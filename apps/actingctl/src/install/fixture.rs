@@ -5,16 +5,24 @@
 
 use super::host::{Host, Installer, NotRan, Ran, RunningImage};
 use super::manifest::{Speaks, parse_declaration};
+use super::runtime::{
+    Closed, ConfigSeen, Drained, InstanceSeen, PauseSeen, PlanSeen, RuntimeLink, RuntimeSeen,
+};
 use super::{Answer, execute};
+use crate::codes::ActingctlCode;
+use crate::watchdog::decide::LiveOwner;
+use crate::watchdog::start::{StartedProcess, StartedState, Target};
+use actingcommand_contract::SchedulingPauseReason;
 use actingcommand_contract::outcome::Outcome;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::cell::{Cell, RefCell};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 pub(super) const C1: &str = "1111111111111111111111111111111111111111";
 pub(super) const C2: &str = "2222222222222222222222222222222222222222";
@@ -25,11 +33,12 @@ pub(super) fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-/// The interfaces both manifests of a neutral build declare: `actingd-config` up to revision 17,
-/// whose check-config takes `--install-root` (INST-1b-F fix round 1).
+/// The interfaces both manifests of a neutral build declare: `actingd-config` up to revision 18
+/// (INST-2, v0.12.19), whose check-config takes `--install-root` (revision 17, INST-1b-F fix
+/// round 1).
 pub(super) fn speaks() -> Value {
     json!({
-        "actingd-config": [5, 17],
+        "actingd-config": [5, 18],
         "install-selection": [1, 1],
         "install-control": [0, 1],
         "ledger": [3, 4],
@@ -291,8 +300,19 @@ pub(super) fn tree(dir: &Path) -> BTreeMap<String, Vec<u8>> {
 /// processes are `processes`; its programs answer as `programs` says; its start logs lie in the
 /// root itself.
 pub(super) struct FakeHost {
-    clock: Cell<u64>,
+    clock: Rc<Cell<u64>>,
     work: PathBuf,
+    /// Workflow #421 INST-2: the root's fake Runtime, the available memory and the detached
+    /// command lines.
+    pub(super) runtime: FakeRuntime,
+    pub(super) memory_mb: Cell<u64>,
+    /// INST-2 fix round 1: the available memory of the next reads, one per read (then
+    /// `memory_mb`), and the running Runtime's working set.
+    pub(super) memory_reads: RefCell<VecDeque<u64>>,
+    pub(super) working_set_mb: Cell<Option<u64>>,
+    /// The reads a starting Runtime reports at each progress sample (none when empty).
+    pub(super) read_bytes: Cell<Option<u64>>,
+    pub(super) detached: RefCell<Vec<Vec<String>>>,
     pub(super) crash_after: Cell<Option<usize>>,
     pub(super) crash_between_renames: Cell<Option<usize>>,
     pub(super) crash_before_retire: Cell<bool>,
@@ -332,8 +352,15 @@ pub(super) const STALLED_PID: u32 = 4242;
 impl FakeHost {
     pub(super) fn new(work: &Path) -> Self {
         fs::create_dir_all(work).expect("create the work folder");
+        let clock = Rc::new(Cell::new(1_800_000_000_000));
         Self {
-            clock: Cell::new(1_800_000_000_000),
+            runtime: FakeRuntime::new(Rc::clone(&clock)),
+            memory_mb: Cell::new(64_000),
+            memory_reads: RefCell::new(VecDeque::new()),
+            working_set_mb: Cell::new(None),
+            read_bytes: Cell::new(None),
+            detached: RefCell::new(Vec::new()),
+            clock,
             work: work.to_path_buf(),
             crash_after: Cell::new(None),
             crash_between_renames: Cell::new(None),
@@ -422,8 +449,20 @@ impl Host for FakeHost {
         self.work.clone()
     }
 
-    fn processes_under(&self, _root: &Path) -> Result<Vec<RunningImage>, Outcome> {
-        Ok(self.processes.borrow().clone())
+    fn processes_under(&self, root: &Path) -> Result<Vec<RunningImage>, Outcome> {
+        let mut images = self.processes.borrow().clone();
+        // Workflow #421 INST-2: a running fake Runtime is an actingd under the root.
+        if self.runtime.running.get() {
+            images.push(RunningImage {
+                pid: self.runtime.owner.borrow().pid,
+                path: format!(
+                    "{}\\runtime\\actingcommand-actingd.exe",
+                    super::files::plain(root)
+                ),
+                mcp_serve: false,
+            });
+        }
+        Ok(images)
     }
 
     fn run_program(
@@ -551,7 +590,7 @@ impl Host for FakeHost {
     }
 
     fn log_dirs(&self, root: &Path) -> Vec<PathBuf> {
-        vec![root.to_path_buf()]
+        vec![root.to_path_buf(), root.join("watchdog")]
     }
 
     fn after_step(&self, operation_id: &str, step: usize) -> Result<(), Outcome> {
@@ -586,6 +625,428 @@ impl Host for FakeHost {
             return Err(crash());
         }
         Ok(())
+    }
+
+    fn runtime(&self) -> &dyn RuntimeLink {
+        &self.runtime
+    }
+
+    /// A poll moves the fake clock; nothing sleeps.
+    fn pause_ms(&self, ms: u64) {
+        self.clock.set(self.clock.get() + ms);
+    }
+
+    fn available_memory_mb(&self) -> Result<u64, Outcome> {
+        Ok(self
+            .memory_reads
+            .borrow_mut()
+            .pop_front()
+            .unwrap_or_else(|| self.memory_mb.get()))
+    }
+
+    fn runtime_read_bytes(&self, _root: &Path) -> Option<u64> {
+        self.read_bytes.get()
+    }
+
+    fn runtime_working_set_mb(&self, _root: &Path) -> Option<u64> {
+        self.working_set_mb.get()
+    }
+
+    fn detach(&self, arguments: &[String], _directory: &Path, _log: &Path) -> Result<u32, Outcome> {
+        self.detached.borrow_mut().push(arguments.to_vec());
+        Ok(9_999)
+    }
+}
+
+/// Workflow #421 INST-2: how one fake start behaves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum FakeStart {
+    /// Answers this many milliseconds after its spawn, on the fake clock.
+    Ready { after_ms: u64 },
+    /// Exits before it answers, with this exit code.
+    Exits { code: i32 },
+    /// Neither answers nor exits: left running at its deadline.
+    Hangs,
+}
+
+/// The fake Runtime's owner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct FakeOwner {
+    pub(super) pid: u32,
+    pub(super) epoch: String,
+    pub(super) started_at_unix_ms: u64,
+}
+
+/// Workflow #421 INST-2: the root's fake Runtime. It is stopped until a test boots it; its
+/// pauses persist across a close and a start, as the Runtime's own persisted pauses do. A spawn
+/// reads which build it starts from the fixed entry's bytes (`neutral daemon <commit>`), writes
+/// its start log with an open line, and answers as the next of `starts` says (by default ready
+/// after 2 s). Every pause, resume, close and spawn is listed in `calls`.
+pub(super) struct FakeRuntime {
+    clock: Rc<Cell<u64>>,
+    pub(super) running: Cell<bool>,
+    /// The build the running Runtime is (`live` for the Runtime a test booted).
+    pub(super) build: RefCell<String>,
+    pub(super) owner: RefCell<FakeOwner>,
+    epochs: Cell<u64>,
+    pub(super) instances: RefCell<Vec<InstanceSeen>>,
+    pub(super) global_pause: RefCell<Option<PauseSeen>>,
+    pub(super) instructions: RefCell<Vec<(String, String)>>,
+    pub(super) sources: RefCell<BTreeMap<String, String>>,
+    pub(super) plan: RefCell<PlanSeen>,
+    pub(super) drains: RefCell<BTreeMap<String, Drained>>,
+    pub(super) starts: RefCell<VecDeque<FakeStart>>,
+    /// By build: members that replace the default `StartReport` answer's.
+    pub(super) report_patch: RefCell<BTreeMap<String, Value>>,
+    /// The builds that do not know `StartReport`.
+    pub(super) unsupported: RefCell<Vec<String>>,
+    /// The close does not complete (its wait passes; nothing is killed).
+    pub(super) refuse_shutdown: Cell<bool>,
+    /// INST-2 fix round 1: by alias, the fake time until which the instance has a queued
+    /// request (its status shows one, and its pause is refused); every batch of pauses asked
+    /// at once; the next pauses that fail as the Runtime refusing them (by alias).
+    pub(super) queued_until: RefCell<BTreeMap<String, u64>>,
+    pub(super) batches: RefCell<Vec<Vec<String>>>,
+    pub(super) refuse_pause: RefCell<Vec<String>>,
+    /// The Runtime goes away right after it answered readiness (its process died).
+    pub(super) dies_after_ready: Cell<bool>,
+    /// The `StartReport` read fails (not as an older build's: the connection failed).
+    pub(super) report_fails: Cell<bool>,
+    pub(super) calls: RefCell<Vec<String>>,
+    /// The spawn under way: when, how it behaves and its build.
+    pending: RefCell<Option<(u64, FakeStart, String)>>,
+    revisions: Cell<u64>,
+}
+
+impl FakeRuntime {
+    fn new(clock: Rc<Cell<u64>>) -> Self {
+        Self {
+            clock,
+            running: Cell::new(false),
+            build: RefCell::new("live".to_owned()),
+            owner: RefCell::new(FakeOwner {
+                pid: 7_000,
+                epoch: "epoch-0".to_owned(),
+                started_at_unix_ms: 1_700_000_000_000,
+            }),
+            epochs: Cell::new(0),
+            instances: RefCell::new(Vec::new()),
+            global_pause: RefCell::new(None),
+            instructions: RefCell::new(Vec::new()),
+            sources: RefCell::new(BTreeMap::new()),
+            plan: RefCell::new(PlanSeen::default()),
+            drains: RefCell::new(BTreeMap::new()),
+            starts: RefCell::new(VecDeque::new()),
+            report_patch: RefCell::new(BTreeMap::new()),
+            unsupported: RefCell::new(Vec::new()),
+            refuse_shutdown: Cell::new(false),
+            queued_until: RefCell::new(BTreeMap::new()),
+            batches: RefCell::new(Vec::new()),
+            refuse_pause: RefCell::new(Vec::new()),
+            dies_after_ready: Cell::new(false),
+            report_fails: Cell::new(false),
+            calls: RefCell::new(Vec::new()),
+            pending: RefCell::new(None),
+            revisions: Cell::new(0),
+        }
+    }
+
+    /// The Runtime a test boots: running as the root's live build, with `aliases` registered
+    /// and unpaused.
+    pub(super) fn boot(&self, aliases: &[&str]) {
+        self.running.set(true);
+        self.next_owner(1_700_000_000_000);
+        *self.instances.borrow_mut() = aliases
+            .iter()
+            .map(|alias| InstanceSeen {
+                alias: (*alias).to_owned(),
+                pause: None,
+                lease_active: false,
+                queued_requests: 0,
+            })
+            .collect();
+    }
+
+    fn next_owner(&self, started_at_unix_ms: u64) {
+        let epoch = self.epochs.get() + 1;
+        self.epochs.set(epoch);
+        *self.owner.borrow_mut() = FakeOwner {
+            pid: 7_000 + u32::try_from(epoch).unwrap_or(0),
+            epoch: format!("epoch-{epoch}"),
+            started_at_unix_ms,
+        };
+    }
+
+    /// Sets the pause of `alias` (another party's, say).
+    pub(super) fn pause_as(&self, alias: &str, reason: &str) {
+        let revision = self.revisions.get() + 1;
+        self.revisions.set(revision);
+        if let Some(instance) = self
+            .instances
+            .borrow_mut()
+            .iter_mut()
+            .find(|instance| instance.alias == alias)
+        {
+            instance.pause = Some(PauseSeen {
+                reason: SchedulingPauseReason::new(reason).expect("a pause reason"),
+                revision,
+            });
+        }
+    }
+
+    /// The pause reason of `alias`, if paused.
+    pub(super) fn pause_of(&self, alias: &str) -> Option<String> {
+        self.instances
+            .borrow()
+            .iter()
+            .find(|instance| instance.alias == alias)
+            .and_then(|instance| instance.pause.as_ref())
+            .map(|pause| pause.reason.as_str().to_owned())
+    }
+
+    /// Whether `alias` has a queued request now, on the fake clock.
+    fn queued(&self, alias: &str) -> bool {
+        self.queued_until
+            .borrow()
+            .get(alias)
+            .is_some_and(|until| self.clock.get() < *until)
+    }
+
+    /// The `StartReport` answer of the running Runtime: every registered instance bound, the
+    /// tagged state loaded, an open well within its deadline, nothing dropped or dispatched,
+    /// with the members of its build's patch.
+    fn report(&self) -> Value {
+        let owner = self.owner.borrow().clone();
+        let mut report = json!({
+            "owner_epoch": owner.epoch,
+            "started_at_unix_ms": owner.started_at_unix_ms,
+            "ready_at_unix_ms": owner.started_at_unix_ms,
+            "open": {
+                "phases": {"sql_read_ms": 0, "verify_ms": 0, "material_ms": 0, "restore_ms": 0,
+                    "meta_ms": 10, "tail_ms": 20, "index_ms": 1_000, "import_ms": 0},
+                "sum_ms": 1_030,
+                "deadline_ms": 600_000,
+                "slow": false,
+            },
+            "tagged_state": "load",
+            "recovery_ms": 5,
+            "pauses_restored": 0,
+            "instructions_restored": self.instructions.borrow().len(),
+            "instances_bound": self
+                .instances
+                .borrow()
+                .iter()
+                .map(|instance| instance.alias.clone())
+                .collect::<Vec<_>>(),
+        });
+        if let Some(Value::Object(patch)) = self.report_patch.borrow().get(&*self.build.borrow()) {
+            for (member, value) in patch {
+                report[member] = value.clone();
+            }
+        }
+        report
+    }
+}
+
+/// A fake started process: it exits at once, or runs.
+struct FakeStarted(FakeStart);
+
+impl StartedProcess for FakeStarted {
+    fn state(&mut self) -> Result<StartedState, Outcome> {
+        Ok(match self.0 {
+            FakeStart::Exits { code } => StartedState::Exited(Some(code)),
+            FakeStart::Ready { .. } | FakeStart::Hangs => StartedState::Running,
+        })
+    }
+}
+
+/// The fake Runtime refusing: the code the real client's failure would carry.
+fn refused() -> Outcome {
+    Outcome::new(ActingctlCode::ShutdownWaitTimeout)
+        .pid(7_000_u32)
+        .timeout_ms(std::time::Duration::from_millis(60_000))
+}
+
+impl RuntimeLink for FakeRuntime {
+    fn status(&self, _state_root: &Path) -> Result<Option<RuntimeSeen>, Outcome> {
+        if !self.running.get() {
+            return Ok(None);
+        }
+        let owner = self.owner.borrow().clone();
+        let mut instances = self.instances.borrow().clone();
+        for instance in &mut instances {
+            if self.queued(&instance.alias) {
+                instance.queued_requests = 1;
+            }
+        }
+        Ok(Some(RuntimeSeen {
+            owner_epoch: owner.epoch,
+            pid: owner.pid,
+            started_at_unix_ms: owner.started_at_unix_ms,
+            global_pause: self.global_pause.borrow().clone(),
+            instances,
+        }))
+    }
+
+    fn config(&self, _state_root: &Path) -> Result<ConfigSeen, Outcome> {
+        if !self.running.get() {
+            return Err(refused());
+        }
+        Ok(ConfigSeen {
+            instructions: self.instructions.borrow().clone(),
+            sources: self.sources.borrow().clone(),
+        })
+    }
+
+    fn plan(&self, _state_root: &Path) -> Result<PlanSeen, Outcome> {
+        if !self.running.get() {
+            return Err(refused());
+        }
+        Ok(self.plan.borrow().clone())
+    }
+
+    fn pause(
+        &self,
+        _state_root: &Path,
+        alias: &str,
+        reason: &SchedulingPauseReason,
+        _drain_timeout_ms: u64,
+    ) -> Result<Drained, Outcome> {
+        if !self.running.get() {
+            return Err(refused());
+        }
+        // A queued request fails the pause at once, as the Runtime's `TransferNotSafe` does.
+        if self.queued(alias) {
+            self.calls
+                .borrow_mut()
+                .push(format!("pause {alias} {reason} refused"));
+            return Err(refused());
+        }
+        let mut refuse = self.refuse_pause.borrow_mut();
+        if let Some(index) = refuse.iter().position(|known| known == alias) {
+            refuse.remove(index);
+            self.calls
+                .borrow_mut()
+                .push(format!("pause {alias} {reason} refused"));
+            return Err(refused());
+        }
+        drop(refuse);
+        self.calls
+            .borrow_mut()
+            .push(format!("pause {alias} {reason}"));
+        self.pause_as(alias, reason.as_str());
+        Ok(self.drains.borrow().get(alias).copied().unwrap_or_default())
+    }
+
+    fn pause_many(
+        &self,
+        state_root: &Path,
+        aliases: &[String],
+        reason: &SchedulingPauseReason,
+        drain_timeout_ms: u64,
+    ) -> Vec<(String, Result<Drained, Outcome>)> {
+        self.batches.borrow_mut().push(aliases.to_vec());
+        aliases
+            .iter()
+            .map(|alias| {
+                (
+                    alias.clone(),
+                    self.pause(state_root, alias, reason, drain_timeout_ms),
+                )
+            })
+            .collect()
+    }
+
+    fn resume(
+        &self,
+        _state_root: &Path,
+        alias: &str,
+        owner_epoch: &str,
+        revision: u64,
+    ) -> Result<(), Outcome> {
+        if !self.running.get() || self.owner.borrow().epoch != owner_epoch {
+            return Err(refused());
+        }
+        self.calls.borrow_mut().push(format!("resume {alias}"));
+        let mut instances = self.instances.borrow_mut();
+        let instance = instances
+            .iter_mut()
+            .find(|instance| instance.alias == alias)
+            .ok_or_else(refused)?;
+        if instance.pause.as_ref().map(|pause| pause.revision) != Some(revision) {
+            return Err(refused());
+        }
+        instance.pause = None;
+        Ok(())
+    }
+
+    fn shutdown(&self, _root: &Path, _state_root: &Path, _wait_ms: u64) -> Result<Closed, Outcome> {
+        self.calls.borrow_mut().push("shutdown".to_owned());
+        if self.refuse_shutdown.get() {
+            return Err(refused());
+        }
+        self.running.set(false);
+        Ok(Closed {
+            wait: json!({"state": "completed"}),
+            terminal: Some(("runtime_stopped".to_owned(), "neutral.log".to_owned())),
+            stopped: true,
+        })
+    }
+
+    fn start_report(&self, _state_root: &Path) -> Result<Option<Value>, Outcome> {
+        if !self.running.get() || self.report_fails.get() {
+            return Err(refused());
+        }
+        if self.unsupported.borrow().contains(&*self.build.borrow()) {
+            return Ok(None);
+        }
+        Ok(Some(self.report()))
+    }
+
+    fn spawn(&self, target: &Target<'_>, log: &Path) -> Result<Box<dyn StartedProcess>, Outcome> {
+        let entry = fs::read_to_string(target.entry()).unwrap_or_default();
+        let build = entry
+            .strip_prefix("neutral daemon ")
+            .unwrap_or("live")
+            .to_owned();
+        let behaviour = self
+            .starts
+            .borrow_mut()
+            .pop_front()
+            .unwrap_or(FakeStart::Ready { after_ms: 2_000 });
+        self.calls.borrow_mut().push(format!("spawn {build}"));
+        let open = json!({"schema_version": "actingcommand.outcome.v1", "code": "ledger_opened",
+            "category": "info", "values": {"sql_read_ms": 0, "verify_ms": 0, "material_ms": 0,
+            "restore_ms": 0, "meta_ms": 10, "tail_ms": 20, "index_ms": 1_000, "import_ms": 0,
+            "timeout_ms": 600_000}});
+        fs::write(log, format!("OUTCOME actingd: {open}\n")).expect("write the start log");
+        *self.pending.borrow_mut() = Some((self.clock.get(), behaviour, build));
+        Ok(Box::new(FakeStarted(behaviour)))
+    }
+
+    fn answering_owner(&self, _state_root: &Path) -> Option<LiveOwner> {
+        let pending = self.pending.borrow().clone();
+        if let Some((at, FakeStart::Ready { after_ms }, build)) = pending
+            && self.clock.get() >= at + after_ms
+        {
+            self.pending.borrow_mut().take();
+            self.running.set(true);
+            *self.build.borrow_mut() = build;
+            self.next_owner(at);
+        }
+        if !self.running.get() {
+            return None;
+        }
+        let owner = self.owner.borrow().clone();
+        // Ready once, then gone (a Runtime that died after its readiness).
+        if self.dies_after_ready.replace(false) {
+            self.running.set(false);
+        }
+        Some(LiveOwner {
+            pid: owner.pid,
+            owner_epoch: owner.epoch,
+            started_at_unix_ms: owner.started_at_unix_ms,
+        })
     }
 }
 

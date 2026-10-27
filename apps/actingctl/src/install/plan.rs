@@ -571,7 +571,7 @@ pub(crate) fn plan(host: &dyn Host, paths: &Paths, inputs: PlanInputs) -> Result
             .path(paths.build(&inputs.commit))
     })?;
     let installer = host.installer_speaks().unwrap_or_default();
-    let mut warnings = Vec::new();
+    let mut warnings = retired_caveats(operation, &settings);
     let mut edges = interface_edges(
         &installer,
         &live_speaks,
@@ -906,6 +906,20 @@ pub(crate) fn planned_outcome(planned: &Planned) -> Outcome {
             .commit_sha(planned.target.commit.clone()),
         &planned.warnings,
     )
+}
+
+/// INST-2 fix round 1 (Alice's decision 75 of 10-27, `actingd-config` revision 18): the caveat
+/// `config_key_retired` of the command `operation` for each retired key of the `install` section
+/// the configuration file names (accepted, no effect).
+pub(crate) fn retired_caveats(
+    operation: InstallLocation,
+    settings: &InstallSettings,
+) -> Vec<Outcome> {
+    settings
+        .retired_named
+        .iter()
+        .map(|key| super::caveat(operation, InstallCaveat::ConfigKeyRetired).config_key(*key))
+        .collect()
 }
 
 /// `outcome` with each of `notes` as a `note` link.

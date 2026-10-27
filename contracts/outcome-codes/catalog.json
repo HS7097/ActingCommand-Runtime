@@ -6597,6 +6597,18 @@
         },
         "instance_invalid": {
           "description": "An instance add or remove was refused (alias; INST-5)."
+        },
+        "runtime_not_running": {
+          "description": "No Runtime answers on the root's state root where the command needs one: update apply --stop (the hold and its S0 are taken from the running Runtime), release-hold, or the release of a composite's hold (INST-2). alias names the instance whose resume failed, the client's failure is the caused_by link."
+        },
+        "runtime_stop_failed": {
+          "description": "The hold or the formal close did not complete (INST-2): a pause or the request-shutdown was refused or did not answer, its wait passed install.stop.shutdown_wait_ms (nothing is killed), or after the pauses the status did not show exactly the expected ones (count and aliases the instances that differ). The hold's pauses stay; release-hold lifts them."
+        },
+        "post_check_failed": {
+          "description": "A fail-class post-start check failed (count the failed checks; the result's post_check lists them) and the automatic rollback could not run: the new Runtime did not stop within install.stop.shutdown_wait_ms (nothing is killed), or the command was a start or a rollback of its own (INST-2). The hold stays."
+        },
+        "deploy_rolled_back": {
+          "description": "A composite update rolled back by itself, between the new start and the resume (Alice's decision 74 A): a fail-class post-start check failed or the new start ended (count the failed checks; the result's failed_checks names them), the rollback gate toward the previous build passed, the operation's file steps were reversed and the previous build started (commit_sha). When the previous build's checks passed its hold was released and scheduling resumed; the command still reports this refusal."
         }
       }
     },
@@ -6632,6 +6644,21 @@
         },
         "check_config_without_install_root": {
           "description": "The target build's check-config does not take --install-root (a build before actingd-config revision 17, or one that refused the option), so it ran without it from the kept build's folder, which it judged as the install root (its adb and default vision root); only the outcome's category counts (commit_sha the target, path its actingd)."
+        },
+        "start_stalled": {
+          "description": "The installer's start looks stalled (INST-2, the stall rule's detection): its log did not grow for install.start.stall_after_ms, or the starting Runtime read more than install.start.stall_read_bytes before it was ready (path the log). Nothing is killed; ending a process is the person's decision."
+        },
+        "stop_terminal_unconfirmed": {
+          "description": "The formal close completed (the owner record closed and the process exited), but the closed start's terminal outcome was not runtime_stopped, or no start log of the closed Runtime was found (path the log when one was read; INST-2)."
+        },
+        "runs_not_continued": {
+          "description": "The hold's drain stopped runs in flight at their next checkpoint after install.stop.drain_timeout_ms (count): they are not continued mid-run; after the release the Runtime evaluates their tasks again from their start (INST-2, Alice's decision 75 of 10-27; mid-run continuation is a later slice)."
+        },
+        "idle_wakes_rederived": {
+          "description": "The hold took instances whose idle action is not none (count), and the Runtime it stopped has no read of the idle wakes it owes them: they are not recorded, and the Runtime derives them again after the start (INST-2 fix round 1, Alice's decision 75 of 10-27; a read of the owed wakes is a later slice)."
+        },
+        "config_key_retired": {
+          "description": "The configuration names a retired key of the install section (config_key): it is accepted and has no effect (actingd-config revision 18; install.guard.blocked_windows, Alice's decision 75 of 10-27)."
         }
       }
     },
@@ -6718,10 +6745,10 @@
           "description": "Available physical memory at least install.guard.min_available_memory_mb."
         },
         "schedule_near": {
-          "description": "No affected instance due within install.guard.before_next_start_ms."
+          "description": "Informational (Alice's decision 75 of 10-27): what is due on a held instance within install.guard.before_next_start_ms, which the hold defers and records; it never refuses."
         },
         "blocked_window": {
-          "description": "Now lies in no configured blocked window."
+          "description": "Retired with install.guard.blocked_windows (actingd-config revision 18, decision 75 of 10-27): never evaluated."
         },
         "foreign_pauses": {
           "description": "No global pause and no unnamed pause of another party."

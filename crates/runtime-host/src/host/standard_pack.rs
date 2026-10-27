@@ -95,6 +95,21 @@ impl StandardPackRoots {
     pub(super) fn root(&self) -> Option<&Path> {
         self.root.as_deref()
     }
+
+    /// Workflow #421 INST-2 (`StartReport`): each game whose registry was read, with the number
+    /// of packages it lists.
+    pub(super) fn registered_counts(&self) -> RuntimeHostResult<Vec<(String, usize)>> {
+        Ok(lock(&self.registered, HostLocation::StandardPackRegister)?
+            .iter()
+            .map(|(game, (listed, _))| {
+                let packages = listed
+                    .iter()
+                    .map(|(package_id, _)| package_id.as_str())
+                    .collect::<BTreeSet<_>>();
+                (game.clone(), packages.len())
+            })
+            .collect())
+    }
 }
 
 /// Workflow #373 NAV-3a (M-373 §4.3): the registry of one game, as a run reads it when it

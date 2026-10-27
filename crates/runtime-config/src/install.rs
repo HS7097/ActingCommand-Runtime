@@ -9,8 +9,9 @@
 //! `actingctl install` reads it from the root's configuration file at every command
 //! ([`settings`]), never from the configuration in effect, so no key is settable. Its defaults
 //! live in the defaults file. A value outside its type or range is `config_value_invalid`
-//! (`wrong_type`, `out_of_range`); a blocked window that breaks its rules, and an unknown member
-//! of the section or of one of its objects, `config_value_invalid` (`section_check`).
+//! (`wrong_type`, `out_of_range`); an unknown member of the section or of one of its objects,
+//! `config_value_invalid` (`section_check`). A retired key ([`RETIRED`]) is accepted with no
+//! effect (`actingd-config` revision 18).
 
 use crate::codes::{ConfigCode, ConfigValueProblem};
 use crate::defaults::shipped_json;
@@ -44,9 +45,11 @@ pub const HOT_IDLE_WAIT_MS: &str = "install.hot.idle_wait_ms";
 pub const ROLLBACK_OPEN_MARGIN_MS: &str = "install.rollback.open_margin_ms";
 /// Guard `memory`: the least available physical memory, in MB (INST-2).
 pub const GUARD_MIN_AVAILABLE_MEMORY_MB: &str = "install.guard.min_available_memory_mb";
-/// Guard `schedule_near`: no affected instance due within this, in milliseconds (INST-2).
+/// Guard `schedule_near`: what is due within this on a held instance is listed (informational
+/// since Alice's decision 75 of 10-27: it never refuses), in milliseconds (INST-2).
 pub const GUARD_BEFORE_NEXT_START_MS: &str = "install.guard.before_next_start_ms";
-/// Guard `blocked_window`: the windows, in host local time (INST-2).
+/// Retired in `actingd-config` revision 18 (Alice's decision 75 of 10-27, Runtime v0.12.19):
+/// still accepted when it is a list, warned as retired, with no effect.
 pub const GUARD_BLOCKED_WINDOWS: &str = "install.guard.blocked_windows";
 /// Guard `adb`: each probe's deadline, in milliseconds (INST-2).
 pub const GUARD_ADB_TIMEOUT_MS: &str = "install.guard.adb_timeout_ms";
@@ -71,12 +74,38 @@ pub const MCP_ENTRY_DRAIN_MAX_MS: &str = "install.mcp_entry.drain_max_ms";
 /// MCP-ENTRY fix round 1 (review M4): the cap of the entry's wait before the next plan after
 /// consecutive refusals (the wait doubles from `settle_ms`).
 pub const MCP_ENTRY_REFUSED_RETRY_MAX_MS: &str = "install.mcp_entry.refused_retry_max_ms";
+/// Workflow #421 INST-2 (#421 deploy design §4, §7; `actingd-config` revision 18, Runtime
+/// v0.12.19): how often the installer's start journals a progress sample (the start log's size,
+/// the starting process's reads), in milliseconds.
+pub const START_SAMPLE_INTERVAL_MS: &str = "install.start.sample_interval_ms";
+/// The stall rule's detection: a start whose log has not grown for this long is the caveat
+/// `start_stalled`, in milliseconds; nothing is killed.
+pub const START_STALL_AFTER_MS: &str = "install.start.stall_after_ms";
+/// The stall rule's detection: a start whose process read more than this many bytes before it
+/// was ready is the caveat `start_stalled`; nothing is killed.
+pub const START_STALL_READ_BYTES: &str = "install.start.stall_read_bytes";
+/// INST-2 fix round 1 (review S2 M2; revision 18): how long a start attempt waits for the
+/// available memory to reach `install.guard.min_available_memory_mb` before it refuses, in
+/// milliseconds (the pages of a Runtime that just stopped are released over time).
+pub const START_MEMORY_WAIT_MS: &str = "install.start.memory_wait_ms";
+/// INST-2 fix round 1 (review S2 M4; revision 18): how long the hold waits for an instance's
+/// queued requests to clear when its pause is refused, before it pauses again (a run in flight
+/// is left to the pause's own drain: re-review S2 N2), in milliseconds.
+pub const STOP_BUSY_WAIT_MS: &str = "install.stop.busy_wait_ms";
+
+/// The keys of the section retired in `actingd-config` revision 18 (Alice's decision 75 of
+/// 10-27, Runtime v0.12.19): still accepted, of their type, with no effect; every `actingctl
+/// install` command that reads the section notes each one the file names.
+pub const RETIRED: &[&str] = &[GUARD_BLOCKED_WINDOWS];
 
 /// The section as the configuration file and the defaults file write it: every member may be
 /// left out and none is unknown (M387 §5.3).
 // Interface anchor `actingd-config` revision 17 (contracts/component-interfaces.md): a Runtime
 // before Workflow #421 INST-1 refuses a file that names the section, because the file denies
-// unknown members; a file that does not name it keeps its revision.
+// unknown members; a file that does not name it keeps its revision. Revision 18 (Workflow #421
+// INST-2, Runtime v0.12.19) adds `start.sample_interval_ms`, `start.stall_after_ms` and
+// `start.stall_read_bytes` (a build before it refuses a file that names one) and retires
+// `guard.blocked_windows`.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct InstallFile {
@@ -135,6 +164,9 @@ struct StopFile {
     drain_timeout_ms: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     shutdown_wait_ms: Option<Value>,
+    // INST-2 fix round 1 (`actingd-config` revision 18).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    busy_wait_ms: Option<Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -144,6 +176,17 @@ struct StartFile {
     ready_timeout_ms: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     attempts: Option<Value>,
+    // Workflow #421 INST-2 (#421 deploy design §7; `actingd-config` revision 18): the start's
+    // progress samples and the stall rule's detection; the product reports a stall and never
+    // kills.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sample_interval_ms: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stall_after_ms: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stall_read_bytes: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    memory_wait_ms: Option<Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -167,6 +210,7 @@ struct GuardFile {
     min_available_memory_mb: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     before_next_start_ms: Option<Value>,
+    // Retired in `actingd-config` revision 18: accepted, with no effect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     blocked_windows: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -186,6 +230,21 @@ const fn row(key: &'static str, value_type: ValueType, range: KeyRange) -> KeyRo
         settable: Settable::No(NotSettable::ReadAtAssembly),
         reader: "INST-1",
         since: "0.12.18",
+    }
+}
+
+/// A row added or changed by Workflow #421 INST-2 in `actingd-config` revision 18 (Runtime
+/// v0.12.19).
+const fn row_inst2(key: &'static str, value_type: ValueType, range: KeyRange) -> KeyRow {
+    KeyRow {
+        name: KeyName::Exact(key),
+        file_path: FilePath::Key,
+        value_type,
+        range,
+        default: DefaultSource::File,
+        settable: Settable::No(NotSettable::ReadAtAssembly),
+        reader: "INST-2",
+        since: "0.12.19",
     }
 }
 
@@ -244,7 +303,8 @@ pub(crate) static ROWS: &[KeyRow] = &[
         ValueType::DurationMs,
         milliseconds(0, 86_400_000),
     ),
-    row(GUARD_BLOCKED_WINDOWS, ValueType::List, KeyRange::Any),
+    // Retired in revision 18 (Alice's decision 75 of 10-27): accepted, warned, no effect.
+    row_inst2(GUARD_BLOCKED_WINDOWS, ValueType::List, KeyRange::Any),
     row(
         GUARD_ADB_TIMEOUT_MS,
         ValueType::DurationMs,
@@ -290,23 +350,37 @@ pub(crate) static ROWS: &[KeyRow] = &[
         ValueType::DurationMs,
         milliseconds(1_000, 86_400_000),
     ),
+    // Workflow #421 INST-2 (#421 deploy design §4, §7): revision 18, Runtime v0.12.19.
+    row_inst2(
+        START_SAMPLE_INTERVAL_MS,
+        ValueType::DurationMs,
+        milliseconds(1_000, 600_000),
+    ),
+    row_inst2(
+        START_STALL_AFTER_MS,
+        ValueType::DurationMs,
+        milliseconds(60_000, 3_600_000),
+    ),
+    row_inst2(
+        START_STALL_READ_BYTES,
+        ValueType::Integer,
+        KeyRange::Integer {
+            min: 0,
+            max: 1_099_511_627_776,
+        },
+    ),
+    // INST-2 fix round 1 (review S2 M2, M4): revision 18, Runtime v0.12.19.
+    row_inst2(
+        START_MEMORY_WAIT_MS,
+        ValueType::DurationMs,
+        milliseconds(0, 3_600_000),
+    ),
+    row_inst2(
+        STOP_BUSY_WAIT_MS,
+        ValueType::DurationMs,
+        milliseconds(0, 3_600_000),
+    ),
 ];
-
-/// One blocked window of `install.guard.blocked_windows`, in host local time, `[from, to)`,
-/// wrapping past the end of its day or hour when `to` is less than `from`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BlockedWindow {
-    /// Every day, from and to a minute of the day (`HH:MM`).
-    Daily { from_minute: u16, to_minute: u16 },
-    /// On the days the window starts on (1 Monday to 7 Sunday), from and to a minute of the day.
-    Weekly {
-        weekdays: Vec<u8>,
-        from_minute: u16,
-        to_minute: u16,
-    },
-    /// Every hour, from and to a minute of the hour.
-    Hourly { from_minute: u8, to_minute: u8 },
-}
 
 /// The section's values, the file's where it names them, else the defaults file's.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -321,7 +395,6 @@ pub struct InstallSettings {
     pub rollback_open_margin_ms: u64,
     pub guard_min_available_memory_mb: u64,
     pub guard_before_next_start_ms: u64,
-    pub guard_blocked_windows: Vec<BlockedWindow>,
     pub guard_adb_timeout_ms: u64,
     pub child_check_config_timeout_ms: u64,
     pub child_ledger_read_timeout_ms: u64,
@@ -331,13 +404,21 @@ pub struct InstallSettings {
     pub mcp_entry_verify_timeout_ms: u64,
     pub mcp_entry_drain_max_ms: u64,
     pub mcp_entry_refused_retry_max_ms: u64,
+    pub start_sample_interval_ms: u64,
+    pub start_stall_after_ms: u64,
+    pub start_stall_read_bytes: u64,
+    pub start_memory_wait_ms: u64,
+    pub stop_busy_wait_ms: u64,
+    /// The retired keys ([`RETIRED`]) the file names: accepted, with no effect (revision 18).
+    pub retired_named: Vec<&'static str>,
 }
 
 /// The section of the configuration document `file` (actingd's configuration as `actingctl`
 /// reads it): each key the file's member when it names one, otherwise the shipped defaults
-/// file's, checked against its type and range; the blocked windows by their rules. An unknown
-/// member of the section or of one of its objects is `config_value_invalid` (`section_check`)
-/// for the section; a key the defaults file lacks is `config_value_invalid` for the key.
+/// file's, checked against its type and range; a retired key the file names only against its
+/// type, and listed in `retired_named`. An unknown member of the section or of one of its
+/// objects is `config_value_invalid` (`section_check`) for the section; a key the defaults file
+/// lacks is `config_value_invalid` for the key.
 pub fn settings(file: &Value) -> Result<InstallSettings, ConfigFailure> {
     if let Some(section) = file.get(SECTION).filter(|section| !section.is_null()) {
         InstallFile::deserialize(section)
@@ -400,8 +481,22 @@ pub fn settings(file: &Value) -> Result<InstallSettings, ConfigFailure> {
             ));
         }
     };
-    let (row, windows) = raw(GUARD_BLOCKED_WINDOWS)?;
-    parse_value(row, GUARD_BLOCKED_WINDOWS, &windows)?;
+    // Revision 18 (Alice's decision 75 of 10-27): a retired key is accepted when it has its
+    // type, has no effect, and is noted when the file (not the defaults file) names it.
+    let mut retired_named = Vec::new();
+    for &key in RETIRED {
+        let row = ROWS
+            .iter()
+            .find(|row| row.matches(key).is_some())
+            .ok_or_else(|| ConfigFailure::new(ConfigCode::ConfigValueInvalid, key))?;
+        if let Some(value) = file_value(row, key, None, file) {
+            parse_value(row, key, value)?;
+            retired_named.push(key);
+        }
+    }
+    let start_stall_read_bytes = u64::try_from(integer(START_STALL_READ_BYTES)?).map_err(|_| {
+        ConfigFailure::invalid_value(START_STALL_READ_BYTES, ConfigValueProblem::OutOfRange)
+    })?;
     Ok(InstallSettings {
         lock_wait_ms: duration(LOCK_WAIT_MS)?,
         stop_drain_timeout_ms: duration(STOP_DRAIN_TIMEOUT_MS)?,
@@ -413,7 +508,6 @@ pub fn settings(file: &Value) -> Result<InstallSettings, ConfigFailure> {
         rollback_open_margin_ms: duration(ROLLBACK_OPEN_MARGIN_MS)?,
         guard_min_available_memory_mb,
         guard_before_next_start_ms: duration(GUARD_BEFORE_NEXT_START_MS)?,
-        guard_blocked_windows: blocked_windows(&windows)?,
         guard_adb_timeout_ms: duration(GUARD_ADB_TIMEOUT_MS)?,
         child_check_config_timeout_ms: duration(CHILD_CHECK_CONFIG_TIMEOUT_MS)?,
         child_ledger_read_timeout_ms: duration(CHILD_LEDGER_READ_TIMEOUT_MS)?,
@@ -423,118 +517,13 @@ pub fn settings(file: &Value) -> Result<InstallSettings, ConfigFailure> {
         mcp_entry_verify_timeout_ms: duration(MCP_ENTRY_VERIFY_TIMEOUT_MS)?,
         mcp_entry_drain_max_ms: duration(MCP_ENTRY_DRAIN_MAX_MS)?,
         mcp_entry_refused_retry_max_ms: duration(MCP_ENTRY_REFUSED_RETRY_MAX_MS)?,
+        start_sample_interval_ms: duration(START_SAMPLE_INTERVAL_MS)?,
+        start_stall_after_ms: duration(START_STALL_AFTER_MS)?,
+        start_stall_read_bytes,
+        start_memory_wait_ms: duration(START_MEMORY_WAIT_MS)?,
+        stop_busy_wait_ms: duration(STOP_BUSY_WAIT_MS)?,
+        retired_named,
     })
-}
-
-/// The windows of `install.guard.blocked_windows` by their rules; the first that breaks one is
-/// `config_value_invalid` (`section_check`) for the key, with the window's JSON pointer.
-fn blocked_windows(value: &Value) -> Result<Vec<BlockedWindow>, ConfigFailure> {
-    let invalid = |index: usize| {
-        ConfigFailure::invalid_value(GUARD_BLOCKED_WINDOWS, ConfigValueProblem::SectionCheck)
-            .with_pointer(format!("/{index}"))
-    };
-    let Some(items) = value.as_array() else {
-        return Err(ConfigFailure::invalid_value(
-            GUARD_BLOCKED_WINDOWS,
-            ConfigValueProblem::WrongType,
-        ));
-    };
-    items
-        .iter()
-        .enumerate()
-        .map(|(index, item)| blocked_window(item).ok_or_else(|| invalid(index)))
-        .collect()
-}
-
-/// One window, or `None` when it breaks a rule: an object of exactly its kind's members, `from`
-/// and `to` of the kind's form and different.
-fn blocked_window(item: &Value) -> Option<BlockedWindow> {
-    let object = item.as_object()?;
-    let kind = object.get("kind")?.as_str()?;
-    let allowed: &[&str] = match kind {
-        "weekly" => &["kind", "weekdays", "from", "to"],
-        "daily" | "hourly" => &["kind", "from", "to"],
-        _ => return None,
-    };
-    if object.keys().any(|name| !allowed.contains(&name.as_str())) {
-        return None;
-    }
-    let window = match kind {
-        "hourly" => {
-            let minute = |name: &str| {
-                object
-                    .get(name)?
-                    .as_u64()
-                    .filter(|minute| *minute <= 59)
-                    .and_then(|minute| u8::try_from(minute).ok())
-            };
-            BlockedWindow::Hourly {
-                from_minute: minute("from")?,
-                to_minute: minute("to")?,
-            }
-        }
-        _ => {
-            let from_minute = minute_of_day(object.get("from")?)?;
-            let to_minute = minute_of_day(object.get("to")?)?;
-            if kind == "daily" {
-                BlockedWindow::Daily {
-                    from_minute,
-                    to_minute,
-                }
-            } else {
-                let mut weekdays = Vec::new();
-                for day in object.get("weekdays")?.as_array()? {
-                    let day = day
-                        .as_u64()
-                        .filter(|day| (1..=7).contains(day))
-                        .and_then(|day| u8::try_from(day).ok())?;
-                    if weekdays.contains(&day) {
-                        return None;
-                    }
-                    weekdays.push(day);
-                }
-                if weekdays.is_empty() {
-                    return None;
-                }
-                BlockedWindow::Weekly {
-                    weekdays,
-                    from_minute,
-                    to_minute,
-                }
-            }
-        }
-    };
-    let (from, to) = match &window {
-        BlockedWindow::Daily {
-            from_minute,
-            to_minute,
-        }
-        | BlockedWindow::Weekly {
-            from_minute,
-            to_minute,
-            ..
-        } => (*from_minute, *to_minute),
-        BlockedWindow::Hourly {
-            from_minute,
-            to_minute,
-        } => (u16::from(*from_minute), u16::from(*to_minute)),
-    };
-    (from != to).then_some(window)
-}
-
-/// `HH:MM`, `00:00` to `23:59`, as the minute of the day.
-fn minute_of_day(value: &Value) -> Option<u16> {
-    let text = value.as_str()?;
-    let (hours, minutes) = text.split_once(':')?;
-    if hours.len() != 2 || minutes.len() != 2 {
-        return None;
-    }
-    let hours = hours.parse::<u16>().ok().filter(|hours| *hours <= 23)?;
-    let minutes = minutes
-        .parse::<u16>()
-        .ok()
-        .filter(|minutes| *minutes <= 59)?;
-    Some(hours * 60 + minutes)
 }
 
 #[cfg(test)]
@@ -544,8 +533,12 @@ mod tests {
 
     // Workflow #421 INST-1, test row IT-14 (frozen model INST-M §12; the keys, ranges and
     // defaults of §8): without the section every key takes its default; an explicit value is
-    // taken; a value outside its range, an unknown member of the section or of one of its
-    // objects, and a window that breaks its rules are refused.
+    // taken; a value outside its range, and an unknown member of the section or of one of its
+    // objects, are refused.
+    // Adapted by INST-2 fix round 1 (Alice's decision 75 of 10-27, `actingd-config` revision
+    // 18): `install.guard.blocked_windows` is retired, so a file naming it is accepted with no
+    // effect and noted in `retired_named`, and the window rules are no longer judged; a value of
+    // another type than a list is still refused.
     #[test]
     fn inst1_it_14_the_install_section_defaults_apply_and_bad_members_are_refused() {
         let defaults = InstallSettings {
@@ -559,7 +552,6 @@ mod tests {
             rollback_open_margin_ms: 20_000,
             guard_min_available_memory_mb: 10_000,
             guard_before_next_start_ms: 900_000,
-            guard_blocked_windows: Vec::new(),
             guard_adb_timeout_ms: 15_000,
             // INST-1b-F fix round 1 (review S1 F4): the deadlines of the installer's children.
             child_check_config_timeout_ms: 900_000,
@@ -571,6 +563,15 @@ mod tests {
             mcp_entry_verify_timeout_ms: 60_000,
             mcp_entry_drain_max_ms: 600_000,
             mcp_entry_refused_retry_max_ms: 300_000,
+            // Workflow #421 INST-2 (#421 deploy design §4, §7; revision 18): the start's samples
+            // and stall detection.
+            start_sample_interval_ms: 30_000,
+            start_stall_after_ms: 720_000,
+            start_stall_read_bytes: 53_687_091_200,
+            // INST-2 fix round 1 (review S2 M2, M4; revision 18).
+            start_memory_wait_ms: 120_000,
+            stop_busy_wait_ms: 300_000,
+            retired_named: Vec::new(),
         };
         assert_eq!(settings(&json!({})), Ok(defaults.clone()));
         assert_eq!(settings(&json!({"install": {}})), Ok(defaults.clone()));
@@ -580,26 +581,13 @@ mod tests {
             "start": {"attempts": 5},
             "guard": {"blocked_windows": [
                 {"kind": "weekly", "weekdays": [1, 4], "from": "04:40", "to": "05:40"},
-                {"kind": "hourly", "from": 0, "to": 10}
+                {"kind": "daily", "from": "24:00", "to": "05:40", "unknown_member": 1}
             ]}
         }}))
-        .expect("explicit values are taken");
+        .expect("explicit values are taken and the retired key is accepted");
         assert_eq!(explicit.lock_wait_ms, 1_000);
         assert_eq!(explicit.start_attempts, 5);
-        assert_eq!(
-            explicit.guard_blocked_windows,
-            vec![
-                BlockedWindow::Weekly {
-                    weekdays: vec![1, 4],
-                    from_minute: 280,
-                    to_minute: 340,
-                },
-                BlockedWindow::Hourly {
-                    from_minute: 0,
-                    to_minute: 10,
-                },
-            ]
-        );
+        assert_eq!(explicit.retired_named, vec![GUARD_BLOCKED_WINDOWS]);
         assert_eq!(
             explicit.stop_drain_timeout_ms,
             defaults.stop_drain_timeout_ms
@@ -637,18 +625,9 @@ mod tests {
                 ConfigValueProblem::SectionCheck,
             ),
             (
-                json!({"install": {"guard": {"blocked_windows": [
-                    {"kind": "daily", "from": "04:40", "to": "05:40", "unknown_member": 1}
-                ]}}}),
+                json!({"install": {"guard": {"blocked_windows": {"kind": "daily"}}}}),
                 GUARD_BLOCKED_WINDOWS,
-                ConfigValueProblem::SectionCheck,
-            ),
-            (
-                json!({"install": {"guard": {"blocked_windows": [
-                    {"kind": "daily", "from": "24:00", "to": "05:40"}
-                ]}}}),
-                GUARD_BLOCKED_WINDOWS,
-                ConfigValueProblem::SectionCheck,
+                ConfigValueProblem::WrongType,
             ),
         ] {
             let failure = settings(&file).expect_err(&file.to_string());

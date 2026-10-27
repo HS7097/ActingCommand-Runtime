@@ -59,6 +59,9 @@ pub use fact_refresh_status::*;
 // Workflow #386 SR-6b, MCP-19a: the latest evaluation's not-run explanation (register §1.143).
 mod schedule_explanation;
 pub use schedule_explanation::*;
+// Workflow #421 INST-2 (#421 deploy design §4): the Runtime's report of its own start.
+mod start_report;
+pub use start_report::*;
 use std::net::{IpAddr, SocketAddr};
 
 // Interface anchor `runtime-client` (contracts/component-interfaces.md): raise its revision in
@@ -3599,6 +3602,10 @@ pub enum RuntimeOperation {
         instance: Option<String>,
         candidates: bool,
     },
+    /// Reads what the Runtime knows about its own start (Workflow #421 INST-2; #421 deploy
+    /// design §4): a general read from memory that reads and records nothing in the ledger. The
+    /// answer is `RuntimeResult::StartReport`.
+    StartReport,
     ConfigureMonitor {
         instance_alias: String,
         policy: RuntimeMonitorPolicy,
@@ -3913,6 +3920,7 @@ impl RuntimeOperation {
             | Self::RuntimeFactSnapshot
             | Self::PerformanceStatus
             | Self::FactRefreshStatus
+            | Self::StartReport
             | Self::DiscoverInstances
             | Self::PollQueuedLease { .. }
             | Self::CancelQueuedLease { .. }
@@ -4176,6 +4184,7 @@ impl fmt::Debug for RuntimeOperation {
             Self::PerformanceStatus => "RuntimeOperation::PerformanceStatus",
             Self::FactRefreshStatus => "RuntimeOperation::FactRefreshStatus",
             Self::ScheduleExplanation { .. } => "RuntimeOperation::ScheduleExplanation(<redacted>)",
+            Self::StartReport => "RuntimeOperation::StartReport",
             Self::ConfigureMonitor { .. } => "RuntimeOperation::ConfigureMonitor(<redacted>)",
             Self::ClearMonitor { .. } => "RuntimeOperation::ClearMonitor(<redacted>)",
             Self::AcquireLease { .. } => "RuntimeOperation::AcquireLease(<redacted>)",
@@ -5085,6 +5094,11 @@ pub enum RuntimeResult {
     ScheduleExplanation {
         explanation: Box<RuntimeScheduleExplanation>,
     },
+    /// `StartReport` (Workflow #421 INST-2; #421 deploy design §4): this Runtime's start, from
+    /// memory.
+    StartReport {
+        report: Box<RuntimeStartReport>,
+    },
     MonitorConfigured {
         status: RuntimeMonitorInstanceStatus,
     },
@@ -5905,6 +5919,14 @@ impl RuntimeReceipt {
                     ));
                 }
                 explanation.validate()?;
+            }
+            Some(RuntimeResult::StartReport { report }) => {
+                if self.state != RuntimeReceiptState::Completed || self.terminal.is_some() {
+                    return Err(RuntimeContractError::new(
+                        RuntimeContractCode::InvalidStartReport,
+                    ));
+                }
+                report.validate()?;
             }
             Some(
                 RuntimeResult::MonitorConfigured { status }

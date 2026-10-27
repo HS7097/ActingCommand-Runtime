@@ -3780,6 +3780,14 @@
       "status": "active",
       "since": "0.12.5",
       "description": "A runtime client operation: why each candidate of the latest policy evaluation did not run (ScheduleExplanation, Workflow #386 SR-6b, MCP-19)."
+    },
+    "runtime_start_report": {
+      "owner": "runtime-client",
+      "layer": "client",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.19",
+      "description": "A runtime client operation: what the Runtime knows about its own start (StartReport, Workflow #421 INST-2)."
     }
   }
 }

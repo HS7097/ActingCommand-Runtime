@@ -253,6 +253,8 @@ actingcommand_contract::outcome_locations! {
         // Workflow #386 SR-6b, MCP-19a: the latest evaluation's not-run explanation (register
         // §1.143).
         RuntimeScheduleExplanation => "runtime_schedule_explanation",
+        // Workflow #421 INST-2 (#421 deploy design §4): the Runtime's report of its own start.
+        RuntimeStartReport => "runtime_start_report",
         RuntimeMonitorConfigure => "runtime_monitor_configure",
         RuntimeMonitorClear => "runtime_monitor_clear",
         RuntimeConfigureSettings => "runtime_configure_settings",

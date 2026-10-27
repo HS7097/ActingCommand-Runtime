@@ -804,8 +804,9 @@ section with the rest of the file (its rows are those of `config.parameters.inst
 uses it. `actingctl install` reads it from the root's configuration file at every command,
 through this crate (`install::settings`), never from the configuration in effect, so no key is
 settable. `actingd-config` revision 17 ([component-interfaces.md](component-interfaces.md), Runtime
-v0.12.18) adds the section; a file that does not name it keeps its revision. The section and each of its
-objects deny unknown members.
+v0.12.18) adds the section; a file that does not name it keeps its revision. Revision 18 (Runtime
+v0.12.19, Workflow #421 INST-2) adds the keys marked "revision 18" below and retires
+`install.guard.blocked_windows`. The section and each of its objects deny unknown members.
 
 | Key | Type | Default (`actingd.defaults.json`) | Read by |
 |---|---|---|---|
@@ -818,8 +819,8 @@ objects deny unknown members.
 | `install.hot.idle_wait_ms` | milliseconds `0..=3600000` | `600000` | hot placement's idle wait (INST-4) |
 | `install.rollback.open_margin_ms` | milliseconds `0..=600000` | `20000` | the rollback gate's open-time part |
 | `install.guard.min_available_memory_mb` | integer `0..=1048576` | `10000` | guard `memory` (INST-2) |
-| `install.guard.before_next_start_ms` | milliseconds `0..=86400000` | `900000` | guard `schedule_near` (INST-2) |
-| `install.guard.blocked_windows` | list of windows (below) | `[]` | guard `blocked_window` (INST-2) |
+| `install.guard.before_next_start_ms` | milliseconds `0..=86400000` | `900000` | guard `schedule_near`, informational: what is due within it is listed, never refused (INST-2; Alice's decision 75 of 10-27) |
+| `install.guard.blocked_windows` | list | `[]` | **retired in revision 18** (since v0.12.19, Alice's decision 75 of 10-27): accepted when it is a list, no effect; every `actingctl install` command notes it (below) |
 | `install.guard.adb_timeout_ms` | milliseconds `1000..=60000` | `15000` | guard `adb` (INST-2) |
 | `install.child.check_config_timeout_ms` | milliseconds `10000..=3600000` | `900000` | each `actingd check-config` the installer runs (INST-1b-F fix round 1) |
 | `install.child.ledger_read_timeout_ms` | milliseconds `10000..=3600000` | `300000` | each `actingledger` read: S0, each page of the rollback gate's reader part (INST-1b-F fix round 1) |
@@ -829,28 +830,28 @@ objects deny unknown members.
 | `install.mcp_entry.verify_timeout_ms` | milliseconds `1000..=600000` | `60000` | a candidate child's verification, the plan and a handle count (MCP-ENTRY) |
 | `install.mcp_entry.drain_max_ms` | milliseconds `0..=86400000` | `600000` | how long a switch waits for outstanding handles before its status says so; it keeps waiting (MCP-ENTRY) |
 | `install.mcp_entry.refused_retry_max_ms` | milliseconds `1000..=86400000` | `300000` | the cap of the entry's wait before the next plan after consecutive refusals; the wait doubles from `settle_ms` (MCP-ENTRY fix round 1) |
+| `install.start.sample_interval_ms` | milliseconds `1000..=600000` | `30000` | how often the installer's start journals a progress sample: the start log's size, the starting Runtime's reads (INST-2, revision 18, since v0.12.19) |
+| `install.start.stall_after_ms` | milliseconds `60000..=3600000` | `720000` | the stall rule's detection: a start log that did not grow for this long is the caveat `start_stalled`; nothing is killed (INST-2, revision 18, since v0.12.19) |
+| `install.start.stall_read_bytes` | integer `0..=1099511627776` | `53687091200` | the stall rule's detection: a starting Runtime that read more than this before it was ready is the caveat `start_stalled`; nothing is killed (INST-2, revision 18, since v0.12.19) |
+| `install.start.memory_wait_ms` | milliseconds `0..=3600000` | `120000` | how long a start attempt waits for guard `memory` to pass (the pages of a Runtime that just stopped are released over time) before it refuses (INST-2 fix round 1, revision 18, since v0.12.19) |
+| `install.stop.busy_wait_ms` | milliseconds `0..=3600000` | `300000` | how long the hold waits for an instance's queued requests to clear when the Runtime refuses its pause, before it pauses it again once (a run in flight is left to the pause's own drain) (INST-2 fix round 1, revision 18, since v0.12.19) |
 
 A child still running at its `install.child.*` deadline is left running, never killed (the
 stall rule), and reported with its `pid` and the key ([install-cli.md](install-cli.md),
 "Children and their deadlines").
 
-A window of `install.guard.blocked_windows` is one object, in host local time, `[from, to)`,
-wrapping past the end of its day or hour when `to` is less than `from`:
-
-- `{"kind": "daily", "from": "HH:MM", "to": "HH:MM"}`;
-- `{"kind": "weekly", "weekdays": [1..7], "from": "HH:MM", "to": "HH:MM"}`: the days the window
-  starts on, 1 Monday to 7 Sunday, at least one, each once;
-- `{"kind": "hourly", "from": <minute>, "to": <minute>}`: minutes `0..=59` of every hour.
-
-`HH:MM` is `00:00` to `23:59`; `from` equals `to` in no window. No slot and no game is built
-in: the default is empty, and a restart window or an hourly quiet time is data the person writes
-into a root's configuration (#386, Alice 10-24).
+`install.guard.blocked_windows` is retired in `actingd-config` revision 18 (Runtime v0.12.19,
+Alice's decision 75 of 10-27: there is no allowed or blocked deploy time span; the hold records
+and hands back the deferred work instead). A file may still name it: a list is accepted and
+has no effect, its windows are not judged, and every `actingctl install` command that reads
+the section notes it as `install_caveat_noted` (`install_caveat` `config_key_retired`,
+`config_key` the key); a value that is not a list is `config_value_invalid` (`wrong_type`). The
+defaults file keeps `[]`, which is not noted. The Mon/Thu restart is no longer data in this key.
 
 A value outside its type or range is `config_value_invalid` (`out_of_range` with `range_min` and
 `range_max`, or `wrong_type`) at actingd's start, in `check-config` and for every `actingctl
-install` command that reads the section; a window that breaks the rules above, and an unknown
-member of the section or of one of its objects for `actingctl install`, is `config_value_invalid`
-(`section_check`) for its key. actingd refuses an unknown member of the section as it refuses any
+install` command that reads the section; an unknown member of the section or of one of its
+objects for `actingctl install` is `config_value_invalid` (`section_check`) for its key. actingd refuses an unknown member of the section as it refuses any
 unknown member of the file (`config_decode_failed`).
 
 ## The `idle` section (IDLE-1)
