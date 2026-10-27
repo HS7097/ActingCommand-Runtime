@@ -287,6 +287,22 @@ pub(crate) fn status(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome>
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    // Workflow #421 INST-2: MCP servers still running on an image an update renamed aside
+    // (`<file>.old-<ms>`): their clients reconnect to use the live build.
+    let on_old_images = match host.processes_under(&paths.root) {
+        Ok(images) => json!(
+            images
+                .into_iter()
+                .filter(|image| {
+                    image.mcp_serve
+                        && Path::new(&image.path)
+                            .file_name()
+                            .is_some_and(|name| name.to_string_lossy().contains(".old-"))
+                })
+                .collect::<Vec<_>>()
+        ),
+        Err(failure) => json!({"failure": crate::cli_line::warning(&failure)}),
+    };
     let mut answer = Answer::new(super::done(STATUS))
         .with("root", &paths.plain)?
         .with("layout", layout)?
@@ -305,7 +321,8 @@ pub(crate) fn status(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome>
         .with("unfinished", unfinished)?
         .with("last_operations", last)?
         .with("leftovers", leftovers)?
-        .with("rollback_window", window)?;
+        .with("rollback_window", window)?
+        .with("mcp_servers_on_old_images", on_old_images)?;
     if let Some(operation_id) = flags.value("--operation") {
         let operation = Operation::load(host, &paths, operation_id, STATUS)
             .map_err(|_| super::unusable("--operation"))?;

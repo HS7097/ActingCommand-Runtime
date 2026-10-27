@@ -198,8 +198,9 @@ actingctl install leftovers --root <root>
 ```
 
 `<commit>` is the full 40-hex commit of a kept build. INST-2 adds `--stop --hold <reason>
-[--known-pause ALIAS=REASON]… --start --ack-guard <id>` to apply, and INST-3 adds
-`--with-config`; until then apply needs the Runtime stopped and leaves the configuration alone.
+[--known-pause ALIAS=REASON]… [--start] [--ack-guard <id>]… [--detach]` to apply ("Formal stop,
+start and the hold"), and INST-3 adds `--with-config`; without `--stop` apply needs the Runtime
+stopped, and until INST-3 it leaves the configuration alone.
 
 **Plan** (read-only; `--preview` allows a running Runtime and reports it instead of refusing):
 
@@ -354,31 +355,144 @@ check-config above).
 actingctl install stop  --root <root> --hold <reason> [--known-pause ALIAS=REASON]... [--ack-guard <id>]...
 actingctl install start --root <root> [--ack-guard <id>]...
 actingctl install release-hold --root <root> --reason <reason>
-actingctl install guards --root <root> --for stop|start|hot-place [--game <game>]
+actingctl install guards --root <root> --for stop|start [--hold <reason>] [--known-pause ALIAS=REASON]...
+actingctl install update apply --root <root> --build <commit> --plan <id> --stop --hold <reason> [--known-pause ALIAS=REASON]... [--start] [--ack-guard <id>]... [--detach]
 ```
 
-- **Stop**: S0 (`status`: the ledger head, the pauses, the run-time instructions) journalled; every
-  unpaused instance paused with reason `--hold` and drained `install.stop.drain_timeout_ms`;
-  `status` must show exactly the expected pauses; the close is the upgrade state `enter` inside an
-  update when I and the Runtime both speak `install-control` 2, otherwise (and outside an update
-  always) `request-shutdown`; gone within `install.stop.shutdown_wait_ms` with the terminal
-  outcome `runtime_stopped`. Result: done. A failed step keeps the hold
-  pauses and names `release-hold`.
+Workflow #421 INST-2 (Runtime v0.12.18; #421 deploy design §4, §8 S2). Alice's decisions:
+74 A (an automatic rollback only between the new start and the resume), 75 as changed on 10-27
+(no allowed or blocked deploy time span: the installer holds and records every deferred action,
+switches, and hands the recorded work back). Every command here is one journalled operation
+(`kind` `stop`, `start`, `release_hold`; the composite is the update's or rollback's own), every
+step resumable with `install resume`; nothing is killed or deleted.
+
+- **The hold** (`stop`, and the composite's first steps). Read from the running Runtime before
+  anything changes: S0 (the owner epoch; every pause `{global, instances: [{alias, reason,
+  revision}]}`; every run-time instruction `[{config_key, value_json}]` from the program fact
+  `host.config_overrides`) is journalled in `s0`, and the hold's **deferred record** in the pause
+  step's evidence (`deferred`): per instance it takes, its queued lease requests, whether a run is
+  in flight (its lease), and by the Runtime's latest plan (`ScheduleExplanation` with candidates)
+  its selected decision, its due tasks and its earliest wake. The owed idle wakes have no read in
+  the builds this records from and are recorded as not read (`owed_idle_wakes_read`
+  `not_available`). The hold takes every instance S0 shows unpaused (and one already paused with
+  `--hold`, a hold a failed step kept): each is paused with reason `--hold`, its run in flight
+  left to reach its end within `install.stop.drain_timeout_ms` and then its next checkpoint (the
+  Runtime's own drain; never cut mid-action, never killed); how each drain ended is journalled
+  (`drained: [{alias, finished, cancelled}]`). `status` must then show exactly the expected
+  pauses (`runtime_stop_failed` with `count` and `aliases` otherwise). Tools pauses only with
+  `--hold` and resumes only that reason; another party's pause is kept and allowed only when
+  named by `--known-pause` with exactly its reason; a global pause refuses (`guard_failed`, which
+  no acknowledgment passes). A Runtime that does not answer refuses `runtime_not_running`.
+- **The close**: `request-shutdown` and its wait (the owner record closed and the process
+  gone) within `install.stop.shutdown_wait_ms`; nothing is killed (a wait that passes refuses
+  `runtime_stop_failed`). The closed start's terminal outcome is read from the start logs: one
+  that is not `runtime_stopped`, or none found, is the caveat `stop_terminal_unconfirmed` (the
+  Runtime is gone all the same). S0's ledger head is then read with the live build's reader
+  (`ledger_head_unreadable` otherwise) and the running state checked again (`runtime_running`,
+  `owner_lock_held`). The upgrade state (`install-control` 2) is not used: no build ships it.
+  `stop` answers done (`installation_changed: false`) with `s0`, `held` and `next` (the
+  `release-hold` form). A failed step keeps the hold's pauses, ends the operation refused and
+  names `release-hold` in `next`.
 - **Start**: no live owner, no actingd under the root, the configuration passes the check-config
-  of `runtime\`; the `memory` guard before every attempt; `writer.lock` and
-  `<root>\watchdog\run.lock` held; the watchdog's manual start with the log
+  of `runtime\` (`config_refused_by_target`); guard `adb`; `writer.lock` and
+  `<root>\watchdog\run.lock` held; before every attempt the `memory` guard (attempt 1 refuses
+  `guard_failed` before any spawn); the watchdog's manual start with the log
   `<root>\watchdog\actingd-<ms>.log`; readiness every 500 ms until
-  `install.start.ready_timeout_ms`; an error terminal outcome starts the next attempt up to
-  `install.start.attempts`, a fatal one does not; the post-check (`post_check: [{id, result,
-  values}]`, a mismatch the caveat `post_check_mismatch`). Result: done (`pid`,
-  `owner_epoch`, `log`), or the refusal `runtime_start_failed` with the start path's own code
-  as its link (`exited_during_startup`; `start_timeout`, the process left running).
-- **release-hold** resumes only the instances paused with exactly `--reason`
-  (done, `count`). `install.hold_after_start` keeps a composite `update apply --stop
-  --start` held until the person releases it.
-- Tools pauses only with its own reasons (`--hold`, `install-<operation_id>`) and resumes only
-  those; another party's pause is kept and allowed only when named by `--known-pause`; a global
-  pause refuses.
+  `install.start.ready_timeout_ms`; every `install.start.sample_interval_ms` a progress sample
+  `{at_unix_ms, log_bytes, read_bytes, stalled}` journalled in the start step's evidence, and
+  the stall rule's detection, the caveat `start_stalled` (`path` the log) when the log did not
+  grow for `install.start.stall_after_ms` or the starting Runtime read more than
+  `install.start.stall_read_bytes`: it reports and never kills (§7: ending a process is the
+  person's decision). An exit with an error terminal outcome starts the next attempt up to
+  `install.start.attempts`, a fatal one does not; a start not ready at its deadline is
+  `start_timeout`, left running and never started again beside it. Then the post-start checks
+  (below) against the S0 and the hold of the newest operation that stopped the Runtime; a
+  mismatch is the caveat `post_check_mismatch` (`count`). Result: done (`pid`, `owner_epoch`,
+  `log`) with `start` (the evidence) and `post_check`, or the refusal `runtime_start_failed`
+  (`path` the log) with the start path's own code as its link (`exited_during_startup`;
+  `start_timeout`, the process left running).
+- **release-hold** resumes only the instances paused with exactly `--reason`, each by the pause
+  it shows (`ResumeScheduling` with the owner epoch and revision it saw; another party's pause is
+  never touched), and hands the deferred work back: from the hold's deferred record (this
+  operation's, else the newest operation whose hold has that reason) it records per instance
+  whether it was resumed, each due task and selected decision with `re_evaluated` (the Runtime's
+  latest plan was evaluated since the release) or `pending_evaluation`, its queued requests, and
+  the runs its drain stopped at a checkpoint (`not_continued`: the Runtime evaluates their tasks
+  again from their start; the caveat `runs_not_continued` with `count`). The Runtime itself
+  evaluates the deferred dispatches again from its next cycle; the installer sends nothing the
+  record names, so no operation already sent is replayed. Result: done (`count` the instances
+  resumed) with `release`. `install.hold_after_start` (default `true`) keeps a composite `update
+  apply --stop --start` held until the person releases it.
+- **guards** reports the guards a `stop` (`foreign_pauses` and `schedule_near` from the running
+  Runtime, `not_evaluated` without one; `adb`) or a `start` (`memory`, `adb`) would evaluate now
+  and changes nothing (done, `count` the guards that do not pass, with `guards`). A hot
+  placement's guards come with INST-4.
+- **The composite update** `update apply … --stop --hold <reason> [--start]`. Its plan is made
+  with `update plan … --preview` while the Runtime runs (the plan document does not hold the
+  running state, so the ids agree); apply recomputes it as a preview, refuses a running image that
+  would change and may not be renamed (`running_image_blocks`), takes `writer.lock` before the
+  hold and keeps it to the end, evaluates the guards (`foreign_pauses`, `schedule_near`, `adb`,
+  and with `--start` `memory`), and journals one operation: `pause`, `close`, the update's own
+  steps (S0's head read at the close), then with `--start` the steps `start`, `post_check` and,
+  unless `install.hold_after_start` keeps the hold, `release_hold`. Result: the update's done
+  (with `start`, `post_check` and `hold`), its caveats as `note` links.
+- **The automatic rollback** (decision 74 A; only a composite update with `--start`, only between
+  the new start and the resume). A fail-class post-start check that fails, or a new start that
+  ends without readiness (an exit; not `start_timeout`, the stall rule's), closes the new Runtime
+  when it runs (`request-shutdown`; one that does not stop within
+  `install.stop.shutdown_wait_ms` ends the command `post_check_failed`, nothing killed) and
+  evaluates the rollback gate (below) toward the build the update replaced with this operation's
+  S0. A gate that fails ends the command with its refusal `rollback_gate_failed`
+  (`rollback_gate_parts`, `ledger_sequence`; the result's `gate`): the new build and the hold stay,
+  a forward fix only. A gate that passes journals `rollback {started_at_unix_ms, to, failed,
+  reversed_at_unix_ms}`, marks the planned steps not begun `{"skipped": "rollback"}` and plans the
+  rollback's steps after them: `reverse_files` (every file step of the operation reversed as
+  `undo` reverses it, every displaced file kept, the previous build verified in place and
+  `state.json` rewritten), `start` and `post_check` of the previous build, and `release_hold` when
+  its checks passed (otherwise the hold stays and the caveat `post_check_mismatch` says so). The
+  command ends refused `deploy_rolled_back` (`commit_sha` the previous build, `count` the failed
+  checks; the result's `failed_checks`, `post_check` and `rollback`): loud, never a success,
+  also when scheduling resumed. After the resume nothing rolls back by itself; `install rollback
+  plan|apply` (gated) remains. A composite rollback, or a stop or start of their own, never rolls
+  back: a failed fail-class check ends it `post_check_failed` (the hold stays).
+- `--detach` runs the same command again without it through the watchdog's manual-run method
+  (WMI `Win32_Process.Create`, hidden, no handle of the caller, so it outlives the session that
+  started it), its output appended to `install\detached-<ms>.log`, and answers at once (done,
+  `installation_changed: false`, `pid`, `log`; `next` names `install status`).
+- **MCP servers on old images.** `install status` lists `mcp_servers_on_old_images: [{pid,
+  path, mcp_serve}]`, the running `mcp-serve` processes under the root whose image an update
+  renamed aside (`<file>.old-<ms>`); their clients reconnect.
+
+### The post-start checks (INST-2)
+
+Each `{id, result: pass | fail | not_evaluated, fail_class, values}`, judged against S0, the
+configuration and `state.json`, never against per-release expectations. The started build's
+own report of its start, the read `StartReport` ([runtime-interface.md](runtime-interface.md)), is
+used when the build knows it; a build before it (a rollback target before v0.12.18) is checked
+from its status, its configuration facts and its start log's `OUTCOME actingd:` lines, and what
+they cannot show is `not_evaluated`. Only a failed fail-class check acts (the automatic rollback,
+or `post_check_failed`); `not_evaluated` never does.
+
+| id | Judged | Fail-class |
+|---|---|---|
+| `ready` | the start reached readiness (`ready_ms`) | yes |
+| `open` | the open's phases sum within its deadline and no `ledger_open_slow` (report, else the start log) | no |
+| `no_seeding` | a root that ran before (an S0) loaded its tagged state, not seeded again | yes |
+| `bindings` | every configured instance alias bound | yes |
+| `packs` | every game of the pack register registered, with its pack count | yes |
+| `pauses` | S0's pauses, plus the hold on every instance it took | yes |
+| `instructions` | S0's run-time instructions, none dropped | yes |
+| `no_dispatch` | no dispatch admitted on a held instance since the start (report; else no lease on one) | yes |
+| `new_keys` | each key the update adds `default`, or `explicit` where the file names it (`config.parameters.*` sources) | yes |
+| `config` | the configuration file's SHA-256 is `state.json`'s | yes |
+| `indexes` | the open noted no incomplete derived index | no |
+| `one_way` | the one-way watch (S6, a later slice): `not_evaluated` | no |
+
+What S2 does not do yet (#421 deploy design §8 and decision 75 of 10-27, for a later slice): a
+run the drain stopped at a checkpoint is evaluated again from its start, not continued mid-run;
+the owed idle wakes are not recorded before the stop (the Runtime derives them again after its
+start, IDLE-2) nor queued again by the installer; the one-way watch (S6); the Runtime-chosen
+window (S4); the configuration transition in the same command (S7).
 
 ## Configuration, instances, packs and a fresh root (INST-3 to INST-6)
 
@@ -561,8 +675,8 @@ A failed gate leaves a forward fix only.
 | id | Check | Key | Commands |
 |---|---|---|---|
 | `memory` | available physical memory ≥ the key (the watchdog's hidden CIM query) | `install.guard.min_available_memory_mb` | start (each attempt), update with `--start` |
-| `schedule_near` | no affected instance due within the key (the Runtime's schedule view; `not_evaluated` without a Runtime) | `install.guard.before_next_start_ms` | stop, hot place, update with `--stop` |
-| `blocked_window` | now (host local time) in no configured window | `install.guard.blocked_windows` | stop, start, hot place |
+| `schedule_near` | no instance the hold takes due within the key: by the Runtime's latest plan a selected decision or a due task is due now, a wake within the key due then (`not_evaluated` when the plan cannot be read); what it lists is what the hold defers and records | `install.guard.before_next_start_ms` | stop, hot place, update with `--stop` |
+| `blocked_window` | not evaluated: Alice's decision 75 of 10-27 has no allowed or blocked deploy time span (the hold records and hands back the deferred work instead); the key stays parsed for INST-4's hot placement to decide | `install.guard.blocked_windows` | — |
 | `foreign_pauses` | no global pause; no unnamed pause of another party on an affected instance | — | stop, hot place |
 | `ladder_holding` | no affected instance in a ladder busy hold | — | hot place |
 | `adb` | each configured instance with a known port answers `shell echo ok` through an adb server already running from `<root>\tools\platform-tools\`; no server is `not_evaluated`; Tools never starts, connects or kills one | `install.guard.adb_timeout_ms` | stop, start, hot place |
@@ -597,7 +711,7 @@ any other schema (`state_invalid`).
 
 ```json
 {"schema_version": "actingcommand.install-operation.v1",
- "operation_id": "op-<ms>", "kind": "release_stage" | "adopt" | "update" | "rollback",
+ "operation_id": "op-<ms>", "kind": "release_stage" | "adopt" | "update" | "rollback" | "stop" | "start" | "release_hold",
  "root": "<root>", "installer": {"commit": "<40 hex>" | null, "path": "<path>"},
  "inputs": {…}, "plan_id": "plan-<16 hex>" | null, "plan": {…} | null,
  "guards": [], "acknowledged": ["accept_ledger_one_way", …],
@@ -606,6 +720,7 @@ any other schema (`state_invalid`).
  "steps": [{"n": 1, "kind": "<step>", "target": "<relative path>", "intent": {…},
             "state": "planned" | "started" | "done" | "undone", "evidence": {…} | null}],
  "undo": {"started_at_unix_ms": 0, "finished_at_unix_ms": 0 | null} | null,
+ "rollback": {"started_at_unix_ms": 0, "to": "<40 hex>", "failed": ["<check id>"], "reversed_at_unix_ms": 0 | null},
  "result": {…} | null, "finished_at_unix_ms": 0 | null}
 ```
 
@@ -628,7 +743,12 @@ state alone, so a step repeated after a crash is either already true or done aga
 | `stage_file` | `<dst>.new-<ms>.part` holds the wanted SHA-256 | copy again | part → `.abandoned-<ms2>` |
 | `swap_file` | `<dst>` holds the new SHA-256; a replaced file's `.old-<ms>` holds the old one | finish whichever half is missing | `<dst>` → `.rolledback-<ms2>`; `.old-<ms>` → `<dst>`; an added file → `.rolledback-<ms2>` |
 | `record_state` | `state.json` says so | rewrite | rewrite the previous state |
-| `pause`, `close`, `start`, `post_check`, `release_hold` | INST-2 | | |
+| `pause` | `status` shows the hold on every instance of the intent and every other pause as S0 had it (no Runtime: its pauses persist) | pause what is not yet held | — (the hold stays until `release-hold`) |
+| `close` | no Runtime answers; S0's head recorded | close again | — |
+| `start` | a Runtime answers whose owner started at or after the step's first spawn | start again | — |
+| `post_check` | — | check again | — |
+| `release_hold` | no instance paused with the reason | release again | — |
+| `reverse_files` | the previous build verified in place | reverse what is not yet reversed | — |
 | `config_swap` | INST-3 | | |
 | `pack_item` | INST-4, as `swap_file` per item | | |
 
@@ -681,6 +801,10 @@ the fragment registers, names the command.
   `install_pack_place`, `install_pack_remove_plan`, `install_pack_remove_apply`,
   `install_pack_restore` (INST-4); `install_instance_add`, `install_instance_remove` (INST-5);
   `install_new` (INST-6).
+- **`install_refusal`, INST-2**: `runtime_not_running`, `runtime_stop_failed`,
+  `post_check_failed`, `deploy_rolled_back` ("Formal stop, start and the hold").
+- **`install_caveat`, INST-2**: `start_stalled`, `stop_terminal_unconfirmed`,
+  `runs_not_continued`.
 - **`install_refusal`**: `not_single_location`, `layout_ab_unsupported`, `not_adopted`,
   `state_invalid`, `operation_unfinished`, `foreign_part`, `writer_lock_failed`,
   `release_check_failed`, `live_build_invalid`, `live_build_modified`, `build_not_kept`,

@@ -2496,6 +2496,12 @@ impl HostShared {
                     }
                 }
             }
+            // Workflow #421 INST-2: the dispatches granted since the start, for `StartReport` (a
+            // suppressed replay runs nothing).
+            Ok(admission @ PolicyDispatchAdmission::Granted { .. }) => {
+                self.count_start_dispatch(&intent.instance_id)?;
+                Ok(admission)
+            }
             result => result,
         }
     }

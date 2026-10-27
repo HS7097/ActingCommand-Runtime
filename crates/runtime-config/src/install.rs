@@ -59,6 +59,15 @@ pub const CHILD_LEDGER_READ_TIMEOUT_MS: &str = "install.child.ledger_read_timeou
 /// The `actingd ledger-maintenance verify` of an update or rollback, its deadline in
 /// milliseconds.
 pub const CHILD_LEDGER_VERIFY_TIMEOUT_MS: &str = "install.child.ledger_verify_timeout_ms";
+/// Workflow #421 INST-2 (#421 deploy design §4, §7): how often the installer's start journals a
+/// progress sample (the start log's size, the starting process's reads), in milliseconds.
+pub const START_SAMPLE_INTERVAL_MS: &str = "install.start.sample_interval_ms";
+/// The stall rule's detection: a start whose log has not grown for this long is the caveat
+/// `start_stalled`, in milliseconds; nothing is killed.
+pub const START_STALL_AFTER_MS: &str = "install.start.stall_after_ms";
+/// The stall rule's detection: a start whose process read more than this many bytes before it
+/// was ready is the caveat `start_stalled`; nothing is killed.
+pub const START_STALL_READ_BYTES: &str = "install.start.stall_read_bytes";
 
 /// The section as the configuration file and the defaults file write it: every member may be
 /// left out and none is unknown (M387 §5.3).
@@ -114,6 +123,14 @@ struct StartFile {
     ready_timeout_ms: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     attempts: Option<Value>,
+    // Workflow #421 INST-2 (#421 deploy design §7): the start's progress samples and the
+    // stall rule's detection; the product reports a stall and never kills.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sample_interval_ms: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stall_after_ms: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stall_read_bytes: Option<Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -235,6 +252,25 @@ pub(crate) static ROWS: &[KeyRow] = &[
         ValueType::DurationMs,
         milliseconds(60_000, 86_400_000),
     ),
+    // Workflow #421 INST-2 (#421 deploy design §4, §7).
+    row(
+        START_SAMPLE_INTERVAL_MS,
+        ValueType::DurationMs,
+        milliseconds(1_000, 600_000),
+    ),
+    row(
+        START_STALL_AFTER_MS,
+        ValueType::DurationMs,
+        milliseconds(60_000, 3_600_000),
+    ),
+    row(
+        START_STALL_READ_BYTES,
+        ValueType::Integer,
+        KeyRange::Integer {
+            min: 0,
+            max: 1_099_511_627_776,
+        },
+    ),
 ];
 
 /// One blocked window of `install.guard.blocked_windows`, in host local time, `[from, to)`,
@@ -271,6 +307,9 @@ pub struct InstallSettings {
     pub child_check_config_timeout_ms: u64,
     pub child_ledger_read_timeout_ms: u64,
     pub child_ledger_verify_timeout_ms: u64,
+    pub start_sample_interval_ms: u64,
+    pub start_stall_after_ms: u64,
+    pub start_stall_read_bytes: u64,
 }
 
 /// The section of the configuration document `file` (actingd's configuration as `actingctl`
@@ -342,6 +381,9 @@ pub fn settings(file: &Value) -> Result<InstallSettings, ConfigFailure> {
     };
     let (row, windows) = raw(GUARD_BLOCKED_WINDOWS)?;
     parse_value(row, GUARD_BLOCKED_WINDOWS, &windows)?;
+    let start_stall_read_bytes = u64::try_from(integer(START_STALL_READ_BYTES)?).map_err(|_| {
+        ConfigFailure::invalid_value(START_STALL_READ_BYTES, ConfigValueProblem::OutOfRange)
+    })?;
     Ok(InstallSettings {
         lock_wait_ms: duration(LOCK_WAIT_MS)?,
         stop_drain_timeout_ms: duration(STOP_DRAIN_TIMEOUT_MS)?,
@@ -358,6 +400,9 @@ pub fn settings(file: &Value) -> Result<InstallSettings, ConfigFailure> {
         child_check_config_timeout_ms: duration(CHILD_CHECK_CONFIG_TIMEOUT_MS)?,
         child_ledger_read_timeout_ms: duration(CHILD_LEDGER_READ_TIMEOUT_MS)?,
         child_ledger_verify_timeout_ms: duration(CHILD_LEDGER_VERIFY_TIMEOUT_MS)?,
+        start_sample_interval_ms: duration(START_SAMPLE_INTERVAL_MS)?,
+        start_stall_after_ms: duration(START_STALL_AFTER_MS)?,
+        start_stall_read_bytes,
     })
 }
 
@@ -500,6 +545,11 @@ mod tests {
             child_check_config_timeout_ms: 900_000,
             child_ledger_read_timeout_ms: 300_000,
             child_ledger_verify_timeout_ms: 1_800_000,
+            // Workflow #421 INST-2 (#421 deploy design §4, §7): the start's samples and stall
+            // detection.
+            start_sample_interval_ms: 30_000,
+            start_stall_after_ms: 720_000,
+            start_stall_read_bytes: 53_687_091_200,
         };
         assert_eq!(settings(&json!({})), Ok(defaults.clone()));
         assert_eq!(settings(&json!({"install": {}})), Ok(defaults.clone()));

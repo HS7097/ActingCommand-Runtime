@@ -824,6 +824,9 @@ objects deny unknown members.
 | `install.child.check_config_timeout_ms` | milliseconds `10000..=3600000` | `900000` | each `actingd check-config` the installer runs (INST-1b-F fix round 1) |
 | `install.child.ledger_read_timeout_ms` | milliseconds `10000..=3600000` | `300000` | each `actingledger` read: S0, each page of the rollback gate's reader part (INST-1b-F fix round 1) |
 | `install.child.ledger_verify_timeout_ms` | milliseconds `60000..=86400000` | `1800000` | the `actingd ledger-maintenance verify` of an update or rollback (INST-1b-F fix round 1) |
+| `install.start.sample_interval_ms` | milliseconds `1000..=600000` | `30000` | how often the installer's start journals a progress sample: the start log's size, the starting Runtime's reads (INST-2) |
+| `install.start.stall_after_ms` | milliseconds `60000..=3600000` | `720000` | the stall rule's detection: a start log that did not grow for this long is the caveat `start_stalled`; nothing is killed (INST-2) |
+| `install.start.stall_read_bytes` | integer `0..=1099511627776` | `53687091200` | the stall rule's detection: a starting Runtime that read more than this before it was ready is the caveat `start_stalled`; nothing is killed (INST-2) |
 
 A child still running at its `install.child.*` deadline is left running, never killed (the
 stall rule), and reported with its `pid` and the key ([install-cli.md](install-cli.md),

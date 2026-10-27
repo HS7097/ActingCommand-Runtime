@@ -188,6 +188,8 @@ crate::outcome_codes! {
         FactRefreshStatusCompleted => "request_fact_refresh_status_completed": success / none,
         // Workflow #386 SR-6b, MCP-19a (register §1.143).
         ScheduleExplanationCompleted => "request_schedule_explanation_completed": success / none,
+        // Workflow #421 INST-2 (#421 deploy design §4): the Runtime's report of its own start.
+        StartReportCompleted => "request_start_report_completed": success / none,
     }
 }
 
@@ -722,6 +724,8 @@ crate::outcome_codes! {
         InvalidFactRefreshStatus => "invalid_fact_refresh_status": error / none,
         // Workflow #386 SR-6b, MCP-19a: a `ScheduleExplanation` answer of the wrong shape.
         InvalidScheduleExplanation => "invalid_schedule_explanation": error / none,
+        // Workflow #421 INST-2: a `StartReport` answer of the wrong shape.
+        InvalidStartReport => "invalid_start_report": error / none,
     }
 }
 

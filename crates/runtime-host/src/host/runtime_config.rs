@@ -71,18 +71,25 @@ impl HostShared {
                 .collect::<Vec<_>>();
             (stored, stale)
         };
-        let (notes, restored) = match &stored {
-            None => (Vec::new(), false),
+        let (notes, restored, rows_stored) = match &stored {
+            None => (Vec::new(), false, 0),
             Some(record) => match (&record.value, record.source) {
                 (ContractFactValue::RecordList(rows), OriginModule::Runtime) => (
                     effective
                         .restore(rows, &context)
                         .map_err(|_| overrides_invalid())?,
                     !rows.is_empty(),
+                    rows.len(),
                 ),
                 _ => return Err(overrides_invalid()),
             },
         };
+        // Workflow #421 INST-2: the instructions restored as they were, and the keys that were
+        // not, for `StartReport`.
+        self.note_start_instructions(
+            rows_stored.saturating_sub(notes.len()),
+            notes.iter().map(|note| note.config_key.clone()).collect(),
+        )?;
         let observed_at_unix_ms = self.clock.sample()?.unix_ms;
         self.record_config_fact(
             manifest.subsystems_fact_record(observed_at_unix_ms, OriginModule::Runtime),

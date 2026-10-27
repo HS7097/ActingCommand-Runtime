@@ -1328,6 +1328,37 @@ impl RuntimeClient {
         }
     }
 
+    /// Reads what the Runtime knows about its own start (`StartReport`, Workflow #421 INST-2;
+    /// #421 deploy design §4): the ledger open, the tagged state, the recovery, the pauses and
+    /// instructions restored, the instances bound, the standard packs registered and the
+    /// dispatches admitted since the start. Read-only: the Runtime reads and records nothing in
+    /// the ledger. A Runtime that does not know the operation (every build before it) drops the
+    /// connection without a receipt: only when this call wrote its own frame and that connection
+    /// then ended before the receipt header (`send_or_dropped`) does the client reconnect and, in
+    /// the same owner epoch, report `runtime_operation_unsupported`. Every other failure is
+    /// returned unchanged.
+    pub fn start_report(&self) -> RuntimeClientResult<actingcommand_contract::RuntimeStartReport> {
+        const OPERATION: Location = ClientLocation::RuntimeStartReport.location();
+        match self.send_or_dropped(OPERATION, RuntimeOperation::StartReport)? {
+            SentOutcome::Answered(result) => match *result {
+                RuntimeResult::StartReport { report }
+                    if report.owner_epoch == self.shared.info.owner_epoch() =>
+                {
+                    Ok(*report)
+                }
+                _ => Err(self.unexpected_result(OPERATION)),
+            },
+            SentOutcome::Dropped(error) => match self.reconnect_in_owner_epoch(OPERATION) {
+                Ok(()) => Err(RuntimeClientError::fatal(
+                    ClientCode::RuntimeOperationUnsupported,
+                    OPERATION,
+                )
+                .with_related(error)),
+                Err(reconnect) => Err(error.with_related(reconnect)),
+            },
+        }
+    }
+
     pub fn configure_monitor(
         &self,
         instance_alias: &str,

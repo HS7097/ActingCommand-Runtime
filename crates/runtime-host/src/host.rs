@@ -238,7 +238,9 @@ mod saved_artifact_ocr;
 use material_read::MaterialReadContext;
 // Workflow #386 SR-6b, MCP-19a: the latest evaluation's not-run explanation (register §1.143).
 mod schedule_explanation_read;
+// Workflow #421 INST-2 (#421 deploy design §4): the Runtime's report of its own start.
 mod scheduling_pause;
+mod start_report_read;
 // #411 A48: a self-check reads the emulator status first and recognizes a running emulator again.
 mod selfcheck_emulator;
 mod signatures;
@@ -1887,6 +1889,12 @@ impl RuntimeHost {
             performance_hold_for_test: AtomicBool::new(false),
             fact_refresh_bindings,
             instance_facts_loaded_at_unix_ms,
+            start_facts: Mutex::new(start_report_read::StartFacts::new(
+                started_at_unix_ms,
+                &timing,
+                timeout_ms,
+                ledger_open_slow.is_some(),
+            )),
             fact_refresh_recorder: Mutex::new(
                 crate::fact_refresh_transitions::FactRefreshRecorder::default(),
             ),
@@ -2036,6 +2044,8 @@ impl RuntimeHost {
             // marker decides whether the monitor registry, the policy host's decision memory and
             // the agent dispatcher load from their tagged records or are seeded once.
             let tagged_start = TaggedStart::read(&shared.ledger)?;
+            // Workflow #421 INST-2: whether this start loads or seeds, for `StartReport`.
+            shared.note_start_tagged_state(tagged_start == TaggedStart::Seed)?;
             // Workflow #422 LN-4: a root's first start has no earlier epoch to seed and writes
             // no marker; read before this start's own start record.
             let earlier_start = crate::tagged_state::earlier_start(&shared.ledger)?;
@@ -2202,6 +2212,7 @@ impl RuntimeHost {
                 mut agent_dispatcher,
                 unsettled_dispatches,
             ) = recovered?;
+            shared.note_start_recovery(startup_recovery.recovery_ms)?;
             if let Some(agent_config) = &config.agent_dispatcher {
                 reconcile_agent_wakes(
                     &mut agent_dispatcher,
@@ -2295,6 +2306,7 @@ impl RuntimeHost {
             shared.restore_install_pauses()?;
             host.scheduling_pause_restore =
                 shared.restore_scheduling_pauses(held_startup, previous_owner_epoch)?;
+            shared.note_start_pauses(&host.scheduling_pause_restore)?;
             // Workflow #369 E3 (coordinator ruling on #670, safety net): each dispatch the start
             // could not settle is recorded and its instance paused, after the persisted pauses
             // are restored and before any instance is prepared.
@@ -2393,6 +2405,8 @@ impl RuntimeHost {
                         )
                     })?,
             );
+            // Workflow #421 INST-2: the start is ready from here on, for `StartReport`.
+            shared.note_start_ready(shared.clock.sample()?.unix_ms)?;
             shared.finish_install_preparation()?;
             if !held_startup {
                 publish_runtime_info(&host.info_path, &host.info)?;
@@ -5263,6 +5277,9 @@ struct HostShared {
     // Workflow #384 D2-S4: L (D2 model §3.1), when this start finished loading the instance
     // facts.
     instance_facts_loaded_at_unix_ms: u64,
+    // Workflow #421 INST-2 (#421 deploy design §4): what this start noted about itself and the
+    // dispatches admitted since, answered by `StartReport` (memory only).
+    start_facts: Mutex<start_report_read::StartFacts>,
     // Workflow #384 D2-S5 (D2 model §5.1 MP-3): the fact refresh's transition recorder of this
     // owner epoch (memory only; no decision reads it).
     fact_refresh_recorder: Mutex<crate::fact_refresh_transitions::FactRefreshRecorder>,

@@ -215,6 +215,11 @@ pub(crate) enum OperationKind {
     Adopt,
     Update,
     Rollback,
+    // Workflow #421 INST-2: the formal stop with its hold, the installer's start, the release
+    // of a hold.
+    Stop,
+    Start,
+    ReleaseHold,
 }
 
 impl OperationKind {
@@ -225,6 +230,9 @@ impl OperationKind {
             Self::Adopt => InstallLocation::Adopt,
             Self::Update => InstallLocation::UpdateApply,
             Self::Rollback => InstallLocation::RollbackApply,
+            Self::Stop => InstallLocation::Stop,
+            Self::Start => InstallLocation::Start,
+            Self::ReleaseHold => InstallLocation::ReleaseHold,
         }
     }
 }
@@ -260,10 +268,16 @@ pub(crate) fn unfinished_operation(root: &Path) -> Option<Option<String>> {
         return None;
     }
     match files::read_json::<Current>(&path) {
+        // Workflow #421 INST-2: a standalone stop, start or release of a hold swaps no program
+        // file either.
         Ok(current)
             if matches!(
                 current.kind,
-                OperationKind::ReleaseStage | OperationKind::Adopt
+                OperationKind::ReleaseStage
+                    | OperationKind::Adopt
+                    | OperationKind::Stop
+                    | OperationKind::Start
+                    | OperationKind::ReleaseHold
             ) =>
         {
             None

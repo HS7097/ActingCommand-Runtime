@@ -1994,6 +1994,9 @@ const RUNTIME_OPEN_ORIGIN_OPERATIONS: &[&str] = &[
     // Workflow #386 SR-6b, MCP-19a (register §1.143): the latest evaluation's not-run
     // explanation, a general read from memory like Status.
     "ScheduleExplanation",
+    // Workflow #421 INST-2 (#421 deploy design §4): the Runtime's report of its own start, a
+    // general read from memory like Status.
+    "StartReport",
     "Status",
     "SubscribeEvents",
     "UnloadPack",

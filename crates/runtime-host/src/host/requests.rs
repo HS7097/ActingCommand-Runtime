@@ -319,6 +319,9 @@ impl HostShared {
                 instance,
                 candidates,
             } => self.schedule_explanation_read(request, instance.as_deref(), *candidates),
+            // Workflow #421 INST-2 (#421 deploy design §4): the Runtime's report of its own
+            // start, a general read from memory that records nothing.
+            RuntimeOperation::StartReport => self.start_report_read(),
             RuntimeOperation::RuntimeFactSnapshot => {
                 let snapshot = self.runtime_fact_snapshot().map_err(|error| {
                     if error.is_fatal() {

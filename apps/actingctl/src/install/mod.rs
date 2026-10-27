@@ -17,14 +17,21 @@
 //! are renamed aside and kept.
 
 mod adopt;
+// Workflow #421 INST-2: the stop, the start, the hold's release and the composite update.
+mod deploy;
 pub(crate) mod files;
+mod guards;
+mod hold;
 mod host;
 mod journal;
+mod launch;
 mod lock;
 mod manifest;
 mod plan;
+mod postcheck;
 mod programs;
 mod release;
+mod runtime;
 mod state;
 mod status;
 mod undo;
@@ -39,6 +46,9 @@ mod gate_inst1_release;
 // Test-only: Workflow #421 INST-1, test rows IT-5 to IT-12, IT-15 and IT-16.
 #[cfg(test)]
 mod gate_inst1_update;
+// Test-only: Workflow #421 INST-2, test rows D-1 to D-9 (#421 deploy design §8 S2).
+#[cfg(test)]
+mod gate_inst2_deploy;
 
 pub(crate) use host::{Host, SystemHost};
 // Workflow #421 INST-1, watchdog row 7a″: what the watchdog and `actingctl start` read.
@@ -59,7 +69,7 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: actingctl install release verify --dir <dir> [--facts <release-facts.json>] [--expect-tag <tag>] [--expect-commit <hex8+>]\nusage: actingctl install release stage --root <root> --dir <dir> [--facts <release-facts.json>] [--expect-tag <tag>] [--expect-commit <hex8+>] [--local-build]\nusage: actingctl install adopt --root <root>\nusage: actingctl install update plan --root <root> --build <commit> [--preview] [--accept-ledger-one-way]\nusage: actingctl install update apply --root <root> --build <commit> --plan <id> [--accept-ledger-one-way]\nusage: actingctl install rollback plan|apply --root <root> --to <commit> [--plan <id>] [--accept-ledger-one-way]\nusage: actingctl install undo|resume --root <root> --operation <id>\nusage: actingctl install status --root <root> [--operation <id>] [--check-rollback]\nusage: actingctl install leftovers --root <root>";
+const USAGE: &str = "usage: actingctl install release verify --dir <dir> [--facts <release-facts.json>] [--expect-tag <tag>] [--expect-commit <hex8+>]\nusage: actingctl install release stage --root <root> --dir <dir> [--facts <release-facts.json>] [--expect-tag <tag>] [--expect-commit <hex8+>] [--local-build]\nusage: actingctl install adopt --root <root>\nusage: actingctl install update plan --root <root> --build <commit> [--preview] [--accept-ledger-one-way]\nusage: actingctl install update apply --root <root> --build <commit> --plan <id> [--accept-ledger-one-way] [--stop --hold <reason> [--known-pause ALIAS=REASON]... [--start] [--ack-guard <id>]... [--detach]]\nusage: actingctl install rollback plan|apply --root <root> --to <commit> [--plan <id>] [--accept-ledger-one-way] [--stop --hold <reason> [--known-pause ALIAS=REASON]... [--start] [--ack-guard <id>]... [--detach]]\nusage: actingctl install undo|resume --root <root> --operation <id>\nusage: actingctl install status --root <root> [--operation <id>] [--check-rollback]\nusage: actingctl install leftovers --root <root>\nusage: actingctl install stop --root <root> --hold <reason> [--known-pause ALIAS=REASON]... [--ack-guard <id>]...\nusage: actingctl install start --root <root> [--ack-guard <id>]...\nusage: actingctl install release-hold --root <root> --reason <reason>\nusage: actingctl install guards --root <root> --for stop|start [--hold <reason>] [--known-pause ALIAS=REASON]...";
 
 /// Runs `install` when the first argument names it; `None` leaves every other command to the
 /// CLI, unchanged.
@@ -132,6 +142,12 @@ pub(crate) fn execute(arguments: &[OsString], host: &dyn Host) -> Answer {
         ["resume", rest @ ..] => resume(rest, host),
         ["status", rest @ ..] => status::status(rest, host),
         ["leftovers", rest @ ..] => status::leftovers(rest, host),
+        // Workflow #421 INST-2: the formal stop, the installer's start, the release of a hold and
+        // the guards report.
+        ["stop", rest @ ..] => deploy::stop_command(rest, host),
+        ["start", rest @ ..] => deploy::start_command(rest, host),
+        ["release-hold", rest @ ..] => deploy::release_hold_command(rest, host),
+        ["guards", rest @ ..] => deploy::guards_command(rest, host),
         [word, ..] => Err(cli_line::usage_invalid(
             Some(*word),
             ArgumentProblem::Unknown,
@@ -153,9 +169,11 @@ fn usage(outcome: Outcome) -> Answer {
     }
 }
 
-/// The flags of one command: each at most once.
+/// The flags of one command: each at most once, but a list flag (Workflow #421 INST-2:
+/// `--known-pause`, `--ack-guard`) as often as it is given.
 pub(crate) struct Flags<'a> {
     values: BTreeMap<&'static str, &'a str>,
+    lists: BTreeMap<&'static str, Vec<&'a str>>,
     switches: BTreeSet<&'static str>,
 }
 
@@ -167,14 +185,32 @@ impl<'a> Flags<'a> {
         with_value: &[&'static str],
         switches: &[&'static str],
     ) -> Result<Self, Outcome> {
+        Self::parse_lists(words, with_value, &[], switches)
+    }
+
+    /// [`Self::parse`] with list flags: each of `lists` takes the next word, and may be given
+    /// again.
+    pub(crate) fn parse_lists(
+        words: &[&'a str],
+        with_value: &[&'static str],
+        lists: &[&'static str],
+        switches: &[&'static str],
+    ) -> Result<Self, Outcome> {
         let mut flags = Self {
             values: BTreeMap::new(),
+            lists: BTreeMap::new(),
             switches: BTreeSet::new(),
         };
         let mut index = 0;
         while index < words.len() {
             let word = words[index];
-            if let Some(flag) = with_value.iter().copied().find(|flag| *flag == word) {
+            if let Some(flag) = lists.iter().copied().find(|flag| *flag == word) {
+                let value = words.get(index + 1).copied().ok_or_else(|| {
+                    cli_line::usage_invalid(Some(word), ArgumentProblem::ValueMissing)
+                })?;
+                flags.lists.entry(flag).or_default().push(value);
+                index += 2;
+            } else if let Some(flag) = with_value.iter().copied().find(|flag| *flag == word) {
                 let value = words.get(index + 1).copied().ok_or_else(|| {
                     cli_line::usage_invalid(Some(word), ArgumentProblem::ValueMissing)
                 })?;
@@ -215,6 +251,11 @@ impl<'a> Flags<'a> {
 
     pub(crate) fn switch(&self, flag: &'static str) -> bool {
         self.switches.contains(flag)
+    }
+
+    /// Every value of the list flag `flag`, in the order given.
+    pub(crate) fn list(&self, flag: &'static str) -> Vec<&'a str> {
+        self.lists.get(flag).cloned().unwrap_or_default()
     }
 }
 
@@ -286,7 +327,11 @@ fn resume(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
     let answer = match operation.journal().kind {
         OperationKind::ReleaseStage => release::resume(operation)?,
         OperationKind::Adopt => adopt::resume(operation)?,
-        OperationKind::Update | OperationKind::Rollback => update::resume(operation)?,
+        OperationKind::Update
+        | OperationKind::Rollback
+        | OperationKind::Stop
+        | OperationKind::Start
+        | OperationKind::ReleaseHold => update::resume(operation)?,
     };
     Ok(resumed(operation_id, answer))
 }

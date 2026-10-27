@@ -97,6 +97,22 @@ pub(crate) fn undo(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
     let mut operation = Operation::load(host, &paths, operation_id, UNDO)?;
     let kind = operation.journal().kind;
     let changes_program = matches!(kind, OperationKind::Update | OperationKind::Rollback);
+    // Workflow #421 INST-2: a composite update starts the Runtime; its program files are never
+    // reversed under a running actingd.
+    if changes_program {
+        let images = host.processes_under(&paths.root).map_err(|cause| {
+            super::refusal(UNDO, InstallRefusal::ProcessesUnreadable).caused_by(cause)
+        })?;
+        let daemon = format!("\\{}", super::programs::DAEMON);
+        if let Some(image) = images
+            .iter()
+            .find(|image| image.path.to_ascii_lowercase().ends_with(&daemon))
+        {
+            return Err(super::refusal(UNDO, InstallRefusal::RuntimeRunning)
+                .path(&image.path)
+                .pid(image.pid));
+        }
+    }
     if operation.journal().finished() && operation.journal().undo.is_none() {
         // The last finished operation only.
         let ids = journal::operation_ids(&paths)?;
@@ -138,74 +154,8 @@ pub(crate) fn undo(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
         if !matches!(step.state, StepState::Started | StepState::Done) {
             continue;
         }
-        let moved: Moved = serde_json::from_value(step.intent.clone())
-            .map_err(|error| operation.interrupted(files::json_failure(&error)))?;
-        let evidence = match step.kind {
-            StepKind::SwapFile => {
-                let intent: SwapIntent = operation
-                    .intent(step.n)
-                    .map_err(|cause| operation.interrupted(cause))?;
-                let dst = paths.at(&intent.dst);
-                let mut evidence = Vec::new();
-                let swapped = files::sha256_file(&dst)
-                    .is_ok_and(|(actual, _)| actual == intent.sha256)
-                    || (!dst.exists() && intent.old.is_some());
-                if swapped {
-                    if let Some(aside) = set_aside(&dst, "rolledback", ms2)
-                        .map_err(|cause| operation.interrupted(cause))?
-                    {
-                        evidence.push(aside);
-                    }
-                    if let Some(old) = &intent.old {
-                        let old = paths.at(old);
-                        if old.exists() && !dst.exists() {
-                            files::rename(&old, &dst)
-                                .map_err(|cause| operation.interrupted(cause))?;
-                        }
-                    }
-                }
-                // The part, when the swap never took it in.
-                if let Some(aside) = set_aside(&paths.at(&intent.part), "abandoned", ms2)
-                    .map_err(|cause| operation.interrupted(cause))?
-                {
-                    evidence.push(aside);
-                }
-                evidence
-            }
-            StepKind::StageFile | StepKind::Extract | StepKind::CopyBuild => {
-                let part = moved.part.as_deref().map(|part| paths.at(part));
-                match part {
-                    Some(part) => set_aside(&part, "abandoned", ms2)
-                        .map_err(|cause| operation.interrupted(cause))?
-                        .into_iter()
-                        .collect(),
-                    None => Vec::new(),
-                }
-            }
-            StepKind::PlaceBuild => {
-                let kept_before = previous.state.as_ref().is_some_and(|state| {
-                    moved
-                        .commit
-                        .as_deref()
-                        .is_some_and(|commit| state.kept(commit).is_some())
-                });
-                match moved.build.as_deref() {
-                    Some(build) if !kept_before => set_aside(&paths.at(build), "rolledback", ms2)
-                        .map_err(|cause| operation.interrupted(cause))?
-                        .into_iter()
-                        .collect(),
-                    _ => Vec::new(),
-                }
-            }
-            StepKind::RecordState => {
-                if let Some(state) = &previous.state {
-                    state::write_state(&paths, state)
-                        .map_err(|cause| operation.interrupted(cause))?;
-                }
-                Vec::new()
-            }
-            StepKind::VerifyTree | StepKind::LedgerVerify => Vec::new(),
-        };
+        let evidence = reverse_step(&operation, step, &previous, ms2)
+            .map_err(|cause| operation.interrupted(cause))?;
         kept.extend(evidence.iter().cloned());
         operation
             .undone(step.n, Some(json!({ "kept": evidence })))
@@ -232,6 +182,82 @@ pub(crate) fn undo(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
     Answer::new(outcome)
         .with("operation_id", operation_id)?
         .with("kept", kept)
+}
+
+/// Reverses one started or done step of `operation` (`install undo`'s table, and an automatic
+/// rollback's reversal, Workflow #421 INST-2): the paths it set aside, each kept. `ms2` names
+/// what it moves aside.
+pub(crate) fn reverse_step(
+    operation: &Operation<'_>,
+    step: &journal::Step,
+    previous: &journal::Previous,
+    ms2: u64,
+) -> Result<Vec<String>, Outcome> {
+    let paths = operation.paths().clone();
+    let moved: Moved =
+        serde_json::from_value(step.intent.clone()).map_err(|error| files::json_failure(&error))?;
+    Ok(match step.kind {
+        StepKind::SwapFile => {
+            let intent: SwapIntent = operation.intent(step.n)?;
+            let dst = paths.at(&intent.dst);
+            let mut evidence = Vec::new();
+            let swapped = files::sha256_file(&dst).is_ok_and(|(actual, _)| actual == intent.sha256)
+                || (!dst.exists() && intent.old.is_some());
+            if swapped {
+                if let Some(aside) = set_aside(&dst, "rolledback", ms2)? {
+                    evidence.push(aside);
+                }
+                if let Some(old) = &intent.old {
+                    let old = paths.at(old);
+                    if old.exists() && !dst.exists() {
+                        files::rename(&old, &dst)?;
+                    }
+                }
+            }
+            // The part, when the swap never took it in.
+            if let Some(aside) = set_aside(&paths.at(&intent.part), "abandoned", ms2)? {
+                evidence.push(aside);
+            }
+            evidence
+        }
+        StepKind::StageFile | StepKind::Extract | StepKind::CopyBuild => {
+            let part = moved.part.as_deref().map(|part| paths.at(part));
+            match part {
+                Some(part) => set_aside(&part, "abandoned", ms2)?.into_iter().collect(),
+                None => Vec::new(),
+            }
+        }
+        StepKind::PlaceBuild => {
+            let kept_before = previous.state.as_ref().is_some_and(|state| {
+                moved
+                    .commit
+                    .as_deref()
+                    .is_some_and(|commit| state.kept(commit).is_some())
+            });
+            match moved.build.as_deref() {
+                Some(build) if !kept_before => set_aside(&paths.at(build), "rolledback", ms2)?
+                    .into_iter()
+                    .collect(),
+                _ => Vec::new(),
+            }
+        }
+        StepKind::RecordState => {
+            if let Some(state) = &previous.state {
+                state::write_state(&paths, state)?;
+            }
+            Vec::new()
+        }
+        // Workflow #421 INST-2: the hold, the close, the start, the checks, the release and
+        // a rollback's reversal change no file; a pause stays until `release-hold`.
+        StepKind::VerifyTree
+        | StepKind::LedgerVerify
+        | StepKind::Pause
+        | StepKind::Close
+        | StepKind::Start
+        | StepKind::PostCheck
+        | StepKind::ReleaseHold
+        | StepKind::ReverseFiles => Vec::new(),
+    })
 }
 
 /// The rollback gate toward the build before the operation, for the undo of a finished update

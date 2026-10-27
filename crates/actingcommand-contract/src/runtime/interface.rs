@@ -214,6 +214,7 @@ runtime_operation_kinds! {
     PerformanceStatus,
     FactRefreshStatus,
     ScheduleExplanation,
+    StartReport,
     ConfigureMonitor,
     ClearMonitor,
     AcquireLease,
@@ -290,6 +291,7 @@ impl RuntimeOperationKind {
             | Self::PerformanceStatus
             | Self::FactRefreshStatus
             | Self::ScheduleExplanation
+            | Self::StartReport
             | Self::ProjectInterface
             | Self::QueryEvents
             | Self::SubscribeEvents
@@ -386,6 +388,8 @@ impl RuntimeOperationKind {
             Self::FactRefreshStatus => Some(ReceiptCode::FactRefreshStatusCompleted.code()),
             // Workflow #386 SR-6b, MCP-19a (register §1.143).
             Self::ScheduleExplanation => Some(ReceiptCode::ScheduleExplanationCompleted.code()),
+            // Workflow #421 INST-2 (#421 deploy design §4).
+            Self::StartReport => Some(ReceiptCode::StartReportCompleted.code()),
             Self::ConfigureMonitor => Some(ReceiptCode::ConfigureMonitorCompleted.code()),
             Self::ClearMonitor => Some(ReceiptCode::ClearMonitorCompleted.code()),
             Self::CancelContainedTask => Some(ReceiptCode::CancelContainedTaskCompleted.code()),
@@ -496,6 +500,7 @@ impl RuntimeOperation {
             Self::PerformanceStatus => Kind::PerformanceStatus,
             Self::FactRefreshStatus => Kind::FactRefreshStatus,
             Self::ScheduleExplanation { .. } => Kind::ScheduleExplanation,
+            Self::StartReport => Kind::StartReport,
             Self::ConfigureMonitor { .. } => Kind::ConfigureMonitor,
             Self::ClearMonitor { .. } => Kind::ClearMonitor,
             Self::AcquireLease { .. } => Kind::AcquireLease,
@@ -619,6 +624,9 @@ mod tests {
             // Workflow #386 SR-6b, MCP-19a (register §1.143, §3 W5): the latest evaluation's
             // not-run explanation, a general read from memory that records nothing.
             K::ScheduleExplanation => (General, Some(Read), false),
+            // Workflow #421 INST-2 (#421 deploy design §4): the Runtime's report of its own
+            // start, a general read from memory that records nothing.
+            K::StartReport => (General, Some(Read), false),
             K::ProjectInterface => (General, Some(Read), false),
             K::QueryEvents => (General, Some(Read), false),
             K::SubscribeEvents => (General, Some(Read), false),

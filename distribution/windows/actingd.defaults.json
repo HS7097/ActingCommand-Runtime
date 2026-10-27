@@ -504,7 +504,10 @@
     },
     "start": {
       "ready_timeout_ms": 900000,
-      "attempts": 2
+      "attempts": 2,
+      "sample_interval_ms": 30000,
+      "stall_after_ms": 720000,
+      "stall_read_bytes": 53687091200
     },
     "hold_after_start": true,
     "hot": {

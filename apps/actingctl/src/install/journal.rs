@@ -32,6 +32,16 @@ pub(crate) enum StepKind {
     LedgerVerify,
     StageFile,
     SwapFile,
+    // Workflow #421 INST-2 (`contracts/install-cli.md`, "Steps"): the hold with what it
+    // deferred, the formal close, the installer's start, the post-start checks, the release of
+    // the hold with the hand-back of the deferred work, and an automatic rollback's reversal of
+    // the operation's file steps.
+    Pause,
+    Close,
+    Start,
+    PostCheck,
+    ReleaseHold,
+    ReverseFiles,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,6 +91,19 @@ pub(crate) struct UndoRecord {
     pub(crate) finished_at_unix_ms: Option<u64>,
 }
 
+/// Workflow #421 INST-2 (#421 deploy design §4, decision 74 A): the automatic rollback of a
+/// composite update, between the new start and the resume: why it began (the failed checks, or
+/// the start's own code), the build it rolled back to, and when the operation's file steps were
+/// reversed (from then on the previous build is live again).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RollbackRecord {
+    pub(crate) started_at_unix_ms: u64,
+    pub(crate) to: String,
+    pub(crate) failed: Vec<String>,
+    pub(crate) reversed_at_unix_ms: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Journal {
@@ -98,6 +121,9 @@ pub(crate) struct Journal {
     pub(crate) previous: Previous,
     pub(crate) steps: Vec<Step>,
     pub(crate) undo: Option<UndoRecord>,
+    /// Workflow #421 INST-2: an automatic rollback, absent when none began.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) rollback: Option<RollbackRecord>,
     pub(crate) result: Option<Value>,
     pub(crate) finished_at_unix_ms: Option<u64>,
 }
@@ -228,6 +254,7 @@ impl<'h> Operation<'h> {
             previous: opening.previous,
             steps,
             undo: None,
+            rollback: None,
             result: None,
             finished_at_unix_ms: None,
         };
@@ -337,6 +364,77 @@ impl<'h> Operation<'h> {
         let step = &mut self.journal.steps[n - 1];
         step.state = StepState::Undone;
         step.evidence = evidence;
+        self.write()
+    }
+
+    /// Workflow #421 INST-2: records step `n`'s evidence so far (a start's progress samples)
+    /// without changing its state.
+    pub(crate) fn progress(&mut self, n: usize, evidence: Value) -> Result<(), Outcome> {
+        self.journal.steps[n - 1].evidence = Some(evidence);
+        self.write()
+    }
+
+    /// Workflow #421 INST-2: records the guards the command evaluated and the acknowledgments
+    /// it was given (`--ack-guard`).
+    pub(crate) fn record_guards(
+        &mut self,
+        guards: Vec<Value>,
+        acknowledged: &[String],
+    ) -> Result<(), Outcome> {
+        self.journal.guards = guards;
+        for id in acknowledged {
+            let named = format!("guard:{id}");
+            if !self.journal.acknowledged.contains(&named) {
+                self.journal.acknowledged.push(named);
+            }
+        }
+        self.write()
+    }
+
+    /// Workflow #421 INST-2: records the ledger head of S0, read once the Runtime stopped.
+    pub(crate) fn record_s0_head(&mut self, head: u64) -> Result<(), Outcome> {
+        let s0 = self.journal.s0.get_or_insert(S0 {
+            head: None,
+            epoch: None,
+            pauses: None,
+            instructions: None,
+        });
+        s0.head = Some(head);
+        self.write()
+    }
+
+    /// Workflow #421 INST-2: every step from `from` on that has not begun is done without
+    /// running, its evidence `{"skipped": why}` (the planned steps an automatic rollback
+    /// replaces).
+    pub(crate) fn skip_planned(&mut self, from: usize, why: &str) -> Result<(), Outcome> {
+        for step in self.journal.steps.iter_mut().skip(from.saturating_sub(1)) {
+            if step.state == StepState::Planned {
+                step.state = StepState::Done;
+                step.evidence = Some(serde_json::json!({"skipped": why}));
+            }
+        }
+        self.write()
+    }
+
+    /// Workflow #421 INST-2: plans more steps after the planned ones (an automatic rollback's).
+    pub(crate) fn append_steps(&mut self, steps: Vec<PlannedStep>) -> Result<(), Outcome> {
+        let first = self.journal.steps.len() + 1;
+        for (index, (kind, target, intent)) in steps.into_iter().enumerate() {
+            self.journal.steps.push(Step {
+                n: first + index,
+                kind,
+                target,
+                intent,
+                state: StepState::Planned,
+                evidence: None,
+            });
+        }
+        self.write()
+    }
+
+    /// Workflow #421 INST-2: records the automatic rollback as it stands.
+    pub(crate) fn record_rollback(&mut self, rollback: RollbackRecord) -> Result<(), Outcome> {
+        self.journal.rollback = Some(rollback);
         self.write()
     }
 

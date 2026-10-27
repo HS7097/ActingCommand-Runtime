@@ -500,6 +500,13 @@ actingcommand_contract::outcome_vocabulary! {
         PackMaintenanceDrift => "pack_maintenance_drift",
         InstancesNotIdle => "instances_not_idle",
         InstanceInvalid => "instance_invalid",
+        // Workflow #421 INST-2 (#421 deploy design §4, §8): no Runtime answers where the command
+        // needs one (`--stop`, `release-hold`); the formal close did not complete; a fail-class
+        // post-start check failed and no rollback was possible; the composite rolled back.
+        RuntimeNotRunning => "runtime_not_running",
+        RuntimeStopFailed => "runtime_stop_failed",
+        PostCheckFailed => "post_check_failed",
+        DeployRolledBack => "deploy_rolled_back",
     }
 }
 
@@ -523,6 +530,13 @@ actingcommand_contract::outcome_vocabulary! {
         // take `--install-root` (a build before `actingd-config` revision 17) and judged the
         // configuration from its kept folder.
         CheckConfigWithoutInstallRoot => "check_config_without_install_root",
+        // Workflow #421 INST-2 (#421 deploy design §4, §7; decision 75 of 10-27 14:2x): the
+        // start looks stalled (no log growth, or reads past the key); a close whose terminal
+        // outcome was not `runtime_stopped` or was not found; runs the hold's drain stopped at a
+        // checkpoint, whose tasks the Runtime evaluates again from their start.
+        StartStalled => "start_stalled",
+        StopTerminalUnconfirmed => "stop_terminal_unconfirmed",
+        RunsNotContinued => "runs_not_continued",
     }
 }
 

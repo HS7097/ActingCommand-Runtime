@@ -9,9 +9,10 @@
 //! root.
 
 use super::manifest::{self, Speaks};
+use super::runtime::{RuntimeLink, SystemRuntime};
 use crate::codes::ActingctlCode;
 use crate::watchdog::observe;
-use actingcommand_contract::outcome::Outcome;
+use actingcommand_contract::outcome::{IoOp, Outcome};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::ffi::OsString;
@@ -102,6 +103,20 @@ pub(crate) trait Host {
     fn before_retire(&self, _operation_id: &str) -> Result<(), Outcome> {
         Ok(())
     }
+    /// Workflow #421 INST-2: the root's Runtime.
+    fn runtime(&self) -> &dyn RuntimeLink;
+    /// Waits `ms` milliseconds between two polls (readiness, progress). Production sleeps; a
+    /// test moves its clock.
+    fn pause_ms(&self, ms: u64);
+    /// The available physical memory in MB (guard `memory`, the watchdog's hidden CIM query).
+    fn available_memory_mb(&self) -> Result<u64, Outcome>;
+    /// The bytes the `actingcommand-actingd.exe` under `root` has read so far (a start's
+    /// progress sample); `None` when none runs or the count cannot be read.
+    fn runtime_read_bytes(&self, root: &Path) -> Option<u64>;
+    /// Runs the running installer again with `arguments`, detached (`--detach`): through the
+    /// watchdog's manual-run method (WMI `Win32_Process.Create`, hidden, no handle of the
+    /// caller), in `directory`, its output appended to `log`; its process id.
+    fn detach(&self, arguments: &[String], directory: &Path, log: &Path) -> Result<u32, Outcome>;
 }
 
 /// The machine.
@@ -188,7 +203,132 @@ impl Host for SystemHost {
         directories.extend(observe::console_log_directory());
         directories
     }
+
+    fn runtime(&self) -> &dyn RuntimeLink {
+        &SystemRuntime
+    }
+
+    fn pause_ms(&self, ms: u64) {
+        std::thread::sleep(Duration::from_millis(ms));
+    }
+
+    fn available_memory_mb(&self) -> Result<u64, Outcome> {
+        const SCRIPT: &str = "$ErrorActionPreference = 'Stop'\n\
+            $ProgressPreference = 'SilentlyContinue'\n\
+            $free = [uint64](Get-CimInstance -ClassName Win32_OperatingSystem).FreePhysicalMemory\n\
+            [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false\n\
+            [Console]::Out.Write((ConvertTo-Json -InputObject ([pscustomobject]@{ free_kb = $free }) -Compress))\n";
+        let output = crate::watchdog::powershell::run(
+            SCRIPT,
+            &[],
+            PROBE_TIMEOUT,
+            ActingctlCode::ProcessProbeFailed,
+        )?;
+        let value: Value = serde_json::from_str(output.trim()).map_err(|error| {
+            Outcome::new(ActingctlCode::ProcessProbeFailed)
+                .caused_by(super::files::json_failure(&error))
+        })?;
+        value["free_kb"]
+            .as_u64()
+            .map(|kb| kb / 1024)
+            .ok_or_else(|| Outcome::new(ActingctlCode::ProcessProbeFailed))
+    }
+
+    fn runtime_read_bytes(&self, root: &Path) -> Option<u64> {
+        const SCRIPT: &str = "$ErrorActionPreference = 'Stop'\n\
+            $ProgressPreference = 'SilentlyContinue'\n\
+            $found = @(Get-CimInstance -ClassName Win32_Process -Filter \"Name='actingcommand-actingd.exe'\" | Where-Object { $_.ExecutablePath } | ForEach-Object { [pscustomobject]@{ pid = [uint32]$_.ProcessId; path = $_.ExecutablePath; read = [uint64]$_.ReadTransferCount } })\n\
+            [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false\n\
+            [Console]::Out.Write((ConvertTo-Json -InputObject $found -Compress -Depth 3))\n";
+        let output = crate::watchdog::powershell::run(
+            SCRIPT,
+            &[],
+            PROBE_TIMEOUT,
+            ActingctlCode::ProcessProbeFailed,
+        )
+        .ok()?;
+        let value: Value = serde_json::from_str(output.trim()).ok()?;
+        let rows = match value {
+            Value::Array(rows) => rows,
+            Value::Null => Vec::new(),
+            row => vec![row],
+        };
+        let prefix = format!(
+            "{}\\",
+            super::files::plain(root)
+                .trim_end_matches('\\')
+                .to_lowercase()
+        );
+        rows.iter()
+            .filter(|row| {
+                row["path"]
+                    .as_str()
+                    .is_some_and(|path| path.to_lowercase().starts_with(&prefix))
+            })
+            .find_map(|row| row["read"].as_u64())
+    }
+
+    fn detach(&self, arguments: &[String], directory: &Path, log: &Path) -> Result<u32, Outcome> {
+        const SCRIPT: &str = "$ErrorActionPreference = 'Stop'\n\
+            $ProgressPreference = 'SilentlyContinue'\n\
+            $startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0; PriorityClass = [uint32]32 }\n\
+            $result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $env:AC_INSTALL_LINE; CurrentDirectory = $env:AC_INSTALL_DIR; ProcessStartupInformation = $startup }\n\
+            [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false\n\
+            [Console]::Out.Write((ConvertTo-Json -InputObject ([pscustomobject]@{ return_value = [int]$result.ReturnValue; pid = [uint32]$result.ProcessId }) -Compress))\n";
+        let program = std::env::current_exe().map_err(|error| {
+            super::files::os_failure(Path::new("actingctl.exe"), &error, IoOp::Open)
+        })?;
+        let program = super::files::plain(&program);
+        let log_text = super::files::plain(log);
+        let words = std::iter::once(program.as_str())
+            .chain(arguments.iter().map(String::as_str))
+            .chain(std::iter::once(log_text.as_str()));
+        for word in words {
+            if word.contains(CMD_UNSAFE) {
+                return Err(Outcome::new(ActingctlCode::WatchdogWmiPathUnsafe).path(word));
+            }
+        }
+        let shell = std::env::var("ComSpec").unwrap_or_else(|_| {
+            let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_owned());
+            format!(r"{root}\System32\cmd.exe")
+        });
+        let quoted = arguments
+            .iter()
+            .map(|word| format!("\"{word}\""))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let line =
+            format!("\"{shell}\" /d /s /c \"\"{program}\" {quoted} 1>>\"{log_text}\" 2>&1\"");
+        let line = std::ffi::OsString::from(line);
+        let directory = directory.as_os_str();
+        let output = crate::watchdog::powershell::run(
+            SCRIPT,
+            &[
+                ("AC_INSTALL_LINE", line.as_os_str()),
+                ("AC_INSTALL_DIR", directory),
+            ],
+            PROBE_TIMEOUT,
+            ActingctlCode::WmiStartFailed,
+        )?;
+        let value: Value = serde_json::from_str(output.trim()).map_err(|error| {
+            Outcome::new(ActingctlCode::WmiStartFailed)
+                .caused_by(super::files::json_failure(&error))
+        })?;
+        match (value["return_value"].as_i64(), value["pid"].as_u64()) {
+            (Some(0), Some(pid)) if pid > 0 => {
+                u32::try_from(pid).map_err(|_| Outcome::new(ActingctlCode::WmiStartFailed).pid(pid))
+            }
+            (Some(return_value), _) => {
+                Err(Outcome::new(ActingctlCode::WmiStartFailed).return_value(return_value))
+            }
+            (None, _) => Err(Outcome::new(ActingctlCode::WmiStartFailed)),
+        }
+    }
 }
+
+/// cmd metacharacters that a quoted word of a detached command line cannot carry safely (the
+/// watchdog's set).
+const CMD_UNSAFE: &[char] = &['&', '|', '<', '>', '^', '%', '!', '"'];
 
 /// The probe's rows whose image lies under `root` (case-insensitive, by the root's plain
 /// spelling); a row without a pid is the probe's failure.

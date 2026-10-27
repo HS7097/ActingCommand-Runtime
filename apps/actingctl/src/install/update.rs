@@ -26,13 +26,12 @@ use super::host::Host;
 use super::journal::{self, Opening, Operation, PlannedStep, Previous, S0, StepKind, StepState};
 use super::lock::WriterLock;
 use super::manifest::{self, Half};
-use super::plan::{self, Action, PlanInputs, PlanKind, Planned, Refused};
+use super::plan::{self, Action, Loaded, PlanInputs, PlanKind, Planned, Refused};
 use super::programs::{self, Deadline, PageRefused};
 use super::state::{self, LiveBuild, OperationKind, Paths};
 use super::{Answer, Flags};
 use crate::codes::{InstallCaveat, InstallLocation, InstallRefusal, RollbackGatePart};
 use actingcommand_contract::outcome::{CauseRelation, Outcome, OutcomeEnvelope};
-use actingcommand_runtime_config::install::InstallSettings;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::fs;
@@ -238,12 +237,39 @@ pub(crate) fn live_changes(
                 if let Some(previous) = &journal.previous.live {
                     changes.push((started, previous.clone()));
                 }
+                // Workflow #421 INST-2: each start the operation made names the build it
+                // started, from its spawn on; an automatic rollback makes the previous build
+                // live again once it reversed the files, and the target was then never live at
+                // the operation's end.
+                for step in journal
+                    .steps
+                    .iter()
+                    .filter(|step| step.kind == StepKind::Start)
+                {
+                    if let Some(evidence) = &step.evidence
+                        && let Some(at) = evidence.get("at_unix_ms").and_then(Value::as_u64)
+                        && let Some(commit) = evidence.get("commit").and_then(Value::as_str)
+                        && at > 0
+                    {
+                        changes.push((at, commit.to_owned()));
+                    }
+                }
+                let reversed = journal
+                    .rollback
+                    .as_ref()
+                    .and_then(|rollback| rollback.reversed_at_unix_ms);
                 let target = journal.inputs.get("commit").and_then(Value::as_str);
                 if recorded
+                    && reversed.is_none()
                     && let Some(target) = target
                     && let Some(finished) = journal.finished_at_unix_ms
                 {
                     changes.push((finished, target.to_owned()));
+                }
+                if let Some(reversed) = reversed
+                    && let Some(previous) = &journal.previous.live
+                {
+                    changes.push((reversed, previous.clone()));
                 }
                 if let Some(undo) = &journal.undo
                     && let Some(undone) = undo.finished_at_unix_ms
@@ -252,7 +278,10 @@ pub(crate) fn live_changes(
                     changes.push((undone, previous.clone()));
                 }
             }
-            OperationKind::ReleaseStage => {}
+            OperationKind::ReleaseStage
+            | OperationKind::Stop
+            | OperationKind::Start
+            | OperationKind::ReleaseHold => {}
         }
     }
     changes.sort_by_key(|(since, _)| *since);
@@ -490,7 +519,7 @@ pub(crate) struct SwapIntent {
     pub(crate) sha256: String,
 }
 
-fn update_steps(planned: &Planned, ms: u64) -> Vec<PlannedStep> {
+pub(crate) fn update_steps(planned: &Planned, ms: u64) -> Vec<PlannedStep> {
     let commit = &planned.target.commit;
     let whole = json!({"commit": commit});
     let mut steps = Vec::new();
@@ -537,27 +566,57 @@ fn update_steps(planned: &Planned, ms: u64) -> Vec<PlannedStep> {
     steps
 }
 
-/// `update apply` / `rollback apply`.
+/// `update apply` / `rollback apply`. Workflow #421 INST-2 adds the composite form `--stop --hold
+/// <reason> [--known-pause ALIAS=REASON]... [--start] [--ack-guard <id>]... [--detach]`
+/// (`super::deploy`): the plan is made while the Runtime runs, the Runtime is held and stopped
+/// first, and with `--start` started and checked after the update's steps.
 pub(crate) fn apply_command(
     words: &[&str],
     host: &dyn Host,
     kind: PlanKind,
 ) -> Result<Answer, Outcome> {
     let operation = kind.location(true);
-    let flags = Flags::parse(
+    let flags = Flags::parse_lists(
         words,
-        &["--root", kind_flag(kind), "--plan"],
-        &["--accept-ledger-one-way"],
+        &["--root", kind_flag(kind), "--plan", "--hold"],
+        &["--known-pause", "--ack-guard"],
+        &["--accept-ledger-one-way", "--stop", "--start", "--detach"],
     )?;
     let paths = super::resolve_root(&flags)?;
     let given = flags.required("--plan")?.to_owned();
+    let hold = super::hold::parse_hold(&flags)?;
+    let stop = flags.switch("--stop");
+    let start = flags.switch("--start");
+    let acks = super::guards::parse_acks(&flags.list("--ack-guard"))?;
+    if stop && hold.is_none() {
+        return Err(flags
+            .required("--hold")
+            .err()
+            .unwrap_or_else(|| super::unusable("--stop")));
+    }
+    if !stop {
+        for (flag, given) in [
+            ("--hold", hold.is_some()),
+            ("--start", start),
+            ("--ack-guard", !acks.is_empty()),
+            ("--detach", flags.switch("--detach")),
+        ] {
+            if given {
+                return Err(super::unusable(flag));
+            }
+        }
+    }
     let inputs = PlanInputs {
         kind,
         commit: flags.required(kind_flag(kind))?.to_ascii_lowercase(),
         accept_ledger_one_way: flags.switch("--accept-ledger-one-way"),
-        preview: false,
+        // INST-2: with `--stop` the plan is made while the Runtime runs; it stops first.
+        preview: stop,
         operation,
     };
+    if flags.switch("--detach") {
+        return super::deploy::detach(host, &paths, words, operation);
+    }
     journal::refuse_unfinished(operation, &paths)?;
     let loaded = plan::load(&paths, operation)?;
     let _lock = WriterLock::take(&paths, loaded.settings.lock_wait_ms, operation)?;
@@ -588,49 +647,59 @@ pub(crate) fn apply_command(
         }
         notes.extend(gate.notes.iter().cloned());
     }
-    // S0: the ledger head before the first change, read with the live build's reader by its
-    // bounded head read (review S1 F2), within its deadline.
-    let head = programs::ledger_head(
-        host,
-        &paths.root.join(Half::Tools.dir()),
-        &planned.state_root,
-        Deadline::ledger_read(&planned.settings),
-    )
-    .map_err(|failure| {
-        failure.onto(
-            super::refusal(operation, InstallRefusal::LedgerHeadUnreadable)
-                .path(&planned.state_root),
-        )
-    })?;
-    let opening = Opening {
-        kind: match kind {
-            PlanKind::Update => OperationKind::Update,
-            PlanKind::Rollback => OperationKind::Rollback,
+    let opened = match &hold {
+        Some(hold) => match super::deploy::open_composite(
+            host, &paths, &loaded, &planned, hold, start, &acks,
+        )? {
+            Ok(opened) => opened,
+            Err(answer) => return Ok(answer),
         },
-        inputs: json!({
-            "commit": planned.target.commit,
-            "accept_ledger_one_way": planned.inputs.accept_ledger_one_way,
-        }),
-        plan_id: Some(planned.id.clone()),
-        plan: Some(planned.document.clone()),
-        acknowledged: if planned.inputs.accept_ledger_one_way {
-            vec!["accept_ledger_one_way".to_owned()]
-        } else {
-            Vec::new()
-        },
-        s0: Some(S0 {
-            head: Some(head),
-            epoch: None,
-            pauses: None,
-            instructions: None,
-        }),
-        previous: Previous {
-            live: Some(planned.live.commit.clone()),
-            state: Some(planned.state.clone()),
-        },
+        None => {
+            // S0: the ledger head before the first change, read with the live build's reader
+            // by its bounded head read (review S1 F2), within its deadline.
+            let head = programs::ledger_head(
+                host,
+                &paths.root.join(Half::Tools.dir()),
+                &planned.state_root,
+                Deadline::ledger_read(&planned.settings),
+            )
+            .map_err(|failure| {
+                failure.onto(
+                    super::refusal(operation, InstallRefusal::LedgerHeadUnreadable)
+                        .path(&planned.state_root),
+                )
+            })?;
+            let opening = Opening {
+                kind: match kind {
+                    PlanKind::Update => OperationKind::Update,
+                    PlanKind::Rollback => OperationKind::Rollback,
+                },
+                inputs: json!({
+                    "commit": planned.target.commit,
+                    "accept_ledger_one_way": planned.inputs.accept_ledger_one_way,
+                }),
+                plan_id: Some(planned.id.clone()),
+                plan: Some(planned.document.clone()),
+                acknowledged: if planned.inputs.accept_ledger_one_way {
+                    vec!["accept_ledger_one_way".to_owned()]
+                } else {
+                    Vec::new()
+                },
+                s0: Some(S0 {
+                    head: Some(head),
+                    epoch: None,
+                    pauses: None,
+                    instructions: None,
+                }),
+                previous: Previous {
+                    live: Some(planned.live.commit.clone()),
+                    state: Some(planned.state.clone()),
+                },
+            };
+            Operation::open(host, &paths, opening, |ms| update_steps(&planned, ms))?
+        }
     };
-    let opened = Operation::open(host, &paths, opening, |ms| update_steps(&planned, ms))?;
-    let answer = run(opened, &planned.settings)?;
+    let answer = run(opened, &loaded)?;
     let renamed = &planned.running.renamed;
     if !renamed.is_empty() {
         notes.push(
@@ -646,17 +715,27 @@ pub(crate) fn apply_command(
         .with("extra", &planned.extra)
 }
 
-/// Continues an unfinished update or rollback under the writer lock.
+/// Continues an unfinished update, rollback, stop, start or release of a hold; the writer lock
+/// is taken for every kind that changes program files or starts the Runtime.
 pub(crate) fn resume(operation: Operation<'_>) -> Result<Answer, Outcome> {
     let loaded = plan::load(operation.paths(), InstallLocation::Resume)
         .map_err(|cause| operation.interrupted(cause))?;
-    let _lock = WriterLock::take(
-        operation.paths(),
-        loaded.settings.lock_wait_ms,
-        InstallLocation::Resume,
-    )
-    .map_err(|cause| operation.interrupted(cause))?;
-    run(operation, &loaded.settings)
+    let _lock = if matches!(
+        operation.journal().kind,
+        OperationKind::Stop | OperationKind::ReleaseHold
+    ) {
+        None
+    } else {
+        Some(
+            WriterLock::take(
+                operation.paths(),
+                loaded.settings.lock_wait_ms,
+                InstallLocation::Resume,
+            )
+            .map_err(|cause| operation.interrupted(cause))?,
+        )
+    };
+    run(operation, &loaded)
 }
 
 /// Whether `path` holds `sha256`.
@@ -664,26 +743,26 @@ fn holds(path: &Path, sha256: &str) -> bool {
     files::sha256_file(path).is_ok_and(|(actual, _)| actual == sha256)
 }
 
-/// The steps of an update or rollback, each skipped when its postcondition already holds; the
-/// children run within the deadlines of `settings`.
-fn run(mut operation: Operation<'_>, settings: &InstallSettings) -> Result<Answer, Outcome> {
+/// The steps of an operation, each skipped when it is done (or reversed by an automatic
+/// rollback) or its postcondition already holds; the steps an automatic rollback plans run
+/// after the planned ones. The file steps are INST-1's; the hold, the close, the start, the
+/// post-start checks, the release and the reversal are INST-2's (`super::deploy`). The children
+/// run within the deadlines of the `install` section.
+pub(crate) fn run(mut operation: Operation<'_>, loaded: &Loaded) -> Result<Answer, Outcome> {
+    let settings = &loaded.settings;
     let paths = operation.paths().clone();
-    let journal = operation.journal().clone();
-    let command = journal.kind.location();
-    let target: String = journal.inputs["commit"]
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| {
-            operation.interrupted(journal::state_invalid(
-                command,
-                paths.journal(operation.id()),
-                None,
-            ))
-        })?;
-    let from = journal.previous.live.clone();
+    let command = operation.journal().kind.location();
+    let target = operation
+        .journal()
+        .inputs
+        .get("commit")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let mut notes = Vec::new();
     let (mut replaced, mut added) = (0_usize, 0_usize);
-    for step in &journal.steps {
-        let n = step.n;
+    let mut n = 1;
+    while n <= operation.journal().steps.len() {
+        let step = operation.journal().steps[n - 1].clone();
         if step.kind == StepKind::SwapFile {
             let intent: SwapIntent = operation
                 .intent(n)
@@ -694,9 +773,41 @@ fn run(mut operation: Operation<'_>, settings: &InstallSettings) -> Result<Answe
                 added += 1;
             }
         }
-        if operation.journal().steps[n - 1].state == StepState::Done {
+        if matches!(step.state, StepState::Done | StepState::Undone) {
+            n += 1;
             continue;
         }
+        if matches!(
+            step.kind,
+            StepKind::Pause
+                | StepKind::Close
+                | StepKind::Start
+                | StepKind::PostCheck
+                | StepKind::ReleaseHold
+                | StepKind::ReverseFiles
+        ) {
+            let ended = super::deploy::step(&mut operation, n, loaded, &mut notes)
+                .map_err(|cause| operation.interrupted(cause))?;
+            match ended {
+                super::deploy::StepEnd::Done(evidence) => {
+                    operation
+                        .done(n, evidence)
+                        .map_err(|cause| operation.interrupted(cause))?;
+                }
+                super::deploy::StepEnd::Ends(refusal, members) => {
+                    return super::deploy::end(operation, refusal, members, &notes);
+                }
+            }
+            n += 1;
+            continue;
+        }
+        let Some(target) = target.clone() else {
+            return Err(operation.interrupted(journal::state_invalid(
+                command,
+                paths.journal(operation.id()),
+                None,
+            )));
+        };
         match step.kind {
             StepKind::LedgerVerify => {
                 operation
@@ -803,7 +914,7 @@ fn run(mut operation: Operation<'_>, settings: &InstallSettings) -> Result<Answe
                 });
                 state::write_state(&paths, &state).map_err(|cause| operation.interrupted(cause))?;
             }
-            StepKind::Extract | StepKind::CopyBuild | StepKind::PlaceBuild => {
+            _ => {
                 return Err(operation.interrupted(journal::state_invalid(
                     command,
                     paths.journal(operation.id()),
@@ -814,27 +925,13 @@ fn run(mut operation: Operation<'_>, settings: &InstallSettings) -> Result<Answe
         operation
             .done(n, None)
             .map_err(|cause| operation.interrupted(cause))?;
+        n += 1;
     }
-    let operation_id = operation.id().to_owned();
-    let outcome = super::done(command)
-        .install_operation_id(operation_id.clone())
-        .commit_sha(target.clone())
-        .installation_changed(true);
-    operation.finish(&outcome)?;
-    let verified = manifest::verify_build(&paths.root)
-        .map(|build| build.runtime.files.len() + build.tools.files.len())
-        .unwrap_or(0);
-    Answer::new(outcome)
-        .with("operation_id", &operation_id)?
-        .with("from_commit", from)?
-        .with("to_commit", &target)?
-        .with("replaced", replaced)?
-        .with("added", added)?
-        .with("verified", verified)?
-        .with(
-            "next",
-            json!({"undo": ["install", "undo", "--root", paths.plain, "--operation", operation_id]}),
-        )
+    super::deploy::finish(
+        operation,
+        notes,
+        super::deploy::FileCounts { replaced, added },
+    )
 }
 
 /// Swaps `part` in at `dst`: a file at `dst` that is not yet the new one is renamed `old` first
