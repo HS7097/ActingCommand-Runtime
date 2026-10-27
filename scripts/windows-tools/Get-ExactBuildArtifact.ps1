@@ -540,6 +540,20 @@ try {
         if ($layout.Value -ceq 'platform-tools-v3') {
             $expectedFiles += 'actingwatch.exe'
         }
+        # Workflow #421 MCP-ENTRY: a v3 artifact built since v0.12.18 also carries the stable MCP
+        # entry actingcommand-mcp-entry.exe; earlier v3 artifacts do not declare it.
+        $declaresMcpEntry = (
+            $manifest.PSObject.Properties.Name -contains 'files' -and
+            @(
+                @($manifest.files) | Where-Object { $null -ne $_ } | ForEach-Object {
+                    $path = $_.PSObject.Properties['path']
+                    if ($null -ne $path) { [string]$path.Value }
+                }
+            ) -ccontains 'actingcommand-mcp-entry.exe'
+        )
+        if ($layout.Value -ceq 'platform-tools-v3' -and $declaresMcpEntry) {
+            $expectedFiles += 'actingcommand-mcp-entry.exe'
+        }
         $expectedFiles += @(
             'platform-tools/adb.exe',
             'platform-tools/AdbWinApi.dll',

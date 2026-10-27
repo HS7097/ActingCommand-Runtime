@@ -435,6 +435,9 @@ actingcommand_contract::outcome_locations! {
         Resume => "install_resume",
         Status => "install_status",
         Leftovers => "install_leftovers",
+        // Workflow #421 MCP-ENTRY: `actingctl mcp-entry plan` and `list`.
+        McpEntryPlan => "install_mcp_entry_plan",
+        McpEntryList => "install_mcp_entry_list",
         Stop => "install_stop",
         Start => "install_start",
         ReleaseHold => "install_release_hold",

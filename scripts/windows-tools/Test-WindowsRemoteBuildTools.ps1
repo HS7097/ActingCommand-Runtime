@@ -398,7 +398,7 @@ try {
         Assert-True -Condition $workflowText.Contains($required) -Message "workflow is missing '$required'"
     }
     $runtimeSplit = '\$runtimeFiles\s*=\s*@\(\s*''actingcommand-actingd\.exe'',\s*''actingctl\.exe'',\s*''actingd\.config\.example\.json'',\s*''actingd\.defaults\.json'',\s*''INSTALL\.md'',\s*''RELEASE-NOTES\.md''\s*\)'
-    $toolsSplit = '\$toolFiles\s*=\s*@\(\s*''actinglab\.exe'',\s*''actingledger\.exe'',\s*''actingcommand-vision-provider-check\.exe'',\s*''actingwatch\.exe''\s*\)'
+    $toolsSplit = '\$toolFiles\s*=\s*@\(\s*''actinglab\.exe'',\s*''actingledger\.exe'',\s*''actingcommand-vision-provider-check\.exe'',\s*''actingwatch\.exe'',\s*''actingcommand-mcp-entry\.exe''\s*\)'
     Assert-True -Condition ([regex]::IsMatch($workflowText, $runtimeSplit)) -Message 'workflow Runtime artifact split is not exact'
     Assert-True -Condition ([regex]::IsMatch($workflowText, $toolsSplit)) -Message 'workflow Tools artifact split is not exact'
     foreach ($retired in @(

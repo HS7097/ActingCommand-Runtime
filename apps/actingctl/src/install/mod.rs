@@ -27,6 +27,8 @@ mod journal;
 mod launch;
 mod lock;
 mod manifest;
+// Workflow #421 MCP-ENTRY: `mcp-entry plan|list`.
+mod mcp_entry;
 mod plan;
 mod postcheck;
 mod programs;
@@ -81,6 +83,48 @@ pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
         return Some(cli_line::failure(&invalid, None));
     }
     Some(print(execute(&arguments[1..], &SystemHost)))
+}
+
+const MCP_ENTRY_USAGE: &str = "usage: actingctl mcp-entry plan --root <root> --entry-protocol 1 [--current-build <commit>] [-- <child arguments>]\nusage: actingctl mcp-entry list --root <root> [--all]";
+
+/// Runs `mcp-entry` (Workflow #421 MCP-ENTRY) when the first argument names it; `None` leaves
+/// every other command to the CLI, unchanged.
+pub(crate) fn dispatch_mcp_entry(arguments: &[OsString]) -> Option<ExitCode> {
+    if arguments.first()?.to_str()? != "mcp-entry" {
+        return None;
+    }
+    if let Err(invalid) = cli_line::detail() {
+        return Some(cli_line::failure(&invalid, None));
+    }
+    let usage = |outcome: Outcome| Answer {
+        members: Map::new(),
+        outcome,
+        text: Some(MCP_ENTRY_USAGE),
+    };
+    let Some(words) = arguments[1..]
+        .iter()
+        .map(|word| word.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return Some(print(usage(cli_line::usage_invalid(
+            None,
+            ArgumentProblem::NotUtf8,
+        ))));
+    };
+    let result = match words.as_slice() {
+        ["plan", rest @ ..] => mcp_entry::plan(rest),
+        ["list", rest @ ..] => mcp_entry::list(rest),
+        [word, ..] => Err(cli_line::usage_invalid(
+            Some(*word),
+            ArgumentProblem::Unknown,
+        )),
+        [] => Err(Outcome::new(ActingctlCode::ActingctlUsageInvalid)),
+    };
+    Some(print(match result {
+        Ok(answer) => answer,
+        Err(outcome) if outcome.is(ActingctlCode::ActingctlUsageInvalid) => usage(outcome),
+        Err(outcome) => Answer::new(outcome),
+    }))
 }
 
 /// One command's answer: the result members and the top outcome.

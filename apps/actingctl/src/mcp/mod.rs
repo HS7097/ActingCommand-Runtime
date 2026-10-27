@@ -45,6 +45,7 @@ mod tools;
 use crate::codes::{ActingctlCode, ArgumentProblem};
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{Detail, IoOp, Outcome, RawSource};
+use serde_json::json;
 use std::ffi::OsString;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -53,8 +54,13 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use tools::TierSet;
 
 const SERVE_USAGE: &str = "usage: actingctl mcp-serve [--root <install root>] [--state-root <dir>] [--tier observer|operator|author[,...]] [--detail codes|full] | actingctl mcp-serve --list-tools [--format json|markdown]";
-const CONFIG_USAGE: &str =
-    "usage: actingctl mcp-config --client claude|codex [--tier observer|operator|author[,...]]";
+const CONFIG_USAGE: &str = "usage: actingctl mcp-config --client claude|codex [--tier observer|operator|author[,...]]\nusage: actingctl mcp-config --client claude|codex|antigravity|dsh --entry --root <root> [--tier observer|operator|author[,...]]";
+/// Workflow #421 MCP-ENTRY (D2): the generation of the MCP entry a registration points at,
+/// `<root>\mcp-entry\g<generation>\actingcommand-mcp-entry.exe`.
+const ENTRY_GENERATION: u32 = 1;
+/// Antigravity's `timeoutSeconds`: a call's 25 s budget with the margin Codex's
+/// `tool_timeout_sec` (60) gives it.
+const ANTIGRAVITY_TIMEOUT_SECONDS: u64 = 60;
 
 /// Why `mcp-serve` or `mcp-config` ended without doing its work (Workflow #378 A5, model v2.2
 /// §7.3): one outcome, and for a usage error the usage line. Neither command prints an
@@ -244,15 +250,33 @@ fn serve(arguments: &[OsString]) -> Result<ExitCode, Ended> {
     .map_err(Ended::from)
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Client {
     Claude,
     Codex,
+    // Workflow #421 MCP-ENTRY (D7): registered through the entry only.
+    Antigravity,
+    Dsh,
+}
+
+impl Client {
+    /// The word `--client` takes, which the entry also takes.
+    const fn word(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+            Self::Antigravity => "antigravity",
+            Self::Dsh => "dsh",
+        }
+    }
 }
 
 /// Prints the client configuration for this executable; it writes no client file.
 fn config(arguments: &[OsString]) -> Result<ExitCode, Ended> {
     let mut client = None;
     let mut tiers = None;
+    let mut entry = false;
+    let mut root = None;
     let mut index = 0;
     while index < arguments.len() {
         let word = flag(arguments, index, CONFIG_USAGE)?;
@@ -262,6 +286,8 @@ fn config(arguments: &[OsString]) -> Result<ExitCode, Ended> {
                     match value(arguments, &mut index, word, CONFIG_USAGE)?.to_str() {
                         Some("claude") => Client::Claude,
                         Some("codex") => Client::Codex,
+                        Some("antigravity") => Client::Antigravity,
+                        Some("dsh") => Client::Dsh,
                         _ => {
                             return Err(usage_error(
                                 CONFIG_USAGE,
@@ -275,7 +301,18 @@ fn config(arguments: &[OsString]) -> Result<ExitCode, Ended> {
             "--tier" if tiers.is_none() => {
                 tiers = Some(parse_tiers(arguments, &mut index, word, CONFIG_USAGE)?);
             }
-            "--client" | "--tier" => {
+            "--entry" if !entry => entry = true,
+            "--root" if root.is_none() => {
+                root = Some(
+                    value(arguments, &mut index, word, CONFIG_USAGE)?
+                        .to_str()
+                        .ok_or_else(|| {
+                            usage_error(CONFIG_USAGE, ArgumentProblem::NotUtf8, Some(word))
+                        })?
+                        .to_owned(),
+                );
+            }
+            "--client" | "--tier" | "--entry" | "--root" => {
                 return Err(usage_error(
                     CONFIG_USAGE,
                     ArgumentProblem::Repeated,
@@ -295,6 +332,27 @@ fn config(arguments: &[OsString]) -> Result<ExitCode, Ended> {
     let client = client
         .ok_or_else(|| usage_error(CONFIG_USAGE, ArgumentProblem::Required, Some("--client")))?;
     let tiers: TierSet = tiers.unwrap_or_default();
+    if entry {
+        let root = root
+            .ok_or_else(|| usage_error(CONFIG_USAGE, ArgumentProblem::Required, Some("--root")))?;
+        print_text(&entry_snippet(client, &root, &tiers.argument()))?;
+        return Ok(ExitCode::SUCCESS);
+    }
+    // Without --entry the registration names this executable: the form takes no --root.
+    if root.is_some() {
+        return Err(usage_error(
+            CONFIG_USAGE,
+            ArgumentProblem::Unknown,
+            Some("--root"),
+        ));
+    }
+    if matches!(client, Client::Antigravity | Client::Dsh) {
+        return Err(usage_error(
+            CONFIG_USAGE,
+            ArgumentProblem::Required,
+            Some("--entry"),
+        ));
+    }
     let program = registered_program()?;
     // A path no configuration line can carry: not Unicode, or (for claude) a double quote.
     let unsupported = || Outcome::new(ActingctlCode::McpConfigProgramUnsupported).program(&program);
@@ -321,9 +379,63 @@ fn config(arguments: &[OsString]) -> Result<ExitCode, Ended> {
                 "[mcp_servers.actingcommand]\ncommand = {command}\nargs = ['mcp-serve','--tier','{tier_argument}']\nstartup_timeout_sec = 10\ntool_timeout_sec = 60\n# Optional second layer: let Codex expose only some tools, for example\n# enabled_tools = [{enabled}]\n"
             )
         }
+        // Registered through the entry only (refused above without --entry).
+        Client::Antigravity | Client::Dsh => {
+            return Err(usage_error(
+                CONFIG_USAGE,
+                ArgumentProblem::Required,
+                Some("--entry"),
+            ));
+        }
     };
     print_text(&text)?;
     Ok(ExitCode::SUCCESS)
+}
+
+/// Workflow #421 MCP-ENTRY (D7): the configuration that points `client` at the stable entry
+/// `<root>\mcp-entry\g1\actingcommand-mcp-entry.exe`, in the client's own shape (the templates
+/// of `codex-goal-lifecycle`'s `mcp\`): Claude Code's and Antigravity's `mcpServers` member
+/// (Antigravity with `timeoutSeconds`), Codex's `[mcp_servers.actingcommand]` table, and for DSH
+/// the `command` and `args` that replace those of its existing `actingcommand` entry (its tool
+/// whitelist stays as it is). Everything after `--` reaches `actingctl mcp-serve` unchanged.
+fn entry_snippet(client: Client, root: &str, tier_argument: &str) -> String {
+    let base = root.trim_end_matches(['\\', '/']);
+    let entry = format!(r"{base}\mcp-entry\g{ENTRY_GENERATION}\actingcommand-mcp-entry.exe");
+    let args = [
+        "--root",
+        root,
+        "--client",
+        client.word(),
+        "--",
+        "mcp-serve",
+        "--tier",
+        tier_argument,
+    ];
+    let server = match client {
+        Client::Claude => json!({"type": "stdio", "command": entry, "args": args, "env": {}}),
+        Client::Antigravity => json!({
+            "command": entry,
+            "args": args,
+            "timeoutSeconds": ANTIGRAVITY_TIMEOUT_SECONDS,
+        }),
+        Client::Dsh => json!({"command": entry, "args": args}),
+        Client::Codex => {
+            let listed = args
+                .iter()
+                .copied()
+                .map(toml_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            return format!(
+                "[mcp_servers.actingcommand]\ncommand = {}\nargs = [{listed}]\nstartup_timeout_sec = 10\ntool_timeout_sec = 60\n",
+                toml_string(&entry)
+            );
+        }
+    };
+    let snippet = json!({"mcpServers": {"actingcommand": server}});
+    let mut text = serde_json::to_string_pretty(&snippet).unwrap_or_else(|_| snippet.to_string());
+    text.push('\n');
+    text
 }
 
 /// The program a client registers (#359 item 7). Run from a slot of an A/B installation,
@@ -489,6 +601,8 @@ mod tests {
     mod gate_411_b15w2;
     mod gate_mcp19b;
     mod gate_mcp8;
+    // Workflow #421 MCP-ENTRY, test row E-12: `mcp-config --entry` for the four clients.
+    mod gate_mcp_entry;
     // Workflow #411 A8: lab::tests::gate_rc2_a8 takes its unreached deadline.
     pub(super) mod gate_mcpt1;
 

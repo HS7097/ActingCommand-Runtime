@@ -8215,6 +8215,9 @@
     "mcp_": [
       "actingctl"
     ],
+    "mcp_entry_": [
+      "mcp-entry"
+    ],
     "measure_": [
       "pack-containment",
       "recognition-pack",
@@ -9712,6 +9715,7 @@
     "ppocr-onnx-json-provider": "providers/ppocr-onnx-json",
     "actinglab-architecture": "tools/actinglab-architecture",
     "outcome-guard": "tools/outcome-guard",
-    "display-adapter": "crates/display-adapter"
+    "display-adapter": "crates/display-adapter",
+    "mcp-entry": "apps/mcp-entry"
   }
 }

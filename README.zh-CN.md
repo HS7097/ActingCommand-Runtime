@@ -157,6 +157,7 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 | apps/actingd | actingcommand-actingd | bin `actingcommand-actingd` | 常驻运行时的精简进程适配器 |
 | apps/actinglab | actingcommand-actinglab | bin `actinglab` | 创作与调试侧命令行，50 个顶层分派臂、139 条命令 |
 | apps/ledger-forensics | actingledger | lib + bin `actingledger` | 账本取证报告、重放与签名目录的只读前端 |
+| apps/mcp-entry | actingcommand-mcp-entry | bin `actingcommand-mcp-entry` | 所有客户端共用的稳定 MCP 入口（随 Tools 发布）：把 JSON-RPC 转给当前的 `actingctl mcp-serve`，并在两次调用之间切到已安装的版本 |
 | apps/vision-provider-check | actingcommand-vision-provider-check | bin | 列出视觉模型文件夹及其内容身份，并从 Runtime 账本读取提供者启动事实；不加载任何模型 |
 
 ### crates（24）
@@ -227,6 +228,8 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 # 列出所有档位的全部工具及说明
 <install root>\runtime\actingctl.exe mcp-serve --list-tools --format markdown
 ```
+
+**稳定入口（v0.12.18）。** 单一位置安装下，所有客户端（Claude Code、Codex、Antigravity、DSH）不再直接启动 `actingctl mcp-serve`，而是启动 `<root>\mcp-entry\g1\actingcommand-mcp-entry.exe --root <root> --client <名字> -- mcp-serve --tier <档位>`。入口把 JSON-RPC 转给一个 `<root>\runtime\actingctl.exe` 子进程，`--` 之后的参数原样传过去；更新之后，它只在两次调用之间、只对核验完整的安装（`actingctl mcp-entry plan`）切到新的子进程，重放客户端的握手，并发出变更通知（旧协议发 `notifications/tools/list_changed`，2026-07-28 协议在 `subscriptions/listen` 流上发同一通知）。旧子进程还持有未读结果的任务或 Lab 句柄时，切换会一直等；子进程在请求进行中退出时，该请求得到 `mcp_entry_outcome_unknown`（用 `ac_get_run` 或 `ac_overview` 查看），绝不重发。客户端第一次改用入口需要重启一次，之后更新不再需要重启。Claude Code 会自己重新拉工具表；Codex 重新加载该服务，Antigravity 在 MCP 管理器里点 Refresh，DSH 通过插件生命周期重新加载、工具白名单保持不变。`actingctl mcp-config --client claude|codex|antigravity|dsh --entry --root <root> --tier <档位>` 打印各客户端的配置片段；`actingctl mcp-entry list --root <root>` 显示每个入口的状态（`<root>\mcp-entry\state\entry-<pid>.json`）。详见 [contracts/install-cli.md](contracts/install-cli.md) 的 “The MCP entry”。
 
 **档位。** `observer` 总是开、也是默认；`operator` 与 `author` 用 `--tier` 打开。`tools/list` 只列出已开档位的工具，未开档位的工具答 `tier_not_enabled`。下表列的是 v0.12.10 的 38 个工具；标 † 的 16 个是 0.12 系列新增的。工具错误是 `{class, outcome}`，`mcp-serve --detail codes|full` 决定每个 outcome 带多少细节。
 

@@ -526,6 +526,13 @@
       "check_config_timeout_ms": 900000,
       "ledger_read_timeout_ms": 300000,
       "ledger_verify_timeout_ms": 1800000
+    },
+    "mcp_entry": {
+      "poll_ms": 2000,
+      "settle_ms": 10000,
+      "verify_timeout_ms": 60000,
+      "drain_max_ms": 600000,
+      "refused_retry_max_ms": 300000
     }
   }
 }

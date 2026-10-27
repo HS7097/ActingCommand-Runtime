@@ -6,6 +6,7 @@ members = [
     "apps/actingd",
     "apps/actinglab",
     "apps/ledger-forensics",
+    "apps/mcp-entry",
     "apps/vision-provider-check",
     "crates/actingcommand-contract",
     "crates/artifact-store",
