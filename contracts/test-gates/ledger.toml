@@ -760,3 +760,12 @@ tests = [
     "actingcommand-ledger::lib::global::tests::gate_ln7c_v::ln7c_v_frame_query_on_a_non_formal_root_is_refused",
 ]
 incident = ["#422 LN-7c V"]
+
+# ROUT-L RL-1c fix round 3 (#411; work order rd-1027/brief-rl1c-fix3.md, re-review rd-1027/v01220-review/rl1c-fix2.md M1): the suspended report's latest time reads through the time index: MAX(timestamp_unix_ms) is one entry of ledger_view_index_time_v1 and the newest row at that time is read through the same index (timestamp_unix_ms=?), both passing the plan rule with no sort; the newest-first read of a type walks ledger_view_index_type_v1 (event_type=? AND sequence<?) with no sort and no scan, automatic or history-wide index
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::sqlite::gate_rl1c_fix3::rl1c_fix3_the_latest_time_reads_one_entry_and_one_row_through_the_time_index",
+    "actingcommand-ledger::lib::global::sqlite::gate_rl1c_fix3::rl1c_fix3_the_newest_first_read_walks_the_type_index_without_a_sort",
+]
+incident = ["#411 RL-1c"]

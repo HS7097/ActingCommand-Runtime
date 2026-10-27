@@ -26,7 +26,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
     // The read's deadline counts from this process's start.
     let started = std::time::Instant::now();
     // At most `--config <path>` and `--deadline-ms <ms>`; a word after a whole option is usage.
-    if arguments.len() > 5 || (arguments.len() > 3 && arguments.len() % 2 == 0) {
+    if arguments.len() > 5 || (arguments.len() > 3 && arguments.len().is_multiple_of(2)) {
         return Err(ActingdError::config(ActingdCode::SuspendedUsageInvalid));
     }
     let mut config = None;

@@ -25,31 +25,36 @@ pub use fake::LedgerReadClock;
 
 #[cfg(any(test, feature = "test-hooks"))]
 mod fake {
-    use std::cell::Cell;
     use std::marker::PhantomData;
+    use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
+    use std::thread::{self, ThreadId};
     use std::time::Instant;
 
-    /// The armed fake clock of this thread: the looks taken, and how many looks see the
-    /// deadline still ahead.
+    /// An armed fake clock: the looks taken, and how many looks see the deadline still ahead.
     #[derive(Clone, Copy)]
     struct Armed {
         looks: u64,
         ahead: u64,
     }
 
-    thread_local! {
-        static ARMED: Cell<Option<Armed>> = const { Cell::new(None) };
+    /// The armed fake clocks, at most one per thread, keyed by the thread that armed it (RL-1c
+    /// fix 3, #411 M2: no item macro, as `write_fault`'s gates).
+    fn armed() -> MutexGuard<'static, Vec<(ThreadId, Armed)>> {
+        static ARMED: OnceLock<Mutex<Vec<(ThreadId, Armed)>>> = OnceLock::new();
+        ARMED
+            .get_or_init(|| Mutex::new(Vec::new()))
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     /// One look at this thread's fake clock: `None` when none is armed, else whether its
     /// deadline has passed (from the look after the `ahead` first ones on).
     pub(super) fn look() -> Option<bool> {
-        ARMED.with(|armed| {
-            let mut clock = armed.get()?;
-            clock.looks = clock.looks.saturating_add(1);
-            armed.set(Some(clock));
-            Some(clock.looks > clock.ahead)
-        })
+        let thread = thread::current().id();
+        let mut armed = armed();
+        let (_, clock) = armed.iter_mut().find(|(id, _)| *id == thread)?;
+        clock.looks = clock.looks.saturating_add(1);
+        Some(clock.looks > clock.ahead)
     }
 
     /// A fake clock for the ledger reads of this thread, until dropped: every deadline this
@@ -66,7 +71,11 @@ mod fake {
         /// Arms the fake clock on this thread; the deadline passes after `ahead` looks
         /// (`u64::MAX`: never).
         pub fn arm(ahead: u64) -> Self {
-            ARMED.with(|armed| armed.set(Some(Armed { looks: 0, ahead })));
+            let thread = thread::current().id();
+            let mut armed = armed();
+            armed.retain(|(id, _)| *id != thread);
+            armed.push((thread, Armed { looks: 0, ahead }));
+            drop(armed);
             Self {
                 // Only a value to hand to a read; the fake clock alone says when it passes.
                 deadline: Instant::now(),
@@ -81,13 +90,18 @@ mod fake {
 
         /// The looks taken at this clock so far.
         pub fn looks(&self) -> u64 {
-            ARMED.with(|armed| armed.get().map_or(0, |clock| clock.looks))
+            let thread = thread::current().id();
+            armed()
+                .iter()
+                .find(|(id, _)| *id == thread)
+                .map_or(0, |(_, clock)| clock.looks)
         }
     }
 
     impl Drop for LedgerReadClock {
         fn drop(&mut self) {
-            ARMED.with(|armed| armed.set(None));
+            let thread = thread::current().id();
+            armed().retain(|(id, _)| *id != thread);
         }
     }
 }
