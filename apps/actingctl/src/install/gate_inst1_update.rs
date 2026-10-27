@@ -33,13 +33,30 @@
 // - IT-16: `adopt` and `update plan` on a root holding a deploy kit's `.old-<stamp>` and
 //   `.rolledback-<stamp>` files: both pass, the files are extra, and `leftovers` lists them
 //   without an operation id.
+// INST-1b-F fix round 1 (brief `rd-1027\brief-inst1b-f-fix1.md` item 9, the gaps of review S1
+// §8), each expected value from the brief's item and the contract it amends:
+// - fix1-1 (F1): a target whose check-config refuses `--install-root` (a build before
+//   `actingd-config` revision 17, or one that refuses the option) is checked without it, with the
+//   caveat `check_config_without_install_root`, and the rollback passes;
+// - fix1-3 (F3): a rollback past the build the live one replaced fails `ledger_readability`,
+//   naming the one target it may pass for; toward that build it passes;
+// - fix1-4 (F4): a child still running at its deadline (the `install.child.*` key) is left
+//   running and reported with its `pid` and the key: before the operation opens nothing changes;
+//   the ledger verification inside apply leaves the operation for `resume`;
+// - fix1-5 (F5): a crash between the two renames of a swap is resumed or undone; a crash after
+//   the end is journalled and before `current.json` is retired is finished by `resume`;
+// - fix1-9u: the undo of a completed update: without an owner start no gate; after one, the
+//   gate decides; an owner journal it cannot read refuses `processes_unreadable` (F6);
+// - fix1-9s: `status --check-rollback` evaluates the whole gate toward the previous build, also
+//   while a Runtime runs.
 // The codes are the family's folded codes (ruling 54): `install_command_done`,
 // `install_caveat_noted` and `install_command_refused` with the command as `operation`, and
 // `install_operation_interrupted`. The machine is the fake host of `fixture.rs`; every root is a
 // temporary folder with neutral files.
 
 use super::fixture::{
-    BuildSpec, C1, C2, FakeHost, code, live_root, run, sha256_hex, tree, word, write_json,
+    BuildSpec, C1, C2, FakeHost, STALLED_PID, code, live_root, run, sha256_hex, tree, word,
+    write_json,
 };
 use super::host::RunningImage;
 use crate::watchdog::decide::LiveOwner;
@@ -1016,7 +1033,8 @@ fn inst1_it_12_the_rollback_gate_refuses_each_failed_part_and_passes_otherwise()
     host.programs.unreadable.replace(None);
     assert_refused(&refused, "install_rollback_plan", "rollback_gate_failed");
     assert_eq!(gate_parts(&refused), ["ledger_readability"]);
-    assert_eq!(refused.outcome.value("ledger_sequence"), Some(&json!(101)));
+    // The first sequence the reader refuses (fix round 1, review S1 F11), not the page's first.
+    assert_eq!(refused.outcome.value("ledger_sequence"), Some(&json!(120)));
 
     // The target's own open exceeds the deadline (600 000 ms) minus the margin (20 000 ms).
     let (root, _) = updated(&temp, &host, "slow", &live);
@@ -1071,7 +1089,7 @@ fn inst1_it_12_the_rollback_gate_refuses_each_failed_part_and_passes_otherwise()
     let refused = apply_rollback(&host, &root, &plan_id(&planned));
     host.programs.unreadable.replace(None);
     assert_refused(&refused, "install_rollback_apply", "rollback_gate_failed");
-    assert_eq!(refused.outcome.value("ledger_sequence"), Some(&json!(101)));
+    assert_eq!(refused.outcome.value("ledger_sequence"), Some(&json!(120)));
     assert_eq!(program_tree(&root), before, "nothing changed");
 }
 
@@ -1199,4 +1217,512 @@ fn inst1_it_16_adopt_and_plan_tolerate_kit_leftovers_without_operation_ids() {
             && row["operation_id"].is_string()),
         "{leftovers:?}"
     );
+}
+
+// ---- INST-1b-F fix round 1 (review S1 §8) ----
+
+/// A third neutral commit, a build after C2.
+const C3: &str = "3333333333333333333333333333333333333333";
+
+/// `relative` (with `/` separators) below `root`.
+fn at(root: &Path, relative: &str) -> PathBuf {
+    relative
+        .split('/')
+        .fold(root.to_path_buf(), |path, part| path.join(part))
+}
+
+/// Sets the `install` section of the root's configuration.
+fn set_install(root: &Path, section: Value) {
+    let config = root.join("actingd.config.json");
+    let mut document: Value =
+        serde_json::from_slice(&fs::read(&config).expect("the configuration")).expect("JSON");
+    document["install"] = section;
+    write_json(&config, &document);
+}
+
+/// Stages `spec` on `root` from a release folder `name` of its own.
+fn stage(host: &FakeHost, base: &Path, root: &Path, spec: &BuildSpec, name: &str) {
+    let release = base.join(name);
+    spec.write_release(&release);
+    let staged = run(
+        host,
+        &[
+            "release",
+            "stage",
+            "--root",
+            word(root),
+            "--dir",
+            word(&release),
+            "--local-build",
+        ],
+    );
+    assert_done(&staged, "install_release_stage");
+}
+
+/// `install <command> --root <root> --operation <operation>` (`resume` or `undo`).
+fn on_operation(host: &FakeHost, command: &str, root: &Path, operation: &str) -> super::Answer {
+    run(
+        host,
+        &[command, "--root", word(root), "--operation", operation],
+    )
+}
+
+/// The check-config runs of `build` the host logged, in order.
+fn check_configs(host: &FakeHost, build: &str) -> Vec<String> {
+    host.log
+        .borrow()
+        .iter()
+        .filter(|line| line.starts_with(build) && line.contains(" check-config "))
+        .cloned()
+        .collect()
+}
+
+/// An owner journal whose record started at `started_at_unix_ms` and ended without a close.
+fn owner_started_at(state_root: &Path, started_at_unix_ms: u64) {
+    let mut record = owner_record(true);
+    record["started_at_unix_ms"] = json!(started_at_unix_ms);
+    fs::write(state_root.join("owner.lock"), format!("{record}\n")).expect("the owner journal");
+}
+
+/// Asserts the root's program files are those of `spec`.
+fn assert_tree_of(root: &Path, spec: &BuildSpec, what: &str) {
+    for (path, bytes) in spec_tree(spec) {
+        assert_eq!(
+            fs::read(at(root, &path)).ok(),
+            Some(bytes),
+            "{what}: {path}"
+        );
+    }
+}
+
+// fix1-1 (brief item 1; review S1 F1): the check-config of a target before `actingd-config`
+// revision 17 never gets `--install-root`, and a target that refuses the option is asked again
+// without it; the plan carries the caveat and the rollback passes and applies.
+#[test]
+fn inst1_fix1_1_a_target_that_does_not_take_install_root_is_checked_without_it() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    host.programs
+        .refuse_install_root
+        .replace(vec![C1.to_owned()]);
+
+    // A build whose range ends at revision 16 and whose check-config refuses the option, as
+    // v0.12.17's refuses more than `--config <path>` (`check_config_usage_invalid`).
+    let mut old = BuildSpec::new(C1);
+    set_speaks(&mut old, "actingd-config", json!([5, 16]));
+    let (root, _) = updated(&temp, &host, "old", &old);
+    own_start_log(&root, even_phases(1_000));
+    host.log.borrow_mut().clear();
+    let planned = plan_rollback(&host, &root);
+    assert_done(&planned, "install_rollback_plan");
+    assert_eq!(
+        caveats(&planned),
+        ["check_config_without_install_root"],
+        "{planned:?}"
+    );
+    assert_eq!(gate_row(&planned, "config")["install_root"], json!(false));
+    let runs = check_configs(&host, C1);
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert!(!runs[0].contains("--install-root"), "{runs:?}");
+    let applied = apply_rollback(&host, &root, &plan_id(&planned));
+    assert_done(&applied, "install_rollback_apply");
+    assert_eq!(
+        caveats(&applied),
+        ["check_config_without_install_root"],
+        "{applied:?}"
+    );
+    assert_tree_of(&root, &old, "rolled back");
+
+    // A build that declares revision 17 and still refuses the option: asked again without it.
+    let (root, _) = updated(&temp, &host, "refusing", &BuildSpec::new(C1));
+    own_start_log(&root, even_phases(1_000));
+    host.log.borrow_mut().clear();
+    let planned = plan_rollback(&host, &root);
+    assert_done(&planned, "install_rollback_plan");
+    assert_eq!(
+        caveats(&planned),
+        ["check_config_without_install_root"],
+        "{planned:?}"
+    );
+    let runs = check_configs(&host, C1);
+    assert_eq!(runs.len(), 2, "{runs:?}");
+    assert!(
+        runs[0].contains("--install-root") && !runs[1].contains("--install-root"),
+        "{runs:?}"
+    );
+    host.programs.refuse_install_root.replace(Vec::new());
+}
+
+// fix1-3 (brief item 3; review S1 F3): S0 covers only the records written since the live build
+// was installed, so the gate passes only toward the build the live one replaced.
+#[test]
+fn inst1_fix1_3_a_rollback_past_the_build_the_live_one_replaced_is_refused() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let (root, to_c2) = updated(&temp, &host, "past", &BuildSpec::new(C1));
+    stage(
+        &host,
+        temp.path(),
+        &root,
+        &BuildSpec::new(C3),
+        "past-release-c3",
+    );
+    let to_c3 = apply_update(
+        &host,
+        &root,
+        C3,
+        &plan_id(&plan_update(&host, &root, C3, &[])),
+        &[],
+    );
+    assert_done(&to_c3, "install_update_apply");
+    // A start of each older build on the root, so that only the reader part can refuse.
+    own_start_log(&root, even_phases(1_000));
+    live_start_log(&root, &to_c2, even_phases(1_000));
+
+    // Toward C1, past C2: refused, the part naming the one target it may pass for.
+    let refused = run(
+        &host,
+        &["rollback", "plan", "--root", word(&root), "--to", C1],
+    );
+    assert_refused(&refused, "install_rollback_plan", "rollback_gate_failed");
+    assert_eq!(gate_parts(&refused), ["ledger_readability"]);
+    let readability = gate_row(&refused, "ledger_readability");
+    assert_eq!(readability["previous"], json!(C2), "{readability}");
+    assert_eq!(readability["s0"], Value::Null, "{readability}");
+
+    // Toward C2, the build C3 replaced: planned.
+    let planned = run(
+        &host,
+        &["rollback", "plan", "--root", word(&root), "--to", C2],
+    );
+    assert_done(&planned, "install_rollback_plan");
+    assert_eq!(
+        gate_row(&planned, "ledger_readability")["previous"],
+        json!(C2)
+    );
+}
+
+// fix1-4 (brief item 4; review S1 F4): a child still running at its deadline is left running
+// and reported with its pid and the key of the deadline; before the operation opens nothing
+// changes, and a ledger verification left running keeps the operation for `resume`.
+#[test]
+fn inst1_fix1_4_a_child_past_its_deadline_is_left_running_and_reported() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let operations = |root: &Path| {
+        fs::read_dir(root.join("install").join("operations"))
+            .expect("operations")
+            .count()
+    };
+
+    // S0's head read, with the deadline the configuration names: apply refuses before the
+    // operation opens.
+    let root = prepared(
+        temp.path(),
+        "head",
+        &BuildSpec::new(C1),
+        &BuildSpec::new(C2),
+        &host,
+    );
+    set_install(&root, json!({"child": {"ledger_read_timeout_ms": 45_000}}));
+    let planned = plan_id(&plan_update(&host, &root, C2, &[]));
+    let before = program_tree(&root);
+    let opened = operations(&root);
+    host.programs.stall.replace(vec!["export"]);
+    host.programs.deadlines.borrow_mut().clear();
+    let refused = apply_update(&host, &root, C2, &planned, &[]);
+    host.programs.stall.replace(Vec::new());
+    assert_refused(&refused, "install_update_apply", "ledger_head_unreadable");
+    assert_eq!(
+        refused.outcome.value("pid"),
+        Some(&json!(STALLED_PID)),
+        "{refused:?}"
+    );
+    assert_eq!(
+        text(&refused, "config_key"),
+        Some("install.child.ledger_read_timeout_ms")
+    );
+    assert!(
+        host.programs
+            .deadlines
+            .borrow()
+            .contains(&("export".to_owned(), 45_000)),
+        "{:?}",
+        host.programs.deadlines.borrow()
+    );
+    assert_eq!(program_tree(&root), before, "nothing changed");
+    assert_eq!(operations(&root), opened, "no operation opened");
+
+    // The target's check-config, with its default deadline: the plan refuses.
+    host.programs.stall.replace(vec!["check-config"]);
+    host.programs.deadlines.borrow_mut().clear();
+    let refused = plan_update(&host, &root, C2, &[]);
+    host.programs.stall.replace(Vec::new());
+    assert_refused(&refused, "install_update_plan", "check_config_unanswered");
+    assert_eq!(refused.outcome.value("pid"), Some(&json!(STALLED_PID)));
+    assert_eq!(
+        text(&refused, "config_key"),
+        Some("install.child.check_config_timeout_ms")
+    );
+    assert!(
+        host.programs
+            .deadlines
+            .borrow()
+            .contains(&("check-config".to_owned(), 900_000)),
+        "{:?}",
+        host.programs.deadlines.borrow()
+    );
+
+    // The ledger verification inside apply: nothing swapped, the operation kept; `resume` once
+    // the verification ends finishes the update.
+    let mut target = BuildSpec::new(C2);
+    set_speaks(&mut target, "ledger", json!([4, 4]));
+    let root = prepared(temp.path(), "verify", &BuildSpec::new(C1), &target, &host);
+    let planned = plan_id(&plan_update(&host, &root, C2, &[]));
+    let before = program_tree(&root);
+    host.programs.stall.replace(vec!["ledger-maintenance"]);
+    let stopped = apply_update(&host, &root, C2, &planned, &[]);
+    host.programs.stall.replace(Vec::new());
+    assert_eq!(
+        code(&stopped),
+        "install_operation_interrupted",
+        "{stopped:?}"
+    );
+    let cause = stopped.outcome.causes()[0].outcome();
+    assert_eq!(
+        cause.value("install_refusal"),
+        Some(&json!("ledger_verify_failed")),
+        "{stopped:?}"
+    );
+    assert_eq!(cause.value("pid"), Some(&json!(STALLED_PID)), "{stopped:?}");
+    assert_eq!(
+        cause.value("config_key"),
+        Some(&json!("install.child.ledger_verify_timeout_ms")),
+        "{stopped:?}"
+    );
+    assert_eq!(program_tree(&root), before, "nothing swapped");
+    assert!(root.join("install").join("current.json").is_file());
+    let resumed = on_operation(&host, "resume", &root, &operation_id(&stopped));
+    assert_done(&resumed, "install_resume");
+    assert_tree_of(&root, &target, "resumed");
+}
+
+// fix1-5 (brief item 5; review S1 F5 and §8.2): a crash between the two renames of a swap is
+// finished by `resume` and reversed by `undo`; a crash after the end is journalled and before
+// `current.json` is retired is finished by `resume`, after which the update can be undone.
+#[test]
+fn inst1_fix1_5_a_crash_inside_a_swap_or_before_current_json_is_retired_is_resumable() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let live = BuildSpec::new(C1);
+    let target = BuildSpec::new(C2);
+    let whole = prepared(temp.path(), "whole", &live, &target, &host);
+    let applied = apply_update(
+        &host,
+        &whole,
+        C2,
+        &plan_id(&plan_update(&host, &whole, C2, &[])),
+        &[],
+    );
+    assert_done(&applied, "install_update_apply");
+    let reference = normalised(&whole);
+    // The first swap that replaces a file (it has a `.old-<ms>` to rename aside).
+    let first_swap = journal_of(&whole, &operation_id(&applied))["steps"]
+        .as_array()
+        .expect("steps")
+        .iter()
+        .find(|step| step["kind"] == "swap_file" && step["intent"]["old"].is_string())
+        .and_then(|step| step["n"].as_u64())
+        .and_then(|n| usize::try_from(n).ok())
+        .expect("a swap that replaces a file");
+
+    for ending in ["resume", "undo"] {
+        let root = prepared(
+            temp.path(),
+            &format!("between-{ending}"),
+            &live,
+            &target,
+            &host,
+        );
+        let planned = plan_id(&plan_update(&host, &root, C2, &[]));
+        host.crash_between_renames.set(Some(first_swap));
+        let stopped = apply_update(&host, &root, C2, &planned, &[]);
+        assert_eq!(
+            code(&stopped),
+            "install_operation_interrupted",
+            "{ending}: {stopped:?}"
+        );
+        // The live file is aside and the part not yet in its place.
+        let operation = operation_id(&stopped);
+        let swap = journal_of(&root, &operation)["steps"][first_swap - 1].clone();
+        let intent = &swap["intent"];
+        let named = |member: &str| at(&root, intent[member].as_str().expect("a path"));
+        assert!(!named("dst").exists(), "{ending}: {swap}");
+        assert!(named("old").is_file(), "{ending}: {swap}");
+        assert!(named("part").is_file(), "{ending}: {swap}");
+        let ended = on_operation(&host, ending, &root, &operation);
+        if ending == "resume" {
+            assert_done(&ended, "install_resume");
+            assert_eq!(normalised(&root), reference, "the resumed tree");
+        } else {
+            assert_done(&ended, "install_undo");
+            assert_tree_of(&root, &live, "undone");
+        }
+        assert!(
+            !root.join("install").join("current.json").exists(),
+            "{ending}"
+        );
+    }
+
+    // The end journalled, `current.json` not yet retired.
+    let root = prepared(temp.path(), "retire", &live, &target, &host);
+    let planned = plan_id(&plan_update(&host, &root, C2, &[]));
+    host.crash_before_retire.set(true);
+    let stopped = apply_update(&host, &root, C2, &planned, &[]);
+    assert_eq!(
+        code(&stopped),
+        "install_operation_interrupted",
+        "{stopped:?}"
+    );
+    let operation = operation_id(&stopped);
+    assert!(
+        journal_of(&root, &operation)["finished_at_unix_ms"].is_u64(),
+        "the end is journalled"
+    );
+    assert!(root.join("install").join("current.json").is_file());
+    let resumed = on_operation(&host, "resume", &root, &operation);
+    assert_done(&resumed, "install_resume");
+    let ended = resumed.outcome.causes()[0].outcome();
+    assert_eq!(ended.code().as_str(), "install_command_done", "{resumed:?}");
+    assert_eq!(
+        ended.value("operation"),
+        Some(&json!("install_update_apply")),
+        "{resumed:?}"
+    );
+    assert!(!root.join("install").join("current.json").exists());
+    assert_eq!(normalised(&root), reference, "the tree is the update's");
+    let undone = on_operation(&host, "undo", &root, &operation);
+    assert_done(&undone, "install_undo");
+    assert_tree_of(&root, &live, "undone after the resume");
+}
+
+// fix1-9u (brief item 9; review S1 §8.3): the undo of a completed update. Without an owner start
+// since it ended, no gate; after one, the gate decides; an owner journal this installer cannot
+// read refuses `processes_unreadable` (F6).
+#[test]
+fn inst1_fix1_9_the_undo_of_a_completed_update() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let live = BuildSpec::new(C1);
+
+    // No owner started since the update ended: undone without the gate.
+    let (root, applied) = updated(&temp, &host, "quiet", &live);
+    host.log.borrow_mut().clear();
+    let undone = on_operation(&host, "undo", &root, &applied);
+    assert_done(&undone, "install_undo");
+    assert!(
+        !host
+            .log
+            .borrow()
+            .iter()
+            .any(|line| line.contains(" events ")),
+        "no gate: {:?}",
+        host.log.borrow()
+    );
+    assert_tree_of(&root, &live, "undone");
+    assert_eq!(state_of(&root)["live"]["commit"], json!(C1));
+    assert!(!root.join("install").join("current.json").exists());
+
+    // An owner started since: the gate decides. The target's reader refusing a record refuses
+    // the undo with nothing changed; once it reads, the update is undone.
+    let (root, applied) = updated(&temp, &host, "started", &live);
+    own_start_log(&root, even_phases(1_000));
+    let ended = journal_of(&root, &applied)["finished_at_unix_ms"]
+        .as_u64()
+        .expect("the update's end");
+    owner_started_at(&temp.path().join("started-state"), ended + 10);
+    let before = program_tree(&root);
+    host.programs.unreadable.replace(Some((C1.to_owned(), 120)));
+    let refused = on_operation(&host, "undo", &root, &applied);
+    host.programs.unreadable.replace(None);
+    assert_refused(&refused, "install_undo", "rollback_gate_failed");
+    assert_eq!(gate_parts(&refused), ["ledger_readability"]);
+    assert_eq!(program_tree(&root), before, "nothing changed");
+    let undone = on_operation(&host, "undo", &root, &applied);
+    assert_done(&undone, "install_undo");
+    assert_tree_of(&root, &live, "undone after the gate passed");
+
+    // An owner journal this installer does not recognise: refused, nothing changed.
+    let (root, applied) = updated(&temp, &host, "unrecognised", &live);
+    fs::write(
+        temp.path().join("unrecognised-state").join("owner.lock"),
+        b"no owner record\n",
+    )
+    .expect("the owner journal");
+    let before = program_tree(&root);
+    let refused = on_operation(&host, "undo", &root, &applied);
+    assert_refused(&refused, "install_undo", "processes_unreadable");
+    assert_eq!(program_tree(&root), before, "nothing changed");
+}
+
+// fix1-9s (brief item 9; review S1 §8.4): `status --check-rollback` evaluates the whole gate
+// toward the build the live one replaced, also while a Runtime runs, and names the first record
+// the target's reader refuses.
+#[test]
+fn inst1_fix1_9_status_check_rollback_evaluates_the_whole_gate() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let (root, _) = updated(&temp, &host, "status", &BuildSpec::new(C1));
+    own_start_log(&root, even_phases(1_000));
+    let check = || {
+        run(
+            &host,
+            &["status", "--root", word(&root), "--check-rollback"],
+        )
+    };
+
+    host.processes.replace(vec![image(
+        &root,
+        "runtime/actingcommand-actingd.exe",
+        41,
+        false,
+    )]);
+    let status = check();
+    assert_done(&status, "install_status");
+    let gate = &status.members["rollback_gate"];
+    assert_eq!(gate["previous"], json!(C1), "{gate}");
+    assert_eq!(gate["passes"], json!(true), "{gate}");
+    let rows = gate["parts"].as_array().expect("the parts");
+    let parts = rows
+        .iter()
+        .map(|row| row["part"].as_str().expect("a part").to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        parts,
+        [
+            "interface_edges",
+            "ledger_readability",
+            "open_time",
+            "config"
+        ],
+        "{gate}"
+    );
+    assert!(rows.iter().all(|row| row["result"] == "pass"), "{gate}");
+    assert_eq!(gate["refused"], Value::Null, "{gate}");
+
+    host.programs.unreadable.replace(Some((C1.to_owned(), 120)));
+    let status = check();
+    host.programs.unreadable.replace(None);
+    host.processes.replace(Vec::new());
+    assert_done(&status, "install_status");
+    let gate = &status.members["rollback_gate"];
+    assert_eq!(gate["passes"], json!(false), "{gate}");
+    let refused = &gate["refused"]["outcome"];
+    assert_eq!(refused["code"], json!("install_command_refused"), "{gate}");
+    assert_eq!(
+        refused["values"]["install_refusal"],
+        json!("rollback_gate_failed"),
+        "{gate}"
+    );
+    assert_eq!(refused["values"]["ledger_sequence"], json!(120), "{gate}");
 }

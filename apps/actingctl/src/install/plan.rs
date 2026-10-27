@@ -693,26 +693,54 @@ pub(crate) fn plan(host: &dyn Host, paths: &Paths, inputs: PlanInputs) -> Result
     let live_defaults = defaults_of(&paths.root);
     let target_defaults = defaults_of(&paths.build(&target.commit));
     let diff = defaults_diff(&live_defaults, &target_defaults, &config);
-    // check-config of the target (`--install-root <root>`) and of the live build in place.
+    // check-config of the target (`--install-root <root>`) and of the live build in place. A
+    // target whose `actingd-config` range ends below the revision of the option, or that refuses
+    // it, is run without it from its kept folder (review S1 F1), with the caveat.
     let config_path = paths.config();
+    let target_runtime = paths.build(&target.commit).join(Half::Runtime.dir());
+    let takes_install_root = target_speaks
+        .get("actingd-config")
+        .is_some_and(|range| range[1] >= programs::INSTALL_ROOT_REVISION);
     let target_check = programs::check_config(
         host,
-        &paths.build(&target.commit).join(Half::Runtime.dir()),
+        &target_runtime,
         &config_path,
-        Some(paths.root.as_path()),
+        takes_install_root.then_some(paths.root.as_path()),
+        programs::Deadline::check_config(&settings),
     )
-    .map_err(|cause| {
-        super::refusal(operation, InstallRefusal::CheckConfigUnanswered)
-            .commit_sha(target.commit.clone())
-            .caused_by(cause)
+    .map_err(|failure| {
+        failure.onto(
+            super::refusal(operation, InstallRefusal::CheckConfigUnanswered)
+                .commit_sha(target.commit.clone()),
+        )
     })?;
-    let live_check = programs::check_config(
+    if !target_check.install_root {
+        warnings.push(
+            super::caveat(operation, InstallCaveat::CheckConfigWithoutInstallRoot)
+                .commit_sha(target.commit.clone())
+                .path(target_runtime.join(programs::DAEMON)),
+        );
+    }
+    // The live build's summary is for comparison only: a failure leaves it out, but one left
+    // running at its deadline is reported as the target's would be (review S1 F4).
+    let live_check = match programs::check_config(
         host,
         &paths.root.join(Half::Runtime.dir()),
         &config_path,
         None,
-    )
-    .ok();
+        programs::Deadline::check_config(&settings),
+    ) {
+        Ok(checked) => Some(checked),
+        Err(failure) if failure.timed_out() => {
+            return Err(failure
+                .onto(
+                    super::refusal(operation, InstallRefusal::CheckConfigUnanswered)
+                        .commit_sha(live.commit.clone()),
+                )
+                .into());
+        }
+        Err(_) => None,
+    };
     edges.push(edge(
         "actingd-config",
         "next_check_config",
@@ -787,6 +815,7 @@ pub(crate) fn plan(host: &dyn Host, paths: &Paths, inputs: PlanInputs) -> Result
         "config_sha256": config_sha256,
         "check_config": {
             "target": target_check.summary,
+            "target_install_root": target_check.install_root,
             "live": live_check.as_ref().map(|checked| &checked.summary),
             "differs": live_check
                 .as_ref()

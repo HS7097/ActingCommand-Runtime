@@ -10,7 +10,7 @@ use super::files;
 use super::host::{Host, Installer};
 use super::state::{self, Current, CurrentState, InstallState, OperationKind, Paths};
 use crate::codes::{ActingctlCode, InstallLocation, InstallRefusal};
-use actingcommand_contract::outcome::{Detail, Outcome};
+use actingcommand_contract::outcome::{Detail, Outcome, OutcomeEnvelope};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -375,28 +375,77 @@ impl<'h> Operation<'h> {
     }
 
     /// Ends an undo: the journal records it (and `result` when the operation had none), and
-    /// `current.json` is renamed `current.json.finished-<ms>`.
+    /// `current.json` is renamed `current.json.finished-<ms>`. A failure on the way is
+    /// `install_operation_interrupted`: `current.json` stays, and `resume` finishes the rename.
     pub(crate) fn finish_undo(mut self, result: &Outcome) -> Result<(), Outcome> {
         let now = self.host.now_unix_ms();
         if let Some(undo) = self.journal.undo.as_mut() {
             undo.finished_at_unix_ms = Some(now);
         }
         if self.journal.result.is_none() {
-            self.journal.result = Some(envelope(result)?);
+            self.journal.result = Some(envelope(result).map_err(|cause| self.interrupted(cause))?);
         }
         self.journal.finished_at_unix_ms.get_or_insert(now);
-        self.write()?;
-        retire_current(&self.paths, now)
+        self.end(now)
     }
 
     /// Records the operation's result and ends it: `current.json` renamed
-    /// `current.json.finished-<ms>`.
+    /// `current.json.finished-<ms>`. A failure on the way is `install_operation_interrupted`:
+    /// `current.json` stays, and `resume` finishes the rename (review S1 F5).
     pub(crate) fn finish(mut self, result: &Outcome) -> Result<(), Outcome> {
         let now = self.host.now_unix_ms();
-        self.journal.result = Some(envelope(result)?);
+        self.journal.result = Some(envelope(result).map_err(|cause| self.interrupted(cause))?);
         self.journal.finished_at_unix_ms = Some(now);
-        self.write()?;
-        retire_current(&self.paths, now)
+        self.end(now)
+    }
+
+    /// The end recorded in the journal, then `current.json` retired; a failure is
+    /// `install_operation_interrupted`.
+    fn end(mut self, now: u64) -> Result<(), Outcome> {
+        self.write().map_err(|cause| self.interrupted(cause))?;
+        self.host
+            .before_retire(&self.journal.operation_id)
+            .map_err(|cause| self.interrupted(cause))?;
+        retire_current(&self.paths, now).map_err(|cause| self.interrupted(cause))
+    }
+
+    /// Whether the operation has ended in its journal (its own end, or its undo's) while
+    /// `current.json` may still name it: what a crash between the journal's last write and the
+    /// rename of `current.json` leaves (review S1 F5).
+    pub(crate) fn ended(&self) -> bool {
+        match &self.journal.undo {
+            Some(undo) => undo.finished_at_unix_ms.is_some(),
+            None => self.journal.finished(),
+        }
+    }
+
+    /// `resume` of an operation that has [`ended`](Self::ended): `current.json` renamed
+    /// `current.json.finished-<ms>`, and the outcome the operation ended with (its journalled
+    /// result; `install_command_done` of `install undo` for an undo). A failure is
+    /// `install_operation_interrupted`.
+    pub(crate) fn retire_ended(self) -> Result<Outcome, Outcome> {
+        let ended = match &self.journal.undo {
+            Some(_) => super::done(InstallLocation::Undo)
+                .install_operation_id(self.id())
+                .installation_changed(true),
+            None => {
+                let result = self.journal.result.clone().ok_or_else(|| {
+                    state_invalid(InstallLocation::Resume, self.paths.journal(self.id()), None)
+                })?;
+                serde_json::from_value::<OutcomeEnvelope>(result)
+                    .map_err(|error| {
+                        state_invalid(
+                            InstallLocation::Resume,
+                            self.paths.journal(self.id()),
+                            Some(files::json_failure(&error)),
+                        )
+                    })?
+                    .into_outcome()
+            }
+        };
+        let now = self.host.now_unix_ms();
+        retire_current(&self.paths, now).map_err(|cause| self.interrupted(cause))?;
+        Ok(ended)
     }
 
     /// `install_operation_interrupted`: a step failed after the operation changed the disk; the

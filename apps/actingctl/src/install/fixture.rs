@@ -3,7 +3,7 @@
 // Test-only: the neutral builds, release folders and roots of the INST-1 gates, and the fake host
 // they run `actingctl install` on. Every name is neutral; no file is a real program.
 
-use super::host::{Host, Installer, Ran, RunningImage};
+use super::host::{Host, Installer, NotRan, Ran, RunningImage};
 use super::manifest::{Speaks, parse_declaration};
 use super::{Answer, execute};
 use actingcommand_contract::outcome::Outcome;
@@ -25,10 +25,11 @@ pub(super) fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-/// The interfaces both manifests of a neutral build declare.
+/// The interfaces both manifests of a neutral build declare: `actingd-config` up to revision 17,
+/// whose check-config takes `--install-root` (INST-1b-F fix round 1).
 pub(super) fn speaks() -> Value {
     json!({
-        "actingd-config": [5, 11],
+        "actingd-config": [5, 17],
         "install-selection": [1, 1],
         "install-control": [0, 1],
         "ledger": [3, 4],
@@ -284,13 +285,17 @@ pub(super) fn tree(dir: &Path) -> BTreeMap<String, Vec<u8>> {
 }
 
 /// A host on a fixed clock that moves 1 ms per call, its work folder in the test's temporary
-/// folder; it stops an operation after the step `crash_after` names, once, and calls `on_step`
-/// after each step first. Its processes are `processes`; its programs answer as `programs` says;
-/// its start logs lie in the root itself.
+/// folder; it stops an operation after the step `crash_after` names, between the two renames of
+/// the swap step `crash_between_renames` names, or before `current.json` is retired when
+/// `crash_before_retire` is set, each once, and calls `on_step` after each step first. Its
+/// processes are `processes`; its programs answer as `programs` says; its start logs lie in the
+/// root itself.
 pub(super) struct FakeHost {
     clock: Cell<u64>,
     work: PathBuf,
     pub(super) crash_after: Cell<Option<usize>>,
+    pub(super) crash_between_renames: Cell<Option<usize>>,
+    pub(super) crash_before_retire: Cell<bool>,
     pub(super) stopped: RefCell<Vec<(String, usize)>>,
     pub(super) processes: RefCell<Vec<RunningImage>>,
     pub(super) programs: Programs,
@@ -304,13 +309,25 @@ pub(super) struct FakeHost {
 pub(super) struct Programs {
     /// The builds (`live`, or a commit) whose check-config refuses the configuration.
     pub(super) refuse_check_config: RefCell<Vec<String>>,
-    /// The ledger head `open` and `events` read.
+    /// The builds whose check-config refuses `--install-root` as a build before
+    /// `actingd-config` revision 17 does: `check_config_usage_invalid`, no value, no report.
+    pub(super) refuse_install_root: RefCell<Vec<String>>,
+    /// The ledger head the head read and `events` read.
     pub(super) ledger_head: Cell<u64>,
-    /// A build whose reader refuses the page holding this sequence.
+    /// A build whose reader refuses a read that reaches this sequence (every read also reads
+    /// the head row, as the real range read does).
     pub(super) unreadable: RefCell<Option<(String, u64)>>,
     /// The exit code of `ledger-maintenance verify`.
     pub(super) verify_exit: Cell<i32>,
+    /// The programs that are still running at their deadline, by the word that names what they
+    /// do (`check-config`, `ledger-maintenance`, `export`, `events`): `pid` 4242, left running.
+    pub(super) stall: RefCell<Vec<&'static str>>,
+    /// Every program run, by that word, with the deadline it was given.
+    pub(super) deadlines: RefCell<Vec<(String, u64)>>,
 }
+
+/// The process id of a fake program left running at its deadline.
+pub(super) const STALLED_PID: u32 = 4242;
 
 impl FakeHost {
     pub(super) fn new(work: &Path) -> Self {
@@ -319,18 +336,40 @@ impl FakeHost {
             clock: Cell::new(1_800_000_000_000),
             work: work.to_path_buf(),
             crash_after: Cell::new(None),
+            crash_between_renames: Cell::new(None),
+            crash_before_retire: Cell::new(false),
             stopped: RefCell::new(Vec::new()),
             processes: RefCell::new(Vec::new()),
             programs: Programs {
                 refuse_check_config: RefCell::new(Vec::new()),
+                refuse_install_root: RefCell::new(Vec::new()),
                 ledger_head: Cell::new(100),
                 unreadable: RefCell::new(None),
                 verify_exit: Cell::new(0),
+                stall: RefCell::new(Vec::new()),
+                deadlines: RefCell::new(Vec::new()),
             },
             on_step: RefCell::new(None),
             log: RefCell::new(Vec::new()),
         }
     }
+}
+
+/// The failure of a crash at a test hook: the operation stops there as if the process died.
+fn crash() -> Outcome {
+    Outcome::from_io_error(
+        &std::io::Error::from(std::io::ErrorKind::Interrupted),
+        actingcommand_contract::outcome::IoOp::Write,
+    )
+}
+
+/// The value after `flag` among `words`, as a number.
+fn number_after(words: &[String], flag: &str) -> Option<u64> {
+    words
+        .iter()
+        .position(|word| word == flag)
+        .and_then(|index| words.get(index + 1))
+        .and_then(|value| value.parse::<u64>().ok())
 }
 
 /// The build a program belongs to: the commit after `builds`, else `live`.
@@ -387,7 +426,12 @@ impl Host for FakeHost {
         Ok(self.processes.borrow().clone())
     }
 
-    fn run_program(&self, program: &Path, arguments: &[OsString]) -> Result<Ran, Outcome> {
+    fn run_program(
+        &self,
+        program: &Path,
+        arguments: &[OsString],
+        timeout_ms: u64,
+    ) -> Result<Ran, NotRan> {
         let build = build_of(program);
         let name = program
             .file_name()
@@ -399,8 +443,40 @@ impl Host for FakeHost {
         self.log
             .borrow_mut()
             .push(format!("{build} {name} {}", words.join(" ")));
+        // What the program does: actingd's first word, actingledger's after `--state-root <s>`.
+        let doing = words
+            .get(if name == "actingledger.exe" { 2 } else { 0 })
+            .cloned()
+            .unwrap_or_default();
+        self.programs
+            .deadlines
+            .borrow_mut()
+            .push((doing.clone(), timeout_ms));
+        if self
+            .programs
+            .stall
+            .borrow()
+            .iter()
+            .any(|stalled| *stalled == doing)
+        {
+            return Err(NotRan::StillRunning { pid: STALLED_PID });
+        }
         let head = self.programs.ledger_head.get();
         Ok(match (name.as_str(), words.first().map(String::as_str)) {
+            ("actingcommand-actingd.exe", Some("check-config"))
+                if words.iter().any(|word| word == "--install-root")
+                    && self.programs.refuse_install_root.borrow().contains(&build) =>
+            {
+                ran(
+                    1,
+                    json!({
+                        "schema_version": "actingcommand.actingd.check-config.v2",
+                        "outcome": {"schema_version": "actingcommand.outcome.v1",
+                            "code": "check_config_usage_invalid", "category": "error",
+                            "values": {}},
+                    }),
+                )
+            }
             ("actingcommand-actingd.exe", Some("check-config")) => {
                 if self.programs.refuse_check_config.borrow().contains(&build) {
                     ran(
@@ -427,35 +503,46 @@ impl Host for FakeHost {
             ("actingcommand-actingd.exe", Some("ledger-maintenance")) => {
                 ran(self.programs.verify_exit.get(), json!({}))
             }
-            ("actingledger.exe", _) if words.get(2).map(String::as_str) == Some("open") => ran(
-                0,
-                json!({"command": "open", "data": {"latest_sequence": head}}),
-            ),
-            ("actingledger.exe", _) => {
-                let after = words
-                    .iter()
-                    .position(|word| word == "--after")
-                    .and_then(|index| words.get(index + 1))
-                    .and_then(|after| after.parse::<u64>().ok())
-                    .expect("an --after page");
-                let through = head.min(after + 1024);
+            // The bounded head read (S0): no row but the head's.
+            ("actingledger.exe", _)
+                if doing == "export"
+                    && words.get(3).map(String::as_str) == Some("--performance")
+                    && number_after(&words, "--through") == Some(0) =>
+            {
+                ran(
+                    0,
+                    json!({"command": "performance", "data": {"after_sequence": 0,
+                        "through_sequence": 0, "limit": 1, "snapshot_latest_sequence": head,
+                        "rows": [], "next_after_sequence": null}}),
+                )
+            }
+            // A range page, as the real one reads: the rows after `--after` through `--through`
+            // (else one more than the limit, up to the head), then the head row.
+            ("actingledger.exe", _) if doing == "events" => {
+                let after = number_after(&words, "--after").expect("an --after page");
+                let limit = number_after(&words, "--limit").expect("a --limit page");
+                let through = number_after(&words, "--through");
+                let bound =
+                    through.map_or(head.min(after + limit + 1), |through| through.min(head));
                 let refused =
                     self.programs
                         .unreadable
                         .borrow()
                         .as_ref()
                         .is_some_and(|(reader, sequence)| {
-                            *reader == build && after < *sequence && *sequence <= through
+                            *reader == build
+                                && ((after < *sequence && *sequence <= bound) || *sequence == head)
                         });
                 if refused {
                     ran(1, json!({}))
                 } else {
-                    let next = (through < head).then_some(through);
+                    let next = (bound > after + limit).then_some(after + limit);
                     ran(
                         0,
                         json!({"command": "events", "data": {"after_sequence": after,
-                            "through_sequence": through, "limit": 1024, "events": [],
-                            "artifact_evictions": [], "next_after_sequence": next}}),
+                            "through_sequence": through.unwrap_or(head), "limit": limit,
+                            "events": [], "artifact_evictions": [],
+                            "next_after_sequence": next}}),
                     )
                 }
             }
@@ -477,10 +564,26 @@ impl Host for FakeHost {
             self.stopped
                 .borrow_mut()
                 .push((operation_id.to_owned(), step));
-            return Err(Outcome::from_io_error(
-                &std::io::Error::from(std::io::ErrorKind::Interrupted),
-                actingcommand_contract::outcome::IoOp::Write,
-            ));
+            return Err(crash());
+        }
+        Ok(())
+    }
+
+    fn between_renames(&self, operation_id: &str, step: usize) -> Result<(), Outcome> {
+        if self.crash_between_renames.get() == Some(step) {
+            self.crash_between_renames.set(None);
+            self.stopped
+                .borrow_mut()
+                .push((operation_id.to_owned(), step));
+            return Err(crash());
+        }
+        Ok(())
+    }
+
+    fn before_retire(&self, operation_id: &str) -> Result<(), Outcome> {
+        if self.crash_before_retire.replace(false) {
+            self.stopped.borrow_mut().push((operation_id.to_owned(), 0));
+            return Err(crash());
         }
         Ok(())
     }

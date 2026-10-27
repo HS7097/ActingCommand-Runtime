@@ -519,6 +519,10 @@ actingcommand_contract::outcome_vocabulary! {
         // Workflow #421 INST-1b-F (#421 deploy design §4, §8 S1): the rollback gate's open-time
         // part found no open of the target build on this root and used another build's.
         OpenTimeFromOtherBuild => "open_time_from_other_build",
+        // Workflow #421 INST-1b-F fix round 1 (review S1 F1): the target's check-config does not
+        // take `--install-root` (a build before `actingd-config` revision 17) and judged the
+        // configuration from its kept folder.
+        CheckConfigWithoutInstallRoot => "check_config_without_install_root",
     }
 }
 

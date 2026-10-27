@@ -18,7 +18,7 @@ use super::state::{self, CurrentState, OperationKind, Paths};
 use super::update::{self, SwapIntent};
 use super::{Answer, Flags};
 use crate::codes::{InstallLocation, InstallRefusal, RollbackGatePart};
-use crate::watchdog::decide::Journal as OwnerJournal;
+use crate::watchdog::decide::{Journal as OwnerJournal, OwnerLock};
 use crate::watchdog::observe;
 use actingcommand_contract::outcome::Outcome;
 use serde::Deserialize;
@@ -61,17 +61,21 @@ fn set_aside(path: &Path, marker: &str, ms: u64) -> Result<Option<String>, Outco
 }
 
 /// Whether an owner of the state root started after `since_unix_ms` (an epoch since the
-/// operation ended); an owner journal that cannot be read refuses (`processes_unreadable`).
+/// operation ended). An owner journal that cannot be read, or whose record this installer does
+/// not recognise, refuses `processes_unreadable`, and one a running owner holds locked refuses
+/// `owner_lock_held` (review S1 F6): neither is taken for "no owner started".
 fn owner_started_since(state_root: &Path, since_unix_ms: u64) -> Result<bool, Outcome> {
-    let (_, journal) = observe::owner_journal(state_root).map_err(|cause| {
-        super::refusal(UNDO, InstallRefusal::ProcessesUnreadable)
-            .path(state_root)
-            .caused_by(cause)
-    })?;
-    Ok(match journal {
-        OwnerJournal::Record { record, .. } => record.started_at_unix_ms > since_unix_ms,
-        OwnerJournal::Absent | OwnerJournal::Unrecognised { .. } => false,
-    })
+    let unreadable = || super::refusal(UNDO, InstallRefusal::ProcessesUnreadable).path(state_root);
+    let (lock, journal) =
+        observe::owner_journal(state_root).map_err(|cause| unreadable().caused_by(cause))?;
+    if lock == OwnerLock::Locked {
+        return Err(super::refusal(UNDO, InstallRefusal::OwnerLockHeld).path(state_root));
+    }
+    match journal {
+        OwnerJournal::Record { record, .. } => Ok(record.started_at_unix_ms > since_unix_ms),
+        OwnerJournal::Absent => Ok(false),
+        OwnerJournal::Unrecognised { failure } => Err(unreadable().caused_by(failure)),
+    }
 }
 
 /// `install undo`.

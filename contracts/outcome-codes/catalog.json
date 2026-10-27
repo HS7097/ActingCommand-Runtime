@@ -6539,7 +6539,7 @@
           "description": "check-config of the build that will run refused the configuration: the live one for an update or rollback, the candidate for a configuration commit (INST-3); its outcome is the link."
         },
         "check_config_unanswered": {
-          "description": "check-config of a build could not be run or answered no report."
+          "description": "check-config of a build could not be run or answered no report, or was still running at install.child.check_config_timeout_ms: then it is left running (pid, config_key the key) and has no cause link."
         },
         "config_base_changed": {
           "description": "The configuration candidate was built on a live file that has changed since (INST-3)."
@@ -6566,16 +6566,16 @@
           "description": "An interface edge failed; the result's edges list it."
         },
         "ledger_verify_failed": {
-          "description": "The target build's ledger-maintenance verify did not pass."
+          "description": "The target build's ledger-maintenance verify did not pass, or was still running at install.child.ledger_verify_timeout_ms (pid, config_key the key): it is left running and the operation stays unfinished, as the caused_by link of install_operation_interrupted."
         },
         "ledger_head_unreadable": {
-          "description": "The ledger head (S0) could not be read with the live build's actingledger."
+          "description": "The ledger head (S0) could not be read with the live build's actingledger (its bounded head read), or the read was still running at install.child.ledger_read_timeout_ms: then it is left running (pid, config_key the key)."
         },
         "plan_changed": {
           "description": "The plan recomputed under the writer lock differs from the plan_id the apply was given: something changed since the plan."
         },
         "rollback_gate_failed": {
-          "description": "The rollback gate failed (rollback_gate_parts); ledger_sequence is the first sequence of a page the target's own reader refused. Only a forward fix remains."
+          "description": "The rollback gate failed (rollback_gate_parts); ledger_sequence is the first sequence the target's own reader refused, as precisely as the reader allows; pid and config_key name a reader read left running at install.child.ledger_read_timeout_ms. Only a forward fix remains."
         },
         "guard_failed": {
           "description": "A guard failed or could not be evaluated and was not acknowledged with --ack-guard (install_guards; INST-2)."
@@ -6629,6 +6629,9 @@
         },
         "open_time_from_other_build": {
           "description": "The rollback gate's open-time part found no ledger open of the target build on this root (the operation journals attribute each start log to the build live at its start), so it judged the newest open of another build (commit_sha the target, path the start log used)."
+        },
+        "check_config_without_install_root": {
+          "description": "The target build's check-config does not take --install-root (a build before actingd-config revision 17, or one that refused the option), so it ran without it from the kept build's folder, which it judged as the install root (its adb and default vision root); only the outcome's category counts (commit_sha the target, path its actingd)."
         }
       }
     },

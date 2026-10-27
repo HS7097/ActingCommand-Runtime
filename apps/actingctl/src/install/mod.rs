@@ -260,7 +260,9 @@ pub(crate) fn refuse_ab(operation: InstallLocation, paths: &Paths) -> Result<(),
 }
 
 /// `install resume --root <root> --operation <id>`: continues the unfinished operation from its
-/// journal; each step's postcondition is checked on disk first.
+/// journal; each step's postcondition is checked on disk first. An operation whose end (or its
+/// undo's) is in its journal while `current.json` still names it (a crash before the rename,
+/// review S1 F5) only has `current.json` retired and answers the end it recorded.
 fn resume(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
     let flags = Flags::parse(words, &["--root", "--operation"], &[])?;
     let paths = resolve_root(&flags)?;
@@ -274,6 +276,10 @@ fn resume(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
         CurrentState::None => return Err(unusable("--operation")),
     }
     let operation = Operation::load(host, &paths, operation_id, InstallLocation::Resume)?;
+    if operation.ended() {
+        let ended = operation.retire_ended()?;
+        return Ok(resumed(operation_id, Answer::new(ended)));
+    }
     if operation.journal().finished() || operation.journal().undo.is_some() {
         return Err(unusable("--operation"));
     }

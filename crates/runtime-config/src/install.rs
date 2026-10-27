@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 //! The `install` section (Workflow #421 INST-1; `contracts/install-cli.md`, "Configuration
-//! keys"; `contracts/runtime-config.md`, "The `install` section"): the waits, attempts, margins
-//! and guard values of `actingctl install`, the command-line installer of a single-location
-//! root (Alice 10-09: 「绝不硬编码」).
+//! keys"; `contracts/runtime-config.md`, "The `install` section"): the waits, attempts, margins,
+//! guard values and child deadlines of `actingctl install`, the command-line installer of a
+//! single-location root (Alice 10-09: 「绝不硬编码」).
 //!
 //! actingd parses and checks the section with the rest of its configuration but never uses it.
 //! `actingctl install` reads it from the root's configuration file at every command
@@ -50,6 +50,15 @@ pub const GUARD_BEFORE_NEXT_START_MS: &str = "install.guard.before_next_start_ms
 pub const GUARD_BLOCKED_WINDOWS: &str = "install.guard.blocked_windows";
 /// Guard `adb`: each probe's deadline, in milliseconds (INST-2).
 pub const GUARD_ADB_TIMEOUT_MS: &str = "install.guard.adb_timeout_ms";
+/// INST-1b-F fix round 1 (review S1 F4): each `actingd check-config` the installer runs, its
+/// deadline in milliseconds; a child still running then is left running and reported.
+pub const CHILD_CHECK_CONFIG_TIMEOUT_MS: &str = "install.child.check_config_timeout_ms";
+/// Each `actingledger` read the installer runs (S0, a page of the rollback gate's reader
+/// check), its deadline in milliseconds.
+pub const CHILD_LEDGER_READ_TIMEOUT_MS: &str = "install.child.ledger_read_timeout_ms";
+/// The `actingd ledger-maintenance verify` of an update or rollback, its deadline in
+/// milliseconds.
+pub const CHILD_LEDGER_VERIFY_TIMEOUT_MS: &str = "install.child.ledger_verify_timeout_ms";
 
 /// The section as the configuration file and the defaults file write it: every member may be
 /// left out and none is unknown (M387 §5.3).
@@ -73,6 +82,20 @@ pub struct InstallFile {
     rollback: Option<RollbackFile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     guard: Option<GuardFile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    child: Option<ChildFile>,
+}
+
+/// The deadlines of the programs the installer runs (INST-1b-F fix round 1, review S1 F4).
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ChildFile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    check_config_timeout_ms: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ledger_read_timeout_ms: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ledger_verify_timeout_ms: Option<Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -197,6 +220,21 @@ pub(crate) static ROWS: &[KeyRow] = &[
         ValueType::DurationMs,
         milliseconds(1_000, 60_000),
     ),
+    row(
+        CHILD_CHECK_CONFIG_TIMEOUT_MS,
+        ValueType::DurationMs,
+        milliseconds(10_000, 3_600_000),
+    ),
+    row(
+        CHILD_LEDGER_READ_TIMEOUT_MS,
+        ValueType::DurationMs,
+        milliseconds(10_000, 3_600_000),
+    ),
+    row(
+        CHILD_LEDGER_VERIFY_TIMEOUT_MS,
+        ValueType::DurationMs,
+        milliseconds(60_000, 86_400_000),
+    ),
 ];
 
 /// One blocked window of `install.guard.blocked_windows`, in host local time, `[from, to)`,
@@ -230,6 +268,9 @@ pub struct InstallSettings {
     pub guard_before_next_start_ms: u64,
     pub guard_blocked_windows: Vec<BlockedWindow>,
     pub guard_adb_timeout_ms: u64,
+    pub child_check_config_timeout_ms: u64,
+    pub child_ledger_read_timeout_ms: u64,
+    pub child_ledger_verify_timeout_ms: u64,
 }
 
 /// The section of the configuration document `file` (actingd's configuration as `actingctl`
@@ -314,6 +355,9 @@ pub fn settings(file: &Value) -> Result<InstallSettings, ConfigFailure> {
         guard_before_next_start_ms: duration(GUARD_BEFORE_NEXT_START_MS)?,
         guard_blocked_windows: blocked_windows(&windows)?,
         guard_adb_timeout_ms: duration(GUARD_ADB_TIMEOUT_MS)?,
+        child_check_config_timeout_ms: duration(CHILD_CHECK_CONFIG_TIMEOUT_MS)?,
+        child_ledger_read_timeout_ms: duration(CHILD_LEDGER_READ_TIMEOUT_MS)?,
+        child_ledger_verify_timeout_ms: duration(CHILD_LEDGER_VERIFY_TIMEOUT_MS)?,
     })
 }
 
@@ -452,6 +496,10 @@ mod tests {
             guard_before_next_start_ms: 900_000,
             guard_blocked_windows: Vec::new(),
             guard_adb_timeout_ms: 15_000,
+            // INST-1b-F fix round 1 (review S1 F4): the deadlines of the installer's children.
+            child_check_config_timeout_ms: 900_000,
+            child_ledger_read_timeout_ms: 300_000,
+            child_ledger_verify_timeout_ms: 1_800_000,
         };
         assert_eq!(settings(&json!({})), Ok(defaults.clone()));
         assert_eq!(settings(&json!({"install": {}})), Ok(defaults.clone()));

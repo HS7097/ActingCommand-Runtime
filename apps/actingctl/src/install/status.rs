@@ -355,7 +355,8 @@ fn check_rollback(host: &dyn Host, paths: &Paths) -> Result<Value, Outcome> {
     };
     let gate = update::gate(host, paths, &planned);
     let refusal = gate.refusal(&planned);
-    let notes = gate.with_notes(super::done(STATUS));
+    // The plan's caveats (a target checked without `--install-root`, say) and the gate's.
+    let notes = gate.with_notes(plan::with_notes(super::done(STATUS), &planned.warnings));
     Ok(json!({
         "previous": previous,
         "passes": refusal.is_none(),

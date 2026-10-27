@@ -149,7 +149,8 @@ pub(crate) enum Decision {
     InstallerBusy,
     SelectionChanged,
     /// Row 7a″ (Workflow #421 INST-1): `install\current.json` names an unfinished installer
-    /// operation (its id, when the file can be read).
+    /// update or rollback, or its undo (its id, when the file can be read; INST-1b-F fix round
+    /// 1: not a `release stage` or `adopt`, which change only `install\`).
     InstallerUnfinished {
         operation_id: Option<String>,
     },

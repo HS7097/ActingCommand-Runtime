@@ -12,8 +12,14 @@
 //! target build's own last ledger open on this root: the start logs are attributed to builds by
 //! the operation journals (the build live on the root when each start began), and the open's
 //! time is the sum of all eight phases its `ledger_opened` daemon line reports, unscaled. Without
-//! an open of the target the newest open of any build is judged, with the caveat
+//! a start of the target the newest open of any build is judged, with the caveat
 //! `open_time_from_other_build`.
+//!
+//! INST-1b-F fix round 1 (review S1): S0 is a bounded head read (F2); the gate passes only toward
+//! the build the live one replaced (F3); the target's newest start decides the open-time part
+//! (F8); the reader part names the first refused sequence as precisely as the reader allows
+//! (F11); every child runs within its deadline (F4), and a ledger verification left running
+//! keeps the operation for `resume` or `undo`.
 
 use super::files;
 use super::host::Host;
@@ -21,11 +27,12 @@ use super::journal::{self, Opening, Operation, PlannedStep, Previous, S0, StepKi
 use super::lock::WriterLock;
 use super::manifest::{self, Half};
 use super::plan::{self, Action, PlanInputs, PlanKind, Planned, Refused};
-use super::programs;
+use super::programs::{self, Deadline, PageRefused};
 use super::state::{self, LiveBuild, OperationKind, Paths};
 use super::{Answer, Flags};
 use crate::codes::{InstallCaveat, InstallLocation, InstallRefusal, RollbackGatePart};
 use actingcommand_contract::outcome::{CauseRelation, Outcome, OutcomeEnvelope};
+use actingcommand_runtime_config::install::InstallSettings;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::fs;
@@ -113,8 +120,8 @@ pub(crate) struct GateRow {
 pub(crate) struct Gate {
     pub(crate) rows: Vec<GateRow>,
     failed: Vec<RollbackGatePart>,
-    /// The first page the target's reader refused, when it refused one.
-    unreadable: Option<(u64, Outcome)>,
+    /// The first page the target's reader refused or gave no usable answer for.
+    unreadable: Option<PageRefused>,
     /// The target's check-config refusal, when it refused the configuration.
     config_refusal: Option<Outcome>,
     /// What the evaluation noted (`open_time_from_other_build`), `note` links of its result.
@@ -139,9 +146,10 @@ impl Gate {
     }
 
     /// The gate's refusal, `None` when every part passes: `rollback_gate_failed` of the plan's
-    /// command with every failed part (`rollback_gate_parts`), `ledger_sequence` and the reader's
-    /// failure when the target's reader refused a page, the target's check-config refusal as a
-    /// link, and the gate's caveats as `note` links.
+    /// command with every failed part (`rollback_gate_parts`); when the target's reader refused a
+    /// page, `ledger_sequence` (the first sequence it refuses) and the reader's failure (a read
+    /// left running at its deadline as `pid` and `config_key`); the target's check-config refusal
+    /// as a link; and the plan's and the gate's caveats as `note` links.
     pub(crate) fn refusal(&self, planned: &Planned) -> Option<Outcome> {
         if self.failed.is_empty() {
             return None;
@@ -150,22 +158,48 @@ impl Gate {
             .rollback_gate_parts(self.failed.iter().copied())
             .commit_sha(planned.target.commit.clone());
         let refusal = match &self.unreadable {
-            Some((sequence, cause)) => refusal.ledger_sequence(*sequence).caused_by(cause.clone()),
+            Some(page) => {
+                let refusal = match page.sequence {
+                    Some(sequence) => refusal.ledger_sequence(sequence),
+                    None => refusal,
+                };
+                page.clone().onto(refusal)
+            }
             None => refusal,
         };
         let refusal = match &self.config_refusal {
             Some(config) => refusal.joined(CauseRelation::CausedBy, config.clone()),
             None => refusal,
         };
-        Some(self.with_notes(refusal))
+        Some(self.with_notes(plan::with_notes(refusal, &planned.warnings)))
     }
 }
 
-/// S0 of the live build: the ledger head the operation that installed it recorded.
-fn live_s0(paths: &Paths, planned: &Planned, host: &dyn Host) -> Option<u64> {
-    let operation_id = planned.state.live.as_ref()?.operation_id.as_ref()?;
-    let operation = Operation::load(host, paths, operation_id, planned.inputs.operation).ok()?;
-    operation.journal().s0.as_ref()?.head
+/// The operation that installed the live build: the S0 it recorded and the build it replaced.
+/// Nothing when no journalled operation installed it (an adopted root).
+fn live_operation(
+    paths: &Paths,
+    planned: &Planned,
+    host: &dyn Host,
+) -> (Option<u64>, Option<String>) {
+    let Some(operation_id) = planned
+        .state
+        .live
+        .as_ref()
+        .and_then(|live| live.operation_id.as_ref())
+    else {
+        return (None, None);
+    };
+    match Operation::load(host, paths, operation_id, planned.inputs.operation) {
+        Ok(operation) => {
+            let journal = operation.journal();
+            (
+                journal.s0.as_ref().and_then(|s0| s0.head),
+                journal.previous.live.clone(),
+            )
+        }
+        Err(_) => (None, None),
+    }
 }
 
 /// When each build became the root's live build, as the operation journals record it, oldest
@@ -328,27 +362,41 @@ pub(crate) fn gate(host: &dyn Host, paths: &Paths, planned: &Planned) -> Gate {
         .filter(|edge| edge.check != "next_check_config")
         .all(|edge| edge.result != plan::EdgeResult::Fail);
     gate.part(RollbackGatePart::InterfaceEdges, edges_pass, Value::Null);
-    // 2. The target's own reader reads every page after S0.
+    // 2. The target's own reader reads every page after S0. S0 covers the records written since
+    // the live build was installed, so the part passes only toward the build it replaced
+    // (review S1 F3); any other target fails, `previous` naming the one it may pass for.
     let target_tools = paths.build(target).join(Half::Tools.dir());
-    match live_s0(paths, planned, host) {
+    let (s0, previous) = live_operation(paths, planned, host);
+    match s0.filter(|_| previous.as_deref() == Some(target)) {
         None => gate.part(
             RollbackGatePart::LedgerReadability,
             false,
-            json!({"s0": Value::Null}),
+            json!({"s0": Value::Null, "previous": previous}),
         ),
-        Some(s0) => match programs::read_pages(host, &target_tools, &planned.state_root, s0) {
+        Some(s0) => match programs::read_pages(
+            host,
+            &target_tools,
+            &planned.state_root,
+            s0,
+            Deadline::ledger_read(&planned.settings),
+        ) {
             Ok(head) => gate.part(
                 RollbackGatePart::LedgerReadability,
                 true,
-                json!({"s0": s0, "head": head}),
+                json!({"s0": s0, "head": head, "previous": previous}),
             ),
             Err(refused) => {
                 gate.part(
                     RollbackGatePart::LedgerReadability,
                     false,
-                    json!({"s0": s0, "first_refused": refused.sequence}),
+                    json!({
+                        "s0": s0,
+                        "previous": previous,
+                        "page_after": refused.after,
+                        "first_refused": refused.sequence,
+                    }),
                 );
-                gate.unreadable = Some((refused.sequence, refused.cause));
+                gate.unreadable = Some(refused);
             }
         },
     }
@@ -366,16 +414,23 @@ pub(crate) fn gate(host: &dyn Host, paths: &Paths, planned: &Planned) -> Gate {
     let margin = planned.settings.rollback_open_margin_ms;
     let changes = live_changes(host, paths, operation);
     let logs = start_logs(host, &paths.root);
-    let open_in = |log: &StartLog| open_of(&log.path).map(|sum| (log.path.clone(), sum));
-    let (open, from_target) = match logs
+    // The target's newest start decides (review S1 F8): one whose open failed (its log holds no
+    // open line: a budget exit, a stall) fails the part; an older open is not judged instead.
+    // Without a start of the target, the newest open of any build is judged, noted.
+    let (log, estimate, from_target) = match logs
         .iter()
-        .filter(|log| live_at(&changes, log.at_unix_ms) == Some(target))
-        .find_map(open_in)
+        .find(|log| live_at(&changes, log.at_unix_ms) == Some(target))
     {
-        Some(own) => (Some(own), true),
-        None => (logs.iter().find_map(open_in), false),
+        Some(own) => (Some(own.path.clone()), open_of(&own.path), true),
+        None => match logs
+            .iter()
+            .find_map(|log| open_of(&log.path).map(|sum| (log.path.clone(), sum)))
+        {
+            Some((other, sum)) => (Some(other), Some(sum), false),
+            None => (None, None, false),
+        },
     };
-    if let Some((log, _)) = &open
+    if let Some(log) = &log
         && !from_target
     {
         gate.notes.push(
@@ -384,7 +439,6 @@ pub(crate) fn gate(host: &dyn Host, paths: &Paths, planned: &Planned) -> Gate {
                 .path(log),
         );
     }
-    let estimate = open.as_ref().map(|(_, sum)| *sum);
     let open_passes = matches!((deadline, estimate), (Some(deadline), Some(estimate))
         if estimate.saturating_add(margin) <= deadline);
     gate.part(
@@ -394,11 +448,12 @@ pub(crate) fn gate(host: &dyn Host, paths: &Paths, planned: &Planned) -> Gate {
             "deadline_ms": deadline,
             "margin_ms": margin,
             "estimate_ms": estimate,
-            "log": open.as_ref().map(|(log, _)| files::plain(log)),
-            "from_target_build": open.as_ref().map(|_| from_target),
+            "log": log.as_deref().map(files::plain),
+            "from_target_build": log.as_ref().map(|_| from_target),
         }),
     );
-    // 4. The live configuration passes the target's check-config.
+    // 4. The live configuration passes the target's check-config (without `--install-root` for
+    // a target that does not take it, judged by its outcome's category: review S1 F1).
     let passes = planned.target_check.passed();
     if !passes {
         gate.config_refusal = Some(planned.target_check.received.clone());
@@ -406,7 +461,10 @@ pub(crate) fn gate(host: &dyn Host, paths: &Paths, planned: &Planned) -> Gate {
     gate.part(
         RollbackGatePart::Config,
         passes,
-        json!({"check_config": planned.target_check.summary}),
+        json!({
+            "check_config": planned.target_check.summary,
+            "install_root": planned.target_check.install_root,
+        }),
     );
     gate
 }
@@ -530,16 +588,19 @@ pub(crate) fn apply_command(
         }
         notes.extend(gate.notes.iter().cloned());
     }
-    // S0: the ledger head before the first change, read with the live build's reader.
+    // S0: the ledger head before the first change, read with the live build's reader by its
+    // bounded head read (review S1 F2), within its deadline.
     let head = programs::ledger_head(
         host,
         &paths.root.join(Half::Tools.dir()),
         &planned.state_root,
+        Deadline::ledger_read(&planned.settings),
     )
-    .map_err(|cause| {
-        super::refusal(operation, InstallRefusal::LedgerHeadUnreadable)
-            .path(&planned.state_root)
-            .caused_by(cause)
+    .map_err(|failure| {
+        failure.onto(
+            super::refusal(operation, InstallRefusal::LedgerHeadUnreadable)
+                .path(&planned.state_root),
+        )
     })?;
     let opening = Opening {
         kind: match kind {
@@ -569,7 +630,7 @@ pub(crate) fn apply_command(
         },
     };
     let opened = Operation::open(host, &paths, opening, |ms| update_steps(&planned, ms))?;
-    let answer = run(opened)?;
+    let answer = run(opened, &planned.settings)?;
     let renamed = &planned.running.renamed;
     if !renamed.is_empty() {
         notes.push(
@@ -595,7 +656,7 @@ pub(crate) fn resume(operation: Operation<'_>) -> Result<Answer, Outcome> {
         InstallLocation::Resume,
     )
     .map_err(|cause| operation.interrupted(cause))?;
-    run(operation)
+    run(operation, &loaded.settings)
 }
 
 /// Whether `path` holds `sha256`.
@@ -603,8 +664,9 @@ fn holds(path: &Path, sha256: &str) -> bool {
     files::sha256_file(path).is_ok_and(|(actual, _)| actual == sha256)
 }
 
-/// The steps of an update or rollback, each skipped when its postcondition already holds.
-fn run(mut operation: Operation<'_>) -> Result<Answer, Outcome> {
+/// The steps of an update or rollback, each skipped when its postcondition already holds; the
+/// children run within the deadlines of `settings`.
+fn run(mut operation: Operation<'_>, settings: &InstallSettings) -> Result<Answer, Outcome> {
     let paths = operation.paths().clone();
     let journal = operation.journal().clone();
     let command = journal.kind.location();
@@ -641,16 +703,25 @@ fn run(mut operation: Operation<'_>) -> Result<Answer, Outcome> {
                     .start(n)
                     .map_err(|cause| operation.interrupted(cause))?;
                 let config = paths.config();
-                if let Err(cause) = programs::ledger_verify(
+                if let Err(failure) = programs::ledger_verify(
                     operation.host(),
                     &paths.build(&target).join(Half::Runtime.dir()),
                     &config,
+                    Deadline::ledger_verify(settings),
                 ) {
+                    let timed_out = failure.timed_out();
+                    let refusal = failure.onto(
+                        super::refusal(command, InstallRefusal::LedgerVerifyFailed)
+                            .commit_sha(target.clone()),
+                    );
+                    if timed_out {
+                        // Left running at its deadline (review S1 F4): nothing has changed, and
+                        // the operation stays unfinished for `resume` (which verifies again) or
+                        // `undo`, so nothing starts the Runtime while the verification reads.
+                        return Err(operation.interrupted(refusal));
+                    }
                     // Nothing has changed yet: the operation ends refused (a fatal report of the
                     // verification tops the refusal by the fatal-link rule).
-                    let refusal = super::refusal(command, InstallRefusal::LedgerVerifyFailed)
-                        .commit_sha(target.clone())
-                        .joined(CauseRelation::CausedBy, cause);
                     operation.finish(&refusal)?;
                     return Err(refusal);
                 }
@@ -686,11 +757,14 @@ fn run(mut operation: Operation<'_>) -> Result<Answer, Outcome> {
                     operation
                         .start(n)
                         .map_err(|cause| operation.interrupted(cause))?;
+                    let host = operation.host();
+                    let operation_id = operation.id().to_owned();
                     swap(
                         command,
                         &dst,
                         &part,
                         intent.old.as_deref().map(|old| paths.at(old)),
+                        || host.between_renames(&operation_id, n),
                     )
                     .map_err(|cause| operation.interrupted(cause))?;
                     if !holds(&dst, &intent.sha256) {
@@ -766,16 +840,21 @@ fn run(mut operation: Operation<'_>) -> Result<Answer, Outcome> {
 /// Swaps `part` in at `dst`: a file at `dst` that is not yet the new one is renamed `old` first
 /// (a new file has no `old`, so a file found at its place refuses `build_invalid` for the
 /// command `command`), then the part renamed `dst`. Each half is done only when it is missing,
-/// so a swap interrupted between the two renames is finished.
+/// so a swap interrupted between the two renames is finished. `between` runs after the first
+/// rename (the host's test hook).
 pub(crate) fn swap(
     command: InstallLocation,
     dst: &Path,
     part: &Path,
     old: Option<PathBuf>,
+    between: impl FnOnce() -> Result<(), Outcome>,
 ) -> Result<(), Outcome> {
     if dst.exists() {
         match &old {
-            Some(old) if !old.exists() => files::rename(dst, old)?,
+            Some(old) if !old.exists() => {
+                files::rename(dst, old)?;
+                between()?;
+            }
             Some(_) => {}
             None => {
                 return Err(super::refusal(command, InstallRefusal::BuildInvalid).path(dst));
