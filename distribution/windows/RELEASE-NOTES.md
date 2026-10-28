@@ -9,6 +9,113 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.25
+
+本版是 v0.12.24 之后合并的 11 个 PR：0.12 第一波的 10 片（W1-1 到 W1-10）和第二波的第一片（P22-0）。运行中会注意到的：
+玩全屏游戏或编译时，第三方压力不再让性能控制器一路升到停止派发（P22-0）；暂停期间用 `ac_emulator start` 启动的实例，
+解除暂停后会跑一次启动包（W1-6），空闲动作唤醒的实例在启动包跑完之前仍记为关着，重启不再丢掉排着的启动包（W1-2）；
+画面还在动、但认得出是回主页包入口页时，恢复阶梯重跑回主页，不再等满 `busy.screen.max_wait_ms`（W1-3）；每日重置不再
+清掉任务自己的上一次结果（W1-4）；计划说明点名占住实例的是什么（W1-5）；Status 和概览不再等账本写入线程（W1-8）；一个
+实例的会话连续两次死掉只扣住这一个实例（W1-7）；S2 自动回退先判回退闸门、再关新 Runtime（W1-1）。升级后的第一次启动
+会记一条 `invalid_runtime_state_fact`，这是预期的（见下面的“升级时要知道的”）。v0.12.24 已在本版之前发布。
+
+配置：没有新键，也没有新的 revision，`actingd-config` 仍是 [5, 19]，`runtime-client` 仍是 [2, 2]，账本仍是 [3, 4]；
+没有改任何默认值。
+
+- `config.subsystems` 多了常开的一行 `reset_exclusions`（W1-4）：这是已有事实的新行值，不是配置键。`schedule.json` 的
+  时间线事件写了 `excludes_fact_prefixes` 时，`requires` 必须列出它。
+- `PerformanceStatus` 的答复新增可选成员 `ledger_read_pages`（W1-8），仍在 `runtime-client` revision 2 之内，不升
+  revision（配对见下面的回退）。没有新请求类型，也没有新请求成员。
+- 新出现的限值都是程序里的固定值，不是配置键：手动运行 `actingd suspended` 时默认 60 秒截止，找 daemon 启动事实最多
+  读 32 768 行（W1-9）。
+- 现有的配置都不需要修改。
+
+升级时要知道的：
+
+- 空闲状态记录（W1-2）：本版读不了 v0.12.24 写的 `host.idle_state`（v0.12.24 的写入者行是 `owner_epoch`，本版是启动
+  锚点 `start_anchor`）。账本里有这条记录时，升级后的第一次启动记一条 `invalid_runtime_state_fact`（操作
+  `restore_idle_state`），是 Runtime 范围的记录，不致命，启动继续。这次启动不知道空闲动作关了哪些游戏：每个空闲动作
+  不是 `none`、配置了启动包（`stop_emulator` 还要配置了模拟器启动）的实例按“已关闭、唤醒时间就是启动时刻”恢复，第一次
+  空闲检查唤醒它一次；它的启动包排在部署的保持后面，`release-hold` 之后跑一次，下一次计划再按正常的唤醒时间关上。
+  这是预期的，不要因为这条记录或多跑的这次启动包回退。退回 v0.12.24 时反方向也一样发生一次（见下）。
+- 重置排除（W1-4）：声明了 `requires: reset_exclusions`（或写了 `excludes_fact_prefixes`）的 `schedule.json`，v0.12.24
+  拒绝。只在本版运行起来之后才加这样的声明；加了之后，S2 回退到 v0.12.24 时，v0.12.24 拒绝那个游戏的文件。另外，规则
+  对自己的 `dependency_completed`（例如对自己 `failed` 的重试分支）现在跨过重置读到上一轮的结果；只该在本轮触发的分支
+  要以同一轮更早一步的 `dependency_completed` 作本轮闸门（已有的这类分支在本版合入之前已在资源侧加上）。
+- 止损指令（W1-3）：本版运行之后，止损用的运行时指令 `recovery_ladder.busy.screen.max_wait_ms=120000` 不再需要。清掉
+  它是运维步骤，不在发布里：`actingctl config clear recovery_ladder.busy.screen.max_wait_ms`（或 `ac_config_set` 只给
+  这个键、不给 `value`），回到默认的 900 000。
+
+退回 v0.12.24 之前要做的事（按代码核对过）：
+
+- 配置和运行时指令：本版没有新键，也没有改默认值，v0.12.24 照样读本版的配置文件，回退启动的 `instructions` 检查不会
+  因本版失败。清掉了上面的止损指令之后再回退的，v0.12.24 没有入口页比较，画面一直在动时又会等满
+  `busy.screen.max_wait_ms`；需要时回退后再设一次这条指令。
+- `schedule.json`：已经加了 `requires: reset_exclusions` 的游戏，回退前先把声明和 `excludes_fact_prefixes` 从文件里拿掉，
+  否则 v0.12.24 拒绝那个游戏的文件。没有加的不用做什么；v0.12.24 的重置照旧清掉任务自己的上一次结果。
+- 空闲状态记录：不用做什么。v0.12.24 读不了本版写的 `start_anchor`，回退后的第一次启动同样记一条
+  `invalid_runtime_state_fact`（操作 `restore_idle_state`），每个上面那样的实例唤醒一次、启动包跑一次。
+- MCP 入口的状态文件：不用做什么。换上本版的 `actingcommand-mcp-entry.exe` 之后，入口在状态文件里多写一个成员
+  `process_created_at_unix_ms`。v0.12.24 的 `actingctl mcp-entry list` 把状态文件当一般 JSON 读、只取 `pid`，不认识的
+  成员忽略，照常列出，只是又只按 pid 判断入口是否还活着。入口和子进程之间的约定仍是 `g1`，本版的入口照样切换到
+  v0.12.24 的子进程。
+- 账本：不用做什么。账本的格式、表、索引和事件类型都没变，v0.12.24 照样打开本版写过的账本。本版不再为只有一条
+  `client.action` 的作用域写 `prior_epoch_scope_closed`（W1-10），回退后 v0.12.24 的第一次启动照旧为上一个纪元的这类
+  作用域补写关闭，只是多写一些记录。会话死亡的计数（W1-7）和淘汰证明集（W1-8）只在内存里。
+- 结果码：退役的 `recent_runs_budget_invalid` 只由客户端的 `recent_runs` 答出，从不写进账本；v0.12.24 里它仍是有效的码，
+  不用做什么。本版没有新结果码。
+- 客户端和 Runtime 的配对：
+  - 本版的客户端连 v0.12.24 的 Runtime：照常。本版没有新请求类型或请求成员；v0.12.24 的 `PerformanceStatus` 答复没有
+    `ledger_read_pages`，本版客户端按没有这个可选成员读。
+  - v0.12.24 的客户端连本版的 Runtime：除了 `PerformanceStatus` 都照常。v0.12.24 的 `PerformanceStatus` 拒绝不认识的
+    成员，而本版 Runtime 的账本有读者池，答复带 `ledger_read_pages`（读者池没能启动时才没有），所以 v0.12.24 的客户端解码失败
+    （`runtime_receipt_decode_failed`）并锁住这次连接：`actingctl perf-status` 报错；`ac_overview` 没有 `performance` 块，
+    带这条警告、标 `incomplete: true`，这次调用里在它之后读的 `fact_refresh` 也失败，下一次调用重新连接。这只发生在
+    升级时 MCP 入口还没切到本版子进程之前，以及直接启动、还没重启的 `actingctl mcp-serve`；命令行用根目录的
+    `runtime\actingctl.exe`，部署之后就是本版。回退方向没有这个问题。
+- 回退本身（W1-1）：S2 的自动回退先判回退闸门。闸门不过时以 `rollback_gate_failed` 结束，什么都不关：新构建、正在运行
+  的新 Runtime 和保持都留着，由人决定（`next` 指向 `release-hold`）。
+
+运行上的变化：
+
+- 回退闸门（W1-1）：S2 自动回退在关新 Runtime 之前判闸门，闸门不过时新 Runtime 继续运行并保持住。
+- 暂停中的启动（W1-6）：暂停期间 `ac_emulator start` / `restart` 也把启动包排在暂停后面，解除暂停（先重连）后跑一次；
+  答复是 `startup_package: scheduled`，`startup_package_withheld` 点名挡住它的暂停。
+- 重置（W1-4）：任务自己的 `dependency_completed`、`since_own_run` 和 `once_per_reading` 读到重置之前的上一次结果；
+  `excludes_fact_prefixes` 列出的前缀不被清掉；时钟槽可能多记一些 `clock_slot_superseded` / `clock_slot_expired`（只是诊断）。
+- 计划说明（W1-5）：实例被占住时，等未知键的候选在 `trigger_unknown` 或 `feedback_stop_unknown` 之后带上占住它的原因和唤醒（`dispatch_instance_held`、
+  `dispatch_paused_*`、`dispatch_instance_cooldown` 或时段黑名单）；占住期间不读，解除后的第一轮再读。
+- 入口页复查（W1-3）：保持之后的复查里画面还在动，最后一帧是回主页包声明的入口页时先续租、再重跑回主页；认不出的画面
+  照旧保持，入口是 `any` 的包不比较，比较做不成的记一条 `runtime.failed`、照旧保持。
+- 诊断（W1-9）：runtime-client 公开的 `recent_runs` 退役；`actingd suspended` 在截止时间内读每个显示的运行，来不及的
+  留空并标 `ledger_read_incomplete`，找不到 daemon 启动时答 `daemon_start_unknown`、其余照常。
+- 性能控制器（P22-0）：只有宿主响应度让旧控制器升级，第三方压力和全屏前台单独或一起都不再升级，所以单靠压力不会到
+  Suspended，不推迟派发、不拒租约、不降重场景名额。
+- 启动和 MCP 入口（W1-10）：启动不再为客户端动作的作用域写关闭；`mcp-entry list` 按 pid 和进程创建时间判断入口
+  是否活着（旧入口的状态文件没有创建时间，按 `started_at_unix_ms` 判断），判断不了的行标 `stale: null` 和
+  `probe_failed`、答复带 `process_probe_failed` 警告，命令照常答复；更新的 `notice.mcp_clients_reconnect` 不再算入口自己的子进程；推迟中的
+  切换遇到安装又变时放弃，稳定后重新计划。
+- 实例隔离（W1-7）：会话连续两次死掉（中间没有一次截图成功）只隔离这个实例，其他实例照跑；E45、E48 只让这次操作
+  失败；输入因运行的截止时间、取消或租约到期被挡下时，是这次操作自己的不致命失败。
+- 账本读取（W1-8）：Status、MonitorStatus 和事实快照读写入线程已发布的头，不再等写入线程（事实快照仍等事实写入闸）；
+  `actingctl perf-status` 和 `ac_overview` 的 `performance` 块显示 `ledger_read_pages {pages, total_ms, longest_ms, last_ms}`。
+- 空闲记录（W1-2）：唤醒之后、启动包跑完之前实例记为 `woken`、仍算关着；`stop_emulator` 的唤醒发现模拟器已在运行时
+  也排一次启动包；中间的离线账本维护或部署的账本检查不再让记录作废；`finished` 两端都失败时两个错误都报。
+
+本版合并的 PR（最后 4 个 #1403、#1404、#1401、#1402 经集成 PR #1406 一起合入，#1406 本身不加内容）：
+
+- #1395 W1-1（#421 P12）：S2 自动回退在关新 Runtime 之前判回退闸门，不过时以 `rollback_gate_failed` 结束，新 Runtime 继续运行并保持住。
+- #1396 W1-6（#411 A71）：暂停期间 `ac_emulator start` 排上的启动包在解除暂停后跑一次，不再一直扣着。
+- #1397 W1-4（#411 P19）：每日重置保留任务自己的上一次结果；重置可以声明不清的前缀（`excludes_fact_prefixes`，要 `requires: reset_exclusions`）。
+- #1398 W1-5（#411 裁定 77 A）：计划说明点名占住实例的是什么（占用者、暂停、冷却、时段黑名单）。
+- #1399 W1-3（#411 A56）：阶梯复查时画面显示回主页包的入口页之一就先续租、再重跑回主页。
+- #1400 W1-9：runtime-client 公开的 `recent_runs` 退役（`recent_runs_budget_invalid` 一起退役）；`actingd suspended` 在截止时间内读，手动运行有默认截止时间和行数上限。
+- #1405 P22-0（#420）：第三方压力和全屏前台单独不再让性能控制器升级。
+- #1403 W1-10（#411 P51、P49）：只读的客户端动作作用域在下次启动时不再写关闭；`mcp-entry list` 比较 pid 和进程创建时间；判断失败的行标出来。
+- #1404 W1-7（#419 ISO-2b）：会话连续两次死掉只扣住那个实例；E45、E48、E08 只让操作失败；会话死亡的码移出“总是严重”的表。
+- #1401 W1-8（#422）：共享的淘汰证明集；`PerformanceStatus` 新增 `ledger_read_pages`；Status、Monitor 和事实快照读已发布的头。
+- #1402 W1-2（#405 P14–P16）：空闲记录保持“已关闭、已唤醒”直到启动包跑完；绑在启动锚点上；两端的错误都报。
+
 ## v0.12.24
 
 本版是 v0.12.23 之后合并的 1 个 PR（#1393 QR-2b，#422）：`ac_diagnose`（和 `actingctl diagnose`）重新能在调用的
