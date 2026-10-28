@@ -1099,37 +1099,8 @@ impl HostShared {
             Some(receipt.request_id()),
             TaskOutcome::Success,
         )?;
-        let execution_input = PolicyExecutionInput::Succeeded;
-        let replayed = {
-            let policy = lock(
-                self.policy()?,
-                HostLocation::ReplayScheduledPolicyCompletion,
-            )?;
-            policy
-                .replay_execution(context.decision_id(), &execution_input)?
-                .is_some()
-                && !policy.dispatch_needs_completion(context.decision_id())?
-        };
-        let (authoritative_outcome, remedy_key) =
-            self.read_scheduled_policy_outcome(context, terminal, receipt.request_id(), replayed)?;
-        // Workflow #411 B15 R4 (model-b15 §7.8): the key a run of a task that declares a remedy
-        // ended on, for its pair's remedy journal, before the run settles.
-        if let Some(outcome_key) = remedy_key {
-            lock(self.policy()?, HostLocation::ReadPolicyOutcomeKeys)?
-                .note_remedy_key(context.decision_id(), outcome_key);
-        }
-        let execution = self.record_policy_dispatch_outcome_under_gate(
-            context.decision_id(),
-            &execution_input,
-            Some(context),
-            PolicyOutcomeCacheUpdate::Commit(
-                authoritative_outcome
-                    .as_ref()
-                    .map(SchedulingOutcomeProjection::scheduling_result),
-            ),
-        )?;
-        // Workflow #336 L6: the run's resolution is no longer needed once it is recorded.
-        self.forget_scheduled_resolution(context.decision_id())?;
+        let (execution, authoritative_outcome) =
+            self.record_scheduled_policy_success(context, terminal, receipt.request_id())?;
         let authoritative_outcome = authoritative_outcome
             .map(|projection| {
                 let settlement_position = self
@@ -1156,6 +1127,57 @@ impl HostShared {
                 })
             })
             .transpose()?;
+        Ok((execution, authoritative_outcome))
+    }
+
+    /// The settlement of the scheduled run `context` whose sole terminal is its success
+    /// `terminal`, written for `request_id`: its execution is recorded as a success and its
+    /// authoritative outcome (when its catalog references outcome keys of its task) is published
+    /// to the scheduling-outcome cache; the key its terminal names is noted for its pair's remedy
+    /// journal first. The caller holds `policy_outcome_gate`. ISO-5a fix 1 (review M1): shared by
+    /// the success path (`complete_scheduled_policy_run`) and the failure path's success arm
+    /// (ISO-M row A11), so a success whose lease end failed after its terminal is never settled
+    /// with its cache entry cleared.
+    fn record_scheduled_policy_success(
+        &self,
+        context: &PolicyRunContext,
+        terminal: TerminalEvent,
+        request_id: RequestId,
+    ) -> RuntimeHostResult<(
+        PolicyExecutionEventData,
+        Option<SchedulingOutcomeProjection>,
+    )> {
+        let execution_input = PolicyExecutionInput::Succeeded;
+        let replayed = {
+            let policy = lock(
+                self.policy()?,
+                HostLocation::ReplayScheduledPolicyCompletion,
+            )?;
+            policy
+                .replay_execution(context.decision_id(), &execution_input)?
+                .is_some()
+                && !policy.dispatch_needs_completion(context.decision_id())?
+        };
+        let (authoritative_outcome, remedy_key) =
+            self.read_scheduled_policy_outcome(context, terminal, request_id, replayed)?;
+        // Workflow #411 B15 R4 (model-b15 §7.8): the key a run of a task that declares a remedy
+        // ended on, for its pair's remedy journal, before the run settles.
+        if let Some(outcome_key) = remedy_key {
+            lock(self.policy()?, HostLocation::ReadPolicyOutcomeKeys)?
+                .note_remedy_key(context.decision_id(), outcome_key);
+        }
+        let execution = self.record_policy_dispatch_outcome_under_gate(
+            context.decision_id(),
+            &execution_input,
+            Some(context),
+            PolicyOutcomeCacheUpdate::Commit(
+                authoritative_outcome
+                    .as_ref()
+                    .map(SchedulingOutcomeProjection::scheduling_result),
+            ),
+        )?;
+        // Workflow #336 L6: the run's resolution is no longer needed once it is recorded.
+        self.forget_scheduled_resolution(context.decision_id())?;
         Ok((execution, authoritative_outcome))
     }
 
@@ -1411,7 +1433,21 @@ impl HostShared {
             ));
         }
         self.ensure_scheduled_policy_lease_released(context)?;
-        let input = self.scheduled_policy_failure_input(context, failure)?;
+        let input = match self.scheduled_policy_failure_input(context, failure)? {
+            ScheduledFailureSettlement::Failed(input) => input,
+            // ISO-5a fix 1 (review M1; ISO-M row A11): a success whose lease end failed after its
+            // terminal settles as the success path settles it: its authoritative outcome is
+            // published (and its remedy key noted), never cleared, so the next evaluation's
+            // projection finds it.
+            ScheduledFailureSettlement::Succeeded {
+                terminal,
+                request_id,
+            } => {
+                let (execution, _) =
+                    self.record_scheduled_policy_success(context, terminal, request_id)?;
+                return Ok(execution);
+            }
+        };
         // Workflow #336 L6 (§12.4): a run's failure is its failure identity (a `linear_steps`
         // or, Workflow #390 EXEC-3, a page-graph run's).
         let input = self.scheduled_failure_identity(context, failure, input)?;
@@ -1507,7 +1543,7 @@ impl HostShared {
         &self,
         context: &PolicyRunContext,
         failure: &RequestFailure,
-    ) -> RuntimeHostResult<PolicyExecutionInput> {
+    ) -> RuntimeHostResult<ScheduledFailureSettlement> {
         // LN-5 (#422, LEAN-L §3.3): the run's chain is read from the store page by page at the
         // head.
         let task_terminals = crate::recovery_read::read_through_head(
@@ -1533,23 +1569,40 @@ impl HostShared {
         let task_failure = match task_terminals.as_slice() {
             // Workflow #378 A2-P: a run with no terminal records its request error's top node.
             [] => {
-                return Ok(PolicyExecutionInput::Failed {
-                    outcome: failure.error.outcome().without_causes(),
-                    failure_identity: None,
-                    class: if failure.error.is_fatal() {
-                        PolicyFailureClass::Severe
-                    } else {
-                        PolicyFailureClass::Recoverable
+                return Ok(ScheduledFailureSettlement::Failed(
+                    PolicyExecutionInput::Failed {
+                        outcome: failure.error.outcome().without_causes(),
+                        failure_identity: None,
+                        class: if failure.error.is_fatal() {
+                            PolicyFailureClass::Severe
+                        } else {
+                            PolicyFailureClass::Recoverable
+                        },
                     },
-                });
+                ));
             }
             [task_failure] if task_failure.event_type() == EventType::TaskFailed => *task_failure,
             // ISO-5a (#419, ISO-M row A11; C-43 point 3): the run committed its success terminal,
             // and only its lease end failed after it (its lease lapsed past the end grace). The
             // run succeeded and settles as a success; its lease end's failure fences only its
-            // instance, or fails only the run's receipt, and never stops the Runtime.
+            // instance, or fails only the run's receipt, and never stops the Runtime. Fix 1
+            // (review M1): it settles from that terminal as the success path does, so its outcome
+            // is published, not cleared.
             [task_success] if task_success.event_type() == EventType::TaskCompleted => {
-                return Ok(PolicyExecutionInput::Succeeded);
+                let request_id = *task_success.links().request_id().ok_or_else(|| {
+                    RuntimeHostError::fatal(
+                        HostCode::PolicyRunIdentityMissing,
+                        HostLocation::CompleteScheduledPolicyFailure,
+                        RuntimeErrorCode::RuntimeHalted,
+                    )
+                })?;
+                return Ok(ScheduledFailureSettlement::Succeeded {
+                    terminal: TerminalEvent {
+                        sequence: task_success.sequence(),
+                        event_id: *task_success.event_id(),
+                    },
+                    request_id,
+                });
             }
             _ => {
                 return Err(RuntimeHostError::fatal(
@@ -1594,11 +1647,16 @@ impl HostShared {
         // from the terminal's severity (now its category). Workflow #378 A2-P: the failure is the
         // terminal outcome's top node, as the startup recovery records it; the ledger compares
         // its code (`scheduled_failure_code_str`).
-        Ok(PolicyExecutionInput::Failed {
-            outcome: outcome.without_causes(),
-            failure_identity: None,
-            class: actingcommand_contract::scheduled_failure_class(outcome.code(), *failure_severe),
-        })
+        Ok(ScheduledFailureSettlement::Failed(
+            PolicyExecutionInput::Failed {
+                outcome: outcome.without_causes(),
+                failure_identity: None,
+                class: actingcommand_contract::scheduled_failure_class(
+                    outcome.code(),
+                    *failure_severe,
+                ),
+            },
+        ))
     }
 
     fn validate_scheduled_policy_terminal(
@@ -2975,6 +3033,18 @@ fn policy_run_effect_started(
         }
     }
     Ok(false)
+}
+
+/// What the failure path settles a scheduled run as (`scheduled_policy_failure_input`).
+enum ScheduledFailureSettlement {
+    /// The run's failure: its failed terminal's outcome, or its request error's without one.
+    Failed(PolicyExecutionInput),
+    /// ISO-5a (#419, ISO-M row A11; fix 1, review M1): the run's sole terminal is its success
+    /// `terminal`, written for `request_id`; only its lease end failed after it.
+    Succeeded {
+        terminal: TerminalEvent,
+        request_id: RequestId,
+    },
 }
 
 pub(super) fn recover_authoritative_policy_outcomes(
