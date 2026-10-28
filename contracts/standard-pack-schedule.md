@@ -91,7 +91,11 @@ example `/timeline/0/excludes_fact_prefixes`). A file that relies on a reset kee
 last result (a rule's `dependency_completed` on itself, its `since_own_run` or its
 `once_per_reading` read through a reset that clears its `task.` state) names `reset_exclusions`
 as well, so an older Runtime refuses the file instead of re-running the rule after each reset; the
-composer cannot see that reliance and does not require it.
+composer cannot see that reliance and does not require it. A rule that uses a `dependency_completed`
+on itself as the result of the current period (for example a retry branch on its own `failed`) now
+reads its last result across the reset, from before it; a retry branch that must fire only within
+the current period needs, as its period gate, a `dependency_completed` on an earlier rule of the
+same period, which the reset clears.
 
 ## Classification
 
