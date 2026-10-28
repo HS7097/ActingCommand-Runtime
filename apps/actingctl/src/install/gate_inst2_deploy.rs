@@ -1618,3 +1618,166 @@ fn inst2_n3_a_refused_hold_reports_the_runs_its_drains_cut() {
         json!([{"alias": "node.a", "finished": 0, "cancelled": 2}])
     );
 }
+
+// #421 S2-IF (v0.12.21; work order rd-1028/brief-s2-instr-fix.md). Production, 10-28 10:11: S2
+// rolled a good update back because the new start's `StartReport`, and the rollback start's
+// again, listed three instructions kept over a changed default as dropped. The required state
+// (the work order's Fix 2; contracts/install-cli.md, the post-start checks): `instructions`
+// fails only on a key the start did not restore (the report's `instructions_dropped`: dropped or
+// superseded) or on S0's instructions not in effect as it recorded them; a key kept over a
+// changed default (`instructions_base_changed`) passes, named in the row's `base_changed`.
+// - T-1: the new start kept the instruction over a changed default: the composite is done;
+// - T-2: the new start dropped it (its key gone): `instructions` fails and the composite rolls
+//   back;
+// - T-3: the file superseded one of two instructions, the other kept over a changed default:
+//   `instructions` fails on the superseded one and the composite rolls back;
+// - T-4: the rollback start, its default changed back, kept it over the default: the rollback's
+//   checks pass and the hold is released.
+
+/// The instruction S0 records, as in production (a lead kept over a default that changed).
+const S2IF_KEY: &str = "idle.close_app_wake_lead_ms";
+/// A second instruction (T-3).
+const S2IF_OTHER: &str = "scheduling.example_key";
+
+/// A prepared root whose running Runtime has `instructions` in effect.
+fn s2if_root(base: &Path, name: &str, host: &FakeHost, instructions: &[(&str, &str)]) -> PathBuf {
+    let root = prepared(base, name, host, json!({}));
+    host.runtime.boot(&["node.a"]);
+    *host.runtime.instructions.borrow_mut() = instructions
+        .iter()
+        .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+        .collect();
+    root
+}
+
+/// The composite rolled back to `C1` on `instructions` alone, and the rollback start's checks
+/// passed and released the hold.
+fn assert_rolled_back_on_instructions(root: &Path, host: &FakeHost, answer: &super::Answer) {
+    assert_refused(answer, "install_update_apply", "deploy_rolled_back");
+    assert_eq!(
+        answer.members["failed_checks"],
+        json!(["instructions"]),
+        "{answer:?}"
+    );
+    let rollback = &answer.members["rollback"];
+    assert_eq!(rollback["released"], true, "{rollback}");
+    assert_eq!(rollback["post_check"]["failed"], json!([]), "{rollback}");
+    assert_rolled_back_to_c1(root, host, &operation_id(answer), "s2if");
+}
+
+// T-1: a new start that kept the instruction over a changed default passes `instructions`, names
+// it, and the composite is done (the new start of 10-28 10:11).
+#[test]
+fn s2if_t1_an_instruction_kept_over_a_changed_default_passes_the_check() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let root = s2if_root(temp.path(), "base-changed", &host, &[(S2IF_KEY, "300000")]);
+    host.runtime.report_patch.borrow_mut().insert(
+        C2.to_owned(),
+        json!({"instructions_base_changed": [S2IF_KEY]}),
+    );
+
+    let answer = composite(&host, &root, "deploy-s2if-1", &[]);
+    assert_done(&answer, "install_update_apply");
+    assert_eq!(
+        answer.members["post_check"]["failed"],
+        json!([]),
+        "{answer:?}"
+    );
+    let row = check_row(&answer.members["post_check"], "instructions");
+    assert_eq!(row["result"], "pass", "{row}");
+    assert_eq!(row["values"]["base_changed"], json!([S2IF_KEY]), "{row}");
+    assert_eq!(row["values"]["dropped"], json!([]), "{row}");
+    assert_eq!(
+        row["values"]["actual"],
+        json!([{"config_key": S2IF_KEY, "value_json": "300000"}]),
+        "{row}"
+    );
+    assert_eq!(row["values"]["expected"], row["values"]["actual"], "{row}");
+    assert!(holds_build(&root, &BuildSpec::new(C2)));
+    assert_eq!(*host.runtime.build.borrow(), C2);
+}
+
+// T-2: a new start that dropped the instruction (its key gone) fails `instructions`, and the
+// composite rolls back.
+#[test]
+fn s2if_t2_a_dropped_instruction_fails_the_check() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let root = s2if_root(temp.path(), "dropped", &host, &[(S2IF_KEY, "300000")]);
+    host.runtime.report_patch.borrow_mut().insert(
+        C2.to_owned(),
+        json!({"instructions_restored": 0, "instructions_dropped": [S2IF_KEY]}),
+    );
+
+    let answer = composite(&host, &root, "deploy-s2if-2", &[]);
+    let row = check_row(&answer.members["post_check"], "instructions");
+    assert_eq!(row["result"], "fail", "{row}");
+    assert_eq!(row["fail_class"], true, "{row}");
+    assert_eq!(row["values"]["dropped"], json!([S2IF_KEY]), "{row}");
+    assert_eq!(row["values"]["base_changed"], json!([]), "{row}");
+    assert_rolled_back_on_instructions(&root, &host, &answer);
+}
+
+// T-3: a new start where the file superseded one instruction and kept the other over a changed
+// default fails `instructions` on the superseded one; the kept one does not mask it.
+#[test]
+fn s2if_t3_a_superseded_instruction_fails_the_check() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let root = s2if_root(
+        temp.path(),
+        "superseded",
+        &host,
+        &[(S2IF_KEY, "300000"), (S2IF_OTHER, "1")],
+    );
+    host.runtime.report_patch.borrow_mut().insert(
+        C2.to_owned(),
+        json!({"instructions_restored": 1, "instructions_dropped": [S2IF_OTHER],
+            "instructions_base_changed": [S2IF_KEY]}),
+    );
+
+    let answer = composite(&host, &root, "deploy-s2if-3", &[]);
+    let row = check_row(&answer.members["post_check"], "instructions");
+    assert_eq!(row["result"], "fail", "{row}");
+    assert_eq!(row["values"]["dropped"], json!([S2IF_OTHER]), "{row}");
+    assert_eq!(row["values"]["base_changed"], json!([S2IF_KEY]), "{row}");
+    assert_rolled_back_on_instructions(&root, &host, &answer);
+}
+
+// T-4: the rollback start, the default changed back, kept the instruction over it: the
+// rollback's `instructions` passes, names it, and the hold is released (the rollback start of
+// 10-28 10:11). The new build fails `no_seeding` to roll back.
+#[test]
+fn s2if_t4_the_rollback_start_with_the_default_changed_back_passes_the_check() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let root = s2if_root(temp.path(), "changed-back", &host, &[(S2IF_KEY, "300000")]);
+    {
+        let mut patches = host.runtime.report_patch.borrow_mut();
+        patches.insert(
+            C2.to_owned(),
+            json!({"tagged_state": "seed", "instructions_base_changed": [S2IF_KEY]}),
+        );
+        patches.insert(
+            C1.to_owned(),
+            json!({"instructions_base_changed": [S2IF_KEY]}),
+        );
+    }
+
+    let answer = composite(&host, &root, "deploy-s2if-4", &[]);
+    assert_refused(&answer, "install_update_apply", "deploy_rolled_back");
+    assert_eq!(answer.members["failed_checks"], json!(["no_seeding"]));
+    assert_eq!(
+        check_row(&answer.members["post_check"], "instructions")["result"],
+        "pass"
+    );
+    let rollback = &answer.members["rollback"];
+    assert_eq!(rollback["released"], true, "{rollback}");
+    assert_eq!(rollback["post_check"]["failed"], json!([]), "{rollback}");
+    let row = check_row(&rollback["post_check"], "instructions");
+    assert_eq!(row["result"], "pass", "{row}");
+    assert_eq!(row["values"]["base_changed"], json!([S2IF_KEY]), "{row}");
+    assert_eq!(row["values"]["dropped"], json!([]), "{row}");
+    assert_rolled_back_to_c1(&root, &host, &operation_id(&answer), "changed-back");
+}

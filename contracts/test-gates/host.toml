@@ -2441,3 +2441,14 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_idle1p::idle1p_n3_both_failures_of_an_abandoned_action_are_reported",
 ]
 incident = ["#405 IDLE-1P"]
+
+# #421 S2-IF (v0.12.21; brief rd-1028/brief-s2-instr-fix.md; production 10-28 10:11: S2 rolled a good update back because StartReport listed three instructions kept over a changed default as dropped): through the host, StartReport names an instruction kept over a default that changed in instructions_base_changed, counts it restored and never lists it in instructions_dropped, its value still in effect (T-1), and again on the rollback's start with the default changed back (T-4); an instruction whose key is gone (T-2) or that the file superseded, an explicit value changed or a default now named (T-3), is listed in instructions_dropped and not counted restored
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_421_s2if::s2if_t1_an_instruction_whose_default_changed_is_base_changed_not_dropped",
+    "actingcommand-runtime-host::lib::tests::gate_421_s2if::s2if_t2_an_instruction_whose_key_is_gone_is_dropped",
+    "actingcommand-runtime-host::lib::tests::gate_421_s2if::s2if_t3_a_superseded_instruction_is_dropped",
+    "actingcommand-runtime-host::lib::tests::gate_421_s2if::s2if_t4_the_rollback_start_with_the_default_changed_back_is_base_changed",
+]
+incident = ["#421 S2-IF"]
