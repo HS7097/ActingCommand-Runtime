@@ -607,6 +607,8 @@ mod tests {
     // dwell once; a spent budget skips performance and fact_refresh; fact_refresh is cut last;
     // an unapplied configuration warns.
     mod gate_422_ov24k;
+    // Workflow #427-B: ac_schedule answers the shared run limits with their numbers.
+    mod gate_427b;
     mod gate_mcp19b;
     mod gate_mcp8;
     // Workflow #421 MCP-ENTRY, test row E-12: `mcp-config --entry` for the four clients.

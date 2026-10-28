@@ -71,6 +71,10 @@ outcome_keys! {
     requested: integer,
     attempted_count: integer,
     remaining_count: integer,
+    // Workflow #427-B (shared run limits, contracts/scheduling/README.md): the two parts of
+    // `used` against a shared run limit.
+    admitted_count: integer,
+    round_selected_count: integer,
     expected_bytes: integer,
     actual_bytes: integer,
     limit_bytes: integer,

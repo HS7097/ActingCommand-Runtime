@@ -262,6 +262,14 @@
       "type": "integer",
       "description": "How many items or attempts remain."
     },
+    "admitted_count": {
+      "type": "integer",
+      "description": "How many policy dispatches already admitted or running take a shared run limit's slots as an evaluation round starts; with round_selected_count it makes used (Workflow #427-B)."
+    },
+    "round_selected_count": {
+      "type": "integer",
+      "description": "How many dispatches chosen earlier in the same evaluation round take a shared run limit's slots; with admitted_count it makes used (Workflow #427-B)."
+    },
     "expected_bytes": {
       "type": "integer",
       "description": "The expected length in bytes."

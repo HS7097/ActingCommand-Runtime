@@ -438,7 +438,7 @@ ranking, the evaluator runs an optional score stage:
   `defer_below_milli < promote_above_milli`; it is only allowed next to a
   selection document (`priority_selection_without_document` otherwise). A scored
   candidate with `effective_milli < defer_below_milli` is deferred with reason
-  `score_deferred` and wakes at `now + defer_for_ms`, consuming no host budget;
+  `score_deferred` and wakes at `now + defer_for_ms`, taking no slot of the shared run limits;
   one with `effective_milli > promote_above_milli` is promoted and ranks ahead of
   every other candidate (`score_promoted`). An unscored candidate is never
   deferred or promoted: its effective value is `utility_milli + offset_milli`,
@@ -540,7 +540,7 @@ read it, and the candidate waits.
   load and a reserved run time of 60 s; its loop budget never binds. It takes
   the highest rank (catalog rank plus manual offset) of the candidates it
   unlocks and competes with the instance's other candidates; one winner per
-  instance and the host budget apply as usual.
+  instance and the shared run limits ("Shared Run Limits") apply as usual.
 - **Its own gates**, before the allocation: an instance without an activity
   profile (a limit, `activity_profile_missing`); its failed runs in a row since
   its last success reaching `max_consecutive_failures` with its latest run in
@@ -638,7 +638,7 @@ target record `session.remedy.choices` (an overlaid instance fact) and the confi
   ahead of the instance's other candidates, with one `policy_remedy_requested` reason per blocked
   pair it serves (at most 16); after the remedy is served, the blocked pair is treated so once,
   with `policy_remedy_retry`. Placement, the feedback stop, the deferrals, budgets, activity
-  windows, one winner per instance and the host budget still apply. Between several requested
+  windows, one winner per instance and the shared run limits still apply. Between several requested
   providers the ranking of "Score-Assisted Priority" decides, unchanged.
 - **Hold and stop.** While its round is open the blocked pair is deferred with
   `policy_remedy_waiting` at position 8a of the order of deferrals
@@ -688,7 +688,7 @@ A chain step that hands over on its page goes first (coordinator triage Q15; reg
   random delay (`dispatch_random_delay_waiting`, position 9 of the order of deferrals) is part of
   its dispatch: while the successor waits for its planned start the candidates it went before keep
   waiting with `policy_chain_handover_waiting` (coordinator ruling 10-21). When any other gate
-  defers the successor in the round (an admission gate at positions 1 to 8a, or the host budget),
+  defers the successor in the round (an admission gate at positions 1 to 8a, or a shared run limit),
   the candidates it went before take their turn in the same round, in rank order. When the
   successor is no longer a candidate (withdrawn, refused, no longer due) there is no handover.
 - **Exception.** A successor whose own trigger or selection document reads a key the fact refresh
@@ -745,6 +745,51 @@ gives the member's rules). The reserve is a hard gate, never a score penalty (re
   decision record lists a held candidate, as its `why`. Without `reserves` every evaluation is
   the one before B16 part 2, and the catalog keeps its bytes and its hash.
 
+## Shared Run Limits (Workflow #427-B)
+
+Since 0.12.22 (Workflow #427 plan r2 point 5, approved whole by Alice on 2026-10-28) the instances
+of a host share only what is really shared, so that five instances run like five players once
+their runs go on in parallel (#427-A):
+
+- **No virtual deduction in the round.** The evaluator no longer charges a chosen dispatch's CPU,
+  GPU and IO load against one host budget for the rest of the round, and there is no budget pool
+  per instance either. `host_budget_deferred`, the reason that deduction gave, is retired.
+- **Placement stays.** A task whose own load (its `load_profile`, or its instance override's)
+  exceeds its host's `cpu_available_milli`, `gpu_available_milli` or `io_available_milli` as the
+  round starts is blocked at placement with `host_capacity_insufficient`, as before.
+- **Heavy-scene slots.** A heavy candidate (`performance.load.heavy_threshold_milli`) takes one of
+  its host's heavy-scene slots, `performance.pacing.heavy_dispatch_limit.normal`, or `.paused`
+  while the performance controller is above Normal. The slots in use are the heavy policy
+  dispatches admitted and not yet settled (running, or admitted and not started; any instance)
+  plus the heavy ones chosen earlier in the round. Each dispatch counts once: the controller's
+  count, capped at the limit, and the policy host's own count of its admitted dispatches name the
+  same dispatches, and the larger is used, so under pressure the real number is reported. A
+  refused admission was never admitted and a settled (completed, failed or cancelled) dispatch is
+  no longer, so either frees its slot; a candidate an admission gate defers in the round takes
+  none. When the admitted ones alone take every slot, a heavy candidate is blocked at placement
+  with `heavy_scene_budget_exhausted`; when the round's earlier choices fill them, it is deferred
+  with `heavy_scene_budget_deferred`.
+- **At most so many runs** (optional). `performance.pacing.max_concurrent_runs` (an integer from 1,
+  no default; [runtime-config.md](../runtime-config.md)) limits the policy dispatches admitted or
+  running across every instance plus those chosen earlier in the round. A candidate past it is
+  deferred with `policy_concurrent_runs_deferred`. Without the key there is no such limit; `1`
+  runs at most one policy dispatch at a time across every instance, the fallback should parallel
+  runs misbehave. It is checked before the heavy-scene slots and holds every candidate, the
+  recognition maintenance package's too.
+- **The numbers.** The three reasons carry `used` (the slots taken), `limit_count` (the limit),
+  `admitted_count` (taken by dispatches admitted or running) and `round_selected_count` (taken
+  by dispatches chosen earlier in the round), so the explanation reads, for example, heavy scene
+  2/2 or concurrent runs 3/3. A `heavy_scene_budget_exhausted` has `round_selected_count` 0; its
+  `used` may be above `limit_count` when the limit fell under pressure.
+- **Pacing modes.** The limits do not depend on `performance.pacing.mode`: `observe` (the release
+  default, which never slows anything down), `pace` and `full` bind them alike, so under `observe`
+  they are the protection.
+- **Where.** The Runtime reads the admitted dispatches from its dispatch journal at each evaluation
+  (`RunSlots`, `evaluate_with_run_slots`); the library's other entry points have none beyond the
+  snapshot's `active_heavy_dispatches` and no maximum. Nothing is persisted: the reasons travel in
+  the decisions, the schedule explanation (`why` keeps its values) and, when a dispatch decision
+  record lists such a candidate, as its `why`.
+
 ## Dispatch Decision Record
 
 Workflow #308 RT-S1c. Every selected candidate's reason chain ends with the
@@ -777,7 +822,7 @@ no value keys and stay developer text.
    - `lead` is `total` minus the highest total among the instance's other
      ranked candidates, `score_deferred` ones included (`none` without one). It
      is negative when the winner was promoted above a higher total, or when a
-     higher-total candidate was deferred by score, the host budget or the
+     higher-total candidate was deferred by score, a shared run limit or the
      admission state; it can be positive while a better-ranked (promoted)
      candidate was deferred.
 2. `decision_record`: `targets=<active:<sha>@<applied_at>|expired:<sha>@<applied_at>|unreadable:<code>|none>[ ignored=<server|game>@<ms>]
@@ -806,8 +851,9 @@ no value keys and stay developer text.
      tie_breaker=<u64>` (the lower `tie_breaker` wins a tie).
    - Others: `why=<code> state=<state> eligibility=<true|false|unknown>`.
    - `why` is the candidate's last reason, the one that settled it
-     (`instance_already_selected`, `host_budget_deferred`,
-     `heavy_scene_budget_deferred`, an admission eligibility code,
+     (`instance_already_selected`, `heavy_scene_budget_deferred`,
+     `policy_concurrent_runs_deferred` ("Shared Run Limits" above; before 0.12.22 also
+     `host_budget_deferred`), an admission eligibility code,
      `score_deferred`, `task_cooldown_active`, `trigger_false`, …); it is
      never `none` ("Why A Candidate Does Not Run" below).
 

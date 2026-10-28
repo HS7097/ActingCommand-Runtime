@@ -3604,6 +3604,23 @@ or interface revision. The number 1.198 is provisional for the parallel slices.
 | CF5-2 | a `resource_projection`'s `value` may be `{"type": "fact", "fact_key", "offset"}` (`ProjectionComparand::Fact`) | catalog format addition (no ledger shape) | CF-5 | the standard packs' `schedule.json` | V2 only (V1: `unknown_field` at `value/type`); the referenced fact is read in the pool's scope with its own expiry and a confidence above 0; compared as `projected C b + offset` in `i128`; a referenced fact that gives no integer makes the predicate false with `fact_reference_unavailable {fact_key, unknown_reason}` (CF4-2), no wake, no fact refresh; an integer serializes and hashes as before |
 | CF5-3 | `config.subsystems` row `pool_fact_reference` (always on, `config_subsystem_always_on`) | new row value of an existing fact (no shape) | CF-5 | CF-5 | [actingd-check-config.md](actingd-check-config.md); a `schedule.json` that writes CF5-1 or CF5-2 must list it in `requires`, else the composer refuses the file (`schedule_invalid` at the first reference: rules, then pools) |
 
+### 1.199 Slice #427-B (0.12.x): no virtual CPU/GPU/IO deduction across instances, heavy-scene slots with their numbers, optional maximum of concurrent runs (Workflow #427 plan r2 point 5, comment 6460013989; Alice 10-28 12:4x: 「427整单批准并放行，允许进入最近的预发行版」; coordinator work order `rd-1028/brief-427b-budget.md`)
+
+[scheduling/README.md](scheduling/README.md) ("Shared Run Limits"),
+[performance-control.md](performance-control.md), [runtime-config.md](runtime-config.md) ("The
+performance section") and the policy fragment of the outcome catalog are the contract. **No
+persisted ledger shape**: the reasons travel in decisions, the schedule explanation and, as
+`why`, in dispatch decision records whose shape is unchanged; a decision reason's outcome gains
+values only. The number 1.199 is provisional for the parallel slices (#427-A).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| 427B-1 | the round deducts no CPU, GPU or IO for a chosen dispatch; `host_budget_deferred` retired (`retired_in` 0.12.22) | rule; outcome code retired | #427-B | the policy evaluator | placement against the host snapshot stays (`host_capacity_insufficient`); no budget pool per instance |
+| 427B-2 | `heavy_scene_budget_deferred` and `heavy_scene_budget_exhausted` carry `used`, `limit_count`, `admitted_count`, `round_selected_count` (required; the last two new keys of the key table) | outcome values added to pending entries | #427-B | the policy evaluator | slots in use = heavy policy dispatches admitted and not settled (the larger of the controller's capped count and the policy host's own) + heavy ones chosen earlier in the round; each dispatch once |
+| 427B-3 | new code `policy_concurrent_runs_deferred` (info, `ladder_class` none; the same four values) | new outcome code | #427-B | the policy evaluator | given only when `performance.pacing.max_concurrent_runs` is set and reached; checked before the heavy-scene slots |
+| 427B-4 | `performance.pacing.max_concurrent_runs` (integer `1..=65535`, no default, read once at assembly) | new optional configuration key (**`actingd-config` revision 19**) | #427-B | actingd's start-up assembly | absent: no limit and no `config.parameters` row; `1`: one policy dispatch at a time across every instance |
+| 427B-5 | `actingcommand_policy::RunSlots` and `evaluate_with_run_slots` | library API addition | #427-B | the policy host | the admitted dispatches' load profiles and the maximum, read from the dispatch journal at each evaluation; every other entry point passes none |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -3698,7 +3715,7 @@ when it takes effect.
 | per instance | `recovery_ladder_profile` | model-398 §6.2: default `none` (the kind table, then the section's `rungs`); must name a profile; settable | RD-4 (§1.81) | RD-4 (v0.12.0) |
 | `performance.monitor.*`, `performance.pressure.*`, `performance.load.*` | PERF §10.1 (15 keys; the three existing `performance_monitor` keys keep their file paths) | PERF §10.1 | P-c (built, §1.24) | P-m `gpu_aggregate`; PM-CFG every other key (v0.12.0, §1.87) |
 | `performance.responsiveness.*` | PERF §10.2 (37 keys) | PERF §10.2 | P-c (built, §1.24) | P-m (v0.12.0) |
-| `performance.pacing.*` | PERF §10.3 (26 keys; `mode` stays `observe` in every release until Alice approves) | PERF §10.3 | P-c (built, §1.24) | P-k, P-s, P-h (0.12.x); `clock_jump_ms`, `heavy_dispatch_limit.*` P-c |
+| `performance.pacing.*` | PERF §10.3 (26 keys; `mode` stays `observe` in every release until Alice approves); Workflow #427-B (**`actingd-config` revision 19**): the optional `max_concurrent_runs` | PERF §10.3; #427-B: no default (unset, no limit), `1..=65535`, not settable (§1.199 427B-4) | P-c (built, §1.24); #427-B | P-k, P-s, P-h (0.12.x); `clock_jump_ms`, `heavy_dispatch_limit.*` P-c; `max_concurrent_runs` #427-B |
 | `performance.calibration.*` | PERF §10.4 (19 keys) | PERF §10.4 | P-c (built, §1.24) | P-a (0.12.x) |
 | `execution.defaults.*` | the kernel's fallback defaults (PERF §10.4 last notes) | today's constants | **not built:** P-c left it out (PR #748 deviation 5, "after SR-1"), and no later slice parses it, so it is not part of revision 5 (open for the coordinator, A8 report) | — (the kernel's fallbacks stay code constants in v0.12.0) |
 | `execution.capture.*` | `max_interval_ms`, `backoff_enabled`, `idle_ceiling_ms` (**`actingd-config` revision 11**) | 60 000 (`5000..=1800000`), `true`, 5 000 (`50..=60000`), settable (§1.177 B1-2, B1-3) | PERF-B1 | PERF-B1 (0.12.x) |

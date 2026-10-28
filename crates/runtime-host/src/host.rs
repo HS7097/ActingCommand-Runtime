@@ -2103,6 +2103,9 @@ impl RuntimeHost {
                         tagged_start,
                     )
                 })?;
+                // Workflow #427-B: every evaluation applies the configured limit of concurrent
+                // policy runs.
+                policy.set_max_concurrent_runs(config.performance_control.max_concurrent_runs());
                 // ROUT-L RL-1b (model §3.4): in composer mode the procedures of the active
                 // composed generation are scheduled runs too, so a run a stop cut is told apart
                 // as the configured ones are.

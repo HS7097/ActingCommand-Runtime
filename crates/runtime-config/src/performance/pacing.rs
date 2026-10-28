@@ -13,7 +13,7 @@ use super::{
 };
 use crate::codes::ConfigValueProblem;
 use crate::effective::ConfigFailure;
-use crate::table::{KeyRange, KeyRow, ValueType};
+use crate::table::{DefaultSource, KeyRange, KeyRow, ValueType};
 use actingcommand_contract::{
     PerformancePacingMode, PerformancePacingStage, PerformancePressureKind,
     PerformancePressureSeverity,
@@ -33,6 +33,11 @@ pub const PRESSURE_FLOOR_KINDS: &str = "performance.pacing.pressure_floor.kinds"
 /// How many heavy runs may be dispatched at once normally, and under pressure.
 pub const HEAVY_DISPATCH_LIMIT_NORMAL: &str = "performance.pacing.heavy_dispatch_limit.normal";
 pub const HEAVY_DISPATCH_LIMIT_PAUSED: &str = "performance.pacing.heavy_dispatch_limit.paused";
+/// Workflow #427-B: at most this many policy dispatches admitted or running at once across every
+/// instance, those chosen earlier in the evaluation round included. Optional, with no default: a
+/// configuration that does not name it has no such limit; `1` runs one policy dispatch at a
+/// time.
+pub const MAX_CONCURRENT_RUNS: &str = "performance.pacing.max_concurrent_runs";
 /// The jump between two controller inputs read as a clock jump.
 pub const CLOCK_JUMP_MS: &str = "performance.pacing.clock_jump_ms";
 
@@ -198,6 +203,18 @@ pub(crate) static ROWS: &[KeyRow] = &[
         between(1, u16::MAX as i64),
         "P-c",
     ),
+    // Workflow #427-B: set as the heavy-dispatch limits are (read once at assembly), but with no
+    // default: only a file that names it carries it.
+    KeyRow {
+        default: DefaultSource::None,
+        since: "0.12.22",
+        ..at_start(
+            MAX_CONCURRENT_RUNS,
+            ValueType::Integer,
+            between(1, u16::MAX as i64),
+            "427-B",
+        )
+    },
     at_start(CLOCK_JUMP_MS, ValueType::DurationMs, at_least(1), "P-c"),
     when_used(
         "performance.pacing.hold.max_ms",

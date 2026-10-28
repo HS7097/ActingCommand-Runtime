@@ -314,15 +314,31 @@ fn tc_1_every_performance_key_is_in_the_defaults_file_and_config_parameters_with
         [15, 37, 26, 19]
     );
     let model = model.into_iter().flatten().collect::<Vec<_>>();
-    // The key table has exactly the model's keys in the section.
+    // The key table has exactly the model's keys in the section, and (Workflow #427-B, approved
+    // by Alice 10-28 with the whole of #427) the one optional key of the shared run limits,
+    // which has no default: it is neither in the defaults file nor a row of a file that does not
+    // name it.
     let table_keys = rows()
         .filter_map(|row| match row.name {
             KeyName::Exact(key) if key.starts_with("performance.") => Some(key),
             _ => None,
         })
         .collect::<BTreeSet<_>>();
-    let model_keys = model.iter().map(|(key, _)| *key).collect::<BTreeSet<_>>();
+    let mut model_keys = model.iter().map(|(key, _)| *key).collect::<BTreeSet<_>>();
+    model_keys.insert(crate::performance::pacing::MAX_CONCURRENT_RUNS);
     assert_eq!(table_keys, model_keys);
+    let (row, _) = find_row(crate::performance::pacing::MAX_CONCURRENT_RUNS)
+        .expect("the optional key is in the key table");
+    assert_eq!(row.default, DefaultSource::None);
+    assert_eq!(
+        member(&defaults, crate::performance::pacing::MAX_CONCURRENT_RUNS),
+        None
+    );
+    assert!(
+        rendered(json!({}))
+            .iter()
+            .all(|parameter| parameter.key != crate::performance::pacing::MAX_CONCURRENT_RUNS)
+    );
 
     // A configuration that names no performance key: every key in effect is the defaults
     // file's, which is the model's, with the source `default`.
