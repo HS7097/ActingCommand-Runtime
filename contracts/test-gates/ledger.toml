@@ -786,11 +786,12 @@ tests = [
 ]
 incident = ["#422 QR-1"]
 
-# QR-2 (#422; v0.12.23; brief rd-1028/brief-qr2-overview-pages.md, investigation rd-1028/qr2-investigation.md §2.1 and §4): the run listing's and the run status's pages stop deriving what no caller reads. A page asked without run recovery, on a history whose runs hold more records than a recovery context, runs no statement of a run's context and has no group, with the default page's rows, views, cursor and read scope; the writer's page asked so is the pool's byte for byte and the in-memory page asked so has no group either, while the default page still reads every run's context and derives a limited group per long run (T1). A reader-pool thread reads the Lab relations and a window's first record once per snapshot: later pages at that snapshot read neither, the first page after the snapshot moved reads both again, and each pool page is the writer's own page at its snapshot byte for byte (T2)
+# QR-2 (#422; v0.12.23; brief rd-1028/brief-qr2-overview-pages.md, investigation rd-1028/qr2-investigation.md §2.1 and §4): the run listing's and the run status's pages stop deriving what no caller reads. A page asked without run recovery, on a history whose runs hold more records than a recovery context, runs no statement of a run's context and has no group, with the default page's rows, views, cursor and read scope; the writer's page asked so is the pool's byte for byte and the in-memory page asked so has no group either, while the default page still reads every run's context and derives a limited group per long run (T1). A reader-pool thread reads the Lab relations once per snapshot and a window's first record once: later pages at that snapshot read neither, the first page after the snapshot moved reads the relations again and keeps the first record found; on a history with a Lab anchor and a run that names its request, a page served from the kept relations names the Lab view among that run's row's views and no other's, and each pool page is the writer's own page at its snapshot byte for byte (T2; fix 1, review M2). Pages of two snapshots in turn on one reader, as two callers' pages interleave, read neither again after each snapshot's first page and are the writer's pages at their snapshots (T4; fix 1, review M1)
 [[gate]]
 coverage = "Y"
 tests = [
     "actingcommand-ledger::lib::global::tests::gate_qr2::qr2_t1_a_page_without_run_recovery_reads_no_runs_records_and_keeps_its_rows",
-    "actingcommand-ledger::lib::global::tests::gate_qr2::qr2_t2_a_reader_reads_the_lab_relations_and_a_window_start_once_per_snapshot",
+    "actingcommand-ledger::lib::global::tests::gate_qr2::qr2_t2_a_reader_reads_the_lab_relations_once_per_snapshot_and_a_window_start_once",
+    "actingcommand-ledger::lib::global::tests::gate_qr2::qr2_t4_two_interleaved_snapshots_on_one_reader_both_keep_their_relations",
 ]
 incident = ["#422 QR-2"]

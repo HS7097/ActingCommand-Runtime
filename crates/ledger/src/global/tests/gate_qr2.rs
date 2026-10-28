@@ -11,15 +11,20 @@
 //   group, and it has the default page's rows (their views among them), cursor and read scope;
 //   the writer's page and the in-memory page asked so have no group either. The default page
 //   still reads every run's context and derives its groups, as before.
-// - T2: a reader-pool thread reads the Lab relations and a window's first record once per
-//   snapshot: a later page at the same snapshot reads neither, a page after the snapshot moved
-//   reads both again, and each page is, byte for byte, the writer's own page at its snapshot (its
-//   rows' views among it).
+// - T2: a reader-pool thread reads the Lab relations once per snapshot and a window's first
+//   record once: a later page at the same snapshot reads neither, a page after the snapshot moved
+//   reads the relations again and keeps the window's first record it found. The history holds a
+//   Lab anchor and a run that names its request (fix 1, review M2), so a page served from the
+//   kept relations names the Lab view among the views of that run's row and of no other; and
+//   each page is, byte for byte, the writer's own page at its snapshot (its rows' views among
+//   it).
+// - T4 (fix 1, review M1): a reader keeps a few snapshots' relations. Pages of two snapshots in
+//   turn, as two callers' pages interleave on one reader, read nothing again after each
+//   snapshot's first page, and each is the writer's own page at its snapshot.
 //
 // The roots are formal roots with the synthetic ledger (LN-1), read by the Runtime's writer and its
 // reader pool of one reader, without a read budget: no read stops at a clock, and nothing sleeps.
 
-use super::*;
 use crate::global::projection::{EventIndexes, PageSelection};
 use crate::global::{
     GlobalLedger, LedgerFailurePlan, LedgerMaintenance, LedgerOpenTiming, LedgerWritePolicy,
@@ -30,11 +35,12 @@ use crate::{
     WriterStatementRecorder, write_synthetic_ledger,
 };
 use actingcommand_contract::{
-    AuditInput, EventActor, EventDraft, EventLinksDraft, EventOrigin, EventQuery, EventSeverity,
-    EventSource, EventType, FactValue, IdentifierIssuer, InstanceId, LedgerMaterialReadState,
-    LedgerReadScope, LedgerReadSource, LedgerRecoveryGap, OriginModule, OwnerEpoch,
-    ProjectionProfile, RuntimeEventQueryPage, RuntimeEventQueryPageRequest, RuntimeFactRecord,
-    RuntimeFactScope, RuntimePayloadDraft, SanitizedEventDraft,
+    AuditInput, ClientPayloadDraft, EventAction, EventActor, EventDraft, EventId, EventLinksDraft,
+    EventOrigin, EventPayloadDraft, EventQuery, EventSeverity, EventSource, EventType, FactValue,
+    IdentifierIssuer, InstanceId, LedgerMaterialReadState, LedgerReadScope, LedgerReadSource,
+    LedgerRecoveryGap, LedgerView, OriginModule, OwnerEpoch, ProjectionProfile,
+    RuntimeEventQueryPage, RuntimeEventQueryPageRequest, RuntimeFactRecord, RuntimeFactScope,
+    RuntimePayloadDraft, SanitizedEventDraft, TaskPayloadDraft, TaskSemanticFact,
 };
 use actingcommand_runtime_database::{MaintenanceLimits, RuntimeDatabase};
 use actingcommand_runtime_state::RuntimeStateStore;
@@ -65,8 +71,11 @@ const PAGE_LIMIT: u16 = 64;
 // such runs.
 const LONG_RUN_FRAMES: u64 = 160;
 const T1_RECORDS: u64 = 6_000;
-// T2: a history of the default mix's runs.
+// T2 and T4: a history of the default mix's runs, then the Lab run (`lab_run`, its records).
 const T2_RECORDS: u64 = 2_000;
+const LAB_RUN_RECORDS: u64 = 3;
+// T2 and T4: the listing window's start, a quarter of the history on.
+const WINDOW_SINCE_MS: u64 = FIRST_MS + RECORD_INTERVAL_MS * (T2_RECORDS / 4);
 // A history statement that selects by a run's link: a run's recovery context (`run_rows`).
 const RUN_CONTEXT_CONDITION: &str = "l.run_id=?";
 // The Lab relations' statements (`read_lab_relations`): its two anchor statements and its run
@@ -259,17 +268,51 @@ fn counted_page(
     )
 }
 
-/// A synchronous append after the history: a runtime fact the writer records.
-fn runtime_fact(ids: &IdentifierIssuer) -> SanitizedEventDraft {
+/// A listing query of `event_type` over the window, as the run listing lists one fact type per
+/// query at one snapshot.
+fn window(event_type: EventType) -> EventQuery {
+    EventQuery {
+        event_type: Some(event_type),
+        from_timestamp_unix_ms: Some(WINDOW_SINCE_MS),
+        ..EventQuery::default()
+    }
+}
+
+/// The record `offset` records after the synthetic history (of `T2_RECORDS`).
+fn draft(
+    ids: &IdentifierIssuer,
+    offset: u64,
+    origin: EventOrigin,
+    links: EventLinksDraft,
+    payload: EventPayloadDraft,
+) -> SanitizedEventDraft {
     EventDraft::new(
         ids.mint_event_id().expect("event id"),
-        FIRST_MS + RECORD_INTERVAL_MS * (T2_RECORDS + 1),
+        FIRST_MS + RECORD_INTERVAL_MS * (T2_RECORDS + offset),
         EventSeverity::Info,
-        EventOrigin::new(
-            EventSource::Runtime,
-            OriginModule::Runtime,
-            EventActor::Runtime,
-        ),
+        origin,
+        links,
+        payload,
+    )
+    .sanitize(&Sha256SecretFingerprinter::new(b"qr2-fixture-salt").expect("salt"))
+    .expect("a fixture draft")
+}
+
+fn runtime() -> EventOrigin {
+    EventOrigin::new(
+        EventSource::Runtime,
+        OriginModule::Runtime,
+        EventActor::Runtime,
+    )
+}
+
+/// A synchronous append after the history, `offset` records after it: a runtime fact the
+/// writer records.
+fn runtime_fact(ids: &IdentifierIssuer, offset: u64) -> SanitizedEventDraft {
+    draft(
+        ids,
+        offset,
+        runtime(),
         EventLinksDraft::default(),
         RuntimePayloadDraft::fact_recorded(
             RuntimeFactRecord {
@@ -284,8 +327,69 @@ fn runtime_fact(ids: &IdentifierIssuer) -> SanitizedEventDraft {
         )
         .into(),
     )
-    .sanitize(&Sha256SecretFingerprinter::new(b"qr2-fixture-salt").expect("salt"))
-    .expect("a fixture draft")
+}
+
+/// The Lab run's two listed rows.
+struct LabRun {
+    /// Its admission (`task.requested`).
+    admission: EventId,
+    /// Its start (`task.started`).
+    start: EventId,
+}
+
+/// Fix 1 (review M2): appends, after the synthetic history and in the window, a Lab anchor (a
+/// Lab request, as `gate_idle_ov` writes them) and a run whose records name the anchor's request
+/// and correlation, as the Runtime's records of a run Lab asked for do: its admission and its
+/// start. Of the listing pages' rows, these two are the only ones the Lab relations relate.
+fn lab_run(ledger: &GlobalLedger, ids: &IdentifierIssuer) -> LabRun {
+    let anchor_links = EventLinksDraft::default()
+        .with_instance_id(ids.issue_registered_instance(instance('a')))
+        .with_request_id(ids.mint_request_id().expect("request id"))
+        .with_correlation_id(ids.mint_correlation_id().expect("correlation id"));
+    ledger
+        .append(draft(
+            ids,
+            1,
+            EventOrigin::new(EventSource::Lab, OriginModule::Actinglab, EventActor::Lab),
+            anchor_links.clone(),
+            ClientPayloadDraft::lab_request(EventAction::RuntimeTaskRun, AuditInput::new()).into(),
+        ))
+        .expect("the Lab anchor");
+    let run_links = anchor_links
+        .with_task_id(ids.mint_task_id().expect("task id"))
+        .with_run_id(ids.mint_run_id().expect("run id"));
+    let fact = |offset: u64, semantic: TaskSemanticFact| -> EventId {
+        *ledger
+            .append(draft(
+                ids,
+                offset,
+                runtime(),
+                run_links.clone(),
+                TaskPayloadDraft::semantic(semantic, AuditInput::new()).into(),
+            ))
+            .expect("a record of the Lab run")
+            .event_id()
+    };
+    LabRun {
+        admission: fact(
+            2,
+            TaskSemanticFact::PackageAdmitted {
+                package_label: "fixture-pack-qr2".to_owned(),
+                task_label: "fixture-task-qr2".to_owned(),
+                response_deadline_monotonic_ms: None,
+            },
+        ),
+        start: fact(LAB_RUN_RECORDS, TaskSemanticFact::RunStarted),
+    }
+}
+
+/// The rows of `page` that name the Lab view among their views.
+fn lab_rows(page: &RuntimeEventQueryPage) -> Vec<EventId> {
+    page.events()
+        .iter()
+        .filter(|row| row.views.contains(&LedgerView::Lab))
+        .map(|row| row.event_id)
+        .collect()
 }
 
 #[test]
@@ -401,23 +505,18 @@ fn qr2_t1_a_page_without_run_recovery_reads_no_runs_records_and_keeps_its_rows()
 }
 
 #[test]
-fn qr2_t2_a_reader_reads_the_lab_relations_and_a_window_start_once_per_snapshot() {
+fn qr2_t2_a_reader_reads_the_lab_relations_once_per_snapshot_and_a_window_start_once() {
     let root = Root::new(T2_RECORDS, None);
     let ledger = root.open();
     let ids = IdentifierIssuer::new().expect("identifier issuer");
-    // Two listing queries over one window (from a quarter of the history on), as the run listing
-    // lists one fact type per query at one snapshot.
-    let since = FIRST_MS + RECORD_INTERVAL_MS * (T2_RECORDS / 4);
-    let window = |event_type: EventType| EventQuery {
-        event_type: Some(event_type),
-        from_timestamp_unix_ms: Some(since),
-        ..EventQuery::default()
-    };
+    let lab_records = lab_run(&ledger, &ids);
+    // Two listing queries over one window.
     let admissions = window(EventType::TaskRequested);
     let starts = window(EventType::TaskStarted);
     let recorder = WriterStatementRecorder::arm(root.dir.path()).expect("the recorder");
 
-    // The reader's first page at the head reads the Lab relations and the window's start.
+    // The reader's first page at the head reads the Lab relations and the window's start; of its
+    // rows, the Lab run's admission alone names the Lab view.
     let (first, lab, start) = counted_page(&ledger, &recorder, &admissions, first_page(PAGE_LIMIT));
     let snapshot = first.snapshot_ledger_position();
     assert_eq!(
@@ -425,7 +524,14 @@ fn qr2_t2_a_reader_reads_the_lab_relations_and_a_window_start_once_per_snapshot(
         (LAB_RELATION_STATEMENTS, 1),
         "the first page at snapshot {snapshot}: Lab relation and window start statements"
     );
-    // Later pages at that snapshot, of another type and of the same one, read neither.
+    assert_eq!(
+        lab_rows(&first),
+        vec![lab_records.admission],
+        "the first page's rows that name the Lab view"
+    );
+    // Later pages at that snapshot, of another type and of the same one, read neither, and name
+    // the Lab view among the views of the Lab run's rows alone, as the relations they kept
+    // relate them.
     let (second, lab, start) = counted_page(
         &ledger,
         &recorder,
@@ -433,6 +539,11 @@ fn qr2_t2_a_reader_reads_the_lab_relations_and_a_window_start_once_per_snapshot(
         at_snapshot(first_page(PAGE_LIMIT), snapshot),
     );
     assert_eq!((lab, start), (0, 0), "a later page at the same snapshot");
+    assert_eq!(
+        lab_rows(&second),
+        vec![lab_records.start],
+        "a page with the kept relations: its rows that name the Lab view"
+    );
     let (again, lab, start) = counted_page(
         &ledger,
         &recorder,
@@ -442,15 +553,17 @@ fn qr2_t2_a_reader_reads_the_lab_relations_and_a_window_start_once_per_snapshot(
     assert_eq!((lab, start), (0, 0), "the first page again at its snapshot");
     assert_eq!(bytes(&again), bytes(&first), "the same page");
 
-    // The snapshot moves: the reader's next page reads both again, and a later page at the new
-    // snapshot neither.
-    let appended = ledger.append(runtime_fact(&ids)).expect("an append");
+    // The snapshot moves: the reader's next page reads the relations again and keeps the window's
+    // first record it found (fix 1), and a later page at the new snapshot reads neither.
+    let appended = ledger
+        .append(runtime_fact(&ids, LAB_RUN_RECORDS + 1))
+        .expect("an append");
     assert_eq!(appended.sequence(), snapshot + 1);
     let (moved, lab, start) = counted_page(&ledger, &recorder, &admissions, first_page(PAGE_LIMIT));
     assert_eq!(moved.snapshot_ledger_position(), snapshot + 1);
     assert_eq!(
         (lab, start),
-        (LAB_RELATION_STATEMENTS, 1),
+        (LAB_RELATION_STATEMENTS, 0),
         "the first page after the snapshot moved"
     );
     let (moved_starts, lab, start) = counted_page(
@@ -460,6 +573,11 @@ fn qr2_t2_a_reader_reads_the_lab_relations_and_a_window_start_once_per_snapshot(
         at_snapshot(first_page(PAGE_LIMIT), snapshot + 1),
     );
     assert_eq!((lab, start), (0, 0), "a later page at the new snapshot");
+    assert_eq!(
+        lab_rows(&moved_starts),
+        vec![lab_records.start],
+        "a page with the relations kept at the new snapshot: its rows that name the Lab view"
+    );
     drop(recorder);
 
     // Each pool page is the writer's own page at its snapshot, byte for byte: the kept relations
@@ -467,6 +585,7 @@ fn qr2_t2_a_reader_reads_the_lab_relations_and_a_window_start_once_per_snapshot(
     for (read, query, page, at) in [
         ("first", &admissions, &first, snapshot),
         ("second", &starts, &second, snapshot),
+        ("again", &admissions, &again, snapshot),
         ("moved", &admissions, &moved, snapshot + 1),
         ("moved starts", &starts, &moved_starts, snapshot + 1),
     ] {
@@ -481,6 +600,88 @@ fn qr2_t2_a_reader_reads_the_lab_relations_and_a_window_start_once_per_snapshot(
             bytes(page),
             bytes(&writer),
             "{read}: the pool's page is the writer's"
+        );
+    }
+    ledger.close().expect("close");
+}
+
+#[test]
+fn qr2_t4_two_interleaved_snapshots_on_one_reader_both_keep_their_relations() {
+    let root = Root::new(T2_RECORDS, None);
+    let ledger = root.open();
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let lab_records = lab_run(&ledger, &ids);
+    let admissions = window(EventType::TaskRequested);
+    let recorder = WriterStatementRecorder::arm(root.dir.path()).expect("the recorder");
+
+    // The older snapshot's first page reads the Lab relations and the window's start.
+    let (older, lab, start) = counted_page(&ledger, &recorder, &admissions, first_page(PAGE_LIMIT));
+    let older_at = older.snapshot_ledger_position();
+    assert_eq!(
+        (lab, start),
+        (LAB_RELATION_STATEMENTS, 1),
+        "the first page at the older snapshot {older_at}"
+    );
+    // A record moves the head; the newer snapshot's first page reads its own relations (the
+    // window's first record found before is kept).
+    ledger
+        .append(runtime_fact(&ids, LAB_RUN_RECORDS + 1))
+        .expect("an append");
+    let (newer, lab, start) = counted_page(&ledger, &recorder, &admissions, first_page(PAGE_LIMIT));
+    let newer_at = newer.snapshot_ledger_position();
+    assert_eq!(newer_at, older_at + 1);
+    assert_eq!(
+        (lab, start),
+        (LAB_RELATION_STATEMENTS, 0),
+        "the first page at the newer snapshot {newer_at}"
+    );
+
+    // Pages at the two snapshots in turn, as two callers' pages interleave on one reader: none
+    // reads the relations or the window's start again, and each is its snapshot's page, its Lab
+    // run's admission naming the Lab view.
+    for (round, page, at) in [
+        (1, &older, older_at),
+        (1, &newer, newer_at),
+        (2, &older, older_at),
+        (2, &newer, newer_at),
+    ] {
+        let (again, lab, start) = counted_page(
+            &ledger,
+            &recorder,
+            &admissions,
+            at_snapshot(first_page(PAGE_LIMIT), at),
+        );
+        assert_eq!(
+            (lab, start),
+            (0, 0),
+            "round {round}: a later page at snapshot {at}"
+        );
+        assert_eq!(
+            bytes(&again),
+            bytes(page),
+            "round {round}: the page at snapshot {at}"
+        );
+        assert_eq!(
+            lab_rows(&again),
+            vec![lab_records.admission],
+            "round {round}: the rows that name the Lab view at snapshot {at}"
+        );
+    }
+    drop(recorder);
+
+    // Each snapshot's page is the writer's own page at it, byte for byte.
+    for (page, at) in [(&older, older_at), (&newer, newer_at)] {
+        let writer = ledger
+            .project_view_page_on_writer_for_test(
+                admissions.clone(),
+                PROFILE,
+                at_snapshot(first_page(PAGE_LIMIT), at),
+            )
+            .unwrap_or_else(|error| panic!("snapshot {at}: the writer's page: {error:?}"));
+        assert_eq!(
+            bytes(page),
+            bytes(&writer),
+            "snapshot {at}: the pool's page is the writer's"
         );
     }
     ledger.close().expect("close");

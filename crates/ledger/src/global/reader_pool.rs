@@ -351,8 +351,8 @@ impl Reader {
             receiver,
             answering: None,
         };
-        // #422 QR-2: this reader's Lab relations and window start, kept from one of its pages to
-        // the next at one snapshot.
+        // #422 QR-2: this reader's Lab relations and window starts, kept from one of its pages to
+        // the next (fix 1: a few snapshots, the least recently used dropped first).
         let mut memo = SnapshotMemo::default();
         loop {
             let job = lock(receiver).recv();
