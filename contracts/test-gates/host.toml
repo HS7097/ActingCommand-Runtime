@@ -2541,6 +2541,14 @@ tests = [
 ]
 incident = ["#419"]
 
+# W2-C (Workflow #419; ISO-M R1, rows A01, A05, E13, E14, E15; the rest of the always-severe list after ISO-2b), on the policy's own state: a scheduled run that fails once with execution_session_close_in_progress, execution_instance_identity_mismatch, input_frame_capture_mismatch, input_frame_not_committed or input_frame_session_missing, recorded as ISO-2's run boundary records it (the kernel's code, failure_severe false), is classed Recoverable by the contract (scheduled_failure_class) and settles with a retry scheduled: its task is not paused, and the pair is admitted again at the retry time
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::policy_control::tests::w2c_a_single_failure_with_a_former_always_severe_code_does_not_pause_its_task",
+]
+incident = ["#419"]
+
 # W1-8 (#422; brief rd-1028/brief-wave1.md W1-8; #422 6463703245, 6461256427 L-4's follow-up): while the writer is held in a read of its own, Status, MonitorStatus and RuntimeFactSnapshot each complete at the one head the writer last published, nothing latches and no stop is requested (T7, P30); PerformanceStatus shows ledger_read_pages, which counts the QueryEvents pages the reader pool read, with their times in order and the status' shape rules kept (T8, P29)
 [[gate]]
 coverage = "Y"

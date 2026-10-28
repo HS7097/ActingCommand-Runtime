@@ -334,6 +334,14 @@ its boundary's, and keeps the kernel's code and severity. A kernel code on the G
   a session close at a lease end, that failed with its resources confirmed holds nothing: its
   failure is recorded and the work goes on. An unconfirmed close fences the instance (#403).
 
+Since Runtime 0.12.26 (W2-C; ISO-M rows A01, A05, E13-E15) the codes of a closing or changed
+session (`execution_session_close_in_progress`, `execution_instance_identity_mismatch`) and of a
+refused frame commit or resolve (`input_frame_capture_mismatch`, `input_frame_not_committed`,
+`input_frame_session_missing`) are not on the policy's always-severe list
+(`is_severe_policy_failure`): a scheduled run that fails with one at its capture or at a frame
+commit or resolve is an ordinary failure toward its task's failure pause. At an input, the
+failure point's own severity (`failure_severe`) still decides, as before.
+
 **ISO-2b** (Runtime 0.12.25; R1, outcome-code spec §7 amendment 10-24):
 - **A session that dies twice in a row holds its instance.** A capture (a run's, an observe's, a
   Lab operation's) that meets its instance's session dead (`execution_session_panicked`,

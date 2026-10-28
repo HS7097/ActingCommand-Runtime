@@ -1917,6 +1917,7 @@ mod tests {
         PerformancePressureSeverity, PerformancePressureValue, PolicyExecutionOutcome,
         PolicyFailureDisposition,
     };
+    use actingcommand_execution_kernel::ExecutionKernelCode;
     use actingcommand_policy::{
         CatalogDocumentSource, CatalogSources, DispatchPrerequisites, LoadProfile, compile_catalog,
     };
@@ -2228,6 +2229,90 @@ mod tests {
             Err("policy_task_paused"),
             "a second interruption in a row holds the pair"
         );
+    }
+
+    /// W2-C (#419 R1; ISO-M rows A01, A05, E13-E15): a scheduled run that fails once with a
+    /// code the contract's always-severe list named before Runtime 0.12.26 does not pause its
+    /// task. Each code reaches the policy as ISO-2's run boundary records it: the kernel's code on
+    /// top of the run's terminal and `failure_severe` false (a capture that met its session
+    /// closing or its endpoint changed: `RuntimeHostError::instance_capture`; a frame commit or
+    /// resolve its session refused: `RuntimeHostError::instance_operation`). The contract's class,
+    /// as the live settlement, the startup recovery and the ledger take it
+    /// (`scheduled_failure_class`), is `Recoverable`, so the policy schedules a retry: the pair
+    /// is held by the back-off only, not paused, and is admitted again at the retry time.
+    #[test]
+    fn w2c_a_single_failure_with_a_former_always_severe_code_does_not_pause_its_task() {
+        let catalog = catalog();
+        for code in [
+            ExecutionKernelCode::ExecutionSessionCloseInProgress,
+            ExecutionKernelCode::ExecutionInstanceIdentityMismatch,
+            ExecutionKernelCode::InputFrameCaptureMismatch,
+            ExecutionKernelCode::InputFrameNotCommitted,
+            ExecutionKernelCode::InputFrameSessionMissing,
+        ] {
+            let spelling = code.as_str();
+            let outcome = Outcome::new(code.code());
+            let class = actingcommand_contract::scheduled_failure_class(outcome.code(), false);
+            assert_eq!(class, PolicyFailureClass::Recoverable, "{spelling}");
+            let mut state = PolicyControlState::default();
+            let first = intent(&catalog, 1);
+            let admission = state
+                .preview_admission(&catalog, &first, NOW)
+                .expect("admission preview");
+            let data = state
+                .preview_execution(
+                    &catalog,
+                    &first,
+                    &admission,
+                    PolicyExecutionTiming {
+                        observed_at_unix_ms: NOW + 100,
+                        runtime_ms: 100,
+                    },
+                    &PolicyExecutionInput::Failed {
+                        outcome,
+                        failure_identity: None,
+                        class,
+                    },
+                    &unavailable(NOW + 100),
+                )
+                .expect("failure classification");
+            let PolicyExecutionOutcome::Failed { failure } = &data.outcome else {
+                panic!("{spelling}: expected a failure")
+            };
+            assert_eq!(failure.outcome.code().as_str(), spelling);
+            assert_eq!(
+                failure.original_class,
+                PolicyFailureClass::Recoverable,
+                "{spelling}"
+            );
+            assert_eq!(
+                failure.effective_class,
+                PolicyFailureClass::Recoverable,
+                "{spelling}"
+            );
+            assert_eq!(
+                failure.disposition,
+                PolicyFailureDisposition::RetryScheduled,
+                "{spelling}"
+            );
+            let retry_at = failure.retry_at_unix_ms.expect("a retry time");
+            state
+                .commit_execution(&catalog, &first, &admission, &data)
+                .expect("commit the failure");
+            let next = intent(&catalog, 2);
+            assert_eq!(
+                state
+                    .preview_admission(&catalog, &next, data.observed_at_unix_ms)
+                    .expect_err("the retry back-off holds the pair")
+                    .code(),
+                "policy_retry_backoff_active",
+                "{spelling}: the task is not paused"
+            );
+            assert!(
+                state.preview_admission(&catalog, &next, retry_at).is_ok(),
+                "{spelling}: the pair is admitted again at its retry time"
+            );
+        }
     }
 
     #[test]
