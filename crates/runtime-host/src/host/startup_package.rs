@@ -228,6 +228,7 @@ impl HostShared {
             claim.host_claim(&pending.instance_alias),
             HostClaimWork::StartupPackage(pending.clone()),
         );
+        let instance_alias = pending.instance_alias.clone();
         match handed {
             Ok(true) => return Ok(StartupPackageDisposition::Scheduled),
             Ok(false) => {
@@ -242,7 +243,7 @@ impl HostShared {
             }
         }
         // W2-B: the control still holds the key, so the claim cannot be granted before this.
-        self.keep_startup_package(resolved.instance_id(), &pending.instance_alias)
+        self.keep_startup_package(resolved.instance_id(), &instance_alias)
             .map_err(RequestFailure::poison_without_terminal)?;
         self.release_lease(request, request_id, &key.token, key.connection_id, None)?;
         Ok(StartupPackageDisposition::Scheduled)

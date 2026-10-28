@@ -577,9 +577,9 @@ fn kept_startup_queued(host: &RuntimeHost) -> Vec<String> {
 }
 
 // T9: T8's start during the instance's pause, then a restart before the resume (a deploy restarts
-// the Runtime; the stop drops the queued claim). The idle record keeps the queued startup package,
-// so the restart queues it again behind the restored pause; nothing runs under the pause. After the
-// resume it runs once and is kept no more, and a further restart queues it no more.
+// the Runtime; the Runtime stop drops the queued claim). The idle record keeps the queued startup
+// package, so the restart queues it again behind the restored pause; nothing runs under the pause.
+// After the resume it runs once and is kept no more, and a further restart queues it no more.
 #[test]
 fn w2b_t9_a_start_during_a_pause_runs_its_startup_package_once_after_a_restart_and_the_resume() {
     let root = TempDir::new().expect("tempdir");

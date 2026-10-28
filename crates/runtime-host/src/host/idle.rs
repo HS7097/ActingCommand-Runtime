@@ -86,10 +86,10 @@
 //!   keeps each instance whose startup package an emulator start (an operator's `start` /
 //!   `restart`, or a configured start) queued behind a scheduling pause, from the hand-off until
 //!   its claim is granted or an emulator control cancels it (`keep_startup_package`,
-//!   `forget_startup_package`). A stop drops that claim (`lease.queue_disconnected`); the next
-//!   start restores the record and, after the daemon-start preparation, queues the package again
-//!   behind the restored pause (`requeue_startup_packages_on_start`), so it runs once after the
-//!   resume.
+//!   `forget_startup_package`). A Runtime stop drops that claim (`lease.queue_disconnected`); the
+//!   next start restores the record and, after the daemon-start preparation, queues the package
+//!   again behind the restored pause (`requeue_startup_packages_on_start`), so it runs once after
+//!   the resume.
 //! - **The scheduler's fact refresh** (IDLE-1P): the closed instances are an input of every
 //!   evaluation (`HostShared::idle_closed_for_policy`); a reading of one waits for its next wake
 //!   unless a task that needs it is due, and the plan the check reads keeps the reading apart
@@ -535,8 +535,8 @@ impl HostShared {
     /// - on the ledger's first start nothing was closed.
     ///
     /// W2-B (0.12.26): that current record also names the instances whose startup package an
-    /// emulator start had queued behind a scheduling pause when the Runtime stopped (the stop
-    /// dropped the claim, `lease.queue_disconnected`); each that is still registered with its
+    /// emulator start had queued behind a scheduling pause when the Runtime stopped (the Runtime
+    /// stop dropped the claim, `lease.queue_disconnected`); each that is still registered with its
     /// startup package configured is kept so again, and the start queues its package again after
     /// the daemon-start preparation (`requeue_startup_packages_on_start`). One the record also
     /// keeps woken, whose wake this start restores, is not: its wake queues the startup package.
@@ -729,9 +729,10 @@ impl HostShared {
     /// queued again, as after a wake: its scheduling intent (`startup_package_scheduled` under the
     /// instance, a fresh causation) and its claim, which waits behind the restored pause and runs
     /// once after the resume. A pause no longer holding the instance (the resume came before the
-    /// stop, and the claim never got the key) lets the claim be granted at once. The kept state
-    /// then follows the claim (`keep_startup_package`). A failure is this instance's (#419): it is
-    /// recorded and the start goes on; only a failure the Runtime does not survive is the error.
+    /// Runtime stop, and the claim never got the key) lets the claim be granted at once. The kept
+    /// state then follows the claim (`keep_startup_package`). A failure is this instance's (#419):
+    /// it is recorded and the start goes on; only a failure the Runtime does not survive is the
+    /// error.
     pub(super) fn requeue_startup_packages_on_start(&self) -> RuntimeHostResult<()> {
         let queued = lock(&self.idle, IdleLocation::Restore)?.startup_queued();
         if queued.is_empty() {
