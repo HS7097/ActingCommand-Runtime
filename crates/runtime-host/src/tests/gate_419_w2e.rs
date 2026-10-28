@@ -10,11 +10,12 @@
 //!   `ActionFailure::backend` records; its `failure_severe` is that failure's `is_fatal`): the
 //!   kernel's code, non-fatal, of X alone and stopping nothing, so the run's boundary contains
 //!   nothing and only the input fails. A close of X's session merged into it with its resources
-//!   confirmed is still carried; merged with an unconfirmed close it stays fatal. A device fault
-//!   (E02) and a session death at an input keep the kernel's severity;
+//!   confirmed is still carried; merged with an unconfirmed close it stays fatal, and the #403
+//!   fence of X then takes it. A device fault (E02) and a session death at an input keep the
+//!   kernel's severity;
 //! - b: each refusal settled as a scheduled run's failure on the policy's own state, with the
 //!   class the live settlement derives from it (`scheduled_failure_class`): `Recoverable`, a
-//!   retry scheduled, the task not paused; the unconfirmed form is `Severe` and pauses the task.
+//!   retry scheduled, the task not paused.
 //!
 //! Each refusal comes from the kernel's own check at an input of X, with no wait: the input runs
 //! while another owner's close of X's session is in progress (inside that close, on the fake
@@ -40,6 +41,7 @@ use actingcommand_policy::{CompiledCatalog, DispatchPrerequisites};
 const X_ALIAS: &str = "w2e.instance.x";
 
 /// A business step of a lease on X, as the host admits an input with.
+#[cfg(test)]
 fn business_step(x: InstanceId) -> Arc<FencedWrite> {
     let ids = IdentifierIssuer::new().expect("identifier issuer");
     Arc::new(issue_fenced_write(
@@ -294,23 +296,14 @@ fn dispatch_intent(catalog: &CompiledCatalog, suffix: u64) -> DispatchIntent {
 /// refusals fails once; its terminal carries the input's failure (the kernel's code, and the
 /// failure's `is_fatal` as `failure_severe`), and the policy settles it with the class the live
 /// settlement derives (`scheduled_failure_class`): `Recoverable`, a retry scheduled, so the task
-/// is held only by its back-off and is admitted again at the retry time. The same input with an
-/// unconfirmed close merged into it is `Severe` and pauses the task.
+/// is held only by its back-off and is admitted again at the retry time. (With an unconfirmed
+/// close merged into it the input stays fatal, `a`, and the #403 fence of X takes it before the
+/// run settles; that path is #403's and is not settled here.)
 #[test]
 fn w2e_b_a_scheduled_runs_input_refused_by_its_session_does_not_pause_its_task() {
     let x = instance_id();
     let catalog = compile_catalog(&policy_sources(1)).expect("the fixture catalog");
-    let refusals = refusals(x);
-    let unconfirmed = ExecutionKernelError::merge_cleanup(
-        refusals[0].clone(),
-        close_failure(x, DeviceResourceQuiescence::Unconfirmed),
-    );
-    let cases = refusals
-        .iter()
-        .cloned()
-        .map(|refusal| (refusal, false))
-        .chain(std::iter::once((unconfirmed, true)));
-    for (refusal, pauses) in cases {
+    for refusal in refusals(x) {
         let code = refusal.code().as_str();
         let failure =
             RuntimeHostError::input_backend(HostLocation::ExecuteInputBackend, &refusal, x);
@@ -350,16 +343,6 @@ fn w2e_b_a_scheduled_runs_input_refused_by_its_session_does_not_pause_its_task()
             .preview_admission(&catalog, &next, data.observed_at_unix_ms)
             .expect_err("the failure holds the pair")
             .code();
-        if pauses {
-            assert_eq!(record.original_class, PolicyFailureClass::Severe, "{code}");
-            assert_eq!(
-                record.disposition,
-                PolicyFailureDisposition::PausedTask,
-                "{code}"
-            );
-            assert_eq!(held, "policy_task_paused", "{code}");
-            continue;
-        }
         assert_eq!(
             record.original_class,
             PolicyFailureClass::Recoverable,
