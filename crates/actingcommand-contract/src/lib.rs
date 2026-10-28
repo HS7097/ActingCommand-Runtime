@@ -36,6 +36,8 @@ pub mod project;
 pub mod proposal;
 pub mod resource_declaration;
 pub mod resource_targets;
+// #422 P32 B-1 (since 0.12.27): a contained run's status folded by one commutative accumulator.
+pub mod run_summary;
 pub mod runtime;
 pub mod runtime_fact;
 pub mod runtime_observation;
@@ -73,6 +75,7 @@ pub use primitive::*;
 pub use project::*;
 pub use proposal::*;
 pub use resource_targets::*;
+pub use run_summary::*;
 pub use runtime::*;
 pub use runtime_fact::*;
 pub use runtime_observation::*;

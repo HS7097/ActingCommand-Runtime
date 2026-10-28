@@ -615,6 +615,20 @@ tests = [
 ]
 incident = ["#422 P32"]
 
+# P32-B1 (#422 6473873443; design rd-1028/design-p32.md §2 B, §3 B-1; 0.12 wave 2b, since 0.12.27): a contained run's status is folded by the contract's RunFold, a pure, commutative accumulator that runtime-client's run status read folds today and the Runtime's run summary (B-2) folds later. The same facts in every one of the 40 320 orders of an eight-fact run, and in 256 fixed-seed shuffles of a 64-fact run, each fact also fed twice, leave one fold field by field and one brief status (state, dispatch, origin, packages in order, terminal, lease, admission); two terminals stay an anomaly in every order; of several anomalies the fold reports the one a read in sequence order meets first (a second origin before another run's fact before a second terminal); a run's listing facts give one order sequence, opened and settled in every order. QueryRuns (defined in 0.12.27, served from B-3): a request and a page round-trip and refuse an unknown member; each invalid request (limit, until_unix_ms, cursor, states, task_prefix) and page (snapshot, coverage, row order, evidence, state, terminal time, settled, catalog task id, next) is refused invalid_query_runs naming the member. runtime-client's existing gates (A6, A6b, 391c, P32-A; actingctl's A42, IDLE-OV, QR-2, QR-2b) hold the client's answers unchanged
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::run_summary::gate_422_p32b1::p32_b1_the_fold_of_a_small_run_is_one_fold_and_one_brief_status_in_every_order",
+    "actingcommand-contract::lib::run_summary::gate_422_p32b1::p32_b1_the_fold_of_a_larger_run_is_one_fold_in_fixed_seed_shuffled_orders",
+    "actingcommand-contract::lib::run_summary::gate_422_p32b1::p32_b1_two_terminals_stay_an_anomaly_in_every_order",
+    "actingcommand-contract::lib::run_summary::gate_422_p32b1::p32_b1_of_several_anomalies_the_fold_reports_the_one_a_read_in_sequence_order_meets_first",
+    "actingcommand-contract::lib::run_summary::gate_422_p32b1::p32_b1_listing_facts_give_one_order_and_settled_state_in_every_order",
+    "actingcommand-contract::lib::run_summary::gate_422_p32b1::p32_b1_query_runs_request_and_page_round_trip",
+    "actingcommand-contract::lib::run_summary::gate_422_p32b1::p32_b1_invalid_query_runs_requests_and_pages_are_refused_by_the_member",
+]
+incident = ["#422 P32"]
+
 # #411 B37 (slice A35-S1, 0.12.x; register §1.152 B37-1; design rd-1021/train-0129/a35-design.md §5.1 S1 T6; coordinator decision Q11; contract key K29 assigned by the coordinator): a scheduling_outcome mapping's busy member parses, reads back and serializes as declared; busy together with remedy, or on a designated_effect_completed mapping, is refused invalid_scheduling_outcome_declaration at the field busy; a mapping without busy serializes byte for byte as before
 [[gate]]
 key = "K29"

@@ -215,6 +215,33 @@ its child about 10 s after `actingctl.exe` changes) or after a rollback while an
 MCP front end still runs the newer client. There is no compatibility code (test
 phase, Alice 10-11).
 
+#422 P32 B-1 (defined in 0.12.27; served from the release that carries P32 B-3):
+a contained run's status is folded from its facts by one contract function,
+`actingcommand_contract::run_summary::RunFold` (with `RunListingFacts` for a
+listing's facts and `RunLeaseTerminals` for a lease's release or expiry). The
+fold reads one fact with its sequence at a time and is commutative: least or
+greatest sequence, sets keyed by sequence, and the two lowest sequences of the
+facts a run records once, so the same facts in any order, each any number of
+times, give one fold. Two terminals, admissions or origins, a semantic fact
+without its run's identity or with another run's, and links that disagree stay
+anomalies (`run_status_*`), never resolved. Of several anomalies of the facts
+themselves, the one at the lowest sequence is reported, which is the one a read
+in sequence order refuses first; links that disagree (the lease's among them)
+are reported only after those, once every fact is folded and none of those is
+found, whatever their sequence, as the read always did.
+`runtime-client`'s run status read and its run listing fold with it from
+0.12.27 and answer as before; the Runtime's in-memory run summary (P32 B-2)
+will fold the same facts with it, so a `QueryRuns` row and a run status read can
+never disagree. `QueryRuns` (`QueryRunsRequest`, `QueryRunsPage`, see
+[runtime-interface.md](runtime-interface.md), "New request kinds") lists a
+window's runs from that summary: rows newest first by their first listing fact
+in the window, at one snapshot, under a coverage `{from_unix_ms, state}`. Under
+`complete` and `building` every run with a fact from `from_unix_ms` on is in the
+summary; a window that starts earlier, or `unavailable` (no row then), is not
+answered completely by it, and its reader reads the ledger or says so. Neither
+type is carried by an operation in 0.12.27, and no configuration key is added
+(the run summary's two keys come with B-2).
+
 A Runtime reader-pool thread also keeps, from one of its pages to the next, the
 Lab relations through a page's snapshot, for the last 4 snapshots it read at
 (the least recently used dropped first), and the window starts first pages

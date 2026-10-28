@@ -62,6 +62,9 @@ pub use schedule_explanation::*;
 // Workflow #421 INST-2 (#421 deploy design §4): the Runtime's report of its own start.
 mod start_report;
 pub use start_report::*;
+// #422 P32 B-1 (since 0.12.27): the request and the result of `QueryRuns`, served from B-3.
+mod query_runs;
+pub use query_runs::*;
 use std::net::{IpAddr, SocketAddr};
 
 // Interface anchor `runtime-client` (contracts/component-interfaces.md): raise its revision in

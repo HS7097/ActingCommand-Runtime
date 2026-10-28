@@ -726,6 +726,8 @@ crate::outcome_codes! {
         InvalidScheduleExplanation => "invalid_schedule_explanation": error / none,
         // Workflow #421 INST-2: a `StartReport` answer of the wrong shape.
         InvalidStartReport => "invalid_start_report": error / none,
+        // #422 P32 B-1 (since 0.12.27): a `QueryRuns` request or answer of the wrong shape.
+        InvalidQueryRuns => "invalid_query_runs": error / none,
     }
 }
 
