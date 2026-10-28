@@ -476,15 +476,23 @@ does not read the journals of kind `stop` or `start` or with `rollback` (review 
   ends without readiness (an exit; not `start_timeout`, the stall rule's), journals the rollback's
   steps before anything acts (fix round 1, review S2 H2: a crash from then on resumes the
   rollback, never judges the new build again): the planned steps not begun are marked
-  `{"skipped": "rollback"}` and after them come `close` (`rollback: true`: the new Runtime closed
-  when it runs, `request-shutdown`; one that does not stop within
+  `{"skipped": "rollback"}` and after them come `close` (`rollback: true`: first, before anything
+  is closed (Runtime v0.12.25, Workflow #421 6441776975), the rollback gate (below) toward the
+  build the update replaced, with this operation's S0, judged as a preview while the new Runtime
+  may still run: that Runtime and its owner lock, which the close ends, do not refuse it, a
+  running image that would change and may not be renamed does (`running_image_blocks` as its
+  cause). A gate that fails ends the command with its refusal `rollback_gate_failed`
+  (`rollback_gate_parts`, `ledger_sequence`; the result's `gate` and `failed_checks`) and closes
+  nothing: the new build, its Runtime (still running, held) and the hold stay, `next` names
+  `release-hold` (and `install start` only when no Runtime runs under the root, as after a new
+  start that exited); the person decides, a forward fix only. A gate that passes journals
+  `rollback {started_at_unix_ms, to, failed, reversed_at_unix_ms}` and its pass in the evidence of
+  `reverse_files`, and a close resumed past it does not judge it again. Then the new Runtime is
+  closed when it runs, `request-shutdown`; one that does not stop within
   `install.stop.shutdown_wait_ms` ends the command `post_check_failed`, nothing killed; S0 stays
-  the operation's own), `reverse_files` (`{to, failed}`: first the rollback gate (below) toward the
-  build the update replaced, with this operation's S0, its passing journalled; a gate that fails
-  ends the command with its refusal `rollback_gate_failed` (`rollback_gate_parts`,
-  `ledger_sequence`; the result's `gate`): the new build and the hold stay, a forward fix only. A
-  gate that passes journals `rollback {started_at_unix_ms, to, failed, reversed_at_unix_ms}`;
-  then, also in a rollback resumed past its gate, no owner lock held and no actingd running under
+  the operation's own), `reverse_files` (`{to, failed}`: the gate's pass journalled by the close;
+  one that finds none judges the gate now, as above but after the close; then, also in a rollback
+  resumed past its gate, no owner lock held and no actingd running under
   the root, as `undo` checks (re-review S2 N4; otherwise `install_operation_interrupted` with
   `runtime_running` or `owner_lock_held`, the operation left unfinished for `install resume`),
   then every file step of the operation is reversed as `undo` reverses it, every displaced file
@@ -666,8 +674,9 @@ A binary rollback (`rollback apply`, or `undo` of a finished update or rollback)
 the program files of `runtime\` and `tools\`, from a kept build or from the operation's
 `.old-<ms>` files; never the state root, the ledger, `packages\`, `policy\` or the configuration
 file (a configuration restore is `config restore`, a pack restore `pack restore`). The gate is
-evaluated at `rollback plan`, again at apply under the writer lock, and by `status
---check-rollback`; all four parts must pass (`rollback_gate_part`):
+evaluated at `rollback plan`, again at apply under the writer lock, by `status
+--check-rollback`, and by a composite's automatic rollback before it closes the new Runtime
+(v0.12.25); all four parts must pass (`rollback_gate_part`):
 
 1. `interface_edges`: the update edges with R\* the target and Rp the live build; the live
    build's `ledger` max ∈ the target's range.
@@ -675,7 +684,11 @@ evaluated at `rollback plan`, again at apply under the writer lock, and by `stat
    recorded (its journal's `s0.head`). The **target build's own** `actingledger --state-root
    <state> events --after <S0> --limit 1024` reads every page up to the head with exit 0; the
    first page it refuses closes the window (`rollback_gate_failed` with `ledger_sequence`). A
-   live build no journalled operation installed has no S0, and this part fails.
+   live build no journalled operation installed has no S0, and this part fails. A composite's
+   automatic rollback evaluates the gate before it closes the new Runtime (v0.12.25), so the
+   target's reader reads the ledger as of that moment and the pages the closing Runtime writes
+   afterwards are not read ahead by it; a ledger interface the target cannot read is already
+   refused by part 1 (`interface_edges`).
    - **Only toward the build the live one replaced** (INST-1b-F fix round 1, review S1 F3). S0
      covers only the records written since the live build was installed, so the part passes
      only for the target that operation replaced (its journal's `previous.live`, the build

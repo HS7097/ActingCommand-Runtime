@@ -1025,6 +1025,26 @@ tests = [
 ]
 incident = ["#427-B"]
 
+# Workflow #421 P12 (v0.12.25; W1-1, brief rd-1028/brief-wave1.md; #421 6441776975): on the fake host, the composite update's automatic rollback evaluates the rollback gate before it closes the new Runtime: a gate that fails closes nothing, the new Runtime keeps running with the hold, the rollback's close is never begun and the command ends rollback_gate_failed naming only release-hold (D-7, adapted); a gate that passes rolls back as before, after a failed check (D-5) or a new start that exited (D-6), and a rollback interrupted after each of its steps, the close past the gate's pass among them, is finished by resume (F-4)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst2_d_7_a_failed_gate_keeps_the_new_build_and_the_hold",
+    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst2_d_5_a_failed_check_rolls_back_to_the_previous_build_and_releases_the_hold",
+    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst2_d_6_a_new_start_that_exits_rolls_back_the_same_way",
+    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst2_f_4_resume_finishes_a_rollback_interrupted_after_each_of_its_steps",
+]
+incident = ["#421 P12"]
+
+# Workflow #421 P12 fix round 1 (v0.12.25; W1-1, brief rd-1028/brief-w1-1-fix1.md item 3; review rd-1028/review-w1-1.md L-2): on the fake host, the rollback gate evaluated before the close refuses a running image that would change and may not be renamed as rollback_gate_failed caused by running_image_blocks, closing nothing, the new Runtime running with the hold and next naming only release-hold (D-7b); a gate that fails after a new start that exited closes and starts nothing and names install start beside release-hold (D-7c)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst2_d_7b_a_running_image_met_before_the_close_fails_the_gate_and_closes_nothing",
+    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst2_d_7c_a_failed_gate_after_a_new_start_that_exited_names_install_start",
+]
+incident = ["#421 P12"]
+
 # #411 P49 (v0.12.25; brief rd-1028/brief-wave1.md W1-10, board #411 6444748093 and #421 6436231390, review rd-1027/mcp-entry/review.md L4, L9, L10): the entry's status file records its process creation time beside its pid, null when the operating system did not say (E-24, L4); actingctl mcp-entry list marks an entry stale when no process runs with its pid or the one that does has another creation time (recorded) or was created after the file's started_at_unix_ms (not recorded), and lists stale ones only with --all (L4); a pid the process probe cannot judge answers only its own row, listed with or without --all with stale null and probe_failed, and the answer carries one process_probe_failed warning naming those rows (fix round 1, review rd-1028/review-w1-10.md M1); the update plan's notice asks MCP clients to reconnect only for a renamed mcp-serve image not started by an MCP entry under the root, and the process probe reads each image's parent (L9); a newer install that lands while a planned switch waits drops that plan, and once it settles the one switch goes to the newest build under its own name (E-25, L10)
 [[gate]]
 coverage = "Y"
