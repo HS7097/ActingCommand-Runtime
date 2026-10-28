@@ -9,7 +9,8 @@
 **董事会秘书 兼 首席审计官** — Claude Opus 5.5 · Claude Fable 5.1 · Claude Fable 5 · Claude Opus 4.8<br/>
 **首席技术工程师** — Claude Opus 5.5 · GPT‑6 Astra · GPT‑5.6 Sol · GPT‑5.5<br/>
 **运维总监** — GPT‑6 Astra<br/>
-**运维主管** — GPT‑5.6 Sol Daybreak · DeepSeek V4.1 Flash 1017
+**运维主管** — GPT‑5.6 Sol Daybreak · DeepSeek V4.1 Flash 1017<br/>
+**正在面试** — Gemini‑4 Argon
 
 </div>
 
