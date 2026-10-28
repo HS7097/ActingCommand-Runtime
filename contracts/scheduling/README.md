@@ -523,7 +523,15 @@ read it, and the candidate waits.
   the cycle starts, a candidate the selection document deferred carries that
   hold's reason alone (`dispatch_paused_*`, `dispatch_instance_held`,
   `dispatch_instance_cooldown`) and no fact refresh reason, and nothing is
-  dispatched there.
+  dispatched there. Workflow #411 ruling 77 A (Alice 10-28; since 0.12.25): a
+  task whose undecided trigger or feedback stop read such a key there carries
+  the same hold's reason after its `trigger_unknown` or
+  `feedback_stop_unknown`, as its last reason and with the hold's wake, and no
+  fact refresh reason; its decision's detection suggestions name the keys it
+  waits for. Nothing is read while the hold lasts; the first round after it
+  ends raises the demand as above. A reader the Runtime's admission holds (a
+  paused pair) is R_I's own limit below: the task names the key and the
+  package under `fact_refresh_exhausted`.
 - **No reader.** A key no reader can serve gives `fact_refresh_unbound` with
   `reader_problem`: `disabled` (`scheduling.fact_refresh.enabled` is off),
   `package_unbound` (the instance has no kept recognition maintenance package),

@@ -29,6 +29,9 @@ use crate::{
     PolicyEvaluation, PolicyEvaluationError, SchedulingDecisionState, TaskDecision,
     TaskRuntimeSnapshot, TaskTerminalState, compile_catalog, evaluate_with_fact_refresh,
 };
+// Workflow #411 ruling 77 A (P18): the suggestion that names the key, and the limit of a paused
+// reader.
+use crate::{DetectionSuggestion, RefreshLimit, ScopeSelector};
 // Workflow #427-B: T28 runs with the shared run limits.
 use crate::{ChainHandoverInputs, RemedyPlan, RunSlots, evaluate_with_run_slots};
 
@@ -1193,6 +1196,228 @@ fn idle1p_l5_within_the_cooldown_the_candidate_takes_no_wake_on_a_closed_instanc
         assert_eq!(
             waiting.next_wake_unix_ms, None,
             "{case}: the cooldown's end is no wake of the waiting task"
+        );
+    }
+}
+
+// Workflow #411 ruling 77 A (P18; Alice 10-28 「七十七。可以，没问题。」; #411 6438574534,
+// 6439686477): what holds A as the cycle starts, or holds A's reader, while task X reads A's stale
+// K through its trigger (as T25).
+#[derive(Clone, Copy, Debug)]
+enum P18Hold {
+    /// A ladder rung, a startup package or a direct run holds A (`dispatch_instance_held`).
+    Held,
+    /// The operator paused A (`dispatch_paused_instance`).
+    Paused,
+    /// A takeover cooldown holds A until `P18_COOLDOWN_END` (`dispatch_instance_cooldown`).
+    Cooldown,
+    /// A is free, but the Runtime's admission finds R_I's pair failure-paused
+    /// (`policy_task_paused`, a limit).
+    Package,
+}
+
+const P18_HOLDS: [P18Hold; 4] = [
+    P18Hold::Held,
+    P18Hold::Paused,
+    P18Hold::Cooldown,
+    P18Hold::Package,
+];
+const P18_COOLDOWN_END: u64 = NOW + 60_000;
+const COOLDOWN_HOLD: &str = "dispatch_instance_cooldown";
+const PAIR_PAUSED: &str = "policy_task_paused";
+
+impl P18Hold {
+    // The hold the closure's positions 1-2 give A as the cycle starts, when A itself is held.
+    fn of_instance(self) -> Option<InstanceHold> {
+        match self {
+            Self::Held => Some(instance_hold(HELD)),
+            Self::Paused => Some(instance_hold(PAUSED)),
+            Self::Cooldown => Some(InstanceHold {
+                reason: DecisionReason {
+                    outcome: Outcome::relayed(COOLDOWN_HOLD)
+                        .instance_id(A)
+                        .next_eligible_unix_ms(P18_COOLDOWN_END),
+                    detail: format!("next_eligible_unix_ms={P18_COOLDOWN_END}"),
+                },
+                next_wake_unix_ms: Some(P18_COOLDOWN_END),
+            }),
+            Self::Package => None,
+        }
+    }
+}
+
+// One round at NOW on A alone: X's trigger reads A's K, last read two hours ago (stale), and A's
+// reader is bound and has not run today. `hold` holds A, or R_I's pair at the Runtime's admission,
+// which answers every other candidate eligible; none holds nothing.
+fn p18_round(hold: Option<P18Hold>) -> PolicyEvaluation {
+    let mut refresh = inputs(vec![reader(0, None)]);
+    if let Some(instance_hold) = hold.and_then(P18Hold::of_instance) {
+        refresh.instance_holds.insert(A.to_owned(), instance_hold);
+    }
+    let pair_paused = matches!(hold, Some(P18Hold::Package));
+    let a = instance(A, &[]);
+    let facts = EvaluationFacts {
+        ledger_position: 7,
+        fact_snapshot_id: "snapshot:fixture-fact-refresh".to_owned(),
+        facts: vec![fact(A, STOCK, 5, NOW - 2 * HOUR_MS, None)],
+        outcomes: Vec::new(),
+        tasks: Vec::new(),
+        instances: vec![a.clone()],
+        priority_offsets: Vec::new(),
+    };
+    let resources = EvaluationResources {
+        pools: Vec::new(),
+        hosts: vec![host(&a.host_id, 1_000)],
+    };
+    evaluate_with_fact_refresh::<PolicyEvaluationError>(
+        &predicate_catalog(trigger_fact(
+            json!({"kind": "instance", "instance_id": A}),
+            STOCK,
+        )),
+        &facts,
+        &resources,
+        EvaluationTime {
+            unix_ms: NOW,
+            monotonic_ms: NOW,
+        },
+        11,
+        &BTreeSet::new(),
+        &refresh,
+        |intent| {
+            Ok(if pair_paused && intent.task_id == FACT_REFRESH_TASK_ID {
+                CandidateEligibility::Refresh {
+                    reason: DecisionReason {
+                        outcome: Outcome::relayed(PAIR_PAUSED),
+                        detail: format!("task_id={FACT_REFRESH_TASK_ID} instance_id={A}"),
+                    },
+                    next_wake_unix_ms: Some(NEXT_DAY),
+                    gate: Code::relayed(PAIR_PAUSED).expect("a registered code"),
+                    limit: Some(RefreshLimit::FailurePause),
+                }
+            } else {
+                CandidateEligibility::Eligible
+            })
+        },
+    )
+    .unwrap_or_else(|error| panic!("a fact refresh never fails the evaluation: {error}"))
+}
+
+// Workflow #411 ruling 77 A (P18), "names the hold": while A is held (a ladder rung or a startup
+// package, an operator pause, a takeover cooldown) X waits under that hold's reason after its own
+// `trigger_unknown`: the hold is its last reason, exactly as the closure gives it, with the hold's
+// wake, and no reason of the fact refresh. While A's reader is failure-paused X names K and the
+// paused package (`fact_refresh_exhausted`, `failure_pause`, the admission's gate) until the next
+// activity day. Either way X's detection suggestions name the reading it waits for: K in A's scope.
+#[test]
+fn p18_a_held_instance_or_package_names_what_holds_the_predicate_candidate() {
+    let stale_k = DetectionSuggestion {
+        scope: ScopeSelector::Instance {
+            instance_id: A.to_owned(),
+        },
+        fact_key: STOCK.to_owned(),
+        reason: "fact_stale".to_owned(),
+    };
+    for hold in P18_HOLDS {
+        let evaluation = p18_round(Some(hold));
+        let waiting = decision(&evaluation, X, A);
+        assert_eq!(waiting.state, SchedulingDecisionState::Deferred, "{hold:?}");
+        assert!(
+            waiting.detection_suggestions.contains(&stale_k),
+            "{hold:?}: {:?}",
+            waiting.detection_suggestions
+        );
+        match hold.of_instance() {
+            Some(instance_hold) => {
+                assert_eq!(
+                    codes(waiting),
+                    [TRIGGER_UNKNOWN, code_of(&instance_hold.reason)],
+                    "{hold:?}"
+                );
+                assert_eq!(
+                    waiting.reasons.last(),
+                    Some(&instance_hold.reason),
+                    "{hold:?}"
+                );
+                assert_eq!(
+                    waiting.next_wake_unix_ms, instance_hold.next_wake_unix_ms,
+                    "{hold:?}"
+                );
+            }
+            None => {
+                assert_eq!(codes(waiting), [TRIGGER_UNKNOWN, EXHAUSTED], "{hold:?}");
+                let mut expected = exhausted("failure_pause", Some(NEXT_DAY));
+                expected.push(("gate_code", json!(PAIR_PAUSED)));
+                assert_values(coded(waiting, EXHAUSTED)[0], &expected);
+                assert_eq!(waiting.next_wake_unix_ms, Some(NEXT_DAY), "{hold:?}");
+            }
+        }
+    }
+}
+
+// Workflow #411 ruling 77 A (P18), "no refresh while held": no hold of P18_HOLDS lets K be read.
+// On a held A nothing is dispatched and R_I is not even planned; with R_I's pair paused R_I is
+// requested and the Runtime's admission defers it under the pause, so nothing runs on A either.
+#[test]
+fn p18_no_reading_is_requested_while_the_instance_or_package_is_held() {
+    for hold in P18_HOLDS {
+        let evaluation = p18_round(Some(hold));
+        assert!(
+            intents_on(&evaluation, A).is_empty(),
+            "{hold:?}: {:#?}",
+            evaluation.dispatch_intents
+        );
+        let refresh = refresh_decision(&evaluation, A);
+        match hold {
+            P18Hold::Package => {
+                let refresh = refresh.expect("R_I's decision");
+                assert_eq!(refresh.state, SchedulingDecisionState::Deferred);
+                assert_eq!(last_code(refresh), PAIR_PAUSED);
+            }
+            P18Hold::Held | P18Hold::Paused | P18Hold::Cooldown => {
+                assert!(refresh.is_none(), "{hold:?}: no R_I candidate");
+            }
+        }
+    }
+}
+
+// Workflow #411 ruling 77 A (P18), "a refresh after release": the round after each hold of
+// P18_HOLDS ends, on the same facts, requests R_I for K and dispatches it: its reason chain
+// requests exactly K with its unknown reason, and X waits for it under `fact_refresh_pending`,
+// with no hold left on it.
+#[test]
+fn p18_the_round_after_the_hold_ends_reads_the_key() {
+    for hold in P18_HOLDS {
+        let held = p18_round(Some(hold));
+        assert_eq!(refresh_intents_on(&held, A), 0, "{hold:?}");
+
+        let released = p18_round(None);
+        let on_a = intents_on(&released, A);
+        assert_eq!(on_a.len(), 1, "{hold:?}: {:#?}", released.dispatch_intents);
+        assert_eq!(on_a[0].task_id, FACT_REFRESH_TASK_ID, "{hold:?}");
+        let requested = chain_of(&released, on_a[0])
+            .reasons
+            .iter()
+            .filter(|reason| code_of(reason) == REQUESTED)
+            .collect::<Vec<_>>();
+        assert_eq!(requested.len(), 1, "{hold:?}: the key set is {{K}}");
+        assert_values(
+            requested[0],
+            &[
+                ("instance_id", json!(A)),
+                ("fact_key", json!(STOCK)),
+                ("unknown_reason", json!("fact_stale")),
+            ],
+        );
+        let waiting = decision(&released, X, A);
+        assert_eq!(codes(waiting), [TRIGGER_UNKNOWN, PENDING], "{hold:?}");
+        assert_values(
+            coded(waiting, PENDING)[0],
+            &[
+                ("instance_id", json!(A)),
+                ("fact_key", json!(STOCK)),
+                ("unknown_reason", json!("fact_stale")),
+                ("package_id", json!(READER)),
+            ],
         );
     }
 }
