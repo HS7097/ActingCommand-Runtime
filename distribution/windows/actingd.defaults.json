@@ -358,6 +358,9 @@
       "enabled": true,
       "runs": 5,
       "margin_ms": 300000
+    },
+    "parallel": {
+      "enabled": false
     }
   },
   "ledger_observer": {

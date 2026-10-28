@@ -55,6 +55,10 @@ mod gate_inst1;
 // Test-only: ROUT-L RL-1c (#411), check-config and `suspended` in composer mode.
 #[cfg(test)]
 mod gate_rl1c;
+// Test-only: Workflow #427-A, the per-instance lanes of the policy round (on the APPS-I7 cycle
+// harness of gate_382_a4_cycle).
+#[cfg(test)]
+mod gate_427a;
 
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{
@@ -67,10 +71,11 @@ use actingcommand_contract::{
 use actingcommand_policy::MAX_TASKS;
 use actingcommand_runtime_client::ClientCode;
 use actingcommand_runtime_host::{
-    EmulatorAutostartReports, FactRefreshTransition, LedgerFailureSink, PolicyAdmissionContext,
-    PolicyCadence, PolicyCycle, PolicyDispatchAdmission, PolicyRecomputeKind, PolicyRunContext,
-    PolicyTrigger, PolicyWakes, RuntimeDaemonReporter, RuntimeHost, RuntimeHostError,
-    RuntimeLifecycleFailure, RuntimeLifecycleFailureStage,
+    EmulatorAutostartReports, FactRefreshTransition, HostCode, LedgerFailureSink,
+    PolicyAdmissionContext, PolicyCadence, PolicyCycle, PolicyDispatchAdmission,
+    PolicyRecomputeDirective, PolicyRecomputeKind, PolicyRecomputeReason, PolicyRunContext,
+    PolicyRunSettled, PolicyRunSink, PolicyTrigger, PolicyWakes, RuntimeDaemonReporter,
+    RuntimeHost, RuntimeHostError, RuntimeLifecycleFailure, RuntimeLifecycleFailureStage,
 };
 use codes::{ActingdCode, ActingdLocation};
 use config::{PolicyBootstrap, RuntimeAssembly, ScheduledExecutionMode};
@@ -648,13 +653,17 @@ fn start_emulator_refused(code: Code, alias: Option<String>) -> Option<ActingdEr
 /// The started Runtime until it stops: the policy's initial cycle, `runtime_ready`, then the
 /// monitor. `Ok` once a requested stop closed the host, else the condition that stopped it.
 fn serve(host: RuntimeHost, policy: Option<PolicyBootstrap>) -> Result<(), ActingdError> {
+    // Workflow #427-A (plan r2 point 4): the driver's control exists before the initial cycle, so
+    // that the runs this cycle hands to the instance workers (`scheduling.parallel.enabled`) can
+    // report their ends before the driver starts; `runtime_ready` no longer waits for them.
+    let control = Arc::new(PolicyDriverControl::default());
     let initial_policy_cycle = (|| {
         let Some(_work) = host.wait_policy_work().map_err(ActingdError::runtime)? else {
             return Ok(None);
         };
         policy
             .as_ref()
-            .map(|policy| initialize_policy(&host, policy))
+            .map(|policy| initialize_policy_in(&host, policy, Some(&control)))
             .transpose()
             .map(Some)
     })();
@@ -707,7 +716,7 @@ fn serve(host: RuntimeHost, policy: Option<PolicyBootstrap>) -> Result<(), Actin
         )),
     ));
     match (policy, initial_policy_cycle) {
-        (Some(policy), Some(cycle)) => monitor_policy(host, policy, cycle),
+        (Some(policy), Some(cycle)) => monitor_policy(host, policy, control, cycle),
         (None, None) => monitor(host),
         _ => {
             let mut error = ActingdError::process(ActingdCode::PolicyBootstrapStateInvalid);
@@ -725,15 +734,27 @@ fn serve(host: RuntimeHost, policy: Option<PolicyBootstrap>) -> Result<(), Actin
     }
 }
 
+#[cfg(test)]
 fn initialize_policy(
     host: &RuntimeHost,
     policy: &PolicyBootstrap,
+) -> Result<PolicyCycleExecution, ActingdError> {
+    initialize_policy_in(host, policy, None)
+}
+
+/// The policy's initial cycle. Workflow #427-A (plan r2 point 4): with `control`, the daemon's,
+/// it hands its scheduled runs to the instance workers when `scheduling.parallel.enabled` is on,
+/// as every later round does; without it (a test of the synchronous cycle) it runs them itself.
+fn initialize_policy_in(
+    host: &RuntimeHost,
+    policy: &PolicyBootstrap,
+    control: Option<&Arc<PolicyDriverControl>>,
 ) -> Result<PolicyCycleExecution, ActingdError> {
     // ROUT-L RL-1b (frozen model v1.0 §3.3, §3.5): in composer mode the first cycle's workbench
     // check composes the standard packs' rules and activates them; nothing is planned, approved
     // or transcribed.
     let Some(catalog) = policy.catalog.as_ref() else {
-        return execute_policy_cycle(host, policy, PolicyTrigger::Recovery);
+        return execute_policy_cycle_in(host, policy, PolicyTrigger::Recovery, control);
     };
     // Workflow #361 C2: plan and check everything first; the catalog pointer moves only after
     // every check passed, so a refused configuration leaves no catalog event behind. The plan
@@ -786,27 +807,54 @@ fn initialize_policy(
         host.transcribe_configured_approval(decision)
             .map_err(ActingdError::runtime)?;
     }
-    execute_policy_cycle(host, policy, PolicyTrigger::Recovery)
+    execute_policy_cycle_in(host, policy, PolicyTrigger::Recovery, control)
 }
 
+#[cfg(test)]
 fn execute_policy_cycle(
     host: &RuntimeHost,
     policy: &PolicyBootstrap,
     trigger: PolicyTrigger,
 ) -> Result<PolicyCycleExecution, ActingdError> {
+    execute_policy_cycle_in(host, policy, trigger, None)
+}
+
+/// One policy round. Workflow #427-A (plan r2 point 6): with the daemon's `control`, the round
+/// reads `scheduling.parallel.enabled` as it starts, so an instruction (`ac_config_set`) takes
+/// effect at the next round; with the switch on, the round hands its scheduled runs to the
+/// instance workers (their ends wake the driver through `control`), with it off it runs them
+/// itself, one after another, as before. A run already handed to a worker finishes there.
+fn execute_policy_cycle_in(
+    host: &RuntimeHost,
+    policy: &PolicyBootstrap,
+    trigger: PolicyTrigger,
+    control: Option<&Arc<PolicyDriverControl>>,
+) -> Result<PolicyCycleExecution, ActingdError> {
+    let lanes = match control {
+        Some(control)
+            if host
+                .scheduling_parallel_enabled()
+                .map_err(ActingdError::runtime)? =>
+        {
+            Some(PolicyLanes::new(control))
+        }
+        _ => None,
+    };
     let started = Instant::now();
-    execute_policy_cycle_with(
+    execute_policy_cycle_on(
         host,
         policy,
         trigger,
         &|| started.elapsed(),
         &mut std::io::stdout(),
+        lanes.as_ref(),
     )
 }
 
 /// Test plan A-4 G6a (APPS-I7): one policy cycle whose budget reads `elapsed`, the time since
 /// the cycle started, and whose yield line goes to `stdout`. The daemon passes the process
 /// clock and its stdout (`execute_policy_cycle`); a test passes its own.
+#[cfg(test)]
 fn execute_policy_cycle_with(
     host: &RuntimeHost,
     policy: &PolicyBootstrap,
@@ -814,9 +862,96 @@ fn execute_policy_cycle_with(
     elapsed: &dyn Fn() -> Duration,
     stdout: &mut dyn Write,
 ) -> Result<PolicyCycleExecution, ActingdError> {
-    let cycle = host
-        .evaluate_policy_cycle(trigger)
-        .map_err(ActingdError::runtime)?;
+    execute_policy_cycle_on(host, policy, trigger, elapsed, stdout, None)
+}
+
+/// Workflow #427-A (C1, plan r2 point 3): the most re-samples of one round whose evaluation
+/// found its sampled outcome keys changed (`policy_outcome_snapshot_changed`: another instance's
+/// run settled between the sample and its validation). Past it the round is given up and waits
+/// for its next trigger. A small code constant, as the plan names it.
+const MAX_POLICY_RESAMPLES: usize = 3;
+
+/// Workflow #427-A (C1): the round's evaluation, sampled again, at most `MAX_POLICY_RESAMPLES`
+/// times, while its validation finds its sample changed; one daemon line per re-sample, and one
+/// when the round gives up (`None`). The driver never stops for it. Any other failure is
+/// returned as before.
+fn evaluate_policy_cycle_resampled(
+    host: &RuntimeHost,
+    trigger: PolicyTrigger,
+    stdout: &mut dyn Write,
+) -> Result<Option<PolicyCycle>, ActingdError> {
+    let mut resamples = 0;
+    loop {
+        match host.evaluate_policy_cycle(trigger) {
+            Ok(cycle) => return Ok(Some(cycle)),
+            Err(error)
+                if !error.is_fatal()
+                    && error.code() == HostCode::PolicyOutcomeSnapshotChanged.as_str() =>
+            {
+                // Like the other informational daemon lines, a failed stdout write does not stop
+                // the daemon.
+                if resamples >= MAX_POLICY_RESAMPLES {
+                    let _ = writeln!(
+                        stdout,
+                        "actingd policy_cycle_given_up code={} resamples={resamples}",
+                        error.code()
+                    );
+                    return Ok(None);
+                }
+                resamples += 1;
+                let _ = writeln!(
+                    stdout,
+                    "actingd policy_cycle_resampled code={} attempt={resamples} limit={MAX_POLICY_RESAMPLES}",
+                    error.code()
+                );
+            }
+            Err(error) => return Err(ActingdError::runtime(error)),
+        }
+    }
+}
+
+/// Workflow #427-A (C1): the round given up after its re-samples, as a deferred cycle with no
+/// evaluation: the driver keeps its trigger and its recompute wakes as deferred work and runs
+/// them at its next trigger, one debounce later (`PolicyDriverSchedule::apply_cycle`).
+fn given_up_policy_cycle(policy: &PolicyBootstrap) -> Result<PolicyCycle, ActingdError> {
+    Ok(PolicyCycle {
+        directive: PolicyRecomputeDirective {
+            kind: PolicyRecomputeKind::Deferred,
+            reason: PolicyRecomputeReason::Debounce,
+            eligible_at_unix_ms: checked_deadline(
+                system_unix_ms()?,
+                policy.cadence.debounce_ms.max(1),
+            )?,
+        },
+        evaluation: None,
+        pending_dispatch_intents: Vec::new(),
+        detection_planning_signals: Vec::new(),
+        clock_slot_signals: Vec::new(),
+        measurement: None,
+        fact_refresh_transitions: Vec::new(),
+    })
+}
+
+/// One policy cycle (`execute_policy_cycle_with`), and Workflow #427-A: with `lanes`, each
+/// granted scheduled run is handed to its instance's worker instead of being run here, so the
+/// cycle never waits for a run.
+fn execute_policy_cycle_on(
+    host: &RuntimeHost,
+    policy: &PolicyBootstrap,
+    trigger: PolicyTrigger,
+    elapsed: &dyn Fn() -> Duration,
+    stdout: &mut dyn Write,
+    lanes: Option<&PolicyLanes>,
+) -> Result<PolicyCycleExecution, ActingdError> {
+    let Some(cycle) = evaluate_policy_cycle_resampled(host, trigger, stdout)? else {
+        return Ok(PolicyCycleExecution {
+            cycle: given_up_policy_cycle(policy)?,
+            recompute_wakes: Vec::new(),
+            yielded_intents: 0,
+            failed_runs: false,
+            retry_after_ms: None,
+        });
+    };
     // Workflow #384 D2-S5 (D2 model §5.2): the fact refresh's transitions at this cycle's yield
     // point, as daemon lines; nothing is written to the ledger.
     let _unwritten = write_fact_refresh_transitions(
@@ -934,6 +1069,23 @@ fn execute_policy_cycle_with(
                     task.mode,
                     policy.registry_modes.get(context.instance_alias()).copied(),
                 )?;
+            }
+            // Workflow #427-A (plan r2 point 1): with the lanes on, the run goes to its
+            // instance's worker, which runs and settles it and wakes the driver; the cycle goes
+            // on with the next intent at once. A hand-off the host refused (it was settled as not
+            // performed) is a failed run of this cycle.
+            if let Some(lanes) = lanes {
+                let alias = context.instance_alias().to_owned();
+                match host.hand_off_scheduled_policy_run(
+                    context,
+                    request.clone(),
+                    Arc::clone(&lanes.sink),
+                ) {
+                    Ok(()) => {}
+                    Err(error) if !error.is_fatal() => failed_runs.record(&alias),
+                    Err(error) => return Err(ActingdError::runtime(error)),
+                }
+                continue;
             }
             let receipt = match host.run_scheduled_contained_task(&context, request) {
                 Ok(receipt) => receipt,
@@ -1068,6 +1220,59 @@ struct PolicyRecomputeKey {
     terminal_event_id: actingcommand_contract::EventId,
 }
 
+/// Workflow #427-A (plan r2 point 1): the lanes of a round: where the instance workers report
+/// the ends of the scheduled runs the round hands them.
+struct PolicyLanes {
+    sink: Arc<dyn PolicyRunSink>,
+}
+
+impl PolicyLanes {
+    fn new(control: &Arc<PolicyDriverControl>) -> Self {
+        Self {
+            sink: Arc::new(DriverLaneSink {
+                control: Arc::clone(control),
+            }),
+        }
+    }
+}
+
+/// Workflow #427-A: wakes the driver when a handed-off run ended, as the synchronous cycle did
+/// after its own run. A settled run with a recompute projection wakes it with that run's
+/// `PolicyRecomputeWake` (`notify_recompute`); every other end (a settled run without one, a
+/// failed or refused run, a run a worker panic dropped) with `FactsChanged`, as `failed_runs`
+/// does, so the instance's next task is judged at once. A wake the driver cannot take (a
+/// conflicting identity, the wake budget) stops the driver with that error, as it stopped the
+/// synchronous cycle.
+struct DriverLaneSink {
+    control: Arc<PolicyDriverControl>,
+}
+
+impl PolicyRunSink for DriverLaneSink {
+    fn settled(&self, settled: PolicyRunSettled) {
+        let woken = match settled {
+            PolicyRunSettled::Completed(completion) => {
+                let completion = *completion;
+                match completion.projection {
+                    Some(projection) => PolicyRecomputeWake::new(
+                        &completion.context,
+                        &completion.receipt,
+                        &completion.execution,
+                        projection,
+                    )
+                    .and_then(|wake| self.control.notify_recompute(wake)),
+                    None => self.control.notify(PolicyTrigger::FactsChanged),
+                }
+            }
+            PolicyRunSettled::Failed { .. } | PolicyRunSettled::Dropped { .. } => {
+                self.control.notify(PolicyTrigger::FactsChanged)
+            }
+        };
+        if let Err(error) = woken {
+            self.control.fail(error);
+        }
+    }
+}
+
 fn validate_scheduled_execution_mode(
     expected: ScheduledExecutionMode,
     actual: Option<ScheduledExecutionMode>,
@@ -1125,11 +1330,11 @@ fn monitor(host: RuntimeHost) -> Result<(), ActingdError> {
 fn monitor_policy(
     host: RuntimeHost,
     policy: PolicyBootstrap,
+    control: Arc<PolicyDriverControl>,
     initial_cycle: PolicyCycleExecution,
 ) -> Result<(), ActingdError> {
     let host = Arc::new(host);
     let policy = Arc::new(policy);
-    let control = Arc::new(PolicyDriverControl::default());
     let setup = (|| {
         let Some(_work) = host.wait_policy_work().map_err(ActingdError::runtime)? else {
             return Ok(None);
@@ -1175,6 +1380,11 @@ fn monitor_policy(
         }
         Ok(()) => Ok(()),
     };
+    // Workflow #427-A (C5): the shutdown order. The driver takes no new trigger and hands off
+    // nothing more (its control is shut down), and it is joined; the instance workers hold no
+    // `Arc<RuntimeHost>` (only the host's shared state and the control), so the host is then
+    // released and closed, and its close joins the workers: a run a worker took finishes and is
+    // settled, one still queued is refused and settled as not performed. Nothing is replayed.
     let shutdown_result = control.shutdown();
     let driver_result = match driver.join() {
         Ok(result) => result,
@@ -1436,6 +1646,9 @@ struct PolicyDriverSignal {
     active_recomputes: BTreeMap<PolicyRecomputeKey, PolicyRecomputeWake>,
     completed_recomputes: BTreeMap<PolicyRecomputeKey, PolicyRecomputeWake>,
     shutdown: bool,
+    /// Workflow #427-A: the first failure an instance worker's report met (`fail`); the
+    /// driver's next wait returns it, so the driver stops with it.
+    failure: Option<ActingdError>,
     #[cfg(test)]
     wait_predicate_checks: usize,
 }
@@ -1562,11 +1775,26 @@ impl PolicyDriverControl {
         Ok(())
     }
 
+    /// Workflow #427-A: an instance worker's report of a handed-off run met `error`; the
+    /// driver's next wait returns the first such error. A poisoned signal keeps nothing: the
+    /// driver's next wait reports the poison itself.
+    fn fail(&self, error: ActingdError) {
+        if let Ok(mut state) = self.state.lock() {
+            if state.failure.is_none() {
+                state.failure = Some(error);
+            }
+            self.changed.notify_all();
+        }
+    }
+
     fn wait(&self, timeout: Duration) -> Result<PolicyDriverWake, ActingdError> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| ActingdError::process(ActingdCode::PolicyDriverSignalPoisoned))?;
+        if let Some(error) = state.failure.take() {
+            return Err(error);
+        }
         if state.shutdown {
             return Ok(PolicyDriverWake::Shutdown);
         }
@@ -1584,9 +1812,12 @@ impl PolicyDriverControl {
                     state.wait_predicate_checks += 1;
                     self.changed.notify_all();
                 }
-                !state.shutdown && state.pending_trigger.is_none()
+                !state.shutdown && state.pending_trigger.is_none() && state.failure.is_none()
             })
             .map_err(|_| ActingdError::process(ActingdCode::PolicyDriverSignalPoisoned))?;
+        if let Some(error) = state.failure.take() {
+            return Err(error);
+        }
         if state.shutdown {
             Ok(PolicyDriverWake::Shutdown)
         } else if let Some((trigger, recomputes)) = take_policy_driver_work(&mut state)? {
@@ -1933,7 +2164,7 @@ fn drive_policy(
 fn handle_policy_driver_trigger(
     host: &RuntimeHost,
     policy: &PolicyBootstrap,
-    control: &PolicyDriverControl,
+    control: &Arc<PolicyDriverControl>,
     schedule: &mut PolicyDriverSchedule,
     mut trigger: PolicyTrigger,
     mut recomputes: Vec<PolicyRecomputeWake>,
@@ -1954,7 +2185,7 @@ fn handle_policy_driver_trigger(
 fn execute_ready_policy_trigger(
     host: &RuntimeHost,
     policy: &PolicyBootstrap,
-    control: &PolicyDriverControl,
+    control: &Arc<PolicyDriverControl>,
     schedule: &mut PolicyDriverSchedule,
     trigger: PolicyTrigger,
     recomputes: Vec<PolicyRecomputeWake>,
@@ -1969,7 +2200,7 @@ fn execute_ready_policy_trigger(
         trigger,
         recomputes,
         now_unix_ms,
-        execute_policy_cycle(host, policy, trigger),
+        execute_policy_cycle_in(host, policy, trigger, Some(control)),
     )
 }
 

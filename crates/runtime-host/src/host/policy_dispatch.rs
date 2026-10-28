@@ -96,13 +96,16 @@ impl HostShared {
     /// Q-3 (6): policy dispatches only to an instance with no holder, no eligible waiting claim
     /// and no takeover cooldown. Read under the scheduler lock, with the routine gate read
     /// just before it.
-    fn instance_occupancy(
+    pub(super) fn instance_occupancy(
         &self,
         instance_id: InstanceId,
         now_unix_ms: u64,
     ) -> RuntimeHostResult<Option<InstanceOccupancy>> {
         let gate = self.routine_gate(instance_id)?;
         let now_monotonic_ms = self.monotonic_ms()?;
+        // Workflow #427-A (C3): a policy run handed to the instance's worker holds the instance
+        // from its hand-off to its settlement, also once its lease is released.
+        let lane_held = self.policy_run_registered(instance_id)?;
         let scheduler = lock(&self.scheduler, HostLocation::ReadPolicyInstanceOccupancy)?;
         let count = scheduler.eligible_count(instance_id, gate, now_monotonic_ms);
         // A lapsed holder is no hold: the sweep, or the admission's own expiry, ends it.
@@ -110,6 +113,7 @@ impl HostShared {
             .active_lease(instance_id)
             .filter(|lease| lease.token().expires_at_monotonic_ms() > now_monotonic_ms)
             .map(|lease| lease.kind())
+            .or_else(|| lane_held.then_some(ClaimKind::PolicyDispatch))
             .or_else(|| scheduler.first_eligible_kind(instance_id, gate, now_monotonic_ms));
         if let Some(holder_kind) = holder_kind {
             return Ok(Some(InstanceOccupancy::Held { holder_kind, count }));
@@ -125,6 +129,52 @@ impl HostShared {
             )
         })?;
         Ok(Some(InstanceOccupancy::Cooldown { until_unix_ms }))
+    }
+
+    /// Workflow #427-A (C1), test builds and the `test-hooks` feature: runs the hook a test set
+    /// for the point between a policy evaluation's sample and its validation, then reports a
+    /// forced snapshot change (`policy_outcome_snapshot_changed`, as the validation would) while
+    /// the test's count of them lasts.
+    #[cfg(any(test, feature = "test-hooks"))]
+    fn between_policy_sample_and_validation_for_test(&self) -> RuntimeHostResult<()> {
+        let hook = lock(
+            &self.policy_sample_hook_for_test,
+            HostLocation::EvaluatePolicyCycle,
+        )?
+        .take();
+        if let Some(hook) = hook {
+            hook();
+        }
+        let forced = self
+            .policy_snapshot_changes_for_test
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                count.checked_sub(1)
+            })
+            .is_ok();
+        if forced {
+            return Err(RuntimeHostError::request(
+                HostCode::PolicyOutcomeSnapshotChanged,
+                HostLocation::ValidatePolicyOutcomeKeySnapshot,
+                RuntimeErrorCode::InvalidRequest,
+            ));
+        }
+        Ok(())
+    }
+
+    /// Workflow #427-A fix 1, test builds and the `test-hooks` feature: runs, once, the hook a
+    /// test set for a scheduling pause's release that waits for a policy run an instance worker
+    /// holds.
+    #[cfg(any(test, feature = "test-hooks"))]
+    fn pause_waits_for_lane_for_test(&self) -> RuntimeHostResult<()> {
+        let hook = lock(
+            &self.pause_lane_wait_hook_for_test,
+            HostLocation::ReadPolicyRunsInFlight,
+        )?
+        .take();
+        if let Some(hook) = hook {
+            hook();
+        }
+        Ok(())
     }
 
     /// The admission's own check (the race since the evaluation): a held instance refuses the
@@ -936,8 +986,15 @@ impl HostShared {
         // Workflow #386 SR-4a2: the blackout keys in effect as this cycle starts.
         let blackout_context =
             self.blackout_context(&remedy_aliases, HostLocation::EvaluatePolicyCycle)?;
+        // Workflow #427-A (C1), tests: what happens between the sample above and its validation
+        // below, and the forced snapshot changes.
+        #[cfg(any(test, feature = "test-hooks"))]
+        self.between_policy_sample_and_validation_for_test()?;
         let (mut cycle, eligibility_unknown_pairs, pool_scopes, random_delays, blackout_holds) = {
             let mut policy = lock(self.policy()?, HostLocation::EvaluatePolicyCycle)?;
+            // Workflow #427-A (C1): another instance's run may settle between the sample and
+            // this validation; its `policy_outcome_snapshot_changed` is a request error, which
+            // actingd answers with a bounded re-sample.
             policy.validate_outcome_key_snapshot(&outcome_keys)?;
             // Workflow #386 SR-4a2 (position 4): the instances a blackout covers as this cycle
             // starts, judged once for the evaluation and the fact refresh's recorder.
@@ -2732,7 +2789,12 @@ impl HostShared {
                 HostLocation::ReadAwaitedClientResets,
             )?
             .awaits_client_reset(instance_alias);
-            if !run_in_flight && !reset_awaited && !lease_held {
+            // Workflow #427-A (C2, C3): a policy run its instance's worker still holds (from its
+            // hand-off to its settlement) is waited for, as an active lease is.
+            let lane_working = self
+                .policy_run_working(instance_id)
+                .map_err(RequestFailure::poison_without_terminal)?;
+            if !run_in_flight && !reset_awaited && !lease_held && !lane_working {
                 // Workflow #191 H (owner ruling 2026-09-29): a pause is not a disconnect; only an
                 // instance outside the multi-Nemu gate closes its session here.
                 if self.keeps_device_session(instance_id)? {
@@ -2780,6 +2842,11 @@ impl HostShared {
                     .checked_add(again.cancelled)
                     .ok_or_else(overflow)?;
                 continue;
+            }
+            // Workflow #427-A fix 1, tests: the release waits here for a lane's run.
+            #[cfg(any(test, feature = "test-hooks"))]
+            if lane_working {
+                self.pause_waits_for_lane_for_test()?;
             }
             if Instant::now() >= deadlines.grace {
                 return Err(scheduling_pause_release_failure(RuntimeHostError::request(

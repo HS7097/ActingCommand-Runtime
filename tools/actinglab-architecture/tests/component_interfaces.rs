@@ -56,9 +56,9 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   revision 18 adds `install.start.sample_interval_ms`, `install.start.stall_after_ms`,
 ///   `install.start.stall_read_bytes`, `install.start.memory_wait_ms` and
 ///   `install.stop.busy_wait_ms` and retires `install.guard.blocked_windows`; revisions 5 to 17
-///   are still read, so [5, 18]. Workflow #427-B: revision 19 adds
-///   `performance.pacing.max_concurrent_runs` (Workflow #427-A adds `scheduling.parallel.enabled`
-///   to the same revision); revisions 5 to 18 are still read, so [5, 19].
+///   are still read, so [5, 18]. Workflow #427-A and #427-B (one release): revision 19 adds
+///   `scheduling.parallel.enabled` (#427-A) and `performance.pacing.max_concurrent_runs`
+///   (#427-B); revisions 5 to 18 are still read, so [5, 19].
 /// - `install-control` stays [0, 1] (model-378 §16 A-7; U-4 raises it in 0.12.x).
 /// - `install-selection` is unchanged (model-378 §10).
 /// - `ledger` [3, 3]: SQLite format 2, `actingcommand.event.v3`; format 1 is refused. Workflow

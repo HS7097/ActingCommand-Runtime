@@ -29440,6 +29440,38 @@
       "status": "active",
       "since": "0.12.15",
       "description": "A Runtime host operation (SCH-M ED-2): the expected duration E of each evaluated (task, instance) pair projected from its instance's health.run_duration record into the evaluation's task states."
+    },
+    "hand_off_scheduled_policy_run": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.22",
+      "description": "A Runtime host operation (Workflow #427-A, scheduling.parallel.enabled): the policy driver hands an admitted scheduled run to its instance's worker and registers it as in flight; a hand-off no worker takes never starts, its lease and registration are released, and it is settled as interrupted when the Runtime's stop refused it, otherwise as that failure."
+    },
+    "run_handed_policy_run": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.22",
+      "description": "A Runtime host operation (Workflow #427-A): a scheduled run on its instance's worker, from its lifecycle admission through its run to its settlement; a run the worker takes after the Runtime's stop was requested is refused, never started, and settled as interrupted (policy_settlement_interrupted), so the restart lifts it; one handed off before an install drain or a scheduling pause began goes ahead."
+    },
+    "read_policy_runs_in_flight": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.22",
+      "description": "A Runtime host operation (Workflow #427-A): a read of the scheduled runs handed to the instance workers and not yet settled, by the evaluation's and the admission's occupancy, the reconciliation, a scheduling pause and an install drain."
+    },
+    "update_policy_runs_in_flight": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.22",
+      "description": "A Runtime host operation (Workflow #427-A): a change of the in-flight policy runs: a hand-off's registration, and its end after the run's settlement (an unsettled run stays registered for the reconciliation)."
     }
   }
 }

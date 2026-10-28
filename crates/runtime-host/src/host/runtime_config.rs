@@ -637,6 +637,21 @@ impl HostShared {
             })
     }
 
+    /// Workflow #427-A: `scheduling.parallel.enabled` in effect, read by actingd at the start of
+    /// every policy round, so an instruction takes effect at the next round.
+    pub(super) fn scheduling_parallel_enabled(&self) -> RuntimeHostResult<bool> {
+        lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .scheduling_parallel_enabled()
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })
+    }
+
     /// Workflow #336 PKG-S3: `scheduling.suspension.lift_check_min_interval_ms` in effect, read
     /// at each suspension lift check.
     pub(super) fn lift_check_min_interval_ms(&self) -> RuntimeHostResult<u64> {
