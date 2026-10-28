@@ -669,10 +669,13 @@ fn sr2b1_t6_the_start_settles_a_run_from_its_terminal_by_the_same_rule() {
     run_unsettled(&host, &context, &package_path);
     let (code, class) = terminal_failure(&host, context.run_id());
     assert_eq!(class, PolicyFailureClass::Recoverable, "{code}");
+    drop(context);
     close_latched(host);
 
+    // The restart's configuration lists the terminal's code as a condition code.
+    let table = rerun_manifest(vec![condition_codes(&[code.as_str()])]);
     let host = RuntimeHost::start(
-        config(&root).with_config_manifest(rerun_manifest(vec![condition_codes(&[code.as_str()])])),
+        config(&root).with_config_manifest(table),
         Arc::new(FakeProvider::one(
             POLICY_INSTANCE_ALIAS,
             registered,
@@ -741,6 +744,7 @@ fn sr2b1_t6_the_start_settles_a_run_from_its_terminal_by_the_same_rule() {
     host.expire_lease_once_for_test(context.lease_token())
         .expect("expire the run's lease");
     run_unsettled(&host, &context, &package_path_in(&root));
+    drop(context);
     close_latched(host);
 
     let interrupted =
