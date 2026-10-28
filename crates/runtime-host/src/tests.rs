@@ -441,6 +441,9 @@ mod gate_epoch_close;
 // #411 A65: the start settles the open direct runs of a previous epoch larger than one unpaged
 // read, and of the epochs before a start that failed after appending its start event.
 mod gate_411_a65;
+// #411 P51: the next start closes no scope of an epoch's client actions (MCP's `client.action`
+// after each Lab observation), so its closes do not grow with them.
+mod gate_411_p51;
 // #411 A67-R: a start whose memory sample leaves no frame budget after the OS reserve goes on, and
 // records the floor warning once in the daemon's log and once in the ledger.
 mod gate_411_a67r;

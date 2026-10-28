@@ -309,7 +309,10 @@ impl<B: super::super::storage::DurableStorage> super::super::storage::EventStore
         for (scope, (scope_source, last)) in page {
             deadline_check(deadline)?;
             let completed = self.retention.prior_epoch_closes.contains_key(&scope);
-            if !completed && self.retention.ordinary_close(&scope).is_some() {
+            if !completed
+                && (self.retention.ordinary_close(&scope).is_some()
+                    || self.client_action_scope(&scope_source, last)?)
+            {
                 continue;
             }
             let state = match checked.remove(&scope.owner) {
@@ -368,6 +371,22 @@ impl<B: super::super::storage::DurableStorage> super::super::storage::EventStore
         }
         deadline_check(deadline)?;
         Ok((next, appended))
+    }
+
+    /// #411 P51: whether the scope whose first record is `source` and whose last record is at
+    /// `last` holds one record only, a `client.action`. Such a record traces an action outside
+    /// the Runtime (an MCP or Lab call, a button): its request records nothing else, so its scope
+    /// holds no resource and no capture and no start closes it. Its one record is read; every
+    /// other scope is closed as before. The scope stays among the scope sources, so the closes
+    /// earlier starts wrote for such scopes still check.
+    fn client_action_scope(&self, source: &TerminalEvent, last: u64) -> GlobalLedgerResult<bool> {
+        if source.sequence != last {
+            return Ok(false);
+        }
+        Ok(self
+            .history()
+            .record_at(source)?
+            .is_some_and(|event| event.event_type() == EventType::ClientAction))
     }
 
     /// LN-7: the import of prior owner `owner`, checked once: a sealed import must still be
