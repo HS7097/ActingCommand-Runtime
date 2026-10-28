@@ -9,6 +9,59 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.24
+
+本版是 v0.12.23 之后合并的 1 个 PR（#1393 QR-2b，#422）：`ac_diagnose`（和 `actingctl diagnose`）重新能在调用的
+预算内答复；有哪个部分来不及读完或读取失败，就在答复里点名，其余部分照常答复。v0.12.23 已在本版之前发布。
+
+配置：没有新键，也没有新的 revision，`actingd-config` 仍是 [5, 19]，`runtime-client` 仍是 [2, 2]，账本仍是 [3, 4]。
+
+- 改动都在客户端一侧（actingctl 和 MCP 的诊断，以及 runtime-client 新增的一次性列表读取）；契约、账本和 actingd
+  答复请求的代码都没变。诊断的每一页带的 `without_run_recovery` 是 v0.12.23 已有的页请求成员（QR-2），本版没有新
+  请求类型，也没有新请求成员。
+- 诊断的截止时间不是配置键：MCP 用调用预算减 1 秒，命令行仍是原来的 24 秒，也没有新增命令行参数。
+- 现有的配置都不需要修改。退回 v0.12.23 之前要做的事（按代码核对过）：什么都不用做。
+  - 配置和运行时指令：本版没有新键，也没有改任何默认值，回退启动的 `instructions` 检查不会因本版失败。
+  - 账本：不需要做什么。诊断只读（QueryEvents 不写记录），本版的改动不写任何文件或状态；账本的格式、表、索引和
+    事件类型都没变。没有新结果码：`call_budget_exhausted` 是已有的码，只补充了说明，结果码发布文件也是空的。
+  - 客户端要和 Runtime 配对吗：不用。本版客户端发出的请求成员和 v0.12.23 相同，所以本版的客户端（例如回退后
+    还没切换子进程的 MCP 前端）连 v0.12.23 的 Runtime 照常答复，诊断也一样；v0.12.23 的客户端连本版 Runtime
+    也照常。回退后 MCP 入口切回 v0.12.23 的子进程，切换前后都不会因为配对报错。
+
+运行上的变化：
+
+- 只列一次（QR-2b）：一次诊断只列一遍窗口里的运行（5 种列表类型各一次查询，同一个快照），`runs` 和
+  `runs_grouped` 都从这一次列表取运行。以前要把整个窗口（包括入口事实）列两遍。
+- 不读已结算的运行：列表里只有一个终结记录、而且是 `task.completed` 或 `task.cancelled`，主准入
+  （`task.requested`）也在窗口里的运行，不再读它的状态；它既不是失败也不是未结束，只在“最近 10 个运行”里占位，
+  不会显示出来。其他运行在最近 10 个还没凑齐时都读状态，凑齐之后只读 `runs_grouped` 要留下的。计划意图页只为
+  `runs_grouped` 留下的、计划发起的失败或未结束运行读；转发终结记录只在转发码没有在目录里登记时读。
+- 不带运行恢复：错误页、失败记录页和转发终结页现在也带 `without_run_recovery`（列表页和状态页从 v0.12.23 起
+  就带），诊断的每一页都不再为运行读上下文。错误页的游标仍可以在 `ac_events` 里接着读。
+- 截止时间：每个部分只在调用的截止时间之前开始读，顺序是错误页、`failures_grouped`、`not_run`，然后才是运行列表、
+  `runs` 和 `runs_grouped`，这样随窗口变长的列表不会把别的部分挤掉。诊断里原来 `recent_runs` 自带的 20 秒预算
+  去掉了。截止时间到时正在进行的读取不会在那一刻被切断：除了在途的那一页，列表还会发出它没读到的列表类型的第一页
+  （最多 4 页），或者一次运行状态读取还会发出 Runtime 重启页（最多 4 页）和租约页（最多 2 页）；每页最长到客户端
+  的 5 秒套接字超时为止。
+- 新成员和警告：截止时间切断的部分，或读取失败的部分，答复 `<section>_incomplete: true`，共四个：
+  `runs_incomplete`、`errors_page_incomplete`、`runs_grouped_incomplete`、`failures_grouped_incomplete`（MCP 的
+  输出 schema 加了这四个布尔成员），并带警告：被截止时间切断的是 `call_budget_exhausted`，`member` 是这个部分的名字；
+  读取失败的是那次读取的失败。整个诊断标 `incomplete: true`，其他部分照常答复。没读到的错误页没有行。`not_run`
+  来不及读时不出现，带 `call_budget_exhausted`（`member` 为 `not_run`）。只有带 `instance` 时用来解析实例的那次
+  Status 读取失败，才会让整个诊断失败。
+- 带实例时，列表被截止时间切断就不给 `runs`（以前 `recent_runs` 会读部分列表里的运行），和 `ac_runs` 的列表一样：
+  部分列表可能漏掉更新的运行。
+- 不带实例的调用仍受那一次完整列表限制：它要列出所有实例在窗口里的全部列表事实（包括入口事实），窗口越长、运行
+  越多，这一读越久；要再快得靠 Runtime 端的运行汇总，本版没有做。列表被截止时间切断时，`runs_grouped`（最近 10 个
+  还没凑齐时还有 `runs`）标 `_incomplete`，错误页、`failures_grouped` 和 `not_run` 在它之前已经读完。
+- 用时：v0.12.21 上实测 `ac_diagnose` 用了 27 秒，没有答复。本版按评审对生产规模账本的估算，每次调用读的页数：
+  不带实例约 65 到 185 页（以前 700 到 1 200 页），带实例约 20 到 55 页（以前 170 到 290 页）；还没有在本版上实测。
+- `ac_events`、`ac_runs`、`ac_get_run` 和概览不变。
+
+本版合并的 PR：
+
+- #1393 QR-2b（#422）：`ac_diagnose` / `actingctl diagnose` 每次调用只列一次窗口里的运行，`runs` 和 `runs_grouped` 共用；列表显示只有一个 `task.completed` 或 `task.cancelled` 终结的运行不读状态；计划意图页只为 `runs_grouped` 留下的计划发起的失败或未结束运行读；每一页都带 `without_run_recovery`；每个部分只在调用的截止时间之前读，被切断的部分答复 `<section>_incomplete: true` 并带 `call_budget_exhausted`（`member` 为该部分），其余部分照常答复，只有解析实例的 Status 读取能让整个诊断失败；MCP 输出 schema 加四个 `_incomplete` 成员；命令行保持 24 秒，MCP 用调用预算减 1 秒；修正 1：测试 T4 的截止时间改为确定的、窗口起点按主准入计算、补文档说明。没有新键、新结果码，不升 revision。
+
 ## v0.12.23
 
 本版是 v0.12.22 之后合并的 1 个 PR（#1391 QR-2，#422）：概览、`ac_runs` 和 `ac_get_run` 读账本时不再做没有
