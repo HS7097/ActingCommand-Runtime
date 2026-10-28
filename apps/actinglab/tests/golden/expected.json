@@ -2109,6 +2109,135 @@
               ]
             },
             {
+              "artifacts": [],
+              "event_id": "<EVENT_ID>",
+              "event_type": "scheduler.admitted",
+              "links": {
+                "correlation_id": "<CORRELATION_ID>",
+                "instance_id": "<INSTANCE_ID>",
+                "lease_id": "<LEASE_ID>",
+                "request_id": "<REQUEST_ID>"
+              },
+              "origin": {
+                "actor": "scheduler",
+                "module": "scheduler",
+                "source": "scheduler"
+              },
+              "payload": {
+                "detail": "full",
+                "payload": {
+                  "family": "scheduler",
+                  "payload": {
+                    "data": {
+                      "action": "schedule.admit",
+                      "audit": {
+                        "device_endpoint": "[redacted]"
+                      }
+                    },
+                    "kind": "admitted"
+                  }
+                }
+              },
+              "payload_schema": "actingcommand.payload.scheduler.v3",
+              "schema_version": "actingcommand.event.v3",
+              "sensitivity": "sensitive",
+              "sequence": 41,
+              "severity": "info",
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "changes",
+                "lab"
+              ]
+            },
+            {
+              "artifacts": [],
+              "event_id": "<EVENT_ID>",
+              "event_type": "lease.transition_intent",
+              "links": {
+                "action_id": "<ACTION_ID>",
+                "correlation_id": "<CORRELATION_ID>",
+                "instance_id": "<INSTANCE_ID>",
+                "lease_id": "<LEASE_ID>",
+                "request_id": "<REQUEST_ID>"
+              },
+              "origin": {
+                "actor": "scheduler",
+                "module": "scheduler",
+                "source": "scheduler"
+              },
+              "payload": {
+                "detail": "full",
+                "payload": {
+                  "family": "lease",
+                  "payload": {
+                    "data": {
+                      "action": "lease.renew",
+                      "audit": {
+                        "device_endpoint": "[redacted]"
+                      }
+                    },
+                    "kind": "transition_intent"
+                  }
+                }
+              },
+              "payload_schema": "actingcommand.payload.lease.v3",
+              "schema_version": "actingcommand.event.v3",
+              "sensitivity": "sensitive",
+              "sequence": 42,
+              "severity": "info",
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "changes",
+                "lab"
+              ]
+            },
+            {
+              "artifacts": [],
+              "event_id": "<EVENT_ID>",
+              "event_type": "lease.renewed",
+              "links": {
+                "action_id": "<ACTION_ID>",
+                "correlation_id": "<CORRELATION_ID>",
+                "instance_id": "<INSTANCE_ID>",
+                "lease_id": "<LEASE_ID>",
+                "request_id": "<REQUEST_ID>"
+              },
+              "origin": {
+                "actor": "scheduler",
+                "module": "scheduler",
+                "source": "scheduler"
+              },
+              "payload": {
+                "detail": "full",
+                "payload": {
+                  "family": "lease",
+                  "payload": {
+                    "data": {
+                      "action": "lease.renew",
+                      "audit": {
+                        "device_endpoint": "[redacted]"
+                      },
+                      "effect_disposition": "performed"
+                    },
+                    "kind": "renewed"
+                  }
+                }
+              },
+              "payload_schema": "actingcommand.payload.lease.v3",
+              "schema_version": "actingcommand.event.v3",
+              "sensitivity": "sensitive",
+              "sequence": 43,
+              "severity": "info",
+              "timestamp_unix_ms": "<TIME>",
+              "views": [
+                "events",
+                "changes",
+                "lab"
+              ]
+            },
+            {
               "artifacts": [
                 {
                   "artifact_id": "<ARTIFACT_ID>",
@@ -2157,7 +2286,7 @@
               "payload_schema": "actingcommand.payload.artifact.v1",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "secret",
-              "sequence": 41,
+              "sequence": 44,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -2214,7 +2343,7 @@
               "payload_schema": "actingcommand.payload.artifact.v1",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "secret",
-              "sequence": 42,
+              "sequence": 45,
               "severity": "success",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -2322,7 +2451,7 @@
               "payload_schema": "actingcommand.payload.capture.v1",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "internal",
-              "sequence": 43,
+              "sequence": 46,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -3871,7 +4000,7 @@
               "payload_schema": "actingcommand.payload.task.v3",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "public",
-              "sequence": 44,
+              "sequence": 47,
               "severity": "success",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -3913,7 +4042,7 @@
               "payload_schema": "actingcommand.payload.scheduler.v3",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "sensitive",
-              "sequence": 45,
+              "sequence": 48,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -3958,7 +4087,7 @@
               "payload_schema": "actingcommand.payload.lease.v3",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "sensitive",
-              "sequence": 46,
+              "sequence": 49,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -4004,7 +4133,7 @@
               "payload_schema": "actingcommand.payload.lease.v3",
               "schema_version": "actingcommand.event.v3",
               "sensitivity": "sensitive",
-              "sequence": 47,
+              "sequence": 50,
               "severity": "info",
               "timestamp_unix_ms": "<TIME>",
               "views": [
@@ -4038,7 +4167,7 @@
             "state": "completed",
             "terminal": {
               "event_id": "<EVENT_ID>",
-              "sequence": 44
+              "sequence": 47
             }
           }
         }
