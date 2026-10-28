@@ -314,9 +314,22 @@ dispatch intent and through its execution record. `--deadline-ms` is the caller'
 counted from the command's start: the read stops there, and the report then answers with what it
 read and the warning `ledger_read_incomplete` (before the selected records are read: no rows and
 `through_sequence` `null`; a run left unread: its `step` is `null` and its `frames` comparison is
-`unavailable` with `ledger_read_budget_exceeded`). Without `--deadline-ms` only the index
-selection bounds it. `actingctl diagnose` and `ac_diagnose` pass their call's deadline less 2 s
-and end the child still running at the deadline (`suspended_report_timeout`). Since
+`unavailable` with `ledger_read_budget_exceeded`). `actingctl diagnose` and `ac_diagnose` pass
+their call's deadline less 2 s and end the child still running at the deadline
+(`suspended_report_timeout`). RL-1c follow-ups (#411 L1, L2 and review 2 L1; since 0.12.25):
+- without `--deadline-ms` (a run by hand) the read's deadline is 60 s from the command's start;
+- each run shown is read once, by one range read that is itself checked against the deadline
+  (its extent check, every row it reads and the head row), so a run whose read the deadline
+  passes in is left unread as above instead of running on until the caller ends the child;
+- the walk for the latest `config.subsystems` fact is read after every other row of the
+  selection and reads at most 32 768 `runtime.fact_recorded` rows; when it ends there or at the
+  deadline before it found the fact, `daemon_started_at_unix_ms` is `null` with
+  `daemon_start_unknown` and `ledger_read_incomplete`, and every other part of the report answers
+  from what was read;
+- the 60 s, the 2 s kept back by `diagnose` and the 32 768 rows are tunables that become
+  configuration keys at the next configuration revision.
+
+Since
 Workflow #336 PKG-S3 it reads the packages a paused pair names, read-only, to measure their
 content hashes now, each package once per report. Nothing is written.
 

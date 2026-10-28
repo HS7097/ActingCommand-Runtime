@@ -198,7 +198,7 @@ those of the same page with its groups (only the response-byte limit, which then
 counts no group, may let it hold more rows). Absent, the member is `false`: the
 request serializes and the page answers as before. No outcome code is added. The
 run listing and the run status reads of `runtime-client` (`latest_runs`,
-`recent_runs`, `list_contained_runs`, `contained_run_status` and the overview's
+`list_contained_runs`, `contained_run_status` and the overview's
 run block built on them), which never read the groups, ask for every page so.
 So does every page of `actingctl diagnose` and `ac_diagnose` (#422 QR-2b): its
 run listing (`list_window_runs`), its runs' status, dispatch intent and relayed

@@ -164,7 +164,6 @@ actingcommand_contract::outcome_codes! {
         RuntimeCaptureSequenceTimeoutOverflow => "runtime_capture_sequence_timeout_overflow": error / none,
         RunStatusReadIncomplete => "run_status_read_incomplete": error / none,
         RecentRunsLimitInvalid => "recent_runs_limit_invalid": error / none,
-        RecentRunsBudgetInvalid => "recent_runs_budget_invalid": error / none,
         RunStatusIdentityMismatch => "run_status_identity_mismatch": error / none,
         RunStatusIdentityAmbiguous => "run_status_identity_ambiguous": error / none,
         RunStatusOriginInconsistent => "run_status_origin_inconsistent": error / none,

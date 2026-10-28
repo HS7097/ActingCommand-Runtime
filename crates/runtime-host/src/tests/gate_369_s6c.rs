@@ -837,23 +837,18 @@ fn s6c_a_start_whose_provider_step_fails_cancels_the_queued_startup_claim() {
         RuntimeReceiptState::Completed,
         "{started:?}"
     );
-    // #411 A50: a paused instance's start queues no startup package and says why; the claim
-    // this test needs waiting behind the pause is queued through the test hook.
+    // #411 A71: a paused instance's start queues its startup package behind the pause and says
+    // which pause holds it.
     assert!(matches!(
         started.result(),
         Some(RuntimeResult::EmulatorInstanceControlled {
-            startup_package: StartupPackageDisposition::None,
+            startup_package: StartupPackageDisposition::Scheduled,
             startup_package_withheld: Some(
                 actingcommand_contract::StartupPackageWithheld::InstancePaused
             ),
             ..
         })
     ));
-    assert_eq!(
-        host.schedule_startup_package_for_test(FIRST)
-            .expect("queue the startup claim behind the pause"),
-        StartupPackageDisposition::Scheduled
-    );
     assert_eq!(
         host.instance_claims_for_test(FIRST).expect("claims"),
         (None, vec![ClaimKind::StartupPackage]),

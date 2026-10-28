@@ -471,6 +471,9 @@ mod gate_rl1c_fix1;
 // ROUT-L RL-1c fix round 2 (#411; work order `rd-1027/brief-rl1c-fix2.md`, re-review M2 and L3):
 // the suspended report's smaller selection, its deadline path and a run it leaves unread.
 mod gate_rl1c_fix2;
+// ROUT-L RL-1c follow-ups (#411 L1 and review 2 L1; 0.12 wave 1 slice W1-9): a run's read within
+// the deadline, and the bounded walk for the daemon start that leaves the rest answered.
+mod gate_rl1c_follow;
 mod home_entry;
 mod input;
 mod input_failure;

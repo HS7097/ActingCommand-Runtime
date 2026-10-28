@@ -215,11 +215,24 @@ pub(super) fn ladder_setup_with_package(
     root: &Path,
     package: &[u8],
 ) -> (RuntimeHostConfig, ContainedTaskRequest) {
+    ladder_setup_with_packages(
+        root,
+        package,
+        &neutral_non_home_start_contained_task_package(true),
+    )
+}
+
+/// `ladder_setup_with_package` with `return_home` as the scheduled run's bound recovery package,
+/// the package the ladder's return-home rung runs (#411 A56: one whose entry lists a page).
+pub(super) fn ladder_setup_with_packages(
+    root: &Path,
+    package: &[u8],
+    return_home: &[u8],
+) -> (RuntimeHostConfig, ContainedTaskRequest) {
     let package_path = root.join("physical-scheduled-task.zip");
     fs::write(&package_path, package).expect("write scheduled package");
-    let return_home = neutral_non_home_start_contained_task_package(true);
     let return_home_path = root.join("return-home.zip");
-    fs::write(&return_home_path, &return_home).expect("write return-home package");
+    fs::write(&return_home_path, return_home).expect("write return-home package");
     let startup = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
         .expect("startup package");
     let host_config = RuntimeHostConfig::new(root, b"runtime-host-test-salt")
@@ -1448,15 +1461,9 @@ fn a_start_under_a_restored_pause_leaves_no_startup_run_until_resume() {
         RuntimeReceiptState::Completed,
         "{receipt:?}"
     );
-    // #411 A50: a paused instance's start queues no startup package and says why; the claim
-    // this test needs waiting behind the restored pause is queued through the test hook.
+    // #411 A71: a paused instance's start queues its startup package behind the pause.
     assert_eq!(
         controlled_startup(&receipt),
-        StartupPackageDisposition::None
-    );
-    assert_eq!(
-        host.schedule_startup_package_for_test(STARTUP_ALIAS)
-            .expect("queue the startup claim behind the pause"),
         StartupPackageDisposition::Scheduled
     );
     // The control released its key; the startup claim waits, held back by the pause, also
@@ -1501,15 +1508,9 @@ fn after_a_restart_under_a_pause_the_resume_reconnects_first_then_the_startup_ru
         RuntimeReceiptState::Completed,
         "{restarted:?}"
     );
-    // #411 A50: a paused instance's start or restart queues no startup package and says why;
-    // the claim this test needs waiting behind the pause is queued through the test hook.
+    // #411 A71: a paused instance's restart queues its startup package behind the pause.
     assert_eq!(
         controlled_startup(&restarted),
-        StartupPackageDisposition::None
-    );
-    assert_eq!(
-        host.schedule_startup_package_for_test(STARTUP_ALIAS)
-            .expect("queue the startup claim behind the pause"),
         StartupPackageDisposition::Scheduled
     );
     assert_eq!(
@@ -1722,15 +1723,9 @@ fn a_stop_under_a_pause_cancels_the_queued_startup_claim_so_the_resume_runs_none
         RuntimeReceiptState::Completed,
         "{started:?}"
     );
-    // #411 A50: a paused instance's start or restart queues no startup package and says why;
-    // the claim this test needs waiting behind the pause is queued through the test hook.
+    // #411 A71: a paused instance's start queues its startup package behind the pause.
     assert_eq!(
         controlled_startup(&started),
-        StartupPackageDisposition::None
-    );
-    assert_eq!(
-        host.schedule_startup_package_for_test(STARTUP_ALIAS)
-            .expect("queue the startup claim behind the pause"),
         StartupPackageDisposition::Scheduled
     );
     assert_eq!(
@@ -1813,15 +1808,9 @@ fn a_resume_whose_reconnect_fails_hands_its_key_to_the_ladder_ahead_of_a_queued_
         RuntimeReceiptState::Completed,
         "{started:?}"
     );
-    // #411 A50: a paused instance's start or restart queues no startup package and says why;
-    // the claim this test needs waiting behind the pause is queued through the test hook.
+    // #411 A71: a paused instance's start queues its startup package behind the pause.
     assert_eq!(
         controlled_startup(&started),
-        StartupPackageDisposition::None
-    );
-    assert_eq!(
-        host.schedule_startup_package_for_test(STARTUP_ALIAS)
-            .expect("queue the startup claim behind the pause"),
         StartupPackageDisposition::Scheduled
     );
     assert_eq!(

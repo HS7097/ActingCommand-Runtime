@@ -889,13 +889,30 @@ fn qr2b_t5_an_answer_without_a_slow_section_is_as_before() {
         every.incomplete_sections
     );
 
-    // One instance: `runs` as `recent_runs` gave them.
+    // One instance: `runs` as `recent_runs` gave them. #422 QR-2b L4 (W1-9): `recent_runs` is
+    // retired; the first page of `list_contained_runs` on the instance lists and reads the same
+    // 10 most recent runs.
     let (one, _) = unhurried(&client, &runtime, Some(ALIAS_A));
     let before = client
-        .recent_runs(ledger.instance_a, WINDOW_START_UNIX_MS, 10)
+        .list_contained_runs(
+            WINDOW_START_UNIX_MS,
+            None,
+            &RunListFilter {
+                instance_id: Some(ledger.instance_a),
+                ..RunListFilter::default()
+            },
+            None,
+            10,
+            unreached_deadline(),
+        )
         .expect("the recent runs of before");
     assert!(!before.incomplete, "setup: {before:?}");
-    assert_eq!(one.runs, failed_or_open(&before.runs), "runs of {ALIAS_A}");
+    let before_runs = before
+        .runs
+        .into_iter()
+        .map(|listed| listed.status)
+        .collect::<Vec<_>>();
+    assert_eq!(one.runs, failed_or_open(&before_runs), "runs of {ALIAS_A}");
     assert_eq!(
         one.runs
             .iter()
@@ -926,7 +943,7 @@ fn qr2b_t5_an_answer_without_a_slow_section_is_as_before() {
         .map(|run| run.request)
         .collect::<BTreeSet<_>>();
     assert!(
-        before.runs.iter().any(|run| run
+        before_runs.iter().any(|run| run
             .request_id
             .is_some_and(|request| settled.contains(&request))),
         "setup: no settled run among {ALIAS_A}'s 10 most recent"

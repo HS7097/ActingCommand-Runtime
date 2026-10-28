@@ -10,10 +10,11 @@
 //! in-memory ledger.
 
 use super::{
-    RejectProjectionSecrets, client_with_timeout, scripted_runtime, write_scripted_result,
+    RejectProjectionSecrets, client_with_timeout, scripted_runtime, unreached_deadline,
+    write_scripted_result,
 };
-use crate::ContainedRunState;
 use crate::ipc::DEFAULT_RUNTIME_MAX_FRAME_BYTES;
+use crate::{ContainedRunState, RunListFilter};
 use actingcommand_contract::{
     AuditInput, EventActor, EventDraft, EventLinksDraft, EventOrigin, EventQuery, EventSeverity,
     EventSource, IdentifierIssuer, InstanceId, OriginModule, OwnerEpoch, ProjectedEvent,
@@ -189,10 +190,23 @@ fn a6_recent_runs_of_an_instance_with_more_entry_facts_than_one_read_keeps_come_
         serve_ledger(listener, owner_epoch, &events);
     });
     let client = client_with_timeout(&root, IO_TIMEOUT);
-    // ac_overview reads the newest run of each instance, ac_diagnose its 10 most recent.
+    // The newest run of the instance and its 10 most recent. #422 QR-2b L4 (W1-9): read through
+    // `list_contained_runs` on the instance (`ac_runs`), which lists the window's runs as the
+    // retired `recent_runs` did and reads each run the same way.
+    let filter = RunListFilter {
+        instance_id: Some(instance),
+        ..RunListFilter::default()
+    };
     for limit in [1, 10] {
         let recent = client
-            .recent_runs(instance, SINCE_UNIX_MS, limit)
+            .list_contained_runs(
+                SINCE_UNIX_MS,
+                None,
+                &filter,
+                None,
+                limit,
+                unreached_deadline(),
+            )
             .unwrap_or_else(|error| {
                 panic!(
                     "the recent runs (limit {limit}) of an instance with {RUNS} runs in the window: {error}"
@@ -206,7 +220,7 @@ fn a6_recent_runs_of_an_instance_with_more_entry_facts_than_one_read_keeps_come_
             recent
                 .runs
                 .iter()
-                .map(|run| (run.request_id, run.state))
+                .map(|run| (run.status.request_id, run.status.state))
                 .collect::<Vec<_>>(),
             newest[..limit].to_vec(),
             "the recent runs (limit {limit}) are not the instance's newest runs, newest first"

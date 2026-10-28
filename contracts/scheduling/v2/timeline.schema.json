@@ -38,6 +38,12 @@
           "maxItems": 128,
           "uniqueItems": true,
           "items": { "$ref": "./common.schema.json#/$defs/identifier" }
+        },
+        "excludes_fact_prefixes": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": { "$ref": "./common.schema.json#/$defs/identifier" }
         }
       },
       "additionalProperties": false

@@ -55,6 +55,10 @@ mod gate_inst1;
 // Test-only: ROUT-L RL-1c (#411), check-config and `suspended` in composer mode.
 #[cfg(test)]
 mod gate_rl1c;
+// Test-only: ROUT-L RL-1c follow-up (#411 L2; 0.12 wave 1 W1-9), `suspended` by hand reads under
+// a default deadline.
+#[cfg(test)]
+mod gate_rl1c_follow;
 // Test-only: Workflow #427-A, the per-instance lanes of the policy round (on the APPS-I7 cycle
 // harness of gate_382_a4_cycle).
 #[cfg(test)]
