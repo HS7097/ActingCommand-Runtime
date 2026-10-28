@@ -10,7 +10,8 @@
 //! `recovery_rung_screen_changing`; the ladder holds `busy.screen.recheck_ms` and probes again,
 //! runs the return-home rung again once the screen has settled, and at `busy.screen.max_wait_ms`
 //! does what `busy.screen.on_exhausted` says. A probe that cannot capture climbs on as before,
-//! its capture failure recorded.
+//! its capture failure recorded. #411 A56 (P10): a recheck whose last probe frame shows a page
+//! of the return-home package's entry runs that package again though the screen still changes.
 //!
 //! The fixture is the ladder fixture's policy run (`ladder_setup`) on a manual Runtime clock
 //! that only the test and the kernel's waits move: a hold ends only when the test moves the
@@ -24,8 +25,8 @@
 
 use super::gate_387_d1c::ladder_manifest;
 use super::instance_workers::{
-    admit_ladder_run, all_events, ladder_end_code, ladder_finished, ladder_setup, phases,
-    wait_for_ladder_end, wait_until,
+    admit_ladder_run, all_events, ladder_end_code, ladder_finished, ladder_setup,
+    ladder_setup_with_packages, phases, wait_for_ladder_end, wait_until,
 };
 use super::*;
 use crate::codes::HostCode;
@@ -97,8 +98,25 @@ fn screen_config() -> Value {
 /// `movement` (still when `None`): the scheduled run has failed and its ladder climbs; its
 /// return-home run fails `contained_task_page_unknown`.
 fn settle_ladder(screen: Value, movement: Option<Movement>) -> SettleLadder {
+    settle_ladder_with(screen, movement, None)
+}
+
+/// `settle_ladder` whose ladder's return-home rung runs `return_home` when given (#411 A56), the
+/// fixture's return-home package otherwise.
+fn settle_ladder_with(
+    screen: Value,
+    movement: Option<Movement>,
+    return_home: Option<&[u8]>,
+) -> SettleLadder {
     let root = TempDir::new().expect("tempdir");
-    let (host_config, request) = ladder_setup(root.path());
+    let (host_config, request) = match return_home {
+        Some(return_home) => ladder_setup_with_packages(
+            root.path(),
+            &neutral_contained_task_package(true),
+            return_home,
+        ),
+        None => ladder_setup(root.path()),
+    };
     let state = Arc::new(FakeState::default());
     state.physical_task_geometry.store(true, Ordering::Release);
     let moving = Arc::new(AtomicBool::new(movement.is_some()));
@@ -699,4 +717,181 @@ fn a35_t6_the_gate_compares_the_frame_change_with_the_configured_threshold_inclu
         }
         drop(ladder.root);
     }
+}
+
+/// #411 A56 (P10): the return-home package of these rows lists a page in its entry: the
+/// scheduled package itself (`entry_page` `home`, its route from `home` to `terminal`), where
+/// the fixture's own return-home package declares none.
+fn entry_return_home() -> Vec<u8> {
+    neutral_contained_task_package(true)
+}
+
+/// #411 A56: the `runtime.failed` records written after `after` (a record's sequence): a
+/// recheck's comparison that could not be made would be one.
+fn failures_after(events: &[PersistedEvent], after: u64) -> usize {
+    events
+        .iter()
+        .filter(|event| event.sequence() > after && event.event_type() == EventType::RuntimeFailed)
+        .count()
+}
+
+/// #411 A56 (P10; Friday review item 8; #411 comment 6355995369, fix 1): the return-home run
+/// fails on an unknown, changing screen and the ladder holds. The screen then shows the
+/// return-home package's entry page while its second row keeps moving (an animated page).
+/// The recheck's probe is still changing, but its last frame shows that entry page: the
+/// return-home rung runs again after the one hold and recovers. One changing verdict only (the
+/// recheck records none), `rungs_tried` 1, a probe before the hold and one after it, no
+/// comparison failure and no application stop.
+#[test]
+fn a56_t1_a_recheck_that_recognises_an_entry_page_reruns_return_home_on_a_changing_screen() {
+    let ladder = settle_ladder_with(screen_config(), Some(MOVING), Some(&entry_return_home()));
+    wait_for(&ladder.host, "the screen-changing record", |events| {
+        changing_records(events) >= 1
+    });
+    let events = all_events(&ladder.host);
+    let records = rung_records(&events);
+    let [held] = records.as_slice() else {
+        panic!("one rung record so far");
+    };
+    assert!(is_changing(held), "the first probe makes no comparison");
+    assert!(ladder_finished(&events).is_none(), "the ladder holds");
+    let held_at = held.event.sequence();
+
+    // The screen shows the return-home package's entry page and still moves; the package's tap
+    // leads to its target page.
+    ladder.state.unknown_capture.store(false, Ordering::Release);
+    ladder
+        .state
+        .transition_capture_after_input
+        .store(true, Ordering::Release);
+    assert!(
+        ladder.moving.load(Ordering::Acquire),
+        "the screen still moves"
+    );
+    ladder.clock.advance(RECHECK_MS);
+    wait_for(
+        &ladder.host,
+        "the ladder's end, or a second changing verdict",
+        |events| ladder_finished(events).is_some() || changing_records(events) > 1,
+    );
+    let events = all_events(&ladder.host);
+    assert_eq!(
+        changing_records(&events),
+        1,
+        "a recognised entry page is not held again"
+    );
+    wait_for_ladder_end(&ladder.host, POLICY_INSTANCE_ALIAS);
+
+    let events = all_events(&ladder.host);
+    let records = rung_records(&events);
+    let [changing, recovered] = records.as_slice() else {
+        panic!(
+            "two rung records: {:?}",
+            records
+                .iter()
+                .map(|record| (record.rung, record.rung_result, code_of(record)))
+                .collect::<Vec<_>>()
+        );
+    };
+    assert!(is_changing(changing));
+    assert_eq!(
+        (recovered.rung, recovered.rung_result),
+        (RecoveryRung::ReturnHome, RecoveryRungOutcome::Recovered),
+        "the return-home rung ran again and recovered"
+    );
+    assert!(recovered.run_id.is_some(), "a run of its own");
+    assert_ne!(recovered.run_id, changing.run_id, "a new return-home run");
+    assert!(
+        recovered.event.timestamp_unix_ms() - changing.event.timestamp_unix_ms() >= RECHECK_MS,
+        "the rerun came after the hold"
+    );
+    let (_, ladder_result, rungs_tried) = ladder_finished(&events).expect("the ladder's end");
+    assert_eq!(
+        (ladder_result, rungs_tried),
+        (RecoveryLadderOutcome::Recovered, 1)
+    );
+    assert_eq!(
+        probe_records(&events, EventType::CaptureCompleted).len() as u64,
+        2 * PROBE_FRAMES,
+        "a probe before the hold and one after it"
+    );
+    assert_eq!(
+        failures_after(&events, held_at),
+        0,
+        "the comparison was made"
+    );
+    assert_eq!(
+        application_commands(&ladder.state),
+        0,
+        "no application stop"
+    );
+    assert!(ladder.host.fatal_error().expect("runtime health").is_none());
+    ladder.host.close().expect("close host");
+    drop(ladder.root);
+}
+
+/// #411 A56 (P10): the same return-home package (its entry lists `home`), but the screen stays
+/// unknown and keeps changing. The recheck's last frame shows no page of the package's entry,
+/// so the recheck holds as before A56: a second changing verdict of the same return-home run
+/// (no run between the two), held since the first one, with its next wait; no comparison
+/// failure, the ladder still holding and no application stop.
+#[test]
+fn a56_t2_an_unrecognised_changing_screen_still_holds_at_the_recheck() {
+    let ladder = settle_ladder_with(screen_config(), Some(MOVING), Some(&entry_return_home()));
+    wait_for(&ladder.host, "the screen-changing record", |events| {
+        changing_records(events) >= 1
+    });
+    ladder.clock.advance(RECHECK_MS);
+    wait_for(
+        &ladder.host,
+        "another rung record, or the ladder's end",
+        |events| rung_records(events).len() > 1 || ladder_finished(events).is_some(),
+    );
+    let events = all_events(&ladder.host);
+    let records = rung_records(&events);
+    let [first, second] = records.as_slice() else {
+        panic!(
+            "two rung records: {:?}",
+            records
+                .iter()
+                .map(|record| (record.rung, record.rung_result, code_of(record)))
+                .collect::<Vec<_>>()
+        );
+    };
+    assert!(
+        is_changing(first) && is_changing(second),
+        "the unrecognised changing screen is held again"
+    );
+    assert_eq!(
+        first.run_id, second.run_id,
+        "no return-home run between the two verdicts"
+    );
+    let outcome = second
+        .outcome
+        .as_ref()
+        .expect("the second changing outcome");
+    assert!(
+        millis(outcome, "held_ms") >= RECHECK_MS,
+        "held since the first verdict: {outcome:?}"
+    );
+    assert!(
+        value(outcome, "retry_after_ms").as_u64().is_some(),
+        "the ladder holds again: {outcome:?}"
+    );
+    assert_eq!(
+        failures_after(&events, first.event.sequence()),
+        0,
+        "the comparison was made"
+    );
+    assert!(
+        ladder_finished(&events).is_none(),
+        "the ladder holds the instance"
+    );
+    assert_eq!(
+        application_commands(&ladder.state),
+        0,
+        "no application stop"
+    );
+    close_while_holding(ladder.host);
+    drop(ladder.root);
 }

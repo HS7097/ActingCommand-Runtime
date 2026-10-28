@@ -2469,3 +2469,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_427b::gate_427b_the_max_key_binds_in_observe_pace_and_full_and_the_explanation_says_the_numbers",
 ]
 incident = ["#427-B"]
+
+# #411 A56 (P10, 0.12.25; brief rd-1028/brief-wave1.md W1-3; #411 comments 6355540927 and 6355995369 fix 1; Friday review item 8; contracts/emulator-control.md, Entry pages on a recheck; no persisted ledger shape): on a recheck of the settle gate (a probe after a hold), a changing probe whose last frame shows a page of the return-home package's entry (entry_page home) runs the return-home rung again at once, though the screen still moves: one changing verdict only, the rerun after the hold recovers with rungs_tried 1, no comparison failure and no application stop; an unknown changing frame with the same package still holds as before: a second changing verdict of the same return-home run, held since the first one, with its next wait, and no application stop
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a35::a56_t1_a_recheck_that_recognises_an_entry_page_reruns_return_home_on_a_changing_screen",
+    "actingcommand-runtime-host::lib::tests::gate_411_a35::a56_t2_an_unrecognised_changing_screen_still_holds_at_the_recheck",
+]
+incident = ["#411 A56"]
