@@ -578,6 +578,14 @@ a proof are Unrecorded. A query with a view is refused
 (`ledger_selection_query_unsupported`). `None` means the root holds no SQLite
 ledger: a segment root is read whole by `open_evidence`, as before. `open`,
 `chain` and `export` keep the full verification; `chain` is the full check.
+`GlobalLedger::open_range_within(root, request, deadline)` (RL-1c follow-up, #411 L1; since
+0.12.25) is `open_range` whose read is checked against `deadline` row by row, its extent check
+and head row included, as `open_selected_within` checks its own; a read the deadline passes in
+is the request error `ledger_read_budget_exceeded` and keeps nothing (`actingd suspended` reads
+each run it shows so). `open_selected_within`'s `newest` walks (RL-1c fix 2) are read after
+every other row of the selection, and `newest_max_rows` bounds the rows each walk reads (since
+0.12.25): a walk that reads them without a match, or that the deadline stops, answers no row,
+`newest_complete()` is false, and the selection keeps every other row it read.
 
 Only the Ledger can construct its private `LedgerEventMetadata`. It retains the
 typed envelope/payload and structurally valid `ProjectedArtifactReference` values

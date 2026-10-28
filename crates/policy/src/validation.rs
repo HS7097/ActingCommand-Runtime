@@ -20,7 +20,7 @@ use crate::{
     MIN_UTC_OFFSET_MINUTES, MetricRef, MissedSlotRule, ObservationRef, PoolCapacity,
     PoolProjection, PoolSpec, PoolValuation, PredicateSpec, ProjectionComparand,
     ResourceEffectSpec, SCHEDULING_SCHEMA_VERSION, SCHEDULING_SCHEMA_VERSION_V2, ScopeSelector,
-    TaskSpec, TimelineDocument,
+    TaskSpec, TimelineDocument, TimelineEvent,
 };
 
 pub(crate) struct CatalogSourceMaps<'a> {
@@ -2077,6 +2077,67 @@ fn validate_timeline(
                 descriptor,
                 diagnostics,
             );
+        }
+        validate_excluded_prefixes(
+            event,
+            &bundle.timeline.schema_version,
+            &path,
+            map,
+            descriptor,
+            diagnostics,
+        );
+    }
+}
+
+/// Workflow #411 P19: a timeline event's `excludes_fact_prefixes` is V2 only (`unknown_field`
+/// at the member in a V1 document); it holds at most as many prefixes as
+/// `invalidates_fact_prefixes` may, each an identifier below one of the event's invalidated
+/// prefixes (`dangling_reference` at the entry otherwise: it would exclude nothing).
+fn validate_excluded_prefixes(
+    event: &TimelineEvent,
+    schema_version: &str,
+    path: &str,
+    map: &SourceMap,
+    descriptor: Option<(&str, u64)>,
+    diagnostics: &mut Vec<CatalogDiagnostic>,
+) {
+    let Some(excluded) = &event.excludes_fact_prefixes else {
+        return;
+    };
+    let member = format!("{path}/excludes_fact_prefixes");
+    if schema_version != SCHEDULING_SCHEMA_VERSION_V2 {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::UnknownField,
+            member,
+            "timeline excludes_fact_prefixes requires actingcommand.scheduling.v2",
+            descriptor,
+        ));
+        return;
+    }
+    if excluded.len() > MAX_REFERENCES_PER_TASK {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::LimitExceeded,
+            member.clone(),
+            format!("excluded fact prefix count exceeds {MAX_REFERENCES_PER_TASK}"),
+            descriptor,
+        ));
+    }
+    for (prefix_index, prefix) in excluded.iter().enumerate() {
+        let entry = format!("{member}/{prefix_index}");
+        validate_identifier(map, &entry, prefix, descriptor, diagnostics);
+        if !event
+            .invalidates_fact_prefixes
+            .iter()
+            .any(|invalidated| prefix.starts_with(invalidated.as_str()))
+        {
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::DanglingReference,
+                entry,
+                format!(
+                    "excluded fact prefix `{prefix}` lies below none of the event's invalidated prefixes"
+                ),
+                descriptor,
+            ));
         }
     }
 }

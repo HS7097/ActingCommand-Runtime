@@ -215,11 +215,24 @@ pub(super) fn ladder_setup_with_package(
     root: &Path,
     package: &[u8],
 ) -> (RuntimeHostConfig, ContainedTaskRequest) {
+    ladder_setup_with_packages(
+        root,
+        package,
+        &neutral_non_home_start_contained_task_package(true),
+    )
+}
+
+/// `ladder_setup_with_package` with `return_home` as the scheduled run's bound recovery package,
+/// the package the ladder's return-home rung runs (#411 A56: one whose entry lists a page).
+pub(super) fn ladder_setup_with_packages(
+    root: &Path,
+    package: &[u8],
+    return_home: &[u8],
+) -> (RuntimeHostConfig, ContainedTaskRequest) {
     let package_path = root.join("physical-scheduled-task.zip");
     fs::write(&package_path, package).expect("write scheduled package");
-    let return_home = neutral_non_home_start_contained_task_package(true);
     let return_home_path = root.join("return-home.zip");
-    fs::write(&return_home_path, &return_home).expect("write return-home package");
+    fs::write(&return_home_path, return_home).expect("write return-home package");
     let startup = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
         .expect("startup package");
     let host_config = RuntimeHostConfig::new(root, b"runtime-host-test-salt")

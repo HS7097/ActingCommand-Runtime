@@ -3583,6 +3583,11 @@ pub(super) struct SelectedRead {
     pub(super) latest_time_unix_ms: Option<u64>,
     /// The newest matching row of each `newest` query, in their order.
     pub(super) newest: Vec<Option<LedgerEventMetadata>>,
+    /// RL-1c follow-up (#411 review 2 L1, W1-9): false when a newest-first walk ended at its
+    /// most rows or at the deadline before it found its row or the type's oldest row.
+    pub(super) newest_complete: bool,
+    /// The deadline stopped a newest-first walk; every other row was read before it.
+    pub(super) deadline_passed: bool,
 }
 
 /// Workflow #375 R375-3: in one read transaction, the keyed meta row, the contiguity of the
@@ -3738,18 +3743,49 @@ fn read_selected_rows(
     // within the same budget; only the rows kept count among the rows held.
     let mut bytes = reader.bytes;
     let mut held = metadata.len();
-    let mut newest = Vec::with_capacity(extras.newest.len());
-    for query in &extras.newest {
-        let found = read_newest(database, connection, query, head, budget, &mut bytes, held)?;
-        held += usize::from(found.is_some());
-        newest.push(found);
-    }
+    // RL-1c follow-up (#411 review 2 L1, W1-9): the latest time is read before the newest-first
+    // walks, which are read last, so a walk its deadline stops leaves every other row read.
     let latest_time_unix_ms = if extras.latest_time && head != 0 {
         read_latest_time(database, connection, budget, &mut bytes, held)?
     } else {
         None
     };
-    check_read_budget(budget, bytes, held)?;
+    let mut newest = Vec::with_capacity(extras.newest.len());
+    let mut newest_complete = true;
+    let mut deadline_passed = false;
+    for query in &extras.newest {
+        if deadline_passed {
+            newest.push(None);
+            continue;
+        }
+        let mut walker = RowReader::new(database, connection, budget);
+        walker.bytes = bytes;
+        let walked = read_newest(&mut walker, query, head, held, extras.newest_max_rows);
+        bytes = walker.bytes;
+        match walked {
+            Ok(NewestRead::Found(found)) => {
+                held += 1;
+                newest.push(Some(*found));
+            }
+            Ok(NewestRead::Absent) => newest.push(None),
+            Ok(NewestRead::Stopped) => {
+                newest_complete = false;
+                newest.push(None);
+            }
+            // A walk its deadline stopped answers no row; the rows read before it stay read.
+            Err(error) if deadline_stopped(&error, budget) => {
+                newest_complete = false;
+                deadline_passed = true;
+                newest.push(None);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    // The deadline has passed once a walk stopped there; the rows and bytes held were checked
+    // as each was read.
+    if !deadline_passed {
+        check_read_budget(budget, bytes, held)?;
+    }
     metadata.truncate(selected_count);
     Ok(SelectedRead {
         events: metadata,
@@ -3757,7 +3793,27 @@ fn read_selected_rows(
         head_time_unix_ms,
         latest_time_unix_ms,
         newest,
+        newest_complete,
+        deadline_passed,
     })
+}
+
+/// RL-1c follow-up (#411 review 2 L1, W1-9): how one newest-first walk ended.
+enum NewestRead {
+    /// The newest matching row (boxed: the other variants carry nothing).
+    Found(Box<LedgerEventMetadata>),
+    /// No row of the type matches, down to its oldest row.
+    Absent,
+    /// The walk read its most rows (`newest_max_rows`) and none matched.
+    Stopped,
+}
+
+/// Whether `error` is a budget stop at `budget`'s deadline (a walk read past it), not at its
+/// most rows or bytes.
+fn deadline_stopped(error: &GlobalLedgerError, budget: ReadBudget) -> bool {
+    !error.is_fatal()
+        && error.code() == LedgerCode::LedgerReadBudgetExceeded.as_str()
+        && budget.is_some_and(|(_, _, deadline)| crate::read_deadline_passed(deadline))
 }
 
 /// Rows per statement of a newest-first read (RL-1c fix 2), as a range read's chunks.
@@ -3769,30 +3825,30 @@ const NEWEST_CHUNK_ROWS: usize = RANGE_CHUNK_ROWS;
 /// type has no older row. Each row read is authenticated on its own; the match alone is kept,
 /// with its link and artifact rows checked, so the rows read before it are never held together.
 /// `held` is the rows the read holds already; each row read counts as one more while it is read.
+/// `reader` is the walk's own, fresh for it. RL-1c follow-up (#411 review 2 L1, W1-9): the walk
+/// reads at most `max_rows` rows (`None`: every row of the type); having read them without a
+/// match it ends `Stopped`, not `Absent`.
 fn read_newest(
-    database: &RuntimeDatabase,
-    connection: &Connection,
+    reader: &mut RowReader<'_>,
     query: &EventQuery,
     head: u64,
-    budget: ReadBudget,
-    bytes: &mut u64,
     held: usize,
-) -> GlobalLedgerResult<Option<LedgerEventMetadata>> {
+    max_rows: Option<usize>,
+) -> GlobalLedgerResult<NewestRead> {
     let Some(event_type) = query.event_type else {
-        return Ok(None);
+        return Ok(NewestRead::Absent);
     };
-    let mut reader = RowReader::new(database, connection, budget);
-    reader.bytes = *bytes;
     let sql = newest_statement();
     let event_type = SqlValue::Text(views::key(event_type)?);
     let mut through = head;
     let mut found = None;
+    let mut walked = 0_usize;
     'chunks: while through > 0 {
         let rows = read_rows_bound(
-            connection,
+            reader.connection,
             &sql,
             &[event_type.clone(), SqlValue::Integer(encode(through))],
-            budget,
+            reader.budget,
             &mut reader.bytes,
             false,
         )?;
@@ -3800,6 +3856,10 @@ fn read_newest(
             break;
         }
         for row in rows {
+            if max_rows.is_some_and(|max_rows| walked >= max_rows) {
+                return Ok(NewestRead::Stopped);
+            }
+            walked += 1;
             let (event, links, artifacts) = reader.authenticate(row, held + 1)?;
             let sequence = event.sequence();
             if super::projection::query_matches_fields(query, &event) {
@@ -3809,15 +3869,13 @@ fn read_newest(
             through = sequence.saturating_sub(1);
         }
     }
-    let found = match found {
+    match found {
         Some((event, links, artifacts)) => {
-            check_row_relations(&mut reader, event.sequence(), links, artifacts)?;
-            Some(event)
+            check_row_relations(reader, event.sequence(), links, artifacts)?;
+            Ok(NewestRead::Found(Box::new(event)))
         }
-        None => None,
-    };
-    *bytes = reader.bytes;
-    Ok(found)
+        None => Ok(NewestRead::Absent),
+    }
 }
 
 /// The statement of one chunk of [`read_newest`]: the rows of a type at or below a sequence,
@@ -4226,16 +4284,20 @@ pub(super) struct RangeRead {
 /// are read too (selected by their type) and give the matching events their eviction proofs, each
 /// carrying this head. Every row is read and authenticated once, on its own, as `read_selected`
 /// reads its rows. Other rows are never read, so this read does not establish their integrity;
-/// there is no retention replay and no migrated-prefix digest.
+/// there is no retention replay and no migrated-prefix digest. RL-1c follow-up (#411 L1, W1-9):
+/// with a `budget`, every statement of the read, the extent check and the head row included, is
+/// checked against it row by row, as `read_selected` checks its own.
 pub(super) fn read_range(
     database: &RuntimeDatabase,
     request: &super::GlobalLedgerRangeRequest,
+    budget: ReadBudget,
 ) -> GlobalLedgerResult<RangeRead> {
+    check_read_budget(budget, 0, 0)?;
     let mut connection = database.connection(LedgerLocation::ReadSqliteSnapshot.location())?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Deferred)
         .map_err(|error| sql_error(error, LedgerLocation::BeginSqliteSnapshot.location()))?;
-    let read = read_range_rows(database, &transaction, request)?;
+    let read = read_range_rows(database, &transaction, request, budget)?;
     transaction
         .commit()
         .map_err(|error| sql_error(error, LedgerLocation::CloseSqliteSnapshot.location()))?;
@@ -4246,13 +4308,14 @@ fn read_range_rows(
     database: &RuntimeDatabase,
     connection: &Connection,
     request: &super::GlobalLedgerRangeRequest,
+    budget: ReadBudget,
 ) -> GlobalLedgerResult<RangeRead> {
     refuse_unsupported_format(connection)?;
     // A different view schema refuses; absent views leave the eviction rows to a table scan.
     views::installed(connection)?;
     let (head, head_hash) = authenticated_head(database, connection)?;
-    let mut reader = RowReader::new(database, connection, None);
-    verify_sequence_extent(connection, head, None, &mut reader.bytes)?;
+    let mut reader = RowReader::new(database, connection, budget);
+    verify_sequence_extent(connection, head, budget, &mut reader.bytes)?;
     // Workflow #411 A4: a test may let a writer append here; this read stays at `head`.
     #[cfg(test)]
     crate::read_count::range_head_read();
@@ -4304,7 +4367,7 @@ fn read_range_rows(
             connection,
             &format!("SELECT {EVENT_COLUMNS} FROM ledger_events WHERE sequence=?"),
             &head_value,
-            None,
+            budget,
             &mut reader.bytes,
             true,
         )?;
@@ -4319,7 +4382,7 @@ fn read_range_rows(
             connection,
             &format!("SELECT {LINK_COLUMNS} FROM ledger_links WHERE sequence=?"),
             &head_value,
-            None,
+            budget,
             &mut reader.bytes,
             false,
         )?;
@@ -4329,7 +4392,7 @@ fn read_range_rows(
                 "SELECT {ARTIFACT_COLUMNS} FROM ledger_artifacts WHERE sequence=? ORDER BY ordinal"
             ),
             &head_value,
-            None,
+            budget,
             &mut reader.bytes,
             false,
         )?;

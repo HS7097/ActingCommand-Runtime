@@ -4180,6 +4180,28 @@ impl PreparedContainedTask {
             .collect())
     }
 
+    /// #411 A56 (P10): the pages of this package's entry ([`Self::navigation_entry_pages`]: its
+    /// declared `entry_page`, one page or an entry page set, or a `linear_steps` package's first
+    /// step page) that `frame` shows. The frame goes through the display adapter's frame gate
+    /// under the game's declaration `layout` (`None` without one), as every frame the kernel
+    /// recognises, and the entry pages are evaluated on its scale frame in one scene evaluation
+    /// ([`Self::matching_pages_on_scene`]). Empty, the frame untouched, for a package whose entry
+    /// lists no page (an application entry, `any`, or no `entry_page`). A frame the gate refuses,
+    /// or an evaluation error, is its refusal.
+    pub fn entry_pages_on_frame(
+        &self,
+        frame: &Frame,
+        layout: Option<&StandardPackDisplayLayout>,
+    ) -> Result<Vec<String>, ContainedTaskError> {
+        let Some(entry) = self.navigation_entry_pages() else {
+            return Ok(Vec::new());
+        };
+        let scale = self.control.resolution.validate_frame(frame, layout)?;
+        let scene = scale.scene()?;
+        let pages = entry.iter().map(String::as_str).collect::<Vec<_>>();
+        self.matching_pages_on_scene(&scene, &pages)
+    }
+
     /// Workflow #373 NAV-5 (M-373 §5.2 item 1, §5.3 item 4): one new frame for a locate or a
     /// hop's check, of this package's resolution (the feature package's, which is the run's):
     /// captured at the `CapturePage` boundary of the window that started at `window_started`

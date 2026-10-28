@@ -99,8 +99,21 @@ const RUN_TYPES: [EventType; 6] = [
 ];
 /// The warning of a report whose ledger read ran out of its budget.
 const LEDGER_READ_INCOMPLETE: &str = "ledger_read_incomplete";
-/// A read without a caller's deadline: far enough that only `max_events` bounds it.
+/// A read without a caller's deadline (an in-process report): far enough that only
+/// `max_events` bounds it. `actingd suspended` always reads under a deadline (its
+/// `--deadline-ms`, else its default, RL-1c follow-up #411 L2). RL-1c follow-up (#411 L2, W1-9):
+/// by the tunables rule a configuration key with this default; it stays a constant until the
+/// `actingd-config` revision that adds the key (none in 0.12 wave 1).
 const NO_DEADLINE: Duration = Duration::from_secs(365 * 24 * 60 * 60);
+/// RL-1c follow-up (#411 review 2 L1, W1-9): the most `runtime.fact_recorded` rows the walk for
+/// the newest `config.subsystems` fact reads, newest first. A start records that fact once, and
+/// the Runtime records about 3.6 K fact rows a day of uptime (re-review 2 §3), so the fact of a
+/// start up to about 9 days back is found; past the bound the start is unknown
+/// (`daemon_start_unknown`) and the read incomplete (`ledger_read_incomplete`), and the rest of
+/// the report answers. Without the fact (an offline or old root) the walk ends here instead of
+/// at the ledger's first row. By the tunables rule a configuration key with this default; it
+/// stays a constant until the `actingd-config` revision that adds the key (none in 0.12 wave 1).
+pub const DAEMON_START_MAX_ROWS: usize = 32_768;
 
 /// ROUT-L RL-1c fix 1 (#411 H1): how much of the ledger `actingd suspended` may read. The report
 /// reads the record types it lists by the ledger's type index (`SELECTED_TYPES`) and a run's own
@@ -113,14 +126,19 @@ pub struct SuspendedReadBudget {
     pub deadline: Option<Instant>,
     /// The most ledger records the report holds, selected and run rows together.
     pub max_events: usize,
+    /// RL-1c follow-up (#411 review 2 L1, W1-9): the most rows the walk for the latest daemon
+    /// start's `config.subsystems` fact reads ([`DAEMON_START_MAX_ROWS`] by default).
+    pub daemon_start_rows: usize,
 }
 
 impl SuspendedReadBudget {
-    /// A read bounded by `deadline` alone.
+    /// A read bounded by `deadline` alone (and the walk for the latest daemon start by
+    /// [`DAEMON_START_MAX_ROWS`]).
     pub const fn until(deadline: Option<Instant>) -> Self {
         Self {
             deadline,
             max_events: usize::MAX,
+            daemon_start_rows: DAEMON_START_MAX_ROWS,
         }
     }
 
@@ -279,9 +297,12 @@ impl Snapshot<'_> {
         Ok(events)
     }
 
-    /// Whether the rows of `run_id` are read, reading them on first use: the rows between its
-    /// dispatch intent and its execution record (`GlobalLedger::open_range`, of that run), never
-    /// past the deadline or the most records the budget holds.
+    /// Whether the rows of `run_id` are read, reading them on first use, once: the rows between
+    /// its dispatch intent and its execution record (`GlobalLedger::open_range_within`, of that
+    /// run), never past the deadline or the most records the budget holds. RL-1c follow-up (#411
+    /// L1, W1-9): the range read itself stops at the deadline (its extent check and every row it
+    /// reads), so a run read the deadline passes in is left unread with `ledger_read_incomplete`
+    /// instead of running on until the caller ends the process.
     fn run_read(&self, run_id: Option<RunId>) -> Result<bool, SuspensionReportError> {
         let Some(run_id) = run_id else {
             return Ok(true);
@@ -321,9 +342,13 @@ impl Snapshot<'_> {
             matches: room.saturating_add(1),
             eviction_proofs: false,
         };
-        let rows = match GlobalLedger::open_range(self.state_root, &request)
-            .map_err(|error| ledger_unavailable(self.state_root, &error))?
+        let opened = match GlobalLedger::open_range_within(self.state_root, &request, self.deadline)
         {
+            Ok(opened) => opened,
+            Err(error) if budget_exceeded(&error) => return Ok(None),
+            Err(error) => return Err(ledger_unavailable(self.state_root, &error)),
+        };
+        let rows = match opened {
             Some(read) => {
                 let read = read.into_events();
                 // RL-1c fix 2 (#411 L3): the run's rows of every type count, so a read that
@@ -752,9 +777,12 @@ fn report(inputs: &ReportInputs<'_>) -> Result<Value, SuspensionReportError> {
         .deadline
         .unwrap_or_else(|| Instant::now() + NO_DEADLINE);
     // RL-1c fix 2 (#411 M2): with the newest `config.subsystems` fact alone and the ledger's
-    // latest time, in the same read.
+    // latest time, in the same read. RL-1c follow-up (#411 review 2 L1, W1-9): the walk for that
+    // fact reads at most `daemon_start_rows` rows, last; when it ends there or at the deadline
+    // the start is unknown and the rest of the report answers.
     let extras = GlobalLedgerSelectionExtras {
         newest: vec![daemon_start_query()],
+        newest_max_rows: Some(budget.daemon_start_rows),
         latest_time: true,
     };
     let selection = match GlobalLedger::open_selected_within(
@@ -776,6 +804,9 @@ fn report(inputs: &ReportInputs<'_>) -> Result<Value, SuspensionReportError> {
     }
     let mut snapshot = Snapshot {
         held: Cell::new(selection.events().len() + selection.newest().iter().flatten().count()),
+        // RL-1c follow-up (#411 review 2 L1): a walk for the daemon start that ended at its most
+        // rows or at the deadline leaves the start unknown; the read is incomplete.
+        incomplete: Cell::new(!selection.newest_complete()),
         selection,
         state_root,
         artifact_root: state_root,
@@ -783,7 +814,6 @@ fn report(inputs: &ReportInputs<'_>) -> Result<Value, SuspensionReportError> {
         deadline,
         spans: BTreeMap::new(),
         runs: RefCell::new(BTreeMap::new()),
-        incomplete: Cell::new(false),
     };
     // Workflow #336 PKG-S3: each package is measured once for the whole report.
     let checks = LiftChecks::default();
