@@ -72,7 +72,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A candidate on the instance waits for the instance's recognition maintenance package (package_id) to read a realistic key it read as unknown (fact_key, unknown_reason): the package is selected this round, or is held back for now by the gate gate_code (its minimum interval or failure backoff, an occupied, paused or unavailable instance, the host budget, a higher-ranked candidate, a Runtime admission gate, or, #405 IDLE-1P, instance_idle_action: the Runtime's idle action closed the instance and no candidate that needs the reading is due, so the reading waits for the instance's next wake), until next_eligible_unix_ms when known. failure_code is the code the package's latest run failed with, when it failed. The candidate is deferred, not failed.",
+      "description": "A candidate on the instance waits for the instance's recognition maintenance package (package_id) to read a realistic key it read as unknown (fact_key, unknown_reason): the package is selected this round, or is held back for now by the gate gate_code (its minimum interval or failure backoff, an occupied, paused or unavailable instance, the shared run limits, a higher-ranked candidate, a Runtime admission gate, or, #405 IDLE-1P, instance_idle_action: the Runtime's idle action closed the instance and no candidate that needs the reading is due, so the reading waits for the instance's next wake), until next_eligible_unix_ms when known. failure_code is the code the package's latest run failed with, when it failed. The candidate is deferred, not failed.",
       "common_causes": "The instance fact is missing or out of date and the package is running now, or must wait for its interval, its failure backoff or its turn on the instance.",
       "handling": "None: the candidate is evaluated again when the reading lands, the gate lifts or the instance's key returns."
     },
@@ -508,7 +508,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Scheduling decision reason: the instance satisfies scope, capability, affinity and host budget, and the task is dispatched there.",
+      "description": "Scheduling decision reason: the instance satisfies scope, capability, affinity and the shared run limits, and the task is dispatched there.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2077,7 +2077,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.9",
-      "description": "Scheduling decision reason (Workflow #411 B41, contracts/scheduling/README.md \"Chain Handover\"): the candidate waits for the chain step that goes first on its instance. A chain's predecessor run ended completed on the page the instance rests on (page_id), that page is in the entry page set of the step's package (task_id, the step), and the step is dispatched this round, so every candidate that ranked ahead of it on the instance waits, a fact refresh reading included: its run would take the instance off that page first. The candidate keeps its own due time and has no wake of its own; it keeps waiting while the step waits for its random delay (part of its dispatch), and takes its turn when another gate defers the step (an admission gate or the host budget) or the step is no longer a candidate. A step whose own trigger or selection document reads a key the fact refresh reads is no candidate, so the refresh goes first.",
+      "description": "Scheduling decision reason (Workflow #411 B41, contracts/scheduling/README.md \"Chain Handover\"): the candidate waits for the chain step that goes first on its instance. A chain's predecessor run ended completed on the page the instance rests on (page_id), that page is in the entry page set of the step's package (task_id, the step), and the step is dispatched this round, so every candidate that ranked ahead of it on the instance waits, a fact refresh reading included: its run would take the instance off that page first. The candidate keeps its own due time and has no wake of its own; it keeps waiting while the step waits for its random delay (part of its dispatch), and takes its turn when another gate defers the step (an admission gate or the shared run limits) or the step is no longer a candidate. A step whose own trigger or selection document reads a key the fact refresh reads is no candidate, so the refresh goes first.",
       "common_causes": "A chain step became due right after its predecessor ended on the page the step starts on, while a higher-ranked task or a fact refresh reading was due on the same instance.",
       "handling": "None. The waiting candidate runs after the chain step."
     },

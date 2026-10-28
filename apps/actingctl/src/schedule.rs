@@ -23,6 +23,7 @@ use actingcommand_contract::{
     FactScalar, FactValue, RuntimeFactScope, RuntimeFactSnapshot, RuntimeScheduleExplanation,
     ScheduleCandidateState, config_parameter_section, config_parameters_fact_key,
 };
+use actingcommand_policy::PolicyCode;
 use actingcommand_runtime_client::RuntimeClientError;
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
@@ -45,8 +46,9 @@ pub(crate) fn not_running_by_alias(
 
 /// The deferred rows of a diagnosis: the rows listed and how many there are in the answer.
 pub(crate) struct NotRun {
-    /// Per entry of the answer, in its order, its first rows whose `state` is `deferred` (at most
-    /// the bound), each the candidate row verbatim with its `instance_alias`.
+    /// Per entry of the answer, in its order, its first rows whose `state` is `deferred`, or
+    /// `blocked` by a shared run limit (at most the bound), each the candidate row verbatim with
+    /// its `instance_alias`.
     pub(crate) rows: Vec<Value>,
     /// Every deferred row of the answer, listed or not.
     pub(crate) total: usize,
@@ -75,16 +77,27 @@ pub(crate) fn not_run(
     }
 }
 
-/// The first `bound` rows of each entry whose `state` is `deferred`, in the answer's order, each
-/// with its `instance_alias` first; and how many such rows the answer holds.
+/// The first `bound` rows of each entry whose `state` is `deferred`, or `blocked` with a `why` of
+/// a shared run limit (`heavy_scene_budget_exhausted`, `heavy_scene_budget_deferred`,
+/// `policy_concurrent_runs_deferred`), in the answer's order, each with its `instance_alias`
+/// first; and how many such rows the answer holds.
 fn deferred_rows(explanation: &RuntimeScheduleExplanation, bound: usize) -> NotRun {
     let mut rows = Vec::new();
     let mut total = 0;
     for entry in &explanation.instances {
-        let deferred = entry
-            .candidates
-            .iter()
-            .filter(|row| row.state == ScheduleCandidateState::Deferred);
+        // Workflow #427-B follow-up (review L1): a row the shared run limits blocked at placement
+        // is listed with the deferred ones, its `why` with its numbers.
+        let deferred = entry.candidates.iter().filter(|row| {
+            row.state == ScheduleCandidateState::Deferred
+                || (row.state == ScheduleCandidateState::Blocked
+                    && [
+                        PolicyCode::HeavySceneBudgetExhausted,
+                        PolicyCode::HeavySceneBudgetDeferred,
+                        PolicyCode::PolicyConcurrentRunsDeferred,
+                    ]
+                    .into_iter()
+                    .any(|code| row.why.is(code)))
+        });
         for (index, row) in deferred.enumerate() {
             total += 1;
             if index < bound {

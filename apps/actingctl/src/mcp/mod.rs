@@ -607,7 +607,8 @@ mod tests {
     // dwell once; a spent budget skips performance and fact_refresh; fact_refresh is cut last;
     // an unapplied configuration warns.
     mod gate_422_ov24k;
-    // Workflow #427-B: ac_schedule answers the shared run limits with their numbers.
+    // Workflow #427-B: ac_schedule answers the shared run limits with their numbers; ac_diagnose
+    // lists a row they blocked at placement (follow-up, review L1).
     mod gate_427b;
     mod gate_mcp19b;
     mod gate_mcp8;

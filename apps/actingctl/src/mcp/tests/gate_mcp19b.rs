@@ -260,7 +260,7 @@ fn parameter(key: &str, value: FactScalar) -> ConfigParameter {
 }
 
 /// The program facts with the bound `rows`.
-fn bound(rows: i64) -> RuntimeFactSnapshot {
+pub(super) fn bound(rows: i64) -> RuntimeFactSnapshot {
     facts(vec![parameter(
         DIAGNOSE_ROWS_KEY,
         FactScalar::Integer(rows),
@@ -268,7 +268,10 @@ fn bound(rows: i64) -> RuntimeFactSnapshot {
 }
 
 /// A diagnosis with only `not_run` and its warnings, rendered as ac_diagnose answers it.
-fn render(explanation: &RuntimeScheduleExplanation, facts: RuntimeFactSnapshot) -> ToolSuccess {
+pub(super) fn render(
+    explanation: &RuntimeScheduleExplanation,
+    facts: RuntimeFactSnapshot,
+) -> ToolSuccess {
     let mut warnings = Vec::new();
     let not_run = schedule::not_run(Ok(explanation.clone()), Ok(facts), &mut warnings);
     Diagnosis {
@@ -304,7 +307,7 @@ fn render(explanation: &RuntimeScheduleExplanation, facts: RuntimeFactSnapshot) 
 }
 
 /// `row` as `not_run` lists it: the candidate row with its instance's alias.
-fn listed(alias: &str, row: &ScheduleExplanationCandidate) -> Value {
+pub(super) fn listed(alias: &str, row: &ScheduleExplanationCandidate) -> Value {
     let mut listed = json!(row);
     listed["instance_alias"] = json!(alias);
     listed

@@ -305,7 +305,7 @@ For each open layer whose last blocked run has no settled remedy since:
   and is **promoted** ahead of the instance's other candidates, with one reason
   `policy_remedy_requested` per blocked pair it would serve;
 - everything else still applies to it: placement, the feedback stop, positions 1 to 8 of the
-  deferrals, budgets, activity windows, one winner per instance and the host budget;
+  deferrals, budgets, activity windows, one winner per instance and the shared run limits;
 - one provider dispatch may serve several blocked pairs of the instance (several tasks blocked on
   the same need); a dispatch carries at most 16 `policy_remedy_requested` reasons;
 - **not requestable**, a persistent condition: no provider task on I (`capability_unbound`); every

@@ -973,3 +973,11 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_427b::gate_427b_ac_schedule_answers_the_shared_run_limits_with_their_numbers",
 ]
 incident = ["#427-B"]
+
+# Workflow #427-B follow-up (brief rd-1028/brief-427b-followup.md; review rd-1028/review-427b.md L1): ac_diagnose's not_run lists, beside the deferred rows, a row whose state is blocked and whose why is a shared run limit (heavy_scene_budget_exhausted at placement), with used, limit_count, admitted_count and round_selected_count; a row blocked by its own trigger stays out
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_427b::gate_427b_ac_diagnose_lists_a_row_the_shared_run_limits_blocked_with_its_numbers",
+]
+incident = ["#427-B"]
