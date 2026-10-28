@@ -9,6 +9,32 @@ use crate::project_interface::{
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
 
 impl HostShared {
+    /// #422 QR-1: a ledger whose reader pool could not open reads its view pages on the writer
+    /// thread, as before the pool. That is safe but not what the Runtime is built for, so it is
+    /// said at the start: one warning in the daemon's log with the code and operation of the
+    /// failure that kept the pool's connections from opening, and the developer line
+    /// `actingd ledger reader_pool fallback=writer`. A Runtime with its pool says nothing.
+    pub(super) fn report_ledger_reader_pool_fallback(&self) {
+        let Some(finding) = self.ledger.reader_pool_finding() else {
+            return;
+        };
+        println!(
+            "actingd ledger reader_pool fallback=writer code={} operation={} detail={:?}",
+            finding.code(),
+            finding.operation(),
+            finding.detail()
+        );
+        if let Some(code) = actingcommand_contract::outcome::Code::relayed(finding.code()) {
+            let mut outcome = actingcommand_contract::outcome::Outcome::new(code);
+            if let Some(operation) =
+                actingcommand_contract::outcome::Location::relayed(finding.operation())
+            {
+                outcome = outcome.operation(operation);
+            }
+            self.fatal.report_warning(&outcome);
+        }
+    }
+
     pub(super) fn project_interface(
         &self,
         request: &ProjectInterfaceRequest,

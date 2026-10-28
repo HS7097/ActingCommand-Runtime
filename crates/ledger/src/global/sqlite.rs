@@ -7,8 +7,8 @@ use super::index::{IndexChange, IndexRows};
 use super::projection::{EventIndexes, LAB_ANCHOR_SOURCE, LAB_ANCHOR_TYPE, LabKeys};
 use super::read_only::check_read_budget;
 use super::read_work::ReadWork;
-use super::retention::RetentionIndex;
 use super::retention::{LedgerOpenTiming, elapsed_ms};
+use super::retention::{PageProofs, RetentionIndex};
 use super::storage::{
     DurableStorage, EventStore, ReadBack, UniqueJsonValue, WriterOwnership, increment_sequence,
 };
@@ -1677,6 +1677,10 @@ impl DurableStorage for SqliteStorage {
         self.head
     }
 
+    fn read_extent(&self) -> Option<(Option<&str>, &'static str)> {
+        Some((self.head_hash.as_deref(), self.marker.state))
+    }
+
     fn resolve_artifact(
         &self,
         selection: &super::LedgerArtifactSelection,
@@ -2205,6 +2209,10 @@ impl SqliteStorage {
     /// LN-WS). LN-WS (R1): while the read holds the connection its statements run under
     /// `read.0`'s statement bound, removed before the transaction ends; a statement it interrupts
     /// outside the page's selection ends the read with `ledger_read_budget_exceeded`.
+    ///
+    /// #422 QR-1: the writer reads a page this way only when the Runtime has no reader pool
+    /// (a ledger without a failure plan, or a pool that could not open); otherwise
+    /// [`view_page_at_point`] reads it on a reader's own connection.
     fn view_page_on_disk(
         &self,
         query: &EventQuery,
@@ -2213,6 +2221,147 @@ impl SqliteStorage {
         observation: &mut Option<LedgerProjectViewObservation>,
         read: (&ReadWork, usize, usize),
         retention: &RetentionIndex,
+    ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
+        ViewReader {
+            database: &self.database,
+            head: self.head,
+            extent: ViewExtent::Writer(self),
+            proofs: PageProofs::Index(retention),
+        }
+        .page(
+            || {
+                self.database
+                    .connection(LedgerLocation::QueryLedgerView.location())
+                    .map_err(GlobalLedgerError::from)
+            },
+            (query, profile, request),
+            observation,
+            read,
+        )
+    }
+}
+
+/// #422 QR-1: one view page on a reader-pool thread's own read-only `connection`, at the point
+/// the writer published (its committed head, head hash, marker and eviction proofs). The page is
+/// the one the writer would read at that head: the same selection, budget and authentication,
+/// the medium checked against the published point instead of the writer's memory
+/// ([`verify_published_extent`]).
+pub(super) fn view_page_at_point(
+    database: &RuntimeDatabase,
+    connection: &mut Connection,
+    point: &super::reader_pool::ReadPoint,
+    page: (
+        &EventQuery,
+        ProjectionProfile,
+        &RuntimeEventQueryPageRequest,
+    ),
+    observation: &mut Option<LedgerProjectViewObservation>,
+    read: (&ReadWork, usize, usize),
+) -> GlobalLedgerResult<RuntimeEventQueryPage> {
+    ViewReader {
+        database,
+        head: point.head,
+        extent: ViewExtent::Published {
+            head_hash: point.head_hash.as_deref(),
+            marker_state: point.marker_state,
+        },
+        proofs: PageProofs::Published {
+            proofs: point.proofs.as_ref(),
+            through_sequence: point.head,
+        },
+    }
+    .page(|| Ok(connection), page, observation, read)
+}
+
+/// #422 QR-1: a reader-pool page's check of the medium, the writer's `verify_extent` at a
+/// published point: the stored views are this build's, the keyed meta row authenticates with the
+/// writer's marker, its head is the published head or later (the writer may have committed since)
+/// and the stored rows end at it, and the record at the published head has the published head
+/// hash (the meta row's own when the two heads are one). Anything else is the writer's
+/// `ledger_meta_mismatch`.
+fn verify_published_extent(
+    database: &RuntimeDatabase,
+    connection: &Connection,
+    (head, head_hash): (u64, Option<&str>),
+    marker_state: &'static str,
+) -> GlobalLedgerResult<()> {
+    let mismatch = || {
+        failure(
+            LedgerCode::LedgerMetaMismatch.code(),
+            LedgerLocation::VerifySqliteHead.location(),
+        )
+    };
+    refuse_unsupported_format(connection)?;
+    views::installed(connection)?;
+    let Some((marker, current)) = authenticated_extent(database, connection)? else {
+        return Err(mismatch());
+    };
+    if marker.state != marker_state || current < head || !rows_end_at(connection, current, None)? {
+        return Err(mismatch());
+    }
+    let stored = if head == 0 {
+        None
+    } else if current == head {
+        meta_head_hash(connection, head)?
+    } else {
+        Some(stored_record_hash(connection, head, None, &mut 0)?)
+    };
+    if stored.as_deref() != head_hash {
+        return Err(mismatch());
+    }
+    Ok(())
+}
+
+/// #422 QR-1: what one view page reads with: the database (for its keyed integrity), the committed
+/// head it reads at, how it checks the medium against that head, and where its rows' eviction
+/// proofs come from. The writer's pages read its own head and retention index; a reader-pool page
+/// reads the point the writer published.
+struct ViewReader<'a> {
+    database: &'a RuntimeDatabase,
+    head: u64,
+    extent: ViewExtent<'a>,
+    proofs: PageProofs<'a>,
+}
+
+/// #422 QR-1: how a view page checks the medium before it selects.
+enum ViewExtent<'a> {
+    /// The writer's head and head hash in its memory (`SqliteStorage::verify_extent`).
+    Writer(&'a SqliteStorage),
+    /// A point the writer published ([`verify_published_extent`]).
+    Published {
+        head_hash: Option<&'a str>,
+        marker_state: &'static str,
+    },
+}
+
+impl ViewReader<'_> {
+    fn verify(&self, connection: &Connection) -> GlobalLedgerResult<()> {
+        match self.extent {
+            ViewExtent::Writer(storage) => storage.verify_extent(connection),
+            ViewExtent::Published {
+                head_hash,
+                marker_state,
+            } => verify_published_extent(
+                self.database,
+                connection,
+                (self.head, head_hash),
+                marker_state,
+            ),
+        }
+    }
+
+    /// One view page in one read transaction on the connection `acquire` gives (see
+    /// `SqliteStorage::view_page_on_disk`).
+    fn page<C: std::ops::DerefMut<Target = Connection>>(
+        &self,
+        acquire: impl FnOnce() -> GlobalLedgerResult<C>,
+        (query, profile, request): (
+            &EventQuery,
+            ProjectionProfile,
+            &RuntimeEventQueryPageRequest,
+        ),
+        observation: &mut Option<LedgerProjectViewObservation>,
+        read: (&ReadWork, usize, usize),
     ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
         if let Some(value) = observation {
             *value = LedgerProjectViewObservation {
@@ -2238,9 +2387,7 @@ impl SqliteStorage {
         if let Some(value) = observation {
             value.connection.begin(Instant::now());
         }
-        let acquired = self
-            .database
-            .connection(LedgerLocation::QueryLedgerView.location());
+        let acquired = acquire();
         if let Some(value) = observation {
             value.connection.finish(Instant::now(), acquired.is_ok());
         }
@@ -2271,7 +2418,6 @@ impl SqliteStorage {
                     bounds,
                     observation,
                     read,
-                    retention,
                 );
                 guard.remove(operation).and(page)
             });
@@ -2335,9 +2481,8 @@ impl SqliteStorage {
         (snapshot, after): (u64, u64),
         observation: &mut Option<LedgerProjectViewObservation>,
         read: (&ReadWork, usize, usize),
-        retention: &RetentionIndex,
     ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
-        self.verify_extent(connection)?;
+        self.verify(connection)?;
         // #422 IDLE-OV (R2): the Lab relations read every Lab anchor of the history, outside the
         // page's selection, so a statement the budget interrupts there refuses the page. They
         // are read only when the page needs them: before the selection for the Lab view, whose
@@ -2415,7 +2560,7 @@ impl SqliteStorage {
             super::projection::PageContext {
                 lab_related: &lab_related,
                 run_context: &mut run_context,
-                retention: Some(retention),
+                retention: Some(self.proofs),
             },
         );
         if let Some(value) = observation {
@@ -2615,7 +2760,9 @@ impl SqliteStorage {
         }
         Ok((events, false))
     }
+}
 
+impl SqliteStorage {
     /// #422 LN-WS (R1): one history page of a read that `work` bounds, in its own read
     /// transaction: its statements run under the read's statement bound while it holds the
     /// connection, removed before the transaction ends; `None` when the bound interrupted it.

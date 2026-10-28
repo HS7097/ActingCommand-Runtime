@@ -676,13 +676,13 @@ tests = [
 ]
 incident = ["#422 LN-8d"]
 
-# LN-WS (#422; brief rd-1026/brief-ln-ws.md; root cause rd-1026/writer-stall/root-cause.md §5; the production stop of 2026-10-26 19:12:43): no read can make a write fail. On a production-shaped synthetic ledger (LN-8d's frame shape, four instances with one in seven runs of twenty, hours of times with one inverted record, the window at 90 to 95 % of the history) the costliest history statement of each incident read form (no instance with `changes`, `events`, none and `errors`; one instance; the run listing; one run) on 12 000 records is at most 1.5 times that on 3 000 (`ledger_observer.history_scan_rows`); a no-instance window read whose budget runs out inside a statement answers incomplete with a cursor past its start, and at most one look at the clock runs after the budget point (`ledger_observer.read_check_vm_steps`); an append captured behind an over-budget read commits once the read answers at its budget, `Ok`, its observation naming the read; paging the window reads on a small budget returns the unbounded read's rows in order, each cursor past the one before; a first window page starts its first history statement at the window's first record (by the time index, exact with the inversion) and reads the unbounded rows; every bounded read on a fake writer clock, a 600 s reply limit and no sleep
+# LN-WS (#422; brief rd-1026/brief-ln-ws.md; root cause rd-1026/writer-stall/root-cause.md §5; the production stop of 2026-10-26 19:12:43): no read can make a write fail. On a production-shaped synthetic ledger (LN-8d's frame shape, four instances with one in seven runs of twenty, hours of times with one inverted record, the window at 90 to 95 % of the history) the costliest history statement of each incident read form (no instance with `changes`, `events`, none and `errors`; one instance; the run listing; one run) on 12 000 records is at most 1.5 times that on 3 000 (`ledger_observer.history_scan_rows`); a no-instance window read whose budget runs out inside a statement answers incomplete with a cursor past its start, and at most one look at the clock runs after the budget point (`ledger_observer.read_check_vm_steps`); an append beside an over-budget read (#422 QR-1: the read runs on the reader pool, off the writer) commits while the read is held, `Ok`, its observation naming no read, and the read answers at its budget; paging the window reads on a small budget returns the unbounded read's rows in order, each cursor past the one before; a first window page starts its first history statement at the window's first record (by the time index, exact with the inversion) and reads the unbounded rows; every bounded read on a fake writer clock, a 600 s reply limit and no sleep
 [[gate]]
 coverage = "Y"
 tests = [
     "actingcommand-ledger::lib::global::tests::gate_ln_ws::ln_ws_t1_no_history_statement_of_an_incident_read_grows_with_the_history",
     "actingcommand-ledger::lib::global::tests::gate_ln_ws::ln_ws_t2_a_window_read_stops_inside_a_statement_at_its_budget_past_its_start",
-    "actingcommand-ledger::lib::global::tests::gate_ln_ws::ln_ws_t3_an_append_captured_behind_an_over_budget_read_commits_once_it_answers",
+    "actingcommand-ledger::lib::global::tests::gate_ln_ws::ln_ws_t3_an_append_commits_while_an_over_budget_read_runs_off_the_writer",
     "actingcommand-ledger::lib::global::tests::gate_ln_ws::ln_ws_t4_paging_window_reads_on_a_small_budget_returns_the_unbounded_rows_in_order",
     "actingcommand-ledger::lib::global::tests::gate_ln_ws::ln_ws_t5_a_window_page_starts_at_the_windows_first_record_and_reads_the_unbounded_rows",
 ]
@@ -769,3 +769,14 @@ tests = [
     "actingcommand-ledger::lib::global::sqlite::gate_rl1c_fix3::rl1c_fix3_the_newest_first_read_walks_the_type_index_without_a_sort",
 ]
 incident = ["#411 RL-1c"]
+
+# QR-1 (#422; brief rd-1028/brief-qr1-reads-off-writer.md; Alice 10-28): the Runtime writer's view pages are read by its reader pool, on read-only connections of their own, off the writer thread, and the frame cleaner's pass-start trim reaches the writer in bounded chunks. While the writer is held inside an append's write transaction, a view page is answered by the pool with the bytes of the page the writer reads (first and next pages); a pass-start trim's chunks each look at no more objects than their bound, every object once, and between two chunks an append and a page both complete; the read budget stops a pool page while the writer is held (incomplete at its budget, a cursor past its start), and a pool page held past the reply limit is writer_response_timeout, not fatal; a page never reads past the committed head (not a record of an open write transaction, never past the head read after it) while the writer appends
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_qr1::qr1_q1_a_page_is_answered_by_the_reader_pool_while_the_writer_is_held",
+    "actingcommand-ledger::lib::global::tests::gate_qr1::qr1_q2_a_pass_start_trim_reaches_the_writer_in_bounded_chunks_with_work_between_them",
+    "actingcommand-ledger::lib::global::tests::gate_qr1::qr1_q3_the_read_budget_and_the_reply_limit_still_stop_a_reader_pool_read",
+    "actingcommand-ledger::lib::global::tests::gate_qr1::qr1_q4_a_page_never_reads_past_the_committed_head_while_the_writer_appends",
+]
+incident = ["#422 QR-1"]

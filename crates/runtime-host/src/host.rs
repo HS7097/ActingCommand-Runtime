@@ -2342,6 +2342,8 @@ impl RuntimeHost {
             // #411 A67-R: a preparation whose frame store opened on the floor is in the daemon's
             // log and the ledger before the start goes on.
             shared.record_frame_store_floor_entries()?;
+            // #422 QR-1: a ledger without its reader pool is said as a warning.
+            shared.report_ledger_reader_pool_fallback();
             shared.check_install_preparation()?;
             // Workflow #398 RD-2 (model-398 §4.1): the device-link watch of the bound handsets,
             // after their daemon-start preparation; none without a bound handset.
