@@ -37,6 +37,7 @@
 
 use super::read_work::ReadWork;
 use super::retention::PublishedProofs;
+use super::sqlite::SnapshotMemo;
 use super::store::LedgerStore;
 use super::write_failure::LedgerMonotonicClock;
 use super::{
@@ -350,6 +351,9 @@ impl Reader {
             receiver,
             answering: None,
         };
+        // #422 QR-2: this reader's Lab relations and window starts, kept from one of its pages to
+        // the next (fix 1: a few snapshots, the least recently used dropped first).
+        let mut memo = SnapshotMemo::default();
         loop {
             let job = lock(receiver).recv();
             let Ok(ReadJob {
@@ -379,7 +383,7 @@ impl Reader {
                 continue;
             }
             let started = Instant::now();
-            let reply = self.page(&mut connection, &query, profile, &request);
+            let reply = self.page(&mut connection, &query, profile, &request, &mut memo);
             self.statistics.record_writer_command(
                 LedgerWriterCommandKind::ProjectViewPage,
                 started.elapsed(),
@@ -408,13 +412,15 @@ impl Reader {
         })
     }
 
-    /// One page at the writer's latest point, within the read budget counted from now.
+    /// One page at the writer's latest point, within the read budget counted from now. #422
+    /// QR-2: with the reader's `memo` (`SnapshotMemo`).
     fn page(
         &self,
         connection: &mut Connection,
         query: &EventQuery,
         profile: ProjectionProfile,
         request: &RuntimeEventQueryPageRequest,
+        memo: &mut SnapshotMemo,
     ) -> ProjectViewReply {
         // #411 A51, tests: a read hold of this root holds the pool's pages too, as it held them
         // on the writer; it no longer holds the writer's other work.
@@ -440,6 +446,7 @@ impl Reader {
                     settings.history_page_rows,
                     settings.history_scan_rows,
                 ),
+                memo,
             ),
             // The open publishes the first point before the pool starts.
             None => Err(GlobalLedgerError::fatal(

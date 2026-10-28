@@ -38,7 +38,7 @@ use rusqlite::{
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -2237,6 +2237,7 @@ impl SqliteStorage {
             (query, profile, request),
             observation,
             read,
+            None,
         )
     }
 }
@@ -2245,7 +2246,8 @@ impl SqliteStorage {
 /// the writer published (its committed head, head hash, marker and eviction proofs). The page is
 /// the one the writer would read at that head: the same selection, budget and authentication,
 /// the medium checked against the published point instead of the writer's memory
-/// ([`verify_published_extent`]).
+/// ([`verify_published_extent`]). #422 QR-2: `memo` is the reader thread's own
+/// [`SnapshotMemo`], kept from one of its pages to the next.
 pub(super) fn view_page_at_point(
     database: &RuntimeDatabase,
     connection: &mut Connection,
@@ -2257,6 +2259,7 @@ pub(super) fn view_page_at_point(
     ),
     observation: &mut Option<LedgerProjectViewObservation>,
     read: (&ReadWork, usize, usize),
+    memo: &mut SnapshotMemo,
 ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
     ViewReader {
         database,
@@ -2270,7 +2273,7 @@ pub(super) fn view_page_at_point(
             through_sequence: point.head,
         },
     }
-    .page(|| Ok(connection), page, observation, read)
+    .page(|| Ok(connection), page, observation, read, Some(memo))
 }
 
 /// #422 QR-1: a reader-pool page's check of the medium, the writer's `verify_extent` at a
@@ -2357,7 +2360,8 @@ impl ViewReader<'_> {
     }
 
     /// One view page in one read transaction on the connection `acquire` gives (see
-    /// `SqliteStorage::view_page_on_disk`).
+    /// `SqliteStorage::view_page_on_disk`). #422 QR-2: `memo`, a reader-pool thread's
+    /// [`SnapshotMemo`]; the writer's own pages keep none.
     fn page<C: std::ops::DerefMut<Target = Connection>>(
         &self,
         acquire: impl FnOnce() -> GlobalLedgerResult<C>,
@@ -2368,6 +2372,7 @@ impl ViewReader<'_> {
         ),
         observation: &mut Option<LedgerProjectViewObservation>,
         read: (&ReadWork, usize, usize),
+        memo: Option<&mut SnapshotMemo>,
     ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
         if let Some(value) = observation {
             *value = LedgerProjectViewObservation {
@@ -2424,6 +2429,7 @@ impl ViewReader<'_> {
                     bounds,
                     observation,
                     read,
+                    memo,
                 );
                 guard.remove(operation).and(page)
             });
@@ -2487,6 +2493,7 @@ impl ViewReader<'_> {
         (snapshot, after): (u64, u64),
         observation: &mut Option<LedgerProjectViewObservation>,
         read: (&ReadWork, usize, usize),
+        mut memo: Option<&mut SnapshotMemo>,
     ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
         self.verify(connection)?;
         // #422 IDLE-OV (R2): the Lab relations read every Lab anchor of the history, outside the
@@ -2498,9 +2505,16 @@ impl ViewReader<'_> {
         // ends just before that row (`LinkedRelations`). Any other selection reads nothing of
         // them (`in_view` and a stored view's condition read them for the Lab view only), and a
         // page without such a row (an empty page among them) never reads them.
+        // #422 QR-2: a reader-pool page takes the relations its thread already read at this
+        // snapshot (`SnapshotMemo`, which keeps a few snapshots) and reads none; relations it
+        // reads are kept for the next.
+        let known = memo.as_deref().and_then(|memo| memo.lab(snapshot));
         let no_relations = LabRelations::default();
         let lab_view = if query.view == Some(LedgerView::Lab) {
-            Some(read_lab_relations(connection, snapshot, &no_relations)?)
+            Some(match known.clone() {
+                Some(lab) => lab,
+                None => Arc::new(read_lab_relations(connection, snapshot, &no_relations)?),
+            })
         } else {
             None
         };
@@ -2508,9 +2522,9 @@ impl ViewReader<'_> {
             rows: usize::from(request.limit()),
             after,
             snapshot,
-            relations: None,
+            relations: known,
         });
-        let selection_lab = lab_view.as_ref().unwrap_or(&no_relations);
+        let selection_lab = lab_view.as_deref().unwrap_or(&no_relations);
         let view = query
             .view
             .map(|view| ViewCondition::of(view, selection_lab))
@@ -2526,7 +2540,11 @@ impl ViewReader<'_> {
             connection,
             (&selection, view.as_ref()),
             (after, snapshot),
-            (selection_limit, request.cursor().is_none()),
+            (
+                selection_limit,
+                request.cursor().is_none(),
+                memo.as_deref_mut(),
+            ),
             (selection_lab, linked.as_mut()),
             read,
         );
@@ -2537,17 +2555,18 @@ impl ViewReader<'_> {
             value.selection_work = LedgerProjectViewCount::from_len(read.0.visited());
         }
         let (selected, budget_stop) = selected?;
-        let lab = match lab_view {
-            Some(lab) => lab,
-            None => linked
-                .and_then(|linked| linked.relations)
-                .unwrap_or(no_relations),
-        };
+        let lab = lab_view.or_else(|| linked.and_then(|linked| linked.relations));
+        if let Some(memo) = memo
+            && let Some(lab) = &lab
+        {
+            memo.keep_lab(snapshot, lab);
+        }
+        let relations = lab.as_deref().unwrap_or(&no_relations);
         if let Some(value) = observation {
             value.selected_sequences = LedgerProjectViewCount::from_len(selected.len());
             value.project_page.begin(Instant::now());
         }
-        let lab_related = |keys: &LabKeys| lab.related(keys);
+        let lab_related = |keys: &LabKeys| relations.related(keys);
         let mut run_context = |run: &RunId| self.run_rows(connection, run, snapshot, read);
         let page = super::projection::project_selected(
             selected,
@@ -2592,7 +2611,10 @@ impl ViewReader<'_> {
     ///   and their order are those of one unbounded statement.
     /// - R3: a first page (`limit.1`) with `from_timestamp_unix_ms` starts at the window's first
     ///   record (`time_start`) minus one; when the bound interrupts that lookup, the page starts
-    ///   where it would have.
+    ///   where it would have. #422 QR-2: `limit.2`, a reader-pool thread's memo, gives the first
+    ///   record when the thread already looked it up (a record found, at any snapshot; none
+    ///   found, at the page's snapshot), and keeps the one this page looks up (not one the bound
+    ///   interrupted).
     ///
     /// #422 IDLE-OV (M1): `lab.1`, a page outside the Lab view, reads its Lab relations at the
     /// first row selected among its own rows that names a request, a correlation or a run; when
@@ -2604,7 +2626,7 @@ impl ViewReader<'_> {
         connection: &Connection,
         (selection, view): (&HistorySelection<'_>, Option<&ViewCondition>),
         (after, snapshot): (u64, u64),
-        (limit, first_page): (usize, bool),
+        (limit, first_page, memo): (usize, bool, Option<&mut SnapshotMemo>),
         (lab, mut linked): (&LabRelations, Option<&mut LinkedRelations>),
         (work, page_rows, scan_rows): (&ReadWork, usize, usize),
     ) -> GlobalLedgerResult<(Vec<LedgerEventMetadata>, Option<u64>)> {
@@ -2620,10 +2642,24 @@ impl ViewReader<'_> {
             && cursor < through
             && let Some(since) = query.from_timestamp_unix_ms
         {
-            match time_start(connection, since) {
-                Ok(Some(first)) => cursor = cursor.max(first.saturating_sub(1)),
-                // No record is that late: the window holds none.
-                Ok(None) => cursor = through,
+            let start = match memo
+                .as_deref()
+                .and_then(|memo| memo.window_start(snapshot, since))
+            {
+                Some(first) => Ok(first),
+                None => time_start(connection, since),
+            };
+            match start {
+                Ok(first) => {
+                    if let Some(memo) = memo {
+                        memo.keep_window_start(snapshot, since, first);
+                    }
+                    cursor = match first {
+                        Some(first) => cursor.max(first.saturating_sub(1)),
+                        // No record is that late: the window holds none.
+                        None => through,
+                    };
+                }
                 Err(error) if work.interrupted(&error) => {}
                 Err(error) => return Err(error),
             }
@@ -2847,17 +2883,144 @@ enum SpanRead {
     Stopped(u64),
 }
 
+/// #422 QR-2 fix 1 (review M1): the snapshots one reader-pool thread's [`SnapshotMemo`] keeps,
+/// the least recently used dropped first. Between two pages of one caller the thread may read
+/// pages of other callers (another overview, `ac_get_run` polling, the UI, a Lab subscription)
+/// at their own snapshots; with room for a few snapshots, those pages no longer drop the
+/// caller's.
+const MEMO_SNAPSHOTS: usize = 4;
+/// #422 QR-2 fix 1: the window starts one reader-pool thread's [`SnapshotMemo`] keeps the first
+/// record of (exact at every snapshot), the least recently used dropped first.
+const MEMO_WINDOW_STARTS: usize = 4;
+
+/// #422 QR-2: what one reader-pool thread keeps from one of its view pages to the next (each
+/// reader has its own; the writer's own pages keep none):
+/// - for each of at most `MEMO_SNAPSHOTS` snapshots (fix 1), the least recently used dropped
+///   first:
+///   - the Lab relations through the snapshot (`read_lab_relations`, every Lab anchor of the
+///     history). They are made of records at or before the snapshot, which never change, so
+///     every page at that snapshot has the same ones;
+///   - a window start (`from_timestamp_unix_ms`) whose lookup (`time_start`) found no record. A
+///     later lookup finds none, or a record committed after the lookup, which is past the
+///     snapshot, so the page selects no row either way;
+/// - for each of at most `MEMO_WINDOW_STARTS` window starts (fix 1), the least recently used
+///   dropped first, the first record a lookup found, at any snapshot. A `ledger_events` row, and
+///   so its entry of the time index the lookup reads (`ledger_view_index_time_v1`), is only
+///   ever added, with a sequence past every row committed before it: no code deletes or rewrites
+///   one (retention and eviction trim `ledger_frame_refs` and `ledger_index` only, and an import
+///   fills an empty database before any writer opens it). So the least sequence at or after a
+///   time, once found, is what every later lookup finds, whatever the page's snapshot.
+///
+/// A lookup the read's bound interrupted is not kept.
+///
+/// Memory, per reader: at most `MEMO_SNAPSHOTS` Lab relation sets (each the set one page already
+/// builds, so its size follows the history's Lab anchors, not the pages read) and
+/// `MEMO_SNAPSHOTS` + `MEMO_WINDOW_STARTS` small entries; a pool has at most
+/// `MAX_READER_THREADS` readers (`reader_pool.rs`).
+///
+/// A page that uses it, when the read budget does not stop it, has the rows, views, cursor and
+/// scope it has without it. When the budget binds, the reads it saves leave more of the budget
+/// to the selection: such a page may reach further (more rows, a later cursor), and a page
+/// whose Lab relations' read the budget would have cut is answered.
+#[derive(Default)]
+pub(super) struct SnapshotMemo {
+    /// The kept snapshots' values, the most recently used last.
+    snapshots: VecDeque<SnapshotValues>,
+    /// Window starts and the first record a lookup found at or after each, the most recently
+    /// used last.
+    window_starts: VecDeque<(u64, u64)>,
+}
+
+/// What a [`SnapshotMemo`] keeps at one snapshot.
+struct SnapshotValues {
+    snapshot: u64,
+    lab: Option<Arc<LabRelations>>,
+    /// A window start whose lookup found no record.
+    empty_window: Option<u64>,
+}
+
+impl SnapshotMemo {
+    /// The Lab relations kept at `snapshot`.
+    fn lab(&self, snapshot: u64) -> Option<Arc<LabRelations>> {
+        self.values(snapshot).and_then(|values| values.lab.clone())
+    }
+
+    /// Keeps `lab`, the Lab relations through `snapshot`.
+    fn keep_lab(&mut self, snapshot: u64, lab: &Arc<LabRelations>) {
+        let lab = Arc::clone(lab);
+        self.keep(snapshot, |values| values.lab = Some(lab));
+    }
+
+    /// The first record of the window that starts at `since`, for a page at `snapshot`, when
+    /// this memo holds it (`Some(None)`: no record is that late).
+    fn window_start(&self, snapshot: u64, since: u64) -> Option<Option<u64>> {
+        self.window_starts
+            .iter()
+            .find(|(known, _)| *known == since)
+            .map(|(_, first)| Some(*first))
+            .or_else(|| {
+                self.values(snapshot)
+                    .filter(|values| values.empty_window == Some(since))
+                    .map(|_| None)
+            })
+    }
+
+    /// Keeps `first`, what a lookup at `snapshot` found as the first record of the window that
+    /// starts at `since`: a record for every snapshot, no record for `snapshot` only.
+    fn keep_window_start(&mut self, snapshot: u64, since: u64, first: Option<u64>) {
+        match first {
+            Some(first) => {
+                self.window_starts.retain(|(known, _)| *known != since);
+                if self.window_starts.len() >= MEMO_WINDOW_STARTS {
+                    self.window_starts.pop_front();
+                }
+                self.window_starts.push_back((since, first));
+            }
+            None => self.keep(snapshot, |values| values.empty_window = Some(since)),
+        }
+    }
+
+    fn values(&self, snapshot: u64) -> Option<&SnapshotValues> {
+        self.snapshots
+            .iter()
+            .find(|values| values.snapshot == snapshot)
+    }
+
+    /// Updates the values kept at `snapshot`, which become the most recently used; a snapshot
+    /// not kept yet gets new values, and the least recently used one is dropped when
+    /// `MEMO_SNAPSHOTS` are kept.
+    fn keep(&mut self, snapshot: u64, update: impl FnOnce(&mut SnapshotValues)) {
+        let index = self
+            .snapshots
+            .iter()
+            .position(|values| values.snapshot == snapshot);
+        let kept = index.and_then(|index| self.snapshots.remove(index));
+        let mut values = kept.unwrap_or(SnapshotValues {
+            snapshot,
+            lab: None,
+            empty_window: None,
+        });
+        update(&mut values);
+        if self.snapshots.len() >= MEMO_SNAPSHOTS {
+            self.snapshots.pop_front();
+        }
+        self.snapshots.push_back(values);
+    }
+}
+
 /// #422 IDLE-OV (M1): the Lab relations of a view page outside the Lab view. They are read at
 /// the first row its selection selects among the page's own rows (`rows`, not its lookahead)
 /// that names a request, a correlation or a run, so a page reads them no later in its work than
 /// at that row, and a page without such a row never reads them (`relations` stays `None`).
+/// #422 QR-2: a reader-pool page starts with the relations its thread kept at the page's
+/// snapshot (`SnapshotMemo`), when it has them, and then reads none.
 struct LinkedRelations {
     /// The page's own rows (its `limit`).
     rows: usize,
     /// The page's cursor (0 on a first page).
     after: u64,
     snapshot: u64,
-    relations: Option<LabRelations>,
+    relations: Option<Arc<LabRelations>>,
 }
 
 impl LinkedRelations {
@@ -2891,7 +3054,7 @@ impl LinkedRelations {
         let stop = sequence.saturating_sub(1);
         match read {
             Ok(relations) => {
-                self.relations = Some(relations);
+                self.relations = Some(Arc::new(relations));
                 Ok(None)
             }
             Err(error) if work.interrupted(&error) && stop > self.after => Ok(Some(stop)),

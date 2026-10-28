@@ -190,6 +190,39 @@ existing 1024-event query ceiling per run; a larger run yields Unknown with an
 explicit context limit. Missing relations, conflicting outcomes and incomplete
 sources also yield Unknown.
 
+#422 QR-2 (since 0.12.23): a page request may ask for no run recovery
+(`RuntimeEventQueryPageRequest::without_run_recovery`, the optional request
+member `without_run_recovery: true`). Such a page derives no group and reads no
+run's context for one; its selection, rows, views, cursor and read scope are
+those of the same page with its groups (only the response-byte limit, which then
+counts no group, may let it hold more rows). Absent, the member is `false`: the
+request serializes and the page answers as before. No outcome code is added. The
+run listing and the run status reads of `runtime-client` (`latest_runs`,
+`recent_runs`, `list_contained_runs`, `contained_run_status` and the overview's
+run block built on them), which never read the groups, ask for every page so.
+A Runtime before 0.12.23 (v0.12.21, v0.12.22) cannot decode a request that names
+the member (the page request denies unknown members there too): it drops the
+connection (`runtime_request_decode_failed`), the client's receipt read fails
+and the client latches the connection, so every later read of that call (the
+overview, `ac_get_run`, `ac_runs`, diagnose) fails as well. A newer client meets
+an older Runtime in the seconds of a deploy switch (the MCP front end changes
+its child about 10 s after `actingctl.exe` changes) or after a rollback while an
+MCP front end still runs the newer client. There is no compatibility code (test
+phase, Alice 10-11).
+
+A Runtime reader-pool thread also keeps, from one of its pages to the next, the
+Lab relations through a page's snapshot, for the last 4 snapshots it read at
+(the least recently used dropped first), and the window starts first pages
+looked up (`from_timestamp_unix_ms`'s first record): a record found, for the
+last 4 window starts, at every snapshot (a `ledger_events` row is only ever
+added, with a sequence past every earlier one, so the first record found at or
+after a time stays the first); no record found, at its snapshot only. A page at
+a snapshot it no longer keeps reads the relations again. Each is exact where it
+is used, so a page the read budget does not stop has the same rows, views and
+cursor with or without them; a page the budget stops may reach further with
+them (the reads they save leave more of its budget), and a page whose Lab
+relations' read the budget would cut is answered.
+
 ### New record types in the views (Workflow #383, ledger revision 3)
 
 The ledger observer adds record types ([Ledger observer](ledger-observer.md),

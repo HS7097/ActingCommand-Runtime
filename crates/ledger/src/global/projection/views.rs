@@ -172,6 +172,7 @@ pub(in crate::global) struct PageContext<'a, E> {
 /// One page of `selected` (in ledger order, with one record of lookahead when the page is cut
 /// by its count) at `snapshot`. `budget_stop` is the last candidate a budgeted selection decided
 /// before its budget ran out (#411 A51). The in-memory indexes and the SQLite store share it.
+/// #422 QR-2: a request without run recovery gets no group, and no run's context is read.
 #[allow(clippy::too_many_arguments)]
 pub(in crate::global) fn project_selected<E: LedgerEventRead>(
     mut selected: Vec<E>,
@@ -208,7 +209,13 @@ pub(in crate::global) fn project_selected<E: LedgerEventRead>(
             row
         })
         .collect();
-    let mut groups = run_recovery(&rows, snapshot, scope.read_complete, context.run_context)?;
+    // #422 QR-2: a page asked without run recovery derives no group and reads no run's context
+    // (`context.run_context` is never called); everything else of the page is its own.
+    let mut groups = if request.derives_run_recovery() {
+        run_recovery(&rows, snapshot, scope.read_complete, context.run_context)?
+    } else {
+        Vec::new()
+    };
     let mut byte_limited = false;
     loop {
         let has_more = count_limited || byte_limited || budget_limited;
