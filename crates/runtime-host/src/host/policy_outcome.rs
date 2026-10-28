@@ -2698,7 +2698,8 @@ fn reconcile_scheduled_policy_outcomes_for(
             policy
                 .commit_execution(&data, None)
                 .map_err(RuntimeHostError::into_fatal)?;
-            // Workflow #386 SR-2b-1: recorded by the next live settlement or evaluation.
+            // Workflow #386 SR-2b-1: recorded by the start right after its reconciliation, online
+            // by the next live settlement or evaluation.
             policy.queue_rerun_signal(&data, decision);
             policy
                 .complete_dispatch(&decision_id, &completion)

@@ -664,9 +664,9 @@ first time there, so the same rule decides it from the terminal's failure code (
 reconciliation reads the `scheduling.rerun` values of actingd's configuration file, as the
 values set while the Runtime ran are restored after it); a run with no terminal
 (`policy_settlement_interrupted`, Severe) never ends by a condition. A
-replay or a start reads the member and never the current configuration, so changing
-`condition_codes`, `max_per_occurrence` or `refund_counts` and restarting cannot make a replay
-disagree with its record. The member is a persisted shape change of v0.12.0, registered by
+replay of a run already recorded reads the member and never the current configuration, so
+changing `condition_codes`, `max_per_occurrence` or `refund_counts` and restarting cannot make a
+replay disagree with its record. The member is a persisted shape change of v0.12.0, registered by
 Workflow #383 AO-0 with the other shapes of the new ledger; rolling a ledger that SR-2b wrote
 back to a v0.11 build fails at its start.
 
@@ -706,7 +706,9 @@ rerun is let through at once.
 failure, and the missed round is not carried into the next day. A pair that ends by a condition
 more than `scheduling.rerun.max_per_occurrence` times (default 2) in one occurrence settles that
 run as an ordinary recoverable failure, without `condition`, and records
-`policy_rerun_exhausted` (warning).
+`policy_rerun_exhausted` (warning). That run is an ordinary failure, so it ends the series and
+removes the owed rerun: the pair's next condition termination counts from 1 again, in the same
+window too.
 
 **After a restart.** The owed reruns load from the pair's latest
 `policy.control_state_recorded` value record (ledger slices LN-3 and LN-4, which satisfy what
@@ -727,12 +729,12 @@ None of these codes triggers the recovery ladder.
 | Key | Default | Meaning |
 |---|---|---|
 | `scheduling.recognition.sample_timeout_retries` | 2 | Base number of observe-only retries of a timed-out observation |
-| `scheduling.rerun.condition_codes` | the eight codes above | Codes that end a run by a condition; read only at live settlement. Every entry is a code the catalog lists and has not retired |
-| `scheduling.rerun.max_per_occurrence` | 2 | Condition terminations per occurrence before an ordinary failure; read only at live settlement |
+| `scheduling.rerun.condition_codes` | the eight codes above | Codes that end a run by a condition; read when a run is first settled (live settlement or reconciliation from its terminal). Every entry is a code the catalog lists and has not retired |
+| `scheduling.rerun.max_per_occurrence` | 2 | Condition terminations per occurrence before an ordinary failure; read when a run is first settled (live settlement or reconciliation from its terminal) |
 | `scheduling.rerun.resume_stage` | S2 | Highest pacing stage at which an owed rerun runs |
 | `scheduling.rerun.resume_settle_ms` | 60,000 | How long the stage must stay at or below the resume stage |
 | `scheduling.rerun.promote` | true | Rank owed reruns first |
-| `scheduling.rerun.refund_counts` | true | Give back the counts of a condition termination; read only at live settlement |
+| `scheduling.rerun.refund_counts` | true | Give back the counts of a condition termination; read when a run is first settled (live settlement or reconciliation from its terminal) |
 | `scheduling.rerun.expires` | `window_end` | When an owed rerun expires (the only value) |
 | `scheduling.pack_admission.check_in_check_config` | true | check-config runs the full admission of the packages |
 | `scheduling.pack_admission.check_after_start` | true | The background check after start |

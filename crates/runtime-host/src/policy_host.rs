@@ -4618,7 +4618,7 @@ impl PolicyHost {
     }
 
     /// Workflow #386 SR-2b-1: the `policy_rerun_exhausted` records queued since the last call,
-    /// for their recorder (the live settlement and the policy evaluation).
+    /// for their recorder (the start, the live settlement and the policy evaluation).
     pub(crate) fn take_rerun_signals(&mut self) -> Vec<PolicyPlanningSignalEventData> {
         std::mem::take(&mut self.rerun_signals)
     }

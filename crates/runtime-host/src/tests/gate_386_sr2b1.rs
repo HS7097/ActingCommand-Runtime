@@ -23,7 +23,9 @@ use actingcommand_contract::{
     PolicyConditionSettlement, PolicyControlStateRecord, PolicyFailureRecord,
     RuntimeConfigManifest,
 };
-use actingcommand_runtime_config::scheduling::{RERUN_CONDITION_CODES, RERUN_REFUND_COUNTS};
+use actingcommand_runtime_config::scheduling::{
+    RERUN_CONDITION_CODES, RERUN_MAX_PER_OCCURRENCE, RERUN_REFUND_COUNTS,
+};
 use serde_json::json;
 
 const TASK: &str = "fixture.observe";
@@ -628,28 +630,25 @@ fn close_latched(host: RuntimeHost) {
     }
 }
 
-// A scheduled run whose `task.failed` terminal is written but which was not settled before the
-// restart (the fixture of `crash_recovery`'s `task-recoverable` case, in process): the start's
-// reconciliation settles it from its terminal by the live rule, here with a configured table
-// listing the terminal's code, so it ends by a condition. A run with no terminal (its lease
-// expired before it ran) is settled as `policy_settlement_interrupted`, Severe and without
-// `condition`, even with that code listed.
-#[test]
-fn sr2b1_t6_the_start_settles_a_run_from_its_terminal_by_the_same_rule() {
-    // A run with a recoverable `task.failed` terminal.
-    let root = TempDir::new().expect("tempdir");
-    let registered = instance_id();
-    let package = neutral_contained_task_package(false);
+/// A scheduled run on a fresh host on `root` whose recoverable `task.failed` terminal is written
+/// but which is not settled before the host closes (the fixture of `crash_recovery`'s
+/// `task-recoverable` case, in process). Returns the run's decision id, its terminal's failure
+/// code and its admission time.
+fn unsettled_run_with_terminal(
+    root: &TempDir,
+    registered: InstanceId,
+    package: &[u8],
+) -> (String, String, u64) {
     let package_path = root.path().join("scheduled-task.zip");
-    fs::write(&package_path, &package).expect("write the package");
+    fs::write(&package_path, package).expect("write the package");
     let state = Arc::new(FakeState::default());
     state.fail_capture.store(true, Ordering::Release);
     state
         .transient_capture_failure
         .store(true, Ordering::Release);
     let host = RuntimeHost::start(
-        config(&root).with_procedure_manifest(procedure_manifest_with_primary(
-            &package,
+        config(root).with_procedure_manifest(procedure_manifest_with_primary(
+            package,
             vec!["after_observation".to_owned()],
         )),
         Arc::new(FakeProvider::one(POLICY_INSTANCE_ALIAS, registered, state).fixture_simulation()),
@@ -671,6 +670,24 @@ fn sr2b1_t6_the_start_settles_a_run_from_its_terminal_by_the_same_rule() {
     assert_eq!(class, PolicyFailureClass::Recoverable, "{code}");
     drop(context);
     close_latched(host);
+    (intent.decision_id, code, admitted_at)
+}
+
+// A scheduled run whose `task.failed` terminal is written but which was not settled before the
+// restart (the fixture of `crash_recovery`'s `task-recoverable` case, in process): the start's
+// reconciliation settles it from its terminal by the live rule, here with a configured table
+// listing the terminal's code, so it ends by a condition. Over `max_per_occurrence` it settles as
+// an ordinary failure, and the start records its `policy_rerun_exhausted` itself, before any
+// evaluation (fix round 1, review L3). A run with no terminal (its lease expired before it ran)
+// is settled as `policy_settlement_interrupted`, Severe and without `condition`, even with that
+// code listed.
+#[test]
+fn sr2b1_t6_the_start_settles_a_run_from_its_terminal_by_the_same_rule() {
+    // A run with a recoverable `task.failed` terminal.
+    let root = TempDir::new().expect("tempdir");
+    let registered = instance_id();
+    let package = neutral_contained_task_package(false);
+    let (decision_id, code, admitted_at) = unsettled_run_with_terminal(&root, registered, &package);
 
     // The restart's configuration lists the terminal's code as a condition code.
     let table = rerun_manifest(vec![condition_codes(&[code.as_str()])]);
@@ -683,7 +700,7 @@ fn sr2b1_t6_the_start_settles_a_run_from_its_terminal_by_the_same_rule() {
         )),
     )
     .expect("the restart settles the run");
-    let failure = execution_failure(&host, &intent.decision_id);
+    let failure = execution_failure(&host, &decision_id);
     assert_eq!(
         actingcommand_contract::scheduled_failure_code_str(&failure.outcome).as_str(),
         code
@@ -699,6 +716,41 @@ fn sr2b1_t6_the_start_settles_a_run_from_its_terminal_by_the_same_rule() {
     );
     let owed = held_record(&host).condition_reruns.expect("the owed rerun");
     assert_eq!(owed.failure_code.as_str(), code);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close the restarted host");
+
+    // The same run with `max_per_occurrence = 0`: its first condition termination is over the
+    // limit, so the start settles it as an ordinary failure and records the warning before it
+    // returns; no evaluation runs here.
+    let root = TempDir::new().expect("tempdir");
+    let registered = instance_id();
+    let (decision_id, code, _) = unsettled_run_with_terminal(&root, registered, &package);
+    let table = rerun_manifest(vec![
+        condition_codes(&[code.as_str()]),
+        (RERUN_MAX_PER_OCCURRENCE, FactScalar::Integer(0)),
+    ]);
+    let host = RuntimeHost::start(
+        config(&root).with_config_manifest(table),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            registered,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("the restart settles the run");
+    assert_eq!(
+        execution_failure(&host, &decision_id).condition,
+        None,
+        "an ordinary failure"
+    );
+    assert_eq!(
+        exhausted_records(&host)
+            .iter()
+            .map(|(_, _, outcome)| (outcome.value("count"), outcome.value("limit_count")))
+            .collect::<Vec<_>>(),
+        vec![(Some(&json!(1)), Some(&json!(0)))],
+        "the start records policy_rerun_exhausted without waiting for an evaluation"
+    );
     assert!(host.fatal_error().expect("runtime health").is_none());
     host.close().expect("close the restarted host");
 

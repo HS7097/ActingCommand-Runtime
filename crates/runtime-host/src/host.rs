@@ -2163,7 +2163,8 @@ impl RuntimeHost {
                         };
                         // Workflow #386 SR-2b-1: a run settled from its terminal here decides
                         // its `condition` as the live settlement would.
-                        let rerun_rule = startup_rerun_condition_rule(&config)?;
+                        let rerun_rule =
+                            startup_rerun_condition_rule(config.config_manifest.as_ref())?;
                         reconcile_policy_dispatches(
                             &mut policy,
                             &shared.ledger,
@@ -2343,6 +2344,17 @@ impl RuntimeHost {
             // a broken one never stops the start.
             shared.register_standard_packs_on_start()?;
             shared.record_policy_settlement_facts_on_start()?;
+            // Workflow #386 SR-2b-1 (fix round 1, review L3): the `policy_rerun_exhausted`
+            // records the start's reconciliation queued, recorded here so a stop before the first
+            // evaluation cannot lose them. Those runs are settled already, so a failure here is
+            // fatal, as at the live settlement.
+            let rerun_signals = lock(shared.policy()?, HostLocation::RecordPolicyPlanningSignal)?
+                .take_rerun_signals();
+            for signal in rerun_signals {
+                shared
+                    .record_policy_planning_signal(signal)
+                    .map_err(RuntimeHostError::into_fatal)?;
+            }
             // The scheduler reconciliation above precedes direct-run settlement; both
             // complete before background execution or root admission (#351 / #352).
             // #405 N-2: the start anchors the idle record is bound to.
@@ -6551,7 +6563,7 @@ fn startup_discovery_config(
 /// ran only after its policy recovery (`start_runtime_config`), so this reconciliation reads the
 /// manifest's.
 fn startup_rerun_condition_rule(
-    config: &RuntimeHostConfig,
+    config_manifest: Option<&RuntimeConfigManifest>,
 ) -> RuntimeHostResult<crate::policy_control::ConditionRule> {
     let refused = |failure: actingcommand_runtime_config::ConfigFailure| {
         RuntimeHostError::fatal(
@@ -6561,7 +6573,7 @@ fn startup_rerun_condition_rule(
         )
         .with_outcome_values(|outcome| failure.with_values(outcome))
     };
-    let scheduling = match &config.config_manifest {
+    let scheduling = match config_manifest {
         Some(manifest) => actingcommand_runtime_config::EffectiveConfig::from_manifest(manifest)
             .map_err(refused)?,
         None => actingcommand_runtime_config::EffectiveConfig::default(),
