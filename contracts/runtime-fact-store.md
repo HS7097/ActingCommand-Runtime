@@ -601,7 +601,17 @@ the backend self-check facts (source `device-proxy` or `capture`).
   each further row is one instance (`instance_alias`, `action` `close_app` or
   `stop_emulator`, `wake_at_unix_ms` when a wake is planned, and, since
   0.12.25 (#405 O-2), `woken` true for an instance woken whose startup package
-  has not run, its `wake_at_unix_ms` the time it was woken). Recorded
+  has not run, its `wake_at_unix_ms` the time it was woken). Since 0.12.26
+  (W2-B), after those rows, one row per instance whose startup package an
+  emulator start (an operator's `start` / `restart`, or a configured start)
+  queued behind a scheduling pause: `instance_alias` and
+  `startup_package_queued` (true) alone, from the hand-off until the package's
+  claim is granted or an emulator control cancels it; a start restores it
+  (for an instance still registered with its startup package configured, and
+  not woken by the same record) and schedules the package again behind the
+  restored pause ([emulator-control.md](emulator-control.md), "Startup package
+  hook"). A build before 0.12.26 reads a record with such a row as another
+  shape (below). Recorded
   whenever that set or a wake changes and again by the start that restores
   the idle planner from it ([runtime-config.md](runtime-config.md), "The
   `idle` section"). A start of a configuration that names an idle action

@@ -43,6 +43,15 @@
 //!
 //! - T8: a start during the instance's pause queues the startup package, nothing runs under the
 //!   pause, and after the resume the package runs once.
+//!
+//! W2-B (0.12.26; brief rd-1028/brief-wave2a.md W2-B; review rd-1028/review-w1-6.md M1): a
+//! deploy that restarts the Runtime between that start and the resume dropped the queued claim
+//! (`lease.queue_disconnected`), and the resume then ran no startup package. Required state:
+//!
+//! - T9: a start during the instance's pause, then a restart, then the resume: the restart queues
+//!   the startup package again behind the restored pause (kept in `host.idle_state`), nothing runs
+//!   under the pause, the package runs once after the resume, and a further restart queues it no
+//!   more. Without a restart T8 holds unchanged.
 
 use super::emulator_controller::{
     EmulatorCall, FAKE_EMULATOR_PORT, ScriptedControl, running_state, stopped_state,
@@ -55,9 +64,9 @@ use super::*;
 use crate::codes::HostCode;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
-    EmulatorInstanceAction, RequestId, RuntimeConfigManifest, RuntimeLifecyclePhase,
-    RuntimePayload, RuntimeSubscriptionRequest, SchedulingPauseReason, SchedulingPauseScope,
-    StartupPackageDisposition, StartupPackageWithheld, SubscriptionCursor,
+    EmulatorInstanceAction, FactScalar, RequestId, RuntimeConfigManifest, RuntimeFactScope,
+    RuntimeLifecyclePhase, RuntimePayload, RuntimeSubscriptionRequest, SchedulingPauseReason,
+    SchedulingPauseScope, StartupPackageDisposition, StartupPackageWithheld, SubscriptionCursor,
 };
 use actingcommand_device::codes::DeviceStage;
 use actingcommand_device::{
@@ -257,6 +266,17 @@ struct StartupHost {
 fn startup_host() -> StartupHost {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
+    let host = start_startup_host(&root, instance_id(), &state);
+    StartupHost {
+        _root: root,
+        host,
+        state,
+    }
+}
+
+/// [`startup_host`]'s start on `root` with `instance` and its scripted emulator `state`. W2-B: a
+/// start on a root an earlier start left finds the emulator bound as that start left it.
+fn start_startup_host(root: &TempDir, instance: InstanceId, state: &Arc<FakeState>) -> RuntimeHost {
     state.physical_task_geometry.store(true, Ordering::Release);
     state
         .transition_capture_after_input
@@ -267,18 +287,15 @@ fn startup_host() -> StartupHost {
     let startup = ContainedTaskRequest::new(package.to_string_lossy().into_owned())
         .and_then(|request| request.with_response_deadline_ms(60_000))
         .expect("startup package request");
-    let instance = instance_id();
     let host = RuntimeHost::start(
-        config(&root).with_startup_packages(BTreeMap::from([(ALIAS.to_owned(), startup)])),
-        Arc::new(FakeProvider::one(ALIAS, instance, Arc::clone(&state))),
+        config(root).with_startup_packages(BTreeMap::from([(ALIAS.to_owned(), startup)])),
+        Arc::new(FakeProvider::one(ALIAS, instance, Arc::clone(state))),
     )
     .expect("runtime host with a startup package");
-    bind_fake_emulator(&host, ALIAS, instance, &state);
-    StartupHost {
-        _root: root,
-        host,
-        state,
+    if !state.emulator_control.load(Ordering::Acquire) {
+        bind_fake_emulator(&host, ALIAS, instance, state);
     }
+    host
 }
 
 /// The emulator control's answer about the startup package: what was queued and why not.
@@ -512,6 +529,190 @@ fn a71_t8_a_start_during_a_pause_runs_its_startup_package_once_after_the_resume(
     );
     assert!(run.host.fatal_error().expect("runtime health").is_none());
     run.host.close().expect("close host");
+}
+
+// ---- W2-B: the startup package queued during a pause survives a restart.
+
+/// The sequence of the host's latest record.
+fn last_sequence(host: &RuntimeHost) -> u64 {
+    all_events(host).last().map_or(0, PersistedEvent::sequence)
+}
+
+/// How many times the startup package was scheduled after `after` (`startup_package_scheduled`).
+fn startup_scheduled_after(host: &RuntimeHost, after: u64) -> usize {
+    phases(&all_events(host))
+        .iter()
+        .filter(|(event, phase)| {
+            event.sequence() > after
+                && matches!(phase, RuntimeLifecyclePhase::StartupPackageScheduled { .. })
+        })
+        .count()
+}
+
+/// The aliases `host.idle_state` keeps as having a startup package queued behind a pause
+/// (`startup_package_queued`).
+fn kept_startup_queued(host: &RuntimeHost) -> Vec<String> {
+    let record = host
+        .runtime_fact_snapshot()
+        .expect("the program facts")
+        .records
+        .into_iter()
+        .find(|record| {
+            record.scope == RuntimeFactScope::Runtime && record.key == "host.idle_state"
+        });
+    let Some(record) = record else {
+        return Vec::new();
+    };
+    match record.value {
+        actingcommand_contract::FactValue::RecordList(rows) => rows
+            .iter()
+            .filter(|row| row.get("startup_package_queued") == Some(&FactScalar::Boolean(true)))
+            .map(|row| match row.get("instance_alias") {
+                Some(FactScalar::String(alias)) => alias.clone(),
+                other => panic!("a kept startup package names its instance: {other:?}"),
+            })
+            .collect(),
+        other => panic!("host.idle_state is a record list: {other:?}"),
+    }
+}
+
+// T9: T8's start during the instance's pause, then a restart before the resume (a deploy restarts
+// the Runtime; the Runtime stop drops the queued claim). The idle record keeps the queued startup
+// package, so the restart queues it again behind the restored pause; nothing runs under the pause.
+// After the resume it runs once and is kept no more, and a further restart queues it no more.
+#[test]
+fn w2b_t9_a_start_during_a_pause_runs_its_startup_package_once_after_a_restart_and_the_resume() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let instance = instance_id();
+    let host = start_startup_host(&root, instance, &state);
+    let paused = send(
+        &host,
+        RuntimeOperation::PauseScheduling {
+            scope: SchedulingPauseScope::Instance {
+                instance_alias: ALIAS.to_owned(),
+            },
+            pause_reason: SchedulingPauseReason::new("w2b_pause").expect("pause reason"),
+            drain_timeout_ms: 1_000,
+        },
+        520,
+    );
+    assert_eq!(paused.state(), RuntimeReceiptState::Completed, "{paused:?}");
+    let started = control(&host, START, 521);
+    assert_eq!(
+        started.state(),
+        RuntimeReceiptState::Completed,
+        "{started:?}"
+    );
+    assert_eq!(
+        startup_answer(&started),
+        (
+            StartupPackageDisposition::Scheduled,
+            Some(StartupPackageWithheld::InstancePaused)
+        ),
+        "{started:?}"
+    );
+    assert_eq!(
+        kept_startup_queued(&host),
+        [ALIAS],
+        "the idle record keeps the startup package queued behind the pause"
+    );
+
+    // The restart before the resume.
+    let stopped_at = last_sequence(&host);
+    host.close().expect("close the paused host");
+    let host = start_startup_host(&root, instance, &state);
+    let (_, pauses) = host.scheduling_pauses_for_test().expect("pauses");
+    assert!(
+        pauses.contains_key(ALIAS),
+        "the instance's pause is restored"
+    );
+    host.expire_due_leases_for_test().expect("sweep tick");
+    assert_eq!(
+        host.instance_claims_for_test(ALIAS).expect("claims"),
+        (None, vec![ClaimKind::StartupPackage]),
+        "the restart queues the startup package again behind the restored pause"
+    );
+    assert_eq!(
+        startup_scheduled_after(&host, stopped_at),
+        1,
+        "queued again once"
+    );
+    assert_eq!(
+        recorded(&host, EventType::TaskRequested),
+        0,
+        "no startup run under the pause"
+    );
+    assert_eq!(kept_startup_queued(&host), [ALIAS], "still kept");
+
+    let resumed_at = last_sequence(&host);
+    let resumed = send(
+        &host,
+        RuntimeOperation::ResumeScheduling {
+            scope: SchedulingPauseScope::Instance {
+                instance_alias: ALIAS.to_owned(),
+            },
+            expected: None,
+        },
+        522,
+    );
+    assert_eq!(
+        resumed.state(),
+        RuntimeReceiptState::Completed,
+        "{resumed:?}"
+    );
+    await_recorded(&host, EventType::TaskCompleted, resumed_at);
+    host.expire_due_leases_for_test().expect("sweep tick");
+    assert_eq!(
+        recorded(&host, EventType::TaskRequested),
+        1,
+        "the startup package ran once"
+    );
+    assert_eq!(recorded(&host, EventType::TaskCompleted), 1);
+    assert_eq!(
+        startup_scheduled_after(&host, stopped_at),
+        1,
+        "no other startup package queued"
+    );
+    assert!(
+        !host
+            .instance_claims_for_test(ALIAS)
+            .expect("claims")
+            .1
+            .contains(&ClaimKind::StartupPackage),
+        "no second startup claim waits"
+    );
+    assert!(
+        kept_startup_queued(&host).is_empty(),
+        "granted, the startup package is kept no more"
+    );
+    assert!(host.fatal_error().expect("runtime health").is_none());
+
+    // Never twice: a further restart queues nothing.
+    let stopped_at = last_sequence(&host);
+    host.close().expect("close the resumed host");
+    let host = start_startup_host(&root, instance, &state);
+    host.expire_due_leases_for_test().expect("sweep tick");
+    assert_eq!(
+        startup_scheduled_after(&host, stopped_at),
+        0,
+        "a further restart queues no startup package"
+    );
+    assert!(
+        !host
+            .instance_claims_for_test(ALIAS)
+            .expect("claims")
+            .1
+            .contains(&ClaimKind::StartupPackage),
+        "no startup claim waits"
+    );
+    assert_eq!(
+        recorded(&host, EventType::TaskRequested),
+        1,
+        "the startup package ran once in all"
+    );
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
 }
 
 // ---- Item 3: a restart waits for the old VM.

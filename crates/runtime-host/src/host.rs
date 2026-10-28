@@ -2368,6 +2368,10 @@ impl RuntimeHost {
             // #422 QR-1: a ledger without its reader pool is said as a warning.
             shared.report_ledger_reader_pool_fallback();
             shared.check_install_preparation()?;
+            // W2-B (0.12.26; review W1-6 M1): each startup package the restored idle record keeps
+            // as queued behind a pause (the Runtime stop dropped its claim) is queued again, after
+            // the daemon-start preparation, behind the restored pause.
+            shared.requeue_startup_packages_on_start()?;
             // Workflow #398 RD-2 (model-398 §4.1): the device-link watch of the bound handsets,
             // after their daemon-start preparation; none without a bound handset.
             device_link::start(&shared)?;
