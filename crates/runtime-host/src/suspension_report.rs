@@ -1159,16 +1159,27 @@ fn reruns(snapshot: &Snapshot<'_>) -> Result<Vec<Value>, SuspensionReportError> 
             } else {
                 "owed"
             };
-            Some(json!({
-                "task_id": task_id,
-                "instance_id": instance_id,
-                "failure_code": owed.failure_code,
-                "count": owed.count,
-                "expires_at_unix_ms": owed.expires_at_unix_ms,
-                "state": state,
+            Some(wire(&RerunRow {
+                task_id,
+                instance_id,
+                failure_code: owed.failure_code,
+                count: owed.count,
+                expires_at_unix_ms: owed.expires_at_unix_ms,
+                state,
             }))
         })
         .collect())
+}
+
+/// One `reruns` row (Workflow #386 SR-2b-2).
+#[derive(Serialize)]
+struct RerunRow {
+    task_id: String,
+    instance_id: String,
+    failure_code: CodeStr,
+    count: u32,
+    expires_at_unix_ms: u64,
+    state: &'static str,
 }
 
 /// The `signal_id` prefix of an owed rerun's `policy_rerun_waiting` record (Workflow #386

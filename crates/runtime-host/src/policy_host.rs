@@ -2792,7 +2792,7 @@ impl PolicyHost {
             time.unix_ms,
         );
         // Workflow #336 R22: the pairs a failure identity schedules for an immediate rerun.
-        let immediate_retries = self
+        let mut immediate_retries = self
             .control
             .immediate_retry_pairs(&active.compiled, time.unix_ms)?;
         // Workflow #384 D2-S4: the fact refresh's readers, holds and settings for this cycle.
@@ -2828,6 +2828,9 @@ impl PolicyHost {
         )?;
         self.rerun_signals
             .extend(rerun_plan.signals.iter().cloned());
+        // SR-2b-2 review M1: a pair that owes a rerun in the occurrence it was exhausted in is
+        // not rerun at once by R22 either; it waits for its own trigger and cooldown.
+        immediate_retries.retain(|pair| !rerun_plan.exhausted.contains(pair));
         let deferrals = clock_slot::Deferrals::default();
         let started = Instant::now();
         let mut evaluation = evaluate_with_owed_reruns::<RuntimeHostError>(

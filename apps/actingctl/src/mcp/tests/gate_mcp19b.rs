@@ -290,6 +290,7 @@ pub(super) fn render(
         suspended: Vec::new(),
         packs: Vec::new(),
         remedies: Vec::new(),
+        reruns: Vec::new(),
         lift: Vec::new(),
         report_warnings: Vec::new(),
         report_status: json!({"status": "ok", "through_sequence": 121_000}),

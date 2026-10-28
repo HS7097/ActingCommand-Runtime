@@ -12,7 +12,9 @@
 //!   condition terminations were exhausted in an occurrence does not enter as an owed rerun
 //!   again in that occurrence: a later owed rerun there waits for the pair's own trigger and
 //!   cooldown, so sustained load cannot turn each trigger into `max_per_occurrence + 1` runs.
-//!   Memory only, like the exhaustion's warning queue: a restart forgets it.
+//!   R22 does not rerun it at once either (the policy host drops it from the immediate retries,
+//!   SR-2b-2 review M1), and the stage gate still holds it. Memory only, like the exhaustion's
+//!   warning queue: a restart forgets it.
 //! - **Stage gate.** While the instance's effective pacing stage is above
 //!   `scheduling.rerun.resume_stage`, or has been back at or below it for less than
 //!   `resume_settle_ms`, the owed rerun is deferred with `policy_rerun_waiting{pacing_stage}`
@@ -71,11 +73,15 @@ pub(crate) struct RerunState {
     signalled: BTreeSet<String>,
 }
 
-/// One evaluation's owed reruns: the pairs let in, the stage gate's waits by pair, and the
-/// records to write after the evaluation.
+/// One evaluation's owed reruns: the pairs let in, the pairs not let in because they were
+/// exhausted in this occurrence, the stage gate's waits by pair, and the records to write after
+/// the evaluation.
 #[derive(Debug, Default)]
 pub(crate) struct RerunPlan {
     pub(crate) owed: OwedReruns,
+    /// The pairs that owe a rerun in the occurrence their condition terminations were exhausted
+    /// in: not promoted, not rerun at once by R22 (SR-2b-2 review M1), still stage-gated.
+    pub(crate) exhausted: BTreeSet<(String, String)>,
     waits: BTreeMap<(String, String), (DecisionReason, Option<u64>)>,
     pub(crate) signals: Vec<PolicyPlanningSignalEventData>,
 }
@@ -185,30 +191,34 @@ impl RerunState {
             }
             let pair = (task_id.clone(), instance_id.clone());
             if self.exhausted.get(&pair) == Some(&owed.expires_at_unix_ms) {
-                continue;
-            }
-            let owed_outcome = with_failure_code(
-                Outcome::new(SchedulingRuleHostCode::PolicyRerunOwed)
-                    .task_id(task_id.as_str())
-                    .instance_id(instance_id.as_str()),
-                owed,
-            )
-            .count(owed.count);
-            plan.owed.pairs.insert(
-                pair.clone(),
-                OwedRerun {
-                    reason: DecisionReason {
-                        outcome: owed_outcome,
-                        detail: format!(
-                            "a rerun is owed: the run ended by a condition ({}), condition termination {} of the occurrence ending at {}",
-                            owed.failure_code.as_str(),
-                            owed.count,
-                            owed.expires_at_unix_ms
-                        ),
+                // Exhausted in this occurrence: not let in as owed, and not rerun at once by R22
+                // (its exhausted run's failure armed it); it waits for its own trigger and
+                // cooldown, and the stage gate below still holds it (SR-2b-2 review M1).
+                plan.exhausted.insert(pair.clone());
+            } else {
+                let owed_outcome = with_failure_code(
+                    Outcome::new(SchedulingRuleHostCode::PolicyRerunOwed)
+                        .task_id(task_id.as_str())
+                        .instance_id(instance_id.as_str()),
+                    owed,
+                )
+                .count(owed.count);
+                plan.owed.pairs.insert(
+                    pair.clone(),
+                    OwedRerun {
+                        reason: DecisionReason {
+                            outcome: owed_outcome,
+                            detail: format!(
+                                "a rerun is owed: the run ended by a condition ({}), condition termination {} of the occurrence ending at {}",
+                                owed.failure_code.as_str(),
+                                owed.count,
+                                owed.expires_at_unix_ms
+                            ),
+                        },
+                        promote: settings.promote,
                     },
-                    promote: settings.promote,
-                },
-            );
+                );
+            }
             let Some(wake) = self.wait(instance_id, settings) else {
                 continue;
             };

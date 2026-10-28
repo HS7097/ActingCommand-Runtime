@@ -714,7 +714,9 @@ removes the owed rerun: the pair's next condition termination counts from 1 agai
 window too. Such a later owed rerun in the window its pair was exhausted in is not promoted
 (coordinator decision, SR-2b-2): it does not enter the evaluation as owed and waits for the
 pair's own trigger and cooldown, so sustained load cannot turn each trigger into
-`max_per_occurrence` + 1 runs; it still hides the terminal and expires as any owed rerun. The
+`max_per_occurrence` + 1 runs. The immediate rerun (R22) that the exhausted run's failure
+identity armed does not rerun it at once either, and the stage gate still holds it; it still
+hides the terminal and expires as any owed rerun. The
 exhaustion is kept in memory only, like its warning before it is recorded: after a restart a
 later owed rerun of that window is promoted again. The expiry is judged at each evaluation:
 `policy_rerun_expired` is recorded once per owed rerun (`window_end_unix_ms` its

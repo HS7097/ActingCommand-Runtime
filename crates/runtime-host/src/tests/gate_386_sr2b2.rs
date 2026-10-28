@@ -14,9 +14,10 @@
 
 use super::gate_386_sr2a::{once_a_day_sources, sampling_ended};
 use super::gate_386_sr2b1::{
-    TASK, admit, condition_codes, failure_of, rerun_manifest, start, whole_day_window_end,
+    TASK, condition_codes, failure_of, rerun_manifest, start, whole_day_window_end,
 };
 use super::*;
+use crate::failure_identity::{FailureIdentity, IdentityFrame, IdentityPackage};
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{PerformancePacingStage, PolicyFailureRecord};
 use actingcommand_policy::{
@@ -28,6 +29,7 @@ const SAMPLING_CODE: &str = "recognition_sample_deadline_exceeded";
 const OWED: &str = "policy_rerun_owed";
 const WAITING: &str = "policy_rerun_waiting";
 const EXPIRED: &str = "policy_rerun_expired";
+const IMMEDIATE: &str = "failure_retry_immediate";
 const SETTLE_MS: u64 = 60_000;
 const MINUTE_MS: u64 = 60_000;
 const SETTLED_AFTER_MS: u64 = 75_000;
@@ -425,37 +427,115 @@ fn sr2b2_t5_actingd_suspended_lists_owed_waiting_and_expired_reruns() {
 // owes a rerun again (count 1), but it is not promoted: the next evaluation carries no
 // `policy_rerun_owed` for the pair, which waits for its own trigger. Before the exhaustion the
 // owed rerun was promoted.
+//
+// SR-2b-2 review M1: the same with a failure that carries a failure identity, so the exhausted
+// run's ordinary failure arms R22's immediate rerun (which reruns that run once, unchanged).
+// Later, while the pair owes a rerun in the window it was exhausted in, R22 does not rerun it at
+// once either (no `failure_retry_immediate`), and the stage gate still holds it: at S3 it waits
+// with `policy_rerun_waiting{pacing_stage: s3}` and is not dispatched. Both legs check this.
 #[test]
 fn sr2b2_t6_a_pair_exhausted_in_this_window_is_not_promoted() {
+    for (leg, input, identified) in [
+        ("no failure identity", sampling_ended(), false),
+        ("a failure identity", identified_sampling_ended(), true),
+    ] {
+        exhausted_leg(leg, &input, identified);
+    }
+}
+
+/// `sampling_ended` with a failure identity, as a linear or page-graph run's settlement writes
+/// one: an ordinary failure of it schedules R22's immediate rerun.
+fn identified_sampling_ended() -> PolicyExecutionInput {
+    let PolicyExecutionInput::Failed { outcome, class, .. } = sampling_ended() else {
+        panic!("sampling_ended is a failure")
+    };
+    let identity = FailureIdentity {
+        base: SAMPLING_CODE.to_owned(),
+        key: "0".repeat(12),
+        main: IdentityPackage::measured("fixture.rerun.package", None),
+        layers: Vec::new(),
+        frame: IdentityFrame::None,
+    }
+    .encode();
+    PolicyExecutionInput::Failed {
+        outcome,
+        failure_identity: Some(identity),
+        class,
+    }
+}
+
+/// Test ⑥'s scenario with the pair's runs failing as `input`.
+fn exhausted_leg(leg: &str, input: &PolicyExecutionInput, identified: bool) {
     let root = TempDir::new().expect("tempdir");
     let (host, clock) = start(&root, instance_id(), POLICY_NOW_UNIX_MS, None);
     host.activate_policy_catalog(&budget_policy_sources(1))
         .expect("activate the catalog");
     let step = 10 * MINUTE_MS;
     let at = |index: u64| POLICY_NOW_UNIX_MS + index * step;
-    let (codes, failure) = run_at(&host, &clock, at(0), 600, true, &sampling_ended());
-    assert!(!codes.iter().any(|code| code == OWED), "{codes:?}");
-    assert_eq!(failure.condition.map(|condition| condition.count), Some(1));
-    let (codes, failure) = run_at(&host, &clock, at(1), 601, false, &sampling_ended());
-    assert!(codes.iter().any(|code| code == OWED), "promoted: {codes:?}");
-    assert_eq!(failure.condition.map(|condition| condition.count), Some(2));
-    let (codes, failure) = run_at(&host, &clock, at(2), 602, false, &sampling_ended());
-    assert!(codes.iter().any(|code| code == OWED), "promoted: {codes:?}");
-    assert_eq!(failure.condition, None, "the third is exhausted");
-    let (codes, failure) = run_at(&host, &clock, at(3), 603, false, &sampling_ended());
-    assert!(!codes.iter().any(|code| code == OWED), "{codes:?}");
+    let (codes, failure) = run_at(&host, &clock, at(0), 600, true, input);
+    assert!(!codes.iter().any(|code| code == OWED), "{leg}: {codes:?}");
     assert_eq!(
         failure.condition.map(|condition| condition.count),
         Some(1),
-        "a new series in the same window owes a rerun"
+        "{leg}"
+    );
+    let (codes, failure) = run_at(&host, &clock, at(1), 601, false, input);
+    assert!(
+        codes.iter().any(|code| code == OWED),
+        "{leg}: promoted: {codes:?}"
+    );
+    assert_eq!(
+        failure.condition.map(|condition| condition.count),
+        Some(2),
+        "{leg}"
+    );
+    let (codes, failure) = run_at(&host, &clock, at(2), 602, false, input);
+    assert!(
+        codes.iter().any(|code| code == OWED),
+        "{leg}: promoted: {codes:?}"
+    );
+    assert_eq!(failure.condition, None, "{leg}: the third is exhausted");
+    if identified {
+        assert!(failure.failure_identity.is_some(), "{leg}: {failure:?}");
+        assert_eq!(
+            failure.disposition,
+            PolicyFailureDisposition::RetryScheduled,
+            "{leg}: the exhausted run's ordinary failure arms R22"
+        );
+    }
+    let (codes, failure) = run_at(&host, &clock, at(3), 603, false, input);
+    assert!(!codes.iter().any(|code| code == OWED), "{leg}: {codes:?}");
+    if identified {
+        assert!(
+            codes.iter().any(|code| code == IMMEDIATE),
+            "{leg}: R22 reruns the exhausted run itself: {codes:?}"
+        );
+    }
+    assert_eq!(
+        failure.condition.map(|condition| condition.count),
+        Some(1),
+        "{leg}: a new series in the same window owes a rerun"
     );
 
+    host.pin_pacing_stage_for_test(POLICY_INSTANCE_ALIAS, PerformancePacingStage::S3)
+        .expect("pin S3");
     let evaluation = evaluate_at(&host, &clock, at(4), 604);
+    assert!(
+        !dispatched(&evaluation, TASK),
+        "{leg}: held by the stage gate: {evaluation:#?}"
+    );
     let pair = decision(&evaluation, TASK);
     assert!(
         reason(pair, OWED).is_none(),
-        "not promoted after its exhaustion in this window: {pair:#?}"
+        "{leg}: not promoted after its exhaustion in this window: {pair:#?}"
     );
+    assert!(
+        reason(pair, IMMEDIATE).is_none(),
+        "{leg}: not rerun at once after its exhaustion in this window: {pair:#?}"
+    );
+    let waiting =
+        reason(pair, WAITING).unwrap_or_else(|| panic!("{leg}: waiting at S3: {pair:#?}"));
+    assert_eq!(waiting.value("pacing_stage"), Some(&json!("s3")), "{leg}");
     assert!(host.fatal_error().expect("runtime health").is_none());
     host.close().expect("close the host");
 }

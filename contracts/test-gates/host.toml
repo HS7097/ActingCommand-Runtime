@@ -649,7 +649,7 @@ tests = [
 ]
 incident = ["#386"]
 
-# An owed rerun is gated by the instance's pacing stage: above scheduling.rerun.resume_stage it waits with policy_rerun_waiting{pacing_stage}, back at or below it still waits until resume_settle_ms has passed (59 s waits, 60 s dispatches); past its window end it expires with policy_rerun_expired and the run's failure is back in the snapshot; while owed no dependency_completed(head, *) of a chain is true; actingd suspended lists owed, waiting and expired reruns; a pair exhausted in this window is not promoted again in it (Workflow #386 SR-2b-2, design P22 §6.2, tests 2 to 5 and the coordinator's decision on review M1)
+# An owed rerun is gated by the instance's pacing stage: above scheduling.rerun.resume_stage it waits with policy_rerun_waiting{pacing_stage}, back at or below it still waits until resume_settle_ms has passed (59 s waits, 60 s dispatches); past its window end it expires with policy_rerun_expired and the run's failure is back in the snapshot; while owed no dependency_completed(head, *) of a chain is true; actingd suspended lists owed, waiting and expired reruns; a pair exhausted in this window is not promoted again in it, nor rerun at once by R22 when its failure carries a failure identity, and the stage gate still holds it (Workflow #386 SR-2b-2, design P22 §6.2, tests 2 to 5 and the coordinator's decision on review M1; fix round 1, review M1)
 [[gate]]
 coverage = "Y"
 tests = [
