@@ -107,7 +107,8 @@ fn evaluate(host: &RuntimeHost, trigger: PolicyTrigger) -> PolicyEvaluation {
 }
 
 /// A's dispatch is chosen while B's lease holds B, and admitted; then B's lease is released.
-fn admit_a_while_b_is_held(host: &RuntimeHost) {
+/// Answers A's decision id; A's dispatch keeps its lease on A.
+fn admit_a_while_b_is_held(host: &RuntimeHost) -> String {
     let mut holder = TestClient::connect(host);
     let (_, token) = holder.acquire(POLICY_INSTANCE_ALIAS_B);
     let evaluation = evaluate(host, PolicyTrigger::FactsChanged);
@@ -134,6 +135,7 @@ fn admit_a_while_b_is_held(host: &RuntimeHost) {
         holder.send(&release).state(),
         RuntimeReceiptState::Completed
     );
+    intent.decision_id
 }
 
 /// Raises the controller above Normal (QosReduced) with host responsiveness samples under the
@@ -266,7 +268,8 @@ fn gate_427b_the_heavy_limit_binds_normal_and_under_pressure_in_observe_pace_and
 
 /// In each mode: `max_concurrent_runs` 1 and A's (light) dispatch admitted, so B's candidate
 /// waits `policy_concurrent_runs_deferred` with 1 of 1 used, 1 admitted, 0 chosen; the schedule
-/// explanation read answers B's not-running row and candidate row with those numbers.
+/// explanation read answers B's not-running row and candidate row with those numbers. Then A's
+/// dispatch settles and frees the slot: the next round chooses B (follow-up, review L2).
 #[test]
 fn gate_427b_the_max_key_binds_in_observe_pace_and_full_and_the_explanation_says_the_numbers() {
     for (mode, expected) in MODES {
@@ -277,7 +280,7 @@ fn gate_427b_the_max_key_binds_in_observe_pace_and_full_and_the_explanation_says
             PerformanceControlConfig::default().with_max_concurrent_runs(Some(1)),
         );
         assert_eq!(pacing_mode(&host), expected, "{mode}");
-        admit_a_while_b_is_held(&host);
+        let a_decision = admit_a_while_b_is_held(&host);
 
         let evaluation = evaluate(&host, PolicyTrigger::Recovery);
         assert!(!b_chosen(&evaluation), "{mode}: {evaluation:#?}");
@@ -298,6 +301,15 @@ fn gate_427b_the_max_key_binds_in_observe_pace_and_full_and_the_explanation_says
             .find(|row| row.task_id == B_TASK)
             .unwrap_or_else(|| panic!("B's row: {entry:#?}"));
         assert_eq!(slots(&row.why), numbers, "{mode}");
+
+        // A's dispatch settles: it no longer takes the slot, and the next round chooses B.
+        host.complete_policy_dispatch(&a_decision)
+            .expect("A's dispatch settles");
+        let evaluation = evaluate(&host, PolicyTrigger::Recovery);
+        assert!(
+            b_chosen(&evaluation),
+            "{mode} after A settled: {evaluation:#?}"
+        );
         host.close().expect("close the host");
     }
 }

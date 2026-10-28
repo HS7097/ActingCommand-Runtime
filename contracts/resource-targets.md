@@ -356,7 +356,7 @@ tie with it. `s_k` never grows as `c` grows. With `base = score + utility + offs
 
 The thresholds are computed from `base`, never from `s`. `total_score` gains
 `effective * 1000`, so `s = 1000` weighs one priority level; the effective score also orders
-the host budget allocation and the performance arbitration like any other. Every admission
+the shared run limits allocation and the performance arbitration like any other. Every admission
 predicate (authorization, budgets, windows, pause, cooldown, availability, host capacity)
 stays in force.
 
@@ -577,7 +577,7 @@ of 100000 is sized this way; 1000 would weigh like a single priority level.
 4. `R <= 1_000_000`. A waiting competitor gains 1 of aging per second, so at the full term it
    overtakes after about `R - Δ` seconds.
 5. The base weight is a standing preference on every producing task of an enabled instance and
-   also orders the shared host budget, so keep `B` small.
+   also orders the shared run limits, so keep `B` small.
 
 Worked example: `Q = S = 1000`, `B = 100`, `G = 100`, `T = 100000`, one task with `r = 1000`
 against a light competitor five priority levels higher (`Δ = 5000` plus the aging difference in

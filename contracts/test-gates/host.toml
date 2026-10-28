@@ -2461,7 +2461,7 @@ tests = [
 ]
 incident = ["#427-A"]
 
-# Workflow #427-B (review C4, #427 comment 6459928838; brief rd-1028/brief-427b-budget.md; contracts/performance-control.md): through the host's policy cycle in observe, pace and full alike, the heavy-scene limit binds (.normal at Normal, .paused above it, heavy_scene_budget_exhausted 1 of 1 with A admitted), and performance.pacing.max_concurrent_runs 1 defers B with policy_concurrent_runs_deferred 1 of 1, which the schedule explanation read answers with its numbers
+# Workflow #427-B (review C4, #427 comment 6459928838; brief rd-1028/brief-427b-budget.md; contracts/performance-control.md): through the host's policy cycle in observe, pace and full alike, the heavy-scene limit binds (.normal at Normal, .paused above it, heavy_scene_budget_exhausted 1 of 1 with A admitted), and performance.pacing.max_concurrent_runs 1 defers B with policy_concurrent_runs_deferred 1 of 1, which the schedule explanation read answers with its numbers; once A's dispatch settles the slot is free and the next round chooses B (follow-up, review rd-1028/review-427b.md L2)
 [[gate]]
 coverage = "Y"
 tests = [

@@ -7,10 +7,16 @@
 //! `policy_concurrent_runs_deferred` or `heavy_scene_budget_deferred` row keeps `used`,
 //! `limit_count`, `admitted_count` and `round_selected_count`, in the not-running row and in the
 //! candidate rows, through the output budget and the tool result.
+//!
+//! Workflow #427-B follow-up (review L1): `ac_diagnose`'s `not_run` lists, beside the deferred
+//! rows, a row whose state is `blocked` and whose `why` is a shared run limit (the evaluator
+//! blocks a heavy candidate at placement with `heavy_scene_budget_exhausted`), with its numbers;
+//! a row blocked by its own trigger stays out.
 
 use super::super::protocol::Era;
 use super::super::schedule::within_budget;
 use super::super::tools::{ToolSuccess, call_result};
+use super::gate_mcp19b::{bound, listed, render};
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     RuntimeScheduleExplanation, ScheduleCandidateEligibility, ScheduleCandidateState,
@@ -107,4 +113,62 @@ fn gate_427b_ac_schedule_answers_the_shared_run_limits_with_their_numbers() {
         values(2, 2, 1, 1),
         "{answered}"
     );
+}
+
+#[test]
+fn gate_427b_ac_diagnose_lists_a_row_the_shared_run_limits_blocked_with_its_numbers() {
+    // Both heavy-scene slots of the host are taken by dispatches admitted or running: the heavy
+    // candidate is blocked at placement, 2 of 2, none chosen in the round. The other row waits
+    // for its own trigger.
+    let exhausted = ScheduleExplanationCandidate {
+        state: ScheduleCandidateState::Blocked,
+        ..deferred(
+            "fixture.heavy",
+            slot_outcome(PolicyCode::HeavySceneBudgetExhausted, 2, 0, 2),
+        )
+    };
+    let waiting = ScheduleExplanationCandidate {
+        task_id: "fixture.later".to_owned(),
+        state: ScheduleCandidateState::Blocked,
+        eligibility: ScheduleCandidateEligibility::False,
+        why: Outcome::relayed("trigger_false"),
+        reasons: vec![Outcome::relayed("trigger_false").code().clone()],
+        reasons_omitted: None,
+        next_wake_unix_ms: Some(EVALUATED_AT + 3_600_000),
+        since_unix_ms: EVALUATED_AT,
+        expected_runtime_ms: None,
+        expected_runtime_source: None,
+    };
+    let explanation = RuntimeScheduleExplanation {
+        evaluated_at_unix_ms: Some(EVALUATED_AT),
+        catalog_hash: Some(format!("sha256:{}", "0".repeat(64))),
+        instances: vec![ScheduleExplanationInstance {
+            instance_alias: "neutral.third".to_owned(),
+            next_wake_unix_ms: Some(EVALUATED_AT + 3_600_000),
+            selected: None,
+            not_running: ScheduleExplanationNotRunning {
+                task_id: Some(exhausted.task_id.clone()),
+                why: exhausted.why.clone(),
+                next_wake_unix_ms: None,
+                since_unix_ms: EVALUATED_AT,
+            },
+            candidates_total: 2,
+            candidates: vec![exhausted.clone(), waiting],
+        }],
+    };
+    assert_eq!(explanation.validate(), Ok(()), "setup: a valid answer");
+
+    let diagnosed = render(&explanation, bound(10));
+    assert_eq!(
+        diagnosed.result["not_run"],
+        json!([listed("neutral.third", &exhausted)]),
+        "{:#}",
+        diagnosed.result
+    );
+    let row = &diagnosed.result["not_run"][0];
+    assert_eq!(row["state"], json!("blocked"));
+    assert_eq!(row["why"]["code"], json!("heavy_scene_budget_exhausted"));
+    assert_eq!(row["why"]["values"], values(2, 2, 2, 0));
+    assert_eq!(diagnosed.result.get("not_run_total"), None);
+    assert!(diagnosed.warnings.is_empty());
 }
