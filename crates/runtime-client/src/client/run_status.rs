@@ -38,6 +38,25 @@ const RUN_ADMISSION_AND_TERMINAL_TYPES: [EventType; 4] = [
     EventType::TaskFailed,
     EventType::TaskCancelled,
 ];
+/// P32 A-2 (#422 6468995196; design rd-1028/design-p32.md §2 A-2): what a run listing asks its
+/// pages for and how it finds the run of one listing fact.
+#[derive(Clone, Copy)]
+struct ListingProjection {
+    profile: ProjectionProfile,
+    identity: fn(&ProjectedEvent) -> RuntimeClientResult<Option<TaskRunIdentity>>,
+}
+
+/// P32 A-2: a listing reads a fact's type, sequence, time and links, never its payload, so its
+/// pages carry none (`Concise`): the Runtime clones, measures and sends no payload and the
+/// client parses none, for the thousands of entry facts a busy window holds (v0.12.24: the
+/// listing of one busy instance's day did not finish within the 24 s of `ac_runs` and
+/// `ac_diagnose`). The run of a fact is read from its links (`listing_fact_identity`). The
+/// profile is the request's existing member, which every Runtime answers.
+const RUN_LISTING_PROJECTION: ListingProjection = ListingProjection {
+    profile: ProjectionProfile::Concise,
+    identity: listing_fact_identity,
+};
+
 /// The most pages one listing type is read in (Workflow #411 A6), each of up to 256 records:
 /// the listing keeps no record, so it ends at its deadline or at its last page, never at a
 /// record count.
@@ -376,16 +395,18 @@ struct RunListingFold {
     runs_seen: BTreeSet<RunId>,
     snapshot: Option<u64>,
     complete: bool,
+    projection: ListingProjection,
 }
 
 impl RunListingFold {
-    fn at(snapshot: Option<u64>) -> Self {
+    fn at(snapshot: Option<u64>, projection: ListingProjection) -> Self {
         Self {
             runs: Vec::new(),
             listed: BTreeMap::new(),
             runs_seen: BTreeSet::new(),
             snapshot,
             complete: true,
+            projection,
         }
     }
 
@@ -403,7 +424,7 @@ impl RunListingFold {
     /// One listing fact: a run it names the first time is listed, a later fact of a listed
     /// run can only move its first listing fact earlier.
     fn fold(&mut self, event: &ProjectedEvent) -> RuntimeClientResult<()> {
-        let Some(identity) = run_fact_identity(event)? else {
+        let Some(identity) = (self.projection.identity)(event)? else {
             return Ok(());
         };
         match self.listed.get(&identity.request_id) {
@@ -505,7 +526,7 @@ impl RuntimeClient {
             from_timestamp_unix_ms: Some(since_unix_ms),
             ..EventQuery::default()
         };
-        let mut fold = RunListingFold::at(None);
+        let mut fold = RunListingFold::at(None, RUN_LISTING_PROJECTION);
         self.fold_run_listing(
             &mut fold,
             &RUN_ADMISSION_AND_TERMINAL_TYPES,
@@ -595,6 +616,7 @@ impl RuntimeClient {
             },
             from.map(|position| position.snapshot_ledger_position),
             Some(deadline),
+            RUN_LISTING_PROJECTION,
         )?;
         let before = from.map_or(u64::MAX, |position| position.before_sequence);
         let mut page = ContainedRunPage {
@@ -633,14 +655,19 @@ impl RuntimeClient {
             let identity = listed.identity;
             // Workflow #389 MCP-3 ruling: task_prefix matches the policy task id, which only a
             // scheduled run has. A run without one, or whose one does not start with the
-            // prefix, is not read.
+            // prefix, is not read. P32 A-1: an intent read the deadline ended examined nothing.
             let mut catalog_task_id = None;
             if let Some(prefix) = &filter.task_prefix {
-                match self.dispatched_catalog_task_id(identity, listing.snapshot)? {
-                    Some(found) if found.starts_with(prefix.as_str()) => {
+                match self.dispatched_catalog_task_id(identity, listing.snapshot, Some(deadline))? {
+                    None => {
+                        page.incomplete = true;
+                        page.next = Some(position(examined));
+                        break;
+                    }
+                    Some(Some(found)) if found.starts_with(prefix.as_str()) => {
                         catalog_task_id = Some(found);
                     }
-                    _ => {
+                    Some(_) => {
                         examined = listed.sequence;
                         continue;
                     }
@@ -657,6 +684,8 @@ impl RuntimeClient {
                 page.next = Some(position(examined));
                 break;
             };
+            // Where the next page starts when this run's dispatch intent read is cut.
+            let unexamined = examined;
             examined = listed.sequence;
             // A run first recorded before the window is not one of its runs.
             let Some(first_fact_unix_ms) = read
@@ -673,12 +702,21 @@ impl RuntimeClient {
                 continue;
             }
             // Only a scheduled run carries a policy task id; a manual one never matches a
-            // task_prefix.
+            // task_prefix. P32 A-1: an intent read the deadline ended leaves the run unexamined.
             let catalog_task_id = match (read.status.dispatch, catalog_task_id) {
                 (RunDispatch::Scheduled, Some(found)) => Some(found),
-                (RunDispatch::Scheduled, None) => {
-                    self.dispatched_catalog_task_id(identity, listing.snapshot)?
-                }
+                (RunDispatch::Scheduled, None) => match self.dispatched_catalog_task_id(
+                    identity,
+                    listing.snapshot,
+                    Some(deadline),
+                )? {
+                    Some(found) => found,
+                    None => {
+                        page.incomplete = true;
+                        page.next = Some(position(unexamined));
+                        break;
+                    }
+                },
                 _ if filter.task_prefix.is_some() => continue,
                 _ => None,
             };
@@ -707,6 +745,37 @@ impl RuntimeClient {
         since_unix_ms: u64,
         deadline: Instant,
     ) -> RuntimeClientResult<WindowRunListing> {
+        self.window_run_listing(instance, since_unix_ms, deadline, RUN_LISTING_PROJECTION)
+    }
+
+    /// P32 A-2, tests only: `list_window_runs` as it read before A-2, its pages asked for
+    /// `Forensic` and each fact's run found from its payload (`run_fact_identity`), for the
+    /// gate that holds both listings equal.
+    #[cfg(test)]
+    pub(crate) fn list_window_runs_from_payloads(
+        &self,
+        instance: Option<InstanceId>,
+        since_unix_ms: u64,
+        deadline: Instant,
+    ) -> RuntimeClientResult<WindowRunListing> {
+        self.window_run_listing(
+            instance,
+            since_unix_ms,
+            deadline,
+            ListingProjection {
+                profile: ProjectionProfile::Forensic,
+                identity: run_fact_identity,
+            },
+        )
+    }
+
+    fn window_run_listing(
+        &self,
+        instance: Option<InstanceId>,
+        since_unix_ms: u64,
+        deadline: Instant,
+        projection: ListingProjection,
+    ) -> RuntimeClientResult<WindowRunListing> {
         let listing = self.list_runs(
             &EventQuery {
                 instance_id: instance,
@@ -715,6 +784,7 @@ impl RuntimeClient {
             },
             None,
             Some(deadline),
+            projection,
         )?;
         Ok(WindowRunListing {
             runs: listing
@@ -735,7 +805,8 @@ impl RuntimeClient {
 
     /// #422 QR-2b: the brief status of one run of a `list_window_runs` listing, read at that
     /// listing's `snapshot` as `list_contained_runs` reads it; `None` when `deadline`, checked
-    /// between pages, ended the read. Read-only.
+    /// between pages, ended the read (P32 A-1: also one of its Runtime restart or lease reads).
+    /// Read-only.
     pub fn window_run_status(
         &self,
         run: &WindowRun,
@@ -757,14 +828,17 @@ impl RuntimeClient {
 
     /// #422 QR-2b: the policy task id of one run of a `list_window_runs` listing (the `task_id`
     /// of its `policy.dispatch_intent`, as `list_contained_runs` reads it for a scheduled run),
-    /// one bounded page at the listing's `snapshot`; `None` for a run dispatched by hand.
+    /// read at the listing's `snapshot`: `Some(None)` for a run dispatched by hand. P32 A-1:
+    /// a page the Runtime's read budget cut goes on to its next page; `None` when `deadline`,
+    /// checked between pages, ended the read first, as `window_run_status` answers then.
     /// Read-only.
     pub fn window_run_catalog_task_id(
         &self,
         run: &WindowRun,
         snapshot: u64,
-    ) -> RuntimeClientResult<Option<String>> {
-        self.dispatched_catalog_task_id(run.identity, snapshot)
+        deadline: Instant,
+    ) -> RuntimeClientResult<Option<Option<String>>> {
+        self.dispatched_catalog_task_id(run.identity, snapshot, Some(deadline))
     }
 
     /// The runs `window` holds a listing fact of (Workflow #391 item 3), one query per listing
@@ -779,8 +853,9 @@ impl RuntimeClient {
         window: &EventQuery,
         snapshot: Option<u64>,
         deadline: Option<Instant>,
+        projection: ListingProjection,
     ) -> RuntimeClientResult<RunListing> {
-        let mut fold = RunListingFold::at(snapshot);
+        let mut fold = RunListingFold::at(snapshot, projection);
         self.fold_run_listing(&mut fold, &RUN_LISTING_EVENT_TYPES, window, deadline)?;
         Ok(fold.finish())
     }
@@ -800,11 +875,13 @@ impl RuntimeClient {
             if !fold.complete {
                 break;
             }
+            let profile = fold.projection.profile;
             let read = self.visit_listing_pages(
                 EventQuery {
                     event_type: Some(*event_type),
                     ..window.clone()
                 },
+                profile,
                 fold.snapshot,
                 deadline,
                 |event| fold.fold(event),
@@ -816,13 +893,15 @@ impl RuntimeClient {
     }
 
     /// Every page of one listing query on one snapshot (Workflow #411 A6), with the cursor,
-    /// snapshot and order checks of `read_status_pages`. Each record is handed to
+    /// snapshot and order checks of `read_status_pages`, each asked for `profile` (P32 A-2:
+    /// `Concise`, no payload). Each record is handed to
     /// `visit` as its page arrives and is not kept, so the read is bounded by its deadline
     /// (reaching it ends the read with `complete: false`) and by `MAX_RUN_LISTING_PAGES`, not by
     /// a record count.
     fn visit_listing_pages(
         &self,
         query: EventQuery,
+        profile: ProjectionProfile,
         snapshot: Option<u64>,
         deadline: Option<Instant>,
         mut visit: impl FnMut(&ProjectedEvent) -> RuntimeClientResult<()>,
@@ -845,8 +924,7 @@ impl RuntimeClient {
                     .at_snapshot(snapshot)
                     .map_err(|_| invalid(ClientCode::RunStatusPageRequestInvalid))?;
             }
-            let page =
-                self.query_event_page(query.clone(), ProjectionProfile::Forensic, request)?;
+            let page = self.query_event_page(query.clone(), profile, request)?;
             let page_position = page.snapshot_ledger_position();
             if position.is_some_and(|expected| expected != page_position) {
                 return Err(invalid(ClientCode::RunStatusSnapshotChanged));
@@ -889,21 +967,25 @@ impl RuntimeClient {
     /// The policy task id of the run `identity` names (Workflow #389 MCP-3 ruling): the `task_id`
     /// of its one `policy.dispatch_intent`. The intent is linked to the run and its task but
     /// recorded under the admission request, not the run's own request, so it is read with one
-    /// bounded query by run at `snapshot`. A run dispatched by hand has none. The id is an
-    /// opaque string from the resource side and is never parsed.
+    /// bounded query by run at `snapshot`. A run dispatched by hand has none (`Some(None)`).
+    /// The id is an opaque string from the resource side and is never parsed. `None` when
+    /// `deadline` ended the read (P32 A-1, `first_status_events`).
     fn dispatched_catalog_task_id(
         &self,
         identity: TaskRunIdentity,
         snapshot: u64,
-    ) -> RuntimeClientResult<Option<String>> {
+        deadline: Option<Instant>,
+    ) -> RuntimeClientResult<Option<Option<String>>> {
         let query = EventQuery {
             run_id: Some(identity.run_id),
             event_type: Some(EventType::PolicyDispatchIntent),
             ..EventQuery::default()
         };
-        let intents = self.first_status_events(query, 2, snapshot)?;
+        let Some(intents) = self.first_status_events(query, 2, snapshot, deadline)? else {
+            return Ok(None);
+        };
         let intent = match intents.as_slice() {
-            [] => return Ok(None),
+            [] => return Ok(Some(None)),
             [intent] => intent,
             _ => return Err(status_error(ClientCode::RunStatusIdentityAmbiguous)),
         };
@@ -912,14 +994,15 @@ impl RuntimeClient {
         }
         match full_payload(intent)? {
             EventPayload::Policy(PolicyPayload::DispatchIntent(payload)) => {
-                Ok(Some(payload.task_id().to_owned()))
+                Ok(Some(Some(payload.task_id().to_owned())))
             }
             _ => Err(status_error(ClientCode::RunStatusIdentityMissing)),
         }
     }
 
-    /// `None` only when `deadline` ended a paged read before its last page. Both reads, by run
-    /// and by request, read `RUN_STATUS_EVENT_TYPES` only (Workflow #411 A6).
+    /// `None` only when `deadline` ended a paged read before its last page (P32 A-1: also a
+    /// Runtime restart read or a lease read). Both reads, by run and by request, read
+    /// `RUN_STATUS_EVENT_TYPES` only (Workflow #411 A6).
     fn read_contained_run_status(
         &self,
         key: RunKey,
@@ -1105,23 +1188,39 @@ impl RuntimeClient {
         let instance_id = single_link(&events, EventLinks::instance_id)?;
         let correlation_id = single_link(&events, EventLinks::correlation_id)?;
         let admitted_sequence = admitted.as_ref().map(|(sequence, _, _)| *sequence);
+        // P32 A-1: a restart or lease read the deadline ended leaves the run unread, never
+        // "no restart" or "no lease terminal".
         let restarted_after_first_fact = match first_fact {
-            Some((sequence, _)) => self.runtime_restarted_since(sequence, snapshot)?,
+            Some((sequence, _)) => {
+                let Some(restarted) = self.runtime_restarted_since(sequence, snapshot, deadline)?
+                else {
+                    return Ok(None);
+                };
+                restarted
+            }
             None => false,
         };
         let restarted_after_admission = match admitted_sequence {
             Some(sequence) if restarted_after_first_fact => {
-                self.runtime_restarted_since(sequence, snapshot)?
+                let Some(restarted) = self.runtime_restarted_since(sequence, snapshot, deadline)?
+                else {
+                    return Ok(None);
+                };
+                restarted
             }
             Some(_) => false,
             None => false,
         };
         let open = terminal.is_none() && first_fact.is_some();
         let lease = match single_link(&events, EventLinks::lease_id)? {
-            Some(lease_id) => Some(ContainedRunLease {
-                lease_id,
-                terminal: self.contained_run_lease_terminal(lease_id, &events, snapshot)?,
-            }),
+            Some(lease_id) => {
+                let Some(terminal) =
+                    self.contained_run_lease_terminal(lease_id, &events, snapshot, deadline)?
+                else {
+                    return Ok(None);
+                };
+                Some(ContainedRunLease { lease_id, terminal })
+            }
             None => None,
         };
         let state = match &terminal {
@@ -1168,29 +1267,40 @@ impl RuntimeClient {
     }
 
     /// Any Runtime start or takeover at or after `sequence`, at `snapshot`. Neither event links
-    /// a request and the event origin carries no epoch, so each is one targeted query.
-    fn runtime_restarted_since(&self, sequence: u64, snapshot: u64) -> RuntimeClientResult<bool> {
+    /// a request and the event origin carries no epoch, so each is one targeted query. `None`
+    /// when `deadline` ended a read (P32 A-1, `first_status_events`).
+    fn runtime_restarted_since(
+        &self,
+        sequence: u64,
+        snapshot: u64,
+        deadline: Option<Instant>,
+    ) -> RuntimeClientResult<Option<bool>> {
         for event_type in [EventType::RuntimeStarted, EventType::RuntimeTakeover] {
             let query = EventQuery {
                 event_type: Some(event_type),
                 from_sequence: Some(sequence),
                 ..EventQuery::default()
             };
-            if !self.first_status_events(query, 1, snapshot)?.is_empty() {
-                return Ok(true);
+            match self.first_status_events(query, 1, snapshot, deadline)? {
+                None => return Ok(None),
+                Some(found) if !found.is_empty() => return Ok(Some(true)),
+                Some(_) => {}
             }
         }
-        Ok(false)
+        Ok(Some(false))
     }
 
     /// The run lease's terminal: the request's own release when it has one, else the lease's
     /// release or expiry (an expiry or a connection cleanup does not link the request).
+    /// `Some(None)` when it has none; `None` when `deadline` ended a read (P32 A-1,
+    /// `first_status_events`).
     fn contained_run_lease_terminal(
         &self,
         lease_id: LeaseId,
         request_events: &[ProjectedEvent],
         snapshot: u64,
-    ) -> RuntimeClientResult<Option<ContainedTaskLeaseTerminal>> {
+        deadline: Option<Instant>,
+    ) -> RuntimeClientResult<Option<Option<ContainedTaskLeaseTerminal>>> {
         let mut terminals = request_events
             .iter()
             .filter(|event| is_lease_terminal(event, lease_id))
@@ -1203,36 +1313,89 @@ impl RuntimeClient {
                     event_type: Some(event_type),
                     ..EventQuery::default()
                 };
-                terminals.extend(self.first_status_events(query, 2, snapshot)?);
+                let Some(found) = self.first_status_events(query, 2, snapshot, deadline)? else {
+                    return Ok(None);
+                };
+                terminals.extend(found);
             }
         }
         match terminals.as_slice() {
-            [] => Ok(None),
+            [] => Ok(Some(None)),
             [event] if event.event_type == EventType::LeaseExpired => {
-                Ok(Some(ContainedTaskLeaseTerminal::Expired))
+                Ok(Some(Some(ContainedTaskLeaseTerminal::Expired)))
             }
-            [_] => Ok(Some(ContainedTaskLeaseTerminal::Released)),
+            [_] => Ok(Some(Some(ContainedTaskLeaseTerminal::Released))),
             _ => Err(status_error(ClientCode::RunStatusLeaseTerminalInconsistent)),
         }
     }
 
-    /// One bounded page at `snapshot`, without run recovery (#422 QR-2: its rows are all it
-    /// reads).
+    /// The first `limit` records `query` selects at `snapshot`, without run recovery (#422
+    /// QR-2: its rows are all it reads).
+    ///
+    /// P32 A-1 (#422 6468995196; design rd-1028/design-p32.md §1.5): a page the Runtime's read
+    /// budget cut (#411 A51: `has_more`, its cursor past the position its read reached) may hold
+    /// fewer than `limit` records, none among them, while later records match: it is not "no
+    /// more". The read goes on after the page's cursor, with the cursor, snapshot and order
+    /// checks of `read_status_pages`, until it holds `limit` records or a page has no more.
+    /// Before, the first page was the answer, so a cut page read as no Runtime restart, no
+    /// lease terminal or no dispatch intent. `deadline` is checked between pages, as
+    /// `read_status_pages` checks it: reaching it with more to read answers `None`, which each
+    /// caller reports as its read's incomplete answer, never as "none".
     fn first_status_events(
         &self,
         query: EventQuery,
         limit: u16,
         snapshot: u64,
-    ) -> RuntimeClientResult<Vec<ProjectedEvent>> {
-        let request = RuntimeEventQueryPageRequest::new(limit, None)
-            .map(RuntimeEventQueryPageRequest::without_run_recovery)
-            .and_then(|request| request.at_snapshot(snapshot))
-            .map_err(|_| status_error(ClientCode::RunStatusPageRequestInvalid))?;
-        let page = self.query_event_page(query, ProjectionProfile::Forensic, request)?;
-        if page.snapshot_ledger_position() != snapshot {
-            return Err(status_error(ClientCode::RunStatusSnapshotChanged));
+        deadline: Option<Instant>,
+    ) -> RuntimeClientResult<Option<Vec<ProjectedEvent>>> {
+        let wanted = usize::from(limit);
+        let mut events = Vec::with_capacity(wanted);
+        let mut event_ids = BTreeSet::<EventId>::new();
+        let mut cursor = None;
+        let mut last_sequence = 0_u64;
+        for _ in 0..MAX_RUN_SUMMARY_PAGES {
+            let mut request = RuntimeEventQueryPageRequest::new(limit, cursor.clone())
+                .map(RuntimeEventQueryPageRequest::without_run_recovery)
+                .map_err(|_| status_error(ClientCode::RunStatusPageRequestInvalid))?;
+            if cursor.is_none() {
+                request = request
+                    .at_snapshot(snapshot)
+                    .map_err(|_| status_error(ClientCode::RunStatusPageRequestInvalid))?;
+            }
+            let page =
+                self.query_event_page(query.clone(), ProjectionProfile::Forensic, request)?;
+            if page.snapshot_ledger_position() != snapshot {
+                return Err(status_error(ClientCode::RunStatusSnapshotChanged));
+            }
+            for event in page.events() {
+                if event.sequence <= last_sequence || !event_ids.insert(event.event_id) {
+                    return Err(status_error(ClientCode::RunStatusPaginationInvalid));
+                }
+                last_sequence = event.sequence;
+                events.push(event.clone());
+                if events.len() == wanted {
+                    return Ok(Some(events));
+                }
+            }
+            if !page.has_more() {
+                return Ok(Some(events));
+            }
+            let next = page
+                .next_cursor()
+                .cloned()
+                .ok_or_else(|| status_error(ClientCode::RunStatusPaginationInvalid))?;
+            let previous_sequence = cursor.as_ref().map_or(0, |value| value.after_sequence());
+            // #411 A51: a page the Runtime's read budget cut goes on after the position its
+            // read reached, at or after its last row.
+            if next.after_sequence() < last_sequence || next.after_sequence() <= previous_sequence {
+                return Err(status_error(ClientCode::RunStatusPaginationInvalid));
+            }
+            cursor = Some(next);
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                return Ok(None);
+            }
         }
-        Ok(page.events().to_vec())
+        Err(status_error(ClientCode::RunStatusPageLimitExceeded))
     }
 
     /// Every page of one Forensic query on one snapshot, with `summarize_run`'s cursor, snapshot
@@ -1373,6 +1536,38 @@ fn run_fact_identity(event: &ProjectedEvent) -> RuntimeClientResult<Option<TaskR
     TaskRunIdentity::from_semantic_event(payload, &event.links)
         .map(Some)
         .ok_or_else(|| status_error(ClientCode::RunStatusIdentityMissing))
+}
+
+/// P32 A-2 (#422 6468995196): the run of one listing fact, read from its links alone (a listing
+/// page carries no payload). Every semantic fact of a contained run links the run's instance
+/// and its whole identity (request, correlation, task, run). The Runtime's own records of the
+/// listing types that are no semantic fact (a Lab debug run's, an evidence export's and a
+/// package debug run's `task.requested` and terminals, `task_event_links`) link no instance:
+/// they belong to no listed run, as `run_fact_identity` finds from their payload. A fact on an
+/// instance without the rest of the identity fails with `run_status_identity_missing`, as a
+/// semantic fact without it fails there.
+fn listing_fact_identity(event: &ProjectedEvent) -> RuntimeClientResult<Option<TaskRunIdentity>> {
+    let links = &event.links;
+    let Some(instance_id) = links.instance_id() else {
+        return Ok(None);
+    };
+    match (
+        links.request_id(),
+        links.correlation_id(),
+        links.task_id(),
+        links.run_id(),
+    ) {
+        (Some(request_id), Some(correlation_id), Some(task_id), Some(run_id)) => {
+            Ok(Some(TaskRunIdentity {
+                request_id: *request_id,
+                correlation_id: *correlation_id,
+                instance_id: *instance_id,
+                task_id: *task_id,
+                run_id: *run_id,
+            }))
+        }
+        _ => Err(status_error(ClientCode::RunStatusIdentityMissing)),
+    }
 }
 
 /// The one value of a link over the run's events; two different values fail.

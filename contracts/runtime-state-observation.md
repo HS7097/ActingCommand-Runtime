@@ -125,6 +125,19 @@ holds only the runs. A window's listing facts therefore do not count against the
 `run_status_resident_limit_exceeded`; `list_contained_runs` (MCP `ac_runs`) and
 `list_window_runs` (`ac_diagnose`, #422 QR-2b) share the listing. The listing and each
 projection share one snapshot and the caller's deadline; reaching it returns `incomplete`.
+#422 P32 A-2 (0.12.26): the listing asks its pages with the `concise` profile, which carries
+no payload, and finds each fact's run from its links (instance, request, correlation, task,
+run); a record of a listing type that links no instance (the Runtime's own task records of a
+Lab debug run, an evidence export or a package debug run) is no listed run, and one that links
+an instance without the rest of the identity fails `run_status_identity_missing`. A run's own
+status read keeps `forensic`. The profile is the page request's existing member, so every
+Runtime answers it; no request member is added. #422 P32 A-1 (0.12.26): a run status read's
+Runtime restart, lease and dispatch intent reads go on past a page the Runtime's read budget
+cut (#411 A51), under the same deadline between pages (`contained_run_status`, which has
+none, reads on to the end); one the deadline ends leaves the run unread as a cut status read
+does (`latest_runs` and `list_contained_runs` answer `incomplete`, `window_run_status` and
+`window_run_catalog_task_id` answer no value), never "not restarted", "no lease terminal" or
+"dispatched by hand".
 #422 QR-2b L4 (0.12.25): the client's `recent_runs`, which read one instance's 1–10 most
 recent runs under a 20-second budget of its own and which no first-party reader called any
 more, is retired with its code `recent_runs_budget_invalid`; `list_contained_runs` on the

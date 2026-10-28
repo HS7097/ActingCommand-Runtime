@@ -4863,9 +4863,22 @@ fn history_statement(
     } else {
         ""
     };
+    // P32 A-1 (#422 6468995196; design rd-1028/design-p32.md §1.3): a per-run statement is
+    // driven by its link's index (`ledger_links_<link>(<link>, sequence)`, its sequence bounds
+    // carried there through the join), which gives its rows in ledger order. Ordered by the
+    // event row instead, SQLite does not see that order: it put every row of the run within the
+    // span into a temporary B-tree and sorted them before it returned the first `rows`, on every
+    // page (`USE TEMP B-TREE FOR ORDER BY`). Ordered by the link row's sequence, which equals the
+    // event row's, it stops at the page's limit; the rows and their order are the same. A
+    // statement without a per-run link keeps its order by the event row.
+    let order = if per_run && links {
+        "l.sequence"
+    } else {
+        "e.sequence"
+    };
     Ok((
         format!(
-            "SELECT {columns} FROM ledger_events e{join} WHERE {} ORDER BY e.sequence LIMIT ?",
+            "SELECT {columns} FROM ledger_events e{join} WHERE {} ORDER BY {order} LIMIT ?",
             clauses.join(" AND ")
         ),
         values,

@@ -696,7 +696,8 @@ fn window_runs(
 
 /// One failed or open run as `runs_grouped` keeps it: the policy task of a scheduled run from
 /// its dispatch intent, and its failure code, a relayed spelling the catalog does not register
-/// read back from its terminal record; `None` when the deadline came before one of those reads.
+/// read back from its terminal record; `None` when the deadline came before one of those reads
+/// or (P32 A-1) ended the dispatch intent read.
 fn grouped_run(
     client: &RuntimeClient,
     run: &WindowRun,
@@ -709,9 +710,14 @@ fn grouped_run(
             if budget.spent() {
                 return Ok(None);
             }
-            client
-                .window_run_catalog_task_id(run, snapshot)
+            // P32 A-1: an intent read the deadline ended leaves the run unread, as a cut does.
+            let Some(catalog_task_id) = client
+                .window_run_catalog_task_id(run, snapshot, budget.until())
                 .map_err(Failure::Runtime)?
+            else {
+                return Ok(None);
+            };
+            catalog_task_id
         }
         _ => None,
     };

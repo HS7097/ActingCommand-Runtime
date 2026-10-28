@@ -733,6 +733,14 @@ tests = [
 ]
 incident = ["#419 DIAG-RUN"]
 
+# P32 A-1 (#422 6468995196; design rd-1028/design-p32.md §1.3, slice A-1; 0.12 wave 2 P32-A, since 0.12.26): a history read with an equality on a per-run link is ordered by its link row's sequence, which the link index gives, so SQLite stops at the page's limit instead of sorting every record of the run within its span in a temporary B-tree on every page (v0.12.24: a long open run's status read took most of a 24 s overview). For each DIAG-RUN form and each run status read of runtime-client (a run's status by its request and by its run, its lease's release and its expiry, its dispatch intent), on a first page, a later page and with a `from_sequence` bound, the statement ends `ORDER BY l.sequence`, its plan has no `USE TEMP B-TREE`, its outer loop is a per-run link index, it reads the event rows by their key and passes the plan check; a statement without a per-run link stays ordered by its event row. DIAG-RUN T3 holds the rows and their order
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::sqlite::gate_diag_run::p32_a1_a_per_run_read_is_ordered_by_its_link_index_and_sorts_nothing",
+]
+incident = ["#422 P32"]
+
 # LN-7c Q (#422; rd-1026/ln7c/final-query.md §7 row Q, §1, §2, §4; Alice's ruling 70; brief rd-1026/brief-ln7c-q.md): the frame cleaner's statements W, L and K on an empty database pass the §1.3 plan rule and equal their golden plans (T-plan); on the case fixture (A6 with F5, F6 and duplicates) and on a production-shaped history each live frame's action equals the full view's class with E1's due time (T-eq; the 1M-record run is on demand), with a Lab-reason pin that keeps its frame Lab by L's pin term alone and on gate L-2's error-point rows (fix round 1, review F3); a kept frame goes once confirmed (by its frame or its run, at or after its capture) or at frame_retention_evidence_max_age_days, never earlier and never on a read through ac_run_evidence (T-evidence); the writer open reads no frame row and does not list the frame store (T-open); a raised stop interrupts the statement in progress (T-pace)
 [[gate]]
 coverage = "Y"

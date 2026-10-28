@@ -25,6 +25,16 @@
 //   records the query selects, in ledger order, for a short run at the head, a run with more
 //   than 256 `artifact.verified` records interleaved with two other runs, and a run with a record
 //   whose time is earlier than the whole history's.
+//
+// P32 A-1 (#422 6468995196; design rd-1028/design-p32.md §1.3, slice A-1; 0.12 wave 2 P32-A): on
+// v0.12.24 a long open run's status read took most of a 24 s overview, because each of its
+// statements, driven by the run's link index, still sorted every record of the run within its
+// span in a temporary B-tree before it returned its first rows. A per-run statement is ordered
+// by its link row's sequence, which the link index gives: its plan sorts nothing (no `USE TEMP
+// B-TREE`), for each DIAG-RUN form and each run status read of runtime-client (a run's status by
+// its request and by its run, its lease's release or expiry, its dispatch intent), and reads the
+// event rows by their key; T3 holds the rows and their order. A statement without a per-run link
+// keeps its order by the event row.
 
 use super::plan_check::check_plan;
 use super::*;
@@ -39,8 +49,8 @@ use actingcommand_contract::{
     ArtifactIssuePolicy, ArtifactKind, ArtifactLinksDraft, ArtifactProducer,
     ArtifactRedactionState, AuditInput, CapturePayloadDraft, CorrelationId, EffectDisposition,
     EventAction, EventActor, EventDraft, EventLinksDraft, EventOrigin, EventSeverity, EventSource,
-    FrameId, IdentifierIssuer, InstanceId, IssuedCorrelationId, IssuedRunId, LeasePayloadDraft,
-    OriginModule, RequestId, RetentionClass, TaskId,
+    FrameId, IdentifierIssuer, InstanceId, IssuedCorrelationId, IssuedRunId, LeaseId,
+    LeasePayloadDraft, OriginModule, RequestId, RetentionClass, TaskId,
 };
 use actingcommand_runtime_database::{DatabaseLocation, MaintenanceLimits};
 use actingcommand_runtime_state::RuntimeStateStore;
@@ -200,6 +210,77 @@ fn per_run_forms(run: &Run, frame: FrameId) -> Vec<(&'static str, EventQuery)> {
                 event_type: Some(EventType::ArtifactVerified),
                 instance_id: Some(run.instance),
                 run_id: Some(run.run),
+                ..EventQuery::default()
+            },
+        ),
+    ]
+}
+
+/// P32 A-1: the plan step that reads an event row by its key.
+const EVENT_ROW_BY_KEY: &str = "SEARCH e USING INTEGER PRIMARY KEY (rowid=?)";
+
+/// P32 A-1: the record types runtime-client's run status reads by a run's request or its run
+/// (its `RUN_STATUS_EVENT_TYPES`).
+const RUN_STATUS_EVENT_TYPES: [EventType; 17] = [
+    EventType::CliCommand,
+    EventType::UiAction,
+    EventType::LabRequest,
+    EventType::CommandReceived,
+    EventType::TaskRequested,
+    EventType::TaskStarted,
+    EventType::TaskGeometryObserved,
+    EventType::TaskEntryPreflight,
+    EventType::TaskStepStarted,
+    EventType::TaskStepFinished,
+    EventType::TaskTerminalIntent,
+    EventType::TaskCompleted,
+    EventType::TaskFailed,
+    EventType::TaskCancelled,
+    EventType::TaskTerminalRejected,
+    EventType::LeaseReleased,
+    EventType::LeaseExpired,
+];
+
+/// P32 A-1: the per-run reads of runtime-client's run status for `run`, its lease `lease`.
+fn run_status_forms(run: &Run, lease: LeaseId) -> Vec<(&'static str, EventQuery)> {
+    vec![
+        (
+            "a run's status by its request",
+            EventQuery {
+                request_id: Some(run.request),
+                event_types: RUN_STATUS_EVENT_TYPES.to_vec(),
+                ..EventQuery::default()
+            },
+        ),
+        (
+            "a run's status by its run",
+            EventQuery {
+                run_id: Some(run.run),
+                event_types: RUN_STATUS_EVENT_TYPES.to_vec(),
+                ..EventQuery::default()
+            },
+        ),
+        (
+            "a run lease's release",
+            EventQuery {
+                lease_id: Some(lease),
+                event_type: Some(EventType::LeaseReleased),
+                ..EventQuery::default()
+            },
+        ),
+        (
+            "a run lease's expiry",
+            EventQuery {
+                lease_id: Some(lease),
+                event_type: Some(EventType::LeaseExpired),
+                ..EventQuery::default()
+            },
+        ),
+        (
+            "a run's dispatch intent",
+            EventQuery {
+                run_id: Some(run.run),
+                event_type: Some(EventType::PolicyDispatchIntent),
                 ..EventQuery::default()
             },
         ),
@@ -577,6 +658,93 @@ fn diag_run_t1_a_per_run_read_is_driven_by_its_run_link_index() {
         assert!(
             !sql.contains('+'),
             "{form}: a statement without a per-run link is unchanged: {sql}"
+        );
+    }
+}
+
+#[test]
+fn p32_a1_a_per_run_read_is_ordered_by_its_link_index_and_sorts_nothing() {
+    let issuer = IdentifierIssuer::new().expect("identifier issuer");
+    let run = Run::mint(&issuer, instance('a'));
+    let frame = *issuer.mint_frame_id().expect("a frame id").transport();
+    let lease = *issuer.mint_lease_id().expect("a lease id").transport();
+    let mut forms = per_run_forms(&run, frame);
+    forms.extend(run_status_forms(&run, lease));
+    for (form, query) in forms {
+        // A cursor's page and a `from_sequence` bound plan as the first page does.
+        for (case, query, range) in [
+            ("first page", query.clone(), (0, 1)),
+            ("later page", query.clone(), (1, 2)),
+            (
+                "from a sequence",
+                EventQuery {
+                    from_sequence: Some(1),
+                    ..query
+                },
+                (0, 2),
+            ),
+        ] {
+            let (sql, _) = history_statement(&HistorySelection::of(&query), None, range, PAGE_ROWS)
+                .expect("the page's statement");
+            assert!(
+                sql.ends_with(" ORDER BY l.sequence LIMIT ?"),
+                "{form}, {case}: not ordered by its link row: {sql}"
+            );
+            let check = check_plan(&sql);
+            assert!(
+                check
+                    .plan
+                    .iter()
+                    .all(|step| !step.trim_start().starts_with("USE TEMP B-TREE")),
+                "{form}, {case}: the plan sorts: {check:?}\n{sql}"
+            );
+            let outer = outer_loop(&check.plan).unwrap_or_default();
+            assert!(
+                outer.starts_with("SEARCH l USING ")
+                    && PER_RUN_INDEXES
+                        .iter()
+                        .any(|index| outer.contains(&format!("INDEX {index} ("))),
+                "{form}, {case}: the outer loop is not a per-run link index: {check:?}\n{sql}"
+            );
+            assert!(
+                check
+                    .plan
+                    .iter()
+                    .any(|step| step.trim_start() == EVENT_ROW_BY_KEY),
+                "{form}, {case}: the event rows are not read by their key: {check:?}\n{sql}"
+            );
+            assert!(
+                check.violations.is_empty(),
+                "{form}, {case}: {check:?}\n{sql}"
+            );
+        }
+    }
+
+    // A statement without a per-run link keeps its order by the event row.
+    for (form, query) in [
+        (
+            "one event type of one instance since a time",
+            EventQuery {
+                event_type: Some(EventType::TaskRequested),
+                instance_id: Some(run.instance),
+                from_timestamp_unix_ms: Some(APPENDED_FIRST_MS),
+                ..EventQuery::default()
+            },
+        ),
+        (
+            "Runtime starts from a sequence",
+            EventQuery {
+                event_type: Some(EventType::RuntimeStarted),
+                from_sequence: Some(1),
+                ..EventQuery::default()
+            },
+        ),
+    ] {
+        let (sql, _) = history_statement(&HistorySelection::of(&query), None, (0, 1), PAGE_ROWS)
+            .expect("the page's statement");
+        assert!(
+            sql.ends_with(" ORDER BY e.sequence LIMIT ?"),
+            "{form}: a statement without a per-run link is ordered by its event row: {sql}"
         );
     }
 }
