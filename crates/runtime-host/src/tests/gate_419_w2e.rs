@@ -154,15 +154,26 @@ fn refusals(x: InstanceId) -> [ExecutionKernelError; 3] {
 /// real kernel: the close that a failed input's cleanup runs (`finish_input_failure`) and merges
 /// into the input's failure.
 fn close_failure(x: InstanceId, quiescence: DeviceResourceQuiescence) -> ExecutionKernelError {
+    let unconfirmed = quiescence == DeviceResourceQuiescence::Unconfirmed;
     let state = Arc::new(FakeState::default());
     let kernel = open_kernel(FakeProvider::one(X_ALIAS, x, Arc::clone(&state)), x);
     *state.close_error.lock().expect("close error") = Some(
         DeviceError::fatal("injected close failure of X's input backend")
             .with_resource_summary(quiescence, 1),
     );
-    kernel
+    let failure = kernel
         .close_instance(x, DeviceCloseAuthority::LocalOnly)
-        .expect_err("X's input backend fails to close")
+        .expect_err("X's input backend fails to close");
+    // The kernel is closed before it is dropped, as the host's shutdown closes its kernel: an
+    // unconfirmed close stays retained and that close reports it, a confirmed one is settled. A
+    // kernel dropped unclosed runs its close in `Drop` and panics on such a failure.
+    let closed = kernel.close();
+    if unconfirmed {
+        closed.expect_err("the kernel's close reports X's retained unconfirmed close");
+    } else {
+        closed.expect("X's confirmed close is settled");
+    }
+    failure
 }
 
 /// a (R1; rows E13, A05, E02): the three refusals at X's input fail only the input, a merged
@@ -257,6 +268,11 @@ fn w2e_a_a_closing_or_changed_session_or_an_uncommitted_frame_fails_only_the_inp
         RuntimeHostError::input_backend(HostLocation::ExecuteInputBackend, &death, x).is_fatal(),
         "a session death at an input keeps its severity until an input's deaths are counted"
     );
+    // Closed before it is dropped, as the host's shutdown closes its kernel: X's dead session
+    // is still registered, and its close reports the death.
+    kernel
+        .close()
+        .expect_err("the kernel's close reports X's dead session");
 }
 
 /// A dispatch of the fixture catalog's first task on its instance, admitted at the fixture's
