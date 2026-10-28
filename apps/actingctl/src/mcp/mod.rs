@@ -610,6 +610,9 @@ mod tests {
     // #422 QR-2: the overview's run block, the run listing and a run's status ask for their
     // pages without run recovery and answer as before.
     mod gate_422_qr2;
+    // #422 QR-2b: ac_diagnose lists the window's runs once, reads no settled run's status, asks
+    // for no run recovery, and answers a section the call's deadline cut as incomplete.
+    mod gate_422_qr2b;
     // Workflow #427-B: ac_schedule answers the shared run limits with their numbers; ac_diagnose
     // lists a row they blocked at placement (follow-up, review L1).
     mod gate_427b;

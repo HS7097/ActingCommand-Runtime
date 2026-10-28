@@ -266,11 +266,98 @@ struct ListingPages {
     complete: bool,
 }
 
-/// One run a listing found: its identity and its first listing fact in the window.
+/// One run a listing found: its identity and its first listing fact in the window; and (#422
+/// QR-2b) whether the window holds its main admission, and the terminal facts the window holds
+/// of it.
 #[derive(Debug, Clone, Copy)]
 struct ListedRun {
     identity: TaskRunIdentity,
     sequence: u64,
+    opened: bool,
+    terminal: Option<EventType>,
+    terminals: u32,
+}
+
+impl ListedRun {
+    fn first(identity: TaskRunIdentity, event: &ProjectedEvent) -> Self {
+        let mut run = Self {
+            identity,
+            sequence: event.sequence,
+            opened: false,
+            terminal: None,
+            terminals: 0,
+        };
+        run.note(event.event_type);
+        run
+    }
+
+    /// #422 QR-2b: one more listing fact of the run, by its type.
+    fn note(&mut self, event_type: EventType) {
+        match event_type {
+            EventType::TaskRequested => self.opened = true,
+            EventType::TaskCompleted | EventType::TaskFailed | EventType::TaskCancelled => {
+                self.terminal = Some(event_type);
+                self.terminals = self.terminals.saturating_add(1);
+            }
+            _ => {}
+        }
+    }
+
+    /// #422 QR-2b: the state the listing alone proves: succeeded or cancelled when it holds the
+    /// run's one terminal and that terminal is `task.completed` or `task.cancelled` (a
+    /// terminal's record type is its `task_result`'s, so the run's status read would answer
+    /// that state). A failed terminal, no terminal or more than one terminal proves nothing.
+    fn settled(&self) -> Option<ContainedRunState> {
+        match (self.terminals, self.terminal) {
+            (1, Some(EventType::TaskCompleted)) => Some(ContainedRunState::Succeeded),
+            (1, Some(EventType::TaskCancelled)) => Some(ContainedRunState::Cancelled),
+            _ => None,
+        }
+    }
+}
+
+/// #422 QR-2b: one run of a window's run listing (`list_window_runs`), as the listing alone
+/// shows it, before any read of the run's own facts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowRun {
+    pub identity: TaskRunIdentity,
+    /// The sequence of its first listing fact in the window: what the listing orders by.
+    pub order_sequence: u64,
+    /// `Succeeded` or `Cancelled` when the window holds the run's one terminal and it is
+    /// `task.completed` or `task.cancelled`: its status read would answer that state, so a
+    /// reader that only needs to know that it is neither failed nor open need not read it. A
+    /// settled run loses the identity checks of its own read (the listing checks its identity
+    /// against its other listing facts only). `None` for a failed run, an open one, or one with
+    /// more than one terminal (its status read refuses it).
+    pub settled: Option<ContainedRunState>,
+    /// Whether the window holds the run's main admission (`task.requested`), not only its
+    /// entry facts or its terminal. A run listed without its admission began before the window
+    /// (an entry fact can be an interrupt it handled mid-run), or ended before its admission
+    /// (its entry check failed, or it ended before its first frame); only its status read
+    /// tells which. A run with its admission in the window began in it, as its status read
+    /// would find, except that a run with an entry check records its first frame's geometry
+    /// (its first fact) and its entry check's facts before its admission, so a run whose entry
+    /// check began before the window's start and whose admission falls in the window is
+    /// counted in it.
+    pub opened_in_window: bool,
+}
+
+/// #422 QR-2b: the runs of one window, each once, newest first by their first listing fact in
+/// the window, all read at one snapshot. `complete` is false when the deadline ended a listing
+/// read before its last page; a partial listing may hold an older run and miss a newer one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowRunListing {
+    pub runs: Vec<WindowRun>,
+    pub snapshot_ledger_position: u64,
+    pub complete: bool,
+}
+
+/// #422 QR-2b: one listed run's brief status, read at its listing's snapshot, and when the run
+/// recorded its first fact (a run first recorded before the window is not one of its runs).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowRunStatus {
+    pub status: ContainedRunStatus,
+    pub first_fact_unix_ms: Option<u64>,
 }
 
 /// The runs of one window, each once, oldest first by their first listing fact there, all read
@@ -327,6 +414,7 @@ impl RunListingFold {
                     return Err(status_error(ClientCode::RunStatusIdentityMismatch));
                 }
                 run.sequence = run.sequence.min(event.sequence);
+                run.note(event.event_type);
             }
             None => {
                 if !self.runs_seen.insert(identity.run_id) {
@@ -339,10 +427,7 @@ impl RunListingFold {
                     ));
                 }
                 self.listed.insert(identity.request_id, self.runs.len());
-                self.runs.push(ListedRun {
-                    identity,
-                    sequence: event.sequence,
-                });
+                self.runs.push(ListedRun::first(identity, event));
             }
         }
         Ok(())
@@ -679,6 +764,80 @@ impl RuntimeClient {
             });
         }
         Ok(page)
+    }
+
+    /// #422 QR-2b: the contained runs with a listing fact since `since_unix_ms`, on `instance`
+    /// or on every instance, listed once as `list_contained_runs` lists them (each listing
+    /// type one query, its pages without run recovery, all at one snapshot), newest first, and
+    /// none of them read. Each run says what the listing alone shows of it (`WindowRun`): a
+    /// reader reads with `window_run_status` and `window_run_catalog_task_id`, at the listing's
+    /// snapshot, only the runs it needs, so one listing serves every part of a reader that
+    /// needs the window's runs. `deadline` is checked between pages; reaching it ends the
+    /// listing `complete: false`. Read-only.
+    pub fn list_window_runs(
+        &self,
+        instance: Option<InstanceId>,
+        since_unix_ms: u64,
+        deadline: Instant,
+    ) -> RuntimeClientResult<WindowRunListing> {
+        let listing = self.list_runs(
+            &EventQuery {
+                instance_id: instance,
+                from_timestamp_unix_ms: Some(since_unix_ms),
+                ..EventQuery::default()
+            },
+            None,
+            Some(deadline),
+        )?;
+        Ok(WindowRunListing {
+            runs: listing
+                .runs
+                .iter()
+                .rev()
+                .map(|run| WindowRun {
+                    identity: run.identity,
+                    order_sequence: run.sequence,
+                    settled: run.settled(),
+                    opened_in_window: run.opened,
+                })
+                .collect(),
+            snapshot_ledger_position: listing.snapshot,
+            complete: listing.complete,
+        })
+    }
+
+    /// #422 QR-2b: the brief status of one run of a `list_window_runs` listing, read at that
+    /// listing's `snapshot` as `list_contained_runs` reads it; `None` when `deadline`, checked
+    /// between pages, ended the read. Read-only.
+    pub fn window_run_status(
+        &self,
+        run: &WindowRun,
+        snapshot: u64,
+        deadline: Instant,
+    ) -> RuntimeClientResult<Option<WindowRunStatus>> {
+        Ok(self
+            .read_contained_run_status(
+                RunKey::RequestId(run.identity.request_id),
+                RunStatusMode::Brief,
+                Some(snapshot),
+                Some(deadline),
+            )?
+            .map(|read| WindowRunStatus {
+                status: read.status,
+                first_fact_unix_ms: read.first_fact_timestamp_unix_ms,
+            }))
+    }
+
+    /// #422 QR-2b: the policy task id of one run of a `list_window_runs` listing (the `task_id`
+    /// of its `policy.dispatch_intent`, as `list_contained_runs` reads it for a scheduled run),
+    /// one bounded page at the listing's `snapshot`; `None` for a run dispatched by hand.
+    /// Read-only.
+    pub fn window_run_catalog_task_id(
+        &self,
+        run: &WindowRun,
+        snapshot: u64,
+    ) -> RuntimeClientResult<Option<String>> {
+        self.dispatched_catalog_task_id(run.identity, snapshot)
     }
 
     /// The runs `window` holds a listing fact of (Workflow #391 item 3), one query per listing

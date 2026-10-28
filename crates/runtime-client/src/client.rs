@@ -68,7 +68,7 @@ pub use run_status::{
     ContainedRunEvidence, ContainedRunLease, ContainedRunPage, ContainedRunProgress,
     ContainedRunState, ContainedRunStatus, ContainedRunTerminal, ListedContainedRun,
     RecentContainedRuns, RunDispatch, RunKey, RunListFilter, RunListPosition, RunOrigin,
-    RunStatusMode,
+    RunStatusMode, WindowRun, WindowRunListing, WindowRunStatus,
 };
 
 #[cfg(feature = "test-observation")]

@@ -30,6 +30,18 @@
 //! one RuntimeFactSnapshot read (`crate::schedule`), neither of which records anything. A read
 //! that failed, or a bound that cannot be read, is a warning (the CLI line's `warnings`, MCP's
 //! warnings) and marks the diagnosis incomplete, with no `not_run`.
+//!
+//! #422 QR-2b (brief rd-1028/brief-qr2b-diagnose.md, investigation rd-1028/qr2-investigation.md
+//! §3): on v0.12.21 a diagnosis took 27 s and failed at the client's 5 s socket timeout. It
+//! listed the window's runs twice (once for `runs`, once for `runs_grouped`), read every listed
+//! run's status, its errors view and `failures_grouped` pages derived a run recovery nothing
+//! reads, `runs` on one instance had its own 20 s budget, and any failed page failed the whole
+//! diagnosis. Now the window's runs are listed once for both sections, a run the listing shows
+//! succeeded or cancelled is not read, every page asks for no run recovery, every section reads
+//! under the call's deadline only, and a section the deadline cut or whose read failed answers
+//! `<section>_incomplete: true` (`runs`, `errors_page`, `runs_grouped`, `failures_grouped`) with
+//! the warning `call_budget_exhausted` naming it (`member`) or the read's failure, while the
+//! others answer; `not_run` cut so is absent with `call_budget_exhausted` (`member` `not_run`).
 
 use crate::child::{self, Captured, ChildFailure};
 use crate::cli_line;
@@ -48,12 +60,12 @@ use actingcommand_contract::{
     EventType, InstalledProcess, InstanceId, LedgerView, MAX_RUNTIME_EVENT_QUERY_EVENTS,
     PolicyExecutionOutcome, PolicyExecutionPayload, PolicyFailureDisposition, PolicyPayload,
     ProjectedEvent, ProjectionPayload, RequestId, RuntimeControlPlaneStatus,
-    RuntimeEventQueryCursor, RuntimeEventQueryPageRequest, RuntimePayload, TaskId,
-    scheduled_failure_code_str,
+    RuntimeEventQueryCursor, RuntimeEventQueryPage, RuntimeEventQueryPageRequest, RuntimePayload,
+    TaskId, scheduled_failure_code_str,
 };
 use actingcommand_runtime_client::{
-    ContainedRunState, ContainedRunStatus, RunListFilter, RuntimeClient, RuntimeClientConfig,
-    RuntimeClientError,
+    ContainedRunState, ContainedRunStatus, RunDispatch, RuntimeClient, RuntimeClientConfig,
+    RuntimeClientError, WindowRun,
 };
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -70,15 +82,14 @@ const DAY_MS: u64 = 24 * 60 * 60 * 1000;
 const DEFAULT_WINDOW_MS: u64 = DAY_MS;
 /// The furthest back since_unix_ms may reach.
 const MAX_WINDOW_MS: u64 = 7 * DAY_MS;
-/// `runs` comes from the 10 most recent runs, the most `recent_runs` returns.
+/// `runs` comes from the 10 most recent runs of the window (#422 QR-2b: of the one listing
+/// `runs_grouped` shares).
 const RECENT_RUNS: usize = 10;
 const ERRORS_PAGE_LIMIT: u16 = 20;
 /// At most this many clock-slot rows are kept (#372 K3).
 const CLOCK_SLOTS: usize = 10;
 /// The tail of a failed subprocess's stderr kept in the report status.
 const MAX_STDERR_TAIL: usize = 2048;
-/// One page of the run list `runs_grouped` reads, its largest.
-const RUN_LIST_PAGE: usize = 100;
 /// How long the CLI reads: MCP's 25 s call budget less the second it keeps back to answer, so
 /// that both sides end a long read alike.
 const CLI_READ_BUDGET: Duration = Duration::from_secs(24);
@@ -226,6 +237,13 @@ impl SuspensionReport {
             child::run_captured_ending(command, deadline)
         })))
     }
+
+    /// #422 QR-2b gate: a report that was not started, as `start` answers when it finds no
+    /// configuration (the gate reads the Runtime's sections, not the child's).
+    #[cfg(test)]
+    pub(crate) fn not_started(outcome: Outcome) -> Self {
+        Self(Err(outcome))
+    }
 }
 
 /// The program root, the configuration and the installation of the generation selected now; or
@@ -250,10 +268,134 @@ fn suspension_source(
     Ok((program_root, config, installation))
 }
 
-/// One diagnosis, read with `client` until `deadline`, of the window from `since_unix_ms`.
-/// `state_root` is the state root the reads go to: the report's rows describe another Runtime
-/// when `actingd suspended` read another one. Also returns the errors view query the errors
-/// page's cursor continues.
+/// #422 QR-2b: the clock a diagnosis checks its deadline on. A diagnosis reads the system's
+/// monotonic clock (`SystemClock`); a test's clock moves as its fake Runtime serves pages, so
+/// that the deadline passes inside a chosen section without a sleep.
+pub(crate) trait Clock {
+    fn now(&self) -> Instant;
+}
+
+/// The system's monotonic clock.
+pub(crate) struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+}
+
+/// #422 QR-2b: the call's deadline on the call's clock.
+struct Budget<'a> {
+    deadline: Instant,
+    clock: &'a dyn Clock,
+}
+
+impl Budget<'_> {
+    /// Whether the deadline has come: no Runtime read starts any more.
+    fn spent(&self) -> bool {
+        self.clock.now() >= self.deadline
+    }
+
+    /// The deadline runtime-client's paged reads check between their pages, on the system's
+    /// clock: what the call's clock leaves of the budget, from now.
+    fn until(&self) -> Instant {
+        Instant::now() + self.deadline.saturating_duration_since(self.clock.now())
+    }
+}
+
+/// #422 QR-2b: a section of the diagnosis that answers `<section>_incomplete: true` when its
+/// reads did not finish: the call's deadline came first (the warning `call_budget_exhausted`
+/// naming it, `member`), or a read failed (the client's failure as the warning).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Section {
+    Runs,
+    ErrorsPage,
+    RunsGrouped,
+    FailuresGrouped,
+}
+
+impl Section {
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Runs => "runs",
+            Self::ErrorsPage => "errors_page",
+            Self::RunsGrouped => "runs_grouped",
+            Self::FailuresGrouped => "failures_grouped",
+        }
+    }
+}
+
+/// The member `call_budget_exhausted` names for `not_run` when the deadline came before its
+/// reads (#422 QR-2b); `not_run` is then absent, as when its reads fail (MCP-19b).
+const NOT_RUN: &str = "not_run";
+
+/// #422 QR-2b: the sections whose reads did not finish, each once, and the warnings that say
+/// why.
+#[derive(Default)]
+struct Unfinished {
+    sections: Vec<Section>,
+    warnings: Vec<Warning>,
+}
+
+impl Unfinished {
+    /// The deadline came before `section` was read to its end: `call_budget_exhausted` naming
+    /// it (`member`), once.
+    fn cut(&mut self, section: Section) {
+        if !self.sections.contains(&section) {
+            self.sections.push(section);
+            self.warnings.push(Warning::Outcome(
+                Outcome::new(ActingctlCode::CallBudgetExhausted).member(section.name()),
+            ));
+        }
+    }
+
+    /// The run reads end before the deadline let them finish: `runs_grouped` is cut, and `runs`
+    /// too while `recent_open` (its 10 runs are not all found).
+    fn cut_runs(&mut self, recent_open: bool) {
+        if recent_open {
+            self.cut(Section::Runs);
+        }
+        self.cut(Section::RunsGrouped);
+    }
+
+    /// A read that `sections` need failed: each is unfinished, and the client's failure is one
+    /// warning.
+    fn failed(&mut self, sections: &[Section], error: RuntimeClientError) {
+        for section in sections {
+            if !self.sections.contains(section) {
+                self.sections.push(*section);
+            }
+        }
+        self.warnings.push(Warning::Runtime(error));
+    }
+
+    /// `failure` of a read that `sections` need: a Runtime failure leaves them unfinished and
+    /// the diagnosis goes on; any other failure (a query the contract refuses to form) fails the
+    /// diagnosis.
+    fn failure(&mut self, sections: &[Section], failure: Failure) -> Result<(), Failure> {
+        match failure {
+            Failure::Runtime(error) => {
+                self.failed(sections, error);
+                Ok(())
+            }
+            other => Err(other),
+        }
+    }
+}
+
+/// One diagnosis, read with `client` until `deadline` on `clock`, of the window from
+/// `since_unix_ms`. `state_root` is the state root the reads go to: the report's rows describe
+/// another Runtime when `actingd suspended` read another one. Also returns the errors view query
+/// the errors page's cursor continues.
+///
+/// #422 QR-2b: every section reads only while the deadline has not come, and a section whose
+/// reads the deadline cut or that failed answers `<section>_incomplete` with its warning while
+/// the others answer (`Section`); only the status read that resolves `instance` fails the whole
+/// diagnosis. The bounded sections come first and the run sections last, so that the window's
+/// run listing, the read whose size grows with the window, cannot leave the others unread: the
+/// errors page (one page), `failures_grouped`, `not_run` (two reads of the Runtime's memory),
+/// then the run listing, read once for both `runs` and `runs_grouped` (`window_runs`). Every
+/// QueryEvents page asks for no run recovery: no part of a diagnosis reads it.
 pub(crate) fn read(
     client: &RuntimeClient,
     request: &DiagnoseRequest,
@@ -261,7 +403,9 @@ pub(crate) fn read(
     report: SuspensionReport,
     state_root: Option<&Path>,
     deadline: Instant,
+    clock: &dyn Clock,
 ) -> Result<(Diagnosis, EventQuery), Failure> {
+    let budget = Budget { deadline, clock };
     let task_id = request.task_id;
     let mut status = None;
     let selected = match &request.instance {
@@ -281,14 +425,8 @@ pub(crate) fn read(
         None => None,
     };
     let instance_id = selected.as_ref().map(|(_, instance_id)| *instance_id);
-    let (recent, runs_incomplete) = recent_runs(client, instance_id, since_unix_ms, deadline)?;
-    let runs = recent
-        .iter()
-        .filter(|run| {
-            FAILED_OR_OPEN.contains(&run.state) && task_id.is_none_or(|id| run.task_id == Some(id))
-        })
-        .map(|run| json!(run))
-        .collect::<Vec<_>>();
+    let alias = selected.as_ref().map(|(alias, _)| alias.as_str());
+    let mut unfinished = Unfinished::default();
     let query = EventQuery {
         view: Some(LedgerView::Errors),
         from_timestamp_unix_ms: Some(since_unix_ms),
@@ -296,30 +434,49 @@ pub(crate) fn read(
         task_id,
         ..EventQuery::default()
     };
-    let page_request = RuntimeEventQueryPageRequest::new(ERRORS_PAGE_LIMIT, None)
-        .map_err(|error| Failure::QueryInvalid(error.code()))?;
-    let page = client
-        .query_event_page(query.clone(), events::PROFILE, page_request)
-        .map_err(Failure::Runtime)?;
-    let (grouped_runs, grouped_runs_complete) =
-        failed_and_open_runs(client, since_unix_ms, instance_id, task_id, deadline)?;
-    let alias = selected.as_ref().map(|(alias, _)| alias.as_str());
-    let (failures, failures_complete) =
-        failure_records(client, since_unix_ms, instance_id, alias, task_id, deadline)?;
-    // The groups name their instances by alias: one status read, and only when one is needed.
-    if status.is_none() && grouped_runs.iter().any(|run| run.instance.is_some()) {
-        status = Some(client.status().map_err(Failure::Runtime)?);
-    }
+    let page = errors_page(client, &query, &budget, &mut unfinished)?;
+    let failures = failure_records(
+        client,
+        since_unix_ms,
+        instance_id,
+        alias,
+        task_id,
+        &budget,
+        &mut unfinished,
+    )?;
     // Workflow #386 SR-6b, MCP-19b (register §1.144 M19B-4): the deferred rows of the latest
     // policy evaluation, of the diagnosed instance or of every one, at most the configured bound
-    // per instance. They come after the reads the diagnosis needs, so that their failure leaves
-    // only a warning.
-    let mut warnings = Vec::new();
-    let not_run = schedule::not_run(
-        client.schedule_explanation(alias, true),
-        client.runtime_fact_snapshot(),
-        &mut warnings,
-    );
+    // per instance; a failed read leaves only a warning. #422 QR-2b: read before the run
+    // listing, which grows with the window, so that a long listing does not leave them unread.
+    let not_run = if budget.spent() {
+        unfinished.warnings.push(Warning::Outcome(
+            Outcome::new(ActingctlCode::CallBudgetExhausted).member(NOT_RUN),
+        ));
+        None
+    } else {
+        schedule::not_run(
+            client.schedule_explanation(alias, true),
+            client.runtime_fact_snapshot(),
+            &mut unfinished.warnings,
+        )
+    };
+    let window = window_runs(
+        client,
+        instance_id,
+        since_unix_ms,
+        task_id,
+        &budget,
+        &mut status,
+        &mut unfinished,
+    )?;
+    let runs = window
+        .recent
+        .iter()
+        .filter(|run| {
+            FAILED_OR_OPEN.contains(&run.state) && task_id.is_none_or(|id| run.task_id == Some(id))
+        })
+        .map(|run| json!(run))
+        .collect::<Vec<_>>();
     let report = report.finish(
         state_root,
         selected
@@ -333,16 +490,23 @@ pub(crate) fn read(
             None => Value::Null,
         },
         since: since_unix_ms,
-        incomplete: runs_incomplete
-            || !report.complete
-            || !grouped_runs_complete
-            || !failures_complete,
+        incomplete: !unfinished.sections.is_empty() || !report.complete,
+        incomplete_sections: unfinished.sections,
         runs,
-        errors: page.events().iter().map(events::brief_row).collect(),
-        error_sequences: page.events().iter().map(|event| event.sequence).collect(),
-        errors_more: page.has_more(),
-        errors_next: page.next_cursor().cloned(),
-        snapshot: page.snapshot_ledger_position(),
+        // #422 QR-2b: an errors page that was not read is empty (`errors_page_incomplete`).
+        errors: page
+            .iter()
+            .flat_map(|page| page.events().iter().map(events::brief_row))
+            .collect(),
+        error_sequences: page
+            .iter()
+            .flat_map(|page| page.events().iter().map(|event| event.sequence))
+            .collect(),
+        errors_more: page.as_ref().is_some_and(RuntimeEventQueryPage::has_more),
+        errors_next: page.as_ref().and_then(|page| page.next_cursor().cloned()),
+        snapshot: page
+            .as_ref()
+            .map_or(0, RuntimeEventQueryPage::snapshot_ledger_position),
         // A page with a task filter is not a page `events` can continue.
         continuable: task_id.is_none(),
         repeating: report.repeating,
@@ -355,47 +519,220 @@ pub(crate) fn read(
         report_outcome: report.outcome,
         clock_slots: report.clock_slots,
         clock_slots_total: report.clock_slots_total,
-        runs_grouped: group_runs(&grouped_runs, status.as_ref()),
+        runs_grouped: group_runs(&window.grouped, status.as_ref()),
         failures_grouped: group_failures(&failures),
         not_run,
-        warnings,
+        warnings: unfinished.warnings,
     };
     Ok((diagnosis, query))
 }
 
-/// The 10 most recent runs first recorded in the window, newest first: on one instance as
-/// `recent_runs` reads them, else on every instance from the first page of the run list; and
-/// whether the read ended early.
-fn recent_runs(
+/// The first page of the errors view in the window, oldest first; `None` when it was not read
+/// (#422 QR-2b: the deadline had come, or the read failed, each answered by `errors_page`
+/// being incomplete). Its rows are all a diagnosis reads of it (`events::brief_row`), so it asks
+/// for no run recovery; its cursor binds the query and profile, not that option, so `events`
+/// continues it as its own page.
+fn errors_page(
+    client: &RuntimeClient,
+    query: &EventQuery,
+    budget: &Budget<'_>,
+    unfinished: &mut Unfinished,
+) -> Result<Option<RuntimeEventQueryPage>, Failure> {
+    if budget.spent() {
+        unfinished.cut(Section::ErrorsPage);
+        return Ok(None);
+    }
+    let page_request = RuntimeEventQueryPageRequest::new(ERRORS_PAGE_LIMIT, None)
+        .map_err(|error| Failure::QueryInvalid(error.code()))?
+        .without_run_recovery();
+    match client.query_event_page(query.clone(), events::PROFILE, page_request) {
+        Ok(page) => Ok(Some(page)),
+        Err(error) => {
+            unfinished.failed(&[Section::ErrorsPage], error);
+            Ok(None)
+        }
+    }
+}
+
+/// What a diagnosis keeps of the window's runs (#422 QR-2b): the 10 most recent runs first
+/// recorded in the window, newest first, of which `runs` keeps the failed and open ones; and
+/// every failed or open run of the window (of `task_id` when one is given), for `runs_grouped`.
+struct WindowReads {
+    recent: Vec<ContainedRunStatus>,
+    grouped: Vec<GroupedRun>,
+}
+
+/// #422 QR-2b: the window's runs, on `instance_id` or on every instance, listed once for both
+/// `runs` and `runs_grouped` (runtime-client `list_window_runs`) and examined newest first. A
+/// run is read only when a section needs it:
+/// - a run the listing shows settled (its one terminal `task.completed` or `task.cancelled`)
+///   and begun in the window (its main admission there) is never read: it can be neither failed
+///   nor open, so `runs_grouped` does not keep it, and it takes its place among the 10 most
+///   recent from the listing (a run whose entry check began before the window's start and whose
+///   admission falls in it is counted in it, `WindowRun::opened_in_window`; it is never shown);
+/// - any other run is read (its brief status, at the listing's snapshot) while the 10 most
+///   recent are not all found, and after that only when `runs_grouped` can keep it (its task is
+///   `task_id`'s, when one is given);
+/// - of a failed or open run `runs_grouped` keeps, the dispatch intent page is read only when
+///   it is scheduled (`catalog_task_id`), and its terminal record only when its code is a
+///   relayed spelling the catalog does not register.
+///
+/// The groups name their instances by alias: when no status was read for the instance and the
+/// listing holds a run that is not settled, one status read follows the listing. Every read
+/// starts only before the deadline; a listing the deadline cut leaves both sections unread (a
+/// partial listing may miss a newer run), a later cut leaves `runs_grouped` incomplete, and
+/// `runs` too until its 10 runs are found. A failed read ends the run reads as a cut does,
+/// with its failure as the warning.
+fn window_runs(
     client: &RuntimeClient,
     instance_id: Option<InstanceId>,
     since_unix_ms: u64,
-    deadline: Instant,
-) -> Result<(Vec<ContainedRunStatus>, bool), Failure> {
-    match instance_id {
-        Some(instance_id) => {
-            let recent = client
-                .recent_runs(instance_id, since_unix_ms, RECENT_RUNS)
-                .map_err(Failure::Runtime)?;
-            Ok((recent.runs, recent.incomplete))
+    task_id: Option<TaskId>,
+    budget: &Budget<'_>,
+    status: &mut Option<RuntimeControlPlaneStatus>,
+    unfinished: &mut Unfinished,
+) -> Result<WindowReads, Failure> {
+    let mut reads = WindowReads {
+        recent: Vec::new(),
+        grouped: Vec::new(),
+    };
+    if budget.spent() {
+        unfinished.cut_runs(true);
+        return Ok(reads);
+    }
+    let listing = match client.list_window_runs(instance_id, since_unix_ms, budget.until()) {
+        Ok(listing) => listing,
+        Err(error) => {
+            unfinished.failed(&[Section::Runs, Section::RunsGrouped], error);
+            return Ok(reads);
         }
-        None => {
-            let page = client
-                .list_contained_runs(
-                    since_unix_ms,
-                    None,
-                    &RunListFilter::default(),
-                    None,
-                    RECENT_RUNS,
-                    deadline,
-                )
-                .map_err(Failure::Runtime)?;
-            Ok((
-                page.runs.into_iter().map(|listed| listed.status).collect(),
-                page.incomplete,
-            ))
+    };
+    if !listing.complete {
+        unfinished.cut_runs(true);
+        return Ok(reads);
+    }
+    if status.is_none() && listing.runs.iter().any(|run| run.settled.is_none()) {
+        if budget.spent() {
+            unfinished.cut_runs(true);
+            return Ok(reads);
+        }
+        // A failed status read leaves the groups naming instances by instance_id.
+        match client.status() {
+            Ok(read) => *status = Some(read),
+            Err(error) => unfinished.failed(&[Section::RunsGrouped], error),
         }
     }
+    let snapshot = listing.snapshot_ledger_position;
+    let mut recent_found = 0_usize;
+    for (index, run) in listing.runs.iter().enumerate() {
+        let recent_wanted = recent_found < RECENT_RUNS;
+        if run.settled.is_some() && run.opened_in_window {
+            recent_found += usize::from(recent_wanted);
+            continue;
+        }
+        let grouped_wanted =
+            run.settled.is_none() && task_id.is_none_or(|id| run.identity.task_id == id);
+        if !recent_wanted && !grouped_wanted {
+            continue;
+        }
+        // `runs` is unfinished when the run reads end before its 10 runs are found.
+        if budget.spent() {
+            unfinished.cut_runs(recent_wanted);
+            break;
+        }
+        let read = match client.window_run_status(run, snapshot, budget.until()) {
+            Ok(Some(read)) => read,
+            Ok(None) => {
+                unfinished.cut_runs(recent_wanted);
+                break;
+            }
+            Err(error) => {
+                let sections: &[Section] = if recent_wanted {
+                    &[Section::Runs, Section::RunsGrouped]
+                } else {
+                    &[Section::RunsGrouped]
+                };
+                unfinished.failed(sections, error);
+                break;
+            }
+        };
+        // A run first recorded before the window is not one of its runs.
+        if !read
+            .first_fact_unix_ms
+            .is_some_and(|first| first >= since_unix_ms)
+        {
+            continue;
+        }
+        if recent_wanted {
+            recent_found += 1;
+            reads.recent.push(read.status.clone());
+        }
+        if !grouped_wanted || !FAILED_OR_OPEN.contains(&read.status.state) {
+            continue;
+        }
+        // `runs` is complete once its 10 runs are found or no run follows this one.
+        let recent_open = recent_found < RECENT_RUNS && index + 1 < listing.runs.len();
+        match grouped_run(client, run, &read.status, snapshot, budget) {
+            Ok(Some(grouped)) => reads.grouped.push(grouped),
+            Ok(None) => {
+                unfinished.cut_runs(recent_open);
+                break;
+            }
+            Err(failure) => {
+                let sections: &[Section] = if recent_open {
+                    &[Section::Runs, Section::RunsGrouped]
+                } else {
+                    &[Section::RunsGrouped]
+                };
+                unfinished.failure(sections, failure)?;
+                break;
+            }
+        }
+    }
+    Ok(reads)
+}
+
+/// One failed or open run as `runs_grouped` keeps it: the policy task of a scheduled run from
+/// its dispatch intent, and its failure code, a relayed spelling the catalog does not register
+/// read back from its terminal record; `None` when the deadline came before one of those reads.
+fn grouped_run(
+    client: &RuntimeClient,
+    run: &WindowRun,
+    status: &ContainedRunStatus,
+    snapshot: u64,
+    budget: &Budget<'_>,
+) -> Result<Option<GroupedRun>, Failure> {
+    let catalog_task_id = match status.dispatch {
+        RunDispatch::Scheduled => {
+            if budget.spent() {
+                return Ok(None);
+            }
+            client
+                .window_run_catalog_task_id(run, snapshot)
+                .map_err(Failure::Runtime)?
+        }
+        _ => None,
+    };
+    let terminal = status.terminal.as_ref();
+    let failure_code = match terminal.and_then(|terminal| terminal.failure_code.as_ref()) {
+        Some(code) if code.as_str() == ContractCode::OutcomeRelayUnregistered.as_str() => {
+            if budget.spent() {
+                return Ok(None);
+            }
+            let sequence = terminal.map_or(0, |terminal| terminal.sequence);
+            Some(relayed_failure_code(client, status.request_id, sequence)?)
+        }
+        Some(code) => Some(code.clone()),
+        None => None,
+    };
+    Ok(Some(GroupedRun {
+        catalog_task_id,
+        failure_code,
+        final_page: terminal.and_then(|terminal| terminal.final_page.clone()),
+        sequence: run.order_sequence,
+        request_id: status.request_id,
+        instance: status.instance_id,
+    }))
 }
 
 /// One failed or open run of `runs_grouped`.
@@ -410,66 +747,12 @@ struct GroupedRun {
     instance: Option<InstanceId>,
 }
 
-/// Every failed or open run first recorded in the window, on `instance_id` or on every instance
-/// and of `task_id` when one is given, read page by page until the list ends or `deadline`; and
-/// whether the whole list was read.
-fn failed_and_open_runs(
-    client: &RuntimeClient,
-    since_unix_ms: u64,
-    instance_id: Option<InstanceId>,
-    task_id: Option<TaskId>,
-    deadline: Instant,
-) -> Result<(Vec<GroupedRun>, bool), Failure> {
-    let filter = RunListFilter {
-        instance_id,
-        states: FAILED_OR_OPEN.to_vec(),
-        ..RunListFilter::default()
-    };
-    let mut runs = Vec::new();
-    let mut from = None;
-    loop {
-        let page = client
-            .list_contained_runs(since_unix_ms, None, &filter, from, RUN_LIST_PAGE, deadline)
-            .map_err(Failure::Runtime)?;
-        for listed in &page.runs {
-            let status = &listed.status;
-            if task_id.is_some_and(|id| status.task_id != Some(id)) {
-                continue;
-            }
-            let terminal = status.terminal.as_ref();
-            let failure_code = match terminal.and_then(|terminal| terminal.failure_code.as_ref()) {
-                Some(code) if code.as_str() == ContractCode::OutcomeRelayUnregistered.as_str() => {
-                    let sequence = terminal.map_or(0, |terminal| terminal.sequence);
-                    Some(relayed_failure_code(client, status.request_id, sequence)?)
-                }
-                Some(code) => Some(code.clone()),
-                None => None,
-            };
-            runs.push(GroupedRun {
-                catalog_task_id: listed.catalog_task_id.clone(),
-                failure_code,
-                final_page: terminal.and_then(|terminal| terminal.final_page.clone()),
-                sequence: listed.order_sequence,
-                request_id: status.request_id,
-                instance: status.instance_id,
-            });
-        }
-        if page.incomplete {
-            return Ok((runs, false));
-        }
-        match page.next {
-            Some(next) if Instant::now() < deadline => from = Some(next),
-            Some(_) => return Ok((runs, false)),
-            None => return Ok((runs, true)),
-        }
-    }
-}
-
 /// The failure code of a failed run whose terminal relayed a spelling the catalog does not
 /// register (`outcome_relay_unregistered`): that spelling, read back from the terminal record at
 /// `sequence` (A3 ruling 7, `scheduled_failure_code_str`), so that distinct failures stay distinct
 /// groups, as they stay distinct failure identities for the policy. The registered code when the
-/// record keeps no spelling.
+/// record keeps no spelling. The page's one row is all it reads, so it asks for no run recovery
+/// (#422 QR-2b).
 fn relayed_failure_code(
     client: &RuntimeClient,
     request_id: Option<RequestId>,
@@ -482,7 +765,8 @@ fn relayed_failure_code(
         ..EventQuery::default()
     };
     let page_request = RuntimeEventQueryPageRequest::new(1, None)
-        .map_err(|error| Failure::QueryInvalid(error.code()))?;
+        .map_err(|error| Failure::QueryInvalid(error.code()))?
+        .without_run_recovery();
     let page = client
         .query_event_page(query, events::PROFILE, page_request)
         .map_err(Failure::Runtime)?;
@@ -665,16 +949,18 @@ fn policy_execution_on(event: &ProjectedEvent, instance_id: InstanceId, alias: &
 }
 
 /// The records of the three kinds in the window, on `instance_id` or on every instance and of
-/// `task_id` when one is given, each type read page by page until its last page or `deadline`;
-/// and whether every page was read.
+/// `task_id` when one is given, each type read page by page until its last page. #422 QR-2b: a
+/// page starts only before the deadline; a deadline that came first, or a failed page, leaves
+/// `failures_grouped` incomplete with what was read.
 fn failure_records(
     client: &RuntimeClient,
     since_unix_ms: u64,
     instance_id: Option<InstanceId>,
     alias: Option<&str>,
     task_id: Option<TaskId>,
-    deadline: Instant,
-) -> Result<(Vec<FailureRecord>, bool), Failure> {
+    budget: &Budget<'_>,
+    unfinished: &mut Unfinished,
+) -> Result<Vec<FailureRecord>, Failure> {
     let mut records = Vec::new();
     for event_type in FAILURE_EVENT_TYPES {
         // A policy execution settled without run links names its instance only in its record,
@@ -687,7 +973,7 @@ fn failure_records(
             task_id,
             ..EventQuery::default()
         };
-        let complete = read_pages(client, query, deadline, |event| {
+        let read = read_pages(client, query, budget, |event| {
             let on_instance = match (policy, instance_id) {
                 (true, Some(instance_id)) => {
                     policy_execution_on(event, instance_id, alias.unwrap_or_default())
@@ -697,29 +983,39 @@ fn failure_records(
             if on_instance && let Some(record) = failure_record(event) {
                 records.push(record);
             }
-        })?;
-        if !complete {
-            return Ok((records, false));
+        });
+        match read {
+            Ok(true) => {}
+            Ok(false) => {
+                unfinished.cut(Section::FailuresGrouped);
+                break;
+            }
+            Err(failure) => {
+                unfinished.failure(&[Section::FailuresGrouped], failure)?;
+                break;
+            }
         }
     }
-    Ok((records, true))
+    Ok(records)
 }
 
 /// Every event `query` matches, oldest first, page by page up to the ledger position of its
-/// first page; false when `deadline` came before the last page.
+/// first page; false when the deadline came before the last page. The rows are all it reads,
+/// so its pages ask for no run recovery (#422 QR-2b).
 fn read_pages(
     client: &RuntimeClient,
     query: EventQuery,
-    deadline: Instant,
+    budget: &Budget<'_>,
     mut each: impl FnMut(&ProjectedEvent),
 ) -> Result<bool, Failure> {
     let mut next = query;
     loop {
-        if Instant::now() >= deadline {
+        if budget.spent() {
             return Ok(false);
         }
         let page_request = RuntimeEventQueryPageRequest::new(MAX_RUNTIME_EVENT_QUERY_EVENTS, None)
-            .map_err(|error| Failure::QueryInvalid(error.code()))?;
+            .map_err(|error| Failure::QueryInvalid(error.code()))?
+            .without_run_recovery();
         let page = client
             .query_event_page(next.clone(), events::PROFILE, page_request)
             .map_err(Failure::Runtime)?;
@@ -792,6 +1088,9 @@ pub(crate) struct Diagnosis {
     pub(crate) instance: Value,
     pub(crate) since: u64,
     pub(crate) incomplete: bool,
+    /// #422 QR-2b: the sections whose reads did not finish, each rendered
+    /// `<section>_incomplete: true` beside the diagnosis's `incomplete`.
+    pub(crate) incomplete_sections: Vec<Section>,
     pub(crate) runs: Vec<Value>,
     pub(crate) errors: Vec<Value>,
     pub(crate) error_sequences: Vec<u64>,
@@ -935,6 +1234,10 @@ impl Diagnosis {
             &self.failures_grouped,
             kept.failures_grouped,
         );
+        // #422 QR-2b: each section whose reads did not finish, named; never cut.
+        for section in &self.incomplete_sections {
+            result.insert(format!("{}_incomplete", section.name()), json!(true));
+        }
         // Workflow #386 SR-6b, MCP-19b: a part that could not be read leaves the diagnosis
         // incomplete too.
         if self.incomplete || !self.warnings.is_empty() {
@@ -1403,6 +1706,7 @@ fn run(arguments: &[OsString]) -> Result<Value, Failure> {
         report,
         Some(state_root.as_path()),
         deadline,
+        &SystemClock,
     )?;
     // This process holds one Runtime connection: its cursor answers cursor_invalid in any
     // later call, as `actingctl events` prints it.

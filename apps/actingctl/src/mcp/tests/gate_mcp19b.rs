@@ -278,6 +278,7 @@ pub(super) fn render(
         instance: Value::Null,
         since: EVALUATED_AT - 24 * HOUR_MS,
         incomplete: false,
+        incomplete_sections: Vec::new(),
         runs: Vec::new(),
         errors: Vec::new(),
         error_sequences: Vec::new(),

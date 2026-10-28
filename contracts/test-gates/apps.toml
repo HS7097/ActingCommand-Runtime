@@ -973,6 +973,18 @@ tests = [
 ]
 incident = ["#422 QR-2"]
 
+# #422 QR-2b (brief rd-1028/brief-qr2b-diagnose.md, investigation rd-1028/qr2-investigation.md §3): on A42's fake Runtime, which logs every QueryEvents page, a diagnosis with and without an instance lists the window's runs once, one first page per listing type (T1); reads the status of no run the listing shows succeeded or cancelled, and of each failed or open run a section needs once (T2); asks for every page without run recovery: errors view, failure records, listing, status, dispatch intent, relayed terminal (T3); on a clock that passes the deadline once a chosen page was served, a section the deadline passes in answers <section>_incomplete with call_budget_exhausted naming it, and the other sections answer as without the deadline: cut in runs_grouped, and cut in the listing (T4); without a slow section, runs are the failed and open runs among the 10 most recent the earlier reads found (recent_runs, list_contained_runs), runs_grouped and failures_grouped the window's groups (T5)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_qr2b::qr2b_t1_one_call_lists_once_with_and_without_an_instance",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_qr2b::qr2b_t2_settled_runs_are_not_status_read",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_qr2b::qr2b_t3_every_page_asks_for_no_run_recovery",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_qr2b::qr2b_t4_a_section_past_the_deadline_answers_incomplete_and_the_rest_answers",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_qr2b::qr2b_t5_an_answer_without_a_slow_section_is_as_before",
+]
+incident = ["#422 QR-2b"]
+
 # Workflow #427-A (brief rd-1028/brief-427a-lanes.md; plan r2 comment 6460013989, C1-C5): the per-instance lanes of the policy round behind scheduling.parallel.enabled, on the APPS-I7 cycle harness. A long run on one instance holds neither the round nor another instance; frozen after the terminal and before settlement there is no second dispatch, the reconciliation skips the run and its settlement and wake happen once; a failed run leaves the other instance running; a settlement between the sample and the validation is sampled again (C1), past the limit the round is given up and deferred; a shutdown refuses a run not taken and finishes a run taken; a worker panic drops the run and keeps its instance occupied for the reconciliation; the switch is off by default and an instruction turns it on at the next round
 [[gate]]
 coverage = "Y"
