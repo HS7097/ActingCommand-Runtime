@@ -76,4 +76,8 @@ mod tests {
 
     // #386 CF-5: a pool's capacity and a projection's comparand can be facts.
     mod gate_386_cf5;
+
+    // Workflow #427-B: no in-round CPU/GPU/IO deduction; the heavy-scene slots and the optional
+    // maximum of concurrent runs, with their numbers.
+    mod gate_427b;
 }

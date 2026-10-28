@@ -2452,3 +2452,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_421_s2if::s2if_t4_the_rollback_start_with_the_default_changed_back_is_base_changed",
 ]
 incident = ["#421 S2-IF"]
+
+# Workflow #427-B (review C4, #427 comment 6459928838; brief rd-1028/brief-427b-budget.md; contracts/performance-control.md): through the host's policy cycle in observe, pace and full alike, the heavy-scene limit binds (.normal at Normal, .paused above it, heavy_scene_budget_exhausted 1 of 1 with A admitted), and performance.pacing.max_concurrent_runs 1 defers B with policy_concurrent_runs_deferred 1 of 1, which the schedule explanation read answers with its numbers
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_427b::gate_427b_the_heavy_limit_binds_normal_and_under_pressure_in_observe_pace_and_full",
+    "actingcommand-runtime-host::lib::tests::gate_427b::gate_427b_the_max_key_binds_in_observe_pace_and_full_and_the_explanation_says_the_numbers",
+]
+incident = ["#427-B"]

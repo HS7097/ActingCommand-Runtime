@@ -454,6 +454,10 @@
       "layer": "policy",
       "uncertain": false,
       "values": {
+        "used": "required",
+        "limit_count": "required",
+        "admitted_count": "required",
+        "round_selected_count": "required",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -463,9 +467,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Scheduling decision reason: higher-ranked dispatches consumed the host's heavy-scene concurrency budget.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "Scheduling decision reason: a heavy candidate waits because the heavy-scene slots of its host are taken (contracts/scheduling/README.md \"Shared run limits\", Workflow #427-B). used of limit_count slots are taken: admitted_count by heavy policy dispatches admitted or running (admitted and not yet settled, on any instance) and round_selected_count by heavy dispatches chosen earlier in the same evaluation round. The limit is performance.pacing.heavy_dispatch_limit.normal, or .paused while the performance controller is above Normal. Each dispatch counts once; a refused or settled one frees its slot.",
+      "common_causes": "Other heavy work runs, or ranked ahead in the same round, on as many instances as the limit allows.",
+      "handling": "None: the candidate is evaluated again at the next round, after a heavy dispatch settles. Raise performance.pacing.heavy_dispatch_limit.normal only if the host carries more heavy work at once."
     },
     "host_budget_deferred": {
       "category": "info",
@@ -481,11 +485,12 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "Scheduling decision reason: higher-ranked dispatches consumed the shared host budget.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "retired_in": "0.12.22",
+      "description": "Retired. Scheduling decision reason: higher-ranked dispatches of the same evaluation round consumed the host's virtual CPU, GPU and IO budget. Since Workflow #427-B the round deducts no CPU, GPU or IO for a chosen dispatch: a task whose own load exceeds the host's capacity is still blocked at placement (host_capacity_insufficient), and the shared limits are the heavy-scene slots (heavy_scene_budget_deferred) and performance.pacing.max_concurrent_runs (policy_concurrent_runs_deferred).",
+      "common_causes": "Before Workflow #427-B: two or more candidates of one round on instances of one host whose loads together exceeded its CPU, GPU or IO capacity.",
+      "handling": "None in the release that retires it and later: the code is no longer emitted."
     },
     "placement_selected": {
       "category": "info",
@@ -635,6 +640,10 @@
       "layer": "policy",
       "uncertain": false,
       "values": {
+        "used": "required",
+        "limit_count": "required",
+        "admitted_count": "required",
+        "round_selected_count": "required",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -644,9 +653,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Scheduling decision reason: the host has no heavy-scene concurrency budget left.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "Scheduling decision reason: a heavy candidate is blocked at placement because the heavy policy dispatches admitted or running (admitted and not yet settled, on any instance) already take every heavy-scene slot of its host (contracts/scheduling/README.md \"Shared run limits\", Workflow #427-B). used and admitted_count are that number, which may be above limit_count when the limit fell under pressure; round_selected_count is 0, since placement comes before the round chooses anything. The limit is performance.pacing.heavy_dispatch_limit.normal, or .paused while the performance controller is above Normal.",
+      "common_causes": "As many heavy dispatches as the limit allows are admitted or running, or the controller lowered the limit to .paused under host pressure.",
+      "handling": "None: the candidate is evaluated again at the next round, after a heavy dispatch settles or the controller recovers to Normal."
     },
     "host_capacity_insufficient": {
       "category": "info",
@@ -2161,6 +2170,30 @@
       "description": "Scheduling decision reason (#386 CF-4, contracts/scheduling/README.md \"Fact references\"): a `fact` predicate whose value is a fact reference ({type: fact, fact_key, offset}) is false because the referenced fact (fact_key) gives no integer in the predicate's scope; since #386 CF-5 (\"Pool fact references\") also a `resource_projection` whose value is one, whose referenced fact is read in the pool's scope with no max_age_ms. unknown_reason says why: fact_missing (no such fact), fact_low_confidence (confidence 0), fact_stale (observed longer ago than the predicate's max_age_ms), fact_expired (past its own expiry) or type_mismatch (it holds no integer). The predicate asks for no fact refresh and gives no wake; the referenced fact's next reading wakes the scheduler. When the predicate decides the trigger, the decision ends with trigger_false.",
       "common_causes": "The package that reads the predicate's fact has not read the referenced fact (for example a capacity) yet, its reading is older than the predicate's max_age_ms, or it publishes the referenced fact with another value kind.",
       "handling": "None. The task becomes due once a fresh integer reading of the referenced fact compares true; publish the referenced fact with the predicate's fact, or raise max_age_ms in the rules."
+    },
+    "policy_concurrent_runs_deferred": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "used": "required",
+        "limit_count": "required",
+        "admitted_count": "required",
+        "round_selected_count": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.22",
+      "description": "Scheduling decision reason (Workflow #427-B, contracts/scheduling/README.md \"Shared run limits\"): a candidate waits because performance.pacing.max_concurrent_runs (limit_count) is reached. used policy dispatches take its slots: admitted_count admitted or running across every instance (admitted and not yet settled) and round_selected_count chosen earlier in the same evaluation round. Each dispatch counts once; a refused or settled one frees its slot. Without the key there is no such limit and the code is never given.",
+      "common_causes": "performance.pacing.max_concurrent_runs is set, and that many policy dispatches run or were chosen ahead in the round.",
+      "handling": "None: the candidate is evaluated again after a dispatch settles. Remove or raise performance.pacing.max_concurrent_runs (read when actingd starts) to let more run at once; 1 runs one policy dispatch at a time across every instance."
     }
   }
 }

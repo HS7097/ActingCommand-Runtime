@@ -477,9 +477,11 @@ Runtime's catalog source runs no selection document, so an override that keeps t
 ranks like `adjust`; they differ in disposition and reasons only.
 
 **Other instances.** Their scores, relative order, thresholds and reasons are unchanged. The
-shared host budget is still allocated in global total order, so while it is short an enabled
+shared run limits are still allocated in global total order, so while one is short an enabled
 instance's candidates can take it first and another instance's candidate then records
-`host_budget_deferred` for the round, as with a v1 target.
+`heavy_scene_budget_deferred` or `policy_concurrent_runs_deferred` for the round, as with a v1
+target (since Workflow #427-B the round deducts no CPU, GPU or IO, and `host_budget_deferred`
+is retired; [scheduling/README.md](scheduling/README.md), "Shared Run Limits").
 
 **Freshness.** A candidate that `R > 0` or an effective override moves is fresh at most until
 `valid_until_unix_ms` and the expiry of every inventory observation behind a positive

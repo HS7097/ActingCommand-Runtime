@@ -27,6 +27,11 @@ pub struct PerformanceControlConfig {
     /// `cpu_milli + gpu_milli + io_milli` reaches it is heavy, here and, through the resource
     /// overlay, in the policy evaluator.
     heavy_threshold_milli: u64,
+    /// Workflow #427-B (`performance.pacing.max_concurrent_runs`): at most this many policy
+    /// dispatches admitted or running at once across every instance, those chosen earlier in
+    /// the evaluation round included; `None`, no such limit. The policy host hands it to the
+    /// evaluator with the dispatches admitted or running (`actingcommand_policy::RunSlots`).
+    max_concurrent_runs: Option<u16>,
 }
 
 impl Default for PerformanceControlConfig {
@@ -39,6 +44,7 @@ impl Default for PerformanceControlConfig {
             normal_heavy_dispatch_limit: 2,
             pressured_heavy_dispatch_limit: 1,
             heavy_threshold_milli: DEFAULT_HEAVY_THRESHOLD_MILLI,
+            max_concurrent_runs: None,
         }
     }
 }
@@ -73,6 +79,13 @@ impl PerformanceControlConfig {
         self
     }
 
+    /// Workflow #427-B: `performance.pacing.max_concurrent_runs` in effect; `None` when the
+    /// configuration does not name it (no limit).
+    pub fn with_max_concurrent_runs(mut self, max_concurrent_runs: Option<u16>) -> Self {
+        self.max_concurrent_runs = max_concurrent_runs;
+        self
+    }
+
     pub const fn escalation_samples(&self) -> u16 {
         self.escalation_samples
     }
@@ -102,6 +115,11 @@ impl PerformanceControlConfig {
         self.heavy_threshold_milli
     }
 
+    /// The limit of concurrent policy runs (`with_max_concurrent_runs`, default none).
+    pub const fn max_concurrent_runs(&self) -> Option<u16> {
+        self.max_concurrent_runs
+    }
+
     pub fn validate(&self) -> RuntimeHostResult<()> {
         if self.escalation_samples == 0
             || self.recovery_samples == 0
@@ -111,6 +129,7 @@ impl PerformanceControlConfig {
             || self.pressured_heavy_dispatch_limit == 0
             || self.pressured_heavy_dispatch_limit > self.normal_heavy_dispatch_limit
             || self.heavy_threshold_milli == 0
+            || self.max_concurrent_runs == Some(0)
         {
             return Err(control_fatal(
                 HostCode::PerformanceControlConfigInvalid,

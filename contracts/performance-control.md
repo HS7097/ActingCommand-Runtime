@@ -25,6 +25,17 @@ candidate is heavy by the same value. Heavy work has no other threshold. The
 escalation and recovery samples and the transition cooldown stay the
 controller's own values.
 
+Workflow #427-B: the controller's configuration also carries the optional
+`performance.pacing.max_concurrent_runs` (no default, read once at assembly
+like the heavy-dispatch limits). The policy host hands it to every evaluation
+with the policy dispatches admitted and not yet settled, whose heavy ones it
+counts again by the same threshold: the resource overlay caps
+`active_heavy_dispatches` at the limit, so under pressure only that second
+count gives the real number the reasons report. Neither the limits nor the
+maximum depends on `performance.pacing.mode`: `observe`, `pace` and `full`
+bind them alike ([scheduling/README.md](scheduling/README.md), "Shared Run
+Limits").
+
 ## Responsiveness input
 
 Host responsiveness measures execution spans: `recognition_latency_ms`

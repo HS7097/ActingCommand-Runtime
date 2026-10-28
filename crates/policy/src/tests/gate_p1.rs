@@ -360,10 +360,13 @@ fn scenarios() -> Vec<(&'static str, PolicyEvaluation, Vec<&'static str>)> {
             vec![PolicyCode::HostCapacityInsufficient.as_str()],
         ),
         (
-            "two instances share a host with room for one run",
+            // Workflow #427-B: the round deducts no CPU, GPU or IO, so the shared limit two
+            // instances of one host can run into is its heavy-scene slots (one here).
+            "two instances share a host with one heavy-scene slot",
             {
                 let catalog = two_task_catalog(|tasks| {
                     tasks[0]["scope"] = json!({"kind": "server", "server_id": "fixture-server-a"});
+                    tasks[0]["load_profile"] = json!({"kind": "heavy"});
                     tasks[0]["trigger"] = due_clock();
                     tasks[1]["trigger"] = false_fact();
                     tasks[0]["feedback_stop"] = false_fact();
@@ -380,13 +383,11 @@ fn scenarios() -> Vec<(&'static str, PolicyEvaluation, Vec<&'static str>)> {
                     preferred_task_ids: vec![MISTYPED_TASK.to_owned()],
                 });
                 let mut resources = base_resources();
-                resources.hosts[0].cpu_available_milli = 200;
-                resources.hosts[0].gpu_available_milli = 100;
-                resources.hosts[0].io_available_milli = 300;
+                resources.hosts[0].heavy_dispatch_limit = 1;
                 run(&catalog, &facts, &resources)
             },
             vec![
-                PolicyCode::HostBudgetDeferred.as_str(),
+                PolicyCode::HeavySceneBudgetDeferred.as_str(),
                 PolicyCode::TriggerFalse.as_str(),
             ],
         ),

@@ -29,6 +29,8 @@ use crate::{
     PolicyEvaluation, PolicyEvaluationError, SchedulingDecisionState, TaskDecision,
     TaskRuntimeSnapshot, TaskTerminalState, compile_catalog, evaluate_with_fact_refresh,
 };
+// Workflow #427-B: T28 runs with the shared run limits.
+use crate::{ChainHandoverInputs, RemedyPlan, RunSlots, evaluate_with_run_slots};
 
 const ALPHA: &str = "task.alpha";
 const X: &str = "task.x";
@@ -47,7 +49,8 @@ const UNRESOLVED: &str = "fact_refresh_unresolved";
 const EXHAUSTED: &str = "fact_refresh_exhausted";
 const COOLDOWN: &str = "task_cooldown_active";
 const ALREADY_SELECTED: &str = "instance_already_selected";
-const HOST_BUDGET: &str = "host_budget_deferred";
+// Workflow #427-B: the shared limit T28 meets (`host_budget_deferred` is retired).
+const CONCURRENT_RUNS: &str = "policy_concurrent_runs_deferred";
 const TRIGGER_UNKNOWN: &str = "trigger_unknown";
 // The closure's positions 1-2, registered by runtime-host (model-369-queue.md W-1; Workflow
 // #191 ps1).
@@ -549,34 +552,62 @@ fn gate_d2_t27_a_restart_held_by_the_startup_package_waits_quietly_then_reads() 
     assert_eq!(refresh_codes(decision(&evaluation, ALPHA, A)), [PENDING]);
 }
 
-// T28 (D2M:608; §3.7 row 6): A and B share a host with room for one run (cpu 250 of the task's 200,
-// R_I's 100). B's candidate ranks ahead and takes it: R_I is `host_budget_deferred` and A's
-// candidate waits under `fact_refresh_pending` with that gate, without a warning.
+// T28 (D2M:608; §3.7 row 6): A and B share a limit with room for one run. Workflow #427-B (Alice
+// 10-28, #427 approved whole): the round deducts no CPU, GPU or IO any more, so the host's cpu 250
+// (the task's 200 and R_I's 100 each fit alone, not together) no longer holds R_I back; the
+// shared limit is `performance.pacing.max_concurrent_runs`, here 1. B's candidate ranks ahead and
+// takes it: R_I is `policy_concurrent_runs_deferred` and A's candidate waits under
+// `fact_refresh_pending` with that gate, without a warning.
 #[test]
 fn gate_d2_t28_a_reader_the_host_budget_defers_leaves_its_candidate_pending() {
     let shared = |id: &str, preferred: &[&str]| InstanceSnapshot {
         host_id: "host.shared".to_owned(),
         ..instance(id, preferred)
     };
-    let evaluation = evaluate_on(
+    let facts = EvaluationFacts {
+        ledger_position: 7,
+        fact_snapshot_id: "snapshot:fixture-fact-refresh".to_owned(),
+        facts: vec![expired_stock(A), fresh_stock(B, NOW - 60_000)],
+        outcomes: Vec::new(),
+        tasks: Vec::new(),
+        instances: vec![shared(A, &[]), shared(B, &[ALPHA])],
+        priority_offsets: Vec::new(),
+    };
+    let resources = EvaluationResources {
+        pools: Vec::new(),
+        hosts: vec![host("host.shared", 250)],
+    };
+    let evaluation = evaluate_with_run_slots::<PolicyEvaluationError>(
         &stock_catalog(),
-        &[shared(A, &[]), shared(B, &[ALPHA])],
-        vec![expired_stock(A), fresh_stock(B, NOW - 60_000)],
-        Vec::new(),
+        &facts,
+        &resources,
+        EvaluationTime {
+            unix_ms: NOW,
+            monotonic_ms: NOW,
+        },
+        11,
+        &BTreeSet::new(),
         &inputs(vec![reader(0, None)]),
-        NOW,
-        vec![host("host.shared", 250)],
-    );
+        &RemedyPlan::default(),
+        &ChainHandoverInputs::default(),
+        &RunSlots {
+            admitted_load_profiles: Vec::new(),
+            max_concurrent_runs: Some(1),
+        },
+        |_, _, _| Ok(false),
+        |_| Ok(CandidateEligibility::Eligible),
+    )
+    .unwrap_or_else(|error| panic!("a fact refresh never fails the evaluation: {error}"));
     assert!(has_intent(&evaluation, ALPHA, B));
     assert!(intents_on(&evaluation, A).is_empty());
     assert_eq!(
         last_code(refresh_decision(&evaluation, A).expect("R_I's decision")),
-        HOST_BUDGET
+        CONCURRENT_RUNS
     );
     let waiting = decision(&evaluation, ALPHA, A);
     assert_values(
         coded(waiting, PENDING)[0],
-        &pending(Some(HOST_BUDGET), None, None),
+        &pending(Some(CONCURRENT_RUNS), None, None),
     );
     assert!(
         waiting

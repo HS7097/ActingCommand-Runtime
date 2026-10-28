@@ -30,7 +30,7 @@ use actingcommand_selection_policy::UnknownReason;
 
 use super::{
     DecisionReason, DetectionSuggestion, EligibilityState, EvaluationFacts, EvaluationTime,
-    HostRemaining, InstanceSnapshot, ObservedFact, PlacementCandidate, PolicyEvaluationError,
+    HostView, InstanceSnapshot, ObservedFact, PlacementCandidate, PolicyEvaluationError,
     PolicyEvaluationResult, RankRecord, ResourceLoad, SchedulingDecisionState, TaskRank,
     TaskRuntimeSnapshot, TaskWork, UnknownReasonToken, activity_window_at,
     deterministic_tie_breaker, min_wake, reason, reason_with, select_activity_profile,
@@ -265,7 +265,7 @@ pub(super) struct PlanContext<'a> {
     pub(super) inputs: &'a FactRefreshInputs,
     pub(super) facts: &'a EvaluationFacts,
     pub(super) profiles: &'a [ActivityProfile],
-    pub(super) hosts: &'a BTreeMap<&'a str, HostRemaining>,
+    pub(super) hosts: &'a BTreeMap<&'a str, HostView>,
     pub(super) task_states: &'a BTreeMap<(&'a str, &'a str), &'a TaskRuntimeSnapshot>,
     pub(super) time: EvaluationTime,
     pub(super) seed: u64,
@@ -551,7 +551,8 @@ fn own_gate(
         &fact_refresh_task().load_profile,
         host.heavy_threshold_milli,
     );
-    if !host.fits(load) {
+    // Workflow #427-B: the package's own (light) load against the host's capacity.
+    if !host.fits_capacity(load) {
         entry.reasons.push(reason(
             PolicyCode::HostCapacityInsufficient,
             format!(

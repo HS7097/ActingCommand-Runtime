@@ -52,8 +52,8 @@ use actingcommand_policy::{
     EvaluationTime, FACT_REFRESH_TASK_ID, FactRefreshInputs, FactRefreshReader, InstanceSnapshot,
     MAX_EVALUATION_INSTANCES, MAX_TASK_FAILURE_STREAK, MAX_TASK_LAST_DURATION_MS, PolicyEvaluation,
     REMEDY_JOURNAL_MAX_RUNS, RemedyInputs, RemedyJournal, RemedyPlan, RemedyRun, RemedySettlement,
-    SchedulingDecisionState, ScopeSelector, TaskDecision, TaskRuntimeSnapshot, TaskTerminalState,
-    activity_window_at, compile_catalog, evaluate_with_chain_handovers, plan_remedies,
+    RunSlots, SchedulingDecisionState, ScopeSelector, TaskDecision, TaskRuntimeSnapshot,
+    TaskTerminalState, activity_window_at, compile_catalog, evaluate_with_run_slots, plan_remedies,
 };
 use actingcommand_runtime_state::{PlanningQuotaUsage as DetectionQuotaUsage, RuntimeStateStore};
 use serde::{Deserialize, Serialize};
@@ -1207,6 +1207,9 @@ pub(crate) struct PolicyHost {
     /// Workflow #386 SR-6b, MCP-19a (register §1.143 M19A-2): the latest evaluated cycle's
     /// not-run explanation. Memory only; a host starts with none.
     explanation: crate::schedule_explanation::ScheduleExplanationTable,
+    /// Workflow #427-B: `performance.pacing.max_concurrent_runs` as the host started
+    /// (`set_max_concurrent_runs`); `None`, no limit.
+    max_concurrent_runs: Option<u16>,
     /// Workflow #422 LN-3 (`contracts/ledger-observer.md` §11.3): per index key of the decision
     /// memory, the value record the ledger holds as its latest. Workflow #422 LN-4: empty on a
     /// start that seeds, so its reconciliation writes one record per key.
@@ -1635,6 +1638,7 @@ impl PolicyHost {
             remedies: crate::remedy::RemedyState::default(),
             random_delays: RandomDelayTable::default(),
             explanation: crate::schedule_explanation::ScheduleExplanationTable::default(),
+            max_concurrent_runs: None,
             recorded_values: BTreeMap::new(),
             values_loaded: false,
             values_through: 0,
@@ -2662,6 +2666,28 @@ impl PolicyHost {
             })
     }
 
+    /// Workflow #427-B: the limit of concurrent policy runs the host started with
+    /// (`performance.pacing.max_concurrent_runs`, through `PerformanceControlConfig`); every
+    /// evaluation applies it.
+    pub(crate) fn set_max_concurrent_runs(&mut self, max_concurrent_runs: Option<u16>) {
+        self.max_concurrent_runs = max_concurrent_runs;
+    }
+
+    /// Workflow #427-B (`contracts/scheduling/README.md`, "Shared run limits"): what takes the
+    /// shared run limits' slots as this evaluation starts: every policy dispatch admitted and not
+    /// yet settled, across every instance (the performance controller's workloads, read again
+    /// under this evaluation's policy lock), and the limit of concurrent runs.
+    fn run_slots(&self) -> RuntimeHostResult<RunSlots> {
+        Ok(RunSlots {
+            admitted_load_profiles: self
+                .active_performance_workloads()?
+                .into_iter()
+                .map(|workload| workload.load_profile)
+                .collect(),
+            max_concurrent_runs: self.max_concurrent_runs,
+        })
+    }
+
     pub(crate) fn evaluate(
         &mut self,
         facts: &EvaluationFacts,
@@ -2754,9 +2780,11 @@ impl PolicyHost {
         // bound package declares a remedy or remedies are off.
         let (remedy_plan, remedy_decisions) =
             self.remedy_plan(&active.compiled, facts, time, remedy)?;
+        // Workflow #427-B: the dispatches admitted or running and the limit of concurrent runs.
+        let run_slots = self.run_slots()?;
         let deferrals = clock_slot::Deferrals::default();
         let started = Instant::now();
-        let mut evaluation = evaluate_with_chain_handovers::<RuntimeHostError>(
+        let mut evaluation = evaluate_with_run_slots::<RuntimeHostError>(
             &active.compiled,
             facts,
             resources,
@@ -2768,6 +2796,7 @@ impl PolicyHost {
             // Workflow #411 B41: a chain step that hands over on its page goes first; the entry
             // of its package is read only for a candidate that follows its predecessor there.
             chain_handover,
+            &run_slots,
             |task, _instance_id, page_id| {
                 Ok(crate::host::chain_entry_holds_page(
                     procedure_manifest,
