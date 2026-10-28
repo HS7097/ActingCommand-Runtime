@@ -1022,6 +1022,12 @@ pub struct TimelineEvent {
     pub schedule: ClockSchedule,
     pub duration_ms: u64,
     pub invalidates_fact_prefixes: Vec<String>,
+    /// Workflow #411 P19 (`actingcommand.scheduling.v2` only, optional): the key prefixes this
+    /// event does not invalidate, each below one of its `invalidates_fact_prefixes`. A key that
+    /// starts with one of them keeps its observation through the event's occurrences and expires
+    /// only by its own expiry. Absent, it serializes as nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excludes_fact_prefixes: Option<Vec<String>>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -1029,6 +1035,28 @@ pub struct TimelineEvent {
     )]
     pub validity: Option<TimelineValidity>,
 }
+
+impl TimelineEvent {
+    /// Workflow #411 P19: whether an occurrence of this event invalidates the observation of
+    /// `key`: the key starts with one of `invalidates_fact_prefixes` and with none of
+    /// `excludes_fact_prefixes`.
+    pub fn invalidates_key(&self, key: &str) -> bool {
+        self.invalidates_fact_prefixes
+            .iter()
+            .any(|prefix| key.starts_with(prefix.as_str()))
+            && !self
+                .excludes_fact_prefixes
+                .iter()
+                .flatten()
+                .any(|prefix| key.starts_with(prefix.as_str()))
+    }
+}
+
+/// Workflow #411 P19: the configuration-manifest subsystem of a Runtime whose timeline events
+/// read `excludes_fact_prefixes` and whose resets keep a task's own last result for its own
+/// edges. A `schedule.json` whose event writes the member names it in `requires`; one that relies
+/// on a reset keeping the task's own last result names it too.
+pub const RESET_EXCLUSIONS_SUBSYSTEM: &str = "reset_exclusions";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

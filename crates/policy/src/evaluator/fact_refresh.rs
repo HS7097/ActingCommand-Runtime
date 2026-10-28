@@ -9,7 +9,10 @@
 //!
 //! - Demand comes from the candidates that passed the closure's positions 1-2 (an operator
 //!   pause, a holder, a waiting claim or a takeover cooldown): on an instance held there the
-//!   candidates carry that reason alone and nothing is collected (§3.4 step 1).
+//!   candidates carry that reason alone and nothing is collected (§3.4 step 1). Workflow #411
+//!   ruling 77 A: a task whose undecided trigger or feedback stop read an unknown key there
+//!   carries that reason too, last, so it never waits under a bare undecided trigger; the
+//!   reading follows once the hold ends.
 //! - R_I is requested for the unknown keys its marks write; it inherits the highest rank of the
 //!   candidates it unlocks (their catalog rank and manual offset) and competes with the other
 //!   candidates of its instance (§3.4).
@@ -206,7 +209,8 @@ pub(super) struct AffectedCandidate {
     pub(super) instance_id: String,
     pub(super) keys: Vec<RefreshKey>,
     pub(super) rank: TaskRank,
-    /// It read the keys through a catalog predicate, so it never reached the closure.
+    /// It read the keys through a catalog predicate, so it never reached the closure: on a held
+    /// instance it keeps its state and gains the hold's reason after its own (ruling 77 A).
     pub(super) predicate: bool,
 }
 
@@ -335,12 +339,21 @@ pub(super) fn plan(
     let mut plans = Vec::new();
     for (instance_id, affected) in by_instance {
         // §3.4 step 1: only candidates past the closure's positions 1-2 raise demand. On a held
-        // or paused instance a candidate the score stage deferred carries the hold's reason
-        // alone, as the closure would have given it; a predicate's keeps its own reasons.
+        // or paused instance (or one a blackout covers) a candidate the score stage deferred
+        // carries the hold's reason alone, as the closure would have given it, and no reading is
+        // requested while the hold lasts; the first round after it ends raises the demand.
+        // Workflow #411 ruling 77 A (Alice 10-28): a predicate's carries the hold's reason too,
+        // after its own `trigger_unknown` or `feedback_stop_unknown`, so its last reason says
+        // what holds it instead of a bare undecided trigger; its detection suggestions name the
+        // keys it waits for, and it takes the hold's wake.
         if let Some(hold) = context.inputs.instance_holds.get(&instance_id) {
-            for candidate in affected.iter().filter(|candidate| !candidate.predicate) {
+            for candidate in &affected {
                 let entry = &mut work[candidate.work_index];
-                entry.state = SchedulingDecisionState::Deferred;
+                // A score-stage candidate passed its trigger and is deferred here; a predicate's
+                // undecided trigger or feedback stop already settled its state.
+                if !candidate.predicate {
+                    entry.state = SchedulingDecisionState::Deferred;
+                }
                 entry.reasons.push(hold.reason.clone());
                 entry.next_wake_unix_ms = min_wake(entry.next_wake_unix_ms, hold.next_wake_unix_ms);
             }

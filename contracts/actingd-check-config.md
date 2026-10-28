@@ -352,6 +352,14 @@ The members of `report`:
       plus an offset ([scheduling/README.md](scheduling/README.md), "Pool fact
       references"); a `schedule.json` that writes either requires it, so it is
       composed only by a Runtime that names this row.
+    - `reset_exclusions` (Workflow #411 P19, since 0.12.25): always on
+      (`config_subsystem_always_on`). The Runtime reads a timeline event's
+      `excludes_fact_prefixes`, and its resets never clear a task's own last
+      result for the task's own edges
+      ([scheduling/README.md](scheduling/README.md), "Reset exclusions and the
+      task's own last result"); a `schedule.json` whose event writes the
+      member requires it, so it is composed only by a Runtime that names this
+      row.
     - `expected_runtime` (SCH-M ED-2): always on
       (`config_subsystem_always_on`). The Runtime keeps the run-duration
       samples (`health.run_duration`) and dispatches by the expected duration

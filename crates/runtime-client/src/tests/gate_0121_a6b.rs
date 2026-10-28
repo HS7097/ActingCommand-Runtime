@@ -9,9 +9,9 @@
 //! still projects its status, by its request and by its run alike. A scripted Runtime
 //! (`test_support::ScriptedRuntime`) answers every event query from one in-memory ledger.
 
-use super::{RejectProjectionSecrets, client_with_timeout};
+use super::{RejectProjectionSecrets, client_with_timeout, unreached_deadline};
 use crate::test_support::{ScriptedConnection, ScriptedRuntime};
-use crate::{ContainedRunProgress, ContainedRunState, RunKey, RunStatusMode};
+use crate::{ContainedRunProgress, ContainedRunState, RunKey, RunListFilter, RunStatusMode};
 use actingcommand_contract::{
     AuditInput, CapturePayloadDraft, EffectDisposition, EventAction, EventActor, EventDraft,
     EventLinksDraft, EventOrigin, EventPayloadDraft, EventSeverity, EventSource, IdentifierIssuer,
@@ -142,10 +142,23 @@ fn a6_a_run_with_more_records_than_the_limit_still_projects_its_status() {
         }),
         "the last step of a run with {CAPTURES} captures"
     );
-    // ac_overview reads the newest run of each instance, ac_diagnose its 10 most recent.
+    // The newest run of the instance and its 10 most recent. #422 QR-2b L4 (W1-9): read through
+    // `list_contained_runs` on the instance (`ac_runs`), which lists the window's runs as the
+    // retired `recent_runs` did and reads each run the same way.
+    let filter = RunListFilter {
+        instance_id: Some(instance),
+        ..RunListFilter::default()
+    };
     for limit in [1, 10] {
         let recent = client
-            .recent_runs(instance, SINCE_UNIX_MS, limit)
+            .list_contained_runs(
+                SINCE_UNIX_MS,
+                None,
+                &filter,
+                None,
+                limit,
+                unreached_deadline(),
+            )
             .unwrap_or_else(|error| {
                 panic!(
                     "the recent runs (limit {limit}) of an instance whose run has {CAPTURES} captures: {error}"
@@ -159,7 +172,7 @@ fn a6_a_run_with_more_records_than_the_limit_still_projects_its_status() {
             recent
                 .runs
                 .iter()
-                .map(|run| (run.request_id, run.state))
+                .map(|run| (run.status.request_id, run.status.state))
                 .collect::<Vec<_>>(),
             vec![(Some(request), ContainedRunState::Succeeded)],
             "the recent runs (limit {limit}) are not the instance's one succeeded run"

@@ -2929,6 +2929,10 @@ mod gate_382_a4_g8;
 // Workflow #411 A4: `actingledger events` reads only its range, counted, with the same report.
 #[path = "tests/gate_0121_a4.rs"]
 mod gate_0121_a4;
+// ROUT-L RL-1c follow-up (#411 L1; 0.12 wave 1 W1-9, fix round 1): a range read under a deadline
+// stops wherever it passes, in its chunked rows and at its head row, and keeps nothing.
+#[path = "tests/gate_rl1c_follow.rs"]
+mod gate_rl1c_follow;
 // #411 A24 (ledger key 50): the offline facts read takes its snapshot at the latest time through
 // its position.
 #[path = "tests/gate_411_a24.rs"]

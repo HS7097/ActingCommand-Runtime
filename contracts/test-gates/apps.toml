@@ -923,6 +923,14 @@ tests = [
 ]
 incident = ["#411 RL-1c"]
 
+# ROUT-L RL-1c follow-up (#411 6444982862 L2; 0.12 wave 1 slice W1-9, brief rd-1028/brief-wave1.md): actingd suspended run by hand, without --deadline-ms, reads the ledger under the default deadline from the process's start, and a caller's run under the deadline it passes
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_rl1c_follow::rl1c_follow_l2_a_run_by_hand_reads_under_the_default_deadline",
+]
+incident = ["#411 RL-1c"]
+
 # ROUT-L RL-1c fix round 1 (#411; work order rd-1027/brief-rl1c-fix1.md, review H1): the actingd suspended child of a diagnosis (ac_diagnose, actingctl diagnose) still running at the call's deadline is ended there and reaped, and the call answers at that deadline (a fake child that never ends, a fake clock)
 [[gate]]
 coverage = "Y"
@@ -973,7 +981,7 @@ tests = [
 ]
 incident = ["#422 QR-2"]
 
-# #422 QR-2b (brief rd-1028/brief-qr2b-diagnose.md, investigation rd-1028/qr2-investigation.md §3): on A42's fake Runtime, which logs every QueryEvents page, a diagnosis with and without an instance lists the window's runs once, one first page per listing type (T1); reads the status of no run the listing shows succeeded or cancelled, and of each failed or open run a section needs once (T2); asks for every page without run recovery: errors view, failure records, listing, status, dispatch intent, relayed terminal (T3); on a clock that passes the deadline once a chosen page was served, a section the deadline passes in answers <section>_incomplete with call_budget_exhausted naming it, and the other sections answer as without the deadline: cut in runs_grouped, and cut in the listing (T4); without a slow section, runs are the failed and open runs among the 10 most recent the earlier reads found (recent_runs, list_contained_runs), runs_grouped and failures_grouped the window's groups (T5)
+# #422 QR-2b (brief rd-1028/brief-qr2b-diagnose.md, investigation rd-1028/qr2-investigation.md §3): on A42's fake Runtime, which logs every QueryEvents page, a diagnosis with and without an instance lists the window's runs once, one first page per listing type (T1); reads the status of no run the listing shows succeeded or cancelled, and of each failed or open run a section needs once (T2); asks for every page without run recovery: errors view, failure records, listing, status, dispatch intent, relayed terminal (T3); on a clock that passes the deadline once a chosen page was served, a section the deadline passes in answers <section>_incomplete with call_budget_exhausted naming it, and the other sections answer as without the deadline: cut in runs_grouped, and cut in the listing (T4); without a slow section, runs are the failed and open runs among the 10 most recent the earlier reads found (list_contained_runs on the instance; recent_runs until its retirement in 0.12.25, W1-9), runs_grouped and failures_grouped the window's groups (T5)
 [[gate]]
 coverage = "Y"
 tests = [
@@ -1024,3 +1032,23 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_427b::gate_427b_ac_diagnose_lists_a_row_the_shared_run_limits_blocked_with_its_numbers",
 ]
 incident = ["#427-B"]
+
+# Workflow #421 P12 (v0.12.25; W1-1, brief rd-1028/brief-wave1.md; #421 6441776975): on the fake host, the composite update's automatic rollback evaluates the rollback gate before it closes the new Runtime: a gate that fails closes nothing, the new Runtime keeps running with the hold, the rollback's close is never begun and the command ends rollback_gate_failed naming only release-hold (D-7, adapted); a gate that passes rolls back as before, after a failed check (D-5) or a new start that exited (D-6), and a rollback interrupted after each of its steps, the close past the gate's pass among them, is finished by resume (F-4)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst2_d_7_a_failed_gate_keeps_the_new_build_and_the_hold",
+    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst2_d_5_a_failed_check_rolls_back_to_the_previous_build_and_releases_the_hold",
+    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst2_d_6_a_new_start_that_exits_rolls_back_the_same_way",
+    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst2_f_4_resume_finishes_a_rollback_interrupted_after_each_of_its_steps",
+]
+incident = ["#421 P12"]
+
+# Workflow #421 P12 fix round 1 (v0.12.25; W1-1, brief rd-1028/brief-w1-1-fix1.md item 3; review rd-1028/review-w1-1.md L-2): on the fake host, the rollback gate evaluated before the close refuses a running image that would change and may not be renamed as rollback_gate_failed caused by running_image_blocks, closing nothing, the new Runtime running with the hold and next naming only release-hold (D-7b); a gate that fails after a new start that exited closes and starts nothing and names install start beside release-hold (D-7c)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst2_d_7b_a_running_image_met_before_the_close_fails_the_gate_and_closes_nothing",
+    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst2_d_7c_a_failed_gate_after_a_new_start_that_exited_names_install_start",
+]
+incident = ["#421 P12"]

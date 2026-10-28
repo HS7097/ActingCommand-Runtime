@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 //! `actingd suspended --config <path> [--deadline-ms <ms>]` (Workflow #336 L6, §12.8; RL-1c fix 1
-//! adds the deadline, which bounds the ledger read): the read-only list of the
+//! adds the deadline, which bounds the ledger read; RL-1c follow-up #411 L2: without it, a
+//! default deadline): the read-only list of the
 //! scheduled pairs a failure paused, those a change of a package's content lifted (Workflow #336
 //! PKG-S3: the running daemon lifts them at its next check, without a restart), and those failing
 //! again and again without accumulating.
@@ -22,9 +23,22 @@ use actingcommand_runtime_host::{
 /// and `detail`).
 pub(super) const SCHEMA_VERSION: &str = "actingcommand.actingd.suspended.v2";
 
-pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, ActingdError> {
-    // The read's deadline counts from this process's start.
-    let started = std::time::Instant::now();
+/// RL-1c follow-up (#411 L2, W1-9): how long a run without `--deadline-ms` (a run by hand) reads
+/// the ledger, from the process's start; it then answers with what it read and
+/// `ledger_read_incomplete`, as a run under the caller's deadline does. By the tunables rule a
+/// configuration key with this default; it stays a constant until the `actingd-config` revision
+/// that adds the key (none in 0.12 wave 1).
+pub(super) const DEFAULT_READ_MS: u64 = 60_000;
+
+/// The options of one run: `--config <path>`, and how long the ledger read may take from the
+/// process's start (`--deadline-ms`, else [`DEFAULT_READ_MS`]).
+pub(super) struct Options {
+    pub(super) config: Option<PathBuf>,
+    pub(super) read_for: std::time::Duration,
+}
+
+/// The run's options, or the refusal of its arguments (usage, then an option).
+pub(super) fn options(arguments: &[std::ffi::OsString]) -> Result<Options, ActingdError> {
     // At most `--config <path>` and `--deadline-ms <ms>`; a word after a whole option is usage.
     if arguments.len() > 5 || (arguments.len() > 3 && arguments.len().is_multiple_of(2)) {
         return Err(ActingdError::config(ActingdCode::SuspendedUsageInvalid));
@@ -51,9 +65,18 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
     if !remaining.is_empty() {
         return Err(ActingdError::config(ActingdCode::SuspendedOptionInvalid));
     }
-    let budget = SuspendedReadBudget::until(
-        deadline_ms.and_then(|ms| started.checked_add(std::time::Duration::from_millis(ms))),
-    );
+    Ok(Options {
+        config,
+        // RL-1c follow-up (#411 L2): a run by hand reads under a deadline too.
+        read_for: std::time::Duration::from_millis(deadline_ms.unwrap_or(DEFAULT_READ_MS)),
+    })
+}
+
+pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, ActingdError> {
+    // The read's deadline counts from this process's start.
+    let started = std::time::Instant::now();
+    let Options { config, read_for } = options(&arguments)?;
+    let budget = SuspendedReadBudget::until(started.checked_add(read_for));
     let config_path =
         config.ok_or_else(|| ActingdError::config(ActingdCode::SuspendedConfigMissing))?;
     let RuntimeAssembly { host, policy, .. } = config::load(&config_path)

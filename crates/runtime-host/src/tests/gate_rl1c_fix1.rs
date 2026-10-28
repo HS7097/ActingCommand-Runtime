@@ -74,8 +74,8 @@ fn rl1c_fix1_the_suspended_report_answers_incomplete_within_its_budget() {
     let bounded = crate::suspension_report_within(
         &request,
         SuspendedReadBudget {
-            deadline: None,
             max_events,
+            ..SuspendedReadBudget::until(None)
         },
     )
     .unwrap_or_else(|error| panic!("the bounded report answers: {error}"));

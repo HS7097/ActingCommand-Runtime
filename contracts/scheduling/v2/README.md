@@ -19,6 +19,16 @@ inclusive and the upper bound exclusive. An explicit null upper bound means
 unbounded. A finite upper bound must exceed the lower bound. All declaration
 integers remain within the existing canonical safe-integer limits.
 
+A V2 timeline event may carry `excludes_fact_prefixes` (Workflow #411 P19,
+since 0.12.25; `../README.md`, "Reset exclusions and the task's own last
+result"): the key prefixes it does not invalidate. A key that starts with one of
+its `invalidates_fact_prefixes` and with none of these is invalidated as
+before; an excluded key keeps its observation and expires by itself. At most
+128 entries, each an identifier (`type_mismatch` at the entry) below one of the
+event's `invalidates_fact_prefixes` (`dangling_reference` at the entry
+otherwise). A V1 document that writes it is refused as an unknown field at the
+member. An event without it serializes, and hashes, exactly as before.
+
 The task predicate `{"kind":"timeline_active","event_id":"neutral.window"}`
 references an event in the same catalog. The existing schedule evaluator resolves
 the latest occurrence using its declared `ClockSource`. A positive duration gives

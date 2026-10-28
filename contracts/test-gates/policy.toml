@@ -542,6 +542,15 @@ tests = [
     "actingcommand-policy::lib::tests::gate_d2_s4::gate_d2_t28_a_reader_the_host_budget_defers_leaves_its_candidate_pending",
 ]
 incident = ["#384"]
+# Workflow #411 ruling 77 A (P18; Alice 10-28; #411 6438574534, 6439686477; contracts/scheduling/README.md, "Fact Refresh", Demand): a task whose trigger reads an unknown realistic key of its instance while the instance is held (dispatch_instance_held, dispatch_paused_instance, dispatch_instance_cooldown) carries that hold's reason after trigger_unknown as its last reason, with the hold's wake, no fact refresh reason, and its detection suggestions name the key; while the instance's reader is failure-paused at admission (policy_task_paused) it carries fact_refresh_exhausted naming the key and the package; nothing reads the key while held; the round after the hold ends dispatches the reader for exactly that key and the task waits under fact_refresh_pending
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_d2_s4::p18_a_held_instance_or_package_names_what_holds_the_predicate_candidate",
+    "actingcommand-policy::lib::tests::gate_d2_s4::p18_no_reading_is_requested_while_the_instance_or_package_is_held",
+    "actingcommand-policy::lib::tests::gate_d2_s4::p18_the_round_after_the_hold_ends_reads_the_key",
+]
+incident = ["#411 P18"]
 # Workflow #386 SR-3 (frozen scheduling model v1.4.2 §2.4 items 3-4, rows T10 and T11; M-PKG v1.1 §3.4, §5.2): the first preparation that refuses a task package with a suspend code suspends it by its package_id, with its content hash; every task bound to it, on every instance, is deferred with pack_admission_suspended and not prepared again, while another task package dispatches; a changed content hash or another build lifts it and the package is tried once, and the same refusal suspends it again
 [[gate]]
 key = "48"
@@ -890,3 +899,13 @@ tests = [
     "actingcommand-policy::lib::tests::gate_427b::gate_427b_max_one_runs_one_dispatch_at_a_time",
 ]
 incident = ["#427-B"]
+
+# Workflow #411 P19 (comment 6455013768 items 1 and 2; work order rd-1028/brief-wave1.md W1-4; contracts/scheduling/README.md, "Reset exclusions and the task's own last result"): a reset that invalidates a prefix keeps the keys below its excludes_fact_prefixes (their expiry not capped at its next occurrence) while every other key below the prefix is cleared, and a schedule.json whose event writes the member composes only when requires names reset_exclusions (schedule_invalid at the member otherwise); a reset never clears a task's own last result: its own dependency_completed reads it (a last success makes it due, a last failure makes it false, never Unknown) while another task naming it reads it as the reset left it (dependency_state_missing), since_own_run's own run reads it (dependency_already_served), and once_per_reading's served check reads it (fact_time_served; a failed last run served nothing)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_411_p19::p19_an_excluded_prefix_survives_a_reset",
+    "actingcommand-policy::lib::tests::gate_411_p19::p19_the_steps_own_last_result_survives_a_reset",
+    "actingcommand-policy::lib::tests::gate_411_p19::p19_the_served_check_reads_the_own_last_result",
+]
+incident = ["#411 P19"]

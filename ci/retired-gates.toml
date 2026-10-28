@@ -136,6 +136,16 @@ ruling = "Alice's ruling 35 (emu-watch; #414 option 3)"
 reason = "A pause no longer gates an autostart claim, so the gated routine entry the shutdown idle test must not count is now a Runtime-internal ladder claim."
 covered_by = "actingcommand-runtime-host::lib::tests::gate_0121_a3::a3_a_shutdown_is_accepted_while_a_paused_instance_holds_a_gated_routine_claim, in host row 102."
 
+# host.toml, row 145 (#411 A71, 0.12.25): an operator start or restart of a paused instance queues
+# its startup package behind the pause again, so A50's T4 was adapted and renamed; the new name
+# takes the old one's place in the same row.
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_411_a50::a50_t4_an_operator_restart_of_a_paused_instance_queues_nothing_and_says_why"
+ruling = "#411 A71 (#411 comment 6380024768; emu-watch, Alice's ruling 35: a pause holds only dispatches)"
+reason = "It pinned A50's rule that a pause holding the instance queues no startup package, which left the package unrun after the resume (production 10-24); A71 queues it behind the pause, to run after the resume."
+covered_by = "actingcommand-runtime-host::lib::tests::gate_411_a50::a50_t4_an_operator_restart_of_a_paused_instance_queues_its_startup_package_behind_the_pause, in host row 145; the resume's run once by gate_411_a50::a71_t8_a_start_during_a_pause_runs_its_startup_package_once_after_the_resume."
+
 # apps.toml, row 7f (#411 A66, PR #1298): the watchdog's start timeout is the configured start
 # window, so the gate's name no longer says 180 s.
 [[retired]]

@@ -39,8 +39,8 @@
 //! on the claim's own key; its `command.received` is written only then, so a claim that yields
 //! leaves no open command. A passing preparation hands the key to the startup package through the
 //! gate, a failing one to the ladder it admitted; emu-watch: under a scheduling pause the startup
-//! package's claim waits queued as a gated entry and runs after the resume (the configured start
-//! does not withhold it as an operator's start does, `startup_package_withheld`). Every outcome
+//! package's claim waits queued as a gated entry and runs after the resume (#411 A71: so does an
+//! operator's start's). Every outcome
 //! is one report line, which actingd writes as a daemon line; a failed write never stops the
 //! daemon.
 //!

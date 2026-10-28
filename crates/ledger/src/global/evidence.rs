@@ -235,6 +235,7 @@ pub struct GlobalLedgerSelection {
     head_time_unix_ms: Option<u64>,
     latest_time_unix_ms: Option<u64>,
     newest: Vec<Option<PersistedEvent>>,
+    newest_complete: bool,
     complete: bool,
     writer: GlobalLedgerWriterMetadataObservation,
 }
@@ -255,9 +256,18 @@ impl GlobalLedgerSelection {
         self.latest_time_unix_ms
     }
     /// ROUT-L RL-1c fix 2 (#411 M2): the newest matching event of each
-    /// [`GlobalLedgerSelectionExtras::newest`] query, in their order; `None` where none matches.
+    /// [`GlobalLedgerSelectionExtras::newest`] query, in their order; `None` where none matches,
+    /// or where its walk ended before it found one ([`GlobalLedgerSelection::newest_complete`]).
     pub fn newest(&self) -> &[Option<PersistedEvent>] {
         &self.newest
+    }
+    /// RL-1c follow-up (#411 review 2 L1, W1-9): false when a
+    /// [`GlobalLedgerSelectionExtras::newest`] walk ended at its most rows
+    /// ([`GlobalLedgerSelectionExtras::newest_max_rows`]) or at the deadline before it found its
+    /// event or the type's oldest row; that query then answers `None` although an older row may
+    /// match. Every other row of the selection was read.
+    pub fn newest_complete(&self) -> bool {
+        self.newest_complete
     }
     /// ROUT-L RL-1c fix 1 (#411 H1): the selected events, in ledger order.
     pub fn events(&self) -> &[PersistedEvent] {
@@ -296,8 +306,14 @@ pub struct GlobalLedgerSelectionExtras {
     /// ([`GlobalLedgerSelection::newest`]): the rows of the query's `event_type` are read newest
     /// first through the type index, each authenticated on its own, until one matches; only that
     /// one is kept. Each query names an `event_type` and no `view`; otherwise the request error
-    /// `ledger_selection_query_unsupported`.
+    /// `ledger_selection_query_unsupported`. RL-1c follow-up (#411 review 2 L1, W1-9): these
+    /// walks are read last; one that reaches the deadline ends there without a row and the
+    /// selection keeps every other row it read ([`GlobalLedgerSelection::newest_complete`]).
     pub newest: Vec<EventQuery>,
+    /// RL-1c follow-up (#411 review 2 L1, W1-9): the most rows one `newest` walk reads; having
+    /// read them without a match it ends without a row ([`GlobalLedgerSelection::newest_complete`]
+    /// false). `None`: every row of the type. A segment root is read whole and has no such bound.
+    pub newest_max_rows: Option<usize>,
     /// Whether the ledger's latest time is read ([`GlobalLedgerSelection::latest_time_unix_ms`],
     /// #411 A24): the row of the maximum `timestamp_unix_ms`, through the time index, one row
     /// authenticated on its own.
@@ -902,6 +918,10 @@ impl GlobalLedger {
                             )
                         })
                 };
+                // RL-1c follow-up (#411 review 2 L1, W1-9): once a newest-first walk stopped at
+                // the deadline, the rows read before it are kept: they are converted without
+                // another look at the deadline (their count was checked as each was read).
+                let budget = if read.deadline_passed { None } else { budget };
                 let mut events = Vec::with_capacity(read.events.len());
                 for event in read.events {
                     read_only::check_read_budget(budget, 0, events.len() + 1)?;
@@ -925,6 +945,7 @@ impl GlobalLedger {
                     head_time_unix_ms: read.head_time_unix_ms,
                     latest_time_unix_ms: read.latest_time_unix_ms,
                     newest,
+                    newest_complete: read.newest_complete,
                     complete: true,
                     writer,
                 });
@@ -964,6 +985,8 @@ impl GlobalLedger {
                 None
             },
             newest,
+            // A segment root is read whole: each walk reads every row it needs.
+            newest_complete: true,
             complete: source.is_complete(),
             writer: source.writer_metadata().clone(),
         })
@@ -985,6 +1008,26 @@ impl GlobalLedger {
     pub fn open_range(
         root: impl Into<PathBuf>,
         request: &GlobalLedgerRangeRequest,
+    ) -> GlobalLedgerResult<Option<GlobalLedgerRangeRead>> {
+        Self::open_range_reading(root, request, None)
+    }
+
+    /// RL-1c follow-up (#411 L1, W1-9): [`GlobalLedger::open_range`] whose read stops at
+    /// `deadline`: the extent check, every row it reads and the head row are checked against it
+    /// as they are read, as `open_selected_within` checks its rows, and a read the deadline
+    /// passes in is the request error `ledger_read_budget_exceeded`; nothing it read is kept.
+    pub fn open_range_within(
+        root: impl Into<PathBuf>,
+        request: &GlobalLedgerRangeRequest,
+        deadline: Instant,
+    ) -> GlobalLedgerResult<Option<GlobalLedgerRangeRead>> {
+        Self::open_range_reading(root, request, Some((u64::MAX, usize::MAX, deadline)))
+    }
+
+    fn open_range_reading(
+        root: impl Into<PathBuf>,
+        request: &GlobalLedgerRangeRequest,
+        budget: Option<(u64, usize, Instant)>,
     ) -> GlobalLedgerResult<Option<GlobalLedgerRangeRead>> {
         // A view's Lab relation is decided from events outside the range.
         if request.query.view.is_some() {
@@ -1021,7 +1064,7 @@ impl GlobalLedger {
         if !sqlite::has_schema(&database)? {
             return Ok(None);
         }
-        let read = sqlite::read_range(&database, request)?;
+        let read = sqlite::read_range(&database, request, budget)?;
         // Every evidence opening reads the writer observation; this one does not report it.
         read_only::read_writer_metadata(&root.join("ledger"))?;
         Ok(Some(GlobalLedgerRangeRead {

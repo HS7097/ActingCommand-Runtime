@@ -770,6 +770,14 @@ tests = [
 ]
 incident = ["#411 RL-1c"]
 
+# ROUT-L RL-1c follow-up (#411 6444982862 L1; 0.12 wave 1 slice W1-9, fix round 1, review rd-1028/review-w1-9.md L1): a range read under a deadline (GlobalLedger::open_range_within) on a formal root, its range several chunks below the head: at every count of looks of the fake read clock below the whole read's, the read is ledger_read_budget_exceeded, not fatal, and keeps nothing; by the rows each stopped read had read, deadlines pass in the middle of its chunked rows, at the head row's statement after every chunk and its link rows, and after the head row was read (its authentication, its link and artifact rows)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_rl1c_follow::rl1c_follow_l1_a_range_read_stops_at_its_deadline_in_its_chunked_rows_and_at_its_head_row",
+]
+incident = ["#411 RL-1c"]
+
 # QR-1 (#422; brief rd-1028/brief-qr1-reads-off-writer.md; Alice 10-28): the Runtime writer's view pages are read by its reader pool, on read-only connections of their own, off the writer thread, and the frame cleaner's pass-start trim reaches the writer in bounded chunks. While the writer is held inside an append's write transaction, a view page is answered by the pool with the bytes of the page the writer reads (first and next pages); a pass-start trim's chunks each look at no more objects than their bound, every object once, and between two chunks an append and a page both complete; the read budget stops a pool page while the writer is held (incomplete at its budget, a cursor past its start), and a pool page held past the reply limit is writer_response_timeout, not fatal; a page never reads past the committed head (not a record of an open write transaction, never past the head read after it) while the writer appends. Fix 1 (brief rd-1028/brief-qr1-fix1.md, review rd-1028/review-qr1.md): a page whose caller's deadline passed on the writer clock while it was queued is answered with that writer_response_timeout and never read; a close with pages queued reads none of them and each has its refusal (writer_unavailable of shutdown_writer, not fatal) when the close returns; a reader that ends is one warning, not fatal, and the reader left answers the pages; once no reader is left that is a warning too and the writer reads the next page; the pool's pages are in the writer statistics as ProjectViewPage
 [[gate]]
 coverage = "Y"

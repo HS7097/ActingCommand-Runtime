@@ -20,11 +20,12 @@
 //!   keeps the hold. **Between the new start and the resume** (decision 74 A) a failed
 //!   fail-class check, or a start that ended, rolls the update back by itself. The rollback's
 //!   steps are journalled before anything acts (fix round 1, review S2 H2): the new Runtime's
-//!   close, the reversal (whose first part is the rollback gate toward the previous build, with
-//!   this operation's S0), the previous build's start and checks, and the release of the hold
-//!   (when its checks passed); the command ends refused `deploy_rolled_back`. When the gate fails
-//!   the new build and the hold stay and it ends `rollback_gate_failed`. After the resume nothing
-//!   rolls back by itself. `--detach` runs the same command again through the watchdog's
+//!   close, the reversal, the previous build's start and checks, and the release of the hold
+//!   (when its checks passed); the command ends refused `deploy_rolled_back`. The rollback gate
+//!   toward the previous build (with this operation's S0) is evaluated before the new Runtime
+//!   closes (Workflow #421 6441776975, P12): when it fails nothing is closed, the new build, its
+//!   Runtime and the hold stay, and the command ends `rollback_gate_failed`. After the resume
+//!   nothing rolls back by itself. `--detach` runs the same command again through the watchdog's
 //!   manual-run method and answers at once.
 //!
 //! A stop or composite refused before it changed a file releases the hold it took (fix round 1,
@@ -311,6 +312,16 @@ fn close(
         .and_then(Value::as_u64)
         .unwrap_or(loaded.settings.stop_shutdown_wait_ms);
     let rollback = of_rollback(&intent);
+    // The rollback gate before the new Runtime closes (Workflow #421 6441776975, P12): a gate
+    // that fails ends the command before anything is closed, and the new Runtime keeps running,
+    // held. A close resumed past the gate's pass does not evaluate it again.
+    if rollback
+        && let Some(reverse) = reversal_after(operation.journal(), n)
+        && !gate_passed(operation.journal(), reverse)
+        && let Some(end) = rollback_gate(operation, reverse, loaded, notes, false)?
+    {
+        return Ok(end);
+    }
     operation.start(n)?;
     if !rollback {
         reread_s0(operation, loaded)?;
@@ -553,10 +564,11 @@ fn post_check(
 /// The automatic rollback of a composite update, between the new start and the resume
 /// (decision 74 A). Its steps are journalled here, before anything acts (review S2 H2: a crash
 /// from now on resumes the rollback and never judges the new build again): the new Runtime's
-/// close (nothing is killed), the reversal (the rollback gate toward the previous build first,
-/// with this operation's S0; a gate that fails ends the command `rollback_gate_failed` with the
-/// new build and the hold kept, a forward fix only), the previous build's start and checks, and
-/// the release of the hold. The current step is done with `evidence`.
+/// close (nothing is killed), the reversal, the previous build's start and checks, and the
+/// release of the hold. The close evaluates the rollback gate toward the previous build, with
+/// this operation's S0, before it closes anything (P12); a gate that fails ends the command
+/// `rollback_gate_failed` with the new build, its Runtime and the hold kept, a forward fix only.
+/// The current step is done with `evidence`.
 fn begin_rollback(
     operation: &mut Operation<'_>,
     n: usize,
@@ -627,10 +639,132 @@ fn rollback_failed(journal: &journal::Journal) -> Vec<String> {
         .collect()
 }
 
-/// The reversal: the rollback gate toward the previous build first (once: its passing is
-/// journalled), then no actingd running under the root (checked every time), then the
-/// operation's file steps reversed as `install undo` reverses them (each displaced file kept),
-/// then the previous build verified in place.
+/// The automatic rollback's reversal step after step `n` (the rollback's close).
+fn reversal_after(journal: &journal::Journal, n: usize) -> Option<usize> {
+    journal.steps[n..]
+        .iter()
+        .find(|step| step.kind == StepKind::ReverseFiles)
+        .map(|step| step.n)
+}
+
+/// Whether the reversal step `reverse` journals the rollback gate's pass.
+fn gate_passed(journal: &journal::Journal, reverse: usize) -> bool {
+    journal.steps[reverse - 1]
+        .evidence
+        .as_ref()
+        .and_then(|evidence| evidence.get("gate_passed"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// The rollback gate toward the build the update replaced (the reversal step `reverse`'s `to`),
+/// with this operation's S0. Workflow #421 6441776975 (P12): the rollback's close evaluates it
+/// before the new Runtime closes (`runtime_closed` false), so its plan is a preview: the running
+/// Runtime and its owner lock, which the close then ends, do not refuse it, and a running image
+/// that would change and may not be renamed refuses as the plan after a close would. A gate that
+/// passes journals the rollback and the pass in the reversal step's evidence and answers `None`;
+/// one that fails answers [`StepEnd::Ends`] with the command's refusal `rollback_gate_failed` and
+/// what stays: the new build and the hold (`next` names `release-hold`, and `install start` only
+/// when no Runtime runs under the root, as after a new start that exited), the failed checks and
+/// the gate's rows. A reversal that finds no pass journalled evaluates it after the close
+/// (`runtime_closed`).
+fn rollback_gate(
+    operation: &mut Operation<'_>,
+    reverse: usize,
+    loaded: &Loaded,
+    notes: &mut Vec<Outcome>,
+    runtime_closed: bool,
+) -> Result<Option<StepEnd>, Outcome> {
+    let command = operation.journal().kind.location();
+    let paths = operation.paths().clone();
+    let to = operation.journal().steps[reverse - 1]
+        .intent
+        .get("to")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| state_invalid(command, paths.journal(operation.id()), None))?;
+    let journal = operation.journal().clone();
+    let failed = rollback_failed(&journal);
+    let host = operation.host();
+    let runtime_down =
+        runtime_closed || launch::refuse_running(host, &paths, &loaded.state_root, command).is_ok();
+    let mut members = hold_kept(&paths, hold_of(&journal).as_ref(), runtime_down);
+    members.insert("failed_checks".to_owned(), json!(failed));
+    if let Some(checked) = journal
+        .steps
+        .iter()
+        .rev()
+        .find(|step| {
+            step.kind == StepKind::PostCheck
+                && !of_rollback(&step.intent)
+                && step
+                    .evidence
+                    .as_ref()
+                    .is_some_and(|e| e.get("skipped").is_none())
+        })
+        .and_then(|step| step.evidence.clone())
+    {
+        members.insert("post_check".to_owned(), checked);
+    }
+    let refused_by = |cause: Outcome| {
+        super::refusal(command, InstallRefusal::RollbackGateFailed)
+            .rollback_gate_parts([RollbackGatePart::InterfaceEdges])
+            .commit_sha(to.clone())
+            .joined(CauseRelation::CausedBy, cause)
+    };
+    let planned = match plan::plan(
+        host,
+        &paths,
+        PlanInputs {
+            kind: PlanKind::Rollback,
+            commit: to.clone(),
+            accept_ledger_one_way: false,
+            preview: !runtime_closed,
+            operation: command,
+        },
+    ) {
+        Ok(planned) => planned,
+        Err(refused) => {
+            return Ok(Some(StepEnd::Ends(
+                refused_by(refused.into_answer().outcome),
+                members,
+            )));
+        }
+    };
+    if !runtime_closed && let Some(image) = planned.running.blocked.first() {
+        let blocked = super::refusal(command, InstallRefusal::RunningImageBlocks)
+            .path(&image.path)
+            .pid(image.pid);
+        return Ok(Some(StepEnd::Ends(refused_by(blocked), members)));
+    }
+    let gate = update::gate(host, &paths, &planned);
+    members.insert("gate".to_owned(), json!(gate.rows));
+    if let Some(refusal) = gate.refusal(&planned) {
+        return Ok(Some(StepEnd::Ends(refusal, members)));
+    }
+    notes.extend(
+        gate.with_notes(super::done(command))
+            .causes()
+            .iter()
+            .map(|link| link.outcome().clone()),
+    );
+    operation.record_rollback(RollbackRecord {
+        started_at_unix_ms: host.now_unix_ms(),
+        to,
+        failed,
+        reversed_at_unix_ms: None,
+    })?;
+    operation.progress(
+        reverse,
+        json!({"gate_passed": true, "rollback_gate": gate.rows}),
+    )?;
+    Ok(None)
+}
+
+/// The reversal: the rollback gate's pass, which the rollback's close journalled before it closed
+/// the new Runtime (a reversal without one evaluates the gate now, once), then no actingd running
+/// under the root (checked every time), then the operation's file steps reversed as `install
+/// undo` reverses them (each displaced file kept), then the previous build verified in place.
 fn reverse_files(
     operation: &mut Operation<'_>,
     n: usize,
@@ -647,72 +781,10 @@ fn reverse_files(
         .map(str::to_owned)
         .ok_or_else(|| state_invalid(command, paths.journal(operation.id()), None))?;
     operation.start(n)?;
-    let gate_passed = step
-        .evidence
-        .as_ref()
-        .and_then(|evidence| evidence.get("gate_passed"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    if !gate_passed {
-        let journal = operation.journal().clone();
-        let failed = rollback_failed(&journal);
-        let mut members = hold_kept(&paths, hold_of(&journal).as_ref(), true);
-        members.insert("failed_checks".to_owned(), json!(failed));
-        if let Some(checked) = journal
-            .steps
-            .iter()
-            .rev()
-            .find(|step| {
-                step.kind == StepKind::PostCheck
-                    && !of_rollback(&step.intent)
-                    && step
-                        .evidence
-                        .as_ref()
-                        .is_some_and(|e| e.get("skipped").is_none())
-            })
-            .and_then(|step| step.evidence.clone())
-        {
-            members.insert("post_check".to_owned(), checked);
-        }
-        let host = operation.host();
-        let planned = match plan::plan(
-            host,
-            &paths,
-            PlanInputs {
-                kind: PlanKind::Rollback,
-                commit: to.clone(),
-                accept_ledger_one_way: false,
-                preview: false,
-                operation: command,
-            },
-        ) {
-            Ok(planned) => planned,
-            Err(refused) => {
-                let refusal = super::refusal(command, InstallRefusal::RollbackGateFailed)
-                    .rollback_gate_parts([RollbackGatePart::InterfaceEdges])
-                    .commit_sha(to)
-                    .joined(CauseRelation::CausedBy, refused.into_answer().outcome);
-                return Ok(StepEnd::Ends(refusal, members));
-            }
-        };
-        let gate = update::gate(host, &paths, &planned);
-        members.insert("gate".to_owned(), json!(gate.rows));
-        if let Some(refusal) = gate.refusal(&planned) {
-            return Ok(StepEnd::Ends(refusal, members));
-        }
-        notes.extend(
-            gate.with_notes(super::done(command))
-                .causes()
-                .iter()
-                .map(|link| link.outcome().clone()),
-        );
-        operation.record_rollback(RollbackRecord {
-            started_at_unix_ms: host.now_unix_ms(),
-            to: to.clone(),
-            failed,
-            reversed_at_unix_ms: None,
-        })?;
-        operation.progress(n, json!({"gate_passed": true, "rollback_gate": gate.rows}))?;
+    if !gate_passed(operation.journal(), n)
+        && let Some(end) = rollback_gate(operation, n, loaded, notes, true)?
+    {
+        return Ok(end);
     }
     // No program file is reversed under a running actingd, as `install undo` checks (re-review
     // S2 N4): also a rollback resumed past its gate. One found running leaves the operation

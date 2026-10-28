@@ -110,12 +110,12 @@ names its packages by `package_id` (`package_label`, `recovery_package_labels`);
 digest is projected. `recovery_package_labels` lists the packages a run admitted for its entry
 recovery; a bound recovery package the run never needed is not listed.
 
-`recent_runs` reads by run (Workflow #391 item 3): it first lists the runs of the
+The run listing reads by run (Workflow #391 item 3): it first lists the runs of the
 window by their main admission (`task.requested`), their entry facts
 (`task.entry_preflight`) and their terminal (`task.completed`, `task.failed`,
 `task.cancelled`), one query per type, and never reads the instance's other events.
-It deduplicates their request/run identities before selecting the requested 1–10
-runs, and orders them by their first fact, newest first. A later fact in the time
+It deduplicates their request/run identities before selecting the runs a reader
+asks for, and orders them by their first fact, newest first. A later fact in the time
 window does not make an older run recent. The listing keeps none of these facts
 (Workflow #411 A6): a run's entry gate navigation and its shared interrupts record
 several entry facts each, so it folds each page into the runs as the page arrives and
@@ -124,8 +124,11 @@ holds only the runs. A window's listing facts therefore do not count against the
 (`run_status_page_limit_exceeded`), and a listing of more than 81 920 runs fails with
 `run_status_resident_limit_exceeded`; `list_contained_runs` (MCP `ac_runs`) and
 `list_window_runs` (`ac_diagnose`, #422 QR-2b) share the listing. The listing and each
-projection share one snapshot and the existing 20-second budget; reaching that budget returns
-`incomplete` (`ac_diagnose` reads under its call's deadline instead, #422 QR-2b). MCP
+projection share one snapshot and the caller's deadline; reaching it returns `incomplete`.
+#422 QR-2b L4 (0.12.25): the client's `recent_runs`, which read one instance's 1–10 most
+recent runs under a 20-second budget of its own and which no first-party reader called any
+more, is retired with its code `recent_runs_budget_invalid`; `list_contained_runs` on the
+instance lists and reads the same runs. MCP
 `ac_get_run`, `ac_diagnose` and the latest-run lookup consume this projection directly. Beside the runs, `ac_diagnose`
 carries at most 10 of the instance's `clock_slots` rows of `actingd suspended` recorded in its
 window, refused and superseded rows first, then deferred and expired rows, then owed ones
@@ -181,7 +184,7 @@ restart pages (up to four) and its lease pages (up to two).
 `list_contained_runs` (Workflow #389 MCP-3) pages the same listing for `actingctl runs`
 and MCP `ac_runs`: the runs first recorded in a window, on one instance or all, newest
 first by their first listing fact, each read in brief mode and kept by its dispatch and
-state, at most 100 a page. As in `recent_runs`, a run is not listed until it writes its
+state, at most 100 a page. As in the listing above, a run is not listed until it writes its
 first listing fact, which for a run with an entry check is when that check ends, at most
 `min(step_timeout, task_timeout)`; meanwhile its instance shows `lease_active: true`.
 A scheduled run also carries its policy task id as
