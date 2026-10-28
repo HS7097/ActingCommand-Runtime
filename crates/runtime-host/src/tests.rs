@@ -239,6 +239,10 @@ mod gate_386_sr2a;
 // Workflow #386 SR-2b-1, the design's tests ① to ⑥: a load-caused failure settles as a condition
 // termination, at the live settlement and at the start's reconciliation from a run's terminal.
 mod gate_386_sr2b1;
+// Workflow #386 SR-2b-2, the design's tests ② to ⑤ and the coordinator's decision on review M1:
+// owed reruns are promoted, gated by the pacing stage, expire, hide their terminal and are listed
+// by `actingd suspended`.
+mod gate_386_sr2b2;
 // Workflow #386 SR-3, test rows T10, T11, T13 and T31: the suspension of a task package that
 // admission refuses with a suspend code.
 mod gate_386_sr3;

@@ -16,11 +16,14 @@ pub use catalog_preview::{
 mod catalog_transaction;
 pub(crate) use catalog_transaction::catalog_ledger_error;
 mod planning_transaction;
+// Workflow #386 SR-2b-2: owed reruns are promoted, gated by the pacing stage, and expire.
+mod rerun;
 use crate::codes::HostLocation;
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::outcome::{Code, Location, Outcome, VocabularyToken};
 use planning_transaction::planning_state_error;
 pub(crate) use planning_transaction::planning_transaction_error;
+pub(crate) use rerun::RerunContext;
 
 use crate::catalog_plan::CatalogLineage;
 use crate::codes::HostCode;
@@ -54,7 +57,8 @@ use actingcommand_policy::{
     MAX_EVALUATION_INSTANCES, MAX_TASK_FAILURE_STREAK, MAX_TASK_LAST_DURATION_MS, PolicyEvaluation,
     REMEDY_JOURNAL_MAX_RUNS, RemedyInputs, RemedyJournal, RemedyPlan, RemedyRun, RemedySettlement,
     RunSlots, SchedulingDecisionState, ScopeSelector, TaskDecision, TaskRuntimeSnapshot,
-    TaskTerminalState, activity_window_at, compile_catalog, evaluate_with_run_slots, plan_remedies,
+    TaskTerminalState, activity_window_at, compile_catalog, evaluate_with_owed_reruns,
+    plan_remedies,
 };
 use actingcommand_runtime_state::{PlanningQuotaUsage as DetectionQuotaUsage, RuntimeStateStore};
 use serde::{Deserialize, Serialize};
@@ -288,6 +292,9 @@ pub(crate) struct PolicyEvaluationContext<'a> {
     /// Workflow #386 SR-4a2 (position 4): the blackout covering each instance as the cycle
     /// starts, by alias ([`PolicyHost::blackout_holds`]).
     pub(crate) blackout_holds: &'a BTreeMap<String, actingcommand_policy::Blackout>,
+    /// Workflow #386 SR-2b-2: the `scheduling.rerun` values and each instance's effective pacing
+    /// stage as the cycle starts.
+    pub(crate) rerun: RerunContext<'a>,
 }
 
 /// Workflow #384 D2-S4 (D2 model §3.1, §3.4): the `scheduling.fact_refresh.*` settings in effect
@@ -1227,6 +1234,9 @@ pub(crate) struct PolicyHost {
     /// Workflow #386 SR-2b-1: the `policy_rerun_exhausted` records of settled runs not recorded
     /// yet (`take_rerun_signals`). Memory only.
     rerun_signals: Vec<PolicyPlanningSignalEventData>,
+    /// Workflow #386 SR-2b-2: the owed reruns' exhaustions, stage watches and recorded
+    /// `policy_rerun_*` records. Memory only.
+    reruns: rerun::RerunState,
 }
 
 /// Workflow #422 LN-4: the dispatch journal while it is rebuilt.
@@ -1648,6 +1658,7 @@ impl PolicyHost {
             values_through: 0,
             pruned_pairs: BTreeSet::new(),
             rerun_signals: Vec::new(),
+            reruns: rerun::RerunState::default(),
         };
         match tagged {
             // Workflow #422 LN-4 (§11.6): no record counts as written, so the start's
@@ -2387,13 +2398,31 @@ impl PolicyHost {
                         PolicyExecutionOutcome::Succeeded { .. } => TaskTerminalState::Succeeded,
                         PolicyExecutionOutcome::Failed { .. } => TaskTerminalState::Failed,
                     };
-                    (
-                        Some(terminal_state),
-                        Some(CompletedActivityWindow {
-                            window_id: admission.activity.window_id.clone(),
-                            completed_at_unix_ms: execution.observed_at_unix_ms,
-                        }),
-                    )
+                    // Workflow #386 SR-2b-2 (`policy-suspension.md`, "Settlement"): while the
+                    // rerun a condition termination owes is owed (its window has not ended by
+                    // the evaluation instant, or no instant is given), its terminal and
+                    // completed window are hidden, so no `dependency_completed(head, *)` of a
+                    // chain becomes true; once expired the failure shows again.
+                    let owed = match &execution.outcome {
+                        PolicyExecutionOutcome::Failed { failure } => {
+                            failure.condition.is_some_and(|condition| {
+                                eligibility_as_of_unix_ms
+                                    .is_none_or(|now| now < condition.expires_at_unix_ms)
+                            })
+                        }
+                        PolicyExecutionOutcome::Succeeded { .. } => false,
+                    };
+                    if owed {
+                        (None, None)
+                    } else {
+                        (
+                            Some(terminal_state),
+                            Some(CompletedActivityWindow {
+                                window_id: admission.activity.window_id.clone(),
+                                completed_at_unix_ms: execution.observed_at_unix_ms,
+                            }),
+                        )
+                    }
                 } else {
                     (None, None)
                 };
@@ -2715,6 +2744,7 @@ impl PolicyHost {
             chain_handover,
             blackout,
             blackout_holds,
+            rerun,
         } = context;
         let directive = self.cadence.observe(trigger, time.unix_ms)?;
         if directive.kind == PolicyRecomputeKind::Deferred {
@@ -2787,9 +2817,20 @@ impl PolicyHost {
             self.remedy_plan(&active.compiled, facts, time, remedy)?;
         // Workflow #427-B: the dispatches admitted or running and the limit of concurrent runs.
         let run_slots = self.run_slots()?;
+        // Workflow #386 SR-2b-2: the owed reruns let in, their stage gate's waits, and the
+        // expiries and first waits to record.
+        let store = &self.store;
+        let rerun_plan = self.reruns.plan(
+            self.control.condition_reruns(),
+            &rerun,
+            time.unix_ms,
+            |signal_id| Ok(store.load_planning_signal(signal_id)?.is_some()),
+        )?;
+        self.rerun_signals
+            .extend(rerun_plan.signals.iter().cloned());
         let deferrals = clock_slot::Deferrals::default();
         let started = Instant::now();
-        let mut evaluation = evaluate_with_run_slots::<RuntimeHostError>(
+        let mut evaluation = evaluate_with_owed_reruns::<RuntimeHostError>(
             &active.compiled,
             facts,
             resources,
@@ -2802,6 +2843,7 @@ impl PolicyHost {
             // of its package is read only for a candidate that follows its predecessor there.
             chain_handover,
             &run_slots,
+            &rerun_plan.owed,
             |task, _instance_id, page_id| {
                 Ok(crate::host::chain_entry_holds_page(
                     procedure_manifest,
@@ -2835,6 +2877,11 @@ impl PolicyHost {
                 if let Some(covering) = blackout_holds.get(&intent.instance_id) {
                     return Ok(BlackoutGate::Active(covering.clone())
                         .eligibility(&intent.instance_id, refresh));
+                }
+                // Workflow #386 SR-2b-2 (`scheduling-blackout.md`, "Order of the deferrals",
+                // position 6): an owed rerun waits for the instance's pacing stage.
+                if let Some(waiting) = rerun_plan.deferral(intent) {
+                    return Ok(waiting);
                 }
                 let instance = instances
                     .get(intent.instance_id.as_str())
@@ -4598,9 +4645,18 @@ impl PolicyHost {
         data: &PolicyExecutionEventData,
         decision: ConditionDecision,
     ) {
-        let ConditionDecision::Exhausted { count, limit } = decision else {
+        let ConditionDecision::Exhausted {
+            count,
+            limit,
+            window_end_unix_ms,
+        } = decision
+        else {
             return;
         };
+        // Workflow #386 SR-2b-2 (coordinator decision on review M1): no owed rerun of the pair
+        // is promoted again in this occurrence.
+        self.reruns
+            .note_exhausted(&data.task_id, &data.instance_id, window_end_unix_ms);
         let digest = Sha256::digest(data.decision_id.as_bytes());
         self.rerun_signals.push(PolicyPlanningSignalEventData {
             signal_id: format!("signal:policy_rerun:exhausted:{digest:x}"),

@@ -28,7 +28,7 @@ use actingcommand_runtime_config::scheduling::{
 };
 use serde_json::json;
 
-const TASK: &str = "fixture.observe";
+pub(super) const TASK: &str = "fixture.observe";
 const SAMPLING_CODE: &str = "recognition_sample_deadline_exceeded";
 const EXHAUSTED_CODE: &str = "policy_rerun_exhausted";
 const DAY_MS: u64 = 86_400_000;
@@ -38,7 +38,7 @@ const BETWEEN_RUNS_MS: u64 = 600_000;
 // ---- The fixture.
 
 /// The end of the budget fixtures' activity window, the whole UTC day, that holds `at`.
-fn whole_day_window_end(at: u64) -> u64 {
+pub(super) fn whole_day_window_end(at: u64) -> u64 {
     (at / DAY_MS + 1) * DAY_MS
 }
 
@@ -68,7 +68,7 @@ fn operator_paused() -> PolicyExecutionInput {
 }
 
 /// A configuration whose explicit keys are `settings`.
-fn rerun_manifest(settings: Vec<(&str, FactScalar)>) -> RuntimeConfigManifest {
+pub(super) fn rerun_manifest(settings: Vec<(&str, FactScalar)>) -> RuntimeConfigManifest {
     let mut parameters = settings
         .into_iter()
         .map(|(key, value)| ConfigParameter {
@@ -87,7 +87,7 @@ fn rerun_manifest(settings: Vec<(&str, FactScalar)>) -> RuntimeConfigManifest {
 }
 
 /// `scheduling.rerun.condition_codes` listing `codes`.
-fn condition_codes(codes: &[&str]) -> (&'static str, FactScalar) {
+pub(super) fn condition_codes(codes: &[&str]) -> (&'static str, FactScalar) {
     (
         RERUN_CONDITION_CODES,
         FactScalar::String(serde_json::to_string(codes).expect("the code list")),
@@ -96,7 +96,7 @@ fn condition_codes(codes: &[&str]) -> (&'static str, FactScalar) {
 
 /// A host on `root` for the fixture instance `registered`, its Runtime clock a manual one at
 /// `at`; `manifest` its configuration's explicit keys, when there are any.
-fn start(
+pub(super) fn start(
     root: &TempDir,
     registered: InstanceId,
     at: u64,
@@ -121,7 +121,7 @@ fn start(
 
 /// The pair's dispatch evaluated and admitted at `at` (the catalog approved first when
 /// `approve`); its intent and its admission.
-fn admit(
+pub(super) fn admit(
     host: &RuntimeHost,
     at: u64,
     seed: u64,
@@ -168,7 +168,9 @@ fn one_run(
     (admission, failure)
 }
 
-fn failure_of(data: &actingcommand_contract::PolicyExecutionEventData) -> PolicyFailureRecord {
+pub(super) fn failure_of(
+    data: &actingcommand_contract::PolicyExecutionEventData,
+) -> PolicyFailureRecord {
     let PolicyExecutionOutcome::Failed { failure } = &data.outcome else {
         panic!("expected a failure: {data:?}")
     };

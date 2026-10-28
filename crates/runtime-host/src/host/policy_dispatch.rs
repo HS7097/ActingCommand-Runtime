@@ -986,6 +986,14 @@ impl HostShared {
         // Workflow #386 SR-4a2: the blackout keys in effect as this cycle starts.
         let blackout_context =
             self.blackout_context(&remedy_aliases, HostLocation::EvaluatePolicyCycle)?;
+        // Workflow #386 SR-2b-2: the owed reruns' gate keys and each instance's effective pacing
+        // stage as this cycle starts, read under the performance lock alone, before the policy
+        // lock.
+        let rerun_settings = self.rerun_gate_settings()?;
+        let rerun_stages = remedy_aliases
+            .iter()
+            .map(|alias| Ok(((*alias).to_owned(), self.effective_pacing_stage(alias)?)))
+            .collect::<RuntimeHostResult<BTreeMap<_, _>>>()?;
         // Workflow #427-A (C1), tests: what happens between the sample above and its validation
         // below, and the forced snapshot changes.
         #[cfg(any(test, feature = "test-hooks"))]
@@ -1026,6 +1034,10 @@ impl HostShared {
                     chain_handover: &chain_handover,
                     blackout: &blackout_context,
                     blackout_holds: &blackout_holds,
+                    rerun: crate::policy_host::RerunContext {
+                        settings: rerun_settings,
+                        stages: &rerun_stages,
+                    },
                 },
             )?;
             let unknown = if cycle.evaluation.is_some() {

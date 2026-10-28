@@ -515,6 +515,7 @@ pub(crate) fn read(
         suspended: report.suspended,
         packs: report.packs,
         remedies: report.remedies,
+        reruns: report.reruns,
         lift: report.lift,
         report_warnings: report.warnings,
         report_status: report.status,
@@ -1114,6 +1115,9 @@ pub(crate) struct Diagnosis {
     /// Workflow #411 B15 R7: the report's stopped remedy rounds of the instance (every one
     /// without an instance).
     pub(crate) remedies: Vec<Value>,
+    /// Workflow #386 SR-2b-2: the report's owed reruns of the instance (every one without an
+    /// instance).
+    pub(crate) reruns: Vec<Value>,
     pub(crate) lift: Vec<Value>,
     pub(crate) report_warnings: Vec<Value>,
     /// The report status's data members: `{status, …}`.
@@ -1148,6 +1152,8 @@ pub(crate) struct Kept {
     pub(crate) suspended: usize,
     pub(crate) packs: usize,
     pub(crate) remedies: usize,
+    /// Workflow #386 SR-2b-2.
+    pub(crate) reruns: usize,
     pub(crate) lift: usize,
     pub(crate) report_warnings: usize,
     pub(crate) clock_slots: usize,
@@ -1167,6 +1173,7 @@ impl Diagnosis {
             suspended: self.suspended.len(),
             packs: self.packs.len(),
             remedies: self.remedies.len(),
+            reruns: self.reruns.len(),
             lift: self.lift.len(),
             report_warnings: self.report_warnings.len(),
             clock_slots: self.clock_slots.len(),
@@ -1198,6 +1205,7 @@ impl Diagnosis {
         list_into(&mut result, "suspended", &self.suspended, kept.suspended);
         list_into(&mut result, "packs", &self.packs, kept.packs);
         list_into(&mut result, "remedies", &self.remedies, kept.remedies);
+        list_into(&mut result, "reruns", &self.reruns, kept.reruns);
         list_into(&mut result, "lift", &self.lift, kept.lift);
         list_into(&mut result, "repeating", &self.repeating, kept.repeating);
         list_into(
@@ -1316,6 +1324,7 @@ struct SuspensionRows {
     suspended: Vec<Value>,
     packs: Vec<Value>,
     remedies: Vec<Value>,
+    reruns: Vec<Value>,
     lift: Vec<Value>,
     repeating: Vec<Value>,
     warnings: Vec<Value>,
@@ -1334,6 +1343,7 @@ impl SuspensionRows {
             suspended: Vec::new(),
             packs: Vec::new(),
             remedies: Vec::new(),
+            reruns: Vec::new(),
             lift: Vec::new(),
             repeating: Vec::new(),
             warnings: Vec::new(),
@@ -1440,6 +1450,21 @@ pub(crate) fn pack_rows(document: &Value, instance: Option<(&str, &Value)>) -> V
 pub(crate) fn remedy_rows(document: &Value, instance: Option<(&str, &Value)>) -> Vec<Value> {
     document
         .get("remedies")
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter(|row| of_instance(row, instance))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Workflow #386 SR-2b-2: the report's `reruns` rows of the instance (its alias or its instance
+/// id is the row's `instance_id`), or every row when no instance is diagnosed.
+pub(crate) fn rerun_rows(document: &Value, instance: Option<(&str, &Value)>) -> Vec<Value> {
+    document
+        .get("reruns")
         .and_then(Value::as_array)
         .map(|rows| {
             rows.iter()
@@ -1623,6 +1648,7 @@ impl SuspensionReport {
                     suspended: rows("suspended"),
                     packs: pack_rows(&document, instance),
                     remedies: remedy_rows(&document, instance),
+                    reruns: rerun_rows(&document, instance),
                     lift: rows("lifted"),
                     repeating: rows("repeating"),
                     warnings: document

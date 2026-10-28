@@ -631,12 +631,10 @@ suspension holds every pair of the package at once.
 so a later build's ledger stays readable within v0.12.x; it never writes the member. Slice
 SR-2b-1 (v0.12.27) writes it: the live settlement and the reconciliation of a run from its
 terminal decide it, the counts are refunded, the streak does not grow, `policy_rerun_exhausted`
-is recorded, and the owed rerun is kept in `condition_reruns` (below). Slice SR-2b-2 adds the
-rest of "The rerun" and "Limits": the promotion with `policy_rerun_owed`, the stage gate
-`policy_rerun_waiting`, the expiry `policy_rerun_expired`, hiding the terminal from the
-snapshot, and `actingd suspended`'s `reruns`. Between the two, an owed pair re-enters the
-ordinary evaluation with its counts given back; its owed rerun is recorded but neither
-promoted nor expired.
+is recorded, and the owed rerun is kept in `condition_reruns` (below). Slice SR-2b-2
+(v0.12.27) adds the rest of "The rerun" and "Limits": the promotion with `policy_rerun_owed`,
+the stage gate `policy_rerun_waiting`, the expiry `policy_rerun_expired`, hiding the terminal
+from the snapshot, and `actingd suspended`'s `reruns`.
 
 **Which runs.** A policy run ends by a condition, not by a failure of the task, when its failure
 code is listed in `scheduling.rerun.condition_codes`. The default list is
@@ -699,7 +697,12 @@ pacing defers it with `perf_scheduling_paused` like every candidate, and a pacin
 `resume_settle_ms` (default 60 s), defers it with `policy_rerun_waiting` (with `pacing_stage`).
 A stage change wakes the evaluation (`ResourcesChanged`); a blackout's end wakes it through the
 deferral's wake time. While performance pacing is observe-only the stage is always S0 and the
-rerun is let through at once.
+rerun is let through at once. SR-2b-2: the stage is the instance's effective pacing stage as the
+evaluation starts (the curve's under `pace`, the learning view's under `full`); the settle counts
+from the first evaluation that finds it back at or below the resume stage, and its end is the
+deferral's wake (`next_eligible_unix_ms`); an instance the Runtime has not seen above the resume
+stage since it started is let through at once. The first wait of each owed rerun is recorded
+once as `policy_rerun_waiting` (info), with the carrier of `policy_rerun_exhausted`.
 
 **Limits.** An owed rerun not served by `expires_at_unix_ms` expires with `policy_rerun_expired`
 (warning); the run's `Failed` terminal then appears in the snapshot and counts as an ordinary
@@ -708,7 +711,15 @@ more than `scheduling.rerun.max_per_occurrence` times (default 2) in one occurre
 run as an ordinary recoverable failure, without `condition`, and records
 `policy_rerun_exhausted` (warning). That run is an ordinary failure, so it ends the series and
 removes the owed rerun: the pair's next condition termination counts from 1 again, in the same
-window too.
+window too. Such a later owed rerun in the window its pair was exhausted in is not promoted
+(coordinator decision, SR-2b-2): it does not enter the evaluation as owed and waits for the
+pair's own trigger and cooldown, so sustained load cannot turn each trigger into
+`max_per_occurrence` + 1 runs; it still hides the terminal and expires as any owed rerun. The
+exhaustion is kept in memory only, like its warning before it is recorded: after a restart a
+later owed rerun of that window is promoted again. The expiry is judged at each evaluation:
+`policy_rerun_expired` is recorded once per owed rerun (`window_end_unix_ms` its
+`expires_at_unix_ms`), the run's record is not settled again, and the expired entry stays in the
+value record until the pair's next settlement replaces it.
 
 **After a restart.** The owed reruns load from the pair's latest
 `policy.control_state_recorded` value record (ledger slices LN-3 and LN-4, which satisfy what
@@ -720,7 +731,12 @@ that found a gap in the ledger, an owed rerun of an entry-cost task counts as no
 pair keeps its last committed value. `actingd suspended` gains the list `reruns` (an addition)
 with the owed, waiting and expired reruns. It is read from the loaded rerun state, that is from
 the pairs' value records (L7 of the [v0.12.0 register](v012-register.md)): SR-2b depends on LN-3
-and LN-4, so no build with SR-2b derives the list from the execution records.
+and LN-4, so no build with SR-2b derives the list from the execution records. Each row (SR-2b-2)
+is one pair whose latest value record owes a rerun, ordered by task and instance: `task_id`,
+`instance_id`, `failure_code`, `count`, `expires_at_unix_ms` and `state`: `expired` once the
+ledger's latest time is at or past `expires_at_unix_ms`, else `waiting` when the rerun's
+`policy_rerun_waiting` record was written, else `owed`. MCP `ac_diagnose` carries the rows of
+the diagnosed instance.
 
 None of these codes triggers the recovery ladder.
 

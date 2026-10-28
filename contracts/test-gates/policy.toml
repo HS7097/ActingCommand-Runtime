@@ -627,6 +627,14 @@ tests = [
 ]
 incident = ["#411 B15"]
 
+# Workflow #386 SR-2b-2 (design P22 §6.2, test 1; contracts/policy-suspension.md, "The rerun"): an owed rerun the Runtime hands the evaluation is triggered past its task cooldown with policy_rerun_owed; with promote it ranks ahead of the instance's higher-ranked candidate and is dispatched, which waits instance_already_selected; with promote false it is still a candidate with policy_rerun_owed but keeps its rank
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_386_sr2b2::sr2b2_t1_an_owed_rerun_ranks_first_with_policy_rerun_owed_and_promote_false_keeps_its_rank",
+]
+incident = ["#386"]
+
 # Workflow #405 W1 (plan-405-406 brief-W1 requirements 1-7; contracts/scheduling/README.md "Fact-time wake"; register §1.134): the V2 catalog predicate fact_time_reached is true from the time its fact holds plus offset_ms on, with the fact's freshness and wake; before it, false with fact_time_pending and a wake at min(T + offset, freshness end + 1); a missing, zero-confidence, stale, expired or non-time fact is false with fact_time_unavailable and its problem, no suggestion, no fact refresh and no wake; under any with a clock whichever comes first dispatches; a V1 document naming it, offset_ms outside ±86 400 000, max_age_ms 0 or a missing member are refused; the V2 schema carries the Runtime's bounds
 [[gate]]
 key = "53"

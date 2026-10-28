@@ -40,9 +40,9 @@ use actingcommand_contract::outcome::{
 };
 use actingcommand_contract::{
     CONFIG_SUBSYSTEMS_FACT_KEY, EventPayload, EventQuery, EventSeverity, EventType,
-    PolicyBudgetDimension, PolicyExecutionOutcome, PolicyFailureDisposition, PolicyFailureRecord,
-    PolicyPayload, PolicyPlanningSignalKind, RunId, RuntimePayload, TaskPayload, TaskSemanticFact,
-    scheduled_failure_code_str,
+    PolicyBudgetDimension, PolicyConditionReruns, PolicyExecutionOutcome, PolicyFailureDisposition,
+    PolicyFailureRecord, PolicyPayload, PolicyPlanningSignalKind, RunId, RuntimePayload,
+    TaskPayload, TaskSemanticFact, scheduled_failure_code_str,
 };
 use actingcommand_execution_kernel::{compare_failure_frames, failure_frame_ccoeff};
 use actingcommand_ledger::{
@@ -78,14 +78,16 @@ const REMEDY_LIMIT: usize = 200;
 /// The other types it reads are a run's own rows ([`RUN_TYPES`]). RL-1c fix 2 (#411 M2): no
 /// `runtime.lifecycle_observed` (nothing queried it) and no `runtime.fact_recorded`: of those
 /// only the newest `config.subsystems` fact is read ([`daemon_start_query`]), and the reference
-/// times are the ledger's own (the latest time and the head row's).
-const SELECTED_TYPES: [EventType; 6] = [
+/// times are the ledger's own (the latest time and the head row's). Workflow #386 SR-2b-2: the
+/// pairs' value records (register L7), which `reruns` reads.
+const SELECTED_TYPES: [EventType; 7] = [
     EventType::PolicyDispatchIntent,
     EventType::PolicyExecutionRecorded,
     EventType::PolicyDispatchAdmitted,
     EventType::PolicyPlanningSignalObserved,
     EventType::TaskFailed,
     EventType::RuntimeFailed,
+    EventType::PolicyControlStateRecorded,
 ];
 /// ROUT-L RL-1c fix 1 (#411 H1): a run's own rows the report reads (its step and its error
 /// frame), only for the runs it shows, each between its dispatch intent and its execution record.
@@ -740,6 +742,7 @@ fn incomplete_report(inputs: &ReportInputs<'_>, mut warnings: Vec<String>) -> Va
         "clock_slots": [],
         "packs": [],
         "remedies": [],
+        "reruns": [],
     })
 }
 
@@ -1073,6 +1076,7 @@ fn report(inputs: &ReportInputs<'_>) -> Result<Value, SuspensionReportError> {
     let (clock_slots, clock_slots_total) = clock_slots(&snapshot, compiled)?;
     let packs = packs(&snapshot, &view, &procedure_refs, daemon_started_at_unix_ms)?;
     let (remedies, remedies_total) = remedies(&snapshot)?;
+    let reruns = reruns(&snapshot)?;
     // RL-1c fix 1 (#411 H1): a run the budget left unread is shown without its step and frames.
     if snapshot.incomplete.get() {
         warnings.push(LEDGER_READ_INCOMPLETE.to_owned());
@@ -1090,6 +1094,7 @@ fn report(inputs: &ReportInputs<'_>) -> Result<Value, SuspensionReportError> {
         "clock_slots": clock_slots,
         "packs": packs,
         "remedies": remedies,
+        "reruns": reruns,
     });
     if let Some(total) = clock_slots_total {
         report["clock_slots_total"] = json!(total);
@@ -1099,6 +1104,76 @@ fn report(inputs: &ReportInputs<'_>) -> Result<Value, SuspensionReportError> {
     }
     Ok(report)
 }
+
+/// Workflow #386 SR-2b-2 (`contracts/policy-suspension.md`, "After a restart"): `reruns`, each
+/// rerun a condition termination owes as the pair's latest value record (register L7) holds it,
+/// the state the Runtime loads: `task_id`, `instance_id`, `failure_code`, `count`,
+/// `expires_at_unix_ms` and `state`. `expired` once the ledger's latest time is at or past its
+/// window end; else `waiting` when its `policy_rerun_waiting` record was written (its pacing
+/// stage held it back); else `owed`. Ordered by task, then instance.
+fn reruns(snapshot: &Snapshot<'_>) -> Result<Vec<Value>, SuspensionReportError> {
+    let mut latest = BTreeMap::<(String, String), Option<PolicyConditionReruns>>::new();
+    for event in snapshot.query(EventQuery {
+        event_type: Some(EventType::PolicyControlStateRecorded),
+        ..EventQuery::default()
+    })? {
+        if let EventPayload::Policy(PolicyPayload::ControlStateRecorded(payload)) = event.payload()
+        {
+            let state = payload.state();
+            latest.insert(
+                (state.task_id.clone(), state.instance_id.clone()),
+                state.condition_reruns.clone(),
+            );
+        }
+    }
+    let waiting = snapshot
+        .query(EventQuery {
+            event_type: Some(EventType::PolicyPlanningSignalObserved),
+            ..EventQuery::default()
+        })?
+        .iter()
+        .filter_map(|event| match event.payload() {
+            EventPayload::Policy(PolicyPayload::PlanningSignalObserved(payload))
+                if payload.kind() == PolicyPlanningSignalKind::GoalMissed
+                    && payload.signal_id().starts_with(RERUN_WAITING_SIGNAL_PREFIX) =>
+            {
+                Some(payload.signal_id().to_owned())
+            }
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    let now = snapshot.latest_time();
+    Ok(latest
+        .into_iter()
+        .filter_map(|((task_id, instance_id), owed)| {
+            let owed = owed?;
+            let state = if now.is_some_and(|now| now >= owed.expires_at_unix_ms) {
+                "expired"
+            } else if waiting.contains(&crate::policy_control::owed_rerun_signal_id(
+                "waiting",
+                &task_id,
+                &instance_id,
+                &owed,
+            )) {
+                "waiting"
+            } else {
+                "owed"
+            };
+            Some(json!({
+                "task_id": task_id,
+                "instance_id": instance_id,
+                "failure_code": owed.failure_code,
+                "count": owed.count,
+                "expires_at_unix_ms": owed.expires_at_unix_ms,
+                "state": state,
+            }))
+        })
+        .collect())
+}
+
+/// The `signal_id` prefix of an owed rerun's `policy_rerun_waiting` record (Workflow #386
+/// SR-2b-2).
+const RERUN_WAITING_SIGNAL_PREFIX: &str = "signal:policy_rerun:waiting:";
 
 /// The values of a copied task package suspension or lift, read back from its outcome.
 #[derive(Deserialize)]

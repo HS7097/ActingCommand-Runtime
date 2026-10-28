@@ -1832,6 +1832,19 @@ impl PerformanceMonitor {
             EffectivePacing::UNPACED
         }
     }
+
+    /// Workflow #386 SR-2b-2: the pacing stage in effect for `instance_alias`, which gates its
+    /// owed reruns. A monitor without counters has never evaluated: S0.
+    pub(crate) fn effective_stage(
+        &self,
+        instance_alias: &str,
+    ) -> actingcommand_contract::PerformancePacingStage {
+        if self.counters_enabled() {
+            self.pacing.effective_stage(instance_alias)
+        } else {
+            actingcommand_contract::PerformancePacingStage::S0
+        }
+    }
 }
 
 fn next_streak_sample(samples: u16) -> RuntimeHostResult<u16> {
