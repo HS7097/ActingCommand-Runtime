@@ -437,6 +437,9 @@ mod gate_ln_ws_f;
 // #422 IDLE-OV: a QueryEvents page whose read its budget stopped answers `ledger_read_failure`
 // (`runtime_unavailable`, failed), not `protocol_invalid`.
 mod gate_422_idle_ov;
+// #422 W1-8: Status, MonitorStatus and RuntimeFactSnapshot read the published ledger head and
+// answer while the writer is held (P30); PerformanceStatus shows the reader pool's pages (P29).
+mod gate_w1_8;
 // #421 S2-IF: `StartReport` names an instruction kept over a changed default base-changed and
 // restored, never dropped; a key gone or superseded is dropped.
 mod gate_421_s2if;

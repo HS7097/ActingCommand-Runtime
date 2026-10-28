@@ -19,7 +19,14 @@ append no ledger record (Workflow #383 AO-4q; [Ledger observer](ledger-observer.
   sample. They stay absent until AO-3 gives the stores their revisions, and every reader
   accepts their absence.
 - `ledger_committed_head` is the highest committed ledger sequence when the state was sampled
-  (0 for an empty ledger). It is read inside the sampling interval.
+  (0 for an empty ledger). It is read inside the sampling interval. #422 W1-8 (P30, since
+  0.12.25): it is the head the ledger writer last published for its reader pool, which the
+  writer publishes after every commit and before it answers the commit's appends, read without
+  a writer command; a record captured and not flushed yet is not in it. A ledger that publishes
+  no head reads the writer's. So Status and MonitorStatus no longer wait for the writer. The
+  RuntimeFactSnapshot read takes its `ledger_position` the same way, so it does not wait for
+  the writer to read the head; it still waits for the fact write gate, whose holders (a fact
+  write, the seal) may wait for the writer.
 - The sampled status carries the owner epoch. The existing receipt terminal convention
   remains unchanged: a status read is `completed` without a terminal.
 - `InstanceFactSnapshot` (Workflow #389 MCP-4, register W2) samples one instance's facts the

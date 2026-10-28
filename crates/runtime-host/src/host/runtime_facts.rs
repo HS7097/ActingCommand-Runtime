@@ -942,13 +942,17 @@ impl HostShared {
         result
     }
 
-    /// Seals the live store at the ledger's latest sequence. Writes nothing.
+    /// Seals the live store at the ledger's committed head. Writes nothing.
     pub(super) fn runtime_fact_snapshot(&self) -> RuntimeHostResult<RuntimeFactSnapshot> {
         let _gate = lock(&self.fact_write_gate, HostLocation::ReadRuntimeFactSnapshot)?;
-        // #411 A51 (R3): a position the writer did not answer in time fails only this read.
+        // #422 W1-8 (P30; #422 6463703245): the head the writer last published, read without a
+        // writer command. Every record of the store was appended and answered under this gate,
+        // and the writer publishes before it answers, so the head is at or past each of them.
+        // #411 A51 (R3): a ledger without a published point reads the writer's head; a position
+        // the writer did not answer in time fails only this read.
         let ledger_position = self
             .ledger
-            .latest_sequence()
+            .published_head()
             .map_err(|error| ledger_read_error(&error, HostLocation::ReadRuntimeFactPosition))?;
         let taken_at_unix_ms = self.clock.sample()?.unix_ms;
         Ok(

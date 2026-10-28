@@ -668,6 +668,14 @@ impl CaptureQueue {
         self.failure.is_some()
     }
 
+    /// #422 W1-8 (P30): whether the probe sealed the writer (§9.2), so that every command it
+    /// would take fails with the sealed writer's error.
+    pub(super) fn writer_sealed(&self) -> bool {
+        self.failure
+            .as_deref()
+            .is_some_and(WriteFailureState::is_sealed)
+    }
+
     /// The writer's queue for wake tokens and barrier lookups, while the writer runs.
     pub(super) fn sender(&self) -> Option<SyncSender<WriterCommand>> {
         self.wake

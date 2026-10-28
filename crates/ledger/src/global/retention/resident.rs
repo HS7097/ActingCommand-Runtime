@@ -453,9 +453,10 @@ impl RetentionIndex {
                 self.frames.entry(frame).or_default().insert(id);
                 self.seen_frames.insert(frame);
             }
-            // #422 QR-1: a proof taken in is a change of the proofs the reader pool reads.
-            if object.proof.is_some() {
-                self.proof_revision = self.proof_revision.wrapping_add(1);
+            // #422 QR-1: a proof taken in is a change of the proofs the reader pool reads; #422
+            // W1-8 (P27): it joins the persistent proof set too.
+            if let Some(proof) = &object.proof {
+                self.proof_changed(id, proof.clone());
             }
             self.objects.insert(id, object);
         }

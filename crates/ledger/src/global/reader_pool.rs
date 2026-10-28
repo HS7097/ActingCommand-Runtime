@@ -33,7 +33,11 @@
 //!   reads the pages again, said as a warning too, instead of a fatal `writer_unavailable`.
 //! - **Seen** (fix 1, review L-4). Each page a reader reads is recorded in the writer's commit
 //!   statistics as a `ProjectViewPage` with its time, where the writer recorded its own pages
-//!   (`GlobalLedger::take_writer_peak`).
+//!   (`GlobalLedger::take_writer_peak`). #422 W1-8 (P29): and in the pool's own page count and
+//!   times, which the Runtime reads while it runs (`GlobalLedger::reader_pool_pages`).
+//! - **The head** (#422 W1-8, P30). The published point's head is the ledger's committed head
+//!   for a read that needs only that (`GlobalLedger::published_head`): it waits for no writer
+//!   command.
 
 use super::read_work::ReadWork;
 use super::retention::PublishedProofs;
@@ -42,7 +46,7 @@ use super::store::LedgerStore;
 use super::write_failure::LedgerMonotonicClock;
 use super::{
     CommitStatistics, GlobalLedgerError, GlobalLedgerResult, LedgerProjectViewObservation,
-    LedgerWriterCommandKind, ProjectViewReply,
+    LedgerReaderPoolPages, LedgerWriterCommandKind, ProjectViewReply,
 };
 use crate::codes::{LedgerCode, LedgerLocation};
 use actingcommand_contract::{EventQuery, ProjectionProfile, RuntimeEventQueryPageRequest};
@@ -86,7 +90,9 @@ impl ReadPoints {
         }
     }
 
-    fn current(&self) -> Option<Arc<ReadPoint>> {
+    /// The point the writer published last; #422 W1-8 (P30): the ledger reads its head as the
+    /// published head (`GlobalLedger::published_head`).
+    pub(super) fn current(&self) -> Option<Arc<ReadPoint>> {
         self.current
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -129,6 +135,8 @@ struct PoolState {
     /// What the Runtime has not said yet: a reader's unexpected end, the pages' fallback to the
     /// writer.
     findings: Mutex<Vec<GlobalLedgerError>>,
+    /// #422 W1-8 (P29): the pages the readers read and their times, since the pool started.
+    pages: Mutex<LedgerReaderPoolPages>,
     /// Tests: the readers that end, unexpectedly, when they next take a page.
     #[cfg(test)]
     end_for_test: AtomicUsize,
@@ -287,6 +295,11 @@ impl ReaderPool {
         std::mem::take(&mut *lock(&self.reader.state.findings))
     }
 
+    /// #422 W1-8 (P29): the pages the readers read since the pool started, with their times.
+    pub(super) fn pages(&self) -> LedgerReaderPoolPages {
+        *lock(&self.reader.state.pages)
+    }
+
     /// Ends the pool. From the close on, no reader starts a page: each page still queued is
     /// answered as refused, `writer_unavailable` of `shutdown_writer` (not fatal), and never read
     /// (review M-1). The readers' connections are interrupted, so a statement running then ends
@@ -384,12 +397,16 @@ impl Reader {
             }
             let started = Instant::now();
             let reply = self.page(&mut connection, &query, profile, &request, &mut memo);
+            let elapsed = started.elapsed();
             self.statistics.record_writer_command(
                 LedgerWriterCommandKind::ProjectViewPage,
-                started.elapsed(),
+                elapsed,
                 0,
                 false,
             );
+            // #422 W1-8 (P29): and in the pool's own pages, which the Runtime shows while it
+            // runs (`GlobalLedger::reader_pool_pages`).
+            lock(&self.state.pages).record(elapsed);
             end.answer(reply);
         }
     }

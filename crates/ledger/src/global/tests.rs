@@ -2703,6 +2703,8 @@ fn shutdown_waits_for_a_full_ingress_queue_to_drain() {
         // #422 QR-1: a hand-built writer reads its pages itself.
         reader_pool: None,
         reader_pool_finding: None,
+        // #422 W1-8 (P30): and publishes no point.
+        read_points: None,
     };
     let (closing_sender, closing) = mpsc::channel();
     let (done_sender, done_receiver) = mpsc::channel();
@@ -2997,3 +2999,8 @@ mod gate_qr1;
 // the Lab relations once per snapshot, for a few snapshots, and a window's start once.
 #[path = "tests/gate_qr2.rs"]
 mod gate_qr2;
+// #422 W1-8: the QR-1 leftovers and the published read point: the persistent proof set (P27), a
+// pool page with real proofs, the pool's budget refusal and the trim's keep rule (P28), the pool's
+// page times (P29) and the published head (P30).
+#[path = "tests/gate_w1_8.rs"]
+mod gate_w1_8;

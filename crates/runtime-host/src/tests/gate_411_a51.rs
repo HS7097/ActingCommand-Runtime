@@ -6,10 +6,11 @@
 //! Requirements of the slice (brief A51, frozen by the coordinator 10-21 19:3x), the host's part:
 //!
 //! - T3 (R3): a ledger read the writer does not answer in time latches nothing. While the
-//!   writer is held in a read, a `Status` and the performance loop's runtime-fact seal both read
-//!   the ledger's head behind it; both answer the registered non-fatal `writer_response_timeout`,
-//!   the fatal state stays empty and no stop is requested; once the read ends, `Status` answers
-//!   `Completed` again;
+//!   writer is held in a read, the performance loop's runtime-fact seal reads the ledger's head
+//!   behind it and answers the registered non-fatal `writer_response_timeout`, the fatal state
+//!   stays empty and no stop is requested. #422 W1-8 (P30): a `Status` reads the head the writer
+//!   last published instead, so it answers `Completed` while the writer is held, and again once
+//!   the read ends;
 //! - T5 (R4): the first fatal condition the host latches reaches the daemon's log at once
 //!   (the daemon reporter), before any close, and only the first.
 //!
@@ -95,9 +96,10 @@ fn a51_t3_reads_the_writer_does_not_answer_in_time_latch_nothing() {
     let ids = IdentifierIssuer::new().expect("identifier issuer");
     let hold = WriterReadHoldGate::arm(root.path()).expect("read hold");
 
-    // The writer is held in the first read; the status's head read and the seal's wait for it.
-    let held = status(&host, &ids, 1);
+    // The writer is held in the first read, the seal's read of the head, which waits for it.
+    // #422 W1-8 (P30): the status reads the published head, so the held writer does not stop it.
     let tick = host.append_runtime_fact_snapshot_for_test();
+    let held = status(&host, &ids, 1);
 
     assert!(
         host.fatal_error().expect("health").is_none(),
@@ -111,12 +113,7 @@ fn a51_t3_reads_the_writer_does_not_answer_in_time_latch_nothing() {
         hold.wait_held(Duration::ZERO),
         "the writer was held in a read"
     );
-    assert_eq!(held.state(), RuntimeReceiptState::Failed, "{held:?}");
-    assert_eq!(
-        held.outcome().code().as_str(),
-        LedgerCode::WriterResponseTimeout.as_str(),
-        "{held:?}"
-    );
+    assert_eq!(held.state(), RuntimeReceiptState::Completed, "{held:?}");
     let tick = tick.expect_err("the seal's head read was not answered");
     assert_eq!(
         tick.code(),

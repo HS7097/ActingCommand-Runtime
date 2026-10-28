@@ -258,7 +258,11 @@ a contained run takes at each step (Step pacing below). `performance.pacing.mode
   the health `unavailable`. `actingctl perf-status` prints it; `ac_overview` answers it as its
   block `performance`. Both write each distinct dwell object once, in `dwell`, each view naming
   its 24 h and total dwell by their index there (`dwell_24h_ref`, `dwell_total_ref`; #422
-  OV-24K).
+  OV-24K). #422 W1-8 (register W20, since 0.12.25): the status also carries the optional
+  `ledger_read_pages {pages, total_ms, longest_ms, last_ms}`, the view pages the ledger's
+  reader pool read since the Runtime started and their summed, longest and last time in
+  milliseconds, read from the ledger's memory without a writer command; it is absent without a
+  reader pool.
 - **GPU.** The GPU utilisation is summed per engine type and the busiest type counts
   (`performance.pressure.gpu_aggregate = max_engine_type`, the default); `sum` keeps the earlier
   sum of every engine.
