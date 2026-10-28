@@ -185,6 +185,9 @@ mod gate_357_db1;
 mod gate_375_r3;
 mod gate_381a;
 mod gate_381b;
+// CAP-IDX (since 0.12.27): capture takes the MuMu index from the discovery binding; a shifted
+// port is checked against MuMu's report before capture opens.
+mod gate_cap_idx;
 // Workflow #382 H-1-rest (test plan v2.2 §3.10): the install transition's deadlines on the
 // manual Runtime clock (HOST-I2), G1 and G3.
 mod gate_382_h1;

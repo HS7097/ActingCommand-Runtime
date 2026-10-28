@@ -317,7 +317,11 @@ fn target_mumu_instance_id(
     Ok(explicit_instance_id)
 }
 
-fn mumu_instance_id_from_serial(serial: &str) -> Option<u16> {
+/// The one rule an index is derived from a loopback serial by: its port must be the index's base
+/// ADB port. A shifted port (MuMu takes the next free port when the base port is busy at launch)
+/// derives none; the caller then needs the index from the discovery binding (CAP-IDX, since
+/// 0.12.27; the Nemu IPC fallback in `capture.rs` uses this rule too).
+pub(crate) fn mumu_instance_id_from_serial(serial: &str) -> Option<u16> {
     let (host, port) = serial.rsplit_once(':')?;
     let host = host.trim_matches(['[', ']']);
     if !host.eq_ignore_ascii_case("127.0.0.1")
@@ -350,7 +354,8 @@ fn push_bounded_process_diagnostic(entries: &mut Vec<String>, entry: String) {
     }
 }
 
-fn mumu_instance_port(instance_id: u16) -> Option<u16> {
+/// The base ADB port of a MuMu index (CAP-IDX: public so callers name it symbolically).
+pub fn mumu_instance_port(instance_id: u16) -> Option<u16> {
     MUMU_PORT_STEP
         .checked_mul(instance_id)
         .and_then(|offset| MUMU_BASE_ADB_PORT.checked_add(offset))
@@ -849,6 +854,51 @@ mod tests {
         let err = target_mumu_instance_id("127.0.0.1:16416", Some(2))
             .expect_err("conflicting target identity must fail");
         assert!(err.message().contains("target identity conflicts"));
+    }
+
+    /// Two running MuMu processes with neutral executable paths, for indices 1 and 2.
+    fn cap_idx_processes() -> (PathBuf, PathBuf, Vec<DeviceDiscoveryProcess>) {
+        let first = PathBuf::from("neutral-first/nx_device/13.7/shell/MuMuNxDevice.exe");
+        let second = PathBuf::from("neutral-second/nx_device/13.7/shell/MuMuNxDevice.exe");
+        let processes = vec![
+            mumu_process(61, &first, &format!("{} -v 1", first.display())),
+            mumu_process(62, &second, &format!("{} -v 2", second.display())),
+        ];
+        (first, second, processes)
+    }
+
+    // CAP-IDX: MuMu took the next port because the index's base port was busy at launch; the
+    // index comes from the discovery binding and selects that index's running process.
+    #[test]
+    fn cap_idx_an_explicit_index_on_a_shifted_port_selects_its_running_process() {
+        let (first, _, processes) = cap_idx_processes();
+        let shifted = mumu_instance_port(1).expect("base port") + 1;
+        let serial = format!("127.0.0.1:{shifted}");
+
+        let selected =
+            running_mumu_executable_for_target_from_processes(&serial, Some(1), &processes)
+                .expect("the bound index resolves on a shifted port");
+
+        assert_eq!(selected, first);
+    }
+
+    // CAP-IDX: a port that is another index's base port still conflicts with the bound index, as
+    // `target_identity_mismatch`, and no process is selected.
+    #[test]
+    fn cap_idx_an_explicit_index_that_conflicts_with_the_port_is_target_identity_mismatch() {
+        let (_, _, processes) = cap_idx_processes();
+        let serial = format!("127.0.0.1:{}", mumu_instance_port(1).expect("base port"));
+
+        let err = running_mumu_executable_for_target_from_processes(&serial, Some(2), &processes)
+            .expect_err("a conflicting index must not select a process");
+
+        assert_eq!(
+            err.nemu_resolution_context()
+                .map(|context| context.reason()),
+            Some(NemuResolutionReason::TargetIdentityMismatch)
+        );
+        assert!(err.message().contains("instance_id=1"));
+        assert!(err.message().contains("explicit instance_id=2"));
     }
 
     #[test]
