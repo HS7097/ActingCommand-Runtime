@@ -84,11 +84,21 @@ impl HostShared {
                 _ => return Err(overrides_invalid()),
             },
         };
-        // Workflow #421 INST-2: the instructions restored as they were, and the keys that were
-        // not, for `StartReport`.
+        // Workflow #421 INST-2, for `StartReport`: the instructions restored, the keys not
+        // restored and (#421 S2-IF) the keys restored over a default that changed, which count
+        // as restored and are never dropped.
+        let (base_changed, dropped): (Vec<&RestoreNote>, Vec<&RestoreNote>) =
+            notes.iter().partition(|note| note.restored());
         self.note_start_instructions(
-            rows_stored.saturating_sub(notes.len()),
-            notes.iter().map(|note| note.config_key.clone()).collect(),
+            rows_stored.saturating_sub(dropped.len()),
+            dropped
+                .into_iter()
+                .map(|note| note.config_key.clone())
+                .collect(),
+            base_changed
+                .into_iter()
+                .map(|note| note.config_key.clone())
+                .collect(),
         )?;
         let observed_at_unix_ms = self.clock.sample()?.unix_ms;
         self.record_config_fact(

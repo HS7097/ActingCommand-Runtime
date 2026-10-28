@@ -21,7 +21,7 @@
 //! | `bindings` | every configured instance bound | yes |
 //! | `packs` | every pack of the register registered, with its count | yes |
 //! | `pauses` | S0's pauses plus the hold on every instance it took | yes |
-//! | `instructions` | S0's run-time instructions, none dropped | yes |
+//! | `instructions` | S0's run-time instructions, none dropped or superseded (one kept over a changed default passes, named) | yes |
 //! | `no_dispatch` | no dispatch on a held instance since the start | yes |
 //! | `new_keys` | each key the update adds `default`, or `explicit` where the file names it | yes |
 //! | `config` | the configuration's SHA-256 is the one the operation began with | yes |
@@ -423,17 +423,23 @@ pub(crate) fn evaluate(
             }
             (Some(recorded), Ok(config)) => {
                 let expected = hold::instructions_of(recorded);
-                let dropped = report
-                    .as_ref()
-                    .and_then(|report| report["instructions_dropped"].as_array().cloned())
-                    .unwrap_or_default();
+                let listed = |member: &str| {
+                    report
+                        .as_ref()
+                        .and_then(|report| report[member].as_array().cloned())
+                        .unwrap_or_default()
+                };
+                // #421 S2-IF: only a key not restored (dropped or superseded) or a mismatch
+                // fails; a key restored over a default that changed passes, named.
+                let dropped = listed("instructions_dropped");
+                let base_changed = listed("instructions_base_changed");
                 check(
                     "instructions",
                     true,
                     verdict(expected == config.instructions && dropped.is_empty()),
                     json!({"expected": hold::instructions_value(&expected),
                         "actual": hold::instructions_value(&config.instructions),
-                        "dropped": dropped}),
+                        "dropped": dropped, "base_changed": base_changed}),
                 )
             }
             (None, _) => unread("instructions", true, "no_s0"),
