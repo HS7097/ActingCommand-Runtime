@@ -938,6 +938,36 @@ impl RuntimeHostError {
         result
     }
 
+    /// W2-E (#419 R1; ISO-M rows E13, A05): an input whose backend the kernel failed with
+    /// `error`, on `instance`'s lease. A refusal that concerns the state of the instance's
+    /// session, not its device, fails only the input, as the same refusal at a capture or at a
+    /// frame resolve does ([`Self::instance_operation`]): the session was being closed by
+    /// another owner (`execution_session_close_in_progress`), its endpoint changed under it
+    /// (`execution_instance_identity_mismatch`), or the Nemu input found its frame no longer
+    /// committed (`input_frame_not_committed`). Every other kernel failure keeps the kernel's
+    /// severity ([`Self::execution`]): a device or backend fault (E02), and a session death until
+    /// an input's deaths are counted as a capture's are (ISO-2b). An unconfirmed close and a
+    /// code on the closed Global list stay severe either way, and the failure keeps its context,
+    /// so a close merged into it is still recorded.
+    pub(crate) fn input_backend(
+        operation: impl Into<Location>,
+        error: &ExecutionKernelError,
+        instance: InstanceId,
+    ) -> Self {
+        if spelled(
+            error.code().as_str(),
+            &[
+                ExecutionKernelCode::ExecutionSessionCloseInProgress.code(),
+                ExecutionKernelCode::ExecutionInstanceIdentityMismatch.code(),
+                ExecutionKernelCode::InputFrameNotCommitted.code(),
+            ],
+        ) {
+            Self::instance_operation(operation, error, Some(instance))
+        } else {
+            Self::execution(operation, error)
+        }
+    }
+
     pub(crate) fn state(error: &RuntimeStateError) -> Self {
         if error.is_fatal() {
             Self::relayed_fatal(
