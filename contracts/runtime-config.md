@@ -921,7 +921,25 @@ provider's Stop, never MuMuManager `api`). The wake comes at the next due time m
 wake lead, or at once when a later evaluation shows a due task: after `close_app` the startup
 package is queued, after `stop_emulator` the configured emulator start, which hands the key to the
 startup package. While an instance's emulator is held stopped the emulator watch does not start
-it. Each action and each wake is one `instance_idle_action` record (`operation` `run_idle_action`
+it.
+
+What wakes an idle instance (IDLE-WG, since 0.12.27; production v0.12.26 on 10-29 02:43: an
+instance resume's reconnect claim held an idle instance, its candidates waited
+`dispatch_instance_held` with no wake, and the plan woke the closed game for tasks its closed
+activity window then refused, one startup package spent for nothing): a due task is one that could
+be dispatched now, a selected decision or an eligible one with no wake of its own later than the
+evaluation, on an instance no blackout covers ([scheduling-blackout.md](scheduling-blackout.md))
+and whose activity window is open at the evaluation. So the wake comes at once for a task really
+due, for a switched action, for a wake whose time has come (also one that fell due while a pause,
+an install hold or a claim held the instance, whose claims then wait behind the holder), and for
+the start's owed wake (an instance restored woken, or with no usable record). It does not come for
+a task a time-bound gate holds back: a blackout that covers the instance, or its closed activity
+window (`policy_activity_window_closed`), also when its decision names a hold that comes before
+those gates in the order of the deferrals (a scheduling pause, `dispatch_instance_held` for a claim
+on the instance's key such as a resume's reconnect). Such a task moves the wake only to the time
+the gates let it through, the blackout's end and then the next opening of the activity window,
+minus the action's wake lead, and an earlier wake in effect stays. The evaluation's decisions and
+the not-run explanation are unchanged; only the plan the idle check reads counts the gates. Each action and each wake is one `instance_idle_action` record (`operation` `run_idle_action`
 or `queue_idle_wake`, `idle_action` naming the action). An instance whose action in effect cannot
 bring it back (its `instances[]` entry has no `startup_package`, or for `stop_emulator` no
 `start_emulator`) never acts, and the first idle check that finds it records one

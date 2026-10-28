@@ -34,7 +34,10 @@
 //!     planned at the action and the one every later plan gives;
 //!   - at once, when a plan shows a task of the instance due (a task that waits for a
 //!     fact-refresh reading too: the wake's claim is queued before the reading's dispatch is
-//!     admitted, so the reading does not meet a closed application);
+//!     admitted, so the reading does not meet a closed application). IDLE-WG (0.12.27): due means
+//!     dispatchable now; a task a blackout or a closed activity window holds back is not due,
+//!     also when a hold of the instance hides those gates in its decision, and it moves the wake
+//!     only to the time they let it through (minus the lead);
 //!   - at once, when the action in effect is no longer the one taken (the switch).
 //!
 //!   IDLE-1P (#405): a fact-refresh reading alone neither wakes an idle instance nor sets its
@@ -151,7 +154,11 @@ pub(crate) struct IdlePlan {
     /// When the evaluation ran.
     pub(crate) evaluated_at_unix_ms: u64,
     /// A task of the instance is due: selected, or due and waiting. The fact-refresh reading is
-    /// no task here (`reading_due_unix_ms`); a task that waits for it is.
+    /// no task here (`reading_due_unix_ms`); a task that waits for it is. IDLE-WG (0.12.27): only
+    /// a task that could be dispatched now is due: none while a blackout covers the instance or
+    /// its activity window is closed (`schedule_explanation::idle_held_back`), even when a hold of
+    /// the instance (a pause, a claim on its key) is what its decision names; such a task wakes at
+    /// the time those gates let it through (`next_wake_unix_ms`).
     pub(crate) due_now: bool,
     /// The earliest wake of the instance's tasks in the evaluation; none: no task of the instance
     /// wakes.

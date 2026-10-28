@@ -2516,6 +2516,15 @@ tests = [
 ]
 incident = ["#405 O-2", "#405 N-2", "#405 N-5"]
 
+# IDLE-WG (0.12.27; register §1.158 IDLE-WG; brief rd-1029/brief-wave2c.md IDLE-WG; production v0.12.26 on 10-29 02:43, #421 6476382014: a resume's reconnect claim held an idle instance, its candidates waited dispatch_instance_held with no wake, and the plan woke the closed game for tasks its closed activity window then refused): from a recorded evaluation on a manual clock, an idle instance whose only due candidates its closed activity window (or a blackout covering it, also one ending before the window opens) holds back is not woken at the resume while the claim's hold is what their decisions name, keeps its wake at the time the gates let them through minus the lead, is still not woken once the claim has ended, and is woken at that wake (A); an idle instance with a candidate really due (its window open, no blackout) is woken at once under the resume's claim, under a pause, or free and selected (B); W1-2's woken and owed cases (the #405 O-2, N-2 and IDLE-1P rows) are unchanged
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_idle_wg::idle_wg_a_a_task_a_time_bound_gate_holds_back_does_not_wake_the_idle_instance_at_resume",
+    "actingcommand-runtime-host::lib::tests::gate_idle_wg::idle_wg_b_a_really_due_task_still_wakes_the_idle_instance",
+]
+incident = ["#421 IDLE-WG"]
+
 # #421 S2-IF (v0.12.21; brief rd-1028/brief-s2-instr-fix.md; production 10-28 10:11: S2 rolled a good update back because StartReport listed three instructions kept over a changed default as dropped): through the host, StartReport names an instruction kept over a default that changed in instructions_base_changed, counts it restored and never lists it in instructions_dropped, its value still in effect (T-1), and again on the rollback's start with the default changed back (T-4); an instruction whose key is gone (T-2) or that the file superseded, an explicit value changed or a default now named (T-3), is listed in instructions_dropped and not counted restored
 [[gate]]
 coverage = "Y"

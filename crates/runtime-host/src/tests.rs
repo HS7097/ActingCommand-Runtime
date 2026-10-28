@@ -164,6 +164,8 @@ mod gate_idle1_host;
 // #405 IDLE-1P: the closed instances and their wakes survive a restart, and a reading alone never
 // wakes a closed game.
 mod gate_idle1p;
+// IDLE-WG (0.12.27): an idle instance is woken only for a task that could be dispatched now.
+mod gate_idle_wg;
 // Workflow #372 K4: the occurrences lost to a `missed` grace or to a later occurrence.
 mod gate_372k4;
 // Workflow #372 K5: accounting follows the active catalog's task identity (`continues_from`).

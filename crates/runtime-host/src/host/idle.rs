@@ -30,7 +30,10 @@
 //!   close, the provider Stop through the configured or internal control, never `api`, the
 //!   endpoint back to pending), so the next start finds no dead retained session.
 //! - **The wake** at the next due time minus the action's wake lead, or at once for an earlier
-//!   due task (a fact-refresh reading too) or a switched action: after `close_app` the startup
+//!   due task (a fact-refresh reading too) or a switched action. IDLE-WG (0.12.27): a due task is
+//!   one that could be dispatched now; one a blackout or a closed activity window holds back
+//!   (also behind a pause or a claim on the instance's key, such as a resume's reconnect) wakes
+//!   nothing before those gates let it through. After `close_app` the startup
 //!   package is queued (`startup_package_scheduled`); after `stop_emulator` the configured
 //!   emulator start (emu-watch's autostart claim, with its `emulator_autostart_queued`), whose
 //!   start hands the key to the startup package as every configured start does. Queued at the
