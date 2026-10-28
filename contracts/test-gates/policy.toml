@@ -874,3 +874,19 @@ tests = [
     "actingcommand-policy::lib::tests::gate_d2_s4::idle1p_l5_within_the_cooldown_the_candidate_takes_no_wake_on_a_closed_instance",
 ]
 incident = ["#405 IDLE-1P"]
+
+# Workflow #427-B (plan r2 point 5, #427 comment 6460013989; Alice 10-28 12:4x; brief rd-1028/brief-427b-budget.md; contracts/scheduling/README.md, "Shared Run Limits"): the round deducts no CPU, GPU or IO, so five instances of one host with ordinary loads are all chosen; a task whose own load exceeds its host is still blocked at placement; two heavy-scene slots take two heavy candidates and the third waits heavy_scene_budget_deferred with used, limit_count, admitted_count and round_selected_count; an admitted heavy dispatch takes a slot once; a refused candidate frees its slot; under pressure the reason says the real number running; without performance.pacing.max_concurrent_runs there is no limit, 3 defers the fourth and 1 runs one at a time, each with policy_concurrent_runs_deferred and its numbers
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_427b::gate_427b_five_instances_with_ordinary_loads_are_all_chosen_in_one_round",
+    "actingcommand-policy::lib::tests::gate_427b::gate_427b_a_task_whose_own_load_exceeds_its_host_is_still_blocked_at_placement",
+    "actingcommand-policy::lib::tests::gate_427b::gate_427b_two_heavy_are_chosen_and_the_third_waits_with_the_numbers",
+    "actingcommand-policy::lib::tests::gate_427b::gate_427b_an_admitted_heavy_dispatch_takes_a_slot_once",
+    "actingcommand-policy::lib::tests::gate_427b::gate_427b_a_refused_heavy_candidate_frees_its_slot",
+    "actingcommand-policy::lib::tests::gate_427b::gate_427b_under_pressure_the_reason_says_the_real_number_running",
+    "actingcommand-policy::lib::tests::gate_427b::gate_427b_without_the_max_key_there_is_no_limit_of_concurrent_runs",
+    "actingcommand-policy::lib::tests::gate_427b::gate_427b_max_three_defers_the_fourth_with_the_numbers",
+    "actingcommand-policy::lib::tests::gate_427b::gate_427b_max_one_runs_one_dispatch_at_a_time",
+]
+incident = ["#427-B"]

@@ -24,9 +24,10 @@
 //!   before them does (fix 1, review L1): the drain waits for it (its registration and its counted
 //!   work) and the pause drains it like any contained run admitted before its gate closed. Only a
 //!   run not yet taken when the Runtime's stop was requested is refused explicitly
-//!   (`runtime_stopping`): never started, its lease released, settled as interrupted
-//!   (`policy_settlement_interrupted`, as the next start settles a run a stop cut short, so the
-//!   restart lifts the first one; fix 2, re-review L-2) and its registration ended.
+//!   (`runtime_stopping`): never started, its lease released, given a live interrupted
+//!   settlement (`policy_settlement_interrupted`, with the elapsed `runtime_ms`, not the start's
+//!   recovered shape), lifted after the restart like the start's, the first one of its pair (fix
+//!   2, re-review L-2; wording, re-review 2 L-A), and its registration ended.
 //! - **Failures (C5, #419).** The run's failures go through the existing failure containment
 //!   (`contain_failure`): an instance-level failure fences that instance and the worker reports a
 //!   non-fatal failure; only a global fault latches the Runtime. A worker panic follows spec §7
@@ -310,10 +311,10 @@ impl HostShared {
     /// Workflow #427-A: settles a handed-off run that never started (its lease released by the
     /// failure path), ends its registration and returns the refusal, a fatal one through the
     /// instance's failure containment. Counted as cleanup work, which a stop or a drain admits.
-    /// Fix 2 (re-review L-2): a run the Runtime's stop refused (`at_stop`) is settled as
-    /// interrupted, as the next start settles a run a stop cut short, so the restart lifts the
-    /// first one (`complete_scheduled_policy_interruption`); any other refusal is settled as
-    /// that failure.
+    /// Fix 2 (re-review L-2): a run the Runtime's stop refused (`at_stop`) gets a live
+    /// interrupted settlement, with the elapsed `runtime_ms` (not the start's recovered shape),
+    /// lifted after the restart like the start's, the first one of its pair
+    /// (`complete_scheduled_policy_interruption`); any other refusal is settled as that failure.
     fn refuse_policy_run(
         &self,
         context: &PolicyRunContext,

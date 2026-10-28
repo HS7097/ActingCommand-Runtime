@@ -236,6 +236,24 @@ pub struct EvaluationResources {
     pub hosts: Vec<HostResourceSnapshot>,
 }
 
+/// Workflow #427-B (`contracts/scheduling/README.md`, "Shared run limits"): the policy dispatches
+/// that take a shared run limit's slots as the round starts, and the optional limit on how many
+/// may be admitted or running at once. The Runtime reads them from its dispatch journal when it
+/// evaluates a cycle ([`evaluate_with_run_slots`]); every other entry point has none: no
+/// dispatch admitted beyond a host's `active_heavy_dispatches`, and no such limit. Memory only:
+/// none of it enters a snapshot or a decision identity.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RunSlots {
+    /// The load profile of each policy dispatch admitted and not yet settled (running, or
+    /// admitted and not started), across every instance: one entry per dispatch. A refused
+    /// dispatch was never admitted and a settled one is no longer, so neither has an entry.
+    pub admitted_load_profiles: Vec<LoadProfile>,
+    /// `performance.pacing.max_concurrent_runs`: at most this many policy dispatches admitted or
+    /// running at once across every instance, those chosen earlier in the round included; at
+    /// least 1. `None`: no such limit.
+    pub max_concurrent_runs: Option<u16>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvaluationTime {
@@ -881,6 +899,7 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
         None,
         None,
         None,
+        &RunSlots::default(),
         eligibility,
     )
 }
@@ -912,6 +931,7 @@ pub fn evaluate_with_fact_refresh<E: From<PolicyEvaluationError>>(
         Some(fact_refresh),
         None,
         None,
+        &RunSlots::default(),
         eligibility,
     )
 }
@@ -949,6 +969,7 @@ pub fn evaluate_with_remedies<E: From<PolicyEvaluationError>>(
         Some(fact_refresh),
         Some(remedies),
         None,
+        &RunSlots::default(),
         eligibility,
     )
 }
@@ -972,6 +993,47 @@ pub fn evaluate_with_chain_handovers<E: From<PolicyEvaluationError>>(
     fact_refresh: &FactRefreshInputs,
     remedies: &RemedyPlan,
     chain_handover: &ChainHandoverInputs,
+    entry_holds: impl FnMut(&TaskSpec, &str, &str) -> Result<bool, E>,
+    eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
+) -> Result<PolicyEvaluation, E> {
+    evaluate_with_run_slots(
+        catalog,
+        facts,
+        resources,
+        time,
+        seed,
+        immediate_retries,
+        fact_refresh,
+        remedies,
+        chain_handover,
+        &RunSlots::default(),
+        entry_holds,
+        eligibility,
+    )
+}
+
+/// Workflow #427-B (`contracts/scheduling/README.md`, "Shared run limits"):
+/// `evaluate_with_chain_handovers` with the policy dispatches admitted or running and the
+/// optional `performance.pacing.max_concurrent_runs`. The round deducts no CPU, GPU or IO for a
+/// chosen dispatch: a task whose own load exceeds its host's capacity is blocked at placement
+/// (`host_capacity_insufficient`), and the only limits the instances share are the heavy-scene
+/// slots of a host (`heavy_scene_budget_deferred`, `heavy_scene_budget_exhausted`) and the
+/// maximum of concurrent runs (`policy_concurrent_runs_deferred`). Each counts the dispatches
+/// admitted or running plus those chosen earlier in the round, each dispatch once, and its
+/// reason says both numbers and the limit. With [`RunSlots::default`] the evaluation is the one
+/// `evaluate_with_chain_handovers` gives.
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_with_run_slots<E: From<PolicyEvaluationError>>(
+    catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
+    resources: &EvaluationResources,
+    time: EvaluationTime,
+    seed: u64,
+    immediate_retries: &BTreeSet<(String, String)>,
+    fact_refresh: &FactRefreshInputs,
+    remedies: &RemedyPlan,
+    chain_handover: &ChainHandoverInputs,
+    run_slots: &RunSlots,
     mut entry_holds: impl FnMut(&TaskSpec, &str, &str) -> Result<bool, E>,
     eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
 ) -> Result<PolicyEvaluation, E> {
@@ -986,6 +1048,7 @@ pub fn evaluate_with_chain_handovers<E: From<PolicyEvaluationError>>(
         Some(fact_refresh),
         Some(remedies),
         Some((chain_handover, entry_holds)),
+        run_slots,
         eligibility,
     )
 }
@@ -1001,9 +1064,11 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
     refresh_inputs: Option<&FactRefreshInputs>,
     remedies: Option<&RemedyPlan>,
     chain: Option<(&ChainHandoverInputs, &mut ChainEntryHolds<'_, E>)>,
+    run_slots: &RunSlots,
     mut eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
 ) -> Result<PolicyEvaluation, E> {
     validate_inputs(catalog, facts, resources, time)?;
+    validate_run_slots(run_slots)?;
     // Stored resource target policies are read before the time-validity projection, so a
     // timeline reset never silently withdraws one (Workflow #308 RT-S1b).
     let target_policies = crate::resource_targets::instance_target_policies(facts, time)?;
@@ -1024,10 +1089,12 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         .map(|pool| (pool.id.as_str(), pool))
         .collect();
     let pool_values = evaluation_pool_values(&pool_specs, resources, facts, time);
-    let host_resources: BTreeMap<&str, HostRemaining> = resources
+    // Workflow #427-B: each host as the round starts. The round deducts nothing from it; the
+    // heavy dispatches chosen in the round are counted beside it (`RoundSlots`).
+    let host_resources: BTreeMap<&str, HostView> = resources
         .hosts
         .iter()
-        .map(|host| (host.host_id.as_str(), HostRemaining::from(host)))
+        .map(|host| (host.host_id.as_str(), HostView::new(host, run_slots)))
         .collect();
 
     // #386 CF-5: a capacity read from its fact wakes the evaluation when that reading expires,
@@ -1450,7 +1517,8 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         None => BTreeMap::new(),
     };
 
-    let mut remaining = host_resources;
+    // Workflow #427-B: the dispatches chosen so far in the round against the shared run limits.
+    let mut round_slots = RoundSlots::default();
     let mut selected_instances = BTreeSet::new();
     let mut dispatch_intents = Vec::new();
     let mut reason_chains = Vec::new();
@@ -1501,31 +1569,20 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
             }
             continue;
         }
-        let host = remaining
-            .get_mut(candidate.host_id.as_str())
+        let host = host_resources
+            .get(candidate.host_id.as_str())
             .ok_or_else(|| {
                 PolicyEvaluationError::invalid(format!(
                     "instance '{}' references missing host '{}'",
                     candidate.instance_id, candidate.host_id
                 ))
             })?;
-        if !host.fits(candidate.load) {
-            let (code, detail) = if candidate.load.heavy
-                && host.active_heavy_dispatches >= host.heavy_dispatch_limit
-            {
-                (
-                    PolicyCode::HeavySceneBudgetDeferred,
-                    "the shared host heavy-scene concurrency budget was consumed by higher-ranked dispatches",
-                )
-            } else {
-                (
-                    PolicyCode::HostBudgetDeferred,
-                    "the shared host budget was consumed by higher-ranked dispatches",
-                )
-            };
-            work[candidate.work_index]
-                .reasons
-                .push(reason(code, detail));
+        // Workflow #427-B: no CPU, GPU or IO is deducted in the round; only the shared run limits
+        // can hold a placed candidate back for the instances' sake.
+        if let Some((code, deferral)) =
+            round_slots.deferral(run_slots, &candidate.host_id, host, candidate.load)
+        {
+            work[candidate.work_index].reasons.push(deferral);
             if refresh {
                 refresh_gates.insert(
                     candidate.work_index,
@@ -1687,7 +1744,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
                 format!("deterministic total score {}", candidate.rank.total_score),
             ),
         ]);
-        host.consume(candidate.load);
+        round_slots.choose(&candidate.host_id, candidate.load);
         if let Some(handover) = handovers
             .get_mut(candidate.instance_id.as_str())
             .filter(|handover| handover.is_successor(candidate.work_index))
@@ -2444,7 +2501,7 @@ struct PlacementContext<'a> {
     profiles: &'a [ActivityProfile],
     pool_specs: &'a BTreeMap<&'a str, &'a PoolSpec>,
     pool_values: &'a BTreeMap<&'a str, PoolReading<'a>>,
-    hosts: &'a BTreeMap<&'a str, HostRemaining>,
+    hosts: &'a BTreeMap<&'a str, HostView>,
     time: EvaluationTime,
     seed: u64,
 }
@@ -2514,26 +2571,26 @@ fn build_candidate(
             ))
         })?;
     let load = ResourceLoad::new(&load_profile, host.heavy_threshold_milli);
-    if !host.fits(load) {
-        let (code, detail) =
-            if load.heavy && host.active_heavy_dispatches >= host.heavy_dispatch_limit {
-                (
-                    PolicyCode::HeavySceneBudgetExhausted,
-                    format!(
-                        "host '{}' has no remaining heavy-scene concurrency budget",
-                        instance.host_id
-                    ),
-                )
-            } else {
-                (
-                    PolicyCode::HostCapacityInsufficient,
-                    format!(
-                        "host '{}' cannot satisfy the task load profile",
-                        instance.host_id
-                    ),
-                )
-            };
-        return Ok(PlacementResult::Blocked(reason(code, detail)));
+    // Workflow #427-B: the task's own load against the host as the round starts. The heavy
+    // dispatches admitted or running may already take every heavy-scene slot; nothing chosen in
+    // the round counts yet, the round has not chosen anything.
+    if load.heavy && host.admitted_heavy_dispatches >= host.heavy_dispatch_limit {
+        return Ok(PlacementResult::Blocked(slot_reason(
+            PolicyCode::HeavySceneBudgetExhausted,
+            host.admitted_heavy_dispatches,
+            0,
+            host.heavy_dispatch_limit,
+            &format!("host '{}' heavy-scene slots", instance.host_id),
+        )));
+    }
+    if !host.fits_capacity(load) {
+        return Ok(PlacementResult::Blocked(reason(
+            PolicyCode::HostCapacityInsufficient,
+            format!(
+                "host '{}' cannot satisfy the task load profile",
+                instance.host_id
+            ),
+        )));
     }
 
     let priority = task_override
@@ -3926,7 +3983,7 @@ fn rank_task(
     priority: i16,
     task_weight: u16,
     load: ResourceLoad,
-    host: &HostRemaining,
+    host: &HostView,
     time: EvaluationTime,
 ) -> PolicyEvaluationResult<TaskRank> {
     let aging_ms = task_state
@@ -4067,38 +4124,32 @@ impl ResourceLoad {
     }
 }
 
+/// One host as the round starts (Workflow #427-B): its capacity, which a task's own load is
+/// placed against, and its heavy-scene slots. The round deducts nothing from it.
 #[derive(Debug, Clone, Copy)]
-struct HostRemaining {
+struct HostView {
     cpu: u16,
     gpu: u16,
     io: u16,
     host_responsiveness_basis_points: u16,
     third_party_pressure_basis_points: u16,
     heavy_dispatch_limit: u16,
-    active_heavy_dispatches: u16,
+    /// The heavy policy dispatches admitted or running: the snapshot's
+    /// `active_heavy_dispatches`, or the heavy ones of the run slots' admitted dispatches by this
+    /// host's threshold when they are more. The snapshot's count is capped at the limit
+    /// (`apply_to_resources`), so under pressure only the run slots give the real number; when
+    /// the two disagree the larger counts, so no dispatch frees a slot before it settles.
+    admitted_heavy_dispatches: u16,
     heavy_threshold_milli: u64,
 }
 
-impl HostRemaining {
-    fn fits(&self, load: ResourceLoad) -> bool {
-        self.cpu >= load.cpu
-            && self.gpu >= load.gpu
-            && self.io >= load.io
-            && (!load.heavy || self.active_heavy_dispatches < self.heavy_dispatch_limit)
-    }
-
-    fn consume(&mut self, load: ResourceLoad) {
-        self.cpu -= load.cpu;
-        self.gpu -= load.gpu;
-        self.io -= load.io;
-        if load.heavy {
-            self.active_heavy_dispatches += 1;
-        }
-    }
-}
-
-impl From<&HostResourceSnapshot> for HostRemaining {
-    fn from(value: &HostResourceSnapshot) -> Self {
+impl HostView {
+    fn new(value: &HostResourceSnapshot, run_slots: &RunSlots) -> Self {
+        let admitted_heavy = run_slots
+            .admitted_load_profiles
+            .iter()
+            .filter(|profile| ResourceLoad::new(profile, value.heavy_threshold_milli).heavy)
+            .count();
         Self {
             cpu: value.cpu_available_milli,
             gpu: value.gpu_available_milli,
@@ -4106,10 +4157,119 @@ impl From<&HostResourceSnapshot> for HostRemaining {
             host_responsiveness_basis_points: value.host_responsiveness_basis_points,
             third_party_pressure_basis_points: value.third_party_pressure_basis_points,
             heavy_dispatch_limit: value.heavy_dispatch_limit,
-            active_heavy_dispatches: value.active_heavy_dispatches,
+            // `validate_run_slots` bounds the admitted dispatches to u16.
+            admitted_heavy_dispatches: value
+                .active_heavy_dispatches
+                .max(u16::try_from(admitted_heavy).unwrap_or(u16::MAX)),
             heavy_threshold_milli: value.heavy_threshold_milli,
         }
     }
+
+    /// Whether the task's own load fits the host's capacity (Workflow #427-B: the placement
+    /// check; nothing is deducted for other dispatches).
+    fn fits_capacity(&self, load: ResourceLoad) -> bool {
+        self.cpu >= load.cpu && self.gpu >= load.gpu && self.io >= load.io
+    }
+}
+
+/// Workflow #427-B: what the round has chosen so far against the shared run limits. A candidate
+/// counts once it is selected; one an admission gate or a remedy defers takes no slot.
+#[derive(Debug, Default)]
+struct RoundSlots {
+    /// The dispatches chosen in the round, on every instance.
+    runs: u16,
+    /// The heavy dispatches chosen in the round, per host.
+    heavy: BTreeMap<String, u16>,
+}
+
+impl RoundSlots {
+    /// The code and the reason that defer a candidate the shared run limits leave no slot for:
+    /// `performance.pacing.max_concurrent_runs` first, which holds every candidate, then a heavy
+    /// candidate's heavy-scene slots on its host.
+    fn deferral(
+        &self,
+        run_slots: &RunSlots,
+        host_id: &str,
+        host: &HostView,
+        load: ResourceLoad,
+    ) -> Option<(PolicyCode, DecisionReason)> {
+        if let Some(limit) = run_slots.max_concurrent_runs {
+            // `validate_run_slots` bounds the admitted dispatches to u16.
+            let admitted =
+                u16::try_from(run_slots.admitted_load_profiles.len()).unwrap_or(u16::MAX);
+            if u32::from(admitted) + u32::from(self.runs) >= u32::from(limit) {
+                let code = PolicyCode::PolicyConcurrentRunsDeferred;
+                return Some((
+                    code,
+                    slot_reason(code, admitted, self.runs, limit, "concurrent policy runs"),
+                ));
+            }
+        }
+        let chosen = self.heavy.get(host_id).copied().unwrap_or(0);
+        if load.heavy
+            && u32::from(host.admitted_heavy_dispatches) + u32::from(chosen)
+                >= u32::from(host.heavy_dispatch_limit)
+        {
+            let code = PolicyCode::HeavySceneBudgetDeferred;
+            return Some((
+                code,
+                slot_reason(
+                    code,
+                    host.admitted_heavy_dispatches,
+                    chosen,
+                    host.heavy_dispatch_limit,
+                    &format!("host '{host_id}' heavy-scene slots"),
+                ),
+            ));
+        }
+        None
+    }
+
+    /// Counts a selected candidate against the shared run limits.
+    fn choose(&mut self, host_id: &str, load: ResourceLoad) {
+        self.runs = self.runs.saturating_add(1);
+        if load.heavy {
+            let chosen = self.heavy.entry(host_id.to_owned()).or_default();
+            *chosen = chosen.saturating_add(1);
+        }
+    }
+}
+
+/// Workflow #427-B: the reason of a shared run limit with its numbers: `used` slots of
+/// `limit_count`, `admitted_count` taken by dispatches admitted or running and
+/// `round_selected_count` by dispatches chosen earlier in the round.
+fn slot_reason(
+    code: PolicyCode,
+    admitted: u16,
+    chosen: u16,
+    limit: u16,
+    slots: &str,
+) -> DecisionReason {
+    let used = u32::from(admitted) + u32::from(chosen);
+    reason_with(
+        Outcome::new(code)
+            .used(used)
+            .limit_count(limit)
+            .admitted_count(admitted)
+            .round_selected_count(chosen),
+        format!(
+            "{slots}: {used} of {limit} taken, {admitted} by dispatches admitted or running and \
+             {chosen} chosen earlier in the round"
+        ),
+    )
+}
+
+/// Workflow #427-B: `max_concurrent_runs` is at least 1, and the admitted dispatches fit the
+/// counts the reasons carry.
+fn validate_run_slots(run_slots: &RunSlots) -> PolicyEvaluationResult<()> {
+    if run_slots.max_concurrent_runs == Some(0)
+        || u16::try_from(run_slots.admitted_load_profiles.len()).is_err()
+    {
+        return Err(PolicyEvaluationError::invalid(
+            "the run slots' limit and admitted dispatches are invalid",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -7703,15 +7863,18 @@ pub(crate) mod tests {
         )
         .expect("evaluation");
 
-        assert_eq!(result.dispatch_intents.len(), 1);
+        // Workflow #427-B: each run fits the host's 200/100/300 on its own and the round deducts
+        // nothing for the other, so both instances are chosen, the preferred one first.
+        assert_eq!(result.dispatch_intents.len(), 2);
         assert_eq!(result.dispatch_intents[0].instance_id, "fixture-instance-b");
+        assert_eq!(result.dispatch_intents[1].instance_id, "fixture-instance-a");
         assert_eq!(
             result.dispatch_intents[0].prerequisites.activity_profile_id,
             "fixture-activity-game"
         );
         let instance_a = decision_for(&result, "fixture.observe", "fixture-instance-a");
         let instance_b = decision_for(&result, "fixture.observe", "fixture-instance-b");
-        assert_eq!(instance_a.state, SchedulingDecisionState::Eligible);
+        assert_eq!(instance_a.state, SchedulingDecisionState::Selected);
         assert_eq!(instance_b.state, SchedulingDecisionState::Selected);
     }
 

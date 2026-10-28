@@ -59,6 +59,10 @@ mod gate_382_a6;
 // Test-only: Workflow #390 DISC-1 (host gate 99), the startup discovery's bounded retry.
 #[cfg(test)]
 mod gate_390_disc1;
+// Test-only: Workflow #427-B, the heavy-dispatch limits and `performance.pacing.max_concurrent_runs`
+// reach the controller in every pacing mode.
+#[cfg(test)]
+mod gate_427b;
 
 const CONFIG_SCHEMA_VERSION: &str = "actingcommand.actingd.config.v1";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
@@ -340,6 +344,11 @@ fn performance_settings(
         Some(actingcommand_contract::FactScalar::DurationMs(ms)) => Duration::from_millis(*ms),
         _ => return Err(ActingdCode::ConfigManifestInvalid.code()),
     };
+    // Workflow #427-B: optional, no default; a configuration that does not name it has no row.
+    let max_concurrent_runs = match value(pacing::MAX_CONCURRENT_RUNS) {
+        None => None,
+        Some(_) => Some(small(pacing::MAX_CONCURRENT_RUNS)?),
+    };
     // Workflow #385 PM-CFG (PERF §10.1; register §5 "Read by P-m"): the monitor, its sampler
     // and the controller read every key of the row in effect.
     let monitor =
@@ -354,7 +363,8 @@ fn performance_settings(
             small(pacing::HEAVY_DISPATCH_LIMIT_NORMAL)?,
             small(pacing::HEAVY_DISPATCH_LIMIT_PAUSED)?,
         )
-        .with_heavy_threshold_milli(monitor.heavy_threshold_milli);
+        .with_heavy_threshold_milli(monitor.heavy_threshold_milli)
+        .with_max_concurrent_runs(max_concurrent_runs);
     Ok((monitor_config, control_config))
 }
 

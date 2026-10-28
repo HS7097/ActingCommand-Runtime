@@ -569,8 +569,8 @@ fn lanes_t5_past_the_resample_limit_the_round_is_given_up_and_the_driver_goes_on
 
 // Brief "Tests": a shutdown before and after the hand-off was taken. Before: A's run is handed and
 // not yet taken when the host's stop is requested; its worker refuses it (`runtime_stopping`),
-// nothing ran, and (fix 2, re-review L-2) it is settled as interrupted, as the next start settles
-// a run a stop cut short, so the restart lifts it. After: A's run was taken and runs past its
+// nothing ran, and (fix 2, re-review L-2) it gets a live interrupted settlement, lifted after the
+// restart like the start's. After: A's run was taken and runs past its
 // terminal when the stop is requested; it finishes and is settled. The close then joins the
 // workers.
 #[test]

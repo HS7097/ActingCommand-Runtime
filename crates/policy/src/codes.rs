@@ -76,8 +76,11 @@ actingcommand_contract::outcome_codes! {
         FeedbackStopUnknown => "feedback_stop_unknown": info / none,
         TaskCooldownActive => "task_cooldown_active": info / none,
         InstanceAlreadySelected => "instance_already_selected": info / none,
+        /// Info. A heavy candidate waits: the host's heavy-scene slots are taken by heavy
+        /// dispatches admitted or running and by heavy ones chosen earlier in the round (keys
+        /// `used`, `limit_count`, `admitted_count`, `round_selected_count`; Workflow #427-B).
+        /// `host_budget_deferred`, the in-round CPU/GPU/IO deduction's reason, is retired.
         HeavySceneBudgetDeferred => "heavy_scene_budget_deferred": info / none,
-        HostBudgetDeferred => "host_budget_deferred": info / none,
         PlacementSelected => "placement_selected": info / none,
         RankBreakdown => "rank_breakdown": info / none,
         DecisionRecord => "decision_record": info / none,
@@ -85,6 +88,9 @@ actingcommand_contract::outcome_codes! {
         CapabilityMissing => "capability_missing": info / none,
         InstanceOverrideDisabled => "instance_override_disabled": info / none,
         ActivityProfileMissing => "activity_profile_missing": info / none,
+        /// Info. A heavy candidate is blocked at placement: the heavy dispatches admitted or
+        /// running already take every heavy-scene slot of its host (keys `used`, `limit_count`,
+        /// `admitted_count`, `round_selected_count` 0; Workflow #427-B).
         HeavySceneBudgetExhausted => "heavy_scene_budget_exhausted": info / none,
         HostCapacityInsufficient => "host_capacity_insufficient": info / none,
         ScoreDeferred => "score_deferred": info / none,
@@ -229,6 +235,13 @@ actingcommand_contract::outcome_codes! {
         /// of the pool's scope plus an offset.
         FactReferenceUnavailable => "fact_reference_unavailable": info / none,
         // ---- #386 CF-4: end ----
+        // ---- Workflow #427-B (shared run limits, `contracts/scheduling/README.md`, "Shared
+        // run limits"): begin ----
+        /// Info. A candidate waits: `performance.pacing.max_concurrent_runs` policy dispatches
+        /// are admitted or running across every instance, or chosen earlier in the round
+        /// (keys `used`, `limit_count`, `admitted_count`, `round_selected_count`).
+        PolicyConcurrentRunsDeferred => "policy_concurrent_runs_deferred": info / none,
+        // ---- Workflow #427-B: end ----
     }
 }
 

@@ -987,3 +987,12 @@ tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::gate_427a::lanes_t9_a_pause_after_the_hand_off_does_not_fail_the_run_handed_off",
 ]
 incident = ["#427-A"]
+
+# Workflow #427-B (brief rd-1028/brief-427b-budget.md; contracts/runtime-config.md, "The performance section"): the start-up assembly hands the controller the heavy-dispatch limits and the optional performance.pacing.max_concurrent_runs in observe, pace and full alike (absent: no limit and no parameter row; named: explicit; 0 refused); ac_schedule answers policy_concurrent_runs_deferred and heavy_scene_budget_deferred rows with used, limit_count, admitted_count and round_selected_count
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_427b::gate_427b_the_assembly_hands_the_limits_and_the_max_key_over_in_every_pacing_mode",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_427b::gate_427b_ac_schedule_answers_the_shared_run_limits_with_their_numbers",
+]
+incident = ["#427-B"]

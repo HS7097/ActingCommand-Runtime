@@ -1426,10 +1426,11 @@ impl HostShared {
     }
 
     /// Workflow #427-A fix 2 (re-review L-2): settles a handed-off run the Runtime's stop refused
-    /// before it started as the next start settles a run a stop cut short: its lease released by
-    /// the failure path, then the run settled as interrupted (`policy_settlement_interrupted`,
-    /// severe), never as a failure of the task, so the restart lifts the first such interruption
-    /// of its pair (`interruption_lifted_by_restart`).
+    /// before it started with a live interrupted settlement: its lease released by the failure
+    /// path, then the run settled as interrupted (`policy_settlement_interrupted`, severe), never
+    /// as a failure of the task, with the elapsed `runtime_ms` (not the start's recovered shape);
+    /// the restart lifts the first such interruption of its pair like the start's
+    /// (`interruption_lifted_by_restart`).
     pub(super) fn complete_scheduled_policy_interruption(
         &self,
         context: &PolicyRunContext,
