@@ -1,0 +1,8 @@
+{
+  "schema_version": "actingcommand.outcome-codes.release.v2",
+  "release": "0.12.22",
+  "codes": {
+    "host_budget_deferred": {"category": "info", "ladder_class": "none", "review": "pending", "status": "retired", "values": {"operation": {"type": "location", "required": false}, "runtime_code": {"type": "code", "required": false}, "host_halted": {"type": "boolean", "required": false}, "receipt_state": {"type": "vocab:receipt_state", "required": false}, "request_id": {"type": "id", "required": false}}}
+  },
+  "locations": {}
+}
