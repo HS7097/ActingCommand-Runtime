@@ -1108,9 +1108,15 @@ fn report(inputs: &ReportInputs<'_>) -> Result<Value, SuspensionReportError> {
 /// Workflow #386 SR-2b-2 (`contracts/policy-suspension.md`, "After a restart"): `reruns`, each
 /// rerun a condition termination owes as the pair's latest value record (register L7) holds it,
 /// the state the Runtime loads: `task_id`, `instance_id`, `failure_code`, `count`,
-/// `expires_at_unix_ms` and `state`. `expired` once the ledger's latest time is at or past its
-/// window end; else `waiting` when its `policy_rerun_waiting` record was written (its pacing
-/// stage held it back); else `owed`. Ordered by task, then instance.
+/// `expires_at_unix_ms` and `state`. `expired` once its `policy_rerun_expired` record was written
+/// (an evaluation at or past its window end, on the Runtime's clock); else `waiting` when its
+/// `policy_rerun_waiting` record was written (its pacing stage held it back); else `owed`.
+/// Ordered by task, then instance.
+///
+/// SR-2b-2 fix round 2: not the ledger's latest time. That time is the maximum over every row,
+/// and the ledger stamps some rows of its own by the system clock, not the Runtime's (a start's
+/// prior-epoch close facts, `retention/prior_epoch.rs`); the Runtime alone judges the expiry,
+/// at each evaluation, and records it.
 fn reruns(snapshot: &Snapshot<'_>) -> Result<Vec<Value>, SuspensionReportError> {
     let mut latest = BTreeMap::<(String, String), Option<PolicyConditionReruns>>::new();
     for event in snapshot.query(EventQuery {
@@ -1126,7 +1132,7 @@ fn reruns(snapshot: &Snapshot<'_>) -> Result<Vec<Value>, SuspensionReportError> 
             );
         }
     }
-    let waiting = snapshot
+    let recorded = snapshot
         .query(EventQuery {
             event_type: Some(EventType::PolicyPlanningSignalObserved),
             ..EventQuery::default()
@@ -1135,26 +1141,30 @@ fn reruns(snapshot: &Snapshot<'_>) -> Result<Vec<Value>, SuspensionReportError> 
         .filter_map(|event| match event.payload() {
             EventPayload::Policy(PolicyPayload::PlanningSignalObserved(payload))
                 if payload.kind() == PolicyPlanningSignalKind::GoalMissed
-                    && payload.signal_id().starts_with(RERUN_WAITING_SIGNAL_PREFIX) =>
+                    && RERUN_STATE_SIGNAL_PREFIXES
+                        .iter()
+                        .any(|prefix| payload.signal_id().starts_with(prefix)) =>
             {
                 Some(payload.signal_id().to_owned())
             }
             _ => None,
         })
         .collect::<BTreeSet<_>>();
-    let now = snapshot.latest_time();
     Ok(latest
         .into_iter()
         .filter_map(|((task_id, instance_id), owed)| {
             let owed = owed?;
-            let state = if now.is_some_and(|now| now >= owed.expires_at_unix_ms) {
+            let written = |kind: &str| {
+                recorded.contains(&crate::policy_control::owed_rerun_signal_id(
+                    kind,
+                    &task_id,
+                    &instance_id,
+                    &owed,
+                ))
+            };
+            let state = if written("expired") {
                 "expired"
-            } else if waiting.contains(&crate::policy_control::owed_rerun_signal_id(
-                "waiting",
-                &task_id,
-                &instance_id,
-                &owed,
-            )) {
+            } else if written("waiting") {
                 "waiting"
             } else {
                 "owed"
@@ -1182,9 +1192,12 @@ struct RerunRow {
     state: &'static str,
 }
 
-/// The `signal_id` prefix of an owed rerun's `policy_rerun_waiting` record (Workflow #386
-/// SR-2b-2).
-const RERUN_WAITING_SIGNAL_PREFIX: &str = "signal:policy_rerun:waiting:";
+/// The `signal_id` prefixes of an owed rerun's `policy_rerun_expired` and `policy_rerun_waiting`
+/// records (Workflow #386 SR-2b-2).
+const RERUN_STATE_SIGNAL_PREFIXES: [&str; 2] = [
+    "signal:policy_rerun:expired:",
+    "signal:policy_rerun:waiting:",
+];
 
 /// The values of a copied task package suspension or lift, read back from its outcome.
 #[derive(Deserialize)]

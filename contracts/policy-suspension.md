@@ -736,9 +736,11 @@ the pairs' value records (L7 of the [v0.12.0 register](v012-register.md)): SR-2b
 and LN-4, so no build with SR-2b derives the list from the execution records. Each row (SR-2b-2)
 is one pair whose latest value record owes a rerun, ordered by task and instance: `task_id`,
 `instance_id`, `failure_code`, `count`, `expires_at_unix_ms` and `state`: `expired` once the
-ledger's latest time is at or past `expires_at_unix_ms`, else `waiting` when the rerun's
-`policy_rerun_waiting` record was written, else `owed`. MCP `ac_diagnose` carries the rows of
-the diagnosed instance.
+rerun's `policy_rerun_expired` record was written, else `waiting` when the rerun's
+`policy_rerun_waiting` record was written, else `owed`. The expiry is the Runtime's, judged at an
+evaluation on its own clock; the report does not compare the window end with the ledger's latest
+time, which also counts rows the ledger stamps by the system clock (a start's prior-epoch close
+facts). MCP `ac_diagnose` carries the rows of the diagnosed instance.
 
 None of these codes triggers the recovery ladder.
 

@@ -378,8 +378,10 @@ fn reruns_report(root: &TempDir) -> Value {
 }
 
 // `actingd suspended` lists the owed rerun from the pair's value record: `owed` after the
-// condition termination, `waiting` once the stage gate held it back, `expired` once the ledger's
-// time passed its window end; each row with the code, the count and the window end.
+// condition termination, `waiting` once the stage gate held it back, `expired` once an evaluation
+// past its window end recorded the expiry; each row with the code, the count and the window end.
+// The restarts' prior-epoch close facts carry the system clock's time, far past the window end;
+// they must not make the rerun expired (fix round 2).
 #[test]
 fn sr2b2_t5_actingd_suspended_lists_owed_waiting_and_expired_reruns() {
     let root = TempDir::new().expect("tempdir");

@@ -23,7 +23,8 @@
 //!   stage passes at once, so under `observe` (stage S0) the rerun is let through at once.
 //! - **Expiry.** At or past `expires_at_unix_ms` the rerun is no longer owed: it is not let in,
 //!   the run's terminal shows in the snapshot again (`task_runtime_snapshots_of`), and
-//!   `policy_rerun_expired` (warning) is recorded once.
+//!   `policy_rerun_expired` (warning) is recorded once, which `actingd suspended` reads to list
+//!   it as expired.
 //! - The first wait of each owed rerun is recorded once as `policy_rerun_waiting` (info), which
 //!   `actingd suspended` reads to list it as waiting.
 //!
