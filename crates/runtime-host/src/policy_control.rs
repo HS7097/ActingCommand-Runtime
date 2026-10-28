@@ -12,11 +12,11 @@ use actingcommand_contract::outcome::{Code, CodeStr, Location, Outcome};
 use actingcommand_contract::{
     MAX_POLICY_CONTROL_STATE_DAYS, PerformanceContext, PolicyActivitySample,
     PolicyActivityStateRecord, PolicyAdmissionRecord, PolicyBudgetDenial, PolicyBudgetDimension,
-    PolicyBudgetReceipt, PolicyConditionSettlement, PolicyControlStateRecord, PolicyDailyCount,
-    PolicyDispatchClockRecord, PolicyExecutionEventData, PolicyExecutionOutcome,
-    PolicyFailureClass, PolicyFailureDisposition, PolicyFailureRecord, PolicyFailureStreakRecord,
-    PolicyJournalDispatchRecord, PolicyRetryRoundRecord, RuntimeErrorCode,
-    scheduled_failure_code_str,
+    PolicyBudgetReceipt, PolicyConditionReruns, PolicyConditionSettlement,
+    PolicyControlStateRecord, PolicyDailyCount, PolicyDispatchClockRecord,
+    PolicyExecutionEventData, PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition,
+    PolicyFailureRecord, PolicyFailureStreakRecord, PolicyJournalDispatchRecord,
+    PolicyRetryRoundRecord, RuntimeErrorCode, scheduled_failure_code_str,
 };
 use actingcommand_policy::{
     ActivityProfile, CompiledCatalog, DispatchIntent, FailureAction, TaskSpec, activity_window_at,
@@ -68,6 +68,44 @@ impl PolicyExecutionInput {
             }
         }
     }
+}
+
+/// Workflow #386 SR-2b-1 (`contracts/policy-suspension.md`, "Condition termination and owed
+/// reruns"): the `scheduling.rerun` values in effect that a run's first settlement decides its
+/// `condition` by. `expires` has one value, the end of the pair's bookkeeping window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ConditionRule {
+    condition_codes: BTreeSet<String>,
+    max_per_occurrence: u32,
+    refund_counts: bool,
+}
+
+impl ConditionRule {
+    pub(crate) fn from_config(rerun: &actingcommand_runtime_config::RerunConfig) -> Self {
+        match rerun.expires {
+            actingcommand_runtime_config::RerunExpiry::WindowEnd => {}
+        }
+        Self {
+            condition_codes: rerun.condition_codes.iter().cloned().collect(),
+            max_per_occurrence: rerun.max_per_occurrence,
+            refund_counts: rerun.refund_counts,
+        }
+    }
+}
+
+/// Workflow #386 SR-2b-1: how a run's first settlement ends it, from its failure code, the
+/// [`ConditionRule`] and its pair's condition terminations in this occurrence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConditionDecision {
+    /// No condition: a success, a severe failure, a failure of a sensitive task or a code the
+    /// rule does not list.
+    Ordinary,
+    /// The run ended by a condition; its record carries `condition`.
+    Condition(PolicyConditionSettlement),
+    /// The pair's `count`-th condition termination in this occurrence, more than the rule's
+    /// `limit` allows: the run settles as an ordinary recoverable failure and
+    /// `policy_rerun_exhausted` (warning) is recorded.
+    Exhausted { count: u32, limit: u32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,6 +174,12 @@ pub(crate) struct PolicyControlState {
     /// Workflow #422 LN-3 (register L14): per (activity profile, instance), the day and the
     /// window of its latest admission, the ones its value record counts in.
     activity_active: BTreeMap<(String, String), (i64, String)>,
+    /// Workflow #386 SR-2b-1 (register L7): per (task, instance), the rerun its latest
+    /// condition termination owes: the run's failure code, the pair's consecutive condition
+    /// terminations in this occurrence and the end of the occurrence's bookkeeping window. Set
+    /// from the execution record's `condition`, so a replay rebuilds it; any other settlement of
+    /// the pair removes it. At most one per pair.
+    condition_reruns: BTreeMap<(String, String), PolicyConditionReruns>,
 }
 
 /// Workflow #422 LN-3: one value record of the decision memory, with its key's complete state
@@ -213,6 +257,11 @@ impl PolicyControlState {
                     .map(|(task, instance)| (task, instance)),
             )
             .chain(dispatches.keys().map(|(task, instance)| (task, instance)))
+            .chain(
+                self.condition_reruns
+                    .keys()
+                    .map(|(task, instance)| (task, instance)),
+            )
             .collect::<BTreeSet<_>>();
         let mut records = BTreeMap::new();
         for (task_id, instance_id) in pairs {
@@ -250,8 +299,8 @@ impl PolicyControlState {
     /// One dispatch pair's complete decision memory: its newest day counts (at most
     /// `MAX_POLICY_CONTROL_STATE_DAYS`), its counts and runtime in the window of its latest
     /// admission, its failure streak (`paused_on` is rebuilt from the failure identity), its retry
-    /// round and its dispatch clock. Workflow #386 SR-2b keeps the rerun state a condition ending
-    /// owes; no settlement owes one before it, so `condition_reruns` stays empty.
+    /// round and its dispatch clock. Workflow #386 SR-2b-1: `condition_reruns` is the rerun the
+    /// pair's latest condition termination owes, as its settlement wrote it.
     fn control_record(
         &self,
         task_id: &str,
@@ -310,7 +359,7 @@ impl PolicyControlState {
             dispatch_clock: dispatch_clock.map(|admitted_at_unix_ms| PolicyDispatchClockRecord {
                 admitted_at_unix_ms,
             }),
-            condition_reruns: None,
+            condition_reruns: self.condition_reruns.get(&pair).cloned(),
             failure_settled: self.failure_settled.get(&pair).copied(),
             dispatches: Vec::new(),
         }
@@ -386,6 +435,15 @@ impl PolicyControlState {
                     }
                     None => {
                         self.failure_settled.remove(&pair);
+                    }
+                }
+                // Workflow #386 SR-2b-1: the owed rerun as the pair's settlement wrote it.
+                match &state.condition_reruns {
+                    Some(reruns) => {
+                        self.condition_reruns.insert(pair.clone(), reruns.clone());
+                    }
+                    None => {
+                        self.condition_reruns.remove(&pair);
                     }
                 }
                 match &state.retry_round {
@@ -992,7 +1050,8 @@ impl PolicyControlState {
     /// The execution record a run settles to. Workflow #386 SR-2a (SCHED §4.2): `condition` is
     /// how a run that a condition ended settled. A replay passes its record's own member, as it
     /// passes `perf_context`, so the settlement never reads the configuration; the live
-    /// settlement passes none until SR-2b decides one.
+    /// settlement and the reconciliation from a run's terminal pass the one
+    /// [`Self::decide_condition`] decided (Workflow #386 SR-2b-1).
     ///
     /// #385 P-k (PERF v1.4.2 §5.3, Tk-10): `budget_elapsed_ms` is the budget time of a run that
     /// had a factor segment above 1000. Such a run is compared with its runtime budget on its
@@ -1197,6 +1256,79 @@ impl PolicyControlState {
         })
     }
 
+    /// Workflow #386 SR-2b-1 (`contracts/policy-suspension.md`, "Decided once"): whether the
+    /// first settlement of `intent`'s run, failed as `input` says, ends it by a condition. Only
+    /// a recoverable failure of a task that is not sensitive, whose code
+    /// ([`scheduled_failure_code_str`]) `rule` lists, does. Its `count` is the pair's
+    /// consecutive condition terminations in this occurrence: one more than the owed rerun's
+    /// when that one expires at the same window end, else 1. `expires_at_unix_ms` is the end of
+    /// the activity window the run was admitted in (the pair's bookkeeping window). A count
+    /// above `max_per_occurrence` is [`ConditionDecision::Exhausted`]. The decision is written
+    /// into the run's record; a replay settles by the record and never calls this.
+    pub(crate) fn decide_condition(
+        &self,
+        catalog: &CompiledCatalog,
+        intent: &DispatchIntent,
+        admission: &PolicyAdmissionRecord,
+        input: &PolicyExecutionInput,
+        rule: &ConditionRule,
+    ) -> RuntimeHostResult<ConditionDecision> {
+        let PolicyExecutionInput::Failed {
+            outcome,
+            class: PolicyFailureClass::Recoverable,
+            ..
+        } = input
+        else {
+            return Ok(ConditionDecision::Ordinary);
+        };
+        let (task, profile) = task_and_profile(catalog, intent)?;
+        if task.sensitive
+            || !rule
+                .condition_codes
+                .contains(scheduled_failure_code_str(outcome).as_str())
+        {
+            return Ok(ConditionDecision::Ordinary);
+        }
+        // The admission was committed inside this window (`commit_admission`), under the same
+        // catalog generation, so it is found again.
+        let window = activity_window_at(profile, admission.activity.admitted_at_unix_ms)
+            .map_err(|_| {
+                fatal(
+                    HostCode::PolicyActivityDayOverflow,
+                    HostLocation::ClassifyPolicyOutcome,
+                )
+            })?
+            .ok_or_else(|| {
+                fatal(
+                    HostCode::PolicyActivityWindowClosed,
+                    HostLocation::ClassifyPolicyOutcome,
+                )
+            })?;
+        let pair = (intent.task_id.clone(), intent.instance_id.clone());
+        let count = match self.condition_reruns.get(&pair) {
+            Some(owed) if owed.expires_at_unix_ms == window.until_unix_ms => {
+                owed.count.checked_add(1).ok_or_else(|| {
+                    fatal(
+                        HostCode::PolicyFailureCountOverflow,
+                        HostLocation::ClassifyPolicyOutcome,
+                    )
+                })?
+            }
+            _ => 1,
+        };
+        if count > rule.max_per_occurrence {
+            return Ok(ConditionDecision::Exhausted {
+                count,
+                limit: rule.max_per_occurrence,
+            });
+        }
+        Ok(ConditionDecision::Condition(PolicyConditionSettlement {
+            refunded: rule.refund_counts,
+            count,
+            expires_at_unix_ms: window.until_unix_ms,
+        }))
+    }
+
     /// Test builds: [`Self::commit_paced_execution`] of a record settled on its wall time.
     #[cfg(test)]
     pub(crate) fn commit_execution(
@@ -1313,6 +1445,28 @@ impl PolicyControlState {
                 )
             })?;
             self.failure_settled.insert(key.clone(), self.settlements);
+        }
+        // Workflow #386 SR-2b-1 (register L7): a run a condition ended owes its pair a rerun, by
+        // the record's own `condition`, so a replay rebuilds it; any other settlement of the
+        // pair (a success, or an ordinary failure, the exhausted one included) ends the pair's
+        // condition terminations and owes none.
+        let owed = match &data.outcome {
+            PolicyExecutionOutcome::Succeeded { .. } => None,
+            PolicyExecutionOutcome::Failed { failure } => {
+                failure.condition.map(|condition| PolicyConditionReruns {
+                    failure_code: scheduled_failure_code_str(&failure.outcome),
+                    count: condition.count,
+                    expires_at_unix_ms: condition.expires_at_unix_ms,
+                })
+            }
+        };
+        match owed {
+            Some(owed) => {
+                self.condition_reruns.insert(key.clone(), owed);
+            }
+            None => {
+                self.condition_reruns.remove(&key);
+            }
         }
         match &data.outcome {
             PolicyExecutionOutcome::Succeeded { .. } => {

@@ -636,6 +636,19 @@ tests = [
 ]
 incident = ["#386"]
 
+# A run's first settlement decides its condition from its failure code, the scheduling.rerun values in effect and its pair's condition terminations in the occurrence: a recoverable sampling timeout of a task that is not sensitive ends by a condition (refunded, count 1, the window's end), the streak does not grow and a once-a-day task enters again; a sensitive task or a code the table does not list is an ordinary failure; the third in one occurrence is an ordinary failure with policy_rerun_exhausted; refund_counts false keeps the counts; the owed rerun is in L7 and loads after a restart; the start settles a run from its terminal by the same rule, and one without a terminal stays policy_settlement_interrupted (Workflow #386 SR-2b-1, design P22 §6.2, tests 1 to 6)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_386_sr2b1::sr2b1_t1_a_sampling_timeout_ends_by_a_condition_refunds_and_keeps_the_streak",
+    "actingcommand-runtime-host::lib::tests::gate_386_sr2b1::sr2b1_t2_a_sensitive_task_or_an_unlisted_code_is_an_ordinary_failure",
+    "actingcommand-runtime-host::lib::tests::gate_386_sr2b1::sr2b1_t3_the_third_condition_termination_is_exhausted",
+    "actingcommand-runtime-host::lib::tests::gate_386_sr2b1::sr2b1_t4_without_refund_counts_the_counts_are_kept",
+    "actingcommand-runtime-host::lib::tests::gate_386_sr2b1::sr2b1_t5_l7_carries_the_owed_rerun_across_a_restart",
+    "actingcommand-runtime-host::lib::tests::gate_386_sr2b1::sr2b1_t6_the_start_settles_a_run_from_its_terminal_by_the_same_rule",
+]
+incident = ["#386"]
+
 # A latched host answers a later request by its condition (runtime_halted over an error condition, a fatal condition as itself); a start reports its ledger open as ledger_opened and a released previous owner as owner_released; catalog_activation_not_newer names both generations; owner_resource_unconfirmed carries the previous owner's pid and probe state (Workflow #378 A6a)
 [[gate]]
 key = "65"

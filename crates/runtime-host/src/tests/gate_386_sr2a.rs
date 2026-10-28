@@ -12,7 +12,7 @@ use actingcommand_contract::{
 };
 
 /// A task limited to one run a day and one per window (the shape of W2 v14's once-a-day tasks).
-fn once_a_day_sources() -> CatalogSources {
+pub(super) fn once_a_day_sources() -> CatalogSources {
     let mut sources = budget_policy_sources(1);
     let mut tasks: serde_json::Value =
         serde_json::from_slice(&sources.tasks.bytes).expect("task fixture");
@@ -23,7 +23,7 @@ fn once_a_day_sources() -> CatalogSources {
 }
 
 /// The run ran out of its sampling deadline (SCHED §4.1): a condition code, recoverable.
-fn sampling_ended() -> PolicyExecutionInput {
+pub(super) fn sampling_ended() -> PolicyExecutionInput {
     // The values the kernel ends such a run with once its retries are spent (SR-1, §2.1): the
     // retries made, the observation's window and which observation.
     PolicyExecutionInput::Failed {
@@ -92,11 +92,27 @@ fn t6d_a_start_reads_the_condition_endings_and_blackout_suppressions_a_later_bui
         .expect("the blackout suppression");
     host.close().expect("close the writing host");
 
-    // The v0.12.0 build starts on the same root later the same day.
+    // The v0.12.0 build starts on the same root later the same day. Workflow #386 SR-2b-1
+    // (adapted): since SR-2b-1 the live settlement decides `condition` from the configured
+    // `scheduling.rerun.condition_codes`, so this start's configuration lists no code, and the
+    // same sampling timeout below settles as an ordinary failure, as this build's did.
     let restart_unix_ms = POLICY_NOW_UNIX_MS + 600_000;
     let clock = Arc::new(ManualRuntimeClock::new(restart_unix_ms, 0));
+    let mut no_condition_codes = vec![actingcommand_contract::ConfigParameter {
+        key: actingcommand_runtime_config::scheduling::RERUN_CONDITION_CODES.to_owned(),
+        value: actingcommand_contract::FactScalar::String("[]".to_owned()),
+        source: actingcommand_contract::ConfigParameterSource::Explicit,
+        settable: false,
+    }];
+    actingcommand_runtime_config::annotate_settable(&mut no_condition_codes)
+        .expect("the key is in the key table");
     let reopened = RuntimeHost::start(
-        config(&root).with_runtime_clock(clock.clone()),
+        config(&root)
+            .with_runtime_clock(clock.clone())
+            .with_config_manifest(actingcommand_contract::RuntimeConfigManifest {
+                subsystems: Vec::new(),
+                parameters: no_condition_codes,
+            }),
         Arc::new(FakeProvider::one(
             POLICY_INSTANCE_ALIAS,
             registered_id,

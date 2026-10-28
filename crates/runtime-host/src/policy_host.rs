@@ -24,9 +24,10 @@ pub(crate) use planning_transaction::planning_transaction_error;
 
 use crate::catalog_plan::CatalogLineage;
 use crate::codes::HostCode;
+use crate::codes::SchedulingRuleHostCode;
 use crate::policy_control::{
-    PolicyControlState, PolicyExecutionInput, PolicyExecutionTiming, PolicyValueRecord,
-    active_activity_window, is_availability_denial,
+    ConditionDecision, ConditionRule, PolicyControlState, PolicyExecutionInput,
+    PolicyExecutionTiming, PolicyValueRecord, active_activity_window, is_availability_denial,
 };
 use crate::recovery_read::{RECOVERY_PAGE_EVENTS, read_event_types, read_event_types_after};
 use crate::suspension_lift::SuspensionLiftView;
@@ -1223,6 +1224,9 @@ pub(crate) struct PolicyHost {
     /// admitted dispatches the journal no longer holds (pruned, or not loaded), so a projection
     /// at an older position reads the history on demand.
     pruned_pairs: BTreeSet<(String, String)>,
+    /// Workflow #386 SR-2b-1: the `policy_rerun_exhausted` records of settled runs not recorded
+    /// yet (`take_rerun_signals`). Memory only.
+    rerun_signals: Vec<PolicyPlanningSignalEventData>,
 }
 
 /// Workflow #422 LN-4: the dispatch journal while it is rebuilt.
@@ -1643,6 +1647,7 @@ impl PolicyHost {
             values_loaded: false,
             values_through: 0,
             pruned_pairs: BTreeSet::new(),
+            rerun_signals: Vec::new(),
         };
         match tagged {
             // Workflow #422 LN-4 (§11.6): no record counts as written, so the start's
@@ -4552,11 +4557,77 @@ impl PolicyHost {
         }
     }
 
+    /// Workflow #386 SR-2b-1: whether the first settlement of `decision_id`'s run, failed as
+    /// `input` says, ends it by a condition under `rule` (`PolicyControlState::decide_condition`).
+    /// A dispatch that is unknown, not admitted or already has its record decides nothing here:
+    /// [`Self::prepare_execution`] refuses the first two and a replay settles by its record.
+    pub(crate) fn decide_condition(
+        &self,
+        decision_id: &str,
+        input: &PolicyExecutionInput,
+        rule: &ConditionRule,
+    ) -> RuntimeHostResult<ConditionDecision> {
+        let Some(dispatch) = self.seen_dispatches.get(decision_id) else {
+            return Ok(ConditionDecision::Ordinary);
+        };
+        let (None, DispatchLifecycle::Admitted, Some(admission)) = (
+            &dispatch.execution,
+            dispatch.lifecycle,
+            dispatch.admission.as_ref(),
+        ) else {
+            return Ok(ConditionDecision::Ordinary);
+        };
+        let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
+        let intent = control_intent(
+            &dispatch.data,
+            dispatch.expected_duration_ms,
+            &catalog.compiled,
+            admission,
+        )?;
+        self.control
+            .decide_condition(&catalog.compiled, &intent, admission, input, rule)
+    }
+
+    /// Workflow #386 SR-2b-1: after the record of `data` is committed with the decision
+    /// `decision`, an exhausted one queues its `policy_rerun_exhausted` record
+    /// (`policy.planning_signal_observed`, kind `goal_missed`) for [`Self::take_rerun_signals`].
+    /// Its `signal_id` is `signal:policy_rerun:exhausted:<hex>`, `<hex>` the lowercase SHA-256 of
+    /// the run's dispatch, so a record of the same run is the same signal.
+    pub(crate) fn queue_rerun_signal(
+        &mut self,
+        data: &PolicyExecutionEventData,
+        decision: ConditionDecision,
+    ) {
+        let ConditionDecision::Exhausted { count, limit } = decision else {
+            return;
+        };
+        let digest = Sha256::digest(data.decision_id.as_bytes());
+        self.rerun_signals.push(PolicyPlanningSignalEventData {
+            signal_id: format!("signal:policy_rerun:exhausted:{digest:x}"),
+            instance_id: data.instance_id.clone(),
+            task_id: Some(data.task_id.clone()),
+            kind: PolicyPlanningSignalKind::GoalMissed,
+            outcome: Outcome::new(SchedulingRuleHostCode::PolicyRerunExhausted)
+                .task_id(data.task_id.as_str())
+                .instance_id(data.instance_id.as_str())
+                .count(count)
+                .limit_count(limit),
+            observed_at_unix_ms: data.observed_at_unix_ms,
+            detection_budget: None,
+        });
+    }
+
+    /// Workflow #386 SR-2b-1: the `policy_rerun_exhausted` records queued since the last call,
+    /// for their recorder (the start, the live settlement and the policy evaluation).
+    pub(crate) fn take_rerun_signals(&mut self) -> Vec<PolicyPlanningSignalEventData> {
+        std::mem::take(&mut self.rerun_signals)
+    }
+
     /// The record a dispatch's run settles to, or the one it already has. Workflow #386 SR-2a:
-    /// `condition` is how a run that a condition ended settled; no live settlement decides one
-    /// before SR-2b, so the host's callers pass none. #385 P-k (Tk-10): `budget_elapsed_ms` is
-    /// the run's budget time when it had a factor segment above 1000, which the settlement
-    /// compares in place of `runtime_ms`.
+    /// `condition` is how a run that a condition ended settled; SR-2b-1's settlements decide it
+    /// first ([`Self::decide_condition`]), and a test may set it. #385 P-k (Tk-10):
+    /// `budget_elapsed_ms` is the run's budget time when it had a factor segment above 1000,
+    /// which the settlement compares in place of `runtime_ms`.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn prepare_execution(
         &self,
