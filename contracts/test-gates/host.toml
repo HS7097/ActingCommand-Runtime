@@ -2453,7 +2453,7 @@ tests = [
 ]
 incident = ["#421 S2-IF"]
 
-# Workflow #427-A fix 1 (brief rd-1028/brief-427a-fix1.md item 4; review rd-1028/review-427a.md M1): a scheduled run handed to its instance's worker, whose worker panicked as it took the run, is not held until a restart: a reconciliation leaves it while its lease is active; once the lease lapsed, one round settles it by the start's rule (its missing run-linked release recovered with policy_settlement_release_recovered, settled once as interrupted), forgets its registration and frees its instance; a second round settles nothing more
+# Workflow #427-A fix 1 (brief rd-1028/brief-427a-fix1.md item 4; review rd-1028/review-427a.md M1): a scheduled run handed to its instance's worker, whose worker panicked as it took the run, is not held until a restart: a reconciliation leaves it while its lease is active; once the lease lapsed, one round settles it by the start's rule (fix 2, brief rd-1028/brief-427a-fix2.md item 2, re-review rd-1028/rereview-427a.md M-1: a lease that already ended gets no release, so no run-linked lease.released and no policy_settlement_release_recovered is written and the lease keeps exactly one end; settled once as interrupted), forgets its registration and frees its instance; a second round settles nothing more
 [[gate]]
 coverage = "Y"
 tests = [

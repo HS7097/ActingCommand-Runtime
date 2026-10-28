@@ -36,8 +36,11 @@ impl HostShared {
                 return Ok(());
             }
             // Workflow #427-A fix 1 (review M1): an abandoned lane whose lease ended is settled
-            // online by the start's rule, so its instance is not held until a restart.
-            let recovered = self.recover_abandoned_policy_runs(&policy, &missing_outcomes)?;
+            // online by the start's rule, so its instance is not held until a restart. Fix 2
+            // (re-review M-1): as at start, a lease that already ended gets no release; the run
+            // is settled from that end (`ended_without_release`).
+            let (recovered, ended_without_release) =
+                self.recover_abandoned_policy_runs(&policy, &missing_outcomes)?;
             let mut eligible =
                 self.inactive_policy_settlements(&policy, &pending, &missing_outcomes)?;
             for decision_id in recovered {
@@ -60,6 +63,7 @@ impl HostShared {
                     .filter(|id| missing_outcomes.contains(*id))
                     .cloned()
                     .collect(),
+                &ended_without_release,
                 None,
             )?;
             if let Some(error) = &skipped {
@@ -596,46 +600,45 @@ impl HostShared {
     /// instance is not held until a restart. Of the abandoned runs whose dispatch has no outcome
     /// (`missing_outcomes`), one whose granted lease is no longer active is ready to settle:
     ///
-    /// - with a run-linked release that records `not_performed` (one this rule recovered, or the
-    ///   failure path's own), as it is;
+    /// - with a run-linked release that records `not_performed` (the failure path's own), as it
+    ///   is;
     /// - with no run-linked release, once its lease ended in one way (`single_lease_end`: its
     ///   expiry, a release without run links, a transfer, or an expiry handed on to a waiting
-    ///   claim): its missing release is recorded first, run-linked under the grant's request,
-    ///   correlation and causation, with effect `not_performed`, and
-    ///   `policy_settlement_release_recovered` once under the same links at Info.
+    ///   claim): as at start (#670 rulings 2 and 3; fix 2, re-review M-1), a lease that already
+    ///   ended gets no release, and nothing is written here; the run is returned in the second
+    ///   table with the time its lease ended, which its settlement is timed from.
     ///
     /// The caller settles each ready run once, from its terminal when it has one, otherwise as
     /// interrupted, and then forgets its registration. A run whose lease is still active waits for
-    /// its TTL; one whose lease ended in more than one way, or whose instance is no longer
-    /// registered, stays held, and the next start records it (`record_open_scheduled_dispatches`);
-    /// one with another run-linked release is left to `inactive_policy_settlements`. The reads are
-    /// this tick's (`SettlementRead::Tolerant`) and come before any write: the first one the writer
-    /// does not answer in time ends this tick's recovery, nothing written, and it is said in the
-    /// daemon's log.
+    /// its TTL; one whose lease ended in more than one way stays held, and the next start records
+    /// it (`record_open_scheduled_dispatches`); one with another run-linked release is left to
+    /// `inactive_policy_settlements`. The reads are this tick's (`SettlementRead::Tolerant`): the
+    /// first one the writer does not answer in time ends this tick's recovery, nothing returned,
+    /// and it is said in the daemon's log.
     fn recover_abandoned_policy_runs(
         &self,
         policy: &PolicyHost,
         missing_outcomes: &BTreeSet<String>,
-    ) -> RuntimeHostResult<Vec<String>> {
+    ) -> RuntimeHostResult<(Vec<String>, BTreeMap<String, u64>)> {
         const OPERATION: HostLocation = HostLocation::ReconcilePolicySettlements;
+        let mut ready = Vec::new();
+        let mut ended_without_release = BTreeMap::new();
         let abandoned = self
             .abandoned_policy_runs()?
             .into_iter()
             .filter(|decision_id| missing_outcomes.contains(decision_id))
             .collect::<Vec<_>>();
         if abandoned.is_empty() {
-            return Ok(Vec::new());
+            return Ok((ready, ended_without_release));
         }
         let through = match self.ledger.latest_sequence() {
             Ok(through) => through,
             Err(error) => {
                 self.skip_unanswered_settlement_read(settlement_read_error(&error, OPERATION))?;
-                return Ok(Vec::new());
+                return Ok((ready, ended_without_release));
             }
         };
         let leases = lock(&self.scheduler, OPERATION)?.active_tokens();
-        let mut ready = Vec::new();
-        let mut unreleased = Vec::new();
         for decision_id in abandoned {
             let found = (|| -> RuntimeHostResult<AbandonedRunEnd> {
                 let intent = policy_dispatch_intent(
@@ -693,7 +696,7 @@ impl HostShared {
                 )?;
                 let grant = match grants.as_slice() {
                     [] => return Ok(AbandonedRunEnd::Waiting),
-                    [grant] => grant.clone(),
+                    [grant] => grant,
                     _ => {
                         return Err(policy_admission_fatal(
                             HostCode::PolicyRunLeaseFactNotUnique,
@@ -761,123 +764,31 @@ impl HostShared {
                     &lease_id,
                     2,
                 )?);
-                if single_lease_end(&lease_ends).is_none() {
+                // Fix 2 (re-review M-1): as at start (#670 rulings 2 and 3), a lease that
+                // already ended gets no release; the run is settled from that end.
+                let Some(end) = single_lease_end(&lease_ends) else {
                     return Ok(AbandonedRunEnd::Waiting);
-                }
-                Ok(AbandonedRunEnd::Unreleased(Box::new(UnreleasedRun {
-                    intent: intent.clone(),
-                    grant,
-                })))
+                };
+                Ok(AbandonedRunEnd::EndedWithoutRelease(
+                    end.timestamp_unix_ms(),
+                ))
             })();
             match found {
                 Ok(AbandonedRunEnd::Waiting) => {}
                 Ok(AbandonedRunEnd::Released) => ready.push(decision_id),
-                Ok(AbandonedRunEnd::Unreleased(run)) => unreleased.push((decision_id, run)),
-                // #419 LN-WS-F: the first unanswered read ends this tick's recovery; nothing was
-                // written, and each run is read again at the next tick.
+                Ok(AbandonedRunEnd::EndedWithoutRelease(ended_at)) => {
+                    ended_without_release.insert(decision_id.clone(), ended_at);
+                    ready.push(decision_id);
+                }
+                // #419 LN-WS-F: the first unanswered read ends this tick's recovery; nothing is
+                // returned, and each run is read again at the next tick.
                 Err(error) => {
                     self.skip_unanswered_settlement_read(error)?;
-                    return Ok(Vec::new());
+                    return Ok((Vec::new(), BTreeMap::new()));
                 }
             }
         }
-        for (decision_id, run) in unreleased {
-            let links = run.intent.links();
-            let (
-                Some(instance_id),
-                Some(request_id),
-                Some(correlation_id),
-                Some(task_id),
-                Some(run_id),
-                Some(lease_id),
-            ) = (
-                links.instance_id(),
-                links.request_id(),
-                links.correlation_id(),
-                links.task_id(),
-                links.run_id(),
-                run.grant.links().lease_id(),
-            )
-            else {
-                return Err(policy_admission_fatal(
-                    HostCode::PolicyRunIdentityMissing,
-                    OPERATION,
-                ));
-            };
-            // An instance no longer registered keeps its run held; the next start records it.
-            let Some(audit) = lock(&self.registered_instances, OPERATION)?
-                .get(instance_id)
-                .map(|instance| audit_endpoint(instance.audit_endpoint()))
-            else {
-                continue;
-            };
-            let request = super::contained_task::recovery_request_identity(
-                *request_id,
-                *correlation_id,
-                run.grant.links().causation_id(),
-                self.runtime_clock_sample()?.unix_ms,
-            )
-            .ok_or_else(|| {
-                RuntimeHostError::fatal(
-                    HostCode::PolicyRunRecoveryIdentityInvalid,
-                    OPERATION,
-                    RuntimeErrorCode::RuntimeHalted,
-                )
-            })?;
-            let validated = request.validate().map_err(|_| {
-                RuntimeHostError::fatal(
-                    HostCode::PolicyRunRecoveryIdentityInvalid,
-                    OPERATION,
-                    RuntimeErrorCode::RuntimeHalted,
-                )
-            })?;
-            let run_links = |action_id| {
-                validated.contained_task_recovery_event_links(
-                    *instance_id,
-                    Some(*lease_id),
-                    *task_id,
-                    *run_id,
-                    Some(action_id),
-                )
-            };
-            self.append_event_raw(
-                EventSeverity::Info,
-                EventSource::Scheduler,
-                OriginModule::Scheduler,
-                EventActor::Scheduler,
-                run_links(self.events.action_id()?),
-                LeasePayloadDraft::released(
-                    EventAction::LeaseRelease,
-                    EffectDisposition::NotPerformed,
-                    audit,
-                ),
-            )?;
-            self.append_event_raw(
-                EventSeverity::Info,
-                EventSource::Runtime,
-                OriginModule::Runtime,
-                EventActor::Runtime,
-                run_links(self.events.action_id()?),
-                RuntimePayloadDraft::failed(
-                    DiagnosticCode::RuntimeDiagnostic,
-                    EffectDisposition::NotPerformed,
-                    Outcome::new(HostCode::PolicySettlementReleaseRecovered)
-                        .operation(OPERATION)
-                        .instance_id(identifier_text(instance_id))
-                        .lease_id(identifier_text(lease_id))
-                        .task_id(identifier_text(task_id)),
-                    DiagnosticDetailDraft::new(
-                        "policy_settlement",
-                        RuntimeLifecycleFailureStage::PolicyDriver.location(),
-                        "runtime_host",
-                        OPERATION.as_str(),
-                    ),
-                    AuditInput::new(),
-                ),
-            )?;
-            ready.push(decision_id);
-        }
-        Ok(ready)
+        Ok((ready, ended_without_release))
     }
 
     // policy_outcome_gate excludes a context committing its outcome while these
@@ -1504,6 +1415,35 @@ impl HostShared {
         // Workflow #336 L6 (§12.4): a run's failure is its failure identity (a `linear_steps`
         // or, Workflow #390 EXEC-3, a page-graph run's).
         let input = self.scheduled_failure_identity(context, failure, input)?;
+        let execution = self.record_policy_dispatch_outcome_under_gate(
+            context.decision_id(),
+            &input,
+            Some(context),
+            PolicyOutcomeCacheUpdate::Clear(context),
+        )?;
+        self.forget_scheduled_resolution(context.decision_id())?;
+        Ok(execution)
+    }
+
+    /// Workflow #427-A fix 2 (re-review L-2): settles a handed-off run the Runtime's stop refused
+    /// before it started as the next start settles a run a stop cut short: its lease released by
+    /// the failure path, then the run settled as interrupted (`policy_settlement_interrupted`,
+    /// severe), never as a failure of the task, so the restart lifts the first such interruption
+    /// of its pair (`interruption_lifted_by_restart`).
+    pub(super) fn complete_scheduled_policy_interruption(
+        &self,
+        context: &PolicyRunContext,
+    ) -> RuntimeHostResult<PolicyExecutionEventData> {
+        let _gate = lock(
+            &self.policy_outcome_gate,
+            HostLocation::CompleteScheduledPolicyFailure,
+        )?;
+        self.ensure_scheduled_policy_lease_released(context)?;
+        let input = PolicyExecutionInput::Failed {
+            outcome: Outcome::new(SharedCode::PolicySettlementInterrupted),
+            failure_identity: None,
+            class: PolicyFailureClass::Severe,
+        };
         let execution = self.record_policy_dispatch_outcome_under_gate(
             context.decision_id(),
             &input,
@@ -2172,11 +2112,10 @@ impl HostShared {
     }
 }
 
-/// Workflow #369 E3: what the start's settlement reads besides the ledger.
+/// Workflow #369 E3: what the start's settlement reads besides the ledger and the runs whose
+/// lease ended without a run-linked release, which are a parameter of their own (Workflow #427-A
+/// fix 2, re-review M-1: the online reconciliation passes its own).
 pub(super) struct StartSettlement {
-    /// The runs whose lease ended without a run-linked release (a transfer, an expiry, both, or
-    /// a release without run links), with the time the lease ended.
-    pub(super) ended_without_release: BTreeMap<String, u64>,
     /// The dispatches the start could not settle, each with its refusal's code.
     pub(super) unsettled: Vec<UnsettledDispatch>,
     /// Test only: the run whose settlement the start refuses as the ledger would.
@@ -2191,15 +2130,9 @@ enum AbandonedRunEnd {
     Waiting,
     /// Its one run-linked release records `not_performed`: it is ready to settle.
     Released,
-    /// Its lease ended in one way without a run-linked release: its release is recovered first.
-    Unreleased(Box<UnreleasedRun>),
-}
-
-/// Workflow #427-A fix 1: an abandoned run whose release is recovered: its dispatch intent and
-/// its lease grant, whose links the release takes.
-struct UnreleasedRun {
-    intent: PersistedEvent,
-    grant: PersistedEvent,
+    /// Fix 2 (re-review M-1): its lease ended in one way without a run-linked release, at this
+    /// time: it is ready to settle from that end, and no release is written (as at start).
+    EndedWithoutRelease(u64),
 }
 
 /// Workflow #369 E3 (#670 safety net): a dispatch the start could not settle.
@@ -2288,13 +2221,16 @@ pub(super) fn record_policy_values(
     Ok(())
 }
 
+/// `ended_without_release`: the runs whose lease ended without a run-linked release, with the
+/// time it ended (`recover_unreleased_policy_runs`).
 pub(super) fn reconcile_policy_dispatches(
     policy: &mut PolicyHost,
     ledger: &GlobalLedger,
     events: &RuntimeEvents,
+    ended_without_release: &BTreeMap<String, u64>,
     start: &mut StartSettlement,
 ) -> RuntimeHostResult<()> {
-    reconcile_scheduled_policy_outcomes(policy, ledger, start)?;
+    reconcile_scheduled_policy_outcomes(policy, ledger, ended_without_release, start)?;
     for decision_id in policy.pending_dispatch_completions() {
         let execution = policy.execution_data(&decision_id)?;
         let completion = match ledger.reconcile_scheduled_policy_settlement(execution) {
@@ -2393,13 +2329,28 @@ pub(super) fn reconcile_policy_dispatches(
 fn reconcile_scheduled_policy_outcomes(
     policy: &mut PolicyHost,
     ledger: &GlobalLedger,
+    ended_without_release: &BTreeMap<String, u64>,
     start: &mut StartSettlement,
 ) -> RuntimeHostResult<()> {
     let pending = policy.pending_dispatch_outcomes();
     // At start nothing is skipped: any failure but a per-run refusal fails the start.
-    reconcile_scheduled_policy_outcomes_for(policy, ledger, pending, Some(start)).map(|_| ())
+    reconcile_scheduled_policy_outcomes_for(
+        policy,
+        ledger,
+        pending,
+        ended_without_release,
+        Some(start),
+    )
+    .map(|_| ())
 }
 
+/// `ended_without_release`: the runs whose lease ended without a run-linked release (a
+/// transfer, an expiry, both, or a release without run links), with the time it ended; no
+/// release is written for them, and a run among them with no terminal is settled as
+/// interrupted from that time. The start passes the table its recovery found
+/// (`recover_unreleased_policy_runs`), the online reconciliation the one this tick's recovery
+/// of the abandoned runs found (`recover_abandoned_policy_runs`; Workflow #427-A fix 2,
+/// re-review M-1).
 /// `start`: the start's settlement context (`None` online). #419 LN-WS-F (R1): online, a
 /// settlement whose read the writer did not answer in time, or stopped at its budget, did nothing
 /// (all its reads come before its one write, and the policy is changed only after that write).
@@ -2411,6 +2362,7 @@ fn reconcile_scheduled_policy_outcomes_for(
     policy: &mut PolicyHost,
     ledger: &GlobalLedger,
     pending: Vec<String>,
+    ended_without_release: &BTreeMap<String, u64>,
     mut start: Option<&mut StartSettlement>,
 ) -> RuntimeHostResult<Option<RuntimeHostError>> {
     if pending.is_empty() {
@@ -2543,9 +2495,10 @@ fn reconcile_scheduled_policy_outcomes_for(
             // ended its lease. The ledger records what happened, so a known outcome is never
             // replaced by an interruption. A run is settled once its lease end is known: its one
             // run-linked release (its own, or the one the start recovered), or the one end the
-            // start found without one (`recover_unreleased_policy_runs`: a transfer, an expiry,
-            // both, or a release without run links). Otherwise its dispatch stays open, and the
-            // start records it (`record_open_scheduled_dispatches`).
+            // start or the online recovery of an abandoned run found without one
+            // (`ended_without_release`: a transfer, an expiry, both, or a release without run
+            // links; Workflow #427-A fix 2). Otherwise its dispatch stays open, and the start
+            // records it (`record_open_scheduled_dispatches`).
             let run_releases = linked_policy_run_events(
                 ledger,
                 read,
@@ -2583,11 +2536,9 @@ fn reconcile_scheduled_policy_outcomes_for(
                     ));
                 }
             };
-            let Some(lease_ended_at) = released_at.or_else(|| {
-                start
-                    .as_ref()
-                    .and_then(|start| start.ended_without_release.get(&decision_id).copied())
-            }) else {
+            let Some(lease_ended_at) =
+                released_at.or_else(|| ended_without_release.get(&decision_id).copied())
+            else {
                 return Ok(());
             };
             let (observed_at_unix_ms, input, runtime_ms) = match terminals.as_slice() {

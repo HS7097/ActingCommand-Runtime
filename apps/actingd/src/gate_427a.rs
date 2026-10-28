@@ -18,15 +18,16 @@
 //   samples again, says so once, and judges the candidates again; the driver does not stop.
 // - lanes_t5 (C1): past the re-sample limit the round is given up and deferred to its next
 //   trigger; the next round evaluates.
-// - lanes_t6: a shutdown before a handed run was taken refuses it (settled as not performed); one
-//   after it was taken lets it finish and settle.
+// - lanes_t6: a shutdown before a handed run was taken refuses it (never started, settled as
+//   interrupted: fix 2, re-review L-2); one after it was taken lets it finish and settle.
 // - lanes_t7: a worker panic drops the run, leaves its instance occupied (registration abandoned,
 //   for the reconciliation) and wakes the driver; the other instance's run completes. While the
 //   run's lease is active a reconciliation leaves it, and the next round defers its instance (fix
 //   1); its settlement once the lease lapsed is runtime-host's gate_427a_m1.
 // - lanes_t8: the switch is off by default, so the daemon's round runs a scheduled run itself; an
 //   instruction turns it on and the next round hands its runs to the workers. The host carries
-//   the switch's row as actingd's configuration assembles it (fix 1, review H3).
+//   the switch's row as actingd's configuration assembles it (fix 1, review H3), and the
+//   instruction comes from the client `ac_config_set` uses (fix 2, re-review H3).
 // - lanes_t9 (fix 1, review L1): a scheduling pause after the hand-off does not fail the run: it
 //   goes ahead and is settled as a success while the pause waits for it, then the pause completes.
 
@@ -568,8 +569,10 @@ fn lanes_t5_past_the_resample_limit_the_round_is_given_up_and_the_driver_goes_on
 
 // Brief "Tests": a shutdown before and after the hand-off was taken. Before: A's run is handed and
 // not yet taken when the host's stop is requested; its worker refuses it (`runtime_stopping`),
-// settled as not performed, and nothing ran. After: A's run was taken and runs past its terminal
-// when the stop is requested; it finishes and is settled. The close then joins the workers.
+// nothing ran, and (fix 2, re-review L-2) it is settled as interrupted, as the next start settles
+// a run a stop cut short, so the restart lifts it. After: A's run was taken and runs past its
+// terminal when the stop is requested; it finishes and is settled. The close then joins the
+// workers.
 #[test]
 fn lanes_t6_a_shutdown_refuses_a_run_not_taken_and_finishes_a_run_taken() {
     for (point, taken) in [
@@ -611,13 +614,25 @@ fn lanes_t6_a_shutdown_refuses_a_run_not_taken_and_finishes_a_run_taken() {
             .iter()
             .any(|event| event.event_type() == EventType::TaskCompleted);
         assert_eq!(ran, taken, "a refused run never ran; a taken one ran");
+        if !taken {
+            let settled = executions(root.path(), &a);
+            assert!(
+                matches!(
+                    settled.as_slice(),
+                    [PolicyExecutionOutcome::Failed { failure }]
+                        if failure.outcome.code().as_str() == "policy_settlement_interrupted"
+                ),
+                "a run refused at the stop is settled as interrupted: {settled:#?}"
+            );
+        }
     }
 }
 
 // Brief "Tests": a worker panic. The panic drops A's run (not retried); A's registration stays as
 // abandoned, so A is still occupied and its settlement is left to the reconciliation; the driver
 // is woken; B's run completes and the Runtime does not stop. Fix 1 (review M1): the end state while
-// A's lease is active (this harness's leases never lapse: its monotonic time does not move): the
+// A's lease is active (fix 2, re-review L-1: this harness's monotonic time advances only with the
+// kernel's waits, far below the lease TTL, so A's lease does not lapse here): the
 // run never started (no terminal, its lease not released), a reconciliation leaves it unsettled
 // and still abandoned, and the next round defers A as held by its policy run. Its settlement once
 // the lease lapsed is runtime-host's gate_427a_m1.
@@ -725,12 +740,15 @@ fn lanes_t8_the_switch_is_off_by_default_and_an_instruction_turns_it_on_at_the_n
         "with the switch off the round ran and settled A itself"
     );
 
+    // Fix 2 (re-review H3): the client is the one `ac_config_set` uses (`apps/actingctl/src/mcp/
+    // operator.rs` `CLI`: actor and source `cli`); a C4 instruction is taken only from the cli,
+    // lab and ui sources (`validate_c4_client_source`).
     let client = RuntimeClient::connect(
         RuntimeClientConfig::new(
             root.path(),
             RuntimeChannel::Cli,
-            EventActor::Agent,
-            EventSource::Adapter,
+            EventActor::Cli,
+            EventSource::Cli,
         )
         .with_io_timeout(Duration::from_secs(5)),
     )

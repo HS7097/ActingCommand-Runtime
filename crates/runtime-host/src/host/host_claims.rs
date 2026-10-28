@@ -152,11 +152,25 @@ fn instance_worker_loop(
     let mut rebuilt = false;
     while let Ok(job) = receiver.recv() {
         let category = job.failure_category();
-        let links = shared.host_claim_failure_links(&job)?;
         // Workflow #427-A: what a panicked policy run leaves behind (its registration).
         let lane = match &job {
             WorkerJob::PolicyRun(run) => Some(run.lane()),
             WorkerJob::HostClaim { .. } => None,
+        };
+        // Fix 2 (re-review L-3): the lane is taken out first, so a failure to issue the failure
+        // links (a global fault) still ends a policy run's registration, left abandoned for the
+        // reconciliation, never working, and the Runtime is marked fatal.
+        let links = match shared.host_claim_failure_links(&job) {
+            Ok(links) => links,
+            Err(error) => {
+                let lane_ended = match lane {
+                    Some(lane) => shared.drop_panicked_policy_run(lane),
+                    None => Ok(()),
+                };
+                shared.fatal.mark(error.clone())?;
+                lane_ended?;
+                return Err(error);
+            }
         };
         match catch_unwind(AssertUnwindSafe(|| shared.run_worker_job(job))) {
             Ok(Ok(())) => rebuilt = false,

@@ -29447,7 +29447,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.22",
-      "description": "A Runtime host operation (Workflow #427-A, scheduling.parallel.enabled): the policy driver hands an admitted scheduled run to its instance's worker and registers it as in flight; a hand-off no worker takes is settled as not performed and its lease and registration are released."
+      "description": "A Runtime host operation (Workflow #427-A, scheduling.parallel.enabled): the policy driver hands an admitted scheduled run to its instance's worker and registers it as in flight; a hand-off no worker takes never starts, its lease and registration are released, and it is settled as interrupted when the Runtime's stop refused it, otherwise as that failure."
     },
     "run_handed_policy_run": {
       "owner": "runtime-host",
@@ -29455,7 +29455,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.22",
-      "description": "A Runtime host operation (Workflow #427-A): a scheduled run on its instance's worker, from its lifecycle admission through its run to its settlement; a run the worker takes after the Runtime's stop was requested is refused and settled as not performed; one handed off before an install drain or a scheduling pause began goes ahead."
+      "description": "A Runtime host operation (Workflow #427-A): a scheduled run on its instance's worker, from its lifecycle admission through its run to its settlement; a run the worker takes after the Runtime's stop was requested is refused, never started, and settled as interrupted (policy_settlement_interrupted), so the restart lifts it; one handed off before an install drain or a scheduling pause began goes ahead."
     },
     "read_policy_runs_in_flight": {
       "owner": "runtime-host",

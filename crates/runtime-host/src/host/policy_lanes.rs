@@ -23,8 +23,10 @@
 //!   install drain or a scheduling pause began goes ahead, as the synchronous round's run admitted
 //!   before them does (fix 1, review L1): the drain waits for it (its registration and its counted
 //!   work) and the pause drains it like any contained run admitted before its gate closed. Only a
-//!   run not yet taken when the Runtime's stop was requested is refused explicitly: settled as not
-//!   performed (`runtime_stopping`), its lease released and its registration ended.
+//!   run not yet taken when the Runtime's stop was requested is refused explicitly
+//!   (`runtime_stopping`): never started, its lease released, settled as interrupted
+//!   (`policy_settlement_interrupted`, as the next start settles a run a stop cut short, so the
+//!   restart lifts the first one; fix 2, re-review L-2) and its registration ended.
 //! - **Failures (C5, #419).** The run's failures go through the existing failure containment
 //!   (`contain_failure`): an instance-level failure fences that instance and the worker reports a
 //!   non-fatal failure; only a global fault latches the Runtime. A worker panic follows spec §7
@@ -32,8 +34,9 @@
 //!   stays occupied. A run whose settlement failed without stopping the Runtime is left the same
 //!   way. The online reconciliation settles an abandoned run by the start's rule once its lease
 //!   ended (fix 1, review M1: `recover_abandoned_policy_runs`): from its terminal, or as
-//!   interrupted, after recording the run-linked release the lease end left missing; then the
-//!   registration is forgotten and the instance is free again.
+//!   interrupted, timed from the lease's end; as at start, a lease that already ended gets no
+//!   release (fix 2, re-review M-1). Then the registration is forgotten and the instance is free
+//!   again.
 //! - **One end.** A lane's registration is ended at most once: the job and what a panic leaves of
 //!   it share an "ended" mark (fix 1, review L2).
 //! - **No replay.** A run is posted once; nothing re-posts it after a lost receipt.
@@ -64,12 +67,13 @@ pub enum PolicyRunSettled {
     Completed(Box<PolicyRunCompletion>),
     /// The run, its settlement or the worker's admission of it failed without stopping the
     /// Runtime. A failure went through the instance's failure containment; a run the worker
-    /// refused (a stopping host) was settled as not performed.
+    /// refused (a stopping host) never started and was settled as interrupted (fix 2).
     Failed {
         context: Box<PolicyRunContext>,
         error: Box<RuntimeHostError>,
     },
-    /// The worker panicked while it held the run (spec §7): the run was dropped, not retried; its
+    /// The worker panicked while it held the run (spec §7), or (fix 2, re-review L-3) could not
+    /// issue its failure links and marked the Runtime fatal: the run was dropped, not retried; its
     /// lease lapses at its TTL and the reconciliation then settles it (fix 1, review M1).
     Dropped {
         instance_alias: String,
@@ -160,9 +164,10 @@ fn lane_conflict(location: HostLocation) -> RuntimeHostError {
 impl HostShared {
     /// Workflow #427-A: hands the admitted scheduled run `context` with its `request` to its
     /// instance's worker, registered as in flight. A hand-off that no worker takes (a stopping
-    /// host, an ended worker) is settled as not performed, its lease and registration released,
-    /// and its refusal returned: non-fatal when the host is stopping, otherwise through the
-    /// instance's failure containment.
+    /// host, an ended worker) never starts: its lease and registration are released and its
+    /// refusal returned: when the host is stopping, settled as interrupted and non-fatal (fix 2,
+    /// re-review L-2), otherwise settled as that failure, through the instance's failure
+    /// containment.
     pub(super) fn hand_off_scheduled_policy_run(
         &self,
         context: Box<PolicyRunContext>,
@@ -189,7 +194,8 @@ impl HostShared {
         let Err(job) = self.post_policy_run(instance_id, job)? else {
             return Ok(());
         };
-        let refusal = if self.fatal.is_shutdown_requested() {
+        let at_stop = self.fatal.is_shutdown_requested();
+        let refusal = if at_stop {
             RuntimeHostError::request(
                 HostCode::RuntimeStopping,
                 HostLocation::HandOffScheduledPolicyRun,
@@ -202,7 +208,8 @@ impl HostShared {
                 RuntimeErrorCode::RuntimeHalted,
             )
         };
-        let error = self.refuse_policy_run(job.context(), job.epoch, &job.ended, refusal)?;
+        let error =
+            self.refuse_policy_run(job.context(), job.epoch, &job.ended, refusal, at_stop)?;
         Err(error)
     }
 
@@ -225,7 +232,8 @@ impl HostShared {
         // admission is closed outside a drain only while a start prepares or an install holds the
         // Runtime, which a registered run never meets (a drain ends only once no lane works); it is
         // waited for there, as a granted host claim waits. A run not yet taken when the Runtime's
-        // stop was requested is refused: settled as not performed, never started.
+        // stop was requested is refused, never started, and settled as interrupted (fix 2,
+        // re-review L-2), so the restart lifts it.
         let _work = loop {
             if self.fatal.is_shutdown_requested() {
                 let refusal = RuntimeHostError::request(
@@ -233,7 +241,8 @@ impl HostShared {
                     HostLocation::RunHandedPolicyRun,
                     RuntimeErrorCode::RuntimeUnavailable,
                 );
-                let error = Box::new(self.refuse_policy_run(&context, epoch, &ended, refusal)?);
+                let error =
+                    Box::new(self.refuse_policy_run(&context, epoch, &ended, refusal, true)?);
                 sink.settled(PolicyRunSettled::Failed { context, error });
                 return Ok(());
             }
@@ -298,21 +307,30 @@ impl HostShared {
         Ok(())
     }
 
-    /// Workflow #427-A: settles a handed-off run that never started as not performed (its lease
-    /// released by the failure path), ends its registration and returns the refusal, a fatal one
-    /// through the instance's failure containment. Counted as cleanup work, which a stop or a
-    /// drain admits.
+    /// Workflow #427-A: settles a handed-off run that never started (its lease released by the
+    /// failure path), ends its registration and returns the refusal, a fatal one through the
+    /// instance's failure containment. Counted as cleanup work, which a stop or a drain admits.
+    /// Fix 2 (re-review L-2): a run the Runtime's stop refused (`at_stop`) is settled as
+    /// interrupted, as the next start settles a run a stop cut short, so the restart lifts the
+    /// first one (`complete_scheduled_policy_interruption`); any other refusal is settled as
+    /// that failure.
     fn refuse_policy_run(
         &self,
         context: &PolicyRunContext,
         epoch: u64,
         ended: &AtomicBool,
         refusal: RuntimeHostError,
+        at_stop: bool,
     ) -> RuntimeHostResult<RuntimeHostError> {
         let _cleanup = self.work_guard()?;
         self.record_scheduled_policy_failure(context, &refusal)?;
-        let failure = RequestFailure::request(refusal.clone(), RuntimeReceiptState::Denied, None);
-        let settled = self.complete_scheduled_policy_failure(context, &failure);
+        let settled = if at_stop {
+            self.complete_scheduled_policy_interruption(context)
+        } else {
+            let failure =
+                RequestFailure::request(refusal.clone(), RuntimeReceiptState::Denied, None);
+            self.complete_scheduled_policy_failure(context, &failure)
+        };
         let mut error = refusal;
         if error.is_fatal() {
             let links = self.policy_run_event_links(context)?;
@@ -345,7 +363,8 @@ impl HostShared {
     /// Workflow #427-A: what a worker panic leaves of a policy run: its registration is kept as
     /// abandoned (its instance stays occupied until the reconciliation settles the run, after its
     /// lease lapsed at its TTL: fix 1, review M1), and the driver is woken. A lane the job had
-    /// already ended (a panic after its settlement) is not ended again (fix 1, review L2).
+    /// already ended (a panic after its settlement) is not ended again (fix 1, review L2). Also
+    /// what a worker that could not issue a job's failure links leaves (fix 2, re-review L-3).
     pub(super) fn drop_panicked_policy_run(&self, lane: PolicyLane) -> RuntimeHostResult<()> {
         let PolicyLane {
             instance_id,

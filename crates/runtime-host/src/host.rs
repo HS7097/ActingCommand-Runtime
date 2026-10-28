@@ -2143,13 +2143,14 @@ impl RuntimeHost {
                 let unsettled_dispatches =
                     timed(&mut startup_recovery.policy_dispatches_ms, || {
                         // Workflow #369 E3 (#670 review H-1): a cut run gets its missing release
-                        // before the reconciliation settles it.
+                        // before the reconciliation settles it; a run whose lease already ended
+                        // gets none and is settled from that end.
+                        let ended_without_release = shared.recover_unreleased_policy_runs(
+                            &policy,
+                            &registered_instances,
+                            &scheduled_procedures,
+                        )?;
                         let mut settlement = policy_outcome::StartSettlement {
-                            ended_without_release: shared.recover_unreleased_policy_runs(
-                                &policy,
-                                &registered_instances,
-                                &scheduled_procedures,
-                            )?,
                             unsettled: Vec::new(),
                             #[cfg(test)]
                             refuse_run_for_test: config.settlement_refusal_for_test,
@@ -2158,6 +2159,7 @@ impl RuntimeHost {
                             &mut policy,
                             &shared.ledger,
                             &shared.events,
+                            &ended_without_release,
                             &mut settlement,
                         )?;
                         // #670 final review (Fail Loud): a scheduled dispatch still open here is

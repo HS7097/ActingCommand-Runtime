@@ -1,16 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // Workflow #427-A fix 1 (brief rd-1028/brief-427a-fix1.md item 4; review rd-1028/review-427a.md
-// M1): a scheduled run handed to its instance's worker, whose worker panicked as it took the run,
+// M1) and fix 2 (brief rd-1028/brief-427a-fix2.md item 2; re-review rd-1028/rereview-427a.md
+// M-1): a scheduled run handed to its instance's worker, whose worker panicked as it took the run,
 // is not left held until a restart. The panic leaves the run's registration abandoned and its
 // lease the dispatch's; a reconciliation leaves both while the lease is active. Once the lease
 // lapsed (the sweep's expiry, which writes no run link), one reconciliation round settles the run
-// by the start's rule: its missing run-linked release is recorded with
-// `policy_settlement_release_recovered`, the run is settled exactly once (as interrupted: it has
-// no terminal), its registration is forgotten and its instance is free for the next dispatch. A
-// second round settles nothing more. Every expected value comes from the brief and the review, not
-// from what the code does today. No sleep: the run's end is awaited on its sink's channel, and
-// `GATE_WAIT` only bounds a broken run.
+// by the start's rule: a lease that already ended gets no release (#670 rulings 2 and 3), so no
+// run-linked release and no `policy_settlement_release_recovered` is written and the lease keeps
+// exactly one end; the run is settled exactly once (as interrupted: it has no terminal), its
+// registration is forgotten and its instance is free for the next dispatch. A second round
+// settles nothing more. Every expected value comes from the briefs and the reviews, not from what
+// the code does today. No sleep: the run's end is awaited on its sink's channel, and `GATE_WAIT`
+// only bounds a broken run.
 
 use super::*;
 
@@ -49,21 +51,44 @@ fn reconciliation_round(host: &RuntimeHost, seed: u64) {
 
 // The records of the run, each as its forensic projection's JSON text.
 fn run_texts(client: &mut TestClient, run_id: RunId) -> Vec<(EventType, String)> {
-    projected_events(
+    texts(
         client,
         EventQuery {
             run_id: Some(run_id),
             ..EventQuery::default()
         },
     )
-    .iter()
-    .map(|event| {
-        (
-            event.event_type,
-            serde_json::to_string(event).expect("the record's JSON"),
-        )
-    })
-    .collect()
+}
+
+// Fix 2 (re-review M-1): the records of the lease, by its id (with or without run links).
+fn lease_texts(client: &mut TestClient, lease_id: LeaseId) -> Vec<(EventType, String)> {
+    texts(
+        client,
+        EventQuery {
+            lease_id: Some(lease_id),
+            ..EventQuery::default()
+        },
+    )
+}
+
+// The records `query` selects, each as its forensic projection's JSON text.
+fn texts(client: &mut TestClient, query: EventQuery) -> Vec<(EventType, String)> {
+    projected_events(client, query)
+        .iter()
+        .map(|event| {
+            (
+                event.event_type,
+                serde_json::to_string(event).expect("the record's JSON"),
+            )
+        })
+        .collect()
+}
+
+// Fix 2 (re-review M-1): the lease's terminal records (`lease.released` and `lease.expired`),
+// by its id.
+fn lease_ends(client: &mut TestClient, lease_id: LeaseId) -> usize {
+    let records = lease_texts(client, lease_id);
+    count(&records, EventType::LeaseReleased) + count(&records, EventType::LeaseExpired)
 }
 
 fn count(records: &[(EventType, String)], event_type: EventType) -> usize {
@@ -112,6 +137,7 @@ fn m1_an_abandoned_lane_settles_once_online_after_its_lease_lapsed_and_frees_its
         panic!("expected policy run context")
     };
     let token = context.lease_token().clone();
+    let lease_id = token.lease_id();
     let run_id = context.run_id();
     let request = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
         .expect("contained task request");
@@ -174,17 +200,24 @@ fn m1_an_abandoned_lane_settles_once_online_after_its_lease_lapsed_and_frees_its
         "the run is settled once"
     );
     assert_eq!(count(&settled, EventType::PolicyDispatchCompleted), 1);
+    // Fix 2 (re-review M-1): as at start, a lease that already ended gets no release.
     assert_eq!(
         count(&settled, EventType::LeaseReleased),
-        1,
-        "the run-linked release the lease's expiry left missing is recovered once"
+        0,
+        "no run-linked release is written for a lease that already ended"
     );
     assert_eq!(
         settled
             .iter()
             .filter(|(_, text)| text.contains("policy_settlement_release_recovered"))
             .count(),
-        1
+        0,
+        "no release is recovered online"
+    );
+    assert_eq!(
+        lease_ends(&mut client, lease_id),
+        1,
+        "the lease keeps exactly one end, its expiry"
     );
     assert!(
         settled.iter().any(|(event_type, text)| {
@@ -205,7 +238,8 @@ fn m1_an_abandoned_lane_settles_once_online_after_its_lease_lapsed_and_frees_its
     let again = run_texts(&mut client, run_id);
     assert_eq!(count(&again, EventType::PolicyExecutionRecorded), 1);
     assert_eq!(count(&again, EventType::PolicyDispatchCompleted), 1);
-    assert_eq!(count(&again, EventType::LeaseReleased), 1);
+    assert_eq!(count(&again, EventType::LeaseReleased), 0);
+    assert_eq!(lease_ends(&mut client, lease_id), 1);
 
     // Past the expiry's takeover cooldown, the next dispatch can go to the instance again.
     clock.advance(100);
