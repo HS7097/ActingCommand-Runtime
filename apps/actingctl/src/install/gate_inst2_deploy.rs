@@ -17,10 +17,12 @@
 // - D-4: each post-start check passes and fails (`one_way` is the later S6 watch: not
 //   evaluated); fix round 1 adds a Runtime gone after readiness and a failed `StartReport`
 //   read (review S2 H2), and judges `config` against the file the operation began with (H1);
-// - D-5: a fail-class check after the new start closes it, passes the gate, reverses the swaps,
-//   starts the previous build, releases the hold and ends `deploy_rolled_back`;
+// - D-5: a fail-class check after the new start passes the gate, closes the new Runtime,
+//   reverses the swaps, starts the previous build, releases the hold and ends
+//   `deploy_rolled_back`;
 // - D-6: a new start that exits does the same;
-// - D-7: a gate that fails keeps the new build and the hold and ends `rollback_gate_failed`;
+// - D-7: a gate that fails keeps the new build, its running Runtime and the hold and ends
+//   `rollback_gate_failed` (Workflow #421 6441776975, P12: the gate before the close);
 // - D-8: a composite interrupted after each of its steps is finished by `resume`;
 // - D-9: `release-hold` resumes only the instances paused with exactly its reason.
 // Fix round 1 (review S2, `rd-1027\inst-deploy\review-s2.md`; work order item 6) adds:
@@ -817,7 +819,10 @@ fn inst2_d_6_a_new_start_that_exits_rolls_back_the_same_way() {
     assert_eq!(host.runtime.pause_of("node.a"), None, "the hold released");
 }
 
-// D-7: a gate that fails keeps the new build and the hold: a forward fix only.
+// D-7: a gate that fails keeps the new build and the hold: a forward fix only. Workflow #421
+// 6441776975 (P12, adapted in W1-1): the gate is evaluated before the new Runtime closes, so a
+// gate that fails closes nothing; the new Runtime keeps running, held, and `next` names only
+// `release-hold`.
 #[test]
 fn inst2_d_7_a_failed_gate_keeps_the_new_build_and_the_hold() {
     let temp = TempDir::new().expect("tempdir");
@@ -847,16 +852,41 @@ fn inst2_d_7_a_failed_gate_keeps_the_new_build_and_the_hold() {
         Some("deploy-7"),
         "the hold stays"
     );
+    // The new Runtime is not closed: no `shutdown` after its spawn.
     assert_eq!(
         calls(&host),
         [
             "pause node.a deploy-7".to_owned(),
             "shutdown".to_owned(),
             format!("spawn {C2}"),
-            "shutdown".to_owned(),
         ]
     );
+    assert!(host.runtime.running.get(), "the new Runtime keeps running");
+    assert_eq!(*host.runtime.build.borrow(), C2);
     assert_eq!(answer.members["next"]["release_hold"][5], json!("deploy-7"));
+    assert!(
+        answer.members["next"].get("start").is_none(),
+        "nothing to start: {answer:?}"
+    );
+    assert_eq!(answer.members["failed_checks"], json!(["no_seeding"]));
+    assert!(answer.members["gate"].is_array(), "{answer:?}");
+    // The journal: no rollback recorded and the rollback's close never begun.
+    let journal = journal_of(&root, &operation_id(&answer));
+    assert!(journal["rollback"].is_null(), "{journal}");
+    let close = journal["steps"]
+        .as_array()
+        .and_then(|steps| {
+            steps
+                .iter()
+                .find(|step| step["kind"] == "close" && step["intent"]["rollback"] == true)
+        })
+        .cloned()
+        .expect("the rollback's close");
+    assert_eq!(close["state"], "planned", "{journal}");
+    assert_eq!(
+        journal["result"]["values"]["install_refusal"],
+        "rollback_gate_failed"
+    );
 }
 
 // D-8: a composite interrupted after each of its steps is finished by `resume`.
