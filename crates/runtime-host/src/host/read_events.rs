@@ -9,6 +9,50 @@ use crate::project_interface::{
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
 
 impl HostShared {
+    /// #422 QR-1: a ledger whose reader pool could not open reads its view pages on the writer
+    /// thread, as before the pool. That is safe but not what the Runtime is built for, so it is
+    /// said at the start: one warning in the daemon's log with the code and operation of the
+    /// failure that kept the pool's connections from opening, and the developer line
+    /// `actingd ledger reader_pool fallback=writer`. A Runtime with its pool says nothing.
+    pub(super) fn report_ledger_reader_pool_fallback(&self) {
+        if let Some(finding) = self.ledger.reader_pool_finding() {
+            self.report_ledger_reader_pool_finding("fallback=writer", finding);
+        }
+    }
+
+    /// #422 QR-1 fix 1 (review L-6): what the ledger's reader pool found while the Runtime runs
+    /// is said as its start fallback is, once each: one warning and the developer line
+    /// `actingd ledger reader_pool reader_ended`, for the first reader that ended unexpectedly
+    /// and, once no reader is left, for the writer reading the pages again (`fallback=writer`
+    /// in its detail). Nothing is latched: the Runtime keeps running.
+    pub(super) fn report_ledger_reader_pool_findings(&self) {
+        for finding in self.ledger.take_reader_pool_findings() {
+            self.report_ledger_reader_pool_finding("reader_ended", &finding);
+        }
+    }
+
+    fn report_ledger_reader_pool_finding(
+        &self,
+        what: &str,
+        finding: &actingcommand_ledger::GlobalLedgerError,
+    ) {
+        println!(
+            "actingd ledger reader_pool {what} code={} operation={} detail={:?}",
+            finding.code(),
+            finding.operation(),
+            finding.detail()
+        );
+        if let Some(code) = actingcommand_contract::outcome::Code::relayed(finding.code()) {
+            let mut outcome = actingcommand_contract::outcome::Outcome::new(code);
+            if let Some(operation) =
+                actingcommand_contract::outcome::Location::relayed(finding.operation())
+            {
+                outcome = outcome.operation(operation);
+            }
+            self.fatal.report_warning(&outcome);
+        }
+    }
+
     pub(super) fn project_interface(
         &self,
         request: &ProjectInterfaceRequest,

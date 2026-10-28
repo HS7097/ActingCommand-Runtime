@@ -118,12 +118,122 @@ impl RetentionIndex {
     /// owners a start may still close and of the retained objects' identities. A dropped run
     /// leaves `known_runs` with its facts, so its next record loads it again from the store
     /// (`load_run`), as LN-7's dropped runs were.
-    pub(in crate::global) fn retain_live_objects(&mut self, live: &BTreeSet<ArtifactId>) {
-        self.objects.retain(|id, object| {
-            object.reference.kind != ArtifactKind::CaptureFrame
-                || live.contains(id)
-                || object.proof.is_some()
-        });
+    ///
+    /// #422 QR-1: the trim runs in bounded chunks, one writer command each, so event writes and
+    /// reads go on between them: [`Self::retain_live_objects_chunk`] looks at no more than a
+    /// chunk's objects, and the chunk that reaches the last object ends with
+    /// [`Self::trim_to_retained_objects`].
+    pub(in crate::global) fn retain_live_objects_chunk(
+        &mut self,
+        live: &BTreeSet<ArtifactId>,
+        (after, as_of): (Option<ArtifactId>, u64),
+        max_objects: usize,
+    ) -> LiveFramesChunk {
+        use std::ops::Bound::{Excluded, Unbounded};
+        let bounds = (after.map_or(Unbounded, Excluded), Unbounded);
+        let max_objects = max_objects.max(1);
+        let mut looked = 0;
+        let mut last = None;
+        let mut dropped = Vec::new();
+        for (id, object) in self.objects.range(bounds).take(max_objects) {
+            looked += 1;
+            last = Some(*id);
+            // An object a record named after the pass start (`as_of`) is the newer state's: it
+            // is not one the pass start's listing could hold, and it stays.
+            if object.reference.kind == ArtifactKind::CaptureFrame
+                && !live.contains(id)
+                && object.proof.is_none()
+                && object.last_reference_sequence <= as_of
+            {
+                dropped.push((*id, object.reference.frame_id));
+            }
+        }
+        for (id, frame) in &dropped {
+            self.objects.remove(id);
+            if let Some(frame) = frame
+                && let Some(ids) = self.frames.get_mut(frame)
+            {
+                ids.remove(id);
+            }
+        }
+        let more = looked == max_objects
+            && last.is_some_and(|last| {
+                self.objects
+                    .range((Excluded(last), Unbounded))
+                    .next()
+                    .is_some()
+            });
+        if !more {
+            self.trim_to_retained_objects();
+        }
+        let next = if more {
+            last.map(|after| LiveFramesCursor { after, as_of })
+        } else {
+            None
+        };
+        LiveFramesChunk {
+            looked,
+            dropped: dropped.len(),
+            next,
+        }
+    }
+
+    /// #422 QR-1, tests: `count` new capture frame objects, each of its own frame, as a record at
+    /// `sequence` would name them (none proven); their ids, in this index's order.
+    #[cfg(test)]
+    pub(in crate::global) fn seed_frame_objects_for_test(
+        &mut self,
+        count: usize,
+        sequence: u64,
+    ) -> Vec<ArtifactId> {
+        let ids = actingcommand_contract::IdentifierIssuer::new().expect("identifier issuer");
+        let mut seeded = Vec::with_capacity(count);
+        for _ in 0..count {
+            let artifact = *ids.mint_artifact_id().expect("artifact id").transport();
+            let frame = *ids.mint_frame_id().expect("frame id").transport();
+            let reference = ProjectedArtifactReference {
+                artifact_id: artifact,
+                kind: ArtifactKind::CaptureFrame,
+                run_id: None,
+                frame_id: Some(frame),
+                correlation_id: None,
+                object_key: None,
+                media_type: ArtifactKind::CaptureFrame.media_type(),
+                byte_count: 1,
+                sha256: String::new(),
+                created_at_unix_ms: 0,
+                producer: actingcommand_contract::ArtifactProducer::CaptureStore,
+                retention_class: actingcommand_contract::RetentionClass::Adaptive,
+                redaction_state: actingcommand_contract::ArtifactRedactionState::NotRequired,
+            };
+            self.frames.entry(frame).or_default().insert(artifact);
+            self.seen_frames.insert(frame);
+            self.objects.insert(
+                artifact,
+                RetainedObject {
+                    reference,
+                    last_reference_sequence: sequence,
+                    verified: None,
+                    verified_lab: LabKeys::default(),
+                    summary: None,
+                    identity: None,
+                    pins: BTreeMap::new(),
+                    released_lab_pins: BTreeMap::new(),
+                    reference_scopes: BTreeSet::new(),
+                    permanently_protected: false,
+                    proof: None,
+                },
+            );
+            seeded.push(artifact);
+        }
+        seeded.sort();
+        seeded
+    }
+
+    /// #422 QR-1: the end of a pass start's trim, after its last chunk: the frames of the
+    /// objects no longer held, and the run- and scope-keyed facts no retained object or open run
+    /// needs (review F5).
+    fn trim_to_retained_objects(&mut self) {
         let objects = &self.objects;
         self.frames.retain(|_, ids| {
             ids.retain(|id| objects.contains_key(id));
@@ -342,6 +452,10 @@ impl RetentionIndex {
             if let Some(frame) = object.reference.frame_id {
                 self.frames.entry(frame).or_default().insert(id);
                 self.seen_frames.insert(frame);
+            }
+            // #422 QR-1: a proof taken in is a change of the proofs the reader pool reads.
+            if object.proof.is_some() {
+                self.proof_revision = self.proof_revision.wrapping_add(1);
             }
             self.objects.insert(id, object);
         }

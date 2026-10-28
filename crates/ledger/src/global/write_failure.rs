@@ -169,6 +169,9 @@ pub struct LedgerFailurePlan {
     /// LN-9 (#422, LEAN-L §6): the paced background scrub of the writer's chain
     /// (`ledger_observer.scrub_*`); without one the writer has no scrub.
     scrub: Option<LedgerScrubPolicy>,
+    /// #422 QR-1 fix 1, tests: the reader pool's threads, when a test needs another number.
+    #[cfg(test)]
+    reader_threads: Option<usize>,
 }
 
 impl fmt::Debug for LedgerFailurePlan {
@@ -226,7 +229,21 @@ impl LedgerFailurePlan {
             history_scan_rows: None,
             open_verify_tail_records: None,
             scrub: None,
+            #[cfg(test)]
+            reader_threads: None,
         }
+    }
+
+    /// #422 QR-1 fix 1, tests: a reader pool of `threads` readers.
+    #[cfg(test)]
+    pub(crate) fn with_reader_threads_for_test(mut self, threads: usize) -> Self {
+        self.reader_threads = Some(threads);
+        self
+    }
+
+    #[cfg(test)]
+    pub(super) fn reader_threads_for_test(&self) -> Option<usize> {
+        self.reader_threads
     }
 
     /// #411 A51 (R2): the work budget of one read on the writer thread
