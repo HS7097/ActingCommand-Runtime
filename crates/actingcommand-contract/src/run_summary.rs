@@ -19,9 +19,13 @@
 //! **Anomalies stay anomalies.** Two terminals, two admissions, two origins, a semantic fact
 //! without its run's identity or with another run's, and links that disagree are kept and
 //! reported ([`RunFactAnomaly`]), never resolved by picking one: the run status read refuses such
-//! a run, as it did before B-1. Of several anomalies the fold reports the one found at the lowest
-//! sequence, so a reader that folds the facts in sequence order and asks after each fact refuses
-//! at the same fact and with the same code as the read that checked each fact as it came.
+//! a run, as it did before B-1. Of several anomalies of the facts themselves (two terminals,
+//! admissions or origins, a missing or another run's identity) the fold reports the one found at
+//! the lowest sequence, so a reader that folds the facts in sequence order and asks after each
+//! fact refuses at the same fact and with the same code as the read that checked each fact as it
+//! came. Links that disagree, the lease's among them, are reported only after those: once every
+//! fact is folded and none of those is found, whatever their sequence ([`RunFold::links`],
+//! [`RunFold::lease_id`]), as the read always did.
 
 use crate::outcome::CodeStr;
 use crate::{
@@ -565,7 +569,7 @@ impl RunFold {
         }
     }
 
-    fn note_progress(&mut self, sequence: u64, step_index: u32, operation: &str, page: &str) {
+    fn note_progress(&mut self, sequence: u64, step_index: u32, operation_label: &str, page: &str) {
         if self
             .progress
             .as_ref()
@@ -575,7 +579,7 @@ impl RunFold {
                 sequence,
                 ContainedRunProgress {
                     step_index,
-                    operation_label: operation.to_owned(),
+                    operation_label: operation_label.to_owned(),
                     page: page.to_owned(),
                 },
             ));

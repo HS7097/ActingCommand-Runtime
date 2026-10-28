@@ -224,8 +224,11 @@ greatest sequence, sets keyed by sequence, and the two lowest sequences of the
 facts a run records once, so the same facts in any order, each any number of
 times, give one fold. Two terminals, admissions or origins, a semantic fact
 without its run's identity or with another run's, and links that disagree stay
-anomalies (`run_status_*`), never resolved; of several, the one at the lowest
-sequence is reported, which is the one a read in sequence order refuses first.
+anomalies (`run_status_*`), never resolved. Of several anomalies of the facts
+themselves, the one at the lowest sequence is reported, which is the one a read
+in sequence order refuses first; links that disagree (the lease's among them)
+are reported only after those, once every fact is folded and none of those is
+found, whatever their sequence, as the read always did.
 `runtime-client`'s run status read and its run listing fold with it from
 0.12.27 and answer as before; the Runtime's in-memory run summary (P32 B-2)
 will fold the same facts with it, so a `QueryRuns` row and a run status read can

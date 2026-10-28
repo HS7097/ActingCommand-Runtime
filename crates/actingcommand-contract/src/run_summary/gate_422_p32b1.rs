@@ -273,7 +273,7 @@ fn every_order<'a>(facts: &'a [Recorded], mut visit: impl FnMut(&[&'a Recorded])
 }
 
 /// A fixed-seed shuffle (xorshift64), the same on every run.
-fn shuffled<'a>(facts: &'a [Recorded], seed: u64) -> Vec<&'a Recorded> {
+fn shuffled(facts: &[Recorded], seed: u64) -> Vec<&Recorded> {
     let mut state = seed.max(1);
     let mut order = facts.iter().collect::<Vec<_>>();
     for index in (1..order.len()).rev() {
@@ -449,9 +449,17 @@ fn p32_b1_of_several_anomalies_the_fold_reports_the_one_a_read_in_sequence_order
     }
 }
 
+/// One listing case: the listing facts, then the expected order sequence, opened and settled state.
+type ListingCase = (
+    &'static [(u64, EventType)],
+    u64,
+    bool,
+    Option<ContainedRunState>,
+);
+
 #[test]
 fn p32_b1_listing_facts_give_one_order_and_settled_state_in_every_order() {
-    let cases: [(&[(u64, EventType)], u64, bool, Option<ContainedRunState>); 4] = [
+    let cases: [ListingCase; 4] = [
         (
             &[
                 (40, EventType::TaskEntryPreflight),

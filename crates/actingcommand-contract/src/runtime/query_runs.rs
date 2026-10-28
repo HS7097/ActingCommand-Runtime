@@ -207,10 +207,11 @@ impl QueryRunsPage {
     /// Refuses, by the member: a snapshot of 0; more than [`MAX_QUERY_RUNS_ROWS`] rows, or any
     /// row under `unavailable` coverage; rows not newest first by order sequence, or one ordered
     /// at 0 or past the snapshot; a run twice; a row read at another snapshot; a row whose state
-    /// is `not_found`; a terminal time without a terminal or a terminal without its time; a
-    /// first fact recorded after the terminal; `settled` other than `succeeded` or `cancelled`,
-    /// or other than the row's state; a policy task id on a run not dispatched by the scheduler,
-    /// or an empty one; a `next` at another snapshot, past its last row, or invalid as a cursor.
+    /// is `not_found`; a terminal time without a terminal or a terminal without its time (the
+    /// two times are not compared: they are the wall clock); `settled` other than `succeeded`
+    /// or `cancelled`, or other than the row's state; a policy task id on a run not dispatched
+    /// by the scheduler, or an empty one; a `next` at another snapshot, past its last row, or
+    /// invalid as a cursor.
     pub fn validate(&self) -> Result<(), QueryRunsInvalid> {
         let snapshot = self.snapshot_ledger_position;
         if snapshot == 0 {
@@ -241,10 +242,9 @@ impl QueryRunsPage {
             if row.status.state == ContainedRunState::NotFound {
                 return Err(QueryRunsInvalid::at("rows.status.state"));
             }
+            // Only the pairing: record times are the wall clock, and a step back of the clock
+            // may stamp the terminal before the first fact.
             match (&row.status.terminal, row.terminal_unix_ms) {
-                (Some(_), Some(terminal)) if terminal < row.first_fact_unix_ms => {
-                    return Err(QueryRunsInvalid::at("rows.terminal_unix_ms"));
-                }
                 (Some(_), Some(_)) | (None, None) => {}
                 _ => return Err(QueryRunsInvalid::at("rows.terminal_unix_ms")),
             }
