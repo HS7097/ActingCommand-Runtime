@@ -1035,3 +1035,12 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst2_f_4_resume_finishes_a_rollback_interrupted_after_each_of_its_steps",
 ]
 incident = ["#421 P12"]
+
+# Workflow #421 P12 fix round 1 (v0.12.25; W1-1, brief rd-1028/brief-w1-1-fix1.md item 3; review rd-1028/review-w1-1.md L-2): on the fake host, the rollback gate evaluated before the close refuses a running image that would change and may not be renamed as rollback_gate_failed caused by running_image_blocks, closing nothing, the new Runtime running with the hold and next naming only release-hold (D-7b); a gate that fails after a new start that exited closes and starts nothing and names install start beside release-hold (D-7c)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst2_d_7b_a_running_image_met_before_the_close_fails_the_gate_and_closes_nothing",
+    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst2_d_7c_a_failed_gate_after_a_new_start_that_exited_names_install_start",
+]
+incident = ["#421 P12"]

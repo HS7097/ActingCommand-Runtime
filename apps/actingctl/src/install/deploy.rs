@@ -318,9 +318,9 @@ fn close(
     if rollback
         && let Some(reverse) = reversal_after(operation.journal(), n)
         && !gate_passed(operation.journal(), reverse)
-        && let Some((refusal, members)) = rollback_gate(operation, reverse, loaded, notes, false)?
+        && let Some(end) = rollback_gate(operation, reverse, loaded, notes, false)?
     {
-        return Ok(StepEnd::Ends(refusal, members));
+        return Ok(end);
     }
     operation.start(n)?;
     if !rollback {
@@ -663,17 +663,18 @@ fn gate_passed(journal: &journal::Journal, reverse: usize) -> bool {
 /// Runtime and its owner lock, which the close then ends, do not refuse it, and a running image
 /// that would change and may not be renamed refuses as the plan after a close would. A gate that
 /// passes journals the rollback and the pass in the reversal step's evidence and answers `None`;
-/// one that fails answers the command's refusal `rollback_gate_failed` with what stays: the new
-/// build and the hold (`next` names `release-hold`, and `install start` only when no Runtime runs
-/// under the root, as after a new start that exited), the failed checks and the gate's rows. A
-/// reversal that finds no pass journalled evaluates it after the close (`runtime_closed`).
+/// one that fails answers [`StepEnd::Ends`] with the command's refusal `rollback_gate_failed` and
+/// what stays: the new build and the hold (`next` names `release-hold`, and `install start` only
+/// when no Runtime runs under the root, as after a new start that exited), the failed checks and
+/// the gate's rows. A reversal that finds no pass journalled evaluates it after the close
+/// (`runtime_closed`).
 fn rollback_gate(
     operation: &mut Operation<'_>,
     reverse: usize,
     loaded: &Loaded,
     notes: &mut Vec<Outcome>,
     runtime_closed: bool,
-) -> Result<Option<(Outcome, Map<String, Value>)>, Outcome> {
+) -> Result<Option<StepEnd>, Outcome> {
     let command = operation.journal().kind.location();
     let paths = operation.paths().clone();
     let to = operation.journal().steps[reverse - 1]
@@ -724,19 +725,22 @@ fn rollback_gate(
     ) {
         Ok(planned) => planned,
         Err(refused) => {
-            return Ok(Some((refused_by(refused.into_answer().outcome), members)));
+            return Ok(Some(StepEnd::Ends(
+                refused_by(refused.into_answer().outcome),
+                members,
+            )));
         }
     };
     if !runtime_closed && let Some(image) = planned.running.blocked.first() {
         let blocked = super::refusal(command, InstallRefusal::RunningImageBlocks)
             .path(&image.path)
             .pid(image.pid);
-        return Ok(Some((refused_by(blocked), members)));
+        return Ok(Some(StepEnd::Ends(refused_by(blocked), members)));
     }
     let gate = update::gate(host, &paths, &planned);
     members.insert("gate".to_owned(), json!(gate.rows));
     if let Some(refusal) = gate.refusal(&planned) {
-        return Ok(Some((refusal, members)));
+        return Ok(Some(StepEnd::Ends(refusal, members)));
     }
     notes.extend(
         gate.with_notes(super::done(command))
@@ -778,9 +782,9 @@ fn reverse_files(
         .ok_or_else(|| state_invalid(command, paths.journal(operation.id()), None))?;
     operation.start(n)?;
     if !gate_passed(operation.journal(), n)
-        && let Some((refusal, members)) = rollback_gate(operation, n, loaded, notes, true)?
+        && let Some(end) = rollback_gate(operation, n, loaded, notes, true)?
     {
-        return Ok(StepEnd::Ends(refusal, members));
+        return Ok(end);
     }
     // No program file is reversed under a running actingd, as `install undo` checks (re-review
     // S2 N4): also a rollback resumed past its gate. One found running leaves the operation

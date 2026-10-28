@@ -679,7 +679,11 @@ evaluated at `rollback plan`, again at apply under the writer lock, by `status
    recorded (its journal's `s0.head`). The **target build's own** `actingledger --state-root
    <state> events --after <S0> --limit 1024` reads every page up to the head with exit 0; the
    first page it refuses closes the window (`rollback_gate_failed` with `ledger_sequence`). A
-   live build no journalled operation installed has no S0, and this part fails.
+   live build no journalled operation installed has no S0, and this part fails. A composite's
+   automatic rollback evaluates the gate before it closes the new Runtime (v0.12.25), so the
+   target's reader reads the ledger as of that moment and the pages the closing Runtime writes
+   afterwards are not read ahead by it; a ledger interface the target cannot read is already
+   refused by part 1 (`interface_edges`).
    - **Only toward the build the live one replaced** (INST-1b-F fix round 1, review S1 F3). S0
      covers only the records written since the live build was installed, so the part passes
      only for the target that operation replaced (its journal's `previous.live`, the build
