@@ -67,8 +67,9 @@
 //!   woken instance as idle owing its wake at the time it was woken, so the start's first check
 //!   queues its startup package again instead of finding a closed game counted as open. Once the
 //!   instance is free, its wake's claims have ended (its startup package ran, or the claims ended
-//!   without it: a configured start that found the emulator running, a claim an emulator control
-//!   cancelled), and it is active again, as after every wake before.
+//!   without it: a claim an emulator control cancelled), and it is active again, as after every
+//!   wake before. A wake's configured start that finds the emulator already running (a restart
+//!   came after it had started the emulator) still queues the startup package (review M-1).
 
 use actingcommand_runtime_config::{IdleAction, IdleConfig};
 use std::collections::BTreeMap;

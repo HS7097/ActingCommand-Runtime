@@ -937,11 +937,14 @@ settlement) no longer makes the record stale. A woken instance stays in the reco
 startup package has run (#405 O-2, since 0.12.25): its wake only queues claims, which wait in
 memory behind a scheduling pause or an install hold, so its row says `woken` (true) with the time
 it was woken as `wake_at_unix_ms`, and the instance is no longer kept once its wake's claims have
-ended (its startup package ran, or the claims ended without it: a configured emulator start that
-found the emulator running, a claim an emulator control cancelled) and an idle check finds it
-free. A start restores them from a record the last start that completed its settlement wrote (the
-anchor `host.contained_settlement` named before this start), as the scheduling pauses are restored
-and before any instance is prepared, and records them again under its own anchor: each comes back
+ended (its startup package ran, or the claims ended without it: a claim an emulator control
+cancelled) and an idle check finds it free. A wake's configured emulator start that finds the
+emulator already running (after `stop_emulator`, a restart that came once the wake had started it)
+ends as `emulator_autostart_skipped` and still queues the startup package once, as its Start would
+have handed it the key ([emulator-control.md](emulator-control.md)). A start restores them from a
+record the last start that completed its settlement wrote (the anchor `host.contained_settlement`
+named before this start), as the scheduling pauses are restored and before any instance is
+prepared, and records them again under its own anchor: each comes back
 idle, owing its wake, which the start's first idle check queues when its time has passed or a plan
 shows a task due, so an instance restarted within its wake lead is brought back at once, and a
 woken one whose startup package had not run is woken again at once. An action in flight at the

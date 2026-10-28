@@ -1182,6 +1182,10 @@ the configured starts; the watch ends with the host.
   instance's key: the fence on the key, the retained session's close, the provider's Stop, the
   endpoint back to pending. #405 IDLE-1P: the hold survives a restart (`host.idle_state`), and the
   configured emulator start at daemon start leaves such an emulator stopped for its wake too.
+  #405 O-2 (since 0.12.25, review M-1): a wake's claim that reads the emulator running (a restart
+  came after that wake had started it, while its startup package waited behind a pause or an
+  install hold) ends as `emulator_autostart_skipped` and still queues the instance's startup
+  package once, under the claim's links, as its Start would have handed it the key.
 
 Each of the watch's records is also a report line, which `actingd` writes as a daemon line. Its
 keys are the `emulator_control` section's ([runtime-config.md](runtime-config.md)). Its codes

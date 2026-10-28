@@ -374,7 +374,7 @@ impl HostShared {
                         .attempts(attempts)
                         .limit_count(settings.restart_attempts),
                 )?;
-                self.request_watch_autostart(position, instance_id, alias)
+                self.request_watch_autostart(position, instance_id, alias, false)
             }
         }
     }

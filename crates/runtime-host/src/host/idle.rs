@@ -722,7 +722,8 @@ impl HostShared {
 
     /// The wake of an idle instance after `action`: its record, then `work` queued in order. The
     /// configured emulator start hands the key to the startup package itself, so nothing after
-    /// it is queued here.
+    /// it is queued here; #405 O-2 (review M-1): a wake's start that finds the emulator already
+    /// running queues the startup package itself too.
     fn queue_idle_wake(
         &self,
         instance_id: InstanceId,
@@ -757,7 +758,7 @@ impl HostShared {
                             .alias(alias)
                             .idle_action(action.as_str()),
                     )?;
-                    return self.request_watch_autostart(position, instance_id, alias);
+                    return self.request_watch_autostart(position, instance_id, alias, true);
                 }
                 WakeWork::StartupPackage => {
                     let resolved = self
