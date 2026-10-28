@@ -19,6 +19,10 @@
 // - T6 (P30): the published head answers while the writer is held inside an append's write
 //   transaction, at the committed head; once the append committed it names it, as the writer's
 //   own head does; a ledger that publishes no point reads the writer's head.
+// - L2-a, L2-b (P30; review rd-1028/review-w1-8.md L-2): the published head of a writer that
+//   ended is the fatal `writer_unavailable` of `latest_sequence`, and that of a writer its probe
+//   sealed is the sealed writer's fatal `ledger_write_failed`, each while its point is still
+//   published.
 //
 // Every bounded read runs on a writer clock that moves only when the test sets a step; nothing
 // sleeps and no test reads a clock itself.
@@ -29,11 +33,13 @@ use crate::codes::{LedgerCode, LedgerLocation};
 use crate::global::retention::{ProofLevels, RetentionIndex};
 use crate::global::{
     ArtifactEvictionAdmission, GlobalLedger, GlobalLedgerError, GlobalLedgerResult,
-    LedgerFailurePlan, LedgerMaintenance, LedgerMonotonicClock, LedgerOpenTiming,
-    LedgerReaderPoolPages, LedgerWritePolicy, Sha256SecretFingerprinter,
+    LedgerFailurePlan, LedgerFailureSink, LedgerMaintenance, LedgerMonotonicClock,
+    LedgerOpenTiming, LedgerReaderPoolPages, LedgerWritePolicy, Sha256SecretFingerprinter,
+    WriterCommand,
 };
 use crate::{SyntheticInstance, SyntheticLedgerSpec, WriterStallGate, write_synthetic_ledger};
 use actingcommand_artifact_store::try_artifact_delete_guard;
+use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     ArtifactEvictionProof, ArtifactId, ArtifactKind, ArtifactRetentionIdentity, AuditInput,
     EventActor, EventDraft, EventLinksDraft, EventOrigin, EventQuery, EventSeverity, EventSource,
@@ -45,8 +51,8 @@ use actingcommand_contract::{
 use actingcommand_runtime_database::{MaintenanceLimits, RuntimeDatabase};
 use actingcommand_runtime_state::RuntimeStateStore;
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -86,6 +92,11 @@ const T4_AFTER: u64 = 9;
 const T4_OBJECTS: usize = 4;
 // T5: the pages read one after another.
 const T5_PAGES: u64 = 3;
+// L2-b: the probe looks at the attempt in progress every millisecond, as AO-1's does.
+const L2_PROBE_MS: u64 = 1;
+// L2-a and L2-b: the bound of a wait for the writer's thread or its stop; a wait returns as soon
+// as its message arrives, the bound only ends a broken run.
+const GATE_WAIT: Duration = Duration::from_secs(30);
 
 /// A writer clock in milliseconds that moves the step the test sets each time it is read (none
 /// until it sets one).
@@ -110,6 +121,17 @@ impl Clock {
 
     fn step_ms(&self, step: u64) {
         self.step.store(step, Ordering::SeqCst);
+    }
+}
+
+/// L2-b: the failure plan's sink; each stop the writer reports goes to the test.
+struct Stops(Mutex<mpsc::Sender<Outcome>>);
+
+impl LedgerFailureSink for Stops {
+    fn write_retried(&self, _outcome: &Outcome) {}
+
+    fn stop(&self, outcome: &Outcome) {
+        let _ = self.0.lock().expect("stop reports").send(outcome.clone());
     }
 }
 
@@ -173,22 +195,33 @@ impl Root {
     /// The Runtime's writer of the root (a failure plan: it has a reader pool and publishes its
     /// points), its reads bounded by `budget` on `clock` when they are given.
     fn open(&self, bounded: Option<(Duration, LedgerMonotonicClock, u32)>) -> GlobalLedger {
-        let state_root = self.dir.path().canonicalize().expect("state root");
-        let mut plan = LedgerFailurePlan::new(
-            LedgerWritePolicy::new(1, vec![0], STALL_MS, PROBE_MS, DUMP_MAX_BYTES)
-                .expect("write policy"),
-            &state_root,
-            None,
-            epoch(),
-            FIRST_MS,
-        )
-        .with_reply_timeout(REPLY_TIMEOUT);
+        let mut plan = self.plan(PROBE_MS);
         if let Some((budget, clock, check_vm_steps)) = bounded {
             plan = plan
                 .with_read_budget(budget)
                 .with_clock(clock)
                 .with_read_check_vm_steps(check_vm_steps);
         }
+        self.open_plan(plan)
+    }
+
+    /// The Runtime's failure plan of the root, its probe looking every `probe_ms`.
+    fn plan(&self, probe_ms: u64) -> LedgerFailurePlan {
+        let state_root = self.dir.path().canonicalize().expect("state root");
+        LedgerFailurePlan::new(
+            LedgerWritePolicy::new(1, vec![0], STALL_MS, probe_ms, DUMP_MAX_BYTES)
+                .expect("write policy"),
+            &state_root,
+            None,
+            epoch(),
+            FIRST_MS,
+        )
+        .with_reply_timeout(REPLY_TIMEOUT)
+    }
+
+    /// The Runtime's writer of the root with `plan` (a failure plan: it has a reader pool and
+    /// publishes its points).
+    fn open_plan(&self, plan: LedgerFailurePlan) -> GlobalLedger {
         let deadline = MaintenanceLimits {
             timeout_seconds: OPEN_TIMEOUT_SECONDS,
             ..MaintenanceLimits::default()
@@ -581,4 +614,126 @@ fn w1_8_t6_the_published_head_answers_while_the_writer_is_held_and_names_each_co
         ledger.latest_sequence().expect("head")
     );
     ledger.close().expect("close");
+}
+
+/// The head of the point the writer published last, if any.
+fn published_point(ledger: &GlobalLedger) -> Option<u64> {
+    ledger
+        .read_points
+        .as_ref()
+        .and_then(|points| points.current())
+        .map(|point| point.head)
+}
+
+#[test]
+fn w1_8_l2_a_the_published_head_of_a_writer_that_ended_is_writer_unavailable() {
+    let root = Root::new(0);
+    let mut ledger = root.open(None);
+    let head = ledger.latest_sequence().expect("head");
+    assert_eq!(ledger.published_head().expect("published head"), head);
+    let terminal = GlobalLedgerError::fatal_untyped("test_terminal", "test_writer_failure");
+    ledger
+        .sender
+        .as_ref()
+        .expect("writer sender")
+        .send(WriterCommand::TestTerminalFailure {
+            error: terminal.clone(),
+        })
+        .expect("inject terminal failure");
+    // The writer's loop ends with the failure. Its thread is joined, so it has ended for certain:
+    // std has no wait on a thread's end short of `join`, which takes the handle the check reads,
+    // and a ledger without the handle is one whose writer ended, by the same check.
+    let writer = ledger.writer.take().expect("the writer's thread");
+    let (joined_sender, joined) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = joined_sender.send(writer.join().ok());
+    });
+    assert_eq!(
+        joined
+            .recv_timeout(GATE_WAIT)
+            .expect("the writer's thread ends"),
+        Some(Err(terminal)),
+        "the writer ended with the injected failure, without a panic"
+    );
+    assert_eq!(
+        published_point(&ledger),
+        Some(head),
+        "the point the writer published last is still there"
+    );
+    let error = ledger
+        .published_head()
+        .expect_err("the published head of a writer that ended is refused");
+    assert_eq!(
+        named(&error),
+        (
+            LedgerCode::WriterUnavailable.as_str(),
+            LedgerLocation::LatestSequence.as_str(),
+            true
+        ),
+        "{error:?}"
+    );
+    ledger.close().expect("the ledger's other threads close");
+}
+
+#[test]
+fn w1_8_l2_b_the_published_head_of_a_sealed_writer_is_ledger_write_failed() {
+    let root = Root::new(0);
+    let clock = Clock::new();
+    let (stops, stopped) = mpsc::channel();
+    let plan = root
+        .plan(L2_PROBE_MS)
+        .with_clock(clock.clock())
+        .with_sink(Arc::new(Stops(Mutex::new(stops))) as Arc<dyn LedgerFailureSink>);
+    let ledger = root.open_plan(plan);
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let head = ledger.published_head().expect("published head");
+    let stall = WriterStallGate::arm(root.dir.path()).expect("writer stall gate");
+    let shared = &ledger;
+    // Everything is read while the writer is held; the assertions follow its release, so that a
+    // failed one never leaves the append's thread held.
+    let (held, stop, alive, published, sealed, appended) = thread::scope(|scope| {
+        let draft = runtime_fact(&ids, 1);
+        let appending = scope.spawn(move || shared.append(draft));
+        let held = stall.wait_held_commit(BARRIER_WAIT);
+        // The attempt in progress started at 0 on the plan's clock; from now on it ran longer
+        // than the stall limit, and the probe seals the writer while it is still held.
+        clock.now.store(STALL_MS + 1, Ordering::SeqCst);
+        let stop = stopped.recv_timeout(GATE_WAIT);
+        let alive = shared
+            .writer
+            .as_ref()
+            .is_some_and(|writer| !writer.is_finished());
+        let published = published_point(shared);
+        let sealed = shared.published_head();
+        stall.release();
+        let appended = appending.join().expect("the append's thread");
+        (held, stop, alive, published, sealed, appended)
+    });
+    assert!(
+        held,
+        "the writer is held inside the append's write transaction"
+    );
+    let stop = stop.expect("the probe seals the writer and stops it");
+    assert!(stop.is(LedgerCode::LedgerWriteFailed), "{stop:?}");
+    assert!(alive, "the sealed writer was held, not ended");
+    assert_eq!(
+        published,
+        Some(head),
+        "the point published before the seal is still there"
+    );
+    let error = sealed.expect_err("the published head of a sealed writer is refused");
+    assert_eq!(
+        named(&error),
+        (
+            LedgerCode::LedgerWriteFailed.as_str(),
+            LedgerLocation::WriteLedgerDump.as_str(),
+            true
+        ),
+        "{error:?}"
+    );
+    appended.expect_err("the sealed writer's append is refused");
+    assert!(
+        ledger.close().is_err(),
+        "the sealed writer ended with its failure"
+    );
 }
