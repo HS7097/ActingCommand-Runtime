@@ -3014,7 +3014,13 @@ pub fn is_severe_policy_failure(code: &crate::outcome::CodeStr) -> bool {
 /// (`execution_session_panicked`, `_state_poisoned`, `_closed`, `_unavailable`,
 /// `_response_lost`) are not listed: since ISO-2 a run's capture that meets one fails only that
 /// run, non-fatal, so a first death counts toward the task's failure pause as any failure does,
-/// and a second in a row holds the instance.
+/// and a second in a row holds the instance. W2-C (#419 R1, ISO-M rows A01, A05, E13-E15,
+/// Runtime 0.12.26): nor are the codes of a session being closed or of an endpoint changed under
+/// it (`execution_session_close_in_progress`, `execution_instance_identity_mismatch`), and of a
+/// frame commit or resolve the session refused (`input_frame_capture_mismatch`,
+/// `input_frame_not_committed`, `input_frame_session_missing`): since ISO-2 a run's capture,
+/// frame commit or frame resolve that meets one fails only that run, non-fatal, so it counts
+/// toward the task's failure pause as any failure does.
 fn severe_policy_failure_codes() -> &'static [&'static str] {
     &[
         "action_id_issue_failed",
@@ -3059,11 +3065,9 @@ fn severe_policy_failure_codes() -> &'static [&'static str] {
         "execution_capability_profile_merge_invalid",
         "execution_configuration_timeout_overflow",
         "execution_endpoint_rebind_session_open",
-        "execution_instance_identity_mismatch",
         "execution_instance_unknown",
         "execution_kernel_closed",
         "execution_kernel_state_poisoned",
-        "execution_session_close_in_progress",
         "execution_session_generation_exhausted",
         "execution_session_spawn_failed",
         "fact_publication_sequence_missing",
@@ -3074,9 +3078,6 @@ fn severe_policy_failure_codes() -> &'static [&'static str] {
         "governance_connection_state_conflict",
         "input_backend_missing",
         "input_execution_plan_invalid",
-        "input_frame_capture_mismatch",
-        "input_frame_not_committed",
-        "input_frame_session_missing",
         "instance_worker_spawn_failed",
         "invalid_application_identity",
         "invalid_emulator_capability_requirement_count",
