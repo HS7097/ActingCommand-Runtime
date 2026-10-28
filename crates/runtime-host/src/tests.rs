@@ -346,6 +346,10 @@ mod gate_419_iso1;
 // widened A46 fence and the retained-session closes of the emulator rung, the autostart, an
 // operator's restart, a pause, a handset and a lease end.
 mod gate_419_iso2;
+// ISO-2b (#419, ISO-M R1): a device session that dies twice in a row holds only its instance;
+// a Nemu input that the run's deadline, its cancel or its lease stopped fails with that work's
+// own code, not as a device failure.
+mod gate_419_iso2b;
 // #411 A35 (A35-S2, host keys 156 to 161), register §1.168: after a listed return-home failure
 // the ladder probes the screen; while it still changes, the ladder holds instead of restarting.
 mod gate_411_a35;

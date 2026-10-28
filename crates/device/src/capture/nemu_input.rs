@@ -51,8 +51,26 @@ pub enum InputCheckPhase {
 }
 
 /// Reads the existing Runtime lease and deadline; this interface grants no authority.
+///
+/// ISO-2b (#419 R1, ISO-M row E08): a check that stops the input because the work that admitted
+/// it ended (its deadline, its lease, its cancellation) answers
+/// [`DeviceError::input_check_stopped`] with the [`InputCheckStop`], not a device failure; the
+/// touch protocol carries that answer to its caller unchanged.
 pub trait InputOperationCheck: Send + Sync {
     fn check(&self, phase: InputCheckPhase) -> DeviceResult<Duration>;
+}
+
+/// ISO-2b (#419 R1, ISO-M row E08): why an input's operation check stopped it. The device was
+/// not at fault: the work that admitted the input ended, so its owner ends that work with its
+/// own code instead of reading a device failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputCheckStop {
+    /// The deadline of the work that admitted the input passed.
+    Deadline,
+    /// The lease or step that admitted the input no longer admits it.
+    Lease,
+    /// The work that admitted the input was asked to stop.
+    Cancelled,
 }
 
 #[derive(Clone)]

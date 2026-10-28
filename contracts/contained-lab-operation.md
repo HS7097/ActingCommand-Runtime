@@ -340,8 +340,11 @@ declared-operation mode over the Lab lease:
   capture after the 256th is refused with `lab_operation_frame_limit_reached` (`count`,
   `limit_count` 256; error, `ladder_class` `none`) and ends the operation;
 * every input is preceded by the handset keepalive, as a run's, and goes through the lease's
-  input with the frame the kernel bound it to; a frame other than the one captured last is the
-  fatal `contained_task_effect_frame_identity_mismatch`. Each attempt's intent and outcome are
+  input with the frame the kernel bound it to; a frame other than the one captured last ends the
+  operation with `contained_task_effect_frame_identity_mismatch` (since 0.12.25, ISO-2b #419: a
+  failure of this operation alone, non-fatal, its record written; the instance is not fenced, as
+  for every broken invariant of the operation's own state: `contained_task_effect_invalid`,
+  `contained_task_state_invalid`). Each attempt's intent and outcome are
   read as an element operation's input is, from after the previous attempt's events;
 * the point is drawn with the touch keys in effect and the instance's landing history, which
   runs share and which records the press; attempt 1 draws from the request's seed (or one
