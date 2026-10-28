@@ -1285,6 +1285,11 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
   `history_page_rows` is the rows of their pages too. A link-set page picks its rows in each link
   dimension's own index, ordered and limited there, so its work does not grow with the linked
   records after it (ledger-store.md, "Open, ownership and append durability"). No key is added.
+- #422 P32 A-1 (since 0.12.26): a history page with an equality on a per-run link (every link
+  but the instance, whose index drives the statement since #419 DIAG-RUN) is ordered by the link
+  row's sequence, which that index gives, so the statement stops at the page's limit; ordered by
+  the event row, it sorted every record of the run within its span on every page. Its rows and
+  their order are unchanged. No key or index is added.
 - #422 LN-9 (LEAN-L §6, Alice's ruling 57: damage in old rows that nobody reads is found by a
   background re-check of about 40 minutes a pass; the release after v0.12.13, `actingd-config`
   revision 13): the Runtime's writer (the one opened with a failure plan) runs a paced background

@@ -604,6 +604,17 @@ tests = [
 ]
 incident = ["#411 A6"]
 
+# P32-A (#422 6468995196; design rd-1028/design-p32.md §1.5, §2 A-1 and A-2; 0.12 wave 2, since 0.12.26): on a scripted Runtime with the time standing still (a deadline already reached, or one no test reaches). A-1: a run's Runtime restart, lease and dispatch intent reads go on past a page the Runtime's read budget cut (no row, more to read, its cursor before the record): at a reached deadline window_run_status and window_run_catalog_task_id answer None (incomplete, as for a cut status read) after that one page, never "not restarted", "no lease terminal" or "dispatched by hand"; before the deadline, and without one (contained_run_status), the read asks the page after the cut one and finds the restart (interrupted_unterminated, restarted after admission), the release (released) and the intent (its policy task). A-2: the run listing asks each listing type's page as Concise (no payload) and finds a fact's run from its links; on a ledger of two instances (succeeded, failed, cancelled, ended before admission, open and doubly terminated runs, and a Lab debug run's own task records that link no instance) its listing equals, field by field, the listing that asked Forensic and read each fact's payload, with and without an instance, from before the first run and from inside the runs
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-client::lib::tests::gate_422_p32a::p32_a1_a_restart_read_the_budget_cut_is_incomplete_at_the_deadline_and_read_on_before_it",
+    "actingcommand-runtime-client::lib::tests::gate_422_p32a::p32_a1_a_lease_read_the_budget_cut_is_incomplete_at_the_deadline_and_read_on_before_it",
+    "actingcommand-runtime-client::lib::tests::gate_422_p32a::p32_a1_a_dispatch_intent_read_the_budget_cut_is_incomplete_at_the_deadline_and_read_on",
+    "actingcommand-runtime-client::lib::tests::gate_422_p32a::p32_a2_the_listing_without_payloads_lists_the_runs_of_the_listing_with_them_field_by_field",
+]
+incident = ["#422 P32"]
+
 # #411 B37 (slice A35-S1, 0.12.x; register §1.152 B37-1; design rd-1021/train-0129/a35-design.md §5.1 S1 T6; coordinator decision Q11; contract key K29 assigned by the coordinator): a scheduling_outcome mapping's busy member parses, reads back and serializes as declared; busy together with remedy, or on a designated_effect_completed mapping, is refused invalid_scheduling_outcome_declaration at the field busy; a mapping without busy serializes byte for byte as before
 [[gate]]
 key = "K29"

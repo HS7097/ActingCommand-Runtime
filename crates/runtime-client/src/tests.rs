@@ -6,6 +6,9 @@ use super::*;
 mod gate_0121_a6;
 // Workflow #411 A6, part 2: a run's own status reads only the record types it projects.
 mod gate_0121_a6b;
+// #422 P32-A: a status read the Runtime's budget cut is read on or incomplete, never "none";
+// the run listing asks its pages without payloads and lists the same runs.
+mod gate_422_p32a;
 // Workflow #381 A: the session deadline of a run (#672 review M3).
 mod gate_381a;
 // Workflow #381 B: the emulator control receipt wait (test plan C-3).
