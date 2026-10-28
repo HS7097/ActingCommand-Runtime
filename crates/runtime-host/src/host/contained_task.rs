@@ -4521,7 +4521,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         }
                         session_died_again = self.host.session_died_again(
                             self.token.instance_id(),
-                            error.code().as_str(),
+                            &error,
                             HostLocation::RunContainedTaskCapture,
                         )?;
                         if !session_died_again {

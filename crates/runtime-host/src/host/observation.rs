@@ -462,11 +462,7 @@ impl HostShared {
                 // its captures succeeded; once recorded, the observe holds only that instance.
                 let session_died_again = match links.instance_id() {
                     Some(instance) => self
-                        .session_died_again(
-                            *instance,
-                            error.code().as_str(),
-                            HostLocation::ExecuteCaptureBackend,
-                        )
+                        .session_died_again(*instance, &error, HostLocation::ExecuteCaptureBackend)
                         .map_err(RequestFailure::poison_without_terminal)?,
                     None => false,
                 };

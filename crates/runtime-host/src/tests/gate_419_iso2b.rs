@@ -9,13 +9,16 @@
 //!   death after a capture succeeded again, fails only the run;
 //! - c, d, e: the Nemu input check reports an input that the run's deadline, the run's cancel or
 //!   the lease stopped as that stop, not as a device failure, and the input path makes it the
-//!   run's or the lease's own non-fatal failure of the operation alone.
+//!   run's or the lease's own non-fatal failure of the operation alone;
+//! - f: a scheduled run whose session dies once fails only that run: its policy settlement is
+//!   an ordinary failure, and its task is not paused.
 //!
-//! Every test checks that the Runtime does not latch. The session tests run two instances, X with
-//! the fault and Y normal, and check that only X is fenced and that Y's run completes.
+//! Every test checks that the Runtime does not latch. The session tests a and b run two
+//! instances, X with the fault and Y normal, and check that only X is fenced and that Y's run
+//! completes.
 
 use super::gate_403::{fence_records, status_fence};
-use super::instance_workers::all_events;
+use super::instance_workers::{admit_ladder_run, all_events, ladder_setup};
 use super::*;
 use crate::FailureScope;
 use actingcommand_contract::{EffectiveDeviceConfiguration, InstanceStuckRecovery};
@@ -86,8 +89,12 @@ fn assert_run_completes(host: &RuntimeHost, alias: &str, package: &str, connecti
     );
 }
 
-/// X's direct run whose capture panics inside X's session thread: the run fails, non-fatal.
-fn run_with_a_dead_session(fixture: &Pair, connection: u64) -> RuntimeReceipt {
+/// The kernel code of a session thread that panicked, the death the tests inject.
+const PANICKED: &str = "execution_session_panicked";
+
+/// X's direct run whose capture panics inside X's session thread: the run fails, non-fatal,
+/// with `code` on top of its receipt.
+fn run_with_a_dead_session(fixture: &Pair, connection: u64, code: &str) -> RuntimeReceipt {
     fixture
         .x_state
         .panic_capture_once
@@ -96,7 +103,21 @@ fn run_with_a_dead_session(fixture: &Pair, connection: u64) -> RuntimeReceipt {
     assert_eq!(receipt.state(), RuntimeReceiptState::Failed, "{receipt:?}");
     let projection = receipt.error_projection().expect("the run's failure");
     assert!(!projection.fatal, "{receipt:?}");
+    assert_eq!(receipt.outcome().code().as_str(), code, "{receipt:?}");
     receipt
+}
+
+/// X's run whose session dies for the first time: it fails only itself, as a capture failure
+/// (#411 A7, ISO-2): the kernel's `execution_session_panicked` on top of its receipt, projected
+/// as a non-fatal `capture_failed`. That also says the death's close was confirmed: an
+/// unconfirmed one would have fenced X (#403) and ended the run with the fence's code.
+fn first_death(fixture: &Pair, connection: u64) {
+    let receipt = run_with_a_dead_session(fixture, connection, PANICKED);
+    assert_eq!(
+        receipt.error_projection().expect("the run's failure").code,
+        RuntimeErrorCode::CaptureFailed,
+        "{receipt:?}"
+    );
 }
 
 /// Two started instances with direct-run packages on a manual clock: X (with the fault) and Y.
@@ -152,13 +173,18 @@ fn pair() -> Pair {
 fn iso2b_a_a_second_session_death_in_a_row_fences_only_x() {
     let fixture = pair();
 
-    run_with_a_dead_session(&fixture, 4401);
+    first_death(&fixture, 4401);
     assert_eq!(
         status_fence(&fixture.host, X_ALIAS),
         None,
         "one death fails only its run"
     );
-    run_with_a_dead_session(&fixture, 4402);
+    // The second death ends the run with the fence's non-fatal failure.
+    run_with_a_dead_session(
+        &fixture,
+        4402,
+        crate::codes::HostCode::InstanceResourcesFenced.as_str(),
+    );
 
     let fence = status_fence(&fixture.host, X_ALIAS).expect("X is fenced");
     assert!(
@@ -189,9 +215,9 @@ fn iso2b_a_a_second_session_death_in_a_row_fences_only_x() {
 fn iso2b_b_a_capture_between_two_deaths_keeps_x_unfenced() {
     let fixture = pair();
 
-    run_with_a_dead_session(&fixture, 4404);
+    first_death(&fixture, 4404);
     assert_run_completes(&fixture.host, X_ALIAS, &fixture.x_package, 4405);
-    run_with_a_dead_session(&fixture, 4406);
+    first_death(&fixture, 4406);
 
     assert_eq!(
         status_fence(&fixture.host, X_ALIAS),
@@ -368,21 +394,16 @@ fn iso2b_e_a_lapsed_lease_stops_the_nemu_input_with_the_lease_refusal() {
         InputCheckStop::Lease,
     );
 
-    // The lease sweep may settle the lapsed lease meanwhile: the refusal is whichever the
-    // scheduler answers for the token now, always one of the lease's own.
+    // The lapsed lease's own refusal: `lease_expired` (the sweep defers an expiry while the
+    // input's step is in flight, so the lease is still there to refuse), or `lease_missing`.
     assert!(
         [
             RuntimeErrorCode::LeaseExpired,
-            RuntimeErrorCode::LeaseMissing,
-            RuntimeErrorCode::LeaseMismatch,
-            RuntimeErrorCode::LeaseCooldown,
-            RuntimeErrorCode::ConnectionMismatch,
-            RuntimeErrorCode::InstanceMismatch,
-            RuntimeErrorCode::HolderMismatch,
+            RuntimeErrorCode::LeaseMissing
         ]
         .iter()
         .any(|code| failure.code() == code.as_str()),
-        "the lease's own refusal: {:?}",
+        "the lapsed lease's own refusal: {:?}",
         failure.outcome()
     );
     assert_eq!(
@@ -390,4 +411,75 @@ fn iso2b_e_a_lapsed_lease_stops_the_nemu_input_with_the_lease_refusal() {
         crate::codes::HostLocation::ExecuteInputBackend.as_str()
     );
     fixture.close(false);
+}
+
+/// f (R1, row A01; ISO-2: a dead session fails only the run): X's scheduled run meets its
+/// session dead at its first capture. The run fails only itself, non-fatal, with the kernel's
+/// `execution_session_panicked`, and the policy settles it as an ordinary failure: class
+/// `Recoverable` and a retry scheduled, so the task is not paused for a person (a session-death
+/// code is no longer on the contract's always-severe list). X is not fenced and the Runtime does
+/// not latch. X's stuck recovery is off, so no ladder acts on X while the test reads it.
+#[test]
+fn iso2b_f_a_single_session_death_does_not_pause_the_scheduled_task() {
+    let root = TempDir::new().expect("tempdir");
+    let (host_config, request) = ladder_setup(root.path());
+    let state = Arc::new(FakeState::default());
+    state.physical_task_geometry.store(true, Ordering::Release);
+    let host = RuntimeHost::start(
+        host_config.with_stuck_recovery(BTreeMap::from([(
+            POLICY_INSTANCE_ALIAS.to_owned(),
+            InstanceStuckRecovery {
+                enabled: false,
+                cooldown_secs: 600,
+            },
+        )])),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::clone(&state),
+        )),
+    )
+    .expect("runtime host");
+    let context = admit_ladder_run(&host, &request);
+    state.panic_capture_once.store(true, Ordering::Release);
+
+    let error = host
+        .run_scheduled_contained_task(&context, &request)
+        .expect_err("X's scheduled run fails");
+
+    assert!(!error.is_fatal(), "{:?}", error.outcome());
+    assert_eq!(error.code(), PANICKED);
+    let failures = all_events(&host)
+        .iter()
+        .filter_map(|event| match event.payload() {
+            EventPayload::Policy(PolicyPayload::ExecutionRecorded(execution)) => {
+                match execution.policy_result() {
+                    PolicyExecutionOutcome::Failed { failure } => Some(failure.clone()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [failure] = failures.as_slice() else {
+        panic!("one failed policy execution: {failures:?}");
+    };
+    assert_eq!(failure.outcome.code().as_str(), PANICKED, "{failure:?}");
+    assert_eq!(
+        failure.original_class,
+        PolicyFailureClass::Recoverable,
+        "{failure:?}"
+    );
+    assert_eq!(
+        failure.disposition,
+        PolicyFailureDisposition::RetryScheduled,
+        "{failure:?}"
+    );
+    assert_eq!(
+        status_fence(&host, POLICY_INSTANCE_ALIAS),
+        None,
+        "one death holds nothing"
+    );
+    assert_running(&host);
+    host.close().expect("close host");
 }

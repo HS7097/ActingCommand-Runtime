@@ -355,11 +355,17 @@ impl HostShared {
                                     // ISO-2b (#419 R1, ISO-M row E08): an input that its
                                     // operation check stopped, its resources not left
                                     // unconfirmed, fails only its operation with the run's or
-                                    // the lease's own code; the device is not at fault.
+                                    // the lease's own code; the device is not at fault. A failure
+                                    // that carries a second one (a close that failed with its
+                                    // resources confirmed, merged as its cleanup) stays the
+                                    // kernel's, so that failure is recorded too (Fail Loud).
                                     let stopped = match error.failure_context().input_check_stop() {
                                         Some(stop)
                                             if error.resource_quiescence()
-                                                != Some(ResourceQuiescence::Unconfirmed) =>
+                                                != Some(ResourceQuiescence::Unconfirmed)
+                                                && error.secondary_code().is_none()
+                                                && error.lifecycle_causes().is_empty()
+                                                && error.cleanup_cause().is_none() =>
                                         {
                                             match self.input_check_stop_failure(
                                                 stop,

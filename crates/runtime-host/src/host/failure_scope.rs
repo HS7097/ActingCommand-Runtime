@@ -707,18 +707,19 @@ impl HostShared {
 
     /// ISO-2b (#419 R1; outcome-code spec §7, amendment 10-24: a per-instance unit that dies
     /// again before it finishes one unit of work stops only its instance): a capture of
-    /// `instance` met its device session dead (`code`, one of [`SESSION_DEATH_CODES`]). Returns
-    /// whether this is the session's second death in a row, that is, no capture of the instance
-    /// succeeded since its previous death ([`Self::session_alive`]). The second death ends the
-    /// count: its caller fences the instance, and the next death after its recovery is a first
-    /// one again. Any other code is no death and changes nothing.
+    /// `instance` failed with `error`; a death of its device session is one of
+    /// [`SESSION_DEATH_CODES`]. Returns whether this is the session's second death in a row,
+    /// that is, no capture of the instance succeeded since its previous death
+    /// ([`Self::session_alive`]). The second death ends the count: its caller fences the
+    /// instance, and the next death after its recovery is a first one again. Any other failure
+    /// is no death and changes nothing.
     pub(super) fn session_died_again(
         &self,
         instance: InstanceId,
-        code: &str,
+        error: &ExecutionKernelError,
         operation: HostLocation,
     ) -> RuntimeHostResult<bool> {
-        if !spelled(code, SESSION_DEATH_CODES) {
+        if !spelled(error.code().as_str(), SESSION_DEATH_CODES) {
             return Ok(false);
         }
         let mut deaths = lock(&self.session_deaths, operation)?;

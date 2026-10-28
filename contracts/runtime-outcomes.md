@@ -343,7 +343,10 @@ its boundary's, and keeps the kernel's code and severity. A kernel code on the G
   such death, the instance is fenced at once (`contain_failure`, whatever the work's boundary):
   the work ends with the fence's non-fatal failure, the capture's own record kept, and every
   other instance goes on. The fence ends the count; after the instance's recovery its next
-  death is a first one again.
+  death is a first one again. A session death that an input meets is not counted. The
+  monitor's probe neither counts a death nor clears the count; that is left to ISO-4a. A
+  session-death code is not on the policy's always-severe list (`is_severe_policy_failure`), so
+  a scheduled run's first death is an ordinary failure toward its task's failure pause.
 - **Operation invariants fail only the operation.** A capture sequence whose result cannot be
   formed (`capture_sequence_result_invalid`, `capture_sequence_terminal_missing`), an observe
   whose observation cannot be formed from its frame (`readonly_observation_invalid`) and a Lab
@@ -355,7 +358,9 @@ its boundary's, and keeps the kernel's code and severity. A kernel code on the G
   (`InputOperationCheck`) answers an input that the work admitting it ended with the stop
   (`DeviceError::input_check_stopped`: its deadline, its lease, its cancellation), not a device
   failure, and the kernel's failure carries it. Unless the stop left the contact unconfirmed
-  (#403 fences then), the input fails only its operation with that work's own code: the run's
+  (#403 fences then) or the failure carries a second one (a session close that failed with its
+  resources confirmed: the kernel's failure stays, so that close is recorded too), the input
+  fails only its operation with that work's own code: the run's
   `contained_task_deadline_exceeded`, `contained_task_cancelled` or `contained_task_paused` (so
   the run ends as on its own deadline or cancel), or the lease's refusal (`lease_expired`,
   `lease_missing`, ...). The input's own command timeout, the clock, the scheduler's own failures
