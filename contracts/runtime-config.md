@@ -254,6 +254,15 @@ carrying `lease_expired`, and fences the instance; neither stops the Runtime. A 
 ended before its end began enters no end phase, and every other lease (an ordinary client lease
 included) keeps its behaviour from before C-43.
 
+ISO-5a (Workflow #419, ISO-M rows A08, A11; C-43 point 3, since Runtime 0.12.27; no new key, no
+revision): a contained run that ends otherwise (a success, another failure, a cancel) enters its
+end phase the same way while it holds its lease and the lease has not lapsed yet; a run whose
+failure poisons (a ledger failure) ends as before. Its lease is renewed once to
+`run_end_grace_ms` from then only when it would lapse inside that grace; a lease that outlasts the
+grace is kept as it is. The key is therefore read when any run's end begins. A scheduled run
+whose success terminal was committed and whose lease end then met its lease already ended (its end
+ran past the grace) settles as a success; only its receipt fails, never the Runtime.
+
 ## The `standard_packs` section (Workflow #373 NAV-6; moved by D1c)
 
 | Key | Type | Default |

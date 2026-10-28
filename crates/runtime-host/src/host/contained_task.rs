@@ -166,6 +166,9 @@ pub(crate) enum ContainedTaskCheckpointPoint {
     /// #419 DIAG-RUN: a run's end work, after its diagnostic was sealed, failed or aborted, and
     /// before the capture summary and the terminal.
     DiagnosticEnded,
+    /// ISO-5a (#419, ISO-M row B17): a lease release (a run's own, after its terminal), after its
+    /// first validation and before the admission guard is taken.
+    ReleaseValidated,
 }
 
 #[cfg(test)]
@@ -533,7 +536,7 @@ pub(super) struct ContainedRunControl {
     /// #411 B37 (A35-S1): set once when the run's committed terminal selected a `busy` mapping.
     busy_end: std::sync::OnceLock<BusyEnd>,
     /// #411 A64 (ruling C-43): set once when the run reached its deadline and entered its end
-    /// phase.
+    /// phase; ISO-5a (#419): or ended otherwise while it held its lease.
     end_phase: std::sync::OnceLock<RunEndPhase>,
     /// #411 A64 (ruling C-43): whether a close of the instance's resources at a lease end in the
     /// run's end phase met the lapsed lease and closed nothing (`LAPSED_CLOSE_*`).
@@ -7654,10 +7657,17 @@ impl HostShared {
         }
         // #411 A64 (ruling C-43): a run that reached its deadline enters its end phase before any
         // of its end work; its end runs under the lease its end grace renewed (`end_token`).
-        let end_token = if reached_deadline(&execution) {
-            Some(self.enter_run_end_phase(request, &token, connection_id, &control)?)
+        // ISO-5a (#419, ISO-M rows A08, A11; C-43 point 3): so does every other run end (success,
+        // another failure, a cancel) while it holds its lease; a failure that poisons (a ledger
+        // failure) ends the run as before.
+        let deadline_end = reached_deadline(&execution);
+        let poisoned = matches!(&execution,
+            Err(ContainedTaskRunError::Boundary(failure) | ContainedTaskRunError::NonfatalOperation(failure))
+                if failure.poison_runtime);
+        let end_token = if deadline_end || !poisoned {
+            self.enter_run_end_phase(request, &token, connection_id, &control, deadline_end)?
         } else {
-            None
+            token.clone()
         };
         #[cfg(test)]
         self.consume_contained_task_checkpoint_for_test(
@@ -7773,7 +7783,7 @@ impl HostShared {
         let mut capture_evidence = std::mem::take(&mut runtime.capture_evidence);
         drop(runtime);
         // #411 A64 (ruling C-43): the terminal and the lease end use the renewed token.
-        let token = end_token.unwrap_or(token);
+        let token = end_token;
         let outcome = match execution {
             Ok(outcome) => outcome,
             Err(
@@ -9629,12 +9639,20 @@ impl HostShared {
     /// lease; #670 final review, test (g)). Any other refusal of the lease's position is left to
     /// the terminal's own check, which ends the run with it as before. A failure that poisons (a
     /// ledger failure) ends the run as before.
+    ///
+    /// ISO-5a (#419, ISO-M rows A08, A11; C-43 point 3: no step of a run's end may stop the
+    /// Runtime): a run that ends otherwise (`deadline_end` false: a success, another failure,
+    /// a cancel) enters its end phase the same way while it holds its lease and the lease has not
+    /// lapsed yet; a lease that lapsed before the end began is left to its sweep, as before. Its
+    /// lease is renewed only when it would lapse inside the end grace; a lease that outlasts the
+    /// grace already covers the end, and is kept as it is.
     fn enter_run_end_phase(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
         token: &LeaseToken,
         connection_id: ConnectionId,
         control: &ContainedRunControl,
+        deadline_end: bool,
     ) -> Result<LeaseToken, RequestFailure> {
         let grace_ms = self
             .run_end_grace_ms()
@@ -9642,18 +9660,20 @@ impl HostShared {
         let now = self
             .monotonic_ms()
             .map_err(RequestFailure::poison_without_terminal)?;
+        let grace_end = now.saturating_add(grace_ms);
         let held = {
             let scheduler = lock(&self.scheduler, HostLocation::ReadTaskLeaseConnection)?;
-            let held = scheduler.connection_for_token(token).is_ok();
+            let held = scheduler.connection_for_token(token).is_ok()
+                && (deadline_end || now < token.expires_at_monotonic_ms());
             if held {
                 control.enter_end_phase(RunEndPhase {
                     lease_id: token.lease_id(),
-                    until_monotonic_ms: now.saturating_add(grace_ms),
+                    until_monotonic_ms: grace_end,
                 });
             }
             held
         };
-        if !held {
+        if !held || (!deadline_end && token.expires_at_monotonic_ms() >= grace_end) {
             return Ok(token.clone());
         }
         match self.renew_held_lease(request, token, connection_id, grace_ms) {

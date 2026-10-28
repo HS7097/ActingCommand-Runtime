@@ -359,6 +359,10 @@ mod gate_419_iso2b;
 // W2-E (#419, ISO-M R1, rows E13, A05): an input that meets its session closing, its endpoint
 // changed or its frame no longer committed fails only the input and does not pause its task.
 mod gate_419_w2e;
+// ISO-5a (#419, ISO-M rows A08, A11, B02; C-43 point 3): no step of a run's end, or of a lease
+// holder's end, stops the Runtime: every run end enters the end phase, a success whose lease ended
+// settles as a success, and an expiry waits for a write in flight.
+mod gate_419_iso5a;
 // #411 A35 (A35-S2, host keys 156 to 161), register §1.168: after a listed return-home failure
 // the ladder probes the screen; while it still changes, the ladder holds instead of restarting.
 mod gate_411_a35;

@@ -48,8 +48,8 @@ tests = [
 ]
 incident = []
 
-# TTL (not written for now, coordinator-rulings-c-items.md:20: release_owned refusing Explicit,
-# Preempted and Expired)
+# TTL (not written for now, coordinator-rulings-c-items.md:20: release_owned refusing Explicit
+# and Expired)
 [[gate]]
 key = "5"
 coverage = "Y"
@@ -62,6 +62,14 @@ tests = [
     "actingcommand-scheduler::lib::tests::gate_p1::gate_p1_g5_rollback_frees_the_instance_and_forgets_the_token",
 ]
 incident = ["#382 P-1"]
+
+# ISO-5a (Workflow #419; ISO-M row B20, the latent bug): a preempted lease whose transfer business capacity refused is ended by the Runtime with an owned release of reason Preempted, which returns the token and the reason and frees the instance (before, release_owned refused Preempted, the cleanup found the token still active and latched scheduler_cleanup_state_mismatch); an explicit release and an expiry keep their own entries and are still refused there
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-scheduler::lib::tests::gate_p1::iso5a_b20_a_preempted_owned_release_frees_the_instance",
+]
+incident = ["#419"]
 
 # Takeover cooldown
 [[gate]]
