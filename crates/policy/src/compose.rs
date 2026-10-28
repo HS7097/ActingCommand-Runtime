@@ -14,9 +14,10 @@
 //! 2. **Read**: each game's file is read by the contract crate's reader, its `requires` checked
 //!    to name `fact_reference` when a rule writes a fact reference (#386 CF-4) and
 //!    `pool_fact_reference` when a pool's `capacity` or a `resource_projection`'s `value` is one
-//!    (#386 CF-5), and against the subsystems given (when given), its packages checked against
-//!    the registry, and the registry's packages classified. A refused game is reported with its
-//!    game id.
+//!    (#386 CF-5) and `reset_exclusions` when a timeline event writes `excludes_fact_prefixes`
+//!    (Workflow #411 P19), and against the subsystems given (when given), its packages checked
+//!    against the registry, and the registry's packages classified. A refused game is reported
+//!    with its game id.
 //! 3. **Instantiate**: per bound instance `i` of game `g` on server `s`, every rule whose package
 //!    belongs to `s` and is not held, and every pool, profile and event for every server or for
 //!    `s`, each scope filled with `{kind: instance, instance_id: i}` (the item's own and those of
@@ -57,8 +58,8 @@ use crate::canonical::canonical_serialized;
 use crate::{
     ActivityProfile, CatalogDocumentSource, CatalogSources, CompiledCatalog,
     FACT_REFERENCE_SUBSYSTEM, FACT_REFERENCE_TYPE, POOL_FACT_REFERENCE_SUBSYSTEM, PoolSpec,
-    SCHEDULING_SCHEMA_VERSION_V2, SchedulingDocumentKind, TaskSpec, TimelineEvent,
-    compile_composed_catalog,
+    RESET_EXCLUSIONS_SUBSYSTEM, SCHEDULING_SCHEMA_VERSION_V2, SchedulingDocumentKind, TaskSpec,
+    TimelineEvent, compile_composed_catalog,
 };
 
 /// The catalog id of every composition (model §3.2 step 4).
@@ -478,6 +479,21 @@ fn read_game(
             ),
         ));
     }
+    // Workflow #411 P19: likewise a timeline event that writes `excludes_fact_prefixes`.
+    if !schedule
+        .requires
+        .iter()
+        .any(|name| name == RESET_EXCLUSIONS_SUBSYSTEM)
+        && let Some(pointer) = first_reset_exclusion(&schedule)
+    {
+        return Err(refused(
+            schedule_issue(StandardPackProblem::ScheduleInvalid, pointer),
+            format!(
+                "a timeline event's {EXCLUDES_FACT_PREFIXES} needs requires to name \
+                 {RESET_EXCLUSIONS_SUBSYSTEM}"
+            ),
+        ));
+    }
     if let Some(subsystems) = subsystems
         && let Some((index, name)) = schedule
             .requires
@@ -526,6 +542,19 @@ fn first_pool_fact_reference(schedule: &StandardPackSchedule) -> Option<String> 
             .find(|(_, pool)| is_fact_reference(pool.body.get("capacity")))
             .map(|(index, _)| format!("/pools/{index}/capacity"))
     })
+}
+
+/// The timeline event member of Workflow #411 P19.
+const EXCLUDES_FACT_PREFIXES: &str = "excludes_fact_prefixes";
+
+/// Workflow #411 P19: the pointer of the first timeline event that writes
+/// `excludes_fact_prefixes`, with any value, in file order. `None` when no event writes it.
+fn first_reset_exclusion(schedule: &StandardPackSchedule) -> Option<String> {
+    schedule
+        .timeline
+        .iter()
+        .position(|event| event.body.contains_key(EXCLUDES_FACT_PREFIXES))
+        .map(|index| format!("/timeline/{index}/{EXCLUDES_FACT_PREFIXES}"))
 }
 
 /// The pointer of the first fact reference a rule's `trigger` or `feedback_stop` writes as the

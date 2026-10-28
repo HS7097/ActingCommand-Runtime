@@ -724,6 +724,11 @@ fn evaluation_pool_values<'a>(
         .collect()
 }
 
+/// The facts as the timeline's resets leave them at `time`: an observation of a key an event
+/// invalidates (`TimelineEvent::invalidates_key`) at or before the event's latest occurrence is
+/// removed, and a task whose settled run is that old loses its `terminal_state` and
+/// `completed_window` here. Workflow #411 P19: the task's own last result stays in the input; the
+/// evaluation reads it there for the task's own edges (`evaluate_predicate`'s `task_state`).
 pub(crate) fn project_time_validity(
     catalog: &CompiledCatalog,
     facts: &EvaluationFacts,
@@ -739,12 +744,9 @@ pub(crate) fn project_time_validity(
         .collect::<PolicyEvaluationResult<Vec<_>>>()?;
     let validity = |scope: &ScopeSelector, key: &str, observed: u64, expiry: &mut Option<u64>| {
         for (event, (latest, next)) in &resets {
-            if !scope_covers(&event.scope, scope, &facts.instances)
-                || !event
-                    .invalidates_fact_prefixes
-                    .iter()
-                    .any(|prefix| key.starts_with(prefix))
-            {
+            // Workflow #411 P19: a key below one of the event's `excludes_fact_prefixes` keeps
+            // its observation through the event.
+            if !scope_covers(&event.scope, scope, &facts.instances) || !event.invalidates_key(key) {
                 continue;
             }
             // Millisecond timestamps cannot order an observation at the reset instant.
@@ -1072,6 +1074,13 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
     // Stored resource target policies are read before the time-validity projection, so a
     // timeline reset never silently withdraws one (Workflow #308 RT-S1b).
     let target_policies = crate::resource_targets::instance_target_policies(facts, time)?;
+    // Workflow #411 P19: each task's own last result, as the input holds it: no timeline reset
+    // clears it. A task's own edges read it (`evaluate_predicate`'s `task_state`).
+    let last_results: BTreeMap<(&str, &str), &TaskRuntimeSnapshot> = facts
+        .tasks
+        .iter()
+        .map(|state| ((state.task_id.as_str(), state.instance_id.as_str()), state))
+        .collect();
 
     let effective_facts = project_time_validity(catalog, facts, time)?;
     let facts = &effective_facts;
@@ -1186,13 +1195,16 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
             let state = task_states
                 .get(&(task.id.as_str(), instance.instance_id.as_str()))
                 .copied();
+            let last_result = last_results
+                .get(&(task.id.as_str(), instance.instance_id.as_str()))
+                .copied();
             let decision_scope = ScopeSelector::Instance {
                 instance_id: instance.instance_id.clone(),
             };
             let mut task_work = TaskWork::new(task.id.clone(), instance.instance_id.clone());
             let mut trigger = evaluate_predicate(
                 &task.trigger,
-                state,
+                last_result,
                 &decision_scope,
                 facts,
                 &pool_specs,
@@ -1302,7 +1314,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
                     let mut stop = if has_window_result {
                         evaluate_predicate(
                             &task.feedback_stop,
-                            state,
+                            last_result,
                             &decision_scope,
                             facts,
                             &pool_specs,
@@ -4311,6 +4323,11 @@ impl PredicateEvaluation {
     }
 }
 
+/// Evaluates `predicate` for the task whose own state on the decision's instance is
+/// `task_state`. Workflow #411 P19: `task_state` is the task's own last result as the input holds
+/// it, which no timeline reset clears: a `clock` reads its latest dispatch, `once_per_reading`'s
+/// served check and `since_own_run`'s own run read it, and so does a `dependency_completed` that
+/// names the task itself. Every other task is read from `facts`, as the resets leave it.
 #[allow(clippy::too_many_arguments)]
 fn evaluate_predicate(
     predicate: &PredicateSpec,
@@ -4863,11 +4880,16 @@ fn evaluate_predicate(
             terminal_states,
             since_own_run,
         } => {
-            let state = facts.tasks.iter().find(|state| {
+            // Workflow #411 P19: the task itself is read from its own last result, which no
+            // reset clears; another task as the resets leave it.
+            let named = |state: &&TaskRuntimeSnapshot| {
                 state.task_id == *task_id
                     && scope_instance_id(decision_scope)
                         .is_some_and(|instance_id| state.instance_id == instance_id)
-            });
+            };
+            let state = task_state
+                .filter(named)
+                .or_else(|| facts.tasks.iter().find(named));
             let Some(terminal_state) = state.and_then(|state| state.terminal_state) else {
                 return Ok(PredicateEvaluation::unknown(DetectionSuggestion {
                     scope: decision_scope.clone(),
@@ -5225,7 +5247,8 @@ struct FactTimeReading {
 
 /// SCH-M CF-1 (`once_per_reading`): the dispatch of this task's latest run when that run
 /// succeeded and was dispatched at or after max(`target`, `observed_at`), so it served the
-/// reading's time.
+/// reading's time. Workflow #411 P19: `task_state` is the task's own last result, which no
+/// timeline reset clears.
 fn reading_served_by(
     task_state: Option<&TaskRuntimeSnapshot>,
     target: u64,
@@ -5671,6 +5694,12 @@ pub fn clock_slot_live(
     if !placed {
         return Ok(false);
     }
+    // Workflow #411 P19: the task's own last result, which no reset clears, as `evaluate` reads
+    // it.
+    let last_result = facts
+        .tasks
+        .iter()
+        .find(|state| state.task_id == task.id && state.instance_id == instance_id);
     let effective_facts = project_time_validity(catalog, facts, time)?;
     let facts = &effective_facts;
     let bundle = catalog.catalog();
@@ -5689,13 +5718,9 @@ pub fn clock_slot_live(
         .iter()
         .map(|event| (event.id.as_str(), event))
         .collect();
-    let state = facts
-        .tasks
-        .iter()
-        .find(|state| state.task_id == task.id && state.instance_id == instance_id);
     let trigger = evaluate_predicate(
         &counted_clocks_due(&task.trigger),
-        state,
+        last_result,
         &ScopeSelector::Instance {
             instance_id: instance_id.to_owned(),
         },

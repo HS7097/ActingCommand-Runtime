@@ -3644,6 +3644,24 @@ new code. The number 1.200 is provisional for the parallel slices (#427-B holds 
 | 427A-4 | a run no worker holds any more (a worker panic, a settlement that failed without stopping the Runtime) is settled online by the start's rule once its lease ended: as at start, a lease that already ended gets no release and no `policy_settlement_release_recovered` (fix 2, re-review M-1; #670 rulings 2 and 3), so it keeps its one end; the run is settled from its terminal or, without one, as interrupted from that end; its registration is then forgotten | behaviour (fix 1, review M1; fix 2, re-review M-1) | #427-A fix 1, fix 2 | the reconciliation | the instance stays held while the run's lease is active; a lease that ended in more than one way stays held and the next start records it |
 | 427A-5 | a run handed off before an install drain or a scheduling pause began goes ahead, as the synchronous round's run admitted before them does; only a run not yet taken when the Runtime's stop was requested is refused (`runtime_stopping`): never started, its lease released, given a live interrupted settlement (`policy_settlement_interrupted`, with the elapsed `runtime_ms`, not the start's recovered shape), which the restart lifts, the first one of its pair, like the start's (fix 2, re-review L-2; wording, re-review 2 L-A) | behaviour (fix 1, review L1; fix 2, re-review L-2) | #427-A fix 1, fix 2 | an instance worker | the drain waits for the run and the pause drains it; no failure is recorded for the pause or the drain |
 
+### 1.201 Slice W1-4 (0.12.25): a reset may exclude key prefixes and never clears a task's own last result (Workflow #411 P19, comment 6455013768 items 1 and 2; coordinator work order `rd-1028/brief-wave1.md` W1-4, the declarative way)
+
+[scheduling/README.md](scheduling/README.md) ("Reset exclusions and the task's own last result",
+with "Runtime Enforcement" and "Condition edges"), [scheduling/v2/README.md](scheduling/v2/README.md),
+`scheduling/v2/timeline.schema.json` and [standard-pack-schedule.md](standard-pack-schedule.md)
+(`requires`) are the contract. **No persisted ledger shape**: the member is a catalog format
+addition (the ledger holds only the catalog's `catalog_hash`, unchanged for a catalog without
+it), and the own last result is the `TaskRuntimeSnapshot` the evaluation already receives; no new
+code (`dangling_reference`, `unknown_field` and `type_mismatch` are reused), no configuration
+key, no wire or interface revision. The number 1.201 is provisional for the parallel slices of
+wave 1.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| P19-1 | a timeline event's optional `excludes_fact_prefixes` (`TimelineEvent::excludes_fact_prefixes`, `TimelineEvent::invalidates_key`; schema `v2/timeline.schema.json`) | catalog format addition (no ledger shape) | W1-4 | the standard packs' `schedule.json` | V2 only (V1: `unknown_field` at the member); at most 128 identifiers, each below one of the event's `invalidates_fact_prefixes` (`dangling_reference` at the entry otherwise); a key below one keeps its observation through the event and its expiry is not capped at the event's next occurrence; absent, the catalog serializes and hashes as before |
+| P19-2 | a reset never clears a task's own last result: its own `dependency_completed`, `since_own_run`'s own run and `once_per_reading`'s served check read the task's state as the input holds it | behaviour | W1-4 | the policy evaluator | the window result before `feedback_stop` and another task's `dependency_completed` still read the state as the resets leave it; `clock_slot_live` reads the trigger the same way, so the K4 clock-slot liveness changes with it: a pair whose own dependency was Unknown after a reset may now be live, and more `clock_slot_superseded` or `clock_slot_expired` records are written (diagnostics only, not dispatch) |
+| P19-3 | `config.subsystems` row `reset_exclusions` (always on, `config_subsystem_always_on`) | new row value of an existing fact (no shape) | W1-4 | W1-4 | [actingd-check-config.md](actingd-check-config.md); a `schedule.json` whose event writes P19-1 must list it in `requires`, else the composer refuses the file (`schedule_invalid` at the first `/timeline/<i>/excludes_fact_prefixes`); a file that relies on P19-2 names it too |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

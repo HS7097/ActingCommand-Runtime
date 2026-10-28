@@ -105,6 +105,7 @@ fn maintenance(
         schedule,
         duration_ms,
         invalidates_fact_prefixes: Vec::new(),
+        excludes_fact_prefixes: None,
         validity: Some(TimelineValidity {
             from_unix_ms: 0,
             until_unix_ms: RequiredNullable(None),

@@ -80,4 +80,8 @@ mod tests {
     // Workflow #427-B: no in-round CPU/GPU/IO deduction; the heavy-scene slots and the optional
     // maximum of concurrent runs, with their numbers.
     mod gate_427b;
+
+    // Workflow #411 P19: a reset may exclude key prefixes and never clears a task's own last
+    // result.
+    mod gate_411_p19;
 }
