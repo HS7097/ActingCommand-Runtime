@@ -166,6 +166,9 @@ pub(crate) enum ContainedTaskCheckpointPoint {
     /// #419 DIAG-RUN: a run's end work, after its diagnostic was sealed, failed or aborted, and
     /// before the capture summary and the terminal.
     DiagnosticEnded,
+    /// ISO-5a (#419, ISO-M row B17): a lease release (a run's own, after its terminal), after its
+    /// first validation and before the admission guard is taken.
+    ReleaseValidated,
 }
 
 #[cfg(test)]

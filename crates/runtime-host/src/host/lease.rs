@@ -1673,6 +1673,15 @@ impl HostShared {
             });
         }
         self.validated_instance(request, token, connection_id)?;
+        #[cfg(test)]
+        self.consume_contained_task_checkpoint_for_test(
+            super::contained_task::ContainedTaskCheckpointPoint::ReleaseValidated,
+            super::contained_task::ContainedTaskCheckpointIdentity::new(
+                request.request_id(),
+                token.instance_id(),
+                token.lease_id(),
+            ),
+        )?;
         let instance_guard = self.instance_guard(token.instance_id())?;
         let _admission = self.lock_admission(&instance_guard, token.instance_id())?;
         // ISO-5a (#419, ISO-M row B17): the lease sweep may have ended the lease between the

@@ -431,6 +431,65 @@ fn iso5a_b_a_success_whose_lease_ended_after_the_grace_settles_as_a_success() {
     fixture.close();
 }
 
+/// d (row B17): X's scheduled run succeeds; its release validated its lease, and before it takes
+/// the admission guard the end grace runs out and a sweep tick ends the lease
+/// (`ReleaseValidated`). Validated again under the guard, the release is the scheduler's
+/// non-fatal denial ("lease already ended"), never a poison: the run's receipt fails non-fatal,
+/// it settles once (a success, its sole terminal `task.completed`), nothing latches and Y's run
+/// completes.
+#[test]
+fn iso5a_d_a_release_whose_lease_ends_before_its_guard_is_denied_not_poisoned() {
+    let mut fixture = fixture(true);
+    let (context, request) = fixture.run.take().expect("X's admitted run");
+    let lease_id = context.lease_token().lease_id();
+    let expiries = Arc::new(AtomicUsize::new(usize::MAX));
+    let (hook_host, hook_clock, hook_expiries) = (
+        Arc::clone(&fixture.host),
+        Arc::clone(&fixture.clock),
+        Arc::clone(&expiries),
+    );
+    let between = fixture
+        .host
+        .run_at_leased_checkpoint_for_test(
+            ContainedTaskCheckpointPoint::ReleaseValidated,
+            fixture.x,
+            lease_id,
+            move |_| {
+                hook_clock.advance(END_GRACE_MS + 1);
+                hook_host
+                    .expire_due_leases_for_test()
+                    .expect("a sweep tick between the validation and the guard");
+                hook_expiries.store(lease_expiries(&hook_host, lease_id), Ordering::SeqCst);
+            },
+        )
+        .expect("arm the sweep between the release's validation and its guard");
+
+    let error = fixture
+        .host
+        .run_scheduled_contained_task(&context, &request)
+        .expect_err("the release meets the ended lease");
+
+    assert_eq!(between.consumed(), 1, "the run's release was validated");
+    assert_eq!(
+        expiries.load(Ordering::SeqCst),
+        1,
+        "the sweep ended the lease before the guard"
+    );
+    assert!(!error.is_fatal(), "{error:?}");
+    assert_runtime_runs(&fixture.host);
+    assert_eq!(
+        run_records(&fixture.host, EventType::TaskCompleted, &context),
+        1
+    );
+    assert_eq!(
+        run_records(&fixture.host, EventType::PolicyExecutionRecorded, &context),
+        1,
+        "one policy execution record"
+    );
+    fixture.assert_y_runs();
+    fixture.close();
+}
+
 /// c (row B02): a client holds X's lease, and its input write is in flight when the lease lapses
 /// (the clock passes the lease's end inside the write, which runs without the admission guard).
 /// Three sweep ticks then meet the write: each leaves the lease, closes nothing and records
