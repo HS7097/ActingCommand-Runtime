@@ -339,8 +339,16 @@ session (`execution_session_close_in_progress`, `execution_instance_identity_mis
 refused frame commit or resolve (`input_frame_capture_mismatch`, `input_frame_not_committed`,
 `input_frame_session_missing`) are not on the policy's always-severe list
 (`is_severe_policy_failure`): a scheduled run that fails with one at its capture or at a frame
-commit or resolve is an ordinary failure toward its task's failure pause. At an input, the
-failure point's own severity (`failure_severe`) still decides, as before.
+commit or resolve is an ordinary failure toward its task's failure pause. Since Runtime 0.12.26
+(W2-E; ISO-M rows E13, A05) the same holds at an input: an input whose kernel failure is
+`execution_session_close_in_progress`, `execution_instance_identity_mismatch` or
+`input_frame_not_committed` (the Nemu input's frame no longer committed) fails only that
+input, non-fatal (`failure_severe` false), with the kernel's code, and keeps the failure's
+context, so a close merged into it is still recorded; an unconfirmed close and a code on the
+Global list keep their severity. Every other kernel failure of an input keeps the kernel's
+severity: a device or backend fault (E02), and the five session-death codes until an input's
+deaths are counted as a capture's are. An application command that meets a closing or changed
+session still fences its instance (#411 A46 widened, ISO-M row C01).
 
 **ISO-2b** (Runtime 0.12.25; R1, outcome-code spec §7 amendment 10-24):
 - **A session that dies twice in a row holds its instance.** A capture (a run's, an observe's, a

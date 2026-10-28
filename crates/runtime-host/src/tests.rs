@@ -350,6 +350,9 @@ mod gate_419_iso2;
 // a Nemu input that the run's deadline, its cancel or its lease stopped fails with that work's
 // own code, not as a device failure.
 mod gate_419_iso2b;
+// W2-E (#419, ISO-M R1, rows E13, A05): an input that meets its session closing, its endpoint
+// changed or its frame no longer committed fails only the input and does not pause its task.
+mod gate_419_w2e;
 // #411 A35 (A35-S2, host keys 156 to 161), register §1.168: after a listed return-home failure
 // the ladder probes the screen; while it still changes, the ladder holds instead of restarting.
 mod gate_411_a35;

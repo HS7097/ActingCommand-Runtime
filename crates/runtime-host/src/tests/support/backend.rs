@@ -25,6 +25,10 @@ pub(super) struct FakeState {
     input_count: AtomicUsize,
     close_count: AtomicUsize,
     close_error: std::sync::Mutex<Option<DeviceError>>,
+    // W2-E (#419): runs inside the next close of the instance's input backend (taken once),
+    // while the kernel still marks the instance's session closing, as another owner's
+    // operation meets that close.
+    input_close_hook: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>,
     fail_input: AtomicBool,
     input_error: std::sync::Mutex<Option<DeviceError>>,
     // Workflow #403: the error the next input returns, taken once, so one input can end with an
@@ -292,6 +296,15 @@ impl InputBackend for FakeBackend {
     ) -> DeviceResult<actingcommand_device::DeviceResourceCloseOutcome> {
         if let Some(outcome) = &self.close_outcome {
             return outcome.clone();
+        }
+        let hook = self
+            .state
+            .input_close_hook
+            .lock()
+            .expect("input close hook")
+            .take();
+        if let Some(hook) = hook {
+            hook();
         }
         self.state.close_count.fetch_add(1, Ordering::AcqRel);
         let outcome = match self.state.close_error.lock().expect("close error").clone() {

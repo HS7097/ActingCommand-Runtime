@@ -384,11 +384,16 @@ impl HostShared {
                                         }
                                         _ => None,
                                     };
+                                    // W2-E (#419 R1, ISO-M rows E13, A05): an input that met its
+                                    // session closing, its endpoint changed or its frame no
+                                    // longer committed fails only the input, as at a capture;
+                                    // a device fault (E02) keeps the kernel's severity.
                                     let mut failure =
                                         ActionFailure::backend(stopped.unwrap_or_else(|| {
-                                            RuntimeHostError::execution(
+                                            RuntimeHostError::input_backend(
                                                 HostLocation::ExecuteInputBackend,
                                                 &error,
+                                                token.instance_id(),
                                             )
                                         }));
                                     failure.destructive_started = false;
