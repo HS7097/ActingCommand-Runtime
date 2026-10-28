@@ -312,7 +312,7 @@ tests = [
     "actingcommand-runtime-host::lib::performance::tests::repeated_sampler_failure_degrades_then_stops_bounded_sampling",
     "actingcommand-runtime-host::lib::performance_control::tests::escalation_is_bounded_by_hysteresis_and_cooldown",
     "actingcommand-runtime-host::lib::performance_control::tests::duplicate_sample_identity_cannot_advance_hysteresis",
-    "actingcommand-runtime-host::lib::performance_control::tests::third_party_contention_is_independent_and_presence_alone_is_not_pressure",
+    "actingcommand-runtime-host::lib::performance_control::tests::third_party_pressure_never_escalates_and_an_unscored_sample_recovers_a_raised_level",
     "actingcommand-runtime-host::lib::performance_control::tests::recovery_releases_only_one_instance_per_transition",
     "actingcommand-runtime-host::lib::performance_control::tests::clock_jump_preserves_control_state_and_resets_transition_evidence",
     "actingcommand-runtime-host::lib::performance_control::tests::resource_overlay_caps_heavy_concurrency",
@@ -323,7 +323,7 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_p0::gate_p0_t04_capture_latency_alone_scores_nothing",
     "actingcommand-runtime-host::lib::tests::gate_p0::gate_p0_t05_fast_acquire_and_touch_score_full",
 ]
-incident = ["#385 P-0"]
+incident = ["#385 P-0", "#420 P22-0"]
 
 # Workflow #420 P22-0 (0.12.25; design-p22 §3; the 10-09 pacing ruling and the Friday review item 7: pressure alone only enters S1 and never pauses): only host responsiveness moves the old controller's level; third-party pressure and a full-screen foreground never escalate, the gate allows and the heavy-dispatch cap stays normal under them, low responsiveness alone still suspends and defers, and a transition still records the third-party value
 [[gate]]

@@ -15,13 +15,15 @@ sample's `third_party_pressure_basis_points`, and the monitor's pressure
 records are unchanged: a policy failure's `perf_context` still lists them, a
 pressure of a floor kind still holds the pacing stage at S1 ("Shadow
 measurement" below), and a recorded pressure still exempts a recoverable
-failure from the consecutive-failure escalation. A sample with third-party pressure and no responsiveness score
-targets Normal: it never escalates, and it counts as a measured recovery
-sample, so a level raised by responsiveness lifts once no device work is
-scored. An escalation's reason is therefore always `responsiveness_pressure`
-and a recovery's `recovery`; the reasons `third_party_contention` and
-`fullscreen_contention` are no longer produced and stay readable in earlier
-records.
+failure from the consecutive-failure escalation. A sample with third-party
+pressure and no responsiveness score targets Normal: it never escalates, and
+it counts as a measured recovery sample, also while work runs, as one at
+pressure 1 000 or below already did; only a tick without any fresh sample
+follows "Recovery without evidence" below. An escalation's reason is
+therefore always `responsiveness_pressure` and a recovery's `recovery`; the
+reasons `third_party_contention` and `fullscreen_contention` are no longer
+produced and stay readable in earlier records.
+
 Every instance with an active policy workload carries its own level: an
 escalation below Suspended raises every instance to the new level, a recovery
 releases one instance per transition. The levels in rank order are Normal,

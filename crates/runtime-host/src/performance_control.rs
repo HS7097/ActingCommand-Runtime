@@ -977,11 +977,12 @@ mod tests {
         assert_eq!(controller.level, PerformanceControlLevel::DispatchPaused);
     }
 
-    /// Adapted by Workflow #420 P22-0 (0.12.25): it pinned that third-party pressure alone
-    /// escalates with reason `ThirdPartyContention`; pressure alone now never escalates, and a
-    /// sample with pressure and no responsiveness score recovers a raised level.
+    /// Adapted and renamed by Workflow #420 P22-0 (0.12.25; retired name in
+    /// `ci/retired-gates.toml`): it pinned that third-party pressure alone escalates with reason
+    /// `ThirdPartyContention`; pressure alone now never escalates, and a sample with pressure and
+    /// no responsiveness score recovers a raised level.
     #[test]
-    fn third_party_contention_is_independent_and_presence_alone_is_not_pressure() {
+    fn third_party_pressure_never_escalates_and_an_unscored_sample_recovers_a_raised_level() {
         let mut controller =
             PerformanceBalanceController::new(PerformanceControlConfig::default()).expect("new");
         for at in [1_000, 3_000, 5_000, 7_000, 9_000, 11_000] {
@@ -1113,8 +1114,9 @@ mod tests {
 
     // Workflow #420 P22-0 (0.12.25; design-p22 §3; the 10-09 pacing ruling and the Friday
     // review item 7): only host responsiveness moves the level. Every time is an explicit unix
-    // ms under the default hysteresis (two samples a level, a 4 s cooldown), so ten samples 2 s
-    // apart are the twenty seconds in which pressure alone used to reach Suspended.
+    // ms; ① to ③ run under the default hysteresis (two samples a level, a 4 s cooldown), so ten
+    // samples 2 s apart are the twenty seconds in which pressure alone used to reach Suspended,
+    // and ④ uses one sample a level and a 1 ms cooldown.
 
     /// `count` sample times 2 s apart from `first`.
     fn sample_times(first: u64, count: u64) -> impl Iterator<Item = u64> {
