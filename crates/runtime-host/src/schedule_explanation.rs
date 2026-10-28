@@ -17,10 +17,84 @@ use actingcommand_contract::{
     ScheduleExplanationNotRunning, ScheduleExplanationSelected,
 };
 use actingcommand_policy::{
-    EligibilityState, FACT_REFRESH_TASK_ID, PolicyEvaluation, SchedulingDecisionState, TaskDecision,
+    ActivityProfile, Blackout, EligibilityState, FACT_REFRESH_TASK_ID, PolicyEvaluation,
+    PolicyEvaluationResult, SchedulingDecisionState, TaskDecision, activity_window_at,
 };
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+
+/// IDLE-WG (0.12.27): by instance alias, the instances a time-bound gate holds back as an
+/// evaluation runs: a blackout covers the instance, or its activity window is closed. Each with
+/// the time the gates first let a candidate of it through (the blackout's end, then the next
+/// opening of its activity window); none when its activity window does not open within the
+/// eight days its windows are searched.
+pub(crate) type IdleHeldBack = BTreeMap<String, Option<u64>>;
+
+const DAY_MS: i128 = 86_400_000;
+const MINUTE_MS: i128 = 60_000;
+
+/// IDLE-WG (0.12.27): the instances a time-bound gate holds back at `now_unix_ms` (see
+/// [`IdleHeldBack`]), from each instance's activity profile (`instances`: its alias and the
+/// profile the evaluator matches to it; none: no window to judge) and the blackouts covering
+/// instances now (`blackouts`, by alias, as the cycle judged them for position 4). A gate that a
+/// hold of the instance (a pause, a claim on its key) comes before still holds the candidate back:
+/// the idle plan reads it here, not from the decision's reason, which names the first gate only.
+pub(crate) fn idle_held_back<'a>(
+    instances: impl IntoIterator<Item = (&'a str, Option<&'a ActivityProfile>)>,
+    blackouts: &BTreeMap<String, Blackout>,
+    now_unix_ms: u64,
+) -> PolicyEvaluationResult<IdleHeldBack> {
+    let mut held_back = IdleHeldBack::new();
+    for (alias, profile) in instances {
+        let covering = blackouts.get(alias);
+        let clear_from = covering.map_or(now_unix_ms, |blackout| {
+            blackout.end_unix_ms.max(now_unix_ms)
+        });
+        let window_open = match profile {
+            Some(profile) => activity_window_at(profile, clear_from)?.is_some(),
+            None => true,
+        };
+        if covering.is_none() && window_open {
+            continue;
+        }
+        let through = match profile {
+            Some(profile) if !window_open => next_window_opening(profile, clear_from)?,
+            _ => Some(clear_from),
+        };
+        held_back.insert(alias.to_owned(), through);
+    }
+    Ok(held_back)
+}
+
+/// IDLE-WG: the first time after `after_unix_ms` at which `profile` has an open activity window,
+/// searched as the admission's own boundary search does (one week and the following day of each
+/// window's local midnights and starts); none when no window opens in that span.
+fn next_window_opening(
+    profile: &ActivityProfile,
+    after_unix_ms: u64,
+) -> PolicyEvaluationResult<Option<u64>> {
+    let mut openings = BTreeSet::new();
+    for window in &profile.windows {
+        let offset = i128::from(window.utc_offset_minutes) * MINUTE_MS;
+        let local_day = (i128::from(after_unix_ms) + offset).div_euclid(DAY_MS);
+        for day in local_day..=local_day + 8 {
+            for minute in [0, window.start_minute_of_day] {
+                let opening = day * DAY_MS + i128::from(minute) * MINUTE_MS - offset;
+                if let Ok(opening) = u64::try_from(opening)
+                    && opening > after_unix_ms
+                {
+                    openings.insert(opening);
+                }
+            }
+        }
+    }
+    for opening in openings {
+        if activity_window_at(profile, opening)?.is_some() {
+            return Ok(Some(opening));
+        }
+    }
+    Ok(None)
+}
 
 /// SCH-M ED-2 (§3.4 "Visible"): for a (task id, instance alias), the duration its dispatch would
 /// reserve and where it comes from (`declared` or `runs:<n>`).
@@ -57,6 +131,14 @@ struct InstanceRows {
 /// evaluation (held by the instance's queue, blocked); an eligible one deferred to a later time
 /// (a budget, a random delay, a gate's wake) is due at that wake. The fact-refresh reading is
 /// kept apart from the tasks.
+///
+/// IDLE-WG (0.12.27; production v0.12.26 on 10-29 02:43: an instance resume's reconnect claim
+/// held an idle instance, its candidates waited `dispatch_instance_held` with no wake, and the
+/// plan woke the closed game for tasks its closed activity window then refused): a task is due
+/// only when it could be dispatched now. On an instance a time-bound gate holds back
+/// ([`IdleHeldBack`]: a blackout covers it, or its activity window is closed) no unselected task
+/// is due, whatever gate its decision names first (a hold of the instance comes before both); its
+/// wake is the time the gates let it through, not its own.
 #[derive(Debug, Default)]
 struct IdleDraft {
     task_due: bool,
@@ -65,7 +147,13 @@ struct IdleDraft {
 }
 
 impl IdleDraft {
-    fn add(&mut self, decision: &TaskDecision, evaluated_at_unix_ms: u64) {
+    /// `held_back`: the instance's entry of [`IdleHeldBack`], when a time-bound gate holds it.
+    fn add(
+        &mut self,
+        decision: &TaskDecision,
+        evaluated_at_unix_ms: u64,
+        held_back: Option<Option<u64>>,
+    ) {
         let eligible = decision.state == SchedulingDecisionState::Selected
             || decision.eligibility == EligibilityState::True;
         let due = decision.state == SchedulingDecisionState::Selected
@@ -73,6 +161,15 @@ impl IdleDraft {
                 && decision
                     .next_wake_unix_ms
                     .is_none_or(|wake| wake <= evaluated_at_unix_ms));
+        if decision.task_id != FACT_REFRESH_TASK_ID
+            && decision.state != SchedulingDecisionState::Selected
+            && due
+            && let Some(through) = held_back
+        {
+            // IDLE-WG: not dispatchable now; it wakes the instance when the gates let it through.
+            self.task_wake = earliest(self.task_wake, through);
+            return;
+        }
         if decision.task_id == FACT_REFRESH_TASK_ID {
             let at = if due {
                 Some(evaluated_at_unix_ms)
@@ -105,19 +202,40 @@ struct Draft<'a> {
 }
 
 impl ScheduleExplanationTable {
-    /// Replaces the table from an evaluated cycle's bound evaluation (`catalog_hash` its
-    /// catalog's, `evaluated_at_unix_ms` its time). A row's `since_unix_ms` carries over from the
-    /// table it replaces while the same (instance, task) keeps the same `why` code, and the
-    /// not-running row's while the same (instance, task or none) keeps it; otherwise it is this
-    /// evaluation's time. SCH-M ED-2 (§3.4 "Visible"): `expected` gives, for a (task, instance
-    /// alias), the duration its dispatch would reserve and where it comes from (`declared` or
-    /// `runs:<n>`); a row carries both.
+    /// `record_held_back` with no instance held back.
+    #[cfg(test)]
     pub(crate) fn record(
         &mut self,
         evaluation: &PolicyEvaluation,
         catalog_hash: &str,
         evaluated_at_unix_ms: u64,
         expected: &ExpectedRuntimeOf<'_>,
+    ) {
+        self.record_held_back(
+            evaluation,
+            catalog_hash,
+            evaluated_at_unix_ms,
+            expected,
+            &IdleHeldBack::new(),
+        );
+    }
+
+    /// Replaces the table from an evaluated cycle's bound evaluation (`catalog_hash` its
+    /// catalog's, `evaluated_at_unix_ms` its time). A row's `since_unix_ms` carries over from the
+    /// table it replaces while the same (instance, task) keeps the same `why` code, and the
+    /// not-running row's while the same (instance, task or none) keeps it; otherwise it is this
+    /// evaluation's time. SCH-M ED-2 (§3.4 "Visible"): `expected` gives, for a (task, instance
+    /// alias), the duration its dispatch would reserve and where it comes from (`declared` or
+    /// `runs:<n>`); a row carries both. IDLE-WG (0.12.27): `held_back`, the instances a
+    /// time-bound gate holds back as the evaluation ran ([`idle_held_back`]), which only the idle
+    /// plan reads; the rows stay the evaluation's own.
+    pub(crate) fn record_held_back(
+        &mut self,
+        evaluation: &PolicyEvaluation,
+        catalog_hash: &str,
+        evaluated_at_unix_ms: u64,
+        expected: &ExpectedRuntimeOf<'_>,
+        held_back: &IdleHeldBack,
     ) {
         let previous = self.latest.take();
         let mut wakes = BTreeMap::<&str, Option<u64>>::new();
@@ -130,9 +248,11 @@ impl ScheduleExplanationTable {
             };
             let wake = wakes.entry(alias).or_default();
             *wake = earliest(*wake, decision.next_wake_unix_ms);
-            idle.entry(alias)
-                .or_default()
-                .add(decision, evaluated_at_unix_ms);
+            idle.entry(alias).or_default().add(
+                decision,
+                evaluated_at_unix_ms,
+                held_back.get(alias).copied(),
+            );
             let rows = drafts.entry(alias).or_default();
             if decision.state == SchedulingDecisionState::Selected {
                 // Every selected decision has its intent (bound to the same decision id the

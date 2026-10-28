@@ -3021,7 +3021,26 @@ impl PolicyHost {
         }
         let refresh_declared_ms = fact_refresh.settings.expected_duration_ms;
         let compiled = &active.compiled;
-        self.explanation.record(
+        // IDLE-WG (0.12.27): the instances a blackout or a closed activity window holds back now,
+        // whatever gate their candidates' decisions name first, so the idle plan wakes an idle
+        // instance only for a task that could be dispatched now.
+        let held_back = crate::schedule_explanation::idle_held_back(
+            instances.iter().map(|(alias, instance)| {
+                (
+                    *alias,
+                    matching_activity_profile(&compiled.catalog().activity.profiles, instance),
+                )
+            }),
+            blackout_holds,
+            time.unix_ms,
+        )
+        .map_err(|_| {
+            fatal(
+                HostCode::PolicyActivityDayOverflow,
+                HostLocation::ResolveActivityWindow,
+            )
+        })?;
+        self.explanation.record_held_back(
             &evaluation,
             active.compiled.catalog_hash(),
             time.unix_ms,
@@ -3044,6 +3063,7 @@ impl PolicyHost {
                     .dispatch_task(task_id)
                     .map(|task| (task.expected_duration_ms, "declared".to_owned())),
             },
+            &held_back,
         );
         if let Some(decisions) = &remedy_decisions {
             self.remedies.retain_keys(decisions);
