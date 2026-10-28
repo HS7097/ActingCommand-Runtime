@@ -1,10 +1,27 @@
 # Performance control
 
 The performance balance controller derives one Runtime-wide control level from
-the host responsiveness and third-party pressure samples of each performance
-tick; a tick without a fresh sample follows "Recovery without evidence" below.
-Escalation, recovery, hysteresis, the transition cooldown and clock-jump
-handling belong to the controller and are not changed by the consumers below.
+the host responsiveness of each performance tick's sample; a tick without a
+fresh sample follows "Recovery without evidence" below. Escalation, recovery,
+hysteresis, the transition cooldown and clock-jump handling belong to the
+controller and are not changed by the consumers below.
+
+Since 0.12.25 (Workflow #420 P22-0; the 10-09 pacing ruling and the Friday
+review item 7: pressure alone only enters S1 and never pauses) only host
+responsiveness moves the level. Third-party pressure and a full-screen
+foreground never raise it, alone or together, at any value: they stay
+evidence. A transition's `PerformanceBalanceChanged` event still carries the
+sample's `third_party_pressure_basis_points`, and the monitor's pressure
+records are unchanged: a policy failure's `perf_context` still lists them, a
+pressure of a floor kind still holds the pacing stage at S1 ("Shadow
+measurement" below), and a recorded pressure still exempts a recoverable
+failure from the consecutive-failure escalation. A sample with third-party pressure and no responsiveness score
+targets Normal: it never escalates, and it counts as a measured recovery
+sample, so a level raised by responsiveness lifts once no device work is
+scored. An escalation's reason is therefore always `responsiveness_pressure`
+and a recovery's `recovery`; the reasons `third_party_contention` and
+`fullscreen_contention` are no longer produced and stay readable in earlier
+records.
 Every instance with an active policy workload carries its own level: an
 escalation below Suspended raises every instance to the new level, a recovery
 releases one instance per transition. The levels in rank order are Normal,
@@ -146,6 +163,11 @@ Urgency never changes the gate's outcome: a deferral has the same code at any
 urgency, never fails as a deadline conflict, and records no
 `PerformanceBalanceChanged` event. Urgency only orders candidates in the
 evaluator.
+
+Only low host responsiveness reaches Suspended (since 0.12.25, Workflow #420
+P22-0), so third-party pressure or a full-screen foreground alone never
+defers a dispatch, never refuses a lease ("Lease admission" below) and never
+lowers the heavy-dispatch cap from its normal limit.
 
 Capacity admission follows an allowed gate unchanged. The resource overlay
 (`apply_to_resources`) does not scale the host budgets by the level: they only

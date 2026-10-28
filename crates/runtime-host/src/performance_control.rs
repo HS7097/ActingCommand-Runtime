@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Contention-driven Runtime control with bounded escalation and staged recovery.
+//! Responsiveness-driven Runtime control with bounded escalation and staged recovery.
 
 use crate::codes::{HostCode, HostLocation};
 use crate::{RuntimeHostError, RuntimeHostResult};
@@ -144,7 +144,10 @@ impl PerformanceControlConfig {
 pub struct PerformanceControlObservation {
     pub observed_at_unix_ms: u64,
     pub host_responsiveness_basis_points: Option<u16>,
+    /// Evidence only: transition events carry it, it never raises a level (Workflow #420 P22-0).
     pub third_party_pressure_basis_points: Option<u16>,
+    /// Never raises a level (Workflow #420 P22-0); the system sample keeps the foreground's
+    /// full-screen state.
     pub foreground_fullscreen: bool,
 }
 
@@ -433,7 +436,8 @@ impl PerformanceBalanceController {
             return Ok(events);
         }
         let step = next_level(previous);
-        let reason = control_reason(observation);
+        // Only host responsiveness escalates (Workflow #420 P22-0, `target_level`).
+        let reason = PerformanceControlReason::ResponsivenessPressure;
         let mut events = Vec::new();
         if step.rank() >= PerformanceControlLevel::Suspended.rank() {
             // Suspension and shutdown reach one instance per transition; the global level
@@ -801,27 +805,21 @@ impl PerformanceBalanceController {
     }
 }
 
+/// Only host responsiveness moves the level (Workflow #420 P22-0, 0.12.25; the 10-09 pacing
+/// ruling and the Friday review item 7: pressure alone only enters S1 and never pauses).
+/// Third-party pressure and a full-screen foreground stay evidence: the transition events and
+/// `perf_context` record them and the pacing pressure floor reads them, but they never raise a
+/// level. A sample that carries third-party pressure and no responsiveness score targets Normal:
+/// it never escalates, and it still recovers a raised level once no device work is scored.
 fn target_level(observation: &PerformanceControlObservation) -> Option<PerformanceControlLevel> {
-    let responsiveness = observation
-        .host_responsiveness_basis_points
-        .map(responsiveness_level);
-    let third_party = observation
-        .third_party_pressure_basis_points
-        .map(third_party_level);
-    let mut target = match (responsiveness, third_party) {
-        (Some(left), Some(right)) => left.max(right),
-        (Some(value), None) | (None, Some(value)) => value,
-        (None, None) => return None,
-    };
-    if observation.foreground_fullscreen
-        && observation
-            .third_party_pressure_basis_points
-            .is_some_and(|value| value > 0)
-        && observation.host_responsiveness_basis_points.is_some()
-    {
-        target = next_level(target);
+    match (
+        observation.host_responsiveness_basis_points,
+        observation.third_party_pressure_basis_points,
+    ) {
+        (Some(responsiveness), _) => Some(responsiveness_level(responsiveness)),
+        (None, Some(_)) => Some(PerformanceControlLevel::Normal),
+        (None, None) => None,
     }
-    Some(target)
 }
 
 fn responsiveness_level(value: u16) -> PerformanceControlLevel {
@@ -833,42 +831,6 @@ fn responsiveness_level(value: u16) -> PerformanceControlLevel {
         4_500..=5_499 => PerformanceControlLevel::QosReduced,
         3_000..=4_499 => PerformanceControlLevel::Suspended,
         _ => PerformanceControlLevel::ShutdownRequested,
-    }
-}
-
-fn third_party_level(value: u16) -> PerformanceControlLevel {
-    match value {
-        0..=1_000 => PerformanceControlLevel::Normal,
-        1_001..=2_500 => PerformanceControlLevel::DispatchPaused,
-        2_501..=4_000 => PerformanceControlLevel::Throttled,
-        4_001..=5_500 => PerformanceControlLevel::YieldRequested,
-        5_501..=7_000 => PerformanceControlLevel::QosReduced,
-        7_001..=8_500 => PerformanceControlLevel::Suspended,
-        _ => PerformanceControlLevel::ShutdownRequested,
-    }
-}
-
-fn control_reason(observation: &PerformanceControlObservation) -> PerformanceControlReason {
-    if observation.foreground_fullscreen
-        && observation
-            .third_party_pressure_basis_points
-            .is_some_and(|value| value > 0)
-        && observation.host_responsiveness_basis_points.is_some()
-    {
-        return PerformanceControlReason::FullscreenContention;
-    }
-    let response_level = observation
-        .host_responsiveness_basis_points
-        .map(responsiveness_level)
-        .unwrap_or(PerformanceControlLevel::Normal);
-    let third_party_level = observation
-        .third_party_pressure_basis_points
-        .map(third_party_level)
-        .unwrap_or(PerformanceControlLevel::Normal);
-    if third_party_level.rank() > response_level.rank() {
-        PerformanceControlReason::ThirdPartyContention
-    } else {
-        PerformanceControlReason::ResponsivenessPressure
     }
 }
 
@@ -1015,26 +977,50 @@ mod tests {
         assert_eq!(controller.level, PerformanceControlLevel::DispatchPaused);
     }
 
+    /// Adapted by Workflow #420 P22-0 (0.12.25): it pinned that third-party pressure alone
+    /// escalates with reason `ThirdPartyContention`; pressure alone now never escalates, and a
+    /// sample with pressure and no responsiveness score recovers a raised level.
     #[test]
     fn third_party_contention_is_independent_and_presence_alone_is_not_pressure() {
         let mut controller =
             PerformanceBalanceController::new(PerformanceControlConfig::default()).expect("new");
-        assert!(
-            controller
-                .observe(observation(1_000, None, Some(0)), &[])
-                .expect("idle")
-                .is_empty()
-        );
+        for at in [1_000, 3_000, 5_000, 7_000, 9_000, 11_000] {
+            assert!(
+                controller
+                    .observe(observation(at, None, Some(8_000)), &[])
+                    .expect("pressure alone")
+                    .is_empty()
+            );
+        }
+        assert_eq!(controller.level, PerformanceControlLevel::Normal);
+
         controller
-            .observe(observation(3_000, None, Some(8_000)), &[])
-            .expect("first pressure");
+            .observe(observation(13_000, Some(8_000), Some(8_000)), &[])
+            .expect("first responsiveness sample");
         let events = controller
-            .observe(observation(5_000, None, Some(8_000)), &[])
-            .expect("second pressure");
+            .observe(observation(15_000, Some(8_000), Some(8_000)), &[])
+            .expect("second responsiveness sample");
+        assert_eq!(events.len(), 1);
         assert_eq!(
             events[0].reason,
-            PerformanceControlReason::ThirdPartyContention
+            PerformanceControlReason::ResponsivenessPressure
         );
+        assert_eq!(controller.level, PerformanceControlLevel::DispatchPaused);
+
+        // No responsiveness score, pressure still high: measured recovery samples toward Normal.
+        let mut recovery = Vec::new();
+        for at in [17_000, 19_000, 21_000] {
+            recovery.extend(
+                controller
+                    .observe(observation(at, None, Some(8_000)), &[])
+                    .expect("pressure without responsiveness"),
+            );
+        }
+        assert_eq!(recovery.len(), 1);
+        assert_eq!(recovery[0].reason, PerformanceControlReason::Recovery);
+        assert!(recovery[0].recovery);
+        assert_eq!(recovery[0].third_party_pressure_basis_points, Some(8_000));
+        assert_eq!(controller.level, PerformanceControlLevel::Normal);
     }
 
     #[test]
@@ -1123,5 +1109,177 @@ mod tests {
             .expect("overlay");
         assert_eq!(resources[0].heavy_dispatch_limit, 1);
         assert_eq!(resources[0].active_heavy_dispatches, 1);
+    }
+
+    // Workflow #420 P22-0 (0.12.25; design-p22 §3; the 10-09 pacing ruling and the Friday
+    // review item 7): only host responsiveness moves the level. Every time is an explicit unix
+    // ms under the default hysteresis (two samples a level, a 4 s cooldown), so ten samples 2 s
+    // apart are the twenty seconds in which pressure alone used to reach Suspended.
+
+    /// `count` sample times 2 s apart from `first`.
+    fn sample_times(first: u64, count: u64) -> impl Iterator<Item = u64> {
+        (0..count).map(move |index| first + index * 2_000)
+    }
+
+    fn fullscreen(at: u64, responsiveness: u16, third_party: u16) -> PerformanceControlObservation {
+        PerformanceControlObservation {
+            foreground_fullscreen: true,
+            ..observation(at, Some(responsiveness), Some(third_party))
+        }
+    }
+
+    fn host_resources() -> HostResourceSnapshot {
+        HostResourceSnapshot {
+            host_id: "host-a".to_owned(),
+            cpu_available_milli: 1_000,
+            gpu_available_milli: 1_000,
+            io_available_milli: 1_000,
+            host_responsiveness_basis_points: 10_000,
+            third_party_pressure_basis_points: 0,
+            heavy_dispatch_limit: 0,
+            active_heavy_dispatches: 0,
+            heavy_threshold_milli: DEFAULT_HEAVY_THRESHOLD_MILLI,
+        }
+    }
+
+    /// ① Third-party pressure 9 000 bp with responsiveness 9 999 over ten samples: still
+    /// Normal, the dispatch gate allows, and the heavy-dispatch limit stays the normal 2.
+    #[test]
+    fn p22_0_t1_third_party_pressure_alone_keeps_normal_the_gate_open_and_two_heavy_slots() {
+        let mut controller =
+            PerformanceBalanceController::new(PerformanceControlConfig::default()).expect("new");
+        let workloads = [workload("instance-a", LoadProfile::Heavy)];
+        for at in sample_times(1_000, 10) {
+            assert!(
+                controller
+                    .observe(observation(at, Some(9_999), Some(9_000)), &workloads)
+                    .expect("pressure sample")
+                    .is_empty(),
+                "no transition at {at}"
+            );
+        }
+        assert_eq!(controller.level, PerformanceControlLevel::Normal);
+        assert_eq!(
+            controller.directive("instance-a").expect("directive").level,
+            PerformanceControlLevel::Normal
+        );
+        for urgency_milli in [0, 1_000] {
+            assert_eq!(
+                controller
+                    .gate_dispatch("instance-a", urgency_milli, 19_000)
+                    .expect("gate"),
+                PerformanceDispatchGate::Allowed
+            );
+        }
+        let mut resources = [host_resources()];
+        controller
+            .apply_to_resources(&mut resources, &workloads)
+            .expect("overlay");
+        assert_eq!(resources[0].heavy_dispatch_limit, 2);
+        assert_eq!(resources[0].active_heavy_dispatches, 1);
+        // The overlay still hands the observed values to the evaluator.
+        assert_eq!(resources[0].third_party_pressure_basis_points, 9_000);
+        assert_eq!(resources[0].host_responsiveness_basis_points, 9_999);
+    }
+
+    /// ② A full-screen foreground with third-party pressure 5 000 adds no level: Normal at
+    /// responsiveness 9 999, and only the responsiveness level (DispatchPaused) at 8 000.
+    #[test]
+    fn p22_0_t2_full_screen_with_third_party_pressure_adds_no_level() {
+        let mut controller =
+            PerformanceBalanceController::new(PerformanceControlConfig::default()).expect("new");
+        for at in sample_times(1_000, 10) {
+            assert!(
+                controller
+                    .observe(fullscreen(at, 9_999, 5_000), &[])
+                    .expect("full-screen sample")
+                    .is_empty(),
+                "no transition at {at}"
+            );
+        }
+        assert_eq!(controller.level, PerformanceControlLevel::Normal);
+
+        let mut events = Vec::new();
+        for at in sample_times(21_000, 10) {
+            events.extend(
+                controller
+                    .observe(fullscreen(at, 8_000, 5_000), &[])
+                    .expect("full-screen sample at DispatchPaused"),
+            );
+        }
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].level, PerformanceControlLevel::DispatchPaused);
+        assert_eq!(
+            events[0].reason,
+            PerformanceControlReason::ResponsivenessPressure
+        );
+        assert_eq!(controller.level, PerformanceControlLevel::DispatchPaused);
+    }
+
+    /// ③ Unchanged: responsiveness 4 000 alone escalates one level a transition to Suspended,
+    /// and the gate then defers with `performance_contention_dispatch_deferred`.
+    #[test]
+    fn p22_0_t3_low_responsiveness_alone_still_suspends_and_defers() {
+        let mut controller =
+            PerformanceBalanceController::new(PerformanceControlConfig::default()).expect("new");
+        let workloads = [workload("instance-a", LoadProfile::Heavy)];
+        let mut events = Vec::new();
+        for at in sample_times(1_000, 10) {
+            events.extend(
+                controller
+                    .observe(observation(at, Some(4_000), None), &workloads)
+                    .expect("responsiveness sample"),
+            );
+        }
+        assert_eq!(controller.level, PerformanceControlLevel::Suspended);
+        assert_eq!(
+            controller.directive("instance-a").expect("directive").level,
+            PerformanceControlLevel::Suspended
+        );
+        assert_eq!(
+            events.last().map(|event| event.level),
+            Some(PerformanceControlLevel::Suspended)
+        );
+        assert!(
+            events
+                .iter()
+                .all(|event| event.reason == PerformanceControlReason::ResponsivenessPressure)
+        );
+        let PerformanceDispatchGate::Deferred { reason, .. } = controller
+            .gate_dispatch("instance-a", 0, 19_000)
+            .expect("gate")
+        else {
+            panic!("Suspended defers the dispatch");
+        };
+        assert_eq!(reason.as_str(), "performance_contention_dispatch_deferred");
+    }
+
+    /// ④ A responsiveness transition, up or down, still records the third-party value.
+    #[test]
+    fn p22_0_t4_a_responsiveness_transition_records_the_third_party_value() {
+        let config =
+            PerformanceControlConfig::default().with_hysteresis(1, 1, Duration::from_millis(1));
+        let mut controller = PerformanceBalanceController::new(config).expect("new");
+        let escalation = controller
+            .observe(fullscreen(1_000, 5_000, 7_500), &[])
+            .expect("escalation");
+        assert_eq!(escalation.len(), 1);
+        assert_eq!(
+            escalation[0].reason,
+            PerformanceControlReason::ResponsivenessPressure
+        );
+        assert!(!escalation[0].recovery);
+        assert_eq!(escalation[0].level, PerformanceControlLevel::DispatchPaused);
+        assert_eq!(escalation[0].host_responsiveness_basis_points, Some(5_000));
+        assert_eq!(escalation[0].third_party_pressure_basis_points, Some(7_500));
+
+        let recovery = controller
+            .observe(observation(1_010, Some(10_000), Some(7_500)), &[])
+            .expect("recovery");
+        assert_eq!(recovery.len(), 1);
+        assert_eq!(recovery[0].reason, PerformanceControlReason::Recovery);
+        assert!(recovery[0].recovery);
+        assert_eq!(recovery[0].host_responsiveness_basis_points, Some(10_000));
+        assert_eq!(recovery[0].third_party_pressure_basis_points, Some(7_500));
     }
 }
