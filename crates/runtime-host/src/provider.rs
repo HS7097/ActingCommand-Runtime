@@ -45,6 +45,10 @@ use std::time::Duration;
 /// opens a session refuses a pending entry first, and always overwritten by the rebind.
 const PENDING_ADB_PORT: u16 = 0;
 
+/// The bounded `info -v <index>` read of a discovery-bound instance:
+/// `actingcommand_device::read_instance_state` in production, a fake in the registry's tests.
+type InstanceStateReader = Arc<dyn Fn(&Path, u16) -> DeviceResult<InstanceState> + Send + Sync>;
+
 /// The typed, serde-free assembly the daemon hands the registry: every instance it registers,
 /// the vision provider it injects and the discovery surface it exposes. Built by the daemon
 /// from its configuration; consumed once by [`ExecutionBackendRegistry::from_assembly`].
@@ -420,6 +424,29 @@ impl EntryEndpoint {
         Ok(())
     }
 
+    /// CAP-IDX (since 0.12.27): a discovery-bound entry's capture takes its MuMu index from the
+    /// binding, never from the ADB port, so a port MuMu shifted at launch still opens the bound
+    /// index. Called where the endpoint is built and on every rebinding.
+    fn bind_capture_index(&mut self) {
+        if let Some(discovered) = self.state.discovered_binding() {
+            self.capture.nemu.instance_id = Some(i32::from(discovered.instance_index()));
+        }
+    }
+
+    /// CAP-IDX: what a Nemu IPC open of a discovery-bound entry checks its bound port against
+    /// (`actingcommand_device::verify_mumu_target_port`); `None` for every other entry.
+    fn nemu_port_check(&self) -> Option<NemuPortCheck> {
+        if self.capture.requested != CaptureBackendChoice::NemuIpc {
+            return None;
+        }
+        let discovered = self.state.discovered_binding()?;
+        Some(NemuPortCheck {
+            mumu_manager_path: discovered.mumu_manager_path().to_path_buf(),
+            instance_index: discovered.instance_index(),
+            bound_port: self.capture.target.port,
+        })
+    }
+
     /// Rewrites every port-dependent field for the given target.
     fn set_target(&mut self, host: &str, port: u16) {
         for target in [
@@ -433,6 +460,51 @@ impl EntryEndpoint {
         self.audit_endpoint = self.application_target.label();
         self.configuration.resolved_serial = self.audit_endpoint.clone();
     }
+}
+
+/// CAP-IDX: a discovery-bound Nemu IPC entry's index, the `MuMuManager` it was discovered
+/// through and the port it is bound to, copied out of the endpoint lock before the check reads.
+struct NemuPortCheck {
+    mumu_manager_path: PathBuf,
+    instance_index: u16,
+    bound_port: u16,
+}
+
+impl NemuPortCheck {
+    /// No read on the index's base port; one bounded `info -v <index>` read otherwise, whose
+    /// reported port must be the bound one (`target_identity_mismatch` otherwise, #419).
+    fn verify(&self, reader: &InstanceStateReader) -> DeviceResult<()> {
+        actingcommand_device::verify_mumu_target_port(self.instance_index, self.bound_port, || {
+            reader(self.mumu_manager_path.as_path(), self.instance_index)
+        })
+    }
+}
+
+/// The backend-open report of a capture open, before the backend is selected.
+fn capture_open_report(
+    capture: &CaptureBackendConfig,
+) -> actingcommand_contract::BackendOpenReport {
+    let mut report = actingcommand_contract::BackendOpenReport::unobserved(
+        actingcommand_contract::BackendOpenEntry::Capture,
+    );
+    report.source = actingcommand_contract::BackendOpenSource::Native;
+    report.requested = capture.requested.as_str().into();
+    report.serial_configured = Some(capture.target.serial.is_some());
+    report.installation_source = capture
+        .resolved_mumu
+        .as_ref()
+        .map(|context| context.source.into());
+    report
+}
+
+/// The backend-open report of a paired Nemu IPC session open.
+fn nemu_pair_open_report() -> actingcommand_contract::BackendOpenReport {
+    let mut report = actingcommand_contract::BackendOpenReport::unobserved(
+        actingcommand_contract::BackendOpenEntry::NemuPair,
+    );
+    report.source = actingcommand_contract::BackendOpenSource::Native;
+    report.requested = "nemu_ipc".into();
+    report
 }
 
 impl ExecutionBackendEntry {
@@ -477,6 +549,7 @@ impl ExecutionBackendEntry {
             let host = endpoint.application_target.host.clone();
             endpoint.set_target(&host, PENDING_ADB_PORT);
         }
+        endpoint.bind_capture_index();
         Ok(Self {
             instance_id: registration.instance_id,
             application_id: registration.application_id,
@@ -542,25 +615,29 @@ impl ExecutionBackendEntry {
             .map_err(|error| actingcommand_device::observe_open_failure(report, error))
     }
 
+    /// The capture configuration an open uses: the bound endpoint's, with the binding's index,
+    /// after the CAP-IDX port check (a refusal is observed as a failed capture open).
+    fn capture_for_open(&self, reader: &InstanceStateReader) -> DeviceResult<CaptureBackendConfig> {
+        let (capture, port_check) = {
+            let endpoint = self.endpoint();
+            endpoint.require_bound(HostLocation::OpenCapture)?;
+            (endpoint.capture.clone(), endpoint.nemu_port_check())
+        };
+        if let Some(port_check) = port_check {
+            port_check.verify(reader).map_err(|error| {
+                actingcommand_device::observe_open_failure(capture_open_report(&capture), error)
+            })?;
+        }
+        Ok(capture)
+    }
+
     fn open_capture(
         &self,
         memory: Option<&actingcommand_device::FrameMemoryBudget>,
+        reader: &InstanceStateReader,
     ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
-        let capture = {
-            let endpoint = self.endpoint();
-            endpoint.require_bound(HostLocation::OpenCapture)?;
-            endpoint.capture.clone()
-        };
-        let mut report = actingcommand_contract::BackendOpenReport::unobserved(
-            actingcommand_contract::BackendOpenEntry::Capture,
-        );
-        report.source = actingcommand_contract::BackendOpenSource::Native;
-        report.requested = capture.requested.as_str().into();
-        report.serial_configured = Some(capture.target.serial.is_some());
-        report.installation_source = capture
-            .resolved_mumu
-            .as_ref()
-            .map(|context| context.source.into());
+        let capture = self.capture_for_open(reader)?;
+        let report = capture_open_report(&capture);
         actingcommand_device::create_capture_backend_with_memory(capture, memory)
             .map(|selected| {
                 let report = selected.open_report();
@@ -575,17 +652,27 @@ impl ExecutionBackendEntry {
     fn open_nemu_session(
         &self,
         memory: Option<&actingcommand_device::FrameMemoryBudget>,
+        reader: &InstanceStateReader,
     ) -> DeviceResult<Option<actingcommand_device::OpenedBackend<NemuSessionBackends>>> {
         // Same pending guard as `open_input` / `open_capture`: a paired session is opened on
-        // the bound target only.
-        let (input, capture) = {
+        // the bound target only, with the binding's index after the same CAP-IDX port check.
+        let (input, capture, port_check) = {
             let endpoint = self.endpoint();
             if endpoint.input.requested != TouchBackendChoice::NemuIpc {
                 return Ok(None);
             }
             endpoint.require_bound(HostLocation::OpenNemuSession)?;
-            (endpoint.input.clone(), endpoint.capture.clone())
+            (
+                endpoint.input.clone(),
+                endpoint.capture.clone(),
+                endpoint.nemu_port_check(),
+            )
         };
+        if let Some(port_check) = port_check {
+            port_check.verify(reader).map_err(|error| {
+                actingcommand_device::observe_open_failure(nemu_pair_open_report(), error)
+            })?;
+        }
         let application = NemuApplicationTarget::new(
             &self.application_id,
             self.nemu_app_index
@@ -601,14 +688,7 @@ impl ExecutionBackendEntry {
             },
             memory,
         )
-        .map_err(|error| {
-            let mut report = actingcommand_contract::BackendOpenReport::unobserved(
-                actingcommand_contract::BackendOpenEntry::NemuPair,
-            );
-            report.source = actingcommand_contract::BackendOpenSource::Native;
-            report.requested = "nemu_ipc".into();
-            actingcommand_device::observe_open_failure(report, error)
-        })
+        .map_err(|error| actingcommand_device::observe_open_failure(nemu_pair_open_report(), error))
         .map(|mut pair| {
             pair.backend.input = Box::new(DeviceRegistryInputDiagnosticBackend::new(
                 pair.backend.input,
@@ -795,6 +875,13 @@ pub struct ExecutionBackendRegistry {
     entries: BTreeMap<String, RegistryEntry>,
     vision_provider: Option<Arc<dyn RecognitionVisionProvider>>,
     discovery: Option<DiscoverySpec>,
+    /// The bounded `info -v <index>` read: `read_instance_state` and the CAP-IDX port check.
+    instance_state_reader: InstanceStateReader,
+}
+
+/// The production `info -v <index>` read.
+fn mumu_instance_state_reader() -> InstanceStateReader {
+    Arc::new(actingcommand_device::read_instance_state)
 }
 
 impl ExecutionBackendRegistry {
@@ -806,6 +893,7 @@ impl ExecutionBackendRegistry {
             entries: BTreeMap::new(),
             vision_provider: None,
             discovery: None,
+            instance_state_reader: mumu_instance_state_reader(),
         };
         for registration in registrations {
             registry.register(registration)?;
@@ -834,6 +922,7 @@ impl ExecutionBackendRegistry {
             entries: BTreeMap::new(),
             vision_provider: vision.map(|spec| spec.provider),
             discovery,
+            instance_state_reader: mumu_instance_state_reader(),
         };
         for spec in instances {
             registry.register_spec(spec)?;
@@ -903,6 +992,32 @@ impl ExecutionBackendRegistry {
     ) -> Self {
         self.vision_provider = Some(vision_provider);
         self
+    }
+
+    /// CAP-IDX tests: replaces the `info -v <index>` read with a fake.
+    #[cfg(test)]
+    pub(crate) fn with_instance_state_reader(
+        mut self,
+        reader: impl Fn(&Path, u16) -> DeviceResult<InstanceState> + Send + Sync + 'static,
+    ) -> Self {
+        self.instance_state_reader = Arc::new(reader);
+        self
+    }
+
+    /// CAP-IDX tests: the capture configuration `open_capture` would open a real entry with,
+    /// after its port check; no backend is created.
+    #[cfg(test)]
+    pub(crate) fn capture_for_open(
+        &self,
+        instance_alias: &str,
+    ) -> DeviceResult<CaptureBackendConfig> {
+        match self.entry(instance_alias)? {
+            RegistryEntry::Real(entry) => entry.capture_for_open(&self.instance_state_reader),
+            #[cfg(feature = "fixture-backends")]
+            RegistryEntry::Fixture(_) => Err(DeviceError::fatal(
+                "a fixture simulation instance has no capture configuration",
+            )),
+        }
     }
 
     fn entry(&self, instance_alias: &str) -> DeviceResult<&RegistryEntry> {
@@ -1057,7 +1172,7 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
         _memory: Option<&actingcommand_device::FrameMemoryBudget>,
     ) -> DeviceResult<actingcommand_device::OpenedBackend<Box<dyn CaptureBackend>>> {
         match self.entry(instance_alias)? {
-            RegistryEntry::Real(entry) => entry.open_capture(_memory),
+            RegistryEntry::Real(entry) => entry.open_capture(_memory, &self.instance_state_reader),
             #[cfg(feature = "fixture-backends")]
             RegistryEntry::Fixture(fixture) => fixture.open_capture(),
         }
@@ -1069,7 +1184,9 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
         memory: Option<&actingcommand_device::FrameMemoryBudget>,
     ) -> DeviceResult<Option<actingcommand_device::OpenedBackend<NemuSessionBackends>>> {
         match self.entry(instance_alias)? {
-            RegistryEntry::Real(entry) => entry.open_nemu_session(memory),
+            RegistryEntry::Real(entry) => {
+                entry.open_nemu_session(memory, &self.instance_state_reader)
+            }
             #[cfg(feature = "fixture-backends")]
             RegistryEntry::Fixture(_) => Ok(None),
         }
@@ -1250,10 +1367,7 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
                 HostLocation::EmulatorControlBinding.location(),
             ));
         };
-        actingcommand_device::read_instance_state(
-            discovered.mumu_manager_path(),
-            discovered.instance_index(),
-        )
+        (self.instance_state_reader)(discovered.mumu_manager_path(), discovered.instance_index())
     }
 
     /// Binds a discovery-bound entry to the port the started instance reported (its host is
@@ -1315,6 +1429,7 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
                     ResolvedInstanceEndpoint::Pending(PendingAdbEndpoint::new(host, discovered));
             }
         }
+        endpoint.bind_capture_index();
         Ok(())
     }
 

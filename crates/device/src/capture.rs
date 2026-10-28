@@ -3790,16 +3790,58 @@ fn resolve_nemu_paths(
     Ok((paths.installation.root, paths.capture_dll_path))
 }
 
+/// The index of a target without an explicit one, by discovery's strict rule (CAP-IDX, since
+/// 0.12.27): only a base port derives an index. A discovery-bound entry always carries its
+/// index explicitly, so no shifted port is ever guessed here.
 fn serial_to_nemu_instance_id(serial: &str) -> Option<i32> {
-    let port = serial.split(':').nth(1)?.parse::<i32>().ok()?;
-    let base = port - 16384 + 16;
-    let index = base.div_euclid(32);
-    let offset = base.rem_euclid(32) - 16;
-    if (0..32).contains(&index) && (-2..=2).contains(&offset) {
-        Some(index)
-    } else {
-        None
+    crate::discovery::mumu_instance_id_from_serial(serial).map(i32::from)
+}
+
+/// CAP-IDX (since 0.12.27): the identity check of a MuMu target whose index comes from its
+/// discovery binding, run before a Nemu IPC capture or paired session opens. On the index's base
+/// ADB port nothing is read: the port and the index agree by the rule discovery derives an index
+/// by. On any other port (MuMu takes the next free port when the base port is busy at launch)
+/// `read_state` runs once (the caller's bounded `info -v <index>`), and the port MuMu reports for
+/// the index must be the bound port. Otherwise the open is refused as `target_identity_mismatch`,
+/// naming both ports, so input (by port) and capture (by index) never reach two instances. A
+/// failed read refuses as `target_identity_unavailable`, keeping the read's own error.
+pub fn verify_mumu_target_port(
+    instance_index: u16,
+    bound_port: u16,
+    read_state: impl FnOnce() -> DeviceResult<crate::InstanceState>,
+) -> DeviceResult<()> {
+    if crate::discovery::mumu_instance_port(instance_index) == Some(bound_port) {
+        return Ok(());
     }
+    let state = read_state().map_err(|error| {
+        let message = format!(
+            "MuMu target identity unavailable: reading instance_id={instance_index} to check the bound port {bound_port} failed: {}",
+            error.message()
+        );
+        with_nemu_capture_resolution_detail(
+            error
+                .with_message(message)
+                .with_nemu_resolution_context_if_absent(NemuResolutionContext::new(
+                    NemuResolutionReason::TargetIdentityUnavailable,
+                )),
+            NemuCaptureResolutionDetail::Target,
+        )
+    })?;
+    if state.adb_port == Some(bound_port) {
+        return Ok(());
+    }
+    let reported = state
+        .adb_port
+        .map_or_else(|| "none".to_owned(), |port| port.to_string());
+    Err(with_nemu_capture_resolution_detail(
+        DeviceError::fatal(format!(
+            "MuMu target identity conflicts: MuMuManager reports ADB port {reported} for instance_id={instance_index} but the binding is on port {bound_port}"
+        ))
+        .with_nemu_resolution_context_if_absent(NemuResolutionContext::new(
+            NemuResolutionReason::TargetIdentityMismatch,
+        )),
+        NemuCaptureResolutionDetail::Target,
+    ))
 }
 
 fn rgba_bottom_up_to_rgba(raw: &[u8], width: u32, height: u32) -> DeviceResult<Vec<u8>> {
@@ -5364,6 +5406,12 @@ mod tests {
         assert_eq!(serial_to_nemu_instance_id("127.0.0.1:16384"), Some(0));
         assert_eq!(serial_to_nemu_instance_id("127.0.0.1:16416"), Some(1));
         assert_eq!(serial_to_nemu_instance_id("127.0.0.1:16448"), Some(2));
+        // CAP-IDX: discovery's strict rule; a shifted port is never guessed to an index.
+        let shifted = crate::discovery::mumu_instance_port(1).expect("base port") + 1;
+        assert_eq!(
+            serial_to_nemu_instance_id(&format!("127.0.0.1:{shifted}")),
+            None
+        );
     }
 
     fn png_header(width: u32, height: u32) -> Vec<u8> {

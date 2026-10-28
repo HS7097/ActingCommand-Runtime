@@ -561,6 +561,17 @@ tests = [
 ]
 incident = []
 
+# Capture takes the MuMu index from the discovery binding: a shifted port resolves with the bound index, a port that derives another index is target_identity_mismatch, and a shifted port MuMu does not report for the index refuses capture on that instance only (CAP-IDX, since 0.12.27)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-device::lib::discovery::tests::cap_idx_an_explicit_index_on_a_shifted_port_selects_its_running_process",
+    "actingcommand-device::lib::discovery::tests::cap_idx_an_explicit_index_that_conflicts_with_the_port_is_target_identity_mismatch",
+    "actingcommand-runtime-host::lib::tests::gate_cap_idx::cap_idx_a_discovered_entry_rebound_to_a_shifted_port_opens_capture_with_the_bound_index",
+    "actingcommand-runtime-host::lib::tests::gate_cap_idx::cap_idx_a_port_mumu_does_not_report_refuses_capture_and_spares_the_other_instance",
+]
+incident = ["#419"]
+
 # Capture selection and touch fallback bounds
 [[gate]]
 key = "42"

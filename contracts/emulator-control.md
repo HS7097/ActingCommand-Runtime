@@ -235,6 +235,22 @@ outcome that carries no port fails typed with `emulator_control_endpoint_unresol
 (`backend_operation_failed`, receipt state `failed`, effect `indeterminate`); the binding stays as
 it was and the request may be repeated.
 
+Nemu target resolution (CAP-IDX, since 0.12.27). A discovery-bound entry's capture takes its
+MuMu index from the binding (`instance_index`), never from the ADB port: the registry gives the
+Nemu IPC capture the bound index when the entry is built and on every rebinding. MuMu takes the
+next free port when an index's base ADB port is still busy at launch, so a started instance can
+be bound to a shifted port; capture opens it with the bound index. A port that derives a
+different index (another index's base port) is still refused, nemu resolution reason
+`target_identity_mismatch`. Before a Nemu IPC capture or paired session opens on a port that is
+not the index's base port, the registry reads `info -v <index>` once (the bounded read of "State
+after a failure" below, never `api`) and requires the reported `adb_port` to be the bound port.
+Otherwise the open is refused with `target_identity_mismatch`, its cause naming both ports (a
+failed read refuses with the read's error, `target_identity_unavailable` when it carries no
+reason of its own); outward it is `capture_backend_open_failed`, or `paired_backend_open_failed`
+for a paired session, and only that instance is affected. On the base port nothing extra is
+read. An entry without a discovery binding derives the index from its port by the same strict
+rule: only a base port derives one (the former tolerance of two ports either side is gone).
+
 Lease queue/acquire uses only the stable instance identity to locate its admission lock.
 After acquiring that lock it resolves the current Host/registry binding again; the endpoint
 check and scheduler preparation, queue context and commit use that same current binding.
