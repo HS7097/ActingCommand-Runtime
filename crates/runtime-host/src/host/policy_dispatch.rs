@@ -2957,7 +2957,10 @@ impl HostShared {
                         None,
                     ) {
                         Ok(_) => failure,
-                        Err(release) => failure.replace_with_poison(*release.error),
+                        // ISO-5a (#419, ISO-M row D55): a release of the reconnect claim the
+                        // scheduler refused (its lease lapsed or is gone) fails only this
+                        // resume; a fatal one poisons as before.
+                        Err(release) => failure.with_cleanup_failure(*release.error),
                     },
                 );
             }

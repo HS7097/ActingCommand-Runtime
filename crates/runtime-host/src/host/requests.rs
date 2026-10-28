@@ -841,6 +841,28 @@ impl RequestFailure {
         }
     }
 
+    /// ISO-5a (#419, ISO-M row B22): the lease-end cleanup after this failure failed with
+    /// `error`. A fatal cleanup failure replaces this failure and poisons as before
+    /// ([`Self::replace_with_poison`]); its boundary contains it, and only a `Global` one latches
+    /// the Runtime. A cleanup failure that is not fatal (a scheduler refusal of the lease end, such
+    /// as a connection mismatch or a stale owner epoch) was recorded by the lease end's own
+    /// failure record: this failure is kept, without poison, and carries it as its `cleanup` link,
+    /// so only the work that met it fails.
+    pub(super) fn with_cleanup_failure(self, error: RuntimeHostError) -> Self {
+        if error.is_fatal() {
+            return self.replace_with_poison(error);
+        }
+        let mut failure = self;
+        failure.error = Box::new(
+            failure
+                .error
+                .as_ref()
+                .clone()
+                .with_related_failure("cleanup", &error),
+        );
+        failure
+    }
+
     pub(super) fn replace_with_poison(self, error: RuntimeHostError) -> Self {
         let mut error = if self.error.has_ppocr_diagnostics() {
             self.error.as_ref().clone().with_complete_failure(
@@ -907,6 +929,59 @@ mod request_failure_tests {
                 severe: false,
             })
         );
+    }
+
+    /// ISO-5a (#419, ISO-M row B22): a lease-end cleanup that the scheduler refused without a
+    /// fatal error (here `connection_mismatch`) keeps the run's own failure, unpoisoned and with
+    /// its classification, and carries the refusal as its `cleanup` link; the boundary then has
+    /// nothing to latch. A fatal cleanup failure still replaces it and poisons, as before.
+    #[test]
+    fn iso5a_b22_a_cleanup_refusal_that_is_not_fatal_fails_only_the_work() {
+        let original = || RequestFailure {
+            state: RuntimeReceiptState::Failed,
+            terminal: None,
+            error: Box::new(RuntimeHostError::request(
+                actingcommand_contract::codes::SharedCode::CaptureBackendOperationFailed,
+                crate::codes::HostLocation::RunContainedTaskCapture,
+                RuntimeErrorCode::CaptureFailed,
+            )),
+            poison_runtime: false,
+            task_failure: Some(TaskFailureEvidence {
+                outcome: actingcommand_contract::outcome::Outcome::new(
+                    actingcommand_contract::codes::SharedCode::CaptureBackendOperationFailed,
+                )
+                .operation(crate::codes::HostLocation::RunContainedTaskCapture),
+                severe: false,
+            }),
+        };
+        let refusal = RuntimeHostError::scheduler(
+            crate::codes::HostLocation::CleanupRuntimeLease,
+            &actingcommand_scheduler::SchedulerError::ConnectionMismatch,
+        );
+        assert!(!refusal.is_fatal());
+
+        let kept = original().with_cleanup_failure(refusal);
+
+        assert!(!kept.poison_runtime);
+        assert!(!kept.error.is_fatal());
+        assert!(!kept.error.halts_runtime());
+        assert_eq!(kept.error.code(), "capture_backend_operation_failed");
+        assert_eq!(kept.task_failure, original().task_failure);
+        assert!(
+            kept.error
+                .native_detail()
+                .is_some_and(|detail| detail.contains("cleanup connection_mismatch")),
+            "the refusal is kept as the failure's cleanup link: {:?}",
+            kept.error.native_detail()
+        );
+
+        let replaced = original().with_cleanup_failure(RuntimeHostError::fatal(
+            crate::codes::test_spellings::TestCode::LeaseCleanupFailed,
+            crate::codes::HostLocation::ReleaseFailedPolicyRun,
+            RuntimeErrorCode::RuntimeHalted,
+        ));
+        assert!(replaced.poison_runtime);
+        assert_eq!(replaced.error.code(), "lease_cleanup_failed");
     }
 }
 

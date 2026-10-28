@@ -2450,6 +2450,10 @@ impl SeedScheduler {
         })
     }
 
+    /// A lease end the Runtime owns. An explicit release (`release`, which keeps its replay) and
+    /// an expiry (`expire_token`) have their own entries and are refused here. ISO-5a (#419,
+    /// ISO-M row B20): a preempted lease whose transfer business capacity refused ends here
+    /// (`Preempted`), as every other owned end does.
     pub fn release_owned(
         &mut self,
         submitted_token: &LeaseToken,
@@ -2458,9 +2462,7 @@ impl SeedScheduler {
     ) -> SchedulerResult<ReleasedLease> {
         if matches!(
             reason,
-            LeaseReleaseReason::Explicit
-                | LeaseReleaseReason::Preempted
-                | LeaseReleaseReason::Expired
+            LeaseReleaseReason::Explicit | LeaseReleaseReason::Expired
         ) {
             return Err(SchedulerError::LeaseMismatch);
         }

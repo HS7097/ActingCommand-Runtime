@@ -1544,6 +1544,13 @@ impl HostShared {
                 });
             }
             [task_failure] if task_failure.event_type() == EventType::TaskFailed => *task_failure,
+            // ISO-5a (#419, ISO-M row A11; C-43 point 3): the run committed its success terminal,
+            // and only its lease end failed after it (its lease lapsed past the end grace). The
+            // run succeeded and settles as a success; its lease end's failure fences only its
+            // instance, or fails only the run's receipt, and never stops the Runtime.
+            [task_success] if task_success.event_type() == EventType::TaskCompleted => {
+                return Ok(PolicyExecutionInput::Succeeded);
+            }
             _ => {
                 return Err(RuntimeHostError::fatal(
                     HostCode::PolicyRunFailureTerminalConflict,

@@ -921,8 +921,10 @@ impl HostShared {
             .map_err(run_failure)
     }
 
-    /// Ends the screen check's step; a step the scheduler does not take back poisons the
-    /// Runtime, as for an input.
+    /// Ends the screen check's step. ISO-5a (#419, ISO-M row E32): a step the scheduler does not
+    /// take back because the run's lease ended or is no longer the run's (a scheduler refusal,
+    /// not fatal) ends only the run (fail-op), as a refusal at the step's start does; a fatal
+    /// failure (the scheduler's lock) poisons as before.
     fn finish_device_state_step(
         &self,
         witness: FencedWrite,
@@ -938,7 +940,7 @@ impl HostShared {
                             .naming_lease(lease_id)
                     })
             })
-            .map_err(RequestFailure::poison_without_terminal)
+            .map_err(run_failure)
     }
 
     /// The screen check (§7.3) under a step of the run's lease, at `location`: `device_screen_woken`

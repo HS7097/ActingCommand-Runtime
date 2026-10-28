@@ -2566,6 +2566,25 @@ tests = [
 ]
 incident = ["#419"]
 
+# ISO-5a (Workflow #419; ISO-M rows A08, A11, B02; coordinator ruling C-43 point 3: no step of a run's end, or of a holder's end, may stop the Runtime), each on its own host with instances X and Y on a fake Runtime clock: a scheduled run that succeeds enters its end phase as a deadline run does (its lease, which would lapse inside host_claims.run_end_grace_ms, renewed once), so its end may pass the lease's original end with the sweep held: it completes, settles once as a success (one policy.execution_recorded), its lease released once and never expired, nothing latched, X not fenced; a success whose lease the sweep ended after the end grace still settles once as a success (its sole terminal task.completed, never policy_run_failure_terminal_conflict), only its receipt failing non-fatal; three sweep ticks that meet a client's input write in flight past its lease's end leave the lease, close and record nothing and latch nothing, and the first tick after the write ends the lease once; Y's run completes after each
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_419_iso5a::iso5a_a_a_success_whose_end_passes_its_lease_end_settles_once_and_the_runtime_runs",
+    "actingcommand-runtime-host::lib::tests::gate_419_iso5a::iso5a_b_a_success_whose_lease_ended_after_the_grace_settles_as_a_success",
+    "actingcommand-runtime-host::lib::tests::gate_419_iso5a::iso5a_c_an_expiry_that_meets_a_write_in_flight_waits_for_it_and_records_nothing",
+]
+incident = ["#419"]
+
+# ISO-5a (Workflow #419; ISO-M row B22): a lease end's cleanup that the scheduler refuses without a fatal error (connection_mismatch) keeps the work's own failure, unpoisoned, with its classification and the refusal as its cleanup link, so its boundary latches nothing; a fatal cleanup failure still replaces it and poisons. W2-E review question 4: a refusal that RuntimeHostError::instance_operation makes non-fatal answers runtime_code backend_operation_failed, no longer runtime_halted, while a Global one keeps runtime_halted (gate_419_iso2::iso2_e)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::host::requests::request_failure_tests::iso5a_b22_a_cleanup_refusal_that_is_not_fatal_fails_only_the_work",
+    "actingcommand-runtime-host::lib::tests::gate_419_iso2::iso2_e_a_refused_frame_commit_or_resolve_fails_only_its_operation",
+]
+incident = ["#419"]
+
 # W1-8 (#422; brief rd-1028/brief-wave1.md W1-8; #422 6463703245, 6461256427 L-4's follow-up): while the writer is held in a read of its own, Status, MonitorStatus and RuntimeFactSnapshot each complete at the one head the writer last published, nothing latches and no stop is requested (T7, P30); PerformanceStatus shows ledger_read_pages, which counts the QueryEvents pages the reader pool read, with their times in order and the status' shape rules kept (T8, P29)
 [[gate]]
 coverage = "Y"
