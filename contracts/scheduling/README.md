@@ -1138,7 +1138,10 @@ invalidate observations. V1 occurrences are unbounded. Duration controls
 availability, including zero-duration resets, and does not undo invalidation.
 An observation at or before the last matching reset is Unknown until replaced
 by a newer observation. Equal timestamps are conservative because the input
-contains no ordering evidence within that millisecond.
+contains no ordering evidence within that millisecond. A V2 event may name key
+prefixes it does not invalidate, and a reset never clears a task's own last
+result for the task's own edges ("Reset exclusions and the task's own last
+result" below).
 
 A fact or outcome whose observed value kind differs from the kind its predicate
 compares (`fact`, `outcome`), a `record_deadline` fact that is not a
@@ -1246,7 +1249,7 @@ A task that is due when earlier work ends, at an instant a package read and publ
 
 ## Condition edges (SCH-M CF-1)
 
-A chain step runs once per new result of its predecessor, and a completion time is served once, without the pass, round and slot reset events that cleared `task.` and `outcome.` facts so that a level could fire again. Two optional boolean members ([v2/README.md](v2/README.md); `actingcommand.scheduling.v2` only) make a predicate an edge. Both are absent by default: a catalog without them evaluates, serializes and hashes exactly as before. Their inputs are the `TaskRuntimeSnapshot` fields of this task and of the predecessor on the decision's instance ("Settlement Feedback And Eligibility Age"); nothing else is read.
+A chain step runs once per new result of its predecessor, and a completion time is served once, without the pass, round and slot reset events that cleared `task.` and `outcome.` facts so that a level could fire again. Two optional boolean members ([v2/README.md](v2/README.md); `actingcommand.scheduling.v2` only) make a predicate an edge. Both are absent by default: a catalog without them evaluates, serializes and hashes exactly as before. Their inputs are the `TaskRuntimeSnapshot` fields of this task and of the predecessor on the decision's instance ("Settlement Feedback And Eligibility Age"); nothing else is read. This task's own fields are its own last result, which no timeline reset clears (since 0.12.25, "Reset exclusions and the task's own last result").
 
 - **`dependency_completed` with `since_own_run: true`.** True when the predecessor's latest terminal state is one of `terminal_states`, and this task has not served it yet: it has no admitted dispatch on the instance, or its latest dispatch is before the predecessor's latest dispatch, or its latest run did not succeed. Otherwise false, with the info reason `dependency_already_served` {`task_id` this task, `predecessor_task_id`} and no wake; the predecessor's next accepted terminal makes it true again.
   - A failed successor stays due. Its cooldown, its retry and backoff (the Runtime's `on_failure` handling) and its daily limits bound how often it runs again.
@@ -1293,6 +1296,20 @@ An account's cap is read, never written as a constant (Alice 10-26). Two more V2
 - **Refusals**, each at its pointer, as for a reference of a `fact` predicate: in a V1 document, `unknown_field` at `capacity/type` or `value/type`; a key that is no identifier, `type_mismatch` at `…/fact_key`; N outside -9007199254740991..=9007199254740991, `limit_exceeded` at `…/offset`; a reference that names a `scope`, `unknown_field` at `…/scope`. A `type` other than `fact`, or an N that is no integer, is refused by the reader (`type_mismatch`).
 - **Capability.** A Runtime that reads both forms reports the always-on subsystem `pool_fact_reference` in `config.subsystems` ([`actingd-check-config.md`](../actingd-check-config.md)). A `schedule.json` that writes either must list `pool_fact_reference` in `requires` ([`standard-pack-schedule.md`](../standard-pack-schedule.md)); the composer refuses the file without it, so a Runtime that does not name the subsystem refuses the file (`schedule_requires_missing`) instead of misreading it. An older Runtime given a catalog with either refuses it at its reader.
 - For example, a task due while the projected amount is at least the read capacity less 20: the pool `"capacity": {"type": "fact", "fact_key": "resource.neutral.capacity", "offset": 0}` and the trigger `{"kind": "resource_projection", "pool_id": "pool.neutral", "comparison": "greater_than_or_equal", "value": {"type": "fact", "fact_key": "resource.neutral.capacity", "offset": -20}}`.
+
+## Reset exclusions and the task's own last result (Workflow #411 P19)
+
+A daily reset that clears a family of readings must not clear the ready times in that family, which are absolute times that expire by themselves, and a reset must not make a chain step forget its own last run (#411 6455013768 items 1 and 2; since 0.12.25).
+
+- **Excluded prefixes.** A V2 timeline event may carry `"excludes_fact_prefixes": [P, …]` ([v2/README.md](v2/README.md)): key prefixes it does **not** invalidate. An occurrence of the event invalidates the observation of a key when the key starts with one of its `invalidates_fact_prefixes` and with none of its `excludes_fact_prefixes` ("Runtime Enforcement"); this holds for facts, for `outcome.<task_id>.<outcome_key>` and for `task.<task_id>.terminal_state` alike. An excluded key keeps its observation through the event and expires only by its own `expires_at_unix_ms` (and a predicate's `max_age_ms`), and its expiry is not capped at the event's next occurrence. For example `"invalidates_fact_prefixes": ["resource."], "excludes_fact_prefixes": ["resource.neutral.ready."]` clears every `resource.` reading at the reset except the ready times below `resource.neutral.ready.`, and a `resource.` key added later is cleared without a change to the event.
+  - The member is optional; absent, the event and its catalog serialize and hash exactly as before. It holds at most 128 entries, each an identifier (`type_mismatch` at the entry otherwise) that starts with one of the event's `invalidates_fact_prefixes`: an entry below none of them would exclude nothing and is refused as `dangling_reference` at the entry. A V1 document that writes it is refused as `unknown_field` at the member.
+  - The event still wakes the evaluation at its occurrences, as before; a wake that clears nothing is harmless.
+- **The task's own last result.** A reset that invalidates `task.<task_id>.terminal_state` clears the task's settled state for everything that reads it as a result of the current period: the window result before `feedback_stop` ("Runtime Enforcement") and a `dependency_completed` of **another** task that names it, which is Unknown (`dependency_state_missing`) until the task settles again. It never clears the task's own last result, which the task's own edges read:
+  - a `dependency_completed` whose `task_id` is the task itself reads the task's latest terminal state on the instance, as settled, whatever reset came since;
+  - `since_own_run` ("Condition edges") reads this task's own latest run that way, so a reset of the successor alone does not make an edge it already served due again;
+  - `once_per_reading`'s served check ("Condition edges") reads this task's own latest run that way, so a reading the task served stays served through a reset, until a newer reading.
+  - The latest dispatch, which `clock` and the cooldown read, was never cleared by a reset and is unchanged.
+- **Capability.** A Runtime that reads `excludes_fact_prefixes` and keeps the task's own last result reports the always-on subsystem `reset_exclusions` in `config.subsystems` ([`actingd-check-config.md`](../actingd-check-config.md)). A `schedule.json` whose event writes the member must list `reset_exclusions` in `requires` ([`standard-pack-schedule.md`](../standard-pack-schedule.md)); the composer refuses the file without it, so a Runtime that does not name the subsystem refuses the file (`schedule_requires_missing`) instead of misreading it. A `schedule.json` that relies on a reset keeping the task's own last result names it as well: nothing in the file shows that reliance, so the composer cannot require it. An older Runtime given a catalog whose event writes the member refuses it at its reader (`unknown_field`).
 
 ## Runtime Boundary
 

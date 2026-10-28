@@ -83,6 +83,16 @@ not name it, `schedule_invalid` at the first in the order rules (their `trigger`
 `/pools/0/capacity`). A file that writes both a `fact` reference and one of these names both
 subsystems. Each reference reads its fact in the pool's scope, which the composer fills.
 
+A timeline event that writes `excludes_fact_prefixes`, with any value (Workflow #411 P19, since
+0.12.25; [scheduling/README.md](scheduling/README.md), "Reset exclusions and the task's own last
+result"), requires `reset_exclusions`, alike: the composer refuses a file that writes it while
+`requires` does not name it, `schedule_invalid` at the first such member in file order (for
+example `/timeline/0/excludes_fact_prefixes`). A file that relies on a reset keeping a rule's own
+last result (a rule's `dependency_completed` on itself, its `since_own_run` or its
+`once_per_reading` read through a reset that clears its `task.` state) names `reset_exclusions`
+as well, so an older Runtime refuses the file instead of re-running the rule after each reset; the
+composer cannot see that reliance and does not require it.
+
 ## Classification
 
 Every package of the game root's registry is one or more of (R6, R7):
@@ -117,8 +127,9 @@ each game root that holds `schedule.json`, that file's bytes, the root as
    `schedule.json` has no rules.
 2. **Read** each game's file (above): the reader, `requires` (it names `fact_reference` when a
    rule writes a fact reference, `pool_fact_reference` when a pool's `capacity` or a
-   `resource_projection`'s `value` is one, and the given subsystems name each entry), the
-   references and the classification. A refused game is reported with its game id.
+   `resource_projection`'s `value` is one, `reset_exclusions` when a timeline event writes
+   `excludes_fact_prefixes`, and the given subsystems name each entry), the references and the
+   classification. A refused game is reported with its game id.
 3. **Instantiate**: for each bound instance `i` of game `g` on server `s`, every rule whose
    package belongs to `s` and is not held, and every pool, profile and event for every server or
    for `s`, each with every scope filled with `{kind: instance, instance_id: i}` (the item's own

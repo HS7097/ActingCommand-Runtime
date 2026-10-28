@@ -183,6 +183,15 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             true,
             Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
         ),
+        // Workflow #411 P19: this build reads a timeline event's `excludes_fact_prefixes`, and its
+        // resets keep a task's own last result for the task's own edges; a `schedule.json` whose
+        // event writes the member requires it, so an older Runtime refuses the file instead of
+        // misreading it.
+        subsystem(
+            "reset_exclusions",
+            true,
+            Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
+        ),
         // SCH-M ED-2 (frozen model v1.0 §3.4, §3.8): this build keeps the run-duration samples
         // (`health.run_duration`) and dispatches by the expected duration E; the catalog
         // generator emits catalog v35 only for a Runtime that names it.

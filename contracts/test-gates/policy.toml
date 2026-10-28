@@ -890,3 +890,13 @@ tests = [
     "actingcommand-policy::lib::tests::gate_427b::gate_427b_max_one_runs_one_dispatch_at_a_time",
 ]
 incident = ["#427-B"]
+
+# Workflow #411 P19 (comment 6455013768 items 1 and 2; work order rd-1028/brief-wave1.md W1-4; contracts/scheduling/README.md, "Reset exclusions and the task's own last result"): a reset that invalidates a prefix keeps the keys below its excludes_fact_prefixes (their expiry not capped at its next occurrence) while every other key below the prefix is cleared, and a schedule.json whose event writes the member composes only when requires names reset_exclusions (schedule_invalid at the member otherwise); a reset never clears a task's own last result: its own dependency_completed reads it (a last success makes it due, a last failure makes it false, never Unknown) while another task naming it reads it as the reset left it (dependency_state_missing), since_own_run's own run reads it (dependency_already_served), and once_per_reading's served check reads it (fact_time_served; a failed last run served nothing)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_411_p19::p19_an_excluded_prefix_survives_a_reset",
+    "actingcommand-policy::lib::tests::gate_411_p19::p19_the_steps_own_last_result_survives_a_reset",
+    "actingcommand-policy::lib::tests::gate_411_p19::p19_the_served_check_reads_the_own_last_result",
+]
+incident = ["#411 P19"]
