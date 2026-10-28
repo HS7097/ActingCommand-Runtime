@@ -2338,7 +2338,8 @@ impl RuntimeHost {
             shared.record_policy_settlement_facts_on_start()?;
             // The scheduler reconciliation above precedes direct-run settlement; both
             // complete before background execution or root admission (#351 / #352).
-            shared.settle_previous_epoch_contained_runs()?;
+            // #405 N-2: the start anchors the idle record is bound to.
+            let start_anchors = shared.settle_previous_epoch_contained_runs()?;
             shared.expire_agent_sessions()?;
             shared.check_install_preparation()?;
             shared.restore_install_pauses()?;
@@ -2347,9 +2348,11 @@ impl RuntimeHost {
             shared.note_start_pauses(&host.scheduling_pause_restore)?;
             // IDLE-1P (#405): the instances the idle action closed and their wakes, as the pauses
             // are restored and before any instance is prepared; after an earlier start that kept
-            // none, or whose record another owner wrote (review M-2: an older build ran in
-            // between), every instance with an idle action counts as closed, never as open.
-            shared.restore_idle_state(previous_owner_epoch)?;
+            // none, or whose record a start other than the last one that completed its settlement
+            // wrote (review M-2: an older build ran in between; #405 N-2: the record is bound to
+            // that start's anchor, not to the latest owner), every instance with an idle action
+            // counts as closed, never as open.
+            shared.restore_idle_state(previous_owner_epoch, start_anchors)?;
             // Workflow #369 E3 (coordinator ruling on #670, safety net): each dispatch the start
             // could not settle is recorded and its instance paused, after the persisted pauses
             // are restored and before any instance is prepared.

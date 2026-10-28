@@ -926,18 +926,30 @@ that is the Runtime's as a whole latches it.
 Across a start (#405 IDLE-1P; on 10-27 a restart at 17:32 forgot a game closed since 14:35 and its
 17:54 wake, and its 18:01 task met the closed game): every change of the instances the action
 closed, or is closing, is recorded as the runtime fact `host.idle_state` (scope Runtime, a record
-list: first a writer row naming the recording owner's `owner_epoch` alone, then one row per
+list: first a writer row naming the recording start's `start_anchor` alone, then one row per
 instance: `instance_alias`, `action`, and `wake_at_unix_ms` when a wake is planned; tagged in
 `ledger_observer.tag.workbench_patterns`, so a start loads it,
-[runtime-fact-store.md](runtime-fact-store.md)). A start restores them from a record the owner
-before it wrote, as the scheduling pauses are restored and before any instance is prepared, and
-records them again under its own epoch: each comes back idle, owing its wake, which the start's
-first idle check queues when its time has passed or a plan shows a task due, so an instance
-restarted within its wake lead is brought back at once. An action in flight at the stop counts as
-done. After an earlier start that kept no record, with a record an earlier owner wrote (a start that
-kept none ran in between, such as a rollback's older build, whose idle action was not recorded), or
-with a record of another shape (`invalid_runtime_state_fact`, operation `restore_idle_state`,
-recorded, and the start goes on), the start does not know what the action left: every instance whose action in effect
+[runtime-fact-store.md](runtime-fact-store.md)). Since 0.12.25 (#405 N-2) the writer row names
+the start anchor, the start event sequence of the start that wrote it as `host.contained_settlement`
+names it, instead of the owner epoch: an owner that ran no Runtime start to its settlement in
+between (an offline ledger maintenance, a deploy's ledger check, a start that failed before its
+settlement) no longer makes the record stale. A woken instance stays in the record until its
+startup package has run (#405 O-2, since 0.12.25): its wake only queues claims, which wait in
+memory behind a scheduling pause or an install hold, so its row says `woken` (true) with the time
+it was woken as `wake_at_unix_ms`, and the instance is no longer kept once its wake's claims have
+ended (its startup package ran, or the claims ended without it: a configured emulator start that
+found the emulator running, a claim an emulator control cancelled) and an idle check finds it
+free. A start restores them from a record the last start that completed its settlement wrote (the
+anchor `host.contained_settlement` named before this start), as the scheduling pauses are restored
+and before any instance is prepared, and records them again under its own anchor: each comes back
+idle, owing its wake, which the start's first idle check queues when its time has passed or a plan
+shows a task due, so an instance restarted within its wake lead is brought back at once, and a
+woken one whose startup package had not run is woken again at once. An action in flight at the
+stop counts as done. After an earlier start that kept no record, with a record another start wrote
+(a start that kept none ran in between, such as a rollback's older build, whose idle action was not
+recorded), or with a record of another shape (`invalid_runtime_state_fact`, operation
+`restore_idle_state`, recorded, and the start goes on; a record a build before 0.12.25 wrote under
+its owner epoch is one), the start does not know what the action left: every instance whose action in effect
 could have run on it (its startup package, and for `stop_emulator` its emulator start) counts as
 closed, never as open, and owes its wake at the start's time (review N-1): the start's first idle
 check wakes it once, its startup package waits behind a scheduling pause or an install hold as
