@@ -24,6 +24,8 @@ impl HostShared {
                 HostLocation::ReconcilePolicySettlements,
             )?;
             let mut policy = lock(self.policy()?, HostLocation::ReconcilePolicySettlements)?;
+            // Workflow #427-A: an abandoned lane whose run is settled already frees its instance.
+            self.forget_settled_abandoned_policy_runs(&policy)?;
             let missing_outcomes = policy
                 .pending_dispatch_outcomes()
                 .into_iter()
@@ -88,6 +90,9 @@ impl HostShared {
                     HostLocation::RecoverOnlinePolicyOutcomes,
                 )? = recover_authoritative_policy_outcomes(&policy, &self.ledger)?;
             }
+            // Workflow #427-A: an abandoned lane (a worker panic, a failed settlement) whose run
+            // this reconciliation settled frees its instance.
+            self.forget_settled_abandoned_policy_runs(&policy)?;
             self.record_policy_values(&mut policy)?;
             // Reconciled settlements carry their four settlement facts too (Workflow #308
             // slice 5b).
@@ -605,6 +610,10 @@ impl HostShared {
             }
         };
         let leases = lock(&self.scheduler, HostLocation::SelectPolicySettlements)?.active_tokens();
+        // Workflow #427-A (C3): a run an instance worker still holds, from its hand-off to its
+        // settlement, is its worker's to settle; it is never settled here early or twice. Read
+        // under the policy outcome gate, which the worker's settlement takes too.
+        let held_by_workers = self.policy_runs_held_by_workers()?;
         let runs = lock(&self.contained_runs, HostLocation::SelectPolicySettlements)?;
         let mut eligible = Vec::new();
         // #419 LN-WS-F, tests: the hook around this tick's settlement reads, from the first
@@ -614,6 +623,9 @@ impl HostShared {
         let _around = super::around_read_for_test(&AROUND_SETTLEMENT_READS);
         for decision_id in pending {
             let inactive = (|| -> RuntimeHostResult<bool> {
+                if held_by_workers.contains(decision_id) {
+                    return Ok(false);
+                }
                 let intents = policy_dispatch_intents(
                     &self.ledger,
                     SettlementRead::Tolerant,

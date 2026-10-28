@@ -388,6 +388,7 @@ both checks ([policy-suspension.md](policy-suspension.md), "Task package suspens
 | `scheduling.remedy.enabled` (Workflow #411 B15) | boolean | `true` |
 | `scheduling.remedy.max_per_round` (Workflow #411 B15) | integer `1..=8` | `2` |
 | `scheduling.remedy.choices` (Workflow #411 B15) | list of remedy choice rows (objects) | `[]` |
+| `scheduling.parallel.enabled` (Workflow #427-A) | boolean | `false` |
 
 The section is checked whole at start, in `check-config` and after every instruction: a code
 list entry the catalog does not list is `config_value_invalid` with `code_unknown`, a retired
@@ -439,6 +440,16 @@ projection of the evaluation inputs ([instance-fact-store.md](instance-fact-stor
 facts"), and `scheduling.fact_refresh.expected_duration_ms` at every evaluation and admission of a
 fact refresh read, whose intent record carries a value other than the spec's nominal 60 000, so
 recovery reserves it again. ED-2 adds no key.
+
+**Per-instance lanes (Workflow #427-A; `actingd-config` revision 19).**
+`scheduling.parallel.enabled` (default `false`, settable) chooses where the policy driver runs
+an admitted scheduled run: `false`, on its own thread, one run after another, as before;
+`true`, on the run's instance worker (`actingd-instance-<alias>`), so a long run on one instance
+holds neither the round nor another instance ([scheduling/README.md](scheduling/README.md),
+"Per-Instance Lanes"). actingd reads it at the start of every policy round, the initial round
+included, so an instruction (`ac_config_set`, `actingctl config set`) takes effect at the next
+round; a run already handed to a worker finishes and is settled there. Accessor
+`EffectiveConfig::scheduling_parallel_enabled`.
 
 **Remedies (Workflow #411 B15, [remedies.md](remedies.md); parsed and checked by slice R3,
 v0.12.3).** `scheduling.remedy.enabled` turns declared remedies on (`false`: every remedy key is a

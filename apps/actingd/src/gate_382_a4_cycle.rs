@@ -103,7 +103,7 @@ static INSTANCES: [Fixture; 2] = [
 // The Runtime clock (HOST-I2, EXEC-I3): its wall time moves 1 ms at every reading, so records keep
 // strictly increasing times; its monotonic time moves only by the contained-task kernel's waits
 // (`pause`), which return at once. It never reads the wall clock.
-struct CycleClock {
+pub(super) struct CycleClock {
     unix_ms: AtomicU64,
     monotonic_ms: AtomicU64,
 }
@@ -127,20 +127,20 @@ impl RuntimeClock for CycleClock {
 
 impl CycleClock {
     // The wall time of the last reading, taking none: the driver's own clock reading.
-    fn now_unix_ms(&self) -> u64 {
+    pub(super) fn now_unix_ms(&self) -> u64 {
         self.unix_ms.load(Ordering::SeqCst)
     }
 
     // Moves the wall time on to `unix_ms`, never back, as the daemon's clock gets there while
     // the driver waits. The monotonic time, and with it every lease, does not move.
-    fn advance_to(&self, unix_ms: u64) {
+    pub(super) fn advance_to(&self, unix_ms: u64) {
         self.unix_ms.fetch_max(unix_ms, Ordering::SeqCst);
     }
 }
 
 // What a fake device shows.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Screen {
+pub(super) enum Screen {
     // `home` at every capture: a tap never opens `terminal`, so a run fails
     // `page_confirmation_failed`.
     Stuck,
@@ -159,7 +159,7 @@ struct Taps {
 // Row 3's hold: the first tap under a lease other than the device's first tap's lease (a rung run
 // on the ladder's key, model-369 §6 step 3) reports itself on `reached` and waits for `release`.
 // Until then the ladder holds its key.
-struct Hold {
+pub(super) struct Hold {
     reached: Mutex<mpsc::Sender<()>>,
     release: Mutex<mpsc::Receiver<()>>,
 }
@@ -444,7 +444,7 @@ fn document(name: &str, bytes: Vec<u8>) -> CatalogDocumentSource {
 
 // catalog-a with its feedback stop at a clock instant that never comes (the runtime-host
 // `policy_sources`) and, for two instances, instance B's copy of the task at priority 50.
-fn catalog(two_instances: bool) -> CatalogSources {
+pub(super) fn catalog(two_instances: bool) -> CatalogSources {
     let mut tasks: Value = serde_json::from_slice(include_bytes!(
         "../../../contracts/scheduling/examples/catalog-a/tasks.json"
     ))
@@ -554,7 +554,7 @@ fn resources(instances: &[Fixture]) -> EvaluationResources {
 // each instance keeps its default stuck recovery (`recovery_ladder.enabled`) and the scheduled
 // request binds the return-home package, the ladder's first rung; without it stuck recovery is
 // off for every instance. It also hands back the Runtime's clock.
-fn start(
+pub(super) fn start(
     root: &Path,
     screens: &[Screen],
     mut hold: Option<Hold>,
@@ -666,7 +666,7 @@ fn start(
 
 // The catalog transition and the configured approvals `initialize_policy` makes before its first
 // cycle (Workflow #361 C2, #389 U-2), through the same host calls.
-fn activate(host: &RuntimeHost, policy: &PolicyBootstrap) {
+pub(super) fn activate(host: &RuntimeHost, policy: &PolicyBootstrap) {
     let plan = host
         .plan_policy_catalog_transition(
             policy.catalog.as_ref().expect("a configured catalog"),
@@ -690,7 +690,7 @@ fn activate(host: &RuntimeHost, policy: &PolicyBootstrap) {
 
 // The ledger's records as a read-only reader sees them now, each authenticated. The tests read
 // records only: the runs' frame material is not read, so the reader never asks for it.
-fn ledger_events(root: &Path) -> Vec<PersistedEvent> {
+pub(super) fn ledger_events(root: &Path) -> Vec<PersistedEvent> {
     GlobalLedger::open_evidence(
         GlobalLedgerEvidenceConfig::new(root).sqlite_material_not_read(),
         |_| None,
@@ -701,7 +701,7 @@ fn ledger_events(root: &Path) -> Vec<PersistedEvent> {
 }
 
 // The policy dispatch records (intent, admitted, rejected, completed) of one decision.
-fn dispatch_records<'a>(
+pub(super) fn dispatch_records<'a>(
     events: &'a [PersistedEvent],
     decision_id: &str,
 ) -> Vec<&'a PersistedEvent> {
@@ -720,7 +720,7 @@ fn dispatch_records<'a>(
 }
 
 // The record of one decision of `event_type`.
-fn dispatch_record<'a>(
+pub(super) fn dispatch_record<'a>(
     events: &'a [PersistedEvent],
     decision_id: &str,
     event_type: EventType,
@@ -731,14 +731,14 @@ fn dispatch_record<'a>(
 }
 
 // The run a decision's intent opened.
-fn run_of(events: &[PersistedEvent], decision_id: &str) -> RunId {
+pub(super) fn run_of(events: &[PersistedEvent], decision_id: &str) -> RunId {
     dispatch_record(events, decision_id, EventType::PolicyDispatchIntent)
         .and_then(|event| event.links().run_id().copied())
         .unwrap_or_else(|| panic!("the run of decision {decision_id}"))
 }
 
 // The records of one run, in ledger order.
-fn run_records(events: &[PersistedEvent], run_id: RunId) -> Vec<&PersistedEvent> {
+pub(super) fn run_records(events: &[PersistedEvent], run_id: RunId) -> Vec<&PersistedEvent> {
     events
         .iter()
         .filter(|event| event.links().run_id() == Some(&run_id))

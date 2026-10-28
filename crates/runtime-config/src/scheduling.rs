@@ -36,6 +36,9 @@
 //! (`0..=3600000`), each also per instance (`instance.<instance id>.scheduling.expected_runtime.*`,
 //! defaulting to the section's), and `fact_refresh.expected_duration_ms` (`1..=1800000`), the
 //! declared duration D of a fact refresh read; parsed and checked here, read by slice ED-2.
+//! Workflow #427-A (plan r2 point 6): `parallel.enabled` (default `false`), whether the policy
+//! driver hands each admitted scheduled run to its instance's worker instead of running it on its
+//! own thread; read by actingd at the start of every policy round.
 //!
 //! The section is read whole and checked whole (M387 §5.3). At start and in `check-config` a
 //! blackout entry that breaks a rule is `blackout_config_invalid` (with `field`, `blackout_source`
@@ -170,6 +173,11 @@ pub const REMEDY_MAX_PER_ROUND: &str = "scheduling.remedy.max_per_round";
 /// replaces this list as a whole.
 pub const REMEDY_CHOICES: &str = "scheduling.remedy.choices";
 
+/// Workflow #427-A (plan r2 point 6): whether the policy driver runs each admitted scheduled run
+/// on its instance's worker (`true`: one run per instance at a time, different instances at once)
+/// or on its own thread, one after another (`false`, the default).
+pub const PARALLEL_ENABLED: &str = "scheduling.parallel.enabled";
+
 /// The longest random delay any key may name: one day (the coordinator's order for Workflow
 /// #405, 2026-10-14). Schema, not a threshold.
 const MAX_RANDOM_DELAY_MS: i64 = 86_400_000;
@@ -272,6 +280,11 @@ pub struct SchedulingFile {
     // unknown fields; a file that does not name it keeps its revision.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     expected_runtime: Option<ExpectedRuntimeFile>,
+    // Interface anchor `actingd-config` revision 19 (contracts/component-interfaces.md; Workflow
+    // #427-A): a Runtime before #427-A refuses a file that names it, because the section denies
+    // unknown fields; a file that does not name it keeps its revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    parallel: Option<ParallelFile>,
 }
 
 /// Workflow #405: the `scheduling` member of an `instances[]` entry, which holds that instance's
@@ -390,6 +403,10 @@ file_struct!(
         runs,
         margin_ms
     }
+);
+file_struct!(
+    /// Workflow #427-A: the switch of the per-instance lanes.
+    ParallelFile { enabled }
 );
 
 const fn row(
@@ -640,6 +657,17 @@ pub(crate) static ROWS: &[KeyRow] = &[
         ValueType::DurationMs,
         FACT_REFRESH_EXPECTED_DURATION,
     ),
+    // Workflow #427-A: read by actingd at the start of every policy round, so an instruction
+    // takes effect at the next round; a run already handed to a worker finishes there.
+    KeyRow {
+        since: "0.12.21",
+        ..row(
+            PARALLEL_ENABLED,
+            ValueType::Boolean,
+            KeyRange::Any,
+            "#427-A",
+        )
+    },
 ];
 
 /// A pacing stage a stage key names (the vocabulary `pacing_stage`).
@@ -835,6 +863,8 @@ pub struct SchedulingConfig {
     pub day_boundary_quiet: bool,
     /// SCH-M ED-1: the section's expected-duration keys.
     pub expected_runtime: ExpectedRuntimeConfig,
+    /// Workflow #427-A: whether the policy driver runs scheduled runs on the instance workers.
+    pub parallel_enabled: bool,
 }
 
 fn invalid(key: &str, problem: ConfigValueProblem) -> ConfigFailure {
@@ -1269,8 +1299,16 @@ impl SchedulingConfig {
                     EXPECTED_RUNTIME_MARGIN_MS,
                 ],
             )?,
+            parallel_enabled: reader.boolean(PARALLEL_ENABLED)?,
         })
     }
+}
+
+/// Workflow #427-A: `scheduling.parallel.enabled` in effect.
+pub(crate) fn parallel_enabled(
+    value: &dyn Fn(&str) -> Option<FactScalar>,
+) -> Result<bool, ConfigFailure> {
+    Reader { value }.boolean(PARALLEL_ENABLED)
 }
 
 /// Workflow #411 B15 R3: the section's remedy keys from `reader`. `max_per_round`'s range

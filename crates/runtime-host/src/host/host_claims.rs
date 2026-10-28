@@ -17,6 +17,10 @@
 //! not idempotent); its key is left to lapse at its TTL, where the sweep's expiry hands it on;
 //! and the worker carries on with fresh state. A second panic before the rebuilt worker
 //! finished one payload marks the Runtime fatal with `runtime_restart_required`.
+//!
+//! Workflow #427-A: a worker also runs the scheduled policy runs the driver hands it
+//! (`policy_lanes.rs`), one at a time, under the same panic rule; a panicked policy run's
+//! registration is left to the reconciliation, never stuck.
 
 use super::device_link::PendingLinkRestore;
 use super::emulator_autostart::PendingAutostart;
@@ -77,9 +81,25 @@ pub(super) struct HostKey {
     pub(super) connection_id: ConnectionId,
 }
 
-pub(super) struct WorkerJob {
-    work: HostClaimWork,
-    key: HostKey,
+// The channel moves each job once, by value; boxing the host claim's payload as well gains
+// nothing.
+#[allow(clippy::large_enum_variant)]
+pub(super) enum WorkerJob {
+    HostClaim {
+        work: HostClaimWork,
+        key: HostKey,
+    },
+    /// Workflow #427-A: a scheduled policy run the driver handed to the instance.
+    PolicyRun(Box<super::policy_lanes::PolicyRunJob>),
+}
+
+impl WorkerJob {
+    fn failure_category(&self) -> &'static str {
+        match self {
+            Self::HostClaim { work, .. } => work.failure_category(),
+            Self::PolicyRun(_) => HostLocation::RunHandedPolicyRun.as_str(),
+        }
+    }
 }
 
 /// The instance workers' channels and threads. Shutdown takes both: dropping the senders ends
@@ -129,9 +149,14 @@ fn instance_worker_loop(
     // Spec §7: whether the worker was rebuilt after a panic and has not finished a payload since.
     let mut rebuilt = false;
     while let Ok(job) = receiver.recv() {
-        let category = job.work.failure_category();
+        let category = job.failure_category();
         let links = shared.host_claim_failure_links(&job)?;
-        match catch_unwind(AssertUnwindSafe(|| shared.run_host_claim(job))) {
+        // Workflow #427-A: what a panicked policy run leaves behind (its registration).
+        let lane = match &job {
+            WorkerJob::PolicyRun(run) => Some(run.lane()),
+            WorkerJob::HostClaim { .. } => None,
+        };
+        match catch_unwind(AssertUnwindSafe(|| shared.run_worker_job(job))) {
             Ok(Ok(())) => rebuilt = false,
             Ok(Err(error)) => {
                 shared.fatal.mark(error.clone())?;
@@ -139,6 +164,12 @@ fn instance_worker_loop(
             }
             Err(panic) => {
                 shared.record_worker_panic(category, links, panic.as_ref())?;
+                // The payload is dropped, not retried; its lease lapses at its TTL. A policy
+                // run's registration stays as abandoned (its instance still occupied) until the
+                // reconciliation settles the run, and the driver is woken.
+                if let Some(lane) = lane {
+                    shared.drop_panicked_policy_run(lane)?;
+                }
                 if rebuilt {
                     let error = RuntimeHostError::fatal(
                         actingcommand_contract::codes::SharedCode::RuntimeRestartRequired,
@@ -156,16 +187,23 @@ fn instance_worker_loop(
 }
 
 impl HostShared {
+    /// One payload of an instance's worker.
+    fn run_worker_job(&self, job: WorkerJob) -> RuntimeHostResult<()> {
+        match job {
+            WorkerJob::HostClaim { work, key } => self.run_host_claim(work, key),
+            WorkerJob::PolicyRun(run) => self.run_handed_policy_run(*run),
+        }
+    }
+
     /// Runs one granted host claim on its instance's worker, as lifecycle work. A grant that
     /// arrives while the host is stopping releases at once; one that arrives while lifecycle
     /// admission is still closed (a daemon start that is preparing) waits for it, holding the
     /// key, as the old host-work thread kept its queue.
-    fn run_host_claim(&self, job: WorkerJob) -> RuntimeHostResult<()> {
+    fn run_host_claim(&self, work: HostClaimWork, key: HostKey) -> RuntimeHostResult<()> {
         #[cfg(test)]
         if self.worker_panic_for_test.swap(false, Ordering::AcqRel) {
             panic!("injected instance worker panic");
         }
-        let WorkerJob { work, key } = job;
         let _work = loop {
             if self.fatal.is_shutdown_requested() {
                 return self.release_host_key(&key);
@@ -187,7 +225,12 @@ impl HostShared {
 
     /// The links a worker's panic is recorded under: the instance and the payload's causation.
     fn host_claim_failure_links(&self, job: &WorkerJob) -> RuntimeHostResult<EventLinksDraft> {
-        Ok(match &job.work {
+        let work = match job {
+            WorkerJob::HostClaim { work, .. } => work,
+            // Workflow #427-A: a policy run's panic is recorded under its run's links.
+            WorkerJob::PolicyRun(run) => return self.policy_run_event_links(run.context()),
+        };
+        Ok(match work {
             HostClaimWork::StartupPackage(pending) => self
                 .events
                 .system_links()?
@@ -288,7 +331,7 @@ impl HostShared {
         let posted = workers
             .senders
             .get(&instance_id)
-            .is_some_and(|sender| sender.send(WorkerJob { work, key }).is_ok());
+            .is_some_and(|sender| sender.send(WorkerJob::HostClaim { work, key }).is_ok());
         if posted || self.fatal.is_shutdown_requested() {
             return Ok(());
         }
@@ -297,6 +340,32 @@ impl HostShared {
             HostLocation::PostHostClaim,
             RuntimeErrorCode::RuntimeHalted,
         ))
+    }
+
+    /// Workflow #427-A: posts a handed-off policy run to the instance's worker. `Ok(Err(run))`
+    /// gives the run back when no worker took it: the host is stopping (its workers' senders
+    /// are gone) or the instance's worker ended.
+    pub(super) fn post_policy_run(
+        &self,
+        instance_id: InstanceId,
+        run: Box<super::policy_lanes::PolicyRunJob>,
+    ) -> RuntimeHostResult<Result<(), Box<super::policy_lanes::PolicyRunJob>>> {
+        let workers = lock(
+            &self.instance_workers,
+            HostLocation::HandOffScheduledPolicyRun,
+        )?;
+        let Some(sender) = workers.senders.get(&instance_id) else {
+            return Ok(Err(run));
+        };
+        match sender.send(WorkerJob::PolicyRun(run)) {
+            Ok(()) => Ok(Ok(())),
+            Err(mpsc::SendError(WorkerJob::PolicyRun(run))) => Ok(Err(run)),
+            Err(mpsc::SendError(WorkerJob::HostClaim { .. })) => Err(RuntimeHostError::fatal(
+                HostCode::InstanceWorkerUnavailable,
+                HostLocation::HandOffScheduledPolicyRun,
+                RuntimeErrorCode::RuntimeHalted,
+            )),
+        }
     }
 
     /// Registers `work` before its claim can be granted (Q-6), then requests the claim: a

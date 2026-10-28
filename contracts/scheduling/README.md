@@ -1275,6 +1275,53 @@ referenced key the package does not declare refuses the run before any effect
 (`policy_run_outcome_declaration_mismatch`). Package validity and execution
 evidence requirements apply in both cases.
 
+## Per-Instance Lanes
+
+Workflow #427-A (plan r2, approved by Alice on 2026-10-28), behind
+`scheduling.parallel.enabled` (default `false`;
+[runtime-config.md](../runtime-config.md), "Per-instance lanes"). actingd reads the switch at
+the start of every policy round, the initial round included; a run already handed to a worker
+finishes and is settled there whatever the switch says afterwards.
+
+- **One evaluator.** Evaluation and admission stay on actingd's policy driver thread. With the
+  switch on, a granted scheduled dispatch is handed, with its request, to its instance's
+  worker (`actingd-instance-<alias>`), which runs it and settles it exactly as the driver does
+  with the switch off (the contained run, then the settlement of its scheduling result), and
+  then wakes the driver: with the run's recompute wake when its settlement projected one,
+  otherwise with `FactsChanged`, as a failed run does. One run per instance at a time; the
+  runs of different instances overlap. The round never waits for a run, so its time budget
+  (`policy_cycle_yielded`) keeps its evaluation meaning only, and the initial round no longer
+  delays `runtime_ready`.
+- **One owner from hand-off to settlement.** The hand-off registers the run as in flight on
+  its instance, with its decision id, while its lease is still held; the registration ends
+  only after the run's settlement (or its refusal's) is recorded. It is the one source of:
+  the instance's occupancy (the evaluation defers, and the admission refuses
+  `dispatch_instance_held` with `holder_kind` `policy_dispatch`, a new dispatch on a registered
+  instance, also once the run's terminal is written and its lease released and before it is
+  settled); the reconciliation (a run a worker still holds is skipped, never settled early or
+  twice); and the waits of an instance's scheduling pause and of an install drain.
+- **Lifecycle.** The worker takes a lifecycle admission when it takes the run; its work covers
+  the run and the settlement, so a drain or a stop waits for it. A run the worker takes while a
+  stop or an install drain has closed admission, or while a scheduling pause holds its
+  instance, is refused: settled as not performed with `runtime_stopping` or the pause's
+  deferral code, its lease released and its registration ended. Nothing is replayed after a
+  lost receipt.
+- **Failures (#419).** The run's failures go through the instance's failure containment: an
+  instance-level failure fences that instance and the other lanes go on; only a global fault
+  stops the Runtime. A worker panic drops the run (not retried, its lease lapses at its TTL);
+  its registration stays, marked abandoned, so the instance stays occupied until the
+  reconciliation settles the run and frees it. A run whose settlement failed without stopping
+  the Runtime is left the same way.
+- **Re-evaluation (C1, not behind the switch).** An evaluation whose validation finds its
+  sampled outcome keys changed (`policy_outcome_snapshot_changed`: another run settled between
+  the sample and the validation) is sampled again, at most three times per round, with one
+  daemon line each (`actingd policy_cycle_resampled`); past that the round is given up
+  (`actingd policy_cycle_given_up`) and deferred to its next trigger. It never stops the
+  driver.
+- **Shutdown.** The driver stops taking triggers and is joined; the workers hold no reference
+  to actingd's host handle, so the host is released and closed, and its close joins the
+  workers: a run a worker took finishes and is settled, one still queued is refused as above.
+
 ## Forward Planning And Maintenance
 
 Forward planning is a bounded dry-run of the same pure evaluator used for live policy decisions. It projects at most 24 hours, performs no ledger write, lease operation, execution, or device action, and reports incomplete evidence instead of inventing resource effects. This is a projection facility, not another scheduler.

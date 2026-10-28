@@ -210,6 +210,11 @@ mod performance;
 mod planning;
 mod policy_catalog;
 mod policy_dispatch;
+// Workflow #427-A: the scheduled policy runs on the instance workers, one lane per instance.
+mod policy_lanes;
+#[cfg(any(test, feature = "test-hooks"))]
+pub use policy_lanes::PolicyLaneHook;
+pub use policy_lanes::{PolicyLanePoint, PolicyRunCompletion, PolicyRunSettled, PolicyRunSink};
 mod policy_outcome;
 // Workflow #383 AO-7: the host's business notifications that wake the policy driver.
 mod policy_wake;
@@ -1883,6 +1888,13 @@ impl RuntimeHost {
             idle_state_unkept_for_test: config.idle_state_unkept_for_test,
             host_claim_work: Mutex::new(BTreeMap::new()),
             instance_workers: Mutex::new(host_claims::InstanceWorkers::default()),
+            policy_runs_in_flight: Mutex::new(policy_lanes::PolicyRunsInFlight::default()),
+            #[cfg(any(test, feature = "test-hooks"))]
+            policy_lane_hook_for_test: Mutex::new(None),
+            #[cfg(any(test, feature = "test-hooks"))]
+            policy_sample_hook_for_test: Mutex::new(None),
+            #[cfg(any(test, feature = "test-hooks"))]
+            policy_snapshot_changes_for_test: AtomicU64::new(0),
             #[cfg(test)]
             worker_panic_for_test: AtomicBool::new(false),
             #[cfg(test)]
@@ -3415,39 +3427,10 @@ impl RuntimeHost {
         context: &PolicyRunContext,
         request: &ContainedTaskRequest,
     ) -> RuntimeHostResult<RuntimeReceipt> {
-        let shared = self.work_ref(HostLocation::RunScheduledContainedTask)?;
-        let (request, success) = match shared.run_scheduled_contained_task(context, request) {
-            Ok(success) => success,
-            Err(failure) => {
-                shared.record_scheduled_policy_failure(context, &failure.error)?;
-                let settlement = shared.complete_scheduled_policy_failure(context, &failure);
-                let mut error = *failure.error;
-                // ISO-M (#419) R0.5, ISO-2: the scheduled run's boundary. A failure that would
-                // stop the Runtime (a poison, or a fatal failure actingd's driver stops on) goes
-                // to the one decision point against the run's instance: only a `Global` failure
-                // latches; an `Instance` one fences that instance, and the run fails with the
-                // fence's non-fatal failure, so the driver goes on with the other instances.
-                if failure.poison_runtime || error.is_fatal() {
-                    let links = shared.policy_run_event_links(context)?;
-                    error = match shared.contain_failure(
-                        error,
-                        Some(context.lease_token().instance_id()),
-                        links,
-                    )? {
-                        failure_scope::Contained::Latched(error) => error,
-                        failure_scope::Contained::Fenced(error)
-                        | failure_scope::Contained::Failed(error) => error,
-                    };
-                }
-                if let Err(settlement_error) = settlement {
-                    shared.record_scheduled_policy_failure(context, &settlement_error)?;
-                    return Err(settlement_error);
-                }
-                return Err(error);
-            }
-        };
-        RuntimeReceipt::success(&request, success.state, success.terminal, success.result)
-            .map_err(|_| receipt_error())
+        // Workflow #427-A: the body is shared with a run on an instance worker
+        // (`policy_lanes.rs`), unchanged.
+        self.work_ref(HostLocation::RunScheduledContainedTask)?
+            .run_scheduled_policy_task(context, request)
     }
 
     /// Validates a same-run contained-task receipt and records the policy execution outcome.
@@ -3459,12 +3442,103 @@ impl RuntimeHost {
         PolicyExecutionEventData,
         Option<SchedulingOutcomeProjection>,
     )> {
-        let shared = self.work_ref(HostLocation::CompleteScheduledPolicyRun)?;
-        let result = shared.complete_scheduled_policy_run(context, receipt);
-        if let Err(error) = &result {
-            shared.record_scheduled_policy_failure(context, error)?;
-        }
-        result
+        self.work_ref(HostLocation::CompleteScheduledPolicyRun)?
+            .complete_scheduled_policy_run_recorded(context, receipt)
+    }
+
+    /// Workflow #427-A (plan r2 points 1, 2): hands the admitted scheduled run `context`, with its
+    /// `request`, to its instance's worker and registers it as in flight until its settlement;
+    /// the worker runs and settles it exactly as [`Self::run_scheduled_contained_task`] and
+    /// [`Self::complete_scheduled_policy_run`] do, then reports its end to `sink`. `Ok` once the
+    /// worker has it. A hand-off no worker takes is settled as not performed, its lease and
+    /// registration released, and its refusal returned: non-fatal while the host stops, otherwise
+    /// through the instance's failure containment.
+    pub fn hand_off_scheduled_policy_run(
+        &self,
+        context: Box<PolicyRunContext>,
+        request: ContainedTaskRequest,
+        sink: Arc<dyn PolicyRunSink>,
+    ) -> RuntimeHostResult<()> {
+        self.work_ref(HostLocation::HandOffScheduledPolicyRun)?
+            .hand_off_scheduled_policy_run(context, request, sink)
+    }
+
+    /// Workflow #427-A (plan r2 point 6): `scheduling.parallel.enabled` in effect, which actingd
+    /// reads at the start of every policy round.
+    pub fn scheduling_parallel_enabled(&self) -> RuntimeHostResult<bool> {
+        self.shared_ref(crate::codes::ConfigHostLocation::ReadRuntimeConfig)?
+            .scheduling_parallel_enabled()
+    }
+
+    /// Workflow #427-A, test builds and the `test-hooks` feature: runs `hook` at every
+    /// [`PolicyLanePoint`] of a handed-off run, on the worker's thread, until it is replaced.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn set_policy_lane_hook_for_test(
+        &self,
+        hook: Option<PolicyLaneHook>,
+    ) -> RuntimeHostResult<()> {
+        let shared = self.shared_ref(HostLocation::ReadPolicyRunsInFlight)?;
+        *lock(
+            &shared.policy_lane_hook_for_test,
+            HostLocation::ReadPolicyRunsInFlight,
+        )? = hook;
+        Ok(())
+    }
+
+    /// Workflow #427-A, test builds and the `test-hooks` feature: runs `hook` once in the next
+    /// policy evaluation, after it sampled the outcome keys and before it validates them (C1).
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn run_between_policy_sample_and_validation_for_test(
+        &self,
+        hook: Box<dyn FnOnce() + Send>,
+    ) -> RuntimeHostResult<()> {
+        let shared = self.shared_ref(HostLocation::EvaluatePolicyCycle)?;
+        *lock(
+            &shared.policy_sample_hook_for_test,
+            HostLocation::EvaluatePolicyCycle,
+        )? = Some(hook);
+        Ok(())
+    }
+
+    /// Workflow #427-A, test builds and the `test-hooks` feature: the next `count` policy
+    /// evaluations find their sampled outcome keys changed at their validation, as when another
+    /// instance's run settled in between (C1).
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn change_policy_outcome_snapshots_for_test(&self, count: u64) -> RuntimeHostResult<()> {
+        self.shared_ref(HostLocation::EvaluatePolicyCycle)?
+            .policy_snapshot_changes_for_test
+            .store(count, Ordering::Release);
+        Ok(())
+    }
+
+    /// Workflow #427-A, test builds and the `test-hooks` feature: requests the host's stop as
+    /// its close does first, without closing it, so that a test orders a handed-off run's worker
+    /// after the request.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn request_shutdown_for_test(&self) -> RuntimeHostResult<()> {
+        self.shared_ref(HostLocation::ReadRuntimeShutdown)?
+            .fatal
+            .request_shutdown();
+        Ok(())
+    }
+
+    /// Workflow #427-A, test builds and the `test-hooks` feature: whether a policy run is
+    /// registered on the instance `instance_alias` names (in flight or abandoned), and whether a
+    /// worker still holds it.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn policy_run_in_flight_for_test(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<(bool, bool)> {
+        let shared = self.shared_ref(HostLocation::ReadPolicyRunsInFlight)?;
+        let instance_id = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        Ok((
+            shared.policy_run_registered(instance_id)?,
+            shared.policy_run_working(instance_id)?,
+        ))
     }
 
     pub fn record_policy_planning_signal(
@@ -5249,6 +5323,18 @@ struct HostShared {
     // per-instance workers that run it.
     host_claim_work: Mutex<BTreeMap<RequestId, host_claims::HostClaimWork>>,
     instance_workers: Mutex<host_claims::InstanceWorkers>,
+    // Workflow #427-A: the scheduled runs handed to the instance workers and not yet settled, by
+    // instance: the one source of their occupancy, the reconciliation's skip and the pause's
+    // and the drain's wait (`policy_lanes.rs`). A leaf lock: nothing is locked while it is held.
+    policy_runs_in_flight: Mutex<policy_lanes::PolicyRunsInFlight>,
+    // Workflow #427-A, test builds and the `test-hooks` feature: the lanes' hook, and the hook
+    // and the forced snapshot changes between a policy evaluation's sample and its validation.
+    #[cfg(any(test, feature = "test-hooks"))]
+    policy_lane_hook_for_test: Mutex<Option<policy_lanes::PolicyLaneHook>>,
+    #[cfg(any(test, feature = "test-hooks"))]
+    policy_sample_hook_for_test: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    #[cfg(any(test, feature = "test-hooks"))]
+    policy_snapshot_changes_for_test: AtomicU64,
     #[cfg(test)]
     worker_panic_for_test: AtomicBool,
     // Workflow #387 D1c-G, test only: the next task frame's geometry reads a zero width.
