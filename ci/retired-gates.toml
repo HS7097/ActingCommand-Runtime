@@ -163,3 +163,13 @@ test = "actingcommand-ledger::lib::global::tests::gate_ln_ws::ln_ws_t3_an_append
 ruling = "Workflow #422 QR-1 (Alice 10-28: ledger queries off the writer thread)"
 reason = "Renamed with the requirement it pins: with the reader pool an append is never captured behind a view read; it commits while the over-budget read runs off the writer, and the read then answers at its budget."
 covered_by = "actingcommand-ledger::lib::global::tests::gate_ln_ws::ln_ws_t3_an_append_commits_while_an_over_budget_read_runs_off_the_writer, in the same ledger.toml row 55."
+
+# host.toml, row 37 (Workflow #420 P22-0, 0.12.25): only host responsiveness moves the old
+# controller's level, so the test that pinned third-party escalation was adapted and renamed; the
+# new name takes the old one's place in the same row.
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::performance_control::tests::third_party_contention_is_independent_and_presence_alone_is_not_pressure"
+ruling = "Alice 10-09 pacing ruling; Friday review item 7 (#405); Workflow #420 P22-0"
+reason = "It pinned that third-party pressure alone escalates the old controller with reason ThirdPartyContention; pressure alone no longer moves the level."
+covered_by = "actingcommand-runtime-host::lib::performance_control::tests::third_party_pressure_never_escalates_and_an_unscored_sample_recovers_a_raised_level, in host row 37; p22_0_t1_third_party_pressure_alone_keeps_normal_the_gate_open_and_two_heavy_slots and p22_0_t2_full_screen_with_third_party_pressure_adds_no_level, in the P22-0 host row."
