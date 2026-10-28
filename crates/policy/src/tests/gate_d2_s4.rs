@@ -816,6 +816,14 @@ fn host(host_id: &str, cpu_available_milli: u16) -> HostResourceSnapshot {
 
 // A catalog of task X alone, triggered by `trigger`, with the fixture's activity profile.
 fn predicate_catalog(trigger: Value) -> CompiledCatalog {
+    predicate_catalog_loaded(
+        trigger,
+        json!({"kind": "weighted", "cpu_milli": 200, "gpu_milli": 100, "io_milli": 300}),
+    )
+}
+
+// `predicate_catalog` with task X's load profile `load_profile`.
+fn predicate_catalog_loaded(trigger: Value, load_profile: Value) -> CompiledCatalog {
     let header = json!({
         "catalog_id": "fixture.fact-refresh-predicates",
         "catalog_version": 1,
@@ -856,7 +864,7 @@ fn predicate_catalog(trigger: Value) -> CompiledCatalog {
         "yield_points": [],
         "expected_duration_ms": 60000,
         "cooldown_ms": 1000,
-        "load_profile": {"kind": "weighted", "cpu_milli": 200, "gpu_milli": 100, "io_milli": 300},
+        "load_profile": load_profile,
         "loop_budget": {"daily_limit": 24, "window_iteration_limit": 4, "max_runtime_ms": 300000},
         "strategic_weight_milli": 1000,
         "instance_overrides": []
@@ -1420,4 +1428,121 @@ fn p18_the_round_after_the_hold_ends_reads_the_key() {
             ],
         );
     }
+}
+
+// Workflow #411 6438574534 follow-up 2 (W2-A; contracts/scheduling/README.md, "Fact Refresh",
+// Demand and R_I's own gates): R_I's placement code when A is unavailable.
+const UNAVAILABLE_INSTANCE: &str = "instance_unavailable";
+
+// W2-A: the one round of the follow-up's cases. Task X's trigger reads A's K, last read two hours
+// ago (stale), as in T25; A's reader is bound and has not run today.
+fn w2a_round(
+    catalog: &CompiledCatalog,
+    a: InstanceSnapshot,
+    a_host: HostResourceSnapshot,
+) -> PolicyEvaluation {
+    evaluate_on(
+        catalog,
+        &[a],
+        vec![fact(A, STOCK, 5, NOW - 2 * HOUR_MS, None)],
+        Vec::new(),
+        &inputs(vec![reader(0, None)]),
+        NOW,
+        vec![a_host],
+    )
+}
+
+// The values X's `fact_refresh_pending` carries for A's stale K, with `gate_code` when one is
+// named.
+fn w2a_pending(gate_code: Option<&str>) -> Vec<(&'static str, Value)> {
+    let mut values = vec![
+        ("instance_id", json!(A)),
+        ("fact_key", json!(STOCK)),
+        ("unknown_reason", json!("fact_stale")),
+        ("package_id", json!(READER)),
+    ];
+    values.extend(gate_code.map(|code| ("gate_code", json!(code))));
+    values
+}
+
+// W2-A, "the task's own load binds only its own dispatch": A's host has one heavy-scene slot and an
+// admitted heavy dispatch takes it, and task X, itself heavy, reads A's stale K through its
+// trigger. The heavy-scene limit is X's alone: R_I, whose load is light, is still requested for
+// exactly K and dispatched on A, and X waits for it under `fact_refresh_pending` with no gate,
+// after its `trigger_unknown`.
+#[test]
+fn w2a_full_heavy_scene_slots_still_request_the_light_reading_for_a_heavy_task() {
+    let a = instance(A, &[]);
+    let mut full = host(&a.host_id, 1_000);
+    full.active_heavy_dispatches = full.heavy_dispatch_limit;
+    let evaluation = w2a_round(
+        &predicate_catalog_loaded(
+            trigger_fact(json!({"kind": "instance", "instance_id": A}), STOCK),
+            json!({"kind": "heavy"}),
+        ),
+        a,
+        full,
+    );
+
+    let on_a = intents_on(&evaluation, A);
+    assert_eq!(on_a.len(), 1, "{:#?}", evaluation.dispatch_intents);
+    assert_eq!(on_a[0].task_id, FACT_REFRESH_TASK_ID);
+    let requested = chain_of(&evaluation, on_a[0])
+        .reasons
+        .iter()
+        .filter(|reason| code_of(reason) == REQUESTED)
+        .collect::<Vec<_>>();
+    assert_eq!(requested.len(), 1, "the key set is {{K}}");
+    assert_values(
+        requested[0],
+        &[
+            ("instance_id", json!(A)),
+            ("fact_key", json!(STOCK)),
+            ("unknown_reason", json!("fact_stale")),
+        ],
+    );
+    let waiting = decision(&evaluation, X, A);
+    assert_eq!(waiting.state, SchedulingDecisionState::Deferred);
+    assert_eq!(codes(waiting), [TRIGGER_UNKNOWN, PENDING]);
+    assert_values(coded(waiting, PENDING)[0], &w2a_pending(None));
+}
+
+// W2-A, "the reader's own gate decides": A is unavailable (its self-check withdrew it) and task X
+// reads A's stale K through its trigger. R_I is requested for K and its own gate holds it back:
+// nothing is dispatched on A, and R_I's decision is deferred under `instance_unavailable`. X names
+// that gate through `fact_refresh_pending` (`gate_code` `instance_unavailable`, no wake) after its
+// `trigger_unknown`, instead of a bare undecided trigger.
+#[test]
+fn w2a_an_unavailable_instance_names_its_gate_through_fact_refresh_pending() {
+    let a = InstanceSnapshot {
+        available: false,
+        ..instance(A, &[])
+    };
+    let a_host = host(&a.host_id, 1_000);
+    let evaluation = w2a_round(
+        &predicate_catalog(trigger_fact(
+            json!({"kind": "instance", "instance_id": A}),
+            STOCK,
+        )),
+        a,
+        a_host,
+    );
+
+    assert!(
+        intents_on(&evaluation, A).is_empty(),
+        "{:#?}",
+        evaluation.dispatch_intents
+    );
+    let refresh = refresh_decision(&evaluation, A).expect("R_I's decision");
+    assert_eq!(refresh.state, SchedulingDecisionState::Deferred);
+    assert!(codes(refresh).contains(&REQUESTED), "{:?}", codes(refresh));
+    assert_eq!(last_code(refresh), UNAVAILABLE_INSTANCE);
+    let waiting = decision(&evaluation, X, A);
+    assert_eq!(waiting.state, SchedulingDecisionState::Deferred);
+    assert_eq!(codes(waiting), [TRIGGER_UNKNOWN, PENDING]);
+    assert_values(
+        coded(waiting, PENDING)[0],
+        &w2a_pending(Some(UNAVAILABLE_INSTANCE)),
+    );
+    assert_eq!(waiting.next_wake_unix_ms, None);
 }

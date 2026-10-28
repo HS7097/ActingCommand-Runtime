@@ -518,6 +518,15 @@ read it, and the candidate waits.
   snapshot pool raises none. #386 CF-5: a pool of exactly the instance's scope
   whose capacity fact gives no capacity raises demand for that fact's key
   ("Pool fact references").
+  Workflow #411 6438574534 follow-up 2 (since 0.12.26): a task's own placement
+  never holds back the demand its undecided trigger or feedback stop raises.
+  Whether the reading can be placed is R_I's own gates' to decide (below): an
+  unavailable instance holds R_I back, and the task takes the row that gate
+  gives it (`fact_refresh_pending` with `gate_code` `instance_unavailable`).
+  The task's own load (a heavy-scene slot it would take, a load its host
+  cannot take) binds only its own dispatch, never R_I's light one. A task its
+  instance cannot run whatever is read (the instance does not provide its
+  operation, or its instance override disables it) raises none.
   Only candidates past the closure's positions 1-2 raise demand: on an instance
   an operator pause, a holder, a waiting claim or a takeover cooldown holds as
   the cycle starts, a candidate the selection document deferred carries that

@@ -2532,32 +2532,9 @@ fn build_candidate(
             "the instance is unavailable",
         )));
     }
-    if !instance
-        .capability_operation_ids
-        .iter()
-        .any(|operation| operation == &task.entrypoint.operation_id)
-    {
-        return Ok(PlacementResult::Blocked(reason(
-            PolicyCode::CapabilityMissing,
-            format!(
-                "instance '{}' does not provide operation '{}'",
-                instance.instance_id, task.entrypoint.operation_id
-            ),
-        )));
-    }
-
-    let task_override = task
-        .instance_overrides
-        .iter()
-        .find(|candidate| candidate.instance_id == instance.instance_id);
-    if task_override
-        .and_then(|value| value.enabled.0)
-        .is_some_and(|enabled| !enabled)
-    {
-        return Ok(PlacementResult::Blocked(reason(
-            PolicyCode::InstanceOverrideDisabled,
-            "the task is disabled by its instance override",
-        )));
+    let task_override = instance_override(task, instance);
+    if let Some(blocked) = pair_blocked(task, task_override, instance) {
+        return Ok(PlacementResult::Blocked(blocked));
     }
 
     let Some(activity_profile) = select_activity_profile(context.profiles, instance) else {
@@ -2570,19 +2547,7 @@ fn build_candidate(
         )));
     };
 
-    let load_profile = task_override
-        .and_then(|value| value.load_profile.0.clone())
-        .unwrap_or_else(|| task.load_profile.clone());
-    let host = context
-        .hosts
-        .get(instance.host_id.as_str())
-        .ok_or_else(|| {
-            PolicyEvaluationError::invalid(format!(
-                "instance '{}' references missing host '{}'",
-                instance.instance_id, instance.host_id
-            ))
-        })?;
-    let load = ResourceLoad::new(&load_profile, host.heavy_threshold_milli);
+    let (load_profile, load, host) = placed_load(task, task_override, instance, context)?;
     // Workflow #427-B: the task's own load against the host as the round starts. The heavy
     // dispatches admitted or running may already take every heavy-scene slot; nothing chosen in
     // the round counts yet, the round has not chosen anything.
@@ -2605,24 +2570,14 @@ fn build_candidate(
         )));
     }
 
-    let priority = task_override
-        .and_then(|value| value.priority.0)
-        .unwrap_or(task.priority);
-    let task_weight = task_override
-        .and_then(|value| value.strategic_weight_milli.0)
-        .unwrap_or(task.strategic_weight_milli);
-    let rank = rank_task(
+    let rank = placed_rank(
         task,
+        task_override,
         task_state,
         instance,
-        context.profiles,
-        context.pool_specs,
-        context.pool_values,
-        priority,
-        task_weight,
+        context,
         load,
         host,
-        context.time,
     )?;
 
     Ok(PlacementResult::Candidate(Box::new(PlacementCandidate {
@@ -2653,6 +2608,102 @@ fn build_candidate(
         window_iteration_limit: task.loop_budget.window_iteration_limit,
         max_runtime_ms: task.loop_budget.max_runtime_ms,
     })))
+}
+
+/// The task's instance override on `instance`, when it declares one.
+fn instance_override<'a>(
+    task: &'a TaskSpec,
+    instance: &InstanceSnapshot,
+) -> Option<&'a crate::InstanceTaskOverride> {
+    task.instance_overrides
+        .iter()
+        .find(|candidate| candidate.instance_id == instance.instance_id)
+}
+
+/// What keeps the task from `instance` whatever is read there: the instance does not provide its
+/// operation, or its instance override disables it.
+fn pair_blocked(
+    task: &TaskSpec,
+    task_override: Option<&crate::InstanceTaskOverride>,
+    instance: &InstanceSnapshot,
+) -> Option<DecisionReason> {
+    if !instance
+        .capability_operation_ids
+        .iter()
+        .any(|operation| operation == &task.entrypoint.operation_id)
+    {
+        return Some(reason(
+            PolicyCode::CapabilityMissing,
+            format!(
+                "instance '{}' does not provide operation '{}'",
+                instance.instance_id, task.entrypoint.operation_id
+            ),
+        ));
+    }
+    task_override
+        .and_then(|value| value.enabled.0)
+        .is_some_and(|enabled| !enabled)
+        .then(|| {
+            reason(
+                PolicyCode::InstanceOverrideDisabled,
+                "the task is disabled by its instance override",
+            )
+        })
+}
+
+/// The load profile the task runs with on `instance`, its load on the instance's host and that
+/// host.
+fn placed_load<'a>(
+    task: &TaskSpec,
+    task_override: Option<&crate::InstanceTaskOverride>,
+    instance: &InstanceSnapshot,
+    context: &'a PlacementContext<'_>,
+) -> PolicyEvaluationResult<(LoadProfile, ResourceLoad, &'a HostView)> {
+    let load_profile = task_override
+        .and_then(|value| value.load_profile.0.clone())
+        .unwrap_or_else(|| task.load_profile.clone());
+    let host = context
+        .hosts
+        .get(instance.host_id.as_str())
+        .ok_or_else(|| {
+            PolicyEvaluationError::invalid(format!(
+                "instance '{}' references missing host '{}'",
+                instance.instance_id, instance.host_id
+            ))
+        })?;
+    let load = ResourceLoad::new(&load_profile, host.heavy_threshold_milli);
+    Ok((load_profile, load, host))
+}
+
+/// The task's rank on `instance`, with its instance override's priority and strategic weight.
+fn placed_rank(
+    task: &TaskSpec,
+    task_override: Option<&crate::InstanceTaskOverride>,
+    task_state: Option<&TaskRuntimeSnapshot>,
+    instance: &InstanceSnapshot,
+    context: &PlacementContext<'_>,
+    load: ResourceLoad,
+    host: &HostView,
+) -> PolicyEvaluationResult<TaskRank> {
+    let priority = task_override
+        .and_then(|value| value.priority.0)
+        .unwrap_or(task.priority);
+    let task_weight = task_override
+        .and_then(|value| value.strategic_weight_milli.0)
+        .unwrap_or(task.strategic_weight_milli);
+    rank_task(
+        task,
+        task_state,
+        instance,
+        context.profiles,
+        context.pool_specs,
+        context.pool_values,
+        priority,
+        task_weight,
+        load,
+        host,
+        context.time,
+    )
 }
 
 /// What the selection document said about one candidate, before any manual offset.
@@ -3828,8 +3879,16 @@ fn selection_candidate(
 
 /// Workflow #384 D2-S4 (D2 model §3.3, catalog predicates): a task whose undecided trigger or
 /// feedback stop read unknown realistic keys in exactly its instance's scope is affected by
-/// them, with the rank its placement on the instance gives it; a task the instance cannot place
-/// is not.
+/// them, with the rank of its task on the instance (its catalog rank there, with its instance
+/// override's priority, weight and load).
+///
+/// Workflow #411 6438574534 follow-up 2 (W2-A; contracts/scheduling/README.md, "Fact Refresh"):
+/// R_I's own gates decide whether the reading can be placed, not the task's placement. An
+/// unavailable instance, a missing activity profile and a host that cannot take R_I's light load
+/// are R_I's gates, which give the task `fact_refresh_pending` or `fact_refresh_exhausted` with
+/// the gate's code; the task's own load (a heavy-scene slot it would take, a load its host cannot
+/// take) binds only its own dispatch, never the reading. A task its instance cannot run whatever
+/// is read (its operation missing there, its instance override disabling it) raises no demand.
 fn predicate_refresh(
     work_index: usize,
     task: &TaskSpec,
@@ -3843,16 +3902,17 @@ fn predicate_refresh(
     if keys.is_empty() {
         return Ok(None);
     }
-    let PlacementResult::Candidate(candidate) =
-        build_candidate(work_index, task, state, instance, context, None)?
-    else {
+    let task_override = instance_override(task, instance);
+    if pair_blocked(task, task_override, instance).is_some() {
         return Ok(None);
-    };
+    }
+    let (_, load, host) = placed_load(task, task_override, instance, context)?;
+    let rank = placed_rank(task, task_override, state, instance, context, load, host)?;
     Ok(Some(AffectedCandidate {
         work_index,
         instance_id: instance.instance_id.clone(),
         keys,
-        rank: offset_rank(&candidate.rank, facts, &task.id, &instance.instance_id),
+        rank: offset_rank(&rank, facts, &task.id, &instance.instance_id),
         predicate: true,
     }))
 }
