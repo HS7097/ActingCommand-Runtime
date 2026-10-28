@@ -1067,6 +1067,13 @@ impl HostShared {
         for signal in remedy_signals {
             self.record_policy_planning_signal(signal)?;
         }
+        // Workflow #386 SR-2b-1: the `policy_rerun_exhausted` records of runs a reconciliation
+        // settled (at start, or this cycle's), not yet recorded.
+        let rerun_signals =
+            lock(self.policy()?, HostLocation::RecordPolicyPlanningSignal)?.take_rerun_signals();
+        for signal in rerun_signals {
+            self.record_policy_planning_signal(signal)?;
+        }
         // Workflow #386 SR-3 (scheduling model §11): the suspensions and lifts of task packages
         // this evaluation acted on, each copied once per instance.
         for signal in self.pack_admission.take_signals()? {

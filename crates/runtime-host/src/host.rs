@@ -1960,6 +1960,8 @@ impl RuntimeHost {
             #[cfg(test)]
             policy_condition_for_test: Mutex::new(None),
             #[cfg(test)]
+            fail_policy_execution_append_once_for_test: AtomicBool::new(false),
+            #[cfg(test)]
             pacing_factor_pins_for_test: Mutex::new(BTreeMap::new()),
             next_connection_id: AtomicU64::new(1),
             clock: Arc::clone(&config.clock),
@@ -2159,12 +2161,16 @@ impl RuntimeHost {
                             #[cfg(test)]
                             refuse_run_for_test: config.settlement_refusal_for_test,
                         };
+                        // Workflow #386 SR-2b-1: a run settled from its terminal here decides
+                        // its `condition` as the live settlement would.
+                        let rerun_rule = startup_rerun_condition_rule(&config)?;
                         reconcile_policy_dispatches(
                             &mut policy,
                             &shared.ledger,
                             &shared.events,
                             &ended_without_release,
                             &mut settlement,
+                            &rerun_rule,
                         )?;
                         // #670 final review (Fail Loud): a scheduled dispatch still open here is
                         // recorded, never left silently.
@@ -4337,6 +4343,18 @@ impl RuntimeHost {
         Ok(())
     }
 
+    /// Workflow #386 SR-2b-1, test only: the next live policy settlement of this host fails at
+    /// its execution append with `ledger_failure` (fatal), after the run's terminal and lease
+    /// release: the run is left for the next start's reconciliation, as a daemon that died there
+    /// leaves it.
+    #[cfg(test)]
+    pub(crate) fn fail_next_policy_execution_append_for_test(&self) -> RuntimeHostResult<()> {
+        self.shared_ref(crate::codes::test_spellings::TestLocation::AppendPolicyExecution)?
+            .fail_policy_execution_append_once_for_test
+            .store(true, Ordering::Release);
+        Ok(())
+    }
+
     /// #385 P-k, test only: every step of `instance_alias`'s contained runs is handed
     /// `factor_milli` (and no extra round) from now on; only the step's read of the pacing in
     /// effect (`effective_pacing`) answers it.
@@ -5487,6 +5505,11 @@ struct HostShared {
     // the stand-in for SR-2b's writer.
     #[cfg(test)]
     policy_condition_for_test: Mutex<Option<actingcommand_contract::PolicyConditionSettlement>>,
+    // Workflow #386 SR-2b-1, test only: the next live policy settlement's execution append fails
+    // with `ledger_failure`, in this host only, as `ACTINGCOMMAND_POLICY_CRASH_POINT`'s
+    // `fail_policy_execution_append` does in a child process.
+    #[cfg(test)]
+    fail_policy_execution_append_once_for_test: AtomicBool,
     // #385 P-k, test only: the pacing factor and extra rounds an instance's contained runs are
     // handed, by alias, in place of the shadow measurement's.
     #[cfg(test)]
@@ -5572,6 +5595,21 @@ impl HostShared {
             crate::codes::test_spellings::TestLocation::TakePolicyConditionForTest,
         )?
         .take())
+    }
+
+    /// Workflow #386 SR-2b-1, test only: the injected failure of this host's next policy
+    /// execution append (`fail_next_policy_execution_append_for_test`), taken once.
+    #[cfg(test)]
+    fn take_policy_execution_append_failure_for_test(&self) -> RuntimeHostResult<()> {
+        if self
+            .fail_policy_execution_append_once_for_test
+            .swap(false, Ordering::AcqRel)
+        {
+            return Err(ledger_error(
+                crate::codes::test_spellings::TestLocation::AppendPolicyExecution,
+            ));
+        }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -6505,6 +6543,34 @@ fn startup_discovery_config(
     }
     .startup_discovery()
     .map_err(refused)
+}
+
+/// Workflow #386 SR-2b-1: the `scheduling.rerun` values the start's reconciliation decides the
+/// `condition` of a run settled from its terminal by: actingd's manifest (the defaults file's
+/// values for a host started without one). The start restores the values set while the Runtime
+/// ran only after its policy recovery (`start_runtime_config`), so this reconciliation reads the
+/// manifest's.
+fn startup_rerun_condition_rule(
+    config: &RuntimeHostConfig,
+) -> RuntimeHostResult<crate::policy_control::ConditionRule> {
+    let refused = |failure: actingcommand_runtime_config::ConfigFailure| {
+        RuntimeHostError::fatal(
+            failure.failure_code(),
+            crate::codes::ConfigHostLocation::ReadRuntimeConfig,
+            RuntimeErrorCode::RuntimeHalted,
+        )
+        .with_outcome_values(|outcome| failure.with_values(outcome))
+    };
+    let scheduling = match &config.config_manifest {
+        Some(manifest) => actingcommand_runtime_config::EffectiveConfig::from_manifest(manifest)
+            .map_err(refused)?,
+        None => actingcommand_runtime_config::EffectiveConfig::default(),
+    }
+    .scheduling()
+    .map_err(refused)?;
+    Ok(crate::policy_control::ConditionRule::from_config(
+        &scheduling.rerun,
+    ))
 }
 
 /// Workflow #383 AO-1 (`contracts/ledger-observer.md` §15): the `ledger_observer` section in

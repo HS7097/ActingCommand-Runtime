@@ -4,7 +4,7 @@ use super::*;
 use crate::codes::HostCode;
 use crate::codes::HostLocation;
 use crate::failure_identity::identifier_text;
-use crate::policy_control::PolicyValueRecord;
+use crate::policy_control::{ConditionDecision, ConditionRule, PolicyValueRecord};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Code, Location, Outcome};
 
@@ -23,6 +23,9 @@ impl HostShared {
                 &self.policy_outcome_gate,
                 HostLocation::ReconcilePolicySettlements,
             )?;
+            // Workflow #386 SR-2b-1: the `scheduling.rerun` values in effect, read before the
+            // policy is locked, as the live settlement reads them.
+            let rule = self.rerun_condition_rule()?;
             let mut policy = lock(self.policy()?, HostLocation::ReconcilePolicySettlements)?;
             // Workflow #427-A: an abandoned lane whose run is settled already frees its instance.
             self.forget_settled_abandoned_policy_runs(&policy)?;
@@ -65,6 +68,7 @@ impl HostShared {
                     .collect(),
                 &ended_without_release,
                 None,
+                &rule,
             )?;
             if let Some(error) = &skipped {
                 self.fatal.report_skipped(&error.outcome());
@@ -1843,13 +1847,19 @@ impl HostShared {
                 })
                 .transpose()?;
             let perf_context = self.performance_context(&instance_id, observed_at_unix_ms)?;
-            // Workflow #386 SR-2a: no live settlement is ended by a condition before SR-2b; a
-            // test stands in for that writer.
-            #[cfg(not(test))]
-            let condition = None;
+            // Workflow #386 SR-2b-1: the `scheduling.rerun` values in effect decide whether the
+            // run ended by a condition; a test may set the condition itself (SR-2a's hook).
+            let rule = self.rerun_condition_rule()?;
             #[cfg(test)]
-            let condition = self.take_policy_condition_for_test()?;
+            let forced_condition = self.take_policy_condition_for_test()?;
             let mut policy = lock(self.policy()?, HostLocation::RecordPolicyDispatchOutcome)?;
+            let decision = policy.decide_condition(decision_id, input, &rule)?;
+            #[cfg(test)]
+            let decision = forced_condition.map_or(decision, ConditionDecision::Condition);
+            let condition = match decision {
+                ConditionDecision::Condition(condition) => Some(condition),
+                ConditionDecision::Ordinary | ConditionDecision::Exhausted { .. } => None,
+            };
             let (data, recorded_now) = match policy.prepare_execution(
                 decision_id,
                 observed_at_unix_ms,
@@ -1868,6 +1878,8 @@ impl HostShared {
                     self.consume_scheduled_policy_checkpoint_for_test(context)?;
                     #[cfg(test)]
                     fail_policy_execution_append_for_test()?;
+                    #[cfg(test)]
+                    self.take_policy_execution_append_failure_for_test()?;
                     // The stored severity is the record's category: its failure's, or its event
                     // type's for a success (Workflow #378 A2-P).
                     if let Err(error) = self.append_event_raw(
@@ -1899,6 +1911,7 @@ impl HostShared {
                     policy
                         .commit_execution(&data, budget_elapsed_ms)
                         .map_err(RuntimeHostError::into_fatal)?;
+                    policy.queue_rerun_signal(&data, decision);
                     (data, true)
                 }
                 PolicyExecutionPreparation::Replay(data) => (data, false),
@@ -1909,8 +1922,16 @@ impl HostShared {
             let settlement = policy
                 .latest_settlement(&data.task_id, &data.instance_id)?
                 .ok_or_else(policy_settlement_missing)?;
+            let rerun_signals = policy.take_rerun_signals();
             drop(policy);
             self.record_policy_settlement_facts(&settlement)?;
+            // Workflow #386 SR-2b-1: an exhausted condition termination's `policy_rerun_exhausted`
+            // (and any a reconciliation queued before it). The execution is committed, so a
+            // failure here is fatal, as the settlement facts' is.
+            for signal in rerun_signals {
+                self.record_policy_planning_signal(signal)
+                    .map_err(RuntimeHostError::into_fatal)?;
+            }
             // SCH-M ED-2 (frozen model v1.0 §3.4 D-13): a successful scheduled run's duration
             // becomes a sample of its package on its instance, once, at the settlement that
             // recorded its execution.
@@ -2223,15 +2244,17 @@ pub(super) fn record_policy_values(
 }
 
 /// `ended_without_release`: the runs whose lease ended without a run-linked release, with the
-/// time it ended (`recover_unreleased_policy_runs`).
+/// time it ended (`recover_unreleased_policy_runs`). `rule`: the `scheduling.rerun` values a run
+/// settled from its terminal decides its `condition` by (Workflow #386 SR-2b-1).
 pub(super) fn reconcile_policy_dispatches(
     policy: &mut PolicyHost,
     ledger: &GlobalLedger,
     events: &RuntimeEvents,
     ended_without_release: &BTreeMap<String, u64>,
     start: &mut StartSettlement,
+    rule: &ConditionRule,
 ) -> RuntimeHostResult<()> {
-    reconcile_scheduled_policy_outcomes(policy, ledger, ended_without_release, start)?;
+    reconcile_scheduled_policy_outcomes(policy, ledger, ended_without_release, start, rule)?;
     for decision_id in policy.pending_dispatch_completions() {
         let execution = policy.execution_data(&decision_id)?;
         let completion = match ledger.reconcile_scheduled_policy_settlement(execution) {
@@ -2332,6 +2355,7 @@ fn reconcile_scheduled_policy_outcomes(
     ledger: &GlobalLedger,
     ended_without_release: &BTreeMap<String, u64>,
     start: &mut StartSettlement,
+    rule: &ConditionRule,
 ) -> RuntimeHostResult<()> {
     let pending = policy.pending_dispatch_outcomes();
     // At start nothing is skipped: any failure but a per-run refusal fails the start.
@@ -2341,6 +2365,7 @@ fn reconcile_scheduled_policy_outcomes(
         pending,
         ended_without_release,
         Some(start),
+        rule,
     )
     .map(|_| ())
 }
@@ -2359,12 +2384,15 @@ fn reconcile_scheduled_policy_outcomes(
 /// settlements after it stay pending and are read again at the next tick, and its failure is
 /// returned. Online the reads are tolerant (`SettlementRead::Tolerant`); at start they are fatal
 /// (`SettlementRead::Fatal`), as before #419 LN-WS-F, and every such failure fails the start.
+/// `rule`: the `scheduling.rerun` values a run settled from its terminal decides its
+/// `condition` by (Workflow #386 SR-2b-1).
 fn reconcile_scheduled_policy_outcomes_for(
     policy: &mut PolicyHost,
     ledger: &GlobalLedger,
     pending: Vec<String>,
     ended_without_release: &BTreeMap<String, u64>,
     mut start: Option<&mut StartSettlement>,
+    rule: &ConditionRule,
 ) -> RuntimeHostResult<Option<RuntimeHostError>> {
     if pending.is_empty() {
         return Ok(None);
@@ -2607,6 +2635,18 @@ fn reconcile_scheduled_policy_outcomes_for(
                     ));
                 }
             };
+            // Workflow #386 SR-2b-1: a run settled here from its terminal is settled for the
+            // first time, so the live settlement's rule decides its `condition` from the
+            // terminal's failure code. A run with no terminal (`policy_settlement_interrupted`,
+            // Severe) is never ended by a condition.
+            let decision = match terminals.as_slice() {
+                [_] => policy.decide_condition(&decision_id, &input, rule)?,
+                _ => ConditionDecision::Ordinary,
+            };
+            let condition = match decision {
+                ConditionDecision::Condition(condition) => Some(condition),
+                ConditionDecision::Ordinary | ConditionDecision::Exhausted { .. } => None,
+            };
             // #385 P-k: a run recovered from its terminal has no factor segments left; it is
             // settled on its wall time.
             let data = match policy.prepare_execution(
@@ -2616,7 +2656,7 @@ fn reconcile_scheduled_policy_outcomes_for(
                 None,
                 &input,
                 &PerformanceContext::unavailable(observed_at_unix_ms),
-                None,
+                condition,
             )? {
                 PolicyExecutionPreparation::New(data) => data,
                 PolicyExecutionPreparation::Replay(_) => {
@@ -2627,8 +2667,10 @@ fn reconcile_scheduled_policy_outcomes_for(
                 }
             };
             // Coordinator ruling on #670 (runtime budget): a run over its admitted runtime budget
-            // is recorded with the policy's own rewrite, derived with the policy's rule.
-            let runtime_exceeded = policy.runtime_budget_exceeded(&decision_id, runtime_ms)?;
+            // is recorded with the policy's own rewrite, derived with the policy's rule. A run a
+            // condition ended is never re-judged (SR-2a, SCHED §4.2 item 4).
+            let runtime_exceeded =
+                condition.is_none() && policy.runtime_budget_exceeded(&decision_id, runtime_ms)?;
             if !policy_recovery_outcome_matches(&data.outcome, &input, runtime_exceeded) {
                 return Err(policy_admission_fatal(
                     HostCode::PolicyExecutionRecoveryOutcomeConflict,
@@ -2656,6 +2698,8 @@ fn reconcile_scheduled_policy_outcomes_for(
             policy
                 .commit_execution(&data, None)
                 .map_err(RuntimeHostError::into_fatal)?;
+            // Workflow #386 SR-2b-1: recorded by the next live settlement or evaluation.
+            policy.queue_rerun_signal(&data, decision);
             policy
                 .complete_dispatch(&decision_id, &completion)
                 .map_err(RuntimeHostError::into_fatal)?;

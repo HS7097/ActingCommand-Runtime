@@ -629,8 +629,14 @@ suspension holds every pair of the package at once.
 **Status.** Written ahead of its code (documentation slice SR-0, scheduling model v1.4.2 §2.3,
 §4). Slice SR-2a (v0.12.0) reads the `condition` member below and settles a replay from it,
 so a later build's ledger stays readable within v0.12.x; it never writes the member. Slice
-SR-2b (v0.12.x, together with performance pacing slice P-s and after ledger slices AO-5 and
-AO-6) writes it and owes the reruns. Until SR-2b, these failures settle as before.
+SR-2b-1 (v0.12.27) writes it: the live settlement and the reconciliation of a run from its
+terminal decide it, the counts are refunded, the streak does not grow, `policy_rerun_exhausted`
+is recorded, and the owed rerun is kept in `condition_reruns` (below). Slice SR-2b-2 adds the
+rest of "The rerun" and "Limits": the promotion with `policy_rerun_owed`, the stage gate
+`policy_rerun_waiting`, the expiry `policy_rerun_expired`, hiding the terminal from the
+snapshot, and `actingd suspended`'s `reruns`. Between the two, an owed pair re-enters the
+ordinary evaluation with its counts given back; its owed rerun is recorded but neither
+promoted nor expired.
 
 **Which runs.** A policy run ends by a condition, not by a failure of the task, when its failure
 code is listed in `scheduling.rerun.condition_codes`. The default list is
@@ -648,7 +654,16 @@ is not in the default list.
 the number of consecutive condition terminations of the pair in this occurrence, and writes the
 result into the failure part of the `policy.execution_recorded` record as the optional member
 `condition: {refunded, count, expires_at_unix_ms}` (absent for an ordinary failure). `count` is
-that consecutive number; `expires_at_unix_ms` is the end of the pair's bookkeeping window. A
+that consecutive number; `expires_at_unix_ms` is the end of the pair's bookkeeping window, the
+activity window the run was admitted in. The occurrence is that window: `count` is one more
+than the owed rerun's when that one expires at the same window end, otherwise 1; a success or an
+ordinary failure of the pair ends the series and removes the owed rerun. Only a recoverable
+failure of a task that is not sensitive is decided this way. A run that a restart, or the
+reconciliation of a run its worker abandoned, settles from its terminal is settled for the
+first time there, so the same rule decides it from the terminal's failure code (the start's
+reconciliation reads the `scheduling.rerun` values of actingd's configuration file, as the
+values set while the Runtime ran are restored after it); a run with no terminal
+(`policy_settlement_interrupted`, Severe) never ends by a condition. A
 replay or a start reads the member and never the current configuration, so changing
 `condition_codes`, `max_per_occurrence` or `refund_counts` and restarting cannot make a replay
 disagree with its record. The member is a persisted shape change of v0.12.0, registered by
@@ -693,16 +708,17 @@ more than `scheduling.rerun.max_per_occurrence` times (default 2) in one occurre
 run as an ordinary recoverable failure, without `condition`, and records
 `policy_rerun_exhausted` (warning).
 
-**After a restart.** Before ledger slices AO-5 and AO-6 the owed reruns are rebuilt from the
-execution records, as the failure streaks are. From AO-6 on they load from the pair's latest
-`policy.control_state_recorded` value record, whose `condition_reruns` holds `{failure_code,
-count, expires_at_unix_ms}` as the settlement wrote them; the `condition` member of execution
-records is then read only by replay. Value records are committed as they arrive. After a start
+**After a restart.** The owed reruns load from the pair's latest
+`policy.control_state_recorded` value record (ledger slices LN-3 and LN-4, which satisfy what
+this text first asked of AO-5 and AO-6), whose `condition_reruns` holds `{failure_code, count,
+expires_at_unix_ms}` as the settlement wrote them; the `condition` member of execution records
+is then read only by replay, which rebuilds the same entry from it. Value records are committed
+as they arrive. After a start
 that found a gap in the ledger, an owed rerun of an entry-cost task counts as not owed; any other
 pair keeps its last committed value. `actingd suspended` gains the list `reruns` (an addition)
 with the owed, waiting and expired reruns. It is read from the loaded rerun state, that is from
-the pairs' value records (L7 of the [v0.12.0 register](v012-register.md)): SR-2b depends on AO-5
-and AO-6, so no build with SR-2b derives the list from the execution records.
+the pairs' value records (L7 of the [v0.12.0 register](v012-register.md)): SR-2b depends on LN-3
+and LN-4, so no build with SR-2b derives the list from the execution records.
 
 None of these codes triggers the recovery ladder.
 
