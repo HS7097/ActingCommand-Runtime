@@ -20,6 +20,7 @@ use actingcommand_contract::{
     VerifiedArtifactReference,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::Arc;
 mod material;
 mod open;
 mod owner_read;
@@ -90,6 +91,64 @@ pub(super) struct RetentionIndex {
     /// #422 LN-7c O: why the open read every owner record (`retention/owner_read.rs`): its
     /// bounded read did not place a retained owner in a start's epoch, or a dump was present.
     owner_read_full: Option<OwnerReadFull>,
+    /// #422 QR-1: moves whenever an object's eviction proof is set, completed or taken in, so the
+    /// writer copies its proofs for the reader pool only when they changed
+    /// ([`Self::published_proofs`]).
+    proof_revision: u64,
+}
+
+/// #422 QR-1: the eviction proofs the writer published for its reader pool, as of its committed
+/// head when they last changed ([`RetentionIndex::published_proofs`]).
+pub(in crate::global) struct PublishedProofs {
+    revision: u64,
+    proofs: BTreeMap<ArtifactId, ArtifactEvictionProof>,
+}
+
+impl PublishedProofs {
+    /// The revision of the writer's proofs these are a copy of.
+    pub(in crate::global) const fn revision(&self) -> u64 {
+        self.revision
+    }
+}
+
+/// #422 QR-1: where a view page reads the eviction proofs of its rows' artifacts: the writer's
+/// retention index (a page the writer reads), or the proofs it published with the committed head
+/// `through_sequence` a reader-pool page reads at. Both give a row the same observations: the
+/// writer's index is as of its head, the published proofs as of the published head.
+#[derive(Clone, Copy)]
+pub(in crate::global) enum PageProofs<'a> {
+    Index(&'a RetentionIndex),
+    Published {
+        proofs: &'a PublishedProofs,
+        through_sequence: u64,
+    },
+}
+
+impl PageProofs<'_> {
+    pub(in crate::global) fn observations<E: LedgerEventRead>(
+        &self,
+        event: &E,
+        snapshot: u64,
+    ) -> Vec<actingcommand_contract::ArtifactEvictionObservation> {
+        match self {
+            Self::Index(index) => index.observations(event, snapshot),
+            Self::Published {
+                proofs,
+                through_sequence,
+            } => {
+                let mut seen = BTreeSet::new();
+                material_references(event)
+                    .into_iter()
+                    .filter(|reference| seen.insert(reference.artifact_id))
+                    .filter_map(|reference| proofs.proofs.get(&reference.artifact_id).cloned())
+                    .filter_map(|mut proof| {
+                        proof.through_sequence = *through_sequence;
+                        proof.observation(snapshot)
+                    })
+                    .collect()
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -172,6 +231,34 @@ impl ClosureScope {
     }
 }
 
+/// #422 QR-1: where the next chunk of a pass start's trim goes on: after the object `after`,
+/// dropping only objects no record named after the writer's head `as_of` at the first chunk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LiveFramesCursor {
+    after: ArtifactId,
+    as_of: u64,
+}
+
+impl LiveFramesCursor {
+    pub(in crate::global) const fn after(&self) -> ArtifactId {
+        self.after
+    }
+
+    pub(in crate::global) const fn as_of(&self) -> u64 {
+        self.as_of
+    }
+}
+
+/// #422 QR-1: what one chunk of a pass start's trim did: the objects it looked at (never more
+/// than the chunk's bound), those it dropped, and the cursor of the next chunk (`None` once the
+/// trim reached the last object and trimmed the run- and scope-keyed facts).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LiveFramesChunk {
+    pub looked: usize,
+    pub dropped: usize,
+    pub next: Option<LiveFramesCursor>,
+}
+
 /// Every returned object counts against the round, including protected objects.
 pub struct ArtifactRetentionCandidates {
     pub references: Vec<ProjectedArtifactReference>,
@@ -222,6 +309,25 @@ impl RetentionIndex {
             .iter()
             .filter_map(|proof| proof.observation(snapshot))
             .collect()
+    }
+
+    /// #422 QR-1: the revision of this index's eviction proofs.
+    pub(super) const fn proof_revision(&self) -> u64 {
+        self.proof_revision
+    }
+
+    /// #422 QR-1: a copy of every eviction proof this index holds, for the reader pool. The proof
+    /// set is resident (a pass start never drops a proven object), so the copy is the proofs of
+    /// the whole committed history; the writer makes it only when the revision moved.
+    pub(super) fn published_proofs(&self) -> PublishedProofs {
+        PublishedProofs {
+            revision: self.proof_revision,
+            proofs: self
+                .objects
+                .iter()
+                .filter_map(|(id, object)| object.proof.clone().map(|proof| (*id, proof)))
+                .collect(),
+        }
     }
 
     pub(super) fn has_pending(&self) -> bool {
@@ -1070,6 +1176,7 @@ impl RetentionIndex {
                         disposition: None,
                         through_sequence: event.sequence(),
                     });
+                    self.proof_revision = self.proof_revision.wrapping_add(1);
                 }
                 ArtifactRetentionFact::EvictionOutcome(outcome) => {
                     self.pending_objects
@@ -1080,6 +1187,7 @@ impl RetentionIndex {
                         .expect("intent validated before commit");
                     proof.terminal_event = Some(terminal(event));
                     proof.disposition = Some(outcome.disposition);
+                    self.proof_revision = self.proof_revision.wrapping_add(1);
                 }
             }
         }
@@ -1759,7 +1867,19 @@ impl super::GlobalLedger {
     /// #422 LN-7c Q (final-query §2): the frame cleaner, at each pass start, hands the writer its
     /// listing of the live frame store (`live`); the writer keeps of the capture frame objects
     /// only those and the eviction proof set. It keeps no frame facts and answers no frame view.
-    pub fn retain_live_frames(&self, live: BTreeSet<ArtifactId>) -> GlobalLedgerResult<()> {
+    ///
+    /// #422 QR-1: one bounded chunk of that trim, one writer command: the writer looks at no more
+    /// than `max_objects` of its objects after `cursor` (from the first one when `None`), and the
+    /// chunk that reaches the last one also trims the run- and scope-keyed facts. The caller sends
+    /// the next chunk at the cursor the answer names until it names none; the writer handles
+    /// every other command queued meanwhile between two chunks. A trim left unfinished keeps more
+    /// objects resident, never fewer: a dropped object is loaded again when a record names it.
+    pub fn retain_live_frames_chunk(
+        &self,
+        live: &Arc<BTreeSet<ArtifactId>>,
+        cursor: Option<LiveFramesCursor>,
+        max_objects: usize,
+    ) -> GlobalLedgerResult<LiveFramesChunk> {
         let (response, receiver) = std::sync::mpsc::sync_channel(1);
         let sender = self
             .sender
@@ -1767,7 +1887,12 @@ impl super::GlobalLedger {
             .ok_or_else(|| invalid(LedgerCode::WriterUnavailable.code()))?;
         super::send_command(
             sender,
-            super::WriterCommand::RetainLiveFrames { live, response },
+            super::WriterCommand::RetainLiveFrames {
+                live: Arc::clone(live),
+                cursor,
+                max_objects,
+                response,
+            },
             LedgerLocation::FrameRetentionLiveObjects.location(),
         )?;
         super::receive_response(

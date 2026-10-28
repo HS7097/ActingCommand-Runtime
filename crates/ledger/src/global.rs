@@ -18,8 +18,11 @@ mod retention;
 pub use retention::{
     ArtifactEvictionAdmission, ArtifactEvictionPermit, ArtifactRetentionCandidates,
     FrameErrorPoint, FrameRetentionClass, FrameRetentionFrame, FrameRetentionSwitches,
-    FrameRetentionView, KeptFrameFolder, LedgerOpenTiming, OwnerReadFull, live_frame_ids,
+    FrameRetentionView, KeptFrameFolder, LedgerOpenTiming, LiveFramesChunk, LiveFramesCursor,
+    OwnerReadFull, live_frame_ids,
 };
+// #422 QR-1: the reader pool that answers view pages on read-only connections of its own.
+mod reader_pool;
 mod sqlite;
 mod storage;
 mod store;
@@ -936,6 +939,9 @@ pub struct GlobalLedgerConfig {
     /// reads on its own connection (the formal writer's); the writer has a scrub with both.
     scrub: Option<LedgerScrubPolicy>,
     scrub_database: Option<Arc<actingcommand_runtime_database::RuntimeDatabase>>,
+    /// #422 QR-1: the reader threads of the Runtime writer's pool (a writer with a failure plan
+    /// and its database), `1..=8`; 2 unless set.
+    reader_threads: usize,
 }
 
 impl fmt::Debug for GlobalLedgerConfig {
@@ -962,6 +968,7 @@ impl fmt::Debug for GlobalLedgerConfig {
             .field("history_scan_rows", &self.history_scan_rows)
             .field("open_verify_tail_records", &self.open_verify_tail_records)
             .field("scrub", &self.scrub)
+            .field("reader_threads", &self.reader_threads)
             .finish()
     }
 }
@@ -989,7 +996,15 @@ impl GlobalLedgerConfig {
             history_rows_read: None,
             scrub: None,
             scrub_database: None,
+            reader_threads: reader_pool::DEFAULT_READER_THREADS,
         }
+    }
+
+    /// #422 QR-1: the reader threads of the Runtime writer's pool, `1..=8`; any other number is
+    /// `invalid_ledger_config` at the open.
+    pub fn with_reader_threads(mut self, threads: usize) -> Self {
+        self.reader_threads = threads;
+        self
     }
 
     /// Workflow #383 AO-1 (`contracts/ledger-observer.md` §9): the running Runtime's writer. A
@@ -1016,6 +1031,11 @@ impl GlobalLedgerConfig {
             .unwrap_or(self.open_verify_tail_records);
         // LN-9 (#422): and the writer's scrub.
         self.scrub = plan.scrub().cloned();
+        // #422 QR-1 fix 1, tests: a reader pool of another size.
+        #[cfg(test)]
+        if let Some(threads) = plan.reader_threads_for_test() {
+            self.reader_threads = threads;
+        }
         self.clock = plan.clock();
         if let Some(timeout) = plan.reply_timeout() {
             self.reply_timeout = timeout;
@@ -1169,9 +1189,11 @@ impl GlobalLedgerConfig {
             ));
         }
         // #422 LN-WS: a request's read looks at its clock at least every million SQLite steps,
-        // and a history statement spans one sequence at least.
+        // and a history statement spans one sequence at least. #422 QR-1: a reader pool has one
+        // reader at least and eight at most.
         if !(1..=read_work::MAX_READ_CHECK_VM_STEPS).contains(&self.read_check_vm_steps)
             || !(1..=history::MAX_HISTORY_SCAN_ROWS).contains(&self.history_scan_rows)
+            || !(1..=reader_pool::MAX_READER_THREADS).contains(&self.reader_threads)
         {
             return Err(GlobalLedgerError::fatal(
                 LedgerCode::InvalidLedgerConfig.code(),
@@ -1305,10 +1327,12 @@ enum WriterCommand {
     /// #422 LN-7c Q (final-query §2): at a frame cleaner pass start, the writer keeps of the
     /// capture frame objects only those of the frames present in the live frame store. Its writer
     /// command kind is `RetentionCandidates`, the cleaner's retention command, so task timing
-    /// records keep their closed set of command kinds.
+    /// records keep their closed set of command kinds. #422 QR-1: one bounded chunk of it.
     RetainLiveFrames {
-        live: std::collections::BTreeSet<actingcommand_contract::ArtifactId>,
-        response: SyncSender<GlobalLedgerResult<()>>,
+        live: Arc<std::collections::BTreeSet<actingcommand_contract::ArtifactId>>,
+        cursor: Option<LiveFramesCursor>,
+        max_objects: usize,
+        response: SyncSender<GlobalLedgerResult<LiveFramesChunk>>,
     },
     AdmitArtifactEviction {
         guard: Box<actingcommand_artifact_store::ArtifactDeleteGuard>,
@@ -1416,6 +1440,13 @@ enum WriterCommand {
     TestTerminalFailure { error: GlobalLedgerError },
     #[cfg(test)]
     TestSubscriberCount { response: SyncSender<usize> },
+    /// #422 QR-1, tests: the writer holds `count` new capture frame objects, as if records had
+    /// named them; their ids come back.
+    #[cfg(test)]
+    TestSeedFrameObjects {
+        count: usize,
+        response: SyncSender<Vec<actingcommand_contract::ArtifactId>>,
+    },
 }
 
 /// One deferred append whose writer reply has not been awaited yet.
@@ -1523,6 +1554,12 @@ pub struct GlobalLedger {
     /// (`ledger_observer.read_check_vm_steps`).
     frame_query_database: Option<Arc<actingcommand_runtime_database::RuntimeDatabase>>,
     read_check_vm_steps: u32,
+    /// #422 QR-1: the reader pool that reads the view pages off the writer thread; only the
+    /// Runtime's writer (a failure plan and its database) has one.
+    reader_pool: Option<reader_pool::ReaderPool>,
+    /// #422 QR-1: why the Runtime's writer has no reader pool (its connections did not open);
+    /// the writer reads the pages then, and the Runtime says so as a warning.
+    reader_pool_finding: Option<GlobalLedgerError>,
 }
 
 /// #411 A51 (R4): the operation of the writer's command in progress (or of its flush) and when
@@ -1558,6 +1595,18 @@ struct WriterContext {
     /// (`ledger_observer.read_check_vm_steps`).
     read_check_vm_steps: u32,
     work: Arc<WriterWork>,
+    /// #422 QR-1: where the writer publishes its committed point for the reader pool, after
+    /// every commit and before the commit's replies; `None` for a writer without a pool.
+    points: Option<Arc<reader_pool::ReadPoints>>,
+}
+
+impl WriterContext {
+    /// #422 QR-1: publishes `store`'s committed point for the reader pool.
+    fn publish<S: LedgerStore>(&self, store: &S) {
+        if let Some(points) = &self.points {
+            points.publish(store);
+        }
+    }
 }
 
 /// Workflow #383 AO-1 (§14 T8): the probe thread and the flag that ends it.
@@ -1719,7 +1768,9 @@ fn refuse_command(command: WriterCommand, error: &GlobalLedgerError) {
             let _ = response.send(Err(refused));
         }
         #[cfg(test)]
-        WriterCommand::TestTerminalFailure { .. } | WriterCommand::TestSubscriberCount { .. } => {}
+        WriterCommand::TestTerminalFailure { .. }
+        | WriterCommand::TestSubscriberCount { .. }
+        | WriterCommand::TestSeedFrameObjects { .. } => {}
     }
 }
 
@@ -2142,6 +2193,36 @@ impl GlobalLedger {
         FrameQuery::open(Arc::clone(database), stop, self.read_check_vm_steps)
     }
 
+    /// #422 QR-1: why the Runtime's writer has no reader pool: the failure that kept its read-only
+    /// connections from opening (`state_database_journal_invalid`, `database_maintenance_sql_failed`
+    /// or the open's own code). The writer then reads the view pages, as before the pool; the
+    /// Runtime says so as a warning. `None` when the pool runs, and for a ledger that has none
+    /// (no failure plan). Does not enqueue a writer command.
+    pub fn reader_pool_finding(&self) -> Option<&GlobalLedgerError> {
+        self.reader_pool_finding.as_ref()
+    }
+
+    /// #422 QR-1: whether the view pages are read by the reader pool, off the writer thread; not
+    /// once every reader of the pool ended (fix 1).
+    pub fn reads_off_writer(&self) -> bool {
+        self.reader_pool
+            .as_ref()
+            .is_some_and(reader_pool::ReaderPool::serving)
+    }
+
+    /// #422 QR-1 fix 1 (review L-6): what the reader pool found while the Runtime runs, each
+    /// once, for the Runtime to say as a warning as it says `reader_pool_finding` at its start:
+    /// the first reader that ended unexpectedly (`writer_panicked` of `query_ledger_view`), and
+    /// once no reader is left, that the writer reads the view pages again (`writer_panicked` of
+    /// `project_ledger_view_page`). Nothing is fatal. Empty for a ledger without a pool. Does
+    /// not enqueue a writer command.
+    pub fn take_reader_pool_findings(&self) -> Vec<GlobalLedgerError> {
+        self.reader_pool
+            .as_ref()
+            .map(reader_pool::ReaderPool::take_findings)
+            .unwrap_or_default()
+    }
+
     pub fn check_writer_health(&self) -> GlobalLedgerResult<()> {
         match self.writer.as_ref() {
             Some(writer) if !writer.is_finished() => Ok(()),
@@ -2238,11 +2319,30 @@ impl GlobalLedger {
         let close_timeout = config.close_timeout;
         let clock = Arc::clone(&config.clock);
         let writer_work = Arc::new(WriterWork::default());
+        // #422 QR-1: the Runtime's writer (a failure plan and its database) reads its view pages
+        // on a reader pool, at the points it publishes.
+        let pool_settings = config
+            .scrub_database
+            .clone()
+            .filter(|_| config.write_failure.is_some())
+            .map(|database| reader_pool::ReaderSettings {
+                database,
+                points: Arc::new(reader_pool::ReadPoints::default()),
+                clock: Arc::clone(&config.clock),
+                read_budget: config.read_budget,
+                read_check_vm_steps: config.read_check_vm_steps,
+                history_page_rows: config.history_page_rows,
+                history_scan_rows: config.history_scan_rows,
+            });
+        let reader_threads = config.reader_threads;
         let context = WriterContext {
             clock: Arc::clone(&config.clock),
             read_budget: config.read_budget,
             read_check_vm_steps: config.read_check_vm_steps,
             work: Arc::clone(&writer_work),
+            points: pool_settings
+                .as_ref()
+                .map(|settings| Arc::clone(&settings.points)),
         };
         let (sender, receiver) = mpsc::sync_channel(capacity);
         // Workflow #383 AO-2 (§7): the capture queue every write passes; it wakes the writer
@@ -2297,6 +2397,25 @@ impl GlobalLedger {
             }
         };
         let commit_statistics = store.commit_statistics();
+        // #422 QR-1: the opened store's point is the readers' first; a pool whose connections do
+        // not open leaves the pages to the writer, and its failure is kept for the Runtime's
+        // warning (`reader_pool_finding`). Fix 1 (review L-4): the pool's pages are recorded in
+        // the writer's commit statistics, as the writer's own pages were.
+        let (reader_pool, reader_pool_finding) = match pool_settings {
+            Some(settings) => {
+                settings.points.publish(&store);
+                match reader_pool::ReaderPool::start(
+                    settings,
+                    Arc::clone(&commit_statistics),
+                    reader_threads,
+                    capacity,
+                ) {
+                    Ok(pool) => (Some(pool), None),
+                    Err(error) => (None, Some(error)),
+                }
+            }
+            None => (None, None),
+        };
         match store_sender.send(store) {
             Ok(()) => {
                 let weak_queue = Arc::downgrade(&receiver);
@@ -2371,6 +2490,8 @@ impl GlobalLedger {
                     scrub,
                     frame_query_database,
                     read_check_vm_steps,
+                    reader_pool,
+                    reader_pool_finding,
                 })
             }
             Err(mpsc::SendError(store)) => {
@@ -2665,6 +2786,32 @@ impl GlobalLedger {
         Ok(receiver)
     }
 
+    /// #422 QR-1, tests: the writer holds `count` new capture frame objects, as if records had
+    /// named them (none of them proven); their ids, in the writer's order.
+    #[cfg(test)]
+    pub(crate) fn seed_frame_objects_for_test(
+        &self,
+        count: usize,
+    ) -> GlobalLedgerResult<Vec<actingcommand_contract::ArtifactId>> {
+        let (response, receiver) = mpsc::sync_channel(1);
+        let sender = self.sender.as_ref().ok_or_else(|| {
+            GlobalLedgerError::fatal(
+                LedgerCode::WriterUnavailable.code(),
+                LedgerLocation::FrameRetentionLiveObjects.location(),
+            )
+        })?;
+        send_command(
+            sender,
+            WriterCommand::TestSeedFrameObjects { count, response },
+            LedgerLocation::FrameRetentionLiveObjects.location(),
+        )?;
+        receive_response(
+            receiver,
+            LedgerLocation::FrameRetentionLiveObjects.location(),
+            self.reply_timeout,
+        )
+    }
+
     pub fn query_page(
         &self,
         query: EventQuery,
@@ -2809,6 +2956,18 @@ impl GlobalLedger {
         Ok((page?, observation))
     }
 
+    /// #422 QR-1, tests: the page read on the writer thread even when the reader pool runs, the
+    /// page a pool's page is compared with.
+    #[cfg(test)]
+    pub(crate) fn project_view_page_on_writer_for_test(
+        &self,
+        query: EventQuery,
+        profile: ProjectionProfile,
+        request: RuntimeEventQueryPageRequest,
+    ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
+        self.project_view_page_on_writer(query, profile, request)?.0
+    }
+
     fn project_view_page_observed(
         &self,
         query: EventQuery,
@@ -2827,6 +2986,31 @@ impl GlobalLedger {
                 LedgerLocation::ProjectLedgerViewPage.location(),
             )
         })?;
+        // #422 QR-1: the reader pool reads the page off the writer thread, at the writer's last
+        // committed point; a writer that ended answers no page, as when it read them itself.
+        // Fix 1 (review L-6): once no reader of the pool is left (said as a warning), the writer
+        // reads the page, as before the pool.
+        if let Some(pool) = self.reader_pool.as_ref().filter(|pool| pool.serving()) {
+            if self.writer.as_ref().is_none_or(JoinHandle::is_finished) {
+                return Err(GlobalLedgerError::fatal(
+                    LedgerCode::WriterUnavailable.code(),
+                    LedgerLocation::ProjectLedgerViewPage.location(),
+                ));
+            }
+            let receiver = pool.submit(query, profile, request, self.reply_timeout)?;
+            return reader_pool::ReaderPool::receive(&receiver, self.reply_timeout);
+        }
+        self.project_view_page_on_writer(query, profile, request)
+    }
+
+    /// The page read on the writer thread: a ledger without a reader pool or (#422 QR-1 fix 1)
+    /// whose readers all ended, and tests comparing the pool's pages with the writer's.
+    fn project_view_page_on_writer(
+        &self,
+        query: EventQuery,
+        profile: ProjectionProfile,
+        request: RuntimeEventQueryPageRequest,
+    ) -> GlobalLedgerResult<ProjectViewReply> {
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self.sender.as_ref().ok_or_else(|| {
             GlobalLedgerError::fatal(
@@ -3013,6 +3197,10 @@ impl GlobalLedger {
     }
 
     fn shutdown(&mut self) -> GlobalLedgerResult<()> {
+        // #422 QR-1: the reader pool takes no page any more; a page in progress is interrupted.
+        if let Some(mut pool) = self.reader_pool.take() {
+            pool.close();
+        }
         // LN-9 (#422): the scrub stops first, within one chunk, so it never holds the close.
         let scrub = self
             .scrub
@@ -3235,6 +3423,7 @@ fn flush_captured<S: LedgerStore>(
     queue: &capture::CaptureQueue,
     subscribers: &mut Vec<ActiveSubscription>,
     previous_writer_work: LedgerWriterWorkObservation,
+    context: &WriterContext,
 ) -> GlobalLedgerResult<Option<LedgerWriterWorkObservation>> {
     let through = queue.begin_drain();
     let started = Instant::now();
@@ -3247,6 +3436,15 @@ fn flush_captured<S: LedgerStore>(
             }
         }
         let report = store.commit_captured(batch, queue.identifiers());
+        // #422 QR-1: the committed point reaches the reader pool before any append of the batch
+        // is answered, so a caller reads what it was told is committed. A batch that ended the
+        // writer publishes nothing: the point stays the last commit's. Its replies are still sent
+        // (fix 1, review L-2), and an earlier record of the batch can be `Ok`, so until the writer
+        // thread has ended a caller told `Ok` may read a page without that record. The Runtime
+        // goes fatal anyway: the writer ended.
+        if report.terminal.is_none() {
+            context.publish(&*store);
+        }
         for finding in report.findings {
             queue.capture_finding(finding);
         }
@@ -3282,10 +3480,11 @@ fn drain_captured<S: LedgerStore>(
     queue: &capture::CaptureQueue,
     subscribers: &mut Vec<ActiveSubscription>,
     previous_writer_work: LedgerWriterWorkObservation,
+    context: &WriterContext,
 ) -> GlobalLedgerResult<()> {
     let mut previous = previous_writer_work;
     loop {
-        if let Some(work) = flush_captured(store, queue, subscribers, previous)? {
+        if let Some(work) = flush_captured(store, queue, subscribers, previous, context)? {
             previous = work;
         }
         if !queue.pending() {
@@ -3341,6 +3540,10 @@ fn command_operation(command: &WriterCommand) -> Location {
         WriterCommand::TestTerminalFailure { .. } => LedgerLocation::CloseWriter.location(),
         #[cfg(test)]
         WriterCommand::TestSubscriberCount { .. } => LedgerLocation::SubscribeEvents.location(),
+        #[cfg(test)]
+        WriterCommand::TestSeedFrameObjects { .. } => {
+            LedgerLocation::FrameRetentionLiveObjects.location()
+        }
     }
 }
 
@@ -3400,9 +3603,13 @@ fn writer_commands<S: LedgerStore>(
             LedgerLocation::LedgerFlushCaptured.location(),
             (context.clock)(),
         );
-        if let Some(work) =
-            flush_captured(&mut store, queue, &mut subscribers, previous_writer_work)?
-        {
+        if let Some(work) = flush_captured(
+            &mut store,
+            queue,
+            &mut subscribers,
+            previous_writer_work,
+            context,
+        )? {
             let elapsed = work
                 .processing
                 .finished_at
@@ -3466,6 +3673,10 @@ fn writer_commands<S: LedgerStore>(
             WriterCommand::TestSubscriberCount { .. } => {
                 LedgerWriterCommandKind::TestSubscriberCount
             }
+            #[cfg(test)]
+            WriterCommand::TestSeedFrameObjects { .. } => {
+                LedgerWriterCommandKind::RetentionCandidates
+            }
         };
         let mut command_observation = LedgerWriterWorkObservation {
             command: Some(kind),
@@ -3526,6 +3737,7 @@ fn writer_commands<S: LedgerStore>(
                 response,
             } => match store.release_lab_pin(target, request) {
                 Ok((release, appended)) => {
+                    context.publish(&store);
                     command_succeeded = true;
                     for event in &appended {
                         deliver_live_event(&mut subscribers, event);
@@ -3552,6 +3764,7 @@ fn writer_commands<S: LedgerStore>(
                 let result = store.reconcile_prior_epoch_closes(writer, &journal, after, deadline);
                 match result {
                     Ok((next, appended)) => {
+                        context.publish(&store);
                         command_succeeded = true;
                         for event in &appended {
                             deliver_live_event(&mut subscribers, event);
@@ -3578,14 +3791,20 @@ fn writer_commands<S: LedgerStore>(
                 }
                 command_observation.replied(response.send(result).is_ok());
             }
-            WriterCommand::RetainLiveFrames { live, response } => {
-                store.retain_live_objects(&live);
+            WriterCommand::RetainLiveFrames {
+                live,
+                cursor,
+                max_objects,
+                response,
+            } => {
+                let chunk = store.retain_live_objects_chunk(&live, cursor, max_objects);
                 command_succeeded = true;
-                command_observation.replied(response.send(Ok(())).is_ok());
+                command_observation.replied(response.send(Ok(chunk)).is_ok());
             }
             WriterCommand::AdmitArtifactEviction { guard, response } => {
                 match store.admit_artifact_eviction(*guard) {
                     Ok((admission, appended)) => {
+                        context.publish(&store);
                         command_succeeded = true;
                         for event in &appended {
                             deliver_live_event(&mut subscribers, event);
@@ -3612,6 +3831,7 @@ fn writer_commands<S: LedgerStore>(
                 let result = store.finish_artifact_eviction(*permit, disposition, outcome);
                 let result = match result {
                     Ok(event) => {
+                        context.publish(&store);
                         deliver_live_event(&mut subscribers, &event);
                         if disposition
                             == actingcommand_contract::ArtifactEvictionDisposition::Failed
@@ -3652,6 +3872,11 @@ fn writer_commands<S: LedgerStore>(
                 let result = store.reconcile_scheduled_policy_settlement(*execution);
                 command_succeeded = result.is_ok();
                 let terminal = result.as_ref().is_err_and(GlobalLedgerError::terminal);
+                // #422 QR-1: what the settlement committed (a refused one's execution too)
+                // reaches the reader pool before its reply.
+                if !terminal {
+                    context.publish(&store);
+                }
                 if let Ok((completion, appended)) = &result {
                     command_observation.replied(response.send(Ok(completion.clone())).is_ok());
                     for event in appended {
@@ -3983,9 +4208,13 @@ fn writer_commands<S: LedgerStore>(
             WriterCommand::Shutdown { response } => {
                 // Workflow #383 AO-2 (§8.2): the capture queue is drained before the ledger
                 // closes; a drain that cannot be written stops the writer by §9.2.
-                if let Err(error) =
-                    drain_captured(&mut store, queue, &mut subscribers, previous_writer_work)
-                {
+                if let Err(error) = drain_captured(
+                    &mut store,
+                    queue,
+                    &mut subscribers,
+                    previous_writer_work,
+                    context,
+                ) {
                     let _ = response.send(Err(error.clone()));
                     return Err(error);
                 }
@@ -4019,6 +4248,12 @@ fn writer_commands<S: LedgerStore>(
                 command_observation.replied(response.send(subscribers.len()).is_ok());
                 command_succeeded = true;
             }
+            #[cfg(test)]
+            WriterCommand::TestSeedFrameObjects { count, response } => {
+                let seeded = store.seed_frame_objects_for_test(count);
+                command_observation.replied(response.send(seeded).is_ok());
+                command_succeeded = true;
+            }
         }
         let finished = Instant::now();
         command_observation
@@ -4043,7 +4278,13 @@ fn writer_commands<S: LedgerStore>(
         previous_writer_work = command_observation;
         context.work.leave();
     }
-    drain_captured(&mut store, queue, &mut subscribers, previous_writer_work)?;
+    drain_captured(
+        &mut store,
+        queue,
+        &mut subscribers,
+        previous_writer_work,
+        context,
+    )?;
     let result = store.close();
     match &result {
         Ok(()) => notify_terminal_failure(

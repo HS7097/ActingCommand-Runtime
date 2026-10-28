@@ -173,6 +173,13 @@ pub(super) trait DurableStorage: Send + 'static {
     /// LN-5 (#422, LEAN-L §3.3): the sequence of the last committed record (0 when none is).
     fn head(&self) -> u64;
 
+    /// #422 QR-1: the committed head's record hash and the medium's marker state, which a reader
+    /// on a connection of its own authenticates the medium against; `None` for a medium the
+    /// reader pool cannot read.
+    fn read_extent(&self) -> Option<(Option<&str>, &'static str)> {
+        None
+    }
+
     fn resolve_artifact(
         &self,
         selection: &super::LedgerArtifactSelection,

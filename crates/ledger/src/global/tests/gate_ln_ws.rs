@@ -19,8 +19,9 @@
 // - T2 in-step bound: a no-instance window read whose budget runs out inside a statement answers
 //   an incomplete page whose cursor is past its start, and at most one look at the clock runs
 //   after the budget point;
-// - T3 append behind a read: an append captured while such a read runs commits once the read
-//   answers at its budget, and its reply is `Ok`, its observation naming the read;
+// - T3 append beside a read (#422 QR-1: the read is the reader pool's, off the writer): an append
+//   commits while such a read is held, its reply `Ok` and its observation naming no read, and the
+//   read then answers at its budget;
 // - T4 paging: paging the no-instance and the instance window reads with a small budget from the
 //   first page to the end returns the rows of an unbounded read in its order, each cursor past
 //   the one before;
@@ -35,9 +36,8 @@
 use super::*;
 use crate::global::projection::{EventIndexes, PageSelection};
 use crate::global::{
-    GlobalLedger, LedgerAppendObservationState, LedgerFailurePlan, LedgerMaintenance,
-    LedgerMonotonicClock, LedgerOpenTiming, LedgerWritePolicy, LedgerWriterCommandKind,
-    Sha256SecretFingerprinter,
+    GlobalLedger, LedgerFailurePlan, LedgerMaintenance, LedgerMonotonicClock, LedgerOpenTiming,
+    LedgerWritePolicy, LedgerWriterCommandKind, Sha256SecretFingerprinter,
 };
 use crate::{
     LedgerWriterCommandStatements, PersistedEvent, SyntheticInstance, SyntheticInversion,
@@ -104,8 +104,6 @@ const T3_STEP_MS: u64 = 250;
 const T4_BUDGET: Duration = Duration::from_millis(20);
 const T4_SCAN_ROWS: usize = 256;
 const T4_MAX_PAGES: usize = 10_000;
-// T3: how many times the test looks at the capture queue before it calls the append lost.
-const CAPTURE_LOOKS: u64 = 100_000_000;
 
 /// A writer clock in milliseconds that moves `step_ms` each time it is read.
 fn stepping_clock(step_ms: u64) -> LedgerMonotonicClock {
@@ -574,8 +572,11 @@ fn ln_ws_t2_a_window_read_stops_inside_a_statement_at_its_budget_past_its_start(
     ledger.close().expect("close");
 }
 
+// #422 QR-1 (adapted): the read no longer runs on the writer. The append is never captured behind
+// it: it commits while the read is held at its start on the reader pool, and the read then
+// answers at its budget.
 #[test]
-fn ln_ws_t3_an_append_captured_behind_an_over_budget_read_commits_once_it_answers() {
+fn ln_ws_t3_an_append_commits_while_an_over_budget_read_runs_off_the_writer() {
     let root = Root::new(SMALL_RECORDS);
     let ledger = root.open(Reads::bounded(T3_BUDGET, T3_STEP_MS, BOUND_SCAN_ROWS));
     let head = ledger.latest_sequence().expect("head");
@@ -589,22 +590,12 @@ fn ln_ws_t3_an_append_captured_behind_an_over_budget_read_commits_once_it_answer
             scope.spawn(move || writer.project_view_page(query, PROFILE, first_page(PAGE_LIMIT)));
         assert!(
             hold.wait_held(BARRIER_WAIT),
-            "the page read reached the writer"
+            "the page read reached its reader"
         );
-        let captured = writer.capture_status().captured;
-        let appender = scope.spawn(move || writer.append_with_observation(draft));
-        // The append is in the capture queue while the writer is in the read.
-        let mut looks = 0_u64;
-        while writer.capture_status().captured == captured {
-            looks += 1;
-            assert!(looks < CAPTURE_LOOKS, "the append was not captured");
-            thread::yield_now();
-        }
+        // The append commits while the read is held.
+        let appended = writer.append_with_observation(draft);
         hold.release();
-        (
-            reader.join().expect("reader"),
-            appender.join().expect("appender"),
-        )
+        (reader.join().expect("reader"), appended)
     });
     let page = page.expect("the page");
     let scope = page.read_scope().expect("a Runtime page has its scope");
@@ -615,26 +606,10 @@ fn ln_ws_t3_an_append_captured_behind_an_over_budget_read_commits_once_it_answer
     let appended = appended.expect("the append's reply is Ok, never writer_response_timeout");
     assert_eq!(appended.sequence(), head + 1, "the append committed");
     let observation = observation.expect("the append's observation");
-    let previous = observation.previous_writer_work;
-    assert_eq!(
-        previous.command,
+    assert_ne!(
+        observation.previous_writer_work.command,
         Some(LedgerWriterCommandKind::ProjectViewPage),
-        "the writer's command before the append was the read: {observation:?}"
-    );
-    assert_eq!(
-        previous.processing.state,
-        LedgerAppendObservationState::Observed,
-        "{observation:?}"
-    );
-    let processing = previous
-        .processing
-        .finished_at
-        .zip(previous.processing.started_at)
-        .map(|(finished, started)| finished.saturating_duration_since(started))
-        .expect("the read's processing span");
-    assert!(
-        processing <= T3_BUDGET,
-        "the read took {processing:?}, more than its budget {T3_BUDGET:?}"
+        "the writer did not read the page: {observation:?}"
     );
     ledger.close().expect("close");
 }

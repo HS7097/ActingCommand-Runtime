@@ -725,9 +725,13 @@ impl FrameRetention {
                 )
                 .with_native_detail(error.to_string())
             })?;
-            ledger
-                .retain_live_frames(live.clone())
-                .map_err(ledger_failure)?;
+            // #422 QR-1: the writer trims its objects to the listing in bounded chunks, so event
+            // writes and reads never wait behind the whole trim.
+            let live = Arc::new(live);
+            if !retain_live_frames_in_chunks(ledger, &live, settings.chunk_frames, stopping)? {
+                return Ok(None);
+            }
+            let live = Arc::unwrap_or_clone(live);
             let kept = list_kept_folders(root).map_err(RuntimeHostError::artifact_read)?;
             let mut query = ledger.frame_query(stop).map_err(ledger_failure)?;
             match self.begin_pass(&mut query, live, kept, clock, settings)? {
@@ -1357,6 +1361,34 @@ impl EvictionRecovery {
         }
         self.after = candidates.next_after;
         Ok(round)
+    }
+}
+
+/// #422 QR-1: hands the writer the live frame store's listing `live` in bounded chunks: each chunk
+/// is one writer command that looks at no more than `chunk_objects` of the writer's objects
+/// (`ledger_observer.frame_query_chunk_frames`, the cleaner's chunk), and the writer handles every
+/// command queued meanwhile, appends and reads among them, between two chunks. `false` when
+/// `stopping` ended it first: the pass does not start, and the objects not yet looked at stay
+/// resident (a dropped object is loaded again when a record names it, so a trim left unfinished
+/// costs memory, never a fact). A chunk's ledger failure is the round's, as the listing's was.
+fn retain_live_frames_in_chunks(
+    ledger: &GlobalLedger,
+    live: &Arc<BTreeSet<ArtifactId>>,
+    chunk_objects: usize,
+    stopping: &dyn Fn() -> bool,
+) -> RuntimeHostResult<bool> {
+    let mut cursor = None;
+    loop {
+        let chunk = ledger
+            .retain_live_frames_chunk(live, cursor, chunk_objects.max(1))
+            .map_err(ledger_failure)?;
+        match chunk.next {
+            None => return Ok(true),
+            Some(next) => cursor = Some(next),
+        }
+        if stopping() {
+            return Ok(false);
+        }
     }
 }
 
