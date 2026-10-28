@@ -53,6 +53,7 @@ fn diagnosis(remedies: Vec<Value>) -> Diagnosis {
         instance: json!({"alias": ALIAS, "instance_id": INSTANCE_ID}),
         since: 1_700_092_800_000,
         incomplete: false,
+        incomplete_sections: Vec::new(),
         runs: Vec::new(),
         errors: Vec::new(),
         error_sequences: Vec::new(),

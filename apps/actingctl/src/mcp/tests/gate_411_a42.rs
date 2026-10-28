@@ -27,7 +27,9 @@
 //! The fake is shared with the #422 IDLE-OV gate (`gate_422_idle_ov`), which also counts its
 //! pages and has it refuse the pages of one event type as the host refuses a page it did not
 //! read, and with the #422 QR-2 gate (`gate_422_qr2`), which counts the pages asked for with their
-//! run recovery.
+//! run recovery. For the #422 QR-2b gate (`gate_422_qr2b`) it also logs every page asked for,
+//! names instances in its Status, serves the errors view, and answers a diagnosis' two `not_run`
+//! reads (no evaluation, the bound at its default).
 
 use super::super::jobs::Jobs;
 use super::super::protocol::Era;
@@ -41,15 +43,17 @@ use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::page_projection::Rect;
 use actingcommand_contract::{
     ArtifactKind, ArtifactPayloadDraft, ArtifactProducer, ArtifactRedactionState, AuditInput,
-    ClientPayloadDraft, EventAction, EventActor, EventDraft, EventLinksDraft, EventOrigin,
-    EventPayloadDraft, EventQuery, EventSeverity, EventSource, EventType, IdentifierIssuer,
-    InputAction, InputSamplingEvidence, InputSamplingRegion, InstanceId, IssuedFrameId,
-    IssuedInstanceId, MAX_RUNTIME_EVENT_QUERY_RESPONSE_BYTES, OriginModule, OwnerEpoch,
-    ProjectedArtifactReference, ProjectedEvent, ProjectionPayload, ProjectionProfile,
+    ClientPayloadDraft, ConfigParameter, ConfigParameterSource, EventAction, EventActor,
+    EventDraft, EventLinksDraft, EventOrigin, EventPayloadDraft, EventQuery, EventSeverity,
+    EventSource, EventType, FactScalar, IdentifierIssuer, InputAction, InputSamplingEvidence,
+    InputSamplingRegion, InstanceId, IssuedFrameId, IssuedInstanceId, LedgerView,
+    MAX_RUNTIME_EVENT_QUERY_RESPONSE_BYTES, OriginModule, OwnerEpoch, ProjectedArtifactReference,
+    ProjectedEvent, ProjectionPayload, ProjectionProfile, RUNTIME_FACT_SCHEMA_VERSION,
     RUNTIME_INFO_FILE, RecognizedTarget, RecognizedTargetRole, RetentionClass,
-    RuntimeControlPlaneStatus, RuntimeErrorCode, RuntimeErrorProjection, RuntimeEventQueryCursor,
-    RuntimeEventQueryPage, RuntimeEventQueryPageRequest, RuntimeInfo, RuntimeInstanceStatus,
-    RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
+    RuntimeConfigManifest, RuntimeControlPlaneStatus, RuntimeErrorCode, RuntimeErrorProjection,
+    RuntimeEventQueryCursor, RuntimeEventQueryPage, RuntimeEventQueryPageRequest,
+    RuntimeFactSnapshot, RuntimeInfo, RuntimeInstanceStatus, RuntimeOperation, RuntimeReceipt,
+    RuntimeReceiptState, RuntimeRequest, RuntimeResult, RuntimeScheduleExplanation,
     SanitizationError, SecretField, SecretFingerprinter, Sha256Fingerprint,
     TaskEntryRecognitionPhase, TaskOutcome, TaskPayloadDraft, TaskSemanticFact,
 };
@@ -755,11 +759,22 @@ pub(super) struct Stats {
     pub(super) pages_with_run_recovery: u64,
 }
 
+/// #422 QR-2b: one QueryEvents page a client asked for: its query, whether it asked for the
+/// page's run recovery, and whether it was a first page (no cursor).
+#[derive(Clone, Debug)]
+pub(super) struct AskedPage {
+    pub(super) query: EventQuery,
+    pub(super) run_recovery: bool,
+    pub(super) first: bool,
+}
+
 /// A Runtime on loopback that answers every connection from one ledger until dropped.
 pub(super) struct FakeRuntime {
     address: SocketAddr,
     stopping: Arc<AtomicBool>,
     stats: Arc<Mutex<Stats>>,
+    /// #422 QR-2b: every QueryEvents page asked for, in order.
+    asked: Arc<Mutex<Vec<AskedPage>>>,
     acceptor: Option<JoinHandle<()>>,
 }
 
@@ -777,6 +792,25 @@ impl FakeRuntime {
         root: &Path,
         events: Vec<ProjectedEvent>,
         refused: Option<EventType>,
+    ) -> Self {
+        Self::start_serving(root, events, refused, Vec::new())
+    }
+
+    /// #422 QR-2b: as `start`, with `instances` in its Status (a diagnosis resolves its instance
+    /// there and names its groups' instances by alias).
+    pub(super) fn start_with_instances(
+        root: &Path,
+        events: Vec<ProjectedEvent>,
+        instances: Vec<RuntimeInstanceStatus>,
+    ) -> Self {
+        Self::start_serving(root, events, None, instances)
+    }
+
+    fn start_serving(
+        root: &Path,
+        events: Vec<ProjectedEvent>,
+        refused: Option<EventType>,
+        instances: Vec<RuntimeInstanceStatus>,
     ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind the fake Runtime");
         let address = listener.local_addr().expect("fake Runtime address");
@@ -800,10 +834,12 @@ impl FakeRuntime {
         .expect("write the Runtime info");
         let stopping = Arc::new(AtomicBool::new(false));
         let stats = Arc::new(Mutex::new(Stats::default()));
-        let ledger = Arc::new(Ledger::new(events, refused));
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let ledger = Arc::new(Ledger::new(events, refused, instances));
         let acceptor = {
             let stopping = Arc::clone(&stopping);
             let stats = Arc::clone(&stats);
+            let asked = Arc::clone(&asked);
             thread::spawn(move || {
                 for stream in listener.incoming() {
                     if stopping.load(Ordering::SeqCst) {
@@ -812,7 +848,8 @@ impl FakeRuntime {
                     let stream = stream.expect("accept a client");
                     let ledger = Arc::clone(&ledger);
                     let stats = Arc::clone(&stats);
-                    thread::spawn(move || serve(stream, owner_epoch, &ledger, &stats));
+                    let asked = Arc::clone(&asked);
+                    thread::spawn(move || serve(stream, owner_epoch, &ledger, &stats, &asked));
                 }
             })
         };
@@ -820,12 +857,29 @@ impl FakeRuntime {
             address,
             stopping,
             stats,
+            asked,
             acceptor: Some(acceptor),
         }
     }
 
     pub(super) fn stats(&self) -> Stats {
         *self.stats.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// #422 QR-2b: every QueryEvents page asked for so far, in order.
+    pub(super) fn asked(&self) -> Vec<AskedPage> {
+        self.asked
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// #422 QR-2b: how many QueryEvents pages were asked for so far.
+    pub(super) fn asked_count(&self) -> usize {
+        self.asked
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len()
     }
 }
 
@@ -840,17 +894,34 @@ impl Drop for FakeRuntime {
     }
 }
 
-/// Answers one client's Health, BindChannel, Status and event queries until it hangs up.
-fn serve(mut stream: TcpStream, owner_epoch: OwnerEpoch, ledger: &Ledger, stats: &Mutex<Stats>) {
+/// Answers one client's Health, BindChannel, Status and event queries until it hangs up, and
+/// (#422 QR-2b) the two reads of a diagnosis' `not_run`: no evaluation has run, and the bound
+/// `scheduling.not_run.diagnose_rows` is at its default.
+fn serve(
+    mut stream: TcpStream,
+    owner_epoch: OwnerEpoch,
+    ledger: &Ledger,
+    stats: &Mutex<Stats>,
+    asked: &Mutex<Vec<AskedPage>>,
+) {
     while let Some(request) = next_request(&mut stream) {
-        // #422 QR-2: a page asked for with its run recovery.
-        if let RuntimeOperation::QueryEvents { page, .. } = request.operation()
-            && page.derives_run_recovery()
-        {
-            stats
+        if let RuntimeOperation::QueryEvents { query, page, .. } = request.operation() {
+            // #422 QR-2: a page asked for with its run recovery.
+            if page.derives_run_recovery() {
+                stats
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .pages_with_run_recovery += 1;
+            }
+            // #422 QR-2b: every page, in order.
+            asked
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
-                .pages_with_run_recovery += 1;
+                .push(AskedPage {
+                    query: query.clone(),
+                    run_recovery: page.derives_run_recovery(),
+                    first: page.cursor().is_none(),
+                });
         }
         let receipt = match request.operation() {
             RuntimeOperation::Health => completed(&request, RuntimeResult::Health { owner_epoch }),
@@ -864,8 +935,24 @@ fn serve(mut stream: TcpStream, owner_epoch: OwnerEpoch, ledger: &Ledger, stats:
             RuntimeOperation::Status => completed(
                 &request,
                 RuntimeResult::Status {
-                    status: RuntimeControlPlaneStatus::new(owner_epoch, Vec::new())
+                    status: RuntimeControlPlaneStatus::new(owner_epoch, ledger.instances.clone())
                         .expect("fake status"),
+                },
+            ),
+            RuntimeOperation::ScheduleExplanation { .. } => completed(
+                &request,
+                RuntimeResult::ScheduleExplanation {
+                    explanation: Box::new(RuntimeScheduleExplanation {
+                        evaluated_at_unix_ms: None,
+                        catalog_hash: None,
+                        instances: Vec::new(),
+                    }),
+                },
+            ),
+            RuntimeOperation::RuntimeFactSnapshot => completed(
+                &request,
+                RuntimeResult::RuntimeFactSnapshot {
+                    snapshot: scheduling_parameters(),
                 },
             ),
             RuntimeOperation::QueryEvents { query, .. } if ledger.refuses(query) => {
@@ -910,6 +997,34 @@ fn completed(request: &RuntimeRequest, result: RuntimeResult) -> RuntimeReceipt 
         .expect("fake receipt")
 }
 
+/// #422 QR-2b: the program facts of the fake Runtime: the section `config.parameters.scheduling`
+/// with the row `scheduling.not_run.diagnose_rows` at its default (10), as a Runtime records it
+/// at start.
+fn scheduling_parameters() -> RuntimeFactSnapshot {
+    let manifest = RuntimeConfigManifest {
+        subsystems: Vec::new(),
+        parameters: vec![ConfigParameter {
+            key: "scheduling.not_run.diagnose_rows".to_owned(),
+            value: FactScalar::Integer(10),
+            source: ConfigParameterSource::Default,
+            settable: true,
+        }],
+    };
+    RuntimeFactSnapshot {
+        schema_version: RUNTIME_FACT_SCHEMA_VERSION.to_owned(),
+        ledger_position: 1,
+        taken_at_unix_ms: START_UNIX_MS,
+        snapshot_id: 1,
+        part: 1,
+        parts: 1,
+        records: vec![manifest.parameter_section_fact_record(
+            "scheduling",
+            START_UNIX_MS,
+            OriginModule::Runtime,
+        )],
+    }
+}
+
 /// The next request, or `None` once the client hung up.
 fn next_request(stream: &mut TcpStream) -> Option<RuntimeRequest> {
     let mut header = [0_u8; 4];
@@ -946,10 +1061,16 @@ struct Ledger {
     counts: BTreeMap<String, u64>,
     /// #422 IDLE-OV: the event type whose pages the fake refuses.
     refused: Option<EventType>,
+    /// #422 QR-2b: the instances its Status answers.
+    instances: Vec<RuntimeInstanceStatus>,
 }
 
 impl Ledger {
-    fn new(events: Vec<ProjectedEvent>, refused: Option<EventType>) -> Self {
+    fn new(
+        events: Vec<ProjectedEvent>,
+        refused: Option<EventType>,
+        instances: Vec<RuntimeInstanceStatus>,
+    ) -> Self {
         let mut counts = BTreeMap::new();
         for event in &events {
             for key in index_keys(event) {
@@ -960,6 +1081,7 @@ impl Ledger {
             events,
             counts,
             refused,
+            instances,
         }
     }
 
@@ -1122,9 +1244,16 @@ fn named_keys(query: &EventQuery) -> Vec<String> {
 }
 
 /// This ledger serves the time and sequence bounds, one event type or a set of them, the
-/// instance and the run links; a query with any other filter fails the test.
+/// instance and the run links, and (#422 QR-2b) the errors view (warning and above); a query
+/// with any other filter fails the test.
 fn assert_served(query: &EventQuery) {
+    assert!(
+        query.view.is_none_or(|view| view == LedgerView::Errors),
+        "the fake ledger serves no view {:?}",
+        query.view
+    );
     let unserved = EventQuery {
+        view: None,
         from_timestamp_unix_ms: None,
         to_timestamp_unix_ms: None,
         from_sequence: None,
@@ -1150,9 +1279,13 @@ fn assert_served(query: &EventQuery) {
 /// the contract.
 fn matches(query: &EventQuery, event: &ProjectedEvent) -> bool {
     let links = &event.links;
+    // #422 QR-2b: the errors view, warning and above.
     query
-        .from_timestamp_unix_ms
-        .is_none_or(|from| event.timestamp_unix_ms >= from)
+        .view
+        .is_none_or(|_| event.severity >= EventSeverity::Warning)
+        && query
+            .from_timestamp_unix_ms
+            .is_none_or(|from| event.timestamp_unix_ms >= from)
         && query
             .to_timestamp_unix_ms
             .is_none_or(|to| event.timestamp_unix_ms < to)

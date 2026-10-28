@@ -146,6 +146,7 @@ fn diagnosis(errors: Vec<Value>, clock_slots: Vec<Value>, clock_slots_total: usi
         instance: json!({"alias": ALIAS, "instance_id": INSTANCE_ID}),
         since: SINCE_UNIX_MS,
         incomplete: false,
+        incomplete_sections: Vec::new(),
         runs: Vec::new(),
         errors,
         error_sequences,

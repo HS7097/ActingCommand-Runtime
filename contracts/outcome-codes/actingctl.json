@@ -264,7 +264,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An MCP call reached the end of its time budget. In an overview, alias names the instance whose run was not read, and member the block that was not read (performance, fact_refresh or not_running).",
+      "description": "An MCP call reached the end of its time budget. In an overview, alias names the instance whose run was not read, and member the block that was not read (performance, fact_refresh or not_running). In a diagnosis (#422 QR-2b), member names the section whose reads the deadline cut (runs, errors_page, runs_grouped, failures_grouped or not_run).",
       "common_causes": "TBD",
       "handling": "TBD"
     },

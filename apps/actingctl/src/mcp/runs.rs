@@ -152,6 +152,7 @@ pub(super) fn diagnose(context: &ToolContext<'_>, arguments: &Map<String, Value>
         report,
         location.state_root.as_deref().ok(),
         deadline,
+        &diagnose::SystemClock,
     )
     .map_err(|failure| diagnose_error(context, Some(&connected), failure))?;
     let binding = CursorBinding {
