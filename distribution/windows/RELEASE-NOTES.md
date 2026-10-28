@@ -9,6 +9,73 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.21
+
+本版是 v0.12.20 之后合并的 3 个 PR：概览和诊断读账本时不再排在账本写入线程后面，也不再等帧清理做完：
+`QueryEvents` 的页改由读者池在写入线程之外读，帧清理交给写入线程的工作分段进行（QR-1）；部署不再因为某个
+运行时指令覆盖的默认值变了而自动回退（S2-IF）；另有 README 人员名单的一处文档修改。v0.12.20 已在本版之前
+发布。
+
+配置：没有新键，也没有新的 revision，`actingd-config` 仍是 [5, 18]，`runtime-client` 仍是 [2, 2]。
+
+- 读者池的大小（2 个读线程）是程序里的固定值，不是配置键。帧清理分段的大小沿用已有的
+  `ledger_observer.frame_query_chunk_frames`（默认 256，范围 1 到 4 096，启动时读取），默认值和范围不变。
+- 启动报告 `StartReport` 的答复新增可选列表 `instructions_base_changed`（见下），仍在 `runtime-client`
+  revision 2 之内，不升 revision：列表为空时不出现，本版的 actingctl 读较早构建的报告时按没有这个列表读。
+- 现有的配置都不需要修改。退回 v0.12.20 之前也不需要做任何事：
+  - 本版没有新键，v0.12.20 照样读本版的配置文件。
+  - 读者池读的提交点（已提交的头序号、头记录的哈希、标记状态和删除证明）只由写入线程在内存里发布，从不写进
+    账本；读者池用的是只读连接。账本的格式、表和索引都没变，v0.12.20 照样打开本版写过的账本。
+  - 帧清理分段修剪时的保留规则（第一段开始之后才有记录引用的对象留下）只作用于写入线程常驻的内存，不写账本。
+  - `instructions_base_changed` 只在启动报告的答复里，不写进账本。本版没有改任何默认值，每次启动又以当时的
+    默认值重新记下运行时指令，所以从本版退回 v0.12.20 时，没有哪个指令会因为默认值变了被 v0.12.20 列为丢掉，
+    回退启动的 `instructions` 检查不会因此失败。
+
+运行上的变化：
+
+- 读者池（QR-1）：`QueryEvents` 的页（概览里各实例最近一次运行、`ac_diagnose`、事件和运行证据的查询都经它读）
+  和 Lab 订阅的页，由读者池的 2 个读线程读。每个读线程有自己的只读 SQLite 连接，不在写入线程上运行，也不等
+  写入线程：写入线程正在提交或做帧清理时，这些读取照常答复。
+  - 每页在写入线程最后发布的提交点读。写入线程每次提交之后、答复这次提交的追加之前发布，所以追加已得到答复
+    的调用方能读到它。一页在一个读事务里读，`through_sequence` 不超过已提交的头，读不到还没提交的记录。答复和
+    写入线程在同一个头读出的页相同：同样的选择、行认证和删除观察，同样的读取预算和语句界限
+    （`ledger_observer.read_budget_ms` 等，从读线程开始读这一页时算起）。
+  - 队列放不下、或在调用方的答复时限内没有读线程答复的页，答 `writer_response_timeout`（操作
+    `project_ledger_view_page`），不致命，再读一次即可，和以前写入线程没有按时答复一样。在队列里等到调用方已经
+    不再等待的页，以同样的 `writer_response_timeout` 答复，不再去读；关闭时队列里的页一页也不读，各自答
+    `writer_unavailable`（操作 `shutdown_writer`，不致命）。
+  - 读者池读的页照旧记进写入线程的提交统计（`ProjectViewPage`，带用时）。
+  - 最新序号、按查询读、订阅与重放、标记状态、索引记录和制品查询等其他读取仍在写入线程上。
+- 读者池的警告（QR-1）：读者池正常时什么也不打印。
+  - 启动时读者池的连接打不开，写入线程像以前一样自己读这些页。启动时 actingd 日志里写一条警告（结果码和操作是
+    让连接打不开的那次失败的），并打印开发者行 `actingd ledger reader_pool fallback=writer code=… operation=…
+    detail=…`。
+  - 运行中第一个意外结束的读线程写一条警告 `writer_panicked`（操作 `query_ledger_view`，细节
+    `reader_ended readers_left=<剩下的数>`），剩下的读线程继续答复。一个读线程也不剩时再写一条
+    `writer_panicked`（操作 `project_ledger_view_page`，细节 `readers_left=0 fallback=writer`），之后的页由写入
+    线程读。这两条各写一次，同时打印 `actingd ledger reader_pool reader_ended code=… operation=… detail=…`。
+  - 这些都只是警告，Runtime 继续运行。
+- 帧清理时的读写（QR-1）：每轮帧清理开始时，写入线程把常驻的对象修剪到帧存储里现有的帧。以前这是一条写入命令，
+  一次做完，期间所有追加和读取都排在后面。现在分段进行：每段是一条写入命令，最多看
+  `ledger_observer.frame_query_chunk_frames` 个对象，两段之间写入线程先处理排队的其他命令（追加和读取）；按运行
+  和范围记的事实在最后一段一起修剪。第一段开始之后才有记录引用的对象属于更新的状态，留下。Runtime 在两段之间
+  停下时这一轮清理不开始，没看过的对象继续常驻：只多占内存，不丢事实（丢掉的对象在有记录引用时按索引读回）。
+- S2 的启动后检查（S2-IF）：`StartReport` 把保留下来、但它覆盖的默认值变了的运行时指令
+  （`config_override_base_changed`）列进新的可选列表 `instructions_base_changed`，算作已恢复（计入
+  `instructions_restored`），不再列进 `instructions_dropped`；`instructions_dropped` 只列没有恢复的
+  （`config_override_dropped`、`config_override_superseded`）。安装器的 `instructions` 检查在期望和实际相同、且
+  没有真正丢掉或被取代的指令时通过；默认值变了的键在这一行的 `values.base_changed` 里列出，只作提示，从不让检查
+  失败。例如从 v0.12.19 升级时，`instance.<实例>.idle.close_app_wake_lead_ms` 的指令（默认值从 60 000 改为
+  300 000）以前会让这项检查失败、整个部署自动回退，现在通过。检查读的是刚启动的 Runtime 的报告：v0.12.20 及
+  更早的 actingd 仍把这类指令列进 `instructions_dropped`，所以回退到默认值与本版不同的更早版本时，回退启动的
+  这项检查仍不通过。
+
+本版合并的 PR：
+
+- #1383（文档）：README 的人员名单新增一行「正在面试 — Gemini‑4 Argon」，中英文 README 都改了。没有程序改动。
+- #1384 S2-IF（#421）：启动报告把保留下来、但覆盖的默认值变了的指令列进新的可选列表 `instructions_base_changed`、算作已恢复，`instructions_dropped` 只列丢掉和被取代的；安装器的 `instructions` 检查在期望等于实际、且没有真正丢掉的指令时通过，默认值变了的键列在 `values.base_changed` 里作提示。没有新键、新结果码，`runtime-client` 不升 revision。
+- #1385 QR-1（#422）：账本的视图页（`QueryEvents` 和 Lab 订阅的页）由 2 个只读连接组成的读者池在写入线程之外读，读的是写入线程答复之前发布的提交点；帧清理交给写入线程的修剪分段进行；修正 1：调用方已不再等待的页不读，关闭时拒绝队列里的页而不去读，读线程意外结束时写警告、一个不剩时由写入线程重新读页，读者池读的页记进提交统计。没有新键、新结果码。
+
 ## v0.12.20
 
 本版是 v0.12.19 之后合并的 3 个 PR：组合模式（`policy` 节没有 `catalog`，由组合器按标准包组合）下读配置的各个读者
