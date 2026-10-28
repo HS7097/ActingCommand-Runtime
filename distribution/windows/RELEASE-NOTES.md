@@ -9,6 +9,57 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.23
+
+本版是 v0.12.22 之后合并的 1 个 PR（#1391 QR-2，#422）：概览、`ac_runs` 和 `ac_get_run` 读账本时不再做没有
+调用方用到的按运行的工作，所以几秒内就能答复。v0.12.22 已在本版之前发布。
+
+配置：没有新键，也没有新的 revision，`actingd-config` 仍是 [5, 19]，`runtime-client` 仍是 [2, 2]，账本仍是 [3, 4]。
+
+- `QueryEvents` 的页请求新增可选成员 `without_run_recovery`（见下），仍在 `runtime-client` revision 2 之内，不升
+  revision：不写时等于 `false`，请求的序列化和页的答复都和以前一样，所以 v0.12.22 的客户端发给本版 Runtime 的
+  请求照旧答复。
+- 读线程的备忘（最近 4 个快照的 Lab 关系、最近 4 个窗口起点）的个数是程序里的固定值，不是配置键。
+- 现有的配置都不需要修改。退回 v0.12.22 之前要做的事（按代码核对过）：
+  - 配置和运行时指令：不需要做什么。本版没有新键，也没有改任何默认值，v0.12.22 照样读本版的配置文件，回退启动
+    的 `instructions` 检查不会因本版失败。
+  - 账本：不需要做什么。备忘只在每个读线程的内存里，从不写进账本，读线程结束就没有了；账本的格式、表、索引和
+    事件类型都没变，也没有新结果码，v0.12.22 照样打开本版写过的账本。
+  - 客户端要和 Runtime 配对：v0.12.22 的页请求拒绝不认识的成员。本版的客户端（actingctl 和 MCP）在列运行和读运行
+    状态时带上 `without_run_recovery`，v0.12.22 的 Runtime 解码失败就断开连接（`runtime_request_decode_failed`），
+    客户端读答复失败并锁住这次连接，这次调用里之后的读取也都失败：概览、`ac_runs`、`ac_get_run`、
+    `ac_run_evidence`、`ac_diagnose` 这类要列运行或读运行状态的调用会报错（不会当作成功）。没有兼容代码（测试
+    阶段不做旧版兼容）。所以回退之后要用 v0.12.22 的客户端：
+    - 经 MCP 入口（`actingcommand-mcp-entry.exe`）连接的客户端：回退（`install rollback apply`，或组合更新的自动
+      回退）换回 `runtime\actingctl.exe` 和 `runtime\BUILD-MANIFEST.json` 之后，入口在变化保持
+      `install.mcp_entry.settle_ms`（默认 10 秒）不动时询问计划；安装完整（写锁空闲、没有未完成的安装操作、文件
+      与清单一致）时，在两次调用之间切到 v0.12.22 的子进程，不用重启客户端。在切换之前（包括子进程还有未读结果的
+      句柄、切换推迟的时候），仍是本版的子进程在答，上面那类调用会失败；切换之后恢复。`actingctl mcp-entry list`
+      显示每个入口当前子进程的构建。
+    - 直接启动 `actingctl mcp-serve` 的客户端：进程继续用被改名留下的本版程序（`install status` 的
+      `mcp_servers_on_old_images` 列出它们），要重启这个 MCP 服务才换成 v0.12.22。
+    - 命令行：`overview`、`runs` 等用根目录自己的 `runtime\actingctl.exe`（回退后是 v0.12.22）。安装器（从最新
+      留存的构建运行）的停、启和启动后检查不列运行、不读运行状态，不受影响。
+
+运行上的变化：
+
+- 不带运行恢复的页（QR-2）：概览的运行块、`ac_runs`、`ac_get_run`（按请求和按运行）、`ac_run_evidence`，以及
+  `actingctl overview`、`runs` 等列运行和读运行状态的地方，读的每一页都带 `without_run_recovery`。这样的页不再为
+  每个运行读取并认证它的上下文（每个运行最多 1 025 条记录），只是少了这些调用从不读的 `run_recovery` 组；行、视图、
+  游标和读取范围都和以前相同（响应字节上限不再计入组，所以一页可能多装几行）。
+- 读线程的备忘（QR-2）：读者池的每个读线程在两页之间记住：
+  - 一页快照上的 Lab 关系，最多 4 个快照，最久没用的先丢；同一快照的后续页不再重读，换到它已不记得的快照时重读。
+  - 窗口起点（`from_timestamp_unix_ms` 处的第一条记录），最多 4 个。账本事件只增不改，所以找到的第一条在之后的
+    快照上仍然准确，跨快照保留；没找到的只在它那个快照上记。
+  - 读取预算没有截断的页，有没有备忘结果都一样；被预算截断的页因省下的读取可能走得更远。
+- 用时：v0.12.21 上实测概览的运行块每个实例 5 到 28 秒；本版预计约 0.5 到 1.5 秒（还没有在本版上实测）。
+- `ac_diagnose`：它列最近运行和运行列表的部分同样走上面的新路径；它自己读的错误等事件页还没有改，仍为每个运行
+  读上下文，留给后续的 QR-2b。`ac_events` 等其他事件查询不变。
+
+本版合并的 PR：
+
+- #1391 QR-2（#422）：`QueryEvents` 的页请求新增可选成员 `without_run_recovery`（不写即和以前相同），带它的页不为每个运行读上下文、没有 `run_recovery` 组；读者池的每个读线程按快照记住 Lab 关系（最多 4 个）和找到的窗口起点（最多 4 个）；客户端列运行和读运行状态（概览的运行块、`ac_runs`、`ac_get_run`）的页都带这个成员；修正 1：备忘保留多个快照、补 Lab 锚点和两个快照交替的测试、契约写明 v0.12.21 和 v0.12.22 的 Runtime 收到这个成员时断开连接。没有新键、新结果码，`runtime-client` 不升 revision。
+
 ## v0.12.22
 
 本版是 v0.12.21 之后合并的 3 个 PR，都属于按实例并行调度（Workflow #427）：调度的一轮可以把计划运行交给各实例
