@@ -19,7 +19,7 @@
 //! (a restored pause included), the claim waits queued as a gated routine entry, the key is
 //! released, and the resume's reconnect runs before the startup run (M-3). A new startup claim
 //! cancels one still queued for the same instance, and so does an emulator control whose hold
-//! hands no startup claim over (a stop, a paused instance's start). Once granted, the package runs
+//! hands no startup claim over (a stop). Once granted, the package runs
 //! on the instance's worker (`host_claims`) under the claim's key, as an ordinary contained
 //! task with a self-minted request and correlation id, the claim's holder and synthesized
 //! connection, the same causation id, structural admission and the complete `task.*` event chain
@@ -30,9 +30,10 @@
 //! and the causation id; a fatal one poisons the host like any other.
 //!
 //! A configured package is scheduled after `start` / `restart` (#411 A50: whether or not the
-//! connection preparation passed, unless a scheduling pause holds the instance;
-//! `emulator_instance`); an instance without one has no package scheduled. A daemon already
-//! running at startup schedules nothing: only the two control actions do.
+//! connection preparation passed; #411 A71: also while a scheduling pause holds the instance,
+//! whose resume its claim then waits for; `emulator_instance`); an instance without one has no
+//! package scheduled. A daemon already running at startup schedules nothing: only the two
+//! control actions do.
 //!
 //! The stuck-recovery ladder (`recovery_ladder`) runs its rung packages through the same
 //! runner on its own key.
@@ -251,7 +252,7 @@ impl HostShared {
 
     /// H-6: one startup claim per instance: a still-queued one is cancelled
     /// (`scheduler.denied lease.queue_cancelled`, its request links only, Warning). An emulator
-    /// control whose hold hands no startup claim over (a stop, a paused instance's start) cancels it
+    /// control whose hold hands no startup claim over (a stop) cancels it
     /// too (coordinator ruling on review #716), and so does a resume's reconnect or a self-check
     /// whose preparation failed and admitted no ladder (Workflow #369 S6c review low (b)).
     pub(super) fn cancel_queued_startup_claims(

@@ -53,16 +53,16 @@
 //! destructive step) and under which the retained session is closed; the ladder renews it.
 //!
 //! Workflow #369 H-4, M6 (S6b): the control's hold ends with its release. After a `start` /
-//! `restart` (#411 A50: whether or not its preparation passed, unless a pause holds the
-//! instance), an instance with a startup package hands the key to the package's claim on that
-//! release, through the gate (`hand_off_startup_package`), so no dispatch can see the instance
-//! free between the start and the startup run; behind a closed gate the claim waits queued. A
-//! hold that hands no startup claim over (a stop, a withheld package) first cancels the
-//! instance's queued startup claims (coordinator ruling on review #716). A failed preparation's
-//! admitted ladder (`record_preparation_finished`) gets the key straight from the release (H-1,
-//! P1; `release_to_preparation_ladder`), the startup claim waiting queued behind it. Workflow #369
-//! S6c: so does a failed control that hands no startup claim over, a provider step that itself
-//! failed included (the same ruling, item 1; merge ledger :529).
+//! `restart` (#411 A50: whether or not its preparation passed; #411 A71: also while a pause
+//! holds the instance), an instance with a startup package hands the key to the package's claim
+//! on that release, through the gate (`hand_off_startup_package`), so no dispatch can see the
+//! instance free between the start and the startup run; behind a closed gate the claim waits
+//! queued and runs after the resume. A hold that hands no startup claim over (a stop) first
+//! cancels the instance's queued startup claims (coordinator ruling on review #716). A failed
+//! preparation's admitted ladder (`record_preparation_finished`) gets the key straight from the
+//! release (H-1, P1; `release_to_preparation_ladder`), the startup claim waiting queued behind
+//! it. Workflow #369 S6c: so does a failed control that hands no startup claim over, a provider
+//! step that itself failed included (the same ruling, item 1; merge ledger :529).
 //!
 //! Workflow #369 S6c (H-5): an autostart claim drives the same start path on its own key
 //! (`drive_configured_start`), and a start it refuses before driving anything records the same
@@ -74,11 +74,13 @@
 //! #411 A50 (the production host on 10-21, after an emulator restart): an operator `start` or
 //! `restart` (and the autostart's start, which drives the same path) of an instance that has a
 //! startup package queues it whether or not the connection preparation passed, since the game the
-//! package starts is what a capture by package needs; a scheduling pause that holds the instance
-//! (its own or the global one) queues none, and the answer says why
-//! (`startup_package_withheld`). A restart launches only after the old VM has exited: when its
-//! Stop's readiness wait expired, the restart reads the emulator status as A48's self-check
-//! does (the bounded read after the failure first, then one read every
+//! package starts is what a capture by package needs. #411 A71 (10-24: a start under a pause
+//! whose package A50 withheld never ran after the resume): a scheduling pause that holds the
+//! instance (its own or the global one) no longer withholds it; the package's claim waits queued
+//! behind the pause, as a configured start's does, and runs after the resume, and the answer
+//! says which pause holds it (`startup_package_withheld`). A restart launches only after the old
+//! VM has exited: when its Stop's readiness wait expired, the restart reads the emulator status
+//! as A48's self-check does (the bounded read after the failure first, then one read every
 //! `ADB_BASELINE_POLL_INTERVAL` on the Runtime clock) until it reads stopped, at most
 //! `emulator_control.restart_exit_wait_ms` (the configuration in effect); still running at the
 //! bound, the restart fails `emulator_restart_previous_instance_running` and launches nothing.
@@ -623,10 +625,10 @@ impl HostShared {
     /// package's claim through the gate (`hand_off_startup_package`); #411 A50: when a failed
     /// preparation also admitted a ladder, the package's claim is queued and the release hands the
     /// key to the ladder (H-1, P1; `release_to_preparation_ladder`), the claim waiting behind it.
-    /// Otherwise (a stop, a pause that withheld the package) the instance's queued startup claims
-    /// are cancelled first (coordinator ruling on review #716: a startup run against a stopped
-    /// emulator is meaningless), then the release hands the key straight to the ladder a failed
-    /// preparation admitted, or to the next eligible claim.
+    /// Otherwise (a stop; #411 A71: a pause no longer withholds the package) the instance's
+    /// queued startup claims are cancelled first (coordinator ruling on review #716: a startup
+    /// run against a stopped emulator is meaningless), then the release hands the key straight to
+    /// the ladder a failed preparation admitted, or to the next eligible claim.
     fn end_emulator_control_hold(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
@@ -1406,21 +1408,21 @@ impl HostShared {
             None
         };
         // #411 A50: the startup package is queued whether or not the preparation passed (the
-        // game it starts is what a capture by package needs), unless a scheduling pause holds
-        // the instance; then none is queued and the answer says why. emu-watch (Alice's ruling
-        // 35): a configured start's package is queued under the pause too, as a gated entry
-        // that runs after the resume.
+        // game it starts is what a capture by package needs). #411 A71 (emu-watch, Alice's
+        // ruling 35: a pause holds only dispatches): a scheduling pause that holds the instance
+        // queues it too, as it does a configured start's: its claim waits queued behind the
+        // pause as a gated entry and runs after the resume, and an operator's answer says which
+        // pause holds it (`startup_package_withheld`).
         let startup_withheld = if action == EmulatorInstanceAction::Stop || mode.configured() {
             None
         } else {
             self.startup_package_withheld(&rebound)?
         };
-        let startup_package =
-            if action == EmulatorInstanceAction::Stop || startup_withheld.is_some() {
-                None
-            } else {
-                self.prepare_startup_package(&rebound, links, control_request_id)?
-            };
+        let startup_package = if action == EmulatorInstanceAction::Stop {
+            None
+        } else {
+            self.prepare_startup_package(&rebound, links, control_request_id)?
+        };
         Ok(EmulatorControlDriven {
             outcome,
             adb_wait_ms,
@@ -1432,9 +1434,10 @@ impl HostShared {
         })
     }
 
-    /// #411 A50: why an operator's start or restart of `resolved` queues no startup package
-    /// although the instance has one: its own scheduling pause holds it, or the global one does.
-    /// `None` when it has none or no pause holds it.
+    /// #411 A50, A71: which scheduling pause holds the startup package an operator's start or
+    /// restart of `resolved` queues: its own scheduling pause, or the global one; the package's
+    /// claim then waits queued behind it and runs after the resume. `None` when the instance has
+    /// no startup package or no pause holds it.
     fn startup_package_withheld(
         &self,
         resolved: &RegisteredInstance,

@@ -969,9 +969,9 @@ impl ApplicationLifecycleAction {
 }
 
 /// What emulator instance control did with the instance's configured startup package
-/// (slice #316-B3): `none` when no package is configured for the instance, the action was
-/// `stop` or (#411 A50) a scheduling pause holds the instance, `scheduled` when the host queued
-/// it for its own scheduling point.
+/// (slice #316-B3): `none` when no package is configured for the instance or the action was
+/// `stop`, `scheduled` when the host queued it for its own scheduling point (#411 A71: also
+/// while a scheduling pause holds the instance; the package then runs after the resume).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StartupPackageDisposition {
@@ -980,9 +980,10 @@ pub enum StartupPackageDisposition {
     Scheduled,
 }
 
-/// #411 A50: why an operator's emulator `start` or `restart` queued no startup package although
-/// the instance has one: a scheduling pause holds the instance. The control's answer carries it
-/// beside `startup_package: none`.
+/// #411 A50, A71: the scheduling pause that holds the startup package an operator's emulator
+/// `start` or `restart` queued: the package's claim waits queued behind it as a gated entry and
+/// runs after the resume (from A50 to A71 the package was not queued at all). The control's
+/// answer carries it beside `startup_package: scheduled`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StartupPackageWithheld {
@@ -5190,8 +5191,8 @@ pub enum RuntimeResult {
         /// contained task with its own `task.*` events; nothing runs inside this request.
         #[serde(default)]
         startup_package: StartupPackageDisposition,
-        /// #411 A50: why no startup package was queued although the instance has one (a
-        /// scheduling pause holds it); absent otherwise.
+        /// #411 A50, A71: the scheduling pause that holds the queued startup package until the
+        /// resume; absent when no pause holds it or no package was queued.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         startup_package_withheld: Option<StartupPackageWithheld>,
     },

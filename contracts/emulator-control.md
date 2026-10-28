@@ -163,7 +163,8 @@ of its shell was lost when that shell's own shutdown hung, and the instance stay
   emulator-restart rung drives its Stop through the same path and waits the same way.
 - A restart succeeds only when both phases are confirmed; it then ends exactly as a successful
   start does (connection preparation, startup package scheduling; #411 A50: the package is
-  queued whether or not the preparation passed, unless a pause holds the instance), and the
+  queued whether or not the preparation passed; #411 A71: also while a pause holds the
+  instance, and it then runs after the resume), and the
   receipt result is
   `EmulatorInstanceControlled { action: restart, .. }` with `elapsed_ms` the whole request's
   provider and ADB baseline time.
@@ -393,7 +394,7 @@ fact store (`runtime-fact-store.md`).
   "running": true,
   "adb_port": 16384,
   "elapsed_ms": 12345,
-  "startup_package": "none",
+  "startup_package": "scheduled",
   "startup_package_withheld": "instance_paused"
 }
 ```
@@ -402,9 +403,11 @@ fact store (`runtime-fact-store.md`).
 state is `completed` with the `command.validated` event as terminal. `startup_package` is
 `scheduled` when a successful `start` / `restart` handed its key to, or queued, the claim of the
 instance's configured startup package (see "Startup package hook"), `none` otherwise (nothing
-configured, a pause that holds the instance, or `stop`). #411 A50: `startup_package_withheld`
-says why an instance that has a startup package got none: `instance_paused` (its own scheduling
-pause holds it) or `scheduling_paused` (the global one does); it is absent otherwise.
+configured, or `stop`). `startup_package_withheld` (#411 A50; since 0.12.25, #411 A71) says
+which scheduling pause holds the queued startup package until the resume: `instance_paused`
+(its own scheduling pause holds it) or `scheduling_paused` (the global one does); it is absent
+otherwise. From A50 to A71 it stood beside `startup_package: none`, because a pause withheld
+the package and the resume never ran it (#411 A71).
 
 ## Startup package hook (slice #316-B3)
 
@@ -422,11 +425,14 @@ that belongs to emulator control:
 - The control request only *schedules* it, after `command.validated`, the second
   `runtime.instance_bound`, the `device.connected` fact and the connection preparation (#411
   A50: whether or not the preparation passed, since the game the package starts is what a capture
-  by package needs; before A50 only a passing one); a scheduling pause that holds the instance
-  (its own or the global one) schedules none, the answer saying why
-  (`startup_package_withheld`), and cancels the instance's queued startup claims (emu-watch:
-  except after a configured start, whose package's claim waits queued behind the pause as a
-  gated entry and runs after the resume, "Configured start at daemon start"):
+  by package needs; before A50 only a passing one). #411 A71 (since 0.12.25; emu-watch, Alice's
+  ruling 35: a pause holds only dispatches): a scheduling pause that holds the instance (its own
+  or the global one) schedules it too, as it does after a configured start ("Configured start
+  at daemon start"): the package's claim waits queued behind the pause as a gated entry and
+  runs once after the resume, and the operator's answer says which pause holds it
+  (`startup_package_withheld`). From A50 to A71 such a pause scheduled none and cancelled the
+  instance's queued startup claims, so the resume ran no startup package (10-24: a start under
+  a pause left the application unstarted after the resume). Scheduling it:
   one `runtime.lifecycle_observed` (phase `startup_package_scheduled { instance_id }`, the
   package locator in the audit machine path, links of the control request plus a freshly
   minted causation id) is appended, the control's key goes to the package's claim, and the
@@ -440,16 +446,16 @@ that belongs to emulator control:
   claim takes no `lease.granted` of its own and bypasses the queue, so no dispatch can see the
   instance free between the start and the startup run. A startup claim queued while a
   scheduling pause holds the instance or the global gate (a restored pause included; since #411
-  A50 an operator start or restart of a paused instance queues none) waits as a gated routine
-  entry: no startup run happens until the resume, whose reconnect claim runs first and whose
+  A71 again the claim of an operator start or restart of a paused instance) waits as a gated
+  routine entry: no startup run happens until the resume, whose reconnect claim runs first and whose
   release hands the key to the startup claim (`contracts/scheduling-pause.md`). #411 A50: when
   the start's failed preparation admitted a ladder, the startup claim is queued and the
   control's release hands the key to the ladder; the claim waits behind it. A claim of a kind
   that takes the admission checks passes them first; a refusal is recorded as the package's failure and the receipt still says
   `scheduled`. A new startup claim cancels one still queued for the same instance
   (`scheduler.denied lease_queue_cancelled`, warning), and so does a control whose hold hands
-  no startup claim over (a `stop`, since #411 A50 a `start` / `restart` of a paused instance,
-  before it one whose preparation failed, and since Workflow #369 S6c a failed control, one
+  no startup claim over (a `stop`; from #411 A50 to A71 a `start` / `restart` of a paused
+  instance, before A50 one whose preparation failed; and since Workflow #369 S6c a failed control, one
   whose provider step failed included): a startup run against a stopped emulator is
   meaningless, so a stop leaves no startup run at the resume. For the same reason a resume's
   reconnect or a self-check whose preparation failed and admitted no ladder cancels it before its claim's
@@ -1108,8 +1114,8 @@ one included), never holds or queues the claim and never makes it yield.
   connection preparation on the key. A passing preparation hands the key to the startup
   package through the gate ("Startup package hook"); a failing one hands it to the ladder it
   admits ("Stuck-recovery ladder"); a failed start ends the key as a failed operator control
-  does. emu-watch: unlike an operator's start, a scheduling pause does not withhold the startup
-  package (no `startup_package_withheld`): its claim waits queued behind the pause as a gated
+  does. emu-watch: a scheduling pause does not withhold the startup package (#411 A71: nor
+  after an operator's start since 0.12.25): its claim waits queued behind the pause as a gated
   entry, so the package runs only after the resume (an instance resume's reconnect first).
 - **Report.** Each outcome is one report line, which `actingd` writes as a daemon line
   (`OUTCOME actingd:` with the developer line, Workflow #378 A6a): `emulator_autostart_queued`
