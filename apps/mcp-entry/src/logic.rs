@@ -1075,6 +1075,7 @@ impl<H: Host> Core<H> {
             if self.pending.take().is_some() {
                 self.dirty = true;
             }
+            self.clear_deferral_without_plan();
             return;
         }
         let seen = matches!(&self.pending, Some((pending, _)) if *pending == stamp);
@@ -1188,6 +1189,7 @@ impl<H: Host> Core<H> {
             self.accepted = Some(run.stamp);
             self.pending = None;
             self.rejected = None;
+            self.clear_deferral_without_plan();
             if differs {
                 self.send_notices(now);
             }
@@ -1343,13 +1345,24 @@ impl<H: Host> Core<H> {
     /// candidate started, so a candidate would run the newer file under the older build's name
     /// (and one more switch would follow). The plan is dropped; `watch` sees the change, and once
     /// it settles the next plan names the build the install then holds. A deferral it waited in
-    /// stays, so its time keeps counting.
+    /// stays, so its time keeps counting, until no switch follows (see
+    /// [`Self::clear_deferral_without_plan`]).
     fn drop_stale_plan(&mut self) {
         if self.planned.take().is_some() {
             self.dirty = true;
             self.host.note(
                 "the install changed while a planned switch waited; it is planned again once the change settles",
             );
+        }
+    }
+
+    /// Fix round 1 (review L1): no switch is planned and none follows (a plan answered no
+    /// switch, or the install is back at the accepted build, as after an S2 rollback to the
+    /// current version within minutes), so nothing waits: a deferral a dropped plan left is
+    /// cleared, and the next deferral counts from its own start.
+    fn clear_deferral_without_plan(&mut self) {
+        if self.planned.is_none() && self.deferred.take().is_some() {
+            self.dirty = true;
         }
     }
 

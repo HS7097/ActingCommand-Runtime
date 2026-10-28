@@ -898,9 +898,13 @@ Every client (Claude Code, Codex, Antigravity, DSH) starts one stable entry inst
   `install_mcp_entry_list`) prints them with `stale` when the entry is gone: no process runs with
   its pid, or the one that does is another, since Windows reuses pids. That process's creation
   time differs from `process_created_at_unix_ms`, or, in a file without it (an entry before
-  v0.12.25), is later than `started_at_unix_ms`, which the entry read after it was created. A
-  process probe that cannot decide fails the command (`process_probe_failed`, `pid`, caused by
-  the probe's reason). Nothing deletes a status file.
+  v0.12.25), is later than `started_at_unix_ms`, which the entry read after it was created. Only
+  `--all` lists stale ones. A process probe that cannot decide (a session without elevation is
+  refused the query for a process of another account) answers only its own row, which is listed
+  with or without `--all`: `stale: null` and `probe_failed` (`{outcome}`: `process_probe_failed`,
+  `pid`, caused by the probe's reason). The answer then has `warnings` with one
+  `process_probe_failed` caused by each of those rows' failures (#411 P49 fix round 1, review
+  M1). Nothing deletes a status file.
 - **Registration.** `actingctl mcp-config --client claude|codex|antigravity|dsh --entry --root
   <root> [--tier …]` prints the snippet; it writes no client file.
 

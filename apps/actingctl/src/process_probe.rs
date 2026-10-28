@@ -16,7 +16,13 @@ use std::process::Command;
 /// together name one process. A probe the operating system does not decide is
 /// `process_probe_failed` with the `pid`, caused by the probe's reason.
 pub(crate) fn pid_created_at(pid: u32) -> Result<Option<u64>, Outcome> {
-    match actingcommand_host_metrics::probe_process(pid) {
+    created_at_of(pid, actingcommand_host_metrics::probe_process(pid))
+}
+
+/// [`pid_created_at`] from the operating system's answer `probe` about `pid` (fix round 1,
+/// review M1: a test feeds the answer of a refused query).
+pub(crate) fn created_at_of(pid: u32, probe: ProcessProbe) -> Result<Option<u64>, Outcome> {
+    match probe {
         ProcessProbe::Running { created_at_unix_ms } => Ok(Some(created_at_unix_ms)),
         ProcessProbe::NotRunning => Ok(None),
         ProcessProbe::Unknown(reason) => Err(Outcome::new(ActingctlCode::ProcessProbeFailed)

@@ -9,11 +9,18 @@
 // - A file without it (an entry before v0.12.25, or one whose own probe failed) is live only
 //   while the process with its pid was created no later than the file's `started_at_unix_ms`.
 // - A pid no process runs with is stale, as before; stale files are listed only with `--all`.
+// - Fix round 1 (brief rd-1028/brief-w1-10-fix1.md, review rd-1028/review-w1-10.md M1): a pid
+//   the probe cannot judge (a non-elevated session is refused the query for a process of
+//   another account: 174 of 868 locally, console hosts among them) is that row's answer, never
+//   the whole list's: `stale: null` and `probe_failed`, listed with or without `--all`, and one
+//   warning of the answer names it.
 // The probe is a fake answering for each pid; the root is a temporary folder.
 
 use super::fixture::{code, word};
 use super::mcp_entry::list_with;
+use crate::process_probe::created_at_of;
 use actingcommand_contract::outcome::Outcome;
+use actingcommand_host_metrics::{HostMetricsCode, ProcessProbe};
 use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
@@ -112,4 +119,85 @@ fn p49_l4_the_list_tells_a_reused_pid_from_the_entry_by_its_creation_time() {
             "a running process has a creation time"
         );
     }
+}
+
+#[test]
+fn p49_m1_a_pid_the_probe_cannot_judge_marks_its_row_and_the_list_still_answers() {
+    let temp = TempDir::new().expect("tempdir");
+    let root = temp.path();
+    let recorded = |pid: u32| {
+        json!({
+            "pid": pid,
+            "process_created_at_unix_ms": 5_000,
+            "started_at_unix_ms": 5_010,
+        })
+    };
+    // The entry itself, a pid another process took, and a pid whose process the operating
+    // system refuses to describe.
+    status_file(root, 101, &recorded(101));
+    status_file(root, 102, &recorded(102));
+    status_file(root, 106, &recorded(106));
+    let probe = |pid: u32| match pid {
+        106 => created_at_of(
+            pid,
+            ProcessProbe::Unknown(HostMetricsCode::ProcessQueryRefused.code()),
+        ),
+        other => created_at(other),
+    };
+
+    for all in [true, false] {
+        let mut words = vec!["--root", word(root)];
+        if all {
+            words.push("--all");
+        }
+        let answer = list_with(&words, &probe).expect("the list answers");
+        assert_eq!(code(&answer), "install_command_done", "{answer:?}");
+        let entries = answer.members["entries"].as_array().expect("entries");
+        let rows = entries
+            .iter()
+            .map(|entry| {
+                (
+                    entry["file"].as_str().expect("a file"),
+                    entry["stale"].clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut expected = vec![("entry-101.json", json!(false))];
+        if all {
+            expected.push(("entry-102.json", json!(true)));
+        }
+        expected.push(("entry-106.json", Value::Null));
+        assert_eq!(rows, expected, "--all: {all}");
+
+        // The row whose probe failed says so, with its pid and the probe's reason.
+        let failed = entries.last().expect("the row of pid 106");
+        let probe_failed = &failed["probe_failed"]["outcome"];
+        assert_eq!(probe_failed["code"], "process_probe_failed", "{failed}");
+        assert_eq!(probe_failed["values"]["pid"], 106, "{failed}");
+        assert_eq!(
+            probe_failed["causes"][0]["code"], "process_query_refused",
+            "{failed}"
+        );
+        assert_eq!(failed["status"]["pid"], 106, "{failed}");
+        for judged in &entries[..entries.len() - 1] {
+            assert!(judged.get("probe_failed").is_none(), "{judged}");
+        }
+
+        // The answer carries one warning, which names that row by its pid.
+        let warnings = answer.members["warnings"].as_array().expect("warnings");
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        let warning = &warnings[0]["outcome"];
+        assert_eq!(warning["code"], "process_probe_failed", "{warning}");
+        let named = warning["causes"]
+            .as_array()
+            .expect("the rows")
+            .iter()
+            .map(|row| (row["code"].clone(), row["values"]["pid"].clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(named, vec![(json!("process_probe_failed"), json!(106))]);
+    }
+
+    // A list whose every probe answers carries no warnings.
+    let answer = list_with(&["--root", word(root)], &created_at).expect("the list");
+    assert!(!answer.members.contains_key("warnings"), "{answer:?}");
 }
