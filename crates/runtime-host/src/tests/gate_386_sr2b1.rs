@@ -757,7 +757,7 @@ fn sr2b1_t6_the_start_settles_a_run_from_its_terminal_by_the_same_rule() {
     // A run with no terminal: its lease expired before it ran.
     let root = TempDir::new().expect("tempdir");
     let registered = instance_id();
-    fs::write(&package_path_in(&root), &package).expect("write the package");
+    fs::write(package_path_in(&root), &package).expect("write the package");
     let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
     let host = RuntimeHost::start(
         config(&root)
