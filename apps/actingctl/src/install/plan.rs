@@ -32,6 +32,8 @@ const STATE_ROOT_MEMBER: &str = "state_root";
 const DEFAULTS_FILE: &str = "actingd.defaults.json";
 /// The image that may be renamed aside while it runs.
 const RENAMABLE_IMAGE: &str = "actingctl.exe";
+/// #411 P49 (MCP-ENTRY review L9): the MCP entry's image (`<root>\mcp-entry\g<N>\`).
+const MCP_ENTRY_IMAGE: &str = "actingcommand-mcp-entry.exe";
 
 /// What is planned: an update to a kept build, or a rollback to one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -126,6 +128,25 @@ pub(crate) struct Running {
     pub(crate) renamed: Vec<RunningImage>,
     /// Running images that would change and may not be renamed (`adb.exe` among them).
     pub(crate) blocked: Vec<RunningImage>,
+    /// #411 P49 (MCP-ENTRY review L9): the pids of the MCP entries running under the root
+    /// (`actingcommand-mcp-entry.exe`). An `mcp-serve` image one of them started is switched to
+    /// the live build by that entry; its client does not reconnect.
+    #[serde(skip)]
+    pub(crate) mcp_entries: BTreeSet<u32>,
+}
+
+impl Running {
+    /// #411 P49 (MCP-ENTRY review L9): whether a renamed image serves MCP to a client that
+    /// started it itself, not through an MCP entry: that client reconnects to use the live
+    /// build.
+    fn mcp_clients_reconnect(&self) -> bool {
+        self.renamed.iter().any(|image| {
+            image.mcp_serve
+                && !image
+                    .parent_pid
+                    .is_some_and(|parent| self.mcp_entries.contains(&parent))
+        })
+    }
 }
 
 /// A computed plan.
@@ -172,7 +193,7 @@ impl Planned {
             "replaced": replaced,
             "added": added,
             "runtime_running": !self.running.runtime.is_empty(),
-            "mcp_clients_reconnect": self.running.renamed.iter().any(|image| image.mcp_serve),
+            "mcp_clients_reconnect": self.running.mcp_clients_reconnect(),
             "rollback_window_bounded": self.inputs.accept_ledger_one_way && self.one_way(),
         });
         let warnings = self
@@ -782,6 +803,9 @@ pub(crate) fn plan(host: &dyn Host, paths: &Paths, inputs: PlanInputs) -> Result
             .unwrap_or(&lower)
             .replace('\\', "/");
         let name = relative.rsplit('/').next().unwrap_or_default().to_owned();
+        if name == MCP_ENTRY_IMAGE {
+            running.mcp_entries.insert(image.pid);
+        }
         if name == programs::DAEMON {
             running.runtime.push(image);
             continue;

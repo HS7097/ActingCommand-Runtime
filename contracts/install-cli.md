@@ -260,6 +260,9 @@ stopped, and until INST-3 it leaves the configuration alone.
   `runtime\` or `tools\` refuses `foreign_part` (`path`).
 - **Notice block** for the person's notice before the change: what changes, whether MCP servers
   must reconnect, and whether the rollback window will be bounded (a one-way ledger edge).
+  `mcp_clients_reconnect` counts only a renamed `mcp-serve` image whose parent process is not an
+  MCP entry running under the root (`actingcommand-mcp-entry.exe`): an entry switches its own
+  child to the live build ("The MCP entry"; #411 P49, v0.12.25).
 
 **Apply.** Steps in order, each journalled:
 
@@ -509,7 +512,8 @@ does not read the journals of kind `stop` or `start` or with `rollback` (review 
   A stale `--plan` or a refusing guard still shows only in that log.
 - **MCP servers on old images.** `install status` lists `mcp_servers_on_old_images: [{pid,
   path, mcp_serve}]`, the running `mcp-serve` processes under the root whose image an update
-  renamed aside (`<file>.old-<ms>`); their clients reconnect.
+  renamed aside (`<file>.old-<ms>`); their clients reconnect, except an MCP entry's child, which
+  its entry switches.
 
 ### The post-start checks (INST-2)
 
@@ -661,7 +665,8 @@ the source of each range and the ranges.
 `actingctl.exe` images (MCP servers, reads) are renamed aside while running and keep running;
 `adb.exe` is never moved and `adb kill-server` is never used; any other running image under the
 root that would change refuses (`running_image_blocks`); unchanged files are never
-touched; MCP servers left on renamed images are listed so the person reconnects them.
+touched; MCP servers left on renamed images are listed so the person reconnects them (an MCP
+entry switches its own child; #411 P49).
 
 ### The rollback gate
 
@@ -857,7 +862,10 @@ Every client (Claude Code, Codex, Antigravity, DSH) starts one stable entry inst
   of the current install, never while `install\writer.lock` is held. Whether an unfinished
   operation blocks it is the plan's decision (`operation_unfinished`). The first plan after a
   child started names that child's build only if the install has not changed since the child
-  started; otherwise its build is a planned switch.
+  started; otherwise its build is a planned switch. A planned switch whose install changes again
+  before its candidate starts is dropped, and the change is planned again once it stays put for
+  `settle_ms`, so a candidate never runs a newer file under an older plan's build (#411 P49,
+  v0.12.25).
 - **The plan** (`actingctl mcp-entry plan`, operation `install_mcp_entry_plan`) prints
   `{switch, reason (build_changed, same_build, no_current_build), build {commit, manifest_sha256},
   child [exe, words…], tunables {poll_ms, settle_ms, verify_timeout_ms, drain_max_ms,
@@ -893,12 +901,23 @@ Every client (Claude Code, Codex, Antigravity, DSH) starts one stable entry inst
   `_meta["io.modelcontextprotocol/subscriptionId"]`; the entry acknowledges and owns those streams
   across children. Whether `tools/list` followed is recorded.
 - **Status.** Each entry writes `<root>\mcp-entry\state\entry-<pid>.json`
-  (`actingcommand.mcp-entry-status.v1`): generation, pid, client, protocol, child (pid, build,
-  since), previous children, last switch, deferral, last candidate failure, last plan, notice and
-  whether `tools/list` followed, and the client's refresh entry (`tools_list_changed` for Claude
-  Code, `codex_reload`, `antigravity_refresh`, `dsh_plugin_reload`, else `client_restart`).
-  `actingctl mcp-entry list --root <root> [--all]` (operation `install_mcp_entry_list`) prints
-  them with `stale` when the pid is gone. Nothing deletes a status file.
+  (`actingcommand.mcp-entry-status.v1`): generation, pid, the process's creation time as the
+  operating system reports it (`process_created_at_unix_ms`, Unix ms; `null`, with an error line
+  on the entry's stderr, when it did not say; #411 P49, v0.12.25), client, protocol, child (pid,
+  build, since), previous children, last switch, deferral, last candidate failure, last plan,
+  notice and whether `tools/list` followed, and the client's refresh entry (`tools_list_changed`
+  for Claude Code, `codex_reload`, `antigravity_refresh`, `dsh_plugin_reload`, else
+  `client_restart`). `actingctl mcp-entry list --root <root> [--all]` (operation
+  `install_mcp_entry_list`) prints them with `stale` when the entry is gone: no process runs with
+  its pid, or the one that does is another, since Windows reuses pids. That process's creation
+  time differs from `process_created_at_unix_ms`, or, in a file without it (an entry before
+  v0.12.25), is later than `started_at_unix_ms`, which the entry read after it was created. Only
+  `--all` lists stale ones. A process probe that cannot decide (a session without elevation is
+  refused the query for a process of another account) answers only its own row, which is listed
+  with or without `--all`: `stale: null` and `probe_failed` (`{outcome}`: `process_probe_failed`,
+  `pid`, caused by the probe's reason). The answer then has `warnings` with one
+  `process_probe_failed` caused by each of those rows' failures (#411 P49 fix round 1, review
+  M1). Nothing deletes a status file.
 - **Registration.** `actingctl mcp-config --client claude|codex|antigravity|dsh --entry --root
   <root> [--tier …]` prints the snippet; it writes no client file.
 

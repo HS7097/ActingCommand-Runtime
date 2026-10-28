@@ -1052,3 +1052,15 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst2_d_7c_a_failed_gate_after_a_new_start_that_exited_names_install_start",
 ]
 incident = ["#421 P12"]
+
+# #411 P49 (v0.12.25; brief rd-1028/brief-wave1.md W1-10, board #411 6444748093 and #421 6436231390, review rd-1027/mcp-entry/review.md L4, L9, L10): the entry's status file records its process creation time beside its pid, null when the operating system did not say (E-24, L4); actingctl mcp-entry list marks an entry stale when no process runs with its pid or the one that does has another creation time (recorded) or was created after the file's started_at_unix_ms (not recorded), and lists stale ones only with --all (L4); a pid the process probe cannot judge answers only its own row, listed with or without --all with stale null and probe_failed, and the answer carries one process_probe_failed warning naming those rows (fix round 1, review rd-1028/review-w1-10.md M1); the update plan's notice asks MCP clients to reconnect only for a renamed mcp-serve image not started by an MCP entry under the root, and the process probe reads each image's parent (L9); a newer install that lands while a planned switch waits drops that plan, and once it settles the one switch goes to the newest build under its own name (E-25, L10)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e24_the_status_records_the_entry_process_creation_time",
+    "actingcommand-actingctl::bin:actingctl::install::gate_411_p49::p49_l4_the_list_tells_a_reused_pid_from_the_entry_by_its_creation_time",
+    "actingcommand-actingctl::bin:actingctl::install::gate_411_p49::p49_m1_a_pid_the_probe_cannot_judge_marks_its_row_and_the_list_still_answers",
+    "actingcommand-actingctl::bin:actingctl::install::gate_inst1_update::p49_l9_the_notice_asks_no_reconnect_for_an_mcp_entrys_child",
+    "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e25_a_newer_install_during_a_deferred_switch_is_planned_again",
+]
+incident = ["#411 P49"]

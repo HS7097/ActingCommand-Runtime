@@ -22,6 +22,7 @@ use crate::logic::{
     ClientKind, Core, ENTRY_PROTOCOL, EntryConfig, GENERATION, Host, PlanEnd, Stamp,
 };
 use actingcommand_contract::outcome::{Detail, Outcome};
+use actingcommand_host_metrics::ProcessProbe;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fs::{self, File, TryLockError};
@@ -131,6 +132,7 @@ fn run(arguments: Arguments) -> ExitCode {
             child_args: arguments.child,
             client_kind: arguments.client,
             pid,
+            process_created_at_unix_ms: own_creation_time(pid),
         },
     );
     entry.start();
@@ -141,6 +143,22 @@ fn run(arguments: Arguments) -> ExitCode {
     serve(&mut entry, &receiver, &poll);
     entry.host.end_all();
     ExitCode::SUCCESS
+}
+
+/// #411 P49 (review L4): this process's creation time as the operating system reports it, the
+/// probe the owner release uses. When the operating system does not say, the entry says so on
+/// stderr and its status file records none; `actingctl mcp-entry list` then judges the file by
+/// its `started_at_unix_ms`.
+fn own_creation_time(pid: u32) -> Option<u64> {
+    match actingcommand_host_metrics::probe_process(pid) {
+        ProcessProbe::Running { created_at_unix_ms } => Some(created_at_unix_ms),
+        other => {
+            eprintln!(
+                "ERROR actingcommand-mcp-entry: cannot read its own process creation time ({other:?}); the status file records none"
+            );
+            None
+        }
+    }
 }
 
 fn serve(core: &mut Core<RealHost>, receiver: &Receiver<Event>, poll: &AtomicU64) {

@@ -424,6 +424,12 @@ per scope. The scopes of those owners, with their first record and last sequence
 are grouped from the link index over their epochs' sequence ranges when the ledger
 opens; their records are not read, and each scope close still reads its scope
 source on its own.
+#411 P51 (v0.12.25): a scope whose one record is a `client.action` (the trace of an
+action outside the Runtime, such as an MCP or Lab call; its request records nothing
+else, so the scope holds no resource and no capture) gets no close. The start reads
+that one record and passes over the scope, so the closes it writes do not grow with
+the client actions of the epoch. The scope stays among the scope sources, so the
+closes an earlier start wrote for such scopes still check on replay.
 
 These facts close only Runtime-owned sessions and cached Unconfirmed resources
 covered by the native positive evidence. They add no task terminal, LeaseReleased,

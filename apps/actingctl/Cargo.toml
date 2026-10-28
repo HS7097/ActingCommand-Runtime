@@ -24,6 +24,9 @@ mcp = []
 
 [dependencies]
 actingcommand-contract = { workspace = true }
+# #411 P49 (MCP-ENTRY review L4): `mcp-entry list` compares a status file's pid and recorded
+# process creation time with the operating system's (the probe the owner release uses).
+actingcommand-host-metrics = { workspace = true }
 # #422 LN-7c Q: `evidence confirm-read` counts the evidence frames a confirmation covers with the
 # frame cleaner's statements, read-only (`evidence_covers`).
 actingcommand-ledger = { workspace = true }

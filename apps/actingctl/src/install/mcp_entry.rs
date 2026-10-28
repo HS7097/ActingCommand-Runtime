@@ -13,13 +13,19 @@
 //!   read before the installed files are hashed, and every refusal after that read carries
 //!   `tunables` too (fix round 1, review M4).
 //! - `list --root <root> [--all]` prints the entries' status files
-//!   (`<root>\mcp-entry\state\entry-<pid>.json`), each with `stale` when its pid is gone; stale
-//!   ones only with `--all`. Nothing is deleted.
+//!   (`<root>\mcp-entry\state\entry-<pid>.json`), each with `stale` when its process is gone:
+//!   no process runs with its pid, or the one that does is another (#411 P49, review L4: its
+//!   creation time differs from the file's `process_created_at_unix_ms`, or, in a file without
+//!   that, is later than its `started_at_unix_ms`); stale ones only with `--all`. A file whose
+//!   pid the probe cannot judge (fix round 1, review M1: the operating system refuses the query
+//!   for a process of another account) is listed always, with `stale: null` and `probe_failed`
+//!   (`process_probe_failed`, `pid`, caused by the probe's reason), and the answer's `warnings`
+//!   holds one `process_probe_failed` caused by each of them. Nothing is deleted.
 
 use super::state::{self, Paths};
 use super::{Answer, Flags, adopt, files, refusal, resolve_root};
 use crate::cli_line;
-use crate::codes::{ArgumentProblem, InstallLocation, InstallRefusal};
+use crate::codes::{ActingctlCode, ArgumentProblem, InstallLocation, InstallRefusal};
 use actingcommand_contract::outcome::{IoOp, Outcome};
 use serde::Serialize;
 use serde_json::Value;
@@ -185,12 +191,41 @@ fn install_settings(
 
 /// `mcp-entry list` (D6).
 pub(super) fn list(words: &[&str]) -> Result<Answer, Outcome> {
+    list_with(words, &crate::process_probe::pid_created_at)
+}
+
+/// The creation time of the process now running with a pid (`None`: none runs), or why it
+/// could not be read: the operating system's probe, a fake in tests.
+pub(super) type CreatedAt<'a> = &'a dyn Fn(u32) -> Result<Option<u64>, Outcome>;
+
+/// #411 P49 (MCP-ENTRY review L4): whether the process now running with the status file's pid,
+/// created at `created` (Unix milliseconds), is the entry that wrote `status`. Windows reuses
+/// pids, so the pid alone is not enough. An entry records its own creation time
+/// (`process_created_at_unix_ms`), which must be the same. A file without it (an entry before
+/// v0.12.25, or one whose own probe failed) is matched by `started_at_unix_ms`, which the entry
+/// read after it was created: a process created later is another one.
+fn same_process(status: &Value, created: u64) -> bool {
+    match status
+        .get("process_created_at_unix_ms")
+        .and_then(Value::as_u64)
+    {
+        Some(recorded) => recorded == created,
+        None => status
+            .get("started_at_unix_ms")
+            .and_then(Value::as_u64)
+            .is_some_and(|started| created <= started),
+    }
+}
+
+/// `mcp-entry list` with the probe `created_at`.
+pub(super) fn list_with(words: &[&str], created_at: CreatedAt<'_>) -> Result<Answer, Outcome> {
     let operation = InstallLocation::McpEntryList;
     let flags = Flags::parse(words, &["--root"], &["--all"])?;
     let paths = resolve_root(&flags)?;
     let all = flags.switch("--all");
     let directory = paths.root.join("mcp-entry").join("state");
     let mut entries = Vec::new();
+    let mut probe_failures = Vec::new();
     let listing = match fs::read_dir(&directory) {
         Ok(listing) => Some(listing),
         Err(error) if error.kind() == ErrorKind::NotFound => None,
@@ -223,16 +258,38 @@ pub(super) fn list(words: &[&str]) -> Result<Answer, Outcome> {
             .get("pid")
             .and_then(Value::as_u64)
             .and_then(|pid| u32::try_from(pid).ok());
-        let alive = match pid {
-            Some(pid) => crate::process_probe::pid_alive(pid)?,
-            None => false,
+        let alive = match pid.map(created_at).transpose() {
+            Ok(created) => created
+                .flatten()
+                .is_some_and(|created| same_process(&status, created)),
+            // Fix round 1 (review M1): a pid the probe cannot judge is this row's answer, never
+            // the whole list's; the row is listed with or without `--all`.
+            Err(failure) => {
+                entries.push(serde_json::json!({
+                    "file": name,
+                    "stale": null,
+                    "probe_failed": cli_line::warning(&failure),
+                    "status": status,
+                }));
+                probe_failures.push(failure);
+                continue;
+            }
         };
         if !alive && !all {
             continue;
         }
         entries.push(serde_json::json!({"file": name, "stale": !alive, "status": status}));
     }
-    Answer::new(super::done(operation))
+    let answer = Answer::new(super::done(operation))
         .with("state_dir", files::plain(&directory))?
-        .with("entries", entries)
+        .with("entries", entries)?;
+    if probe_failures.is_empty() {
+        return Ok(answer);
+    }
+    // One warning naming the rows: `process_probe_failed` caused by each row's failure (its pid).
+    let warning = probe_failures.into_iter().fold(
+        Outcome::new(ActingctlCode::ProcessProbeFailed),
+        |warning, failure| warning.caused_by(failure),
+    );
+    answer.with("warnings", [cli_line::warning(&warning)])
 }

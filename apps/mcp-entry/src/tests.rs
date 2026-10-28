@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Workflow #421 MCP-ENTRY, test rows E-1 to E-11, and fix round 1's E-13, E-14, E-16 and E-18
-//! to E-23: the entry's logic with a fake child and a fake clock (no process, no sleep).
+//! Workflow #421 MCP-ENTRY, test rows E-1 to E-11, fix round 1's E-13, E-14, E-16 and E-18 to
+//! E-23, and #411 P49's E-24 and E-25: the entry's logic with a fake child and a fake clock (no
+//! process, no sleep).
 
 use crate::logic::{ClientKind, Core, EntryConfig, Host, PlanEnd, Stamp};
 use serde_json::{Value, json};
@@ -75,6 +76,10 @@ impl Host for FakeHost {
 const ARGS: [&str; 3] = ["mcp-serve", "--tier", "observer,operator"];
 const OLD: &str = "1111111111111111111111111111111111111111";
 const NEW: &str = "2222222222222222222222222222222222222222";
+/// #411 P49: a third build, installed while a switch to `NEW` waits (review L10).
+const NEWER: &str = "3333333333333333333333333333333333333333";
+/// #411 P49: the fake entry process's creation time (review L4).
+const PROCESS_CREATED_MS: u64 = 999_000;
 
 fn entry() -> Core<FakeHost> {
     let host = FakeHost {
@@ -84,15 +89,7 @@ fn entry() -> Core<FakeHost> {
         },
         ..FakeHost::default()
     };
-    let mut entry = Core::new(
-        host,
-        EntryConfig {
-            default_exe: "ROOT/runtime/actingctl.exe".to_owned(),
-            child_args: ARGS.iter().map(|word| (*word).to_owned()).collect(),
-            client_kind: Some(ClientKind::Codex),
-            pid: 77,
-        },
-    );
+    let mut entry = Core::new(host, config());
     entry.start();
     // The first plan names the first child's build.
     assert_eq!(entry.host.plans, vec![None]);
@@ -628,6 +625,7 @@ fn config() -> EntryConfig {
         child_args: ARGS.iter().map(|word| (*word).to_owned()).collect(),
         client_kind: Some(ClientKind::Codex),
         pid: 77,
+        process_created_at_unix_ms: Some(PROCESS_CREATED_MS),
     }
 }
 
@@ -922,5 +920,103 @@ fn e23_a_zero_count_is_ignored_after_a_call_reached_the_child() {
         1,
         &json!({"jsonrpc": "2.0", "id": again["id"], "result": zero}),
     );
+    assert_eq!(entry.host.spawned.len(), 2);
+}
+
+// ---- #411 P49 (brief rd-1028/brief-wave1.md W1-10; review rd-1027/mcp-entry/review.md L4, L10) --
+
+/// E-24 (review L4): the status file records the entry process's creation time beside its pid,
+/// so a reused pid can be told apart; none when the operating system did not say.
+#[test]
+fn e24_the_status_records_the_entry_process_creation_time() {
+    let entry = entry();
+    assert_eq!(entry.host.status["pid"], 77);
+    assert_eq!(
+        entry.host.status["process_created_at_unix_ms"],
+        PROCESS_CREATED_MS
+    );
+
+    let host = FakeHost {
+        now: 1_000_000,
+        stamp: Stamp {
+            files: vec![Some((10, 1))],
+        },
+        ..FakeHost::default()
+    };
+    let mut entry = Core::new(
+        host,
+        EntryConfig {
+            process_created_at_unix_ms: None,
+            ..config()
+        },
+    );
+    entry.start();
+    assert_eq!(entry.host.status["pid"], 77);
+    assert_eq!(entry.host.status["process_created_at_unix_ms"], Value::Null);
+}
+
+/// E-25 (review L10): a newer install that lands while a planned switch waits for a handle drops
+/// that plan. Once the change settles the next plan names the newest build, and the one switch
+/// goes to it under its own name; no further switch follows.
+#[test]
+fn e25_a_newer_install_during_a_deferred_switch_is_planned_again() {
+    let mut entry = entry();
+    legacy_session(&mut entry);
+    answered_call(&mut entry, 5, "ac_lab_do");
+    plan_switch(&mut entry);
+    serve_internal(
+        &mut entry,
+        1,
+        "2025-11-25",
+        &json!({"outstanding_handles": 1, "kinds": ["lab"], "handles": ["lab_1"], "calls_in_flight": 0}),
+    );
+    assert_eq!(
+        entry.host.spawned.len(),
+        1,
+        "the switch to NEW waits for the handle"
+    );
+    assert_eq!(entry.host.status["deferred"]["kind"], "handles");
+
+    // NEWER lands while the switch waits: the plan for NEW is dropped and no candidate starts.
+    entry.host.stamp = Stamp {
+        files: vec![Some((30, 3))],
+    };
+    entry.tick();
+    assert_eq!(entry.host.spawned.len(), 1);
+    assert_eq!(
+        entry.host.plans.len(),
+        2,
+        "no plan before the change settles"
+    );
+    entry.host.now += 5_000;
+    entry.tick();
+    assert_eq!(
+        entry.host.plans.len(),
+        3,
+        "the settled change is planned again"
+    );
+    assert_eq!(entry.host.plans[2], Some(OLD.to_owned()));
+    entry.plan_done(PlanEnd::Answered(plan(true, NEWER)));
+
+    // The handle is read: the one candidate starts under NEWER and becomes current.
+    serve_internal(
+        &mut entry,
+        1,
+        "2025-11-25",
+        &json!({"outstanding_handles": 0, "kinds": [], "handles": [], "calls_in_flight": 0}),
+    );
+    assert_eq!(entry.host.spawned.len(), 2, "one candidate");
+    serve_internal(&mut entry, 2, "2025-11-25", &json!({}));
+    assert_eq!(entry.current_child(), Some(2));
+    assert_eq!(entry.host.status["child"]["build"], NEWER);
+    assert_eq!(entry.host.status["last_switch"]["from_build"], OLD);
+    assert_eq!(entry.host.status["last_switch"]["to_build"], NEWER);
+
+    // The install stays put: no further plan and no further switch.
+    entry.host.now += 5_000;
+    entry.tick();
+    entry.host.now += 5_000;
+    entry.tick();
+    assert_eq!(entry.host.plans.len(), 3);
     assert_eq!(entry.host.spawned.len(), 2);
 }

@@ -354,6 +354,10 @@ pub(crate) struct EntryConfig {
     pub(crate) child_args: Vec<String>,
     pub(crate) client_kind: Option<ClientKind>,
     pub(crate) pid: u32,
+    /// #411 P49 (review L4): the entry process's creation time as the operating system reports
+    /// it, in Unix milliseconds; `None` when the operating system did not say. With the pid it
+    /// names this process: `actingctl mcp-entry list` compares both, since pids are reused.
+    pub(crate) process_created_at_unix_ms: Option<u64>,
 }
 
 pub(crate) struct Core<H: Host> {
@@ -1027,14 +1031,18 @@ impl<H: Host> Core<H> {
     }
 
     fn watch(&mut self, now: u64) {
-        if self.current.is_none()
-            || self.plan_running.is_some()
-            || self.planned.is_some()
-            || self.starting.is_some()
-        {
+        if self.current.is_none() || self.plan_running.is_some() || self.starting.is_some() {
             return;
         }
         let stamp = self.host.stamp();
+        // #411 P49 (review L10): a planned switch waits (for handles, a call, the writer lock)
+        // while the install it was planned for stays put; a newer install drops it, and the
+        // change below is planned again once it settles.
+        match self.planned.as_ref().map(|planned| planned.stamp == stamp) {
+            Some(true) => return,
+            Some(false) => self.drop_stale_plan(),
+            None => {}
+        }
         if self
             .rejected
             .as_ref()
@@ -1067,6 +1075,7 @@ impl<H: Host> Core<H> {
             if self.pending.take().is_some() {
                 self.dirty = true;
             }
+            self.clear_deferral_without_plan();
             return;
         }
         let seen = matches!(&self.pending, Some((pending, _)) if *pending == stamp);
@@ -1180,6 +1189,7 @@ impl<H: Host> Core<H> {
             self.accepted = Some(run.stamp);
             self.pending = None;
             self.rejected = None;
+            self.clear_deferral_without_plan();
             if differs {
                 self.send_notices(now);
             }
@@ -1266,6 +1276,12 @@ impl<H: Host> Core<H> {
         };
         let exe = planned.exe.clone();
         let build = planned.build.commit.clone();
+        // #411 P49 (review L10): the candidate would run the file the install holds now under
+        // the plan's build; a plan the install moved past is planned again instead.
+        if self.host.stamp() != planned.stamp {
+            self.drop_stale_plan();
+            return;
+        }
         match self.spawn_slot(&exe, Some(build.clone())) {
             Ok(slot) => self.begin(slot, Purpose::Switch),
             Err(error) => {
@@ -1323,6 +1339,31 @@ impl<H: Host> Core<H> {
             spawn_stamp,
             previous_build: None,
         })
+    }
+
+    /// #411 P49 (review L10): the install changed after the plan named its build and before a
+    /// candidate started, so a candidate would run the newer file under the older build's name
+    /// (and one more switch would follow). The plan is dropped; `watch` sees the change, and once
+    /// it settles the next plan names the build the install then holds. A deferral it waited in
+    /// stays, so its time keeps counting, until no switch follows (see
+    /// [`Self::clear_deferral_without_plan`]).
+    fn drop_stale_plan(&mut self) {
+        if self.planned.take().is_some() {
+            self.dirty = true;
+            self.host.note(
+                "the install changed while a planned switch waited; it is planned again once the change settles",
+            );
+        }
+    }
+
+    /// Fix round 1 (review L1): no switch is planned and none follows (a plan answered no
+    /// switch, or the install is back at the accepted build, as after an S2 rollback to the
+    /// current version within minutes), so nothing waits: a deferral a dropped plan left is
+    /// cleared, and the next deferral counts from its own start.
+    fn clear_deferral_without_plan(&mut self) {
+        if self.planned.is_none() && self.deferred.take().is_some() {
+            self.dirty = true;
+        }
     }
 
     /// The planned switch's candidate failed: its stamp is rejected (review L2 keeps whether
@@ -1692,6 +1733,7 @@ impl<H: Host> Core<H> {
             "entry_generation": GENERATION,
             "entry_protocol": ENTRY_PROTOCOL,
             "pid": self.config.pid,
+            "process_created_at_unix_ms": self.config.process_created_at_unix_ms,
             "started_at_unix_ms": self.started_ms,
             "updated_at_unix_ms": self.host.now_ms(),
             "closing": self.closing,

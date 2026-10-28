@@ -189,6 +189,7 @@ fn image(root: &Path, relative: &str, pid: u32, mcp_serve: bool) -> RunningImage
         pid,
         path: format!("{}\\{}", plain_root(root), relative.replace('/', "\\")),
         mcp_serve,
+        parent_pid: None,
     }
 }
 
@@ -1725,4 +1726,62 @@ fn inst1_fix1_9_status_check_rollback_evaluates_the_whole_gate() {
         "{gate}"
     );
     assert_eq!(refused["values"]["ledger_sequence"], json!(120), "{gate}");
+}
+
+/// #411 P49 (brief rd-1028/brief-wave1.md W1-10; MCP-ENTRY review L9): the update plan's notice
+/// asks for MCP clients to reconnect only when a renamed `mcp-serve` image was started by a
+/// client itself. One that an MCP entry under the root started is switched to the live build by
+/// that entry. The process probe reads each image's parent.
+#[test]
+fn p49_l9_the_notice_asks_no_reconnect_for_an_mcp_entrys_child() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let live = BuildSpec::new(C1);
+    let target = BuildSpec::new(C2);
+    let root = prepared(temp.path(), "root", &live, &target, &host);
+    let entry = image(&root, "mcp-entry/g1/actingcommand-mcp-entry.exe", 50, false);
+    let child = RunningImage {
+        parent_pid: Some(50),
+        ..image(&root, "runtime/actingctl.exe", 77, true)
+    };
+    host.processes.replace(vec![entry.clone(), child]);
+    let planned = plan_update(&host, &root, C2, &[]);
+    assert_done(&planned, "install_update_plan");
+    assert_eq!(
+        planned.members["running"]["renamed"][0]["pid"],
+        json!(77),
+        "{planned:?}"
+    );
+    assert_eq!(
+        planned.members["notice"]["mcp_clients_reconnect"],
+        json!(false),
+        "{planned:?}"
+    );
+
+    // A server a client started itself: that client reconnects.
+    let direct = RunningImage {
+        parent_pid: Some(60),
+        ..image(&root, "runtime/actingctl.exe", 78, true)
+    };
+    host.processes.replace(vec![entry, direct]);
+    let planned = plan_update(&host, &root, C2, &[]);
+    assert_done(&planned, "install_update_plan");
+    assert_eq!(
+        planned.members["notice"]["mcp_clients_reconnect"],
+        json!(true),
+        "{planned:?}"
+    );
+    host.processes.replace(Vec::new());
+
+    // The probe's row names the parent.
+    let plain = super::files::plain(&root);
+    let rows = json!([{
+        "pid": 77,
+        "path": format!("{plain}\\runtime\\actingctl.exe"),
+        "mcp": true,
+        "parent": 50,
+    }]);
+    let parsed = super::host::parse_processes(&rows.to_string(), &root).expect("the probe's rows");
+    assert_eq!(parsed.len(), 1, "{parsed:?}");
+    assert_eq!(parsed[0].parent_pid, Some(50));
 }

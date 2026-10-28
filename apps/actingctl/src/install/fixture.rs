@@ -460,6 +460,7 @@ impl Host for FakeHost {
                     super::files::plain(root)
                 ),
                 mcp_serve: false,
+                parent_pid: None,
             });
         }
         Ok(images)

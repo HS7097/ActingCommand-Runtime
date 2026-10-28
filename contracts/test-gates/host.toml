@@ -2507,3 +2507,11 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_411_a35::a56_t2_an_unrecognised_changing_screen_still_holds_at_the_recheck",
 ]
 incident = ["#411 A56"]
+
+# #411 P51 (v0.12.25; brief rd-1028/brief-wave1.md W1-10, board #411 6437869880; production 10-27: a start wrote 1 651 prior-epoch scope closes, 1 559 of them for the request scopes of MCP's client.action records after ac_lab_observe): N client actions of an instance in one epoch, then a restart on the same state root: the next start writes no close for their scopes, for N = 1 and N = 4 alike, so its closes do not grow with them
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_p51::p51_the_next_start_closes_no_scope_of_an_epochs_client_actions",
+]
+incident = ["#411 P51"]
