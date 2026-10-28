@@ -36,7 +36,10 @@
 //!   so what follows pins a failed start, not a startup package that ran).
 //! - O-2, review M-1 (rd-1028/brief-w1-2-fix1.md): the same restart with `stop_emulator`: the
 //!   wake's configured start finds the emulator the first wake started running, and still queues
-//!   the startup package, which runs once after the restart and the pause's end.
+//!   the startup package, which runs once after the restart and the pause's end. Adapted for it
+//!   (rd-1028 W1-2 fix round 2): N-1 with `stop_emulator`, whose wake's start finds X's emulator
+//!   running, now sees that start queue the startup package once, and X stays woken until the
+//!   startup claim has given X's key up (O-2), so the next plan is checked only after that.
 //! - N-2: the record is bound to the start anchor (`host.contained_settlement`), not to the latest
 //!   owner: an owner in between that settled no start leaves it current. Adapted for it: the
 //!   writer row `kept_record` and `kept_history` read (`start_anchor`, was `owner_epoch`), and M-2's
@@ -784,6 +787,68 @@ fn await_key(host: &RuntimeHost, claim: RequestId) {
     }
 }
 
+/// #405 O-2, review M-1: waits until X's startup claim `claim` has given X's key up and X is free.
+/// After the claim was requested, X's key is released twice: by the wake's configured emulator
+/// start, which hands it to the claim, then by the claim (its run's release, completed or failed,
+/// or the claim's own after a refused preparation). A release is recorded once the key is free;
+/// the release holds X's admission guard until it returns, so the guard is then taken and let go.
+fn await_startup_claim_end(host: &RuntimeHost, x: InstanceId, claim: RequestId) {
+    let mut after = of_request(host, claim)
+        .first()
+        .map(PersistedEvent::sequence)
+        .expect("the startup claim's request");
+    for release in ["the wake's start's release", "the startup claim's release"] {
+        after = await_release(host, x, after, release);
+    }
+    let admission = host
+        .instance_admission_for_test(X_ALIAS)
+        .expect("X's admission guard");
+    drop(admission.lock().expect("X's admission guard"));
+}
+
+/// The sequence of X's next key release after `after` (`what`); each wait is a ledger subscription
+/// that answers as soon as one is written, as in [`await_key`].
+fn await_release(host: &RuntimeHost, x: InstanceId, after: u64, what: &str) -> u64 {
+    let query = EventQuery {
+        event_type: Some(EventType::LeaseReleased),
+        instance_id: Some(x),
+        from_sequence: Some(after + 1),
+        ..EventQuery::default()
+    };
+    let empty_answers = WAIT
+        .as_millis()
+        .div_ceil(u128::from(MAX_RUNTIME_SUBSCRIPTION_WAIT_MS));
+    for _ in 0..empty_answers {
+        let subscription = RuntimeSubscriptionRequest::new(
+            query.clone(),
+            ProjectionProfile::Forensic,
+            SubscriptionCursor::default(),
+            MAX_RUNTIME_SUBSCRIPTION_WAIT_MS,
+            1,
+        )
+        .expect("subscription request");
+        let receipt = send(
+            host,
+            RuntimeOperation::SubscribeEvents {
+                request: subscription,
+            },
+            4_404,
+        );
+        let Some(RuntimeResult::EventBatch { batch }) = receipt.result() else {
+            panic!("an event batch: {receipt:?}");
+        };
+        if !batch.timed_out() {
+            return host
+                .query_persisted_events_for_test(query)
+                .expect("X's key releases")
+                .first()
+                .map(PersistedEvent::sequence)
+                .expect(what);
+        }
+    }
+    panic!("{what}: X's key was not released within the wait");
+}
+
 /// X paused with `reason`, as a person or the installer's hold pauses it.
 fn pause_x(host: &RuntimeHost, reason: &str) {
     let receipt = send(
@@ -806,8 +871,10 @@ fn pause_x(host: &RuntimeHost, reason: &str) {
 /// earlier start kept none), with X's only work waiting for a status reading that expired
 /// meanwhile. Its plan has no task due and no task wake, and the reading alone wakes nothing, yet
 /// X is woken once at the start's first check. Its wake's configured emulator start finds X's
-/// emulator running and starts nothing; the next plan, after the reading, closes X again with its
-/// proper wake: the task's next wake minus the lead.
+/// emulator running and starts nothing; since review M-1 (0.12.25) it still queues X's startup
+/// package once, and X stays woken until that claim has given X's key up (#405 O-2). The next
+/// plan, after the reading, then closes X again with its proper wake: the task's next wake minus
+/// the lead.
 #[test]
 fn idle1p_n1_an_unknown_start_wakes_an_instance_whose_work_waits_for_an_expired_reading() {
     let root = TempDir::new().expect("tempdir");
@@ -854,6 +921,15 @@ fn idle1p_n1_an_unknown_start_wakes_an_instance_whose_work_waits_for_an_expired_
             .contains(&EmulatorCall::Control(EmulatorInstanceAction::Start)),
         "X's running emulator is not started"
     );
+    // Review M-1 (0.12.25, adapted): the wake's start, which found X's emulator running, still
+    // queued the startup package once, and X stays woken while that claim holds it (#405 O-2):
+    // the next plan meets X free only once the claim has given X's key up.
+    assert_eq!(
+        startups_scheduled(&host, x, 0),
+        1,
+        "the wake's start queues the startup package once"
+    );
+    await_startup_claim_end(&host, x, startup_claim(&host, x));
 
     // The next plan, after the reading: the task wakes at the fresh status's expiry + 1.
     let fresh_at = started_at + MINUTE_MS;
