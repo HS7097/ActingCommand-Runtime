@@ -660,7 +660,7 @@ pub(crate) static ROWS: &[KeyRow] = &[
     // Workflow #427-A: read by actingd at the start of every policy round, so an instruction
     // takes effect at the next round; a run already handed to a worker finishes there.
     KeyRow {
-        since: "0.12.21",
+        since: "0.12.22",
         ..row(
             PARALLEL_ENABLED,
             ValueType::Boolean,

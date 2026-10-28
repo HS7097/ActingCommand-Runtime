@@ -1895,6 +1895,8 @@ impl RuntimeHost {
             policy_sample_hook_for_test: Mutex::new(None),
             #[cfg(any(test, feature = "test-hooks"))]
             policy_snapshot_changes_for_test: AtomicU64::new(0),
+            #[cfg(any(test, feature = "test-hooks"))]
+            pause_lane_wait_hook_for_test: Mutex::new(None),
             #[cfg(test)]
             worker_panic_for_test: AtomicBool::new(false),
             #[cfg(test)]
@@ -3509,6 +3511,41 @@ impl RuntimeHost {
             .policy_snapshot_changes_for_test
             .store(count, Ordering::Release);
         Ok(())
+    }
+
+    /// Workflow #427-A fix 1, test builds and the `test-hooks` feature: runs `hook` once, the
+    /// first time a scheduling pause's release waits for a policy run an instance worker holds
+    /// (`release_paused_instance`), on the pause's thread.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn run_when_pause_waits_for_lane_for_test(
+        &self,
+        hook: Box<dyn FnOnce() + Send>,
+    ) -> RuntimeHostResult<()> {
+        let shared = self.shared_ref(HostLocation::ReadPolicyRunsInFlight)?;
+        *lock(
+            &shared.pause_lane_wait_hook_for_test,
+            HostLocation::ReadPolicyRunsInFlight,
+        )? = Some(hook);
+        Ok(())
+    }
+
+    /// Workflow #427-A fix 1, test builds: whether a policy dispatch could go to the instance
+    /// `instance_alias` names now (the admission's occupancy: no holder, no eligible waiting
+    /// claim, no registered policy run and no takeover cooldown).
+    #[cfg(test)]
+    pub(crate) fn policy_instance_free_for_test(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<bool> {
+        let shared = self.shared_ref(HostLocation::ReadPolicyRunsInFlight)?;
+        let instance_id = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        let now_unix_ms = shared.runtime_clock_sample()?.unix_ms;
+        Ok(shared
+            .instance_occupancy(instance_id, now_unix_ms)?
+            .is_none())
     }
 
     /// Workflow #427-A, test builds and the `test-hooks` feature: requests the host's stop as
@@ -5335,6 +5372,10 @@ struct HostShared {
     policy_sample_hook_for_test: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     #[cfg(any(test, feature = "test-hooks"))]
     policy_snapshot_changes_for_test: AtomicU64,
+    // Workflow #427-A fix 1, test builds and the `test-hooks` feature: the hook a scheduling
+    // pause's release runs once when it waits for a policy run an instance worker holds.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pause_lane_wait_hook_for_test: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     #[cfg(test)]
     worker_panic_for_test: AtomicBool,
     // Workflow #387 D1c-G, test only: the next task frame's geometry reads a zero width.

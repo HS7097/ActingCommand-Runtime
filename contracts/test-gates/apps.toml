@@ -979,3 +979,11 @@ tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::gate_427a::lanes_t8_the_switch_is_off_by_default_and_an_instruction_turns_it_on_at_the_next_round",
 ]
 incident = ["#427-A"]
+
+# Workflow #427-A fix 1 (brief rd-1028/brief-427a-fix1.md item 5; review rd-1028/review-427a.md L1 and its item 10): a scheduling pause requested after the round handed a run to its instance's worker, while the worker holds it as it took it, does not fail the run: the pause's release waits for it, the run goes ahead as the synchronous round's run admitted before a pause does and is settled once as a success (never as a failure nor refused, so the pair's failure streak is unchanged), then the pause completes
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_427a::lanes_t9_a_pause_after_the_hand_off_does_not_fail_the_run_handed_off",
+]
+incident = ["#427-A"]

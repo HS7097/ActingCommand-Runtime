@@ -6,9 +6,9 @@
 // (`execute_policy_cycle_on` with the driver's lane sink, `DriverLaneSink`); the interleavings are
 // forced with the host's lane hook (a run held on its worker when the worker took it, or after its
 // terminal and lease release and before its settlement) and the C1 hook between an evaluation's
-// sample and its validation. No sleep: every wait returns as soon as its message arrives; `WAIT`
-// only bounds a broken run. Every expected value comes from the brief and the plan, not from what
-// the code does today:
+// sample and its validation. No sleep: every wait returns as soon as its message arrives;
+// `GATE_WAIT` only bounds a broken run. Every expected value comes from the brief and the plan, not
+// from what the code does today:
 //
 // - lanes_t1: a long run on A does not hold the round nor B's run; A's next round finds A free.
 // - lanes_t2: frozen at "terminal written, lease released, not settled": no second dispatch on A,
@@ -21,21 +21,31 @@
 // - lanes_t6: a shutdown before a handed run was taken refuses it (settled as not performed); one
 //   after it was taken lets it finish and settle.
 // - lanes_t7: a worker panic drops the run, leaves its instance occupied (registration abandoned,
-//   for the reconciliation) and wakes the driver; the other instance's run completes.
+//   for the reconciliation) and wakes the driver; the other instance's run completes. While the
+//   run's lease is active a reconciliation leaves it, and the next round defers its instance (fix
+//   1); its settlement once the lease lapsed is runtime-host's gate_427a_m1.
 // - lanes_t8: the switch is off by default, so the daemon's round runs a scheduled run itself; an
-//   instruction turns it on and the next round hands its runs to the workers.
+//   instruction turns it on and the next round hands its runs to the workers. The host carries
+//   the switch's row as actingd's configuration assembles it (fix 1, review H3).
+// - lanes_t9 (fix 1, review L1): a scheduling pause after the hand-off does not fail the run: it
+//   goes ahead and is settled as a success while the pause waits for it, then the pause completes.
 
 use super::gate_382_a4_cycle::{
     Screen, activate, dispatch_record, dispatch_records, ledger_events, run_of, run_records, start,
+    start_with,
 };
 use super::*;
-use actingcommand_contract::{ConfigSettingChange, EventActor, EventSource, EventType};
+use actingcommand_contract::{
+    ConfigSettingChange, EventActor, EventPayload, EventSource, EventType,
+    MAX_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS, PolicyExecutionOutcome, PolicyPayload,
+    RuntimeConfigManifest, SchedulingPauseReason, SchedulingPauseScope,
+};
 use actingcommand_runtime_client::{RuntimeChannel, RuntimeClient, RuntimeClientConfig};
 use actingcommand_runtime_host::{PolicyLaneHook, PolicyLanePoint};
 use std::sync::mpsc;
 use tempfile::TempDir;
 
-const WAIT: Duration = Duration::from_secs(120);
+const GATE_WAIT: Duration = Duration::from_secs(120);
 const A: &str = "fixture-instance-a";
 const B: &str = "fixture-instance-b";
 // The harness's instant (gate_382_a4_cycle): an occurrence of catalog-a's hourly clock trigger.
@@ -48,7 +58,7 @@ fn end_of(
     alias: &str,
 ) -> Result<Ended, mpsc::RecvTimeoutError> {
     loop {
-        let (instance, end) = ended.recv_timeout(WAIT)?;
+        let (instance, end) = ended.recv_timeout(GATE_WAIT)?;
         if instance == alias {
             return Ok(end);
         }
@@ -126,7 +136,7 @@ fn hold_at(host: &RuntimeHost, alias: &'static str, point: PolicyLanePoint) -> H
                 let _ = sender.send(());
             }
             if let Ok(receiver) = release_receiver.lock() {
-                let _ = receiver.recv_timeout(WAIT);
+                let _ = receiver.recv_timeout(GATE_WAIT);
             }
         }
     });
@@ -190,6 +200,67 @@ fn completions(root: &Path, decision_id: &str) -> usize {
         .count()
 }
 
+// How the policy recorded each execution of `decision_id` (its settlement), in ledger order.
+fn executions(root: &Path, decision_id: &str) -> Vec<PolicyExecutionOutcome> {
+    ledger_events(root)
+        .iter()
+        .filter_map(|event| match event.payload() {
+            EventPayload::Policy(PolicyPayload::ExecutionRecorded(execution))
+                if execution.decision_id() == decision_id =>
+            {
+                Some(execution.policy_result().clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+// Whether the round's evaluation deferred `alias` as held by a policy dispatch (the evaluator's
+// `dispatch_instance_held` with `holder_kind=policy_dispatch`).
+fn held_by_policy_dispatch(execution: &PolicyCycleExecution, alias: &str) -> bool {
+    execution
+        .cycle
+        .evaluation
+        .as_ref()
+        .expect("an evaluation")
+        .decisions
+        .iter()
+        .filter(|decision| decision.instance_id.as_deref() == Some(alias))
+        .flat_map(|decision| decision.reasons.iter())
+        .any(|reason| {
+            reason.outcome.code().as_str() == "dispatch_instance_held"
+                && reason.outcome.value("holder_kind")
+                    == Some(&serde_json::json!("policy_dispatch"))
+        })
+}
+
+// Fix 1 (review H3): the switch's row as actingd's configuration assembles it (`config.rs`:
+// `render_parameters` over the key table and the shipped defaults file, then `annotate_settable`).
+// A host without a configuration manifest has no setting to change, so an instruction is refused
+// (`config_key_unknown`).
+fn switch_manifest() -> RuntimeConfigManifest {
+    let (row, _) = actingcommand_runtime_config::find_row(
+        actingcommand_runtime_config::scheduling::PARALLEL_ENABLED,
+    )
+    .expect("the switch's row in the key table");
+    let (_, defaults) =
+        actingcommand_runtime_config::DefaultsFile::shipped().expect("the shipped defaults");
+    let mut parameters = actingcommand_runtime_config::render_parameters(
+        &[*row],
+        &[],
+        &defaults,
+        &serde_json::json!({}),
+        &|_| None,
+    )
+    .expect("the switch at its shipped default");
+    actingcommand_runtime_config::annotate_settable(&mut parameters)
+        .expect("the switch is in the key table");
+    RuntimeConfigManifest {
+        subsystems: Vec::new(),
+        parameters,
+    }
+}
+
 // The driver's pending wake, taken: its trigger and its recompute wakes.
 fn driver_wake(control: &PolicyDriverControl) -> Option<(PolicyTrigger, usize)> {
     match control.wait(Duration::ZERO).expect("the driver's wake") {
@@ -217,7 +288,7 @@ fn lanes_t1_a_long_run_on_one_instance_holds_neither_the_round_nor_the_other_ins
     assert!(!execution.failed_runs);
     let (a, b) = (decision_of(&execution, A), decision_of(&execution, B));
     held.reached
-        .recv_timeout(WAIT)
+        .recv_timeout(GATE_WAIT)
         .expect("A's worker took A's run after the round returned");
     assert_eq!(
         end_of(&ended, B).expect("B's run ends"),
@@ -247,19 +318,10 @@ fn lanes_t1_a_long_run_on_one_instance_holds_neither_the_round_nor_the_other_ins
     host.set_policy_lane_hook_for_test(None)
         .expect("the lane hook is cleared");
     let (next, _) = round(&host, &policy, &lanes, PolicyTrigger::Recovery);
-    let evaluation = next.cycle.evaluation.as_ref().expect("an evaluation");
     assert!(
-        evaluation
-            .decisions
-            .iter()
-            .filter(|decision| decision.instance_id.as_deref() == Some(A))
-            .flat_map(|decision| decision.reasons.iter())
-            .all(
-                |reason| reason.outcome.code().as_str() != "dispatch_instance_held"
-                    || reason.outcome.value("holder_kind")
-                        != Some(&serde_json::json!("policy_dispatch"))
-            ),
-        "A is not held by a settled run: {evaluation:#?}"
+        !held_by_policy_dispatch(&next, A),
+        "A is not held by a settled run: {:#?}",
+        next.cycle.evaluation
     );
     assert_running(&host);
     drop(held);
@@ -273,7 +335,7 @@ fn lanes_t1_a_long_run_on_one_instance_holds_neither_the_round_nor_the_other_ins
 #[test]
 fn lanes_t2_frozen_after_the_terminal_no_second_dispatch_one_settlement_and_the_wake() {
     let root = TempDir::new().expect("tempdir");
-    let (host, policy, _clock) = start(root.path(), &[Screen::Opens, Screen::Opens], None, false);
+    let (host, policy, clock) = start(root.path(), &[Screen::Opens, Screen::Opens], None, false);
     activate(&host, &policy);
     let control = Arc::new(PolicyDriverControl::default());
     let (lanes, ended) = lanes(&control);
@@ -282,7 +344,7 @@ fn lanes_t2_frozen_after_the_terminal_no_second_dispatch_one_settlement_and_the_
     let (execution, _) = round(&host, &policy, &lanes, PolicyTrigger::Recovery);
     let a = decision_of(&execution, A).to_owned();
     held.reached
-        .recv_timeout(WAIT)
+        .recv_timeout(GATE_WAIT)
         .expect("A's run returned its receipt and is not settled");
     assert_eq!(end_of(&ended, B).expect("B's run ends"), Ended::Completed);
     let _ = driver_wake(&control);
@@ -307,12 +369,25 @@ fn lanes_t2_frozen_after_the_terminal_no_second_dispatch_one_settlement_and_the_
         !aliases(&reconciled).contains(&A),
         "no dispatch on A while its run is unsettled"
     );
+    // Fix 1 (review L5): at catalog-a's next hourly occurrence A's task is due again, so what
+    // holds A back is its registration, the run's own occupancy, not a task that is not due.
+    clock.advance_to(POLICY_NOW_UNIX_MS + 3_600_000);
     let (again, _) = round(&host, &policy, &lanes, PolicyTrigger::Recovery);
     assert!(
         !aliases(&again).contains(&A),
         "no second dispatch on A while its run is unsettled: {:#?}",
         again.cycle.pending_dispatch_intents
     );
+    assert!(
+        held_by_policy_dispatch(&again, A),
+        "A is deferred as held by its unsettled run: {:#?}",
+        again.cycle.evaluation
+    );
+    // B, due again too, may run again; its end and wake are taken before A's.
+    if aliases(&again).contains(&B) {
+        end_of(&ended, B).expect("B's next run ends");
+        let _ = driver_wake(&control);
+    }
     assert_eq!(completions(root.path(), &a), 0, "nothing settled A early");
     assert_running(&host);
 
@@ -358,7 +433,7 @@ fn lanes_t3_a_failed_run_on_one_instance_leaves_the_other_running() {
     assert_eq!(aliases(&execution), [A, B]);
     let mut ends = BTreeMap::new();
     for _ in 0..2 {
-        let (alias, end) = ended.recv_timeout(WAIT).expect("a run ends");
+        let (alias, end) = ended.recv_timeout(GATE_WAIT).expect("a run ends");
         ends.insert(alias, end);
     }
     assert_eq!(ends.get(A), Some(&Ended::Failed), "A's run fails");
@@ -393,7 +468,9 @@ fn lanes_t4_a_settlement_between_sample_and_validation_is_judged_again() {
     let held = hold_at(&host, A, PolicyLanePoint::Ran);
     let (execution, _) = round(&host, &policy, &lanes, PolicyTrigger::Recovery);
     let a = decision_of(&execution, A).to_owned();
-    held.reached.recv_timeout(WAIT).expect("A's run is held");
+    held.reached
+        .recv_timeout(GATE_WAIT)
+        .expect("A's run is held");
     assert_eq!(end_of(&ended, B).expect("B's run ends"), Ended::Completed);
 
     let (back, returned) = mpsc::channel();
@@ -407,7 +484,7 @@ fn lanes_t4_a_settlement_between_sample_and_validation_is_judged_again() {
     host.change_policy_outcome_snapshots_for_test(1)
         .expect("one changed sample");
     let (again, out) = round(&host, &policy, &lanes, PolicyTrigger::Recovery);
-    let (_ended, settled) = returned.recv_timeout(WAIT).expect("the hook ran");
+    let (_ended, settled) = returned.recv_timeout(GATE_WAIT).expect("the hook ran");
     assert_eq!(
         settled.expect("A settles inside the round"),
         Ended::Completed
@@ -507,7 +584,9 @@ fn lanes_t6_a_shutdown_refuses_a_run_not_taken_and_finishes_a_run_taken() {
         let held = hold_at(&host, A, point);
         let (execution, _) = round(&host, &policy, &lanes, PolicyTrigger::Recovery);
         let a = decision_of(&execution, A).to_owned();
-        held.reached.recv_timeout(WAIT).expect("A's run is held");
+        held.reached
+            .recv_timeout(GATE_WAIT)
+            .expect("A's run is held");
 
         // The close's first step, before it joins the workers.
         host.request_shutdown_for_test()
@@ -537,11 +616,15 @@ fn lanes_t6_a_shutdown_refuses_a_run_not_taken_and_finishes_a_run_taken() {
 
 // Brief "Tests": a worker panic. The panic drops A's run (not retried); A's registration stays as
 // abandoned, so A is still occupied and its settlement is left to the reconciliation; the driver
-// is woken; B's run completes and the Runtime does not stop.
+// is woken; B's run completes and the Runtime does not stop. Fix 1 (review M1): the end state while
+// A's lease is active (this harness's leases never lapse: its monotonic time does not move): the
+// run never started (no terminal, its lease not released), a reconciliation leaves it unsettled
+// and still abandoned, and the next round defers A as held by its policy run. Its settlement once
+// the lease lapsed is runtime-host's gate_427a_m1.
 #[test]
 fn lanes_t7_a_worker_panic_drops_the_run_and_leaves_its_instance_occupied() {
     let root = TempDir::new().expect("tempdir");
-    let (host, policy, _clock) = start(root.path(), &[Screen::Opens, Screen::Opens], None, false);
+    let (host, policy, clock) = start(root.path(), &[Screen::Opens, Screen::Opens], None, false);
     activate(&host, &policy);
     let control = Arc::new(PolicyDriverControl::default());
     let (lanes, ended) = lanes(&control);
@@ -557,7 +640,7 @@ fn lanes_t7_a_worker_panic_drops_the_run_and_leaves_its_instance_occupied() {
     assert_eq!(aliases(&execution), [A, B]);
     let mut ends = BTreeMap::new();
     for _ in 0..2 {
-        let (alias, end) = ended.recv_timeout(WAIT).expect("a run ends");
+        let (alias, end) = ended.recv_timeout(GATE_WAIT).expect("a run ends");
         ends.insert(alias, end);
     }
     host.set_policy_lane_hook_for_test(None)
@@ -578,6 +661,41 @@ fn lanes_t7_a_worker_panic_drops_the_run_and_leaves_its_instance_occupied() {
         driver_wake(&control).map(|(trigger, _)| trigger),
         Some(PolicyTrigger::FactsChanged)
     );
+    let a = decision_of(&execution, A).to_owned();
+    let events = ledger_events(root.path());
+    let a_records = run_records(&events, run_of(&events, &a));
+    assert!(
+        !a_records.iter().any(|event| matches!(
+            event.event_type(),
+            EventType::TaskCompleted
+                | EventType::TaskFailed
+                | EventType::TaskCancelled
+                | EventType::LeaseReleased
+        )),
+        "A's run never started and its lease is still the dispatch's"
+    );
+    let (reconciled, _) = round(&host, &policy, &lanes, PolicyTrigger::Reconciliation);
+    assert!(!aliases(&reconciled).contains(&A));
+    assert_eq!(
+        completions(root.path(), &a),
+        0,
+        "a reconciliation does not settle a run whose lease is active"
+    );
+    assert_eq!(
+        host.policy_run_in_flight_for_test(A).expect("A's lane"),
+        (true, false),
+        "A's registration stays abandoned"
+    );
+    // At catalog-a's next hourly occurrence A's task is due again: its abandoned run still holds A.
+    clock.advance_to(POLICY_NOW_UNIX_MS + 3_600_000);
+    let (next, _) = round(&host, &policy, &lanes, PolicyTrigger::Recovery);
+    assert!(!aliases(&next).contains(&A));
+    assert!(
+        held_by_policy_dispatch(&next, A),
+        "the next round defers A as held by its policy run: {:#?}",
+        next.cycle.evaluation
+    );
+    assert!(executions(root.path(), &a).is_empty());
     assert_running(&host);
     host.close().expect("the Runtime closes");
 }
@@ -589,7 +707,9 @@ fn lanes_t7_a_worker_panic_drops_the_run_and_leaves_its_instance_occupied() {
 #[test]
 fn lanes_t8_the_switch_is_off_by_default_and_an_instruction_turns_it_on_at_the_next_round() {
     let root = TempDir::new().expect("tempdir");
-    let (host, policy, clock) = start(root.path(), &[Screen::Opens], None, false);
+    let (host, policy, clock) = start_with(root.path(), &[Screen::Opens], None, false, |config| {
+        config.with_config_manifest(switch_manifest())
+    });
     activate(&host, &policy);
     let control = Arc::new(PolicyDriverControl::default());
     assert!(
@@ -620,7 +740,7 @@ fn lanes_t8_the_switch_is_off_by_default_and_an_instruction_turns_it_on_at_the_n
             key: "scheduling.parallel.enabled".to_owned(),
             value: Some(serde_json::json!(true)),
         }])
-        .expect("the instruction is taken");
+        .unwrap_or_else(|error| panic!("the instruction is refused: {:?}", error.outcome()));
     assert!(host.scheduling_parallel_enabled().expect("the switch"));
     drop(client);
 
@@ -630,14 +750,16 @@ fn lanes_t8_the_switch_is_off_by_default_and_an_instruction_turns_it_on_at_the_n
     let on = execute_policy_cycle_in(&host, &policy, PolicyTrigger::Recovery, Some(&control))
         .expect("the round runs");
     let second = decision_of(&on, A).to_owned();
-    held.reached.recv_timeout(WAIT).expect("A's worker took it");
+    held.reached
+        .recv_timeout(GATE_WAIT)
+        .expect("A's worker took it");
     assert_eq!(
         completions(root.path(), &second),
         0,
         "the round returned before A's run, handed to A's worker"
     );
     held.release.send(()).expect("release A's run");
-    match control.wait(WAIT).expect("the driver's wake") {
+    match control.wait(GATE_WAIT).expect("the driver's wake") {
         PolicyDriverWake::Trigger(trigger, _) => assert_eq!(trigger, PolicyTrigger::FactsChanged),
         PolicyDriverWake::TimedOut | PolicyDriverWake::Shutdown => {
             panic!("A's end wakes the driver")
@@ -647,6 +769,97 @@ fn lanes_t8_the_switch_is_off_by_default_and_an_instruction_turns_it_on_at_the_n
         completions(root.path(), &second),
         1,
         "A's worker settled it"
+    );
+    host.set_policy_lane_hook_for_test(None)
+        .expect("the lane hook is cleared");
+    drop(held);
+    assert_running(&host);
+    host.close().expect("the Runtime closes");
+}
+
+// Fix 1 (brief rd-1028/brief-427a-fix1.md item 5; review L1 and its item 10, "交接后暂停"): a
+// scheduling pause of A requested after the round handed A's run off, while A's worker holds the
+// run as it took it. The pause's release waits for the run (the test observes it there before it
+// lets the worker go on). A run refused before it started must not count as a failure: A's run goes
+// ahead as the synchronous round's run admitted before a pause does, and the pause drains it. It is
+// settled once as a success, never as a failure, nor refused, so A's failure streak is unchanged
+// (none); the pause then completes and the Runtime keeps running.
+#[test]
+fn lanes_t9_a_pause_after_the_hand_off_does_not_fail_the_run_handed_off() {
+    let root = TempDir::new().expect("tempdir");
+    let (host, policy, _clock) = start(root.path(), &[Screen::Opens], None, false);
+    activate(&host, &policy);
+    let control = Arc::new(PolicyDriverControl::default());
+    let (lanes, ended) = lanes(&control);
+    let held = hold_at(&host, A, PolicyLanePoint::Taken);
+    let (execution, _) = round(&host, &policy, &lanes, PolicyTrigger::Recovery);
+    let a = decision_of(&execution, A).to_owned();
+    held.reached
+        .recv_timeout(GATE_WAIT)
+        .expect("A's worker took A's run");
+    assert!(executions(root.path(), &a).is_empty(), "no failure before");
+
+    let (waiting_sender, waiting) = mpsc::channel();
+    host.run_when_pause_waits_for_lane_for_test(Box::new(move || {
+        let _ = waiting_sender.send(());
+    }))
+    .expect("the pause hook is set");
+    let (paused_sender, paused) = mpsc::channel();
+    let pause_root = root.path().to_path_buf();
+    let pausing = std::thread::spawn(move || {
+        let paused = RuntimeClient::connect(
+            RuntimeClientConfig::new(
+                pause_root,
+                RuntimeChannel::Cli,
+                EventActor::Cli,
+                EventSource::Cli,
+            )
+            .with_io_timeout(Duration::from_secs(5)),
+        )
+        .and_then(|client| {
+            client.pause_scheduling(
+                SchedulingPauseScope::Instance {
+                    instance_alias: A.to_owned(),
+                },
+                SchedulingPauseReason::new("gate.lanes.pause").expect("the pause reason"),
+                MAX_SCHEDULING_PAUSE_DRAIN_TIMEOUT_MS,
+            )
+        })
+        .map(|_| ())
+        .map_err(|error| format!("{:?}", error.outcome()));
+        let _ = paused_sender.send(paused);
+    });
+    waiting
+        .recv_timeout(GATE_WAIT)
+        .expect("the pause's release waits for A's run");
+    held.release.send(()).expect("release A's run");
+    assert_eq!(
+        end_of(&ended, A).expect("A's run ends"),
+        Ended::Completed,
+        "A's run goes ahead and completes"
+    );
+    paused
+        .recv_timeout(GATE_WAIT)
+        .expect("the pause answers")
+        .expect("the pause completes once A's run settled");
+    pausing.join().expect("the pause's thread ends");
+    assert_eq!(completions(root.path(), &a), 1, "A is settled once");
+    let settled = executions(root.path(), &a);
+    assert!(
+        matches!(
+            settled.as_slice(),
+            [PolicyExecutionOutcome::Succeeded { .. }]
+        ),
+        "A's run is settled as a success, never as a failure: {settled:#?}"
+    );
+    assert!(
+        dispatch_record(
+            &ledger_events(root.path()),
+            &a,
+            EventType::PolicyDispatchRejected
+        )
+        .is_none(),
+        "A's dispatch was settled, never refused"
     );
     host.set_policy_lane_hook_for_test(None)
         .expect("the lane hook is cleared");

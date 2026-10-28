@@ -96,7 +96,7 @@ impl HostShared {
     /// Q-3 (6): policy dispatches only to an instance with no holder, no eligible waiting claim
     /// and no takeover cooldown. Read under the scheduler lock, with the routine gate read
     /// just before it.
-    fn instance_occupancy(
+    pub(super) fn instance_occupancy(
         &self,
         instance_id: InstanceId,
         now_unix_ms: u64,
@@ -147,7 +147,7 @@ impl HostShared {
         }
         let forced = self
             .policy_snapshot_changes_for_test
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
                 count.checked_sub(1)
             })
             .is_ok();
@@ -157,6 +157,22 @@ impl HostShared {
                 HostLocation::ValidatePolicyOutcomeKeySnapshot,
                 RuntimeErrorCode::InvalidRequest,
             ));
+        }
+        Ok(())
+    }
+
+    /// Workflow #427-A fix 1, test builds and the `test-hooks` feature: runs, once, the hook a
+    /// test set for a scheduling pause's release that waits for a policy run an instance worker
+    /// holds.
+    #[cfg(any(test, feature = "test-hooks"))]
+    fn pause_waits_for_lane_for_test(&self) -> RuntimeHostResult<()> {
+        let hook = lock(
+            &self.pause_lane_wait_hook_for_test,
+            HostLocation::ReadPolicyRunsInFlight,
+        )?
+        .take();
+        if let Some(hook) = hook {
+            hook();
         }
         Ok(())
     }
@@ -2826,6 +2842,11 @@ impl HostShared {
                     .checked_add(again.cancelled)
                     .ok_or_else(overflow)?;
                 continue;
+            }
+            // Workflow #427-A fix 1, tests: the release waits here for a lane's run.
+            #[cfg(any(test, feature = "test-hooks"))]
+            if lane_working {
+                self.pause_waits_for_lane_for_test()?;
             }
             if Instant::now() >= deadlines.grace {
                 return Err(scheduling_pause_release_failure(RuntimeHostError::request(

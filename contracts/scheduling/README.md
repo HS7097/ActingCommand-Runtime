@@ -1300,18 +1300,27 @@ finishes and is settled there whatever the switch says afterwards.
   instance, also once the run's terminal is written and its lease released and before it is
   settled); the reconciliation (a run a worker still holds is skipped, never settled early or
   twice); and the waits of an instance's scheduling pause and of an install drain.
-- **Lifecycle.** The worker takes a lifecycle admission when it takes the run; its work covers
-  the run and the settlement, so a drain or a stop waits for it. A run the worker takes while a
-  stop or an install drain has closed admission, or while a scheduling pause holds its
-  instance, is refused: settled as not performed with `runtime_stopping` or the pause's
-  deferral code, its lease released and its registration ended. Nothing is replayed after a
-  lost receipt.
+- **Lifecycle.** The worker takes a lifecycle (continuation) admission when it takes the run;
+  its work covers the run and the settlement, so a drain or a stop waits for it. A run handed
+  off before an install drain or a scheduling pause began goes ahead, as the round's own run
+  admitted before them does with the switch off: the drain waits for it, and the pause drains
+  it like any contained run admitted before its gate closed; neither records a failure for it
+  (fix 1, review L1). Only a run the worker takes after the Runtime's stop was requested is
+  refused: settled as not performed with `runtime_stopping`, its lease released and its
+  registration ended. Nothing is replayed after a lost receipt.
 - **Failures (#419).** The run's failures go through the instance's failure containment: an
   instance-level failure fences that instance and the other lanes go on; only a global fault
   stops the Runtime. A worker panic drops the run (not retried, its lease lapses at its TTL);
-  its registration stays, marked abandoned, so the instance stays occupied until the
-  reconciliation settles the run and frees it. A run whose settlement failed without stopping
-  the Runtime is left the same way.
+  its registration stays, marked abandoned, so the instance stays occupied. A run whose
+  settlement failed without stopping the Runtime is left the same way. Once such a run's lease
+  ended, the reconciliation settles it by the start's rule (fix 1, review M1): when the lease
+  ended without a run-linked release (its expiry, a transfer, or both as one end) the missing
+  release is recorded under the run's links (`not_performed`) with
+  `policy_settlement_release_recovered`; the run is then settled once, from its terminal or,
+  without one, as interrupted (`policy_settlement_interrupted`, which pauses the task on that
+  instance as a run cut by a restart does); its registration is forgotten and the instance is
+  free again. A lease that ended in more than one way leaves the run held, and the next start
+  records it (`policy_settlement_dispatch_left_open`).
 - **Re-evaluation (C1, not behind the switch).** An evaluation whose validation finds its
   sampled outcome keys changed (`policy_outcome_snapshot_changed`: another run settled between
   the sample and the validation) is sampled again, at most three times per round, with one
@@ -1320,7 +1329,8 @@ finishes and is settled there whatever the switch says afterwards.
   driver.
 - **Shutdown.** The driver stops taking triggers and is joined; the workers hold no reference
   to actingd's host handle, so the host is released and closed, and its close joins the
-  workers: a run a worker took finishes and is settled, one still queued is refused as above.
+  workers: a run a worker took finishes and is settled, one still queued is refused
+  (`runtime_stopping`) as above.
 
 ## Forward Planning And Maintenance
 

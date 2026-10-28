@@ -557,8 +557,20 @@ fn resources(instances: &[Fixture]) -> EvaluationResources {
 pub(super) fn start(
     root: &Path,
     screens: &[Screen],
+    hold: Option<Hold>,
+    ladder: bool,
+) -> (RuntimeHost, PolicyBootstrap, Arc<CycleClock>) {
+    start_with(root, screens, hold, ladder, |config| config)
+}
+
+// `start`, with the Runtime's configuration passed through `configure` last (Workflow #427-A fix 1:
+// a configuration manifest).
+pub(super) fn start_with(
+    root: &Path,
+    screens: &[Screen],
     mut hold: Option<Hold>,
     ladder: bool,
+    configure: impl FnOnce(RuntimeHostConfig) -> RuntimeHostConfig,
 ) -> (RuntimeHost, PolicyBootstrap, Arc<CycleClock>) {
     let instances = &INSTANCES[..screens.len()];
     let scheduled = root.join("scheduled-task.zip");
@@ -632,7 +644,7 @@ pub(super) fn start(
             (instance.alias.to_owned(), Arc::new(device))
         })
         .collect();
-    let host = RuntimeHost::start(config, Arc::new(CycleProvider(devices)))
+    let host = RuntimeHost::start(configure(config), Arc::new(CycleProvider(devices)))
         .expect("the in-process Runtime starts");
     let policy = PolicyBootstrap {
         catalog_approval_ids: vec![APPROVAL.to_owned()],

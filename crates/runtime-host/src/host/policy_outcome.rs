@@ -35,8 +35,16 @@ impl HostShared {
             if pending.is_empty() {
                 return Ok(());
             }
-            let eligible =
+            // Workflow #427-A fix 1 (review M1): an abandoned lane whose lease ended is settled
+            // online by the start's rule, so its instance is not held until a restart.
+            let recovered = self.recover_abandoned_policy_runs(&policy, &missing_outcomes)?;
+            let mut eligible =
                 self.inactive_policy_settlements(&policy, &pending, &missing_outcomes)?;
+            for decision_id in recovered {
+                if !eligible.contains(&decision_id) {
+                    eligible.push(decision_id);
+                }
+            }
             if eligible.is_empty() {
                 return Ok(());
             }
@@ -254,6 +262,7 @@ impl HostShared {
                 .collect::<Vec<_>>();
             lease_ends.extend(lease_transfers_from(
                 &self.ledger,
+                SettlementRead::Fatal,
                 through,
                 instance_id,
                 lease_id,
@@ -579,6 +588,296 @@ impl HostShared {
             ),
         )?;
         Ok(*instance_id)
+    }
+
+    /// Workflow #427-A fix 1 (review M1): the start's rule (`recover_unreleased_policy_runs`) for
+    /// a scheduled run no instance worker holds any more (an abandoned registration: a worker
+    /// panic, a settlement that failed without stopping the Runtime), applied online, so its
+    /// instance is not held until a restart. Of the abandoned runs whose dispatch has no outcome
+    /// (`missing_outcomes`), one whose granted lease is no longer active is ready to settle:
+    ///
+    /// - with a run-linked release that records `not_performed` (one this rule recovered, or the
+    ///   failure path's own), as it is;
+    /// - with no run-linked release, once its lease ended in one way (`single_lease_end`: its
+    ///   expiry, a release without run links, a transfer, or an expiry handed on to a waiting
+    ///   claim): its missing release is recorded first, run-linked under the grant's request,
+    ///   correlation and causation, with effect `not_performed`, and
+    ///   `policy_settlement_release_recovered` once under the same links at Info.
+    ///
+    /// The caller settles each ready run once, from its terminal when it has one, otherwise as
+    /// interrupted, and then forgets its registration. A run whose lease is still active waits for
+    /// its TTL; one whose lease ended in more than one way, or whose instance is no longer
+    /// registered, stays held, and the next start records it (`record_open_scheduled_dispatches`);
+    /// one with another run-linked release is left to `inactive_policy_settlements`. The reads are
+    /// this tick's (`SettlementRead::Tolerant`) and come before any write: the first one the writer
+    /// does not answer in time ends this tick's recovery, nothing written, and it is said in the
+    /// daemon's log.
+    fn recover_abandoned_policy_runs(
+        &self,
+        policy: &PolicyHost,
+        missing_outcomes: &BTreeSet<String>,
+    ) -> RuntimeHostResult<Vec<String>> {
+        const OPERATION: HostLocation = HostLocation::ReconcilePolicySettlements;
+        let abandoned = self
+            .abandoned_policy_runs()?
+            .into_iter()
+            .filter(|decision_id| missing_outcomes.contains(decision_id))
+            .collect::<Vec<_>>();
+        if abandoned.is_empty() {
+            return Ok(Vec::new());
+        }
+        let through = match self.ledger.latest_sequence() {
+            Ok(through) => through,
+            Err(error) => {
+                self.skip_unanswered_settlement_read(settlement_read_error(&error, OPERATION))?;
+                return Ok(Vec::new());
+            }
+        };
+        let leases = lock(&self.scheduler, OPERATION)?.active_tokens();
+        let mut ready = Vec::new();
+        let mut unreleased = Vec::new();
+        for decision_id in abandoned {
+            let found = (|| -> RuntimeHostResult<AbandonedRunEnd> {
+                let intent = policy_dispatch_intent(
+                    &self.ledger,
+                    SettlementRead::Tolerant,
+                    &decision_id,
+                    policy.dispatch_intent_sequence(&decision_id),
+                    through,
+                    OPERATION,
+                )?;
+                let links = intent.links();
+                let (
+                    Some(instance_id),
+                    Some(request_id),
+                    Some(correlation_id),
+                    Some(task_id),
+                    Some(run_id),
+                ) = (
+                    links.instance_id(),
+                    links.request_id(),
+                    links.correlation_id(),
+                    links.task_id(),
+                    links.run_id(),
+                )
+                else {
+                    return Err(policy_admission_fatal(
+                        HostCode::PolicyRunIdentityMissing,
+                        OPERATION,
+                    ));
+                };
+                let grants = linked_policy_run_events(
+                    &self.ledger,
+                    SettlementRead::Tolerant,
+                    EventQuery {
+                        to_sequence: Some(through),
+                        event_type: Some(EventType::LeaseGranted),
+                        instance_id: Some(*instance_id),
+                        request_id: Some(*request_id),
+                        correlation_id: Some(*correlation_id),
+                        task_id: Some(*task_id),
+                        run_id: Some(*run_id),
+                        ..EventQuery::default()
+                    },
+                    through,
+                    2,
+                    OPERATION,
+                    |event| {
+                        event.event_type() == EventType::LeaseGranted
+                            && event.links().instance_id() == Some(instance_id)
+                            && event.links().request_id() == Some(request_id)
+                            && event.links().correlation_id() == Some(correlation_id)
+                            && event.links().task_id() == Some(task_id)
+                            && event.links().run_id() == Some(run_id)
+                    },
+                )?;
+                let grant = match grants.as_slice() {
+                    [] => return Ok(AbandonedRunEnd::Waiting),
+                    [grant] => grant.clone(),
+                    _ => {
+                        return Err(policy_admission_fatal(
+                            HostCode::PolicyRunLeaseFactNotUnique,
+                            OPERATION,
+                        ));
+                    }
+                };
+                let Some(lease_id) = grant.links().lease_id().copied() else {
+                    return Err(policy_admission_fatal(
+                        HostCode::PolicyRunIdentityMissing,
+                        OPERATION,
+                    ));
+                };
+                if leases.iter().any(|token| token.lease_id() == lease_id) {
+                    return Ok(AbandonedRunEnd::Waiting);
+                }
+                let lease_events = crate::recovery_read::read_pages(
+                    &self.ledger,
+                    &EventQuery {
+                        to_sequence: Some(through),
+                        lease_id: Some(lease_id),
+                        ..EventQuery::default()
+                    },
+                    through,
+                    self.ledger.history_page_events(),
+                )
+                .map_err(|error| settlement_read_error(&error, OPERATION))?;
+                // The effect each run-linked release of the lease records.
+                let releases = lease_events
+                    .iter()
+                    .filter(|event| {
+                        run_lease_release_matches(
+                            event,
+                            instance_id,
+                            correlation_id,
+                            task_id,
+                            run_id,
+                            &lease_id,
+                        )
+                    })
+                    .map(|event| event.payload().effect_disposition())
+                    .collect::<Vec<_>>();
+                match releases.as_slice() {
+                    [] => {}
+                    [Some(EffectDisposition::NotPerformed)] => {
+                        return Ok(AbandonedRunEnd::Released);
+                    }
+                    _ => return Ok(AbandonedRunEnd::Waiting),
+                }
+                let mut lease_ends = lease_events
+                    .into_iter()
+                    .filter(|event| {
+                        event.links().lease_id() == Some(&lease_id)
+                            && (event.event_type() == EventType::LeaseExpired
+                                || (event.event_type() == EventType::LeaseReleased
+                                    && event.links().instance_id() == Some(instance_id)
+                                    && event.links().run_id().is_none()))
+                    })
+                    .collect::<Vec<_>>();
+                lease_ends.extend(lease_transfers_from(
+                    &self.ledger,
+                    SettlementRead::Tolerant,
+                    through,
+                    instance_id,
+                    &lease_id,
+                    2,
+                )?);
+                if single_lease_end(&lease_ends).is_none() {
+                    return Ok(AbandonedRunEnd::Waiting);
+                }
+                Ok(AbandonedRunEnd::Unreleased(Box::new(UnreleasedRun {
+                    intent: intent.clone(),
+                    grant,
+                })))
+            })();
+            match found {
+                Ok(AbandonedRunEnd::Waiting) => {}
+                Ok(AbandonedRunEnd::Released) => ready.push(decision_id),
+                Ok(AbandonedRunEnd::Unreleased(run)) => unreleased.push((decision_id, run)),
+                // #419 LN-WS-F: the first unanswered read ends this tick's recovery; nothing was
+                // written, and each run is read again at the next tick.
+                Err(error) => {
+                    self.skip_unanswered_settlement_read(error)?;
+                    return Ok(Vec::new());
+                }
+            }
+        }
+        for (decision_id, run) in unreleased {
+            let links = run.intent.links();
+            let (
+                Some(instance_id),
+                Some(request_id),
+                Some(correlation_id),
+                Some(task_id),
+                Some(run_id),
+                Some(lease_id),
+            ) = (
+                links.instance_id(),
+                links.request_id(),
+                links.correlation_id(),
+                links.task_id(),
+                links.run_id(),
+                run.grant.links().lease_id(),
+            )
+            else {
+                return Err(policy_admission_fatal(
+                    HostCode::PolicyRunIdentityMissing,
+                    OPERATION,
+                ));
+            };
+            // An instance no longer registered keeps its run held; the next start records it.
+            let Some(audit) = lock(&self.registered_instances, OPERATION)?
+                .get(instance_id)
+                .map(|instance| audit_endpoint(instance.audit_endpoint()))
+            else {
+                continue;
+            };
+            let request = super::contained_task::recovery_request_identity(
+                *request_id,
+                *correlation_id,
+                run.grant.links().causation_id(),
+                self.runtime_clock_sample()?.unix_ms,
+            )
+            .ok_or_else(|| {
+                RuntimeHostError::fatal(
+                    HostCode::PolicyRunRecoveryIdentityInvalid,
+                    OPERATION,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+            })?;
+            let validated = request.validate().map_err(|_| {
+                RuntimeHostError::fatal(
+                    HostCode::PolicyRunRecoveryIdentityInvalid,
+                    OPERATION,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+            })?;
+            let run_links = |action_id| {
+                validated.contained_task_recovery_event_links(
+                    *instance_id,
+                    Some(*lease_id),
+                    *task_id,
+                    *run_id,
+                    Some(action_id),
+                )
+            };
+            self.append_event_raw(
+                EventSeverity::Info,
+                EventSource::Scheduler,
+                OriginModule::Scheduler,
+                EventActor::Scheduler,
+                run_links(self.events.action_id()?),
+                LeasePayloadDraft::released(
+                    EventAction::LeaseRelease,
+                    EffectDisposition::NotPerformed,
+                    audit,
+                ),
+            )?;
+            self.append_event_raw(
+                EventSeverity::Info,
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+                run_links(self.events.action_id()?),
+                RuntimePayloadDraft::failed(
+                    DiagnosticCode::RuntimeDiagnostic,
+                    EffectDisposition::NotPerformed,
+                    Outcome::new(HostCode::PolicySettlementReleaseRecovered)
+                        .operation(OPERATION)
+                        .instance_id(identifier_text(instance_id))
+                        .lease_id(identifier_text(lease_id))
+                        .task_id(identifier_text(task_id)),
+                    DiagnosticDetailDraft::new(
+                        "policy_settlement",
+                        RuntimeLifecycleFailureStage::PolicyDriver.location(),
+                        "runtime_host",
+                        OPERATION.as_str(),
+                    ),
+                    AuditInput::new(),
+                ),
+            )?;
+            ready.push(decision_id);
+        }
+        Ok(ready)
     }
 
     // policy_outcome_gate excludes a context committing its outcome while these
@@ -1885,6 +2184,24 @@ pub(super) struct StartSettlement {
     pub(super) refuse_run_for_test: Option<RunId>,
 }
 
+/// Workflow #427-A fix 1 (review M1): what the reconciliation read of an abandoned run's lease.
+enum AbandonedRunEnd {
+    /// Its lease is still active or not granted, ended in more than one way, or has a run-linked
+    /// release that does not record `not_performed`: it is not settled here.
+    Waiting,
+    /// Its one run-linked release records `not_performed`: it is ready to settle.
+    Released,
+    /// Its lease ended in one way without a run-linked release: its release is recovered first.
+    Unreleased(Box<UnreleasedRun>),
+}
+
+/// Workflow #427-A fix 1: an abandoned run whose release is recovered: its dispatch intent and
+/// its lease grant, whose links the release takes.
+struct UnreleasedRun {
+    intent: PersistedEvent,
+    grant: PersistedEvent,
+}
+
 /// Workflow #369 E3 (#670 safety net): a dispatch the start could not settle.
 pub(super) struct UnsettledDispatch {
     pub(super) decision_id: String,
@@ -3131,10 +3448,13 @@ fn policy_recovery_outcome_matches(
     }
 }
 
-/// The `lease.transferred` events that handed `lease_id` on, on its instance, at most `cap`. A
-/// start's read (`recover_unreleased_policy_runs`): it stays fatal (#419 LN-WS-F fix round 1).
+/// The `lease.transferred` events that handed `lease_id` on, on its instance, at most `cap`, read
+/// in the form `read` names: the start's read (`recover_unreleased_policy_runs`) stays fatal (#419
+/// LN-WS-F fix round 1); the reconciliation tick's (`recover_abandoned_policy_runs`, Workflow
+/// #427-A fix 1) is tolerant.
 fn lease_transfers_from(
     ledger: &GlobalLedger,
+    read: SettlementRead,
     through: u64,
     instance_id: &InstanceId,
     lease_id: &LeaseId,
@@ -3142,7 +3462,7 @@ fn lease_transfers_from(
 ) -> RuntimeHostResult<Vec<PersistedEvent>> {
     linked_policy_run_events(
         ledger,
-        SettlementRead::Fatal,
+        read,
         EventQuery {
             to_sequence: Some(through),
             event_type: Some(EventType::LeaseTransferred),

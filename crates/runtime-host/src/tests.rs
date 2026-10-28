@@ -410,6 +410,9 @@ mod gate_422_ln4;
 // LN-8c (Workflow #422, LEAN-L model §7.1 A3): the start's runtime-fact recovery reads its record
 // events in bounded pages and rebuilds the store one read of them rebuilds.
 mod gate_422_ln8c;
+// Workflow #427-A fix 1 (review M1): a handed-off run whose worker panicked is settled online by
+// the start's rule once its lease lapsed, once, and its instance is free again.
+mod gate_427a_m1;
 // #422 LN-TUNE: a second start reads no planning history before the planning checkpoint.
 mod gate_ln_tune;
 // #422 LN-9: a finding of the ledger's scrub stops the Runtime as a Global failure.

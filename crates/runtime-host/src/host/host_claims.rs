@@ -20,7 +20,8 @@
 //!
 //! Workflow #427-A: a worker also runs the scheduled policy runs the driver hands it
 //! (`policy_lanes.rs`), one at a time, under the same panic rule; a panicked policy run's
-//! registration is left to the reconciliation, never stuck.
+//! registration is left to the reconciliation, which settles the run once its lease ended (fix 1,
+//! review M1), never stuck.
 
 use super::device_link::PendingLinkRestore;
 use super::emulator_autostart::PendingAutostart;
@@ -35,8 +36,9 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc;
 
 /// How often a granted claim retries a lifecycle admission that is still closed (a daemon
-/// start that is still preparing, an install hold) before its payload runs.
-const HOST_CLAIM_ADMISSION_POLL: Duration = Duration::from_millis(100);
+/// start that is still preparing, an install hold) before its payload runs; a handed-off policy
+/// run waits the same way (Workflow #427-A fix 1, `policy_lanes.rs`).
+pub(super) const HOST_CLAIM_ADMISSION_POLL: Duration = Duration::from_millis(100);
 
 /// What a granted host claim runs on its instance's worker.
 pub(super) enum HostClaimWork {
@@ -163,13 +165,15 @@ fn instance_worker_loop(
                 return Err(error);
             }
             Err(panic) => {
-                shared.record_worker_panic(category, links, panic.as_ref())?;
                 // The payload is dropped, not retried; its lease lapses at its TTL. A policy
                 // run's registration stays as abandoned (its instance still occupied) until the
-                // reconciliation settles the run, and the driver is woken.
+                // reconciliation settles the run once its lease ended, and the driver is woken.
+                // Workflow #427-A fix 1 (review L2): before the panic's record, so a ledger
+                // failure there cannot leave the registration working.
                 if let Some(lane) = lane {
                     shared.drop_panicked_policy_run(lane)?;
                 }
+                shared.record_worker_panic(category, links, panic.as_ref())?;
                 if rebuilt {
                     let error = RuntimeHostError::fatal(
                         actingcommand_contract::codes::SharedCode::RuntimeRestartRequired,
