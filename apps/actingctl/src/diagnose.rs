@@ -94,7 +94,9 @@ const MAX_STDERR_TAIL: usize = 2048;
 /// that both sides end a long read alike.
 const CLI_READ_BUDGET: Duration = Duration::from_secs(24);
 /// ROUT-L RL-1c fix 1 (#411 H1): what `actingd suspended` keeps back from the call's deadline to
-/// answer with what it read before it is ended there.
+/// answer with what it read before it is ended there. RL-1c follow-up (#411 L2, W1-9): by the
+/// tunables rule a configuration key with this default; it stays a constant until the
+/// configuration revision that adds the key (none in 0.12 wave 1).
 const SUSPENDED_ANSWER_MARGIN: Duration = Duration::from_secs(2);
 const ACTINGD: &str = "actingcommand-actingd.exe";
 /// The run states `runs` and `runs_grouped` keep: failed, and not ended.
