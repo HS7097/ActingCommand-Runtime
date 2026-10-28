@@ -3010,7 +3010,11 @@ pub fn is_severe_policy_failure(code: &crate::outcome::CodeStr) -> bool {
 /// `ExecutionKernelError::fatal`) and never as request or device-severity errors, in spelling
 /// order. A code whose fatality the pin decided per error (a device error's severity, a store
 /// error's flag) is not listed, so its failure stays `Recoverable`. Other owners' codes, as a
-/// list B4 reviews.
+/// list B4 reviews. ISO-2b (#419 R1, Runtime 0.12.25): the codes of an instance's dead session
+/// (`execution_session_panicked`, `_state_poisoned`, `_closed`, `_unavailable`,
+/// `_response_lost`) are not listed: since ISO-2 a run's capture that meets one fails only that
+/// run, non-fatal, so a first death counts toward the task's failure pause as any failure does,
+/// and a second in a row holds the instance.
 fn severe_policy_failure_codes() -> &'static [&'static str] {
     &[
         "action_id_issue_failed",
@@ -3060,13 +3064,8 @@ fn severe_policy_failure_codes() -> &'static [&'static str] {
         "execution_kernel_closed",
         "execution_kernel_state_poisoned",
         "execution_session_close_in_progress",
-        "execution_session_closed",
         "execution_session_generation_exhausted",
-        "execution_session_panicked",
-        "execution_session_response_lost",
         "execution_session_spawn_failed",
-        "execution_session_state_poisoned",
-        "execution_session_unavailable",
         "fact_publication_sequence_missing",
         "fatal_state_poisoned",
         "fenced_step_not_reclaimed",

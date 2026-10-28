@@ -40,6 +40,17 @@ const PREVIOUS_EPOCH_SETTLEMENT_OPERATION: HostLocation =
 /// #411 A65 (R3): the runtime fact (Runtime scope, an integer) that names the start event
 /// sequence of the start that last completed the previous-epoch settlement of direct runs.
 pub(super) const CONTAINED_SETTLEMENT_FACT_KEY: &str = "host.contained_settlement";
+
+/// #405 N-2 (0.12.25): the start anchors a start's settlement reads and records: `previous`, the
+/// start `host.contained_settlement` named before this start (the last start that completed its
+/// settlement; none without the fact), and `current`, this start's own start event sequence (none
+/// when the ledger holds no start event). The idle record is bound to them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct StartAnchors {
+    pub(super) previous: Option<u64>,
+    pub(super) current: Option<u64>,
+}
+
 /// Workflow #369 Q-2: the longest a direct task run (CLI, console, MCP `ac_run_pack`) waits in
 /// its instance's queue before it is refused `lease_queue_expired`.
 const DIRECT_TASK_RUN_CLAIM_WAIT_MS: u64 = 60_000;
@@ -896,6 +907,23 @@ impl ContainedRunControl {
             Ordering::AcqRel,
             Ordering::Acquire,
         );
+    }
+
+    /// ISO-2b (#419) tests: the control of a run of `instance_id` whose deadline is
+    /// `deadline_monotonic_ms`; with `cancelled`, its client asked it to stop.
+    #[cfg(test)]
+    pub(super) fn for_test(
+        request_id: RequestId,
+        instance_id: InstanceId,
+        deadline_monotonic_ms: u64,
+        cancelled: bool,
+    ) -> RuntimeHostResult<Self> {
+        let control = Self::new(request_id, instance_id, true);
+        control.set_deadline(deadline_monotonic_ms)?;
+        if cancelled {
+            control.request_cancel();
+        }
+        Ok(control)
     }
 
     /// Workflow #191 ps1 (b): an instance pause whose drain timeout expired asks the run to
@@ -4225,6 +4253,11 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                             module,
                         )
                         .map_err(RequestFailure::poison_without_terminal)?;
+                    // ISO-2b (#419 R1): the instance's session finished a capture.
+                    self.host.session_alive(
+                        self.token.instance_id(),
+                        HostLocation::RunContainedTaskCapture,
+                    )?;
                     let material_started = self
                         .task_timing
                         .begin_boundary(Boundary::CaptureMaterial, identity);
@@ -4436,7 +4469,10 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     // does the instance's own session that died (its thread panicked, ended or
                     // lost its reply; its state lock poisoned), is being closed by another owner,
                     // or no longer matches the instance's endpoint. The failure's close above
-                    // retired that session, and the next capture opens a fresh one.
+                    // retired that session, and the next capture opens a fresh one. ISO-2b
+                    // (#419 R1): a session that died again before any capture of the instance
+                    // succeeded keeps the kernel's failure, and the instance is fenced below.
+                    let mut session_died_again = false;
                     if spelled(
                         error.code().as_str(),
                         &[
@@ -4494,10 +4530,17 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                                 host.invalidate_adb_baseline(instance_id)?;
                             }
                         }
-                        runtime_error = RuntimeHostError::instance_capture(
-                            HostLocation::RunContainedTaskCapture,
+                        session_died_again = self.host.session_died_again(
+                            self.token.instance_id(),
                             &error,
-                        );
+                            HostLocation::RunContainedTaskCapture,
+                        )?;
+                        if !session_died_again {
+                            runtime_error = RuntimeHostError::instance_capture(
+                                HostLocation::RunContainedTaskCapture,
+                                &error,
+                            );
+                        }
                     }
                     let payload = CapturePayloadDraft::failed_with_causes(
                         EventAction::CaptureObserve,
@@ -4527,8 +4570,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         payload,
                     )?;
                     self.host
-                        .record_required_failure(&runtime_error, &failed, links)?;
-                    Err(RequestFailure {
+                        .record_required_failure(&runtime_error, &failed, links.clone())?;
+                    let failure = RequestFailure {
                         state: RuntimeReceiptState::Failed,
                         terminal: Some(terminal(&failed)),
                         poison_runtime: runtime_error.is_fatal(),
@@ -4537,7 +4580,17 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                             severe: runtime_error.is_fatal(),
                         }),
                         error: Box::new(runtime_error),
-                    })
+                    };
+                    // ISO-2b (#419 R1): the session's second death in a row holds only this
+                    // instance, whatever boundary the run has.
+                    if session_died_again {
+                        return Err(self.host.contain_session_death(
+                            failure,
+                            self.token.instance_id(),
+                            links,
+                        )?);
+                    }
+                    Err(failure)
                 }
             }
         })();
@@ -9234,7 +9287,10 @@ impl HostShared {
     /// - R1: every read is a ledger page; a page the writer's read budget stopped is read again
     ///   smaller ([`LedgerPages`]).
     /// - R2: a ledger failure keeps the ledger's own failure as its cause.
-    pub(super) fn settle_previous_epoch_contained_runs(&self) -> RuntimeHostResult<()> {
+    ///
+    /// #405 N-2: returns the anchor read before this start and this start's own, which the idle
+    /// record is bound to.
+    pub(super) fn settle_previous_epoch_contained_runs(&self) -> RuntimeHostResult<StartAnchors> {
         let through = self
             .ledger
             .latest_sequence()
@@ -9261,19 +9317,24 @@ impl HostShared {
             );
         }
         let Some(current) = starts.into_iter().max() else {
-            return Ok(());
+            return Ok(StartAnchors::default());
+        };
+        let anchors = StartAnchors {
+            previous: self.contained_settlement_anchor(current)?,
+            current: Some(current),
         };
         // Without the anchor the scan begins at the ledger's start (sequence 0 precedes every
         // event), so no earlier start's own start event can hide an older epoch.
-        let previous = self.contained_settlement_anchor(current)?.unwrap_or(0);
+        let previous = anchors.previous.unwrap_or(0);
         if current.saturating_sub(previous) >= 2 {
             self.settle_contained_runs_between(previous, current)?;
         }
         #[cfg(test)]
         if self.contained_settlement_unrecorded_for_test {
-            return Ok(());
+            return Ok(anchors);
         }
-        self.record_contained_settlement(current)
+        self.record_contained_settlement(current)?;
+        Ok(anchors)
     }
 
     /// The direct contained runs whose first task semantic fact lies after the event at

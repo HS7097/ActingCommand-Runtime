@@ -587,8 +587,11 @@ impl HostShared {
         let settings = self.performance_measurement()?;
         let instances = self.pacing_instances()?;
         let now = self.clock.sample()?.unix_ms;
-        let status = lock(&self.performance, HostLocation::ReadPerformanceStatus)?
+        let mut status = lock(&self.performance, HostLocation::ReadPerformanceStatus)?
             .pacing_status(now, &settings, &instances);
+        // #422 W1-8 (P29; QR-1 review L-4 follow-up): the ledger reader pool's pages and their
+        // times, read from the ledger's memory without a writer command; absent without a pool.
+        status.ledger_read_pages = self.ledger.reader_pool_pages().map(ledger_read_pages);
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: None,
@@ -779,4 +782,18 @@ pub(super) fn performance_monitor_loop(
         }
     }
     Ok(())
+}
+
+/// #422 W1-8 (P29): the reader pool's pages as the performance status shows them, in
+/// milliseconds (a time past `u64::MAX` milliseconds shows as `u64::MAX`).
+fn ledger_read_pages(
+    pages: actingcommand_ledger::LedgerReaderPoolPages,
+) -> actingcommand_contract::LedgerReadPagesStatus {
+    let ms = |duration: Duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
+    actingcommand_contract::LedgerReadPagesStatus {
+        pages: pages.pages,
+        total_ms: ms(pages.total),
+        longest_ms: ms(pages.longest),
+        last_ms: ms(pages.last),
+    }
 }

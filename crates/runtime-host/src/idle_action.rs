@@ -59,6 +59,17 @@
 //!   time has passed or a plan shows a task due. An action in flight at the stop, and an instance
 //!   whose state the start does not know, are restored as closed too, never as open; the latter
 //!   owes its wake at the start, so the start's first check wakes it once (review N-1).
+//! - **Closed until the startup package has run** (#405 O-2, 0.12.25): a woken instance is not
+//!   open yet. Its wake only queues claims (the startup package, after `stop_emulator` the
+//!   configured emulator start first), which wait behind a pause or a deploy's hold in memory, so
+//!   the instance stays closed and woken (`Woken`, kept as such) for as long as those claims hold
+//!   it: until its startup package has run and the instance is free again. A start restores a
+//!   woken instance as idle owing its wake at the time it was woken, so the start's first check
+//!   queues its startup package again instead of finding a closed game counted as open. Once the
+//!   instance is free, its wake's claims have ended (its startup package ran, or the claims ended
+//!   without it: a claim an emulator control cancelled), and it is active again, as after every
+//!   wake before. A wake's configured start that finds the emulator already running (a restart
+//!   came after it had started the emulator) still queues the startup package (review M-1).
 
 use actingcommand_runtime_config::{IdleAction, IdleConfig};
 use std::collections::BTreeMap;
@@ -167,11 +178,13 @@ impl IdlePlan {
 
 /// IDLE-1P (#405): an instance the idle action closed, or is closing, as the Runtime keeps it
 /// across a start (`host.idle_state`): the action taken and the wake in effect (none: no task
-/// wakes, or the first plan after a start gives it).
+/// wakes, or the first plan after a start gives it). #405 O-2 (0.12.25): `woken`, the instance was
+/// woken and its startup package has not run yet; its wake is then the time it was woken.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct KeptIdle {
     pub(crate) action: IdleAction,
     pub(crate) wake_at_unix_ms: Option<u64>,
+    pub(crate) woken: bool,
 }
 
 /// What a wake queues, in order.
@@ -248,6 +261,13 @@ enum Phase {
         action: IdleAction,
         wake_at_unix_ms: Option<u64>,
     },
+    /// #405 O-2: the wake after `action` was queued at `woken_at_unix_ms` and its claims still
+    /// hold the instance: closed and woken until its startup package has run and the instance is
+    /// free. Never acted on, never woken again meanwhile.
+    Woken {
+        action: IdleAction,
+        woken_at_unix_ms: u64,
+    },
     /// The action was not performed: the instance is left as it is until work holds it again.
     Failed,
 }
@@ -270,6 +290,10 @@ pub(crate) struct IdlePlanner {
     instances: BTreeMap<String, InstanceIdle>,
     /// IDLE-1P: the closed instances the host kept last; none before the first record.
     kept: Option<BTreeMap<String, KeptIdle>>,
+    /// #405 N-2 (0.12.25): the start anchor the host keeps the closed instances under: this
+    /// start's start event sequence, which its settlement records as `host.contained_settlement`;
+    /// none before the start's restore binds it.
+    start_anchor: Option<u64>,
     /// When the lease sweep's idle check last ran (monotonic milliseconds).
     last_sweep_ms: Option<u64>,
     /// Test only: how many idle actions' workers ended, whatever their result.
@@ -309,6 +333,16 @@ impl IdlePlanner {
             }
             Phase::Failed => None,
             Phase::Active => decide(entry, config, view, plan, now_unix_ms),
+            // #405 O-2: the wake's claims (its startup package) still hold the instance.
+            Phase::Woken { .. } if view.in_use() => {
+                entry.in_use_at_unix_ms = Some(now_unix_ms);
+                None
+            }
+            // Free again: the wake's claims have ended, the startup package's run with them.
+            Phase::Woken { .. } => {
+                entry.phase = Phase::Active;
+                decide(entry, config, view, plan, now_unix_ms)
+            }
             // IDLE-2: a hold neither ends an idle instance's wait nor cancels its wake.
             Phase::Idle {
                 action,
@@ -384,28 +418,52 @@ impl IdlePlanner {
     }
 
     /// IDLE-1P (#405): the instances the idle action closed or is closing, by alias, each with
-    /// its action and its wake in effect: what the Runtime keeps across a start.
+    /// its action and its wake in effect: what the Runtime keeps across a start. #405 O-2: a
+    /// woken instance whose startup package has not run is still closed, `woken`, its wake the
+    /// time it was woken.
     pub(crate) fn closed(&self) -> BTreeMap<String, KeptIdle> {
         self.instances
             .iter()
-            .filter_map(|(alias, entry)| match entry.phase {
-                Phase::Acting {
-                    action,
-                    wake_at_unix_ms,
-                }
-                | Phase::Idle {
-                    action,
-                    wake_at_unix_ms,
-                } => Some((
-                    alias.clone(),
-                    KeptIdle {
+            .filter_map(|(alias, entry)| {
+                let kept = match entry.phase {
+                    Phase::Acting {
                         action,
                         wake_at_unix_ms,
+                    }
+                    | Phase::Idle {
+                        action,
+                        wake_at_unix_ms,
+                    } => KeptIdle {
+                        action,
+                        wake_at_unix_ms,
+                        woken: false,
                     },
-                )),
-                Phase::Active | Phase::Failed => None,
+                    Phase::Woken {
+                        action,
+                        woken_at_unix_ms,
+                    } => KeptIdle {
+                        action,
+                        wake_at_unix_ms: Some(woken_at_unix_ms),
+                        woken: true,
+                    },
+                    Phase::Active | Phase::Failed => return None,
+                };
+                Some((alias.clone(), kept))
             })
             .collect()
+    }
+
+    /// #405 N-2: binds the planner to this start's anchor (`host.contained_settlement`, this
+    /// start's start event sequence; none when the start has none), which every record of the
+    /// closed instances names.
+    pub(crate) fn bind_start(&mut self, start_anchor: Option<u64>) {
+        self.start_anchor = start_anchor;
+    }
+
+    /// #405 N-2: the start anchor the closed instances are kept under; none before the start's
+    /// restore bound one.
+    pub(crate) const fn start_anchor(&self) -> Option<u64> {
+        self.start_anchor
     }
 
     /// IDLE-1P: the closed instances when they differ from the ones the host kept last (all of
@@ -425,7 +483,9 @@ impl IdlePlanner {
     /// flight when the Runtime stopped, and an instance whose state the start does not know, are
     /// restored so too: what is left on them is not known, so they count as closed, never as
     /// open, and their wake brings them back through the startup package (the host restores the
-    /// latter with its wake at the start's time, review N-1).
+    /// latter with its wake at the start's time, review N-1). #405 O-2: so is an instance woken
+    /// before the stop whose startup package had not run (`kept.woken`): its wake, the time it was
+    /// woken, has passed, so the start's first check queues its startup package again.
     pub(crate) fn restore(&mut self, alias: &str, kept: KeptIdle) {
         self.instances.insert(
             alias.to_owned(),
@@ -534,7 +594,12 @@ fn wake(
     let due_now = plan.is_some_and(|plan| plan.due_now);
     let switched = config.action != action;
     if switched || due_now || wake_at_unix_ms.is_some_and(|at| at <= now_unix_ms) {
-        entry.phase = Phase::Active;
+        // #405 O-2: closed and woken until the wake's claims, its startup package's run among
+        // them, have ended.
+        entry.phase = Phase::Woken {
+            action,
+            woken_at_unix_ms: now_unix_ms,
+        };
         // The wake's claims hold the instance next: an action waits for a plan made after them.
         entry.in_use_at_unix_ms = Some(now_unix_ms);
         return Some(IdleStep::Wake {

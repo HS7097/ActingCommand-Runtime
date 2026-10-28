@@ -1910,6 +1910,7 @@ impl RuntimeHost {
             recovery_ladders: Mutex::new(BTreeMap::new()),
             ladder_busy_holds: Mutex::new(BTreeMap::new()),
             resource_fences: Mutex::new(BTreeMap::new()),
+            session_deaths: Mutex::new(BTreeSet::new()),
             device_links: Mutex::new(device_link::DeviceLinks::default()),
             device_states: Mutex::new(device_state::DeviceStates::default()),
             runtime_config: Mutex::new(actingcommand_runtime_config::EffectiveConfig::default()),
@@ -2338,7 +2339,8 @@ impl RuntimeHost {
             shared.record_policy_settlement_facts_on_start()?;
             // The scheduler reconciliation above precedes direct-run settlement; both
             // complete before background execution or root admission (#351 / #352).
-            shared.settle_previous_epoch_contained_runs()?;
+            // #405 N-2: the start anchors the idle record is bound to.
+            let start_anchors = shared.settle_previous_epoch_contained_runs()?;
             shared.expire_agent_sessions()?;
             shared.check_install_preparation()?;
             shared.restore_install_pauses()?;
@@ -2347,9 +2349,11 @@ impl RuntimeHost {
             shared.note_start_pauses(&host.scheduling_pause_restore)?;
             // IDLE-1P (#405): the instances the idle action closed and their wakes, as the pauses
             // are restored and before any instance is prepared; after an earlier start that kept
-            // none, or whose record another owner wrote (review M-2: an older build ran in
-            // between), every instance with an idle action counts as closed, never as open.
-            shared.restore_idle_state(previous_owner_epoch)?;
+            // none, or whose record a start other than the last one that completed its settlement
+            // wrote (review M-2: an older build ran in between; #405 N-2: the record is bound to
+            // that start's anchor, not to the latest owner), every instance with an idle action
+            // counts as closed, never as open.
+            shared.restore_idle_state(previous_owner_epoch, start_anchors)?;
             // Workflow #369 E3 (coordinator ruling on #670, safety net): each dispatch the start
             // could not settle is recorded and its instance paused, after the persisted pauses
             // are restored and before any instance is prepared.
@@ -5411,6 +5415,9 @@ struct HostShared {
     // Workflow #403: the instances an unconfirmed close of their own resources fenced (memory
     // only; a restart prepares and self-checks every instance again). A leaf lock.
     resource_fences: Mutex<BTreeMap<InstanceId, resource_fence::ResourceFence>>,
+    // ISO-2b (#419 R1): the instances whose device session died at a capture and has not
+    // finished a capture since (memory only; `HostShared::session_died_again`). A leaf lock.
+    session_deaths: Mutex<BTreeSet<InstanceId>>,
     // Workflow #398 RD-2: the handsets' device links and their watch (model-398 §4). A leaf
     // lock: nothing else is taken while it is held.
     device_links: Mutex<device_link::DeviceLinks>,

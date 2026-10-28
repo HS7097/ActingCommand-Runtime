@@ -51,6 +51,10 @@ mod gate_inst1_update;
 // Test-only: Workflow #421 INST-2, test rows D-1 to D-9 (#421 deploy design §8 S2).
 #[cfg(test)]
 mod gate_inst2_deploy;
+// Test-only: #411 P49, `mcp-entry list` judges an entry by its pid and its process creation time
+// (MCP-ENTRY review L4).
+#[cfg(test)]
+mod gate_411_p49;
 
 pub(crate) use host::{Host, SystemHost};
 // Workflow #421 INST-1, watchdog row 7a″: what the watchdog and `actingctl start` read.

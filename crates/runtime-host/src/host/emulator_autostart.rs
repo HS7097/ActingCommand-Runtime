@@ -24,7 +24,11 @@
 //! (`MuMuManager info`, the read that never starts anything) and ends as
 //! `emulator_autostart_skipped` when the emulator process runs, or as `emulator_autostart_failed`
 //! (the read's failure its cause) when the read fails; it never stops or restarts a running
-//! emulator.
+//! emulator. #405 O-2 (0.12.25, review M-1): the claim an idle wake requests (after
+//! `stop_emulator`) is also marked `idle_wake`; when it so finds the emulator running, it still
+//! queues the instance's startup package, once, as its Start would have handed it the key, so a
+//! restart that came while the woken instance's startup package waited in memory (behind a pause
+//! or an install hold) does not leave the game unstarted.
 //!
 //! Once granted, the claim runs on its instance's worker and holds the key throughout. It reads
 //! the operating system's connectivity status (`actingcommand_host_metrics`, P3; the Runtime
@@ -184,6 +188,9 @@ pub(super) struct PendingAutostart {
     /// claim reads the emulator status just before its Start instead of asking whether the
     /// binding is pending.
     watch: bool,
+    /// #405 O-2 (0.12.25, review M-1): an idle wake requested the claim (a `watch` claim): when it
+    /// finds the emulator running, it still queues the instance's startup package.
+    idle_wake: bool,
 }
 
 /// Binds the configured aliases to registered physical instances at startup, in configuration
@@ -281,6 +288,7 @@ impl HostShared {
                         instance_alias,
                         position,
                         watch: false,
+                        idle_wake: false,
                     },
                 )
                 .collect::<Vec<_>>()
@@ -323,18 +331,22 @@ impl HostShared {
     /// `position` whose emulator the watch found stopped; it does not block. It contends for the
     /// start turn from before its request, as a daemon start's claim does. A claim the queue
     /// refuses is recorded by the queue and reported (`emulator_autostart_failed`); only a failure
-    /// the Runtime does not survive is returned.
+    /// the Runtime does not survive is returned. #405 O-2 (review M-1): `idle_wake`, an idle wake
+    /// requests it (the claim then queues the startup package even when it finds the emulator
+    /// running).
     pub(super) fn request_watch_autostart(
         &self,
         position: usize,
         instance_id: InstanceId,
         instance_alias: &str,
+        idle_wake: bool,
     ) -> RuntimeHostResult<()> {
         let claim = PendingAutostart {
             instance_id,
             instance_alias: instance_alias.to_owned(),
             position,
             watch: true,
+            idle_wake,
         };
         self.autostart_turn(|turn| turn.enter(claim.position))?;
         match self.request_autostart_claim(&claim) {
@@ -550,7 +562,9 @@ impl HostShared {
     }
 
     /// Ends a hold before its Start: the key is released, and one report line says why. A
-    /// refused renewal is the start's refusal pair.
+    /// refused renewal is the start's refusal pair. #405 O-2 (review M-1): an idle wake's claim
+    /// that found the emulator running first queues the instance's startup package
+    /// (`queue_idle_wake_startup_package`); a failure to queue it is the line's cause.
     fn end_autostart_hold(
         &self,
         pending: &PendingAutostart,
@@ -563,6 +577,17 @@ impl HostShared {
                 Outcome::new(HostCode::EmulatorAutostartInterrupted).alias(alias)
             }
             HoldEnd::Superseded => Outcome::new(HostCode::EmulatorAutostartSuperseded).alias(alias),
+            HoldEnd::Running if pending.idle_wake => {
+                match self.queue_idle_wake_startup_package(pending, key) {
+                    Ok(()) => Outcome::new(HostCode::EmulatorAutostartSkipped).alias(alias),
+                    Err(failure) if failure.poison_runtime || failure.error.is_fatal() => {
+                        return Err(*failure.error);
+                    }
+                    Err(failure) => Outcome::new(HostCode::EmulatorAutostartFailed)
+                        .alias(alias)
+                        .caused_by(failure.error.outcome()),
+                }
+            }
             HoldEnd::Running => Outcome::new(HostCode::EmulatorAutostartSkipped).alias(alias),
             HoldEnd::Unread(cause) => Outcome::new(HostCode::EmulatorAutostartFailed)
                 .alias(alias)
@@ -580,6 +605,25 @@ impl HostShared {
         };
         self.release_host_key(key)?;
         self.report_emulator_autostart(line)
+    }
+
+    /// #405 O-2 (0.12.25, review M-1): an idle wake's claim that found the emulator already
+    /// running (a restart came while the woken instance's startup package waited in memory, or a
+    /// person started the emulator meanwhile) queues the instance's startup package once, through
+    /// the path a wake's own startup package takes: its scheduling intent under the claim's links
+    /// (`prepare_startup_package`), then its claim (`schedule_startup_package`, which cancels a
+    /// still-queued one), queued while this claim still holds the key, so the instance stays held
+    /// until the package has run; behind a pause or an install hold it waits queued as every
+    /// startup claim does. An instance without a startup package queues nothing.
+    fn queue_idle_wake_startup_package(
+        &self,
+        pending: &PendingAutostart,
+        key: &HostKey,
+    ) -> Result<(), RequestFailure> {
+        let resolved = self.resolve_instance(&pending.instance_alias)?;
+        let links = self.autostart_links(pending, key)?;
+        let package = self.prepare_startup_package(&resolved, links, key.request.request_id())?;
+        self.schedule_startup_package(package).map(|_| ())
     }
 
     /// P3: no internet access was reported in time. The start is refused with the existing

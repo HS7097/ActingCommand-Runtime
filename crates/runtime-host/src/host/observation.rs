@@ -116,6 +116,20 @@ fn runtime_capture_backend(
     }
 }
 
+/// ISO-2b (#419, ISO-M row E48): a capture sequence whose own result cannot be formed (`code`)
+/// fails only its request, non-fatal; its frames' observations were each recorded.
+fn capture_sequence_failure(code: HostCode) -> RequestFailure {
+    RequestFailure::request(
+        RuntimeHostError::request(
+            code,
+            ContractLocation::CaptureSequence,
+            RuntimeErrorCode::CaptureFailed,
+        ),
+        RuntimeReceiptState::Failed,
+        None,
+    )
+}
+
 impl HostShared {
     pub(super) fn observe_readonly(
         &self,
@@ -194,24 +208,13 @@ impl HostShared {
                 thread::sleep(Duration::from_millis(spec.interval_ms()));
             }
         }
-        // ISO-2 (#419, ISO-M row E48): an invariant of this sequence's own result is the
-        // observed instance's failure alone; its boundary fences that instance.
-        let sequence = CaptureSequence::new(spec, observations).map_err(|_| {
-            RequestFailure::poison_without_terminal(RuntimeHostError::instance_fault(
-                HostCode::CaptureSequenceResultInvalid,
-                ContractLocation::CaptureSequence,
-                RuntimeErrorCode::RuntimeHalted,
-                resolved.instance_id(),
-            ))
-        })?;
-        let terminal_event = last_terminal.ok_or_else(|| {
-            RequestFailure::poison_without_terminal(RuntimeHostError::instance_fault(
-                HostCode::CaptureSequenceTerminalMissing,
-                ContractLocation::CaptureSequence,
-                RuntimeErrorCode::RuntimeHalted,
-                resolved.instance_id(),
-            ))
-        })?;
+        // ISO-2b (#419, ISO-M row E48): an invariant of this sequence's own result fails only the
+        // request, non-fatal, with its own code; the instance and every frame it observed are
+        // sound, so nothing is fenced and the Runtime goes on.
+        let sequence = CaptureSequence::new(spec, observations)
+            .map_err(|_| capture_sequence_failure(HostCode::CaptureSequenceResultInvalid))?;
+        let terminal_event = last_terminal
+            .ok_or_else(|| capture_sequence_failure(HostCode::CaptureSequenceTerminalMissing))?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: Some(terminal(&terminal_event)),
@@ -419,6 +422,11 @@ impl HostShared {
                     OriginModule::Capture,
                 )
                 .map_err(RequestFailure::poison_without_terminal)?;
+                // ISO-2b (#419 R1): the instance's session finished a capture.
+                if let Some(instance) = links.instance_id() {
+                    self.session_alive(*instance, HostLocation::ExecuteCaptureBackend)
+                        .map_err(RequestFailure::poison_without_terminal)?;
+                }
                 frame
             }
             Err(error) => {
@@ -450,6 +458,14 @@ impl HostShared {
                         return Err(RequestFailure::poison_without_terminal(runtime_error));
                     }
                 }
+                // ISO-2b (#419 R1): the observed instance's session died again before any of
+                // its captures succeeded; once recorded, the observe holds only that instance.
+                let session_died_again = match links.instance_id() {
+                    Some(instance) => self
+                        .session_died_again(*instance, &error, HostLocation::ExecuteCaptureBackend)
+                        .map_err(RequestFailure::poison_without_terminal)?,
+                    None => false,
+                };
                 let payload = CapturePayloadDraft::failed_with_causes(
                     EventAction::CaptureObserve,
                     DiagnosticCode::CaptureFailed,
@@ -491,11 +507,17 @@ impl HostShared {
                         AuditInput::new(),
                     ),
                 )?;
-                return Err(RequestFailure::request(
+                let failure = RequestFailure::request(
                     runtime_error,
                     RuntimeReceiptState::Failed,
                     Some(terminal(&event)),
-                ));
+                );
+                if session_died_again && let Some(instance) = links.instance_id() {
+                    return Err(self
+                        .contain_session_death(failure, *instance, links.clone())
+                        .map_err(RequestFailure::poison_without_terminal)?);
+                }
+                return Err(failure);
             }
         };
         // #411 A35 (A35-S2): the frame-change digest, taken before the frame moves into the
@@ -606,16 +628,18 @@ impl HostShared {
                 .map_err(RequestFailure::poison_without_terminal)?,
             reference.project(true),
         )
-        // ISO-2 (#419, ISO-M row E48): the observed instance's failure alone.
+        // ISO-2b (#419, ISO-M row E48): an observation that cannot be formed from its frame fails
+        // only this observe, non-fatal, with its own code; nothing is fenced.
         .map_err(|_| {
-            let mut error = RuntimeHostError::fatal(
-                HostCode::ReadonlyObservationInvalid,
-                ContractLocation::ObserveReadonly,
-                RuntimeErrorCode::RuntimeHalted,
+            RequestFailure::request(
+                RuntimeHostError::request(
+                    HostCode::ReadonlyObservationInvalid,
+                    ContractLocation::ObserveReadonly,
+                    RuntimeErrorCode::CaptureFailed,
+                ),
+                RuntimeReceiptState::Failed,
+                None,
             )
-            .instance_scoped();
-            error.lifecycle.instance_id = links.instance_id().copied();
-            RequestFailure::poison_without_terminal(error)
         })?;
         self.append_capture_completed(
             links.clone(),

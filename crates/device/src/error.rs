@@ -608,9 +608,31 @@ struct StoredDeviceEvidence {
     recovery: Option<crate::AdbTargetRecovery>,
     /// #411 A50: why a capture open failed, when the backend could tell.
     capture_open: Option<CaptureOpenFailure>,
+    /// ISO-2b (#419 R1, ISO-M row E08): why the input's operation check stopped it.
+    input_check_stop: Option<crate::InputCheckStop>,
 }
 
 impl DeviceError {
+    /// ISO-2b (#419 R1, ISO-M row E08): an input that its operation check
+    /// ([`crate::InputOperationCheck`]) stopped because the work that admitted it ended
+    /// (`stop`), not because the device failed. The input cannot go on, so the error is fatal to
+    /// its operation; it names the stop, so the owner of that work ends it with its own code.
+    pub fn input_check_stopped(stop: crate::InputCheckStop, message: impl Into<String>) -> Self {
+        let mut error = Self::fatal(message);
+        error
+            .evidence
+            .get_or_insert_with(Default::default)
+            .input_check_stop = Some(stop);
+        error
+    }
+
+    /// ISO-2b (#419 R1, ISO-M row E08): why the input's operation check stopped it, when it did.
+    pub fn input_check_stop(&self) -> Option<crate::InputCheckStop> {
+        self.evidence
+            .as_deref()
+            .and_then(|evidence| evidence.input_check_stop)
+    }
+
     /// #411 A50: this error with the cause of the capture open it ended.
     pub fn with_capture_open_failure(mut self, failure: CaptureOpenFailure) -> Self {
         self.evidence

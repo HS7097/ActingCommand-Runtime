@@ -39,7 +39,7 @@ mod nemu_input;
 // #402 RD-3: the scrcpy continuous-stream backend for real devices.
 mod scrcpy;
 pub use nemu_input::{
-    InputCheckPhase, InputExecutionContext, InputOperationCheck, NemuAppIndex,
+    InputCheckPhase, InputCheckStop, InputExecutionContext, InputOperationCheck, NemuAppIndex,
     NemuApplicationTarget, NemuFrameGeometry, NemuInputConfig, NemuIpcSession, NemuSessionBackends,
 };
 pub use scrcpy::{SCRCPY_SERVER_SHA256, SCRCPY_SERVER_VERSION, ScrcpyBackend, ScrcpyConfig};

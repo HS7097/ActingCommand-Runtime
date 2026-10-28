@@ -25,6 +25,7 @@ dependencies = [
  "actingcommand-artifact-store",
  "actingcommand-contract",
  "actingcommand-device",
+ "actingcommand-host-metrics",
  "actingcommand-ledger",
  "actingcommand-pack-containment",
  "actingcommand-policy",
@@ -237,6 +238,7 @@ name = "actingcommand-mcp-entry"
 version = "0.1.0"
 dependencies = [
  "actingcommand-contract",
+ "actingcommand-host-metrics",
  "serde",
  "serde_json",
  "tempfile",

@@ -595,20 +595,30 @@ the backend self-check facts (source `device-proxy` or `capture`).
   `contained_settlement_anchor_invalid`.
 - `host.idle_state` (#405 IDLE-1P, 0.12.20) — runtime scope, `record_list`,
   no lifetime: the instances the idle action closed, or is closing. The first
-  row names the writer, `owner_epoch` alone (the recording owner's epoch);
+  row names the writer, `start_anchor` alone (an integer, since 0.12.25, #405
+  N-2: the start event sequence of the recording start, as
+  `host.contained_settlement` names it; it was the owner's `owner_epoch`);
   each further row is one instance (`instance_alias`, `action` `close_app` or
-  `stop_emulator`, and `wake_at_unix_ms` when a wake is planned). Recorded
+  `stop_emulator`, `wake_at_unix_ms` when a wake is planned, and, since
+  0.12.25 (#405 O-2), `woken` true for an instance woken whose startup package
+  has not run, its `wake_at_unix_ms` the time it was woken). Recorded
   whenever that set or a wake changes and again by the start that restores
   the idle planner from it ([runtime-config.md](runtime-config.md), "The
   `idle` section"). A start of a configuration that names an idle action
   records it even when no instance is closed, so the next start knows. A
-  start restores from it only when its writer is the owner before that start;
-  a record an earlier owner wrote (a start that kept none ran in between, such
-  as a rollback's older build) leaves every instance's state unknown (closed,
-  never open, with its wake at the start's time, so the start's first idle
-  check wakes it once). A value of another shape is `invalid_runtime_state_fact`
-  (operation `restore_idle_state`), recorded, and the start goes on with every
-  instance's state unknown.
+  start restores from it only when its writer is the last start that
+  completed its settlement (the anchor `host.contained_settlement` named
+  before that start; an owner that settled no start in between, such as an
+  offline ledger maintenance, leaves it current); a record another start
+  wrote (a start that kept none ran in between, such as a rollback's older
+  build) leaves every instance's state unknown (closed, never open, with its
+  wake at the start's time, so the start's first idle check wakes it once). A
+  woken row is restored as closed, owing its wake at the time it was woken, so
+  the start's first idle check queues its startup package again. A value of
+  another shape is `invalid_runtime_state_fact` (operation
+  `restore_idle_state`), recorded, and the start goes on with every
+  instance's state unknown; a record a build before 0.12.25 wrote (its writer
+  row names `owner_epoch`) is one.
 
 `contracts/actingd-check-config.md` lists the subsystems and parameters
 `actingd` reports; `actingctl facts --program` returns both records as part of

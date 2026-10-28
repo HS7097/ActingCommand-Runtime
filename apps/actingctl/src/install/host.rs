@@ -43,6 +43,11 @@ pub(crate) struct RunningImage {
     pub(crate) path: String,
     /// Whether its command line serves MCP (`mcp-serve`).
     pub(crate) mcp_serve: bool,
+    /// #411 P49 (MCP-ENTRY review L9): the pid of the process that started it, as the operating
+    /// system recorded it; the plan reads it to tell an MCP entry's child from a server a client
+    /// started itself.
+    #[serde(skip)]
+    pub(crate) parent_pid: Option<u32>,
 }
 
 /// A program that ran to its end: its exit code and what it printed.
@@ -162,7 +167,7 @@ impl Host for SystemHost {
     fn processes_under(&self, root: &Path) -> Result<Vec<RunningImage>, Outcome> {
         const SCRIPT: &str = "$ErrorActionPreference = 'Stop'\n\
             $ProgressPreference = 'SilentlyContinue'\n\
-            $found = @(Get-CimInstance -ClassName Win32_Process | Where-Object { $_.ExecutablePath } | ForEach-Object { [pscustomobject]@{ pid = [uint32]$_.ProcessId; path = $_.ExecutablePath; mcp = ([string]$_.CommandLine).Contains('mcp-serve') } })\n\
+            $found = @(Get-CimInstance -ClassName Win32_Process | Where-Object { $_.ExecutablePath } | ForEach-Object { [pscustomobject]@{ pid = [uint32]$_.ProcessId; path = $_.ExecutablePath; mcp = ([string]$_.CommandLine).Contains('mcp-serve'); parent = [uint32]$_.ParentProcessId } })\n\
             [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false\n\
             [Console]::Out.Write((ConvertTo-Json -InputObject $found -Compress -Depth 3))\n";
         let output = crate::watchdog::powershell::run(
@@ -384,6 +389,9 @@ pub(crate) fn parse_processes(output: &str, root: &Path) -> Result<Vec<RunningIm
                 pid,
                 path: path.to_owned(),
                 mcp_serve: row["mcp"].as_bool().unwrap_or(false),
+                parent_pid: row["parent"]
+                    .as_u64()
+                    .and_then(|parent| u32::try_from(parent).ok()),
             });
         }
     }

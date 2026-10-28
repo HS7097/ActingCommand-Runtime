@@ -952,6 +952,7 @@ fn inst2_d_7b_a_running_image_met_before_the_close_fails_the_gate_and_closes_not
         pid: 7_778,
         path: format!("{plain}\\tools\\actingledger.exe"),
         mcp_serve: false,
+        parent_pid: None,
     });
     let before = calls(&host);
     assert_eq!(
@@ -1663,6 +1664,7 @@ fn inst2_n4_a_rollback_resumed_past_its_gate_reverses_nothing_while_an_actingd_r
             super::files::plain(&root)
         ),
         mcp_serve: false,
+        parent_pid: None,
     });
     let before = calls(&host);
 

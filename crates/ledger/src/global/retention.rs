@@ -25,14 +25,17 @@ mod material;
 mod open;
 mod owner_read;
 mod prior_epoch;
+mod proof_levels;
 mod resident;
 mod view;
 pub use material::{LedgerFrameRefsNote, LedgerOpenTiming, OwnerReadFull};
+// #422 W1-8 (P27): the persistent proof set the writer publishes its eviction proofs in.
 pub(super) use material::{PendingMaterial, elapsed_ms};
 #[cfg(test)]
 pub(super) use owner_read::{
     OwnerState, read_every_owner_record_for_test, take_opened_owner_state_for_test,
 };
+pub(in crate::global) use proof_levels::ProofLevels;
 pub use resident::live_frame_ids;
 pub use view::{
     FrameErrorPoint, FrameRetentionClass, FrameRetentionFrame, FrameRetentionSwitches,
@@ -92,22 +95,33 @@ pub(super) struct RetentionIndex {
     /// bounded read did not place a retained owner in a start's epoch, or a dump was present.
     owner_read_full: Option<OwnerReadFull>,
     /// #422 QR-1: moves whenever an object's eviction proof is set, completed or taken in, so the
-    /// writer copies its proofs for the reader pool only when they changed
+    /// writer publishes its proofs for the reader pool anew only when they changed
     /// ([`Self::published_proofs`]).
     proof_revision: u64,
+    /// #422 W1-8 (P27; QR-1 review L-3): every object's eviction proof, as the objects hold it,
+    /// in the persistent set a publication shares instead of copying it; set wherever
+    /// `proof_revision` moves.
+    proof_set: ProofLevels,
 }
 
 /// #422 QR-1: the eviction proofs the writer published for its reader pool, as of its committed
-/// head when they last changed ([`RetentionIndex::published_proofs`]).
+/// head when they last changed ([`RetentionIndex::published_proofs`]). #422 W1-8 (P27): they
+/// share the writer's persistent proof set as it was then ([`ProofLevels`]).
 pub(in crate::global) struct PublishedProofs {
     revision: u64,
-    proofs: BTreeMap<ArtifactId, ArtifactEvictionProof>,
+    proofs: ProofLevels,
 }
 
 impl PublishedProofs {
     /// The revision of the writer's proofs these are a copy of.
     pub(in crate::global) const fn revision(&self) -> u64 {
         self.revision
+    }
+
+    /// Tests: `artifact`'s proof as published.
+    #[cfg(test)]
+    pub(in crate::global) fn proof(&self, artifact: &ArtifactId) -> Option<&ArtifactEvictionProof> {
+        self.proofs.get(artifact)
     }
 }
 
@@ -316,18 +330,22 @@ impl RetentionIndex {
         self.proof_revision
     }
 
-    /// #422 QR-1: a copy of every eviction proof this index holds, for the reader pool. The proof
-    /// set is resident (a pass start never drops a proven object), so the copy is the proofs of
-    /// the whole committed history; the writer makes it only when the revision moved.
+    /// #422 QR-1: every eviction proof this index holds, for the reader pool. The proof set is
+    /// resident (a pass start never drops a proven object), so these are the proofs of the whole
+    /// committed history; the writer publishes them anew only when the revision moved. #422 W1-8
+    /// (P27; review L-3): they share the persistent proof set, whose levels this copies the
+    /// handles of, never the proofs.
     pub(super) fn published_proofs(&self) -> PublishedProofs {
         PublishedProofs {
             revision: self.proof_revision,
-            proofs: self
-                .objects
-                .iter()
-                .filter_map(|(id, object)| object.proof.clone().map(|proof| (*id, proof)))
-                .collect(),
+            proofs: self.proof_set.clone(),
         }
+    }
+
+    /// #422 W1-8 (P27): `artifact`'s proof is now `proof`, in the persistent proof set too.
+    fn proof_changed(&mut self, artifact: ArtifactId, proof: ArtifactEvictionProof) {
+        self.proof_set.set(artifact, proof);
+        self.proof_revision = self.proof_revision.wrapping_add(1);
     }
 
     pub(super) fn has_pending(&self) -> bool {
@@ -1169,14 +1187,15 @@ impl RetentionIndex {
                     self.pending_objects
                         .insert(fact.identity().artifact.artifact_id);
                     self.sealed_scopes.extend(scopes(event));
-                    object.proof = Some(ArtifactEvictionProof {
+                    let proof = ArtifactEvictionProof {
                         identity: fact.identity().clone(),
                         intent: terminal(event),
                         terminal_event: None,
                         disposition: None,
                         through_sequence: event.sequence(),
-                    });
-                    self.proof_revision = self.proof_revision.wrapping_add(1);
+                    };
+                    object.proof = Some(proof.clone());
+                    self.proof_changed(fact.identity().artifact.artifact_id, proof);
                 }
                 ArtifactRetentionFact::EvictionOutcome(outcome) => {
                     self.pending_objects
@@ -1187,7 +1206,8 @@ impl RetentionIndex {
                         .expect("intent validated before commit");
                     proof.terminal_event = Some(terminal(event));
                     proof.disposition = Some(outcome.disposition);
-                    self.proof_revision = self.proof_revision.wrapping_add(1);
+                    let proof = proof.clone();
+                    self.proof_changed(fact.identity().artifact.artifact_id, proof);
                 }
             }
         }

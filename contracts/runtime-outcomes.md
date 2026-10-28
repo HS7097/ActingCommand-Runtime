@@ -334,6 +334,38 @@ its boundary's, and keeps the kernel's code and severity. A kernel code on the G
   a session close at a lease end, that failed with its resources confirmed holds nothing: its
   failure is recorded and the work goes on. An unconfirmed close fences the instance (#403).
 
+**ISO-2b** (Runtime 0.12.25; R1, outcome-code spec §7 amendment 10-24):
+- **A session that dies twice in a row holds its instance.** A capture (a run's, an observe's, a
+  Lab operation's) that meets its instance's session dead (`execution_session_panicked`,
+  `execution_session_state_poisoned`, `execution_session_closed`,
+  `execution_session_unavailable`, `execution_session_response_lost`) fails only its work and
+  retires the session, as above. When no capture of that instance succeeded since its previous
+  such death, the instance is fenced at once (`contain_failure`, whatever the work's boundary):
+  the work ends with the fence's non-fatal failure, the capture's own record kept, and every
+  other instance goes on. The fence ends the count; after the instance's recovery its next
+  death is a first one again. A session death that an input meets is not counted. The
+  monitor's probe neither counts a death nor clears the count; that is left to ISO-4a. A
+  session-death code is not on the policy's always-severe list (`is_severe_policy_failure`), so
+  a scheduled run's first death is an ordinary failure toward its task's failure pause.
+- **Operation invariants fail only the operation.** A capture sequence whose result cannot be
+  formed (`capture_sequence_result_invalid`, `capture_sequence_terminal_missing`), an observe
+  whose observation cannot be formed from its frame (`readonly_observation_invalid`) and a Lab
+  declared operation whose own state broke (`contained_task_effect_invalid`,
+  `contained_task_state_invalid`, `contained_task_effect_frame_identity_mismatch`) fail their
+  request or operation, non-fatal (`capture_failed`, resp. `backend_operation_failed`); the Lab
+  operation's record is written. Nothing is fenced (ISO-M rows E45, E48).
+- **A Nemu input stopped by its check names why** (ISO-M row E08). The device's input check
+  (`InputOperationCheck`) answers an input that the work admitting it ended with the stop
+  (`DeviceError::input_check_stopped`: its deadline, its lease, its cancellation), not a device
+  failure, and the kernel's failure carries it. Unless the stop left the contact unconfirmed
+  (#403 fences then) or the failure carries a second one (a session close that failed with its
+  resources confirmed: the kernel's failure stays, so that close is recorded too), the input
+  fails only its operation with that work's own code: the run's
+  `contained_task_deadline_exceeded`, `contained_task_cancelled` or `contained_task_paused` (so
+  the run ends as on its own deadline or cancel), or the lease's refusal (`lease_expired`,
+  `lease_missing`, ...). The input's own command timeout, the clock, the scheduler's own failures
+  and a close's check stay the device's failure, as before.
+
 **A lock of one instance alone** that guards no data (its admission guard, its queue-order lock;
 R8) is taken through `lock_instance`: when a panic left it poisoned, the poison is cleared and
 the work fails with `instance_lock_poisoned` (error, ladder class `none`), an `Instance` failure

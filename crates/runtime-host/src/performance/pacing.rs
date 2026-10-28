@@ -1010,6 +1010,8 @@ impl PacingShadow {
             host: host_status,
             instances: rows,
             warnings,
+            // #422 W1-8 (P29): the host's status read adds the ledger's pages.
+            ledger_read_pages: None,
         }
     }
 }

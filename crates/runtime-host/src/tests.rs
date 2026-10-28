@@ -346,6 +346,10 @@ mod gate_419_iso1;
 // widened A46 fence and the retained-session closes of the emulator rung, the autostart, an
 // operator's restart, a pause, a handset and a lease end.
 mod gate_419_iso2;
+// ISO-2b (#419, ISO-M R1): a device session that dies twice in a row holds only its instance;
+// a Nemu input that the run's deadline, its cancel or its lease stopped fails with that work's
+// own code, not as a device failure.
+mod gate_419_iso2b;
 // #411 A35 (A35-S2, host keys 156 to 161), register §1.168: after a listed return-home failure
 // the ladder probes the screen; while it still changes, the ladder holds instead of restarting.
 mod gate_411_a35;
@@ -433,6 +437,9 @@ mod gate_ln_ws_f;
 // #422 IDLE-OV: a QueryEvents page whose read its budget stopped answers `ledger_read_failure`
 // (`runtime_unavailable`, failed), not `protocol_invalid`.
 mod gate_422_idle_ov;
+// #422 W1-8: Status, MonitorStatus and RuntimeFactSnapshot read the published ledger head and
+// answer while the writer is held (P30); PerformanceStatus shows the reader pool's pages (P29).
+mod gate_w1_8;
 // #421 S2-IF: `StartReport` names an instruction kept over a changed default base-changed and
 // restored, never dropped; a key gone or superseded is dropped.
 mod gate_421_s2if;
@@ -441,6 +448,9 @@ mod gate_epoch_close;
 // #411 A65: the start settles the open direct runs of a previous epoch larger than one unpaged
 // read, and of the epochs before a start that failed after appending its start event.
 mod gate_411_a65;
+// #411 P51: the next start closes no scope of an epoch's client actions (MCP's `client.action`
+// after each Lab observation), so its closes do not grow with them.
+mod gate_411_p51;
 // #411 A67-R: a start whose memory sample leaves no frame budget after the OS reserve goes on, and
 // records the floor warning once in the daemon's log and once in the ledger.
 mod gate_411_a67r;

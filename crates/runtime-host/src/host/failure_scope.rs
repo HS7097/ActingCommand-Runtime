@@ -28,6 +28,7 @@
 use super::*;
 use crate::FailureScope;
 use crate::codes::{ConfigHostCode, HostCode, HostLocation};
+use crate::error::spelled;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Category, Code, Location};
 use actingcommand_execution_kernel::ExecutionKernelCode;
@@ -586,6 +587,18 @@ pub(crate) const GLOBAL_CODES: &[GlobalCode] = &[
     ),
 ];
 
+/// ISO-2b (#419 R1, ISO-M rows E11, E12): the kernel codes of an instance's device session that
+/// died: its thread panicked, ended or lost its reply, or its state lock was poisoned. A capture
+/// that meets one fails only its work and retires the session; the instance's second such death
+/// in a row fences it (`HostShared::session_died_again`).
+pub(crate) const SESSION_DEATH_CODES: &[Code] = &[
+    ExecutionKernelCode::ExecutionSessionPanicked.code(),
+    ExecutionKernelCode::ExecutionSessionStatePoisoned.code(),
+    ExecutionKernelCode::ExecutionSessionClosed.code(),
+    ExecutionKernelCode::ExecutionSessionUnavailable.code(),
+    ExecutionKernelCode::ExecutionSessionResponseLost.code(),
+];
+
 /// The Global family of the code spelled `spelling`: its family on [`GLOBAL_CODES`], else
 /// `CatalogFatal` when the embedded catalog files the code under category `fatal`; `None` for a
 /// code off the list.
@@ -690,6 +703,65 @@ impl HostShared {
         .values()
         .find(|instance| instance.instance_alias == alias)
         .map(|instance| instance.instance_id))
+    }
+
+    /// ISO-2b (#419 R1; outcome-code spec §7, amendment 10-24: a per-instance unit that dies
+    /// again before it finishes one unit of work stops only its instance): a capture of
+    /// `instance` failed with `error`; a death of its device session is one of
+    /// [`SESSION_DEATH_CODES`]. Returns whether this is the session's second death in a row,
+    /// that is, no capture of the instance succeeded since its previous death
+    /// ([`Self::session_alive`]). The second death ends the count: its caller fences the
+    /// instance, and the next death after its recovery is a first one again. Any other failure
+    /// is no death and changes nothing.
+    pub(super) fn session_died_again(
+        &self,
+        instance: InstanceId,
+        error: &ExecutionKernelError,
+        operation: HostLocation,
+    ) -> RuntimeHostResult<bool> {
+        if !spelled(error.code().as_str(), SESSION_DEATH_CODES) {
+            return Ok(false);
+        }
+        let mut deaths = lock(&self.session_deaths, operation)?;
+        if deaths.remove(&instance) {
+            return Ok(true);
+        }
+        deaths.insert(instance);
+        Ok(false)
+    }
+
+    /// ISO-2b (#419 R1): a capture of `instance` succeeded, so its session finished a unit of
+    /// work; the instance's next session death is a first one.
+    pub(super) fn session_alive(
+        &self,
+        instance: InstanceId,
+        operation: HostLocation,
+    ) -> RuntimeHostResult<()> {
+        lock(&self.session_deaths, operation)?.remove(&instance);
+        Ok(())
+    }
+
+    /// ISO-2b (#419 R1): `failure`, a capture of `instance` whose session died for the second
+    /// time in a row, holds only that instance. It goes to the one decision point at once
+    /// ([`Self::contain_failure`]), whatever boundary its work has: the instance is fenced and the
+    /// work ends with the fence's non-fatal failure, the capture's own record and terminal kept;
+    /// every other instance goes on. A Runtime that latched already keeps its first condition.
+    pub(super) fn contain_session_death(
+        &self,
+        failure: RequestFailure,
+        instance: InstanceId,
+        links: EventLinksDraft,
+    ) -> RuntimeHostResult<RequestFailure> {
+        Ok(
+            match self.contain_failure((*failure.error).clone(), Some(instance), links)? {
+                Contained::Fenced(fence) | Contained::Failed(fence) => failure.fenced(fence),
+                Contained::Latched(error) => RequestFailure {
+                    error: Box::new(error),
+                    poison_runtime: true,
+                    ..failure
+                },
+            },
+        )
     }
 }
 

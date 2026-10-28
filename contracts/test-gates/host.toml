@@ -1555,7 +1555,7 @@ tests = [
 ]
 incident = ["#411 B8"]
 
-# #411 A51 (0.12.9; register §1.151 A51-7, A51-8; no persisted ledger shape; brief A51 T3, T5; the next free host key above 129): while the writer is held in a read, a Status and the performance loop's runtime-fact seal answer the non-fatal writer_response_timeout, nothing is latched and no stop is requested, and once the read ends Status completes; the first fatal condition the host latches reaches the daemon reporter at once, before any close, and only the first
+# #411 A51 (0.12.9; register §1.151 A51-7, A51-8; no persisted ledger shape; brief A51 T3, T5; the next free host key above 129): while the writer is held in a read, the performance loop's runtime-fact seal answers the non-fatal writer_response_timeout, nothing is latched and no stop is requested, and a Status completes, held or not (#422 W1-8 P30: it reads the published head, no longer the writer's); the first fatal condition the host latches reaches the daemon reporter at once, before any close, and only the first
 [[gate]]
 key = "130"
 coverage = "Y"
@@ -2452,7 +2452,7 @@ tests = [
 ]
 incident = ["#411 RL-1c"]
 
-# #405 IDLE-1P (brief rd-1027/brief-idle1p.md; production 10-27: a restart at 17:32 forgot a game closed since 14:35 and its 17:54 wake, and its 18:01 task met the closed game): through the host on a manual clock, an instance the idle action closed is kept as host.idle_state with its wake, and a restart restores it: it is not acted on again, and its wake fires at its time (L-1) or, restarted within the wake lead, at the start's first check before any plan (L-2); after an earlier start that kept no state the instance counts as closed, never as open: no action, and a wake at its next task minus the lead (L-3); idle.close_app_wake_lead_ms defaults to 300000 for the section and every instance, and an explicit value in the file or an instruction wins (L-4); from a recorded evaluation, a fact-refresh reading (selected, held back by the idle action, or by its own interval) with no due task neither wakes the closed instance nor moves its wake, which comes at the next task minus the lead (L-5), and a task that needs the reading, due now or within the lead, wakes it (L-6); review fixes (rd-1027/brief-idle1p-fix1.md): the reading held by its own minimum interval or failure backoff keeps its wake while the task waiting for it takes none, the shape the evaluator gives (M-1, L-5 case 3); host.idle_state names its writer's owner_epoch, and a record an earlier owner wrote (an older build ran in between and closed the instance unrecorded) leaves the instance closed, never open: no action, and a wake at its next task minus the lead (M-2); the daemon-start emulator start leaves an emulator the restored stop_emulator holds stopped: no autostart claim and no Start before its wake (L-3); any eligible task with no wake of its own later than the evaluation is due, not only the top-ranked one: an open instance is not closed and a closed one is woken (L-2); review fixes, round 2 (rd-1027/brief-idle1p-fix2.md): a start without a usable record (none after an earlier start, another owner's, unreadable) restores each closed instance with its wake at the start, so L-3 and M-2 see it woken once at the start's first check and never acted on; an instance whose only work waits for an expired status reading (no task wake, the reading held back) is woken once at the first check, and the next plan after the reading closes it again with its wake at the task's next wake minus the lead (N-1); with close_app the wake's startup claim is claimed at once, and under a pause of the instance restored at the start (a standing pause or the install hold) it waits queued, a later check claims and wakes nothing more, and it gets the key only after the resume (N-1); an abandoned action whose key release and record both fail reports both under the instance, the release's first, and neither latches the Runtime (N-3)
+# #405 IDLE-1P (brief rd-1027/brief-idle1p.md; production 10-27: a restart at 17:32 forgot a game closed since 14:35 and its 17:54 wake, and its 18:01 task met the closed game): through the host on a manual clock, an instance the idle action closed is kept as host.idle_state with its wake, and a restart restores it: it is not acted on again, and its wake fires at its time (L-1) or, restarted within the wake lead, at the start's first check before any plan (L-2); after an earlier start that kept no state the instance counts as closed, never as open: no action, and a wake at its next task minus the lead (L-3); idle.close_app_wake_lead_ms defaults to 300000 for the section and every instance, and an explicit value in the file or an instruction wins (L-4); from a recorded evaluation, a fact-refresh reading (selected, held back by the idle action, or by its own interval) with no due task neither wakes the closed instance nor moves its wake, which comes at the next task minus the lead (L-5), and a task that needs the reading, due now or within the lead, wakes it (L-6); review fixes (rd-1027/brief-idle1p-fix1.md): the reading held by its own minimum interval or failure backoff keeps its wake while the task waiting for it takes none, the shape the evaluator gives (M-1, L-5 case 3); host.idle_state names its writer (its owner_epoch; since 0.12.25 its start anchor, #405 N-2), and a record an earlier owner wrote (an older build ran in between and closed the instance unrecorded) leaves the instance closed, never open: no action, and a wake at its next task minus the lead (M-2); since 0.12.25 (#405 O-2) L-1, L-3, M-2 and N-1 see the woken instance kept closed and woken after its wake, and (review M-1) the stop_emulator N-1's wake start, which finds the emulator running, queues the startup package once and the next plan closes the instance again once that claim has given its key up; the daemon-start emulator start leaves an emulator the restored stop_emulator holds stopped: no autostart claim and no Start before its wake (L-3); any eligible task with no wake of its own later than the evaluation is due, not only the top-ranked one: an open instance is not closed and a closed one is woken (L-2); review fixes, round 2 (rd-1027/brief-idle1p-fix2.md): a start without a usable record (none after an earlier start, another owner's, unreadable) restores each closed instance with its wake at the start, so L-3 and M-2 see it woken once at the start's first check and never acted on; an instance whose only work waits for an expired status reading (no task wake, the reading held back) is woken once at the first check, and the next plan after the reading closes it again with its wake at the task's next wake minus the lead (N-1); with close_app the wake's startup claim is claimed at once, and under a pause of the instance restored at the start (a standing pause or the install hold) it waits queued, a later check claims and wakes nothing more, and it gets the key only after the resume (N-1); an abandoned action whose key release and record both fail reports both under the instance, the release's first, and neither latches the Runtime (N-3)
 [[gate]]
 coverage = "Y"
 tests = [
@@ -2470,6 +2470,18 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_idle1p::idle1p_n3_both_failures_of_an_abandoned_action_are_reported",
 ]
 incident = ["#405 IDLE-1P"]
+
+# #405 O-2, N-2, N-5 (0.12.25; brief rd-1028/brief-wave1.md W1-2; #405 comments 6445765189 and 6444911128): a wake that falls due while a pause holds the instance only queues its startup package in memory, so host.idle_state keeps the instance closed and woken (woken, its wake the time it was woken) while its wake's claims hold it and no longer once it is free, and a start restores a woken instance closed and wakes it again at once (O-2, the planner); through the host with close_app, a restart while that startup claim waits behind the pause restores the instance closed, its first check wakes it again, and the startup package gets the key after the resume (O-2); the same with stop_emulator (review M-1): the first wake's configured emulator start starts the emulator under the pause and its startup claim waits, and after a restart the wake's start finds the emulator running, starts nothing and still queues the startup package once, which gets the key after the resume (O-2); host.idle_state is bound to the start anchor (host.contained_settlement) instead of the latest owner, so an owner in between that settled no start (a start that failed before its settlement, as an offline ledger maintenance takes the owner) leaves the record current: the instance is restored closed with its kept wake, neither woken at the restart nor acted on (N-2); an action carried out whose key release and record both fail reports both under the instance and the action's links through the helper an abandoned action's take, the release's first, ends before its own record, and neither latches the Runtime (N-5)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_idle1p::idle1p_o2_a_woken_instance_is_kept_closed_until_its_wakes_claims_end",
+    "actingcommand-runtime-host::lib::tests::gate_idle1p::idle1p_o2_a_restart_while_the_wake_is_queued_runs_the_startup_package_after_it",
+    "actingcommand-runtime-host::lib::tests::gate_idle1p::idle1p_m1_a_stop_emulator_restart_while_the_wake_is_queued_runs_the_startup_package_after_it",
+    "actingcommand-runtime-host::lib::tests::gate_idle1p::idle1p_n2_an_owner_that_settled_no_start_in_between_leaves_the_record_current",
+    "actingcommand-runtime-host::lib::tests::gate_idle1p::idle1p_n5_both_failures_of_a_finished_action_are_reported",
+]
+incident = ["#405 O-2", "#405 N-2", "#405 N-5"]
 
 # #421 S2-IF (v0.12.21; brief rd-1028/brief-s2-instr-fix.md; production 10-28 10:11: S2 rolled a good update back because StartReport listed three instructions kept over a changed default as dropped): through the host, StartReport names an instruction kept over a default that changed in instructions_base_changed, counts it restored and never lists it in instructions_dropped, its value still in effect (T-1), and again on the rollback's start with the default changed back (T-4); an instruction whose key is gone (T-2) or that the file superseded, an explicit value changed or a default now named (T-3), is listed in instructions_dropped and not counted restored
 [[gate]]
@@ -2507,3 +2519,33 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_411_a35::a56_t2_an_unrecognised_changing_screen_still_holds_at_the_recheck",
 ]
 incident = ["#411 A56"]
+
+# #411 P51 (v0.12.25; brief rd-1028/brief-wave1.md W1-10, board #411 6437869880; production 10-27: a start wrote 1 651 prior-epoch scope closes, 1 559 of them for the request scopes of MCP's client.action records after ac_lab_observe): N client actions of an instance in one epoch, then a restart on the same state root: the next start writes no close for their scopes, for N = 1 and N = 4 alike, so its closes do not grow with them
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_p51::p51_the_next_start_closes_no_scope_of_an_epochs_client_actions",
+]
+incident = ["#411 P51"]
+
+# ISO-2b (Workflow #419, ISO-2 acceptance 6399693120; ISO-M R1, rows E08, E11, E12; outcome-code spec §7 amendment 10-24), each on its own host on a manual clock: X's device session that dies at a run's capture twice in a row, no capture of X succeeding between, fences X (caused by the dead session) while one death fails only its run, and a death after a successful capture of X is a first one again; the Runtime does not latch and Y's run completes. X's Nemu input check answers an input that the run's deadline, the run's client cancel or the lapsed lease stopped with that stop (Deadline, Cancelled, Lease), not a device failure, the final up staying allowed after a cancel; the input path makes it the run's contained_task_deadline_exceeded or contained_task_cancelled, or the scheduler's own lease refusal, non-fatal and of the operation alone. A scheduled run whose session dies once fails only that run: the policy settles it as a Recoverable failure with a retry scheduled, so its task is not paused (the session-death codes are off the always-severe list)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_419_iso2b::iso2b_a_a_second_session_death_in_a_row_fences_only_x",
+    "actingcommand-runtime-host::lib::tests::gate_419_iso2b::iso2b_b_a_capture_between_two_deaths_keeps_x_unfenced",
+    "actingcommand-runtime-host::lib::tests::gate_419_iso2b::iso2b_c_a_nemu_input_past_the_run_deadline_fails_with_the_run_deadline_code",
+    "actingcommand-runtime-host::lib::tests::gate_419_iso2b::iso2b_d_a_cancelled_run_stops_its_nemu_input_with_the_cancel_code",
+    "actingcommand-runtime-host::lib::tests::gate_419_iso2b::iso2b_e_a_lapsed_lease_stops_the_nemu_input_with_the_lease_refusal",
+    "actingcommand-runtime-host::lib::tests::gate_419_iso2b::iso2b_f_a_single_session_death_does_not_pause_the_scheduled_task",
+]
+incident = ["#419"]
+
+# W1-8 (#422; brief rd-1028/brief-wave1.md W1-8; #422 6463703245, 6461256427 L-4's follow-up): while the writer is held in a read of its own, Status, MonitorStatus and RuntimeFactSnapshot each complete at the one head the writer last published, nothing latches and no stop is requested (T7, P30); PerformanceStatus shows ledger_read_pages, which counts the QueryEvents pages the reader pool read, with their times in order and the status' shape rules kept (T8, P29)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_w1_8::w1_8_t7_status_monitor_and_fact_snapshot_answer_at_the_published_head_while_the_writer_is_held",
+    "actingcommand-runtime-host::lib::tests::gate_w1_8::w1_8_t8_the_performance_status_shows_the_reader_pools_pages",
+]
+incident = ["#422 W1-8"]
