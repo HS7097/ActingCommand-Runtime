@@ -82,6 +82,14 @@
 //!   package has run, so a restart while the startup package waits queued in memory (behind a
 //!   pause or a deploy's hold) wakes it again. The configured emulator start at start leaves an
 //!   emulator the action holds stopped to its wake.
+//! - **A startup package queued behind a pause** (W2-B, 0.12.26; review W1-6 M1): the same record
+//!   keeps each instance whose startup package an emulator start (an operator's `start` /
+//!   `restart`, or a configured start) queued behind a scheduling pause, from the hand-off until
+//!   its claim is granted or an emulator control cancels it (`keep_startup_package`,
+//!   `forget_startup_package`). A stop drops that claim (`lease.queue_disconnected`); the next
+//!   start restores the record and, after the daemon-start preparation, queues the package again
+//!   behind the restored pause (`requeue_startup_packages_on_start`), so it runs once after the
+//!   resume.
 //! - **The scheduler's fact refresh** (IDLE-1P): the closed instances are an input of every
 //!   evaluation (`HostShared::idle_closed_for_policy`); a reading of one waits for its next wake
 //!   unless a task that needs it is due, and the plan the check reads keeps the reading apart
@@ -94,9 +102,10 @@ use super::input::ApplicationKey;
 use super::lease::HostClaim;
 use super::resource_fence::UnconfirmedResources;
 use super::*;
-use crate::codes::{HostCode, IdleCode, IdleLocation};
+use crate::codes::{HostCode, HostLocation, IdleCode, IdleLocation};
 use crate::idle_action::{
-    IdleEnd, IdlePlan, IdlePlanner, IdleRequirement, IdleStep, IdleView, KeptIdle, WakeWork,
+    IdleEnd, IdlePlan, IdlePlanner, IdleRequirement, IdleStep, IdleView, KeptIdle, KeptState,
+    WakeWork,
 };
 use actingcommand_contract::codes::SanitizationCode;
 use actingcommand_contract::outcome::Outcome;
@@ -115,9 +124,11 @@ const IDLE_SWEEP_INTERVAL_MS: u64 = 1_000;
 /// `host.contained_settlement` names it; review M-2 named the owner epoch); every further row is
 /// one instance, `instance_alias`, `action` (`close_app` or `stop_emulator`), when one is planned
 /// `wake_at_unix_ms`, and #405 O-2 `woken` (true) for an instance woken whose startup package has
-/// not run, its wake then the time it was woken. The idle planner's changes record it; a start
-/// restores the planner from it when the last start that completed its settlement wrote it, and
-/// records it again.
+/// not run, its wake then the time it was woken. W2-B (0.12.26): after them, one row per instance
+/// whose startup package an emulator start queued behind a scheduling pause, `instance_alias` and
+/// `startup_package_queued` (true) alone. The idle planner's changes record it; a start restores
+/// the planner from it when the last start that completed its settlement wrote it, and records it
+/// again.
 const IDLE_STATE_FACT_KEY: &str = "host.idle_state";
 /// The member of a `host.idle_state` writer row.
 const KEPT_ANCHOR: &str = "start_anchor";
@@ -126,6 +137,8 @@ const KEPT_ALIAS: &str = "instance_alias";
 const KEPT_ACTION: &str = "action";
 const KEPT_WAKE: &str = "wake_at_unix_ms";
 const KEPT_WOKEN: &str = "woken";
+/// W2-B: the member of a `host.idle_state` row of a startup package queued behind a pause.
+const KEPT_STARTUP_QUEUED: &str = "startup_package_queued";
 
 /// One instance's idle action, run on its worker under its emulator-control claim.
 pub(super) struct PendingIdleAction {
@@ -140,12 +153,13 @@ pub(super) struct PendingIdleAction {
     causation_id: actingcommand_contract::IssuedCausationId,
 }
 
-/// IDLE-1P (#405): the start anchor that wrote a `host.idle_state` record (#405 N-2) and the
-/// closed instances it keeps, by alias; none when the record is not of the shape this build
-/// writes (not the Runtime's own record list, no writer row first, a row without its alias, an
-/// action other than `close_app` or `stop_emulator`, a wake or a `woken` of another type, a
-/// woken row without its wake).
-fn kept_idle(record: &RuntimeFactRecord) -> Option<(u64, BTreeMap<String, KeptIdle>)> {
+/// IDLE-1P (#405): the start anchor that wrote a `host.idle_state` record (#405 N-2) and what it
+/// keeps: the closed instances by alias and (W2-B) the instances whose startup package waits
+/// queued behind a pause; none when the record is not of the shape this build writes (not the
+/// Runtime's own record list, no writer row first, a row without its alias, an action other than
+/// `close_app` or `stop_emulator`, a wake or a `woken` of another type, a woken row without its
+/// wake, a startup row with another member or not `true`).
+fn kept_idle(record: &RuntimeFactRecord) -> Option<(u64, KeptState)> {
     if record.source != OriginModule::Runtime {
         return None;
     }
@@ -159,10 +173,19 @@ fn kept_idle(record: &RuntimeFactRecord) -> Option<(u64, BTreeMap<String, KeptId
         _ => return None,
     };
     let mut kept = BTreeMap::new();
+    let mut startup_queued = BTreeSet::new();
     for row in rows {
         let Some(FactScalar::String(alias)) = row.get(KEPT_ALIAS) else {
             return None;
         };
+        // W2-B: a startup package queued behind a pause names the instance and itself alone.
+        if let Some(queued) = row.get(KEPT_STARTUP_QUEUED) {
+            if row.len() != 2 || *queued != FactScalar::Boolean(true) {
+                return None;
+            }
+            startup_queued.insert(alias.clone());
+            continue;
+        }
         let Some(FactScalar::String(token)) = row.get(KEPT_ACTION) else {
             return None;
         };
@@ -192,7 +215,13 @@ fn kept_idle(record: &RuntimeFactRecord) -> Option<(u64, BTreeMap<String, KeptId
             },
         );
     }
-    Some((writer, kept))
+    Some((
+        writer,
+        KeptState {
+            closed: kept,
+            startup_queued,
+        },
+    ))
 }
 
 /// `instance_idle_action` for `alias` and `action` at `operation`.
@@ -375,7 +404,7 @@ impl HostShared {
         if self.idle_state_unkept_for_test {
             return Ok(());
         }
-        let Some(closed) = planner.unkept() else {
+        let Some(state) = planner.unkept() else {
             return Ok(());
         };
         // #405 N-2: the record names this start's anchor, which the start's restore bound. A start
@@ -388,19 +417,16 @@ impl HostShared {
                 RuntimeErrorCode::RuntimeHalted,
             )
         })?;
-        self.record_idle_state(&closed, anchor)?;
-        planner.mark_kept(closed);
+        self.record_idle_state(&state, anchor)?;
+        planner.mark_kept(state);
         Ok(())
     }
 
     /// `host.idle_state`: the writer row naming this start's `anchor` (#405 N-2), then one row per
-    /// instance of `closed`, observed strictly after the previous record (a manual clock may not
-    /// move between two).
-    fn record_idle_state(
-        &self,
-        closed: &BTreeMap<String, KeptIdle>,
-        anchor: u64,
-    ) -> RuntimeHostResult<()> {
+    /// closed instance of `state` and (W2-B) one per startup package it keeps queued behind a
+    /// pause, observed strictly after the previous record (a manual clock may not move between
+    /// two).
+    fn record_idle_state(&self, state: &KeptState, anchor: u64) -> RuntimeHostResult<()> {
         let anchor = i64::try_from(anchor).map_err(|_| {
             RuntimeHostError::fatal(
                 HostCode::ContainedSettlementAnchorInvalid,
@@ -410,7 +436,7 @@ impl HostShared {
         })?;
         let writer = BTreeMap::from([(KEPT_ANCHOR.to_owned(), FactScalar::Integer(anchor))]);
         let rows = std::iter::once(writer)
-            .chain(closed.iter().map(|(alias, kept)| {
+            .chain(state.closed.iter().map(|(alias, kept)| {
                 let mut row = BTreeMap::from([
                     (KEPT_ALIAS.to_owned(), FactScalar::String(alias.clone())),
                     (
@@ -425,6 +451,12 @@ impl HostShared {
                     row.insert(KEPT_WOKEN.to_owned(), FactScalar::Boolean(true));
                 }
                 row
+            }))
+            .chain(state.startup_queued.iter().map(|alias| {
+                BTreeMap::from([
+                    (KEPT_ALIAS.to_owned(), FactScalar::String(alias.clone())),
+                    (KEPT_STARTUP_QUEUED.to_owned(), FactScalar::Boolean(true)),
+                ])
             }))
             .collect::<Vec<_>>();
         let now = self.runtime_clock_sample()?.unix_ms;
@@ -502,6 +534,13 @@ impl HostShared {
     ///   closes it again with its wake;
     /// - on the ledger's first start nothing was closed.
     ///
+    /// W2-B (0.12.26): that current record also names the instances whose startup package an
+    /// emulator start had queued behind a scheduling pause when the Runtime stopped (the stop
+    /// dropped the claim, `lease.queue_disconnected`); each that is still registered with its
+    /// startup package configured is kept so again, and the start queues its package again after
+    /// the daemon-start preparation (`requeue_startup_packages_on_start`). One the record also
+    /// keeps woken, whose wake this start restores, is not: its wake queues the startup package.
+    ///
     /// The restored instances are then recorded again under this start's anchor
     /// (`anchors.current`), which is the ledger's record of the restore; a start whose
     /// configuration names no idle action and that finds no record keeps nothing.
@@ -523,6 +562,12 @@ impl HostShared {
             .collect::<Vec<_>>();
         let startup_packages = self.startup_packages()?;
         let emulator_starts = self.emulator_autostart()?;
+        // W2-B: the instances a kept startup package may still be queued for.
+        let with_startup_package = instances
+            .iter()
+            .filter(|(_, instance_id)| startup_packages.contains_key(instance_id))
+            .map(|(alias, _)| alias.clone())
+            .collect::<BTreeSet<_>>();
         // Each instance the configuration names, with its action in effect and whether that
         // action could have run on it.
         let mut configured = BTreeMap::new();
@@ -566,14 +611,23 @@ impl HostShared {
                 kept.and_then(|(writer, kept)| (anchors.previous == Some(writer)).then_some(kept))
             }
             None if previous_owner_epoch.is_some() => None,
-            None => Some(BTreeMap::new()),
+            None => Some(KeptState::default()),
         };
         let mut planner = lock(&self.idle, IdleLocation::Restore)?;
         match kept {
             Some(kept) => {
-                for (alias, kept) in kept {
-                    if configured.contains_key(&alias) {
-                        planner.restore(&alias, kept);
+                for (alias, closed) in &kept.closed {
+                    if configured.contains_key(alias) {
+                        planner.restore(alias, *closed);
+                    }
+                }
+                // W2-B: a startup package queued behind a pause when the Runtime stopped, unless
+                // the instance's restored wake brings it back (#405 O-2).
+                for alias in &kept.startup_queued {
+                    let woken = configured.contains_key(alias)
+                        && kept.closed.get(alias).is_some_and(|closed| closed.woken);
+                    if with_startup_package.contains(alias) && !woken {
+                        planner.restore_startup_queued(alias);
                     }
                 }
             }
@@ -599,6 +653,131 @@ impl HostShared {
             }
         }
         self.keep_idle_state(&mut planner)
+    }
+
+    /// W2-B (0.12.26; review W1-6 M1): keeps, in `host.idle_state`, whether the startup package of
+    /// `instance_id` (`alias`) waits queued behind a scheduling pause: its startup claim is queued
+    /// and a pause of the instance or the global pause holds it. Called while the claim cannot be
+    /// granted yet: by an emulator start's hand-off before the control releases its key, and by a
+    /// start's re-queue behind the restored pause. A record that fails is this instance's failure
+    /// (#419): recorded through the one decision point; only a failure the Runtime does not
+    /// survive is the error.
+    pub(super) fn keep_startup_package(
+        &self,
+        instance_id: InstanceId,
+        alias: &str,
+    ) -> RuntimeHostResult<()> {
+        let kept = (|| -> RuntimeHostResult<()> {
+            let mut planner = lock(&self.idle, HostLocation::ScheduleStartupPackage)?;
+            let paused = {
+                let pauses = lock(&self.scheduling_pause, HostLocation::ReadRoutineGate)?;
+                pauses.holds_global() || pauses.holds_instance(alias)
+            };
+            let queued = paused
+                && !lock(&self.scheduler, HostLocation::ReadQueuedStartupClaims)?
+                    .queued_of_kind(instance_id, ClaimKind::StartupPackage)
+                    .is_empty();
+            if !planner.note_startup_queued(alias, queued) {
+                return Ok(());
+            }
+            self.keep_idle_state(&mut planner)
+        })();
+        self.contain_startup_keep(instance_id, kept)
+    }
+
+    /// W2-B: the startup package of `instance_id` waits queued no longer: its claim was granted
+    /// (`run_startup_claim`), or an emulator control cancelled it (a stop, a failed control, a
+    /// reconnect or self-check whose preparation failed and admitted no ladder), so the next start
+    /// queues none. The record's failure is handled as in [`Self::keep_startup_package`].
+    pub(super) fn forget_startup_package(&self, instance_id: InstanceId) -> RuntimeHostResult<()> {
+        let kept = (|| -> RuntimeHostResult<()> {
+            let alias = lock(
+                &self.registered_instances,
+                HostLocation::ReadInstanceRegistry,
+            )?
+            .get(&instance_id)
+            .map(|instance| instance.instance_alias.clone());
+            let Some(alias) = alias else {
+                return Ok(());
+            };
+            let mut planner = lock(&self.idle, HostLocation::ScheduleStartupPackage)?;
+            if !planner.note_startup_queued(&alias, false) {
+                return Ok(());
+            }
+            self.keep_idle_state(&mut planner)
+        })();
+        self.contain_startup_keep(instance_id, kept)
+    }
+
+    /// W2-B: a failed record of a kept startup package, through the one decision point for
+    /// `instance_id` (#419).
+    fn contain_startup_keep(
+        &self,
+        instance_id: InstanceId,
+        kept: RuntimeHostResult<()>,
+    ) -> RuntimeHostResult<()> {
+        match kept {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.contain_idle_failure(instance_id, error, self.idle_links(instance_id)?)
+            }
+        }
+    }
+
+    /// W2-B (0.12.26; review W1-6 M1): at start, after the daemon-start preparation, the startup
+    /// package of each instance the restored `host.idle_state` keeps as queued behind a pause is
+    /// queued again, as after a wake: its scheduling intent (`startup_package_scheduled` under the
+    /// instance, a fresh causation) and its claim, which waits behind the restored pause and runs
+    /// once after the resume. A pause no longer holding the instance (the resume came before the
+    /// stop, and the claim never got the key) lets the claim be granted at once. The kept state
+    /// then follows the claim (`keep_startup_package`). A failure is this instance's (#419): it is
+    /// recorded and the start goes on; only a failure the Runtime does not survive is the error.
+    pub(super) fn requeue_startup_packages_on_start(&self) -> RuntimeHostResult<()> {
+        let queued = lock(&self.idle, IdleLocation::Restore)?.startup_queued();
+        if queued.is_empty() {
+            return Ok(());
+        }
+        let registered = lock(&self.registered_instances, IdleLocation::Restore)?
+            .values()
+            .map(|instance| (instance.instance_alias.clone(), instance.instance_id()))
+            .collect::<BTreeMap<_, _>>();
+        for alias in queued {
+            let Some(&instance_id) = registered.get(&alias) else {
+                continue;
+            };
+            if let Err(failure) = self.requeue_startup_package(instance_id, &alias) {
+                let error = if failure.poison_runtime {
+                    (*failure.error).into_fatal()
+                } else {
+                    *failure.error
+                };
+                self.contain_idle_failure(instance_id, error, self.idle_links(instance_id)?)?;
+            }
+            self.keep_startup_package(instance_id, &alias)?;
+        }
+        Ok(())
+    }
+
+    /// W2-B: one kept startup package queued again at start, through the path a wake's own takes
+    /// (`prepare_startup_package`, then `schedule_startup_package`); an instance whose
+    /// configuration no longer names one queues nothing.
+    fn requeue_startup_package(
+        &self,
+        instance_id: InstanceId,
+        alias: &str,
+    ) -> Result<(), RequestFailure> {
+        let resolved = self.resolve_instance(alias)?;
+        let control_request_id = *self
+            .events
+            .issuer()
+            .mint_request_id()
+            .map_err(|_| RequestFailure::poison_without_terminal(runtime_identifier_error()))?
+            .transport();
+        let links = self
+            .idle_links(instance_id)
+            .map_err(RequestFailure::poison_without_terminal)?;
+        let pending = self.prepare_startup_package(&resolved, links, control_request_id)?;
+        self.schedule_startup_package(pending).map(|_| ())
     }
 
     /// What the instance shows to the idle check now. Read without waiting: a held admission

@@ -430,7 +430,19 @@ that belongs to emulator control:
   or the global one) schedules it too, as it does after a configured start ("Configured start
   at daemon start"): the package's claim waits queued behind the pause as a gated entry and
   runs once after the resume, and the operator's answer says which pause holds it
-  (`startup_package_withheld`). From A50 to A71 such a pause scheduled none and cancelled the
+  (`startup_package_withheld`). The claim waits until every pause that holds it is lifted: when
+  both the instance's own pause and the global pause hold it, the answer names the instance's
+  (`instance_paused`), and an instance resume alone leaves the claim waiting for the global
+  resume (the sweep's pump grants it then). Since 0.12.26 (W2-B; review W1-6 M1) the package
+  survives a restart before the resume: the stop disconnects the claim
+  (`lease.queue_disconnected`), but `host.idle_state` keeps the package as queued
+  ([runtime-fact-store.md](runtime-fact-store.md)) from the hand-off until its claim is granted
+  or a control cancels it (below), and the next start, once its daemon-start preparation is
+  done, schedules it again (a new `startup_package_scheduled` under the instance, a fresh
+  causation id) behind the restored pause, so it still runs once after the resume, never twice
+  (a resume that came before the stop, whose claim never got the key, leaves no pause: the
+  claim is then granted at once); before 0.12.26 the resume after such a restart ran none. The same holds for a configured
+  start's package ("Configured start at daemon start"). From A50 to A71 such a pause scheduled none and cancelled the
   instance's queued startup claims, so the resume ran no startup package (10-24: a start under
   a pause left the application unstarted after the resume). Scheduling it:
   one `runtime.lifecycle_observed` (phase `startup_package_scheduled { instance_id }`, the
@@ -459,7 +471,11 @@ that belongs to emulator control:
   whose provider step failed included): a startup run against a stopped emulator is
   meaningless, so a stop leaves no startup run at the resume. For the same reason a resume's
   reconnect or a self-check whose preparation failed and admitted no ladder cancels it before its claim's
-  release (Workflow #369 S6c review low (b); `contracts/scheduling-pause.md`).
+  release (Workflow #369 S6c review low (b); `contracts/scheduling-pause.md`). Since 0.12.26
+  (W2-B) the claim's grant, and each cancellation by a control that hands no startup claim
+  over, a reconnect or a self-check, ends what `host.idle_state` keeps of the package, so no
+  later start schedules it again; a new startup claim that replaces a queued one is kept as it
+  waits; the shutdown's disconnection and an install drain's cancellation end nothing.
 - The instance's worker (`actingd-instance-<alias>`, Workflow #369 W-2) runs the package on
   the claim's key as an ordinary contained task under the same causation id: self-minted
   request and correlation ids, the claim's holder and synthesized connection, origin
@@ -1139,7 +1155,9 @@ one included), never holds or queues the claim and never makes it yield.
   admits ("Stuck-recovery ladder"); a failed start ends the key as a failed operator control
   does. emu-watch: a scheduling pause does not withhold the startup package (#411 A71: nor
   after an operator's start since 0.12.25): its claim waits queued behind the pause as a gated
-  entry, so the package runs only after the resume (an instance resume's reconnect first).
+  entry, so the package runs only after the resume (an instance resume's reconnect first). Since
+  0.12.26 (W2-B) a restart before that resume does not lose it: `host.idle_state` keeps it and
+  the next start schedules it again behind the restored pause ("Startup package hook").
 - **Report.** Each outcome is one report line, which `actingd` writes as a daemon line
   (`OUTCOME actingd:` with the developer line, Workflow #378 A6a): `emulator_autostart_queued`
   (`count`) when the claims are enqueued, nothing when no instance names `start_emulator`;

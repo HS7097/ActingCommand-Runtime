@@ -44,9 +44,9 @@
 //! leaves no open command. A passing preparation hands the key to the startup package through the
 //! gate, a failing one to the ladder it admitted; emu-watch: under a scheduling pause the startup
 //! package's claim waits queued as a gated entry and runs after the resume (#411 A71: so does an
-//! operator's start's). Every outcome
-//! is one report line, which actingd writes as a daemon line; a failed write never stops the
-//! daemon.
+//! operator's start's; W2-B, 0.12.26: `host.idle_state` keeps it, so a restart before the resume
+//! queues it again). Every outcome is one report line, which actingd writes as a daemon line; a
+//! failed write never stops the daemon.
 //!
 //! Workflow #386 SR-4a3 (frozen scheduling model v1.4.2 C-3, T46; `scheduling-blackout.md`,
 //! "Complete silence"): inside a blackout of its instance the claim gets no key and starts no

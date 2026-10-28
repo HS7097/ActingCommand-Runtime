@@ -33,7 +33,11 @@
 //! connection preparation passed; #411 A71: also while a scheduling pause holds the instance,
 //! whose resume its claim then waits for; `emulator_instance`); an instance without one has no
 //! package scheduled. A daemon already running at startup schedules nothing: only the two
-//! control actions do.
+//! control actions do. W2-B (0.12.26; review W1-6 M1): except the package of such a control
+//! (or of a configured start) whose claim waited queued behind a scheduling pause when the
+//! Runtime stopped: `host.idle_state` keeps it until its claim is granted or cancelled, and the
+//! next start queues it again behind the restored pause (`idle`), so it runs once after the
+//! resume.
 //!
 //! The stuck-recovery ladder (`recovery_ladder`) runs its rung packages through the same
 //! runner on its own key.
@@ -202,7 +206,10 @@ impl HostShared {
     /// routine entry (`schedule_startup_package`) and the key is released; the resume's
     /// reconnect then runs first, and its release hands the key on (M-3). A claim the admission
     /// checks refuse is recorded as the package's failure and the key is released; the receipt
-    /// still says `scheduled`.
+    /// still says `scheduled`. W2-B (0.12.26): before that release, whether the claim waits queued
+    /// behind a scheduling pause is kept in `host.idle_state` (`keep_startup_package`), so a
+    /// restart before the resume, which drops the claim, does not lose the package; a claim
+    /// handed the key runs now, and its grant forgets what was kept.
     pub(super) fn hand_off_startup_package(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
@@ -211,7 +218,7 @@ impl HostShared {
         pending: PendingStartupPackage,
     ) -> Result<StartupPackageDisposition, RequestFailure> {
         let resolved = self.resolve_instance(&pending.instance_alias)?;
-        self.cancel_queued_startup_claims(resolved.instance_id())?;
+        self.cancel_startup_claims(resolved.instance_id())?;
         let claim = self.new_startup_claim(&pending, &resolved)?;
         let handed = self.release_lease_to_claim(
             request,
@@ -234,14 +241,19 @@ impl HostShared {
                     .map_err(RequestFailure::poison_without_terminal)?;
             }
         }
+        // W2-B: the control still holds the key, so the claim cannot be granted before this.
+        self.keep_startup_package(resolved.instance_id(), &pending.instance_alias)
+            .map_err(RequestFailure::poison_without_terminal)?;
         self.release_lease(request, request_id, &key.token, key.connection_id, None)?;
         Ok(StartupPackageDisposition::Scheduled)
     }
 
     /// H-6: one startup claim per instance, then the new claim is queued (`new_startup_claim`).
+    /// W2-B: what `host.idle_state` keeps is left to the caller (the idle check that queues a
+    /// wake's claim holds the idle planner).
     fn enqueue_startup_claim(&self, pending: PendingStartupPackage) -> Result<(), RequestFailure> {
         let resolved = self.resolve_instance(&pending.instance_alias)?;
-        self.cancel_queued_startup_claims(resolved.instance_id())?;
+        self.cancel_startup_claims(resolved.instance_id())?;
         let claim = self.new_startup_claim(&pending, &resolved)?;
         let instance_alias = pending.instance_alias.clone();
         self.request_host_claim_work(
@@ -254,11 +266,22 @@ impl HostShared {
     /// (`scheduler.denied lease.queue_cancelled`, its request links only, Warning). An emulator
     /// control whose hold hands no startup claim over (a stop) cancels it
     /// too (coordinator ruling on review #716), and so does a resume's reconnect or a self-check
-    /// whose preparation failed and admitted no ladder (Workflow #369 S6c review low (b)).
+    /// whose preparation failed and admitted no ladder (Workflow #369 S6c review low (b)). W2-B
+    /// (0.12.26): no startup package of the instance waits any more, so `host.idle_state` keeps
+    /// none for the next start (`forget_startup_package`).
     pub(super) fn cancel_queued_startup_claims(
         &self,
         instance_id: InstanceId,
     ) -> Result<(), RequestFailure> {
+        self.cancel_startup_claims(instance_id)?;
+        self.forget_startup_package(instance_id)
+            .map_err(RequestFailure::poison_without_terminal)
+    }
+
+    /// H-6: cancels the instance's queued startup claims, leaving what `host.idle_state` keeps to
+    /// the caller: a new claim of the same package follows (`hand_off_startup_package`,
+    /// `enqueue_startup_claim`).
+    fn cancel_startup_claims(&self, instance_id: InstanceId) -> Result<(), RequestFailure> {
         let connection_id = startup_claim_connection()?;
         let queued = lock(&self.scheduler, HostLocation::ReadQueuedStartupClaims)?
             .queued_of_kind(instance_id, ClaimKind::StartupPackage);
@@ -313,13 +336,17 @@ impl HostShared {
     }
 
     /// Workflow #369 W-2: a granted startup claim on its instance's worker: the package runs
-    /// on the claim's key, then the key is released if the run did not take it over.
+    /// on the claim's key, then the key is released if the run did not take it over. W2-B
+    /// (0.12.26): granted, the package waits no longer, so `host.idle_state` keeps it no longer
+    /// (`forget_startup_package`) before it runs: a restart after this does not run it twice.
     pub(super) fn run_startup_claim(
         &self,
         pending: &PendingStartupPackage,
         mut key: HostKey,
     ) -> RuntimeHostResult<()> {
-        let ran = self.run_package_on_key(pending, &mut key, None).map(|_| ());
+        let ran = self
+            .forget_startup_package(pending.instance_id)
+            .and_then(|()| self.run_package_on_key(pending, &mut key, None).map(|_| ()));
         let released = self.release_host_key(&key);
         ran.and(released)
     }

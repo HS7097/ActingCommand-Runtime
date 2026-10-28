@@ -70,9 +70,17 @@
 //!   without it: a claim an emulator control cancelled), and it is active again, as after every
 //!   wake before. A wake's configured start that finds the emulator already running (a restart
 //!   came after it had started the emulator) still queues the startup package (review M-1).
+//! - **A startup package queued behind a pause is kept too** (W2-B, 0.12.26; review W1-6 M1):
+//!   an emulator start (an operator's `start` / `restart`, or a configured start: the daemon
+//!   start's, the emulator watch's) whose startup package's claim waits queued behind a scheduling
+//!   pause is kept with the closed instances ([`KeptState::startup_queued`]), so a restart before
+//!   the resume, which drops that claim, does not lose the package: the next start queues it
+//!   again. It is kept until its claim is granted or an emulator control cancels it (a stop), so
+//!   it runs once. A woken instance is not kept so: its wake's record already brings its startup
+//!   package back.
 
 use actingcommand_runtime_config::{IdleAction, IdleConfig};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// What one instance shows to an idle check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -187,6 +195,15 @@ pub(crate) struct KeptIdle {
     pub(crate) woken: bool,
 }
 
+/// What the Runtime keeps across a start (`host.idle_state`): the instances the idle action
+/// closed or is closing ([`IdlePlanner::closed`]) and, W2-B (0.12.26), the instances whose startup
+/// package waits queued behind a scheduling pause, by alias.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct KeptState {
+    pub(crate) closed: BTreeMap<String, KeptIdle>,
+    pub(crate) startup_queued: BTreeSet<String>,
+}
+
 /// What a wake queues, in order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WakeWork {
@@ -288,8 +305,12 @@ struct InstanceIdle {
 #[derive(Debug, Default)]
 pub(crate) struct IdlePlanner {
     instances: BTreeMap<String, InstanceIdle>,
-    /// IDLE-1P: the closed instances the host kept last; none before the first record.
-    kept: Option<BTreeMap<String, KeptIdle>>,
+    /// W2-B (0.12.26): the instances whose startup package an emulator start queued behind a
+    /// scheduling pause, until its claim is granted or cancelled.
+    startup_queued: BTreeSet<String>,
+    /// IDLE-1P: the state the host kept last (W2-B: with the queued startup packages); none
+    /// before the first record.
+    kept: Option<KeptState>,
     /// #405 N-2 (0.12.25): the start anchor the host keeps the closed instances under: this
     /// start's start event sequence, which its settlement records as `host.contained_settlement`;
     /// none before the start's restore binds it.
@@ -466,16 +487,47 @@ impl IdlePlanner {
         self.start_anchor
     }
 
-    /// IDLE-1P: the closed instances when they differ from the ones the host kept last (all of
-    /// them before the first record); none when they do not.
-    pub(crate) fn unkept(&self) -> Option<BTreeMap<String, KeptIdle>> {
-        let closed = self.closed();
-        (self.kept.as_ref() != Some(&closed)).then_some(closed)
+    /// IDLE-1P: the closed instances (W2-B: and the queued startup packages) when they differ from
+    /// the ones the host kept last (all of them before the first record); none when they do not.
+    pub(crate) fn unkept(&self) -> Option<KeptState> {
+        let state = KeptState {
+            closed: self.closed(),
+            startup_queued: self.startup_queued.clone(),
+        };
+        (self.kept.as_ref() != Some(&state)).then_some(state)
     }
 
-    /// IDLE-1P: the host kept `closed`.
-    pub(crate) fn mark_kept(&mut self, closed: BTreeMap<String, KeptIdle>) {
-        self.kept = Some(closed);
+    /// IDLE-1P: the host kept `state`.
+    pub(crate) fn mark_kept(&mut self, state: KeptState) {
+        self.kept = Some(state);
+    }
+
+    /// W2-B (0.12.26): whether the startup package of `alias` waits queued behind a scheduling
+    /// pause (`queued`), as the host read it after an emulator start's hand-off or a start's
+    /// re-queue; `false` too once its claim is granted or an emulator control cancelled it. A
+    /// woken instance is never kept so (#405 O-2: its wake's record brings the startup package
+    /// back). Whether what is kept changed.
+    pub(crate) fn note_startup_queued(&mut self, alias: &str, queued: bool) -> bool {
+        let woken = self
+            .instances
+            .get(alias)
+            .is_some_and(|entry| matches!(entry.phase, Phase::Woken { .. }));
+        if queued && !woken {
+            self.startup_queued.insert(alias.to_owned())
+        } else {
+            self.startup_queued.remove(alias)
+        }
+    }
+
+    /// W2-B: a start restores `alias` as an instance whose startup package waits queued behind a
+    /// scheduling pause; the start queues it again.
+    pub(crate) fn restore_startup_queued(&mut self, alias: &str) {
+        self.startup_queued.insert(alias.to_owned());
+    }
+
+    /// W2-B: the instances whose startup package waits queued behind a scheduling pause.
+    pub(crate) fn startup_queued(&self) -> Vec<String> {
+        self.startup_queued.iter().cloned().collect()
     }
 
     /// IDLE-1P (#405): a start restores `alias` as idle after `kept.action`, owing its wake

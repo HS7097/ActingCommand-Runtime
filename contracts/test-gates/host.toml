@@ -1647,6 +1647,14 @@ tests = [
 ]
 incident = ["#411 A71"]
 
+# W2-B (0.12.26; register §1.158 W2B-1; brief rd-1028/brief-wave2a.md W2-B; review rd-1028/review-w1-6.md M1): an operator start during the instance's scheduling pause keeps its queued startup package in host.idle_state (startup_package_queued); a restart before the resume, which disconnects the claim, restores the pause and queues the package again behind it, nothing runs under the pause, after the resume it runs once and is kept no more, and a further restart queues it no more
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a50::w2b_t9_a_start_during_a_pause_runs_its_startup_package_once_after_a_restart_and_the_resume",
+]
+incident = ["#411 A71"]
+
 # #411 A50 item 3 (register §1.158 A50-4, A50-5; no persisted ledger shape): a restart whose Stop's readiness wait expired launches only after the emulator status reads the old VM stopped; still running at emulator_control.restart_exit_wait_ms (the configuration in effect) it fails emulator_restart_previous_instance_running and launches nothing
 [[gate]]
 key = "146"
