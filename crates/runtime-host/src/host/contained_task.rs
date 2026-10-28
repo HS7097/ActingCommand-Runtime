@@ -40,6 +40,17 @@ const PREVIOUS_EPOCH_SETTLEMENT_OPERATION: HostLocation =
 /// #411 A65 (R3): the runtime fact (Runtime scope, an integer) that names the start event
 /// sequence of the start that last completed the previous-epoch settlement of direct runs.
 pub(super) const CONTAINED_SETTLEMENT_FACT_KEY: &str = "host.contained_settlement";
+
+/// #405 N-2 (0.12.25): the start anchors a start's settlement reads and records: `previous`, the
+/// start `host.contained_settlement` named before this start (the last start that completed its
+/// settlement; none without the fact), and `current`, this start's own start event sequence (none
+/// when the ledger holds no start event). The idle record is bound to them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct StartAnchors {
+    pub(super) previous: Option<u64>,
+    pub(super) current: Option<u64>,
+}
+
 /// Workflow #369 Q-2: the longest a direct task run (CLI, console, MCP `ac_run_pack`) waits in
 /// its instance's queue before it is refused `lease_queue_expired`.
 const DIRECT_TASK_RUN_CLAIM_WAIT_MS: u64 = 60_000;
@@ -9276,7 +9287,10 @@ impl HostShared {
     /// - R1: every read is a ledger page; a page the writer's read budget stopped is read again
     ///   smaller ([`LedgerPages`]).
     /// - R2: a ledger failure keeps the ledger's own failure as its cause.
-    pub(super) fn settle_previous_epoch_contained_runs(&self) -> RuntimeHostResult<()> {
+    ///
+    /// #405 N-2: returns the anchor read before this start and this start's own, which the idle
+    /// record is bound to.
+    pub(super) fn settle_previous_epoch_contained_runs(&self) -> RuntimeHostResult<StartAnchors> {
         let through = self
             .ledger
             .latest_sequence()
@@ -9303,19 +9317,24 @@ impl HostShared {
             );
         }
         let Some(current) = starts.into_iter().max() else {
-            return Ok(());
+            return Ok(StartAnchors::default());
+        };
+        let anchors = StartAnchors {
+            previous: self.contained_settlement_anchor(current)?,
+            current: Some(current),
         };
         // Without the anchor the scan begins at the ledger's start (sequence 0 precedes every
         // event), so no earlier start's own start event can hide an older epoch.
-        let previous = self.contained_settlement_anchor(current)?.unwrap_or(0);
+        let previous = anchors.previous.unwrap_or(0);
         if current.saturating_sub(previous) >= 2 {
             self.settle_contained_runs_between(previous, current)?;
         }
         #[cfg(test)]
         if self.contained_settlement_unrecorded_for_test {
-            return Ok(());
+            return Ok(anchors);
         }
-        self.record_contained_settlement(current)
+        self.record_contained_settlement(current)?;
+        Ok(anchors)
     }
 
     /// The direct contained runs whose first task semantic fact lies after the event at
