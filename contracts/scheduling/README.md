@@ -1321,6 +1321,67 @@ referenced key the package does not declare refuses the run before any effect
 (`policy_run_outcome_declaration_mismatch`). Package validity and execution
 evidence requirements apply in both cases.
 
+## Per-Instance Lanes
+
+Workflow #427-A (plan r2, approved by Alice on 2026-10-28), behind
+`scheduling.parallel.enabled` (default `false`;
+[runtime-config.md](../runtime-config.md), "Per-instance lanes"). actingd reads the switch at
+the start of every policy round, the initial round included; a run already handed to a worker
+finishes and is settled there whatever the switch says afterwards.
+
+- **One evaluator.** Evaluation and admission stay on actingd's policy driver thread. With the
+  switch on, a granted scheduled dispatch is handed, with its request, to its instance's
+  worker (`actingd-instance-<alias>`), which runs it and settles it exactly as the driver does
+  with the switch off (the contained run, then the settlement of its scheduling result), and
+  then wakes the driver: with the run's recompute wake when its settlement projected one,
+  otherwise with `FactsChanged`, as a failed run does. One run per instance at a time; the
+  runs of different instances overlap. The round never waits for a run, so its time budget
+  (`policy_cycle_yielded`) keeps its evaluation meaning only, and the initial round no longer
+  delays `runtime_ready`.
+- **One owner from hand-off to settlement.** The hand-off registers the run as in flight on
+  its instance, with its decision id, while its lease is still held; the registration ends
+  only after the run's settlement (or its refusal's) is recorded. It is the one source of:
+  the instance's occupancy (the evaluation defers, and the admission refuses
+  `dispatch_instance_held` with `holder_kind` `policy_dispatch`, a new dispatch on a registered
+  instance, also once the run's terminal is written and its lease released and before it is
+  settled); the reconciliation (a run a worker still holds is skipped, never settled early or
+  twice); and the waits of an instance's scheduling pause and of an install drain.
+- **Lifecycle.** The worker takes a lifecycle (continuation) admission when it takes the run;
+  its work covers the run and the settlement, so a drain or a stop waits for it. A run handed
+  off before an install drain or a scheduling pause began goes ahead, as the round's own run
+  admitted before them does with the switch off: the drain waits for it, and the pause drains
+  it like any contained run admitted before its gate closed; neither records a failure for it
+  (fix 1, review L1). Only a run the worker takes after the Runtime's stop was requested is
+  refused (`runtime_stopping`): it never starts, its lease is released, and it gets a live
+  interrupted settlement (`policy_settlement_interrupted`, with the elapsed `runtime_ms`, not
+  the start's recovered shape), lifted after the restart like the start's, the first one of its
+  pair (fix 2, re-review L-2; wording, re-review 2 L-A); its registration is
+  ended. Nothing is replayed after a lost receipt.
+- **Failures (#419).** The run's failures go through the instance's failure containment: an
+  instance-level failure fences that instance and the other lanes go on; only a global fault
+  stops the Runtime. A worker panic drops the run (not retried, its lease lapses at its TTL);
+  its registration stays, marked abandoned, so the instance stays occupied. A run whose
+  settlement failed without stopping the Runtime is left the same way. Once such a run's lease
+  ended, the reconciliation settles it by the start's rule (fix 1, review M1): as at start, a
+  lease that already ended without a run-linked release (its expiry, a release without run
+  links, a transfer, or an expiry and a transfer as one end) gets no release, so the lease
+  keeps its one end (fix 2, re-review M-1; #670 rulings 2 and 3); the run is settled once,
+  from its terminal or, without one, as interrupted from that end
+  (`policy_settlement_interrupted`, which pauses the task on that instance as a run cut by a
+  restart does); its registration is forgotten and the instance is free again. A lease that
+  ended in more than one way leaves the run held, and the next start records it
+  (`policy_settlement_dispatch_left_open`).
+- **Re-evaluation (C1, not behind the switch).** An evaluation whose validation finds its
+  sampled outcome keys changed (`policy_outcome_snapshot_changed`: another run settled between
+  the sample and the validation) is sampled again, at most three times per round, with one
+  daemon line each (`actingd policy_cycle_resampled`); past that the round is given up
+  (`actingd policy_cycle_given_up`) and deferred to its next trigger. It never stops the
+  driver.
+- **Shutdown.** The driver stops taking triggers and is joined; the workers hold no reference
+  to actingd's host handle, so the host is released and closed, and its close joins the
+  workers: a run a worker took finishes and is settled, one still queued is refused
+  (`runtime_stopping`) and settled as interrupted, as above.
+
 ## Forward Planning And Maintenance
 
 Forward planning is a bounded dry-run of the same pure evaluator used for live policy decisions. It projects at most 24 hours, performs no ledger write, lease operation, execution, or device action, and reports incomplete evidence instead of inventing resource effects. This is a projection facility, not another scheduler.

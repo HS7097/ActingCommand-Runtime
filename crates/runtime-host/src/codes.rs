@@ -2238,6 +2238,17 @@ actingcommand_contract::outcome_locations! {
         /// Workflow #369 S6c: an autostart claim's hold and Start on its instance's worker.
         RunEmulatorAutostart => "run_emulator_autostart",
         RunInstanceWorker => "run_instance_worker",
+        /// Workflow #427-A: the policy driver hands an admitted scheduled run to its instance's
+        /// worker, registering it as in flight.
+        HandOffScheduledPolicyRun => "hand_off_scheduled_policy_run",
+        /// Workflow #427-A: a handed-off scheduled run on its instance's worker: its admission,
+        /// run and settlement.
+        RunHandedPolicyRun => "run_handed_policy_run",
+        /// Workflow #427-A: a read of the in-flight policy runs (occupancy, reconciliation,
+        /// pause and install drain).
+        ReadPolicyRunsInFlight => "read_policy_runs_in_flight",
+        /// Workflow #427-A: a change of the in-flight policy runs (registration, its end).
+        UpdatePolicyRunsInFlight => "update_policy_runs_in_flight",
         RunMonitorCapture => "run_monitor_capture",
         RunMonitorProbe => "run_monitor_probe",
         RunPerformanceProbe => "run_performance_probe",

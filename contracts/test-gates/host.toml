@@ -2453,6 +2453,14 @@ tests = [
 ]
 incident = ["#421 S2-IF"]
 
+# Workflow #427-A fix 1 (brief rd-1028/brief-427a-fix1.md item 4; review rd-1028/review-427a.md M1): a scheduled run handed to its instance's worker, whose worker panicked as it took the run, is not held until a restart: a reconciliation leaves it while its lease is active; once the lease lapsed, one round settles it by the start's rule (fix 2, brief rd-1028/brief-427a-fix2.md item 2, re-review rd-1028/rereview-427a.md M-1: a lease that already ended gets no release, so no run-linked lease.released and no policy_settlement_release_recovered is written and the lease keeps exactly one end; settled once as interrupted), forgets its registration and frees its instance; a second round settles nothing more
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_427a_m1::m1_an_abandoned_lane_settles_once_online_after_its_lease_lapsed_and_frees_its_instance",
+]
+incident = ["#427-A"]
+
 # Workflow #427-B (review C4, #427 comment 6459928838; brief rd-1028/brief-427b-budget.md; contracts/performance-control.md): through the host's policy cycle in observe, pace and full alike, the heavy-scene limit binds (.normal at Normal, .paused above it, heavy_scene_budget_exhausted 1 of 1 with A admitted), and performance.pacing.max_concurrent_runs 1 defers B with policy_concurrent_runs_deferred 1 of 1, which the schedule explanation read answers with its numbers; once A's dispatch settles the slot is free and the next round chooses B (follow-up, review rd-1028/review-427b.md L2)
 [[gate]]
 coverage = "Y"

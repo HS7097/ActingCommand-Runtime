@@ -3621,6 +3621,26 @@ values only. The number 1.199 is provisional for the parallel slices (#427-A).
 | 427B-4 | `performance.pacing.max_concurrent_runs` (integer `1..=65535`, no default, read once at assembly) | new optional configuration key (**`actingd-config` revision 19**) | #427-B | actingd's start-up assembly | absent: no limit and no `config.parameters` row; `1`: one policy dispatch at a time across every instance |
 | 427B-5 | `actingcommand_policy::RunSlots` and `evaluate_with_run_slots` | library API addition | #427-B | the policy host | the admitted dispatches' load profiles and the maximum, read from the dispatch journal at each evaluation; every other entry point passes none |
 
+### 1.200 Slice #427-A (0.12.22): the policy round's scheduled runs on the instance workers, behind a switch that is off by default (Workflow #427 plan r2 points 1, 2, 3, 4 and 6 with C1 to C5, comment 6460013989; Alice 10-28 12:4x: 「427整单批准并放行，允许进入最近的预发行版」; coordinator work orders `rd-1028/brief-427a-lanes.md`, `rd-1028/brief-427a-fix1.md` and `rd-1028/brief-427a-fix2.md`)
+
+[scheduling/README.md](scheduling/README.md) ("Per-Instance Lanes"), [runtime-config.md](runtime-config.md)
+and [component-interfaces.md](component-interfaces.md) (`actingd-config` revision 19) are the
+contract. **No persisted ledger shape**: a handed-off run writes the records the driver's own run
+writes, and an abandoned run is settled online as the start settles a run whose lease already
+ended: no release is written and its lease keeps its one end, then its terminal or the
+interrupted settlement (fix 2, re-review M-1); a run refused at the stop gets a live
+interrupted settlement, with the elapsed `runtime_ms` (not the start's recovered shape), and is
+lifted after the restart like the start's (fix 2, re-review L-2; wording, re-review 2 L-A); no
+new code. The number 1.200 is provisional for the parallel slices (#427-B holds 1.199).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| 427A-1 | `scheduling.parallel.enabled` (boolean, default `false`) | new configuration key (**`actingd-config` revision 19**) | #427-A | a person (`ac_config_set`, the configuration file) | settable; read by actingd at the start of every policy round, so an instruction takes effect at the next round; on: each admitted scheduled run goes to its instance's worker (one run per instance at a time, different instances at once); off: the round runs them itself, as before |
+| 427A-2 | locations `hand_off_scheduled_policy_run`, `run_handed_policy_run`, `read_policy_runs_in_flight`, `update_policy_runs_in_flight` (`since` 0.12.22, `review` pending) | new outcome locations | #427-A | the Runtime host | existing codes only (`runtime_stopping`, `instance_worker_unavailable`, `policy_instance_dispatch_conflict`, `policy_run_identity_mismatch`) |
+| 427A-3 | a `policy_outcome_snapshot_changed` evaluation is sampled again at most three times, then the round is given up and deferred to its next trigger (daemon lines `actingd policy_cycle_resampled`, `actingd policy_cycle_given_up`) | behaviour (C1; not behind the switch) | #427-A | actingd's policy driver | each re-sample judges the candidates again on the new sample |
+| 427A-4 | a run no worker holds any more (a worker panic, a settlement that failed without stopping the Runtime) is settled online by the start's rule once its lease ended: as at start, a lease that already ended gets no release and no `policy_settlement_release_recovered` (fix 2, re-review M-1; #670 rulings 2 and 3), so it keeps its one end; the run is settled from its terminal or, without one, as interrupted from that end; its registration is then forgotten | behaviour (fix 1, review M1; fix 2, re-review M-1) | #427-A fix 1, fix 2 | the reconciliation | the instance stays held while the run's lease is active; a lease that ended in more than one way stays held and the next start records it |
+| 427A-5 | a run handed off before an install drain or a scheduling pause began goes ahead, as the synchronous round's run admitted before them does; only a run not yet taken when the Runtime's stop was requested is refused (`runtime_stopping`): never started, its lease released, given a live interrupted settlement (`policy_settlement_interrupted`, with the elapsed `runtime_ms`, not the start's recovered shape), which the restart lifts, the first one of its pair, like the start's (fix 2, re-review L-2; wording, re-review 2 L-A) | behaviour (fix 1, review L1; fix 2, re-review L-2) | #427-A fix 1, fix 2 | an instance worker | the drain waits for the run and the pause drains it; no failure is recorded for the pause or the drain |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -3725,6 +3745,7 @@ when it takes effect.
 | `scheduling.blackout.quiet_horizon`, `scheduling.day_boundary.quiet`, and per instance `instance.<id>.scheduling.blackout`, `instance.<id>.scheduling.day_boundary.quiet` (`actingd-config` revision 11) | SCH-M §3.2 D-1, D-4, D-6 | `deadline`, `true`; no instance list by default; an instance's `day_boundary.quiet` defaults to the section's | SR-4a1 (built, §1.179) | SR-4a2 |
 | `scheduling.random_delay.*`, and per instance `instance.<id>.scheduling.random_delay.*` | `enabled`, `min_ms`, `max_ms` | `false`, 60 000, 3 600 000; `0 <= min_ms <= max_ms <= 86400000` on the pair in effect; an instance's default is the section's (#405, coordinator's order of 2026-10-14) | SR-1 (built, §1.23) | #405 D1 (0.12.5, §1.135): the pair in effect per instance, read at every policy cycle |
 | `scheduling.pack_admission.*` | `check_in_check_config`, `check_after_start`, `suspend_codes` | SCHED §9 | SR-3 (built, §1.69 SR3-4) | SR-3 (v0.12.0) |
+| `scheduling.parallel.*` | Workflow #427-A (**`actingd-config` revision 19**): `enabled` | `false`, settable (§1.200 427A-1): whether the policy driver hands each admitted scheduled run to its instance's worker | #427-A | #427-A (0.12.22): read at the start of every policy round |
 | `scheduling.fact_refresh.*` | `enabled`, `min_interval_ms`, `daily_limit`, `failure_backoff_ms`, `max_consecutive_failures`, `recognition_join_timeout_ms`, `overdue_ms` (no default value: unset, no `fact_reader_overdue` is reported; that is its declared default, coordinator ruling 9 of 2026-10-16, so R4 holds) | D2M §3.4 | D2-S4 (built, §1.56 D41, all but `overdue_ms`); `recognition_join_timeout_ms` D2-S2 (built, §1.28); `overdue_ms` D2-S5 (built, §1.68 D53) | D2-S4 (v0.12.0); `recognition_join_timeout_ms` D2-S2; `overdue_ms` D2-S5 |
 | per instance | `recognition_package` `{package}` (a location only, no digest; no default) | D2M §3.2 v1.4.2 | D2-S2 (built, §1.28) | D2-S2 |
 | per instance | `start_emulator` | ORD §3.5 item 17: default `none` (off unless the entry names it); discovery-bound instances only | S6a (built, §1.36) | S6c (built, §1.60; v0.12.0) |

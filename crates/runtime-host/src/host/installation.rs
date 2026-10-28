@@ -380,7 +380,11 @@ impl HostShared {
                     )
                 }) == 0
         } && !lock(&self.scheduling_pause, HostLocation::CheckInstallCleanup)?
-            .install_cleanup_pending())
+            .install_cleanup_pending()
+            // Workflow #427-A (C2): a policy run an instance worker still holds, from its
+            // hand-off to its settlement, is in flight; an install drain and a shutdown decision
+            // wait for it.
+            && !self.any_policy_run_working()?)
     }
 
     /// An idle Runtime has lifecycle work in flight now and then as well: the lease sweep every

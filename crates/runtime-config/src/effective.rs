@@ -543,6 +543,13 @@ impl EffectiveConfig {
         scheduling::lift_check_min_interval_ms(&|key: &str| self.value_or_shipped(key))
     }
 
+    /// Workflow #427-A: `scheduling.parallel.enabled` in effect, read by actingd at the start of
+    /// every policy round: whether the round hands its admitted scheduled runs to the instance
+    /// workers.
+    pub fn scheduling_parallel_enabled(&self) -> Result<bool, ConfigFailure> {
+        scheduling::parallel_enabled(&|key: &str| self.value_or_shipped(key))
+    }
+
     /// ROUT-L RL-1b (frozen model v1.0 §3.8): `standard_packs.check_interval_ms` and
     /// `standard_packs.cached_generations` in effect, read at each check of the scheduler
     /// workbench.
