@@ -1,0 +1,8 @@
+{
+  "schema_version": "actingcommand.outcome-codes.release.v2",
+  "release": "0.12.25",
+  "codes": {
+    "recent_runs_budget_invalid": {"category": "error", "ladder_class": "none", "review": "pending", "status": "retired", "values": {"operation": {"type": "location", "required": false}}}
+  },
+  "locations": {}
+}
