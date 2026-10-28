@@ -649,6 +649,18 @@ tests = [
 ]
 incident = ["#386"]
 
+# An owed rerun is gated by the instance's pacing stage: above scheduling.rerun.resume_stage it waits with policy_rerun_waiting{pacing_stage}, back at or below it still waits until resume_settle_ms has passed (59 s waits, 60 s dispatches); past its window end it expires with policy_rerun_expired and the run's failure is back in the snapshot; while owed no dependency_completed(head, *) of a chain is true; actingd suspended lists owed, waiting and expired reruns; a pair exhausted in this window is not promoted again in it, nor rerun at once by R22 when its failure carries a failure identity, and the stage gate still holds it (Workflow #386 SR-2b-2, design P22 §6.2, tests 2 to 5 and the coordinator's decision on review M1; fix round 1, review M1)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_386_sr2b2::sr2b2_t2_the_stage_gate_holds_an_owed_rerun_until_s2_has_settled_60_s",
+    "actingcommand-runtime-host::lib::tests::gate_386_sr2b2::sr2b2_t3_past_the_window_end_the_rerun_expires_and_the_failure_returns",
+    "actingcommand-runtime-host::lib::tests::gate_386_sr2b2::sr2b2_t4_while_owed_no_dependency_completed_of_the_head_is_true",
+    "actingcommand-runtime-host::lib::tests::gate_386_sr2b2::sr2b2_t5_actingd_suspended_lists_owed_waiting_and_expired_reruns",
+    "actingcommand-runtime-host::lib::tests::gate_386_sr2b2::sr2b2_t6_a_pair_exhausted_in_this_window_is_not_promoted",
+]
+incident = ["#386"]
+
 # A latched host answers a later request by its condition (runtime_halted over an error condition, a fatal condition as itself); a start reports its ledger open as ledger_opened and a released previous owner as owner_released; catalog_activation_not_newer names both generations; owner_resource_unconfirmed carries the previous owner's pid and probe state (Workflow #378 A6a)
 [[gate]]
 key = "65"

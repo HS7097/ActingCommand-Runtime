@@ -627,6 +627,30 @@ impl HostShared {
         )
     }
 
+    /// Workflow #386 SR-2b-2: the pacing stage in effect for `instance_alias` (the last
+    /// evaluation's; S0 under `observe`, before the first evaluation, without counters or without
+    /// a row), which gates its owed reruns. Read under the performance lock alone, as
+    /// [`Self::effective_pacing`] is; a poisoned lock is fatal.
+    pub(super) fn effective_pacing_stage(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<actingcommand_contract::PerformancePacingStage> {
+        #[cfg(test)]
+        if let Some(pinned) = lock(
+            &self.pacing_stage_pins_for_test,
+            crate::codes::test_spellings::TestLocation::PinPacingFactorForTest,
+        )?
+        .get(instance_alias)
+        .copied()
+        {
+            return Ok(pinned);
+        }
+        Ok(
+            lock(&self.performance, HostLocation::ReadPerformanceStatus)?
+                .effective_stage(instance_alias),
+        )
+    }
+
     /// #385 P-k (PERF v1.4.2 §5.2, §10.3): `performance.pacing.pre_input_wait_base_ms` of the
     /// `performance` section in effect, read at start-up with the section; a step's pre-input
     /// wait is this × (f − 1000) / 1000.

@@ -84,4 +84,8 @@ mod tests {
     // Workflow #411 P19: a reset may exclude key prefixes and never clears a task's own last
     // result.
     mod gate_411_p19;
+
+    // Workflow #386 SR-2b-2 (test ①): an owed rerun is triggered past its cooldown with
+    // `policy_rerun_owed` and ranks first only when it promotes.
+    mod gate_386_sr2b2;
 }

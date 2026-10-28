@@ -665,6 +665,19 @@ impl HostShared {
         ))
     }
 
+    /// Workflow #386 SR-2b-2: the `scheduling.rerun` values in effect that gate and rank an owed
+    /// rerun (`resume_stage`, `resume_settle_ms`, `promote`), read at each policy evaluation.
+    pub(super) fn rerun_gate_settings(
+        &self,
+    ) -> RuntimeHostResult<crate::policy_control::RerunGateSettings> {
+        let scheduling = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .scheduling()
+            .map_err(remedy_config_failure)?;
+        Ok(crate::policy_control::RerunGateSettings::from_config(
+            &scheduling.rerun,
+        ))
+    }
+
     /// Workflow #336 PKG-S3: `scheduling.suspension.lift_check_min_interval_ms` in effect, read
     /// at each suspension lift check.
     pub(super) fn lift_check_min_interval_ms(&self) -> RuntimeHostResult<u64> {

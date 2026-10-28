@@ -34,6 +34,8 @@ mod chain_handover;
 // SCH-M ED-1 (Workflow #405; SCH-M §3.4 D-12): the expected duration E.
 mod expected_runtime;
 mod fact_refresh;
+// Workflow #386 SR-2b-2: the owed reruns an evaluation reads.
+mod rerun;
 
 pub use blackout::{
     Blackout, BlackoutEntry, BlackoutSources, BlackoutWindow, DayBoundaryDeferral, blackout_at,
@@ -51,6 +53,7 @@ pub use fact_refresh::{
     FACT_REFRESH_TASK_ID, FactRefreshInputs, FactRefreshReader, FactRefreshSettings, IdleClosed,
     InstanceHold, fact_refresh_task,
 };
+pub use rerun::{OwedRerun, OwedReruns};
 
 pub const MAX_EVALUATION_FACTS: usize = 16_384;
 pub const MAX_EVALUATION_OUTCOMES: usize = 16_384;
@@ -902,6 +905,7 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
         None,
         None,
         &RunSlots::default(),
+        &OwedReruns::default(),
         eligibility,
     )
 }
@@ -934,6 +938,7 @@ pub fn evaluate_with_fact_refresh<E: From<PolicyEvaluationError>>(
         None,
         None,
         &RunSlots::default(),
+        &OwedReruns::default(),
         eligibility,
     )
 }
@@ -972,6 +977,7 @@ pub fn evaluate_with_remedies<E: From<PolicyEvaluationError>>(
         Some(remedies),
         None,
         &RunSlots::default(),
+        &OwedReruns::default(),
         eligibility,
     )
 }
@@ -1036,6 +1042,46 @@ pub fn evaluate_with_run_slots<E: From<PolicyEvaluationError>>(
     remedies: &RemedyPlan,
     chain_handover: &ChainHandoverInputs,
     run_slots: &RunSlots,
+    entry_holds: impl FnMut(&TaskSpec, &str, &str) -> Result<bool, E>,
+    eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
+) -> Result<PolicyEvaluation, E> {
+    evaluate_with_owed_reruns(
+        catalog,
+        facts,
+        resources,
+        time,
+        seed,
+        immediate_retries,
+        fact_refresh,
+        remedies,
+        chain_handover,
+        run_slots,
+        &OwedReruns::default(),
+        entry_holds,
+        eligibility,
+    )
+}
+
+/// Workflow #386 SR-2b-2 (`contracts/policy-suspension.md`, "The rerun"; module `rerun`):
+/// `evaluate_with_run_slots` with the owed reruns the Runtime lets in. An owed pair is treated
+/// as triggered and past its task cooldown, as an immediate rerun is, and carries the Runtime's
+/// reason (`policy_rerun_owed`); one that `promote`s ranks among the promoted candidates, ahead
+/// of the instance's other candidates. Feedback stop, placement, budgets, the shared run limits
+/// and one winner per instance are unchanged. With no owed rerun the evaluation is the one
+/// `evaluate_with_run_slots` gives.
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_with_owed_reruns<E: From<PolicyEvaluationError>>(
+    catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
+    resources: &EvaluationResources,
+    time: EvaluationTime,
+    seed: u64,
+    immediate_retries: &BTreeSet<(String, String)>,
+    fact_refresh: &FactRefreshInputs,
+    remedies: &RemedyPlan,
+    chain_handover: &ChainHandoverInputs,
+    run_slots: &RunSlots,
+    owed_reruns: &OwedReruns,
     mut entry_holds: impl FnMut(&TaskSpec, &str, &str) -> Result<bool, E>,
     eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
 ) -> Result<PolicyEvaluation, E> {
@@ -1051,6 +1097,7 @@ pub fn evaluate_with_run_slots<E: From<PolicyEvaluationError>>(
         Some(remedies),
         Some((chain_handover, entry_holds)),
         run_slots,
+        owed_reruns,
         eligibility,
     )
 }
@@ -1067,6 +1114,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
     remedies: Option<&RemedyPlan>,
     chain: Option<(&ChainHandoverInputs, &mut ChainEntryHolds<'_, E>)>,
     run_slots: &RunSlots,
+    owed_reruns: &OwedReruns,
     mut eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
 ) -> Result<PolicyEvaluation, E> {
     validate_inputs(catalog, facts, resources, time)?;
@@ -1238,6 +1286,14 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
                     .reasons
                     .extend(remedy_override.reasons().iter().cloned());
             }
+            // Workflow #386 SR-2b-2: an owed rerun is treated as triggered and past its cooldown
+            // too, with the Runtime's reason (`policy_rerun_owed`).
+            let owed_rerun = owed_reruns.get(&task.id, &instance.instance_id);
+            if let Some(owed_rerun) = owed_rerun {
+                trigger.truth = PredicateTruth::True;
+                trigger.suggestions.clear();
+                task_work.reasons.push(owed_rerun.reason.clone());
+            }
             task_work.next_wake_unix_ms = trigger.next_wake_unix_ms;
             if let Some(not_before_unix_ms) = trigger.next_wake_unix_ms {
                 consider_preload_hint(
@@ -1401,7 +1457,11 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
                                 min_wake(timeline_fresh_until, pool_fresh_until),
                             );
                             let cooldown_until = state
-                                .filter(|_| !immediate_retry && remedy_override.is_none())
+                                .filter(|_| {
+                                    !immediate_retry
+                                        && remedy_override.is_none()
+                                        && owed_rerun.is_none()
+                                })
                                 .and_then(|state| state.last_dispatched_unix_ms)
                                 .map(|last| {
                                     last.checked_add(task.cooldown_ms).ok_or_else(|| {
@@ -1477,6 +1537,19 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
                 if let Some(record) = work[candidate.work_index].record.as_mut() {
                     record.promoted = true;
                 }
+            }
+        }
+    }
+    // Workflow #386 SR-2b-2: an owed rerun that `promote`s ranks among the promoted candidates,
+    // ahead of its instance's other candidates; one that does not keeps its rank.
+    for candidate in &mut candidates {
+        if owed_reruns
+            .get(&candidate.task_id, &candidate.instance_id)
+            .is_some_and(|owed_rerun| owed_rerun.promote)
+        {
+            candidate.promoted = true;
+            if let Some(record) = work[candidate.work_index].record.as_mut() {
+                record.promoted = true;
             }
         }
     }

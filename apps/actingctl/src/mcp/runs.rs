@@ -251,6 +251,8 @@ impl Diagnosis {
                 kept.packs -= 1;
             } else if kept.remedies > 0 {
                 kept.remedies -= 1;
+            } else if kept.reruns > 0 {
+                kept.reruns -= 1;
             } else if kept.report_warnings > 0 {
                 kept.report_warnings -= 1;
             } else {

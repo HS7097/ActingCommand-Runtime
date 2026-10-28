@@ -65,6 +65,7 @@ fn diagnosis(remedies: Vec<Value>) -> Diagnosis {
         suspended: Vec::new(),
         packs: Vec::new(),
         remedies,
+        reruns: Vec::new(),
         lift: Vec::new(),
         report_warnings: Vec::new(),
         report_status: json!({"status": "ok", "through_sequence": 121_000}),

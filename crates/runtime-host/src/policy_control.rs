@@ -104,8 +104,71 @@ pub(crate) enum ConditionDecision {
     Condition(PolicyConditionSettlement),
     /// The pair's `count`-th condition termination in this occurrence, more than the rule's
     /// `limit` allows: the run settles as an ordinary recoverable failure and
-    /// `policy_rerun_exhausted` (warning) is recorded.
-    Exhausted { count: u32, limit: u32 },
+    /// `policy_rerun_exhausted` (warning) is recorded. Workflow #386 SR-2b-2: `window_end_unix_ms`
+    /// is the end of the occurrence it was exhausted in, so a later owed rerun of the pair in
+    /// the same occurrence is not promoted (coordinator decision on review M1).
+    Exhausted {
+        count: u32,
+        limit: u32,
+        window_end_unix_ms: u64,
+    },
+}
+
+/// Workflow #386 SR-2b-2 (`contracts/policy-suspension.md`, "The rerun"): the `scheduling.rerun`
+/// values in effect that gate and rank an owed rerun, read at each policy evaluation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RerunGateSettings {
+    /// The highest pacing stage at which an owed rerun runs (`resume_stage`).
+    pub(crate) resume_stage: actingcommand_contract::PerformancePacingStage,
+    /// How long the stage must stay at or below `resume_stage` after it was above it.
+    pub(crate) resume_settle_ms: u64,
+    /// Whether an owed rerun ranks ahead of its instance's other candidates.
+    pub(crate) promote: bool,
+}
+
+impl RerunGateSettings {
+    pub(crate) fn from_config(rerun: &actingcommand_runtime_config::RerunConfig) -> Self {
+        use actingcommand_contract::PerformancePacingStage as Stage;
+        use actingcommand_runtime_config::scheduling::PacingStage;
+        Self {
+            resume_stage: match rerun.resume_stage {
+                PacingStage::S0 => Stage::S0,
+                PacingStage::S1 => Stage::S1,
+                PacingStage::S2 => Stage::S2,
+                PacingStage::S3 => Stage::S3,
+                PacingStage::S4 => Stage::S4,
+            },
+            resume_settle_ms: rerun.resume_settle_ms,
+            promote: rerun.promote,
+        }
+    }
+}
+
+/// Workflow #386 SR-2b-2: the `signal_id` of a `policy_rerun_<kind>` record of one owed rerun:
+/// `signal:policy_rerun:<kind>:<hex>`, `<hex>` the lowercase SHA-256 of the task, the instance,
+/// the owed rerun's window end and its count, so each owed rerun records each kind once.
+pub(crate) fn owed_rerun_signal_id(
+    kind: &str,
+    task_id: &str,
+    instance_id: &str,
+    owed: &PolicyConditionReruns,
+) -> String {
+    let expires = owed.expires_at_unix_ms.to_string();
+    let count = owed.count.to_string();
+    let parts: [&[u8]; 7] = [
+        task_id.as_bytes(),
+        b"\0",
+        instance_id.as_bytes(),
+        b"\0",
+        expires.as_bytes(),
+        b"\0",
+        count.as_bytes(),
+    ];
+    let mut hasher = Sha256::new();
+    for part in parts {
+        hasher.update(part);
+    }
+    format!("signal:policy_rerun:{kind}:{:x}", hasher.finalize())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1256,6 +1319,12 @@ impl PolicyControlState {
         })
     }
 
+    /// Workflow #386 SR-2b-2: the owed reruns as the pairs' settlements left them (register L7),
+    /// by (task, instance): the evaluation's input, its expiry and `actingd suspended` read them.
+    pub(crate) fn condition_reruns(&self) -> &BTreeMap<(String, String), PolicyConditionReruns> {
+        &self.condition_reruns
+    }
+
     /// Workflow #386 SR-2b-1 (`contracts/policy-suspension.md`, "Decided once"): whether the
     /// first settlement of `intent`'s run, failed as `input` says, ends it by a condition. Only
     /// a recoverable failure of a task that is not sensitive, whose code
@@ -1320,6 +1389,7 @@ impl PolicyControlState {
             return Ok(ConditionDecision::Exhausted {
                 count,
                 limit: rule.max_per_occurrence,
+                window_end_unix_ms: window.until_unix_ms,
             });
         }
         Ok(ConditionDecision::Condition(PolicyConditionSettlement {

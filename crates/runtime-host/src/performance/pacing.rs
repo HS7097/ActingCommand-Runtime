@@ -893,6 +893,24 @@ impl PacingShadow {
             })
     }
 
+    /// Workflow #386 SR-2b-2 (PERF v1.4.2 §4.6): the pacing stage in effect for
+    /// `instance_alias` at the last evaluation: S0 under `observe`, the curve's stage (pressure
+    /// floor included) under `pace`, the learning view's under `full`; S0 before the first
+    /// evaluation and for an instance without a row.
+    pub(crate) fn effective_stage(&self, instance_alias: &str) -> PerformancePacingStage {
+        self.evaluated
+            .as_ref()
+            .and_then(|(_, snapshot)| {
+                snapshot
+                    .instances
+                    .iter()
+                    .find(|entry| entry.alias == instance_alias)
+            })
+            .map_or(PerformancePacingStage::S0, |entry| {
+                entry.row.effective_stage
+            })
+    }
+
     /// The pacing members of `perf.summary` (register P4) from the last evaluation; none before
     /// it.
     pub(crate) fn summary(&self) -> Option<PerformancePacingSummary> {

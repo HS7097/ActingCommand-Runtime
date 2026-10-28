@@ -1963,6 +1963,8 @@ impl RuntimeHost {
             fail_policy_execution_append_once_for_test: AtomicBool::new(false),
             #[cfg(test)]
             pacing_factor_pins_for_test: Mutex::new(BTreeMap::new()),
+            #[cfg(test)]
+            pacing_stage_pins_for_test: Mutex::new(BTreeMap::new()),
             next_connection_id: AtomicU64::new(1),
             clock: Arc::clone(&config.clock),
             clock_origin_monotonic_ms: clock_origin.monotonic_ms,
@@ -4405,6 +4407,25 @@ impl RuntimeHost {
         Ok(())
     }
 
+    /// Workflow #386 SR-2b-2, test only: the policy evaluation reads `stage` as the pacing stage
+    /// in effect for `instance_alias` from now on; only that read (`effective_pacing_stage`)
+    /// answers it.
+    #[cfg(test)]
+    pub(crate) fn pin_pacing_stage_for_test(
+        &self,
+        instance_alias: &str,
+        stage: actingcommand_contract::PerformancePacingStage,
+    ) -> RuntimeHostResult<()> {
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::PinPacingFactorForTest)?;
+        lock(
+            &shared.pacing_stage_pins_for_test,
+            crate::codes::test_spellings::TestLocation::PinPacingFactorForTest,
+        )?
+        .insert(instance_alias.to_owned(), stage);
+        Ok(())
+    }
+
     /// Workflow #386 SR-2a, test only: records a `runtime.lifecycle_observed` phase, as a later
     /// writer (SR-4a's ladder suppression) will.
     #[cfg(test)]
@@ -4664,6 +4685,25 @@ impl RuntimeHost {
         let (held, journal) = policy.decision_memory_for_test()?;
         let replayed = policy.replayed_decision_memory_for_test(&shared.ledger)?;
         Ok((held, replayed, journal))
+    }
+
+    /// Workflow #386 SR-2b-2, test only: the task runtime snapshots the policy evaluation at
+    /// `as_of_unix_ms` projects from the dispatch journal at the ledger's head.
+    #[cfg(test)]
+    pub(crate) fn policy_task_snapshots_for_test(
+        &self,
+        as_of_unix_ms: u64,
+    ) -> RuntimeHostResult<Vec<actingcommand_policy::TaskRuntimeSnapshot>> {
+        let shared = self.shared_ref(HostLocation::ProjectPolicyTaskState)?;
+        let position = shared.ledger.latest_sequence().map_err(|_| {
+            RuntimeHostError::fatal(
+                HostCode::PolicyExecutionOutcomeMissing,
+                HostLocation::ProjectPolicyTaskState,
+                RuntimeErrorCode::RuntimeHalted,
+            )
+        })?;
+        let policy = lock(shared.policy()?, HostLocation::ProjectPolicyTaskState)?;
+        policy.task_runtime_snapshots(&shared.ledger, position, Some(as_of_unix_ms))
     }
 
     /// Workflow #422 LN-4, test only: the policy host's dispatch journal, and today's
@@ -5526,6 +5566,11 @@ struct HostShared {
     // handed, by alias, in place of the shadow measurement's.
     #[cfg(test)]
     pacing_factor_pins_for_test: Mutex<BTreeMap<String, crate::performance::EffectivePacing>>,
+    // Workflow #386 SR-2b-2, test only: the pacing stage in effect an instance's owed reruns are
+    // gated by, by alias, in place of the shadow measurement's.
+    #[cfg(test)]
+    pacing_stage_pins_for_test:
+        Mutex<BTreeMap<String, actingcommand_contract::PerformancePacingStage>>,
     next_connection_id: AtomicU64,
     clock: Arc<dyn RuntimeClock>,
     clock_origin_monotonic_ms: u64,
