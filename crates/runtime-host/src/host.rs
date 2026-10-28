@@ -1910,6 +1910,7 @@ impl RuntimeHost {
             recovery_ladders: Mutex::new(BTreeMap::new()),
             ladder_busy_holds: Mutex::new(BTreeMap::new()),
             resource_fences: Mutex::new(BTreeMap::new()),
+            session_deaths: Mutex::new(BTreeSet::new()),
             device_links: Mutex::new(device_link::DeviceLinks::default()),
             device_states: Mutex::new(device_state::DeviceStates::default()),
             runtime_config: Mutex::new(actingcommand_runtime_config::EffectiveConfig::default()),
@@ -5411,6 +5412,9 @@ struct HostShared {
     // Workflow #403: the instances an unconfirmed close of their own resources fenced (memory
     // only; a restart prepares and self-checks every instance again). A leaf lock.
     resource_fences: Mutex<BTreeMap<InstanceId, resource_fence::ResourceFence>>,
+    // ISO-2b (#419 R1): the instances whose device session died at a capture and has not
+    // finished a capture since (memory only; `HostShared::session_died_again`). A leaf lock.
+    session_deaths: Mutex<BTreeSet<InstanceId>>,
     // Workflow #398 RD-2: the handsets' device links and their watch (model-398 §4). A leaf
     // lock: nothing else is taken while it is held.
     device_links: Mutex<device_link::DeviceLinks>,

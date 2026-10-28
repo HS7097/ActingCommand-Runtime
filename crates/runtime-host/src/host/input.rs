@@ -74,6 +74,8 @@ impl HostShared {
                 ),
             )?);
         }
+        // ISO-2b (#419 R1, ISO-M row E08): the run whose stop a stopped input reports.
+        let stop_control = input_control.clone();
         let input_check = self
             .nemu_input_check(
                 &resolved.instance_alias,
@@ -350,11 +352,39 @@ impl HostShared {
                                 close_links,
                             ) {
                                 Ok(error) => {
+                                    // ISO-2b (#419 R1, ISO-M row E08): an input that its
+                                    // operation check stopped, its resources not left
+                                    // unconfirmed, fails only its operation with the run's or
+                                    // the lease's own code; the device is not at fault.
+                                    let stopped = match error.failure_context().input_check_stop() {
+                                        Some(stop)
+                                            if error.resource_quiescence()
+                                                != Some(ResourceQuiescence::Unconfirmed) =>
+                                        {
+                                            match self.input_check_stop_failure(
+                                                stop,
+                                                stop_control.as_deref(),
+                                                token,
+                                                connection_id,
+                                            ) {
+                                                Ok(stopped) => stopped,
+                                                Err(error) => {
+                                                    return CriticalActionReport::Failed {
+                                                        error: ActionFailure::poison(error),
+                                                        effect: backend_failure_effect,
+                                                    };
+                                                }
+                                            }
+                                        }
+                                        _ => None,
+                                    };
                                     let mut failure =
-                                        ActionFailure::backend(RuntimeHostError::execution(
-                                            HostLocation::ExecuteInputBackend,
-                                            &error,
-                                        ));
+                                        ActionFailure::backend(stopped.unwrap_or_else(|| {
+                                            RuntimeHostError::execution(
+                                                HostLocation::ExecuteInputBackend,
+                                                &error,
+                                            )
+                                        }));
                                     failure.destructive_started = false;
                                     failure
                                 }

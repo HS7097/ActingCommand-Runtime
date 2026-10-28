@@ -152,9 +152,18 @@ pub struct ExecutionFailureContext {
     prior_recorded_event: Option<Arc<OnceLock<EventId>>>,
     /// #411 A50: why a capture open failed, when the device backend could tell.
     capture_open: Option<Box<actingcommand_device::CaptureOpenFailure>>,
+    /// ISO-2b (#419 R1, ISO-M row E08): why the input's operation check stopped the input, when
+    /// it did (the primary device failure's; a merged failure keeps the primary's).
+    input_check_stop: Option<actingcommand_device::InputCheckStop>,
 }
 
 impl ExecutionFailureContext {
+    /// ISO-2b (#419 R1, ISO-M row E08): why the input's operation check stopped the input this
+    /// failure ended, when it did: the work that admitted the input ended, not the device.
+    pub const fn input_check_stop(&self) -> Option<actingcommand_device::InputCheckStop> {
+        self.input_check_stop
+    }
+
     pub fn resource_dispositions(&self) -> Option<Vec<ResourceDisposition>> {
         resource_dispositions(&self.resources)
     }
@@ -496,6 +505,7 @@ impl ExecutionKernelError {
                 native_detail: device_native_detail(error),
                 native_detail_is_device_message: error.diagnostic_message().is_none(),
                 capture_open: error.capture_open_failure().cloned().map(Box::new),
+                input_check_stop: error.input_check_stop(),
                 causes,
                 resources: error
                     .resource_contributions()

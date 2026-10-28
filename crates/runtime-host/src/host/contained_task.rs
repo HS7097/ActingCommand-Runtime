@@ -898,6 +898,23 @@ impl ContainedRunControl {
         );
     }
 
+    /// ISO-2b (#419) tests: the control of a run of `instance_id` whose deadline is
+    /// `deadline_monotonic_ms`; with `cancelled`, its client asked it to stop.
+    #[cfg(test)]
+    pub(super) fn for_test(
+        request_id: RequestId,
+        instance_id: InstanceId,
+        deadline_monotonic_ms: u64,
+        cancelled: bool,
+    ) -> RuntimeHostResult<Self> {
+        let control = Self::new(request_id, instance_id, true);
+        control.set_deadline(deadline_monotonic_ms)?;
+        if cancelled {
+            control.request_cancel();
+        }
+        Ok(control)
+    }
+
     /// Workflow #191 ps1 (b): an instance pause whose drain timeout expired asks the run to
     /// stop at its next checkpoint. Returns whether this call set the reason; a run already
     /// ending for another reason keeps that reason.
@@ -4225,6 +4242,11 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                             module,
                         )
                         .map_err(RequestFailure::poison_without_terminal)?;
+                    // ISO-2b (#419 R1): the instance's session finished a capture.
+                    self.host.session_alive(
+                        self.token.instance_id(),
+                        HostLocation::RunContainedTaskCapture,
+                    )?;
                     let material_started = self
                         .task_timing
                         .begin_boundary(Boundary::CaptureMaterial, identity);
@@ -4436,7 +4458,10 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     // does the instance's own session that died (its thread panicked, ended or
                     // lost its reply; its state lock poisoned), is being closed by another owner,
                     // or no longer matches the instance's endpoint. The failure's close above
-                    // retired that session, and the next capture opens a fresh one.
+                    // retired that session, and the next capture opens a fresh one. ISO-2b
+                    // (#419 R1): a session that died again before any capture of the instance
+                    // succeeded keeps the kernel's failure, and the instance is fenced below.
+                    let mut session_died_again = false;
                     if spelled(
                         error.code().as_str(),
                         &[
@@ -4494,10 +4519,17 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                                 host.invalidate_adb_baseline(instance_id)?;
                             }
                         }
-                        runtime_error = RuntimeHostError::instance_capture(
+                        session_died_again = self.host.session_died_again(
+                            self.token.instance_id(),
+                            error.code().as_str(),
                             HostLocation::RunContainedTaskCapture,
-                            &error,
-                        );
+                        )?;
+                        if !session_died_again {
+                            runtime_error = RuntimeHostError::instance_capture(
+                                HostLocation::RunContainedTaskCapture,
+                                &error,
+                            );
+                        }
                     }
                     let payload = CapturePayloadDraft::failed_with_causes(
                         EventAction::CaptureObserve,
@@ -4527,8 +4559,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         payload,
                     )?;
                     self.host
-                        .record_required_failure(&runtime_error, &failed, links)?;
-                    Err(RequestFailure {
+                        .record_required_failure(&runtime_error, &failed, links.clone())?;
+                    let failure = RequestFailure {
                         state: RuntimeReceiptState::Failed,
                         terminal: Some(terminal(&failed)),
                         poison_runtime: runtime_error.is_fatal(),
@@ -4537,7 +4569,17 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                             severe: runtime_error.is_fatal(),
                         }),
                         error: Box::new(runtime_error),
-                    })
+                    };
+                    // ISO-2b (#419 R1): the session's second death in a row holds only this
+                    // instance, whatever boundary the run has.
+                    if session_died_again {
+                        return Err(self.host.contain_session_death(
+                            failure,
+                            self.token.instance_id(),
+                            links,
+                        )?);
+                    }
+                    Err(failure)
                 }
             }
         })();

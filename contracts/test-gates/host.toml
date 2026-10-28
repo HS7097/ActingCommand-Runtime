@@ -2469,3 +2469,15 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_427b::gate_427b_the_max_key_binds_in_observe_pace_and_full_and_the_explanation_says_the_numbers",
 ]
 incident = ["#427-B"]
+
+# ISO-2b (Workflow #419, ISO-2 acceptance 6399693120; ISO-M R1, rows E08, E11, E12; outcome-code spec §7 amendment 10-24), each on its own host on a manual clock: X's device session that dies at a run's capture twice in a row, no capture of X succeeding between, fences X (caused by the dead session) while one death fails only its run, and a death after a successful capture of X is a first one again; the Runtime does not latch and Y's run completes. X's Nemu input check answers an input that the run's deadline, the run's client cancel or the lapsed lease stopped with that stop (Deadline, Cancelled, Lease), not a device failure, the final up staying allowed after a cancel; the input path makes it the run's contained_task_deadline_exceeded or contained_task_cancelled, or the scheduler's own lease refusal, non-fatal and of the operation alone
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_419_iso2b::iso2b_a_a_second_session_death_in_a_row_fences_only_x",
+    "actingcommand-runtime-host::lib::tests::gate_419_iso2b::iso2b_b_a_capture_between_two_deaths_keeps_x_unfenced",
+    "actingcommand-runtime-host::lib::tests::gate_419_iso2b::iso2b_c_a_nemu_input_past_the_run_deadline_fails_with_the_run_deadline_code",
+    "actingcommand-runtime-host::lib::tests::gate_419_iso2b::iso2b_d_a_cancelled_run_stops_its_nemu_input_with_the_cancel_code",
+    "actingcommand-runtime-host::lib::tests::gate_419_iso2b::iso2b_e_a_lapsed_lease_stops_the_nemu_input_with_the_lease_refusal",
+]
+incident = ["#419"]

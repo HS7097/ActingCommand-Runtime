@@ -1462,6 +1462,22 @@ fn lab_operation_failure(
     ))
 }
 
+/// ISO-2b (#419, ISO-M row E45): an invariant of a Lab declared operation's own state broke (its
+/// effect, its attempt or frame bookkeeping, the frame its input names). Only that operation fails,
+/// non-fatal, with `code`: its record is written with the failure, the instance is sound and is not
+/// fenced, and the Runtime goes on.
+fn lab_declared_state_failure(code: impl Into<Code>) -> RequestFailure {
+    RequestFailure::request(
+        RuntimeHostError::request(
+            code,
+            ContractLocation::RunContainedTask,
+            RuntimeErrorCode::BackendOperationFailed,
+        ),
+        RuntimeReceiptState::Failed,
+        None,
+    )
+}
+
 /// The request a Lab operation serves: its request, instance and connection.
 #[derive(Clone, Copy)]
 struct LabOperationContext<'a> {
@@ -1652,22 +1668,10 @@ impl LabOperationRuntime<'_> {
         sampling: Option<InputSamplingEvidence>,
         guard: ContainedTaskGuardOutcome,
     ) -> Result<(), RequestFailure> {
-        action.validate().map_err(|_| {
-            RequestFailure::poison_without_terminal(RuntimeHostError::instance_fault(
-                HostCode::ContainedTaskEffectInvalid,
-                ContractLocation::RunContainedTask,
-                RuntimeErrorCode::RuntimeHalted,
-                self.instance_id,
-            ))
-        })?;
-        let invalid = || {
-            RequestFailure::poison_without_terminal(RuntimeHostError::instance_fault(
-                SharedCode::ContainedTaskStateInvalid,
-                ContractLocation::RunContainedTask,
-                RuntimeErrorCode::RuntimeHalted,
-                self.instance_id,
-            ))
-        };
+        action
+            .validate()
+            .map_err(|_| lab_declared_state_failure(HostCode::ContainedTaskEffectInvalid))?;
+        let invalid = || lab_declared_state_failure(SharedCode::ContainedTaskStateInvalid);
         let attempt = u32::try_from(self.attempts.len())
             .ok()
             .and_then(|count| count.checked_add(1))
@@ -1721,22 +1725,15 @@ impl LabOperationRuntime<'_> {
     /// The current attempt's input through the Lab lease, as an element operation presses: the
     /// handset keepalive first (decision Q4), then `HostShared::input` with the frame the kernel
     /// bound it to. Its intent and outcome are read from after the previous attempt's events
-    /// (after the prepared record for attempt 1). A frame other than the one captured last is
-    /// the fatal `contained_task_effect_frame_identity_mismatch`.
+    /// (after the prepared record for attempt 1). A frame other than the one captured last fails
+    /// the operation with `contained_task_effect_frame_identity_mismatch` (ISO-2b: non-fatal).
     fn press(
         &mut self,
         action: InputAction,
         frame: Option<InputFrameContext>,
     ) -> Result<(), RequestFailure> {
         self.clock_read()?;
-        let invalid = || {
-            RequestFailure::poison_without_terminal(RuntimeHostError::instance_fault(
-                SharedCode::ContainedTaskStateInvalid,
-                ContractLocation::RunContainedTask,
-                RuntimeErrorCode::RuntimeHalted,
-                self.instance_id,
-            ))
-        };
+        let invalid = || lab_declared_state_failure(SharedCode::ContainedTaskStateInvalid);
         let index = self.attempts.len().checked_sub(1).ok_or_else(invalid)?;
         let prepared_sequence = self
             .prepared_artifact
@@ -1749,13 +1746,8 @@ impl LabOperationRuntime<'_> {
             .last()
             .and_then(|entry| entry.frame.observation.artifact().frame_id);
         if reference.is_some_and(|reference| Some(reference.frame_id) != last_frame) {
-            return Err(RequestFailure::poison_without_terminal(
-                RuntimeHostError::instance_fault(
-                    HostCode::ContainedTaskEffectFrameIdentityMismatch,
-                    ContractLocation::RunContainedTask,
-                    RuntimeErrorCode::RuntimeHalted,
-                    self.instance_id,
-                ),
+            return Err(lab_declared_state_failure(
+                HostCode::ContainedTaskEffectFrameIdentityMismatch,
             ));
         }
         self.host.device_state_keepalive(
@@ -2013,12 +2005,7 @@ impl ContainedTaskRuntime for LabOperationRuntime<'_> {
         match trace {
             ContainedTaskTrace::StepStarted { .. } => {
                 self.started_attempts = self.started_attempts.checked_add(1).ok_or_else(|| {
-                    RequestFailure::poison_without_terminal(RuntimeHostError::instance_fault(
-                        SharedCode::ContainedTaskStateInvalid,
-                        ContractLocation::RunContainedTask,
-                        RuntimeErrorCode::RuntimeHalted,
-                        self.instance_id,
-                    ))
+                    lab_declared_state_failure(SharedCode::ContainedTaskStateInvalid)
                 })?;
                 self.after_input = false;
                 if self.started_attempts == 1 {
