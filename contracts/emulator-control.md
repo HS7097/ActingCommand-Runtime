@@ -851,7 +851,10 @@ most `busy.screen.change_max_milli`.
   run's code). While `held_ms` is below `limit_ms`, the ladder holds as after a busy end, for
   `busy.screen.recheck_ms`, no longer than what is left, and probes again: settled, it runs the
   return-home rung again (whose end is handled as every return-home end, this gate and the busy
-  hold included); changing, it records the verdict and holds again. At the limit
+  hold included); changing, it first compares the probe's last frame with the return-home
+  package's entry pages and, when the frame shows one, runs the return-home rung again as on a
+  settled screen, whether or not the screen still changes; otherwise it records the verdict and
+  holds again (#411 A56, below). At the limit
   `busy.screen.on_exhausted` decides: `escalate` (the default; an unknown screen that never stops
   moving may be hung) goes on to the next rung, `stop` ends the ladder `exhausted` with
   `recovery_ladder_hold_exhausted` caused by the last `recovery_rung_screen_changing`.
@@ -864,6 +867,24 @@ most `busy.screen.change_max_milli`.
 The screen hold's budget is its own, counted from the first changing verdict of the climb; the
 busy hold's is the busy ends'. A climb that starts at a later rung (a start rung past
 `return_home`) is not gated (decision Q4).
+
+**Entry pages on a recheck (#411 A56, since 0.12.25; #411 comment 6355995369, fix 1).** A screen
+that keeps moving is not always a load: a page with an animated background changes on every
+probe, and its return-home package may know it. So on a recheck (a probe after a hold; the first
+probe makes no comparison, since the run that just failed saw that screen), a changing probe's
+last frame is compared with the return-home package's entry pages: the package the rung runs,
+admitted again, its declared `entry_page` (one page or an entry page set; a `linear_steps`
+package's first step page), evaluated on that frame as the package recognises its pages (the
+frame read back from its artifact, through the display adapter's frame gate under the game's
+declaration, [display-adapter.md](display-adapter.md)). When the frame shows one of them, the
+return-home rung runs again at once, as after a settled probe: no changing verdict is recorded
+for that recheck, and the run's end is handled as every return-home end. A package whose entry
+lists no page (`any`, or none) is never compared, and the hold goes on as before. A comparison
+that cannot be made (the package not admitted, the game's standard-pack root refused, the frame
+unreadable, refused by the frame gate or not evaluated) is recorded (`runtime.failed` under the
+frame's links, with its own code) and counts as no entry page shown, so the hold goes on as
+before; only a failure that poisons the Runtime ends it. Nothing new is configured or recorded
+for the comparison itself.
 
 While a hold waits, `Status` shows it as the instance's `ladder_busy_hold` (#411 A35-S5,
 coordinator decision Q7): `kind` what the ladder waits for, a closed vocabulary (`busy_outcome`

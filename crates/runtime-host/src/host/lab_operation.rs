@@ -2079,8 +2079,9 @@ fn aggregate_effect(attempts: &[LabOperationAttempt]) -> EffectDisposition {
     }
 }
 
-/// The device's name of the capture backend the Runtime recorded a frame from.
-fn capture_backend_name(backend: RuntimeCaptureBackend) -> CaptureBackendName {
+/// The device's name of the capture backend the Runtime recorded a frame from (#411 A56: also
+/// the recovery ladder's, for the frame its recheck reads back).
+pub(super) fn capture_backend_name(backend: RuntimeCaptureBackend) -> CaptureBackendName {
     match backend {
         RuntimeCaptureBackend::AdbScreencap => CaptureBackendName::AdbScreencap,
         RuntimeCaptureBackend::AdbScreencapEncode => CaptureBackendName::AdbScreencapEncode,

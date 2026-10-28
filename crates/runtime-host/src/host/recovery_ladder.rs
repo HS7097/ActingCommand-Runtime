@@ -566,14 +566,26 @@ enum ScreenProbe {
     /// Every two consecutive frames changed by at most `busy.screen.change_max_milli`.
     Settled,
     /// Two consecutive frames changed by more: `count` frames probed, `score_milli` the largest
-    /// change between two consecutive ones.
-    Changing { count: usize, score_milli: u32 },
+    /// change between two consecutive ones, `frame` the last one (#411 A56).
+    Changing {
+        count: usize,
+        score_milli: u32,
+        frame: Box<ProbeFrame>,
+    },
     /// The probe's capture failed or was refused (the capture path recorded why), or its frames
     /// could not be compared (recorded by the probe).
     Unavailable,
     /// The key's renewal before the probe was refused (`lease_expired`, `lease_missing`): no
     /// probe was made, and the refusal ends the climb.
     Refused { interruption: &'static str },
+}
+
+/// #411 A56 (P10): the last frame of a changing probe, which a recheck compares with the
+/// return-home package's entry pages: its observation (its artifact and capture backend) and
+/// the links its records carry.
+struct ProbeFrame {
+    observation: ReadonlyObservation,
+    links: EventLinksDraft,
 }
 
 /// Rung 3's bounds from the ladder's configuration (§4.2).
@@ -2846,8 +2858,11 @@ impl HostShared {
     /// `busy.screen.max_wait_ms` since its first "changing" verdict, the ladder holds
     /// `busy.screen.recheck_ms`, no longer than what is left (S1's hold,
     /// `ladder_hold_until`), and probes again: settled, it runs the return-home rung again with
-    /// `deadline_ms` (`Rerun`); changing, it holds again; a probe that cannot be made goes on to
-    /// the next rung (`Escalate`). At the limit `busy.screen.on_exhausted` decides: `stop` ends
+    /// `deadline_ms` (`Rerun`); changing, it first compares the probe's last frame with the
+    /// return-home package's entry pages (#411 A56, `return_home_entry_shown`) and runs the rung
+    /// again when the frame shows one (`Rerun`), else it holds again; a probe that cannot be made
+    /// goes on to the next rung (`Escalate`). The first probe makes no comparison: the run that
+    /// just failed saw that screen. At the limit `busy.screen.on_exhausted` decides: `stop` ends
     /// the ladder `exhausted` with `recovery_ladder_hold_exhausted` and no restart (`Ended`),
     /// `escalate` goes on to the next rung (`Escalate`). A holding interruption during a hold,
     /// or a renewal refused before a later probe, ends the climb as at every rung boundary, the
@@ -2878,7 +2893,28 @@ impl HostShared {
         loop {
             let probe = self.probe_screen(pending, resolved, key)?;
             let (count, score_milli) = match (probe, held.take()) {
-                (ScreenProbe::Changing { count, score_milli }, _) => (count, score_milli),
+                (
+                    ScreenProbe::Changing {
+                        count,
+                        score_milli,
+                        frame,
+                    },
+                    held_failure,
+                ) => {
+                    // #411 A56 (P10; Friday review item 8): on a recheck, a frame that shows a
+                    // page of the return-home package's entry runs that package again, whether
+                    // or not the screen still changes (an animated page it knows is no loading).
+                    if let Some(failure) = held_failure
+                        && self.return_home_entry_shown(pending, &frame)?
+                    {
+                        if self.ladder_rerun_suppressed(pending, deadline_ms)? {
+                            return Ok(ScreenStep::Ended);
+                        }
+                        let attempt = self.recovery_return_home(pending, deadline_ms, key)?;
+                        return Ok(ScreenStep::Rerun { failure, attempt });
+                    }
+                    (count, score_milli)
+                }
                 (ScreenProbe::Refused { interruption }, None) => {
                     return Ok(ScreenStep::AsToday {
                         interruption: Some(interruption),
@@ -3036,17 +3072,25 @@ impl HostShared {
                 payload,
             )?;
         }
-        let digests = match self.capture_readonly_transaction(
+        let (digests, last) = match self.capture_readonly_transaction(
             &validated,
             instance_alias,
             pending.instance_id,
             config.probe,
         ) {
-            Ok((samples, current)) => samples
-                .into_iter()
-                .chain(std::iter::once(current))
-                .map(|frame| frame.change_digest)
-                .collect::<Vec<ColorDigest>>(),
+            // #411 A56: the last frame is kept for a recheck's comparison with the return-home
+            // package's entry pages.
+            Ok((samples, current)) => (
+                samples
+                    .into_iter()
+                    .map(|frame| frame.change_digest)
+                    .chain(std::iter::once(current.change_digest))
+                    .collect::<Vec<ColorDigest>>(),
+                ProbeFrame {
+                    observation: current.observation,
+                    links: current.links,
+                },
+            ),
             // Only a failure that poisons the Runtime ends the climb, as it ends a read-only
             // observe request. A capture error of fatal device severity is fatal to its frame,
             // not to the Runtime (the observe request answers it `failed`, the Runtime healthy):
@@ -3093,8 +3137,100 @@ impl HostShared {
             ScreenProbe::Changing {
                 count: digests.len(),
                 score_milli,
+                frame: Box::new(last),
             }
         })
+    }
+
+    /// #411 A56 (P10; Friday review item 8; #411 comment 6355995369, fix 1): whether `frame`, the
+    /// last frame of a recheck's changing probe, shows a page of the return-home package's entry
+    /// (its declared `entry_page`, one page or an entry page set; a `linear_steps` package's first
+    /// step page), recognised as the package recognises its pages: the climb's return-home
+    /// package (the one its rung runs) admitted again, the frame read back from its artifact, as a
+    /// Lab operation reads its frames, and compared through the display adapter's frame gate under
+    /// the game's declaration (`PreparedContainedTask::entry_pages_on_frame`). A package whose
+    /// entry lists no page (`any`, or none) shows none, and no frame is read. A comparison that
+    /// cannot be made (the package not admitted, the game's standard-pack root refused, the frame
+    /// unreadable, refused by the gate or not evaluated) is recorded under the frame's links and
+    /// shows none, so the hold goes on as before; only a failure that poisons the Runtime is
+    /// returned.
+    fn return_home_entry_shown(
+        &self,
+        pending: &PendingRecoveryLadder,
+        frame: &ProbeFrame,
+    ) -> RuntimeHostResult<bool> {
+        let not_compared = |failure: RequestFailure| -> RuntimeHostResult<bool> {
+            if failure.poison_runtime || failure.error.is_fatal() {
+                return Err(*failure.error);
+            }
+            self.append_lifecycle_failure(
+                RuntimeLifecycleFailureStage::OperationCleanup,
+                RuntimeLifecycleFailure::Host(&failure.error),
+                frame.links.clone(),
+                None,
+            )?;
+            Ok(false)
+        };
+        let binding = pending
+            .recovery
+            .as_ref()
+            .ok_or_else(|| ladder_invariant(HostCode::RecoveryLadderRecoveryPackageMissing))?;
+        let request = match ContainedTaskRequest::new(binding.package_path()) {
+            Ok(request) => request,
+            Err(error) => {
+                return not_compared(RequestFailure::request(
+                    RuntimeHostError::relayed_request(
+                        error.code().as_str(),
+                        LADDER_OPERATION.as_str(),
+                        RuntimeErrorCode::InvalidRequest,
+                    ),
+                    RuntimeReceiptState::Failed,
+                    None,
+                ));
+            }
+        };
+        let prepared = match super::contained_task::prepare_contained_task(
+            &pending.instance_alias,
+            &request,
+            self.execution()?.vision_provider(),
+            Instant::now() + Duration::from_millis(request.response_deadline_ms()),
+        ) {
+            Ok(prepared) => prepared,
+            Err(failure) => return not_compared(failure),
+        };
+        if prepared.navigation_entry_pages().is_none() {
+            return Ok(false);
+        }
+        let layout = match self.prepare_run_interrupts(&prepared) {
+            Ok(standard_pack) => standard_pack.display_layout,
+            Err(failure) => return not_compared(failure),
+        };
+        let png = match read_projected_verified(self.artifacts.root(), frame.observation.artifact())
+        {
+            Ok(png) => png,
+            Err(error) => {
+                return not_compared(super::online_observation::observation_artifact_failure(
+                    error,
+                ));
+            }
+        };
+        let backend =
+            super::lab_operation::capture_backend_name(frame.observation.capture_backend());
+        let Ok(decoded) = Frame::from_png(png, backend) else {
+            return not_compared(RequestFailure::request(
+                RuntimeHostError::request(
+                    SharedCode::CaptureFrameInvalid,
+                    LADDER_OPERATION,
+                    RuntimeErrorCode::CaptureFailed,
+                ),
+                RuntimeReceiptState::Failed,
+                None,
+            ));
+        };
+        match prepared.entry_pages_on_frame(&decoded, layout.as_ref()) {
+            Ok(pages) => Ok(!pages.is_empty()),
+            Err(error) => not_compared(entry_comparison_failure(&error)),
+        }
     }
 
     /// R1: the failed run's bound recovery package (or the configured return-home package,
@@ -3956,6 +4092,27 @@ fn ladder_fact_payload(
     } else {
         RuntimePayloadDraft::lifecycle_observed(owner_epoch, phase, AuditInput::new())
     }
+}
+
+/// #411 A56: the kernel's refusal of a recheck's entry comparison (a frame the display gate
+/// refuses, an evaluation error), as a failure of the ladder's operation: its code, with the
+/// values and the detail it carries.
+fn entry_comparison_failure(
+    error: &actingcommand_execution_kernel::ContainedTaskError,
+) -> RequestFailure {
+    let mut failed = RuntimeHostError::relayed_request(
+        error.code().as_str(),
+        LADDER_OPERATION.as_str(),
+        RuntimeErrorCode::BackendOperationFailed,
+    );
+    if error.has_values() {
+        let values = error.outcome();
+        failed = failed.with_outcome_values(|_| values.operation(LADDER_OPERATION));
+    }
+    if let Some(detail) = error.detail() {
+        failed = failed.with_native_detail(detail.to_owned());
+    }
+    RequestFailure::request(failed, RuntimeReceiptState::Failed, None)
 }
 
 /// The outcome of a failed rung (ledger revision 3): its reason's outcome; a holding
