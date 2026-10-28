@@ -48,8 +48,8 @@ tests = [
 ]
 incident = []
 
-# TTL (not written for now, coordinator-rulings-c-items.md:20: release_owned refusing Explicit,
-# Preempted and Expired)
+# TTL (not written for now, coordinator-rulings-c-items.md:20: release_owned refusing Explicit
+# and Expired)
 [[gate]]
 key = "5"
 coverage = "Y"
