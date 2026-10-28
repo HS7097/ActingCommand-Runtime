@@ -1544,7 +1544,7 @@ tests = [
 ]
 incident = ["#411 B8"]
 
-# #411 A51 (0.12.9; register §1.151 A51-7, A51-8; no persisted ledger shape; brief A51 T3, T5; the next free host key above 129): while the writer is held in a read, a Status and the performance loop's runtime-fact seal answer the non-fatal writer_response_timeout, nothing is latched and no stop is requested, and once the read ends Status completes; the first fatal condition the host latches reaches the daemon reporter at once, before any close, and only the first
+# #411 A51 (0.12.9; register §1.151 A51-7, A51-8; no persisted ledger shape; brief A51 T3, T5; the next free host key above 129): while the writer is held in a read, the performance loop's runtime-fact seal answers the non-fatal writer_response_timeout, nothing is latched and no stop is requested, and a Status completes, held or not (#422 W1-8 P30: it reads the published head, no longer the writer's); the first fatal condition the host latches reaches the daemon reporter at once, before any close, and only the first
 [[gate]]
 key = "130"
 coverage = "Y"
@@ -2469,3 +2469,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_427b::gate_427b_the_max_key_binds_in_observe_pace_and_full_and_the_explanation_says_the_numbers",
 ]
 incident = ["#427-B"]
+
+# W1-8 (#422; brief rd-1028/brief-wave1.md W1-8; #422 6463703245, 6461256427 L-4's follow-up): while the writer is held in a read of its own, Status, MonitorStatus and RuntimeFactSnapshot each complete at the one head the writer last published, nothing latches and no stop is requested (T7, P30); PerformanceStatus shows ledger_read_pages, which counts the QueryEvents pages the reader pool read, with their times in order and the status' shape rules kept (T8, P29)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_w1_8::w1_8_t7_status_monitor_and_fact_snapshot_answer_at_the_published_head_while_the_writer_is_held",
+    "actingcommand-runtime-host::lib::tests::gate_w1_8::w1_8_t8_the_performance_status_shows_the_reader_pools_pages",
+]
+incident = ["#422 W1-8"]

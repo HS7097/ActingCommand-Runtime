@@ -123,10 +123,35 @@ pub struct RuntimePerformanceInstanceStatus {
     pub effective_factor_milli: u32,
 }
 
+/// #422 W1-8 (P29; since 0.12.25): the view pages the ledger's reader pool read since the
+/// Runtime started, read from memory: how many (`pages`), their summed time (`total_ms`, so
+/// `total_ms / pages` is the mean), the longest one (`longest_ms`) and the last one (`last_ms`), in
+/// milliseconds. A page the pool answered without reading it is not counted.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LedgerReadPagesStatus {
+    pub pages: u64,
+    pub total_ms: u64,
+    pub longest_ms: u64,
+    pub last_ms: u64,
+}
+
+impl LedgerReadPagesStatus {
+    /// No page yet is all zero; a page's time is within the longest, the longest within the sum.
+    fn valid(&self) -> bool {
+        if self.pages == 0 {
+            return *self == Self::default();
+        }
+        self.last_ms <= self.longest_ms && self.longest_ms <= self.total_ms
+    }
+}
+
 /// The answer of `PerformanceStatus`: the mode in effect and, for `full`, the phase; whether the
 /// learning view caps the normal one; the monitor's health; the host row; one row per registered
 /// instance; and the measurement's warnings now (`perf_probe_unavailable` for a host probe that
-/// could not run, `perf_baseline_clamped` for a baseline held at its bound).
+/// could not run, `perf_baseline_clamped` for a baseline held at its bound). #422 W1-8 (P29):
+/// `ledger_read_pages`, the ledger reader pool's pages and their times, absent when the Runtime's
+/// ledger has no reader pool.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimePerformanceStatus {
@@ -141,18 +166,22 @@ pub struct RuntimePerformanceStatus {
     pub instances: Vec<RuntimePerformanceInstanceStatus>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<Outcome>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ledger_read_pages: Option<LedgerReadPagesStatus>,
 }
 
 impl RuntimePerformanceStatus {
     /// The shape rules: responsiveness within 10 000 basis points, shares within 1 000, factors
     /// never below 1 000, a share of 0 exactly at S4, a phase only under `full`, each instance
-    /// once by a valid alias, every warning a warning, and the bounds above.
+    /// once by a valid alias, every warning a warning, the bounds above, and (#422 W1-8) the
+    /// ledger's page times in order.
     pub fn validate(&self) -> RuntimeContractResult<()> {
         let invalid = || RuntimeContractError::new(RuntimeContractCode::InvalidPerformanceStatus);
         let host = &self.host;
         let responsiveness_valid =
             |value: Option<u16>| value.is_none_or(|value| value <= MAX_RESPONSIVENESS_BP);
         if self.observed_at_unix_ms == 0
+            || self.ledger_read_pages.is_some_and(|pages| !pages.valid())
             || self.pacing_phase.is_some() && self.pacing_mode != PerformancePacingMode::Full
             || !responsiveness_valid(host.host_responsiveness_bp)
             || !responsiveness_valid(Some(host.responsiveness_bp))

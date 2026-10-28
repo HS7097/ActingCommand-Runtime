@@ -437,11 +437,14 @@ impl HostShared {
             .map_err(RequestFailure::poison_without_terminal)?
             .unix_ms;
         let state = sample()?;
-        // #411 A51 (R3): a head the writer did not answer in time fails only this read; the
-        // next status reads it again.
+        // #422 W1-8 (P30; #422 6463703245): the head the writer last published, read without a
+        // writer command, so a status, a monitor status or a project read never waits behind the
+        // writer's work. #411 A51 (R3): a ledger without a published point reads the writer's
+        // head, and a head the writer did not answer in time fails only this read; the next
+        // status reads it again.
         let ledger_committed_head = self
             .ledger
-            .latest_sequence()
+            .published_head()
             .map_err(|error| ledger_read_failure(&error, HostLocation::RuntimeStateSource))?;
         let sampled_completed_at_unix_ms = self
             .clock

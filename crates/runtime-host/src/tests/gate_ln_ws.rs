@@ -281,22 +281,17 @@ fn ln_ws_t7_an_append_not_answered_in_time_fails_naming_writer_response_timeout(
         )),
     )
     .expect("runtime host");
-    let ids = IdentifierIssuer::new().expect("identifier issuer");
     let hold = WriterReadHoldGate::arm(root.path()).expect("read hold");
-    let request = runtime_request(&ids, RuntimeOperation::Status);
     let appended = thread::scope(|scope| {
-        let request = &request;
         let host = &host;
-        // The writer is held in the status's read; the append is captured behind it.
-        let held = scope.spawn(move || {
-            host.process_request_for_test(request, ConnectionId::new(1).expect("connection"))
-        });
+        // The writer is held in a read of the ledger's head on the writer, a whole-history read's
+        // first (#422 W1-8, P30: a status no longer reads its head on the writer); the append is
+        // captured behind it. That read's own answer is not this test's subject.
+        let held = scope.spawn(move || host.query_persisted_events_for_test(EventQuery::default()));
         assert!(hold.wait_held(GATE_WAIT), "the writer is in a read");
         let appended = append_approval(host, 0);
         hold.release();
-        held.join()
-            .expect("the status's thread")
-            .expect("a status receipt");
+        let _read = held.join().expect("the read's thread");
         appended
     });
     let error = appended.expect_err("the append's reply did not come in time");

@@ -233,6 +233,8 @@ fn performance(instances: usize) -> RuntimePerformanceStatus {
             })
             .collect(),
         warnings: Vec::new(),
+        // #422 W1-8 (P29): a status without the ledger's pages, as before them.
+        ledger_read_pages: None,
     }
 }
 

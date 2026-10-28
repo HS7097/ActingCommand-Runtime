@@ -244,6 +244,30 @@ pub struct LedgerWriterPeak {
     pub whole_ledger_queries: u64,
 }
 
+/// #422 W1-8 (P29; QR-1 review L-4 follow-up): the view pages the writer's reader pool read
+/// since the writer opened, and their times: how many, their sum, the longest and the last one.
+/// The writer's statistics hold each page in a peak window only, which the Runtime reads at its
+/// start; these are read while it runs (`GlobalLedger::reader_pool_pages`). A page the pool
+/// answered without reading it (its caller's deadline passed, the pool was closing) is not
+/// among them. Process-local, never persisted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LedgerReaderPoolPages {
+    pub pages: u64,
+    pub total: Duration,
+    pub longest: Duration,
+    pub last: Duration,
+}
+
+impl LedgerReaderPoolPages {
+    /// Counts one page read in `elapsed`.
+    fn record(&mut self, elapsed: Duration) {
+        self.pages = self.pages.saturating_add(1);
+        self.total = self.total.saturating_add(elapsed);
+        self.longest = self.longest.max(elapsed);
+        self.last = elapsed;
+    }
+}
+
 impl LedgerWriterPeak {
     /// Whether an unpaged `Query` reads the whole Ledger: no lower sequence bound and none of
     /// the index-backed filters (event type, origin module, diagnostic code, instance, links).
@@ -1560,6 +1584,10 @@ pub struct GlobalLedger {
     /// #422 QR-1: why the Runtime's writer has no reader pool (its connections did not open);
     /// the writer reads the pages then, and the Runtime says so as a warning.
     reader_pool_finding: Option<GlobalLedgerError>,
+    /// #422 W1-8 (P30): the committed points the writer publishes after every commit, read by
+    /// [`Self::published_head`] without a writer command; `None` for a writer that publishes
+    /// none (no failure plan), whatever became of its reader pool.
+    read_points: Option<Arc<reader_pool::ReadPoints>>,
 }
 
 /// #411 A51 (R4): the operation of the writer's command in progress (or of its flush) and when
@@ -2223,6 +2251,43 @@ impl GlobalLedger {
             .unwrap_or_default()
     }
 
+    /// #422 W1-8 (P29; QR-1 review L-4 follow-up): the view pages the reader pool read since the
+    /// writer opened, with their times, for the Runtime to show while it runs; `None` for a
+    /// ledger without a reader pool. Does not enqueue a writer command.
+    pub fn reader_pool_pages(&self) -> Option<LedgerReaderPoolPages> {
+        self.reader_pool
+            .as_ref()
+            .map(reader_pool::ReaderPool::pages)
+    }
+
+    /// #422 W1-8 (P30; #422 6463703245): the committed head as the writer last published it for
+    /// its reader pool, read without a writer command, so a read of the head never waits behind
+    /// the writer's work. The writer publishes after every commit and before it answers the
+    /// commit's appends, so the head names every append that was answered; a record captured and
+    /// not flushed yet is not in it (`latest_sequence` flushes it first). A writer that ended, or
+    /// that its probe sealed, answers as `latest_sequence` would: `writer_unavailable` or the
+    /// sealed writer's `ledger_write_failed`, both fatal. A ledger that publishes no point (no
+    /// failure plan, or a medium the pool does not read) reads `latest_sequence`.
+    pub fn published_head(&self) -> GlobalLedgerResult<u64> {
+        let Some(point) = self
+            .read_points
+            .as_ref()
+            .and_then(|points| points.current())
+        else {
+            return self.latest_sequence();
+        };
+        if self.writer.as_ref().is_none_or(JoinHandle::is_finished) {
+            return Err(GlobalLedgerError::fatal(
+                LedgerCode::WriterUnavailable.code(),
+                LedgerLocation::LatestSequence.location(),
+            ));
+        }
+        if self.queue.writer_sealed() {
+            return Err(write_failure::sealed_error());
+        }
+        Ok(point.head)
+    }
+
     pub fn check_writer_health(&self) -> GlobalLedgerResult<()> {
         match self.writer.as_ref() {
             Some(writer) if !writer.is_finished() => Ok(()),
@@ -2335,6 +2400,10 @@ impl GlobalLedger {
                 history_scan_rows: config.history_scan_rows,
             });
         let reader_threads = config.reader_threads;
+        // #422 W1-8 (P30): the ledger reads the published head from the same points.
+        let read_points = pool_settings
+            .as_ref()
+            .map(|settings| Arc::clone(&settings.points));
         let context = WriterContext {
             clock: Arc::clone(&config.clock),
             read_budget: config.read_budget,
@@ -2492,6 +2561,7 @@ impl GlobalLedger {
                     read_check_vm_steps,
                     reader_pool,
                     reader_pool_finding,
+                    read_points,
                 })
             }
             Err(mpsc::SendError(store)) => {
