@@ -9,6 +9,97 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.22
+
+本版是 v0.12.21 之后合并的 3 个 PR，都属于按实例并行调度（Workflow #427）：调度的一轮可以把计划运行交给各实例
+自己的工作线程，不同实例同时运行（#427-A）；同一宿主上的实例之间只共享真正共享的上限（#427-B 及其后续）。并行
+运行由开关 `scheduling.parallel.enabled` 控制，默认关闭。开关关着时一切照旧，只有两处变化：快照变了时有界地重新
+取样（C1），以及每轮不再按 CPU、GPU、IO 预扣宿主预算。v0.12.21 已在本版之前发布。
+
+配置：`actingd-config` 升为 revision 19，本版声明 [5, 19]，仍读 revision 5 到 18 的配置文件；其他接口不变。
+
+- 新键 `scheduling.parallel.enabled`（#427-A）：布尔，默认 `false`（在 `actingd.defaults.json` 里），可在运行时设置。
+  actingd 在每一轮调度开始时读它，启动后的第一轮也读，所以运行时的指令从下一轮起生效；已经交给实例工作线程的运行
+  照样在那里跑完并结算。
+  - 打开：`actingctl config set scheduling.parallel.enabled=true`，或 MCP `ac_config_set`
+    `{"changes": [{"key": "scheduling.parallel.enabled", "value": true}]}`。
+  - 关闭：`actingctl config clear scheduling.parallel.enabled`（或 `ac_config_set` 只给这个键、不给 `value`），回到
+    默认的 `false`，不留指令。设成 `false` 也能关，但会留下一条指令（见下面的回退）。
+  - 也可以写进配置文件（经 `acsetup --commit-config`，下次启动生效）。
+- 新键 `performance.pacing.max_concurrent_runs`（#427-B）：整数 1 到 65 535，没有默认值，不可在运行时设置，启动时读
+  一次。配置文件不写它就没有这个上限，`config.parameters` 里也没有这一行；写了，所有实例合计已准入或正在运行的策略
+  派发，加上本轮更早选中的，最多这么多个。`1` 表示所有实例合计一次只跑一个策略派发。改它要改配置文件并重启。
+- 其他键和默认值都不变，现有配置不需要修改。`performance.pacing.heavy_dispatch_limit.normal` / `.paused`（默认 2 / 1）
+  现在是同一宿主上重场景的共享名额（见下）。
+- 退回 v0.12.21 之前要做的事（按代码核对过）：
+  - 配置文件：v0.12.21 只认 [5, 18]，`scheduling` 节和 `performance.pacing` 都拒绝不认识的成员。配置文件只要写了
+    `scheduling.parallel`（哪怕是 `false`）或 `performance.pacing.max_concurrent_runs`，v0.12.21 的 `check-config` 和
+    启动都会拒绝整个文件。回退前先把这两个键从配置文件里删掉并提交；两个都没写的文件 v0.12.21 照常读。
+  - 运行时指令：只要用 `config set` 或 `ac_config_set` 设过 `scheduling.parallel.enabled`（`true` 和 `false` 都算），
+    这条指令就记在 `host.config_overrides` 里。v0.12.21 不认识这个键，启动时把它作为 `config_override_dropped` 丢掉
+    （只是警告，启动照常），并列进 `instructions_dropped`，所以回退启动的 `instructions` 检查不通过。回退前先执行
+    `actingctl config clear scheduling.parallel.enabled`，这也同时关掉并行运行。`max_concurrent_runs` 不可设置，不会
+    有指令。
+  - 结果码：不需要做什么。退役的 `host_budget_deferred` 在 v0.12.21 里仍在用，回退后每轮重新按 CPU、GPU、IO 预扣
+    并给出它。本版写的派发决定记录里，`decision_candidate_not_selected` 的 `why` 和 `omitted_why` 可能写有 v0.12.21
+    不认识的 `policy_concurrent_runs_deferred`，重场景原因也多了 4 个值；结果里不认识的码和值照样可读。账本接口仍是
+    [3, 4]，没有新事件类型，表和索引都没变。
+  - 账本里的状态：不需要做什么。在途登记只在内存里，从不写进账本；交给工作线程的运行写的记录和调度线程自己跑时
+    一样；停止时被拒绝的运行记的是普通的 `policy_settlement_interrupted` 结算，v0.12.21 只按结果码和连续次数决定是否
+    解除，和启动时记下的中断一样；被放弃的运行在线结算时写的是启动时的形状（租约已结束的不再写释放）。
+
+运行上的变化，开关关着（默认）时：
+
+- 重新取样（C1，不受开关控制）：一轮评估在取样和校验之间发现采样的结果键变了（`policy_outcome_snapshot_changed`：
+  另一个运行在这之间结算了），以前这个错误会结束策略驱动线程（随后报 `policy_driver_stopped`）。现在这一轮重新取样
+  再评估，每轮最多 3 次，每次打印 `actingd policy_cycle_resampled code=… attempt=<n> limit=3`；3 次之后仍变就放弃这一
+  轮，打印 `actingd policy_cycle_given_up code=… resamples=3`，推迟到下一次触发（一个去抖间隔之后）。驱动线程不会因此
+  停下。
+- 不再预扣（#427-B）：每轮不再把选中派发的 CPU、GPU、IO 负载从宿主预算里扣掉，也没有按实例的预算池，
+  `host_budget_deferred` 退役，不再出现。任务自身的负载超过宿主容量的，仍在放置阶段以 `host_capacity_insufficient`
+  挡住。所以一轮可以在同一宿主的多个实例上各选一个派发（例如五个普通负载的实例一轮全部选中）；开关关着时，这些
+  派发仍由调度线程在这一轮里一个接一个地执行。
+- 重场景名额：重场景候选（按 `performance.load.heavy_threshold_milli` 判断）占宿主的一个名额，名额数是
+  `heavy_dispatch_limit.normal`，性能控制器高于 Normal 时是 `.paused`。占用的名额 = 已准入、尚未结算的重场景策略派发
+  （任何实例）+ 本轮更早选中的重场景派发，每个派发只算一次；准入被拒的和已结算的派发都释放名额。已准入的派发就占
+  满名额时，候选在放置阶段以 `heavy_scene_budget_exhausted` 挡住；本轮更早的选择占满时，以
+  `heavy_scene_budget_deferred` 推迟。`max_concurrent_runs` 写了时先查它，到上限的候选以新码
+  `policy_concurrent_runs_deferred` 推迟。这些上限与 `performance.pacing.mode` 无关，`observe`（发布默认）、`pace`、
+  `full` 下一样生效。
+- 带数值的原因：这三个原因都带 `used`（占用）、`limit_count`（上限）、`admitted_count`（已准入或正在运行的占用）和
+  `round_selected_count`（本轮更早选中的占用），例如重场景 2/2、并发运行 3/3。压力下 `heavy_scene_budget_exhausted`
+  的 `used` 可以大于 `limit_count`。`ac_schedule` 和 `actingctl schedule`、`ac_overview` 的 `not_running`、
+  `ac_diagnose` 的 `not_run` 都原样显示这些值；`ac_diagnose` 的 `not_run` 除了 `deferred` 的行，现在也列出因这三个
+  共享上限之一而 `blocked` 的行（#1389）。
+
+开关打开后：
+
+- 实例通道：每个获准的计划运行连同它的请求交给它所在实例的工作线程（`actingd-instance-<别名>`），由它运行、结算，
+  再唤醒调度线程。同一实例一次一个，不同实例同时运行。一轮不再等运行结束，启动后的第一轮也不再推迟
+  `runtime_ready`。评估和准入仍只在调度线程上。
+- 在途登记：从交出到结算为止，运行登记在它的实例上。期间这个实例算作被占用：评估推迟它的候选，准入以
+  `dispatch_instance_held`（`holder_kind` `policy_dispatch`）拒绝新派发，终止记录已写、租约已释放但还没结算的那段
+  时间也一样；对账跳过工作线程还持有的运行，不会提前或重复结算。
+- 排空：实例的调度暂停和安装排空都等在途运行。在暂停或排空开始之前交出的运行照常进行（排空等它，暂停像对待之前
+  准入的运行一样排空它），不为此记失败。只有在 Runtime 的停止已经请求之后工作线程才取到的运行被拒绝
+  （`runtime_stopping`）：不启动，释放租约，记一次实时的中断结算（`policy_settlement_interrupted`，带实际经过的
+  `runtime_ms`），重启后像启动时记下的中断一样解除（连续第一次）。关闭时，工作线程已取到的运行跑完并结算，还在队列
+  里的被拒绝并按中断结算，什么都不重放。
+- 故障（#419）：运行的故障走该实例的故障隔离，实例级故障只隔离那一个实例，其他实例照跑；只有全局故障才停
+  Runtime。工作线程崩溃（panic）时这个运行被丢弃、不重试，租约到期失效；登记保留并标为放弃，实例在租约有效期间
+  保持占用。租约结束后，对账按启动时的规则在线结算它一次（有终止记录就按终止记录，否则从租约结束的时刻按中断
+  结算），然后忘掉登记，实例重新可用。租约以不止一种方式结束的仍保持占用，留给下次启动记录。
+- 共享名额：各实例同时运行时，重场景名额按所有实例已准入未结算的重场景派发计数，按默认值同一宿主最多同时 2 个重
+  场景（压力下 1 个）；写了 `max_concurrent_runs` 时，所有实例合计的派发数不超过它。
+- 回落：并行运行出问题时，最快的是关掉开关（`config clear`，下一轮起生效）。要保留开关、但所有实例合计一次只跑一个
+  派发，在配置文件里写 `performance.pacing.max_concurrent_runs` 为 `1` 并重启。
+
+本版合并的 PR：
+
+- #1387 #427-B（#427）：每轮不再按 CPU、GPU、IO 预扣宿主预算，`host_budget_deferred` 退役，任务自身负载超过宿主容量仍在放置阶段挡住；重场景名额按已准入未结算加本轮已选中计数；新的可选键 `performance.pacing.max_concurrent_runs`（不写即不限，启动时读）和新码 `policy_concurrent_runs_deferred`；三个共享上限的原因带 `used`、`limit_count`、`admitted_count`、`round_selected_count`。
+- #1386 #427-A（#427）：开关 `scheduling.parallel.enabled`（默认关，可在运行时设置，每轮读）打开时，计划运行交给各实例的工作线程；在途登记从交出到结算，供占用、对账、调度暂停和安装排空使用；C1 有界重新取样（不受开关控制）；开关打开时启动的第一轮不再推迟 `runtime_ready`；工作线程崩溃后放弃的运行在租约结束后在线按中断结算，停止时被拒绝的运行按中断结算；`actingd-config` 升到 revision 19（两个新键）。
+- #1389 #427-B 后续：`ac_diagnose` 的 `not_run` 也列出因共享上限在放置阶段被挡住的行及其数值；结果码和契约说明里的 "host budget" 改称 "shared run limits"（共享运行上限）；补一个宿主级的名额释放测试。没有新键、新结果码。
+
 ## v0.12.21
 
 本版是 v0.12.20 之后合并的 3 个 PR：概览和诊断读账本时不再排在账本写入线程后面，也不再等帧清理做完：
