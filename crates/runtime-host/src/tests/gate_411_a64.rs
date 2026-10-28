@@ -231,8 +231,9 @@ fn deadline_package() -> Vec<u8> {
     zip.finish().expect("finish zip").into_inner()
 }
 
-/// A device configuration whose capture is the Nemu IPC (neutral test values).
-fn nemu_capture(serial: &str) -> EffectiveDeviceConfiguration {
+/// A device configuration whose capture is the Nemu IPC (neutral test values). ISO-5a
+/// (`gate_419_iso5a.rs`) puts its instances behind the same multi-Nemu gate with it.
+pub(super) fn nemu_capture(serial: &str) -> EffectiveDeviceConfiguration {
     EffectiveDeviceConfiguration {
         input_backend: "adb_shell_input".to_owned(),
         capture_backend: "nemu_ipc".to_owned(),

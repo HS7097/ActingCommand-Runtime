@@ -1672,9 +1672,23 @@ impl HostShared {
                 failure_outcome: None,
             });
         }
-        let resolved = self.validated_instance(request, token, connection_id)?;
+        self.validated_instance(request, token, connection_id)?;
+        #[cfg(test)]
+        self.consume_contained_task_checkpoint_for_test(
+            super::contained_task::ContainedTaskCheckpointPoint::ReleaseValidated,
+            super::contained_task::ContainedTaskCheckpointIdentity::new(
+                request.request_id(),
+                token.instance_id(),
+                token.lease_id(),
+            ),
+        )?;
         let instance_guard = self.instance_guard(token.instance_id())?;
         let _admission = self.lock_admission(&instance_guard, token.instance_id())?;
+        // ISO-5a (#419, ISO-M row B17): the lease sweep may have ended the lease between the
+        // validation above and the guard. Validated again under the guard, which the sweep's
+        // expiry needs too, a lease already ended is answered as the scheduler's denial
+        // ("lease already ended"), never a poison.
+        let resolved = self.validated_instance(request, token, connection_id)?;
         self.expire_queued_for_instance(token.instance_id())?;
         self.end_lease_device_use(token, connection_id, LeaseDeviceEnd::Keep)?;
         let gate = self.routine_gate(token.instance_id())?;
@@ -1851,7 +1865,7 @@ impl HostShared {
         let gate = self.routine_gate(token.instance_id())?;
         let order_lock = self.queue_order_lock(token.instance_id())?;
         let order = lock(&order_lock, HostLocation::LockInstanceQueueOrder)?;
-        let transfer = lock(&self.scheduler, HostLocation::PreparePreemptedTransfer)?
+        let prepared = lock(&self.scheduler, HostLocation::PreparePreemptedTransfer)?
             .prepare_transfer_gated(
                 token,
                 connection_id,
@@ -1859,13 +1873,21 @@ impl HostShared {
                 None,
                 gate,
                 self.monotonic_ms()?,
-            )
-            .map_err(|error| {
-                RequestFailure::poison_without_terminal(
+            );
+        let transfer = match prepared {
+            Ok(transfer) => transfer,
+            // ISO-5a (#419, ISO-M row B19): the lease is gone (the sweep expired it once a write
+            // freed the admission guard, or its key went on): there is no key to hand on.
+            Err(SchedulerError::LeaseMissing | SchedulerError::LeaseMismatch) => {
+                TransferPreparation::NoCandidate
+            }
+            Err(error) => {
+                return Err(RequestFailure::poison_without_terminal(
                     RuntimeHostError::scheduler(HostLocation::PreparePreemptedTransfer, &error)
                         .naming_lease(token.lease_id()),
-                )
-            })?;
+                ));
+            }
+        };
         match transfer {
             TransferPreparation::NoCandidate => Ok(false),
             TransferPreparation::Ready(prepared) => {
@@ -2121,11 +2143,14 @@ impl HostShared {
         self.end_lease_device_use(token, connection_id, LeaseDeviceEnd::Keep)
             .map_err(|failure| *failure.error)?;
         let claim_request = ladder.claim().clone();
+        // ISO-5a (#419, ISO-M row B24): an invalid claim of this instance's ladder is an invariant
+        // of this instance's data: its boundary fences the instance, never the Runtime.
         let validated_claim = claim_request.validate().map_err(|_| {
-            RuntimeHostError::fatal(
+            RuntimeHostError::instance_fault(
                 HostCode::RecoveryLadderClaimRequestInvalid,
                 HostLocation::HandOffToLadder,
                 RuntimeErrorCode::RuntimeHalted,
+                instance_id,
             )
         })?;
         let claim_connection =
@@ -2157,6 +2182,12 @@ impl HostShared {
             Ok(TransferPreparation::Ready(prepared)) => prepared,
             Ok(TransferPreparation::Deferred | TransferPreparation::NoCandidate)
             | Err(SchedulerError::LeaseMissing | SchedulerError::LeaseMismatch) => {
+                return Ok(Some(ladder));
+            }
+            // ISO-5a (#419, ISO-M row B24): any other refusal of the hand-off that is not fatal
+            // leaves the key where it is: the lease ends in the ordinary way and the admitted
+            // ladder waits as a claim (`enqueue_ladder_claim`), as when no key is left to hand on.
+            Err(error) if !error.is_fatal() => {
                 return Ok(Some(ladder));
             }
             Err(error) => {
@@ -2352,6 +2383,13 @@ impl HostShared {
         let Some(admission) = self.try_lock_admission(&instance_guard, token.instance_id())? else {
             return Ok(false);
         };
+        // ISO-5a (#419, ISO-M row B02): a write still in flight on the lease (an input writes
+        // without the admission guard) is a device step too: the expiry closes nothing under it
+        // and is retried at the next tick, once per tick and without a record, until the write
+        // has returned.
+        if self.lease_step_active(token)? {
+            return Ok(false);
+        }
         self.cleanup_token_guarded(
             token,
             connection_id,
@@ -2587,12 +2625,20 @@ impl HostShared {
                                 value: token.clone(),
                                 effect: DefiniteEffectDisposition::NotPerformed,
                             },
+                            // ISO-5a (#419, ISO-M row B23): the scheduler refused the end of a
+                            // lease it still holds, an invariant of this one lease: the failure
+                            // is this instance's (its boundary fences it), and nothing latches
+                            // here.
                             Ok(false) => CriticalActionReport::Failed {
-                                error: ActionFailure::poison(RuntimeHostError::fatal(
-                                    HostCode::SchedulerCleanupStateMismatch,
-                                    HostLocation::CleanupRuntimeLease,
-                                    RuntimeErrorCode::RuntimeHalted,
-                                )),
+                                error: ActionFailure {
+                                    poison_runtime: false,
+                                    ..ActionFailure::poison(RuntimeHostError::instance_fault(
+                                        HostCode::SchedulerCleanupStateMismatch,
+                                        HostLocation::CleanupRuntimeLease,
+                                        RuntimeErrorCode::RuntimeHalted,
+                                        token.instance_id(),
+                                    ))
+                                },
                                 effect: EffectDisposition::Indeterminate,
                             },
                             Err(error) => CriticalActionReport::Failed {
@@ -2952,6 +2998,10 @@ impl HostShared {
                         &error,
                     ))
                 })?;
+            // ISO-5a (#419, ISO-M row B16): an expiry end that fails without being fatal (a
+            // scheduler refusal of the lapsed lease's end) denies only the acquire that met it,
+            // and the lease sweep ends the lease later; a fatal one poisons as before, and its
+            // boundary contains it.
             self.cleanup_token_inner(
                 &token,
                 connection_id,
@@ -2959,7 +3009,13 @@ impl HostShared {
                 None,
                 admission,
             )
-            .map_err(RequestFailure::poison_without_terminal)?;
+            .map_err(|error| {
+                if error.is_fatal() {
+                    RequestFailure::poison_without_terminal(error)
+                } else {
+                    RequestFailure::request(error, RuntimeReceiptState::Denied, None)
+                }
+            })?;
         }
         Ok(())
     }

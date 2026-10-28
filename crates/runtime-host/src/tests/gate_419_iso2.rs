@@ -558,6 +558,13 @@ fn iso2_e_a_refused_frame_commit_or_resolve_fails_only_its_operation() {
         assert_eq!(failure.code(), code);
         assert!(!failure.is_fatal(), "{code}");
         assert!(!failure.halts_runtime(), "{code}");
+        // ISO-5a (W2-E review, question 4): the Runtime runs on, so the receipt no longer says
+        // `runtime_halted`.
+        assert_eq!(
+            failure.projection().code,
+            RuntimeErrorCode::BackendOperationFailed,
+            "{code}"
+        );
         assert_eq!(
             RuntimeHostError::execution(HostLocation::CommitCaptureInputFrame, refusal)
                 .scope_at(Some(x)),
@@ -598,6 +605,7 @@ fn iso2_e_a_refused_frame_commit_or_resolve_fails_only_its_operation() {
         Some(x),
     );
     assert!(global.is_fatal());
+    assert_eq!(global.projection().code, RuntimeErrorCode::RuntimeHalted);
     assert_eq!(global.scope_at(Some(x)), FailureScope::Global);
     assert!(global.halts_runtime());
 }
