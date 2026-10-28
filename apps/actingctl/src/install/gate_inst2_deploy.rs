@@ -1446,6 +1446,7 @@ fn inst2_n4_a_rollback_resumed_past_its_gate_reverses_nothing_while_an_actingd_r
             super::files::plain(&root)
         ),
         mcp_serve: false,
+        parent_pid: None,
     });
     let before = calls(&host);
 

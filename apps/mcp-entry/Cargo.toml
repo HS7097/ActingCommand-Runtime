@@ -26,6 +26,9 @@ path = "src/fake_child.rs"
 
 [dependencies]
 actingcommand-contract = { workspace = true }
+# #411 P49 (MCP-ENTRY review L4): the entry's own process creation time, read once at its start
+# with the probe the owner release uses, goes into its status file.
+actingcommand-host-metrics = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

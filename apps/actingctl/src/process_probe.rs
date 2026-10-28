@@ -6,8 +6,24 @@
 use crate::codes::ActingctlCode;
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
+use actingcommand_host_metrics::ProcessProbe;
 use std::path::PathBuf;
 use std::process::Command;
+
+/// #411 P49 (MCP-ENTRY review L4): the creation time, in Unix milliseconds, of the process now
+/// running with `pid`, as the operating system reports it (the probe the owner release uses);
+/// `None` when no running process has the pid. Windows reuses pids, so a pid and this time
+/// together name one process. A probe the operating system does not decide is
+/// `process_probe_failed` with the `pid`, caused by the probe's reason.
+pub(crate) fn pid_created_at(pid: u32) -> Result<Option<u64>, Outcome> {
+    match actingcommand_host_metrics::probe_process(pid) {
+        ProcessProbe::Running { created_at_unix_ms } => Ok(Some(created_at_unix_ms)),
+        ProcessProbe::NotRunning => Ok(None),
+        ProcessProbe::Unknown(reason) => Err(Outcome::new(ActingctlCode::ProcessProbeFailed)
+            .pid(pid)
+            .caused_by(Outcome::new(reason))),
+    }
+}
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
