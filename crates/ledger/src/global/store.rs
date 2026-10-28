@@ -50,10 +50,29 @@ pub(super) trait LedgerStore: Send + 'static {
     ) -> GlobalLedgerResult<super::ArtifactRetentionCandidates>;
     /// #422 LN-7c Q (final-query §2): at a frame cleaner pass start, the writer keeps of the
     /// capture frame objects only those in `live` (the live frame store) and the proof set.
-    fn retain_live_objects(
+    /// #422 QR-1: one bounded chunk of that trim, after `cursor` (from the first object when
+    /// `None`), looking at no more than `max_objects` objects.
+    fn retain_live_objects_chunk(
         &mut self,
         live: &std::collections::BTreeSet<actingcommand_contract::ArtifactId>,
-    );
+        cursor: Option<super::LiveFramesCursor>,
+        max_objects: usize,
+    ) -> super::LiveFramesChunk;
+    /// #422 QR-1: the committed point the reader pool reads at: the head, its record hash, the
+    /// medium's marker and the eviction proofs, reusing `previous`'s proofs while they did not
+    /// change. `None` for a store the reader pool cannot read (no SQLite medium).
+    fn read_point(
+        &self,
+        _previous: Option<&super::reader_pool::ReadPoint>,
+    ) -> Option<super::reader_pool::ReadPoint> {
+        None
+    }
+    /// #422 QR-1, tests: `count` new capture frame objects, as if records had named them.
+    #[cfg(test)]
+    fn seed_frame_objects_for_test(
+        &mut self,
+        count: usize,
+    ) -> Vec<actingcommand_contract::ArtifactId>;
     fn admit_artifact_eviction(
         &mut self,
         guard: actingcommand_artifact_store::ArtifactDeleteGuard,
@@ -195,11 +214,44 @@ impl<B: DurableStorage> LedgerStore for EventStore<B> {
     ) -> GlobalLedgerResult<super::ArtifactRetentionCandidates> {
         Self::retention_candidates(self, after)
     }
-    fn retain_live_objects(
+    fn retain_live_objects_chunk(
         &mut self,
         live: &std::collections::BTreeSet<actingcommand_contract::ArtifactId>,
-    ) {
-        self.retention.retain_live_objects(live);
+        cursor: Option<super::LiveFramesCursor>,
+        max_objects: usize,
+    ) -> super::LiveFramesChunk {
+        // The first chunk's head bounds the objects every chunk of this trim may drop.
+        let position = cursor.map_or((None, self.latest_sequence()), |cursor| {
+            (Some(cursor.after()), cursor.as_of())
+        });
+        self.retention
+            .retain_live_objects_chunk(live, position, max_objects)
+    }
+    fn read_point(
+        &self,
+        previous: Option<&super::reader_pool::ReadPoint>,
+    ) -> Option<super::reader_pool::ReadPoint> {
+        let (head_hash, marker_state) = self.backend.read_extent()?;
+        let proofs = match previous {
+            Some(previous) if previous.proofs.revision() == self.retention.proof_revision() => {
+                Arc::clone(&previous.proofs)
+            }
+            _ => Arc::new(self.retention.published_proofs()),
+        };
+        Some(super::reader_pool::ReadPoint {
+            head: self.latest_sequence(),
+            head_hash: head_hash.map(str::to_owned),
+            marker_state,
+            proofs,
+        })
+    }
+    #[cfg(test)]
+    fn seed_frame_objects_for_test(
+        &mut self,
+        count: usize,
+    ) -> Vec<actingcommand_contract::ArtifactId> {
+        let head = self.latest_sequence();
+        self.retention.seed_frame_objects_for_test(count, head)
     }
     fn admit_artifact_eviction(
         &mut self,

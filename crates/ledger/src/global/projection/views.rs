@@ -146,7 +146,9 @@ impl EventIndexes {
             PageContext {
                 lab_related: &lab_related,
                 run_context: &mut run_context,
-                retention: selection.retention,
+                retention: selection
+                    .retention
+                    .map(crate::global::retention::PageProofs::Index),
             },
         )
     }
@@ -164,7 +166,7 @@ pub(in crate::global) type RunContextRecords<E> = Result<(Vec<E>, bool), GlobalL
 pub(in crate::global) struct PageContext<'a, E> {
     pub lab_related: &'a dyn Fn(&LabKeys) -> bool,
     pub run_context: &'a mut dyn FnMut(&RunId) -> RunContextRecords<E>,
-    pub retention: Option<&'a crate::global::retention::RetentionIndex>,
+    pub retention: Option<crate::global::retention::PageProofs<'a>>,
 }
 
 /// One page of `selected` (in ledger order, with one record of lookahead when the page is cut

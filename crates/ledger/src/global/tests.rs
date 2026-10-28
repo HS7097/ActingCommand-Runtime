@@ -2700,6 +2700,9 @@ fn shutdown_waits_for_a_full_ingress_queue_to_drain() {
         // is `ledger_observer.read_check_vm_steps`'s default.
         frame_query_database: None,
         read_check_vm_steps: super::read_work::DEFAULT_READ_CHECK_VM_STEPS,
+        // #422 QR-1: a hand-built writer reads its pages itself.
+        reader_pool: None,
+        reader_pool_finding: None,
     };
     let (closing_sender, closing) = mpsc::channel();
     let (done_sender, done_receiver) = mpsc::channel();
@@ -2982,3 +2985,7 @@ mod gate_ln7c_v;
 // reads them and is never refused for them; the Lab view still gets them.
 #[path = "tests/gate_idle_ov.rs"]
 mod gate_idle_ov;
+// #422 QR-1: view pages are read by the Runtime writer's reader pool, off the writer thread, and
+// the frame cleaner's trim reaches the writer in bounded chunks.
+#[path = "tests/gate_qr1.rs"]
+mod gate_qr1;

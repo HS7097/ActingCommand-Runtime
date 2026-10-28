@@ -144,3 +144,12 @@ test = "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_
 ruling = "#411 A66 (coordinator ruling 10-24: watchdog.start_window_ms, 900 s by default)"
 reason = "Renamed with the requirement it pins: a start that never answers is start_timeout after the configured start window, no longer after a fixed 180 s."
 covered_by = "actingcommand-actingctl::bin:actingctl::watchdog::gate_382_a4::gate_382_a4_g12_a_start_that_never_answers_is_start_timeout_after_its_window, in the same apps.toml row."
+
+# ledger.toml, row 55 (#422 QR-1, PR #1385): view pages are read by the reader pool, off the
+# writer thread, so an append is no longer captured behind a view read.
+[[retired]]
+fragment = "ledger"
+test = "actingcommand-ledger::lib::global::tests::gate_ln_ws::ln_ws_t3_an_append_captured_behind_an_over_budget_read_commits_once_it_answers"
+ruling = "Workflow #422 QR-1 (Alice 10-28: ledger queries off the writer thread)"
+reason = "Renamed with the requirement it pins: with the reader pool an append is never captured behind a view read; it commits while the over-budget read runs off the writer, and the read then answers at its budget."
+covered_by = "actingcommand-ledger::lib::global::tests::gate_ln_ws::ln_ws_t3_an_append_commits_while_an_over_budget_read_runs_off_the_writer, in the same ledger.toml row 55."
