@@ -14,8 +14,9 @@
 //!   `connection_failed`;
 //! - T3 (item 2): an operator restart of an unpaused instance that has a startup package queues
 //!   it, also when the restart's preparation failed because the game was not running;
-//! - T4 (item 2): the same on a paused instance queues nothing, and the answer says why
-//!   (`startup_package_withheld: instance_paused`);
+//! - T4 (item 2; #411 A71 replaced its rule): the same on a paused instance queues the startup
+//!   package too, its claim waiting gated behind the pause, and the answer says which pause holds
+//!   it (`startup_package_withheld: instance_paused`);
 //! - T5 (item 3): a restart whose Stop's readiness wait expired launches only after the status
 //!   reads stopped (the reads answer running, running, stopped);
 //! - T6 (item 3): the old VM never stops within the configured bound (a non-default
@@ -33,10 +34,20 @@
 //! failed asserted no startup package (that was the rule), every restart whose Stop's wait
 //! expired had the status already reading stopped, and no recovery preparation read the
 //! emulator status (only a self-check on an operator claim did, A48).
+//!
+//! #411 A71 (#411 comment 6380024768, the production host on 10-24 at 12:50): an instance was
+//! paused, then `ac_emulator start` started its emulator; the answer said
+//! `startup_package_withheld: instance_paused`, and after the resume the startup package never
+//! ran. A pause holds only dispatches (emu-watch, Alice's ruling 35), so the start queues the
+//! package behind the pause, as a configured start does:
+//!
+//! - T8: a start during the instance's pause queues the startup package, nothing runs under the
+//!   pause, and after the resume the package runs once.
 
 use super::emulator_controller::{
     EmulatorCall, FAKE_EMULATOR_PORT, ScriptedControl, running_state, stopped_state,
 };
+use super::gate_369_s6c::GATE_WAIT;
 use super::gate_387_d1c::ladder_manifest;
 use super::gate_403::status_fence;
 use super::instance_workers::{all_events, phases, wait_until};
@@ -45,8 +56,8 @@ use crate::codes::HostCode;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     EmulatorInstanceAction, RequestId, RuntimeConfigManifest, RuntimeLifecyclePhase,
-    RuntimePayload, SchedulingPauseReason, SchedulingPauseScope, StartupPackageDisposition,
-    StartupPackageWithheld,
+    RuntimePayload, RuntimeSubscriptionRequest, SchedulingPauseReason, SchedulingPauseScope,
+    StartupPackageDisposition, StartupPackageWithheld, SubscriptionCursor,
 };
 use actingcommand_device::codes::DeviceStage;
 use actingcommand_device::{
@@ -324,10 +335,11 @@ fn a50_t3_an_operator_restart_of_an_unpaused_instance_queues_its_startup_package
     run.host.close().expect("close host");
 }
 
-// T4: the same restart on an instance its own scheduling pause holds queues nothing, and the
-// answer says why with a typed reason.
+// T4 (#411 A71 replaced A50's rule that a pause queues nothing): the same restart on an instance
+// its own scheduling pause holds queues the startup package too; its claim waits gated behind the
+// pause, and the answer names the pause with a typed reason.
 #[test]
-fn a50_t4_an_operator_restart_of_a_paused_instance_queues_nothing_and_says_why() {
+fn a50_t4_an_operator_restart_of_a_paused_instance_queues_its_startup_package_behind_the_pause() {
     let run = startup_host();
     let paused = send(
         &run.host,
@@ -352,19 +364,151 @@ fn a50_t4_an_operator_restart_of_a_paused_instance_queues_nothing_and_says_why()
     assert_eq!(
         startup_answer(&receipt),
         (
-            StartupPackageDisposition::None,
+            StartupPackageDisposition::Scheduled,
             Some(StartupPackageWithheld::InstancePaused)
         ),
         "{receipt:?}"
     );
-    assert_eq!(startup_scheduled(&run.host), 0, "no startup package queued");
+    assert_eq!(
+        startup_scheduled(&run.host),
+        1,
+        "one startup package queued"
+    );
+    assert_eq!(
+        run.host.instance_claims_for_test(ALIAS).expect("claims"),
+        (None, vec![ClaimKind::StartupPackage]),
+        "the startup claim waits gated behind the pause"
+    );
+    assert!(run.host.fatal_error().expect("runtime health").is_none());
+    run.host.close().expect("close host");
+}
+
+// ---- #411 A71: a start during a pause runs its startup package after the resume.
+
+/// The records of `event_type`.
+fn recorded(host: &RuntimeHost, event_type: EventType) -> usize {
+    host.query_persisted_events_for_test(EventQuery {
+        event_type: Some(event_type),
+        ..EventQuery::default()
+    })
+    .expect("events of the type")
+    .len()
+}
+
+/// Returns once a record of `event_type` after `after` is recorded (a ledger subscription that
+/// answers as soon as it is; `GATE_WAIT` only bounds a broken run).
+fn await_recorded(host: &RuntimeHost, event_type: EventType, after: u64) {
+    let query = EventQuery {
+        event_type: Some(event_type),
+        from_sequence: Some(after + 1),
+        ..EventQuery::default()
+    };
+    let subscription = RuntimeSubscriptionRequest::new(
+        query,
+        ProjectionProfile::Forensic,
+        SubscriptionCursor::default(),
+        u64::try_from(GATE_WAIT.as_millis()).expect("gate wait"),
+        1,
+    )
+    .expect("subscription request");
+    let receipt = send(
+        host,
+        RuntimeOperation::SubscribeEvents {
+            request: subscription,
+        },
+        513,
+    );
+    let Some(RuntimeResult::EventBatch { batch }) = receipt.result() else {
+        panic!("an event batch: {receipt:?}");
+    };
+    assert!(!batch.timed_out(), "{event_type:?} after {after}");
+}
+
+// T8: the instance is paused, then the operator starts its emulator. The start queues the startup
+// package and the answer names the pause; under the pause its claim only waits (also after a
+// sweep tick) and nothing runs. The resume's reconnect hands the key on, the startup package runs
+// once, and no second startup claim waits.
+#[test]
+fn a71_t8_a_start_during_a_pause_runs_its_startup_package_once_after_the_resume() {
+    let run = startup_host();
+    let paused = send(
+        &run.host,
+        RuntimeOperation::PauseScheduling {
+            scope: SchedulingPauseScope::Instance {
+                instance_alias: ALIAS.to_owned(),
+            },
+            pause_reason: SchedulingPauseReason::new("a71_pause").expect("pause reason"),
+            drain_timeout_ms: 1_000,
+        },
+        510,
+    );
+    assert_eq!(paused.state(), RuntimeReceiptState::Completed, "{paused:?}");
+
+    let started = control(&run.host, START, 511);
+    assert_eq!(
+        started.state(),
+        RuntimeReceiptState::Completed,
+        "{started:?}"
+    );
+    assert_eq!(
+        startup_answer(&started),
+        (
+            StartupPackageDisposition::Scheduled,
+            Some(StartupPackageWithheld::InstancePaused)
+        ),
+        "{started:?}"
+    );
+    run.host.expire_due_leases_for_test().expect("sweep tick");
+    assert_eq!(
+        run.host.instance_claims_for_test(ALIAS).expect("claims"),
+        (None, vec![ClaimKind::StartupPackage]),
+        "the startup claim waits behind the pause"
+    );
+    assert_eq!(
+        recorded(&run.host, EventType::TaskRequested),
+        0,
+        "no startup run under the pause"
+    );
+
+    let resumed_at = all_events(&run.host)
+        .last()
+        .map_or(0, PersistedEvent::sequence);
+    let resumed = send(
+        &run.host,
+        RuntimeOperation::ResumeScheduling {
+            scope: SchedulingPauseScope::Instance {
+                instance_alias: ALIAS.to_owned(),
+            },
+            expected: None,
+        },
+        512,
+    );
+    assert_eq!(
+        resumed.state(),
+        RuntimeReceiptState::Completed,
+        "{resumed:?}"
+    );
+    await_recorded(&run.host, EventType::TaskCompleted, resumed_at);
+    run.host.expire_due_leases_for_test().expect("sweep tick");
+
+    assert_eq!(
+        recorded(&run.host, EventType::TaskRequested),
+        1,
+        "the startup package ran once"
+    );
+    assert_eq!(recorded(&run.host, EventType::TaskCompleted), 1);
+    assert_eq!(
+        startup_scheduled(&run.host),
+        1,
+        "one startup package queued"
+    );
     assert!(
         !run.host
             .instance_claims_for_test(ALIAS)
             .expect("claims")
             .1
             .contains(&ClaimKind::StartupPackage),
-        "no startup claim waits"
+        "no second startup claim waits"
     );
     assert!(run.host.fatal_error().expect("runtime health").is_none());
     run.host.close().expect("close host");

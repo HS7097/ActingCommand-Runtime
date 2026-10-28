@@ -1618,15 +1618,23 @@ tests = [
 ]
 incident = ["#411 A50"]
 
-# #411 A50 item 2 (register §1.158 A50-2, A50-3; no persisted ledger shape): an operator restart of an unpaused instance that has a startup package queues it, also when its preparation failed; on a paused instance it queues nothing and the answer says why (startup_package_withheld instance_paused)
+# #411 A50 item 2 (register §1.158 A50-2, A50-3; no persisted ledger shape): an operator restart of an unpaused instance that has a startup package queues it, also when its preparation failed; #411 A71 (register §1.158 A71-1) replaced the paused case: on a paused instance it queues the package too, its claim waiting gated behind the pause, and the answer names the pause (startup_package_withheld instance_paused)
 [[gate]]
 key = "145"
 coverage = "Y"
 tests = [
     "actingcommand-runtime-host::lib::tests::gate_411_a50::a50_t3_an_operator_restart_of_an_unpaused_instance_queues_its_startup_package",
-    "actingcommand-runtime-host::lib::tests::gate_411_a50::a50_t4_an_operator_restart_of_a_paused_instance_queues_nothing_and_says_why",
+    "actingcommand-runtime-host::lib::tests::gate_411_a50::a50_t4_an_operator_restart_of_a_paused_instance_queues_its_startup_package_behind_the_pause",
 ]
-incident = ["#411 A50"]
+incident = ["#411 A50", "#411 A71"]
+
+# #411 A71 (0.12.25; register §1.158 A71-1; #411 comment 6380024768; no persisted ledger shape): an operator start during the instance's scheduling pause queues its startup package behind the pause (startup_package scheduled, startup_package_withheld instance_paused), nothing runs under the pause, and after the resume the package runs once
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_411_a50::a71_t8_a_start_during_a_pause_runs_its_startup_package_once_after_the_resume",
+]
+incident = ["#411 A71"]
 
 # #411 A50 item 3 (register §1.158 A50-4, A50-5; no persisted ledger shape): a restart whose Stop's readiness wait expired launches only after the emulator status reads the old VM stopped; still running at emulator_control.restart_exit_wait_ms (the configuration in effect) it fails emulator_restart_previous_instance_running and launches nothing
 [[gate]]
