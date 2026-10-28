@@ -748,7 +748,7 @@ fn qr2b_t4_a_section_past_the_deadline_answers_incomplete_and_the_rest_answers()
 
     // The deadline passes while `runs_grouped` reads: once B's old failed run, beyond the 10
     // most recent, has been read.
-    let base = Instant::now();
+    let base = unreached_deadline();
     let clock = PageClock {
         runtime: &runtime,
         from: runtime.asked_count(),
@@ -791,7 +791,7 @@ fn qr2b_t4_a_section_past_the_deadline_answers_incomplete_and_the_rest_answers()
 
     // The deadline passes while the window's runs are listed: neither run section is read on,
     // and both say so; the errors page, failures_grouped and not_run answer.
-    let base = Instant::now();
+    let base = unreached_deadline();
     let clock = PageClock {
         runtime: &runtime,
         from: runtime.asked_count(),

@@ -267,8 +267,8 @@ struct ListingPages {
 }
 
 /// One run a listing found: its identity and its first listing fact in the window; and (#422
-/// QR-2b) whether the window holds its main admission or an entry fact, and the terminal facts
-/// the window holds of it.
+/// QR-2b) whether the window holds its main admission, and the terminal facts the window holds
+/// of it.
 #[derive(Debug, Clone, Copy)]
 struct ListedRun {
     identity: TaskRunIdentity,
@@ -294,7 +294,7 @@ impl ListedRun {
     /// #422 QR-2b: one more listing fact of the run, by its type.
     fn note(&mut self, event_type: EventType) {
         match event_type {
-            EventType::TaskRequested | EventType::TaskEntryPreflight => self.opened = true,
+            EventType::TaskRequested => self.opened = true,
             EventType::TaskCompleted | EventType::TaskFailed | EventType::TaskCancelled => {
                 self.terminal = Some(event_type);
                 self.terminals = self.terminals.saturating_add(1);
@@ -330,13 +330,15 @@ pub struct WindowRun {
     /// against its other listing facts only). `None` for a failed run, an open one, or one with
     /// more than one terminal (its status read refuses it).
     pub settled: Option<ContainedRunState>,
-    /// Whether the window holds the run's main admission or an entry fact, not only its
-    /// terminal. A run listed by its terminal alone began before the window, or ended before
-    /// its first frame (its first fact its terminal intent); only its status read tells which.
-    /// A run with an admission or an entry fact in the window began in it, as its status read
+    /// Whether the window holds the run's main admission (`task.requested`), not only its
+    /// entry facts or its terminal. A run listed without its admission began before the window
+    /// (an entry fact can be an interrupt it handled mid-run), or ended before its admission
+    /// (its entry check failed, or it ended before its first frame); only its status read
+    /// tells which. A run with its admission in the window began in it, as its status read
     /// would find, except that a run with an entry check records its first frame's geometry
-    /// (its first fact) moments before its first entry fact, so a run begun moments before the
-    /// window's start is counted in it.
+    /// (its first fact) and its entry check's facts before its admission, so a run whose entry
+    /// check began before the window's start and whose admission falls in the window is
+    /// counted in it.
     pub opened_in_window: bool,
 }
 

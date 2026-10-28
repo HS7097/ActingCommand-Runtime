@@ -144,10 +144,12 @@ list.
 `list_window_runs` (the listing `list_contained_runs` reads, on the instance or on every
 instance), and both `runs` (the failed and open runs among the 10 most recent) and
 `runs_grouped` take their runs from it, newest first. A run the listing shows settled (its one
-terminal `task.completed` or `task.cancelled`) with its main admission or an entry fact in
+terminal `task.completed` or `task.cancelled`) with its main admission (`task.requested`) in
 the window is not read: it can be neither failed nor open, and it takes its place among the 10
-most recent from the listing (a run with an entry check begun moments before the window's
-start is counted in it; it is never shown). Every other run is read in brief mode, at the
+most recent from the listing (a run whose entry check began before the window's start and
+whose admission falls in the window is counted in it; it is never shown). A settled run with
+only entry facts or its terminal in the window (begun before it, or ended before its
+admission) is read like any other. Every other run is read in brief mode, at the
 listing's snapshot, while the 10 most recent are not all found, and after that only when
 `runs_grouped` can keep it; a run's dispatch intent page is read only for a scheduled failed
 or open run `runs_grouped` keeps, its terminal record only for a relayed code the catalog does
@@ -163,8 +165,11 @@ deadline cut, or whose read failed, answers `<section>_incomplete: true` (`runs`
 the warning `call_budget_exhausted` naming it (`member`) or the read's failure, and the
 diagnosis answers the other sections and is `incomplete`; `not_run` not read is absent, with
 `call_budget_exhausted` (`member` `not_run`). Only the status read that resolves `instance`
-fails the whole diagnosis. A page in flight at the deadline still ends at the client's own
-socket timeout.
+fails the whole diagnosis. Each read starts only before the deadline and checks it between
+its pages, but a read under way at the deadline can still send more than the page in flight,
+each page ending at the client's own socket timeout: the listing, the first page of each
+listing type it has not read yet (at most four); or one run's status read, its Runtime
+restart pages (up to four) and its lease pages (up to two).
 
 `list_contained_runs` (Workflow #389 MCP-3) pages the same listing for `actingctl runs`
 and MCP `ac_runs`: the runs first recorded in a window, on one instance or all, newest

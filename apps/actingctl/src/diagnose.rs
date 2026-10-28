@@ -566,10 +566,10 @@ struct WindowReads {
 /// `runs` and `runs_grouped` (runtime-client `list_window_runs`) and examined newest first. A
 /// run is read only when a section needs it:
 /// - a run the listing shows settled (its one terminal `task.completed` or `task.cancelled`)
-///   and begun in the window (its admission or an entry fact there) is never read: it can be
-///   neither failed nor open, so `runs_grouped` does not keep it, and it takes its place among
-///   the 10 most recent from the listing (a run with an entry check begun moments before the
-///   window's start is counted in it, `WindowRun::opened_in_window`; it is never shown);
+///   and begun in the window (its main admission there) is never read: it can be neither failed
+///   nor open, so `runs_grouped` does not keep it, and it takes its place among the 10 most
+///   recent from the listing (a run whose entry check began before the window's start and whose
+///   admission falls in it is counted in it, `WindowRun::opened_in_window`; it is never shown);
 /// - any other run is read (its brief status, at the listing's snapshot) while the 10 most
 ///   recent are not all found, and after that only when `runs_grouped` can keep it (its task is
 ///   `task_id`'s, when one is given);
