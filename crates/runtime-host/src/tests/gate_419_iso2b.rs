@@ -23,6 +23,7 @@ use super::*;
 use crate::FailureScope;
 use actingcommand_contract::{EffectiveDeviceConfiguration, InstanceStuckRecovery};
 use actingcommand_device::{DeviceResult, InputCheckPhase, InputCheckStop};
+use actingcommand_execution_kernel::ExecutionKernelCode;
 
 /// One Nemu input check's answer, and the failure the input path made of a stopped input.
 type Checked = (DeviceResult<Duration>, Option<RuntimeHostError>);
@@ -89,8 +90,12 @@ fn assert_run_completes(host: &RuntimeHost, alias: &str, package: &str, connecti
     );
 }
 
-/// The kernel code of a session thread that panicked, the death the tests inject.
-const PANICKED: &str = "execution_session_panicked";
+/// The code on top of the failure of a capture whose session thread panicked, the death the
+/// tests inject: always the kernel's `execution_session_response_lost`, a session death. The
+/// panic unwinds the session thread and drops the capture's reply sender unsent, so the waiting
+/// capture's reply fails first (`ExecutionSession::capture_frame_retained`); the thread's own
+/// `execution_session_panicked` comes from the join after it and is merged in as the secondary.
+const RESPONSE_LOST: &str = ExecutionKernelCode::ExecutionSessionResponseLost.as_str();
 
 /// X's direct run whose capture panics inside X's session thread: the run fails, non-fatal,
 /// with `code` on top of its receipt.
@@ -108,11 +113,11 @@ fn run_with_a_dead_session(fixture: &Pair, connection: u64, code: &str) -> Runti
 }
 
 /// X's run whose session dies for the first time: it fails only itself, as a capture failure
-/// (#411 A7, ISO-2): the kernel's `execution_session_panicked` on top of its receipt, projected
-/// as a non-fatal `capture_failed`. That also says the death's close was confirmed: an
-/// unconfirmed one would have fenced X (#403) and ended the run with the fence's code.
+/// (#411 A7, ISO-2): the kernel's `execution_session_response_lost` on top of its receipt,
+/// projected as a non-fatal `capture_failed`. That also says the death's close was confirmed:
+/// an unconfirmed one would have fenced X (#403) and ended the run with the fence's code.
 fn first_death(fixture: &Pair, connection: u64) {
-    let receipt = run_with_a_dead_session(fixture, connection, PANICKED);
+    let receipt = run_with_a_dead_session(fixture, connection, RESPONSE_LOST);
     assert_eq!(
         receipt.error_projection().expect("the run's failure").code,
         RuntimeErrorCode::CaptureFailed,
@@ -415,7 +420,7 @@ fn iso2b_e_a_lapsed_lease_stops_the_nemu_input_with_the_lease_refusal() {
 
 /// f (R1, row A01; ISO-2: a dead session fails only the run): X's scheduled run meets its
 /// session dead at its first capture. The run fails only itself, non-fatal, with the kernel's
-/// `execution_session_panicked`, and the policy settles it as an ordinary failure: class
+/// `execution_session_response_lost`, and the policy settles it as an ordinary failure: class
 /// `Recoverable` and a retry scheduled, so the task is not paused for a person (a session-death
 /// code is no longer on the contract's always-severe list). X is not fenced and the Runtime does
 /// not latch. X's stuck recovery is off, so no ladder acts on X while the test reads it.
@@ -448,7 +453,7 @@ fn iso2b_f_a_single_session_death_does_not_pause_the_scheduled_task() {
         .expect_err("X's scheduled run fails");
 
     assert!(!error.is_fatal(), "{:?}", error.outcome());
-    assert_eq!(error.code(), PANICKED);
+    assert_eq!(error.code(), RESPONSE_LOST);
     let failures = all_events(&host)
         .iter()
         .filter_map(|event| match event.payload() {
@@ -464,7 +469,11 @@ fn iso2b_f_a_single_session_death_does_not_pause_the_scheduled_task() {
     let [failure] = failures.as_slice() else {
         panic!("one failed policy execution: {failures:?}");
     };
-    assert_eq!(failure.outcome.code().as_str(), PANICKED, "{failure:?}");
+    assert_eq!(
+        failure.outcome.code().as_str(),
+        RESPONSE_LOST,
+        "{failure:?}"
+    );
     assert_eq!(
         failure.original_class,
         PolicyFailureClass::Recoverable,
