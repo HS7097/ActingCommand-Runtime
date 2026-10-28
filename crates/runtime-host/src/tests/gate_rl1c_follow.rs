@@ -15,6 +15,12 @@
 // `config.subsystems` facts, one paused scheduled run, then `LATER_FACTS` other workbench facts,
 // so the walk reads those first. Deadlines are judged by the fake read clock (`LedgerReadClock`),
 // which passes after a fixed number of looks; no sleep, and the test reads no wall clock.
+//
+// Fix round 1 (review rd-1028/review-w1-9.md L1): the L1 test also sets deadlines over the whole
+// of the run's read, found by search, not only at one count after the selection. Where in the
+// range read a deadline passes (its chunked rows, its head row) is told apart by the rows it had
+// read, which only the ledger's own test counter sees: that is the ledger gate
+// `gate_rl1c_follow` (`crates/ledger/src/global/tests/gate_rl1c_follow.rs`).
 
 use super::gate_rl1c_fix2::{
     LATER_FACTS, LATEST_START_UNIX_MS, PAUSED_TASK, fixture, old_full_read, report_within, warnings,
@@ -66,6 +72,18 @@ fn fewest_looks(root: &TempDir, high: u64, holds: impl Fn(&Value) -> bool) -> u6
     high
 }
 
+/// The most look counts [`spread`] gives: each is one whole report.
+const SAMPLES: u64 = 16;
+
+/// Up to [`SAMPLES`] look counts spread evenly over `low..=high` (`low < high`), both ends
+/// included; every count when there are no more.
+fn spread(low: u64, high: u64) -> Vec<u64> {
+    let intervals = (high - low).min(SAMPLES - 1);
+    (0..=intervals)
+        .map(|step| low + (high - low) * step / intervals)
+        .collect()
+}
+
 /// The paused pair, which the report lists whatever it left unread.
 fn paused_pair(report: &Value) -> &Value {
     let pair = &report["suspended"][0];
@@ -78,6 +96,12 @@ fn paused_pair(report: &Value) -> &Value {
 /// left unread (`step` null, frames `unavailable` with `ledger_read_budget_exceeded`) and the
 /// report warns `ledger_read_incomplete` last; the rest answers (`through_sequence`, the daemon
 /// start). A deadline that never passes reads the run.
+///
+/// Fix round 1 (review rd-1028/review-w1-9.md L1): not only at that look. `read` is the fewest
+/// looks at which the run is read, so every look of the run's own read (its range read's extent
+/// check, its chunked rows, the head row read after them, and the check after it) comes after
+/// `started` and by `read`, however many looks each takes. Deadlines spread over that window,
+/// both ends included, each leave the run unread with the rest answered as above.
 #[test]
 fn rl1c_follow_l1_a_deadline_passing_in_a_runs_read_leaves_the_run_unread() {
     let root = fixture(true);
@@ -108,6 +132,46 @@ fn rl1c_follow_l1_a_deadline_passing_in_a_runs_read_leaves_the_run_unread() {
         Some("ledger_read_incomplete"),
         "{report:#}"
     );
+
+    // Fix round 1 (L1): the whole window of the run's read, not one count in it.
+    let read = fewest_looks(&root, looks, |report| {
+        !report["suspended"][0]["step"].is_null()
+    });
+    assert!(
+        read > started + 2,
+        "the run's read takes looks: the selection by {started}, the run by {read}"
+    );
+    for ahead in spread(started + 1, read - 1) {
+        let report = report_at(&root, ahead);
+        assert_eq!(
+            report["through_sequence"],
+            json!(head),
+            "{ahead} looks: {report:#}"
+        );
+        assert_eq!(
+            report["daemon_started_at_unix_ms"],
+            json!(LATEST_START_UNIX_MS),
+            "{ahead} looks: {report:#}"
+        );
+        let pair = paused_pair(&report);
+        assert_eq!(pair["step"], Value::Null, "{ahead} looks: {report:#}");
+        let comparison = &pair["frames"]["comparison"];
+        assert_eq!(
+            comparison["status"],
+            json!("unavailable"),
+            "{ahead} looks: {report:#}"
+        );
+        assert_eq!(
+            comparison["outcome"]["code"],
+            json!("ledger_read_budget_exceeded"),
+            "{ahead} looks: {report:#}"
+        );
+        assert_eq!(
+            warnings(&report).last().map(String::as_str),
+            Some("ledger_read_incomplete"),
+            "{ahead} looks: {report:#}"
+        );
+    }
 
     let whole = report_at(&root, u64::MAX);
     assert!(

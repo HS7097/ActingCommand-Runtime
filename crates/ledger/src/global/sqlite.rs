@@ -3765,7 +3765,7 @@ fn read_selected_rows(
         match walked {
             Ok(NewestRead::Found(found)) => {
                 held += 1;
-                newest.push(Some(found));
+                newest.push(Some(*found));
             }
             Ok(NewestRead::Absent) => newest.push(None),
             Ok(NewestRead::Stopped) => {
@@ -3800,8 +3800,8 @@ fn read_selected_rows(
 
 /// RL-1c follow-up (#411 review 2 L1, W1-9): how one newest-first walk ended.
 enum NewestRead {
-    /// The newest matching row.
-    Found(LedgerEventMetadata),
+    /// The newest matching row (boxed: the other variants carry nothing).
+    Found(Box<LedgerEventMetadata>),
     /// No row of the type matches, down to its oldest row.
     Absent,
     /// The walk read its most rows (`newest_max_rows`) and none matched.
@@ -3872,7 +3872,7 @@ fn read_newest(
     match found {
         Some((event, links, artifacts)) => {
             check_row_relations(reader, event.sequence(), links, artifacts)?;
-            Ok(NewestRead::Found(event))
+            Ok(NewestRead::Found(Box::new(event)))
         }
         None => Ok(NewestRead::Absent),
     }

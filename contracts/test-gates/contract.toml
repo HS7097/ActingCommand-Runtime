@@ -585,7 +585,7 @@ tests = [
 ]
 incident = ["#378 A8b"]
 
-# Workflow #411 A6 (no register section; the 0.12.1 train): a run listing (recent_runs, and list_contained_runs, which shares it) keeps none of the facts it lists by, so an instance whose window holds more entry facts than one read keeps (16 384) gets its newest run and its 10 most recent runs back complete, newest first, instead of run_status_event_limit_exceeded during recent_runs (MCP ac_overview, ac_diagnose; contract key R14, the next free key of the R series; R6 is the run projection across pages)
+# Workflow #411 A6 (no register section; the 0.12.1 train): a run listing (list_contained_runs; recent_runs shared it until its retirement in 0.12.25, W1-9) keeps none of the facts it lists by, so an instance whose window holds more entry facts than one read keeps (16 384) gets its newest run and its 10 most recent runs back complete, newest first, through list_contained_runs on the instance, instead of run_status_event_limit_exceeded during recent_runs, as at the incident (MCP ac_overview, ac_diagnose; contract key R14, the next free key of the R series; R6 is the run projection across pages)
 [[gate]]
 key = "R14"
 coverage = "Y"
@@ -594,7 +594,7 @@ tests = [
 ]
 incident = ["#411 A6"]
 
-# Workflow #411 A6, part 2 (no register section; the 0.12.1 train): a run's own status (contained_run_status, and each run recent_runs and list_contained_runs project) reads only the record types its projection folds (RUN_STATUS_EVENT_TYPES), by its request and when a run id is reversed to its request, so a run whose captures alone pass the 16 384 records one read keeps still projects its status, the same by its run id, instead of run_status_event_limit_exceeded during contained_run_status (MCP ac_get_run, ac_stop_run, ac_overview, ac_diagnose; contract key R15, the next free key of the R series after R14; R6 is the run projection across pages)
+# Workflow #411 A6, part 2 (no register section; the 0.12.1 train): a run's own status (contained_run_status, and each run list_contained_runs projects; recent_runs, retired in 0.12.25 (W1-9), projected them too) reads only the record types its projection folds (RUN_STATUS_EVENT_TYPES), by its request and when a run id is reversed to its request, so a run whose captures alone pass the 16 384 records one read keeps still projects its status, the same by its run id, instead of run_status_event_limit_exceeded during contained_run_status (MCP ac_get_run, ac_stop_run, ac_overview, ac_diagnose; contract key R15, the next free key of the R series after R14; R6 is the run projection across pages)
 [[gate]]
 key = "R15"
 coverage = "Y"
