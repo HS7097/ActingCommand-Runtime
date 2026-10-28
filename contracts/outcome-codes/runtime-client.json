@@ -2492,9 +2492,10 @@
         "operation": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "A runtime client call failed: recent runs budget invalid.",
+      "retired_in": "0.12.25",
+      "description": "Retired (#422 QR-2b L4): the runtime client's public recent_runs, the only call that answered it, is retired; its runs are read under the caller's deadline (latest_runs, list_contained_runs, list_window_runs). Was: a runtime client call failed: recent runs budget invalid.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

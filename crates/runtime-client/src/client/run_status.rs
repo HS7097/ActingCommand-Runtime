@@ -15,7 +15,6 @@ const RECENT_RUNS_OPERATION: Location = ClientLocation::RecentRuns.location();
 const MAX_RECENT_RUNS: usize = 10;
 /// The most runs one page of a run list holds (Workflow #389 MCP-3).
 const MAX_RUN_LIST: usize = 100;
-const RECENT_RUNS_BUDGET: Duration = Duration::from_secs(20);
 /// The facts a run is listed by (Workflow #391 item 3): its main admission, its entry facts and
 /// its terminal. A run without an entry check starts with its main admission, a run with one
 /// records an entry fact once that check is done, and a run whose first check fails ends with
@@ -464,78 +463,6 @@ impl RuntimeClient {
             .ok_or_else(|| status_error(ClientCode::RunStatusReadIncomplete))
     }
 
-    /// The most recent `limit` (1-10) contained runs first recorded on `instance` since
-    /// `since_unix_ms`, each in brief mode. The runs of the window are listed first and then
-    /// read one by one (Workflow #391 item 3), so the instance's other events are never read.
-    /// The whole read has a 20 s budget, checked between reads; when it ends the read early the
-    /// result is `incomplete`. Read-only.
-    pub fn recent_runs(
-        &self,
-        instance: InstanceId,
-        since_unix_ms: u64,
-        limit: usize,
-    ) -> RuntimeClientResult<RecentContainedRuns> {
-        if limit == 0 || limit > MAX_RECENT_RUNS {
-            return Err(RuntimeClientError::fatal(
-                ClientCode::RecentRunsLimitInvalid,
-                RECENT_RUNS_OPERATION,
-            ));
-        }
-        let deadline = Instant::now()
-            .checked_add(RECENT_RUNS_BUDGET)
-            .ok_or_else(|| {
-                RuntimeClientError::fatal(
-                    ClientCode::RecentRunsBudgetInvalid,
-                    RECENT_RUNS_OPERATION,
-                )
-            })?;
-        let listing = self.list_runs(
-            &EventQuery {
-                instance_id: Some(instance),
-                from_timestamp_unix_ms: Some(since_unix_ms),
-                ..EventQuery::default()
-            },
-            None,
-            Some(deadline),
-        )?;
-        let mut incomplete = !listing.complete;
-        let mut runs = Vec::with_capacity(limit);
-        for listed in listing.runs.iter().rev() {
-            if Instant::now() >= deadline {
-                incomplete = true;
-                break;
-            }
-            match self.read_contained_run_status(
-                RunKey::RequestId(listed.identity.request_id),
-                RunStatusMode::Brief,
-                Some(listing.snapshot),
-                Some(deadline),
-            )? {
-                Some(read) => {
-                    // A later fact inside the window does not make an older run recent.
-                    if read
-                        .first_fact_timestamp_unix_ms
-                        .is_some_and(|first| first >= since_unix_ms)
-                    {
-                        runs.push(read.status);
-                        if runs.len() == limit {
-                            break;
-                        }
-                    }
-                }
-                None => {
-                    incomplete = true;
-                    break;
-                }
-            }
-        }
-        Ok(RecentContainedRuns {
-            runs,
-            incomplete,
-            snapshot_ledger_position: listing.snapshot,
-        })
-    }
-
     /// The newest `limit` (1-10) contained runs first recorded on `instance` since
     /// `since_unix_ms`, newest first, each in brief mode (Workflow #411 A42; #422 IDLE-OV).
     /// The window is listed forward, by run, on the instance, each listing query a first page
@@ -638,7 +565,7 @@ impl RuntimeClient {
 
     /// One page of the contained runs first recorded from `since_unix_ms` to `until_unix_ms`
     /// (Workflow #389 MCP-3, `actingctl runs` / `ac_runs`). The runs of the window are listed by
-    /// run, as `recent_runs` lists them, and examined newest first by their order sequence: each
+    /// run (Workflow #391 item 3), and examined newest first by their order sequence: each
     /// is read in brief mode and kept when `filter` keeps it, until `limit` (1-100) are kept.
     /// A scheduled run also gets its policy task id, from its dispatch intent; `task_prefix`
     /// matches that id, so a run without one is not kept and not read. `from` continues an

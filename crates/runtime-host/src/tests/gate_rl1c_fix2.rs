@@ -38,11 +38,11 @@ use serde_json::{Value, json};
 const STATE_KEY: &[u8] = b"runtime-host-test-salt";
 const WRITER: &str = "rl1c-fix2-offline-writer";
 /// The paused pair's task: a neutral id outside the catalog.
-const PAUSED_TASK: &str = "fixture.rl1c-fix2.paused";
+pub(super) const PAUSED_TASK: &str = "fixture.rl1c-fix2.paused";
 /// Other workbench facts after the latest daemon start: more than one newest-first statement.
-const LATER_FACTS: u64 = 300;
+pub(super) const LATER_FACTS: u64 = 300;
 /// The latest daemon start, as its `config.subsystems` fact records it.
-const LATEST_START_UNIX_MS: u64 = POLICY_NOW_UNIX_MS + 2_000;
+pub(super) const LATEST_START_UNIX_MS: u64 = POLICY_NOW_UNIX_MS + 2_000;
 
 /// The offline writer of a closed state root and what it appends.
 struct Appender {
@@ -260,7 +260,7 @@ impl Appender {
 /// A closed state root: a host's start and close, then an earlier and the latest daemon start's
 /// `config.subsystems` facts, the paused run when `paused_run`, and `LATER_FACTS` other
 /// workbench facts after them, the last of them the head.
-fn fixture(paused_run: bool) -> TempDir {
+pub(super) fn fixture(paused_run: bool) -> TempDir {
     let root = TempDir::new().expect("the state root");
     let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
     let host = RuntimeHost::start(
@@ -296,7 +296,7 @@ fn fixture(paused_run: bool) -> TempDir {
 }
 
 /// `actingd suspended` on the closed root within `budget`.
-fn report_within(root: &TempDir, budget: SuspendedReadBudget) -> Value {
+pub(super) fn report_within(root: &TempDir, budget: SuspendedReadBudget) -> Value {
     let host = config(root);
     let sources = slot_sources(1, &[slot_task(&[600], 1)], None);
     crate::suspension_report_within(
@@ -314,12 +314,12 @@ fn report_within(root: &TempDir, budget: SuspendedReadBudget) -> Value {
 /// A budget of `max_events` records and no deadline.
 fn records(max_events: usize) -> SuspendedReadBudget {
     SuspendedReadBudget {
-        deadline: None,
         max_events,
+        ..SuspendedReadBudget::until(None)
     }
 }
 
-fn warnings(report: &Value) -> Vec<String> {
+pub(super) fn warnings(report: &Value) -> Vec<String> {
     report["warnings"]
         .as_array()
         .unwrap_or_else(|| panic!("warnings is a list: {report:#}"))
@@ -349,7 +349,7 @@ fn smallest_complete_budget(root: &TempDir) -> usize {
 
 /// The ledger's head sequence, and the latest daemon start as the old full read found it: every
 /// `runtime.fact_recorded`, newest last, the last `config.subsystems` one.
-fn old_full_read(root: &TempDir) -> (u64, Option<u64>, usize) {
+pub(super) fn old_full_read(root: &TempDir) -> (u64, Option<u64>, usize) {
     let events = ledger_events(root);
     let head = events
         .iter()

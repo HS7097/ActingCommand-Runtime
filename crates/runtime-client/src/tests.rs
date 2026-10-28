@@ -1492,6 +1492,13 @@ fn client_with_timeout(root: &TempDir, io_timeout: Duration) -> RuntimeClient {
     .expect("runtime client")
 }
 
+/// #422 QR-2b L4 (W1-9): a deadline no test reaches, for the run reads that take the caller's
+/// deadline (`list_contained_runs`). It only anchors that bound and measures nothing (the form of
+/// actingctl's `gate_mcpt1::unreached_deadline`).
+fn unreached_deadline() -> Instant {
+    Instant::now() + Duration::from_secs(60 * 60)
+}
+
 #[cfg(feature = "test-observation")]
 fn start_test_observation() -> (TestObservationCapture, HostTestObservationGuard) {
     let capture = TestObservationCapture::start().expect("start test observation");
