@@ -2279,6 +2279,12 @@ pub(super) fn view_page_at_point(
 /// and the stored rows end at it, and the record at the published head has the published head
 /// hash (the meta row's own when the two heads are one). Anything else is the writer's
 /// `ledger_meta_mismatch`.
+///
+/// Fix 1 (review L-7): it compares the marker's state only, where `verify_extent` compares the
+/// whole marker (its migration and material too). The meta row is keyed and the writer holds the
+/// medium, so at a published point a row that authenticates is the one its open verified or one
+/// it wrote since, with its marker; that marker is set at the open and never changes while the
+/// writer runs. At a published point the two checks therefore agree.
 fn verify_published_extent(
     database: &RuntimeDatabase,
     connection: &Connection,
@@ -2673,7 +2679,7 @@ impl ViewReader<'_> {
             // starts after that row, and each row is read and authenticated once.
             let rows = page_rows.min(limit.saturating_sub(selected.len()));
             let page = match read_history_rows(
-                &self.database,
+                self.database,
                 connection,
                 (selection, view),
                 (cursor, end),
@@ -2741,7 +2747,7 @@ impl ViewReader<'_> {
             let end = cursor.saturating_add(span).min(snapshot);
             let rows = page_rows.min(wanted - events.len());
             let page = match read_history_rows(
-                &self.database,
+                self.database,
                 connection,
                 (&selection, None),
                 (cursor, end),

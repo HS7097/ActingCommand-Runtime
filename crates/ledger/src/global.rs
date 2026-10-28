@@ -1031,6 +1031,11 @@ impl GlobalLedgerConfig {
             .unwrap_or(self.open_verify_tail_records);
         // LN-9 (#422): and the writer's scrub.
         self.scrub = plan.scrub().cloned();
+        // #422 QR-1 fix 1, tests: a reader pool of another size.
+        #[cfg(test)]
+        if let Some(threads) = plan.reader_threads_for_test() {
+            self.reader_threads = threads;
+        }
         self.clock = plan.clock();
         if let Some(timeout) = plan.reply_timeout() {
             self.reply_timeout = timeout;
@@ -2197,9 +2202,25 @@ impl GlobalLedger {
         self.reader_pool_finding.as_ref()
     }
 
-    /// #422 QR-1: whether the view pages are read by the reader pool, off the writer thread.
+    /// #422 QR-1: whether the view pages are read by the reader pool, off the writer thread; not
+    /// once every reader of the pool ended (fix 1).
     pub fn reads_off_writer(&self) -> bool {
-        self.reader_pool.is_some()
+        self.reader_pool
+            .as_ref()
+            .is_some_and(reader_pool::ReaderPool::serving)
+    }
+
+    /// #422 QR-1 fix 1 (review L-6): what the reader pool found while the Runtime runs, each
+    /// once, for the Runtime to say as a warning as it says `reader_pool_finding` at its start:
+    /// the first reader that ended unexpectedly (`writer_panicked` of `query_ledger_view`), and
+    /// once no reader is left, that the writer reads the view pages again (`writer_panicked` of
+    /// `project_ledger_view_page`). Nothing is fatal. Empty for a ledger without a pool. Does
+    /// not enqueue a writer command.
+    pub fn take_reader_pool_findings(&self) -> Vec<GlobalLedgerError> {
+        self.reader_pool
+            .as_ref()
+            .map(reader_pool::ReaderPool::take_findings)
+            .unwrap_or_default()
     }
 
     pub fn check_writer_health(&self) -> GlobalLedgerResult<()> {
@@ -2378,11 +2399,17 @@ impl GlobalLedger {
         let commit_statistics = store.commit_statistics();
         // #422 QR-1: the opened store's point is the readers' first; a pool whose connections do
         // not open leaves the pages to the writer, and its failure is kept for the Runtime's
-        // warning (`reader_pool_finding`).
+        // warning (`reader_pool_finding`). Fix 1 (review L-4): the pool's pages are recorded in
+        // the writer's commit statistics, as the writer's own pages were.
         let (reader_pool, reader_pool_finding) = match pool_settings {
             Some(settings) => {
                 settings.points.publish(&store);
-                match reader_pool::ReaderPool::start(settings, reader_threads, capacity) {
+                match reader_pool::ReaderPool::start(
+                    settings,
+                    Arc::clone(&commit_statistics),
+                    reader_threads,
+                    capacity,
+                ) {
                     Ok(pool) => (Some(pool), None),
                     Err(error) => (None, Some(error)),
                 }
@@ -2961,25 +2988,23 @@ impl GlobalLedger {
         })?;
         // #422 QR-1: the reader pool reads the page off the writer thread, at the writer's last
         // committed point; a writer that ended answers no page, as when it read them itself.
-        if let Some(pool) = &self.reader_pool {
+        // Fix 1 (review L-6): once no reader of the pool is left (said as a warning), the writer
+        // reads the page, as before the pool.
+        if let Some(pool) = self.reader_pool.as_ref().filter(|pool| pool.serving()) {
             if self.writer.as_ref().is_none_or(JoinHandle::is_finished) {
                 return Err(GlobalLedgerError::fatal(
                     LedgerCode::WriterUnavailable.code(),
                     LedgerLocation::ProjectLedgerViewPage.location(),
                 ));
             }
-            let receiver = pool.submit(query, profile, request)?;
-            return receive_response(
-                receiver,
-                LedgerLocation::ProjectLedgerViewPage.location(),
-                self.reply_timeout,
-            );
+            let receiver = pool.submit(query, profile, request, self.reply_timeout)?;
+            return reader_pool::ReaderPool::receive(&receiver, self.reply_timeout);
         }
         self.project_view_page_on_writer(query, profile, request)
     }
 
-    /// The page read on the writer thread: a ledger without a reader pool, and (#422 QR-1)
-    /// tests comparing the pool's pages with the writer's.
+    /// The page read on the writer thread: a ledger without a reader pool or (#422 QR-1 fix 1)
+    /// whose readers all ended, and tests comparing the pool's pages with the writer's.
     fn project_view_page_on_writer(
         &self,
         query: EventQuery,
@@ -3413,7 +3438,10 @@ fn flush_captured<S: LedgerStore>(
         let report = store.commit_captured(batch, queue.identifiers());
         // #422 QR-1: the committed point reaches the reader pool before any append of the batch
         // is answered, so a caller reads what it was told is committed. A batch that ended the
-        // writer publishes nothing: the point stays the last commit's.
+        // writer publishes nothing: the point stays the last commit's. Its replies are still sent
+        // (fix 1, review L-2), and an earlier record of the batch can be `Ok`, so until the writer
+        // thread has ended a caller told `Ok` may read a page without that record. The Runtime
+        // goes fatal anyway: the writer ended.
         if report.terminal.is_none() {
             context.publish(&*store);
         }

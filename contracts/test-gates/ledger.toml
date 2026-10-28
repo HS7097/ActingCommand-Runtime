@@ -770,7 +770,7 @@ tests = [
 ]
 incident = ["#411 RL-1c"]
 
-# QR-1 (#422; brief rd-1028/brief-qr1-reads-off-writer.md; Alice 10-28): the Runtime writer's view pages are read by its reader pool, on read-only connections of their own, off the writer thread, and the frame cleaner's pass-start trim reaches the writer in bounded chunks. While the writer is held inside an append's write transaction, a view page is answered by the pool with the bytes of the page the writer reads (first and next pages); a pass-start trim's chunks each look at no more objects than their bound, every object once, and between two chunks an append and a page both complete; the read budget stops a pool page while the writer is held (incomplete at its budget, a cursor past its start), and a pool page held past the reply limit is writer_response_timeout, not fatal; a page never reads past the committed head (not a record of an open write transaction, never past the head read after it) while the writer appends
+# QR-1 (#422; brief rd-1028/brief-qr1-reads-off-writer.md; Alice 10-28): the Runtime writer's view pages are read by its reader pool, on read-only connections of their own, off the writer thread, and the frame cleaner's pass-start trim reaches the writer in bounded chunks. While the writer is held inside an append's write transaction, a view page is answered by the pool with the bytes of the page the writer reads (first and next pages); a pass-start trim's chunks each look at no more objects than their bound, every object once, and between two chunks an append and a page both complete; the read budget stops a pool page while the writer is held (incomplete at its budget, a cursor past its start), and a pool page held past the reply limit is writer_response_timeout, not fatal; a page never reads past the committed head (not a record of an open write transaction, never past the head read after it) while the writer appends. Fix 1 (brief rd-1028/brief-qr1-fix1.md, review rd-1028/review-qr1.md): a page whose caller's deadline passed on the writer clock while it was queued is answered with that writer_response_timeout and never read; a close with pages queued reads none of them and each has its refusal (writer_unavailable of shutdown_writer, not fatal) when the close returns; a reader that ends is one warning, not fatal, and the reader left answers the pages; once no reader is left that is a warning too and the writer reads the next page; the pool's pages are in the writer statistics as ProjectViewPage
 [[gate]]
 coverage = "Y"
 tests = [
@@ -778,5 +778,10 @@ tests = [
     "actingcommand-ledger::lib::global::tests::gate_qr1::qr1_q2_a_pass_start_trim_reaches_the_writer_in_bounded_chunks_with_work_between_them",
     "actingcommand-ledger::lib::global::tests::gate_qr1::qr1_q3_the_read_budget_and_the_reply_limit_still_stop_a_reader_pool_read",
     "actingcommand-ledger::lib::global::tests::gate_qr1::qr1_q4_a_page_never_reads_past_the_committed_head_while_the_writer_appends",
+    "actingcommand-ledger::lib::global::tests::gate_qr1::qr1_f1_a_page_past_its_callers_deadline_is_answered_and_never_read",
+    "actingcommand-ledger::lib::global::tests::gate_qr1::qr1_f1_a_close_answers_the_queued_pages_as_refused_and_reads_none",
+    "actingcommand-ledger::lib::global::tests::gate_qr1::qr1_f1_a_reader_that_ends_is_said_once_and_the_reader_left_answers_the_pages",
+    "actingcommand-ledger::lib::global::tests::gate_qr1::qr1_f1_once_no_reader_is_left_the_writer_reads_the_pages_with_a_warning",
+    "actingcommand-ledger::lib::global::tests::gate_qr1::qr1_f1_the_pool_pages_are_recorded_in_the_writer_statistics",
 ]
 incident = ["#422 QR-1"]

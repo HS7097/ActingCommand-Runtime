@@ -15,11 +15,29 @@ impl HostShared {
     /// failure that kept the pool's connections from opening, and the developer line
     /// `actingd ledger reader_pool fallback=writer`. A Runtime with its pool says nothing.
     pub(super) fn report_ledger_reader_pool_fallback(&self) {
-        let Some(finding) = self.ledger.reader_pool_finding() else {
-            return;
-        };
+        if let Some(finding) = self.ledger.reader_pool_finding() {
+            self.report_ledger_reader_pool_finding("fallback=writer", finding);
+        }
+    }
+
+    /// #422 QR-1 fix 1 (review L-6): what the ledger's reader pool found while the Runtime runs
+    /// is said as its start fallback is, once each: one warning and the developer line
+    /// `actingd ledger reader_pool reader_ended`, for the first reader that ended unexpectedly
+    /// and, once no reader is left, for the writer reading the pages again (`fallback=writer`
+    /// in its detail). Nothing is latched: the Runtime keeps running.
+    pub(super) fn report_ledger_reader_pool_findings(&self) {
+        for finding in self.ledger.take_reader_pool_findings() {
+            self.report_ledger_reader_pool_finding("reader_ended", &finding);
+        }
+    }
+
+    fn report_ledger_reader_pool_finding(
+        &self,
+        what: &str,
+        finding: &actingcommand_ledger::GlobalLedgerError,
+    ) {
         println!(
-            "actingd ledger reader_pool fallback=writer code={} operation={} detail={:?}",
+            "actingd ledger reader_pool {what} code={} operation={} detail={:?}",
             finding.code(),
             finding.operation(),
             finding.detail()

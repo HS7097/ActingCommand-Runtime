@@ -13,19 +13,31 @@
 // - Q-4: a page never returns a record past the committed head while the writer appends: not the
 //   record of a write transaction still open, and never past the head read after the page.
 //
+// Fix 1 (brief rd-1028/brief-qr1-fix1.md, review rd-1028/review-qr1.md):
+// - F-1 (M-1): a page whose caller's deadline passed while it waited in the queue is answered
+//   with the caller's `writer_response_timeout` and never read.
+// - F-2 (M-1): a close with pages queued reads none of them; each is answered as refused by the
+//   time the close returns, which waits for the page in progress only.
+// - F-3 (L-6): a reader that ends is said once, not fatal, and the reader left answers the pages.
+// - F-4 (L-6): once no reader is left, that is said too, and the writer reads the next page.
+// - F-5 (L-4): the pool's pages are recorded in the writer's statistics as `ProjectViewPage`.
+//
 // The roots are formal roots with the synthetic ledger (LN-1) where a test reads history. Every
-// bounded read runs on a fake writer clock that moves a fixed step each time it is read; nothing
-// sleeps. Only Q-3's reply limit is a real wait, of one second, for a read the test holds.
+// bounded read runs on a fake writer clock that moves a fixed step each time it is read; F-1's
+// deadline passes on a writer clock the test moves; nothing sleeps. Only Q-3's reply limit is a
+// real wait, of one second, for a read the test holds.
 
 use super::*;
-use crate::codes::LedgerCode;
+use crate::codes::{LedgerCode, LedgerLocation};
+use crate::global::reader_pool::ReaderPool;
 use crate::global::{
-    GlobalLedger, LedgerFailurePlan, LedgerMaintenance, LedgerMonotonicClock, LedgerOpenTiming,
-    LedgerWritePolicy, Sha256SecretFingerprinter,
+    GlobalLedger, GlobalLedgerError, GlobalLedgerResult, LedgerFailurePlan, LedgerMaintenance,
+    LedgerMonotonicClock, LedgerOpenTiming, LedgerWritePolicy, LedgerWriterCommandKind,
+    Sha256SecretFingerprinter,
 };
 use crate::{
     SyntheticInstance, SyntheticLedgerSpec, WriterReadHoldGate, WriterStallGate,
-    write_synthetic_ledger,
+    WriterStatementRecorder, write_synthetic_ledger,
 };
 use actingcommand_contract::{
     ArtifactId, AuditInput, EventActor, EventDraft, EventLinksDraft, EventOrigin, EventQuery,
@@ -75,11 +87,57 @@ const Q2_LIVE_EVERY: usize = 4;
 const Q2_CHUNK: usize = 8;
 // Q-4: the appends that run while the pages are read.
 const Q4_APPENDS: i64 = 30;
+// F-1: the reply limit of the caller whose page waits past it, in writer clock milliseconds.
+const F1_LATE_TIMEOUT_MS: u64 = 1_000;
+// F-2: the pages queued behind the page in progress when the pool closes; F-3 and F-5: the pages
+// read one after another.
+const F_QUEUED: usize = 3;
+const F_PAGES: usize = 3;
 
 /// A writer clock in milliseconds that moves `step_ms` each time it is read.
 fn stepping_clock(step_ms: u64) -> LedgerMonotonicClock {
     let now = Arc::new(AtomicU64::new(0));
     Arc::new(move || now.fetch_add(step_ms, Ordering::SeqCst))
+}
+
+/// A writer clock in milliseconds that only the test moves, through the returned counter.
+fn manual_clock() -> (Arc<AtomicU64>, LedgerMonotonicClock) {
+    let now = Arc::new(AtomicU64::new(0));
+    let read = Arc::clone(&now);
+    (now, Arc::new(move || read.load(Ordering::SeqCst)))
+}
+
+/// The view pages `recorder` recorded since it was last read.
+fn pages_read(recorder: &WriterStatementRecorder) -> usize {
+    recorder
+        .take()
+        .iter()
+        .filter(|command| command.command == LedgerWriterCommandKind::ProjectViewPage)
+        .count()
+}
+
+/// The writer's command just before an append of `value`, as the append observed it.
+fn writer_work_before_append(
+    ledger: &GlobalLedger,
+    ids: &IdentifierIssuer,
+    value: i64,
+) -> Option<LedgerWriterCommandKind> {
+    let (appended, observation) = ledger.append_with_observation(runtime_fact(ids, value));
+    appended.expect("the append commits");
+    observation
+        .expect("the append's observation")
+        .previous_writer_work
+        .command
+}
+
+/// A view page of every record.
+fn read_page(ledger: &GlobalLedger) -> GlobalLedgerResult<RuntimeEventQueryPage> {
+    ledger.project_view_page(EventQuery::default(), PROFILE, first_page(10))
+}
+
+/// An error's code and operation.
+fn named(error: &GlobalLedgerError) -> (&'static str, &'static str) {
+    (error.code(), error.operation())
 }
 
 fn instance(letter: char) -> InstanceId {
@@ -149,6 +207,18 @@ impl Root {
         budget: Option<(Duration, LedgerMonotonicClock)>,
         reply_timeout: Duration,
     ) -> GlobalLedger {
+        let (budget, clock) = budget.unzip();
+        self.open_with(budget, clock, None, reply_timeout)
+    }
+
+    /// `open`, its clock and its reader pool's size given apart (fix 1).
+    fn open_with(
+        &self,
+        budget: Option<Duration>,
+        clock: Option<LedgerMonotonicClock>,
+        readers: Option<usize>,
+        reply_timeout: Duration,
+    ) -> GlobalLedger {
         let state_root = self.dir.path().canonicalize().expect("state root");
         let mut plan = LedgerFailurePlan::new(
             LedgerWritePolicy::new(1, vec![0], STALL_MS, PROBE_MS, DUMP_MAX_BYTES)
@@ -161,8 +231,14 @@ impl Root {
         .with_reply_timeout(reply_timeout)
         .with_read_check_vm_steps(BOUND_CHECK_VM_STEPS)
         .with_history_scan_rows(BOUND_SCAN_ROWS);
-        if let Some((budget, clock)) = budget {
-            plan = plan.with_read_budget(budget).with_clock(clock);
+        if let Some(budget) = budget {
+            plan = plan.with_read_budget(budget);
+        }
+        if let Some(clock) = clock {
+            plan = plan.with_clock(clock);
+        }
+        if let Some(readers) = readers {
+            plan = plan.with_reader_threads_for_test(readers);
         }
         let deadline = MaintenanceLimits {
             timeout_seconds: OPEN_TIMEOUT_SECONDS,
@@ -469,7 +545,7 @@ fn qr1_q3_the_read_budget_and_the_reply_limit_still_stop_a_reader_pool_read() {
     let error = ledger
         .project_view_page(EventQuery::default(), PROFILE, first_page(10))
         .expect_err("a page held at the pool is not answered in time");
-    assert!(hold.wait_held(Duration::ZERO), "the pool's read was held");
+    assert!(hold.wait_held(BARRIER_WAIT), "the pool's read was held");
     assert_eq!(
         error.code(),
         LedgerCode::WriterResponseTimeout.as_str(),
@@ -544,5 +620,237 @@ fn qr1_q4_a_page_never_reads_past_the_committed_head_while_the_writer_appends() 
         }
         appending.join().expect("the appends' thread");
     });
+    ledger.close().expect("close");
+}
+
+#[test]
+fn qr1_f1_a_page_past_its_callers_deadline_is_answered_and_never_read() {
+    let root = Root::new(0);
+    let (now, clock) = manual_clock();
+    let ledger = root.open_with(None, Some(clock), Some(1), REPLY_TIMEOUT);
+    let pool = ledger.reader_pool.as_ref().expect("the reader pool");
+    let recorder = WriterStatementRecorder::arm(root.dir.path()).expect("statement recorder");
+    let hold = WriterReadHoldGate::arm(root.dir.path()).expect("read hold");
+    // The pool's one reader is held in a page; a second page waits in the queue behind it.
+    let held = pool
+        .submit(
+            EventQuery::default(),
+            PROFILE,
+            first_page(10),
+            REPLY_TIMEOUT,
+        )
+        .expect("the first page is queued");
+    assert!(
+        hold.wait_held(BARRIER_WAIT),
+        "the reader is held in the first page"
+    );
+    let late = pool
+        .submit(
+            EventQuery::default(),
+            PROFILE,
+            first_page(10),
+            Duration::from_millis(F1_LATE_TIMEOUT_MS),
+        )
+        .expect("the second page is queued");
+    // The second page's caller stops waiting while its page is still queued.
+    now.fetch_add(F1_LATE_TIMEOUT_MS, Ordering::SeqCst);
+    hold.release();
+    let (page, _) = ReaderPool::receive(&held, BARRIER_WAIT).expect("the held page is answered");
+    page.expect("the held page is read");
+    let (late, observation) =
+        ReaderPool::receive(&late, BARRIER_WAIT).expect("the late page is answered");
+    let error = late.expect_err("the late page is not read");
+    assert_eq!(
+        named(&error),
+        (
+            LedgerCode::WriterResponseTimeout.as_str(),
+            LedgerLocation::ProjectLedgerViewPage.as_str()
+        ),
+        "the late page has its caller's timeout: {error:?}"
+    );
+    assert!(!error.is_fatal(), "{error:?}");
+    assert!(observation.is_none(), "nothing was read for the late page");
+    assert_eq!(pages_read(&recorder), 1, "the pool read the held page only");
+    ledger.close().expect("close");
+}
+
+#[test]
+fn qr1_f1_a_close_answers_the_queued_pages_as_refused_and_reads_none() {
+    let root = Root::new(0);
+    let mut ledger = root.open_with(None, None, Some(1), REPLY_TIMEOUT);
+    let mut pool = ledger.reader_pool.take().expect("the reader pool");
+    let recorder = WriterStatementRecorder::arm(root.dir.path()).expect("statement recorder");
+    let hold = WriterReadHoldGate::arm(root.dir.path()).expect("read hold");
+    // The pool's one reader is held in a page; more pages wait in the queue behind it.
+    let in_progress = pool
+        .submit(
+            EventQuery::default(),
+            PROFILE,
+            first_page(10),
+            REPLY_TIMEOUT,
+        )
+        .expect("the first page is queued");
+    assert!(
+        hold.wait_held(BARRIER_WAIT),
+        "the reader is held in the first page"
+    );
+    let queued = (0..F_QUEUED)
+        .map(|_| {
+            pool.submit(
+                EventQuery::default(),
+                PROFILE,
+                first_page(10),
+                REPLY_TIMEOUT,
+            )
+            .expect("a page is queued")
+        })
+        .collect::<Vec<_>>();
+    // The close's first step, then the page in progress goes on, then the close ends.
+    pool.stop();
+    hold.release();
+    pool.close();
+    let (_in_progress, _) = in_progress
+        .try_recv()
+        .expect("the page in progress was answered before the close returned");
+    for (index, receiver) in queued.iter().enumerate() {
+        let (reply, observation) = receiver
+            .try_recv()
+            .unwrap_or_else(|error| panic!("queued page {index} was not answered: {error:?}"));
+        let error = reply.expect_err("a queued page is refused");
+        assert_eq!(
+            named(&error),
+            (
+                LedgerCode::WriterUnavailable.as_str(),
+                LedgerLocation::ShutdownWriter.as_str()
+            ),
+            "queued page {index}: {error:?}"
+        );
+        assert!(!error.is_fatal(), "queued page {index}: {error:?}");
+        assert!(observation.is_none(), "nothing was read for page {index}");
+    }
+    assert_eq!(
+        pages_read(&recorder),
+        1,
+        "the close read none of the queued pages"
+    );
+    drop(pool);
+    ledger.close().expect("close");
+}
+
+#[test]
+fn qr1_f1_a_reader_that_ends_is_said_once_and_the_reader_left_answers_the_pages() {
+    let root = Root::new(0);
+    let ledger = root.open(None, REPLY_TIMEOUT);
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    ledger
+        .reader_pool
+        .as_ref()
+        .expect("the reader pool")
+        .end_readers_for_test(1);
+    let error = read_page(&ledger).expect_err("the page whose reader ended");
+    assert_eq!(
+        named(&error),
+        (
+            LedgerCode::WriterPanicked.as_str(),
+            LedgerLocation::ProjectLedgerViewPage.as_str()
+        ),
+        "{error:?}"
+    );
+    assert!(!error.is_fatal(), "a reader's end is not fatal: {error:?}");
+    let findings = ledger.take_reader_pool_findings();
+    assert_eq!(
+        findings.iter().map(named).collect::<Vec<_>>(),
+        vec![(
+            LedgerCode::WriterPanicked.as_str(),
+            LedgerLocation::QueryLedgerView.as_str()
+        )],
+        "one warning for the reader's end: {findings:?}"
+    );
+    assert!(findings.iter().all(|finding| !finding.is_fatal()));
+    assert!(ledger.reads_off_writer(), "a reader is left");
+    for read in 0..F_PAGES {
+        read_page(&ledger).unwrap_or_else(|error| panic!("page {read}: {error:?}"));
+    }
+    assert!(
+        ledger.take_reader_pool_findings().is_empty(),
+        "the reader's end is said once"
+    );
+    assert_ne!(
+        writer_work_before_append(&ledger, &ids, 1),
+        Some(LedgerWriterCommandKind::ProjectViewPage),
+        "the reader left read the pages, not the writer"
+    );
+    ledger.close().expect("close");
+}
+
+#[test]
+fn qr1_f1_once_no_reader_is_left_the_writer_reads_the_pages_with_a_warning() {
+    let root = Root::new(0);
+    let ledger = root.open(None, REPLY_TIMEOUT);
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    ledger
+        .reader_pool
+        .as_ref()
+        .expect("the reader pool")
+        .end_readers_for_test(2);
+    for reader in 0..2 {
+        let error = read_page(&ledger).expect_err("the page whose reader ended");
+        assert_eq!(
+            named(&error),
+            (
+                LedgerCode::WriterPanicked.as_str(),
+                LedgerLocation::ProjectLedgerViewPage.as_str()
+            ),
+            "reader {reader}: {error:?}"
+        );
+        assert!(!error.is_fatal(), "reader {reader}: {error:?}");
+    }
+    let findings = ledger.take_reader_pool_findings();
+    assert_eq!(
+        findings.iter().map(named).collect::<Vec<_>>(),
+        vec![
+            (
+                LedgerCode::WriterPanicked.as_str(),
+                LedgerLocation::QueryLedgerView.as_str()
+            ),
+            (
+                LedgerCode::WriterPanicked.as_str(),
+                LedgerLocation::ProjectLedgerViewPage.as_str()
+            ),
+        ],
+        "the first end and the fallback to the writer are said: {findings:?}"
+    );
+    assert!(findings.iter().all(|finding| !finding.is_fatal()));
+    assert!(!ledger.reads_off_writer(), "no reader is left");
+    read_page(&ledger).expect("the writer answers the next page");
+    assert_eq!(
+        writer_work_before_append(&ledger, &ids, 1),
+        Some(LedgerWriterCommandKind::ProjectViewPage),
+        "the writer read the page"
+    );
+    assert!(ledger.take_reader_pool_findings().is_empty());
+    ledger.close().expect("close");
+}
+
+#[test]
+fn qr1_f1_the_pool_pages_are_recorded_in_the_writer_statistics() {
+    let root = Root::new(0);
+    let ledger = root.open(None, REPLY_TIMEOUT);
+    // A new window opens; only the pool's pages run in it.
+    ledger.take_writer_peak();
+    for read in 0..F_PAGES {
+        read_page(&ledger).unwrap_or_else(|error| panic!("page {read}: {error:?}"));
+    }
+    let peak = ledger.take_writer_peak();
+    assert_eq!(
+        peak.commands,
+        u64::try_from(F_PAGES).expect("a page count"),
+        "every pool page is recorded: {peak:?}"
+    );
+    assert_eq!(
+        peak.longest.map(|(command, _)| command),
+        Some(LedgerWriterCommandKind::ProjectViewPage),
+        "the window's longest work is a pool page, with its time: {peak:?}"
+    );
     ledger.close().expect("close");
 }
