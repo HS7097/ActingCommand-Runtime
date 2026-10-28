@@ -878,7 +878,9 @@ package's first step page), evaluated on that frame as the package recognises it
 frame read back from its artifact, through the display adapter's frame gate under the game's
 declaration, [display-adapter.md](display-adapter.md)). When the frame shows one of them, the
 return-home rung runs again at once, as after a settled probe: no changing verdict is recorded
-for that recheck, and the run's end is handled as every return-home end. A package whose entry
+for that recheck, and the run's end is handled as every return-home end. Since the comparison
+spends part of what the probe's renewal left, the ladder first renews its key to
+`hold.margin_ms`; a renewal refused there is a holding interruption. A package whose entry
 lists no page (`any`, or none) is never compared, and the hold goes on as before. A comparison
 that cannot be made (the package not admitted, the game's standard-pack root refused, the frame
 unreadable, refused by the frame gate or not evaluated) is recorded (`runtime.failed` under the

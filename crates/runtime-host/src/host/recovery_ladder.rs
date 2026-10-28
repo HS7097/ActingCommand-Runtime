@@ -2865,7 +2865,8 @@ impl HostShared {
     /// just failed saw that screen. At the limit `busy.screen.on_exhausted` decides: `stop` ends
     /// the ladder `exhausted` with `recovery_ladder_hold_exhausted` and no restart (`Ended`),
     /// `escalate` goes on to the next rung (`Escalate`). A holding interruption during a hold,
-    /// or a renewal refused before a later probe, ends the climb as at every rung boundary, the
+    /// or a renewal refused before a later probe or before an entry page's rerun (renewed to
+    /// `hold.margin_ms` after the comparison), ends the climb as at every rung boundary, the
     /// return-home rung recorded failed with it (`Ended`).
     fn climb_screen_gate(
         &self,
@@ -2908,6 +2909,21 @@ impl HostShared {
                         && self.return_home_entry_shown(pending, &frame)?
                     {
                         if self.ladder_rerun_suppressed(pending, deadline_ms)? {
+                            return Ok(ScreenStep::Ended);
+                        }
+                        // The comparison spent part of what the probe's renewal left: the key is
+                        // renewed to `hold.margin_ms` before the rerun prepares its package, and a
+                        // refused renewal ends the climb as one refused before a probe does.
+                        if let Some(RungAttempt::Failed { reason, .. }) =
+                            self.ladder_step_renewal(key, pending.config.hold.margin_ms)?
+                        {
+                            self.finish_interrupted_ladder(
+                                pending,
+                                key,
+                                Some(RecoveryRung::ReturnHome),
+                                reason,
+                                rungs_tried,
+                            )?;
                             return Ok(ScreenStep::Ended);
                         }
                         let attempt = self.recovery_return_home(pending, deadline_ms, key)?;
