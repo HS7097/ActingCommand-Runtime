@@ -4,11 +4,18 @@
 //! knows about its own start, so the installer's post-start checks read no ledger and parse no
 //! log: the ledger open's eight phases, their sum and the deadline, whether the open was slow and
 //! read the owner history in full, whether this start loaded or seeded the tagged state, the
-//! recovery's time, the pauses restored and dropped, the run-time instructions restored and the
-//! keys not restored as they were, the instances bound, the standard packs registered with their
-//! counts, and the dispatches admitted since the start per instance. The read is answered from
-//! memory (a general read under `runtime-client` 2, like `ScheduleExplanation`; only actingctl of
-//! the same build sends it); it reads and records nothing in the ledger.
+//! recovery's time, the pauses restored and dropped, the run-time instructions restored, the keys
+//! not restored (dropped or superseded) and the keys restored over a default that changed, the
+//! instances bound, the standard packs registered with their counts, and the dispatches admitted
+//! since the start per instance. The read is answered from memory (a general read under
+//! `runtime-client` 2, like `ScheduleExplanation`; only actingctl of the same build sends it); it
+//! reads and records nothing in the ledger.
+//!
+//! #421 S2-IF (v0.12.21): an instruction kept over a default that changed
+//! (`config_override_base_changed`) is restored: it counts in `instructions_restored` and is
+//! named in `instructions_base_changed`, never in `instructions_dropped`, which names only the
+//! keys not restored (`config_override_dropped`, `config_override_superseded`). The new list is
+//! additive and absent when empty, so a report of an earlier build reads as one without it.
 
 use super::{RuntimeContractError, RuntimeContractResult};
 use crate::OwnerEpoch;
@@ -16,7 +23,7 @@ use crate::codes::RuntimeContractCode;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-/// The most rows one list of the answer holds (aliases, games, dropped keys).
+/// The most rows one list of the answer holds (aliases, games, dropped or base-changed keys).
 pub const MAX_START_REPORT_ROWS: usize = 256;
 
 /// The phases of this start's ledger open, as its `ledger_opened` daemon line reports them
@@ -111,9 +118,16 @@ pub struct RuntimeStartReport {
     pub pauses_restored: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pauses_dropped: Vec<String>,
+    /// The instructions restored, those kept over a changed default included.
     pub instructions_restored: u64,
+    /// The keys not restored: dropped (`config_override_dropped`) or superseded by the file
+    /// (`config_override_superseded`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub instructions_dropped: Vec<String>,
+    /// #421 S2-IF: the keys restored although the default they override changed
+    /// (`config_override_base_changed`); informational.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub instructions_base_changed: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub instances_bound: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -137,6 +151,10 @@ impl RuntimeStartReport {
         }
         let lists_hold = names_once(self.pauses_dropped.iter().map(String::as_str), true)
             && names_once(self.instructions_dropped.iter().map(String::as_str), false)
+            && names_once(
+                self.instructions_base_changed.iter().map(String::as_str),
+                false,
+            )
             && names_once(self.instances_bound.iter().map(String::as_str), true)
             && names_once(
                 self.standard_packs.iter().map(|row| row.game.as_str()),

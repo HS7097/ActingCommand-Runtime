@@ -305,6 +305,12 @@ impl RestoreNote {
     pub fn outcome(&self) -> Outcome {
         Outcome::new(self.note).config_key(self.config_key.clone())
     }
+
+    /// #421 S2-IF: whether the value was restored all the same: kept over a default that
+    /// changed (`config_override_base_changed`). A dropped or superseded value was not.
+    pub fn restored(&self) -> bool {
+        self.note == ConfigCode::ConfigOverrideBaseChanged
+    }
 }
 
 /// A `host.config_overrides` record that is not the shape this build writes.

@@ -524,7 +524,7 @@ does.
 | `bindings` | every configured instance alias bound | yes |
 | `packs` | every game of the pack register registered, with its pack count | yes |
 | `pauses` | S0's pauses, plus the hold on every instance it took | yes |
-| `instructions` | S0's run-time instructions, none dropped | yes |
+| `instructions` | S0's run-time instructions in effect as S0 recorded them, and none the start did not restore (the report's `instructions_dropped`: dropped or superseded). An instruction kept over a default that changed (`instructions_base_changed`, `config_override_base_changed`) is restored: it is named in the row's `base_changed` and never fails it (#421 S2-IF) | yes |
 | `no_dispatch` | no dispatch admitted on a held instance since the start (report; else no lease on one) | yes |
 | `new_keys` | each key the update adds `default`, or `explicit` where the file names it (`config.parameters.*` sources) | yes |
 | `config` | the configuration file's SHA-256 is the one the operation began with (`inputs.config_sha256`: a change during the operation fails, an edit after the adopt does not); a `state.json` hash that differs is reported (`committed_differs`), never failed | yes |

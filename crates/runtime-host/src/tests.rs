@@ -427,6 +427,9 @@ mod gate_ln_ws_f;
 // #422 IDLE-OV: a QueryEvents page whose read its budget stopped answers `ledger_read_failure`
 // (`runtime_unavailable`, failed), not `protocol_invalid`.
 mod gate_422_idle_ov;
+// #421 S2-IF: `StartReport` names an instruction kept over a changed default base-changed and
+// restored, never dropped; a key gone or superseded is dropped.
+mod gate_421_s2if;
 
 mod gate_epoch_close;
 // #411 A65: the start settles the open direct runs of a previous epoch larger than one unpaged

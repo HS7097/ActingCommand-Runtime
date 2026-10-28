@@ -8,9 +8,9 @@
 //! The start notes each part when it has it: the ledger open (its phases, the deadline, whether
 //! it was slow, the owner read and the frame index note), how the tagged state was restored, the
 //! recovery's time, the scheduling pauses restored and dropped, the run-time instructions
-//! restored and those not restored as they were, and its readiness. Every admitted dispatch is
-//! counted per instance. The instances bound and the standard packs registered are read when the
-//! report is answered.
+//! restored, those not restored (dropped or superseded) and (#421 S2-IF) those restored over a
+//! default that changed, and its readiness. Every admitted dispatch is counted per instance. The
+//! instances bound and the standard packs registered are read when the report is answered.
 
 use super::*;
 use actingcommand_contract::{
@@ -29,6 +29,7 @@ pub(super) struct StartFacts {
     pauses_dropped: Vec<String>,
     instructions_restored: u64,
     instructions_dropped: Vec<String>,
+    instructions_base_changed: Vec<String>,
     dispatches: BTreeMap<String, u64>,
 }
 
@@ -70,6 +71,7 @@ impl StartFacts {
             pauses_dropped: Vec::new(),
             instructions_restored: 0,
             instructions_dropped: Vec::new(),
+            instructions_base_changed: Vec::new(),
             dispatches: BTreeMap::new(),
         }
     }
@@ -111,18 +113,26 @@ impl HostShared {
         Ok(())
     }
 
-    /// Notes the run-time instructions the start restored and the keys it did not restore as
-    /// they were (Workflow #387 D1b, §5.7).
+    /// Notes the run-time instructions the start restored, the keys it did not restore
+    /// (`config_override_dropped`, `config_override_superseded`) and (#421 S2-IF) the keys it
+    /// restored although the default they override changed (`config_override_base_changed`),
+    /// which `restored` counts (Workflow #387 D1b, §5.7).
     pub(super) fn note_start_instructions(
         &self,
         restored: usize,
         dropped: Vec<String>,
+        base_changed: Vec<String>,
     ) -> RuntimeHostResult<()> {
         let mut facts = lock(&self.start_facts, HostLocation::StartRuntimeHost)?;
         facts.instructions_restored = u64::try_from(restored).unwrap_or(u64::MAX);
         for key in dropped {
             if !facts.instructions_dropped.contains(&key) {
                 facts.instructions_dropped.push(key);
+            }
+        }
+        for key in base_changed {
+            if !facts.instructions_base_changed.contains(&key) {
+                facts.instructions_base_changed.push(key);
             }
         }
         Ok(())
@@ -171,6 +181,8 @@ impl HostShared {
             pauses_dropped.sort();
             let mut instructions_dropped = facts.instructions_dropped.clone();
             instructions_dropped.sort();
+            let mut instructions_base_changed = facts.instructions_base_changed.clone();
+            instructions_base_changed.sort();
             RuntimeStartReport {
                 owner_epoch: self.owner_epoch,
                 started_at_unix_ms: facts.started_at_unix_ms,
@@ -182,6 +194,7 @@ impl HostShared {
                 pauses_dropped,
                 instructions_restored: facts.instructions_restored,
                 instructions_dropped,
+                instructions_base_changed,
                 instances_bound,
                 standard_packs,
                 dispatches_since_start: facts

@@ -953,3 +953,14 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::ov24k_fix1_l3_a_spent_budget_skips_the_not_running_read",
 ]
 incident = ["#422 OV-24K"]
+
+# #421 S2-IF (v0.12.21; brief rd-1028/brief-s2-instr-fix.md; production 10-28 10:11: S2 rolled a good update back on the instructions check, on the new start and again on the rollback start): on the fake host, the composite update's instructions check passes an instruction the new start kept over a changed default and names it in base_changed, and the composite is done (T-1); it fails on a key the start dropped (T-2) or superseded, a kept one beside it not masking it (T-3), and the composite rolls back; the rollback start that kept the instruction over the default changed back passes it and releases the hold (T-4)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::s2if_t1_an_instruction_kept_over_a_changed_default_passes_the_check",
+    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::s2if_t2_a_dropped_instruction_fails_the_check",
+    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::s2if_t3_a_superseded_instruction_fails_the_check",
+    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::s2if_t4_the_rollback_start_with_the_default_changed_back_passes_the_check",
+]
+incident = ["#421 S2-IF"]
