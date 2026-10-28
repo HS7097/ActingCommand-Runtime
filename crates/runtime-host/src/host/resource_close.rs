@@ -35,6 +35,14 @@ impl HostShared {
         end: LeaseDeviceEnd,
     ) -> Result<(), RequestFailure> {
         let instance_id = token.instance_id();
+        // ISO-5a (#419, ISO-M row B02): an expiry that meets a write still in flight on the
+        // lease (an input writes without the admission guard) closes nothing under that write.
+        // The scheduler defers the expiry under the step (`cleanup_token_guarded`), and a later
+        // sweep tick ends the lease once the write returned: no close is refused, nothing is
+        // recorded per tick, and nothing stops.
+        if end == LeaseDeviceEnd::Expiry && self.lease_step_active(token)? {
+            return Ok(());
+        }
         let needs_close = self
             .execution()?
             .session_needs_close(instance_id)
@@ -51,10 +59,7 @@ impl HostShared {
         {
             return self.close_instance_resources(token, connection_id, EventLinksDraft::default());
         }
-        let step_active = lock(&self.scheduler, HostLocation::ReadLeaseEndStep)?
-            .active_lease(instance_id)
-            .is_some_and(|active| active.token() == token && active.destructive_step_active());
-        if step_active {
+        if self.lease_step_active(token)? {
             // The scheduler defers an expiry under an in-flight step (`cleanup_token_inner`).
             if end == LeaseDeviceEnd::Expiry {
                 return Ok(());
@@ -87,6 +92,14 @@ impl HostShared {
                     &error,
                 ))
             })
+    }
+
+    /// Whether a destructive step (an input write, a device-state step) is still in flight on
+    /// `token`'s lease.
+    pub(super) fn lease_step_active(&self, token: &LeaseToken) -> RuntimeHostResult<bool> {
+        Ok(lock(&self.scheduler, HostLocation::ReadLeaseEndStep)?
+            .active_lease(token.instance_id())
+            .is_some_and(|active| active.token() == token && active.destructive_step_active()))
     }
 
     /// Workflow #191 H (the multi-Nemu gate): whether `instance_id` keeps its device session
@@ -137,7 +150,8 @@ impl HostShared {
         };
         match self.cleanup_token(&token, connection_id, LeaseReleaseReason::BackendFailure) {
             Ok(()) => failure,
-            Err(error) => failure.replace_with_poison(error),
+            // ISO-5a (#419, ISO-M row B22): a cleanup refusal not fatal fails only the work.
+            Err(error) => failure.with_cleanup_failure(error),
         }
     }
 
@@ -178,7 +192,8 @@ impl HostShared {
         let cleanup = cleanup.and_then(|()| self.close_lapsed_run_session(&token));
         match cleanup {
             Ok(()) => failure,
-            Err(error) => failure.replace_with_poison(error),
+            // ISO-5a (#419, ISO-M row B22): a cleanup refusal not fatal fails only the work.
+            Err(error) => failure.with_cleanup_failure(error),
         }
     }
 
@@ -277,6 +292,14 @@ impl HostShared {
                 {
                     return self.fence_lapsed_lease_close(token, failure, links);
                 }
+                // ISO-5a (#419, ISO-M row B18): a holder's own end that finds its lease already
+                // ended has nothing of it to close.
+                if self
+                    .close_lease_ended(token, &failure.error)
+                    .map_err(RequestFailure::poison_without_terminal)?
+                {
+                    return Ok(());
+                }
                 return Err(failure);
             }
         };
@@ -326,6 +349,33 @@ impl HostShared {
             return Ok(false);
         }
         Ok(self.run_end_phase_of_lease(token.lease_id())?.is_some())
+    }
+
+    /// ISO-5a (#419, ISO-M row B18): whether `error` is the refusal of a lease end's resource
+    /// close because the lease had already ended before the close began (`lease_missing`,
+    /// `lease_mismatch` from `begin_resource_close`), and the scheduler no longer holds `token`:
+    /// the lease sweep expired it, and its expiry end closed or fenced the instance's resources
+    /// (the fence then owns the session), or the key went on to another holder, whose session it
+    /// is. The holder's own end (an emulator, application or input failure's cleanup, a policy
+    /// run's settlement release, any other holder's end) then closes nothing and goes on; it is
+    /// never a poison. A lease still held keeps its refusal as before.
+    fn close_lease_ended(
+        &self,
+        token: &LeaseToken,
+        error: &RuntimeHostError,
+    ) -> RuntimeHostResult<bool> {
+        if error.operation() != HostLocation::BeginDestructiveResourceClose.as_str()
+            || (error.code() != RuntimeErrorCode::LeaseMissing.as_str()
+                && error.code() != RuntimeErrorCode::LeaseMismatch.as_str())
+        {
+            return Ok(false);
+        }
+        Ok(
+            !lock(&self.scheduler, HostLocation::ReadResourceCloseLease)?
+                .active_tokens()
+                .into_iter()
+                .any(|active| active == *token),
+        )
     }
 
     /// #411 A64 (the 10-24 incident; ruling C-43): the close at a lease end in a run's end phase

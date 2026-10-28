@@ -599,6 +599,42 @@ fn gate_p1_g5_owned_releases_free_the_instance_for_each_owned_reason() {
     }
 }
 
+/// ISO-5a (Workflow #419, ISO-M row B20): a preempted lease whose transfer business capacity
+/// refused is ended by the Runtime with `Preempted` (`transfer_preempted_while_guarded`,
+/// `promote_idle_preemption`). That owned release returns the token and the reason and frees the
+/// instance, as every other owned end does, so the cleanup never finds the token still active
+/// after a refused release (`scheduler_cleanup_state_mismatch`, which latched the Runtime). An
+/// explicit release and an expiry keep their own entries and are still refused here.
+#[test]
+fn iso5a_b20_a_preempted_owned_release_frees_the_instance() {
+    let issuer = ids();
+    let mut scheduler =
+        SeedScheduler::new(epoch(&issuer), claim_config(), [], 0).expect("scheduler");
+    let (instance_id, token) = held_instance(&issuer, &mut scheduler);
+    let released = scheduler
+        .release_owned(&token, connection(1), LeaseReleaseReason::Preempted)
+        .expect("the preempted owned release");
+    assert_eq!(
+        released,
+        ReleasedLease {
+            token: token.clone(),
+            reason: LeaseReleaseReason::Preempted,
+        }
+    );
+    assert!(scheduler.active_lease(instance_id).is_none());
+    assert!(!scheduler.active_tokens().contains(&token));
+    for reason in [LeaseReleaseReason::Explicit, LeaseReleaseReason::Expired] {
+        let (instance_id, token) = held_instance(&issuer, &mut scheduler);
+        assert_eq!(
+            scheduler.release_owned(&token, connection(1), reason),
+            Err(SchedulerError::LeaseMismatch),
+            "{reason:?}"
+        );
+        assert!(scheduler.active_tokens().contains(&token), "{reason:?}");
+        assert!(scheduler.active_lease(instance_id).is_some(), "{reason:?}");
+    }
+}
+
 /// P-1 G5 (b) (test-ci-plan.md:162, :216; inventory-policy.md:85; req-basis-cp.md:98). A lease
 /// granted at `t` with TTL `T` has the deadline `d = t + T`; one millisecond before it the lease
 /// renews by the fixed TTL under the same lease id, and it is not expired (c3a:65; key 5).

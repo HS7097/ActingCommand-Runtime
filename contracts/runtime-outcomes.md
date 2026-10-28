@@ -312,7 +312,12 @@ latched, a receipt is as before. A direct contained run's failed receipt keeps i
 severity as `host_halted`: the client reads it to know whether the run kept its OCR fields
 report, which the host aborts for a fatal failure. Since ISO-2 a capture of the instance's dead
 session (ISO-M row A01) and a failed geometry read (A03) fail the run non-fatally; a fatal
-input failure (E02) keeps its severity and latches nothing.
+input failure (E02) keeps its severity and latches nothing. Since Runtime 0.12.27 (ISO-5a; W2-E
+review, question 4) a kernel refusal that fails only its operation (a refused frame commit or
+resolve, and an input that met its session closing, its endpoint changed or its frame no longer
+committed) answers `runtime_code` `backend_operation_failed` where it said the catch-all
+`runtime_halted`; a code `execution` maps itself (`capture_failed`, ...) keeps its mapping, and
+a refusal that stays Global keeps `runtime_halted`.
 
 **Device and kernel failures** (ISO-2, Runtime 0.12.13; R1, R2): a failure of the execution
 kernel (the device, its session, its capture and input backends) concerns only the session's

@@ -934,6 +934,13 @@ impl RuntimeHostError {
             && !crate::host::failure_scope::is_global_code(result.code())
         {
             result.projection.fatal = false;
+            // ISO-5a (#419; W2-E review, question 4): the Runtime keeps running, so a receipt of
+            // this failure no longer says `runtime_halted` (the catch-all of `execution` for a
+            // kernel code it does not list): it says `backend_operation_failed`. A code that
+            // `execution` maps itself (`capture_failed`, ...) keeps its mapping.
+            if result.projection.code == RuntimeErrorCode::RuntimeHalted {
+                result.projection.code = RuntimeErrorCode::BackendOperationFailed;
+            }
         }
         result
     }

@@ -29,6 +29,9 @@ pub(super) struct FakeState {
     // while the kernel still marks the instance's session closing, as another owner's
     // operation meets that close.
     input_close_hook: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    // ISO-5a (#419, ISO-M row B02): runs inside the next input write (taken once), while the
+    // write is in flight on its lease, as the lease sweep's tick meets it.
+    input_hook: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>,
     fail_input: AtomicBool,
     input_error: std::sync::Mutex<Option<DeviceError>>,
     // Workflow #403: the error the next input returns, taken once, so one input can end with an
@@ -169,6 +172,12 @@ impl FakeBackend {
 
     fn complete_input(&self) -> DeviceResult<()> {
         self.state.input_started.store(true, Ordering::Release);
+        // ISO-5a (#419): runs inside the next input write (taken once), while the write is in
+        // flight on its lease.
+        let hook = self.state.input_hook.lock().expect("input hook").take();
+        if let Some(hook) = hook {
+            hook();
+        }
         while self.state.block_input.load(Ordering::Acquire) {
             thread::sleep(Duration::from_millis(5));
         }
