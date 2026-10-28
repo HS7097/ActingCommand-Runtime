@@ -5,8 +5,16 @@
 
 use super::*;
 use crate::codes::ClientCode;
+// P32 B-1 (since 0.12.27): the run status types and the fold of a run's facts are the
+// contract's (`actingcommand_contract::run_summary`), so this read and the Runtime's run
+// summary (B-2) fold the same facts with one function. The types keep their paths here.
+pub use actingcommand_contract::{
+    ContainedRunEvidence, ContainedRunLease, ContainedRunProgress, ContainedRunState,
+    ContainedRunTerminal, RunDispatch, RunOrigin,
+};
 use actingcommand_contract::{
-    ContainedTaskLeaseTerminal, EventLinks, InstanceId, LeaseId, TaskRunIdentity,
+    ContainedTaskLeaseTerminal, InstanceId, LeaseId, RUN_LISTING_EVENT_TYPES, RunFact,
+    RunFactAnomaly, RunFold, RunLeaseTerminals, RunListingFacts, RunReads, TaskRunIdentity,
 };
 
 const RUN_STATUS_SCHEMA: &str = "actingcommand.run-status.v1";
@@ -15,20 +23,12 @@ const RECENT_RUNS_OPERATION: Location = ClientLocation::RecentRuns.location();
 const MAX_RECENT_RUNS: usize = 10;
 /// The most runs one page of a run list holds (Workflow #389 MCP-3).
 const MAX_RUN_LIST: usize = 100;
-/// The facts a run is listed by (Workflow #391 item 3): its main admission, its entry facts and
-/// its terminal. A run without an entry check starts with its main admission, a run with one
-/// records an entry fact once that check is done, and a run whose first check fails ends with
-/// its terminal. Listing by them reads none of the instance's other events. A run records one
-/// main admission and one terminal, but its entry gate's navigation and its shared interrupts
-/// record several entry facts (Workflow #373 NAV-5, NAV-6), so a busy window holds more entry
-/// facts than one read keeps (Workflow #411 A6): the listing keeps none of them.
-const RUN_LISTING_EVENT_TYPES: [EventType; 5] = [
-    EventType::TaskRequested,
-    EventType::TaskEntryPreflight,
-    EventType::TaskCompleted,
-    EventType::TaskFailed,
-    EventType::TaskCancelled,
-];
+// The facts a run is listed by (Workflow #391 item 3) are the contract's
+// `RUN_LISTING_EVENT_TYPES`: its main admission, its entry facts and its terminal. Listing by
+// them reads none of the instance's other events. A run records one main admission and one
+// terminal, but its entry gate's navigation and its shared interrupts record several entry
+// facts (Workflow #373 NAV-5, NAV-6), so a busy window holds more entry facts than one read
+// keeps (Workflow #411 A6): the listing keeps none of them.
 /// #422 IDLE-OV (H1): the listing facts a run records one of each, its main admission and its
 /// terminal. `latest_runs` lists these over its whole window and the entry facts, which a busy
 /// window holds thousands of, only from its newest runs on.
@@ -108,37 +108,6 @@ pub enum RunStatusMode {
     Brief,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RunDispatch {
-    Manual,
-    Scheduled,
-    Unknown,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RunOrigin {
-    Cli,
-    Ui,
-    Lab,
-    Scheduler,
-    Unknown,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ContainedRunState {
-    NotFound,
-    Admitted,
-    Running,
-    Succeeded,
-    Failed,
-    Cancelled,
-    /// A run fact precedes a later Runtime start or takeover without a terminal; uncertain.
-    InterruptedUnterminated,
-}
-
 /// `actingcommand.run-status.v1`: one contained run as its ledger events show it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ContainedRunStatus {
@@ -167,46 +136,6 @@ pub struct ContainedRunStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub progress: Option<ContainedRunProgress>,
     pub evidence: ContainedRunEvidence,
-}
-
-/// A run's terminal as `actingcommand.run-status.v1` shows it. `failure_code` is the code of the
-/// terminal's committed outcome (ledger revision 3). A relayed spelling the catalog does not
-/// register was committed as `outcome_relay_unregistered`, and that is the code this member
-/// reads; the original spelling (a token) stays in that outcome's `raw_code` value.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ContainedRunTerminal {
-    pub outcome: TaskOutcome,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub failure_code: Option<actingcommand_contract::outcome::CodeStr>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub final_page: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub executed_steps: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cancellation_reason: Option<ContainedTaskCancellationReason>,
-    pub sequence: u64,
-    pub event_id: EventId,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct ContainedRunLease {
-    pub lease_id: LeaseId,
-    pub terminal: Option<ContainedTaskLeaseTerminal>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ContainedRunProgress {
-    pub step_index: u32,
-    pub operation_label: String,
-    pub page: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct ContainedRunEvidence {
-    pub snapshot_ledger_position: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub admitted_sequence: Option<u64>,
-    pub restarted_after_admission: bool,
 }
 
 /// The most recent runs of one instance, newest first, all read at one ledger snapshot.
@@ -284,53 +213,27 @@ struct ListingPages {
     complete: bool,
 }
 
-/// One run a listing found: its identity and its first listing fact in the window; and (#422
-/// QR-2b) whether the window holds its main admission, and the terminal facts the window holds
-/// of it.
+/// One run a listing found: its identity and (P32 B-1: the contract's `RunListingFacts`, the
+/// fold the Runtime's run summary folds them with) its first listing fact in the window,
+/// whether the window holds its main admission, and the terminal facts the window holds of it
+/// (#422 QR-2b).
 #[derive(Debug, Clone, Copy)]
 struct ListedRun {
     identity: TaskRunIdentity,
-    sequence: u64,
-    opened: bool,
-    terminal: Option<EventType>,
-    terminals: u32,
+    facts: RunListingFacts,
 }
 
 impl ListedRun {
     fn first(identity: TaskRunIdentity, event: &ProjectedEvent) -> Self {
-        let mut run = Self {
+        Self {
             identity,
-            sequence: event.sequence,
-            opened: false,
-            terminal: None,
-            terminals: 0,
-        };
-        run.note(event.event_type);
-        run
-    }
-
-    /// #422 QR-2b: one more listing fact of the run, by its type.
-    fn note(&mut self, event_type: EventType) {
-        match event_type {
-            EventType::TaskRequested => self.opened = true,
-            EventType::TaskCompleted | EventType::TaskFailed | EventType::TaskCancelled => {
-                self.terminal = Some(event_type);
-                self.terminals = self.terminals.saturating_add(1);
-            }
-            _ => {}
+            facts: RunListingFacts::first(event.sequence, event.event_type),
         }
     }
 
-    /// #422 QR-2b: the state the listing alone proves: succeeded or cancelled when it holds the
-    /// run's one terminal and that terminal is `task.completed` or `task.cancelled` (a
-    /// terminal's record type is its `task_result`'s, so the run's status read would answer
-    /// that state). A failed terminal, no terminal or more than one terminal proves nothing.
-    fn settled(&self) -> Option<ContainedRunState> {
-        match (self.terminals, self.terminal) {
-            (1, Some(EventType::TaskCompleted)) => Some(ContainedRunState::Succeeded),
-            (1, Some(EventType::TaskCancelled)) => Some(ContainedRunState::Cancelled),
-            _ => None,
-        }
+    /// The sequence of its first listing fact in the window: what the listing orders by.
+    const fn sequence(&self) -> u64 {
+        self.facts.order_sequence()
     }
 }
 
@@ -413,7 +316,11 @@ impl RunListingFold {
     /// The first listing fact read so far of the `nth` newest run by that fact (1: the
     /// newest); `None` when fewer runs are listed.
     fn nth_newest_first_sequence(&self, nth: usize) -> Option<u64> {
-        let mut sequences = self.runs.iter().map(|run| run.sequence).collect::<Vec<_>>();
+        let mut sequences = self
+            .runs
+            .iter()
+            .map(ListedRun::sequence)
+            .collect::<Vec<_>>();
         sequences.sort_unstable();
         sequences
             .len()
@@ -433,8 +340,7 @@ impl RunListingFold {
                 if run.identity != identity {
                     return Err(status_error(ClientCode::RunStatusIdentityMismatch));
                 }
-                run.sequence = run.sequence.min(event.sequence);
-                run.note(event.event_type);
+                run.facts.fold(event.sequence, event.event_type);
             }
             None => {
                 if !self.runs_seen.insert(identity.run_id) {
@@ -455,7 +361,7 @@ impl RunListingFold {
 
     /// The listing, oldest first by each run's first listing fact.
     fn finish(mut self) -> RunListing {
-        self.runs.sort_by_key(|run| run.sequence);
+        self.runs.sort_by_key(ListedRun::sequence);
         RunListing {
             runs: self.runs,
             snapshot: self.snapshot.unwrap_or(0),
@@ -641,7 +547,7 @@ impl RuntimeClient {
             .runs
             .iter()
             .rev()
-            .filter(|listed| listed.sequence < before)
+            .filter(|listed| listed.sequence() < before)
         {
             if page.runs.len() == limit {
                 page.next = Some(position(examined));
@@ -668,7 +574,7 @@ impl RuntimeClient {
                         catalog_task_id = Some(found);
                     }
                     Some(_) => {
-                        examined = listed.sequence;
+                        examined = listed.sequence();
                         continue;
                     }
                 }
@@ -686,7 +592,7 @@ impl RuntimeClient {
             };
             // Where the next page starts when this run's dispatch intent read is cut.
             let unexamined = examined;
-            examined = listed.sequence;
+            examined = listed.sequence();
             // A run first recorded before the window is not one of its runs.
             let Some(first_fact_unix_ms) = read
                 .first_fact_timestamp_unix_ms
@@ -723,7 +629,7 @@ impl RuntimeClient {
             page.runs.push(ListedContainedRun {
                 status: read.status,
                 catalog_task_id,
-                order_sequence: listed.sequence,
+                order_sequence: listed.sequence(),
                 first_fact_unix_ms,
                 terminal_unix_ms: read.terminal_timestamp_unix_ms,
             });
@@ -793,9 +699,9 @@ impl RuntimeClient {
                 .rev()
                 .map(|run| WindowRun {
                     identity: run.identity,
-                    order_sequence: run.sequence,
-                    settled: run.settled(),
-                    opened_in_window: run.opened,
+                    order_sequence: run.sequence(),
+                    settled: run.facts.settled(),
+                    opened_in_window: run.facts.opened(),
                 })
                 .collect(),
             snapshot_ledger_position: listing.snapshot,
@@ -1071,123 +977,54 @@ impl RuntimeClient {
             }));
         }
 
-        let mut origin = None;
-        let mut admitted = None;
-        let mut terminal = None;
-        let mut recovery_package_labels = Vec::new();
-        let mut progress = None;
-        let mut step_started = false;
-        let mut first_fact = None;
-        let mut first_fact_timestamp_unix_ms = None;
-        let mut terminal_timestamp_unix_ms = None;
+        // P32 B-1: the facts are folded by the contract's `RunFold`, the fold the Runtime's run
+        // summary (B-2) folds them with. They come in sequence order, so the fold's anomaly
+        // after each fact is the first one the facts so far hold: the read refuses at the same
+        // fact, with the same code, as when it checked each fact itself (its origin, then its
+        // payload, then its identity, then what it records).
+        let mut fold = RunFold::new();
         for event in &events {
-            if let Some(found) = request_origin(event)
-                && origin.replace(found).is_some()
-            {
-                return Err(status_error(ClientCode::RunStatusOriginInconsistent));
-            }
-            let EventPayload::Task(TaskPayload::Semantic(payload)) = full_payload(event)? else {
-                continue;
+            let (semantic, unreadable) = match full_payload(event) {
+                Ok(EventPayload::Task(TaskPayload::Semantic(payload))) => {
+                    (Some(payload.fact()), None)
+                }
+                Ok(_) => (None, None),
+                Err(error) => (None, Some(error)),
             };
-            let identity = run_fact_identity(event)?
-                .ok_or_else(|| status_error(ClientCode::RunStatusIdentityMissing))?;
-            match first_fact {
-                Some((_, previous)) if previous != identity => {
-                    return Err(status_error(ClientCode::RunStatusIdentityMismatch));
-                }
-                None => {
-                    first_fact = Some((event.sequence, identity));
-                    first_fact_timestamp_unix_ms = Some(event.timestamp_unix_ms);
-                }
-                _ => {}
+            fold.fold(RunFact {
+                sequence: event.sequence,
+                event_id: event.event_id,
+                timestamp_unix_ms: event.timestamp_unix_ms,
+                event_type: event.event_type,
+                source: event.origin.source(),
+                links: &event.links,
+                semantic,
+            });
+            if let Some(anomaly) = fold.anomaly_found() {
+                return Err(status_error(anomaly_code(anomaly)));
             }
-            match payload.fact() {
-                TaskSemanticFact::PackageAdmitted { package_label, .. } => {
-                    let found = (
-                        event.sequence,
-                        package_label.clone(),
-                        event.links.lease_id().copied(),
-                    );
-                    if admitted.replace(found).is_some() {
-                        return Err(status_error(ClientCode::RunStatusPackageFactCountInvalid));
-                    }
-                }
-                TaskSemanticFact::EntryRecoveryPackageAdmitted { package_label, .. } => {
-                    recovery_package_labels.push(package_label.clone());
-                }
-                TaskSemanticFact::StepStarted {
-                    step_index,
-                    operation_label,
-                    from_page,
-                    ..
-                } => {
-                    step_started = true;
-                    progress = Some(ContainedRunProgress {
-                        step_index: *step_index,
-                        operation_label: operation_label.clone(),
-                        page: from_page.clone(),
-                    });
-                }
-                TaskSemanticFact::StepFinished {
-                    step_index,
-                    operation_label,
-                    page_label,
-                    ..
-                } => {
-                    progress = Some(ContainedRunProgress {
-                        step_index: *step_index,
-                        operation_label: operation_label.clone(),
-                        page: page_label.clone(),
-                    });
-                }
-                TaskSemanticFact::TerminalCommitted {
-                    task_result,
-                    final_page,
-                    executed_steps,
-                    outcome,
-                    ..
-                } => {
-                    let failure_code = outcome.as_ref().map(|outcome| outcome.code().clone());
-                    let found = ContainedRunTerminal {
-                        outcome: *task_result,
-                        final_page: final_page.clone(),
-                        executed_steps: *executed_steps,
-                        cancellation_reason: (*task_result == TaskOutcome::Cancelled).then_some(
-                            ContainedTaskCancellationReason::from_failure_code(
-                                failure_code.as_ref(),
-                            ),
-                        ),
-                        failure_code,
-                        sequence: event.sequence,
-                        event_id: event.event_id,
-                    };
-                    if terminal.replace(found).is_some() {
-                        return Err(status_error(ClientCode::RunStatusTerminalStateInconsistent));
-                    }
-                    terminal_timestamp_unix_ms = Some(event.timestamp_unix_ms);
-                }
-                _ => {}
+            if let Some(error) = unreadable {
+                return Err(error);
             }
         }
 
-        if let Some((_, identity)) = first_fact
-            && (identity.request_id != request_id
-                || events
-                    .iter()
-                    .any(|event| !identity.matches_links(&event.links)))
+        // Every record's links agree with each other and with the run's first semantic fact.
+        let links = fold
+            .links()
+            .map_err(|anomaly| status_error(anomaly_code(anomaly)))?;
+        if fold
+            .identity()
+            .is_some_and(|identity| identity.request_id != request_id)
         {
             return Err(status_error(ClientCode::RunStatusIdentityMismatch));
         }
-        let run_id = single_link(&events, EventLinks::run_id)?;
         if let RunKey::RunId(expected) = key
-            && run_id != Some(expected)
+            && links.run_id != Some(expected)
         {
             return Err(status_error(ClientCode::RunStatusIdentityMismatch));
         }
-        let task_id = single_link(&events, EventLinks::task_id)?;
-        let instance_id = single_link(&events, EventLinks::instance_id)?;
-        let correlation_id = single_link(&events, EventLinks::correlation_id)?;
-        let admitted_sequence = admitted.as_ref().map(|(sequence, _, _)| *sequence);
+        let first_fact = fold.first_fact();
+        let admitted_sequence = fold.admitted_sequence();
         // P32 A-1: a restart or lease read the deadline ended leaves the run unread, never
         // "no restart" or "no lease terminal".
         let restarted_after_first_fact = match first_fact {
@@ -1211,58 +1048,59 @@ impl RuntimeClient {
             Some(_) => false,
             None => false,
         };
-        let open = terminal.is_none() && first_fact.is_some();
-        let lease = match single_link(&events, EventLinks::lease_id)? {
+        let lease_terminal = match fold
+            .lease_id()
+            .map_err(|anomaly| status_error(anomaly_code(anomaly)))?
+        {
             Some(lease_id) => {
-                let Some(terminal) =
-                    self.contained_run_lease_terminal(lease_id, &events, snapshot, deadline)?
+                let Some(terminal) = self.contained_run_lease_terminal(
+                    lease_id,
+                    fold.lease_terminals(),
+                    snapshot,
+                    deadline,
+                )?
                 else {
                     return Ok(None);
                 };
-                Some(ContainedRunLease { lease_id, terminal })
+                terminal
             }
             None => None,
         };
-        let state = match &terminal {
-            Some(terminal) => match terminal.outcome {
-                TaskOutcome::Success => ContainedRunState::Succeeded,
-                TaskOutcome::Failure => ContainedRunState::Failed,
-                TaskOutcome::Cancelled => ContainedRunState::Cancelled,
-            },
-            None if !open => ContainedRunState::NotFound,
-            None if restarted_after_first_fact => ContainedRunState::InterruptedUnterminated,
-            None if step_started || admitted_sequence.is_none() => ContainedRunState::Running,
-            None => ContainedRunState::Admitted,
-        };
-        let (dispatch, origin) = origin.unwrap_or((RunDispatch::Unknown, RunOrigin::Unknown));
+        let brief = fold
+            .brief(
+                request_id,
+                snapshot,
+                RunReads {
+                    restarted_after_first_fact,
+                    restarted_after_admission,
+                    lease_terminal,
+                },
+            )
+            .map_err(|anomaly| status_error(anomaly_code(anomaly)))?;
         Ok(Some(ReadRunStatus {
             status: ContainedRunStatus {
                 schema_version: RUN_STATUS_SCHEMA,
-                request_id: Some(request_id),
-                correlation_id,
-                run_id,
-                task_id,
-                instance_id,
-                dispatch,
-                origin,
-                package_label: admitted.map(|(_, package, _)| package),
-                recovery_package_labels,
-                state,
-                terminal,
-                lease,
+                request_id: Some(brief.request_id),
+                correlation_id: brief.correlation_id,
+                run_id: brief.run_id,
+                task_id: brief.task_id,
+                instance_id: brief.instance_id,
+                dispatch: brief.dispatch,
+                origin: brief.origin,
+                package_label: brief.package_label,
+                recovery_package_labels: brief.recovery_package_labels,
+                state: brief.state,
+                terminal: brief.terminal,
+                lease: brief.lease,
                 progress: if mode == RunStatusMode::Full {
-                    progress
+                    fold.progress().cloned()
                 } else {
                     None
                 },
-                evidence: ContainedRunEvidence {
-                    snapshot_ledger_position: snapshot,
-                    admitted_sequence,
-                    restarted_after_admission,
-                },
+                evidence: brief.evidence,
             },
-            first_fact_timestamp_unix_ms,
-            terminal_timestamp_unix_ms,
+            first_fact_timestamp_unix_ms: first_fact.map(|(_, timestamp)| timestamp),
+            terminal_timestamp_unix_ms: fold.terminal().map(|(_, timestamp)| timestamp),
         }))
     }
 
@@ -1290,22 +1128,19 @@ impl RuntimeClient {
         Ok(Some(false))
     }
 
-    /// The run lease's terminal: the request's own release when it has one, else the lease's
-    /// release or expiry (an expiry or a connection cleanup does not link the request).
-    /// `Some(None)` when it has none; `None` when `deadline` ended a read (P32 A-1,
-    /// `first_status_events`).
+    /// The run lease's terminal: the request's own release when it has one (`request_terminals`,
+    /// the release or expiry records the run's own facts hold of its one lease), else the
+    /// lease's release or expiry (an expiry or a connection cleanup does not link the request),
+    /// folded as the contract's `RunLeaseTerminals` (P32 B-1). `Some(None)` when it has none;
+    /// `None` when `deadline` ended a read (P32 A-1, `first_status_events`).
     fn contained_run_lease_terminal(
         &self,
         lease_id: LeaseId,
-        request_events: &[ProjectedEvent],
+        request_terminals: RunLeaseTerminals,
         snapshot: u64,
         deadline: Option<Instant>,
     ) -> RuntimeClientResult<Option<Option<ContainedTaskLeaseTerminal>>> {
-        let mut terminals = request_events
-            .iter()
-            .filter(|event| is_lease_terminal(event, lease_id))
-            .cloned()
-            .collect::<Vec<_>>();
+        let mut terminals = request_terminals;
         if terminals.is_empty() {
             for event_type in [EventType::LeaseReleased, EventType::LeaseExpired] {
                 let query = EventQuery {
@@ -1316,17 +1151,15 @@ impl RuntimeClient {
                 let Some(found) = self.first_status_events(query, 2, snapshot, deadline)? else {
                     return Ok(None);
                 };
-                terminals.extend(found);
+                for event in &found {
+                    terminals.fold(event.sequence, event.event_type);
+                }
             }
         }
-        match terminals.as_slice() {
-            [] => Ok(Some(None)),
-            [event] if event.event_type == EventType::LeaseExpired => {
-                Ok(Some(Some(ContainedTaskLeaseTerminal::Expired)))
-            }
-            [_] => Ok(Some(Some(ContainedTaskLeaseTerminal::Released))),
-            _ => Err(status_error(ClientCode::RunStatusLeaseTerminalInconsistent)),
-        }
+        terminals
+            .terminal()
+            .map(Some)
+            .map_err(|anomaly| status_error(anomaly_code(anomaly)))
     }
 
     /// The first `limit` records `query` selects at `snapshot`, without run recovery (#422
@@ -1515,16 +1348,15 @@ fn status_error(code: impl Into<Code>) -> RuntimeClientError {
     RuntimeClientError::fatal(code, RUN_STATUS_OPERATION)
 }
 
-/// The request's origin event: a client command is manual, the scheduler's receipt scheduled.
-fn request_origin(event: &ProjectedEvent) -> Option<(RunDispatch, RunOrigin)> {
-    match event.event_type {
-        EventType::CliCommand => Some((RunDispatch::Manual, RunOrigin::Cli)),
-        EventType::UiAction => Some((RunDispatch::Manual, RunOrigin::Ui)),
-        EventType::LabRequest => Some((RunDispatch::Manual, RunOrigin::Lab)),
-        EventType::CommandReceived if event.origin.source() == EventSource::Scheduler => {
-            Some((RunDispatch::Scheduled, RunOrigin::Scheduler))
-        }
-        _ => None,
+/// P32 B-1: the run status read's code of a fold anomaly, of the same name.
+const fn anomaly_code(anomaly: RunFactAnomaly) -> ClientCode {
+    match anomaly {
+        RunFactAnomaly::IdentityMissing => ClientCode::RunStatusIdentityMissing,
+        RunFactAnomaly::IdentityMismatch => ClientCode::RunStatusIdentityMismatch,
+        RunFactAnomaly::OriginInconsistent => ClientCode::RunStatusOriginInconsistent,
+        RunFactAnomaly::PackageFactCountInvalid => ClientCode::RunStatusPackageFactCountInvalid,
+        RunFactAnomaly::TerminalStateInconsistent => ClientCode::RunStatusTerminalStateInconsistent,
+        RunFactAnomaly::LeaseTerminalInconsistent => ClientCode::RunStatusLeaseTerminalInconsistent,
     }
 }
 
@@ -1568,30 +1400,6 @@ fn listing_fact_identity(event: &ProjectedEvent) -> RuntimeClientResult<Option<T
         }
         _ => Err(status_error(ClientCode::RunStatusIdentityMissing)),
     }
-}
-
-/// The one value of a link over the run's events; two different values fail.
-fn single_link<T: Copy + PartialEq>(
-    events: &[ProjectedEvent],
-    link: fn(&EventLinks) -> Option<&T>,
-) -> RuntimeClientResult<Option<T>> {
-    let mut found = None;
-    for value in events.iter().filter_map(|event| link(&event.links)) {
-        match found {
-            Some(existing) if existing != *value => {
-                return Err(status_error(ClientCode::RunStatusIdentityMismatch));
-            }
-            _ => found = Some(*value),
-        }
-    }
-    Ok(found)
-}
-
-fn is_lease_terminal(event: &ProjectedEvent, lease_id: LeaseId) -> bool {
-    matches!(
-        event.event_type,
-        EventType::LeaseReleased | EventType::LeaseExpired
-    ) && event.links.lease_id() == Some(&lease_id)
 }
 
 #[cfg(test)]
