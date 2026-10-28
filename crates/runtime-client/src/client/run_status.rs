@@ -747,9 +747,11 @@ impl RuntimeClient {
         let mut position = snapshot;
         let mut last_sequence = 0_u64;
         for _ in 0..MAX_RUN_LISTING_PAGES {
+            // #422 QR-2: the listing reads no run recovery, so its pages ask for none.
             let mut request =
                 RuntimeEventQueryPageRequest::new(MAX_RUNTIME_EVENT_QUERY_EVENTS, cursor.clone())
-                    .map_err(|_| invalid(ClientCode::RunStatusPageRequestInvalid))?;
+                    .map_err(|_| invalid(ClientCode::RunStatusPageRequestInvalid))?
+                    .without_run_recovery();
             if cursor.is_none()
                 && let Some(snapshot) = snapshot
             {
@@ -1128,7 +1130,8 @@ impl RuntimeClient {
         }
     }
 
-    /// One bounded page at `snapshot`.
+    /// One bounded page at `snapshot`, without run recovery (#422 QR-2: its rows are all it
+    /// reads).
     fn first_status_events(
         &self,
         query: EventQuery,
@@ -1136,6 +1139,7 @@ impl RuntimeClient {
         snapshot: u64,
     ) -> RuntimeClientResult<Vec<ProjectedEvent>> {
         let request = RuntimeEventQueryPageRequest::new(limit, None)
+            .map(RuntimeEventQueryPageRequest::without_run_recovery)
             .and_then(|request| request.at_snapshot(snapshot))
             .map_err(|_| status_error(ClientCode::RunStatusPageRequestInvalid))?;
         let page = self.query_event_page(query, ProjectionProfile::Forensic, request)?;
@@ -1163,9 +1167,12 @@ impl RuntimeClient {
         let mut last_sequence = 0_u64;
         let mut resident_bytes = 0_usize;
         for _ in 0..MAX_RUN_SUMMARY_PAGES {
+            // #422 QR-2: a run's status reads its rows only, so its pages ask for no run
+            // recovery.
             let mut request =
                 RuntimeEventQueryPageRequest::new(MAX_RUNTIME_EVENT_QUERY_EVENTS, cursor.clone())
-                    .map_err(|_| invalid(ClientCode::RunStatusPageRequestInvalid))?;
+                    .map_err(|_| invalid(ClientCode::RunStatusPageRequestInvalid))?
+                    .without_run_recovery();
             if cursor.is_none()
                 && let Some(snapshot) = snapshot
             {

@@ -3119,6 +3119,11 @@ pub struct RuntimeEventQueryPageRequest {
     cursor: Option<RuntimeEventQueryCursor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     snapshot_position: Option<u64>,
+    /// #422 QR-2 (since 0.12.23): the page derives no `run_recovery` groups and reads no run's
+    /// context for them; its selection, rows, views, cursor and read scope are the page's own.
+    /// Absent (false), the request serializes, and the page answers, as before.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    without_run_recovery: bool,
 }
 
 impl RuntimeEventQueryPageRequest {
@@ -3127,6 +3132,7 @@ impl RuntimeEventQueryPageRequest {
             limit,
             cursor,
             snapshot_position: None,
+            without_run_recovery: false,
         };
         request.validate()?;
         Ok(request)
@@ -3169,6 +3175,20 @@ impl RuntimeEventQueryPageRequest {
     pub const fn snapshot_position(&self) -> Option<u64> {
         self.snapshot_position
     }
+
+    /// #422 QR-2: the same page without its `run_recovery` groups: the Runtime reads no run's
+    /// context for them (a reader that never reads the groups, the run listing and the run
+    /// status reads among them, asks for its pages so).
+    #[must_use]
+    pub fn without_run_recovery(mut self) -> Self {
+        self.without_run_recovery = true;
+        self
+    }
+
+    /// #422 QR-2: whether the page derives its `run_recovery` groups (the default).
+    pub const fn derives_run_recovery(&self) -> bool {
+        !self.without_run_recovery
+    }
 }
 
 impl Default for RuntimeEventQueryPageRequest {
@@ -3177,6 +3197,7 @@ impl Default for RuntimeEventQueryPageRequest {
             limit: DEFAULT_RUNTIME_EVENT_QUERY_EVENTS,
             cursor: None,
             snapshot_position: None,
+            without_run_recovery: false,
         }
     }
 }

@@ -2989,3 +2989,7 @@ mod gate_idle_ov;
 // the frame cleaner's trim reaches the writer in bounded chunks.
 #[path = "tests/gate_qr1.rs"]
 mod gate_qr1;
+// #422 QR-2: a page asked without run recovery reads no run's context; a reader-pool thread reads
+// the Lab relations and a window's start once per snapshot.
+#[path = "tests/gate_qr2.rs"]
+mod gate_qr2;

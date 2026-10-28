@@ -26,7 +26,8 @@
 //! `time_start`; #422 IDLE-OV: the overview's run lookup lists the window forward from there).
 //! The fake is shared with the #422 IDLE-OV gate (`gate_422_idle_ov`), which also counts its
 //! pages and has it refuse the pages of one event type as the host refuses a page it did not
-//! read.
+//! read, and with the #422 QR-2 gate (`gate_422_qr2`), which counts the pages asked for with their
+//! run recovery.
 
 use super::super::jobs::Jobs;
 use super::super::protocol::Era;
@@ -749,6 +750,9 @@ pub(super) struct Stats {
     refused_too_large: u64,
     /// #422 IDLE-OV: QueryEvents pages asked for (each one writer command on the Runtime).
     pub(super) pages: u64,
+    /// #422 QR-2: of those pages, the ones asked for with their run recovery (a request without
+    /// `without_run_recovery`), for which the Runtime reads the context of every run they name.
+    pub(super) pages_with_run_recovery: u64,
 }
 
 /// A Runtime on loopback that answers every connection from one ledger until dropped.
@@ -839,6 +843,15 @@ impl Drop for FakeRuntime {
 /// Answers one client's Health, BindChannel, Status and event queries until it hangs up.
 fn serve(mut stream: TcpStream, owner_epoch: OwnerEpoch, ledger: &Ledger, stats: &Mutex<Stats>) {
     while let Some(request) = next_request(&mut stream) {
+        // #422 QR-2: a page asked for with its run recovery.
+        if let RuntimeOperation::QueryEvents { page, .. } = request.operation()
+            && page.derives_run_recovery()
+        {
+            stats
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .pages_with_run_recovery += 1;
+        }
         let receipt = match request.operation() {
             RuntimeOperation::Health => completed(&request, RuntimeResult::Health { owner_epoch }),
             RuntimeOperation::BindChannel { channel, via } => completed(

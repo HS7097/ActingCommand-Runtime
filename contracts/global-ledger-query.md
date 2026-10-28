@@ -190,6 +190,22 @@ existing 1024-event query ceiling per run; a larger run yields Unknown with an
 explicit context limit. Missing relations, conflicting outcomes and incomplete
 sources also yield Unknown.
 
+#422 QR-2 (since 0.12.23): a page request may ask for no run recovery
+(`RuntimeEventQueryPageRequest::without_run_recovery`, the optional request
+member `without_run_recovery: true`). Such a page derives no group and reads no
+run's context for one; its selection, rows, views, cursor and read scope are
+those of the same page with its groups (only the response-byte limit, which then
+counts no group, may let it hold more rows). Absent, the member is `false`: the
+request serializes and the page answers as before. No outcome code is added. The
+run listing and the run status reads of `runtime-client` (`latest_runs`,
+`recent_runs`, `list_contained_runs`, `contained_run_status` and the overview's
+run block built on them), which never read the groups, ask for every page so.
+A Runtime reader-pool thread also keeps, from one of its pages to the next at the
+same snapshot, the Lab relations through that snapshot and the window start a
+first page looked up (`from_timestamp_unix_ms`'s first record); a page at
+another snapshot reads them again. Both are exact at their snapshot, so a page
+answers the same with or without them.
+
 ### New record types in the views (Workflow #383, ledger revision 3)
 
 The ledger observer adds record types ([Ledger observer](ledger-observer.md),

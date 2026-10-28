@@ -607,6 +607,9 @@ mod tests {
     // dwell once; a spent budget skips performance and fact_refresh; fact_refresh is cut last;
     // an unapplied configuration warns.
     mod gate_422_ov24k;
+    // #422 QR-2: the overview's run block, the run listing and a run's status ask for their
+    // pages without run recovery and answer as before.
+    mod gate_422_qr2;
     // Workflow #427-B: ac_schedule answers the shared run limits with their numbers; ac_diagnose
     // lists a row they blocked at placement (follow-up, review L1).
     mod gate_427b;

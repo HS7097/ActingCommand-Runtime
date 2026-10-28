@@ -965,6 +965,14 @@ tests = [
 ]
 incident = ["#421 S2-IF"]
 
+# #422 QR-2 (v0.12.23; brief rd-1028/brief-qr2-overview-pages.md, investigation rd-1028/qr2-investigation.md §4 R4): on A42's fake Runtime, the overview's run block, the run listing (ac_runs) and a run's status (ac_get_run, by its request and by its run) ask for every QueryEvents page without run recovery, and answer as before: the window's newest run, complete; the window's runs newest first, each succeeded; the same status by request and by run (T3)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_qr2::qr2_t3_the_run_block_listing_and_status_ask_for_no_run_recovery_and_answer_as_before",
+]
+incident = ["#422 QR-2"]
+
 # Workflow #427-A (brief rd-1028/brief-427a-lanes.md; plan r2 comment 6460013989, C1-C5): the per-instance lanes of the policy round behind scheduling.parallel.enabled, on the APPS-I7 cycle harness. A long run on one instance holds neither the round nor another instance; frozen after the terminal and before settlement there is no second dispatch, the reconciliation skips the run and its settlement and wake happen once; a failed run leaves the other instance running; a settlement between the sample and the validation is sampled again (C1), past the limit the round is given up and deferred; a shutdown refuses a run not taken and finishes a run taken; a worker panic drops the run and keeps its instance occupied for the reconciliation; the switch is off by default and an instruction turns it on at the next round
 [[gate]]
 coverage = "Y"
