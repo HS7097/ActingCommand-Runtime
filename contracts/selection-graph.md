@@ -154,7 +154,7 @@ field:
 | Each `targets` key is a declared feature that reads no target of its own, and each value a string. | `…/slots/k/targets/<name>` | gate |
 | A `repeated_anchor` layout names its `anchor` (a string), `max_instances` 1 to 64, an `order` of `top_to_bottom` or `left_to_right`, and optionally `suppress_iou_milli` 0 to 999. | `/candidate_layouts/i/anchor`, `…/max_instances`, `…/order`, `…/suppress_iou_milli` | gate |
 | Its `instance_rect` and `click` are integer rectangles relative to the anchor match: a signed origin and a positive size. Its optional `readable_band` is an integer rectangle with a non-negative origin and a positive size, entirely inside the task's `coordinate_space`. | `/candidate_layouts/i/instance_rect`, `…/click`, `…/readable_band` (a field's type or value at `…/x` and so on) | gate |
-| Workflow #396 REC-8: a `fixed_slots` layout may declare `shared_ocr` (section Shared OCR read) from task schema `0.9` on; an older task schema refuses it with `UnconsumedField`, and a `repeated_anchor` layout with `UnknownField`. Its `region` is a `rect` or `full_frame` region in the form of an OCR target's; `languages` are strings; `timeout_ms` is an unsigned integer; `model_ref`, `model_sha256` and `blocks` are strings; the optional `line_merge` is a string or `{"gap_factor": n}` with an unsigned `n`. | `/candidate_layouts/i/shared_ocr` and its fields | gate |
+| Workflow #396 REC-8: a `fixed_slots` layout may declare `shared_ocr` (section Shared OCR read) from task schema `0.9` on; an older task schema refuses it with `UnconsumedField`, and a `repeated_anchor` layout with `UnknownField`. Its `region` is a `rect` or `full_frame` region in the form of an OCR target's; `languages` are strings; `timeout_ms` is an unsigned integer; `model_ref`, `model_sha256` and `blocks` are strings; the optional `line_merge` is a string or `{"gap_factor": n}` with an unsigned `n`. Workflow #428 CFL-2: the optional `preprocess` is a chain of [recognition-preprocess.md](recognition-preprocess.md), refused at its own pointer below `…/shared_ocr/preprocess`, and a `threshold` of `"otsu"` in it is `InvalidValue` at `…/preprocess/steps/<k>/value` (section Shared OCR read, Preprocessing). | `/candidate_layouts/i/shared_ocr` and its fields | gate |
 | The page is a page the declaring task itself declares (its `entry_page`, `target_page`, `error_pages`, `scheduling_outcome` terminal pages, or an operation's `from`, `to` or `expect_after.page_id`). Every build of the task therefore holds it. | `/candidate_layouts/i/page_id` | parser |
 | Each slot target is a `template`, `color`, `color_digest`, `composite`, `ocr` or `nn` target of the derived pack; a `measure_milli` feature never reads a composite. Every layout of the selected tasks needs its targets in the same build, as a check does. | `…/slots/k/targets/<name>` | parser |
 | A feature's own `target` is a `template`, `color`, `color_digest` or `ocr` target of the derived pack: an `nn` or `composite` feature cannot be read at an offset. | `…/features/j/target` | parser |
@@ -276,6 +276,50 @@ share:
   counts none ([candidate-projection.md](candidate-projection.md), section Budgets). Admission
   knows a target's region before the frame unless it is `template_relative`; such a target
   keeps its own evaluation in the count, and the frame may still serve it.
+
+#### Preprocessing (Workflow #428 CFL-2, since 0.12.29)
+
+The read may declare `preprocess`, the chain of
+[recognition-preprocess.md](recognition-preprocess.md), with the white-text example:
+
+```json
+"shared_ocr": {"region": {"x": 40, "y": 120, "width": 1200, "height": 480},
+               "languages": ["en"], "timeout_ms": 5000,
+               "model_ref": "<model>", "model_sha256": "<64 hex>",
+               "blocks": "detect", "line_merge": {"gap_factor": 0},
+               "preprocess": {"steps": [
+                 {"kind": "keep_colors", "colors": [[255, 255, 255]], "tolerance": 40},
+                 {"kind": "invert"}
+               ]}}
+```
+
+- **Pixel by pixel only.** A shared read's chain takes no `threshold` of `"otsu"`: Otsu's
+  threshold reads the whole region, so a target's part of the shared result would differ from
+  what the target gives on its own. Admission refuses it with `resource_declaration_invalid`,
+  `InvalidValue`, at `/candidate_layouts/<i>/shared_ocr/preprocess/steps/<k>/value` (the
+  source's own pointer in `task.json`). Every other step works pixel by pixel.
+- **Which targets it serves.** Besides the rules above, a target takes its text from the read
+  only when its own `preprocess` equals the read's, step by step and with the colors of
+  `keep_colors` in their declared order; neither declaring one is equal too. A target with
+  another chain, an `otsu` one among them, reads on its own. The admission rule "at least one
+  target takes its text from the read" counts with chains.
+- **The read.** The chain runs once over the read's region before the provider call, the
+  provider reads the processed region ([recognition-preprocess.md](recognition-preprocess.md),
+  "Hand-over") and the processed region is kept for the projection. After the chain the sample
+  deadline is checked again, as before the read.
+- **Evidence.** Every evaluation the read serves carries `shared_read`: the read's `rect`, the
+  detector's `detected` and `limit` when the provider gives them, and with a chain the read's
+  own `kept_milli` and `threshold_value`. With a chain its `preprocess` evidence has `scope`
+  `shared`, `rect` the target's own region and `source_rect` the read's; its `kept_milli` is
+  counted over the target's own region of the kept processed region, without running the chain
+  again, and equals what the target would report on its own. Both are read-only and Lab
+  output; the ledger is unchanged.
+- **Truncation** still fails the projection with `text_read_blocks_truncated`, with a chain as
+  without one.
+- **The authoring warning.** `package bundle` and `actinglab standard-pack check` report one
+  `package_bundle_preprocess_divergent` warning (`package_id`, `target_id`, `json_pointer` of
+  the read in the recognition pack) for each target that lies in the read with its model and
+  languages but declares another chain, so that it reads on its own. Nothing is refused.
 
 ### Rules
 

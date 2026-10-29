@@ -76,6 +76,8 @@ pub struct NavigationPackageDescriptor {
     navigation_entry_pages: Option<Vec<String>>,
     /// STORE-FG-1 (design-store-fg §8.1): its declared store operations that tap a fixed place.
     store_fixed_taps: Vec<String>,
+    /// Workflow #428 CFL-2: [`PreparedContainedTask::preprocess_divergences`].
+    preprocess_divergences: Vec<(String, String)>,
 }
 
 impl PreparedContainedTask {
@@ -97,6 +99,7 @@ impl PreparedContainedTask {
                     .collect()
             }),
             store_fixed_taps: self.store_fixed_taps(),
+            preprocess_divergences: self.preprocess_divergences(),
         }
     }
 }
@@ -135,6 +138,11 @@ impl NavigationPackageDescriptor {
     /// frame, in declaration order; empty for a package without `store_update`.
     pub fn store_fixed_taps(&self) -> &[String] {
         &self.store_fixed_taps
+    }
+    /// Workflow #428 CFL-2: each OCR target whose chain differs from the shared read it would
+    /// take its text from, with the shared read's pointer in the recognition pack.
+    pub fn preprocess_divergences(&self) -> &[(String, String)] {
+        &self.preprocess_divergences
     }
 }
 

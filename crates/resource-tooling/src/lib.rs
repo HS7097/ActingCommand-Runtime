@@ -56,6 +56,11 @@ mod gate_386_cf4;
 #[cfg(test)]
 mod gate_386_cf5;
 
+// Workflow #428 CFL-2: standard-pack check names a target whose chain differs from its shared
+// read, with and without `pages.json`.
+#[cfg(test)]
+mod gate_428_cfl2;
+
 mod maa_task_graph;
 mod package_directory;
 mod package_publish;

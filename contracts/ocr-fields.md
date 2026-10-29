@@ -479,9 +479,13 @@ target, each such target is one read of its own region, even when another read h
 request. Other ordinary OCR targets are not reads. A consumer
 reads with at most 4 provider calls and at most one frame
 of summed region area, each distinct request once; requests are the same when their
-resolved region, model, languages, timeout, `blocks` and `line_merge` are equal. Within one
+resolved region, model, languages, timeout, `blocks`, `line_merge` and (Workflow #428 CFL-2,
+since 0.12.29) `preprocess` chain are equal: one region read with two chains is two requests,
+and two targets that copy one chain verbatim are one ([recognition-preprocess.md](recognition-preprocess.md),
+"Hand-over"). Within one
 Scene a request calls the provider once; a later locate target with the same request reads
-the remembered result. Admission counts every consumer statically (a `template_relative`
+the remembered result, with the chain's evidence and without running the chain again.
+Admission counts every consumer statically (a `template_relative`
 region counts as its own request) and refuses an exceeded budget with
 `resource_declaration_invalid` at the page (`/pages/<i>`) or guard
 (`/operations/<i>/guard`) that exceeds it. A read that would exceed the budget at run time

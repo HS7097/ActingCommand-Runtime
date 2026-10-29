@@ -1078,6 +1078,8 @@ mod tests {
                     },
                 ],
                 located,
+                preprocess: None,
+                shared_read: None,
             })),
             nn: None,
             color_digest: None,
@@ -1243,6 +1245,75 @@ mod tests {
             ocr.as_ref(),
             TaskDiagnosticOcrData::Evaluated { located: None, .. }
         ));
+    }
+
+    // Workflow #428 CFL-2 (design CF v2 §5.7, test 10): the task diagnostic maps an OCR
+    // evaluation's members one by one, so a chained target's target and OCR rows have exactly
+    // the members of an unchained one (ledger revision 4): the chain's evidence and the shared
+    // read stay out of the ledger, while the evaluation as read-only answers serialize it
+    // carries both.
+    #[test]
+    fn cfl2_a_chained_target_writes_the_same_target_and_ocr_rows_as_an_unchained_one() {
+        use actingcommand_recognition_pack::{
+            OcrPreprocess, OcrPreprocessEvidence, OcrPreprocessScope, OcrSharedReadEvidence,
+        };
+        let plain = located_target(None, None);
+        let mut chained = plain.clone();
+        let ocr = chained.ocr.as_deref_mut().expect("OCR evidence");
+        ocr.preprocess = Some(OcrPreprocessEvidence {
+            algorithm: "preprocess.v1",
+            steps: OcrPreprocess::from_json(&serde_json::json!({"steps": [
+                {"kind": "keep_colors", "colors": [[255, 255, 255]], "tolerance": 40},
+                {"kind": "invert"}
+            ]}))
+            .expect("a chain"),
+            scope: OcrPreprocessScope::Target,
+            rect: rect(40, 120, 600, 480),
+            source_rect: None,
+            kept_milli: 183,
+            inverted: true,
+            threshold_value: None,
+        });
+        ocr.shared_read = Some(OcrSharedReadEvidence {
+            rect: rect(40, 120, 600, 480),
+            detected: Some(3),
+            limit: Some(64),
+            kept_milli: Some(183),
+            threshold_value: None,
+        });
+        let guard = || TaskDiagnosticTargetSource::Guard {
+            phase: "guard".to_owned(),
+        };
+        let rows = |evaluation: &actingcommand_recognition_pack::TargetEvaluation| {
+            serde_json::to_value([
+                record(
+                    1,
+                    None,
+                    Payload::Target(Box::new(target_payload(evaluation, guard()))),
+                ),
+                record(
+                    2,
+                    Some(1),
+                    Payload::Ocr(Box::new(ocr_payload(
+                        evaluation.ocr.as_deref().expect("OCR evidence"),
+                    ))),
+                ),
+            ])
+            .expect("serialize the rows")
+        };
+        assert_eq!(rows(&chained), rows(&plain));
+        let read_only = serde_json::to_value(&chained).expect("serialize the evaluation");
+        assert_eq!(
+            read_only["ocr"]["preprocess"]["algorithm"],
+            serde_json::json!("preprocess.v1")
+        );
+        assert_eq!(
+            read_only["ocr"]["shared_read"]["detected"],
+            serde_json::json!(3)
+        );
+        let plain = serde_json::to_value(&plain).expect("serialize the evaluation");
+        assert!(plain["ocr"].get("preprocess").is_none());
+        assert!(plain["ocr"].get("shared_read").is_none());
     }
 
     // Workflow #396 REC-2: the guard row of a unique target with a second place.

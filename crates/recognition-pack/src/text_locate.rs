@@ -153,15 +153,20 @@ pub struct OcrLocatedEvidence {
     pub truncated: bool,
 }
 
+/// One remembered text read: the provider's result in frame coordinates and, with a chain, its
+/// evidence (Workflow #428 CFL-2).
+pub(crate) type TextRead = (OcrProviderResult, Option<OcrPreprocessEvidence>);
+
 /// One consumer's remembered text reads within one `SceneEvaluation`.
 #[derive(Default)]
 pub(crate) struct TextReads {
-    results: HashMap<TextReadKey, RecognitionPackResult<OcrProviderResult>>,
+    results: HashMap<TextReadKey, RecognitionPackResult<TextRead>>,
     calls: u32,
     area: u64,
 }
 
-/// Requests are the same when region, model, languages, timeout and block mode are equal.
+/// Requests are the same when region, model, languages, timeout, block mode and (Workflow #428
+/// CFL-2) chain are equal.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct TextReadKey {
     region: PackRect,
@@ -170,20 +175,23 @@ struct TextReadKey {
     languages: Vec<String>,
     timeout_ms: u64,
     blocks: OcrProviderBlocks,
+    preprocess: Option<OcrPreprocess>,
 }
 
 impl SceneEvaluation<'_> {
     /// The provider's result for this request on this frame: remembered after the first call,
     /// so a later target with the same request reads it without a call. Before a call the
     /// consumer's budget is checked; an exceeded budget calls nothing. A remembered result
-    /// carries its PP-OCR reports only once, with the call that produced them.
+    /// carries its PP-OCR reports only once, with the call that produced them. Workflow #428
+    /// CFL-2: the target's chain is part of the request; it runs once before the call, and a
+    /// remembered read keeps its evidence without running it again.
     pub(crate) fn read_text_once(
         &self,
         provider: &dyn VisionProvider,
         target: &OcrTarget,
         region: PackRect,
         blocks: OcrProviderBlocks,
-    ) -> RecognitionPackResult<OcrProviderResult> {
+    ) -> RecognitionPackResult<TextRead> {
         let key = TextReadKey {
             region,
             model_ref: target.model_ref.clone(),
@@ -191,13 +199,14 @@ impl SceneEvaluation<'_> {
             languages: target.languages.clone(),
             timeout_ms: target.timeout_ms,
             blocks,
+            preprocess: target.preprocess.clone(),
         };
         if let Some(remembered) = self.text_reads.borrow().results.get(&key) {
             return match remembered {
-                Ok(result) => {
+                Ok((result, preprocess)) => {
                     let mut result = result.clone();
                     result.ppocr_diagnostics = Vec::new();
-                    Ok(result)
+                    Ok((result, preprocess.clone()))
                 }
                 Err(error) => {
                     let mut error = error.clone();
@@ -207,17 +216,23 @@ impl SceneEvaluation<'_> {
             };
         }
         self.admit_text_read(&target.id, region)?;
+        let hand_over = self.ocr_hand_over(
+            &target.id,
+            region,
+            blocks,
+            target.preprocess.as_ref(),
+            target.timeout_ms,
+        )?;
         let result = provider
-            .read_text(OcrProviderRequest {
-                frame: provider_frame(self.scene),
-                region,
-                languages: &target.languages,
-                timeout_ms: target.timeout_ms,
-                model_ref: &target.model_ref,
-                model_sha256: &target.model_sha256,
-                blocks,
-            })
-            .map_err(|err| provider_error(&target.id, "ocr", err));
+            .read_text(hand_over.request(
+                &target.languages,
+                target.timeout_ms,
+                &target.model_ref,
+                &target.model_sha256,
+            ))
+            .map_err(|err| provider_error(&target.id, "ocr", err))
+            .and_then(|result| hand_over.restore(result))
+            .map(|result| (result, hand_over.into_evidence()));
         self.count_text_read(region);
         self.text_reads
             .borrow_mut()
@@ -286,7 +301,7 @@ impl RecognitionEvaluator {
             provider
                 .require_ocr_model(&target.model_ref, &target.model_sha256)
                 .map_err(|error| provider_error(&target.id, "ocr admission", error))?;
-            let result = context.read_text_once(
+            let (result, preprocess) = context.read_text_once(
                 provider.as_ref(),
                 target,
                 region,
@@ -403,6 +418,8 @@ impl RecognitionEvaluator {
                     match_mode: target.match_mode,
                     blocks: ocr.blocks,
                     located,
+                    preprocess,
+                    shared_read: None,
                 })),
                 nn: None,
                 color_digest: None,
@@ -488,6 +505,7 @@ impl RecognitionEvaluator {
                 languages: target.languages.clone(),
                 timeout_ms: target.timeout_ms,
                 blocks,
+                preprocess: target.preprocess.clone(),
             };
             if count.reads.contains(&read) {
                 return Ok(());
@@ -604,6 +622,8 @@ enum StaticTextRegion {
     Kept(String),
 }
 
+/// Workflow #428 CFL-2: the chain is part of the request, so one region read with two chains is
+/// two reads.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct StaticTextRead {
     region: StaticTextRegion,
@@ -612,6 +632,7 @@ struct StaticTextRead {
     languages: Vec<String>,
     timeout_ms: u64,
     blocks: OcrProviderBlocks,
+    preprocess: Option<OcrPreprocess>,
 }
 
 fn text_read_budget_exceeded(
