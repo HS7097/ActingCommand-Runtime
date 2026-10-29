@@ -10,12 +10,17 @@ use serde_json::{Value, json};
 
 use super::selection_catalog::{NOW, catalog, evaluate_fixture, instance};
 use crate::{
-    CatalogDocumentSource, CatalogSources, SCHEDULING_SCHEMA_VERSION, SCHEDULING_SCHEMA_VERSION_V2,
-    compile_catalog,
+    CatalogDiagnosticCode, CatalogDocumentSource, CatalogSources, SCHEDULING_SCHEMA_VERSION,
+    SCHEDULING_SCHEMA_VERSION_V2, compile_catalog,
 };
 
 /// The example catalog `catalog-a`, which writes every bound, declared as `version`.
 fn example(version: &str) -> CatalogSources {
+    example_edited(version, |_, _| {})
+}
+
+/// `catalog-a` declared as `version`, with `edit` applied to its tasks and activity documents.
+fn example_edited(version: &str, edit: impl FnOnce(&mut Value, &mut Value)) -> CatalogSources {
     let parse = |bytes: &[u8]| -> Value { serde_json::from_slice(bytes).expect("example JSON") };
     let mut documents = [
         parse(include_bytes!(
@@ -41,7 +46,8 @@ fn example(version: &str) -> CatalogSources {
             }
         }
     }
-    let [tasks, pools, activity, timeline] = documents;
+    let [mut tasks, pools, mut activity, timeline] = documents;
+    edit(&mut tasks, &mut activity);
     let source = |name: &str, value: &Value| {
         CatalogDocumentSource::new(
             format!("memory://catalog-a/{name}.json"),
@@ -111,4 +117,55 @@ fn ss3_t6_a_catalog_that_writes_every_bound_evaluates_identically() {
             prerequisites.urgency_milli,
         )
     );
+}
+
+/// Removes `member` from the object `value`.
+fn remove(value: &mut Value, member: &str) {
+    value
+        .as_object_mut()
+        .expect("example object")
+        .remove(member);
+}
+
+/// SS-3 (register §1.212, SS3-1): the example with `delete` applied is refused as V1 with
+/// `missing_required_field` at `member`, the member `delete` removed; the same document declared
+/// V2 compiles.
+fn assert_only_v1_requires(member: &str, delete: impl Fn(&mut Value, &mut Value)) {
+    let failure = compile_catalog(&example_edited(SCHEDULING_SCHEMA_VERSION, &delete))
+        .expect_err("V1 refuses the document");
+    assert!(
+        failure.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code == CatalogDiagnosticCode::MissingRequiredField
+                && diagnostic.json_path == member
+        }),
+        "V1 names {member}: {:?}",
+        failure.diagnostics()
+    );
+    if let Err(failure) = compile_catalog(&example_edited(SCHEDULING_SCHEMA_VERSION_V2, &delete)) {
+        panic!("V2 compiles without {member}: {:?}", failure.diagnostics());
+    }
+}
+
+// SS-3 (register §1.212, SS3-1): V1 still requires `loop_budget`.
+#[test]
+fn ss3_v1_still_requires_loop_budget() {
+    assert_only_v1_requires("/tasks/0/loop_budget", |tasks, _| {
+        remove(&mut tasks["tasks"][0], "loop_budget");
+    });
+}
+
+// SS-3 (register §1.212, SS3-1): V1 still requires each item of `loop_budget`.
+#[test]
+fn ss3_v1_still_requires_each_loop_budget_item() {
+    assert_only_v1_requires("/tasks/0/loop_budget/daily_limit", |tasks, _| {
+        remove(&mut tasks["tasks"][0]["loop_budget"], "daily_limit");
+    });
+}
+
+// SS-3 (register §1.212, SS3-1): V1 still requires an activity profile's `session_max_ms`.
+#[test]
+fn ss3_v1_still_requires_session_max_ms() {
+    assert_only_v1_requires("/profiles/0/session_max_ms", |_, activity| {
+        remove(&mut activity["profiles"][0], "session_max_ms");
+    });
 }

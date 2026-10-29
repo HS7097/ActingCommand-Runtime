@@ -317,6 +317,16 @@ tests = [
 ]
 incident = ["#386 SS-3"]
 
+# SS-3 (contracts/scheduling/README.md, "Optional run-count bounds"; register §1.212, SS3-1; since 0.12.30): a V1 document still requires every run-count bound: without loop_budget, without one of its items, or without an activity profile's session_max_ms it is refused missing_required_field at that member, and the same document declared V2 compiles
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_ss3::ss3_v1_still_requires_loop_budget",
+    "actingcommand-policy::lib::tests::gate_ss3::ss3_v1_still_requires_each_loop_budget_item",
+    "actingcommand-policy::lib::tests::gate_ss3::ss3_v1_still_requires_session_max_ms",
+]
+incident = ["#386 SS-3"]
+
 # Resource projection
 [[gate]]
 key = "32"
@@ -368,7 +378,7 @@ tests = [
 ]
 incident = []
 
-# SS-3 (rd-1029 design-sch-state §5 SS-3 test 5; contracts/scheduling/README.md, "Optional run-count bounds"; register §1.212; since 0.12.30): without daily_limit the strategy's production estimate comes from the bounds written and the period; with none written it is the period bound alone, and with all three it is as before
+# SS-3 (rd-1029 design-sch-state §5 SS-3 test 5; contracts/scheduling/README.md, "Optional run-count bounds"; register §1.212; since 0.12.30): without daily_limit the strategy's production estimate comes from the bounds written and the period, also where daily_limit was the tightest bound; with none written it is the period bound alone, and with all three it is as before
 [[gate]]
 coverage = "Y"
 tests = [

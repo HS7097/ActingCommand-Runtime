@@ -2194,12 +2194,12 @@ fn actual_runtime_totals(
     let task_total = admission
         .budget
         .task_runtime_reserved_ms
-        .map(&total)
+        .map(total)
         .transpose()?;
     let activity_total = admission
         .budget
         .activity_runtime_reserved_ms
-        .map(&total)
+        .map(total)
         .transpose()?;
     Ok((task_total, activity_total))
 }

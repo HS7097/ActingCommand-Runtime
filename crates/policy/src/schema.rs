@@ -76,6 +76,17 @@ where
     Option::<T>::deserialize(deserializer).map(RequiredNullable)
 }
 
+/// SS-3 (register §1.212): an optional run-count bound that, when written, must be a value. An
+/// absent member is `None` (`default`); an explicit `null` is refused (`type_mismatch`), as the
+/// V2 schemas declare and as an effect's quantity is (`effect_quantity`).
+fn written_bound<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CatalogDiagnostic {
@@ -309,8 +320,13 @@ pub struct TaskSpec {
     /// SS-3 (register §1.212): optional in an `actingcommand.scheduling.v2` document, required
     /// in V1. Absent, the task has none of the three run-count dimensions, and the member
     /// serializes as nothing at all; read it through [`TaskSpec::daily_limit`],
-    /// [`TaskSpec::window_iteration_limit`] and [`TaskSpec::max_runtime_ms`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// [`TaskSpec::window_iteration_limit`] and [`TaskSpec::max_runtime_ms`]. An explicit
+    /// `null` is refused (`type_mismatch`).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "written_bound"
+    )]
     pub loop_budget: Option<LoopBudget>,
     pub strategic_weight_milli: u16,
     pub instance_overrides: Vec<InstanceTaskOverride>,
@@ -384,15 +400,28 @@ pub enum LoadProfile {
 /// document each item is optional on its own, and an item that is not written is no dimension:
 /// admission reserves nothing for it, the retry round does not judge it, Workflow #411 B8 hands
 /// no schedule value for it and the strategy report estimates from the other bounds. A written
-/// item applies as before. V1 requires all three. An absent item serializes as nothing at all.
+/// item applies as before. V1 requires all three. An absent item serializes as nothing at all;
+/// an explicit `null` is refused (`type_mismatch`), as it was before SS-3.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LoopBudget {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "written_bound"
+    )]
     pub daily_limit: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "written_bound"
+    )]
     pub window_iteration_limit: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "written_bound"
+    )]
     pub max_runtime_ms: Option<u64>,
 }
 
@@ -993,12 +1022,25 @@ pub struct ActivityProfile {
     pub windows: Vec<ActivityWindow>,
     /// SS-3 (register §1.212): the three activity run-count bounds are each optional in an
     /// `actingcommand.scheduling.v2` document and required in V1; an absent one is no dimension
-    /// (see [`LoopBudget`]) and serializes as nothing at all.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// (see [`LoopBudget`]) and serializes as nothing at all. An explicit `null` is refused
+    /// (`type_mismatch`).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "written_bound"
+    )]
     pub daily_budget: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "written_bound"
+    )]
     pub max_window_iterations: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "written_bound"
+    )]
     pub session_max_ms: Option<u64>,
     pub detection_budget: DetectionBudget,
     pub minimum_interval_ms: u64,

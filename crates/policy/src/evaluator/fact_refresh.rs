@@ -178,6 +178,13 @@ pub fn fact_refresh_task() -> &'static TaskSpec {
         expected_duration_ms: FACT_REFRESH_EXPECTED_DURATION_MS,
         cooldown_ms: 0,
         load_profile: LoadProfile::Light,
+        // Keep `daily_limit` written (SS-3, register §1.212). The recognition maintenance daily
+        // throttle, safety bound S4 (`scheduling.fact_refresh.daily_limit`), compares
+        // `FactRefreshReader::dispatched_today` with its limit, and the host reads that count from
+        // the `task_daily` counter (`PolicyControlState::task_daily_count`). Admission keeps
+        // that counter only for a task that writes `daily_limit`. Without this item the count
+        // would stay 0 and the throttle would never hold. SS-9 must keep this item or give the
+        // throttle a counter of its own.
         loop_budget: Some(LoopBudget {
             daily_limit: Some(u32::MAX),
             window_iteration_limit: Some(u32::MAX),

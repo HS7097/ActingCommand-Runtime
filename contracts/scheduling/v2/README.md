@@ -185,7 +185,9 @@ reserves nothing for it, the retry round does not judge it, the budget receipt
 carries none of its members, Workflow #411 B8 hands no `daily_remaining` or
 `last_daily_slot` from it and the strategy estimate uses the bounds that
 remain. A written bound must still be above 0 (`loop_budget_missing`) and
-applies exactly as before; a V1 document still requires all six
+applies exactly as before; an explicit `null` is refused (`type_mismatch`), as
+these schemas declare, and is never read as not written; a V1 document still
+requires all six
 (`missing_required_field` at the member). An absent bound serializes, and
 hashes, as nothing at all, so a catalog that writes every bound serializes, and
 hashes, exactly as before.

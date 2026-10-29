@@ -15,15 +15,19 @@
 
 use crate::RuntimeHostError;
 use crate::policy_control::{PolicyControlState, PolicyExecutionInput, PolicyExecutionTiming};
+use crate::policy_host::{BlackoutContext, BlackoutGate};
 use actingcommand_contract::{
     ContainedTaskRequest, PerformanceContext, PolicyAdmissionRecord, PolicyBudgetDenial,
     PolicyBudgetDimension, PolicyBudgetReceipt, PolicyExecutionOutcome,
 };
 use actingcommand_policy::{
-    CatalogDocumentSource, CatalogSources, CompiledCatalog, DispatchIntent, DispatchPrerequisites,
-    LoadProfile, SCHEDULING_SCHEMA_VERSION, SCHEDULING_SCHEMA_VERSION_V2, compile_catalog,
+    BlackoutEntry, BlackoutWindow, CatalogDocumentSource, CatalogSources, CompiledCatalog,
+    DispatchIntent, DispatchPrerequisites, EvaluationTime, InstanceSnapshot, LoadProfile,
+    SCHEDULING_SCHEMA_VERSION, SCHEDULING_SCHEMA_VERSION_V2, compile_catalog,
 };
+use actingcommand_runtime_config::scheduling::QuietHorizon;
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 
 /// 2023-11-14 12:00 UTC, inside the fixture's activity window (08:00 to 22:00 UTC).
 const NOW: u64 = 1_699_963_200_000;
@@ -262,11 +266,19 @@ fn ss3_t2_a_written_daily_limit_of_two_still_refuses_the_third_run() {
 }
 
 // Test 3: without `max_runtime_ms` (and without the profile's `session_max_ms`), the window's
-// cumulative runtime is never judged: 49 runs of the longest a policy run may take, 24.5 hours
-// in all, settle as successes and none is rewritten to `policy_runtime_budget_exceeded`. The
-// per-run deadline is untouched: each run is still held to the contained-task response bound.
+// cumulative runtime is never judged. The pair runs as it does in use, one run after another:
+// each run is admitted when the one before it ends and lasts the longest a policy run may take,
+// its per-run deadline (30 minutes). Nineteen such runs, 12:00 to 21:30 UTC, add up to 9.5 hours,
+// far above what the example writes (300 000 ms for the task, 7 200 000 ms for the profile), and
+// none is rewritten to `policy_runtime_budget_exceeded`. The design's "above 24 hours" cannot
+// happen in one window: the example's activity window is 14 hours long, and a pair's runs never
+// overlap.
+//
+// The per-run deadline still applies to the pair: the next run, which would start less than its
+// deadline before a blackout, is held back `blackout_approaching` with the deadline as the time it
+// needs; with the blackout a full deadline away it is not held back.
 #[test]
-fn ss3_t3_without_max_runtime_a_window_above_a_day_records_no_runtime_budget_exceeded() {
+fn ss3_t3_without_max_runtime_back_to_back_runs_record_no_runtime_budget_exceeded() {
     let catalog = catalog(
         SCHEDULING_SCHEMA_VERSION_V2,
         |task| remove(task, &["loop_budget"]),
@@ -274,16 +286,11 @@ fn ss3_t3_without_max_runtime_a_window_above_a_day_records_no_runtime_budget_exc
     );
     let per_run_ms = ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS;
     let mut state = PolicyControlState::default();
-    let mut cumulative_ms = 0_u64;
-    for run in 0..49_u64 {
-        assert_eq!(
-            crate::policy_host::evaluation_deadline_ms(&intent(&catalog, run)),
-            ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS,
-            "the per-run deadline still applies"
-        );
-        let (admission, outcome) =
-            admit_and_succeed(&mut state, &catalog, run, NOW + run * 1_000, per_run_ms)
-                .expect("every run is admitted");
+    let mut at = NOW;
+    for run in 0..19_u64 {
+        let (admission, outcome) = admit_and_succeed(&mut state, &catalog, run, at, per_run_ms)
+            .expect("every run is admitted");
+        assert_eq!(admission.activity.admitted_at_unix_ms, at);
         assert_eq!(admission.budget.task_runtime_reserved_ms, None);
         assert_eq!(admission.budget.activity_runtime_reserved_ms, None);
         assert_eq!(
@@ -293,12 +300,67 @@ fn ss3_t3_without_max_runtime_a_window_above_a_day_records_no_runtime_budget_exc
             },
             "run {run} is not rewritten to policy_runtime_budget_exceeded"
         );
-        cumulative_ms += per_run_ms;
+        // The next run is admitted when this one ends.
+        at += per_run_ms;
     }
+    let cumulative_ms = at - NOW;
+    assert_eq!(cumulative_ms, 19 * per_run_ms);
     assert!(
-        cumulative_ms > DAY_MS,
+        cumulative_ms > 7_200_000,
         "the window holds {cumulative_ms} ms"
     );
+
+    let next = intent(&catalog, 19);
+    let deadline_ms = crate::policy_host::evaluation_deadline_ms(&next);
+    assert_eq!(deadline_ms, per_run_ms);
+    let instance = InstanceSnapshot {
+        instance_id: INSTANCE.to_owned(),
+        server_id: "fixture-server-a".to_owned(),
+        game_id: "fixture-game-a".to_owned(),
+        host_id: "fixture-host-a".to_owned(),
+        available: true,
+        capability_operation_ids: Vec::new(),
+        preferred_task_ids: Vec::new(),
+    };
+    let quiet_gate = |blackout_start_unix_ms: u64| {
+        BlackoutContext {
+            host: vec![BlackoutEntry {
+                id: "fixture-blackout".to_owned(),
+                window: BlackoutWindow::Once {
+                    from_unix_ms: blackout_start_unix_ms,
+                    until_unix_ms: blackout_start_unix_ms + MINUTE_MS,
+                },
+            }],
+            instances: BTreeMap::new(),
+            day_boundary_quiet: BTreeMap::new(),
+            day_boundary_section: false,
+            quiet_margin_ms: 0,
+            hard_quiet_ms: 0,
+            quiet_horizon: QuietHorizon::Deadline,
+        }
+        .quiet_gate(
+            &catalog,
+            &instance,
+            &next,
+            EvaluationTime {
+                unix_ms: at,
+                monotonic_ms: 0,
+            },
+            deadline_ms,
+        )
+        .expect("the quiet gate")
+    };
+    match quiet_gate(at + deadline_ms - 1) {
+        Some(BlackoutGate::Approaching {
+            blackout,
+            required_ms,
+        }) => {
+            assert_eq!(blackout.id, "fixture-blackout");
+            assert_eq!(required_ms, deadline_ms);
+        }
+        other => panic!("the next run is held back by its deadline: {other:?}"),
+    }
+    assert_eq!(quiet_gate(at + deadline_ms), None);
 }
 
 // Test 4: the admission receipt carries no dimension that was not written. With nothing written

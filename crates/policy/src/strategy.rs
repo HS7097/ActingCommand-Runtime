@@ -2322,7 +2322,14 @@ mod tests {
             }))),
             Some(50)
         );
-        // No daily_limit: the window bound still binds.
+        // The daily bound the tightest: min(2, 5, 60, 3 600) = 2 runs.
+        assert_eq!(
+            rate(Some(serde_json::json!({
+                "daily_limit": 2, "window_iteration_limit": 5, "max_runtime_ms": 60000
+            }))),
+            Some(20)
+        );
+        // The same bounds without daily_limit: the window bound, 5 runs, binds instead.
         assert_eq!(
             rate(Some(serde_json::json!({
                 "window_iteration_limit": 5, "max_runtime_ms": 60000
