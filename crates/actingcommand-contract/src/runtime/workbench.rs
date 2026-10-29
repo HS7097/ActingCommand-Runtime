@@ -179,7 +179,8 @@ pub struct PackScheduleEdited {
 /// facts", SR-11 items 1 to 3): of the layers that have a row of that package, the most specific
 /// (instance over server over game) decides with its row that covers now; when none covers now,
 /// a default row of the pack that covers now decides, and otherwise the package is schedulable.
-/// A layer without a row of it decides nothing for it.
+/// A layer without a row of it decides nothing for it. Each package also names the layer below's
+/// decision (`below`, R-0d, register §1.217), which R-8 fills too.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackScheduleView {
@@ -200,9 +201,9 @@ pub struct PackScheduleScopeVersion {
 }
 
 /// One package in a [`PackScheduleView`]: whether it is schedulable now, the layer that
-/// decided, the row that decided (absent when no row covers now: `source` `none`), and when the
+/// decided, the row that decided (absent when no row covers now: `source` `none`), when the
 /// decision next changes (absent when no row bounds it; a row that takes effect later gives its
-/// start).
+/// start), and the layer below's decision (`below`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackSchedulePackage {
@@ -214,6 +215,26 @@ pub struct PackSchedulePackage {
     pub row: Option<PackScheduleEditRow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_change_unix_ms: Option<u64>,
+    /// What the package would be now if the deciding layer had no row of it (Workflow #429 R-0d,
+    /// register §1.217, since 0.12.30): the next layer down, ending at the pack default or
+    /// `none`. Absent when `source` is already `pack_default` or `none`. Runtime 0.12.30 answers
+    /// the read `not_implemented`; R-8 fills it with the rest of the view.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub below: Option<PackScheduleBelow>,
+}
+
+/// The layer below's decision for one package in a [`PackScheduleView`] (Workflow #429 R-0d,
+/// register §1.217, since 0.12.30): SR-11 resolved for the package again without the deciding
+/// layer's rows of it, so whether the package would be schedulable now and which layer would
+/// decide: `server`, `game`, `pack_default` or `none` (no lower row covers now, so it is
+/// schedulable), never `instance`. The console reads it to see, before it edits, what
+/// withdrawing the deciding layer's rows of the package would give, so turning the package on or
+/// off is one `EditPackSchedule`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackScheduleBelow {
+    pub schedulable: bool,
+    pub source: PackScheduleSource,
 }
 
 /// The layer that decided a package in a [`PackScheduleView`], a closed vocabulary: the
@@ -790,6 +811,7 @@ mod tests {
                     schedulable: index % 2 == 0,
                 }),
                 next_change_unix_ms: (*source != PackScheduleSource::None).then_some(2_000),
+                below: None,
             })
             .collect::<Vec<_>>();
         let viewed = RuntimeResult::PackScheduleViewed {
@@ -848,6 +870,129 @@ mod tests {
         assert!(serde_json::from_value::<RuntimeResult>(nested).is_err());
         let mut nested = encoded;
         nested["view"]["packages"][0]["source"] = json!("default");
+        assert!(serde_json::from_value::<RuntimeResult>(nested).is_err());
+    }
+
+    // R-0d (register §1.217 R0D-1): a package's `below`, the layer below's decision. Filled, it
+    // round-trips as `{schedulable, source}` under the package; absent (the deciding layer is the
+    // pack default or `none`), the package has no `below` key on the wire. Every object level, the
+    // `below` object included, refuses an unknown member.
+    #[test]
+    fn r0d_pack_schedule_package_carries_below_only_when_filled_and_refuses_an_unknown_member() {
+        let row = |schedulable: bool| PackScheduleEditRow {
+            from_unix_ms: 1_000,
+            until_unix_ms: Some(2_000),
+            schedulable,
+        };
+        // (deciding source, its decision, the layer below's decision when there is one)
+        let cases = [
+            (
+                PackScheduleSource::Instance,
+                false,
+                Some((true, PackScheduleSource::Server, "server")),
+            ),
+            (
+                PackScheduleSource::Instance,
+                false,
+                Some((true, PackScheduleSource::None, "none")),
+            ),
+            (
+                PackScheduleSource::Server,
+                true,
+                Some((false, PackScheduleSource::Game, "game")),
+            ),
+            (
+                PackScheduleSource::Game,
+                false,
+                Some((true, PackScheduleSource::PackDefault, "pack_default")),
+            ),
+            (PackScheduleSource::PackDefault, false, None),
+            (PackScheduleSource::None, true, None),
+        ];
+        let packages = cases
+            .iter()
+            .enumerate()
+            .map(
+                |(index, (source, schedulable, below))| PackSchedulePackage {
+                    package_id: format!("package.{index}"),
+                    schedulable: *schedulable,
+                    source: *source,
+                    row: (*source != PackScheduleSource::None).then_some(row(*schedulable)),
+                    next_change_unix_ms: (*source != PackScheduleSource::None).then_some(2_000),
+                    below: below.map(|(schedulable, source, _)| PackScheduleBelow {
+                        schedulable,
+                        source,
+                    }),
+                },
+            )
+            .collect::<Vec<_>>();
+        let viewed = RuntimeResult::PackScheduleViewed {
+            view: Box::new(PackScheduleView {
+                instance_alias: "node.a".to_owned(),
+                scopes: vec![PackScheduleScopeVersion {
+                    scope: FactScope::Instance {
+                        instance_id: "node.a".to_owned(),
+                    },
+                    version: 3,
+                }],
+                packages,
+            }),
+        };
+        let encoded = round_trips(&viewed);
+        for (index, (_, _, below)) in cases.iter().enumerate() {
+            let package = &encoded["view"]["packages"][index];
+            match below {
+                Some((schedulable, _, spelling)) => assert_eq!(
+                    package["below"],
+                    json!({"schedulable": schedulable, "source": spelling}),
+                    "{package}"
+                ),
+                None => assert!(package.get("below").is_none(), "{package}"),
+            }
+        }
+
+        // A package without `below` is exactly R-0c's package on the wire, and one written
+        // without the key reads as `None`.
+        let without = PackSchedulePackage {
+            package_id: "package.a".to_owned(),
+            schedulable: true,
+            source: PackScheduleSource::None,
+            row: None,
+            next_change_unix_ms: None,
+            below: None,
+        };
+        assert_eq!(
+            round_trips(&without),
+            json!({"package_id": "package.a", "schedulable": true, "source": "none"})
+        );
+        let below = PackScheduleBelow {
+            schedulable: true,
+            source: PackScheduleSource::Game,
+        };
+        let encoded_below = round_trips(&below);
+        assert_eq!(
+            encoded_below,
+            json!({"schedulable": true, "source": "game"})
+        );
+        refuses_unknown::<PackScheduleBelow>(encoded_below, &[]);
+
+        // Every level refuses an unknown member, with `below` present.
+        refuses_unknown::<RuntimeResult>(encoded.clone(), &[]);
+        refuses_unknown::<RuntimeResult>(encoded.clone(), &["view"]);
+        let mut nested = encoded.clone();
+        nested["view"]["scopes"][0]["unknown_member"] = json!(1);
+        assert!(serde_json::from_value::<RuntimeResult>(nested).is_err());
+        let mut nested = encoded.clone();
+        nested["view"]["packages"][0]["unknown_member"] = json!(1);
+        assert!(serde_json::from_value::<RuntimeResult>(nested).is_err());
+        let mut nested = encoded.clone();
+        nested["view"]["packages"][0]["row"]["unknown_member"] = json!(1);
+        assert!(serde_json::from_value::<RuntimeResult>(nested).is_err());
+        let mut nested = encoded.clone();
+        nested["view"]["packages"][0]["below"]["unknown_member"] = json!(1);
+        assert!(serde_json::from_value::<RuntimeResult>(nested).is_err());
+        let mut nested = encoded;
+        nested["view"]["packages"][0]["below"]["source"] = json!("default");
         assert!(serde_json::from_value::<RuntimeResult>(nested).is_err());
     }
 

@@ -9,7 +9,8 @@
 // 2. Each method reads its completed answer; `config_version` is passed on, `Some` or `None`, by
 //    `configure_settings` and `runtime_fact_snapshot_versioned`, and `runtime_fact_snapshot`
 //    answers the snapshot as before; `stop_instance_run` returns the receipt's outcome beside
-//    the stop, unchanged, a code it carries included.
+//    the stop, unchanged, a code it carries included; `pack_schedule_view` passes each
+//    package's `below` through unchanged, absent or filled (R-0d, register §1.217).
 // 3. The 0.12.30 Runtime's Denied `not_implemented` is the method's error with the host's code
 //    and operation, never an unexpected result, and the request is sent once.
 // 4. `run_instance_task` after a cancelled run or a receipt timeout sends neither `SafeReset` nor
@@ -36,13 +37,13 @@ use actingcommand_contract::outcome::{Code, Detail, Location, Outcome, OutcomeEn
 use actingcommand_contract::{
     ConfigParameterSource, ConfigSettingChange, ConfiguredSetting, ContainedTaskCancellationReason,
     ContainedTaskRequest, EventActor, EventSource, FactScalar, FactScope, IdentifierIssuer,
-    InstanceRunReset, InstanceRunStop, OwnerEpoch, PackScheduleEditRow, PackScheduleEdited,
-    PackSchedulePackage, PackScheduleScopeVersion, PackScheduleSource, PackScheduleView,
-    RUNTIME_FACT_SCHEMA_VERSION, RUNTIME_RECEIPT_SCHEMA_VERSION, RequestId, ResourceTargetEdit,
-    ResourceTargetsApplied, RoutineSummaryGranularity, RoutineSummaryInstance, RoutineSummaryPage,
-    RuntimeErrorCode, RuntimeErrorProjection, RuntimeFactSnapshot, RuntimeOperation,
-    RuntimeOperationKind, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
-    TaskOutcome, TerminalEvent,
+    InstanceRunReset, InstanceRunStop, OwnerEpoch, PackScheduleBelow, PackScheduleEditRow,
+    PackScheduleEdited, PackSchedulePackage, PackScheduleScopeVersion, PackScheduleSource,
+    PackScheduleView, RUNTIME_FACT_SCHEMA_VERSION, RUNTIME_RECEIPT_SCHEMA_VERSION, RequestId,
+    ResourceTargetEdit, ResourceTargetsApplied, RoutineSummaryGranularity, RoutineSummaryInstance,
+    RoutineSummaryPage, RuntimeErrorCode, RuntimeErrorProjection, RuntimeFactSnapshot,
+    RuntimeOperation, RuntimeOperationKind, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest,
+    RuntimeResult, TaskOutcome, TerminalEvent,
 };
 use serde_json::{Value, json};
 use std::path::Path;
@@ -60,6 +61,7 @@ const LONGER_IO: Duration = Duration::from_millis(500);
 const INSTANCE: &str = "node-01";
 const OTHER_INSTANCE: &str = "node-02";
 const PACKAGE: &str = "neutral.package";
+const OTHER_PACKAGE: &str = "neutral.package.other";
 
 fn connect(state_root: &Path, io_timeout: Duration) -> RuntimeClient {
     connect_as(state_root, io_timeout, EventActor::Cli, EventSource::Cli)
@@ -262,13 +264,33 @@ fn pack_schedule(instance_alias: &str) -> PackScheduleView {
             },
             version: 0,
         }],
-        packages: vec![PackSchedulePackage {
-            package_id: PACKAGE.to_owned(),
-            schedulable: true,
-            source: PackScheduleSource::None,
-            row: None,
-            next_change_unix_ms: None,
-        }],
+        packages: vec![
+            PackSchedulePackage {
+                package_id: PACKAGE.to_owned(),
+                schedulable: true,
+                source: PackScheduleSource::None,
+                row: None,
+                next_change_unix_ms: None,
+                below: None,
+            },
+            // R-0d (register §1.217): a package the instance layer closes, with the layer below's
+            // decision, which `pack_schedule_view` passes through unchanged.
+            PackSchedulePackage {
+                package_id: OTHER_PACKAGE.to_owned(),
+                schedulable: false,
+                source: PackScheduleSource::Instance,
+                row: Some(PackScheduleEditRow {
+                    from_unix_ms: 1_000,
+                    until_unix_ms: None,
+                    schedulable: false,
+                }),
+                next_change_unix_ms: None,
+                below: Some(PackScheduleBelow {
+                    schedulable: true,
+                    source: PackScheduleSource::Server,
+                }),
+            },
+        ],
     }
 }
 
@@ -581,11 +603,26 @@ fn r0c_each_method_sends_its_request_member_by_member_and_reads_its_completed_an
             .expect("every instance's summary"),
         summary(owner_epoch, &[INSTANCE, OTHER_INSTANCE])
     );
+    let view = client
+        .pack_schedule_view(INSTANCE)
+        .expect("the pack schedule");
+    assert_eq!(view, pack_schedule(INSTANCE));
+    // R-0d: each package's `below` arrives as the Runtime wrote it, absent or filled.
     assert_eq!(
-        client
-            .pack_schedule_view(INSTANCE)
-            .expect("the pack schedule"),
-        pack_schedule(INSTANCE)
+        view.packages
+            .iter()
+            .map(|package| (package.package_id.as_str(), package.below))
+            .collect::<Vec<_>>(),
+        [
+            (PACKAGE, None),
+            (
+                OTHER_PACKAGE,
+                Some(PackScheduleBelow {
+                    schedulable: true,
+                    source: PackScheduleSource::Server,
+                })
+            ),
+        ]
     );
     assert_eq!(
         client

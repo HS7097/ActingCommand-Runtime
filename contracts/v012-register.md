@@ -3947,6 +3947,20 @@ configuration key. It adds members to revision 3, so it merges before the 0.12.3
 | R0C-4 | R0-4's first writer (`activity`): R-0b in 0.12.31 fills all seven kinds at once, `policy_run` and `direct_run` always with `request_id` and `package_id`, and raises `runtime-client` `min` to 3; `StartReport` is part of revision 3 (R0-7, §3 W21, §6), as W5 is; ledger-observer §13's receipts of gate-class operations take a later revision (W6); in codes mode `fact_observation_version_conflict` keeps its `current_version` value, as `host_halted` travels (R-4) | contract wording | R-0c | R-0b, R-4 | `StartReport` reads only memory, has served since v0.12.19, and the console reads its `instructions_dropped` |
 | R0C-5 | SR-11 resolves per package: instance over server over game over the pack's default row, each package on its own; a layer without a row of a package decides nothing for it; `EditPackSchedule` replaces only that package's rows in its scope | contract wording ([instance-fact-store.md](instance-fact-store.md), "Pack schedule facts") | R-0c | R-8 | replaces "an instance record replaces the server and game records as a whole"; SR-11 had no code, so nothing migrates; Alice's order "instance > server > game" is unchanged |
 
+### 1.217 Slice R-0d (0.12.30): the layer below in `PackScheduleView` (Workflow #429 UI item 5, `rd-1029/ui-check-13.md` item 5: with only the deciding layer visible, turning a package back on takes withdraw, read again, write; coordinator work order `rd-1029/brief-r0d.md`)
+
+[runtime-interface.md](runtime-interface.md) ("Workbench request kinds", the `PackScheduleView`
+row), [component-interfaces.md](component-interfaces.md) (`runtime-client` revision 3) and
+[instance-fact-store.md](instance-fact-store.md) ("Pack schedule facts") are the contract. **No
+persisted ledger shape**, no outcome code, no configuration key, no new interface revision: one
+optional answer member joins R0C-3's result in revision 3 before the 0.12.30 tag. The
+`runtime-client` method `pack_schedule_view` passes it through unchanged. The number 1.217 is the
+coordinator's (1.215 is UPD-1's, 1.216 R-0c's).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| R0D-1 | `PackSchedulePackage.below?: PackScheduleBelow {schedulable, source: server \| game \| pack_default \| none}` in R0C-3's `PackScheduleViewed` | new optional answer member (**`runtime-client` revision 3**) | R-0d | R-8 (`pack_default` R-9) | the package's decision now if the deciding layer had no row of it: SR-11 resolved again without that layer's rows of the package, ending at the pack default or `none`; never `instance`; absent when `source` is `pack_default` or `none`, so such a package serializes as under R-0c; both levels deny unknown members; Runtime 0.12.30 refuses the read `not_implemented`, so no 0.12.30 answer carries it and `min` stays 2; a console built before R-0d refuses a view that carries it, so the console pins a commit with it |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
