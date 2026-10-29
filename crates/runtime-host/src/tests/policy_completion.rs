@@ -26,8 +26,8 @@ fn policy_failure_activity_and_planning_facts_recover_without_duplicate_side_eff
         panic!("expected granted policy admission")
     };
     let budget_record = context.admission();
-    assert_eq!(budget_record.budget.task_daily_used, 1);
-    assert_eq!(budget_record.budget.activity_window_used, 1);
+    assert_eq!(budget_record.budget.task_daily_used, Some(1));
+    assert_eq!(budget_record.budget.activity_window_used, Some(1));
     assert!(budget_record.activity.seed > 0);
 
     let signals = [

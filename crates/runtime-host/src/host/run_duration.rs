@@ -213,11 +213,12 @@ impl HostShared {
                 if samples.is_empty() {
                     continue;
                 }
+                // SS-3: a task that writes no `max_runtime_ms` puts no ceiling on E.
                 let runtime = expected_runtime(
                     samples,
                     settings,
                     task.expected_duration_ms,
-                    task.loop_budget.max_runtime_ms,
+                    task.max_runtime_ms().unwrap_or(u64::MAX),
                 )?;
                 expected.push((task.id.clone(), instance.instance_id.clone(), runtime));
             }
@@ -233,7 +234,7 @@ impl HostShared {
                         samples,
                         settings,
                         refresh_declared_ms,
-                        fact_refresh_task().loop_budget.max_runtime_ms,
+                        fact_refresh_task().max_runtime_ms().unwrap_or(u64::MAX),
                     )?;
                     expected.push((
                         FACT_REFRESH_TASK_ID.to_owned(),
