@@ -12,6 +12,8 @@ publish = false
 actingcommand-contract = { workspace = true }
 actingcommand-device = { workspace = true }
 actingcommand-execution-kernel = { workspace = true }
+# RB-2: the process's own memory and I/O priority, set and read back at start.
+actingcommand-host-metrics = { workspace = true }
 actingcommand-policy = { workspace = true }
 actingcommand-ppocr-onnx-json-provider = { workspace = true }
 actingcommand-runtime-client = { workspace = true }

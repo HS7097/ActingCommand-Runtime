@@ -6,7 +6,7 @@ use crate::codes::HostLocation;
 use crate::failure_identity::identifier_text;
 use crate::policy_control::{ConditionDecision, ConditionRule, PolicyValueRecord};
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::{Code, Location, Outcome};
+use actingcommand_contract::outcome::{CauseRelation, Code, Location, Outcome};
 
 #[derive(Clone, Copy)]
 pub(super) enum PolicyOutcomeCacheUpdate<'a> {
@@ -413,13 +413,12 @@ impl HostShared {
             if !scheduled_procedures.contains(&policy.dispatch_procedure_ref(&decision_id)?) {
                 continue;
             }
-            self.record_scheduled_dispatch_diagnostic(
-                &decision_id,
-                through,
-                EventSeverity::Warning,
-                Outcome::new(HostCode::PolicySettlementDispatchLeftOpen),
-                OPERATION,
-            )?;
+            self.record_scheduled_dispatch_diagnostic(&decision_id, through, OPERATION, |_| {
+                Ok((
+                    EventSeverity::Warning,
+                    Outcome::new(HostCode::PolicySettlementDispatchLeftOpen),
+                ))
+            })?;
         }
         Ok(())
     }
@@ -430,6 +429,17 @@ impl HostShared {
     /// code as the reason, unless it is paused already, so no new dispatch meets the open one.
     /// A person or an agent lifts the pause after looking. A run of an instance no longer
     /// registered is only recorded.
+    ///
+    /// UNSET-1 (0.12.28; production 10-29 05:24): the refusal is not persisted, so every later
+    /// start refuses the same dispatch again. Only the first start that meets it holds its
+    /// instance: before recording, the run's own records are read once, by its links
+    /// ([`Self::unsettled_dispatch_recorded_before`]). A run that already holds a
+    /// `policy_settlement_dispatch_unsettled` record was held once and looked at; it is recorded
+    /// at Warning, `policy_settlement_dispatch_left_open` with the same `failure_code`, and its
+    /// instance is not paused again (a pause still in place stays as it is). A read the writer
+    /// did not answer in time, or stopped at its budget, holds as before: the Error carries that
+    /// read's failure as a `note` link. Any other read failure fails the start, as the start's
+    /// other reads of the run do.
     pub(super) fn hold_unsettled_dispatches(
         &self,
         unsettled: &[UnsettledDispatch],
@@ -446,18 +456,36 @@ impl HostShared {
         for dispatch in unsettled {
             // The refusal's code is the outcome's `failure_code`; a spelling the catalog does
             // not register stays visible as its `caused_by` link instead.
-            let outcome = Outcome::new(reason);
-            let outcome = match Code::relayed(dispatch.cause) {
+            let refusal = |outcome: Outcome| match Code::relayed(dispatch.cause) {
                 Some(cause) => outcome.failure_code(cause),
                 None => outcome.caused_by(Outcome::relayed(dispatch.cause)),
             };
+            let mut hold = true;
             let instance_id = self.record_scheduled_dispatch_diagnostic(
                 &dispatch.decision_id,
                 through,
-                EventSeverity::Error,
-                outcome,
                 OPERATION,
+                |links| match self.unsettled_dispatch_recorded_before(links, through) {
+                    Ok(true) => {
+                        hold = false;
+                        Ok((
+                            EventSeverity::Warning,
+                            refusal(Outcome::new(HostCode::PolicySettlementDispatchLeftOpen)),
+                        ))
+                    }
+                    Ok(false) => Ok((EventSeverity::Error, refusal(Outcome::new(reason)))),
+                    // #419 LN-WS-F (R1): a read the writer did not answer in time, or stopped at
+                    // its budget, is a request error with the ledger's code; it holds as before.
+                    Err(read) if !read.is_fatal() => Ok((
+                        EventSeverity::Error,
+                        refusal(Outcome::new(reason)).link(CauseRelation::Note, read.outcome()),
+                    )),
+                    Err(read) => Err(read),
+                },
             )?;
+            if !hold {
+                continue;
+            }
             let alias = lock(
                 &self.registered_instances,
                 HostLocation::ReadUnsettledDispatchInstance,
@@ -471,16 +499,19 @@ impl HostShared {
         Ok(())
     }
 
-    /// Records `outcome` once at `severity` under the run links of the dispatch `decision_id`
-    /// (with its lease when it has one grant), adding the operation and the run's instance, task
-    /// and lease (ledger revision 3); returns the run's instance.
+    /// Records the outcome `decide` gives, once at the severity it gives, under the run links of
+    /// the dispatch `decision_id` (with its lease when it has one grant), adding the operation and
+    /// the run's instance, task and lease (ledger revision 3); returns the run's instance.
+    /// `decide` receives the links of the dispatch's intent (UNSET-1: the unsettled dispatch's
+    /// record depends on the run's earlier records).
     fn record_scheduled_dispatch_diagnostic(
         &self,
         decision_id: &str,
         through: u64,
-        severity: EventSeverity,
-        outcome: Outcome,
         operation: impl Into<Location>,
+        decide: impl FnOnce(
+            &actingcommand_contract::EventLinks,
+        ) -> RuntimeHostResult<(EventSeverity, Outcome)>,
     ) -> RuntimeHostResult<InstanceId> {
         let operation: Location = operation.into();
         const OPERATION: HostLocation = HostLocation::RecordScheduledDispatchDiagnostic;
@@ -542,6 +573,7 @@ impl HostShared {
             [grant] => grant.links().lease_id().copied(),
             _ => None,
         };
+        let (severity, outcome) = decide(links)?;
         let outcome = outcome
             .operation(operation)
             .instance_id(identifier_text(instance_id))
@@ -596,6 +628,50 @@ impl HostShared {
             ),
         )?;
         Ok(*instance_id)
+    }
+
+    /// UNSET-1 (0.12.28): whether the run of an unsettled dispatch (the task and run `links` of
+    /// its intent) already holds a `policy_settlement_dispatch_unsettled` record through
+    /// `through`, recorded by an earlier start. The read follows the run's link index, for its
+    /// `runtime.failed` records only, and stops at the first such record, so it reads the run's
+    /// own records, never a type's history. It is the start's read before the record is written:
+    /// a read the writer did not answer in time, or stopped at its budget, is a request error
+    /// with the ledger's code; any other failure is fatal, with the ledger's cause.
+    fn unsettled_dispatch_recorded_before(
+        &self,
+        links: &actingcommand_contract::EventLinks,
+        through: u64,
+    ) -> RuntimeHostResult<bool> {
+        const OPERATION: HostLocation = HostLocation::ReadUnsettledDispatchRecords;
+        let unsettled = HostCode::PolicySettlementDispatchUnsettled.code();
+        // Tests: the hook around this read; it ends before anything is written.
+        #[cfg(test)]
+        let _around = super::around_read_for_test(&AROUND_UNSETTLED_RECORD_READ);
+        let recorded = linked_policy_run_events(
+            &self.ledger,
+            SettlementRead::Tolerant,
+            EventQuery {
+                to_sequence: Some(through),
+                event_type: Some(EventType::RuntimeFailed),
+                task_id: links.task_id().copied(),
+                run_id: links.run_id().copied(),
+                ..EventQuery::default()
+            },
+            through,
+            1,
+            OPERATION,
+            |event| {
+                event.event_type() == EventType::RuntimeFailed
+                    && event.links().task_id() == links.task_id()
+                    && event.links().run_id() == links.run_id()
+                    && matches!(
+                        event.payload(),
+                        EventPayload::Runtime(RuntimePayload::Failed(record))
+                            if record.outcome().code().as_str() == unsettled.as_str()
+                    )
+            },
+        )?;
+        Ok(!recorded.is_empty())
     }
 
     /// Workflow #427-A fix 1 (review M1): the start's rule (`recover_unreleased_policy_runs`) for
@@ -2995,6 +3071,8 @@ pub(crate) enum SettlementRead {
     /// (`inactive_policy_settlements`, and `reconcile_scheduled_policy_outcomes_for` online). A
     /// read the writer did not answer in time, or stopped at its budget, fails only this tick's
     /// step (`settlement_read_error`); any other failure is fatal, with the ledger's cause.
+    /// UNSET-1 (0.12.28): also a start's read of an unsettled dispatch's earlier records
+    /// (`unsettled_dispatch_recorded_before`), which such a read leaves holding as before.
     Tolerant,
     /// A read after a commit, or at start: the live settlement's completion read after its
     /// execution record (`finish_policy_dispatch_outcome`), the start's reads and the failure
@@ -3029,6 +3107,11 @@ thread_local! {
     /// completion read on this thread (`finish_policy_dispatch_outcome`, after the run's
     /// execution record is committed).
     pub(crate) static AROUND_COMPLETION_READ: super::AroundReadForTest =
+        const { std::cell::RefCell::new(None) };
+    /// UNSET-1 (0.12.28), tests: the hook around the next start's read, on this thread, of
+    /// whether an unsettled dispatch's run already holds its `policy_settlement_dispatch_unsettled`
+    /// record (`unsettled_dispatch_recorded_before`); nothing is written while it lives.
+    pub(crate) static AROUND_UNSETTLED_RECORD_READ: super::AroundReadForTest =
         const { std::cell::RefCell::new(None) };
 }
 
