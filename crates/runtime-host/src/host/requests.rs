@@ -750,6 +750,11 @@ impl HostShared {
             RuntimeOperation::RoutineSummary { .. } => {
                 Err(not_implemented(HostLocation::RoutineSummary))
             }
+            // Workflow #429 R-0c (register §1.216): the pack schedule's read view has its wire
+            // shape; R-8 adds the behaviour. Until then it is refused and records nothing.
+            RuntimeOperation::PackScheduleView { .. } => {
+                Err(not_implemented(HostLocation::PackScheduleView))
+            }
         }
     }
 }

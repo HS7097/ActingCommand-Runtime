@@ -22,12 +22,12 @@ pub(super) fn config_set(context: &ToolContext<'_>, arguments: &Map<String, Valu
     let changes = changes(arguments.value("changes"))?;
     let connection = context.runtime.connect_fresh(CLI.0, CLI.1)?;
     let write = record_provenance(connection, "ac_config_set", None, CLI, None)?;
-    let settings = write
+    let configured = write
         .client
-        .configure_settings(changes)
+        .configure_settings(changes, None)
         .map_err(|error| client_error(&error))?;
     Ok(ToolSuccess {
-        result: json!({ "settings": settings }),
+        result: json!({ "settings": configured.settings }),
         warnings: write.warnings,
     })
 }

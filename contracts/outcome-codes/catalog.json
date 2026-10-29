@@ -9760,7 +9760,8 @@
       "policy"
     ],
     "pack_schedule_": [
-      "policy"
+      "policy",
+      "runtime-host"
     ],
     "scrcpy_": [
       "device"

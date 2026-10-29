@@ -411,9 +411,9 @@ fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError>
         }
         // Workflow #387 D1b: `config set|clear` (MCP `ac_config_set`); a refused change prints
         // the Runtime's receipt beside its outcome and exits non-zero.
-        Command::ConfigureSettings { changes } => match client.configure_settings(changes) {
-            Ok(settings) => Ok(Done::new(
-                members([member("settings", &settings)?]),
+        Command::ConfigureSettings { changes } => match client.configure_settings(changes, None) {
+            Ok(configured) => Ok(Done::new(
+                members([member("settings", &configured.settings)?]),
                 Outcome::new(success),
             )),
             Err(error) => refused(error),
@@ -421,7 +421,7 @@ fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError>
         // A refused policy prints the Runtime's receipt beside its outcome and exits non-zero.
         Command::AgentApplyResourceTargets { .. } => {
             let document = resource_targets.ok_or(ActingctlError::Usage)?;
-            match client.apply_resource_targets(document) {
+            match client.apply_resource_targets(document, None) {
                 Ok(applied) => Ok(Done::new(
                     members([member("applied", &applied)?]),
                     Outcome::new(success),

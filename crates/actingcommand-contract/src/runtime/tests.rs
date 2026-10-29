@@ -3040,6 +3040,8 @@ fn a4_each_request_kind_that_completes_has_its_own_success_code() {
         Kind::EditPackSchedule,
         Kind::EditResourceTarget,
         Kind::RoutineSummary,
+        // Workflow #429 R-0c: refused `not_implemented` until R-8.
+        Kind::PackScheduleView,
     ];
     let mut seen = std::collections::BTreeSet::new();
     for kind in RuntimeOperationKind::ALL {

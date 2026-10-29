@@ -36,10 +36,13 @@ fn u2_an_actinglab_connection_binds_the_lab_channel_with_a_lab_envelope_and_its_
         let client =
             RuntimeClient::connect(lab_client_config_via(root.path(), via)).expect("connect");
         // A key no configuration holds: refused after its command is recorded.
-        let refused = client.configure_settings(vec![ConfigSettingChange {
-            key: "neutral_section.unknown_key".to_owned(),
-            value: Some(serde_json::json!(true)),
-        }]);
+        let refused = client.configure_settings(
+            vec![ConfigSettingChange {
+                key: "neutral_section.unknown_key".to_owned(),
+                value: Some(serde_json::json!(true)),
+            }],
+            None,
+        );
         assert!(refused.is_err());
     }
     let reader =

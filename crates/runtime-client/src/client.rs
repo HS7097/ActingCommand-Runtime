@@ -3,7 +3,7 @@
 use crate::codes::{ClientCode, ClientLocation};
 use crate::ipc::{DEFAULT_RUNTIME_MAX_FRAME_BYTES, ReceiptReadDeadline, exchange};
 use crate::{RuntimeClientError, RuntimeClientResult};
-use actingcommand_contract::codes::{ContractLocation, SharedCode};
+use actingcommand_contract::codes::{ContractLocation, RuntimeContractCode, SharedCode};
 use actingcommand_contract::outcome::{Code, Detail, Location, Outcome};
 use actingcommand_contract::{
     AgentSessionContext, AgentSessionId, AgentSessionResponse, AgentSessionStatus, AgentWakeId,
@@ -389,6 +389,16 @@ pub enum ContainedTaskResetOutcome {
     NotNeeded,
     /// The reset was sent and failed; the failure is kept, not retried.
     Failed(RuntimeClientError),
+}
+
+/// The result of `configure_settings` (Workflow #429 R-0c, register §1.216): each changed key as
+/// it is in effect afterwards, in request order, and the settings' version after the change
+/// (`SettingsConfigured.config_version`, the `expected_version` of the next change; an opaque
+/// token compared only for equality), absent while the Runtime does not fill it (before R-4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfiguredSettings {
+    pub settings: Vec<actingcommand_contract::ConfiguredSetting>,
+    pub config_version: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1152,11 +1162,26 @@ impl RuntimeClient {
 
     /// Reads the sealed image of the Runtime's own fact store at the ledger's latest sequence.
     pub fn runtime_fact_snapshot(&self) -> RuntimeClientResult<RuntimeFactSnapshot> {
+        self.runtime_fact_snapshot_versioned()
+            .map(|(snapshot, _)| snapshot)
+    }
+
+    /// Reads the sealed image of the Runtime's own fact store, as [`Self::runtime_fact_snapshot`]
+    /// does, with the settings' version beside it (Workflow #429 R-0c, register §1.216:
+    /// `RuntimeFactSnapshot.config_version`, the `expected_version` of the next
+    /// `configure_settings`; an opaque token compared only for equality), absent while the
+    /// Runtime does not fill it (before R-4).
+    pub fn runtime_fact_snapshot_versioned(
+        &self,
+    ) -> RuntimeClientResult<(RuntimeFactSnapshot, Option<u64>)> {
         match self.execute(
             ClientLocation::RuntimeFactSnapshot.location(),
             RuntimeOperation::RuntimeFactSnapshot,
         )? {
-            RuntimeResult::RuntimeFactSnapshot { snapshot, .. } => Ok(snapshot),
+            RuntimeResult::RuntimeFactSnapshot {
+                snapshot,
+                config_version,
+            } => Ok((snapshot, config_version)),
             _ => Err(self.unexpected_result(ClientLocation::RuntimeFactSnapshot.location())),
         }
     }
@@ -1215,10 +1240,13 @@ impl RuntimeClient {
     /// Applies one instance resource target policy through the Runtime's formal entry
     /// (Workflow #308 RT-S1a). Only the document length is checked here; the Runtime parses
     /// and checks the content, and a refused document's receipt, with its field position, is
-    /// the error's `received_receipt()`.
+    /// the error's `received_receipt()`. Workflow #429 R-0c (register §1.216): `expected_version`
+    /// is sent as given, absent from the request when `None`; a Runtime before R-13c refuses a
+    /// request that names it `not_implemented` and changes nothing.
     pub fn apply_resource_targets(
         &self,
         document_json: String,
+        expected_version: Option<u64>,
     ) -> RuntimeClientResult<actingcommand_contract::ResourceTargetsApplied> {
         if document_json.is_empty()
             || document_json.len() > actingcommand_contract::MAX_RESOURCE_TARGETS_DOCUMENT_BYTES
@@ -1232,7 +1260,7 @@ impl RuntimeClient {
             ContractLocation::ApplyResourceTargets.location(),
             RuntimeOperation::ApplyResourceTargets {
                 document_json,
-                expected_version: None,
+                expected_version,
             },
         )? {
             RuntimeResult::ResourceTargetsApplied { applied } => Ok(*applied),
@@ -1397,20 +1425,258 @@ impl RuntimeClient {
     /// Changes settings the Runtime may change while it runs, all of them or none (Workflow #387
     /// D1b, model v1.2 §5.6). Returns each changed key as it is in effect afterwards; a refusal
     /// (`config_key_unknown`, `config_key_not_settable`, `config_value_invalid`) is the error with
-    /// the receipt.
+    /// the receipt. Workflow #429 R-0c (register §1.216): `expected_version` is sent as given,
+    /// absent from the request when `None`, and the answer's `config_version` is returned beside
+    /// the settings; a Runtime before R-4 refuses a request that names `expected_version`
+    /// `not_implemented` and changes nothing.
     pub fn configure_settings(
         &self,
         changes: Vec<actingcommand_contract::ConfigSettingChange>,
-    ) -> RuntimeClientResult<Vec<actingcommand_contract::ConfiguredSetting>> {
+        expected_version: Option<u64>,
+    ) -> RuntimeClientResult<ConfiguredSettings> {
         match self.execute(
             ClientLocation::RuntimeConfigureSettings.location(),
             RuntimeOperation::ConfigureSettings {
                 changes,
-                expected_version: None,
+                expected_version,
             },
         )? {
-            RuntimeResult::SettingsConfigured { settings, .. } => Ok(settings),
+            RuntimeResult::SettingsConfigured {
+                settings,
+                config_version,
+            } => Ok(ConfiguredSettings {
+                settings,
+                config_version,
+            }),
             _ => Err(self.unexpected_result(ClientLocation::RuntimeConfigureSettings.location())),
+        }
+    }
+
+    /// Runs now, as a direct run, the package `package_id` that a task bound to `instance_alias`
+    /// references (`RunInstanceTask`, Workflow #429 R-0c, register §1.216; the behaviour is
+    /// R-5's): the Runtime resolves the path. The holder is minted on this connection, as for
+    /// `prepare_contained_task`, and the request always carries `response_deadline_ms`;
+    /// `response_deadline` outside 1 ms to `ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS` is
+    /// refused with `invalid_contained_task_response_deadline` before anything is sent. The
+    /// receipt wait is the deadline plus the IO margin. A completed run answers its flow, as
+    /// `run_contained_task`; a cancelled run is the error its reason maps to, and the client
+    /// sends no `SafeReset`: the Runtime resets the device itself. A receipt that never came is
+    /// returned as it is, with no `CancelContainedTask` and no reset (both are the Lab's): the
+    /// caller reads `Status`' `activity` and sends `stop_instance_run` when it needs to.
+    pub fn run_instance_task(
+        &self,
+        instance_alias: &str,
+        package_id: &str,
+        response_deadline: Duration,
+    ) -> RuntimeClientResult<RuntimeFlowOutput> {
+        const OPERATION: Location = ClientLocation::RuntimeRunInstanceTask.location();
+        let response_deadline_ms = u64::try_from(response_deadline.as_millis())
+            .ok()
+            .filter(|ms| (1..=ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS).contains(ms))
+            .ok_or_else(|| {
+                RuntimeClientError::fatal(
+                    RuntimeContractCode::InvalidContainedTaskResponseDeadline,
+                    OPERATION,
+                )
+            })?;
+        let connection = self.connection(OPERATION)?;
+        let correlation = connection.issue_correlation(OPERATION, self.correlation)?;
+        let holder = connection.ids.mint_holder_id().map_err(|_| {
+            RuntimeClientError::fatal(SharedCode::RuntimeIdentifierIssueFailed, OPERATION)
+        })?;
+        let correlation_id = *correlation.transport();
+        drop(connection);
+        let receipt = self.execute_receipt_with_correlation(
+            OPERATION,
+            RuntimeOperation::RunInstanceTask {
+                instance_alias: instance_alias.to_owned(),
+                package_id: package_id.to_owned(),
+                holder_id: *holder.transport(),
+                response_deadline_ms: Some(response_deadline_ms),
+            },
+            correlation,
+            None,
+        )?;
+        match receipt.result() {
+            Some(RuntimeResult::ContainedTaskCompleted { .. }) => {}
+            Some(RuntimeResult::ContainedTaskCancelled { reason, .. }) => {
+                return Err(RuntimeClientError::fatal(
+                    contained_task_cancelled_code(*reason),
+                    OPERATION,
+                ));
+            }
+            _ => return Err(self.unexpected_result(OPERATION)),
+        }
+        self.flow_output(receipt, correlation_id)
+    }
+
+    /// Stops the instance's run `request_id`, a scheduled or a client-started one
+    /// (`StopInstanceRun`, Workflow #429 R-0c, register §1.216; the behaviour is R-6's); the
+    /// Runtime resets the device itself and answers once the run ended or after `wait`. The
+    /// receipt wait is `wait` plus the IO margin. An answer for another run, a still-stopping
+    /// answer (`settled: false`) with a `reset`, or a settled one without it, is unexpected.
+    pub fn stop_instance_run(
+        &self,
+        instance_alias: &str,
+        request_id: RequestId,
+        wait: Duration,
+    ) -> RuntimeClientResult<actingcommand_contract::InstanceRunStop> {
+        const OPERATION: Location = ClientLocation::RuntimeStopInstanceRun.location();
+        let wait_ms = u64::try_from(wait.as_millis()).map_err(|_| {
+            RuntimeClientError::fatal(ClientCode::RuntimeReceiptTimeoutOverflow, OPERATION)
+        })?;
+        match self.execute(
+            OPERATION,
+            RuntimeOperation::StopInstanceRun {
+                instance_alias: instance_alias.to_owned(),
+                request_id,
+                wait_ms,
+            },
+        )? {
+            RuntimeResult::InstanceRunStopped { stopped }
+                if stopped.request_id == request_id
+                    && stopped.settled == stopped.reset.is_some() =>
+            {
+                Ok(stopped)
+            }
+            _ => Err(self.unexpected_result(OPERATION)),
+        }
+    }
+
+    /// Replaces the rows of `package_id` in `scope`'s `session.pack.schedule` list
+    /// (`EditPackSchedule`, Workflow #429 R-0c, register §1.216; the behaviour is R-8's), only
+    /// while the list's version is `expected_version` when one is given (absent from the request
+    /// when `None`). Returns the list's version after the edit and the event that holds it.
+    pub fn edit_pack_schedule(
+        &self,
+        scope: FactScope,
+        package_id: &str,
+        rows: Vec<actingcommand_contract::PackScheduleEditRow>,
+        expected_version: Option<u64>,
+    ) -> RuntimeClientResult<actingcommand_contract::PackScheduleEdited> {
+        const OPERATION: Location = ClientLocation::RuntimeEditPackSchedule.location();
+        match self.execute(
+            OPERATION,
+            RuntimeOperation::EditPackSchedule {
+                scope,
+                package_id: package_id.to_owned(),
+                rows,
+                expected_version,
+            },
+        )? {
+            RuntimeResult::PackScheduleEdited { edited } => Ok(edited),
+            _ => Err(self.unexpected_result(OPERATION)),
+        }
+    }
+
+    /// One change of `instance_alias`'s resource target table, only while the table's version is
+    /// `expected_version` (`EditResourceTarget`, Workflow #429 R-0c, register §1.216; the
+    /// behaviour is R-13c's): `ResourceTargetView`'s `active.version`, or `0` while the view has
+    /// no `active`. Answers as `apply_resource_targets`; an answer for another instance is
+    /// unexpected.
+    pub fn edit_resource_target(
+        &self,
+        instance_alias: &str,
+        expected_version: u64,
+        op: actingcommand_contract::ResourceTargetEdit,
+    ) -> RuntimeClientResult<actingcommand_contract::ResourceTargetsApplied> {
+        const OPERATION: Location = ClientLocation::RuntimeEditResourceTarget.location();
+        match self.execute(
+            OPERATION,
+            RuntimeOperation::EditResourceTarget {
+                instance_alias: instance_alias.to_owned(),
+                expected_version,
+                op,
+            },
+        )? {
+            RuntimeResult::ResourceTargetsApplied { applied }
+                if applied.instance_alias == instance_alias =>
+            {
+                Ok(*applied)
+            }
+            _ => Err(self.unexpected_result(OPERATION)),
+        }
+    }
+
+    /// Reads the routine summary's health statistics from the Runtime's memory, for `instance`
+    /// or every instance, by `granularity`, and with `since_revision` only the buckets changed
+    /// after it (`RoutineSummary`, Workflow #429 R-0c, register §1.216; the behaviour is R-12's).
+    /// Read-only: the Runtime reads and records nothing in the ledger. An answer that names
+    /// another instance is unexpected. A Runtime that does not know the operation drops the
+    /// connection, which this call reports as `runtime_operation_unsupported` once it reconnected
+    /// in the same owner epoch, as `start_report` does.
+    pub fn routine_summary(
+        &self,
+        instance: Option<&str>,
+        granularity: actingcommand_contract::RoutineSummaryGranularity,
+        since_revision: Option<u64>,
+    ) -> RuntimeClientResult<actingcommand_contract::RoutineSummaryPage> {
+        const OPERATION: Location = ClientLocation::RuntimeRoutineSummary.location();
+        match self.send_or_dropped(
+            OPERATION,
+            RuntimeOperation::RoutineSummary {
+                instance: instance.map(str::to_owned),
+                granularity,
+                since_revision,
+            },
+        )? {
+            SentOutcome::Answered(result) => match *result {
+                RuntimeResult::RoutineSummary { summary }
+                    if instance.is_none_or(|wanted| {
+                        summary
+                            .instances
+                            .iter()
+                            .all(|entry| entry.instance_alias == wanted)
+                    }) =>
+                {
+                    Ok(*summary)
+                }
+                _ => Err(self.unexpected_result(OPERATION)),
+            },
+            SentOutcome::Dropped(error) => Err(self.unsupported_after_drop(OPERATION, error)),
+        }
+    }
+
+    /// Reads, for `instance_alias`, each scope's pack schedule list version and, per package,
+    /// whether it is schedulable now and which layer decided (`PackScheduleView`, Workflow #429
+    /// R-0c, register §1.216; the behaviour is R-8's). Read-only. An answer for another instance
+    /// is unexpected. A Runtime that does not know the operation drops the connection, which
+    /// this call reports as `runtime_operation_unsupported`, as `routine_summary` does.
+    pub fn pack_schedule_view(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeClientResult<actingcommand_contract::PackScheduleView> {
+        const OPERATION: Location = ClientLocation::RuntimePackScheduleView.location();
+        match self.send_or_dropped(
+            OPERATION,
+            RuntimeOperation::PackScheduleView {
+                instance_alias: instance_alias.to_owned(),
+            },
+        )? {
+            SentOutcome::Answered(result) => match *result {
+                RuntimeResult::PackScheduleViewed { view }
+                    if view.instance_alias == instance_alias =>
+                {
+                    Ok(*view)
+                }
+                _ => Err(self.unexpected_result(OPERATION)),
+            },
+            SentOutcome::Dropped(error) => Err(self.unsupported_after_drop(OPERATION, error)),
+        }
+    }
+
+    /// The end of a `send_or_dropped` read whose connection ended before its receipt: once a new
+    /// connection reaches the same owner epoch, `runtime_operation_unsupported` with the drop as
+    /// its related failure; otherwise the drop with the reconnect's failure (as `start_report`).
+    fn unsupported_after_drop(
+        &self,
+        operation: Location,
+        error: RuntimeClientError,
+    ) -> RuntimeClientError {
+        match self.reconnect_in_owner_epoch(operation) {
+            Ok(()) => RuntimeClientError::fatal(ClientCode::RuntimeOperationUnsupported, operation)
+                .with_related(error),
+            Err(reconnect) => error.with_related(reconnect),
         }
     }
 
@@ -2131,22 +2397,7 @@ impl RuntimeClient {
             Some(RuntimeResult::ContainedTaskCancelled { reason, .. }) => {
                 drop(connection);
                 let error = RuntimeClientError::fatal(
-                    match reason {
-                        ContainedTaskCancellationReason::DeadlineExceeded => {
-                            ClientCode::RuntimeContainedTaskResponseTimeout
-                        }
-                        // A blackout stop and a performance yield end only runs the Runtime
-                        // started itself (register S2, P7); a client run reads them as cancelled.
-                        ContainedTaskCancellationReason::ClientRequested
-                        | ContainedTaskCancellationReason::RecoveredAfterRestart
-                        | ContainedTaskCancellationReason::BlackoutStop
-                        | ContainedTaskCancellationReason::PerformanceYield => {
-                            ClientCode::RuntimeContainedTaskCancelled
-                        }
-                        ContainedTaskCancellationReason::PausedByOperator => {
-                            ClientCode::RuntimeContainedTaskPaused
-                        }
-                    },
+                    contained_task_cancelled_code(*reason),
                     ContractLocation::RunContainedTask.location(),
                 );
                 let recovery = self.safe_reset(instance_alias).map(|_| ());
@@ -3537,6 +3788,15 @@ impl RuntimeClient {
                         ClientCode::RuntimeReceiptTimeout,
                     ))
                 }
+                // Workflow #429 R-0c: a bound task's direct run waits for its deadline as a
+                // contained task does.
+                RuntimeOperation::RunInstanceTask {
+                    response_deadline_ms,
+                    ..
+                } => Some(ReceiptReadDeadline::after(
+                    Duration::from_millis(run_instance_task_deadline_ms(*response_deadline_ms)),
+                    ClientCode::RuntimeReceiptTimeout,
+                )),
                 _ => None,
             };
             if connection
@@ -3620,8 +3880,11 @@ impl RuntimeClient {
             );
             if receipt.request_id() != request.request_id()
                 || receipt.correlation_id() != request.correlation_id()
-                || (matches!(&operation, RuntimeOperation::RunContainedTask { .. })
-                    && matches!(receipt.result(),
+                || (matches!(
+                    &operation,
+                    RuntimeOperation::RunContainedTask { .. }
+                        | RuntimeOperation::RunInstanceTask { .. }
+                ) && matches!(receipt.result(),
                         Some(RuntimeResult::ContainedTaskCompleted { task_request_id, .. }
                             | RuntimeResult::ContainedTaskCancelled { task_request_id, .. })
                             if *task_request_id != request.request_id()))
@@ -3674,6 +3937,7 @@ impl RuntimeClient {
                 if matches!(
                     operation,
                     RuntimeOperation::RunContainedTask { .. }
+                        | RuntimeOperation::RunInstanceTask { .. }
                         | RuntimeOperation::RequestShutdown { .. }
                 ) && receipt.terminal().is_some()
                     || (matches!(operation, RuntimeOperation::ReadMaterial { .. })
@@ -6408,7 +6672,37 @@ pub(super) fn receipt_response_timeout(
                 ContractLocation::ConnectionPreparation.location(),
             )
         }),
+        // Workflow #429 R-0c: a bound task's direct run answers after its deadline, a stop after
+        // its wait; each plus the IO margin.
+        RuntimeOperation::RunInstanceTask {
+            response_deadline_ms,
+            ..
+        } => Duration::from_millis(run_instance_task_deadline_ms(*response_deadline_ms))
+            .checked_add(io_timeout)
+            .ok_or_else(|| {
+                RuntimeClientError::fatal(
+                    ClientCode::RuntimeReceiptTimeoutOverflow,
+                    ClientLocation::RuntimeRunInstanceTask.location(),
+                )
+            }),
+        RuntimeOperation::StopInstanceRun { wait_ms, .. } => Duration::from_millis(*wait_ms)
+            .checked_add(io_timeout)
+            .ok_or_else(|| {
+                RuntimeClientError::fatal(
+                    ClientCode::RuntimeReceiptTimeoutOverflow,
+                    ClientLocation::RuntimeStopInstanceRun.location(),
+                )
+            }),
         _ => Ok(io_timeout),
+    }
+}
+
+/// The deadline a `RunInstanceTask` runs under: the one it names, else the contained task's
+/// default (`run_instance_task` always names one).
+const fn run_instance_task_deadline_ms(response_deadline_ms: Option<u64>) -> u64 {
+    match response_deadline_ms {
+        Some(deadline_ms) => deadline_ms,
+        None => ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS,
     }
 }
 
@@ -6491,6 +6785,25 @@ pub(crate) fn contained_task_response_timeout(
                 ContractLocation::RunContainedTask.location(),
             )
         })
+}
+
+/// The client code of a contained run's cancelled receipt, by its reason: shared by
+/// `submit_prepared` and, since Workflow #429 R-0c, `run_instance_task`.
+const fn contained_task_cancelled_code(reason: ContainedTaskCancellationReason) -> ClientCode {
+    match reason {
+        ContainedTaskCancellationReason::DeadlineExceeded => {
+            ClientCode::RuntimeContainedTaskResponseTimeout
+        }
+        // A blackout stop and a performance yield end only runs the Runtime started itself
+        // (register S2, P7); a client run reads them as cancelled.
+        ContainedTaskCancellationReason::ClientRequested
+        | ContainedTaskCancellationReason::RecoveredAfterRestart
+        | ContainedTaskCancellationReason::BlackoutStop
+        | ContainedTaskCancellationReason::PerformanceYield => {
+            ClientCode::RuntimeContainedTaskCancelled
+        }
+        ContainedTaskCancellationReason::PausedByOperator => ClientCode::RuntimeContainedTaskPaused,
+    }
 }
 
 fn contained_task_recovery_outcome(
