@@ -177,12 +177,13 @@
         "argument_problem": "required",
         "range_min": "optional",
         "range_max": "optional",
-        "argument_value": "optional"
+        "argument_value": "optional",
+        "req_id": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An MCP tool was called with arguments its input schema refuses. Workflow #411 B27: argument_value is the value an event type argument of ac_events was given that names no event type (for event_types and exclude_event_types, the element).",
+      "description": "An MCP tool was called with arguments its input schema refuses. Workflow #411 B27: argument_value is the value an event type argument of ac_events was given that names no event type (for event_types and exclude_event_types, the element). Workflow #411 A27 (since 0.12.28): when ac_lab_do refuses its arguments before actinglab runs, req_id is a request id this server issued for the refusal, in actinglab's form; no Lab request exists under it and nothing is recorded.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

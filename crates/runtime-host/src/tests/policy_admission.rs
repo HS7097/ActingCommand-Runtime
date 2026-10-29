@@ -1012,11 +1012,17 @@ fn runtime_owned_policy_inputs_supply_time_and_reject_unknown_resource_hosts() {
     invalid
         .activate_policy_catalog(&policy_sources(1))
         .expect("activate catalog");
-    let error = invalid
+    // ISO-PE (#419): the refusal is not fatal and not global, so the evaluation is skipped with it
+    // (recorded as `policy_evaluation_skipped`) instead of returning it, and nothing dispatches.
+    let cycle = invalid
         .evaluate_policy_cycle(PolicyTrigger::FactsChanged)
-        .expect_err("unknown resource host must fail");
-    assert_eq!(error.code(), "policy_resource_metadata_untrusted");
-    assert!(!error.is_fatal());
+        .expect("unknown resource host must fail: the evaluation is skipped");
+    assert!(cycle.evaluation.is_none());
+    assert_eq!(
+        super::gate_419_iso_pe::skipped_failure_codes(&invalid),
+        vec!["policy_resource_metadata_untrusted".to_owned()]
+    );
+    assert!(invalid.fatal_error().expect("health").is_none());
     invalid.close().expect("close invalid host");
 }
 

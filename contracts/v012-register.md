@@ -3700,13 +3700,47 @@ for the parallel slices of wave 2.
 | B43-1 | an `interrupts.json` entry's optional `limit_cause`: `"pack_logic"` (default) or `"environment"` (`StandardPackInterrupt::limit_cause`, `InterruptLimitCause`) | new optional member (resource file format, not a ledger shape) | B43 | resource side | read by `parse_standard_pack_interrupts`, so the Runtime, `package bundle` and `standard-pack check` accept and refuse it alike; another value or type is `malformed` (pointer empty, as every decoding refusal of the file); absent, the entry serializes as before; joins `package` revision 6, which BT-PK6 declares, admitted by code until then; it is the first root-file member folded into a `package` revision (the earlier ones are pack members), so BT-PK6 must name `interrupts.json` `limit_cause` when it declares revision 6; a Runtime before 0.12.28 refuses a root that names it (`standard_pack_root_invalid`) |
 | B43-2 | a run that meets an `environment` page once more than its `max_per_run` ends with `contained_task_interrupt_environment_limit_reached` (error, `budget_or_permission`; `page_id`, `count`, `limit_count`) | behaviour | B43 | runtime-host | in place of `contained_task_interrupt_limit_reached`; the run's 16 handlings of all pages together keep the old code; the failure is rerun only in every scope (`failure_accumulates`), its identity keeps `g`; the recovery ladder follows its configuration: no default trigger matches the class, so by default the code starts no ladder; an operator who wants one adds a trigger item that names the code |
 
-### 1.204 Slice CFL-1 (0.12.29): recognition preprocessing, the pure chain and its contract (Workflow #411 A58, comment 6371351838; #428 comment 6485683314; design `rd-1029/design-cf.md` §4.2, §4.3, §4.5, §4.6, §6 CFL-1, revised by `rd-1029/design-cf-v2.md` §5.3, §5.7 and §8 (the CFL-1 revision round); review `rd-1029/review-cfl1.md` L1–L3; coordinator work orders `rd-1029/brief-cfl1.md` and `rd-1029/brief-cfl1-fix1.md`, with the names, the hue scale, the tolerance and "kept is white" settled on 10-29)
+### 1.204 Slice WD-MT (0.12.28): the watchdog dates a log by the file's own time, and actingd's children do not inherit its log (Workflow #421; investigation `rd-1029/inv-1119.md` §2 and §4 rows C and D; coordinator work order `rd-1029/brief-wd-mt.md`)
+
+[runtime-watchdog.md](runtime-watchdog.md) (Observation 4 and "Logs held open"),
+[install-cli.md](install-cli.md) (the close's terminal and the rollback gate's start logs) and
+the actingd and host-metrics fragments of the outcome catalog are the contract. **No persisted
+ledger shape, no configuration key, no wire or interface revision**: the new code is a daemon
+line. The number 1.204 is settled (coordinator, 10-29): ISO-PE, also 0.12.28, takes 1.205.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| WDMT-1 | a candidate log's modification time is read from the file (`fs::metadata`), not from its directory entry (Rust's std falls back to the entry only when the open is refused as access denied); an observation lists the logs once (F, the closed-epoch log test of rows 6 and 6′, row 6′'s look-back), and `status` lists them once more after it decides a formal close, for its close evidence; a log whose time cannot be read is `watchdog_log_unreadable` (`path`, a `caused_by` `foreign_os_error` with `io_op` `metadata`), a log gone since the listing is passed over | behaviour | WD-MT | actingctl watchdog, `actingctl install` | before 0.12.28 the listing's entry time was used and an unreadable entry was passed over; the install rollback gate dates a start log without `<ms>` in its name the same way |
+| WDMT-2 | `host_stdio_inheritance_failed` (warning, `ladder_class` none, no values; each failed call a `caused_by` `foreign_os_error` with one of the two new host-metrics locations `process_stdout_inheritance_clear`, `process_stderr_inheritance_clear`) | new outcome code, a daemon line only on failure | WD-MT | actingd's start | the daemon clears `HANDLE_FLAG_INHERIT` on its own stdout and stderr before anything can start a child; nothing is written on success; the start goes on |
+| WDMT-3 | the vendor stdio session's saved duplicates of stdout and stderr are not inheritable (their `Dup` step's `after.flags` shows it); a refusal adds one `SetHandleInformation` step with its error and ends the acquisition | behaviour | WD-MT | device (vendor stdio) | the successful path keeps its 32 steps; the restore gives the standard descriptors the originals' inherit flag, cleared since WDMT-2 |
+
+### 1.205 Slice ISO-PE (0.12.28): a policy evaluation failure that is not global no longer stops the Runtime, and its detail is kept (#419; investigation `rd-1029/inv-1119.md`, production v0.12.26 on 10-29 11:19: one `policy_evaluation_input_invalid` ended the policy driver and the monitor stopped all five instances; coordinator work order `rd-1029/brief-iso-pe.md`)
+
+[scheduling/README.md](scheduling/README.md) ("Evaluation failures") and
+[runtime-config.md](runtime-config.md) ("Skipped evaluations") are the contract. **No persisted
+ledger shape**: the two new codes ride the existing `runtime.failed` record (a catalog entry each,
+§7), the refused input's values ride the existing `caused_by` link of `policy_evaluation_rejected`,
+and the policy's text the existing native detail; the two keys join **`actingd-config` revision
+20**, which RB-2 raised in this release (not raised again). The number 1.205 is the
+coordinator's (1.204 is WD-MT's, #1430). Fix round 1 (`rd-1029/brief-iso-pe-fix1.md`, review
+`rd-1029/review-iso-pe.md` M1) bounds `outcome_projection_not_ready` (PE-6).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| PE-1 | `policy_evaluation_input_invalid` gains the optional values `policy_input` (vocabulary `policy_input`: `fact`, `outcome`, `task_state`, `completed_window`, `pool`, `priority_offset`), `policy_input_problem` (vocabulary `policy_input_problem`: `observed_after_evaluation`, `unknown_reference`, `duplicate`, `value_invalid`), `fact_key`, `instance_id`, `task_id`, `pool_id`, `observed_at_unix_ms`, `evaluated_at_unix_ms` (two vocabularies and four keys new in the key table) | values of a pending code | ISO-PE | policy crate (`validate_inputs`) | set by the evaluator's input checks (the time checks with both times); `policy_evaluation_rejected` carries it as its `caused_by` link and the policy's code and developer text as its native detail (a `foreign_other_error` link), as `scheduling/README.md` already said; until 0.12.28 only the bare code was kept |
+| PE-2 | `policy_evaluation_skipped` (warning, `none`; `count`, `limit_count`, `retry_after_ms`, `next_eligible_unix_ms`, the failure as `caused_by`) | new outcome code, a `runtime.failed` record with system links and a daemon line | ISO-PE | runtime-host (`evaluate_policy_cycle`) | one per skipped evaluation; the host answers a deferred cycle with no evaluation, due `retry_after_ms` later, which the driver applies as any deferred cycle |
+| PE-3 | `policy_evaluation_awaiting_person` (error, `none`; `count`, `limit_count`, `retry_after_ms`, the latest failure as `caused_by`) | new outcome code, a `runtime.failed` record with system links and a daemon line | ISO-PE | runtime-host | once per run of skips, at the skip that reaches `scheduling.evaluation.escalate_after`; the run counts the evaluations in a row that did not evaluate, the waits of PE-6 included; an evaluation that evaluates ends the run; the Runtime keeps running |
+| PE-4 | `scheduling.evaluation.retry_ms` (milliseconds `1..=3600000`, default `15000`) and `scheduling.evaluation.escalate_after` (integer `1..=4294967295`, default `3`), settable | new configuration keys (**`actingd-config` revision 20**) | ISO-PE | read by the host at every skipped evaluation | a Runtime before 0.12.28 refuses a file that names `scheduling.evaluation`, because the section denies unknown members |
+| PE-5 | the evaluation's time is sampled under `fact_write_gate` (and `policy_outcome_gate`), after the evaluation waited for them, not as it starts | behaviour | ISO-PE | runtime-host | an input a concurrent settlement observed and committed while the evaluation waited for its gates is no longer "later than evaluation time" |
+| PE-6 | actingd defers `outcome_projection_not_ready` by one debounce also when the trigger has no recompute wake; the host returns it only while fewer than `scheduling.evaluation.escalate_after` evaluations in a row have not evaluated (each wait counts as one, with no record), and skips the next one (PE-2, PE-3) | behaviour | ISO-PE (fix 1 for the bound) | actingd's driver; runtime-host (`evaluate_policy_cycle`) | until 0.12.28 such a trigger ended the driver and the Runtime, and one with recompute wakes was deferred every debounce with no record and no bound |
+
+### 1.206 Slice CFL-1 (0.12.29): recognition preprocessing, the pure chain and its contract (Workflow #411 A58, comment 6371351838; #428 comment 6485683314; design `rd-1029/design-cf.md` §4.2, §4.3, §4.5, §4.6, §6 CFL-1, revised by `rd-1029/design-cf-v2.md` §5.3, §5.7 and §8 (the CFL-1 revision round); review `rd-1029/review-cfl1.md` L1–L3; coordinator work orders `rd-1029/brief-cfl1.md` and `rd-1029/brief-cfl1-fix1.md`, with the names, the hue scale, the tolerance and "kept is white" settled on 10-29)
 
 [recognition-preprocess.md](recognition-preprocess.md) is the contract. **No persisted ledger
 shape**, no code, no configuration key, no wire or interface revision: the chain is a library
 addition that no package can declare before CFL-2, which adds the member `preprocess` (into
-`package` revision 6, as the design says). The number 1.204 is provisional for the parallel
-slices.
+`package` revision 6, as the design says). The number 1.206 is the coordinator's (1.204 is
+WD-MT's, 1.205 is ISO-PE's).
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|

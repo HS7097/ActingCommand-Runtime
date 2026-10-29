@@ -16,7 +16,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::codes::{
-    DecisionStateToken, EligibilityToken, FactTimeProblem, PolicyCode, SchedulingRulePolicyCode,
+    DecisionStateToken, EligibilityToken, FactTimeProblem, PolicyCode, PolicyInput,
+    PolicyInputProblem, SchedulingRulePolicyCode,
 };
 use crate::remedy::ProviderView;
 use crate::resource_targets::{InstanceTargetPolicy, TargetEffect, TargetPolicyState};
@@ -497,6 +498,93 @@ pub struct PolicyEvaluation {
 pub struct PolicyEvaluationError {
     code: Code,
     message: String,
+    /// ISO-PE (#419): the refused input, when the check that refused it names it.
+    input: Option<Box<PolicyInputRejection>>,
+}
+
+/// ISO-PE (#419): what an input check of the evaluation refused, as the values of its
+/// `policy_evaluation_input_invalid`: which input and why, the fact key, instance, task or pool it
+/// names, and for a time check the input's observation time and the evaluation's time. The
+/// developer text stays in the error's message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyInputRejection {
+    pub input: PolicyInput,
+    pub problem: PolicyInputProblem,
+    pub fact_key: Option<String>,
+    pub instance_id: Option<String>,
+    pub task_id: Option<String>,
+    pub pool_id: Option<String>,
+    pub observed_at_unix_ms: Option<u64>,
+    pub evaluated_at_unix_ms: Option<u64>,
+}
+
+impl PolicyInputRejection {
+    pub(crate) fn new(input: PolicyInput, problem: PolicyInputProblem) -> Self {
+        Self {
+            input,
+            problem,
+            fact_key: None,
+            instance_id: None,
+            task_id: None,
+            pool_id: None,
+            observed_at_unix_ms: None,
+            evaluated_at_unix_ms: None,
+        }
+    }
+
+    fn fact_key(mut self, fact_key: &str) -> Self {
+        self.fact_key = Some(fact_key.to_owned());
+        self
+    }
+
+    fn instance<S: AsRef<str> + ?Sized>(mut self, instance_id: Option<&S>) -> Self {
+        self.instance_id = instance_id.map(|instance_id| instance_id.as_ref().to_owned());
+        self
+    }
+
+    fn task(mut self, task_id: &str) -> Self {
+        self.task_id = Some(task_id.to_owned());
+        self
+    }
+
+    fn pool(mut self, pool_id: &str) -> Self {
+        self.pool_id = Some(pool_id.to_owned());
+        self
+    }
+
+    /// The scope's instance, when the scope is one instance's.
+    fn scope(self, scope: &ScopeSelector) -> Self {
+        match scope {
+            ScopeSelector::Instance { instance_id } => self.instance(Some(instance_id)),
+            ScopeSelector::Server { .. } | ScopeSelector::Game { .. } => self,
+        }
+    }
+
+    /// The outcome `outcome` with this rejection's values.
+    fn values(&self, outcome: Outcome) -> Outcome {
+        let mut outcome = outcome
+            .policy_input(self.input)
+            .policy_input_problem(self.problem);
+        if let Some(fact_key) = &self.fact_key {
+            outcome = outcome.fact_key(fact_key.as_str());
+        }
+        if let Some(instance_id) = &self.instance_id {
+            outcome = outcome.instance_id(instance_id.as_str());
+        }
+        if let Some(task_id) = &self.task_id {
+            outcome = outcome.task_id(task_id.as_str());
+        }
+        if let Some(pool_id) = &self.pool_id {
+            outcome = outcome.pool_id(pool_id.as_str());
+        }
+        if let Some(observed) = self.observed_at_unix_ms {
+            outcome = outcome.observed_at_unix_ms(observed);
+        }
+        if let Some(evaluated) = self.evaluated_at_unix_ms {
+            outcome = outcome.evaluated_at_unix_ms(evaluated);
+        }
+        outcome
+    }
 }
 
 impl PolicyEvaluationError {
@@ -508,10 +596,35 @@ impl PolicyEvaluationError {
         &self.message
     }
 
+    /// ISO-PE (#419): the refused input, when the check that refused it names it.
+    pub fn input(&self) -> Option<&PolicyInputRejection> {
+        self.input.as_deref()
+    }
+
+    /// ISO-PE (#419): the error as an outcome: its code, with the refused input's values when
+    /// the check named it (`policy_evaluation_input_invalid` with `policy_input`,
+    /// `policy_input_problem`, ...).
+    pub fn outcome(&self) -> Outcome {
+        let outcome = Outcome::new(self.code);
+        match &self.input {
+            Some(input) => input.values(outcome),
+            None => outcome,
+        }
+    }
+
     pub(crate) fn invalid(message: impl Into<String>) -> Self {
         Self {
             code: PolicyCode::PolicyEvaluationInputInvalid.code(),
             message: message.into(),
+            input: None,
+        }
+    }
+
+    /// ISO-PE (#419): [`Self::invalid`] naming the input it refused.
+    pub(crate) fn invalid_input(message: impl Into<String>, input: PolicyInputRejection) -> Self {
+        Self {
+            input: Some(Box::new(input)),
+            ..Self::invalid(message)
         }
     }
 
@@ -519,6 +632,7 @@ impl PolicyEvaluationError {
         Self {
             code: PolicyCode::PolicyEvaluationFactTypeMismatch.code(),
             message: message.into(),
+            input: None,
         }
     }
 
@@ -526,6 +640,7 @@ impl PolicyEvaluationError {
         Self {
             code: PolicyCode::PolicyEvaluationNumericOverflow.code(),
             message: message.into(),
+            input: None,
         }
     }
 
@@ -533,6 +648,7 @@ impl PolicyEvaluationError {
         Self {
             code: PolicyCode::ScoreOverflow.code(),
             message: message.into(),
+            input: None,
         }
     }
 
@@ -540,6 +656,7 @@ impl PolicyEvaluationError {
         Self {
             code: PolicyCode::SelectionPolicyInvalid.code(),
             message: message.into(),
+            input: None,
         }
     }
 }
@@ -6348,21 +6465,47 @@ fn validate_inputs(
         if let Some(instance_id) = &offset.instance_id {
             validate_instance_alias(instance_id)?;
         }
-        validate_observation_time("priority offset", offset.observed_at_unix_ms, time.unix_ms)?;
+        validate_observation_time(
+            "priority offset",
+            offset.observed_at_unix_ms,
+            time.unix_ms,
+            PolicyInputRejection::new(
+                PolicyInput::PriorityOffset,
+                PolicyInputProblem::ObservedAfterEvaluation,
+            )
+            .task(&offset.task_id)
+            .instance(offset.instance_id.as_deref()),
+        )?;
         if offset.offset_milli < -MAX_PRIORITY_OFFSET_MILLI
             || offset.offset_milli > MAX_PRIORITY_OFFSET_MILLI
         {
-            return Err(PolicyEvaluationError::invalid(format!(
-                "priority offset for task '{}' exceeds {MAX_PRIORITY_OFFSET_MILLI} milli",
-                offset.task_id
-            )));
+            return Err(PolicyEvaluationError::invalid_input(
+                format!(
+                    "priority offset for task '{}' exceeds {MAX_PRIORITY_OFFSET_MILLI} milli",
+                    offset.task_id
+                ),
+                PolicyInputRejection::new(
+                    PolicyInput::PriorityOffset,
+                    PolicyInputProblem::ValueInvalid,
+                )
+                .task(&offset.task_id)
+                .instance(offset.instance_id.as_deref()),
+            ));
         }
         if !offset_keys.insert((offset.task_id.as_str(), offset.instance_id.as_deref())) {
-            return Err(PolicyEvaluationError::invalid(format!(
-                "duplicate priority offset '{}:{}'",
-                offset.task_id,
-                offset.instance_id.as_deref().unwrap_or("*")
-            )));
+            return Err(PolicyEvaluationError::invalid_input(
+                format!(
+                    "duplicate priority offset '{}:{}'",
+                    offset.task_id,
+                    offset.instance_id.as_deref().unwrap_or("*")
+                ),
+                PolicyInputRejection::new(
+                    PolicyInput::PriorityOffset,
+                    PolicyInputProblem::Duplicate,
+                )
+                .task(&offset.task_id)
+                .instance(offset.instance_id.as_deref()),
+            ));
         }
     }
 
@@ -6437,25 +6580,45 @@ fn validate_inputs(
     for fact in &facts.facts {
         validate_id("fact key", &fact.fact_key)?;
         validate_input_scope("fact", &fact.scope, &instance_ids)?;
-        validate_observation_time("fact", fact.observed_at_unix_ms, time.unix_ms)?;
+        validate_observation_time(
+            "fact",
+            fact.observed_at_unix_ms,
+            time.unix_ms,
+            PolicyInputRejection::new(
+                PolicyInput::Fact,
+                PolicyInputProblem::ObservedAfterEvaluation,
+            )
+            .fact_key(&fact.fact_key)
+            .scope(&fact.scope),
+        )?;
         if fact.confidence_milli > 1_000
             || fact
                 .expires_at_unix_ms
                 .is_some_and(|expires| expires <= fact.observed_at_unix_ms)
             || !observed_fact_value_is_bounded(&fact.value)
         {
-            return Err(PolicyEvaluationError::invalid(format!(
-                "fact '{}:{}' metadata or value is invalid",
-                scope_key(&fact.scope),
-                fact.fact_key
-            )));
+            return Err(PolicyEvaluationError::invalid_input(
+                format!(
+                    "fact '{}:{}' metadata or value is invalid",
+                    scope_key(&fact.scope),
+                    fact.fact_key
+                ),
+                PolicyInputRejection::new(PolicyInput::Fact, PolicyInputProblem::ValueInvalid)
+                    .fact_key(&fact.fact_key)
+                    .scope(&fact.scope),
+            ));
         }
         if !fact_keys.insert((scope_key(&fact.scope), fact.fact_key.as_str())) {
-            return Err(PolicyEvaluationError::invalid(format!(
-                "duplicate fact '{}:{}'",
-                scope_key(&fact.scope),
-                fact.fact_key
-            )));
+            return Err(PolicyEvaluationError::invalid_input(
+                format!(
+                    "duplicate fact '{}:{}'",
+                    scope_key(&fact.scope),
+                    fact.fact_key
+                ),
+                PolicyInputRejection::new(PolicyInput::Fact, PolicyInputProblem::Duplicate)
+                    .fact_key(&fact.fact_key)
+                    .scope(&fact.scope),
+            ));
         }
     }
 
@@ -6465,24 +6628,50 @@ fn validate_inputs(
         validate_instance_alias(&outcome.instance_id)?;
         validate_id("outcome key", &outcome.outcome_key)?;
         if !task_ids.contains(outcome.task_id.as_str()) {
-            return Err(PolicyEvaluationError::invalid(format!(
-                "outcome references unknown task '{}'",
-                outcome.task_id
-            )));
+            return Err(PolicyEvaluationError::invalid_input(
+                format!("outcome references unknown task '{}'", outcome.task_id),
+                PolicyInputRejection::new(
+                    PolicyInput::Outcome,
+                    PolicyInputProblem::UnknownReference,
+                )
+                .task(&outcome.task_id)
+                .instance(Some(&outcome.instance_id)),
+            ));
         }
         if !instance_ids.contains(outcome.instance_id.as_str()) {
-            return Err(PolicyEvaluationError::invalid(format!(
-                "outcome references unknown instance '{}'",
-                outcome.instance_id
-            )));
+            return Err(PolicyEvaluationError::invalid_input(
+                format!(
+                    "outcome references unknown instance '{}'",
+                    outcome.instance_id
+                ),
+                PolicyInputRejection::new(
+                    PolicyInput::Outcome,
+                    PolicyInputProblem::UnknownReference,
+                )
+                .task(&outcome.task_id)
+                .instance(Some(&outcome.instance_id)),
+            ));
         }
-        validate_observation_time("outcome", outcome.observed_at_unix_ms, time.unix_ms)?;
+        validate_observation_time(
+            "outcome",
+            outcome.observed_at_unix_ms,
+            time.unix_ms,
+            PolicyInputRejection::new(
+                PolicyInput::Outcome,
+                PolicyInputProblem::ObservedAfterEvaluation,
+            )
+            .task(&outcome.task_id)
+            .instance(Some(&outcome.instance_id)),
+        )?;
         if outcome
             .expires_at_unix_ms
             .is_some_and(|expiry| expiry <= outcome.observed_at_unix_ms)
         {
-            return Err(PolicyEvaluationError::invalid(
+            return Err(PolicyEvaluationError::invalid_input(
                 "outcome expiration must follow observation",
+                PolicyInputRejection::new(PolicyInput::Outcome, PolicyInputProblem::ValueInvalid)
+                    .task(&outcome.task_id)
+                    .instance(Some(&outcome.instance_id)),
             ));
         }
         if let Some(window_id) = &outcome.activity_window_id {
@@ -6493,10 +6682,15 @@ fn validate_inputs(
             outcome.instance_id.as_str(),
             outcome.outcome_key.as_str(),
         )) {
-            return Err(PolicyEvaluationError::invalid(format!(
-                "duplicate outcome '{}:{}:{}'",
-                outcome.task_id, outcome.instance_id, outcome.outcome_key
-            )));
+            return Err(PolicyEvaluationError::invalid_input(
+                format!(
+                    "duplicate outcome '{}:{}:{}'",
+                    outcome.task_id, outcome.instance_id, outcome.outcome_key
+                ),
+                PolicyInputRejection::new(PolicyInput::Outcome, PolicyInputProblem::Duplicate)
+                    .task(&outcome.task_id)
+                    .instance(Some(&outcome.instance_id)),
+            ));
         }
     }
 
@@ -6507,28 +6701,56 @@ fn validate_inputs(
         // Workflow #384 D2-S4: a recognition maintenance package's dispatches keep their clocks
         // under the reserved fact refresh task.
         if state.task_id != FACT_REFRESH_TASK_ID && !task_ids.contains(state.task_id.as_str()) {
-            return Err(PolicyEvaluationError::invalid(format!(
-                "task state references unknown task '{}'",
-                state.task_id
-            )));
+            return Err(PolicyEvaluationError::invalid_input(
+                format!("task state references unknown task '{}'", state.task_id),
+                PolicyInputRejection::new(
+                    PolicyInput::TaskState,
+                    PolicyInputProblem::UnknownReference,
+                )
+                .task(&state.task_id)
+                .instance(Some(&state.instance_id)),
+            ));
         }
         if !instance_ids.contains(state.instance_id.as_str()) {
-            return Err(PolicyEvaluationError::invalid(format!(
-                "task state references unknown instance '{}'",
-                state.instance_id
-            )));
+            return Err(PolicyEvaluationError::invalid_input(
+                format!(
+                    "task state references unknown instance '{}'",
+                    state.instance_id
+                ),
+                PolicyInputRejection::new(
+                    PolicyInput::TaskState,
+                    PolicyInputProblem::UnknownReference,
+                )
+                .task(&state.task_id)
+                .instance(Some(&state.instance_id)),
+            ));
         }
         if !state_ids.insert((state.task_id.as_str(), state.instance_id.as_str())) {
-            return Err(PolicyEvaluationError::invalid(format!(
-                "duplicate task state '{}:{}'",
-                state.task_id, state.instance_id
-            )));
+            return Err(PolicyEvaluationError::invalid_input(
+                format!(
+                    "duplicate task state '{}:{}'",
+                    state.task_id, state.instance_id
+                ),
+                PolicyInputRejection::new(PolicyInput::TaskState, PolicyInputProblem::Duplicate)
+                    .task(&state.task_id)
+                    .instance(Some(&state.instance_id)),
+            ));
         }
         for timestamp in [state.last_dispatched_unix_ms, state.eligible_since_unix_ms]
             .into_iter()
             .flatten()
         {
-            validate_observation_time("task state", timestamp, time.unix_ms)?;
+            validate_observation_time(
+                "task state",
+                timestamp,
+                time.unix_ms,
+                PolicyInputRejection::new(
+                    PolicyInput::TaskState,
+                    PolicyInputProblem::ObservedAfterEvaluation,
+                )
+                .task(&state.task_id)
+                .instance(Some(&state.instance_id)),
+            )?;
         }
         if state
             .last_duration_ms
@@ -6537,10 +6759,15 @@ fn validate_inputs(
                 .failure_streak
                 .is_some_and(|streak| streak > MAX_TASK_FAILURE_STREAK)
         {
-            return Err(PolicyEvaluationError::invalid(format!(
-                "task state '{}:{}' last duration exceeds {MAX_TASK_LAST_DURATION_MS} ms or failure streak exceeds {MAX_TASK_FAILURE_STREAK}",
-                state.task_id, state.instance_id
-            )));
+            return Err(PolicyEvaluationError::invalid_input(
+                format!(
+                    "task state '{}:{}' last duration exceeds {MAX_TASK_LAST_DURATION_MS} ms or failure streak exceeds {MAX_TASK_FAILURE_STREAK}",
+                    state.task_id, state.instance_id
+                ),
+                PolicyInputRejection::new(PolicyInput::TaskState, PolicyInputProblem::ValueInvalid)
+                    .task(&state.task_id)
+                    .instance(Some(&state.instance_id)),
+            ));
         }
         if let Some(completed) = &state.completed_window {
             validate_id("completed activity window id", &completed.window_id)?;
@@ -6548,10 +6775,22 @@ fn validate_inputs(
                 "completed activity window",
                 completed.completed_at_unix_ms,
                 time.unix_ms,
+                PolicyInputRejection::new(
+                    PolicyInput::CompletedWindow,
+                    PolicyInputProblem::ObservedAfterEvaluation,
+                )
+                .task(&state.task_id)
+                .instance(Some(&state.instance_id)),
             )?;
             if state.terminal_state.is_none() {
-                return Err(PolicyEvaluationError::invalid(
+                return Err(PolicyEvaluationError::invalid_input(
                     "completed activity window requires a settled terminal state",
+                    PolicyInputRejection::new(
+                        PolicyInput::CompletedWindow,
+                        PolicyInputProblem::ValueInvalid,
+                    )
+                    .task(&state.task_id)
+                    .instance(Some(&state.instance_id)),
                 ));
             }
         }
@@ -6567,27 +6806,42 @@ fn validate_inputs(
     let mut observed_pool_ids = BTreeSet::new();
     for pool in &resources.pools {
         validate_id("pool id", &pool.pool_id)?;
-        validate_observation_time("pool", pool.observed_at_unix_ms, time.unix_ms)?;
+        validate_observation_time(
+            "pool",
+            pool.observed_at_unix_ms,
+            time.unix_ms,
+            PolicyInputRejection::new(
+                PolicyInput::Pool,
+                PolicyInputProblem::ObservedAfterEvaluation,
+            )
+            .pool(&pool.pool_id),
+        )?;
         let Some(spec) = pool_specs.get(pool.pool_id.as_str()) else {
-            return Err(PolicyEvaluationError::invalid(format!(
-                "pool snapshot references unknown pool '{}'",
-                pool.pool_id
-            )));
+            return Err(PolicyEvaluationError::invalid_input(
+                format!("pool snapshot references unknown pool '{}'", pool.pool_id),
+                PolicyInputRejection::new(PolicyInput::Pool, PolicyInputProblem::UnknownReference)
+                    .pool(&pool.pool_id),
+            ));
         };
         // #386 CF-5: a value may exceed a capacity read from its fact.
         if let Some(capacity) = spec.capacity.constant()
             && pool.value > capacity
         {
-            return Err(PolicyEvaluationError::invalid(format!(
-                "pool '{}' value {} exceeds capacity {capacity}",
-                pool.pool_id, pool.value
-            )));
+            return Err(PolicyEvaluationError::invalid_input(
+                format!(
+                    "pool '{}' value {} exceeds capacity {capacity}",
+                    pool.pool_id, pool.value
+                ),
+                PolicyInputRejection::new(PolicyInput::Pool, PolicyInputProblem::ValueInvalid)
+                    .pool(&pool.pool_id),
+            ));
         }
         if !observed_pool_ids.insert(pool.pool_id.as_str()) {
-            return Err(PolicyEvaluationError::invalid(format!(
-                "duplicate pool snapshot '{}'",
-                pool.pool_id
-            )));
+            return Err(PolicyEvaluationError::invalid_input(
+                format!("duplicate pool snapshot '{}'", pool.pool_id),
+                PolicyInputRejection::new(PolicyInput::Pool, PolicyInputProblem::Duplicate)
+                    .pool(&pool.pool_id),
+            ));
         }
     }
     Ok(())
@@ -6653,11 +6907,23 @@ fn validate_count(label: &str, count: usize, maximum: usize) -> PolicyEvaluation
     Ok(())
 }
 
-fn validate_observation_time(label: &str, observed: u64, now: u64) -> PolicyEvaluationResult<()> {
+/// An input observed later than the evaluation's time is refused. ISO-PE (#419): the refusal
+/// names the input (`rejection`), its observation time and the evaluation's time.
+fn validate_observation_time(
+    label: &str,
+    observed: u64,
+    now: u64,
+    rejection: PolicyInputRejection,
+) -> PolicyEvaluationResult<()> {
     if observed > now {
-        return Err(PolicyEvaluationError::invalid(format!(
-            "{label} timestamp {observed} is later than evaluation time {now}"
-        )));
+        return Err(PolicyEvaluationError::invalid_input(
+            format!("{label} timestamp {observed} is later than evaluation time {now}"),
+            PolicyInputRejection {
+                observed_at_unix_ms: Some(observed),
+                evaluated_at_unix_ms: Some(now),
+                ..rejection
+            },
+        ));
     }
     Ok(())
 }

@@ -649,6 +649,14 @@ tests = [
 ]
 incident = ["#396"]
 
+# #411 B47 (0.12.28 LAB-SMALL; brief rd-1029/brief-wave2d.md, triage rd-1028/triage-p71.md B47; contracts/contained-page-observation.md, "0.12.28 LAB-SMALL"; related: exec 47): offline observe of a recognised page whose candidate layout has a feature that needs an OCR model the Tools do not hold does not refuse the frame: the layout is not projected, the page is still answered (page, matched, observation), and candidate_not_projected names the layout with {layout_id, item, code: candidate_feature_provider_missing, detail naming the OCR target}, beside the OCR state (ocr.available false)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_small::b47_a_layout_whose_ocr_feature_has_no_model_is_named_and_the_page_still_answered",
+]
+incident = ["#411 B47"]
+
 # Resource validation: a repository's declared directories admit its regression case families in place of the "no mapped parser" refusal; unknown JSON elsewhere and a malformed declaration are refused (#396 TOOL-2)
 [[gate]]
 key = "48"
@@ -1418,6 +1426,14 @@ tests = [
 ]
 incident = ["#411 A9"]
 
+# #411 A69 (0.12.28 LAB-SMALL P60; brief rd-1029/brief-wave2d.md, inventory rd-1028/inventory-012.md P60; contracts/contained-page-observation.md, "0.12.28 LAB-SMALL"; related: exec 86): offline observe --with-frame writes its frame file only once the answer stands: an answer refused as observe_identity_limit_exceeded (exit 2; a --with-frame path over 2 KiB, which Min's identity keeps whole) writes no frame file and creates no directory for it, and an answer given writes the frame at the named path and answers it as frame_path
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_small::p60_a_refused_answer_writes_no_frame_file_and_a_given_one_does",
+]
+incident = ["#411 A69"]
+
 # Workflow #411 A12 part 1 (v0.12.1-rc.2; register §1.103; related: key 47): outside an install selection, the offline tools started from a single-location root (runtime\BUILD-MANIFEST.json two levels above the executable, no A/B slot folder) load the OCR provider over the vision root that <root>\actingd.config.json names; such a root without its configuration is config_read_failed, never lab_ocr_vision_unconfigured
 [[gate]]
 key = "87"
@@ -1578,6 +1594,22 @@ tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_lab_l6::l6_replay_reports_the_readings_and_fields_its_run_took",
 ]
 incident = ["#411 Lab L6"]
+
+# #411 A62 (0.12.28 LAB-SMALL P57; brief rd-1029/brief-wave2d.md; contracts/contained-page-observation.md, "0.12.28 LAB-SMALL"; related: exec 99): each entry offline observe --targets answers carries target_center {x, y}, the centre of the template box the target matched on the current frame (x + width / 2, y + height / 2), where the kernel presses a target_center click without offset; null when the target did not pass
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::observation::gate_411_p57::p57_observe_targets_names_where_a_target_center_click_lands",
+]
+incident = ["#411 A62"]
+
+# #411 A70 (0.12.28 LAB-SMALL P61; brief rd-1029/brief-wave2d.md, inventory rd-1028/inventory-012.md P61; contracts/contained-page-observation.md, "0.12.28 LAB-SMALL"; related: exec 86): offline observe of a frame no page matches is never standby: the answer (matched false, page unknown) and its projection observation both carry standby false
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_small::p61_a_page_not_recognised_is_never_standby",
+]
+incident = ["#411 A70"]
 
 # #411 A21 (v0.12.x; register §1.123; no persisted structure change): an online observation admits the rows of each fact collection (facts, private_facts) by tier while each fits: the matched page's candidate evidence (and, with target consensus, the recognition samples) first, then the explicitly requested targets' rows and the page target evaluations they reuse, then every other row; kept rows stay in production order, omitted rows are counted as before, and an observation whose rows all fit is unchanged; explicit targets never change its status, page or candidate sets; it fails only when the required evidence alone exceeds the budget (candidate samples: candidate_sample_record_failed, partial); a failed actinglab observe --capture keeps device_error (exit 4) with details {error, state, req_id, receipt_state, runtime_outcome, correlation_id, hint}
 [[gate]]
