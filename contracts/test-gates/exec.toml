@@ -2499,6 +2499,14 @@ tests = [
 ]
 incident = ["UPD-1"]
 
+# UPD-1 fix round 5 (0.12.30; the review rd-1029/review-upd1-r3.md's note beside L1 to L3; register §1.215 UPD-15; contracts/standard-pack-schedule.md, "The store update rule"): package bundle --schedule and standard-pack check refuse, through the one composer the Runtime runs, a schedule.json timeline event whose invalidates_fact_prefixes covers health.application.update_required (the key itself or any prefix of it), standard_pack_root_invalid with schedule_invalid at /timeline/<i>/invalidates_fact_prefixes/<j>, and package bundle writes no --out; a reset of other keys passes, and so does one whose excludes_fact_prefixes keeps the key
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_373_navt::upd1_r5_a_reset_that_invalidates_the_application_update_fact_is_refused",
+]
+incident = ["UPD-1"]
+
 # STORE-FG-1 (0.12.29; register §1.207 SF-5; design rd-1029/design-store-fg.md §8.1; contracts/package-reference.md, the standard-pack cross-check): package bundle and standard-pack check report one package_bundle_store_tap_unlocated warning (package_id, pack_operation_id) per pack and store step of control.json store_update that taps with point, rect or specific_rect, in registry order, and both still pass; a root without such a pack reports none
 [[gate]]
 coverage = "Y"

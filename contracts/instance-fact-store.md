@@ -868,9 +868,10 @@ package's run has succeeded there since.
   fact, also when no update was needed.
 - **Lifetime.** The record never expires. A restart (it is an ordinary tagged record, loaded with
   the store), a takeover, and an emulator stop or restart leave it as it is: the client is still
-  the old one. A timeline event whose `invalidates_fact_prefixes` covers `health.application.`
-  would invalidate it (the next run then meets the dialog again); a resource repository does not
-  write one.
+  the old one. A timeline event whose `invalidates_fact_prefixes` covers the key (the key or any
+  prefix of it) would invalidate it, so the composer refuses a `schedule.json` that writes one
+  (UPD-1 fix round 5, [standard-pack-schedule.md](standard-pack-schedule.md), "The store update
+  rule").
 - **Projection.** It is an ordinary evaluation fact: the projection passes it to the evaluation
   (a catalog predicate reads it; its change changes `fact_snapshot_id`, so an intent evaluated
   before it is `policy_facts_stale` at admission). A missing `health.` key raises no reading

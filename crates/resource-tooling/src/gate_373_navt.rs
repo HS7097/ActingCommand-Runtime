@@ -1366,3 +1366,113 @@ fn upd1_l6_a_store_update_rule_without_a_cooldown_is_refused() {
         "standard-pack check: {values}"
     );
 }
+
+// UPD-1 fix round 5 (contracts/standard-pack-schedule.md, "The store update rule"): a timeline
+// event whose `invalidates_fact_prefixes` covers the Runtime's `health.application.update_required`
+// (the key itself or any prefix of it) would clear the fact at each occurrence, so the store update
+// rule would read the key missing and never run while the Runtime's gate kept holding the
+// instance. `package bundle --schedule` and the check of the installed root refuse it through the
+// one composer the Runtime runs too, `standard_pack_root_invalid` with `schedule_invalid` at the
+// entry, and `package bundle` writes no `--out`. A reset of other keys passes, and so does one
+// whose `excludes_fact_prefixes` keeps the key.
+#[test]
+fn upd1_r5_a_reset_that_invalidates_the_application_update_fact_is_refused() {
+    let root = valid();
+    let schedule = |invalidated: &[&str], excluded: Option<&[&str]>| {
+        let mut event = json!({
+            "id": "neutral.reset",
+            "event_kind": "reset",
+            "schedule": {"kind": "interval", "clock_source": {"kind": "local"},
+                         "every_ms": 86400000, "anchor_ms": 0},
+            "duration_ms": 0,
+            "invalidates_fact_prefixes": invalidated,
+            "validity": {"from_unix_ms": 0, "until_unix_ms": null}
+        });
+        let mut requires = Vec::<&str>::new();
+        if let Some(excluded) = excluded {
+            event["excludes_fact_prefixes"] = json!(excluded);
+            requires.push("reset_exclusions");
+        }
+        json!({
+            "schema_version": "actingcommand.schedule.v1",
+            "requires": requires,
+            "timeline": [event]
+        })
+    };
+    let installed_with = |schedule: &Value| {
+        let (temp, game_root) = installed(&root, &[]);
+        fs::write(
+            game_root.join(SCHEDULE),
+            serde_json::to_vec_pretty(schedule).expect("schedule JSON"),
+        )
+        .expect("schedule file");
+        (temp, game_root)
+    };
+
+    for (case, passing) in [
+        ("another prefix", schedule(&["resource."], None)),
+        (
+            "an exclusion keeps the key",
+            schedule(&["health."], Some(&["health.application."][..])),
+        ),
+    ] {
+        let (_temp, request, result) = bundle_with_schedule(&root, Some(&passing));
+        let response =
+            result.unwrap_or_else(|error| panic!("{case}: {}: {}", error.code, error.message));
+        assert_eq!(response.status, "written", "{case}");
+        assert!(
+            request.out.join(SCHEDULE).is_file(),
+            "{case}: the schedule is laid"
+        );
+        let (_temp, game_root) = installed_with(&passing);
+        let checked = check(&game_root)
+            .unwrap_or_else(|error| panic!("{case}: {}: {}", error.code, error.message));
+        assert_eq!(checked.status, "checked", "{case}");
+    }
+
+    for (case, refused, pointer) in [
+        (
+            "the key's family",
+            schedule(&["resource.", "health."], None),
+            "/timeline/0/invalidates_fact_prefixes/1",
+        ),
+        (
+            "the key itself",
+            schedule(&["health.application.update_required"], None),
+            "/timeline/0/invalidates_fact_prefixes/0",
+        ),
+    ] {
+        let expected = (
+            &json!(StandardPackProblem::ScheduleInvalid.as_str()),
+            &json!(pointer),
+        );
+        let (_temp, request, result) = bundle_with_schedule(&root, Some(&refused));
+        let error = result.expect_err(case);
+        let (code, values) = refusal(&error);
+        assert_eq!(
+            code, ROOT_INVALID,
+            "{case}, package bundle: {}",
+            error.message
+        );
+        assert_eq!(
+            (&values["standard_pack_problem"], &values["json_pointer"]),
+            expected,
+            "{case}, package bundle: {values}"
+        );
+        assert!(!request.out.exists(), "{case}: --out was written");
+
+        let (_temp, game_root) = installed_with(&refused);
+        let error = check(&game_root).expect_err(case);
+        let (code, values) = refusal(&error);
+        assert_eq!(
+            code, ROOT_INVALID,
+            "{case}, standard-pack check: {}",
+            error.message
+        );
+        assert_eq!(
+            (&values["standard_pack_problem"], &values["json_pointer"]),
+            expected,
+            "{case}, standard-pack check: {values}"
+        );
+    }
+}

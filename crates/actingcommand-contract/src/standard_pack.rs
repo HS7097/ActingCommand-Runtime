@@ -339,6 +339,12 @@ pub enum InterruptResult {
     ApplicationUpdateRequired,
 }
 
+/// UPD-1: the instance fact the Runtime records for [`InterruptResult::ApplicationUpdateRequired`]
+/// (`contracts/instance-fact-store.md`, "Application update facts"). Only the Runtime writes it,
+/// and no timeline event of a game root's `schedule.json` may invalidate it: the composer refuses
+/// such an event (fix round 5).
+pub const APPLICATION_UPDATE_REQUIRED_FACT_KEY: &str = "health.application.update_required";
+
 /// Workflow #411 B43: what an interrupt page met once more than its `max_per_run` says
 /// (`limit_cause`). The data names the cause; the Runtime names no page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

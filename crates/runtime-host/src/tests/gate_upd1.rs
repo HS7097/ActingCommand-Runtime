@@ -49,6 +49,8 @@ const MINUTE_MS: u64 = 60_000;
 const STORE_TASK: &str = "t_store_update";
 const STORE_PROCEDURE: &str = "procedure.store_update";
 const STORE_COOLDOWN_MS: u64 = 30 * MINUTE_MS;
+/// B4: the store update task's priority, the maintenance tier above the fixture task's 100.
+const STORE_PRIORITY: i64 = 200;
 
 /// Every publication of the key for the policy instance, in ledger order: its value and its
 /// `source_snapshot_id`.
@@ -217,13 +219,24 @@ fn catalog() -> CatalogSources {
 
 /// B4: [`catalog`] and the store update task [`STORE_TASK`], whose rule is the store update rule
 /// of `standard-pack-schedule.md`: triggered while the instance's
-/// `health.application.update_required` is true, with a cooldown of [`STORE_COOLDOWN_MS`].
+/// `health.application.update_required` is true, with a cooldown of [`STORE_COOLDOWN_MS`]. It
+/// ranks above the ordinary task by construction, [`STORE_PRIORITY`] against the fixture's 100
+/// (Alice's ruling of 2026-10-29 20:4x: two tiers, maintenance high and business normal, and
+/// keeping the client updatable is maintenance), whatever the tie-breaker.
 fn store_catalog() -> CatalogSources {
     let mut sources = catalog();
     let mut tasks: Value = serde_json::from_slice(&sources.tasks.bytes).expect("fixture tasks");
     let mut store = tasks["tasks"][0].clone();
+    assert!(
+        tasks["tasks"][0]["priority"]
+            .as_i64()
+            .expect("the fixture task's priority")
+            < STORE_PRIORITY,
+        "the ordinary task is the lower tier"
+    );
     store["id"] = json!(STORE_TASK);
     store["procedure_ref"] = json!(STORE_PROCEDURE);
+    store["priority"] = json!(STORE_PRIORITY);
     store["trigger"] = json!({
         "kind": "fact",
         "scope": {"kind": "instance", "instance_id": POLICY_INSTANCE_ALIAS},
@@ -440,7 +453,12 @@ fn assert_pending(evaluation: &PolicyEvaluation, task_id: &str, case: &str) {
 /// `application_update_pending` naming the instance and the key, with no wake of its own.
 fn assert_held(evaluation: &PolicyEvaluation, case: &str) {
     assert!(dispatched(evaluation).is_none(), "{case}: no dispatch");
-    let held = decision(evaluation);
+    assert_held_decision(decision(evaluation), case);
+}
+
+/// Asserts `held` waits at position 4a: deferred, its last reason `application_update_pending`
+/// naming the instance and the key, with no wake of its own.
+fn assert_held_decision(held: &TaskDecision, case: &str) {
     assert_eq!(held.state, SchedulingDecisionState::Deferred, "{case}");
     let reason = &held.reasons.last().expect("a reason").outcome;
     assert_eq!(
@@ -571,11 +589,26 @@ fn upd1_b4_without_a_new_version_the_store_task_looks_again_only_after_its_coold
     let first_at = POLICY_NOW_UNIX_MS + 1_000;
     let due = first_at + STORE_COOLDOWN_MS;
 
-    // 1. Fix round 3 (CI run 40858239951): here the store update task ranks first and takes the
-    // instance, so the round settles the ordinary task without asking the eligibility closure;
-    // position 4a holds it all the same (the evaluator's `InstanceHolds`).
+    // 1. Fix round 3 (CI run 40858239951): the store update task ranks first by its priority
+    // (fix round 5) and takes the instance, so the round settles the ordinary task without asking
+    // the eligibility closure; position 4a holds it all the same (the evaluator's
+    // `InstanceHolds`): its last reason is the hold's, never `instance_already_selected`, and it
+    // has no wake.
     let first = bench.evaluate(first_at, 1);
-    assert_pending(&first, TASK, "the dialog met");
+    assert!(
+        dispatched_task(&first, TASK).is_none(),
+        "the dialog met: {first:#?}"
+    );
+    let ordinary = decision_of(&first, TASK);
+    assert_held_decision(ordinary, "the dialog met");
+    assert!(
+        !ordinary
+            .reasons
+            .iter()
+            .any(|reason| reason.outcome.is(PolicyCode::InstanceAlreadySelected)),
+        "the dialog met: {:?}",
+        ordinary.reasons
+    );
     let (intent, chain) = dispatched_task(&first, STORE_TASK)
         .unwrap_or_else(|| panic!("the store update task is dispatched: {first:#?}"));
     record_policy_approval(&bench.host, &intent);

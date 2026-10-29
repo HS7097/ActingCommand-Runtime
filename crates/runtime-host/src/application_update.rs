@@ -33,8 +33,10 @@ use actingcommand_policy::{
 };
 use std::collections::BTreeSet;
 
-/// The fact's key: an instance-scoped key of the `health.` family only the Runtime writes.
-pub(crate) const APPLICATION_UPDATE_FACT_KEY: &str = "health.application.update_required";
+/// The fact's key: an instance-scoped key of the `health.` family only the Runtime writes (the
+/// contract crate's, which the composer also reads).
+pub(crate) const APPLICATION_UPDATE_FACT_KEY: &str =
+    actingcommand_contract::APPLICATION_UPDATE_REQUIRED_FACT_KEY;
 /// The record's `source_detector`.
 pub(crate) const APPLICATION_UPDATE_DETECTOR: &str = "runtime.application-update";
 /// The record's `schema_version`.

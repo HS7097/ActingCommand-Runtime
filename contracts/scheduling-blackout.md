@@ -287,9 +287,11 @@ be held here once it became a candidate. **Whatever the ranking** (fix round 3, 
 instance's selected candidate, one behind the shared run limits, one a chain handover holds); on
 a waiting instance such a candidate that is not a store update task is held here all the same,
 `application_update_pending` with no wake in place of `instance_already_selected`,
-`heavy_scene_budget_deferred`, `heavy_scene_budget_exhausted`,
-`policy_concurrent_runs_deferred` or `policy_chain_handover_waiting` (the policy crate's
-`InstanceHolds`, `evaluate_with_instance_holds`; the fact refresh's names it as its gate). So a
+`heavy_scene_budget_deferred`, `policy_concurrent_runs_deferred` or
+`policy_chain_handover_waiting` (the policy crate's `InstanceHolds`,
+`evaluate_with_instance_holds`; the fact refresh's names it as its gate). A placement block
+(`Blocked`, such as `heavy_scene_budget_exhausted`) keeps its own code: such a candidate never
+enters the round, and it is not eligible. So a
 store update task that ranks first never leaves the instance's other candidates eligible and
 unselected. A candidate the closure is asked about is answered by positions 1 to 4 first, as
 above;
