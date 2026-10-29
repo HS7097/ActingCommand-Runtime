@@ -649,6 +649,14 @@ tests = [
 ]
 incident = ["#386"]
 
+# The shipped scheduling.rerun.condition_codes lists contained_task_paused since 0.12.28 (Alice's decision 92, 2026-10-29): a scheduled run of a task that is not sensitive which an operator pause cut off ends by a condition under the shipped table (refunded, count 1, the window's end), adds to no streak, owes its rerun with the pause's code, and after the resume is dispatched again the same day with policy_rerun_owed and its counts given back; a sensitive task's paused run stays an ordinary failure (Workflow #386 SR-2b, decision 92)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_386_sr2b1::sr92_an_operator_pause_ends_a_scheduled_run_by_a_condition_under_the_shipped_table",
+]
+incident = ["#386"]
+
 # An owed rerun is gated by the instance's pacing stage: above scheduling.rerun.resume_stage it waits with policy_rerun_waiting{pacing_stage}, back at or below it still waits until resume_settle_ms has passed (59 s waits, 60 s dispatches); past its window end it expires with policy_rerun_expired and the run's failure is back in the snapshot; while owed no dependency_completed(head, *) of a chain is true; actingd suspended lists owed, waiting and expired reruns; a pair exhausted in this window is not promoted again in it, nor rerun at once by R22 when its failure carries a failure identity, and the stage gate still holds it (Workflow #386 SR-2b-2, design P22 §6.2, tests 2 to 5 and the coordinator's decision on review M1; fix round 1, review M1)
 [[gate]]
 coverage = "Y"

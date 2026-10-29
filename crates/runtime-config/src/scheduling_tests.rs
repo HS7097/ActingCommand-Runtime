@@ -28,8 +28,9 @@ const DEVICE: DeviceBounds = DeviceBounds {
     emulator_stop_ms: 200_000,
     emulator_start_ms: 190_000,
 };
-// SCHED §9 `scheduling.rerun.condition_codes`: the eight codes that end a run by a condition.
-const CONDITION_CODES: [&str; 8] = [
+// SCHED §9 `scheduling.rerun.condition_codes`: the eight codes that end a run by a condition, and
+// since 0.12.28 the operator pause's `contained_task_paused` (Alice's decision 92, 2026-10-29).
+const CONDITION_CODES: [&str; 9] = [
     "recognition_sample_budget_insufficient",
     "candidate_sample_budget_insufficient",
     "recognition_sample_deadline_exceeded",
@@ -38,6 +39,7 @@ const CONDITION_CODES: [&str; 8] = [
     "perf_run_yielded",
     "perf_hold_expired",
     "cost_commit_time_insufficient",
+    "contained_task_paused",
 ];
 
 fn context() -> CheckContext {
@@ -102,7 +104,7 @@ fn list(value: &FactScalar) -> Value {
 // SCHED §9 and the #405 order: every key of the section, defaulted from the defaults file
 // (source `default`), settable while the Runtime runs; an instance's random delay defaults to
 // the section's. The rerun codes are the model's eight (SH-1 registers `perf_run_yielded` and
-// `perf_hold_expired`).
+// `perf_hold_expired`) and, since 0.12.28, `contained_task_paused` (decision 92).
 #[test]
 fn sr1_c1_every_scheduling_key_has_its_model_default() {
     let parameters = render(json!({}), json!({})).expect("the defaults resolve");

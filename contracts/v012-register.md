@@ -444,7 +444,9 @@ row, as listed, in `distribution/windows/actingd.defaults.json`; Workflow #405's
 (§5 row `scheduling.random_delay.*`, coordinator's order of 2026-10-14).
 `scheduling.rerun.condition_codes` lists SCHED §9's eight codes; `perf_run_yielded` and
 `perf_hold_expired` are registered by SH-1 (pending), since a code list entry must be a listed,
-active code (train 6).
+active code (train 6). Since 0.12.28 the default also lists `contained_task_paused` (Alice's
+decision 92, 2026-10-29; a changed default, no new key and no `actingd-config` revision;
+[policy-suspension.md](policy-suspension.md), "Which runs").
 
 ### 1.24 Wave 6 slice P-c (#385 PERF §10, §11)
 
