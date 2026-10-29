@@ -3968,6 +3968,13 @@ pub enum RuntimeOperation {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         since_revision: Option<u64>,
     },
+    /// Workflow #429 R-0c (register §1.216, since 0.12.30; `runtime-client` 3): reads, for one
+    /// instance, each scope's pack schedule list version and, per package, whether it is
+    /// schedulable now and which layer decided (R-8; `workbench.rs`, `PackScheduleView`). A
+    /// general read that records nothing; until R-8 the host refuses it `not_implemented`.
+    PackScheduleView {
+        instance_alias: String,
+    },
 }
 
 impl RuntimeOperation {
@@ -4140,6 +4147,8 @@ impl RuntimeOperation {
             | Self::ControlEmulatorInstance { instance_alias, .. }
             | Self::ClearMonitor { instance_alias }
             | Self::ResourceTargetView { instance_alias }
+            // Workflow #429 R-0c: only the alias until R-8, as for R-0's kinds.
+            | Self::PackScheduleView { instance_alias }
             | Self::InstanceFactSnapshot {
                 instance: instance_alias,
             } => validate_instance_alias(instance_alias),
@@ -4423,6 +4432,7 @@ impl fmt::Debug for RuntimeOperation {
             Self::EditPackSchedule { .. } => "RuntimeOperation::EditPackSchedule(<redacted>)",
             Self::EditResourceTarget { .. } => "RuntimeOperation::EditResourceTarget(<redacted>)",
             Self::RoutineSummary { .. } => "RuntimeOperation::RoutineSummary(<redacted>)",
+            Self::PackScheduleView { .. } => "RuntimeOperation::PackScheduleView(<redacted>)",
         })
     }
 }
@@ -5505,6 +5515,10 @@ pub enum RuntimeResult {
     /// `RoutineSummary` (R-12).
     RoutineSummary {
         summary: Box<RoutineSummaryPage>,
+    },
+    /// `PackScheduleView` (Workflow #429 R-0c, register §1.216; R-8).
+    PackScheduleViewed {
+        view: Box<PackScheduleView>,
     },
 }
 

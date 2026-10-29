@@ -278,6 +278,8 @@ runtime_operation_kinds! {
     EditPackSchedule,
     EditResourceTarget,
     RoutineSummary,
+    // Workflow #429 R-0c (register §1.216): the pack schedule's read view.
+    PackScheduleView,
 }
 
 impl RuntimeOperationKind {
@@ -305,7 +307,10 @@ impl RuntimeOperationKind {
             | Self::ResourceTargetView
             | Self::UpgradeStateStatus
             // Workflow #429 R-0: the routine summary, a general read from memory.
-            | Self::RoutineSummary => GENERAL_QUERY,
+            | Self::RoutineSummary
+            // Workflow #429 R-0c: the pack schedule's read view, a general read (not through
+            // G14).
+            | Self::PackScheduleView => GENERAL_QUERY,
             // General reads that record: looking at frames, instance discovery.
             Self::ObserveReadonly | Self::CaptureSequence | Self::DiscoverInstances => {
                 GENERAL_RECORDED_READ
@@ -489,6 +494,8 @@ impl RuntimeOperationKind {
             | Self::EditPackSchedule
             | Self::EditResourceTarget
             | Self::RoutineSummary => None,
+            // Workflow #429 R-0c: its success code comes with R-8.
+            Self::PackScheduleView => None,
         }
     }
 }
@@ -585,6 +592,7 @@ impl RuntimeOperation {
             Self::EditPackSchedule { .. } => Kind::EditPackSchedule,
             Self::EditResourceTarget { .. } => Kind::EditResourceTarget,
             Self::RoutineSummary { .. } => Kind::RoutineSummary,
+            Self::PackScheduleView { .. } => Kind::PackScheduleView,
         }
     }
 
@@ -736,6 +744,9 @@ mod tests {
             K::EditPackSchedule => (General, Some(Instruction), true),
             K::EditResourceTarget => (General, Some(Instruction), true),
             K::RoutineSummary => (General, Some(Read), false),
+            // Workflow #429 R-0c: the pack schedule's read view, a general read that records
+            // nothing.
+            K::PackScheduleView => (General, Some(Read), false),
         }
     }
 

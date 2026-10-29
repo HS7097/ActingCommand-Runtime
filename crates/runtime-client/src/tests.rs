@@ -34,6 +34,8 @@ mod gate_c4;
 
 // #412 Lab B-3 S2 (apps key 90): the receipt wait of a declared operation.
 mod gate_412_b3_s2;
+// Workflow #429 R-0c (register §1.216): the workbench's client methods over the scripted Runtime.
+mod gate_429_r0c;
 use crate::client::{
     MAX_OFFICIAL_OCR_ARTIFACT_BYTES, OCR_COMPARISON_ENVELOPE_SCHEMA, OCR_COMPARISON_SCHEMA_V2,
     OCR_OBSERVATION_SCHEMA, canonical_sha256, resolve_official_ocr_projection,

@@ -754,10 +754,13 @@ fn lanes_t8_the_switch_is_off_by_default_and_an_instruction_turns_it_on_at_the_n
     )
     .expect("connect to the Runtime");
     client
-        .configure_settings(vec![ConfigSettingChange {
-            key: "scheduling.parallel.enabled".to_owned(),
-            value: Some(serde_json::json!(true)),
-        }])
+        .configure_settings(
+            vec![ConfigSettingChange {
+                key: "scheduling.parallel.enabled".to_owned(),
+                value: Some(serde_json::json!(true)),
+            }],
+            None,
+        )
         .unwrap_or_else(|error| panic!("the instruction is refused: {:?}", error.outcome()));
     assert!(host.scheduling_parallel_enabled().expect("the switch"));
     drop(client);

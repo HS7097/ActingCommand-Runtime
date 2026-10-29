@@ -139,3 +139,37 @@ fn r0_each_workbench_kind_without_behaviour_answers_not_implemented_with_no_effe
     drop(reader);
     host.close().expect("close host");
 }
+
+// Workflow #429 R-0c (register §1.216 R0C-3): the pack schedule's read view has its wire shape
+// and no behaviour yet (R-8). It is refused `not_implemented` (Denied) naming its operation
+// `pack_schedule_view`, with no result and no terminal, and has no effect: nothing is appended to
+// the ledger and no instance's status changes.
+#[test]
+fn r0c_pack_schedule_view_answers_not_implemented_with_no_effect() {
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, ALIAS, Arc::new(FakeState::default()));
+    let mut client = TestClient::connect(&host);
+    let mut reader = TestClient::connect(&host);
+
+    let status_before = instances(&mut reader);
+    let head_before = ledger_head(&mut reader);
+
+    let request = client.request(RuntimeOperation::PackScheduleView {
+        instance_alias: ALIAS.to_owned(),
+    });
+    let receipt = client.send(&request);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Denied);
+    assert_eq!(receipt.outcome().code().as_str(), "not_implemented");
+    assert_eq!(
+        receipt.outcome().value("operation"),
+        Some(&json!("pack_schedule_view"))
+    );
+    assert!(receipt.result().is_none());
+    assert!(receipt.terminal().is_none());
+
+    assert_eq!(ledger_head(&mut reader), head_before);
+    assert_eq!(instances(&mut reader), status_before);
+    drop(client);
+    drop(reader);
+    host.close().expect("close host");
+}

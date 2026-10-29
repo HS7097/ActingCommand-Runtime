@@ -1980,6 +1980,9 @@ const RUNTIME_OPEN_ORIGIN_OPERATIONS: &[&str] = &[
     "MonitorStatus",
     "ObserveContainedPage",
     "ObserveReadonly",
+    // Workflow #429 R-0c (register §1.216): the pack schedule's read view, a general read like
+    // ResourceTargetView.
+    "PackScheduleView",
     // Workflow #385 P-m (register §1.61 W15): the shadow measurement's status, a general read
     // from memory like Status.
     "PerformanceStatus",

@@ -615,7 +615,7 @@ pub(super) fn targets_set(
         Some(view.instance_alias.as_str()),
         AGENT,
     )?;
-    match write.client.apply_resource_targets(document) {
+    match write.client.apply_resource_targets(document, None) {
         Ok(applied) => Ok(ToolSuccess {
             result: json!({"applied": applied}),
             warnings: write.warnings,

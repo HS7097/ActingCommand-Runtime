@@ -254,6 +254,13 @@ actingcommand_contract::outcome_locations! {
         RuntimeScheduleExplanation => "runtime_schedule_explanation",
         // Workflow #421 INST-2 (#421 deploy design §4): the Runtime's report of its own start.
         RuntimeStartReport => "runtime_start_report",
+        // Workflow #429 R-0c (register §1.216): the workbench's methods of `runtime-client` 3.
+        RuntimeRunInstanceTask => "runtime_run_instance_task",
+        RuntimeStopInstanceRun => "runtime_stop_instance_run",
+        RuntimeEditPackSchedule => "runtime_edit_pack_schedule",
+        RuntimeEditResourceTarget => "runtime_edit_resource_target",
+        RuntimeRoutineSummary => "runtime_routine_summary",
+        RuntimePackScheduleView => "runtime_pack_schedule_view",
         RuntimeMonitorConfigure => "runtime_monitor_configure",
         RuntimeMonitorClear => "runtime_monitor_clear",
         RuntimeConfigureSettings => "runtime_configure_settings",
