@@ -173,3 +173,28 @@ test = "actingcommand-runtime-host::lib::performance_control::tests::third_party
 ruling = "Alice 10-09 pacing ruling; Friday review item 7 (#405); Workflow #420 P22-0"
 reason = "It pinned that third-party pressure alone escalates the old controller with reason ThirdPartyContention; pressure alone no longer moves the level."
 covered_by = "actingcommand-runtime-host::lib::performance_control::tests::third_party_pressure_never_escalates_and_an_unscored_sample_recovers_a_raised_level, in host row 37; p22_0_t1_third_party_pressure_alone_keeps_normal_the_gate_open_and_two_heavy_slots and p22_0_t2_full_screen_with_third_party_pressure_adds_no_level, in the P22-0 host row."
+
+# Workflow #429 R-2 (0.12.31, register §1.220, PR #1448): the performance keys become settable at
+# run time and the defaults align to the adaptive preset (Alice 98 and 99, 10-29). Three gated tests
+# pinned the old behaviour; each was adapted and renamed, and the new name takes the old one's place
+# in the same row.
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-config::lib::r1_tests::r1_t4_max_concurrent_runs_stays_not_settable_whether_or_not_the_file_writes_it"
+ruling = "Workflow #429 R-2 (Alice 98 and 99, 10-29: the top bar's number is concurrent tasks, set at run time)"
+reason = "Renamed with the requirement it pins: R-1 left max_concurrent_runs not settable because it was read at assembly; R-2 makes it hot, so the same test now pins that it is settable whether or not the file writes it."
+covered_by = "actingcommand-runtime-config::lib::r1_tests::r1_t4_max_concurrent_runs_is_settable_whether_or_not_the_file_writes_it, in the same host.toml row."
+
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-config::lib::perf_tests::tc_4_a_configuration_without_mode_takes_the_release_default_observe"
+ruling = "Alice 98 (10-29: new installs default to the adaptive preset); Workflow #429 R-2"
+reason = "Renamed with the requirement it pins: the release default of performance.pacing.mode is pace, no longer observe."
+covered_by = "actingcommand-runtime-config::lib::perf_tests::tc_4_a_configuration_without_mode_takes_the_release_default_pace, in the same host.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingd::bin:actingcommand-actingd::gate_427a::lanes_t8_the_switch_is_off_by_default_and_an_instruction_turns_it_on_at_the_next_round"
+ruling = "Alice 98 (10-29: the adaptive preset, whose scheduling.parallel.enabled is true, is the default); Workflow #429 R-2"
+reason = "The default of scheduling.parallel.enabled is true now, so 'off by default' no longer holds; the test keeps its point, an instruction turns the switch on at the next round, with the file writing false explicitly."
+covered_by = "actingcommand-actingd::bin:actingcommand-actingd::gate_427a::lanes_t8_the_switch_off_in_the_file_is_turned_on_by_an_instruction_at_the_next_round, in the same apps.toml row."
