@@ -878,6 +878,27 @@ impl HostShared {
             })
     }
 
+    /// STORE-FG-2 (design-store-fg §2.2): whether `store_foreground.allowed_application_ids` in
+    /// effect lists `store_application_id`, read at a store update package's run start and at
+    /// each of its store taps. The key is not settable, so the list is the configuration file's
+    /// as the Runtime started with it.
+    pub(super) fn store_foreground_allowed(
+        &self,
+        store_application_id: &str,
+    ) -> RuntimeHostResult<bool> {
+        lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .store_foreground()
+            .map(|allowlist| allowlist.allows(store_application_id))
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })
+    }
+
     /// Workflow #386 SR-1: `scheduling.recognition.sample_timeout_retries` in effect, read at
     /// each step of a contained run (the kernel's `step_pacing()`).
     pub(super) fn sample_timeout_retries(&self) -> RuntimeHostResult<u32> {

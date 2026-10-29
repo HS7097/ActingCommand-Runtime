@@ -549,5 +549,8 @@
   "host": {
     "process_memory_priority": "normal",
     "process_io_priority": "normal"
+  },
+  "store_foreground": {
+    "allowed_application_ids": []
   }
 }

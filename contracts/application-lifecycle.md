@@ -212,7 +212,9 @@ device-state command. In order:
    person unlocks the handset.
 3. Under `device_state.in_use_gate`, the foreground (the foreground gate's query): another
    application than the instance's `application_id` and the home activity's package is
-   `device_in_use`. No resumed activity counts as no other application.
+   `device_in_use`. No resumed activity counts as no other application. For a store update
+   package's own run (STORE-FG-2, "Store foreground allowance" below), its declared
+   `store_application_id` is no other application either; every other run is unchanged.
 4. `settings get system screen_off_timeout`, for the keepalive below; a failed read records
    `device_state_unreadable` and the run starts without the keepalive.
 
@@ -228,6 +230,53 @@ before the input.
 
 The gate changes no setting of the handset, never presses the power key and never enters a
 credential.
+
+## Store foreground allowance (STORE-FG-2, since 0.12.29)
+
+Alice's ruling of 2026-10-29 10:1x: a client update from outside the game comes only from the
+official app store, as a pack of its own (design `rd-1029/design-store-fg.md`; the package's
+member is [resource-declarations.md](resource-declarations.md), "Store update packages"). A
+store update package declares, in `control.json`, `store_update.store_application_id` (the
+store's Android package id) and its store steps (`store_operations`, each a guarded tap with its
+listing proof). The operator allows stores in the configuration,
+`store_foreground.allowed_application_ids` ([runtime-config.md](runtime-config.md), "The
+`store_foreground` section"; default `[]`, not settable while the Runtime runs). The Runtime
+compares package ids for equality only and names no store.
+
+- **Run start.** The package's own run (a direct or scheduled run of the package; never a layer,
+  a recovery entry or a declared operation's run) is checked before the handset start
+  gate and before any capture or input: a store the list does not name ends the run
+  `application_store_not_allowed` (`declaration_error`, `invalid_request`, receipt state
+  `denied`; values `alias`, `application_id` the declared store; operation
+  `admit_store_foreground`), recorded as the run's failure. The kernel asks the same at its
+  run start (`ContainedTaskRuntime::admit_store_foreground`).
+- **The store tap.** A declared store step's tap reaches the foreground gate as a store input
+  (`ContainedTaskRuntime::store_input`). For a plain `Tap` the gate first checks the list again
+  (`application_store_not_allowed`, operation `require_foreground_application`, the same
+  `command.rejected` and `runtime.failed` as any refused input, before the foreground is read),
+  then expects **exactly** `store_application_id` in front: the game in front (a store that
+  closed), another package (a sign-in activity, a browser) or no resumed activity refuse the tap
+  as above (`application_not_foreground`, whose detail names `foreground=` the observed package
+  and `expected=` the store; `application_foreground_unknown`). A match records
+  `application.foreground` = the store when it changed. Any other action of a store step expects
+  the assigned application.
+- **Every other input is unchanged.** The package's other steps (the game's own update dialog),
+  every input of every other package, of a layer, of a Lab operation (the store step's included)
+  and of a client `Input` expect the assigned application, as above.
+- **The handset start gate** does not count the declared store in front as another application
+  for that run (above, item 3).
+- **Never a layer or a startup package.** A store update package as a prerequisite, return-home,
+  navigation, interrupt or `then.run` package is refused with `reason=store_update` (the kernel's
+  prerequisite incompatibility); as a startup package it is refused
+  `startup_package_admission_failed` with `reason=store_update`; a ladder rung's restart entry
+  runs the restart alone.
+- **The way back** is the package's own `application` `launch` or `restart`, ungated as always;
+  the first ordinary tap after it records `application.foreground` = the assigned application
+  again. The Runtime adds no relaunch of its own when a store run fails (Alice's question 97,
+  option A): a scheduled run's failure takes the recovery ladder, a direct run's runner relaunches
+  the game (`ac_app restart`).
+- Nothing persists: the allowance holds for the store taps of that one run only (no fact, no
+  flag, no instance state).
 
 ## The startup package hook
 

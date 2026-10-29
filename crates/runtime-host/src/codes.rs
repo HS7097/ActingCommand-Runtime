@@ -3000,3 +3000,28 @@ actingcommand_contract::outcome_locations! {
     }
 }
 // ---- SCH-M ED-2: end ----
+
+// ---- STORE-FG-2 (design-store-fg §2.2, §3; Alice's ruling of 2026-10-29 10:1x): begin ----
+actingcommand_contract::outcome_codes! {
+    /// The host's code of the store foreground allowance (STORE-FG-2; design §3: the slice's one
+    /// new code). A store tap whose foreground is not the declared store is the existing
+    /// `application_not_foreground`.
+    pub(crate) enum StoreForegroundCode {
+        /// Error. A store update package's run, or one of its store taps, names a store
+        /// application that `store_foreground.allowed_application_ids` does not list: the run is
+        /// refused before any capture or input (`operation` `admit_store_foreground`), a tap
+        /// before it is sent (`operation` `require_foreground_application`). Keys `alias`,
+        /// `application_id` (the declared store).
+        NotAllowed => "application_store_not_allowed": error / declaration_error,
+    }
+}
+
+actingcommand_contract::outcome_locations! {
+    /// The host's operations of the store foreground allowance (STORE-FG-2).
+    pub(crate) enum StoreForegroundLocation {
+        /// The allowlist check of a store update package's own run, before any capture or input
+        /// (`HostShared::admit_store_foreground`).
+        Admit => "admit_store_foreground",
+    }
+}
+// ---- STORE-FG-2: end ----

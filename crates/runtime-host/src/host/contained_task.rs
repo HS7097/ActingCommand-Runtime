@@ -1485,12 +1485,20 @@ pub(super) struct RuntimeContainedTask<'a> {
     /// overlaid on every instance fact snapshot the run takes and never stored: its dispatch's
     /// `policy_dispatch_parameters`, else its package's declared defaults.
     run_parameters: actingcommand_execution_kernel::RunParameters,
+    /// STORE-FG-2 (design-store-fg §2.7): the application the next input expects in front: the
+    /// store for the tap `store_input` hands on, else the assigned application. The input takes
+    /// it first, so it holds for that one input only.
+    next_input_foreground: InputForeground,
 }
 
 pub(super) struct EntryRecoveryRuntime<'a, 'host> {
     pub(super) inner: &'a mut RuntimeContainedTask<'host>,
 }
 
+// STORE-FG-2 (review L5): a layer (an entry recovery, prerequisite, navigation or interrupt
+// package) never routes a store step (the kernel asks only a package's own run, and a store update
+// package is never a layer), so this runtime overrides neither `admit_store_foreground` nor
+// `store_input`: its every tap expects the assigned application.
 impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
     type Error = RequestFailure;
 
@@ -4723,11 +4731,39 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             })
     }
 
+    /// STORE-FG-2 (design-store-fg §2.2, §2.7; review L5): the start of a store update package's
+    /// own run, before any capture or input: its store must be in
+    /// `store_foreground.allowed_application_ids` (`application_store_not_allowed`). This runtime
+    /// overrides `store_input` too, which checks the list again at the gate.
+    fn admit_store_foreground(&mut self, store_application_id: &str) -> Result<(), Self::Error> {
+        self.host.admit_store_foreground(
+            self.control.instance_id,
+            self.instance_alias,
+            store_application_id,
+        )
+    }
+
+    /// STORE-FG-2 (design-store-fg §2.7): a declared store step's tap is this run's input with
+    /// the store as the application the foreground gate expects (for a plain `Tap` only, and
+    /// only while the allowlist names it); everything else of the input is as for any input.
+    fn store_input(
+        &mut self,
+        action: InputAction,
+        frame: Option<InputFrameContext>,
+        store_application_id: &str,
+    ) -> Result<(), Self::Error> {
+        self.next_input_foreground = InputForeground::Store(store_application_id.to_owned());
+        self.input(action, frame)
+    }
+
     fn input(
         &mut self,
         action: InputAction,
         frame: Option<InputFrameContext>,
     ) -> Result<(), Self::Error> {
+        // STORE-FG-2: what this input expects in front, taken first so that every later input
+        // expects the assigned application again, whatever this one's result.
+        let foreground = std::mem::take(&mut self.next_input_foreground);
         self.kernel_clock_read()?;
         let input_started = self.task_timing.begin_boundary(
             actingcommand_contract::TaskTimingBoundary::Input,
@@ -4757,6 +4793,7 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                     before_frame_id: None,
                     input_frame: frame.map(|frame| frame.reference()),
                     input_control: Some(Arc::clone(&self.control)),
+                    foreground,
                 },
             )?;
             self.ensure_active()?;
@@ -6943,6 +6980,24 @@ impl HostShared {
         }
         // Workflow #335 S5b: a startup or return-home package writes no instance facts; one
         // that declares resource readings is refused before any lease and any input.
+        // STORE-FG-2 (review L5): a store update package is no startup package or ladder rung;
+        // it is refused as such, `startup_package_admission_failed` with `reason=store_update`,
+        // not as a resource reading.
+        if let Some(reason @ "store_update") = prepared.startup_incompatibility() {
+            return Err(RequestFailure::request(
+                RuntimeHostError::request(
+                    HostCode::StartupPackageAdmissionFailed,
+                    HostLocation::RunStartupPackage,
+                    RuntimeErrorCode::PackageInvalid,
+                )
+                .with_native_detail(format!(
+                    "instance_alias={instance_alias}; package_id={}; reason={reason}",
+                    prepared.package_label()
+                )),
+                RuntimeReceiptState::Denied,
+                None,
+            ));
+        }
         if prepared.startup_incompatibility().is_some() {
             return Err(RequestFailure::request(
                 RuntimeHostError::request(
@@ -7527,6 +7582,7 @@ impl HostShared {
             kernel_clock_failure: None,
             pacing: RunPacing::UNPACED,
             run_parameters,
+            next_input_foreground: InputForeground::Assigned,
         };
         // Workflow #373 NAV-5 (M-373 §4.4, 「不递归」): a run the host starts itself (a startup
         // package, a ladder rung) keeps today's gate; it never navigates.
@@ -7538,11 +7594,28 @@ impl HostShared {
         // Zero-input fields confirm the required entry in the interpreter's first capture.
         // Workflow #398 RD-5b (model-398 v1.1 §7.2): a handset's start gate runs before the
         // run's first step; its refusal ends the run with its own code and no input.
+        // STORE-FG-2 (design-store-fg §2.2, §2.6): the run's own store update package names its
+        // store; the allowlist is checked before the start gate and any capture (an entry check
+        // captures before the kernel's own admission), and the start gate does not count that
+        // store as another application in front.
+        let store_application_id = prepared.store_application_id();
         let mut execution = if let Err(failure) = runtime
             .begin_diagnostic()
             .and_then(|()| runtime.record_initial_configuration(task_request, &prepared))
+            .and_then(|()| match store_application_id {
+                Some(store) => {
+                    self.admit_store_foreground(control.instance_id, instance_alias, store)
+                }
+                None => Ok(()),
+            })
             .and_then(|()| {
-                self.device_state_gate(control.instance_id, instance_alias, &token, connection_id)
+                self.device_state_gate(
+                    control.instance_id,
+                    instance_alias,
+                    &token,
+                    connection_id,
+                    store_application_id,
+                )
             })
             // Workflow #373 NAV-5 (§4.4): an entry the page list does not hold is recorded.
             .and_then(|()| runtime.note_unlisted_entry())

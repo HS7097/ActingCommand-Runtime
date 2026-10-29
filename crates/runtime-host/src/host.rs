@@ -281,7 +281,7 @@ pub(crate) use contained_task::{
 };
 #[cfg(test)]
 use contained_task::{ContainedTaskCheckpointTestHook, ContainedTaskTerminalDraft};
-use input::RuntimeInputContext;
+use input::{InputForeground, RuntimeInputContext};
 #[cfg(test)]
 use lease::{LeaseExpiryTestCheckpoint, lease_token_identity_match_count};
 use lease::{

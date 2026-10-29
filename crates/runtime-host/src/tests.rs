@@ -319,6 +319,9 @@ mod gate_398_rd2;
 mod gate_398_rd4;
 // Workflow #398 RD-5b: a handset's device state, its holds and the start gate through the host.
 mod gate_398_rd5b;
+// STORE-FG-2 (0.12.29): a store update package's store tap goes to exactly its allowed store;
+// every other input expects the assigned application.
+mod gate_store_fg2;
 // Workflow #403: an unconfirmed close of one instance's resources fences only that instance.
 mod gate_403;
 // #411 A38: a fence that waits for a person re-checks itself; an emulator control command that

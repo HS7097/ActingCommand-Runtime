@@ -124,10 +124,16 @@ pub(super) struct FakeState {
     // Workflow #373 NAV-6: given a capture's number and the inputs so far, the pixels (index,
     // RGB) the capture shows over the frame the flags above give, such as an overlay.
     pixel_script: std::sync::Mutex<Option<PixelScript>>,
+    // STORE-FG-2 (design-store-fg §5): given the inputs and the application commands so far, the
+    // package Android reports in the foreground (`None`: no resumed activity); unset, the
+    // assigned application as before.
+    foreground_script: std::sync::Mutex<Option<ForegroundScript>>,
 }
 
 /// Workflow #373 NAV-6: a frame script of [`FakeState`].
 type PixelScript = Arc<dyn Fn(usize, usize) -> Vec<(usize, [u8; 3])> + Send + Sync>;
+/// STORE-FG-2: a foreground script of [`FakeState`] (inputs, application commands).
+type ForegroundScript = Arc<dyn Fn(usize, usize) -> Option<String> + Send + Sync>;
 
 impl FakeState {
     /// The frame and display extent of `physical_task_geometry` (Workflow #392 DA-A); after an
@@ -1375,8 +1381,25 @@ impl ExecutionBackendProvider for FakeProvider {
             .entries
             .get(instance_alias)
             .is_some_and(|entry| entry.state.android_down.load(Ordering::Acquire));
+        // STORE-FG-2: a scripted foreground, from the inputs and application commands so far.
+        let scripted = self.entries.get(instance_alias).and_then(|entry| {
+            let script = entry
+                .state
+                .foreground_script
+                .lock()
+                .expect("foreground script")
+                .clone()?;
+            Some(script(
+                entry.state.input_count.load(Ordering::Acquire),
+                entry.state.application_count.load(Ordering::Acquire),
+            ))
+        });
+        let foreground = match scripted {
+            Some(foreground) => foreground,
+            None => (!android_down).then(|| "neutral.application".to_owned()),
+        };
         Ok(crate::ForegroundApplicationObservation {
-            foreground: (!android_down).then(|| "neutral.application".to_owned()),
+            foreground,
             assigned: "neutral.application".to_owned(),
         })
     }

@@ -3786,6 +3786,24 @@ coordinator's (1.204 is WD-MT's, 1.205 is ISO-PE's, 1.206 is CFL-1's, 1.207 is S
 | CFL2-4 | `OcrEvaluation.preprocess`, `OcrEvaluation.shared_read`, `OcrObservationEvaluation.preprocess`: `{algorithm, steps, scope, rect, source_rect?, kept_milli, inverted, threshold_value}` and `{rect, detected?, limit?, kept_milli?, threshold_value?}` | read-only evidence (memory and read-only answers only) | CFL-2 | — | absent without a chain (`shared_read` on every evaluation a shared read serves); direct serializers carry them: the read-only page responses' `actual` evaluations, a saved frame's OCR report `observation`, and the online observation's `candidate_sample` rows (`ac_observe`, `ac_lab_observe` and the Lab's online `observe`); explicit mappings do not: the task diagnostic (ledger), the read-only target response, the field report artifact, the runtime client's DTOs |
 | CFL2-5 | `package_bundle_preprocess_divergent` (warning, ladder class `none`, since 0.12.29, pending; `package_id`, `target_id`, `json_pointer`): `package bundle` and `actinglab standard-pack check` report one per package, OCR target and shared read whose chains differ though the read would serve the target | new catalog entry and report entries (not persisted) | CFL-2 | resource tooling | no existing warning names a target and a shared read (the five package-bundle warnings are entry pages, remedies, shadowed interrupt pages, undeclared recognition packs and unlocated store taps); nothing is refused |
 
+### 1.209 Slice STORE-FG-2 (0.12.29): the store allowlist, and the host taps a declared store step only with exactly that store in front (Alice 10-29 10:1x; her questions 95 to 97, option A; design `rd-1029/design-store-fg.md` §2, §3, §5, §6; review `rd-1029/review-store-fg-1.md` L5; coordinator work order `rd-1029/brief-store-fg-2.md`)
+
+[application-lifecycle.md](application-lifecycle.md) ("Store foreground allowance"),
+[runtime-config.md](runtime-config.md) ("The `store_foreground` section") and the runtime-host
+fragment of the outcome catalog are the contract. **No persisted ledger shape**: the refusals are
+the existing `command.rejected`, `runtime.failed` and the run's terminal, the store in front is the
+existing `application.foreground` fact, and the key's row is a new row of the existing
+`config.parameters.<section>` fact. The number 1.209 is the coordinator's (1.204 is WD-MT's,
+1.205 is ISO-PE's, 1.206 is CFL-1's, 1.207 is STORE-FG-1's, 1.208 is CFL-2's).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SF2-1 | `store_foreground.allowed_application_ids` (list of 0 to 16 unique Android package names, default `[]` from the defaults file, not settable) | new configuration section (**`actingd-config` revision 21**) | STORE-FG-2 | the operator, in the configuration file | a value that is no list or an entry that is no string is `config_value_invalid` `wrong_type`; more than 16 entries or a malformed entry `out_of_range`; a duplicate or an instance's own `application_id` `section_check`; at start and in `check-config` |
+| SF2-2 | `application_store_not_allowed` (error, `declaration_error`; `alias`, `application_id`); location `admit_store_foreground` | new outcome code and location (runtime-host), design §3's one new code | STORE-FG-2 | runtime-host | the run of a store update package whose store the list does not name, before any capture or input (`denied`); a store tap that meets the same at the foreground gate (`command.rejected` + `runtime.failed`) |
+| SF2-3 | the foreground gate's expected application: the declared store for a store step's plain `Tap` (`RuntimeInputContext.foreground`, `InputForeground::Store`), else the assigned application | behaviour | STORE-FG-2 | runtime-host | a mismatch is the existing `application_not_foreground`, its detail naming `expected=` the store; client `Input`, Lab operations and layers always expect the assigned application; the host overrides both SF-4 methods in the one runtime that runs a package's own run (`RuntimeContainedTask`), neither in the layer and Lab runtimes |
+| SF2-4 | the handset start gate's `device_in_use` for a store update package's own run | behaviour | STORE-FG-2 | runtime-host | the declared store in front is no other application for that run; every other run unchanged |
+| SF2-5 | the startup refusal of a store update package: `startup_package_admission_failed` with `reason=store_update` | existing code, new detail (review L5) | STORE-FG-2 | runtime-host | before, `contained_task_resource_reading_run_kind_unsupported`; a resource-reading startup package keeps that code |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -3906,6 +3924,7 @@ when it takes effect.
 | `touch.*` (**`actingd-config` revision 7**, Workflow #406; §1.136) | `sampling.sigma_ratio_milli`, `sampling.max_redraws`, `sampling.candidate_count`, `history.points_per_box`, `history.max_boxes` | 250 (`1..=1000`), 8 (`0..=64`), 4 (`1..=16`), 16 (`1..=256`), 1024 (`1..=65536`); host-wide, every key settable (plan Q13; [runtime-config.md](runtime-config.md)) | #406 T12 (§1.136) | #406 T12 (0.12.x) |
 | `emulator_control.*` (**`actingd-config` revision 8**, #411 A50; §1.158) | `restart_exit_wait_ms` | 60 000 (`1000..=300000`); host-wide, settable ([runtime-config.md](runtime-config.md)) | A50 (§1.158 A50-5) | A50 (0.12.x) |
 | `host.*` (**`actingd-config` revision 20**, RB-2; §1.202) | `process_memory_priority`, `process_io_priority` | `normal` (`normal` \| `low`); not settable, applied by actingd to its own process at start ([runtime-config.md](runtime-config.md), "The `host` section") | RB-2 (§1.202 RB2-1) | RB-2 (0.12.28) |
+| `store_foreground.*` (**`actingd-config` revision 21**, STORE-FG-2; §1.209) | `allowed_application_ids` | `[]` (0 to 16 unique Android package names, none an instance's `application_id`); not settable, only the configuration file widens it ([runtime-config.md](runtime-config.md), "The `store_foreground` section") | STORE-FG-2 (§1.209 SF2-1) | STORE-FG-2 (0.12.29) |
 
 - Removed by option 丙 in the same revision (PKG-S4): `startup_package.expected_sha256`,
   `prerequisite_packages[].package_digest`, `policy.procedure_manifest[].package_digest`. A
