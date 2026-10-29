@@ -52,10 +52,11 @@
 use super::contained_task::{EntryRecoveryRuntime, PackageIdentity, RuntimeContainedTask};
 use super::navigation::{RunNavigation, run_navigation};
 use super::*;
+use crate::codes::ApplicationUpdateCode;
 use actingcommand_contract::outcome::{IoOp, Outcome};
 use actingcommand_contract::{
-    InterruptLimitCause, MAX_INTERRUPT_HANDLINGS_PER_RUN, NavigationProblem, NavigationRole,
-    RegistryProblem, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE,
+    InterruptLimitCause, InterruptResult, MAX_INTERRUPT_HANDLINGS_PER_RUN, NavigationProblem,
+    NavigationRole, RegistryProblem, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE,
     STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE,
     STANDARD_PACK_TABLES_DIRECTORY, StandardPackDisplayLayout, StandardPackInterrupts,
     StandardPackNavigation, StandardPackPages, StandardPackRegistry, StandardPackRootBytes,
@@ -549,6 +550,8 @@ struct RunInterrupt {
     /// Workflow #411 B43: the code that ends a run meeting the page once more than
     /// `max_per_run`, as its `limit_cause` says.
     limit_code: HostCode,
+    /// UPD-1: the named result of a run this page ends (`then: end_run`), as its `result` says.
+    result: Option<InterruptResult>,
 }
 
 /// What a run's preparation read of its game's standard-pack root, fixed for the whole run (§7):
@@ -821,6 +824,7 @@ impl HostShared {
                     then,
                     max_per_run: interrupt.max_per_run,
                     limit_code,
+                    result: interrupt.result,
                 })
             })
             .collect::<Vec<_>>();
@@ -1258,6 +1262,39 @@ impl RuntimeContainedTask<'_> {
                 .count(count),
         })
         .map_err(ContainedTaskRunError::Boundary)?;
+        // UPD-1 (design §2.2, §3.3): a page whose data names the run's result `application
+        // update required` ends it with its own code (warning, ladder class none), the instance's
+        // fact recorded true first, before the terminal. A refusal of the store fails the run
+        // with the refusal (Fail Loud); a fatal failure poisons it.
+        if then == TaskInterruptThen::EndRun
+            && entry.result == Some(InterruptResult::ApplicationUpdateRequired)
+        {
+            self.host
+                .record_application_update(
+                    self.instance_alias,
+                    true,
+                    super::application_update::application_update_run_snapshot(
+                        self.run_id.transport(),
+                    ),
+                )
+                .map_err(|error| {
+                    if error.is_fatal() {
+                        ContainedTaskRunError::Boundary(RequestFailure::poison_without_terminal(
+                            error,
+                        ))
+                    } else {
+                        interrupt_failure(error)
+                    }
+                })?;
+            return Err(interrupt_failure(
+                RuntimeHostError::request(
+                    ApplicationUpdateCode::RunEnded,
+                    HostLocation::InterruptHandle,
+                    RuntimeErrorCode::BackendOperationFailed,
+                )
+                .with_outcome_values(|outcome| outcome.page_id(entry.page.as_str())),
+            ));
+        }
         if then == TaskInterruptThen::EndRun {
             return Err(interrupt_failure(
                 RuntimeHostError::request(

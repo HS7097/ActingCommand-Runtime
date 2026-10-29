@@ -473,6 +473,33 @@ tests = [
 ]
 incident = ["#411"]
 
+# UPD-1a (0.12.30; design rd-1029/design-upd1.md §2, §3, §5, §9 rows A1 to A10; Alice's rulings 95 and 96 of 2026-10-29; register §1.215): a shared interrupt page whose interrupts.json entry declares result application_update_required ends a run after its handler with contained_task_application_update_required (warning, ladder class none, page_id), the instance fact health.application.update_required published true before the terminal; a scheduled run ends by a condition under the shipped scheduling.rerun.condition_codes (refunded, count 1, no streak, no immediate rerun) and starts no ladder; a startup package ends so with one runtime.failed at Warning and no ladder; a ladder's application restart that meets the dialog stops the ladder (recovery_ladder_interrupted, exhausted at Warning, no emulator restart); a store update package's successful run clears the fact before its terminal, a failed one keeps it; a start seeds false once and keeps a record already there; a client's publication of the key is refused application_update_key_reserved with nothing appended; result is read only with then end_run (interrupt_result_invalid at /interrupts/<i>/result, another value or type malformed) by the shared static check
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_373_nav6::upd1_a9_a_direct_run_meeting_the_update_dialog_ends_with_its_code_and_records_the_fact",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav6::upd1_a1_b2_a_scheduled_run_meeting_the_update_dialog_ends_by_a_condition_and_reruns_after",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav6::upd1_a3_a_startup_package_meeting_the_update_dialog_ends_with_its_code_and_opens_no_ladder",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav6::upd1_a4_the_ladder_s_application_restart_meeting_the_update_dialog_stops_the_ladder",
+    "actingcommand-runtime-host::lib::tests::gate_store_fg2::upd1_a5_a_store_update_success_clears_the_fact_before_its_terminal",
+    "actingcommand-runtime-host::lib::tests::gate_store_fg2::upd1_a6_a_failed_store_update_keeps_the_fact",
+    "actingcommand-runtime-host::lib::tests::gate_upd1::upd1_a7_a_start_seeds_false_once_and_keeps_a_record_already_there",
+    "actingcommand-runtime-host::lib::tests::gate_upd1::upd1_a8_a_client_publish_of_the_key_is_refused",
+    "actingcommand-contract::lib::standard_pack::tests::upd1_a10_an_interrupt_s_result_is_read_only_with_end_run",
+]
+incident = ["UPD-1"]
+
+# UPD-1b (0.12.30; design rd-1029/design-upd1.md §4, §6, §9 rows B1 to B6; register §1.215; contracts/scheduling-blackout.md, "Order of the deferrals", position 4a): while an instance's health.application.update_required is true, every candidate of it except a task whose bound package declares store_update is deferred application_update_pending (instance_id, fact_key) with no wake, the owed rerun included, and nothing reruns at once; an intent evaluated before the fact turned true is refused policy_facts_stale; once the fact is false the task is dispatched again (the owed rerun's half, policy_rerun_owed, is UPD-1a's upd1_a1_b2); only instances whose fact is true are held (#419); a decision the gate holds, the fact refresh's included, never makes the idle plan due nor wakes it; a store update package placed in place is known as one at the next remedy table rebuild, an unreadable one is no store task
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_upd1::upd1_b1_b3_while_the_fact_is_true_only_the_store_update_task_runs",
+    "actingcommand-runtime-host::lib::tests::gate_upd1::upd1_b1_the_gate_holds_only_the_instances_whose_fact_is_true",
+    "actingcommand-runtime-host::lib::tests::gate_upd1::upd1_b5_a_decision_the_update_holds_never_wakes_the_idle_instance",
+    "actingcommand-runtime-host::lib::tests::gate_upd1::upd1_b6_a_store_update_package_placed_in_place_is_known_at_the_next_rebuild",
+]
+incident = ["UPD-1"]
+
 # Settings the Runtime may change while it runs: the defaults file and the file layer, one change all or none with its command and value records, refusals, restore at restart by the later change, and clear (Workflow #387 D1b, D1-M1 to D1-M7)
 [[gate]]
 key = "52"

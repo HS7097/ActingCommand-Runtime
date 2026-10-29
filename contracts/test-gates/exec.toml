@@ -2483,6 +2483,14 @@ tests = [
 ]
 incident = ["#411 B35"]
 
+# UPD-1 A10 (0.12.30; design rd-1029/design-upd1.md §7, §9; register §1.215; contracts/package-reference.md, interrupts.json and the standard-pack cross-check): package bundle and standard-pack check accept an interrupts.json entry's result application_update_required with then end_run and lay the file byte for byte; a store update pack (control.json store_update) that holds such a page as its own gets no package_bundle_interrupt_page_shadowed, a pack without store_update still does; the same result with then resume is refused by both with standard_pack_root_invalid, interrupt_result_invalid at /interrupts/0/result
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_373_navt::upd1_a10_a_named_result_is_accepted_on_end_run_only_and_a_store_pack_may_hold_its_page",
+]
+incident = ["UPD-1"]
+
 # STORE-FG-1 (0.12.29; register §1.207 SF-5; design rd-1029/design-store-fg.md §8.1; contracts/package-reference.md, the standard-pack cross-check): package bundle and standard-pack check report one package_bundle_store_tap_unlocated warning (package_id, pack_operation_id) per pack and store step of control.json store_update that taps with point, rect or specific_rect, in registry order, and both still pass; a root without such a pack reports none
 [[gate]]
 coverage = "Y"

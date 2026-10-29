@@ -1139,3 +1139,81 @@ fn store_fg1_s8_1_a_store_step_tapping_a_point_or_a_rect_gets_one_warning() {
         checked.warnings
     );
 }
+
+// ---- UPD-1.
+
+// UPD-1 A10 (design-upd1 §7, §9): the shared interrupt page `notice` declares
+// `result: "application_update_required"` with `then: "end_run"`. Both `package bundle` and the
+// check of the installed root accept it; a store update pack that starts on the page (its own
+// page, design §8.1) gets no `package_bundle_interrupt_page_shadowed`, while a pack without
+// `store_update` that declares the page still gets one. The same `result` on an entry whose `then`
+// is `resume` is refused by both with `standard_pack_root_invalid`, `interrupt_result_invalid` at
+// `/interrupts/0/result`.
+#[test]
+fn upd1_a10_a_named_result_is_accepted_on_end_run_only_and_a_store_pack_may_hold_its_page() {
+    let named = valid()
+        .with(own_notice())
+        .with(Pack {
+            store: Some("point"),
+            ..graph(
+                STORE_POINT,
+                "notice",
+                "home",
+                &[("tap_update", "notice", "home")],
+            )
+        })
+        .interrupt("then", json!("end_run"))
+        .interrupt("result", json!("application_update_required"));
+    let expected = vec![(json!(OWN_NOTICE), json!("notice"))];
+
+    let (_temp, request, result) = bundle(&named);
+    let response = result.unwrap_or_else(|error| panic!("{}: {}", error.code, error.message));
+    assert_eq!(response.status, "written");
+    assert_eq!(
+        fs::read(request.out.join(INTERRUPTS)).expect("written interrupts"),
+        fs::read(
+            request
+                .root_files
+                .interrupts
+                .as_ref()
+                .expect("given interrupts")
+        )
+        .expect("source interrupts"),
+        "the root file is laid byte for byte"
+    );
+    assert_eq!(shadowed(&response.warnings), expected, "package bundle");
+
+    let (_temp, game_root) = installed(&named, &[]);
+    let checked =
+        check(&game_root).unwrap_or_else(|error| panic!("{}: {}", error.code, error.message));
+    assert_eq!(checked.status, "checked");
+    assert_eq!(shadowed(&checked.warnings), expected, "standard-pack check");
+
+    let misplaced = valid().interrupt("result", json!("application_update_required"));
+    let (_temp, request, result) = bundle(&misplaced);
+    let error = result.expect_err("a result on resume");
+    let (code, values) = refusal(&error);
+    assert_eq!(code, ROOT_INVALID, "package bundle: {}", error.message);
+    assert_eq!(
+        (&values["standard_pack_problem"], &values["json_pointer"]),
+        (
+            &json!(StandardPackProblem::InterruptResultInvalid.as_str()),
+            &json!("/interrupts/0/result")
+        ),
+        "package bundle: {values}"
+    );
+    assert!(!request.out.exists(), "--out was written");
+
+    let (_temp, game_root) = installed(&misplaced, &[]);
+    let error = check(&game_root).expect_err("a result on resume");
+    let (code, values) = refusal(&error);
+    assert_eq!(code, ROOT_INVALID, "standard-pack check: {}", error.message);
+    assert_eq!(
+        (&values["standard_pack_problem"], &values["json_pointer"]),
+        (
+            &json!(StandardPackProblem::InterruptResultInvalid.as_str()),
+            &json!("/interrupts/0/result")
+        ),
+        "standard-pack check: {values}"
+    );
+}

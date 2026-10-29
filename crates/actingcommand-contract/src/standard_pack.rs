@@ -117,6 +117,8 @@ crate::outcome_vocabulary! {
         PackagesCount => "packages_count",
         /// An interrupt's `max_per_run` is outside 1..=8.
         MaxPerRunInvalid => "max_per_run_invalid",
+        /// UPD-1 (0.12.30): an interrupt declares `result` but its `then` is not `end_run`.
+        InterruptResultInvalid => "interrupt_result_invalid",
         /// Workflow #373 NAV-5: `edges` holds more than 1024 edges.
         EdgesCount => "edges_count",
         /// Workflow #373 NAV-5: an edge's `from` or `to` is no page id: `any`, a draft's
@@ -318,6 +320,23 @@ pub struct StandardPackInterrupt {
     /// than `max_per_run`; absent it is [`InterruptLimitCause::PackLogic`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit_cause: Option<InterruptLimitCause>,
+    /// UPD-1 (since 0.12.30): what a run that this page ends (`then: end_run`) says, a word of a
+    /// closed vocabulary; only with `then: end_run` (else `interrupt_result_invalid`). Absent,
+    /// the run ends with `contained_task_interrupt_escalated` as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<InterruptResult>,
+}
+
+/// UPD-1: the named result of a run a shared interrupt page ends (`result`, a closed
+/// vocabulary). The data names the page; the Runtime names none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InterruptResult {
+    /// The page says the game's client must be updated before it can be played: the run ends
+    /// with `contained_task_application_update_required`, and the Runtime records the instance
+    /// fact `health.application.update_required` true, which holds the instance's other tasks
+    /// until a `store_update` package's run succeeds there.
+    ApplicationUpdateRequired,
 }
 
 /// Workflow #411 B43: what an interrupt page met once more than its `max_per_run` says
@@ -553,7 +572,9 @@ pub fn parse_standard_pack_pages(
 /// [`parse_standard_pack_pages`], at most 32 entries, each `page` a page of `pages` and named
 /// once, 1..=8 handlers, 1..=8 `then.run` packages, and `max_per_run` within 1..=8. Workflow
 /// #411 B43: an optional `limit_cause` that is not `"pack_logic"` or `"environment"` is
-/// `malformed`, as every member of another type is.
+/// `malformed`, as every member of another type is. UPD-1: an optional `result` that is not
+/// `"application_update_required"` is `malformed` too, and one on an entry whose `then` is not
+/// `end_run` is `interrupt_result_invalid` at `/interrupts/<i>/result`.
 pub fn parse_standard_pack_interrupts(
     bytes: &[u8],
     game: Option<&str>,
@@ -613,6 +634,14 @@ pub fn parse_standard_pack_interrupts(
                 file,
                 StandardPackProblem::MaxPerRunInvalid,
                 at("max_per_run"),
+            ));
+        }
+        // UPD-1: a named result is what a run the page ends says; only `end_run` ends one.
+        if interrupt.result.is_some() && interrupt.then != InterruptThen::EndRun {
+            return Err(StandardPackRootIssue::new(
+                file,
+                StandardPackProblem::InterruptResultInvalid,
+                at("result"),
             ));
         }
     }
@@ -1111,6 +1140,70 @@ mod tests {
         ] {
             assert_eq!(
                 read_interrupts(&interrupt_with("limit_cause", value)).map(|_| ()),
+                Err(issue(
+                    STANDARD_PACK_INTERRUPTS_FILE,
+                    StandardPackProblem::Malformed,
+                    ""
+                )),
+                "{case}"
+            );
+        }
+    }
+
+    /// UPD-1 A10 (the shared static check of the Runtime, `package bundle` and `standard-pack
+    /// check`): an entry may declare `result: "application_update_required"` with
+    /// `then: "end_run"`; absent, the entry serializes as before; on an entry whose `then` is
+    /// `resume` or `{"run": [...]}` it is `interrupt_result_invalid` at
+    /// `/interrupts/<i>/result`; any other value or type is `malformed`.
+    #[test]
+    fn upd1_a10_an_interrupt_s_result_is_read_only_with_end_run() {
+        let absent = read_interrupts(&interrupts()).expect("interrupts without the member");
+        assert!(
+            absent
+                .interrupts
+                .iter()
+                .all(|interrupt| interrupt.result.is_none())
+        );
+        let serialized = serde_json::to_value(&absent.interrupts[2]).expect("an interrupt");
+        assert!(
+            serialized.get("result").is_none(),
+            "an absent result serializes as before: {serialized}"
+        );
+        // The third entry is `end_run`.
+        let mut named = interrupts();
+        named["interrupts"][2]["result"] = json!("application_update_required");
+        let read = read_interrupts(&named).expect("a named result on end_run");
+        assert_eq!(
+            read.interrupts[2].result,
+            Some(InterruptResult::ApplicationUpdateRequired)
+        );
+        assert_eq!(
+            serde_json::to_value(&read.interrupts[2]).expect("an interrupt")["result"],
+            json!("application_update_required")
+        );
+        // The first entry is `resume`, the second `{"run": [...]}`.
+        for index in [0_usize, 1] {
+            let mut misplaced = interrupts();
+            misplaced["interrupts"][index]["result"] = json!("application_update_required");
+            assert_eq!(
+                read_interrupts(&misplaced).map(|_| ()),
+                Err(issue(
+                    STANDARD_PACK_INTERRUPTS_FILE,
+                    StandardPackProblem::InterruptResultInvalid,
+                    &format!("/interrupts/{index}/result")
+                )),
+                "entry {index}"
+            );
+        }
+        for (case, value) in [
+            ("a boolean", json!(true)),
+            ("a number", json!(1)),
+            ("an unknown result", json!("update_required")),
+        ] {
+            let mut wrong = interrupts();
+            wrong["interrupts"][2]["result"] = value;
+            assert_eq!(
+                read_interrupts(&wrong).map(|_| ()),
                 Err(issue(
                     STANDARD_PACK_INTERRUPTS_FILE,
                     StandardPackProblem::Malformed,

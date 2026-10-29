@@ -78,6 +78,8 @@ pub struct NavigationPackageDescriptor {
     store_fixed_taps: Vec<String>,
     /// Workflow #428 CFL-2: [`PreparedContainedTask::preprocess_divergences`].
     preprocess_divergences: Vec<(String, String)>,
+    /// UPD-1: [`PreparedContainedTask::declares_store_update`].
+    store_update: bool,
 }
 
 impl PreparedContainedTask {
@@ -100,6 +102,7 @@ impl PreparedContainedTask {
             }),
             store_fixed_taps: self.store_fixed_taps(),
             preprocess_divergences: self.preprocess_divergences(),
+            store_update: self.declares_store_update(),
         }
     }
 }
@@ -143,6 +146,11 @@ impl NavigationPackageDescriptor {
     /// take its text from, with the shared read's pointer in the recognition pack.
     pub fn preprocess_divergences(&self) -> &[(String, String)] {
         &self.preprocess_divergences
+    }
+    /// UPD-1 (design-upd1 §7): whether it declares `store_update`; a store update package may
+    /// hold a shared interrupt page with a named `result` as its own page by its part.
+    pub fn declares_store_update(&self) -> bool {
+        self.store_update
     }
 }
 

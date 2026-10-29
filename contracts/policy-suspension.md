@@ -181,7 +181,10 @@ Only these failures can pause a task by repeating:
   declares `limit_cause` `"environment"` ([package-reference.md](package-reference.md),
   "Standard package root"): the data says the screen is the game's network or servers, not a
   pack that no longer matches, so the pair is rerun (R22) and never paused by repeating. Its
-  identity still names `g`.
+  identity still names `g`. UPD-1 (0.12.30): `contained_task_application_update_required` (the
+  game's update dialog, an `interrupts.json` entry with `result`) is not under the
+  `contained_task_interrupt_` prefix and never accumulates; it ends a scheduled run by a
+  condition ("Condition termination and owed reruns", "Which runs").
 
 Every other failure is rerun only: its `F` is unique, so it never repeats the previous identity
 and its count stays 1. This covers the gate and every prerequisite and return-home package,
@@ -646,7 +649,8 @@ code is listed in `scheduling.rerun.condition_codes`. The default list is
 `recognition_sample_budget_insufficient`, `candidate_sample_budget_insufficient`,
 `recognition_sample_deadline_exceeded`, `candidate_sample_deadline_exceeded`,
 `blackout_run_stopped` (`scheduling-blackout.md`), `perf_run_yielded` and `perf_hold_expired`
-(Workflow #385), `cost_commit_time_insufficient` (`cost-commit.md`) and `contained_task_paused`.
+(Workflow #385), `cost_commit_time_insufficient` (`cost-commit.md`), `contained_task_paused` and
+`contained_task_application_update_required`.
 A sampling timeout ends a run only after its observe-only retries ran out: an observation that
 times out is repeated without repeating any input, `scheduling.recognition.sample_timeout_retries`
 times (default 2; slice SR-1) plus the pacing curve's extra retries of the step's stage (Workflow
@@ -656,6 +660,15 @@ pause`) or a deploy's drain cut off at its drain timeout ([scheduling-pause.md](
 ends by a condition: it adds to no streak, its counts are given back (with the default
 `refund_counts`) and its rerun is owed after the resume. A sensitive task's paused run stays an
 ordinary failure, as every sensitive task's failure does (below).
+`contained_task_application_update_required` is in the default list since 0.12.30 (UPD-1, design
+`rd-1029/design-upd1.md` §2.2 item 4, option A of Alice's possible question 109; a changed
+default, no new key and no `actingd-config` revision): a scheduled run that met the game's
+update dialog ([package-reference.md](package-reference.md), `interrupts.json` `result`) ends by a
+condition, adds to no streak, is not rerun at once (R22), has its counts given back and owes its
+rerun, which the application update hold ([scheduling-blackout.md](scheduling-blackout.md),
+position 4a) keeps until a store update package's run has cleared
+`health.application.update_required`; the owed rerun then goes first. A sensitive task's run that
+met the dialog stays an ordinary failure, as above.
 
 **Decided once.** The live settlement decides it from the failure code, the configuration and
 the number of consecutive condition terminations of the pair in this occurrence, and writes the
@@ -758,7 +771,7 @@ None of these codes triggers the recovery ladder.
 | Key | Default | Meaning |
 |---|---|---|
 | `scheduling.recognition.sample_timeout_retries` | 2 | Base number of observe-only retries of a timed-out observation |
-| `scheduling.rerun.condition_codes` | the nine codes above (`contained_task_paused` since 0.12.28, decision 92) | Codes that end a run by a condition; read when a run is first settled (live settlement or reconciliation from its terminal). Every entry is a code the catalog lists and has not retired |
+| `scheduling.rerun.condition_codes` | the ten codes above (`contained_task_paused` since 0.12.28, decision 92; `contained_task_application_update_required` since 0.12.30, UPD-1) | Codes that end a run by a condition; read when a run is first settled (live settlement or reconciliation from its terminal). Every entry is a code the catalog lists and has not retired |
 | `scheduling.rerun.max_per_occurrence` | 2 | Condition terminations per occurrence before an ordinary failure; read when a run is first settled (live settlement or reconciliation from its terminal) |
 | `scheduling.rerun.resume_stage` | S2 | Highest pacing stage at which an owed rerun runs |
 | `scheduling.rerun.resume_settle_ms` | 60,000 | How long the stage must stay at or below the resume stage |

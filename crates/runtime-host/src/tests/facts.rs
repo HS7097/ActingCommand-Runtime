@@ -56,8 +56,9 @@ fn runtime_fact_store_shares_server_facts_invalidates_and_recovers_from_ledger()
             game_id: "fixture-game-a".to_owned(),
         })
         .expect("peer snapshot");
-    // The configured instance also carries its three configuration seeds (`session.instance.*`).
-    assert_eq!(primary.records.len(), 5);
+    // The configured instance also carries its three configuration seeds (`session.instance.*`)
+    // and, since 0.12.30 (UPD-1 A7), its `health.application.update_required` seed.
+    assert_eq!(primary.records.len(), 6);
     assert_eq!(peer.records.len(), 1);
 
     host.record_policy_planning_signal(PolicyPlanningSignalEventData {
@@ -174,8 +175,9 @@ fn agent_adapter_publish_fact_uses_authoritative_fact_owner_once() {
             ..EventQuery::default()
         },
     );
-    // The three configuration seeds precede the adapter's own publication.
-    assert_eq!(first_events.len(), 4);
+    // The three configuration seeds and (UPD-1 A7, 0.12.30) the application update seed precede
+    // the adapter's own publication.
+    assert_eq!(first_events.len(), 5);
     let adapter_event = first_events.last().expect("adapter publication");
     assert_eq!(adapter_event.event_id, published_event_id);
     assert_eq!(
@@ -588,12 +590,11 @@ fn fact_snapshot_catches_up_with_critical_ledger_events() {
             game_id: "fixture-game-a".to_owned(),
         })
         .expect("synchronized fact snapshot");
-    assert!(
-        snapshot
-            .records
-            .iter()
-            .all(|record| record.key.starts_with("session.instance."))
-    );
+    // Only the start's seeds remain (UPD-1 A7, 0.12.30: the application update seed with them).
+    assert!(snapshot.records.iter().all(|record| {
+        record.key.starts_with("session.instance.")
+            || record.key == crate::application_update::APPLICATION_UPDATE_FACT_KEY
+    }));
 
     let mut client = TestClient::connect(&host);
     assert_eq!(
@@ -746,12 +747,11 @@ fn runtime_startup_materializes_a_missed_critical_fact_invalidation() {
             game_id: "fixture-game-a".to_owned(),
         })
         .expect("recovered snapshot");
-    assert!(
-        snapshot
-            .records
-            .iter()
-            .all(|record| record.key.starts_with("session.instance."))
-    );
+    // Only the start's seeds remain (UPD-1 A7, 0.12.30: the application update seed with them).
+    assert!(snapshot.records.iter().all(|record| {
+        record.key.starts_with("session.instance.")
+            || record.key == crate::application_update::APPLICATION_UPDATE_FACT_KEY
+    }));
     let mut client = TestClient::connect(&reopened);
     assert_eq!(
         projected_events(

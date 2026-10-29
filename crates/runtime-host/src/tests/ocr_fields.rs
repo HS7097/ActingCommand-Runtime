@@ -346,12 +346,14 @@ fn fields_v1_callback_failures_keep_official_projection_and_fatal_boundaries() {
             )
             .unwrap();
             assert!(ledger.corrupt_tail().is_none());
-            // The only fact publications are the three configuration seeds of startup.
+            // The only fact publications are the three configuration seeds of startup and (UPD-1
+            // A7, 0.12.30) its application update seed.
             assert!(ledger.events().iter().all(|event| match event.payload() {
                 EventPayload::Fact(actingcommand_contract::FactPayload::Published(payload)) => {
-                    payload
-                        .records()
-                        .all(|record| record.key.starts_with("session.instance."))
+                    payload.records().all(|record| {
+                        record.key.starts_with("session.instance.")
+                            || record.key == crate::application_update::APPLICATION_UPDATE_FACT_KEY
+                    })
                 }
                 _ => !matches!(
                     event.event_type(),

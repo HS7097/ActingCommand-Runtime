@@ -1881,3 +1881,471 @@ fn n6_15_root_files_replaced_in_place_take_effect_at_the_next_run() {
     assert_eq!(strings(changed, "added_package_ids"), [CLOSE_ALERT]);
     assert!(changed.value("removed_package_ids").is_none());
 }
+
+// ---- UPD-1 (design-upd1 §2, §3.3, §5; register §1.215): the game's update dialog.
+
+const UPDATE_REQUIRED: &str = "contained_task_application_update_required";
+const UPDATE_PENDING: &str = "application_update_pending";
+const UPDATE_KEY: &str = "health.application.update_required";
+
+/// The shared interrupt page `page` (handled by `handler`) as the update dialog: `then: end_run`
+/// and `result: application_update_required`.
+fn update_entry(page: &str, handler: &str) -> Value {
+    let mut entry = interrupt(page, handler, json!("end_run"), 1);
+    entry["result"] = json!("application_update_required");
+    entry
+}
+
+/// A game root whose `notice` is the update dialog.
+fn update_root(base: &Path) -> GameRoot {
+    let mut root = GameRoot::new(base);
+    root.features()
+        .pack(
+            CLOSE_NOTICE,
+            "navigable_route",
+            handler_task("notice", "first_white", TO_AWAY),
+        )
+        .bundle()
+        .pages()
+        .interrupts(json!([update_entry("notice", CLOSE_NOTICE)]));
+    root
+}
+
+/// Every publication of `health.application.update_required` for `alias`, in ledger order: its
+/// event's sequence, its value and its `source_snapshot_id`.
+fn update_publications(events: &[PersistedEvent], alias: &str) -> Vec<(u64, bool, String)> {
+    let scope = FactScope::Instance {
+        instance_id: alias.to_owned(),
+    };
+    events
+        .iter()
+        .filter_map(|event| match event.payload() {
+            EventPayload::Fact(actingcommand_contract::FactPayload::Published(payload)) => {
+                Some((event.sequence(), payload.record()))
+            }
+            _ => None,
+        })
+        .filter(|(_, record)| record.key == UPDATE_KEY && record.scope == scope)
+        .filter_map(|(sequence, record)| match &record.content {
+            FactContent::Inline {
+                value: ContractFactValue::Boolean(value),
+            } => Some((sequence, *value, record.source_snapshot_id.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The sequence of the first failed task terminal (`task.failed`) in `events`.
+fn failed_terminal(events: &[PersistedEvent]) -> u64 {
+    events
+        .iter()
+        .find(|event| event.event_type() == EventType::TaskFailed)
+        .map(PersistedEvent::sequence)
+        .expect("a failed task terminal")
+}
+
+/// Whether any recovery ladder started in `events`.
+fn ladder_started(events: &[PersistedEvent]) -> bool {
+    super::instance_workers::phases(events)
+        .iter()
+        .any(|(_, phase)| matches!(phase, RuntimeLifecyclePhase::RecoveryLadderStarted { .. }))
+}
+
+/// UPD-1 A9 (and the code's class, A1's "no ladder" by default): a direct run that meets the
+/// update dialog runs its handler, then ends with `contained_task_application_update_required`
+/// (warning, ladder class none, `page_id`) with no further input; the instance's
+/// `health.application.update_required` is published true before the run's terminal; no ladder
+/// starts. The code never accumulates toward a pause, in any scope.
+#[test]
+fn upd1_a9_a_direct_run_meeting_the_update_dialog_ends_with_its_code_and_records_the_fact() {
+    let state = Arc::new(FakeState::default());
+    let temp = TempDir::new().expect("tempdir");
+    let root = update_root(temp.path());
+    overlay_then_away_then_home(&state, 0, Overlay::Notice);
+    let host = start(&temp, &state, Some(&root));
+    let run = run(&host, &temp, "run", &away_to_home());
+    let events = host
+        .query_persisted_events_for_test(EventQuery::default())
+        .expect("ledger events");
+    let fact = host
+        .application_update_for_test(ALIAS)
+        .expect("the instance fact");
+    host.close().expect("close runtime host");
+
+    assert_eq!(run.receipt.state(), RuntimeReceiptState::Failed);
+    let failure = run.failure();
+    assert_eq!(failure.code().as_str(), UPDATE_REQUIRED);
+    assert_eq!(failure.category(), Category::Warning);
+    assert_eq!(text(&failure, "page_id"), Some("notice"));
+    let handled = run.handled();
+    let [(_, _, then, 1, _)] = handled.as_slice() else {
+        panic!("one handled interrupt: {handled:?}");
+    };
+    assert_eq!(*then, TaskInterruptThen::EndRun);
+    assert_eq!(
+        state.input_count.load(Ordering::Acquire),
+        1,
+        "the handler's tap only"
+    );
+    let publications = update_publications(&events, ALIAS);
+    let [(published_at, true, source)] = publications.as_slice() else {
+        panic!("one publication of true: {publications:?}");
+    };
+    assert!(
+        source.starts_with("application_update:run:"),
+        "the run's write: {source}"
+    );
+    assert!(
+        *published_at < failed_terminal(&events),
+        "the fact before the terminal"
+    );
+    assert_eq!(fact.map(|(value, _)| value), Some(true));
+    assert!(!ladder_started(&events), "a direct run starts no ladder");
+
+    let code = crate::codes::ApplicationUpdateCode::RunEnded;
+    assert_eq!(code.as_str(), UPDATE_REQUIRED);
+    assert_eq!(code.category(), Category::Warning);
+    assert_eq!(code.ladder_class(), LadderClass::NotApplicable);
+    let code = CodeStr::from(code.code());
+    for scope in ["prepare", "gate", "pre:0123abcd", "main"] {
+        for restart_segment in [false, true] {
+            assert!(
+                !failure_accumulates(&code, scope, restart_segment),
+                "{scope} {restart_segment}"
+            );
+        }
+    }
+}
+
+/// UPD-1 A1 and B2 (design §2.3, §6): a scheduled run of a page-graph task, under the catalog
+/// value that pauses a repeated failure, meets the update dialog. It ends with the new code, the
+/// fact is true before its terminal, it starts no ladder, and its settlement is a condition
+/// termination under the shipped `scheduling.rerun.condition_codes`: refunded, count 1, no streak,
+/// no immediate rerun. While the fact is true the pair's owed rerun waits with
+/// `application_update_pending` (position 4a). Once a store update's success has cleared the fact,
+/// the pair is dispatched again first, as the owed rerun (`policy_rerun_owed`).
+#[test]
+fn upd1_a1_b2_a_scheduled_run_meeting_the_update_dialog_ends_by_a_condition_and_reruns_after() {
+    let state = Arc::new(FakeState::default());
+    let temp = TempDir::new().expect("tempdir");
+    let root = update_root(temp.path());
+    overlay_then_away_then_home(&state, 0, Overlay::Notice);
+    let package = away_to_home();
+    let package_path = temp.path().join("scheduled.zip");
+    fs::write(&package_path, &package).expect("write the scheduled package");
+    let request = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+        .expect("scheduled request");
+    let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
+    state.physical_task_geometry.store(true, Ordering::Release);
+    let host = RuntimeHost::start(
+        config(&temp)
+            .with_runtime_clock(clock.clone())
+            .with_procedure_manifest(procedure_manifest_with_primary(
+                &package,
+                vec!["after_observation".to_owned()],
+            ))
+            .with_standard_packs_root(Some(root.root.clone())),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::clone(&state),
+        )),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&pausing_policy_sources())
+        .expect("activate policy catalog");
+
+    let (context, error) = b43_failed_scheduled_run(&host, &clock, &request, POLICY_NOW_UNIX_MS, 7);
+    assert_eq!(error.code(), UPDATE_REQUIRED);
+    let events = host
+        .query_persisted_events_for_test(EventQuery::default())
+        .expect("ledger events");
+    let publications = update_publications(&events, POLICY_INSTANCE_ALIAS);
+    let [(published_at, true, _)] = publications.as_slice() else {
+        panic!("one publication of true: {publications:?}");
+    };
+    assert!(*published_at < failed_terminal(&events));
+    assert!(!ladder_started(&events), "class none opens no ladder");
+    let failure = b43_recorded_failure(&host, context.run_id());
+    assert_eq!(
+        actingcommand_contract::scheduled_failure_code_str(&failure.outcome).as_str(),
+        UPDATE_REQUIRED
+    );
+    assert!(
+        matches!(
+            failure.condition,
+            Some(actingcommand_contract::PolicyConditionSettlement {
+                refunded: true,
+                count: 1,
+                ..
+            })
+        ),
+        "a condition termination: {failure:?}"
+    );
+    assert_eq!(failure.consecutive_same_error, 0);
+    assert_eq!(failure.escalation_streak, 0);
+    assert_eq!(failure.disposition, PolicyFailureDisposition::Continue);
+
+    // The fact is true: the owed rerun waits at position 4a, and nothing reruns at once.
+    let evaluate = |at: u64, seed: u64| {
+        advance_manual_clock_to(&clock, at);
+        host.capacity_sampler_for_test().expect("capacity owner")()
+            .expect("capacity sample at the evaluation time");
+        host.evaluate_policy_cycle_with_test_inputs(
+            &policy_facts(),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: at,
+                monotonic_ms: at,
+            },
+            seed,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("evaluate the policy")
+        .evaluation
+        .expect("an evaluation")
+    };
+    let at = context
+        .admission()
+        .activity
+        .next_eligible_unix_ms
+        .max(clock_now(&clock) + 600_000);
+    let held = evaluate(at, 8);
+    let reasons = held
+        .decisions
+        .iter()
+        .filter(|decision| {
+            decision.task_id == B43_TASK
+                && decision.instance_id.as_deref() == Some(POLICY_INSTANCE_ALIAS)
+        })
+        .flat_map(|decision| decision.reasons.iter())
+        .map(|reason| reason.outcome.clone())
+        .collect::<Vec<_>>();
+    let pending = reasons
+        .iter()
+        .find(|outcome| outcome.code().as_str() == UPDATE_PENDING)
+        .unwrap_or_else(|| panic!("the pair waits for the update: {reasons:?}"));
+    assert_eq!(text(pending, "instance_id"), Some(POLICY_INSTANCE_ALIAS));
+    assert_eq!(text(pending, "fact_key"), Some(UPDATE_KEY));
+    assert!(
+        !reasons
+            .iter()
+            .any(|outcome| outcome.code().as_str() == "failure_retry_immediate"),
+        "no immediate rerun: {reasons:?}"
+    );
+    assert!(
+        !held
+            .dispatch_intents
+            .iter()
+            .any(|intent| intent.task_id == B43_TASK),
+        "nothing is dispatched while the fact is true"
+    );
+
+    // A store update's success clears the fact: the owed rerun goes first.
+    host.record_application_update_for_test(POLICY_INSTANCE_ALIAS, false)
+        .expect("clear the fact");
+    let after = evaluate(clock_now(&clock) + 1_000, 9);
+    host.close().expect("close runtime host");
+    let rerun = after
+        .dispatch_intents
+        .iter()
+        .find(|intent| intent.task_id == B43_TASK && intent.instance_id == POLICY_INSTANCE_ALIAS)
+        .unwrap_or_else(|| panic!("the pair is dispatched again: {after:#?}"));
+    let chain = after
+        .reason_chains
+        .iter()
+        .find(|chain| chain.id == rerun.reason_chain_id)
+        .expect("the rerun's reason chain");
+    assert!(
+        chain
+            .reasons
+            .iter()
+            .any(|reason| reason.outcome.code().as_str() == "policy_rerun_owed"),
+        "the owed rerun: {chain:#?}"
+    );
+}
+
+/// UPD-1 A3 (design §5.2 item 1): the instance's startup package meets the update dialog. It
+/// ends with the new code, `runtime.failed` records it at Warning, the fact is true, no ladder
+/// starts and the Runtime stays healthy (the instance is not fenced).
+#[test]
+fn upd1_a3_a_startup_package_meeting_the_update_dialog_ends_with_its_code_and_opens_no_ladder() {
+    let state = Arc::new(FakeState::default());
+    let temp = TempDir::new().expect("tempdir");
+    let root = update_root(temp.path());
+    let (host_config, _) =
+        super::instance_workers::ladder_setup_with_package(temp.path(), &away_to_home());
+    overlay_then_away_then_home(&state, 0, Overlay::Notice);
+    state.physical_task_geometry.store(true, Ordering::Release);
+    let host = RuntimeHost::start(
+        host_config.with_standard_packs_root(Some(root.root.clone())),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::clone(&state),
+        )),
+    )
+    .expect("runtime host");
+    host.schedule_startup_package_for_test(POLICY_INSTANCE_ALIAS)
+        .expect("schedule the startup package");
+    super::instance_workers::wait_until("the startup run's end and its release", || {
+        let events = super::instance_workers::all_events(&host);
+        events
+            .iter()
+            .any(|event| event.event_type() == EventType::TaskFailed)
+            && host
+                .instance_claims_for_test(POLICY_INSTANCE_ALIAS)
+                .expect("instance claims")
+                .0
+                .is_none()
+    });
+    let events = super::instance_workers::all_events(&host);
+    let fact = host
+        .application_update_for_test(POLICY_INSTANCE_ALIAS)
+        .expect("the instance fact");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close runtime host");
+
+    let terminal = events
+        .iter()
+        .find_map(|event| match event.payload() {
+            EventPayload::Task(TaskPayload::Semantic(payload)) => match payload.fact() {
+                TaskSemanticFact::TerminalCommitted {
+                    outcome: Some(outcome),
+                    ..
+                } => Some(outcome.clone()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("the startup run's failed terminal");
+    assert_eq!(terminal.code().as_str(), UPDATE_REQUIRED);
+    let recorded = events
+        .iter()
+        .filter_map(|event| match event.payload() {
+            EventPayload::Runtime(RuntimePayload::Failed(payload))
+                if payload.outcome().code().as_str() == UPDATE_REQUIRED =>
+            {
+                Some(event.severity())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        recorded,
+        [EventSeverity::Warning],
+        "one runtime.failed at Warning"
+    );
+    assert_eq!(fact.map(|(value, _)| value), Some(true));
+    assert!(
+        !ladder_started(&events),
+        "a startup package opens no ladder"
+    );
+}
+
+/// UPD-1 A4 (design §5.2 item 2): a scheduled run fails by the pack's logic (a notice that ends
+/// it, no `result`) and opens the `pack_logic` ladder. Its return-home rung is skipped (the run
+/// binds no return-home package); its application restart runs the startup package, which meets
+/// the update dialog (`alert`, with `result`): the rung fails with `recovery_ladder_interrupted`
+/// caused by the new code, the ladder ends `exhausted` at Warning with the same outcome, and it
+/// climbs no further (no emulator restart rung is recorded). The fact is true.
+#[test]
+fn upd1_a4_the_ladder_s_application_restart_meeting_the_update_dialog_stops_the_ladder() {
+    let state = Arc::new(FakeState::default());
+    let temp = TempDir::new().expect("tempdir");
+    let mut root = GameRoot::new(temp.path());
+    root.features()
+        .pack(
+            CLOSE_NOTICE,
+            "navigable_route",
+            handler_task("notice", "first_white", TO_AWAY),
+        )
+        .pack(
+            CLOSE_ALERT,
+            "navigable_route",
+            handler_task("alert", "third_white", TO_AWAY),
+        )
+        .bundle()
+        .pages()
+        .interrupts(json!([
+            interrupt("notice", CLOSE_NOTICE, json!("end_run"), 1),
+            update_entry("alert", CLOSE_ALERT)
+        ]));
+    let (host_config, bound) =
+        super::instance_workers::ladder_setup_with_package(temp.path(), &away_to_home());
+    // The scheduled run binds no return-home package: the ladder's first rung is skipped.
+    let request = ContainedTaskRequest::new(bound.package_path().to_owned())
+        .expect("scheduled request without a return-home binding");
+    // Before the application restart the notice, then `away`; after it the update dialog until
+    // the next input (its handler's tap), then `away`.
+    let device = Arc::downgrade(&state);
+    let restarted_at = std::sync::Mutex::new(None::<usize>);
+    script(&state, move |_, inputs| {
+        let applications = device
+            .upgrade()
+            .map_or(0, |state| state.application_count.load(Ordering::Acquire));
+        if applications == 0 {
+            return frame(RED, (inputs == 0).then_some(Overlay::Notice));
+        }
+        let mut restarted_at = restarted_at.lock().expect("the restart's inputs");
+        if *restarted_at.get_or_insert(inputs) == inputs {
+            frame(RED, Some(Overlay::Alert))
+        } else {
+            frame(RED, None)
+        }
+    });
+    state.physical_task_geometry.store(true, Ordering::Release);
+    let host = RuntimeHost::start(
+        host_config.with_standard_packs_root(Some(root.root.clone())),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::clone(&state),
+        )),
+    )
+    .expect("runtime host");
+    let context = super::instance_workers::admit_ladder_run(&host, &request);
+    let error = host
+        .run_scheduled_contained_task(&context, &request)
+        .expect_err("the scheduled run fails");
+    assert_eq!(error.code(), "contained_task_interrupt_escalated");
+    super::instance_workers::wait_for_ladder_end(&host, POLICY_INSTANCE_ALIAS);
+    let events = super::instance_workers::all_events(&host);
+    let fact = host
+        .application_update_for_test(POLICY_INSTANCE_ALIAS)
+        .expect("the instance fact");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close runtime host");
+
+    let rungs = super::instance_workers::rung_outcomes(&events);
+    assert!(
+        !rungs
+            .iter()
+            .any(|(rung, ..)| *rung == actingcommand_contract::RecoveryRung::EmulatorRestart),
+        "no emulator restart rung: {rungs:?}"
+    );
+    let restart = rungs
+        .iter()
+        .find(|(rung, ..)| *rung == actingcommand_contract::RecoveryRung::ApplicationRestart)
+        .unwrap_or_else(|| panic!("the application restart rung: {rungs:?}"));
+    assert_eq!(
+        (restart.1, restart.2.as_deref()),
+        (
+            actingcommand_contract::RecoveryRungOutcome::Failed,
+            Some(UPDATE_REQUIRED)
+        ),
+        "{rungs:?}"
+    );
+    let (finished, result, _) =
+        super::instance_workers::ladder_finished(&events).expect("the ladder's end");
+    assert_eq!(
+        result,
+        actingcommand_contract::RecoveryLadderOutcome::Exhausted
+    );
+    assert_eq!(finished.severity(), EventSeverity::Warning);
+    assert_eq!(
+        super::instance_workers::ladder_end_code(finished),
+        Some("recovery_ladder_interrupted")
+    );
+    assert_eq!(fact.map(|(value, _)| value), Some(true));
+}

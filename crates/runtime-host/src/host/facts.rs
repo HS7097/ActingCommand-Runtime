@@ -178,6 +178,9 @@ pub(super) enum FactPublicationPurpose {
     /// SCH-M ED-2 (§3.4 D-14): the Runtime's own write of one instance's `health.run_duration`
     /// record at a settlement, the key's only entry.
     RunDuration,
+    /// UPD-1 (design-upd1 §3.3): the Runtime's own write of one instance's
+    /// `health.application.update_required`, the key's only entry.
+    ApplicationUpdate,
 }
 
 /// Where one publication landed: the event that holds its records, the sequence of the
@@ -366,10 +369,26 @@ impl HostShared {
                     )
                     .with_outcome_values(|outcome| outcome.fact_key(fact_key.as_str())));
                 }
+                // UPD-1 (design §3.3): the Runtime is the only writer of the application update
+                // fact; any other publication of the key is refused before the gate.
+                if purpose != FactPublicationPurpose::ApplicationUpdate
+                    && let Some(record) = observation.records.iter().find(|record| {
+                        record.key == crate::application_update::APPLICATION_UPDATE_FACT_KEY
+                    })
+                {
+                    let fact_key = record.key.clone();
+                    return Err(RuntimeHostError::request(
+                        crate::codes::ApplicationUpdateCode::KeyReserved,
+                        ContractLocation::PublishFacts,
+                        RuntimeErrorCode::InvalidRequest,
+                    )
+                    .with_outcome_values(|outcome| outcome.fact_key(fact_key.as_str())));
+                }
                 // Workflow #308 RT-S1a: the resource target policy key has one formal entry.
                 match purpose {
                     FactPublicationPurpose::Ordinary
                     | FactPublicationPurpose::RunDuration
+                    | FactPublicationPurpose::ApplicationUpdate
                     | FactPublicationPurpose::ResourceAdjustment { .. } => {
                         if observation
                             .records

@@ -511,7 +511,9 @@ fn preprocess_divergences(
 /// `package_bundle_interrupt_page_shadowed` warning per package of the registry and shared
 /// interrupt page it declares, in registry order and then `interrupts.json` order; nothing is
 /// refused. A feature package of `pages.json` (its pages are the list's) and a handler of the
-/// page (its entry holds the page) declare it by their part and are not reported.
+/// page (its entry holds the page) declare it by their part and are not reported; UPD-1 (design
+/// §7): so does a store update package (`store_update`) for a page whose entry names a `result`
+/// (the page it starts from, which the shared interrupt must not take from its own run).
 fn shadowed_interrupt_pages(
     root: &StandardPackRoot,
     features: &[String],
@@ -531,7 +533,8 @@ fn shadowed_interrupt_pages(
                 .handlers
                 .iter()
                 .any(|handler| handler == package_id);
-            if !handles && package.page_ids().contains(&interrupt.page) {
+            let store_entry = interrupt.result.is_some() && package.declares_store_update();
+            if !handles && !store_entry && package.page_ids().contains(&interrupt.page) {
                 warnings.push(
                     Outcome::new(ResourceToolingCode::PackageBundleInterruptPageShadowed)
                         .package_id(package_id)

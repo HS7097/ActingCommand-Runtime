@@ -232,6 +232,10 @@ pub(super) struct ContainedTaskTerminalDraft {
     pub(super) task_timing: Option<Box<actingcommand_contract::TaskTimingObservations>>,
     /// Readings a successful run took (Workflow #335 S5b, #384 D2-S2); in memory only.
     pub(super) resource_readings: Option<ContainedTaskResourceReadings>,
+    /// UPD-1 (design §3.3): the instance alias of a `store_update` package's own run; its
+    /// successful terminal first records the instance's `health.application.update_required`
+    /// false. In memory only.
+    pub(super) store_update_alias: Option<String>,
 }
 
 /// The failure point's verdict that a failed run must pause its task: the terminal's
@@ -7921,6 +7925,7 @@ impl HostShared {
                             capture_summary,
                             task_timing: Some(task_timing.clone()),
                             resource_readings: None,
+                            store_update_alias: None,
                         },
                     )?;
                     if let Some(refusal) = &summary_refusal {
@@ -8034,6 +8039,7 @@ impl HostShared {
                             capture_summary,
                             task_timing: Some(task_timing.clone()),
                             resource_readings: None,
+                            store_update_alias: None,
                         },
                     )?;
                     failure.terminal = Some(terminal(&event));
@@ -8163,6 +8169,7 @@ impl HostShared {
                         capture_summary,
                         task_timing: Some(task_timing.clone()),
                         resource_readings: None,
+                        store_update_alias: None,
                     },
                 )?;
                 // Workflow #336 L2d: the page-graph home entry's refusal of a configured
@@ -8294,6 +8301,7 @@ impl HostShared {
                             capture_summary: None,
                             task_timing: Some(task_timing),
                             resource_readings: None,
+                            store_update_alias: None,
                         },
                     )?;
                     let task_failure = scheduled.then(|| TaskFailureEvidence {
@@ -8352,6 +8360,10 @@ impl HostShared {
                     confirmation_frames,
                     adjustments: adjustment_plan,
                 }),
+                // UPD-1 (design §3.3): a store update package's success clears the fact.
+                store_update_alias: prepared
+                    .declares_store_update()
+                    .then(|| instance_alias.to_owned()),
             },
         )?;
         match self.release_lease(
@@ -10023,6 +10035,13 @@ impl HostShared {
                         request, token, &links, &mut draft, readings,
                     )?,
                 _ => None,
+            };
+            // UPD-1 (design §3.3): a store update package's successful run (its readings, if
+            // any, published) clears its instance's `health.application.update_required` before
+            // its terminal; a store refusal fails the run instead.
+            let reading_failure = match reading_failure {
+                Some(failure) => Some(failure),
+                None => self.clear_application_update_before_terminal(&mut draft)?,
             };
             let gate = lock(
                 &self.fact_write_gate,

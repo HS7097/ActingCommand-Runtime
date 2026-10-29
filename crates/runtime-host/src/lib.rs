@@ -8,6 +8,8 @@
 #![forbid(unsafe_code)]
 
 mod agent_dispatcher;
+// UPD-1: the instance fact `health.application.update_required` and the gate it holds.
+mod application_update;
 mod approval;
 mod catalog_plan;
 pub mod codes;
