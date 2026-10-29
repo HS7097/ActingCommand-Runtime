@@ -907,6 +907,11 @@ mod gate_lab_l6;
 #[cfg(test)]
 mod gate_411_p57;
 
+// LAB-WAIT (0.12.29): offline observe loads a wait step whose `to` is a page set, lists no action
+// for it, and a click step to a page set still requires its click.
+#[cfg(test)]
+mod gate_lab_wait;
+
 #[cfg(test)]
 mod lab3_tests {
     // Workflow #396 LAB-3 (FCM T-02): offline `observe` evaluates an action's OCR target with the
