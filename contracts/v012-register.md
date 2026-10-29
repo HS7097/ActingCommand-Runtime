@@ -3817,6 +3817,23 @@ shape that pack containment and the kernel already admit. The number 1.210 is th
 |---|---|---|---|---|---|
 | LW-1 | offline `observe`'s page-set operations (`ObservationResources::multi_destination`, read from the task files) leave out a wait step, `wait` and none of `click`, `application` and `select` (pack containment's `is_wait_step`), as they leave out an application effect and a select step | behaviour (actinglab, since 0.12.29) | LAB-WAIT | — | the generated navigation holds no row for a wait step, so `actions` lists none for it, whether its destinations are a page-set `to` or `expect_after.page_id`; its destinations stay the kernel's (`to`, else `expect_after`); a step that declares `wait` beside a `click` is still read as a click step (pack containment's reading; the kernel refuses it, `wait_member_refused`); a click step whose `to` is a page set still requires its `click` |
 
+### 1.211 Slice SS-1 (0.12.30): a pool's base valuation counts on every instance, and the resource layer reads no task state (Alice's ruling 100, #386 comment 6490879952: 「没有玩家目标时，跑建模算出的基准最优解」, resource weight feeds task weight and never the reverse; ruling 102: a met goal only stops adding score; design `rd-1029/design-sch-state.md` §3, §4.1, §4.2, §5 SS-1 and `rd-1029/design-acm-fit.md` C1 to C3; coordinator work order `rd-1029/brief-wave3a.md` SS-1)
+
+[resource-targets.md](resource-targets.md) ("Base valuation on every instance", "Evaluation" and
+"Resource weights (v2)") and [scheduling/README.md](scheduling/README.md) ("Pool Valuation" and
+the dispatch decision record) are the contract. **No persisted ledger shape**: the term rides the
+existing `resource_weights` reason and `score_computed` detail, and the decision record's
+existing fields; no new code (`resource_weights` is reused, its catalog description updated), no
+configuration key, no wire or interface revision. In production no pool declares a `valuation`
+and no task declares `produces` yet (`rd-1029/design-sch-state.md` §2.1), so neither the base
+term nor the v1 `U` change (SS1-2) can fire live until the resource side writes them. The number
+1.211 is the coordinator's.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SS1-1 | without an active v2 policy (no record, a withdrawal, an expired or unreadable record, a v1 policy) every candidate that produces a valued pool covering its instance carries the base term `R` (`W = B`, `Γ = 0`): it is added to the effective score, enters the score stage when `R > 0`, and shows as `resource_weights` `policy=none …`, ` resources=<R>` in `score_computed` and, unless a v1 target applies, `target=<R> target_id=* mode=adjust … offset_kept=1` in the dispatch decision record | behaviour | SS-1 | the policy evaluator | until 0.12.29 the base weight counted only on an instance with an active non-empty v2 policy; a v1 target's score adds on top (`adjust`: `base + s + R`; `override`: `utility + s + R`), its record keeps `target=<s>`; a base term bounds no freshness and wakes nothing; a candidate that produces no valued pool, and every catalog without a valuation, is byte for byte as before (SS1-2's v1 `U` aside); v2 has no paused target yet, so "every target paused" (v3) needs nothing here |
+| SS1-2 | the resource layer (`weigh_production`) reads the pools' valuation, the stored targets, the inventory readings and each task's own `produces` only; a v2 target's `no_producing_task` lapse and a named task's `task_disabled` are reports only (the target resolves and keeps covering the disabled task); a v1 target's `U` includes the named tasks an instance override disables | behaviour (one-way guard) | SS-1 | the policy evaluator | no observable v2 change: a disabled task has no candidate; v1: disabling a named task by instance override no longer raises the other named tasks' `s` (before, `U` dropped the disabled task's contribution); a v2 target's `tasks` list still narrows who receives `Γ` (it is target data, not task state; #429 A.5 v3 removes `tasks`) |
+
 ### 1.212 Slice SS-3 (0.12.30): run-count quotas become optional (Alice's ruling 100, #386 comment 6490879952: dispatch follows live account state, there is no "run task X N times"; design `rd-1029/design-sch-state.md` §1.1, §4, §5 SS-3; coordinator work order `rd-1029/brief-wave3a.md` SS-3)
 
 [scheduling/README.md](scheduling/README.md) ("Optional run-count bounds"),
