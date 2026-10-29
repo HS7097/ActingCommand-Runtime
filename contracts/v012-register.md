@@ -3734,6 +3734,20 @@ coordinator's (1.204 is WD-MT's, #1430). Fix round 1 (`rd-1029/brief-iso-pe-fix1
 | PE-5 | the evaluation's time is sampled under `fact_write_gate` (and `policy_outcome_gate`), after the evaluation waited for them, not as it starts | behaviour | ISO-PE | runtime-host | an input a concurrent settlement observed and committed while the evaluation waited for its gates is no longer "later than evaluation time" |
 | PE-6 | actingd defers `outcome_projection_not_ready` by one debounce also when the trigger has no recompute wake; the host returns it only while fewer than `scheduling.evaluation.escalate_after` evaluations in a row have not evaluated (each wait counts as one, with no record), and skips the next one (PE-2, PE-3) | behaviour | ISO-PE (fix 1 for the bound) | actingd's driver; runtime-host (`evaluate_policy_cycle`) | until 0.12.28 such a trigger ended the driver and the Runtime, and one with recompute wakes was deferred every debounce with no record and no bound |
 
+### 1.206 Slice CFL-1 (0.12.29): recognition preprocessing, the pure chain and its contract (Workflow #411 A58, comment 6371351838; #428 comment 6485683314; design `rd-1029/design-cf.md` §4.2, §4.3, §4.5, §4.6, §6 CFL-1, revised by `rd-1029/design-cf-v2.md` §5.3, §5.7 and §8 (the CFL-1 revision round); review `rd-1029/review-cfl1.md` L1–L3; coordinator work orders `rd-1029/brief-cfl1.md` and `rd-1029/brief-cfl1-fix1.md`, with the names, the hue scale, the tolerance and "kept is white" settled on 10-29)
+
+[recognition-preprocess.md](recognition-preprocess.md) is the contract. **No persisted ledger
+shape**, no code, no configuration key, no wire or interface revision: the chain is a library
+addition that no package can declare before CFL-2, which adds the member `preprocess` (into
+`package` revision 6, as the design says). The number 1.206 is the coordinator's (1.204 is
+WD-MT's, 1.205 is ISO-PE's).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| CFL1-1 | `actingcommand_recognition::preprocess`: the validated chain `Preprocess` (`new`, `steps`, `apply`), `PreprocessStep`, `PreprocessKind` (names and members), `ColorSpace`, `ThresholdValue`, `PreprocessOutput` with `PreprocessEvidence {kept_milli, inverted, threshold_value}`, `PreprocessError {step, member, reason}` with `pointer()`, `PreprocessApplyError {EmptyRegion, RegionTooLarge, Internal}`, `check_region_size`, the constants `PREPROCESS_ALGORITHM` (`"preprocess.v1"`) and `MAX_REGION_PIXELS` (2^24), `rgb_to_hsv`, and `Scene::preprocess_region` | library API addition (memory only, since 0.12.29) | CFL-1 | — (CFL-2 hands the processed region to the OCR reads) | the two shapes of at most 4 steps, at most 8 colors; every step integer arithmetic except `gray`, which is the scene's own gray (image 0.25 `to_luma8`, `f32`), so that `[gray]` equals the scene's gray byte for byte; the design's `floor((2126 R + 7152 G + 722 B) / 10000)` is not that gray (it differs on about half of all colors) and is not used |
+| CFL1-2 | the region domain: `apply` refuses a region of more than 2^24 pixels (`RegionTooLarge`) before any step, `Scene::preprocess_region` before it crops; within it Otsu compares the exact scores quotient first, remainder second, with every intermediate at most 108 bits (the contract's bound table) | behaviour (library) | CFL-1 revision round | — | a domain of the algorithm like the 4 steps and 8 colors, no configuration key; the `checked_mul` guards stay and cannot fail inside the domain; the tie rule (smallest `t`) is unchanged |
+| CFL1-3 | `kept_milli` is counted before `invert`, and `inverted` says whether the chain has it (in place of the first round's `foreground_milli`, counted after `invert`) | evidence definition (memory only) | CFL-1 revision round | — | golden values re-recorded with the coordinator's approval: `keep_range hsv` then `invert` 750 → 250, `gray` then `invert` 625 → 375; every other value unchanged |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
