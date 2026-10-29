@@ -898,7 +898,12 @@ const MAX_POLICY_RESAMPLES: usize = 3;
 /// Workflow #427-A (C1): the round's evaluation, sampled again, at most `MAX_POLICY_RESAMPLES`
 /// times, while its validation finds its sample changed; one daemon line per re-sample, and one
 /// when the round gives up (`None`). The driver never stops for it. Any other failure is
-/// returned as before.
+/// returned as before. ISO-PE (#419): the host no longer returns an evaluation failure that is
+/// not global: it records it (`policy_evaluation_skipped`) and answers a deferred cycle with no
+/// evaluation, due `scheduling.evaluation.retry_ms` later, which the driver applies as any
+/// deferred cycle; what is returned here ends the driver, and the Runtime, only because it is
+/// global (or `outcome_projection_not_ready`, which `apply_policy_cycle_result` defers; the host
+/// returns it at most `scheduling.evaluation.escalate_after` times in a row, then skips it).
 fn evaluate_policy_cycle_resampled(
     host: &RuntimeHost,
     trigger: PolicyTrigger,
@@ -2265,9 +2270,14 @@ fn apply_policy_cycle_result(
                 Err(error) => Err(error),
             }
         }
-        Err(error)
-            if !recomputes.is_empty() && error.code.is(SharedCode::OutcomeProjectionNotReady) =>
-        {
+        // ISO-PE (#419): a projection not ready yet is a wait, not a global failure, so it never
+        // ends the driver: the trigger, with its recompute wakes when it has any, is deferred by
+        // one debounce. (Until 0.12.28 only a trigger with recompute wakes was; one without
+        // ended the driver and, with it, the Runtime.) Fix 1 (review M1): the host returns it
+        // only while fewer than `scheduling.evaluation.escalate_after` evaluations in a row have
+        // not evaluated; the next one it skips, recorded, and answers with a deferred cycle due
+        // `scheduling.evaluation.retry_ms` later (the `Ok` arm above), so these waits are bounded.
+        Err(error) if error.code.is(SharedCode::OutcomeProjectionNotReady) => {
             schedule.defer_projection(trigger, recomputes, now_unix_ms)
         }
         Err(error) => Err(error),
@@ -3309,6 +3319,79 @@ mod tests {
                 },
                 Vec::new()
             ))
+        );
+    }
+
+    #[test]
+    fn iso_pe_a_skipped_evaluation_keeps_its_trigger_until_the_retry_and_the_driver_goes_on() {
+        // ISO-PE (#419): the host answers an evaluation it skipped with a deferred cycle and no
+        // evaluation, due `scheduling.evaluation.retry_ms` later. The driver applies it as any
+        // deferred cycle: no error (so the driver, and the Runtime, go on), the trigger kept,
+        // and evaluated again at the retry, not before.
+        let now = 10_000;
+        let retry_ms = 15_000;
+        let cadence = || PolicyCadence {
+            debounce_ms: 10,
+            cooldown_ms: 20,
+            reconciliation_interval_ms: 600_000,
+            clock_jump_threshold_ms: 600_000,
+        };
+        let control = PolicyDriverControl::default();
+        let mut schedule = PolicyDriverSchedule::new(
+            cadence(),
+            &policy_cycle(PolicyRecomputeKind::Full, now),
+            now,
+        )
+        .expect("the schedule");
+        let skipped = PolicyCycleExecution {
+            cycle: policy_cycle(PolicyRecomputeKind::Deferred, now + retry_ms),
+            recompute_wakes: Vec::new(),
+            yielded_intents: 0,
+            failed_runs: false,
+            retry_after_ms: None,
+        };
+        apply_policy_cycle_result(
+            &control,
+            &mut schedule,
+            PolicyTrigger::FactsChanged,
+            Vec::new(),
+            now,
+            Ok(skipped),
+        )
+        .expect("a skipped evaluation does not end the driver");
+        assert_eq!(
+            schedule
+                .take_due_work(now + retry_ms - 1)
+                .expect("before the retry"),
+            None,
+            "nothing is evaluated before the retry"
+        );
+        assert_eq!(
+            schedule.take_due_work(now + retry_ms).expect("the retry"),
+            Some((PolicyTrigger::FactsChanged, Vec::new())),
+            "the kept trigger is evaluated again at the retry"
+        );
+
+        // A projection not ready yet, with no recompute wake, waits one debounce instead of
+        // ending the driver.
+        let mut schedule = PolicyDriverSchedule::new(
+            cadence(),
+            &policy_cycle(PolicyRecomputeKind::Full, now),
+            now,
+        )
+        .expect("the schedule");
+        apply_policy_cycle_result(
+            &control,
+            &mut schedule,
+            PolicyTrigger::FactsChanged,
+            Vec::new(),
+            now,
+            Err(ActingdError::process(SharedCode::OutcomeProjectionNotReady)),
+        )
+        .expect("a projection not ready yet does not end the driver");
+        assert_eq!(
+            schedule.take_due_work(now + 10).expect("the debounce"),
+            Some((PolicyTrigger::FactsChanged, Vec::new()))
         );
     }
 

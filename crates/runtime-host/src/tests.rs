@@ -372,6 +372,11 @@ mod gate_419_w2e;
 // holder's end, stops the Runtime: every run end enters the end phase, a success whose lease ended
 // settles as a success, and an expiry waits for a write in flight.
 mod gate_419_iso5a;
+// ISO-PE (#419; production 10-29 11:19): a policy evaluation whose failure is not global is
+// skipped with its detail and evaluated again after `scheduling.evaluation.retry_ms`; skips in a
+// row escalate to a person once; a global failure is still returned; and the evaluation's time is
+// sampled under the gates its inputs are read under.
+mod gate_419_iso_pe;
 // #411 A35 (A35-S2, host keys 156 to 161), register §1.168: after a listed return-home failure
 // the ladder probes the screen; while it still changes, the ladder holds instead of restarting.
 mod gate_411_a35;
