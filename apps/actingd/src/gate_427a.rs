@@ -24,8 +24,9 @@
 //   for the reconciliation) and wakes the driver; the other instance's run completes. While the
 //   run's lease is active a reconciliation leaves it, and the next round defers its instance (fix
 //   1); its settlement once the lease lapsed is runtime-host's gate_427a_m1.
-// - lanes_t8: the switch is off by default, so the daemon's round runs a scheduled run itself; an
-//   instruction turns it on and the next round hands its runs to the workers. The host carries
+// - lanes_t8: the switch is off as the file writes it (off by default before 0.12.31, Workflow
+//   #429 R-2), so the daemon's round runs a scheduled run itself; an instruction turns it on and
+//   the next round hands its runs to the workers. The host carries
 //   the switch's row as actingd's configuration assembles it (fix 1, review H3), and the
 //   instruction comes from the client `ac_config_set` uses (fix 2, re-review H3).
 // - lanes_t9 (fix 1, review L1): a scheduling pause after the hand-off does not fail the run: it
@@ -238,7 +239,8 @@ fn held_by_policy_dispatch(execution: &PolicyCycleExecution, alias: &str) -> boo
 // Fix 1 (review H3): the switch's row as actingd's configuration assembles it (`config.rs`:
 // `render_parameters` over the key table and the shipped defaults file, then `annotate_settable`).
 // A host without a configuration manifest has no setting to change, so an instruction is refused
-// (`config_key_unknown`).
+// (`config_key_unknown`). Workflow #429 R-2: the file writes the switch off (the shipped default is
+// on since 0.12.31).
 fn switch_manifest() -> RuntimeConfigManifest {
     let (row, _) = actingcommand_runtime_config::find_row(
         actingcommand_runtime_config::scheduling::PARALLEL_ENABLED,
@@ -250,10 +252,10 @@ fn switch_manifest() -> RuntimeConfigManifest {
         &[*row],
         &[],
         &defaults,
-        &serde_json::json!({}),
+        &serde_json::json!({"scheduling": {"parallel": {"enabled": false}}}),
         &|_| None,
     )
-    .expect("the switch at its shipped default");
+    .expect("the switch as the file writes it");
     actingcommand_runtime_config::annotate_settable(&mut parameters)
         .expect("the switch is in the key table");
     RuntimeConfigManifest {
@@ -715,12 +717,13 @@ fn lanes_t7_a_worker_panic_drops_the_run_and_leaves_its_instance_occupied() {
     host.close().expect("the Runtime closes");
 }
 
-// Brief "Tests" and point 6: the switch. Off by default: the daemon's round runs A's scheduled run
-// itself, so A is settled when the round returns. An instruction turns it on, and the next round
-// (an hour on, A's task due again) hands A's run to A's worker: held there, the round has
+// Brief "Tests" and point 6: the switch. Off as the file writes it (Workflow #429 R-2, Alice's
+// ruling 98: the default is on since 0.12.31, off before): the daemon's round runs A's scheduled
+// run itself, so A is settled when the round returns. An instruction turns it on, and the next
+// round (an hour on, A's task due again) hands A's run to A's worker: held there, the round has
 // returned with A unsettled, and A's end wakes the driver.
 #[test]
-fn lanes_t8_the_switch_is_off_by_default_and_an_instruction_turns_it_on_at_the_next_round() {
+fn lanes_t8_the_switch_off_in_the_file_is_turned_on_by_an_instruction_at_the_next_round() {
     let root = TempDir::new().expect("tempdir");
     let (host, policy, clock) = start_with(root.path(), &[Screen::Opens], None, false, |config| {
         config.with_config_manifest(switch_manifest())
@@ -729,7 +732,7 @@ fn lanes_t8_the_switch_is_off_by_default_and_an_instruction_turns_it_on_at_the_n
     let control = Arc::new(PolicyDriverControl::default());
     assert!(
         !host.scheduling_parallel_enabled().expect("the switch"),
-        "off by default"
+        "off as the file writes it"
     );
     let off = execute_policy_cycle_in(&host, &policy, PolicyTrigger::Recovery, Some(&control))
         .expect("the round runs");

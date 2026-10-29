@@ -417,8 +417,11 @@ fn budget_sources() -> CatalogSources {
 // pressure of a floor kind at full responsiveness the floor's factor (1 250).
 #[test]
 fn pk1b_the_step_factor_is_the_instances_factor_in_effect() {
-    let observe = shipped();
-    assert_eq!(observe.pacing.mode, PerformancePacingMode::Observe);
+    // Workflow #429 R-2 (Alice's ruling 98, since 0.12.31): the shipped mode is `pace`;
+    // `observe` is a configuration's.
+    let mut observe = shipped();
+    assert_eq!(observe.pacing.mode, PerformancePacingMode::Pace);
+    observe.pacing.mode = PerformancePacingMode::Observe;
     let mut pace = shipped();
     pace.pacing.mode = PerformancePacingMode::Pace;
 
@@ -754,7 +757,9 @@ fn step_entries(events: &[PersistedEvent]) -> Vec<(u32, Option<u32>, Option<u32>
 // pressure of a floor kind at full responsiveness: at least the floor's one round.
 #[test]
 fn pk2_the_step_pacing_carries_the_stages_extra_rounds_and_pre_input_wait() {
-    let observe = shipped();
+    // Workflow #429 R-2: the shipped mode is `pace` since 0.12.31; `observe` is a configuration's.
+    let mut observe = shipped();
+    observe.pacing.mode = PerformancePacingMode::Observe;
     let mut pace = shipped();
     pace.pacing.mode = PerformancePacingMode::Pace;
     let base = EffectiveConfig::default()
@@ -1214,4 +1219,80 @@ fn pk2_a_scheduled_runs_paced_wait_ends_by_its_deadline() {
         STRETCHED_WAIT_MS,
     );
     assert_lease_released(&run_records, &all_records);
+}
+
+// Workflow #429 R-2 test 1 (design 429-A A.1 契约 1; register §1.220; since 0.12.31): `mode`
+// switched from `observe` to `pace` while the Runtime runs. The host's configuration writes
+// `observe`; the shadow measurement's evaluations read the section in effect, so at 6 000, where
+// the curve reads S2 and 2 500, the step factor stays 1 000. One instruction sets `pace` and is in
+// effect at once; the next evaluation reads it, and the next step's `StepPacing::factor_milli`
+// is the curve's 2 500, with no restart. What was handed before the switch stays 1 000.
+#[test]
+fn r2_t1_switching_mode_while_running_paces_the_next_step_and_leaves_the_part_before_at_1000() {
+    let root = TempDir::new().expect("tempdir");
+    let (_, defaults) =
+        actingcommand_runtime_config::DefaultsFile::shipped().expect("the shipped defaults");
+    let parameters = actingcommand_runtime_config::render_parameters(
+        &actingcommand_runtime_config::mechanism_rows(),
+        &[],
+        &defaults,
+        &json!({"performance": {"pacing": {"mode": "observe"}}}),
+        &|_| None,
+    )
+    .expect("every key resolves");
+    let host = RuntimeHost::start(
+        config(&root).with_config_manifest(actingcommand_contract::RuntimeConfigManifest {
+            subsystems: Vec::new(),
+            parameters,
+        }),
+        Arc::new(FakeProvider::one(
+            ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    let base = EffectiveConfig::default()
+        .sample_timeout_retries()
+        .expect("the shipped observe-only retries");
+    let handed = |shadow: &PacingShadow, settings: &PerformanceMeasurement| {
+        shadow
+            .effective_pacing(ALIAS)
+            .step_pacing(base, settings.pacing.pre_input_wait_base_ms)
+            .factor_milli
+    };
+
+    let before = host
+        .performance_measurement_for_test()
+        .expect("the section in effect");
+    assert_eq!(before.pacing.mode, PerformancePacingMode::Observe);
+    let mut shadow = evaluated_at_6000(&before);
+    let before_switch = handed(&shadow, &before);
+    assert_eq!(before_switch, 1_000, "observe, before the switch");
+
+    let mut client = TestClient::connect(&host);
+    let request = client.request(RuntimeOperation::ConfigureSettings {
+        changes: vec![actingcommand_contract::ConfigSettingChange {
+            key: actingcommand_runtime_config::performance::pacing::MODE.to_owned(),
+            value: Some(json!("pace")),
+        }],
+        expected_version: None,
+    });
+    let receipt = client.send(&request);
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{receipt:?}"
+    );
+
+    let after = host
+        .performance_measurement_for_test()
+        .expect("the section in effect");
+    assert_eq!(after.pacing.mode, PerformancePacingMode::Pace);
+    // The next evaluation, a second after the last; the tracked value is still 6 000.
+    shadow.evaluate(SUSTAINED + 1_000, &after, &[ALIAS.to_owned()], None);
+    assert_eq!(handed(&shadow, &after), 2_500, "pace, the next step");
+    assert_eq!(before_switch, 1_000, "the part before the switch");
+    drop(client);
+    host.close().expect("close host");
 }

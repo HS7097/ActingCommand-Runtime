@@ -43,10 +43,15 @@ const SLOW_CAPTURE_BP: u16 = 3_666;
 // A frame acquisition within the allowance: it scores 10 000.
 const QUICK_CAPTURE_US: u64 = 9_000;
 
+/// The shipped section with `mode` `observe`. Workflow #429 R-2 (Alice's ruling 98, since
+/// 0.12.31): the shipped mode is `pace`; these rows are the model's under `observe`, which a
+/// configuration names.
 fn settings() -> PerformanceMeasurement {
-    EffectiveConfig::default()
+    let mut settings = EffectiveConfig::default()
         .performance_measurement()
-        .expect("the shipped performance section")
+        .expect("the shipped performance section");
+    settings.pacing.mode = PerformancePacingMode::Observe;
+    settings
 }
 
 fn aliases(names: &[&str]) -> Vec<String> {
@@ -492,7 +497,8 @@ fn tc_3_two_curves_give_each_its_own_stage_and_factor() {
 }
 
 // Tm-12 (§4.6), the Runtime's side: PerformanceStatus answers from memory, one row per
-// registered instance with the mode in effect (observe) and nothing taking effect, appends no
+// registered instance with the mode in effect (the shipped one, `pace` since 0.12.31, Workflow
+// #429 R-2; `observe` before) and nothing taking effect (no monitor, so no evaluation), appends no
 // ledger record and leaves no record of its request.
 #[test]
 fn tm_12_the_status_read_answers_from_memory_and_appends_nothing() {
@@ -519,7 +525,7 @@ fn tm_12_the_status_read_answers_from_memory_and_appends_nothing() {
     let Some(RuntimeResult::PerformanceStatus { status }) = receipt.result() else {
         panic!("expected a performance status, got {:?}", receipt.result());
     };
-    assert_eq!(status.pacing_mode, PerformancePacingMode::Observe);
+    assert_eq!(status.pacing_mode, PerformancePacingMode::Pace);
     assert_eq!(status.pacing_phase, None);
     // This host runs no performance monitor.
     assert_eq!(status.monitor_health, PerformanceMonitorHealth::Unavailable);

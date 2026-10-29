@@ -34,7 +34,12 @@ The controller's `clock_jump_threshold` and its heavy-dispatch limits come from
 the configuration (Workflow #385 P-c): `performance.pacing.clock_jump_ms`
 (default 30 000) and `performance.pacing.heavy_dispatch_limit.normal` /
 `.paused` (defaults 2 and 1), read once when actingd assembles the host
-([runtime-config.md](runtime-config.md), "The performance section"). So does
+([runtime-config.md](runtime-config.md), "The performance section"). Workflow
+#429 R-2 (since 0.12.31): the two heavy-dispatch limits are settable, and the
+resource overlay reads them from the configuration in effect at every policy
+evaluation and forward projection, so an instruction moves the next round's
+heavy-scene slots and cuts no dispatch already admitted; `.paused` stays at most
+`.normal`. So does
 `performance.load.heavy_threshold_milli` (default 1 500; Workflow #385 PM-CFG):
 a weighted workload whose `cpu_milli + gpu_milli + io_milli` reaches it counts
 as heavy. The controller and the policy evaluator both use this key: the
@@ -45,9 +50,13 @@ escalation and recovery samples and the transition cooldown stay the
 controller's own values.
 
 Workflow #427-B: the controller's configuration also carries the optional
-`performance.pacing.max_concurrent_runs` (no default, read once at assembly
-like the heavy-dispatch limits). The policy host hands it to every evaluation
-with the policy dispatches admitted and not yet settled, whose heavy ones it
+`performance.pacing.max_concurrent_runs` (no default, read at assembly like the
+heavy-dispatch limits; Workflow #429 R-2, since 0.12.31: settable, and read from
+the configuration in effect at every evaluation, so lowering it cancels no
+dispatch in progress and defers the next round's extra candidates,
+`policy_concurrent_runs_deferred` with the new `limit_count`; it counts tasks run
+at once, never running emulators, Alice's ruling 99). The policy host hands it to
+every evaluation with the policy dispatches admitted and not yet settled, whose heavy ones it
 counts again by the same threshold: the resource overlay caps
 `active_heavy_dispatches` at the limit, so under pressure only that second
 count gives the real number the reasons report. Neither the limits nor the
@@ -193,9 +202,11 @@ through this gate.
 Beside the controller above, which it changes in nothing, the performance monitor runs the
 shadow measurement of the frozen pacing model (PERF v1.4.2 §3, §4, §4.6, §10.3). It measures,
 evaluates both views and records; the only thing read from it is the factor in effect, which
-a contained run takes at each step (Step pacing below). `performance.pacing.mode` stays
-`observe` in every release, and enabling `pace` or `full` is the person's decision
-(coordinator ruling 7 of wave 13).
+a contained run takes at each step (Step pacing below). Workflow #429 R-2 (since 0.12.31):
+`performance.pacing.mode` defaults to `pace` (Alice's ruling 98: a new install is `adaptive`,
+[runtime-config.md](runtime-config.md), "Presets"), and an instruction may set `observe` or
+`pace` while the Runtime runs; every evaluation reads the mode in effect, so a run's next step
+takes the factor of the new mode. `full` is set only in the configuration file.
 
 - **Samples.** The host timer probe (`performance.responsiveness.host_probe.timer.*`) runs
   beside an enabled monitor: every `interval_ms` its own thread sleeps `burst` times for

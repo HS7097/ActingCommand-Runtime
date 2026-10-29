@@ -13,6 +13,10 @@
 //! whose file writes no blackout list of its own gets one by instruction and keeps it across a
 //! restart; clearing it leaves the instance with none; a file that writes the key later voids the
 //! instruction (`config_override_superseded`). Tests 4 to 6 are `runtime-config`'s `r1_tests`.
+//!
+//! Workflow #429 R-2 (A.1 契约 2; register §1.220; since 0.12.31), test 4: applying a preset is one
+//! `ConfigureSettings` of its members, every key at once and one `host.config_overrides` record,
+//! or none of them.
 
 use super::*;
 use actingcommand_contract::{
@@ -20,6 +24,10 @@ use actingcommand_contract::{
     ConfiguredSetting, FactScalar, RuntimeConfigManifest, RuntimeOperationKind, RuntimePayload,
     config_parameters_fact_key,
 };
+use actingcommand_runtime_config::performance::pacing::{
+    HEAVY_DISPATCH_LIMIT_PAUSED, MAX_CONCURRENT_RUNS,
+};
+use actingcommand_runtime_config::performance::presets;
 use actingcommand_runtime_config::scheduling::{
     INSTANCE_BLACKOUT, REMEDY_CHOICES, REMEDY_ENABLED, REMEDY_MAX_PER_ROUND,
 };
@@ -1037,6 +1045,150 @@ fn r1_t3_a_file_that_later_writes_the_key_voids_the_instruction_as_superseded() 
         fact_rows(&mut client, CONFIG_OVERRIDES_FACT_KEY),
         Some(Vec::new())
     );
+    drop(client);
+    host.close().expect("close host");
+}
+
+// ---- Workflow #429 R-2 (A.1 契约 2; register §1.220; since 0.12.31): applying a preset.
+
+/// The file layer of every section a start assembles from the shipped defaults and `file`.
+fn r2_file(file: Value) -> RuntimeConfigManifest {
+    let (_, defaults) = DefaultsFile::shipped().expect("the shipped defaults");
+    let parameters = render_parameters(&mechanism_rows(), &[], &defaults, &file, &|_| None)
+        .expect("every key resolves");
+    RuntimeConfigManifest {
+        subsystems: Vec::new(),
+        parameters,
+    }
+}
+
+/// The parameters in effect the current preset reads: the rows of `config.parameters.performance`
+/// and `config.parameters.scheduling`, as the three counters read them.
+fn r2_in_effect(client: &mut TestClient) -> Vec<ConfigParameter> {
+    ["performance", "scheduling"]
+        .into_iter()
+        .flat_map(|section| {
+            fact_rows(client, &config_parameters_fact_key(section))
+                .unwrap_or_else(|| panic!("config.parameters.{section}"))
+        })
+        .map(|row| presets::parameter_of_row(&row).unwrap_or_else(|| panic!("a row: {row:?}")))
+        .collect()
+}
+
+/// The current preset of the parameters in effect, by the shared function.
+fn r2_current(client: &mut TestClient) -> String {
+    let parameters = r2_in_effect(client);
+    let table = presets::table_of(&parameters)
+        .expect("the preset table's row")
+        .expect("the table reads back");
+    presets::current_preset(&table, &parameters).preset
+}
+
+/// The changes of the preset `name` as the three counters build them, from the table in effect.
+fn r2_preset_changes(client: &mut TestClient, name: &str) -> Vec<ConfigSettingChange> {
+    presets::table_of(&r2_in_effect(client))
+        .expect("the preset table's row")
+        .expect("the table reads back")
+        .get(name)
+        .unwrap_or_else(|| panic!("the preset {name}"))
+        .changes()
+}
+
+// R-2 test 4: applying `light`, then `standard`, over a file that writes none of the members. Each
+// is one `ConfigureSettings`: every member's key changes at once (the receipt names each, in the
+// mapping table's order) and `host.config_overrides` is recorded exactly once, its rows the
+// members the preset writes (`standard` leaves `max_concurrent_runs` unwritten, so its change
+// clears `light`'s value: receipt `null` from `default`, no row). The current preset follows.
+#[test]
+fn r2_t4_applying_a_preset_sets_every_member_at_once_with_one_overrides_record() {
+    let root = TempDir::new().expect("tempdir");
+    let host = start_at(&root, instance_id(), r2_file(json!({})), R1_START_MS);
+    let mut client = TestClient::connect(&host);
+    assert_eq!(r2_current(&mut client), "adaptive");
+    assert!(recorded_facts(&mut client, CONFIG_OVERRIDES_FACT_KEY).is_empty());
+
+    for (name, records, rows, max) in [
+        ("light", 1, 4, FactScalar::Integer(1)),
+        ("standard", 2, 3, FactScalar::String("null".to_owned())),
+    ] {
+        let changes = r2_preset_changes(&mut client, name);
+        let keys = changes
+            .iter()
+            .map(|change| change.key.clone())
+            .collect::<Vec<_>>();
+        let (_, receipt) = configure(&mut client, changes);
+        assert_eq!(
+            receipt.state(),
+            RuntimeReceiptState::Completed,
+            "{name}: {receipt:?}"
+        );
+        let Some(RuntimeResult::SettingsConfigured { settings, .. }) = receipt.result() else {
+            panic!("{name}: the settings configured: {receipt:?}");
+        };
+        assert_eq!(
+            settings
+                .iter()
+                .map(|setting| setting.key.clone())
+                .collect::<Vec<_>>(),
+            keys,
+            "{name}"
+        );
+        assert_eq!(
+            settings
+                .iter()
+                .find(|setting| setting.key == MAX_CONCURRENT_RUNS)
+                .map(|setting| setting.value.clone()),
+            Some(max),
+            "{name}"
+        );
+        assert_eq!(
+            recorded_facts(&mut client, CONFIG_OVERRIDES_FACT_KEY).len(),
+            records,
+            "{name}: one record per preset"
+        );
+        let overrides = fact_rows(&mut client, CONFIG_OVERRIDES_FACT_KEY).expect("overrides");
+        assert_eq!(overrides.len(), rows, "{name}: {overrides:?}");
+        assert_eq!(r2_current(&mut client), name);
+    }
+    drop(client);
+    host.close().expect("close host");
+}
+
+// R-2 test 4: one member that cannot be applied refuses the whole preset. The file writes
+// `.paused` 2 beside `.normal` 2; `light`'s `.normal` 1 breaks the section (`config_value_invalid`,
+// `section_check`, naming `.paused`), so none of its four changes applies: no record of
+// `host.config_overrides`, every member as before, the current preset still `adaptive`.
+#[test]
+fn r2_t4_one_member_that_cannot_be_applied_applies_none() {
+    let root = TempDir::new().expect("tempdir");
+    let file =
+        json!({"performance": {"pacing": {"heavy_dispatch_limit": {"normal": 2, "paused": 2}}}});
+    let host = start_at(&root, instance_id(), r2_file(file), R1_START_MS);
+    let mut client = TestClient::connect(&host);
+    let before = r2_in_effect(&mut client);
+    assert_eq!(r2_current(&mut client), "adaptive");
+
+    let changes = r2_preset_changes(&mut client, "light");
+    let (_, receipt) = configure(&mut client, changes);
+    assert_eq!(receipt.state(), RuntimeReceiptState::Denied, "{receipt:?}");
+    let outcome = receipt.outcome();
+    assert_eq!(
+        outcome.code().as_str(),
+        ConfigCode::ConfigValueInvalid.as_str()
+    );
+    assert_eq!(
+        outcome.value("config_key").and_then(Value::as_str),
+        Some(HEAVY_DISPATCH_LIMIT_PAUSED)
+    );
+    assert_eq!(
+        outcome
+            .value("config_value_problem")
+            .and_then(Value::as_str),
+        Some("section_check")
+    );
+    assert!(recorded_facts(&mut client, CONFIG_OVERRIDES_FACT_KEY).is_empty());
+    assert_eq!(r2_in_effect(&mut client), before);
+    assert_eq!(r2_current(&mut client), "adaptive");
     drop(client);
     host.close().expect("close host");
 }

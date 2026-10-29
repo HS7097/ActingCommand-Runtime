@@ -728,7 +728,9 @@ impl EffectiveConfig {
     /// a value returns the key to its file-layer value. Workflow #429 R-1: a key whose default is
     /// none is in the configuration once its instance or section is, so an instruction sets it
     /// whether or not the file writes it (over `base_json` `null` when it does not); clearing it
-    /// then leaves the key unset, and its receipt entry is `null` (text) from `default`.
+    /// then leaves the key unset, and its receipt entry is `null` (text) from `default`. Workflow
+    /// #429 R-2: `performance.pacing.mode` `full` is `config_value_invalid` (`out_of_range`), a
+    /// file-only choice.
     pub fn apply(
         &self,
         changes: &[ConfigSettingChange],
@@ -759,6 +761,8 @@ impl EffectiveConfig {
                 None => None,
                 Some(value) => {
                     let parsed = parse_value(setting.row, &change.key, value)?;
+                    // Workflow #429 R-2: a value the file may hold but no instruction sets.
+                    performance::pacing::check_instruction(&change.key, &parsed)?;
                     let base_json = setting.file_json().ok_or_else(|| {
                         ConfigFailure::invalid_value(
                             change.key.clone(),
@@ -989,11 +993,16 @@ impl EffectiveConfig {
                 continue;
             };
             let setting = &mut self.settings[at];
+            // Workflow #429 R-2: a value no instruction may set does not fit the key either.
             let value = serde_json::from_str::<Value>(&recorded.value_json)
                 .ok()
                 .and_then(|value| {
                     parse_value(setting.row, &recorded.config_key, &value)
                         .ok()
+                        .filter(|parsed| {
+                            performance::pacing::check_instruction(&recorded.config_key, parsed)
+                                .is_ok()
+                        })
                         .map(|parsed| (parsed, canonical_json(&value)))
                 });
             let (Some((value, value_json)), Some(current_json), true) = (

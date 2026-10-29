@@ -656,6 +656,37 @@ impl HostShared {
             })
     }
 
+    /// Workflow #429 R-2 (A.1 契约 1): the shared run limits in effect, read at every policy
+    /// evaluation and forward projection, so an instruction takes effect at the next round and no
+    /// run in progress is cut: `performance.pacing.heavy_dispatch_limit.normal` / `.paused`, which
+    /// the controller's resource overlay hands each host, and
+    /// `performance.pacing.max_concurrent_runs`, which the policy host hands the evaluator. A limit
+    /// the configuration does not carry is `None`, and the value the host was started with holds:
+    /// an actingd manifest carries both heavy limits always and `max_concurrent_runs` only while
+    /// the file or an instruction sets it (without, no limit, as the assembly read it); a host
+    /// started without actingd's manifest keeps its own. The keys are checked whenever the
+    /// configuration is loaded or changed, so a value that cannot be read here is a halt.
+    pub(super) fn shared_run_limits(&self) -> RuntimeHostResult<SharedRunLimits> {
+        use actingcommand_runtime_config::performance::pacing::{
+            HEAVY_DISPATCH_LIMIT_NORMAL, HEAVY_DISPATCH_LIMIT_PAUSED, MAX_CONCURRENT_RUNS,
+        };
+        let config = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?;
+        let limit = |key: &str| match config.value(key) {
+            None => Ok(None),
+            Some(FactScalar::Integer(limit)) => u16::try_from(*limit)
+                .map(Some)
+                .map_err(|_| value_type_invalid(ConfigHostLocation::ReadRuntimeConfig)),
+            Some(_) => Err(value_type_invalid(ConfigHostLocation::ReadRuntimeConfig)),
+        };
+        Ok(SharedRunLimits {
+            heavy: crate::performance_control::HeavyDispatchLimits {
+                normal: limit(HEAVY_DISPATCH_LIMIT_NORMAL)?,
+                paused: limit(HEAVY_DISPATCH_LIMIT_PAUSED)?,
+            },
+            max_concurrent_runs: limit(MAX_CONCURRENT_RUNS)?,
+        })
+    }
+
     /// ISO-PE (#419): `scheduling.evaluation.retry_ms` and `.escalate_after` in effect, read at
     /// every policy evaluation the Runtime skips, so an instruction takes effect at the next one.
     pub(super) fn evaluation_retry_settings(
@@ -1111,6 +1142,14 @@ impl HostShared {
         )
         .map(|_| ())
     }
+}
+
+/// Workflow #429 R-2: the shared run limits in effect at one policy evaluation
+/// ([`HostShared::shared_run_limits`]); `None` where the configuration does not carry the key.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct SharedRunLimits {
+    pub(super) heavy: crate::performance_control::HeavyDispatchLimits,
+    pub(super) max_concurrent_runs: Option<u16>,
 }
 
 /// The `host.config_overrides` fact of these rows; its observation time is set when recorded.

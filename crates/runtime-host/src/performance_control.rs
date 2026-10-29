@@ -140,6 +140,16 @@ impl PerformanceControlConfig {
     }
 }
 
+/// Workflow #429 R-2 (A.1 契约 1): `performance.pacing.heavy_dispatch_limit.normal` and
+/// `.paused` in effect, read from the configuration at every policy evaluation; `None` for a
+/// limit the configuration does not carry (a host started without actingd's manifest), which
+/// keeps the controller's own.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct HeavyDispatchLimits {
+    pub(crate) normal: Option<u16>,
+    pub(crate) paused: Option<u16>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PerformanceControlObservation {
     pub observed_at_unix_ms: u64,
@@ -464,11 +474,41 @@ impl PerformanceBalanceController {
         Ok(events)
     }
 
+    /// The overlay with the controller's own heavy-dispatch limits (the configuration it was
+    /// started with).
+    #[cfg(test)]
     pub(crate) fn apply_to_resources(
         &self,
         resources: &mut [HostResourceSnapshot],
         workloads: &[PerformanceControlWorkload],
     ) -> RuntimeHostResult<()> {
+        self.apply_to_resources_with(resources, workloads, HeavyDispatchLimits::default())
+    }
+
+    /// The resource overlay of one policy evaluation or forward projection. Workflow #429 R-2
+    /// (A.1 契约 1): each host's heavy-dispatch budget is `limits`, the configuration's values
+    /// in effect read at this evaluation, `.normal` while the controller is at Normal and
+    /// `.paused` above it; a limit the configuration does not carry is the controller's own.
+    /// `.paused` above `.normal` or a limit of 0 is an invariant breach (the configuration's
+    /// whole-section check refuses both), fatal.
+    pub(crate) fn apply_to_resources_with(
+        &self,
+        resources: &mut [HostResourceSnapshot],
+        workloads: &[PerformanceControlWorkload],
+        limits: HeavyDispatchLimits,
+    ) -> RuntimeHostResult<()> {
+        let normal = limits
+            .normal
+            .unwrap_or(self.config.normal_heavy_dispatch_limit);
+        let pressured = limits
+            .paused
+            .unwrap_or(self.config.pressured_heavy_dispatch_limit);
+        if normal == 0 || pressured == 0 || pressured > normal {
+            return Err(control_fatal(
+                HostCode::PerformanceControlConfigInvalid,
+                HostLocation::ApplyPerformanceControlResources,
+            ));
+        }
         let heavy_count = u16::try_from(
             workloads
                 .iter()
@@ -494,9 +534,9 @@ impl PerformanceBalanceController {
             }
             // The host budgets only express capacity: no level scales them (Workflow #385 P-0).
             host.heavy_dispatch_limit = if self.level == PerformanceControlLevel::Normal {
-                self.config.normal_heavy_dispatch_limit
+                normal
             } else {
-                self.config.pressured_heavy_dispatch_limit
+                pressured
             };
             host.active_heavy_dispatches = heavy_count.min(host.heavy_dispatch_limit);
             // Workflow #385 PM-CFG: the evaluator judges a candidate heavy by the same threshold.

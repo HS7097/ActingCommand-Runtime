@@ -809,9 +809,12 @@ their runs go on in parallel (#427-A):
   by dispatches chosen earlier in the round), so the explanation reads, for example, heavy scene
   2/2 or concurrent runs 3/3. A `heavy_scene_budget_exhausted` has `round_selected_count` 0; its
   `used` may be above `limit_count` when the limit fell under pressure.
-- **Pacing modes.** The limits do not depend on `performance.pacing.mode`: `observe` (the release
-  default, which never slows anything down), `pace` and `full` bind them alike, so under `observe`
-  they are the protection.
+- **Pacing modes.** The limits do not depend on `performance.pacing.mode`: `observe` (which never
+  slows anything down; the release default before 0.12.31, `pace` since, Workflow #429 R-2), `pace`
+  and `full` bind them alike, so under `observe` they are the protection.
+- **Online (Workflow #429 R-2, since 0.12.31).** `heavy_dispatch_limit.normal` / `.paused` and
+  `max_concurrent_runs` are settable and read from the configuration in effect at every
+  evaluation: a change applies from the next round, and no dispatch admitted or running is cut.
 - **Where.** The Runtime reads the admitted dispatches from its dispatch journal at each evaluation
   (`RunSlots`, `evaluate_with_run_slots`); the library's other entry points have none beyond the
   snapshot's `active_heavy_dispatches` and no maximum. Nothing is persisted: the reasons travel in

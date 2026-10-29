@@ -1224,6 +1224,9 @@ impl HostShared {
                 unknown_offset_tasks,
             )
         };
+        // Workflow #429 R-2 (A.1 契约 1): the shared run limits in effect as this cycle starts,
+        // read before the policy and controller locks; a run already admitted is not cut.
+        let run_limits = self.shared_run_limits()?;
         let workloads = lock(self.policy()?, HostLocation::ReadPolicyPerformanceWorkloads)?
             .active_performance_workloads()?;
         let mut controlled_resources = resources.clone();
@@ -1231,7 +1234,11 @@ impl HostShared {
             &self.performance_control,
             HostLocation::ApplyPolicyPerformanceControl,
         )?
-        .apply_to_resources(&mut controlled_resources.hosts, &workloads)?;
+        .apply_to_resources_with(
+            &mut controlled_resources.hosts,
+            &workloads,
+            run_limits.heavy,
+        )?;
         let seed = match seed {
             Some(seed) => seed,
             None => runtime_policy_seed(&facts.fact_snapshot_id, time, self.owner_epoch)?,
@@ -1319,6 +1326,7 @@ impl HostShared {
                         settings: rerun_settings,
                         stages: &rerun_stages,
                     },
+                    max_concurrent_runs: run_limits.max_concurrent_runs,
                 },
             )?;
             let unknown = if cycle.evaluation.is_some() {
@@ -1984,11 +1992,13 @@ impl HostShared {
             .validate_pool_sources(catalog.compiled(), |scope| self.fact_scope_instances(scope))?;
         let mut resources =
             actingcommand_policy::project_fact_pools(catalog.compiled(), &facts, resources);
+        // Workflow #429 R-2: the heavy-dispatch limits in effect, as an evaluation reads them.
+        let run_limits = self.shared_run_limits()?;
         lock(
             &self.performance_control,
             HostLocation::ApplyForwardPerformanceControl,
         )?
-        .apply_to_resources(&mut resources.hosts, &workloads)?;
+        .apply_to_resources_with(&mut resources.hosts, &workloads, run_limits.heavy)?;
         project_forward(catalog.compiled(), &facts, &resources, time, seed, config).map_err(
             |error| {
                 RuntimeHostError::request(

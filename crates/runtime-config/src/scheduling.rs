@@ -36,9 +36,10 @@
 //! (`0..=3600000`), each also per instance (`instance.<instance id>.scheduling.expected_runtime.*`,
 //! defaulting to the section's), and `fact_refresh.expected_duration_ms` (`1..=1800000`), the
 //! declared duration D of a fact refresh read; parsed and checked here, read by slice ED-2.
-//! Workflow #427-A (plan r2 point 6): `parallel.enabled` (default `false`), whether the policy
-//! driver hands each admitted scheduled run to its instance's worker instead of running it on its
-//! own thread; read by actingd at the start of every policy round.
+//! Workflow #427-A (plan r2 point 6): `parallel.enabled` (default `true` since 0.12.31, Workflow
+//! #429 R-2 and Alice's ruling 98; `false` before), whether the policy driver hands each admitted
+//! scheduled run to its instance's worker instead of running it on its own thread; read by
+//! actingd at the start of every policy round.
 //!
 //! The section is read whole and checked whole (M387 §5.3). At start and in `check-config` a
 //! blackout entry that breaks a rule is `blackout_config_invalid` (with `field`, `blackout_source`
@@ -174,8 +175,8 @@ pub const REMEDY_MAX_PER_ROUND: &str = "scheduling.remedy.max_per_round";
 pub const REMEDY_CHOICES: &str = "scheduling.remedy.choices";
 
 /// Workflow #427-A (plan r2 point 6): whether the policy driver runs each admitted scheduled run
-/// on its instance's worker (`true`: one run per instance at a time, different instances at once)
-/// or on its own thread, one after another (`false`, the default).
+/// on its instance's worker (`true`, the default since 0.12.31: one run per instance at a time,
+/// different instances at once) or on its own thread, one after another (`false`).
 pub const PARALLEL_ENABLED: &str = "scheduling.parallel.enabled";
 /// ISO-PE (#419; `actingd-config` revision 20): how long the policy driver waits after an
 /// evaluation the Runtime skipped (one whose failure is not global) before it evaluates again.
