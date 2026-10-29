@@ -3804,6 +3804,19 @@ existing `application.foreground` fact, and the key's row is a new row of the ex
 | SF2-4 | the handset start gate's `device_in_use` for a store update package's own run | behaviour | STORE-FG-2 | runtime-host | the declared store in front is no other application for that run; every other run unchanged |
 | SF2-5 | the startup refusal of a store update package: `startup_package_admission_failed` with `reason=store_update` | existing code, new detail (review L5) | STORE-FG-2 | runtime-host | before, `contained_task_resource_reading_run_kind_unsupported`; a resource-reading startup package keeps that code |
 
+### 1.210 Slice LAB-WAIT (0.12.29): offline `observe` loads a wait step whose `to` is a page set (the resource side's report of 10-29: such a step refused the package with `missing field 'click'`; coordinator work order LAB-WAIT)
+
+[resource-declarations.md](resource-declarations.md) (offline `observe`'s page-set operations,
+and "Wait steps and wait pages") is the contract. **No persisted ledger shape**, no code, no
+configuration key, no wire or interface revision, no new member: actinglab reads an existing
+shape that pack containment and the kernel already admit. The number 1.210 is the coordinator's
+(1.204 is WD-MT's, 1.205 is ISO-PE's, 1.206 is CFL-1's, 1.207 is STORE-FG-1's, 1.208 is CFL-2's,
+1.209 is STORE-FG-2's).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| LW-1 | offline `observe`'s page-set operations (`ObservationResources::multi_destination`, read from the task files) leave out a wait step, `wait` and none of `click`, `application` and `select` (pack containment's `is_wait_step`), as they leave out an application effect and a select step | behaviour (actinglab, since 0.12.29) | LAB-WAIT | — | the generated navigation holds no row for a wait step, so `actions` lists none for it, whether its destinations are a page-set `to` or `expect_after.page_id`; its destinations stay the kernel's (`to`, else `expect_after`); a step that declares `wait` beside a `click` is still read as a click step (pack containment's reading; the kernel refuses it, `wait_member_refused`); a click step whose `to` is a page set still requires its `click` |
+
 ### 1.211 Slice SS-1 (0.12.30): a pool's base valuation counts on every instance, and the resource layer reads no task state (Alice's ruling 100, #386 comment 6490879952: 「没有玩家目标时，跑建模算出的基准最优解」, resource weight feeds task weight and never the reverse; ruling 102: a met goal only stops adding score; design `rd-1029/design-sch-state.md` §3, §4.1, §4.2, §5 SS-1 and `rd-1029/design-acm-fit.md` C1 to C3; coordinator work order `rd-1029/brief-wave3a.md` SS-1)
 
 [resource-targets.md](resource-targets.md) ("Base valuation on every instance", "Evaluation" and
