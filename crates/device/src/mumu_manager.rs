@@ -976,8 +976,11 @@ fn control_failure_context(error: DeviceError) -> DeviceError {
 /// `{"errcode","errmsg"}` envelope with `errcode != 0` are failures exactly like `info`;
 /// `errcode == 0` is the success acknowledgment. A poll whose bound expires (observed while
 /// `player_state` is `stopping`) is no observation yet and polling continues until `wait`
-/// elapses; only an envelope with `errcode != 0`, a shape error or another typed reader
-/// failure, or `launch_err_code != 0`, ends the wait early. Never dispatches `api`.
+/// elapses; `launch_err_code != 0` ends the wait early. EMU-BIND A (0.12.28): during a Start
+/// every other failed read (an envelope with `errcode != 0`, a non-zero exit, a shape error or
+/// another typed reader failure) is no observation yet either, and the deadline carries the last
+/// one; during a Stop it ends the wait early, its own text after the control output (EMU-BIND
+/// C). Never dispatches `api`.
 pub fn control_instance(
     mumu_manager_path: &Path,
     instance_index: u16,
@@ -1098,6 +1101,9 @@ pub(crate) fn control_instance_with(
     let deadline = runner.now() + wait;
     let mut last_state: Option<InstanceState> = None;
     let mut expired_polls: u32 = 0;
+    // EMU-BIND A (0.12.28): a Start's `info` reads that failed, and the last failure's text.
+    let mut failed_reads: u32 = 0;
+    let mut last_read_failure: Option<String> = None;
     // Workflow #381 B F2: the last listing's answer and when the next one may run.
     let mut listed: Option<DeviceProcessPresence> = None;
     let mut next_listing: Option<Duration> = None;
@@ -1167,7 +1173,20 @@ pub(crate) fn control_instance_with(
             {
                 expired_polls += 1;
             }
+            // EMU-BIND A (0.12.28): during a Start's readiness wait a failed `info` read is no
+            // observation yet (on 10-29, MuMuManager 6.8.4.0 exited non-zero once while the VM
+            // of the first launch after a reboot came up): the wait goes on to its deadline,
+            // which carries the last failure. A non-zero `launch_err_code` still fails at once.
+            Err(error) if action != EmulatorInstanceAction::Stop => {
+                failed_reads += 1;
+                last_read_failure = Some(error.message().to_owned());
+            }
+            // A Stop's failed read still ends the wait. EMU-BIND C (Fail Loud): the failure
+            // carries the read's own text (its exit status, stdout and stderr) after the
+            // control command's output.
             Err(error) => {
+                let summary =
+                    bounded_control_summary(format!("{summary}\ninfo: {}", error.message()));
                 return Err(failure(
                     error,
                     summary,
@@ -1178,8 +1197,11 @@ pub(crate) fn control_instance_with(
             }
         }
         if runner.now() >= deadline {
+            let read_failure = last_read_failure
+                .as_ref()
+                .map_or_else(String::new, |failure| format!("\ninfo: {failure}"));
             let summary = bounded_control_summary(format!(
-                "{summary}\n{}",
+                "{summary}\n{}{read_failure}",
                 last_state.as_ref().map_or_else(
                     || "state: no observation".to_owned(),
                     InstanceState::summary_line
@@ -1199,9 +1221,9 @@ pub(crate) fn control_instance_with(
                     },
                     wait.as_millis(),
                     if last_state.is_some() {
-                        format!("last observation carried; {expired_polls} info poll(s) expired")
+                        format!("last observation carried; {expired_polls} info poll(s) expired, {failed_reads} failed")
                     } else {
-                        format!("no observation; {expired_polls} info poll(s) expired")
+                        format!("no observation; {expired_polls} info poll(s) expired, {failed_reads} failed")
                     }
                 ))
                 .with_diagnostic(DeviceErrorCategory::Response, crate::codes::DeviceStage::MumuManagerWaitTimeout.location()),

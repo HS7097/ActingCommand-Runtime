@@ -725,7 +725,13 @@ Fixture instances and providers without a device endpoint are not prepared by
 the automatic triggers.
 
 **Emulator status first (#411 A48).** A self-check (`SelfCheckInstance` and an
-instance resume's reconnect, the phase on an operator claim) of a
+instance resume's reconnect, the phase on an operator claim; #411 A50: the
+Runtime's own recovery preparation; EMU-BIND, since 0.12.28: the emulator
+watch's recognition on its autostart claim, `emulator-control.md`, "Emulator
+watch"; for an instance already bound to the reported port and `on` that holds
+no `backend.selfcheck.*` fact, EMU-BIND fix 1, the read takes the "running and
+already recognized" branch below, so the opens go on without the ADB baseline
+wait and `device.connected` keeps its earlier value) of a
 discovery-bound instance reads the emulator's status once (`MuMuManager info`,
 bounded; a status read that never starts or stops anything) after step 2's
 close of a retained session and before its opens:
