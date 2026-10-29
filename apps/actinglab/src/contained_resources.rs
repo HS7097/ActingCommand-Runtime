@@ -149,7 +149,8 @@ pub(super) fn observation_resources(
 }
 
 /// The click operations of every task file of `bundle` whose `to` is a page set; an application
-/// effect and a select step are not clicks, as the generated navigation leaves them out too.
+/// effect, a select step and (LAB-WAIT, 0.12.29) a wait step are not clicks, as the generated
+/// navigation leaves them out too.
 fn multi_destination_operations(
     bundle: &actingcommand_pack_containment::LoadedBundle,
 ) -> CliOutcome<Vec<MultiDestinationOperation>> {
@@ -176,7 +177,10 @@ fn multi_destination_operations(
                 continue;
             };
             let effect = |name: &str| operation.get(name).is_some_and(|value| !value.is_null());
-            if effect("application") || effect("select") {
+            // LAB-WAIT (0.12.29): a wait step is pack containment's (`is_wait_step`): `wait` and
+            // none of `click`, `application` and `select`. It makes no input and has no click;
+            // its destinations are the kernel's (`to`, else `expect_after`), not an action here.
+            if effect("application") || effect("select") || (effect("wait") && !effect("click")) {
                 continue;
             }
             let game = super::required_string_field(&task, "game")?;
