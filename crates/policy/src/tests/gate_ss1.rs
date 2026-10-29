@@ -75,7 +75,8 @@ fn ss1_t1_without_a_target_record_a_producing_task_gets_yield_times_base_over_sc
 // Work order test 2: disabling, by instance override, another task that produces the same pool
 // leaves the first task's resource term unchanged: without a record (the base alone), under a v2
 // target on the pool with an open gap (base plus shortfall), and under a v1 target that names both
-// tasks (whose score `s = ⌊g·I·u / (S·U)⌋` keeps the disabled task's yield in `U`).
+// tasks, in `adjust` and in `override` mode (whose score `s = ⌊g·I·u / (S·U)⌋` keeps the disabled
+// task's yield in `U`).
 #[test]
 fn ss1_t2_disabling_another_producer_by_instance_override_leaves_the_resource_term_unchanged() {
     let enabled = catalog(&[task_a(), task_b()]);
@@ -83,7 +84,17 @@ fn ss1_t2_disabling_another_producer_by_instance_override_leaves_the_resource_te
     let inventory = || vec![reading(POOL_A_KEY, 50)];
     let v2 = stored(&enabled, v2_target(None), NOW - HOUR_MS);
     let v1 = stored(&enabled, v1_target(&[TASK_A, TASK_B]), NOW - HOUR_MS);
-    for (label, record) in [("no record", None), ("v2", Some(v2)), ("v1", Some(v1))] {
+    let v1_override = stored(
+        &enabled,
+        v1_override_target(&[TASK_A, TASK_B]),
+        NOW - HOUR_MS,
+    );
+    for (label, record) in [
+        ("no record", None),
+        ("v2", Some(v2)),
+        ("v1", Some(v1)),
+        ("v1 override", Some(v1_override)),
+    ] {
         let facts = || {
             inventory()
                 .into_iter()
@@ -123,53 +134,120 @@ fn ss1_t2_disabling_another_producer_by_instance_override_leaves_the_resource_te
     let v1_round = after(v1);
     assert_eq!(term(&v1_round, TASK_A), 1000);
     assert_eq!(effective(&v1_round, TASK_A), 3333 + 1000);
+    // v1 `override`: `effective = utility + s + R` (contracts/resource-targets.md, "Base valuation
+    // on every instance"). The override supersedes task A's manual offset of 250000 and the
+    // utility term is 0 here, so the effective score is the same `s = 3333` plus the base 1000;
+    // the disposition is `none`.
+    let overridden = round(
+        &disabled,
+        vec![
+            reading(POOL_A_KEY, 50),
+            stored(
+                &enabled,
+                v1_override_target(&[TASK_A, TASK_B]),
+                NOW - HOUR_MS,
+            ),
+        ],
+        offset(TASK_A, 250_000),
+    );
+    assert_eq!(term(&overridden, TASK_A), 1000);
+    assert_eq!(effective(&overridden, TASK_A), 3333 + 1000);
+    assert_eq!(
+        reason_detail(&overridden, TASK_A, "score_computed"),
+        "score=none offset=250000 effective=4333 disposition=none \
+         target=goal-a:override:3333 resources=1000"
+    );
+    assert_eq!(
+        reason_detail(&overridden, TASK_A, "resource_target_override"),
+        "superseded score=none offset=250000; utility kept"
+    );
 }
 
 // Work order test 3: changing a task's priority or offset leaves every pool weight unchanged.
-// Under a v2 target with an open gap on pool A, every item of every task (yield, step, base,
-// gap, effective weight and term) and every task's term stay byte for byte as they were when
-// task B's priority changes, when task B gets a manual offset and when task A gets one.
+// Without a target record (the base term alone) and under a v2 target with an open gap on pool A,
+// every item of every task (yield, step, base, gap, effective weight and term) and every task's
+// term stay byte for byte as they were when task B's priority changes, when task B gets a manual
+// offset and when task A gets one.
 #[test]
 fn ss1_t3_a_task_priority_or_offset_changes_no_pool_weight() {
     let base = catalog(&[task_a(), task_b()]);
     let reprioritized = catalog(&[task_a(), with_priority(task_b(), 900)]);
-    let record = stored(&base, v2_target(None), NOW - HOUR_MS);
-    let facts = || vec![reading(POOL_A_KEY, 50), record.clone()];
-    let reference = round(&base, facts(), Vec::new());
-    let variants = [
+    let v2 = stored(&base, v2_target(None), NOW - HOUR_MS);
+    // The weights each reference shows, task A's then task B's, with their terms: without a
+    // record pool A `W = 500` and pool B `W = 7`; under the v2 target pool A `W = 500 + 500`.
+    let without_record = [
         (
-            "task B's priority",
-            round(&reprioritized, facts(), Vec::new()),
+            "pool_a:r=20,per=10,base=500,gap=0,effective=500,term=1000",
+            1000,
         ),
         (
-            "task B's offset",
-            round(&base, facts(), offset(TASK_B, 250_000)),
-        ),
-        (
-            "task A's offset",
-            round(&base, facts(), offset(TASK_A, -250_000)),
+            "pool_a:r=30,per=10,base=500,gap=0,effective=500,term=1500;\
+             pool_b:r=3,per=1,base=7,gap=0,effective=7,term=21",
+            1500 + 21,
         ),
     ];
-    for (label, variant) in &variants {
-        for task_id in [TASK_A, TASK_B] {
+    let under_v2 = [
+        (
+            "pool_a:r=20,per=10,base=500,gap=500,effective=1000,term=2000",
+            2000,
+        ),
+        (
+            "pool_a:r=30,per=10,base=500,gap=500,effective=1000,term=3000;\
+             pool_b:r=3,per=1,base=7,gap=0,effective=7,term=21",
+            3000 + 21,
+        ),
+    ];
+    for (record_label, record, pinned) in [
+        ("no record", None, without_record),
+        ("v2", Some(v2), under_v2),
+    ] {
+        let facts = || {
+            std::iter::once(reading(POOL_A_KEY, 50))
+                .chain(record.clone())
+                .collect::<Vec<_>>()
+        };
+        let reference = round(&base, facts(), Vec::new());
+        for (task_id, (pinned_items, pinned_term)) in [TASK_A, TASK_B].into_iter().zip(pinned) {
             assert_eq!(
                 items(&reference, task_id),
-                items(variant, task_id),
-                "{label}: the pool weights of {task_id}"
+                pinned_items,
+                "{record_label}: {task_id}"
             );
             assert_eq!(
                 term(&reference, task_id),
-                term(variant, task_id),
-                "{label}: {task_id}"
+                pinned_term,
+                "{record_label}: {task_id}"
             );
         }
+        let variants = [
+            (
+                "task B's priority",
+                round(&reprioritized, facts(), Vec::new()),
+            ),
+            (
+                "task B's offset",
+                round(&base, facts(), offset(TASK_B, 250_000)),
+            ),
+            (
+                "task A's offset",
+                round(&base, facts(), offset(TASK_A, -250_000)),
+            ),
+        ];
+        for (label, variant) in &variants {
+            for task_id in [TASK_A, TASK_B] {
+                assert_eq!(
+                    items(&reference, task_id),
+                    items(variant, task_id),
+                    "{record_label}, {label}: the pool weights of {task_id}"
+                );
+                assert_eq!(
+                    term(&reference, task_id),
+                    term(variant, task_id),
+                    "{record_label}, {label}: {task_id}"
+                );
+            }
+        }
     }
-    // The weights the reference shows: pool A `W = 500 + 500`, pool B `W = 7`.
-    assert_eq!(
-        items(&reference, TASK_B),
-        "pool_a:r=30,per=10,base=500,gap=500,effective=1000,term=3000;\
-         pool_b:r=3,per=1,base=7,gap=0,effective=7,term=21"
-    );
 }
 
 // Work order test 4 (ruling 102): after a goal is met, its producing task stays a candidate;
@@ -463,6 +541,13 @@ fn v1_target(tasks: &[&str]) -> Value {
     })
 }
 
+/// `v1_target` in `override` mode.
+fn v1_override_target(tasks: &[&str]) -> Value {
+    let mut document = v1_target(tasks);
+    document["targets"][0]["apply"]["mode"] = json!("override");
+    document
+}
+
 /// The record the formal entry stores for `document`, checked against `catalog` at `checked_at`.
 fn stored(catalog: &CompiledCatalog, document: Value, checked_at: u64) -> ObservedFact {
     stored_document(catalog, &document, checked_at)
@@ -586,6 +671,16 @@ fn weights<'a>(evaluation: &'a PolicyEvaluation, task_id: &str) -> &'a str {
         .find(|reason| reason.outcome.code().as_str() == "resource_weights")
         .map(|reason| reason.detail.as_str())
         .unwrap_or_else(|| panic!("a resource_weights reason on {task:#?}"))
+}
+
+/// The detail of the candidate's first reason with `code`.
+fn reason_detail<'a>(evaluation: &'a PolicyEvaluation, task_id: &str, code: &str) -> &'a str {
+    let task = decision(evaluation, task_id);
+    task.reasons
+        .iter()
+        .find(|reason| reason.outcome.code().as_str() == code)
+        .map(|reason| reason.detail.as_str())
+        .unwrap_or_else(|| panic!("a {code} reason on {task:#?}"))
 }
 
 /// The candidate's resource term `R`.

@@ -519,7 +519,7 @@ tests = [
     "actingcommand-policy::lib::tests::gate_p2b::gate_p2b_g12_a_met_target_scores_nothing_more_shortfall_never_less_and_other_instances_are_unaffected",
 ]
 incident = ["#308", "#382 P-2b"]
-# SS-1 (0.12.30; Alice's rulings 100 and 102; contracts/resource-targets.md, "Base valuation on every instance"): without a target record a producing task's resource term is per-run yield × base / scale; disabling another producer by instance override leaves it unchanged (no record, v2, v1); a task's priority or offset changes no pool weight; a met goal keeps its producing task a candidate with only the base term; an expired, withdrawn, unreadable or v1 record keeps the base term
+# SS-1 (0.12.30; Alice's rulings 100 and 102; contracts/resource-targets.md, "Base valuation on every instance"): without a target record a producing task's resource term is per-run yield × base / scale; disabling another producer by instance override leaves it unchanged (no record, v2, v1 adjust and override; a v1 override scores utility + s + R); a task's priority or offset changes no pool weight (no record, v2); a met goal keeps its producing task a candidate with only the base term; an expired, withdrawn, unreadable or v1 record keeps the base term
 [[gate]]
 coverage = "Y"
 tests = [

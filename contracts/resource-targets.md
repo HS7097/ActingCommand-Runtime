@@ -10,10 +10,10 @@ nothing.
 The evaluator reads the stored policy in every evaluation and turns each open gap into a task
 target score in the score stage ("Evaluation" below). On an instance without a policy the
 pools' declared `valuation` alone weighs every producing task ("Base valuation on every
-instance" below); with no valued pool it decides exactly as before. The input identity (`fact_snapshot_id`) includes a stored policy like any
-other overlaid fact.
+instance" below); with no valued pool it decides exactly as before. The input identity
+(`fact_snapshot_id`) includes a stored policy like any other overlaid fact.
 
-### Base valuation on every instance
+## Base valuation on every instance
 
 SS-1 (0.12.30; Alice's rulings 100 and 102: with no player goal the scheduler runs the modelled
 baseline optimum, a goal only adds its shortfall, and a met goal only stops adding it). A pool's
@@ -26,10 +26,12 @@ computed with no target (`W = B`), with its `resource_weights` reason (`policy=n
 ` resources=<R>` in `score_computed` and, unless a v1 target applies to it, its resource fields
 in the dispatch decision record; it enters the score stage when `R > 0`. A base term bounds no
 freshness and wakes nothing: the valuation is part of the catalog. Under a v1 policy the v1
-effect below is computed as before and `R` is added to its effective score (`adjust`: `base + s
-+ R`; `override`: `utility + s + R`); its decision record keeps the v1 fields (`target=<s>`). A
-candidate that produces no valued pool, and every candidate of a catalog without a valuation,
-keeps every reason and record byte for byte.
+effect below is computed as before and `R` is added to its effective score (`adjust`:
+`base + s + R`; `override`: `utility + s + R`); its decision record keeps the v1 fields
+(`target=<s>`). A candidate that produces no valued pool, and every candidate of a catalog
+without a valuation, keeps every reason and record byte for byte, except the v1 `U` of the
+one-way guard below (a v1 policy one of whose named tasks an instance override disables after
+it was stored).
 
 **One-way guard.** Resource weight feeds task weight, never the reverse (ruling 100). The
 resource layer, the pool weights `W = B + Γ` and each task's term `R`, reads the pools'
@@ -43,13 +45,15 @@ lapsed; and a v1 target's best useful contribution `U` includes the named tasks 
 override disables ("Evaluation" below).
 
 Two document versions exist. `actingcommand.resource-targets.v1` (Workflow #308 RT-S1) is
-frozen: its fields, rejections, rows, identity and evaluation stay exactly as specified here,
-and its override still supersedes the manual offset. `actingcommand.resource-targets.v2`
-(Workflow #335 S2b) weighs every produced resource of the instance with the pool's declared
-`valuation` (`contracts/scheduling/README.md`, "Pool Valuation") plus its target's shortfall
-("Document `actingcommand.resource-targets.v2`" and "Resource weights (v2)" below). Agents
-submit v2; a v1 document keeps its v1 meaning. Since SS-1 (0.12.30) the valuation weighs every
-instance whatever its record ("Base valuation on every instance" below).
+frozen: its fields, rejections, rows and identity stay exactly as specified here, and its
+evaluation too, except that since SS-1 (0.12.30) its `U` includes the named tasks an instance
+override disables ("One-way guard" above, "Evaluation" below); its override still supersedes
+the manual offset. `actingcommand.resource-targets.v2` (Workflow #335 S2b) weighs every
+produced resource of the instance with the pool's declared `valuation`
+(`contracts/scheduling/README.md`, "Pool Valuation") plus its target's shortfall ("Document
+`actingcommand.resource-targets.v2`" and "Resource weights (v2)" below). Agents submit v2; a v1
+document keeps its v1 meaning (its `U` aside, SS-1). Since SS-1 (0.12.30) the valuation weighs
+every instance whatever its record ("Base valuation on every instance" above).
 
 ## Document `actingcommand.resource-targets.v1`
 
@@ -381,8 +385,10 @@ s_k = min(floor(g*I*u_k / (S*U)), 1_000_000) task target score, "capped" at the 
 
 The task with the largest useful contribution scores `s = w`; the other tasks score at most
 `s` (`s_k = min(floor(g*I*u_k / (S*U)), 1e6)`), and at the cap, or when `u_k = U`, they can
-tie with it. `s_k` never grows as `c` grows. With `base = score + utility + offset` (see
-`contracts/scheduling/README.md`, "Score-Assisted Priority"):
+tie with it. `U` counts a disabled named task too (SS-1); when that task has the largest useful
+contribution, no candidate reaches `w`. `s_k` never grows as `c` grows. With
+`base = score + utility + offset` (see `contracts/scheduling/README.md`, "Score-Assisted
+Priority"):
 
 - `adjust`: `effective = base + s`. The disposition follows the thresholds as for any scored
   candidate, so with a selection document `s` takes part in the promotion comparison.
@@ -405,10 +411,12 @@ wakes, and none requests detection. The policy and the inventory are part of the
 Reasons follow `score_computed` (whose detail ends with ` target=<id>:<mode>:<s>` when
 applied) and `score_unknown`, and precede the disposition reason: at most one policy-level
 reason (the first that applies of ignored, unreadable, expired, tasks_unevaluable), one
-target-level reason and one override reason. Each reason is a registered code with its values
-(Workflow #378 A2-P); the target-level and override reasons carry the target's id as the value
-`resource_target_id`. The details are developer text, never persisted; every detail stays
-within 1024 bytes.
+target-level reason and one override reason. With a valued pool a v1 instance's candidate also
+gains ` resources=<R>` at the end of `score_computed` and `resource_weights` (`policy=none`)
+after these ("Base valuation on every instance" above). Each reason is a registered code with
+its values (Workflow #378 A2-P); the target-level and override reasons carry the target's id as
+the value `resource_target_id`. The details are developer text, never persisted; every detail
+stays within 1024 bytes.
 
 | Code | Detail |
 | --- | --- |
@@ -458,10 +466,10 @@ and is listed as `<id>@<pool>:<why>` in `resource_target_tasks_unevaluable` on e
 the instance, beside the v1-style `<target>/<task>:<why>` items of named tasks that can have no
 candidate. Since SS-1 a `no_producing_task` lapse is a report only: the target still resolves,
 and the only tasks it covers have no candidate (one-way guard); likewise a named task an
-instance override disables is listed as `task_disabled` and keeps its coverage. Only these catalog-level failures are listed: a producing task that is merely held
-back this round (trigger, feedback stop, cooldown, placement, budget) is not a lapse. A target
-with `tasks` whose pool no longer resolves shows `resource_target_unmapped` on its named
-candidates, as v1.
+instance override disables is listed as `task_disabled` and keeps its coverage. Only these
+catalog-level failures are listed: a producing task that is merely held back this round
+(trigger, feedback stop, cooldown, placement, budget) is not a lapse. A target with `tasks`
+whose pool no longer resolves shows `resource_target_unmapped` on its named candidates, as v1.
 
 For an enabled instance `i` and a candidate `k` (a task that passed trigger, feedback stop,
 cooldown and placement), with milli-unit quantities and checked 128-bit intermediates:
@@ -551,7 +559,7 @@ with ` offset_kept=<0|1>`; `decision_record` names the policy `active.v2:<sha>@<
 or `expired.v2:<sha>@<applied_at>`. On an instance that is not enabled a candidate with a base
 term shows the same ` resources=<R>` and, unless a v1 target applies to it, the same record
 fields (`target_id=*`, `mode=adjust`, ` offset_kept=1`); a candidate without one keeps every
-reason byte for byte (SS-1).
+reason byte for byte (SS-1; the v1 `U` of the one-way guard aside).
 
 ## Choosing scale and importance
 

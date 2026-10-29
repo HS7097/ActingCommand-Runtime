@@ -168,7 +168,8 @@ resource target policy, and an active `actingcommand.resource-targets.v2`
 policy only adds its targets' shortfall (`contracts/resource-targets.md`, "Base
 valuation on every instance" and "Resource weights (v2)"). Until 0.12.29 it was
 read only for an instance with an active v2 policy. A catalog without a
-valuation ranks exactly as before.
+valuation ranks exactly as before, apart from the v1 `U` change of SS-1
+(`contracts/resource-targets.md`, "One-way guard").
 
 The bounds above are checked when the catalog is compiled (`compile_catalog`,
 `actinglab scheduling compile`, Runtime activation and startup reload).
