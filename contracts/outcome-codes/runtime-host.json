@@ -20815,6 +20815,29 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "contained_task_interrupt_environment_limit_reached": {
+      "category": "error",
+      "ladder_class": "environment_fault",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "page_id": "required",
+        "count": "required",
+        "limit_count": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.28",
+      "description": "A shared interrupt page whose interrupts.json entry declares limit_cause environment was seen once more than its max_per_run (Workflow #411 B43): the standard pack's data says the page keeps coming back because of the game's network or servers, not because the pack no longer matches. The run ends with no further input. A scheduled run's failure is rerun only: it never accumulates toward a pause of its task pair; the ladder configuration decides what follows.",
+      "common_causes": "The game's network or its servers stayed unavailable (for example during a maintenance) while the run was handling the page.",
+      "handling": "TBD"
+    },
     "contained_task_navigation_located": {
       "category": "info",
       "ladder_class": "none",

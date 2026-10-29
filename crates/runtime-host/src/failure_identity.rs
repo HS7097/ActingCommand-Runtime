@@ -76,6 +76,11 @@ const PREPARE_ACCUMULATING_PREFIX: &str = "contained_task_prerequisite_";
 /// accumulate in every scope of a run.
 const NAVIGATION_FAILURE_PREFIXES: [&str; 2] =
     ["contained_task_navigation_", "contained_task_interrupt_"];
+/// Workflow #411 B43: the shared interrupt failure the standard pack's data declares an
+/// environment problem (`limit_cause: environment`). Its identity still names the data, but it
+/// is rerun only, in every scope.
+const RERUN_ONLY_INTERRUPT_FAILURES: &[&str] =
+    &[crate::codes::HostCode::ContainedTaskInterruptEnvironmentLimitReached.as_str()];
 /// R25-2: the adb backend failures of a `linear_steps` task that are rerun only when the run
 /// was not poisoned.
 pub(crate) const RERUN_ONLY_BACKEND_FAILURES: &[&str] = &[
@@ -184,8 +189,12 @@ pub(crate) fn navigation_failure_code(code: &CodeStr) -> bool {
 /// main package's own steps outside the restart segment, or a prerequisite preparation
 /// refusal. Workflow #373 NAV-5 (M-373 §8.5, §15 ruling 4): a navigation or shared interrupt
 /// failure in any scope of the run, a restart segment included (a recovery chain may restart
-/// the application). Every other failure is rerun only.
+/// the application), except (Workflow #411 B43) the interrupt limit the data declares an
+/// environment problem. Every other failure is rerun only.
 pub(crate) fn failure_accumulates(code: &CodeStr, scope: &str, restart_segment: bool) -> bool {
+    if RERUN_ONLY_INTERRUPT_FAILURES.contains(&code.as_str()) {
+        return false;
+    }
     if scope != "prepare" && navigation_failure_code(code) {
         return true;
     }

@@ -3664,6 +3664,21 @@ wave 1.
 | P19-2 | a reset never clears a task's own last result: its own `dependency_completed`, `since_own_run`'s own run and `once_per_reading`'s served check read the task's state as the input holds it | behaviour | W1-4 | the policy evaluator | the window result before `feedback_stop` and another task's `dependency_completed` still read the state as the resets leave it; `clock_slot_live` reads the trigger the same way, so the K4 clock-slot liveness changes with it: a pair whose own dependency was Unknown after a reset may now be live, and more `clock_slot_superseded` or `clock_slot_expired` records are written (diagnostics only, not dispatch) |
 | P19-3 | `config.subsystems` row `reset_exclusions` (always on, `config_subsystem_always_on`) | new row value of an existing fact (no shape) | W1-4 | W1-4 | [actingd-check-config.md](actingd-check-config.md); a `schedule.json` whose event writes P19-1 must list it in `requires`, else the composer refuses the file (`schedule_invalid` at the first `/timeline/<i>/excludes_fact_prefixes`); a file that relies on P19-2 names it too |
 
+### 1.202 Slice B43 (0.12.28): a shared interrupt page can declare that reaching its limit is an environment problem (Workflow #411 B43; triage `rd-1028/triage-p71.md` B43, Alice's item 88 of 10-29: 「全部放行」; coordinator work order `rd-1029/brief-wave2d.md` B43)
+
+[package-reference.md](package-reference.md) ("Standard package root", `interrupts.json` and
+"Shared interrupt pages") and [policy-suspension.md](policy-suspension.md) ("Which failures
+accumulate") are the contract. **No persisted ledger shape**: the member is a root-file format
+addition, and the new code rides the existing `task.failed` terminal and
+`policy.execution_recorded` failure as any code does (a catalog entry, not a row, §7); no
+configuration key, no wire or interface revision raised here. The number 1.202 is provisional
+for the parallel slices of wave 2.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| B43-1 | an `interrupts.json` entry's optional `limit_cause`: `"pack_logic"` (default) or `"environment"` (`StandardPackInterrupt::limit_cause`, `InterruptLimitCause`) | new optional member (resource file format, not a ledger shape) | B43 | resource side | read by `parse_standard_pack_interrupts`, so the Runtime, `package bundle` and `standard-pack check` accept and refuse it alike; another value or type is `malformed` (pointer empty, as every decoding refusal of the file); absent, the entry serializes as before; joins `package` revision 6, which BT-PK6 declares, admitted by code until then; a Runtime before 0.12.28 refuses a root that names it (`standard_pack_root_invalid`) |
+| B43-2 | a run that meets an `environment` page once more than its `max_per_run` ends with `contained_task_interrupt_environment_limit_reached` (error, `environment_fault`; `page_id`, `count`, `limit_count`) | behaviour | B43 | runtime-host | in place of `contained_task_interrupt_limit_reached`; the run's 16 handlings of all pages together keep the old code; the failure is rerun only in every scope (`failure_accumulates`), its identity keeps `g`; the recovery ladder follows its configuration (by default no `task` item matches the class; `stability_burst` counts it) |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

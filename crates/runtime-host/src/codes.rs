@@ -1420,6 +1420,10 @@ actingcommand_contract::outcome_codes! {
         /// Error. A shared interrupt page whose `then` is `end_run` was handled (keys
         /// `page_id`).
         ContainedTaskInterruptEscalated => "contained_task_interrupt_escalated": error / pack_logic_mismatch,
+        /// Error. Workflow #411 B43: a shared interrupt page whose `limit_cause` is
+        /// `environment` was seen once more than its `max_per_run` (keys `page_id`, `count`,
+        /// `limit_count`); rerun only, it never accumulates toward a pause.
+        ContainedTaskInterruptEnvironmentLimitReached => "contained_task_interrupt_environment_limit_reached": error / environment_fault,
         // ---- Workflow #373 NAV-6: end
         // ---- Workflow #357 DB-1 (shared tables, M-357a v1.1 §2.2, register §1.65 TB3): begin
         /// Warning. A column of a standard-pack table declares `valid_until_unix_s` and that

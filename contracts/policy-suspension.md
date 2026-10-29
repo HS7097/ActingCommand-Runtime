@@ -176,7 +176,12 @@ Only these failures can pause a task by repeating:
   screen the run cannot handle, again and again, means the standard pack no longer matches
   the game, so the pair pauses until the package or the data changes (its identity names the
   data files, `g`, and the handler's layer, `n`). `prepare` is excluded because interrupts
-  there are expected.
+  there are expected. Workflow #411 B43: `contained_task_interrupt_environment_limit_reached`
+  is excluded in every scope. It ends a run only on a page whose `interrupts.json` entry
+  declares `limit_cause` `"environment"` ([package-reference.md](package-reference.md),
+  "Standard package root"): the data says the screen is the game's network or servers, not a
+  pack that no longer matches, so the pair is rerun (R22) and never paused by repeating. Its
+  identity still names `g`.
 
 Every other failure is rerun only: its `F` is unique, so it never repeats the previous identity
 and its count stays 1. This covers the gate and every prerequisite and return-home package,
