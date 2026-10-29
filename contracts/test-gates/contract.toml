@@ -191,7 +191,7 @@ tests = [
 ]
 incident = ["#429 R-0"]
 
-# Workflow #429 R-0c (0.12.30; register §1.216): the runtime client's workbench methods over the scripted Runtime: each sends its operation member by member (run_instance_task mints its holder per call and always names its deadline, refusing one outside 1 ms to the contained task's maximum unsent; expected_version as given, absent from the wire when None) and reads its completed answer, config_version passed on Some or None and runtime_fact_snapshot unchanged; 0.12.30's Denied not_implemented is the method's error with the host's code and operation, never unexpected, sent once; run_instance_task sends no SafeReset and no CancelContainedTask after a cancelled run or a receipt timeout; stop_instance_run refuses another run and a reset that contradicts settled; routine_summary and pack_schedule_view report a dropped connection as runtime_operation_unsupported and refuse another instance; each method refuses a result of another kind. PackScheduleView's request and answer round-trip, refuse an unknown member at every level and spell every source
+# Workflow #429 R-0c (0.12.30; register §1.216): the runtime client's workbench methods over the scripted Runtime: each sends its operation member by member (run_instance_task mints its holder per call and always names its deadline, refusing one outside 1 ms to the contained task's maximum unsent; expected_version as given, absent from the wire when None) and reads its completed answer, config_version passed on Some or None and runtime_fact_snapshot unchanged; 0.12.30's Denied not_implemented is the method's error with the host's code and operation, never unexpected, sent once; run_instance_task sends no SafeReset and no CancelContainedTask after a cancelled run or a receipt timeout; stop_instance_run refuses another run and a reset that contradicts settled and returns the receipt's outcome unchanged, a failed reset's code included; run_instance_task and stop_instance_run wait the deadline or wait plus the Runtime's own reset plus IO, so a receipt after the deadline or wait plus IO is read; routine_summary and pack_schedule_view report a dropped connection as runtime_operation_unsupported and refuse another instance, as edit_resource_target does; each method refuses a result of another kind. PackScheduleView's request and answer round-trip, refuse an unknown member at every level and spell every source
 [[gate]]
 coverage = "Y"
 tests = [
@@ -199,8 +199,12 @@ tests = [
     "actingcommand-runtime-client::lib::tests::gate_429_r0c::r0c_each_method_sends_its_request_member_by_member_and_reads_its_completed_answer",
     "actingcommand-runtime-client::lib::tests::gate_429_r0c::r0c_a_not_implemented_refusal_is_the_methods_error_and_is_sent_once",
     "actingcommand-runtime-client::lib::tests::gate_429_r0c::r0c_run_instance_task_neither_resets_nor_cancels_after_a_cancelled_run_or_a_timeout",
+    "actingcommand-runtime-client::lib::tests::gate_429_r0c::r0c_run_instance_task_waits_for_the_runtimes_own_reset",
     "actingcommand-runtime-client::lib::tests::gate_429_r0c::r0c_stop_instance_run_refuses_another_run_and_a_reset_that_contradicts_settled",
+    "actingcommand-runtime-client::lib::tests::gate_429_r0c::r0c_stop_instance_run_returns_the_receipts_outcome_unchanged",
+    "actingcommand-runtime-client::lib::tests::gate_429_r0c::r0c_stop_instance_run_waits_for_the_runtimes_own_reset",
     "actingcommand-runtime-client::lib::tests::gate_429_r0c::r0c_the_two_reads_report_an_older_runtime_and_refuse_another_instance",
+    "actingcommand-runtime-client::lib::tests::gate_429_r0c::r0c_edit_resource_target_refuses_another_instances_table",
     "actingcommand-runtime-client::lib::tests::gate_429_r0c::r0c_each_method_refuses_a_result_of_another_kind",
     "actingcommand-contract::lib::runtime::workbench::tests::r0c_pack_schedule_view_round_trips_and_refuses_an_unknown_member",
 ]

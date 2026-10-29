@@ -8,21 +8,28 @@
 //    absent from the wire when `None`.
 // 2. Each method reads its completed answer; `config_version` is passed on, `Some` or `None`, by
 //    `configure_settings` and `runtime_fact_snapshot_versioned`, and `runtime_fact_snapshot`
-//    answers the snapshot as before.
+//    answers the snapshot as before; `stop_instance_run` returns the receipt's outcome beside
+//    the stop, unchanged, a code it carries included.
 // 3. The 0.12.30 Runtime's Denied `not_implemented` is the method's error with the host's code
 //    and operation, never an unexpected result, and the request is sent once.
 // 4. `run_instance_task` after a cancelled run or a receipt timeout sends neither `SafeReset` nor
-//    `CancelContainedTask`.
+//    `CancelContainedTask`; its receipt wait covers the Runtime's own reset, so a cancelled
+//    run's receipt that comes after the deadline plus the IO margin is still read.
 // 5. `stop_instance_run` refuses an answer for another run and a `reset` that contradicts
-//    `settled`.
+//    `settled`; its receipt wait covers the Runtime's own reset, so a stop's receipt that comes
+//    after `wait` plus the IO margin is still read.
 // 6. `routine_summary` (and `pack_schedule_view`, the same way) reports an older Runtime that
-//    drops the connection as `runtime_operation_unsupported` and refuses another instance's rows.
+//    drops the connection as `runtime_operation_unsupported` and refuses another instance's rows;
+//    `edit_resource_target` refuses another instance's table.
 // 7. Each method refuses a result of another kind as unexpected.
 
-use crate::test_support::{ScriptedAnswer, ScriptedConnection, ScriptedRecord, ScriptedRuntime};
+use crate::client::receipt_response_timeout;
+use crate::test_support::{
+    ScriptedAnswer, ScriptedConnection, ScriptedGate, ScriptedRecord, ScriptedRuntime,
+};
 use crate::{
     ClientCode, ClientLocation, ConfiguredSettings, RuntimeClient, RuntimeClientConfig,
-    RuntimeClientError, RuntimeClientErrorClass, RuntimeClientResult,
+    RuntimeClientError, RuntimeClientErrorClass, RuntimeClientResult, StoppedRun,
 };
 use actingcommand_contract::codes::{RuntimeContractCode, SharedCode};
 use actingcommand_contract::outcome::{Code, Detail, Location, Outcome, OutcomeEnvelope};
@@ -39,6 +46,7 @@ use actingcommand_contract::{
 };
 use serde_json::{Value, json};
 use std::path::Path;
+use std::thread;
 use std::time::Duration;
 use tempfile::TempDir;
 
@@ -46,6 +54,9 @@ use tempfile::TempDir;
 const IO: Duration = Duration::from_secs(10);
 /// An IO budget a receipt the script holds back outlasts.
 const SHORT_IO: Duration = Duration::from_millis(250);
+/// An IO budget longer than a 1 ms wait or deadline plus `SHORT_IO`: the receipt wait those two
+/// methods had before it covered the Runtime's own reset.
+const LONGER_IO: Duration = Duration::from_millis(500);
 const INSTANCE: &str = "node-01";
 const OTHER_INSTANCE: &str = "node-02";
 const PACKAGE: &str = "neutral.package";
@@ -76,30 +87,41 @@ fn ids() -> IdentifierIssuer {
     IdentifierIssuer::new().expect("identifier issuer")
 }
 
-/// A completed receipt of `request` carrying `result`. The workbench's kinds get their success
-/// codes with their behaviour (register §1.213), so the script tops a completed receipt of one
-/// with `Status`' success code: the client reads a completed receipt by its state and result.
+/// The success code that tops a completed receipt of `kind`. The workbench's kinds get their
+/// success codes with their behaviour (register §1.213), so the script stands in `Status`' for a
+/// kind without one: the client reads a completed receipt by its state and result.
+fn success_code(kind: RuntimeOperationKind) -> Code {
+    kind.success_code().unwrap_or_else(|| {
+        RuntimeOperationKind::Status
+            .success_code()
+            .expect("Status completes")
+    })
+}
+
+/// A completed receipt of `request` carrying `result`, its outcome the kind's success code.
 fn completed(
     request: &RuntimeRequest,
     terminal: Option<TerminalEvent>,
     result: RuntimeResult,
 ) -> ScriptedAnswer {
-    let code = request
-        .operation()
-        .kind()
-        .success_code()
-        .unwrap_or_else(|| {
-            RuntimeOperationKind::Status
-                .success_code()
-                .expect("Status completes")
-        });
+    let outcome = Outcome::new(success_code(request.operation().kind()));
+    completed_with(request, terminal, result, &outcome)
+}
+
+/// A completed receipt of `request` carrying `result` and `outcome` as given.
+fn completed_with(
+    request: &RuntimeRequest,
+    terminal: Option<TerminalEvent>,
+    result: RuntimeResult,
+    outcome: &Outcome,
+) -> ScriptedAnswer {
     let mut receipt = json!({
         "schema_version": RUNTIME_RECEIPT_SCHEMA_VERSION,
         "request_id": request.request_id(),
         "correlation_id": request.correlation_id(),
         "state": "completed",
         "result": result,
-        "outcome": OutcomeEnvelope::new(&Outcome::new(code), Detail::Full),
+        "outcome": OutcomeEnvelope::new(outcome, Detail::Full),
     });
     if let Some(terminal) = terminal {
         receipt["terminal"] = json!(terminal);
@@ -503,17 +525,24 @@ fn r0c_each_method_sends_its_request_member_by_member_and_reads_its_completed_an
     let owner_epoch = runtime.owner_epoch();
 
     let client = connect(root.path(), IO);
+    let stop_outcome = Outcome::new(success_code(RuntimeOperationKind::StopInstanceRun));
     assert_eq!(
         client
             .stop_instance_run(INSTANCE, stopped_run, Duration::from_millis(25_000))
             .expect("a settled stop"),
-        settled
+        StoppedRun {
+            stopped: settled,
+            outcome: stop_outcome.clone(),
+        }
     );
     assert_eq!(
         client
             .stop_instance_run(INSTANCE, stopped_run, Duration::from_millis(1_000))
             .expect("a stop still stopping"),
-        stopping
+        StoppedRun {
+            stopped: stopping,
+            outcome: stop_outcome,
+        }
     );
     let scope = FactScope::Instance {
         instance_id: INSTANCE.to_owned(),
@@ -954,8 +983,9 @@ fn r0c_run_instance_task_neither_resets_nor_cancels_after_a_cancelled_run_or_a_t
     );
     assert!(record.unscripted.is_empty(), "{:?}", record.unscripted);
 
-    // The receipt never comes: the wait is the 1 ms deadline plus the IO budget, then the
-    // receipt timeout, uncertain, as it is; no reconnect, no cancel, no reset.
+    // The receipt never comes: the wait is the 1 ms deadline plus the reset's wait (twice a 1 ms
+    // backend-open bound plus the IO budget) plus the IO budget, then the receipt timeout,
+    // uncertain, as it is; no reconnect, no cancel, no reset.
     let root = TempDir::new().expect("tempdir");
     let runtime = ScriptedRuntime::start(root.path(), |_| {
         vec![ScriptedConnection::new().request(|request| {
@@ -966,7 +996,17 @@ fn r0c_run_instance_task_neither_resets_nor_cancels_after_a_cancelled_run_or_a_t
             ScriptedAnswer::StallUntilClosed
         })]
     });
-    let client = connect(root.path(), SHORT_IO);
+    let client = RuntimeClient::connect(
+        RuntimeClientConfig::new(
+            root.path(),
+            crate::RuntimeChannel::Cli,
+            EventActor::Cli,
+            EventSource::Cli,
+        )
+        .with_io_timeout(SHORT_IO)
+        .with_backend_open_timeout(Duration::from_millis(1)),
+    )
+    .expect("runtime client");
     let error = client
         .run_instance_task(INSTANCE, PACKAGE, Duration::from_millis(1))
         .expect_err("a receipt that never came");
@@ -978,6 +1018,110 @@ fn r0c_run_instance_task_neither_resets_nor_cancels_after_a_cancelled_run_or_a_t
     );
     assert_eq!(error.disposition(), RuntimeClientErrorClass::Uncertain);
     let record = runtime.finish();
+    assert_eq!(resets_and_cancels(&record), 0);
+    assert!(record.unscripted.is_empty(), "{:?}", record.unscripted);
+}
+
+/// Calls `call` on a client with `SHORT_IO` against a Runtime that answers the call's request
+/// (of `kind`) as `answer` says only once a second client, which connected after that request
+/// came, has had its own receipt wait of `LONGER_IO` run out: the answer comes after a 1 ms wait
+/// or deadline plus `SHORT_IO`. Gates order it instead of a sleep, as for the contained task in
+/// gate C-2. Returns the call's result and what the Runtime received.
+fn answered_after_the_io_margin<T>(
+    kind: RuntimeOperationKind,
+    answer: impl FnOnce(&RuntimeRequest) -> ScriptedAnswer + Send + 'static,
+    call: impl FnOnce(&RuntimeClient) -> RuntimeClientResult<T>,
+) -> (RuntimeClientResult<T>, ScriptedRecord) {
+    let request_came = ScriptedGate::new();
+    let wait_spent = ScriptedGate::new();
+    let root = TempDir::new().expect("tempdir");
+    let runtime = ScriptedRuntime::start(root.path(), {
+        let request_came = request_came.clone();
+        let wait_spent = wait_spent.clone();
+        move |_| {
+            let answer_after = wait_spent.clone();
+            vec![
+                ScriptedConnection::new().request(move |request| {
+                    assert_eq!(request.operation().kind(), kind);
+                    request_came.open();
+                    answer(request).after(&answer_after)
+                }),
+                // The second client's connection: one request whose receipt never comes.
+                ScriptedConnection::new()
+                    .request(|request| {
+                        assert_eq!(request.operation().kind(), RuntimeOperationKind::Health);
+                        ScriptedAnswer::StallUntilClosed
+                    })
+                    .open(&wait_spent),
+            ]
+        }
+    });
+    let second = {
+        let state_root = root.path().to_path_buf();
+        thread::spawn(move || {
+            request_came.wait();
+            connect(&state_root, LONGER_IO).health()
+        })
+    };
+    let client = connect(root.path(), SHORT_IO);
+    let result = call(&client);
+    let second = second.join().expect("the second client");
+    drop(client);
+    assert_code(
+        &second.expect_err("the second client's receipt never comes"),
+        ClientCode::RuntimeReceiptHeaderFailed.code(),
+        "the second client's receipt wait ran out",
+    );
+    (result, runtime.finish())
+}
+
+// 4: the Runtime resets the device itself before it writes a cancelled run's receipt, so
+// `run_instance_task` waits its deadline plus the reset's wait (an `Input` `reset`'s: twice the
+// backend-open bound plus the IO margin) plus the IO margin. A run cancelled at its 1 ms deadline
+// whose receipt comes after the deadline plus the IO margin is read: the error its reason maps
+// to, not the receipt timeout, and still no `SafeReset` and no `CancelContainedTask`.
+#[test]
+fn r0c_run_instance_task_waits_for_the_runtimes_own_reset() {
+    let io = Duration::from_millis(100);
+    let backend_open = Duration::from_secs(2);
+    assert_eq!(
+        receipt_response_timeout(
+            &RuntimeOperation::RunInstanceTask {
+                instance_alias: INSTANCE.to_owned(),
+                package_id: PACKAGE.to_owned(),
+                holder_id: *ids().mint_holder_id().expect("holder id").transport(),
+                response_deadline_ms: Some(30_000),
+            },
+            io,
+            backend_open,
+        ),
+        Ok(Duration::from_millis(30_000) + (backend_open * 2 + io) + io)
+    );
+
+    let (result, record) = answered_after_the_io_margin(
+        RuntimeOperationKind::RunInstanceTask,
+        |request| {
+            ScriptedAnswer::answered(
+                request,
+                RuntimeReceiptState::Cancelled,
+                contained_task_cancelled(
+                    request,
+                    ContainedTaskCancellationReason::DeadlineExceeded,
+                ),
+            )
+        },
+        |client| {
+            client
+                .run_instance_task(INSTANCE, PACKAGE, Duration::from_millis(1))
+                .map(drop)
+        },
+    );
+    let error = result.expect_err("a run cancelled at its deadline");
+    assert_code(
+        &error,
+        ClientCode::RuntimeContainedTaskResponseTimeout.code(),
+        "the cancelled run's receipt",
+    );
     assert_eq!(resets_and_cancels(&record), 0);
     assert!(record.unscripted.is_empty(), "{:?}", record.unscripted);
 }
@@ -1032,6 +1176,88 @@ fn r0c_stop_instance_run_refuses_another_run_and_a_reset_that_contradicts_settle
         );
         runtime.finish();
     }
+}
+
+// 2: `stop_instance_run` returns the stop with its completed receipt's outcome, unchanged. A
+// failed reset's code that the outcome carries (#429 E2.4, E2.10: R-6 puts it in the receipt's
+// outcome; here a cause below the success code) reaches the caller as the Runtime wrote it.
+#[test]
+fn r0c_stop_instance_run_returns_the_receipts_outcome_unchanged() {
+    let stopped_run = request_id();
+    let stopped = InstanceRunStop {
+        request_id: stopped_run,
+        settled: true,
+        reset: Some(InstanceRunReset::Failed),
+    };
+    let reset_failure = RuntimeErrorCode::BackendOperationFailed.code();
+    let outcome = Outcome::new(success_code(RuntimeOperationKind::StopInstanceRun))
+        .caused_by(Outcome::new(reset_failure));
+    let root = TempDir::new().expect("tempdir");
+    let runtime = ScriptedRuntime::start(root.path(), {
+        let outcome = outcome.clone();
+        move |_| {
+            vec![ScriptedConnection::new().request(move |request| {
+                completed_with(
+                    request,
+                    None,
+                    RuntimeResult::InstanceRunStopped { stopped },
+                    &outcome,
+                )
+            })]
+        }
+    });
+    let client = connect(root.path(), IO);
+    let answer = client
+        .stop_instance_run(INSTANCE, stopped_run, Duration::from_millis(1_000))
+        .expect("a settled stop whose reset failed");
+    drop(client);
+    runtime.finish();
+    assert_eq!(answer, StoppedRun { stopped, outcome });
+    let [cause] = answer.outcome.causes() else {
+        panic!("one cause: {:?}", answer.outcome)
+    };
+    assert_eq!(cause.outcome().code().as_str(), reset_failure.as_str());
+}
+
+// 5: the Runtime resets the device with the run's lease before it writes a settled stop's
+// receipt (`reset` is part of the answer), so `stop_instance_run` waits `wait` plus the reset's
+// wait (an `Input` `reset`'s: twice the backend-open bound plus the IO margin) plus the IO
+// margin. A stop whose receipt comes after a 1 ms `wait` plus the IO margin is read.
+#[test]
+fn r0c_stop_instance_run_waits_for_the_runtimes_own_reset() {
+    let io = Duration::from_millis(100);
+    let backend_open = Duration::from_secs(2);
+    assert_eq!(
+        receipt_response_timeout(
+            &RuntimeOperation::StopInstanceRun {
+                instance_alias: INSTANCE.to_owned(),
+                request_id: request_id(),
+                wait_ms: 25_000,
+            },
+            io,
+            backend_open,
+        ),
+        Ok(Duration::from_millis(25_000) + (backend_open * 2 + io) + io)
+    );
+
+    let stopped_run = request_id();
+    let stopped = InstanceRunStop {
+        request_id: stopped_run,
+        settled: true,
+        reset: Some(InstanceRunReset::Done),
+    };
+    let (result, record) = answered_after_the_io_margin(
+        RuntimeOperationKind::StopInstanceRun,
+        move |request| completed(request, None, RuntimeResult::InstanceRunStopped { stopped }),
+        |client| client.stop_instance_run(INSTANCE, stopped_run, Duration::from_millis(1)),
+    );
+    assert_eq!(
+        result
+            .expect("the stop's receipt after its wait and the IO margin")
+            .stopped,
+        stopped
+    );
+    assert!(record.unscripted.is_empty(), "{:?}", record.unscripted);
 }
 
 // 6: `routine_summary` and `pack_schedule_view` read through `send_or_dropped`. A Runtime that
@@ -1108,6 +1334,38 @@ fn r0c_the_two_reads_report_an_older_runtime_and_refuse_another_instance() {
         assert_unexpected(&error, location, row);
         runtime.finish();
     }
+}
+
+// 6: `edit_resource_target` refuses as unexpected an applied table that names another instance,
+// as the two reads refuse another instance's rows.
+#[test]
+fn r0c_edit_resource_target_refuses_another_instances_table() {
+    let root = TempDir::new().expect("tempdir");
+    let runtime = ScriptedRuntime::start(root.path(), |_| {
+        vec![ScriptedConnection::new().request(|request| {
+            let applied_at = terminal(21);
+            completed(
+                request,
+                Some(applied_at),
+                RuntimeResult::ResourceTargetsApplied {
+                    applied: Box::new(applied(OTHER_INSTANCE, applied_at)),
+                },
+            )
+        })]
+    });
+    let client = connect(root.path(), IO);
+    let error = edit_resource_target(&client).expect_err("another instance's table");
+    drop(client);
+    assert_unexpected(
+        &error,
+        ClientLocation::RuntimeEditResourceTarget.location(),
+        "another instance's table",
+    );
+    let record = runtime.finish();
+    assert_eq!(
+        sent(&record, 0, RuntimeOperationKind::EditResourceTarget).len(),
+        1
+    );
 }
 
 // 7: each method refuses a completed answer of another kind as unexpected.

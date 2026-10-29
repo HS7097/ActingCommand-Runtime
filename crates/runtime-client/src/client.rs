@@ -401,6 +401,16 @@ pub struct ConfiguredSettings {
     pub config_version: Option<u64>,
 }
 
+/// The result of `stop_instance_run` (Workflow #429 R-0c, register §1.216): the stop the
+/// Runtime answered and its completed receipt's outcome, unchanged. A failed reset
+/// (`reset: failed`) carries its failure's code in that outcome, where R-6's contract puts it,
+/// so the caller shows why without another read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoppedRun {
+    pub stopped: actingcommand_contract::InstanceRunStop,
+    pub outcome: Outcome,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeOfficialOcrFieldsProjection {
@@ -1458,11 +1468,14 @@ impl RuntimeClient {
     /// `prepare_contained_task`, and the request always carries `response_deadline_ms`;
     /// `response_deadline` outside 1 ms to `ContainedTaskRequest::MAX_RESPONSE_DEADLINE_MS` is
     /// refused with `invalid_contained_task_response_deadline` before anything is sent. The
-    /// receipt wait is the deadline plus the IO margin. A completed run answers its flow, as
-    /// `run_contained_task`; a cancelled run is the error its reason maps to, and the client
-    /// sends no `SafeReset`: the Runtime resets the device itself. A receipt that never came is
-    /// returned as it is, with no `CancelContainedTask` and no reset (both are the Lab's): the
-    /// caller reads `Status`' `activity` and sends `stop_instance_run` when it needs to.
+    /// Runtime resets the device itself before it writes a cancelled run's receipt, so the
+    /// receipt wait is the deadline plus the reset's wait (an `Input` `reset`'s) plus the IO
+    /// margin. A completed run answers its flow, as `run_contained_task`; a cancelled run is the
+    /// error its reason maps to, and the client sends no `SafeReset`. A receipt that never came
+    /// is returned as it is, with no `CancelContainedTask` and no reset (both are the Lab's),
+    /// and latches this connection, as every receipt timeout does: the caller reads `Status`'
+    /// `activity` and sends `stop_instance_run` when it needs to, both on a new connection (a
+    /// new `RuntimeClient`).
     pub fn run_instance_task(
         &self,
         instance_alias: &str,
@@ -1512,32 +1525,41 @@ impl RuntimeClient {
 
     /// Stops the instance's run `request_id`, a scheduled or a client-started one
     /// (`StopInstanceRun`, Workflow #429 R-0c, register §1.216; the behaviour is R-6's); the
-    /// Runtime resets the device itself and answers once the run ended or after `wait`. The
-    /// receipt wait is `wait` plus the IO margin. An answer for another run, a still-stopping
-    /// answer (`settled: false`) with a `reset`, or a settled one without it, is unexpected.
+    /// Runtime resets the device itself before it answers, once the run ended or after `wait`.
+    /// Returns the stop with its completed receipt's outcome unchanged ([`StoppedRun`]): a failed
+    /// reset's code travels there, wherever R-6 puts it. The receipt wait is `wait` plus the
+    /// reset's wait (an `Input` `reset`'s) plus the IO margin. An answer for another run, a
+    /// still-stopping answer (`settled: false`) with a `reset`, or a settled one without it, is
+    /// unexpected. A receipt timeout latches this connection, as every receipt timeout does: the
+    /// caller reads `Status` and stops again on a new connection.
     pub fn stop_instance_run(
         &self,
         instance_alias: &str,
         request_id: RequestId,
         wait: Duration,
-    ) -> RuntimeClientResult<actingcommand_contract::InstanceRunStop> {
+    ) -> RuntimeClientResult<StoppedRun> {
         const OPERATION: Location = ClientLocation::RuntimeStopInstanceRun.location();
         let wait_ms = u64::try_from(wait.as_millis()).map_err(|_| {
             RuntimeClientError::fatal(ClientCode::RuntimeReceiptTimeoutOverflow, OPERATION)
         })?;
-        match self.execute(
+        let receipt = self.execute_receipt(
             OPERATION,
             RuntimeOperation::StopInstanceRun {
                 instance_alias: instance_alias.to_owned(),
                 request_id,
                 wait_ms,
             },
-        )? {
-            RuntimeResult::InstanceRunStopped { stopped }
+            None,
+        )?;
+        match receipt.result() {
+            Some(RuntimeResult::InstanceRunStopped { stopped })
                 if stopped.request_id == request_id
                     && stopped.settled == stopped.reset.is_some() =>
             {
-                Ok(stopped)
+                Ok(StoppedRun {
+                    stopped: *stopped,
+                    outcome: receipt.outcome().clone(),
+                })
             }
             _ => Err(self.unexpected_result(OPERATION)),
         }
@@ -6673,28 +6695,47 @@ pub(super) fn receipt_response_timeout(
             )
         }),
         // Workflow #429 R-0c: a bound task's direct run answers after its deadline, a stop after
-        // its wait; each plus the IO margin.
+        // its wait; the Runtime resets the device with the run's own lease before it writes
+        // either receipt (a cancelled run's, a settled stop's), so each waits that plus the
+        // reset's wait (an `Input` `reset`'s, no claim wait) plus the IO margin.
         RuntimeOperation::RunInstanceTask {
             response_deadline_ms,
             ..
-        } => Duration::from_millis(run_instance_task_deadline_ms(*response_deadline_ms))
-            .checked_add(io_timeout)
-            .ok_or_else(|| {
-                RuntimeClientError::fatal(
-                    ClientCode::RuntimeReceiptTimeoutOverflow,
-                    ClientLocation::RuntimeRunInstanceTask.location(),
-                )
-            }),
-        RuntimeOperation::StopInstanceRun { wait_ms, .. } => Duration::from_millis(*wait_ms)
-            .checked_add(io_timeout)
-            .ok_or_else(|| {
-                RuntimeClientError::fatal(
-                    ClientCode::RuntimeReceiptTimeoutOverflow,
-                    ClientLocation::RuntimeStopInstanceRun.location(),
-                )
-            }),
+        } => reset_inclusive_response_timeout(
+            run_instance_task_deadline_ms(*response_deadline_ms),
+            io_timeout,
+            backend_open_timeout,
+            ClientLocation::RuntimeRunInstanceTask.location(),
+        ),
+        RuntimeOperation::StopInstanceRun { wait_ms, .. } => reset_inclusive_response_timeout(
+            *wait_ms,
+            io_timeout,
+            backend_open_timeout,
+            ClientLocation::RuntimeStopInstanceRun.location(),
+        ),
         _ => Ok(io_timeout),
     }
+}
+
+/// The receipt wait of a request the Runtime answers after `wait_ms` and a device reset of its
+/// own (Workflow #429 R-0c: `RunInstanceTask`, `StopInstanceRun`): `wait_ms` plus the reset's
+/// wait (an `Input` `reset`'s) plus the IO margin.
+fn reset_inclusive_response_timeout(
+    wait_ms: u64,
+    io_timeout: Duration,
+    backend_open_timeout: Duration,
+    operation: Location,
+) -> RuntimeClientResult<Duration> {
+    let reset = input_response_timeout(io_timeout, backend_open_timeout, &InputAction::Reset)
+        .map_err(|_| {
+            RuntimeClientError::fatal(ClientCode::RuntimeReceiptTimeoutOverflow, operation)
+        })?;
+    Duration::from_millis(wait_ms)
+        .checked_add(reset)
+        .and_then(|timeout| timeout.checked_add(io_timeout))
+        .ok_or_else(|| {
+            RuntimeClientError::fatal(ClientCode::RuntimeReceiptTimeoutOverflow, operation)
+        })
 }
 
 /// The deadline a `RunInstanceTask` runs under: the one it names, else the contained task's

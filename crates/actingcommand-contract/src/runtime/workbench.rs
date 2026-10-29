@@ -176,9 +176,10 @@ pub struct PackScheduleEdited {
 /// pack defaults): for one instance, the version of each scope's `session.pack.schedule` list
 /// that applies to it and, per package, whether it is schedulable now and which layer decided.
 /// Each package is resolved on its own (`contracts/instance-fact-store.md`, "Pack schedule
-/// facts"): the most specific layer that has a row of that package decides, instance over
-/// server over game over the pack's default row; a layer without a row of it decides nothing
-/// for it.
+/// facts", SR-11 items 1 to 3): of the layers that have a row of that package, the most specific
+/// (instance over server over game) decides with its row that covers now; when none covers now,
+/// a default row of the pack that covers now decides, and otherwise the package is schedulable.
+/// A layer without a row of it decides nothing for it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackScheduleView {
@@ -199,8 +200,9 @@ pub struct PackScheduleScopeVersion {
 }
 
 /// One package in a [`PackScheduleView`]: whether it is schedulable now, the layer that
-/// decided, the row that decided (absent when no layer has a row of it: `source` `none`), and
-/// when the decision next changes (absent when no row bounds it).
+/// decided, the row that decided (absent when no row covers now: `source` `none`), and when the
+/// decision next changes (absent when no row bounds it; a row that takes effect later gives its
+/// start).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackSchedulePackage {
@@ -216,7 +218,8 @@ pub struct PackSchedulePackage {
 
 /// The layer that decided a package in a [`PackScheduleView`], a closed vocabulary: the
 /// instance's, server's or game's `session.pack.schedule` row, the pack's default row (R-9), or
-/// none (no layer has a row of the package, so it is schedulable).
+/// none (no row covers now, SR-11 item 3, so it is schedulable; a row that takes effect later
+/// gives `next_change_unix_ms` its start).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PackScheduleSource {
