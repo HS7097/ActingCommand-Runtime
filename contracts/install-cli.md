@@ -608,13 +608,23 @@ actingctl install new --root <new root> --build <kept build dir or verified rele
   an installer command turns on is listed in its JSON result (`lab_options_enabled`). `config
   lab-options` changes them later through the candidate and a commit, and lists the same way.
   Updates keep the values a root has.
+- **Lab options from the graphical wizard** (Workflow #429 A.4 h, R-15a, since 0.12.30). Each of
+  `--lab-authoring` and `--lab-debugging` takes an explicit `true` or `false`, and a flag given
+  decides its option as given, interactive or not; only an option no flag names is asked for or
+  defaulted on. The graphical wizard (acsetup, which drives `install new` as a child process)
+  **always** passes both, `--lab-authoring true|false` and `--lab-debugging true|false`, with the
+  person's choice on its Lab page; it never leaves either out, so the non-interactive default
+  (both on) never decides for it. It shows the result's `lab_options_enabled` to the person as
+  the CLI returns it, neither recomputed nor filtered. `install new` is not built yet (INST-6,
+  slice R-15e), so this rule has no code before it; no flag of an existing command changes.
 
 ## Interface checks
 
 From [component-interfaces.md](component-interfaces.md), "Checks per operation". The parties:
 **I** the running installer (its own declaration), **Rp** the live build, **R\*** the build that
 will run, **B** a placed bundle (the register's declared range) or a new one (its
-`interfaces.json`), **C** the configuration file.
+`interfaces.json`), **C** the configuration file, **U\*** the UI that runs after the operation
+("UI edges" below).
 
 | Operation | Edges (all must pass; each a row of `edges`) |
 |---|---|
@@ -626,6 +636,34 @@ will run, **B** a placed bundle (the register's declared range) or a new one (it
 An edge row is `{interface, check, result: pass | fail | warning, parties: [{party, source,
 range}]}` (`source` `manifest`, `register` or `bundle`); every failed edge names both parties,
 the source of each range and the ranges.
+
+### UI edges (Workflow #429 A.4 a, R-15a, since 0.12.30)
+
+**U\*** is the UI that runs after the operation. Its ranges are the declaration its UI build
+carries: the UI repository's `crates/acui-setup/component-interfaces.json`, which the UI build
+copies unchanged into its `BUILD-MANIFEST.json` as `interfaces`, read by the parse rules of
+[component-interfaces.md](component-interfaces.md) (all six v1 interfaces named; a declaration
+that breaks them is no U\*). A declaration that does not name `runtime-outcomes` counts as
+[0, 0]. The U\* side of "Checks per operation":
+
+| Interface | Check | Edge |
+|---|---|---|
+| `actingd-config` | `installer_ui_next_common` | one revision common to I, U\* and R\* (I ∩ U\* ∩ R\* not empty; I writes R\*'s configuration, the console edits it, R\* reads it) |
+| `ledger` | `previous_max_in_ui` | Rp.max ∈ U\* |
+| `ledger` | `next_max_in_ui` | R\*.max ∈ U\* |
+| `runtime-client` | `ui_meets_next` | U\* ∩ R\* |
+| `runtime-outcomes` | `next_max_in_ui` | R\*.max ∈ U\* |
+
+`install-selection` has no edge here: a single-location root holds no `install\active.json`, so
+the installer writes no selection that R\* or U\* would read (neither side is checked for it).
+Each row names every party of its check with the source and the range of its own side: I
+`declaration`, Rp and R\* `manifest`, U\* `manifest`, or `default` for a `runtime-outcomes` its
+declaration does not name ([0, 0]). A failed U\* edge counts in `interface_edge` like any other.
+`component-interfaces.md` defines no edge of the UI being replaced, so there is no such party.
+
+The update and rollback plans and the rollback gate's part 1 add these rows once a root carries a
+UI member: the release reader (R-15b) and the layout (R-15c) bring the UI build, and R-15d adds
+the rows. Until then a root has no U\*, and its plans hold no U\* row.
 
 ## Safety
 

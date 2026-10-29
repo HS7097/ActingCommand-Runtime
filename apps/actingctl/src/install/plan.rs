@@ -349,6 +349,95 @@ fn interface_edges(
     edges
 }
 
+/// Workflow #429 A.4 a (R-15a, since 0.12.30): the edges of party U*, the UI that runs after the
+/// operation (`contracts/component-interfaces.md`, "Checks per operation";
+/// `contracts/install-cli.md`, "Interface checks", "UI edges"), beside the update edges of I, Rp
+/// and R*:
+/// - `actingd-config`: one revision common to I, U* and R* (I writes R*'s configuration, the
+///   console edits it, R* reads it);
+/// - `ledger`: Rp.max ∈ U* and R*.max ∈ U*;
+/// - `runtime-client`: U* ∩ R*;
+/// - `runtime-outcomes`: R*.max ∈ U*.
+///
+/// `install-selection` has no edge: a single-location root holds no `install\active.json`, so
+/// nobody writes a selection U* would read. Each row names every party with the source and the
+/// range of its side; U*'s source is `manifest` (its build manifest's `interfaces`), or `default`
+/// for a `runtime-outcomes` its declaration does not name, taken as [0, 0]. The update and
+/// rollback plans add these rows once a root has a UI member (R-15c, R-15d); until then only the
+/// gate tests compute them.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn ui_edges(
+    installer: &Speaks,
+    live: &Speaks,
+    target: &Speaks,
+    ui: &manifest::UiDeclaration,
+) -> Vec<Edge> {
+    let get = |speaks: &Speaks, interface: &str| speaks.get(interface).copied();
+    let outcomes = "runtime-outcomes";
+    let ui_party = |interface: &str| {
+        let source = if interface == outcomes && !ui.names_outcomes {
+            "default"
+        } else {
+            "manifest"
+        };
+        party("U*", source, get(&ui.speaks, interface))
+    };
+    let next_party = |interface: &str| party("R*", "manifest", get(target, interface));
+    let mut edges = Vec::new();
+    let config = "actingd-config";
+    let common = match [installer, &ui.speaks, target].map(|speaks| get(speaks, config)) {
+        [Some(own), Some(console), Some(runtime)] => {
+            own[0].max(console[0]).max(runtime[0]) <= own[1].min(console[1]).min(runtime[1])
+        }
+        _ => false,
+    };
+    edges.push(edge(
+        config,
+        "installer_ui_next_common",
+        common,
+        vec![
+            party("I", "declaration", get(installer, config)),
+            ui_party(config),
+            next_party(config),
+        ],
+    ));
+    let ui_ledger = get(&ui.speaks, LEDGER);
+    for (name, writer, check) in [
+        ("Rp", get(live, LEDGER), "previous_max_in_ui"),
+        ("R*", get(target, LEDGER), "next_max_in_ui"),
+    ] {
+        edges.push(edge(
+            LEDGER,
+            check,
+            matches!(
+                (writer, ui_ledger),
+                (Some(writer), Some(reader)) if contains(reader, writer[1])
+            ),
+            vec![party(name, "manifest", writer), ui_party(LEDGER)],
+        ));
+    }
+    let client = "runtime-client";
+    edges.push(edge(
+        client,
+        "ui_meets_next",
+        matches!(
+            (get(&ui.speaks, client), get(target, client)),
+            (Some(console), Some(runtime)) if meet(console, runtime)
+        ),
+        vec![ui_party(client), next_party(client)],
+    ));
+    edges.push(edge(
+        outcomes,
+        "next_max_in_ui",
+        matches!(
+            (get(target, outcomes), get(&ui.speaks, outcomes)),
+            (Some(writer), Some(reader)) if contains(reader, writer[1])
+        ),
+        vec![next_party(outcomes), ui_party(outcomes)],
+    ));
+    edges
+}
+
 /// The configuration keys that `C` names in the sections the configuration mechanism resolves
 /// and that the installer does not know: neither a row of its key table nor a member of its own
 /// defaults file (which holds every default of those sections, objects and lists included).

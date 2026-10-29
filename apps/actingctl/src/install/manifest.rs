@@ -154,6 +154,43 @@ pub(crate) fn parse_declaration(value: &Value) -> Option<Speaks> {
     Some(speaks)
 }
 
+/// Workflow #429 A.4 a (R-15a, since 0.12.30): party U*, a UI build's declaration. It is the UI
+/// repository's `crates/acui-setup/component-interfaces.json`, which the UI build copies
+/// unchanged into its manifest's `interfaces` (`contracts/component-interfaces.md`,
+/// "Declaration"), read by the same parse rules as a Runtime declaration: all six v1 interfaces
+/// named, `runtime-outcomes` taken as [0, 0] when absent. The release reader (R-15b) and the
+/// layout (R-15c) bring a UI build to the installer; until then only the gate tests read one.
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UiDeclaration {
+    pub(crate) speaks: Speaks,
+    /// Whether the declaration names `runtime-outcomes`; when it does not, its [0, 0] comes from
+    /// the parse rules, and the edge rows say so (`source` `default`).
+    pub(crate) names_outcomes: bool,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl UiDeclaration {
+    /// The declaration `value` by the parse rules; `None` when it breaks them.
+    pub(crate) fn parse(value: &Value) -> Option<Self> {
+        let speaks = parse_declaration(value)?;
+        let names_outcomes = value
+            .get("speaks")
+            .and_then(Value::as_object)
+            .is_some_and(|named| named.contains_key(RUNTIME_OUTCOMES.0));
+        Some(Self {
+            speaks,
+            names_outcomes,
+        })
+    }
+
+    /// The declaration a UI build's manifest carries (`interfaces`); `None` when it has none or
+    /// it breaks the parse rules.
+    pub(crate) fn of_manifest(manifest: &BuildManifest) -> Option<Self> {
+        Self::parse(manifest.interfaces.as_ref()?)
+    }
+}
+
 /// One listed file that is not as its manifest says.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FileProblem {
