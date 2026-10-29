@@ -3664,6 +3664,18 @@ wave 1.
 | P19-2 | a reset never clears a task's own last result: its own `dependency_completed`, `since_own_run`'s own run and `once_per_reading`'s served check read the task's state as the input holds it | behaviour | W1-4 | the policy evaluator | the window result before `feedback_stop` and another task's `dependency_completed` still read the state as the resets leave it; `clock_slot_live` reads the trigger the same way, so the K4 clock-slot liveness changes with it: a pair whose own dependency was Unknown after a reset may now be live, and more `clock_slot_superseded` or `clock_slot_expired` records are written (diagnostics only, not dispatch) |
 | P19-3 | `config.subsystems` row `reset_exclusions` (always on, `config_subsystem_always_on`) | new row value of an existing fact (no shape) | W1-4 | W1-4 | [actingd-check-config.md](actingd-check-config.md); a `schedule.json` whose event writes P19-1 must list it in `requires`, else the composer refuses the file (`schedule_invalid` at the first `/timeline/<i>/excludes_fact_prefixes`); a file that relies on P19-2 names it too |
 
+### 1.204 Slice CFL-1 (0.12.29): recognition preprocessing, the pure chain and its contract (Workflow #411 A58, comment 6371351838; #428 comment 6485683314; design `rd-1029/design-cf.md` §4.2, §4.3, §4.5, §4.6, §6 CFL-1; coordinator work order `rd-1029/brief-cfl1.md`, with the names, the hue scale, the tolerance and "kept is white" settled on 10-29)
+
+[recognition-preprocess.md](recognition-preprocess.md) is the contract. **No persisted ledger
+shape**, no code, no configuration key, no wire or interface revision: the chain is a library
+addition that no package can declare before CFL-2, which adds the member `preprocess` (into
+`package` revision 6, as the design says). The number 1.204 is provisional for the parallel
+slices.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| CFL1-1 | `actingcommand_recognition::preprocess`: the validated chain `Preprocess` (`new`, `steps`, `apply`), `PreprocessStep`, `PreprocessKind` (names and members), `ColorSpace`, `ThresholdValue`, `PreprocessOutput` with `PreprocessEvidence {foreground_milli, threshold_value}`, `PreprocessError {step, member, reason}` with `pointer()`, `rgb_to_hsv`, and `Scene::preprocess_region` | library API addition (memory only, since 0.12.29) | CFL-1 | — (CFL-2 hands the processed region to the OCR reads) | the two shapes of at most 4 steps, at most 8 colors; every step integer arithmetic except `gray`, which is the scene's own gray (image 0.25 `to_luma8`, `f32`), so that `[gray]` equals the scene's gray byte for byte; the design's `floor((2126 R + 7152 G + 722 B) / 10000)` is not that gray (it differs on about half of all colors) and is not used |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

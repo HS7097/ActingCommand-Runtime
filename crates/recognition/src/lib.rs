@@ -16,6 +16,8 @@ mod exact_score;
 // Test plan v2.2 E-1 G8 (exec key 17): color_digest.v1.
 #[cfg(test)]
 mod gate_e1;
+// Workflow #411 A58, #428 CFL-1: a region's fixed preprocessing chain before a recognition.
+pub mod preprocess;
 // Workflow #396 REC-5: the resampling primitive (Workflow #392 reuses it).
 pub mod resample;
 // Workflow #411 B13: a matched window's brightness and contrast relative to its template.
@@ -24,6 +26,10 @@ mod window_luma;
 pub use codes::ColorDigestErrorCode;
 pub use exact_score::{
     ExactScoreMap, RegionSpectra, ScaledMatch, ScaledScoreMaps, ScaledSelection, score_milli,
+};
+pub use preprocess::{
+    ColorSpace, Preprocess, PreprocessError, PreprocessErrorReason, PreprocessEvidence,
+    PreprocessKind, PreprocessOutput, PreprocessStep, ThresholdValue,
 };
 pub use window_luma::{LumaRatios, LumaReference};
 
