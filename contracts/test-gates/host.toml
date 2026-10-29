@@ -961,6 +961,20 @@ tests = [
 ]
 incident = ["#369", "#361"]
 
+# EMU-BIND (0.12.27; brief rd-1029/brief-emu-bind.md; production 10-29 after the 05:23 reboot: a configured start's readiness wait failed on one non-zero info read while its emulator came up, and the running emulator kept its endpoint pending for five hours): a Start's readiness wait takes a failed info read as no observation and completes once info reads running, the launch sent once, and a wait whose every read fails ends wait_timeout carrying the last read's own text, as a Stop's failed read does (A, C); the watch recognizes a running emulator whose endpoint is pending on one autostart claim marked recognize at the next poll after such a failed start, binding the reported port (runtime.instance_bound), passing the self-check and queuing the startup package, with the Start sent once (T1); an instance without start_emulator started outside the Runtime is recognized and bound with nothing started or stopped (T2); of two instances one whose ADB probe leaves its adb child unconfirmed is fenced and fails alone while the other is recognized in the same poll (T3, #419); three failed recognitions in the window record emulator_watch_restart_exhausted with watch_kind recognize once and no fourth (T4); a watch claim whose read before its Start finds the emulator running while pending recognizes it instead of answering skipped, with no Start (T5)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-device::lib::tests::gate_emu_bind::emu_bind_t1_a_start_survives_one_failed_info_read_and_completes",
+    "actingcommand-device::lib::tests::gate_emu_bind::emu_bind_a_failed_reads_wait_to_the_deadline_and_a_failure_carries_the_reads_text",
+    "actingcommand-runtime-host::lib::tests::gate_emu_bind::emu_bind_t1_a_start_whose_readiness_read_failed_is_bound_at_the_next_poll",
+    "actingcommand-runtime-host::lib::tests::gate_emu_bind::emu_bind_t2_an_emulator_started_outside_the_runtime_is_recognized_and_bound",
+    "actingcommand-runtime-host::lib::tests::gate_emu_bind::emu_bind_t3_two_instances_are_recognized_independently",
+    "actingcommand-runtime-host::lib::tests::gate_emu_bind::emu_bind_t4_used_up_recognitions_warn_once_and_hold_in_the_window",
+    "actingcommand-runtime-host::lib::tests::gate_emu_bind::emu_bind_t5_a_watch_claim_that_finds_the_emulator_running_while_pending_recognizes_it",
+]
+incident = ["#419", "EMU-BIND"]
+
 # A person's drill of one physical instance's stuck-recovery ladder is recorded like a ladder a trigger started and tagged drill: its trigger (stage drill, no run, task, preparation, rule or match), its plan, one recovery_rung_finished per rung and its end; only a ladder's own phases carry the tag, and only a drill ends planned. A plan drill never acts on the device (each rung it would run skipped drill_plan, the climb planned at info, no Stop, Start or preparation) and opens no cool-down window; a device drill climbs its rungs on the instance under the same key as a real ladder and opens the window, after which a drill the cool-down holds is refused recovery_ladder_drill_cooling_down after its tagged suppression; a drill of an instance whose stuck recovery is off is refused recovery_ladder_drill_disabled, and no agent origin may ask for one (Workflow #390 DRILL-1, forced compromise T-08; wave 13 ruling 9); a recovery_ladder.triggers[] item that names the stage drill is refused stage_not_allowed naming recovery_ladder.triggers, at start and by instruction, and the configuration in effect stays (register DR2; TEST-FU, train 15 rulings DRILL-1 item 6)
 [[gate]]
 key = "88"

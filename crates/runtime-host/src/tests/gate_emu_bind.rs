@@ -1,0 +1,532 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
+// EMU-BIND (0.12.27; production 10-29 after the 05:23 reboot): a configured start's readiness
+// wait failed while its emulator came up, the autostart tried once, and the watch never bound the
+// running emulator, so the instance kept its endpoint pending for five hours. The watch now
+// recognizes a running emulator whose endpoint the Runtime holds pending or bound to another
+// port, on an autostart claim marked `recognize` that never launches or stops anything. On the
+// scripted emulator (HOST-I1), a scripted connectivity status and the Runtime's manual clock.
+// Every wait returns as soon as what it waits for is polled or reported; `GATE_WAIT` only bounds a
+// broken run.
+
+use super::emulator_controller::{
+    EmulatorCall, FAKE_EMULATOR_PORT, FakeEmulatorController, ScriptedControl, running_state,
+    stopped_state,
+};
+use super::gate_369_s6c::{
+    GATE_WAIT, START, autostart_host, connectivity, head, instance_status, stop,
+};
+use super::instance_workers::phases;
+use super::*;
+use actingcommand_contract::outcome::Outcome;
+use actingcommand_contract::{EmulatorRunningState, RuntimeLifecyclePhase, RuntimePayload};
+use actingcommand_device::DeviceResourceQuiescence;
+use actingcommand_host_metrics::NetworkConnectivity;
+
+/// R2: the default polling interval (`emulator_control.watch_interval_ms`).
+const WATCH_INTERVAL_MS: u64 = 60_000;
+/// The bound recognitions share with restarts, counted apart: 3 (`restart_attempts`) per 30 min
+/// (`restart_window_ms`).
+const RESTART_ATTEMPTS: u64 = 3;
+const RESTART_WINDOW_MS: u64 = 1_800_000;
+const FIRST: &str = "emu_bind.first";
+const SECOND: &str = "emu_bind.second";
+
+// An emulator whose process runs but whose Android has not started and which reports no port.
+fn booting_state() -> crate::InstanceState {
+    crate::InstanceState {
+        process_started: true,
+        android_started: false,
+        adb_port: None,
+        player_state: None,
+        launch_err_code: 0,
+        launch_err_msg: String::new(),
+    }
+}
+
+// A discovery-bound fake whose emulator was stopped when the host started: the Runtime holds it
+// pending, and its opens are refused until a port is bound (#411 A48).
+fn pending_state() -> Arc<FakeState> {
+    let state = Arc::new(FakeState {
+        emulator: FakeEmulatorController::pending(),
+        ..FakeState::default()
+    });
+    state.emulator_control.store(true, Ordering::Release);
+    state.refuse_pending_opens.store(true, Ordering::Release);
+    state.physical_task_geometry.store(true, Ordering::Release);
+    state
+        .transition_capture_after_input
+        .store(true, Ordering::Release);
+    state.observed_open.store(true, Ordering::Release);
+    state
+}
+
+fn reported(lines: &[Outcome], code: &str) -> usize {
+    lines
+        .iter()
+        .filter(|line| line.code().as_str() == code)
+        .count()
+}
+
+// The lines of `code` that carry `watch_kind` `recognize`.
+fn recognized<'a>(lines: &'a [Outcome], code: &str) -> Vec<&'a Outcome> {
+    lines
+        .iter()
+        .filter(|line| {
+            line.code().as_str() == code
+                && line.value("watch_kind") == Some(&serde_json::json!("recognize"))
+        })
+        .collect()
+}
+
+// The report lines once `done` holds for them (none is taken).
+fn await_reports(host: &RuntimeHost, done: impl Fn(&[Outcome]) -> bool) -> Vec<Outcome> {
+    host.emulator_autostart_reports()
+        .await_lines_for_test(done, GATE_WAIT)
+        .expect("the awaited report lines")
+}
+
+fn events(host: &RuntimeHost) -> Vec<PersistedEvent> {
+    host.query_persisted_events_for_test(EventQuery::default())
+        .expect("ledger events")
+}
+
+// The outcomes of the `device_state_observed` records under `instance` whose code is `code`.
+fn watch_records(host: &RuntimeHost, instance: InstanceId, code: &str) -> Vec<Outcome> {
+    let events = events(host);
+    phases(&events)
+        .into_iter()
+        .filter(|(event, _)| event.links().instance_id() == Some(&instance))
+        .filter_map(|(_, phase)| match phase {
+            RuntimeLifecyclePhase::DeviceStateObserved { outcome }
+                if outcome.code().as_str() == code =>
+            {
+                Some(outcome)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+// The events of `event_type` under `instance` after `after`.
+fn recorded_after(
+    host: &RuntimeHost,
+    instance: InstanceId,
+    event_type: EventType,
+    after: u64,
+) -> usize {
+    events(host)
+        .iter()
+        .filter(|event| {
+            event.sequence() > after
+                && event.event_type() == event_type
+                && event.links().instance_id() == Some(&instance)
+        })
+        .count()
+}
+
+// The codes of the `runtime.failed` records under `instance`.
+fn failure_codes(host: &RuntimeHost, instance: InstanceId) -> Vec<String> {
+    events(host)
+        .iter()
+        .filter(|event| event.links().instance_id() == Some(&instance))
+        .filter_map(|event| match event.payload() {
+            EventPayload::Runtime(RuntimePayload::Failed(record)) => {
+                Some(record.outcome().code().as_str().to_owned())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+// The startup packages whose scheduling intent was recorded for `instance`.
+fn startup_packages_scheduled(host: &RuntimeHost, instance: InstanceId) -> usize {
+    let events = events(host);
+    phases(&events)
+        .into_iter()
+        .filter(|(_, phase)| {
+            matches!(
+                phase,
+                RuntimeLifecyclePhase::StartupPackageScheduled { instance_id } if *instance_id == instance
+            )
+        })
+        .count()
+}
+
+// The emulator control actions the scripted emulator was asked for.
+fn control_calls(state: &FakeState) -> Vec<EmulatorCall> {
+    state
+        .emulator
+        .calls()
+        .into_iter()
+        .filter(|call| matches!(call, EmulatorCall::Control(_)))
+        .collect()
+}
+
+fn control_starts(state: &FakeState) -> usize {
+    control_calls(state)
+        .iter()
+        .filter(|call| **call == EmulatorCall::Control(START))
+        .count()
+}
+
+fn unconfirmed_adb_probe() -> DeviceError {
+    DeviceError::fatal("synthetic adb probe left its child unconfirmed")
+        .with_resource_summary(DeviceResourceQuiescence::Unconfirmed, 1)
+}
+
+// T1, the 10-29 case. The configured start's launch succeeded, but one `info` read of its
+// readiness wait exited non-zero, so (without A, which the device gate pins) the Start failed
+// with `mumu_manager_exit` and the autostart tried once. The emulator came up: the next poll
+// reads it running on its port while the endpoint is pending, recognizes it on one autostart
+// claim, binds the port (`runtime.instance_bound`), passes the self-check and queues the startup
+// package. The Start was sent exactly once.
+#[test]
+fn emu_bind_t1_a_start_whose_readiness_read_failed_is_bound_at_the_next_poll() {
+    let root = TempDir::new().expect("tempdir");
+    let state = pending_state();
+    let instance = instance_id();
+    let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
+    let package_path = root.path().join("startup-package.zip");
+    fs::write(&package_path, neutral_contained_task_package(true)).expect("write startup package");
+    let startup = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+        .and_then(|request| request.with_response_deadline_ms(60_000))
+        .expect("startup package request");
+    let (read, _reads) = connectivity(Vec::new(), NetworkConnectivity::Internet);
+    let host = autostart_host(&root, &[(FIRST, instance, &state)], read, |config| {
+        config
+            .with_runtime_clock(clock.clone())
+            .with_startup_packages(BTreeMap::from([(FIRST.to_owned(), startup)]))
+    });
+    state.emulator.script_control(
+        START,
+        ScriptedControl::Failed {
+            stage: actingcommand_device::codes::DeviceStage::MumuManagerExit.location(),
+            exit_code: Some(0),
+            last_state: None,
+            device_process_present: None,
+        },
+    );
+    // The bounded read after the failed control: the VM has just come up.
+    state.emulator.script_read(booting_state());
+
+    assert_eq!(host.enqueue_emulator_autostart().expect("enqueue"), 1);
+    await_reports(&host, |lines| {
+        reported(lines, "emulator_autostart_failed") == 1
+    });
+    assert_eq!(state.emulator.bound_port(), None, "the endpoint is pending");
+
+    // The poll's read, then the recognition's own status read.
+    state
+        .emulator
+        .script_read(running_state(FAKE_EMULATOR_PORT));
+    state
+        .emulator
+        .script_read(running_state(FAKE_EMULATOR_PORT));
+    let before = head(&host);
+    host.start_emulator_watch().expect("the watch starts");
+    clock.advance(WATCH_INTERVAL_MS);
+    host.await_emulator_watch_polls_for_test(1, GATE_WAIT)
+        .expect("the first poll");
+    let lines = await_reports(&host, |lines| {
+        !recognized(lines, "emulator_autostart_skipped").is_empty()
+    });
+
+    assert_eq!(control_starts(&state), 1, "the Start was sent exactly once");
+    assert_eq!(reported(&lines, "emulator_autostart_preparation_failed"), 0);
+    assert_eq!(
+        state.emulator.bound_port(),
+        Some(FAKE_EMULATOR_PORT),
+        "the reported port is bound"
+    );
+    assert!(matches!(
+        instance_status(&host, FIRST).emulator_state(),
+        EmulatorRunningState::On { .. }
+    ));
+    assert_eq!(
+        recorded_after(&host, instance, EventType::RuntimeInstanceBound, before),
+        1
+    );
+    let queued = watch_records(&host, instance, "emulator_autostart_queued");
+    let [queued] = &queued[..] else {
+        panic!("one recognition queued: {queued:?}");
+    };
+    assert_eq!(
+        queued.value("watch_kind"),
+        Some(&serde_json::json!("recognize"))
+    );
+    assert_eq!(queued.value("attempts"), Some(&serde_json::json!(1)));
+    assert_eq!(
+        startup_packages_scheduled(&host, instance),
+        1,
+        "the startup package is queued as after a start"
+    );
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+// T2: an instance without `start_emulator` whose emulator was started outside the Runtime (it
+// reads running while the Runtime holds it pending) is recognized and bound; nothing is started
+// or stopped.
+#[test]
+fn emu_bind_t2_an_emulator_started_outside_the_runtime_is_recognized_and_bound() {
+    let root = TempDir::new().expect("tempdir");
+    let state = pending_state();
+    let instance = instance_id();
+    let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
+    let host = RuntimeHost::start(
+        config(&root).with_runtime_clock(clock.clone()),
+        Arc::new(FakeProvider::one(FIRST, instance, Arc::clone(&state))),
+    )
+    .expect("runtime host started before its emulator");
+    assert!(matches!(
+        instance_status(&host, FIRST).emulator_state(),
+        EmulatorRunningState::Off { .. }
+    ));
+    state
+        .emulator
+        .script_read(running_state(FAKE_EMULATOR_PORT));
+    state
+        .emulator
+        .script_read(running_state(FAKE_EMULATOR_PORT));
+    let before = head(&host);
+
+    host.start_emulator_watch().expect("the watch starts");
+    clock.advance(WATCH_INTERVAL_MS);
+    host.await_emulator_watch_polls_for_test(1, GATE_WAIT)
+        .expect("the first poll");
+    let lines = await_reports(&host, |lines| {
+        !recognized(lines, "emulator_autostart_skipped").is_empty()
+    });
+
+    assert_eq!(
+        recognized(&lines, "emulator_autostart_skipped")[0].value("alias"),
+        Some(&serde_json::json!(FIRST))
+    );
+    assert!(
+        control_calls(&state).is_empty(),
+        "nothing was started or stopped"
+    );
+    assert_eq!(state.emulator.bound_port(), Some(FAKE_EMULATOR_PORT));
+    assert!(matches!(
+        instance_status(&host, FIRST).emulator_state(),
+        EmulatorRunningState::On { .. }
+    ));
+    assert_eq!(
+        recorded_after(&host, instance, EventType::RuntimeInstanceBound, before),
+        1
+    );
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+// T3 (#419): two instances read running while pending. One's ADB baseline probe leaves its adb
+// child unconfirmed: that fences only it, and only it records `emulator_device_unrecognized` and
+// a failed recognition. The other is recognized and bound in the same poll; the Runtime goes on.
+#[test]
+fn emu_bind_t3_two_instances_are_recognized_independently() {
+    let root = TempDir::new().expect("tempdir");
+    let failing_state = pending_state();
+    let state = pending_state();
+    *failing_state
+        .adb_probe_error
+        .lock()
+        .expect("adb probe error") = Some(unconfirmed_adb_probe());
+    let failing = instance_id();
+    let other = instance_id();
+    let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
+    let (read, _reads) = connectivity(Vec::new(), NetworkConnectivity::Internet);
+    let host = autostart_host(
+        &root,
+        &[(FIRST, failing, &failing_state), (SECOND, other, &state)],
+        read,
+        |config| config.with_runtime_clock(clock.clone()),
+    );
+    for fake in [&failing_state, &state] {
+        fake.emulator.script_read(running_state(FAKE_EMULATOR_PORT));
+        fake.emulator.script_read(running_state(FAKE_EMULATOR_PORT));
+    }
+
+    host.start_emulator_watch().expect("the watch starts");
+    clock.advance(WATCH_INTERVAL_MS);
+    host.await_emulator_watch_polls_for_test(1, GATE_WAIT)
+        .expect("the first poll");
+    let lines = await_reports(&host, |lines| {
+        !recognized(lines, "emulator_autostart_skipped").is_empty()
+            && !recognized(lines, "emulator_autostart_preparation_failed").is_empty()
+    });
+
+    let passed = recognized(&lines, "emulator_autostart_skipped");
+    let failed = recognized(&lines, "emulator_autostart_preparation_failed");
+    assert_eq!(passed.len(), 1, "{lines:?}");
+    assert_eq!(failed.len(), 1, "{lines:?}");
+    assert_eq!(passed[0].value("alias"), Some(&serde_json::json!(SECOND)));
+    assert_eq!(failed[0].value("alias"), Some(&serde_json::json!(FIRST)));
+    assert!(
+        failure_codes(&host, failing)
+            .iter()
+            .any(|code| code == "emulator_device_unrecognized"),
+        "{:?}",
+        failure_codes(&host, failing)
+    );
+    assert!(
+        !failure_codes(&host, other)
+            .iter()
+            .any(|code| code == "emulator_device_unrecognized"),
+        "{:?}",
+        failure_codes(&host, other)
+    );
+    assert_eq!(state.emulator.bound_port(), Some(FAKE_EMULATOR_PORT));
+    assert!(matches!(
+        instance_status(&host, SECOND).emulator_state(),
+        EmulatorRunningState::On { .. }
+    ));
+    assert!(
+        control_calls(&state).is_empty(),
+        "the recognized instance was neither started nor stopped"
+    );
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+// T4: three recognitions whose self-check fails (the device reports no ADB port by the time the
+// claim reads it) use the bound up within 30 min: the fourth poll records
+// `emulator_watch_restart_exhausted` with `watch_kind` `recognize` once, and neither it nor the
+// fifth requests another recognition. Nothing is started.
+#[test]
+fn emu_bind_t4_used_up_recognitions_warn_once_and_hold_in_the_window() {
+    let root = TempDir::new().expect("tempdir");
+    let state = pending_state();
+    let instance = instance_id();
+    let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
+    let host = RuntimeHost::start(
+        config(&root).with_runtime_clock(clock.clone()),
+        Arc::new(FakeProvider::one(FIRST, instance, Arc::clone(&state))),
+    )
+    .expect("runtime host started before its emulator");
+    for _ in 0..RESTART_ATTEMPTS {
+        state
+            .emulator
+            .script_read(running_state(FAKE_EMULATOR_PORT));
+        state.emulator.script_read(booting_state());
+    }
+    for _ in 0..2 {
+        state
+            .emulator
+            .script_read(running_state(FAKE_EMULATOR_PORT));
+    }
+    host.start_emulator_watch().expect("the watch starts");
+
+    // Polls 1 to 3, one interval apart: each requests one recognition, which fails.
+    for poll in 1..=RESTART_ATTEMPTS {
+        clock.advance(WATCH_INTERVAL_MS);
+        host.await_emulator_watch_polls_for_test(poll, GATE_WAIT)
+            .expect("the poll");
+        let failed = usize::try_from(poll).expect("a count");
+        await_reports(&host, |lines| {
+            recognized(lines, "emulator_autostart_preparation_failed").len() == failed
+        });
+    }
+
+    // Polls 4 and 5 meet three recognitions in the window: one warning, no fourth recognition.
+    for poll in 4..=5 {
+        clock.advance(WATCH_INTERVAL_MS);
+        host.await_emulator_watch_polls_for_test(poll, GATE_WAIT)
+            .expect("the poll");
+    }
+    let exhausted = watch_records(&host, instance, "emulator_watch_restart_exhausted");
+    let [exhausted] = &exhausted[..] else {
+        panic!("one used-up record: {exhausted:?}");
+    };
+    assert_eq!(
+        exhausted.value("watch_kind"),
+        Some(&serde_json::json!("recognize"))
+    );
+    assert_eq!(exhausted.value("attempts"), Some(&serde_json::json!(3)));
+    assert_eq!(
+        exhausted.value("limit_count"),
+        Some(&serde_json::json!(RESTART_ATTEMPTS))
+    );
+    // The first recognition (at 60 s) leaves the window at 60 s + 30 min; poll 4 is at 240 s.
+    assert_eq!(
+        exhausted.value("retry_after_ms"),
+        Some(&serde_json::json!(
+            RESTART_WINDOW_MS - 3 * WATCH_INTERVAL_MS
+        ))
+    );
+    let queued = watch_records(&host, instance, "emulator_autostart_queued");
+    assert_eq!(queued.len(), 3, "{queued:?}");
+    assert!(
+        queued
+            .iter()
+            .all(|queued| queued.value("watch_kind") == Some(&serde_json::json!("recognize"))),
+        "counted apart from restarts: {queued:?}"
+    );
+    let lines = await_reports(&host, |_| true);
+    assert_eq!(
+        recognized(&lines, "emulator_autostart_preparation_failed").len(),
+        3
+    );
+    assert_eq!(reported(&lines, "emulator_watch_restart_exhausted"), 1);
+    assert_eq!(
+        host.instance_claims_for_test(FIRST).expect("claims"),
+        (None, vec![]),
+        "no claim in the window"
+    );
+    assert!(control_calls(&state).is_empty(), "nothing was started");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+// T5: a watch claim (R3: the poll read the configured instance stopped) whose read just before its
+// Start finds the emulator running while the Runtime holds the endpoint pending no longer ends as
+// a plain `emulator_autostart_skipped`: it recognizes the emulator and binds the reported port,
+// and no Start is sent.
+#[test]
+fn emu_bind_t5_a_watch_claim_that_finds_the_emulator_running_while_pending_recognizes_it() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let instance = instance_id();
+    let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
+    let (read, _reads) = connectivity(Vec::new(), NetworkConnectivity::Internet);
+    let host = autostart_host(&root, &[(FIRST, instance, &state)], read, |config| {
+        config.with_runtime_clock(clock.clone())
+    });
+    stop(&host, FIRST, 301);
+    assert_eq!(state.emulator.bound_port(), None, "the endpoint is pending");
+    // The poll's read, the claim's read just before its Start, the recognition's read.
+    state.emulator.script_read(stopped_state());
+    state
+        .emulator
+        .script_read(running_state(FAKE_EMULATOR_PORT));
+    state
+        .emulator
+        .script_read(running_state(FAKE_EMULATOR_PORT));
+
+    host.start_emulator_watch().expect("the watch starts");
+    clock.advance(WATCH_INTERVAL_MS);
+    host.await_emulator_watch_polls_for_test(1, GATE_WAIT)
+        .expect("the first poll");
+    let lines = await_reports(&host, |lines| {
+        reported(lines, "emulator_autostart_skipped") == 1
+    });
+
+    assert_eq!(
+        recognized(&lines, "emulator_autostart_skipped").len(),
+        1,
+        "the skipped claim recognized the emulator: {lines:?}"
+    );
+    assert_eq!(reported(&lines, "emulator_autostart_failed"), 0);
+    assert_eq!(control_starts(&state), 0, "no Start");
+    assert_eq!(state.emulator.bound_port(), Some(FAKE_EMULATOR_PORT));
+    let queued = watch_records(&host, instance, "emulator_autostart_queued");
+    let [queued] = &queued[..] else {
+        panic!("one restart queued: {queued:?}");
+    };
+    assert_eq!(
+        queued.value("watch_kind"),
+        Some(&serde_json::json!("restart"))
+    );
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
