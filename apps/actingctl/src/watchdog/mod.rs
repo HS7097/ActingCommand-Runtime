@@ -28,6 +28,9 @@ mod gate_382_a4;
 // Test-only: Workflow #390 WD-1, the watchdog of a single-location root.
 #[cfg(test)]
 mod gate_wd1;
+// Test-only: WD-MT (Workflow #421, INV-1119), a candidate log's time read from the file.
+#[cfg(test)]
+mod gate_wd_mt;
 mod log;
 pub(crate) mod observe;
 // Workflow #421 INST-1: `actingctl install` runs the same hidden CIM query for its process probe.

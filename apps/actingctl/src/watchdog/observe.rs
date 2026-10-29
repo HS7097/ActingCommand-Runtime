@@ -411,16 +411,16 @@ fn owner_line(value: &Value) -> Result<OwnerRecord, Outcome> {
 /// Workflow #381 A R5b: among the `LOOKBACK_OWNERS` owners before the last one, the newest whose
 /// epoch a candidate log covers (modified from its start to its close plus the clock slack; an
 /// owner without a close ends where the next one starts), and the terminal outcome of the
-/// newest such log, if it holds one (Workflow #378 A6a: it was the FATAL line).
+/// newest such log, if it holds one (Workflow #378 A6a: it was the FATAL line). `logs` are the
+/// candidate logs, newest first.
 fn earlier_owner_terminal(
-    log_directories: &[PathBuf],
+    logs: &[(PathBuf, u64)],
     owners: &[OwnerRecord],
     root: Option<&Path>,
 ) -> Result<Option<Terminal>, Outcome> {
     let Some((last, earlier)) = owners.split_last() else {
         return Ok(None);
     };
-    let logs = candidate_logs(log_directories)?;
     let mut next_started = last.started_at_unix_ms;
     for owner in earlier.iter().rev().take(LOOKBACK_OWNERS) {
         let end = owner
@@ -477,22 +477,47 @@ fn epoch_text(value: &Value) -> Option<String> {
 /// same way, I7). `root` is the supervised installation: a terminal outcome that names another
 /// installation's `install_root` is not this root's (Workflow #378 A6a, model section 8.2 N4).
 /// `start_window_ms` is the installation's start window (#411 A66), which bounds the open start
-/// an answering owner may belong to.
+/// an answering owner may belong to. The candidate logs' times are read from the files
+/// themselves ([`FileTimes`], WD-MT).
 pub(crate) fn observe_owner(
     state_root: &Path,
     log_directories: &[PathBuf],
     root: Option<&Path>,
     start_window_ms: u64,
 ) -> Result<Observed, Outcome> {
+    observe_owner_with(
+        state_root,
+        log_directories,
+        root,
+        start_window_ms,
+        &FileTimes,
+    )
+}
+
+/// [`observe_owner`] with the seam the candidate logs' modification times are read through
+/// (WD-MT, Workflow #421). The logs are listed once, for an unlocked journal with a record: F,
+/// the close's log evidence and R5b all read that one list. (`status` lists them once more, the
+/// same way, after it decides a formal close: [`close_logged`].)
+pub(crate) fn observe_owner_with(
+    state_root: &Path,
+    log_directories: &[PathBuf],
+    root: Option<&Path>,
+    start_window_ms: u64,
+    times: &dyn LogTimes,
+) -> Result<Observed, Outcome> {
     let (lock, journal, bytes) = read_owner_journal(state_root)?;
+    let logs = match (&lock, &journal) {
+        (OwnerLock::Unlocked, Journal::Record { .. }) => candidate_logs(log_directories, times)?,
+        _ => Vec::new(),
+    };
     let terminal = match (&lock, &journal) {
         (
             OwnerLock::Unlocked,
             Journal::Record {
                 modified_unix_ms, ..
             },
-        ) => terminal_after(
-            log_directories,
+        ) => newest_terminal(
+            &logs,
             modified_unix_ms.saturating_sub(super::decide::CLOCK_SLACK_MS),
             root,
         )?,
@@ -504,9 +529,7 @@ pub(crate) fn observe_owner(
             if terminal.is_none() && !record.active =>
         {
             let logged = match record.closed_at_unix_ms {
-                Some(closed_at) => {
-                    close_logged(log_directories, record.started_at_unix_ms, closed_at)?
-                }
+                Some(closed_at) => logged_during(&logs, record.started_at_unix_ms, closed_at),
                 None => false,
             };
             if logged {
@@ -514,7 +537,7 @@ pub(crate) fn observe_owner(
             } else {
                 let owners = owner_blocks(&bytes)
                     .map_err(|failure| failure.path(state_root.join(OWNER_JOURNAL_FILE)))?;
-                earlier_owner_terminal(log_directories, &owners, root)?
+                earlier_owner_terminal(&logs, &owners, root)?
             }
         }
         _ => None,
@@ -568,10 +591,49 @@ pub(crate) fn live_owner(
     })
 }
 
+/// WD-MT (Workflow #421, INV-1119): where a candidate log's modification time is read. A
+/// directory listing's own entry data (`DirEntry::metadata`; on Windows what FindNextFile
+/// returns) is the directory entry, which NTFS does not refresh as the file is written: it
+/// catches up when the last handle to the writing file object closes, or when any other process
+/// opens and closes the file. On 2026-10-29 an adb server that had inherited actingd's stdout
+/// and stderr kept the err log open, its entry stayed at the log's creation time, and a stop
+/// that ended in an error was read as a formal close for 35 minutes. The time is therefore read
+/// from the file itself, not from the directory listing.
+pub(crate) trait LogTimes {
+    /// The modification time of the file at `path`, read from the file; `Ok(None)` when no
+    /// regular file is there (it went away after the listing, or it is a directory).
+    fn modified_unix_ms(&self, path: &Path) -> std::io::Result<Option<u64>>;
+}
+
+/// The file system: `fs::metadata` opens the file without data access (so no sharing mode of
+/// the writer refuses it) and reads its time and size through that handle, the values every
+/// open handle of the file shares. Only when that open is refused as access denied (an access
+/// control list that denies reading the file's attributes) does Rust's std fall back to the
+/// directory entry's data.
+pub(crate) struct FileTimes;
+
+impl LogTimes for FileTimes {
+    fn modified_unix_ms(&self, path: &Path) -> std::io::Result<Option<u64>> {
+        match fs::metadata(path) {
+            Ok(metadata) if metadata.is_file() => {
+                Ok(Some(metadata.modified().map(unix_ms).unwrap_or(0)))
+            }
+            Ok(_) => Ok(None),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+}
+
 /// The logs a terminal outcome is searched in: `actingd-*.log` in the given directories (the root for
 /// acsetup, a logon script and an operator's restart script; `<root>\watchdog` for the
-/// watchdog's own starts; the console's log directory).
-fn candidate_logs(directories: &[PathBuf]) -> Result<Vec<(PathBuf, u64)>, Outcome> {
+/// watchdog's own starts; the console's log directory), newest first by the time `times` reads
+/// from each file (WD-MT). A log whose time cannot be read is `watchdog_log_unreadable`
+/// (`path`).
+fn candidate_logs(
+    directories: &[PathBuf],
+    times: &dyn LogTimes,
+) -> Result<Vec<(PathBuf, u64)>, Outcome> {
     let mut logs = Vec::new();
     for directory in directories {
         let entries = match fs::read_dir(directory) {
@@ -591,14 +653,18 @@ fn candidate_logs(directories: &[PathBuf]) -> Result<Vec<(PathBuf, u64)>, Outcom
             if !(name.starts_with("actingd-") && name.ends_with(".log")) {
                 continue;
             }
-            let Ok(metadata) = entry.metadata() else {
-                continue;
-            };
-            if !metadata.is_file() {
-                continue;
+            let path = entry.path();
+            let modified = times.modified_unix_ms(&path).map_err(|error| {
+                io_failure(
+                    ActingctlCode::WatchdogLogUnreadable,
+                    &path,
+                    &error,
+                    IoOp::Metadata,
+                )
+            })?;
+            if let Some(modified) = modified {
+                logs.push((path, modified));
             }
-            let modified = metadata.modified().map(unix_ms).unwrap_or(0);
-            logs.push((entry.path(), modified));
         }
     }
     logs.sort_by_key(|(_, modified)| std::cmp::Reverse(*modified));
@@ -613,14 +679,27 @@ pub(crate) fn terminal_after(
     since_unix_ms: u64,
     root: Option<&Path>,
 ) -> Result<Option<Terminal>, Outcome> {
-    for (path, modified) in candidate_logs(directories)? {
-        if modified < since_unix_ms {
+    newest_terminal(
+        &candidate_logs(directories, &FileTimes)?,
+        since_unix_ms,
+        root,
+    )
+}
+
+/// [`terminal_after`] among listed candidate logs, newest first.
+fn newest_terminal(
+    logs: &[(PathBuf, u64)],
+    since_unix_ms: u64,
+    root: Option<&Path>,
+) -> Result<Option<Terminal>, Outcome> {
+    for (path, modified) in logs {
+        if *modified < since_unix_ms {
             break;
         }
-        let tail = read_tail(&path)?;
+        let tail = read_tail(path)?;
         if let Some(outcome) = terminal_outcome(&tail, root) {
             return Ok(Some(Terminal {
-                log: plain_path(&path).display().to_string(),
+                log: plain_path(path).display().to_string(),
                 outcome,
             }));
         }
@@ -649,10 +728,19 @@ pub(crate) fn close_logged(
     started_at_unix_ms: u64,
     closed_at_unix_ms: u64,
 ) -> Result<bool, Outcome> {
-    Ok(candidate_logs(directories)?.iter().any(|(_, modified)| {
+    Ok(logged_during(
+        &candidate_logs(directories, &FileTimes)?,
+        started_at_unix_ms,
+        closed_at_unix_ms,
+    ))
+}
+
+/// [`close_logged`] among listed candidate logs.
+fn logged_during(logs: &[(PathBuf, u64)], started_at_unix_ms: u64, closed_at_unix_ms: u64) -> bool {
+    logs.iter().any(|(_, modified)| {
         *modified >= started_at_unix_ms
             && *modified <= closed_at_unix_ms.saturating_add(super::decide::CLOCK_SLACK_MS)
-    }))
+    })
 }
 
 /// A log's tail; an unreadable log is `watchdog_log_unreadable` (`path`).

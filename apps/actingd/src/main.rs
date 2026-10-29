@@ -12,6 +12,8 @@ mod monitor_retry;
 mod owner_unlock;
 // RB-2: the memory and I/O priority the start gives its own process.
 mod process_priority;
+// WD-MT (Workflow #421): the daemon's own stdout and stderr, made not inheritable at its start.
+mod standard_handles;
 mod suspended;
 
 // Test-only: the shared sealed C4 fixture support, reused for its 16x9 fake-device fixtures.
@@ -404,6 +406,13 @@ fn report_line(
 /// stop, else `runtime_stopped` followed by the stopping condition. The process exits by the
 /// terminal outcome's category.
 fn run_daemon(arguments: Vec<std::ffi::OsString>) -> Category {
+    // WD-MT (Workflow #421, INV-1119): before anything can start a child process, the daemon's
+    // own stdout and stderr (its log) are made not inheritable, so no adb server, MuMuManager or
+    // PowerShell it starts, directly or through another child, keeps the log open. A failure is
+    // one warning daemon line and the start goes on.
+    if let Some(warning) = standard_handles::apply(&standard_handles::SystemStandardHandles) {
+        write_stderr(&daemon_lines(&warning, None));
+    }
     let installation = match actingcommand_contract::process_installation_for(
         actingcommand_contract::InstallConfigPurpose::Running,
     ) {

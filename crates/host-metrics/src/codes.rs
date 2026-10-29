@@ -62,5 +62,11 @@ actingcommand_contract::outcome_locations! {
         ProcessIoPrioritySet => "process_io_priority_set",
         /// RB-2: reading this process's I/O priority back (`NtQueryInformationProcess`).
         ProcessIoPriorityRead => "process_io_priority_read",
+        /// WD-MT: making this process's own standard output handle not inheritable
+        /// (`SetHandleInformation`).
+        ProcessStdoutInheritanceClear => "process_stdout_inheritance_clear",
+        /// WD-MT: making this process's own standard error handle not inheritable
+        /// (`SetHandleInformation`).
+        ProcessStderrInheritanceClear => "process_stderr_inheritance_clear",
     }
 }
