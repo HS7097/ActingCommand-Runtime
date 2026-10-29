@@ -597,7 +597,7 @@ fn ed2_t4_restart_keeps_the_samples_and_recovers_a_dispatch_admitted_with_e() {
     let context = admit(&host, &intent, &chain);
     assert_eq!(
         context.admission().budget.task_runtime_reserved_ms,
-        expected,
+        Some(expected),
         "the admission reserved E"
     );
     assert_eq!(recorded_durations(&host), vec![Some(expected)]);
@@ -821,7 +821,7 @@ fn ed2_t9_with_the_switch_off_nothing_is_written_or_read() {
     let context = admit(&off, &intent, &chain);
     assert_eq!(
         context.admission().budget.task_runtime_reserved_ms,
-        DECLARED_MS
+        Some(DECLARED_MS)
     );
     assert_eq!(recorded_durations(&off), vec![None]);
     off.close().expect("close the host with the switch off");

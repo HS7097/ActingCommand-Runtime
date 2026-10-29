@@ -73,7 +73,6 @@
     },
     "loopBudget": {
       "type": "object",
-      "required": ["daily_limit", "window_iteration_limit", "max_runtime_ms"],
       "properties": {
         "daily_limit": { "type": "integer", "minimum": 1, "maximum": 1000000 },
         "window_iteration_limit": { "type": "integer", "minimum": 1, "maximum": 1000000 },
@@ -117,7 +116,6 @@
         "expected_duration_ms",
         "cooldown_ms",
         "load_profile",
-        "loop_budget",
         "strategic_weight_milli",
         "instance_overrides"
       ],

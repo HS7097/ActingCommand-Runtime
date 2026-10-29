@@ -263,8 +263,8 @@ For a blocked pair whose key K declares `need` N and `capabilities` C:
   | `next_occurrence_unix_ms` | `unix_ms` | the least next occurrence after the evaluation of the clocks the task's trigger counts for its clock slots (every `clock` through `all` and `any`, none under `not`); absent without such a clock (or with an interval shorter than one hour) and when none occurs again |
   | `window_end_unix_ms` | `unix_ms` | the end of the instance's activity window at the evaluation (the profile the dispatch is admitted under) |
   | `last_in_window` | boolean | "the last round of the window": no such clock occurs again before `window_end_unix_ms`; absent when either is unknown |
-  | `daily_remaining` | integer | "how many runs remain today": the runs the task's daily budget (`loop_budget.daily_limit`, its accounting group) and its activity profile's `daily_budget` still allow in the activity day after this dispatch, the fewer of the two, as the Runtime's admission preview counts them |
-  | `last_daily_slot` | boolean | "the last of today's budget": `daily_remaining` is 0 |
+  | `daily_remaining` | integer | "how many runs remain today": the runs the task's daily budget (`loop_budget.daily_limit`, its accounting group) and its activity profile's `daily_budget` still allow in the activity day after this dispatch, the fewer of the two, as the Runtime's admission preview counts them; SS-3 (since 0.12.30): only the written ones count, and with neither written it is absent |
+  | `last_daily_slot` | boolean | "the last of today's budget": `daily_remaining` is 0; absent when `daily_remaining` is |
 
   The host overlays each as the record `session.dispatch.schedule.<key>` with its type
   (`timestamp_ms`, `boolean` or `integer`; instance scope; confidence 1000; observed at the

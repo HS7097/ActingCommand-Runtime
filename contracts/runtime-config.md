@@ -442,7 +442,8 @@ at every policy cycle.
 **Expected duration (SCH-M slice ED-1, frozen model v1.0 §3.4; `actingd-config` revision
 11).** `scheduling.expected_runtime.enabled`, `.runs` and `.margin_ms` set the expected duration E
 of a task package on an instance: the mean of its latest `runs` successful scheduled runs, rounded
-up, plus `margin_ms`, at most the task's `loop_budget.max_runtime_ms`; with no run, or with
+up, plus `margin_ms`, at most the task's `loop_budget.max_runtime_ms` (SS-3, since 0.12.30: no
+ceiling when the task does not write it); with no run, or with
 `enabled` false, the declared value ([scheduling/README.md](scheduling/README.md), "Settlement
 Feedback And Eligibility Age"). Each is also per instance,
 `instance.<instance id>.scheduling.expected_runtime.<member>`, in the file the entry's

@@ -162,10 +162,14 @@ field, while `json_path` and the line and column point at the nearest preceding
 value (the existing parser's behaviour).
 
 The block is a declaration. The compiler validates it and hashes it with the
-catalog. The evaluator reads it only for an instance with an active
-`actingcommand.resource-targets.v2` policy (Workflow #335 S2b,
-`contracts/resource-targets.md`, "Resource weights (v2)"); every other instance
-ranks exactly as with the same catalog without a valuation.
+catalog. Since SS-1 (0.12.30; Alice's ruling 100) the evaluator reads it for
+every instance: its base weight weighs every producing task with or without a
+resource target policy, and an active `actingcommand.resource-targets.v2`
+policy only adds its targets' shortfall (`contracts/resource-targets.md`, "Base
+valuation on every instance" and "Resource weights (v2)"). Until 0.12.29 it was
+read only for an instance with an active v2 policy. A catalog without a
+valuation ranks exactly as before, apart from the v1 `U` change of SS-1
+(`contracts/resource-targets.md`, "One-way guard").
 
 The bounds above are checked when the catalog is compiled (`compile_catalog`,
 `actinglab scheduling compile`, Runtime activation and startup reload).
@@ -879,7 +883,11 @@ A stored `actingcommand.resource-targets.v2` policy is named
 it is active the target fields carry the candidate's resource term instead
 (`target=<R>`, `target_id=<override id|*>`, `mode=<override|adjust>`) and
 `rank_breakdown` ends with ` offset_kept=<0|1>`, as
-`contracts/resource-targets.md`, "Resource weights (v2)", states.
+`contracts/resource-targets.md`, "Resource weights (v2)", states. Since SS-1
+(0.12.30) a candidate with a base term on any other instance carries the same
+fields with its base term `R` (`target_id=*`, `mode=adjust`, ` offset_kept=1`),
+unless a v1 target applies to it, which keeps `target=<s>` ("Base valuation on
+every instance").
 
 Bounds, every truncation marked: a chain of `L` reasons gains `rank_breakdown`,
 `decision_record` and at most `min(8, 128 - L - 2)` candidates when
@@ -1008,7 +1016,8 @@ projects carries what earlier runs of that task on that instance settled:
 - `expected_runtime_ms` and `expected_runtime_runs` (SCH-M slice ED-1, frozen model v1.0 §3.4
   D-12, D-15) carry the expected duration E of the pair and how many samples it is the mean of:
   E = min(⌈mean of the latest `runs` successful scheduled runs of the task's package on the
-  instance⌉ + `margin_ms`, the task's `loop_budget.max_runtime_ms`), with the instance's
+  instance⌉ + `margin_ms`, the task's `loop_budget.max_runtime_ms`; SS-3, since 0.12.30: no
+  ceiling when the V2 task does not write it), with the instance's
   `scheduling.expected_runtime.*` in effect (`actingcommand_policy::expected_runtime`). With no
   sample, or with `enabled` false, E is the declared value and both members are absent, so the
   evaluation input and every evaluation are byte for byte those without samples. When present, E
@@ -1202,6 +1211,27 @@ transaction state.
 The evaluator pins the selected activity profile in every dispatch intent. Runtime owns activity sampling, budget counters, retry state, and failure escalation; callers cannot supply remaining-budget values. Admission and execution ledger events record the selected profile, sample seed, activity window, cadence, cumulative task and activity budget receipts, and classified outcome.
 
 Recoverable failures receive a positive, bounded backoff. Only repeated failures with the same failure code, failure identity and failure class share a consecutive-failure streak, and sensitive or severe failures are never automatically restarted. A failure records its `outcome` (whose category is the record's severity) and, for a scheduled `linear_steps` or (Workflow #390 EXEC-3) page-graph task, its `failure_identity`, which is rerun at once and lifted by a package update (`../policy-suspension.md`). Goal-missed, feasibility-red, and drift-predicted signals are informational planning facts: they do not consume failure tax, advance a failure streak, or pause execution.
+
+### Optional run-count bounds
+
+SS-3 (since 0.12.30; Alice's ruling 100 on Workflow #386: dispatch follows live account state, and there is no "run task X N times"; register §1.212). In an `actingcommand.scheduling.v2` catalog a task's `loop_budget` may be left out, and so may each of its three items, `daily_limit`, `window_iteration_limit` and `max_runtime_ms`, on its own; so may each of an activity profile's `daily_budget`, `max_window_iterations` and `session_max_ms`. V1 keeps all six required (`missing_required_field` at the member). In V1 and V2 a bound that is written is a value: an explicit `null` is refused (`type_mismatch`), as the V2 schemas declare and as for an effect's `amount`; it is never read as "not written". A bound that is written applies exactly as before, and must still be above 0 (`loop_budget_missing`); a catalog that writes all of them serializes, hashes, admits, settles and records byte for byte as before. A bound that is not written is no dimension:
+
+- **Admission** reserves nothing for it and never refuses on it (`policy_budget_exhausted` names only a written dimension). The dispatch intent carries only the written items in `prerequisites` (`daily_limit`, `window_iteration_limit`, `max_runtime_ms`), and the intent check requires each one it carries to be above 0 and the intent's expected duration to be within a carried `max_runtime_ms`.
+- **The budget receipt** of `policy.dispatch_admitted` and `policy.dispatch_completed` carries neither member of an unwritten dimension (`task_daily_used`/`task_daily_limit`, `task_window_used`/`task_window_limit`, `task_runtime_reserved_ms`/`task_runtime_limit_ms` and the three activity pairs); a carried dimension holds both members with the count between 1 and the limit, as before, and a receipt with one member of a pair is invalid. The receipt is part of the admission record those two events carry (and the retry round of `policy.control_state_recorded` keeps), and the global ledger query's public projection hands it on unchanged as `PublicPayload.policy_admission`, which reaches clients through runtime-client. The Runtime keeps no count for an unwritten dimension, and a condition rerun's refund gives back only the counts the admission took.
+- **The retry round** does not judge an unwritten dimension; retries stay bounded by `on_failure` and the round's window.
+- **Settlement** never rewrites a run to `policy_runtime_budget_exceeded` on an unwritten runtime dimension: without `max_runtime_ms` (and `session_max_ms`) a window's cumulative runtime has no bound. The per-run deadline (the contained-task response bound and the package's own timeout) is unchanged, and so are failure retries and escalation, the per-occurrence rerun limit, the recovery ladder, in-pack loop caps and concurrency.
+- **Expected duration E** has no ceiling without `max_runtime_ms` ("Settlement Feedback And Eligibility Age").
+- **Workflow #411 B8** hands a task that opts in to `dispatch_parameters` `daily_remaining` and `last_daily_slot` only from the daily dimensions written (the task's `daily_limit`, the profile's `daily_budget`, the fewer of those written); with neither written both are absent (`../remedies.md`, section 4).
+- **The strategy report's production estimate** takes the fewest runs an hour of the bounds written (`daily_limit`, `window_iteration_limit`, `max_runtime_ms` / E) and the period bound (one hour over the task's cycle), which is always present.
+
+**Readers before 0.12.30.** A receipt that leaves members out is written only after the resource side first leaves a bound out; until then every receipt is written as before, and every build reads it. From then on a reader older than 0.12.30, which requires all twelve members, cannot decode it:
+
+- **A Runtime before 0.12.30** refuses the ledger with `corrupt_ledger_record`: at open, when such a record lies among the newest `ledger_observer.open_verify_tail_records` rows it verifies (`../ledger-store.md`), and otherwise later, when the background recheck reaches the record, latches a Global failure and stops the Runtime with the same code (`../ledger-observer.md`). It also refuses a V2 catalog that leaves `loop_budget` out.
+- **Tools and the UI before 0.12.30** fail to decode a ledger event query page (`RuntimeEventQueryPage`) that carries such a receipt in `PublicPayload.policy_admission`.
+
+No ledger revision is bumped for this (`ledger` stays [3, 4]); the bump comes with SS-9, which deletes the members. After the resource side first leaves a bound out, no rollback below 0.12.30 is possible, so the resource side leaves bounds out only once every deployment runs 0.12.30 or later (the 0.12.30 release notes and Workflow #428 say both).
+
+Deleting the members (SS-9), the no-progress guard (SS-4) and batch allowances (SS-6) are later slices.
 
 ## Task Execution Fields
 
@@ -1501,7 +1531,7 @@ The compiler enforces both schema limits and UTF-8 byte limits:
 | Pool valuation scale | 1..=9,007,199,254,740,991 |
 | Pool valuation base weight / gap weight | 0..=1,000,000 / 1..=1,000,000 milli |
 
-Loop budgets are mandatory. Arrays and strings that exceed their limit reject the entire catalog. Duplicate identifiers, duplicate object keys, and unbounded recursive input are invalid.
+Loop budgets are mandatory in V1; in V2 each run-count bound is optional (SS-3, "Optional run-count bounds"). Arrays and strings that exceed their limit reject the entire catalog. Duplicate identifiers, duplicate object keys, and unbounded recursive input are invalid.
 
 ## Canonical Serialization And Hash
 

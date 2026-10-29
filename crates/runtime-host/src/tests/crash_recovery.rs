@@ -589,8 +589,8 @@ fn orphaned_policy_admission_is_reconciled_after_real_process_kill() {
             panic!("expected post-recovery grant")
         };
         let admission = context.admission();
-        assert_eq!(admission.budget.task_daily_used, 1);
-        assert_eq!(admission.budget.activity_window_used, 1);
+        assert_eq!(admission.budget.task_daily_used, Some(1));
+        assert_eq!(admission.budget.activity_window_used, Some(1));
         host.close().expect("close recovered host");
 
         let reopened = RuntimeHost::start(
