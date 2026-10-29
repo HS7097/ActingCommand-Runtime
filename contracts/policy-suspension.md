@@ -641,12 +641,16 @@ code is listed in `scheduling.rerun.condition_codes`. The default list is
 `recognition_sample_budget_insufficient`, `candidate_sample_budget_insufficient`,
 `recognition_sample_deadline_exceeded`, `candidate_sample_deadline_exceeded`,
 `blackout_run_stopped` (`scheduling-blackout.md`), `perf_run_yielded` and `perf_hold_expired`
-(Workflow #385) and `cost_commit_time_insufficient` (`cost-commit.md`). A sampling timeout ends a
-run only after its observe-only retries ran out: an observation that times out is repeated
-without repeating any input, `scheduling.recognition.sample_timeout_retries` times (default 2;
-slice SR-1) plus the pacing curve's extra retries of the step's stage (Workflow #385 P-k). An
-operator pause (`contained_task_paused`)
-is not in the default list.
+(Workflow #385), `cost_commit_time_insufficient` (`cost-commit.md`) and `contained_task_paused`.
+A sampling timeout ends a run only after its observe-only retries ran out: an observation that
+times out is repeated without repeating any input, `scheduling.recognition.sample_timeout_retries`
+times (default 2; slice SR-1) plus the pacing curve's extra retries of the step's stage (Workflow
+#385 P-k). `contained_task_paused` is in the default list since 0.12.28, by Alice's decision 92
+of 2026-10-29: a scheduled run that an operator's scheduling pause (`ac_pause`, `actingctl
+pause`) or a deploy's drain cut off at its drain timeout ([scheduling-pause.md](scheduling-pause.md))
+ends by a condition: it adds to no streak, its counts are given back (with the default
+`refund_counts`) and its rerun is owed after the resume. A sensitive task's paused run stays an
+ordinary failure, as every sensitive task's failure does (below).
 
 **Decided once.** The live settlement decides it from the failure code, the configuration and
 the number of consecutive condition terminations of the pair in this occurrence, and writes the
@@ -749,7 +753,7 @@ None of these codes triggers the recovery ladder.
 | Key | Default | Meaning |
 |---|---|---|
 | `scheduling.recognition.sample_timeout_retries` | 2 | Base number of observe-only retries of a timed-out observation |
-| `scheduling.rerun.condition_codes` | the eight codes above | Codes that end a run by a condition; read when a run is first settled (live settlement or reconciliation from its terminal). Every entry is a code the catalog lists and has not retired |
+| `scheduling.rerun.condition_codes` | the nine codes above (`contained_task_paused` since 0.12.28, decision 92) | Codes that end a run by a condition; read when a run is first settled (live settlement or reconciliation from its terminal). Every entry is a code the catalog lists and has not retired |
 | `scheduling.rerun.max_per_occurrence` | 2 | Condition terminations per occurrence before an ordinary failure; read when a run is first settled (live settlement or reconciliation from its terminal) |
 | `scheduling.rerun.resume_stage` | S2 | Highest pacing stage at which an owed rerun runs |
 | `scheduling.rerun.resume_settle_ms` | 60,000 | How long the stage must stay at or below the resume stage |

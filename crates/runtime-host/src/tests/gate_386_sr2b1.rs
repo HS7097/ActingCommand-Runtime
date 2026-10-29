@@ -12,7 +12,9 @@
 // `policy_rerun_exhausted`. A run a restart settles from its terminal is decided by the same
 // rule; one with no terminal stays `policy_settlement_interrupted`. Every expected value is the
 // design's; the Runtime clock is a manual one except where the fixture's injected capture failure
-// needs the Runtime's own (test ⑥, as the crash fixture it follows).
+// needs the Runtime's own (test ⑥, as the crash fixture it follows). Alice's decision 92
+// (2026-10-29, Runtime 0.12.28) puts the operator pause's `contained_task_paused` in the shipped
+// table: test `sr92` pins it, and test ② was adapted.
 
 use super::gate_386_sr2a::{once_a_day_sources, sampling_ended};
 use super::*;
@@ -57,11 +59,22 @@ fn sensitive_once_a_day_sources() -> CatalogSources {
     sources
 }
 
-/// An operator pause ended the run (`contained_task_paused`), recoverable. Alice's pending
-/// question 92 decides whether it is a condition code; the shipped table does not list it.
+/// An operator pause (or a deploy's drain) cut the run off at its drain timeout
+/// (`contained_task_paused`), recoverable. Since 0.12.28 the shipped table lists it (Alice's
+/// decision 92, 2026-10-29).
 fn operator_paused() -> PolicyExecutionInput {
     PolicyExecutionInput::Failed {
         outcome: Outcome::new(RuntimeErrorCode::ContainedTaskPaused.code()),
+        failure_identity: None,
+        class: PolicyFailureClass::Recoverable,
+    }
+}
+
+/// The run was cancelled (`contained_task_cancelled`), recoverable: a planned stop like the
+/// operator pause, which the shipped table does not list.
+fn cancelled() -> PolicyExecutionInput {
+    PolicyExecutionInput::Failed {
+        outcome: Outcome::new(RuntimeErrorCode::ContainedTaskCancelled.code()),
         failure_identity: None,
         class: PolicyFailureClass::Recoverable,
     }
@@ -291,9 +304,10 @@ fn sr2b1_t1_a_sampling_timeout_ends_by_a_condition_refunds_and_keeps_the_streak(
 // ---- ②
 
 // A sensitive task's sampling timeout, a code the shipped table does not list
-// (`contained_task_paused`, which pending question 92 leaves out), and a code a configured table
-// does not list each settle as an ordinary failure; the configured table is read, so a code it
-// lists ends by a condition.
+// (`contained_task_cancelled`), and a code a configured table does not list each settle as an
+// ordinary failure; the configured table is read, so a code it lists ends by a condition.
+// Adapted for Alice's decision 92 (0.12.28): the shipped table's unlisted code was the operator
+// pause's `contained_task_paused`, which the shipped table now lists (test `sr92` below).
 #[test]
 fn sr2b1_t2_a_sensitive_task_or_an_unlisted_code_is_an_ordinary_failure() {
     // A sensitive task.
@@ -311,7 +325,7 @@ fn sr2b1_t2_a_sensitive_task_or_an_unlisted_code_is_an_ordinary_failure() {
     assert!(failure.sensitive);
     assert_eq!(failure.effective_class, PolicyFailureClass::Severe);
 
-    // The shipped table does not list an operator pause.
+    // The shipped table does not list a cancellation.
     let root = TempDir::new().expect("tempdir");
     let (_, failure) = one_run(
         &root,
@@ -320,7 +334,7 @@ fn sr2b1_t2_a_sensitive_task_or_an_unlisted_code_is_an_ordinary_failure() {
         100,
         Some(&budget_policy_sources(1)),
         None,
-        &operator_paused(),
+        &cancelled(),
     );
     assert_eq!(failure.condition, None, "not in the shipped table");
     assert_eq!(failure.consecutive_same_error, 1);
@@ -359,6 +373,109 @@ fn sr2b1_t2_a_sensitive_task_or_an_unlisted_code_is_an_ordinary_failure() {
         }),
         "the configured table lists it"
     );
+}
+
+// ---- Decision 92
+
+// Alice's decision 92 (2026-10-29, Runtime 0.12.28): the shipped
+// `scheduling.rerun.condition_codes` lists `contained_task_paused`. Under the shipped table, a
+// scheduled run of a task that is not sensitive which an operator pause cut off ends by a
+// condition: `condition{refunded: true, count: 1, expires_at_unix_ms: the window's end}`, no
+// streak (the record keeps the pair's counters, none here, and the pair has no failure streak),
+// and the rerun is owed with the pause's code. After the resume, later the same day, the
+// once-a-day task is dispatched again as the owed rerun (`policy_rerun_owed`), its daily and
+// window counts given back. The same pause of a sensitive task stays an ordinary failure (SR-2a).
+#[test]
+fn sr92_an_operator_pause_ends_a_scheduled_run_by_a_condition_under_the_shipped_table() {
+    let paused_code = RuntimeErrorCode::ContainedTaskPaused.code();
+    let root = TempDir::new().expect("tempdir");
+    let registered = instance_id();
+    let window_end = whole_day_window_end(POLICY_NOW_UNIX_MS);
+    let (host, clock) = start(&root, registered, POLICY_NOW_UNIX_MS, None);
+    host.activate_policy_catalog(&once_a_day_sources())
+        .expect("activate the catalog");
+    let (first, admission) = admit(&host, POLICY_NOW_UNIX_MS, 100, true);
+    assert_eq!(admission.budget.task_daily_used, 1);
+    clock.advance(75_000);
+    let paused = failure_of(
+        &host
+            .record_policy_dispatch_outcome(&first.decision_id, &operator_paused())
+            .expect("the condition settlement"),
+    );
+    assert_eq!(
+        paused.condition,
+        Some(PolicyConditionSettlement {
+            refunded: true,
+            count: 1,
+            expires_at_unix_ms: window_end,
+        }),
+        "the shipped table lists the operator pause"
+    );
+    assert_eq!(paused.consecutive_same_error, 0);
+    assert_eq!(paused.escalation_streak, 0);
+    assert_eq!(paused.effective_class, PolicyFailureClass::Recoverable);
+    assert_eq!(paused.disposition, PolicyFailureDisposition::Continue);
+    let record = held_record(&host);
+    assert!(record.failure_streak.is_none(), "no streak");
+    let owed = record.condition_reruns.expect("the owed rerun");
+    assert_eq!(owed.failure_code.as_str(), paused_code.as_str());
+    assert_eq!(owed.count, 1);
+    assert_eq!(owed.expires_at_unix_ms, window_end);
+
+    // After the resume: the owed rerun is promoted and admitted, its counts given back.
+    let at = POLICY_NOW_UNIX_MS + BETWEEN_RUNS_MS;
+    clock.set_unix_ms(at);
+    let (_, rerun, chain) = evaluated_policy_dispatch_at(&host, PolicyTrigger::Recovery, at, 101);
+    assert_eq!(rerun.task_id, TASK);
+    let codes = chain
+        .reasons
+        .iter()
+        .map(|reason| reason.outcome.code().as_str().to_owned())
+        .collect::<Vec<_>>();
+    let promoted = chain
+        .reasons
+        .iter()
+        .map(|reason| &reason.outcome)
+        .find(|outcome| outcome.code().as_str() == "policy_rerun_owed")
+        .unwrap_or_else(|| panic!("the rerun is owed: {codes:?}"));
+    assert_eq!(
+        promoted.value("failure_code"),
+        Some(&json!(paused_code.as_str()))
+    );
+    let PolicyDispatchAdmission::Granted { context } = host
+        .admit_policy_dispatch(&rerun, &chain, &policy_context(&host, &rerun))
+        .expect("the rerun's admission")
+    else {
+        panic!("expected a granted admission")
+    };
+    assert_eq!(
+        context.admission().budget.task_daily_used,
+        1,
+        "the daily count was given back"
+    );
+    assert_eq!(
+        context.admission().budget.task_window_used,
+        1,
+        "the window count was given back"
+    );
+    drop(context);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close the host");
+
+    // A sensitive task's paused run stays an ordinary failure under the shipped table.
+    let root = TempDir::new().expect("tempdir");
+    let (_, failure) = one_run(
+        &root,
+        instance_id(),
+        POLICY_NOW_UNIX_MS,
+        100,
+        Some(&sensitive_once_a_day_sources()),
+        None,
+        &operator_paused(),
+    );
+    assert_eq!(failure.condition, None, "sensitive");
+    assert!(failure.sensitive);
+    assert_eq!(failure.effective_class, PolicyFailureClass::Severe);
 }
 
 // ---- ③
