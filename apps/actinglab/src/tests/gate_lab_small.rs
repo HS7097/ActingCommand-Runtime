@@ -9,12 +9,13 @@
 //   `--with-frame` file; an answer given writes it.
 // - P61 (#411 A70): a page not recognised is never `standby`, neither in the answer nor in its
 //   projection.
-// Packages and frames are synthetic and neutral; no Runtime, device or OCR model is involved.
+// Packages and frames are synthetic and neutral; no Runtime, device or OCR model is involved. The
+// packages are sealed by the shared semantic fixture builder the other observe tests use
+// (`seal_semantic_fixture`), with a navigation graph, which offline observe requires.
 
+use super::semantic_fixture::SemanticFixture;
 use super::*;
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
-use std::io::{Cursor, Write};
-use zip::{ZipWriter, write::FileOptions};
 
 /// The first pixel of a frame tells its page; the second shows the button.
 const ENTRY: [u8; 3] = [40, 90, 160];
@@ -24,7 +25,7 @@ const BUTTON: [u8; 3] = [60, 200, 60];
 const ENTRY_PAGE: &str = "neutral/entry_page";
 
 /// A context with no configuration, no recording session and an empty Runtime state root, and a
-/// directory for the packages and frames. The fields drop in order, the environment lock last.
+/// directory for the frames. The fields drop in order, the environment lock last.
 struct Isolated {
     files: TempDir,
     _runtime_env: RuntimeStateEnvGuard,
@@ -68,90 +69,87 @@ impl Isolated {
         fs::write(&path, png).unwrap();
         path.display().to_string()
     }
-
-    /// The package `name`: its one page told by the first pixel; with `ocr_layout` the page has
-    /// the fixed-slot layout `choices`, whose feature `label` reads the OCR target `text/label`.
-    fn package(&self, name: &str, ocr_layout: bool) -> String {
-        let mut pack = json!({
-            "schema_version": "0.7",
-            "game": "neutral",
-            "server": "test",
-            "coordinate_space": {"width": 2, "height": 1},
-            "defaults": {"color_max_distance": 0.0},
-            "targets": [
-                {"type": "color", "id": "page/entry_page",
-                 "region": {"x": 0, "y": 0, "width": 1, "height": 1}, "expected": ENTRY},
-                {"type": "color", "id": "ui/button",
-                 "region": {"x": 1, "y": 0, "width": 1, "height": 1}, "expected": BUTTON}
-            ]
-        });
-        if ocr_layout {
-            pack["targets"]
-                .as_array_mut()
-                .expect("targets")
-                .push(json!({
-                    "type": "ocr", "id": "text/label",
-                    "region": {"x": 1, "y": 0, "width": 1, "height": 1},
-                    "languages": ["en"], "timeout_ms": 1000, "match_mode": "exact",
-                    "expected": ["open"], "case_sensitive": false, "minimum_confidence": 0.9,
-                    "model_ref": "neutral-ocr", "model_sha256": "a".repeat(64)
-                }));
-            let slot = json!({"x": 1, "y": 0, "width": 1, "height": 1});
-            pack["candidate_layouts"] = json!([{
-                "id": "choices",
-                "page_id": ENTRY_PAGE,
-                "kind": "fixed_slots",
-                "sample_interval_ms": 0,
-                "features": [
-                    {"name": "ready", "value": "passed"},
-                    {"name": "label", "value": "passed"}
-                ],
-                "slots": [{"rect": slot, "click": slot,
-                           "targets": {"ready": "ui/button", "label": "text/label"}}]
-            }]);
-        }
-        let bytes = zip_entries(&[
-            (
-                "control.json",
-                json!({"game": "neutral", "server": "test", "entry_task_id": "task"}),
-            ),
-            (
-                "resources/manifest.json",
-                json!({"schema_version": "0.3", "entry_task_id": "task"}),
-            ),
-            ("resources/operations/task/task.json", json!({})),
-            ("resources/recognition/neutral.test.pack.json", pack),
-            (
-                "resources/recognition/neutral.test.pages.json",
-                json!({"schema_version": "0.3", "pages": [
-                    {"id": ENTRY_PAGE, "required": ["page/entry_page"]}
-                ]}),
-            ),
-        ]);
-        let path = self.files.path().join(name);
-        fs::write(&path, bytes).unwrap();
-        path.display().to_string()
-    }
 }
 
-fn zip_entries(entries: &[(&str, Value)]) -> Vec<u8> {
-    let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
-    let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    for (path, value) in entries {
-        zip.start_file(*path, options).expect("zip entry");
-        zip.write_all(&serde_json::to_vec(value).expect("JSON"))
-            .expect("zip bytes");
+/// The package, sealed by the shared builder `seal_semantic_fixture` from its own source
+/// directory (game `neutral`, server `test`): its one page told by the first pixel, and an empty
+/// navigation graph; with `ocr_layout` the page has the fixed-slot layout `choices`, whose feature
+/// `label` reads the OCR target `text/label`.
+fn package(ocr_layout: bool) -> SemanticFixture {
+    let mut pack = json!({
+        "schema_version": "0.7",
+        "game": "neutral",
+        "server": "test",
+        "coordinate_space": {"width": 2, "height": 1},
+        "defaults": {"color_max_distance": 0.0},
+        "targets": [
+            {"type": "color", "id": "page/entry_page",
+             "region": {"x": 0, "y": 0, "width": 1, "height": 1}, "expected": ENTRY},
+            {"type": "color", "id": "ui/button",
+             "region": {"x": 1, "y": 0, "width": 1, "height": 1}, "expected": BUTTON}
+        ]
+    });
+    if ocr_layout {
+        pack["targets"]
+            .as_array_mut()
+            .expect("targets")
+            .push(json!({
+                "type": "ocr", "id": "text/label",
+                "region": {"x": 1, "y": 0, "width": 1, "height": 1},
+                "languages": ["en"], "timeout_ms": 1000, "match_mode": "exact",
+                "expected": ["open"], "case_sensitive": false, "minimum_confidence": 0.9,
+                "model_ref": "neutral-ocr", "model_sha256": "a".repeat(64)
+            }));
+        let slot = json!({"x": 1, "y": 0, "width": 1, "height": 1});
+        pack["candidate_layouts"] = json!([{
+            "id": "choices",
+            "page_id": ENTRY_PAGE,
+            "kind": "fixed_slots",
+            "sample_interval_ms": 0,
+            "features": [
+                {"name": "ready", "value": "passed"},
+                {"name": "label", "value": "passed"}
+            ],
+            "slots": [{"rect": slot, "click": slot,
+                       "targets": {"ready": "ui/button", "label": "text/label"}}]
+        }]);
     }
-    zip.finish().expect("finish zip").into_inner()
+    let sources = TempDir::new().unwrap();
+    let pack_path = sources.path().join("pack.json");
+    let pages_path = sources.path().join("pages.json");
+    let navigation_path = sources.path().join("navigation.json");
+    fs::write(&pack_path, serde_json::to_vec(&pack).unwrap()).unwrap();
+    fs::write(
+        &pages_path,
+        serde_json::to_vec(&json!({"schema_version": "0.3", "pages": [
+            {"id": ENTRY_PAGE, "required": ["page/entry_page"]}
+        ]}))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        &navigation_path,
+        br#"{"schema_version": "0.3", "game": "neutral", "server": "test", "navigation": [], "destructive_actions": []}"#,
+    )
+    .unwrap();
+    seal_semantic_fixture(
+        sources,
+        "neutral",
+        "test",
+        &pack_path,
+        &pages_path,
+        Some(&navigation_path),
+    )
 }
 
-/// `--json observe <extra> --scene <scene> --zip <package>`: `extra` follows the command word, so
-/// an observe option such as `--with-frame` reaches observe and is not read as the command.
-fn observe(extra: &[&str], scene: &str, package: &str) -> CliResult {
+/// `--json observe <extra> --scene <scene>`, and `--zip` with the package (`run_semantic_cli`):
+/// `extra` follows the command word, so an observe option such as `--with-frame` reaches observe
+/// and is not read as the command.
+fn observe(extra: &[&str], scene: &str, package: &SemanticFixture) -> CliResult {
     let mut line = vec!["--json".to_string(), "observe".to_string()];
     line.extend(extra.iter().map(|word| (*word).to_string()));
-    line.extend(["--scene", scene, "--zip", package].map(str::to_string));
-    run_cli(line, true)
+    line.extend(["--scene", scene].map(str::to_string));
+    run_semantic_cli(package, line, true)
 }
 
 /// The answer is a success; its data.
@@ -169,7 +167,7 @@ fn data(result: &CliResult, what: &str) -> Value {
 #[test]
 fn b47_a_layout_whose_ocr_feature_has_no_model_is_named_and_the_page_still_answered() {
     let context = Isolated::new();
-    let package = context.package("ocr-layout.zip", true);
+    let package = package(true);
     let scene = context.scene("entry.png", ENTRY);
 
     let observed = data(
@@ -202,7 +200,7 @@ fn b47_a_layout_whose_ocr_feature_has_no_model_is_named_and_the_page_still_answe
 #[test]
 fn p60_a_refused_answer_writes_no_frame_file_and_a_given_one_does() {
     let context = Isolated::new();
-    let package = context.package("plain.zip", false);
+    let package = package(false);
     let scene = context.scene("entry.png", ENTRY);
 
     // A path of more than 2 KiB: Min's identity, which keeps `frame_path` whole, no longer fits
@@ -251,7 +249,7 @@ fn p60_a_refused_answer_writes_no_frame_file_and_a_given_one_does() {
 #[test]
 fn p61_a_page_not_recognised_is_never_standby() {
     let context = Isolated::new();
-    let package = context.package("plain.zip", false);
+    let package = package(false);
     let scene = context.scene("other.png", OTHER);
 
     let observed = data(
