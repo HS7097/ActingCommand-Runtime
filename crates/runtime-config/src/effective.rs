@@ -11,6 +11,7 @@ use crate::device_link::DeviceLinkConfig;
 use crate::device_state::DeviceStateConfig;
 use crate::display_safe_area::DisplaySafeAreaConfig;
 use crate::execution::CaptureCadenceConfig;
+use crate::host::HostProcessConfig;
 use crate::idle::IdleConfig;
 use crate::ledger_observer::LedgerObserverConfig;
 use crate::recovery_ladder::LadderConfig;
@@ -23,8 +24,9 @@ use crate::table::{DefaultSource, INSTANCE_SECTION, KeyName, KeyRange, KeyRow, f
 use crate::touch::TouchConfig;
 use crate::value::{canonical_json, parse_value, scalar_json};
 use crate::{
-    device_link, device_state, display_safe_area, emulator_control, execution, host_claims, idle,
-    instance, ledger_observer, performance, recovery_ladder, scheduling, startup_discovery, touch,
+    device_link, device_state, display_safe_area, emulator_control, execution, host, host_claims,
+    idle, instance, ledger_observer, performance, recovery_ladder, scheduling, startup_discovery,
+    touch,
 };
 use actingcommand_contract::outcome::{BlackoutSource, Outcome};
 use actingcommand_contract::{
@@ -512,6 +514,12 @@ impl EffectiveConfig {
         TouchConfig::parse(&|key: &str| self.value_or_shipped(key))
     }
 
+    /// RB-2: the `host` section in effect, the memory and I/O priority actingd gives its own
+    /// process at start, before the ledger opens.
+    pub fn host_process(&self) -> Result<HostProcessConfig, ConfigFailure> {
+        HostProcessConfig::parse(&|key: &str| self.value_or_shipped(key))
+    }
+
     /// PERF-B1 (Workflow #407 B1): the `execution.capture` keys in effect, the kernel's capture
     /// cadence, which the host hands the kernel with each step's pacing.
     pub fn capture_cadence(&self) -> Result<CaptureCadenceConfig, ConfigFailure> {
@@ -814,6 +822,9 @@ impl EffectiveConfig {
         }
         if sections.contains(display_safe_area::SECTION) {
             self.display_safe_area_section()?;
+        }
+        if sections.contains(host::SECTION) {
+            self.host_process()?;
         }
         if !sections.contains(INSTANCE_SECTION) {
             return Ok(());

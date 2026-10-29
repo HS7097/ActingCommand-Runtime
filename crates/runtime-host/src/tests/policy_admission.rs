@@ -1504,6 +1504,388 @@ fn a_start_that_cannot_settle_one_dispatch(refusal: StartSettlementRefusal, caus
     host.close().expect("close host");
 }
 
+// UNSET-1 (0.12.28; production 10-29 05:24): a dispatch an earlier start could not settle, and
+// held its instance for, does not hold the instance again at every later start.
+
+/// UNSET-1: the refusal the restarts inject for A's settlement (the host's recovery, as in
+/// test (l)).
+const UNSET1_REFUSAL: &str = "policy_execution_recovery_outcome_conflict";
+/// UNSET-1 test 4: how long the restart's writer has to answer a read.
+const UNSET1_REPLY_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// UNSET-1: A's dispatch of tests (l) and (m), open after the first host's close: the
+/// instances A and B, and the run of A's dispatch.
+struct OpenDispatchOnA {
+    instance_a: InstanceId,
+    instance_b: InstanceId,
+    run_id: RunId,
+}
+
+impl OpenDispatchOnA {
+    fn provider(&self) -> Arc<FakeProvider> {
+        two_instance_provider(self.instance_a, self.instance_b)
+    }
+}
+
+/// UNSET-1: the provider of instances A and B, each with a fresh fake state.
+fn two_instance_provider(instance_a: InstanceId, instance_b: InstanceId) -> Arc<FakeProvider> {
+    Arc::new(FakeProvider::from_entries([
+        (
+            POLICY_INSTANCE_ALIAS.to_owned(),
+            instance_a,
+            Arc::new(FakeState::default()),
+        ),
+        (
+            POLICY_INSTANCE_ALIAS_B.to_owned(),
+            instance_b,
+            Arc::new(FakeState::default()),
+        ),
+    ]))
+}
+
+/// UNSET-1: the scheduled configuration of tests (l) and (m) with its Runtime clock at
+/// `clock_unix_ms`.
+fn unset1_config(root: &TempDir, clock_unix_ms: u64) -> RuntimeHostConfig {
+    config(root)
+        .with_runtime_clock(Arc::new(ManualRuntimeClock::new(clock_unix_ms, 0)))
+        .with_scheduled_procedures([
+            "procedure.observe".to_owned(),
+            "procedure.observe-b".to_owned(),
+        ])
+}
+
+/// UNSET-1: the first start of tests (l) and (m): A's dispatch admitted, then the host closed
+/// with it open.
+fn an_open_dispatch_on_a(root: &TempDir) -> OpenDispatchOnA {
+    let (instance_a, instance_b) = (instance_id(), instance_id());
+    let host = RuntimeHost::start(
+        unset1_config(root, POLICY_NOW_UNIX_MS),
+        two_instance_provider(instance_a, instance_b),
+    )
+    .expect("first start");
+    host.activate_policy_catalog(&pending_policy_sources(1))
+        .expect("two-instance catalog activation");
+    let cycle = evaluate_pending_policy(&host, PolicyTrigger::FactsChanged);
+    let evaluation = cycle.evaluation.as_ref().expect("evaluation");
+    let intent = evaluation
+        .dispatch_intents
+        .iter()
+        .find(|intent| intent.instance_id == POLICY_INSTANCE_ALIAS)
+        .unwrap_or_else(|| panic!("A's dispatch intent: {evaluation:#?}"))
+        .clone();
+    let reasons = evaluation
+        .reason_chains
+        .iter()
+        .find(|chain| chain.id == intent.reason_chain_id)
+        .expect("A's reason chain")
+        .clone();
+    record_policy_approval(&host, &intent);
+    let PolicyDispatchAdmission::Granted { context } = host
+        .admit_policy_dispatch(&intent, &reasons, &policy_context(&host, &intent))
+        .expect("A's admission")
+    else {
+        panic!("expected A's dispatch to be granted");
+    };
+    let run_id = context.run_id();
+    host.close().expect("close with A's dispatch open");
+    OpenDispatchOnA {
+        instance_a,
+        instance_b,
+        run_id,
+    }
+}
+
+/// UNSET-1: a restart at `clock_unix_ms` whose start refuses A's settlement; `adjust` changes
+/// its configuration further. The Runtime starts.
+fn restart_refusing_a(
+    root: &TempDir,
+    open: &OpenDispatchOnA,
+    clock_unix_ms: u64,
+    adjust: impl FnOnce(RuntimeHostConfig) -> RuntimeHostConfig,
+) -> RuntimeHost {
+    let host = RuntimeHost::start(
+        adjust(
+            unset1_config(root, clock_unix_ms).with_policy_settlement_refusal_for_test(open.run_id),
+        ),
+        open.provider(),
+    )
+    .expect("a start that cannot settle one run still starts");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host
+}
+
+/// UNSET-1: the outcomes of the run's `runtime.failed` records of `code` at `severity`, in
+/// ledger order.
+fn unset1_records(
+    host: &RuntimeHost,
+    run_id: RunId,
+    severity: EventSeverity,
+    code: &str,
+) -> Vec<actingcommand_contract::outcome::Outcome> {
+    host.query_persisted_events_for_test(EventQuery {
+        run_id: Some(run_id),
+        event_type: Some(EventType::RuntimeFailed),
+        ..EventQuery::default()
+    })
+    .expect("the run's runtime failures")
+    .into_iter()
+    .filter(|event| event.severity() == severity)
+    .filter_map(|event| match event.payload() {
+        EventPayload::Runtime(actingcommand_contract::RuntimePayload::Failed(record))
+            if record.outcome().code().as_str() == code =>
+        {
+            Some(record.outcome().clone())
+        }
+        _ => None,
+    })
+    .collect()
+}
+
+/// UNSET-1: the run's `policy_settlement_dispatch_unsettled` records (Error).
+fn unsettled_errors(
+    host: &RuntimeHost,
+    run_id: RunId,
+) -> Vec<actingcommand_contract::outcome::Outcome> {
+    unset1_records(
+        host,
+        run_id,
+        EventSeverity::Error,
+        "policy_settlement_dispatch_unsettled",
+    )
+}
+
+/// UNSET-1: the run's `policy_settlement_dispatch_left_open` records (Warning).
+fn left_open_warnings(
+    host: &RuntimeHost,
+    run_id: RunId,
+) -> Vec<actingcommand_contract::outcome::Outcome> {
+    unset1_records(
+        host,
+        run_id,
+        EventSeverity::Warning,
+        "policy_settlement_dispatch_left_open",
+    )
+}
+
+/// UNSET-1: the outcome's `note` links.
+fn note_links(
+    outcome: &actingcommand_contract::outcome::Outcome,
+) -> Vec<&actingcommand_contract::outcome::Outcome> {
+    outcome_links(
+        outcome,
+        actingcommand_contract::outcome::CauseRelation::Note,
+    )
+}
+
+/// UNSET-1: A's scheduling pause, if any.
+fn pause_of_a(host: &RuntimeHost) -> Option<actingcommand_contract::InstancePauseState> {
+    let (_, paused) = host
+        .scheduling_pauses_for_test()
+        .expect("scheduling pauses");
+    paused.get(POLICY_INSTANCE_ALIAS).cloned()
+}
+
+/// UNSET-1: a person lifts A's pause after looking (`actingctl resume` of A).
+fn resume_a(host: &RuntimeHost) {
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let receipt = host
+        .process_request_for_test(
+            &runtime_request(
+                &ids,
+                RuntimeOperation::ResumeScheduling {
+                    scope: actingcommand_contract::SchedulingPauseScope::Instance {
+                        instance_alias: POLICY_INSTANCE_ALIAS.to_owned(),
+                    },
+                    expected: None,
+                },
+            ),
+            ConnectionId::new(1).expect("connection"),
+        )
+        .expect("resume receipt");
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{receipt:?}"
+    );
+    assert!(pause_of_a(host).is_none(), "A's pause is lifted");
+}
+
+/// UNSET-1 test 1: the first restart that cannot settle A's dispatch holds as before: one Error
+/// naming the run and the refusal, without a note (the run's records were read), and A paused
+/// with that code as its reason.
+fn first_hold_of_a(root: &TempDir, open: &OpenDispatchOnA) -> RuntimeHost {
+    let host = restart_refusing_a(root, open, POLICY_RESTART_UNIX_MS, |config| config);
+    let errors = unsettled_errors(&host, open.run_id);
+    assert_eq!(errors.len(), 1, "one Error naming the run: {errors:#?}");
+    assert_eq!(
+        outcome_str(&errors[0], "failure_code"),
+        Some(UNSET1_REFUSAL)
+    );
+    assert!(note_links(&errors[0]).is_empty(), "{errors:#?}");
+    assert!(left_open_warnings(&host, open.run_id).is_empty());
+    let pause = pause_of_a(&host).expect("A's instance is paused");
+    assert_eq!(
+        pause.pause_reason.as_str(),
+        "policy_settlement_dispatch_unsettled"
+    );
+    host
+}
+
+/// UNSET-1 test 2 (test 1 at its first restart): after a person lifted A's first pause, a later
+/// start that refuses the same run records `policy_settlement_dispatch_left_open` (Warning) with
+/// the refusal as its `failure_code`, records no second Error, and does not pause A.
+#[test]
+fn unset1_a_later_start_after_the_lifted_hold_records_left_open_without_a_pause() {
+    let root = TempDir::new().expect("tempdir");
+    let open = an_open_dispatch_on_a(&root);
+    let host = first_hold_of_a(&root, &open);
+    resume_a(&host);
+    host.close().expect("close after the resume");
+
+    let host = restart_refusing_a(&root, &open, POLICY_RESTART_UNIX_MS + 60_000, |config| {
+        config
+    });
+    assert_eq!(
+        unsettled_errors(&host, open.run_id).len(),
+        1,
+        "no second Error"
+    );
+    let left_open = left_open_warnings(&host, open.run_id);
+    assert_eq!(left_open.len(), 1, "one Warning: {left_open:#?}");
+    assert_eq!(
+        outcome_str(&left_open[0], "failure_code"),
+        Some(UNSET1_REFUSAL)
+    );
+    assert_eq!(
+        outcome_str(&left_open[0], "operation"),
+        Some("hold_unsettled_dispatches")
+    );
+    assert!(pause_of_a(&host).is_none(), "A is not paused again");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+/// UNSET-1 test 3: with A's first pause still in place, a later start that refuses the same run
+/// records the Warning and no second Error, and adds no second pause: A's pause is the first
+/// one, restored.
+#[test]
+fn unset1_a_later_start_under_the_first_pause_adds_no_second_pause() {
+    let root = TempDir::new().expect("tempdir");
+    let open = an_open_dispatch_on_a(&root);
+    let host = first_hold_of_a(&root, &open);
+    let first = pause_of_a(&host).expect("A's first pause");
+    host.close().expect("close with A paused");
+
+    let host = restart_refusing_a(&root, &open, POLICY_RESTART_UNIX_MS + 60_000, |config| {
+        config
+    });
+    assert_eq!(
+        unsettled_errors(&host, open.run_id).len(),
+        1,
+        "no second Error"
+    );
+    let left_open = left_open_warnings(&host, open.run_id);
+    assert_eq!(left_open.len(), 1, "one Warning: {left_open:#?}");
+    assert_eq!(
+        outcome_str(&left_open[0], "failure_code"),
+        Some(UNSET1_REFUSAL)
+    );
+    let pause = pause_of_a(&host).expect("A's first pause is still in place");
+    assert_eq!(pause.pause_reason.as_str(), first.pause_reason.as_str());
+    assert_eq!(
+        pause.since_unix_ms, first.since_unix_ms,
+        "the first pause, restored; no second pause"
+    );
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+/// UNSET-1 test 4: the read hold armed right before the start's read of the run's records and
+/// released once that read has returned; whether it held a read.
+struct HeldUnsettledRecordRead {
+    gate: Option<actingcommand_ledger::WriterReadHoldGate>,
+    held: Arc<AtomicBool>,
+}
+
+impl Drop for HeldUnsettledRecordRead {
+    fn drop(&mut self) {
+        if let Some(gate) = self.gate.take() {
+            self.held
+                .store(gate.wait_held(Duration::ZERO), Ordering::SeqCst);
+            gate.release();
+        }
+    }
+}
+
+/// UNSET-1 test 4: installs on this thread the read hold of `root` around the next start's read
+/// of an unsettled dispatch's run records; whether it held the read, once it has returned.
+fn hold_the_unsettled_record_read(root: &Path) -> Arc<AtomicBool> {
+    let held = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&held);
+    let state_root = root.to_path_buf();
+    crate::host::AROUND_UNSETTLED_RECORD_READ.with(|around| {
+        *around.borrow_mut() = Some(Box::new(move || -> Box<dyn std::any::Any> {
+            Box::new(HeldUnsettledRecordRead {
+                gate: Some(
+                    actingcommand_ledger::WriterReadHoldGate::arm(&state_root)
+                        .expect("arm the read hold"),
+                ),
+                held: flag,
+            })
+        }));
+    });
+    held
+}
+
+/// UNSET-1 test 4: after a person lifted A's first pause, a later start whose read of the run's
+/// records fails (the writer does not answer it within the reply limit; a read stopped at its
+/// budget fails the same way) holds as before: a second Error naming the refusal, whose `note`
+/// link is the read's failure, no Warning, and A paused again.
+#[test]
+fn unset1_a_failed_read_of_the_run_records_holds_as_before_and_says_why() {
+    let root = TempDir::new().expect("tempdir");
+    let open = an_open_dispatch_on_a(&root);
+    let host = first_hold_of_a(&root, &open);
+    resume_a(&host);
+    host.close().expect("close after the resume");
+
+    let held = hold_the_unsettled_record_read(root.path());
+    let host = restart_refusing_a(&root, &open, POLICY_RESTART_UNIX_MS + 60_000, |config| {
+        config.with_ledger_reply_timeout(UNSET1_REPLY_TIMEOUT)
+    });
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the read of the run's records was held past the reply limit"
+    );
+    let errors = unsettled_errors(&host, open.run_id);
+    assert_eq!(errors.len(), 2, "the start holds as before: {errors:#?}");
+    let noted = errors
+        .iter()
+        .filter(|outcome| !note_links(outcome).is_empty())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        noted.len(),
+        1,
+        "only the second Error says why: {errors:#?}"
+    );
+    assert_eq!(outcome_str(noted[0], "failure_code"), Some(UNSET1_REFUSAL));
+    assert!(
+        note_links(noted[0]).iter().any(|note| {
+            note.code().as_str() == "writer_response_timeout"
+                && outcome_str(note, "operation") == Some("read_unsettled_dispatch_records")
+        }),
+        "the note is the read's failure: {noted:#?}"
+    );
+    assert!(left_open_warnings(&host, open.run_id).is_empty());
+    let pause = pause_of_a(&host).expect("A is paused again");
+    assert_eq!(
+        pause.pause_reason.as_str(),
+        "policy_settlement_dispatch_unsettled"
+    );
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
 fn two_instance_pending_policy_host(root: &TempDir) -> RuntimeHost {
     let host = RuntimeHost::start(
         config(root),

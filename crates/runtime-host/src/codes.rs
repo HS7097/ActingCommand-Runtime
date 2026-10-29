@@ -2109,6 +2109,7 @@ actingcommand_contract::outcome_locations! {
         ReadTestLedgerHead => "read_test_ledger_head",
         ReadTransferRequest => "read_transfer_request",
         ReadUnsettledDispatchInstance => "read_unsettled_dispatch_instance",
+        ReadUnsettledDispatchRecords => "read_unsettled_dispatch_records",
         RebindInstanceEndpoint => "rebind_instance_endpoint",
         RebuildApprovalProjection => "rebuild_approval_projection",
         ReceiveRuntimeSubscription => "receive_runtime_subscription",

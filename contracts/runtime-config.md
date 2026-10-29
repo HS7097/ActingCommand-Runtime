@@ -90,8 +90,9 @@ read and reported only: nothing is refused by them. Workflow #390 DISC-1's rows:
 Workflow #406 T12's rows: the `touch` section below (default `file`, settable). PERF-B1's rows:
 the `execution` section below (default `file`, settable). Workflow #392 DA-4b-D's rows: the
 `display_safe_area` section below (default `file`, settable) and the per-instance
-`display_safe_area.model` (string, default `section:display_safe_area.model`, settable). A
-manifest key the table does not have fails
+`display_safe_area.model` (string, default `section:display_safe_area.model`, settable). RB-2's
+rows: the `host` section below (string `normal` | `low`, default `file`, not settable: applied
+before the ledger opens; since 0.12.28). A manifest key the table does not have fails
 the start (`config_key_unknown`). The manifest lists the exact keys in row order
 (`recovery_ladder`, `host_claims`, `standard_packs`, `performance`, `scheduling`,
 `ledger_observer`, the two Lab options), then each instance's per-instance keys together.
@@ -363,7 +364,7 @@ both checks ([policy-suspension.md](policy-suspension.md), "Task package suspens
 | Key | Type | Default (`actingd.defaults.json`) |
 |---|---|---|
 | `scheduling.recognition.sample_timeout_retries` | integer `0..=4294967295` | `2` |
-| `scheduling.rerun.condition_codes` | list of codes the catalog lists and has not retired | the model's eight codes |
+| `scheduling.rerun.condition_codes` | list of codes the catalog lists and has not retired | the model's eight codes and, since 0.12.28 (Alice's decision 92, 2026-10-29), `contained_task_paused` ([policy-suspension.md](policy-suspension.md), "Which runs") |
 | `scheduling.rerun.max_per_occurrence` | integer `0..=4294967295` | `2` |
 | `scheduling.rerun.resume_stage` | `s0`…`s4` (vocabulary `pacing_stage`) | `s2` |
 | `scheduling.rerun.resume_settle_ms` | milliseconds | `60000` |
@@ -1028,6 +1029,55 @@ rows are those of `config.parameters.display_safe_area` and, per instance,
 `config.parameters.instance`. What the declarations hold, which insets a frame takes and how a
 broken declaration is refused (`display_map_unresolved` with its `display_problem`) is
 [display-adapter.md](display-adapter.md) section 9.
+
+## The `host` section (RB-2)
+
+RB-2 (Alice's ruling of 2026-10-29 10:2x, 「设回正常」; [v012-register.md](v012-register.md)
+§1.202): the memory priority and the I/O priority actingd gives its own process. After the
+machine's reboot of 2026-10-29 05:23 the watchdog's scheduled task (task priority 7) started
+actingd, and the process inherited the task's memory priority 2 and I/O priority Low: no code set
+them. The operating system evicts the pages of a low memory priority first, so the ledger's cached
+pages (a 7.7 GB file) never stayed in memory and its reads went to disk for hours (6 600 to 8 600
+physical reads a second on its drive); an actingd a deploy starts had normal priorities and did not
+show this. So at every start, right after it read its configuration and before the Runtime host
+starts (before the ledger opens), actingd sets both priorities of its own process to these keys'
+levels and reads them back. **The CPU priority class stays as the process was started** (below
+normal under the watchdog's task): no key names it and the start never changes it.
+
+| Key | Type | Default (`actingd.defaults.json`) | Settable |
+|---|---|---|---|
+| `host.process_memory_priority` | string `normal` \| `low`: Windows' memory priority 5 (`MEMORY_PRIORITY_NORMAL`) or 2 (`MEMORY_PRIORITY_LOW`), set with `SetProcessInformation(ProcessMemoryPriority)` and read back with `GetProcessInformation` | `normal` | no (applied before the ledger opens) |
+| `host.process_io_priority` | string `normal` \| `low`: Windows' I/O priority hint 2 (`IoPriorityNormal`) or 1 (`IoPriorityLow`), set with ntdll's `NtSetInformationProcess(ProcessIoPriority)` and read back with `NtQueryInformationProcess`, both resolved at run time | `normal` | no (applied before the ledger opens) |
+
+- **Read at start only.** Both keys are read once, from the configuration in effect at the start
+  (the file and the defaults file; no instruction value is known before the ledger opens), so
+  `ConfigureSettings` refuses them (`config_key_not_settable`); the file changes them at the next
+  start. `actingd-config` revision 20 ([component-interfaces.md](component-interfaces.md)) adds
+  the section; a file that does not name it keeps its revision.
+- **Refusal.** A value that is no string is `config_value_invalid` (`wrong_type`), a string other
+  than `normal` or `low` `config_value_invalid` (`out_of_range`), each naming its key (`config_key`),
+  at start and in `check-config`. `check-config` checks the section and applies nothing.
+- **The I/O priority call.** Windows documents no call that sets a process's I/O priority: its
+  `SetPriorityClass(PROCESS_MODE_BACKGROUND_END)` only ends a background mode the process entered
+  itself (a process of a below-normal task is in none), and `SetFileInformationByHandle`
+  (`FileIoPriorityHintInfo`) sets one file handle's hint. The native class `ProcessIoPriority` has
+  kept its number and values since Windows Vista. What was observed: on 2026-10-29 the actingd
+  the watchdog's scheduled task started read I/O priority Low (1) through this class. Raising a
+  process's own I/O priority to normal needs no privilege. Its risk: a later Windows may change or
+  refuse it; then the call fails with its NTSTATUS, recorded as below, and the start goes on.
+- **Record.** The start writes one outcome as its daemon lines (`OUTCOME actingd:`), at once,
+  before the ledger opens: `host_process_priority_applied` (info) when every call succeeded and
+  each level read back is the one asked for, else `host_process_priority_failed` (warning). Both
+  carry `memory_priority_requested` and `io_priority_requested` (the Windows levels above) and,
+  where the read succeeded, `memory_priority_read` and `io_priority_read`; each failed call is a
+  `caused_by` `foreign_os_error` link whose `operation` names it (`process_memory_priority_set`,
+  `process_memory_priority_read`, `process_io_priority_set`, `process_io_priority_read`; a native
+  call's NTSTATUS is its `raw_code`, `0x` and eight lowercase hex digits such as `0xc0000022`).
+  Memory is set and read first, then I/O; a failed call does not skip the next. **A failure is
+  never fatal**: the Runtime starts with whatever priorities the process has.
+- **Elsewhere.** On an operating system without these priorities (not Windows) nothing is set
+  or read, and the record is `host_process_priority_applied` with the two levels asked for and no
+  level read. The tests apply the section through a fake of the same calls.
 
 ## Facts
 
