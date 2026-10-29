@@ -313,7 +313,12 @@ installer at v0.11.0.
 acsetup applies the checks as follows; `actingctl install` applies the same checks to a
 single-location root (Workflow #421, [install-cli.md](install-cli.md), "Interface checks"),
 where the slots are the live build in `runtime\` and `tools\` (Rp) and a kept build under
-`install\builds\` (R*). Parties:
+`install\builds\` (R*). Since 0.12.30 (Workflow #429 A.4 a, slice R-15a) `actingctl install`
+also has the U\* side of the edges below: U\* is judged by the declaration its UI build carries
+(the UI's `component-interfaces.json`, copied into the UI manifest's `interfaces`), and one that
+does not name `runtime-outcomes` counts as [0, 0] (Parse rules). On a single-location root the
+`install-selection` row has no edge: the root holds no `install\active.json`, so nothing writes a
+selection that R\* or U\* would read ([install-cli.md](install-cli.md), "UI edges"). Parties:
 
 | Party | Meaning |
 |---|---|
