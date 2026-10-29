@@ -157,6 +157,8 @@ const STARTUP_PACKAGE_CONNECTION_VALUE: u64 = u64::MAX - 2;
 const CONNECTION_PREPARATION_CONNECTION_VALUE: u64 = u64::MAX - 3;
 
 mod agent_control;
+// UPD-1: the host's writes of `health.application.update_required`.
+mod application_update;
 mod backend_open;
 // Workflow #386 SR-4a3: complete silence at the host's own entries, read from the blackouts.
 mod blackout_silence;
@@ -2348,6 +2350,9 @@ impl RuntimeHost {
                 HostLocation::PrepareAgentDispatcher,
             )? = agent_dispatcher;
             shared.seed_policy_instance_facts()?;
+            // UPD-1 (design §3.3): `health.application.update_required` false for each configured
+            // instance without a record.
+            shared.seed_application_update_facts()?;
             // Workflow #387 D1b: the configuration facts, and the instruction values restored
             // before any instance is prepared.
             if let Some(config_manifest) = &config.config_manifest {
@@ -4547,6 +4552,7 @@ impl RuntimeHost {
                     capture_summary: None,
                     task_timing: None,
                     resource_readings: None,
+                    store_update_alias: None,
                 },
             )
             .map(|event| terminal(&event))
@@ -4636,6 +4642,7 @@ impl RuntimeHost {
                     capture_summary: None,
                     task_timing: None,
                     resource_readings: None,
+                    store_update_alias: None,
                 },
             )
             .map(|event| terminal(&event))
@@ -4797,6 +4804,51 @@ impl RuntimeHost {
     ) -> RuntimeHostResult<crate::run_duration::RunDurations> {
         self.shared_ref(crate::codes::RunDurationLocation::RecordSample)?
             .run_durations_for_test(alias)
+    }
+
+    /// UPD-1, test only: records `required` as the instance `alias`'s
+    /// `health.application.update_required`, as the end of a run that met the update dialog
+    /// (true) or a store update package's success (false) writes it. UPD-1 fix round 2: a true
+    /// and a false each come from a source of their own (`application_update:test`,
+    /// `application_update:test:cleared`), as two runs' writes do: the store refuses one source
+    /// that names two values (`fact_source_snapshot_identity_conflict`, fatal), so a test that
+    /// sets the fact true, false and true again records three ordinary replacements.
+    #[cfg(test)]
+    pub(crate) fn record_application_update_for_test(
+        &self,
+        alias: &str,
+        required: bool,
+    ) -> RuntimeHostResult<()> {
+        let source = if required {
+            "application_update:test"
+        } else {
+            "application_update:test:cleared"
+        };
+        self.shared_ref(HostLocation::SeedPolicyInstanceFacts)?
+            .record_application_update(alias, required, source.to_owned())
+    }
+
+    /// UPD-1, test only: the instance `alias`'s `health.application.update_required` as the
+    /// store holds it now (`None` without a record) and its `source_snapshot_id`.
+    #[cfg(test)]
+    pub(crate) fn application_update_for_test(
+        &self,
+        alias: &str,
+    ) -> RuntimeHostResult<Option<(bool, String)>> {
+        let active = self
+            .shared_ref(HostLocation::SeedPolicyInstanceFacts)?
+            .active_fact_revision(
+                &FactScope::Instance {
+                    instance_id: alias.to_owned(),
+                },
+                crate::application_update::APPLICATION_UPDATE_FACT_KEY,
+            )?;
+        Ok(active.and_then(|(record, _, _)| match record.content {
+            FactContent::Inline {
+                value: ContractFactValue::Boolean(value),
+            } => Some((value, record.source_snapshot_id)),
+            _ => None,
+        }))
     }
 
     /// SCH-M ED-2, test only: a scheduled run's preparation admitted `package_id` at `path`, as

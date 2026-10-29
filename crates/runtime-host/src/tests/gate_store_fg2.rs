@@ -271,7 +271,8 @@ fn page(id: &str, required: &[&str]) -> Value {
 /// package carries an empty navigation resource: a Lab operation's observation admits only a
 /// package with pack, pages and navigation (`gate_412_b3_s2`'s package carries the same), so T7's
 /// Lab operation of `tap_update` is admitted and reaches its input; a run reads no navigation.
-fn store_package() -> Vec<u8> {
+/// UPD-1 (`gate_upd1`) binds it as a scheduled store update task's package.
+pub(super) fn store_package() -> Vec<u8> {
     let space = json!({"width": 16, "height": 9});
     let control = json!({
         "schema_version": "Lab-1y.control.v2",
@@ -963,5 +964,128 @@ fn store_fg2_t9_the_declared_store_in_front_does_not_hold_a_store_run_on_a_hands
         "{receipt:?}"
     );
     assert_eq!(run.inputs(), 1, "the ordinary run did not start");
+    run.close();
+}
+
+// ---- UPD-1 (design-upd1 §3.3, §6; register §1.215).
+
+/// The sequences of the publications of `health.application.update_required` false for
+/// [`ALIAS`], and of the successful terminals (`task.completed`), in ledger order.
+fn cleared_and_completed(run: &Fixture) -> (Vec<u64>, Vec<u64>) {
+    let events = run
+        .host
+        .query_persisted_events_for_test(EventQuery::default())
+        .expect("the runs' records");
+    let scope = FactScope::Instance {
+        instance_id: ALIAS.to_owned(),
+    };
+    let cleared = events
+        .iter()
+        .filter(|event| match event.payload() {
+            EventPayload::Fact(actingcommand_contract::FactPayload::Published(payload)) => {
+                let record = payload.record();
+                record.key == "health.application.update_required"
+                    && record.scope == scope
+                    && record.content
+                        == FactContent::Inline {
+                            value: ContractFactValue::Boolean(false),
+                        }
+            }
+            _ => false,
+        })
+        .map(PersistedEvent::sequence)
+        .collect();
+    let completed = events
+        .iter()
+        .filter(|event| event.event_type() == EventType::TaskCompleted)
+        .map(PersistedEvent::sequence)
+        .collect();
+    (cleared, completed)
+}
+
+// UPD-1 A5: the instance waits for its client update (the fact true, as a run that met the
+// dialog leaves it). A store update package's own run that succeeds, after its store tap
+// (`updated`, T1's scene) or with no update needed (`not_needed`, T5's scene), records the fact
+// false before its terminal, from the run (`application_update:run:<run_id>`). Both are direct
+// runs (`ac_run_pack`), the manual way to lift the gate.
+#[test]
+fn upd1_a5_a_store_update_success_clears_the_fact_before_its_terminal() {
+    let cases: [(&str, Vec<Segment>, &str); 2] = [
+        (
+            "updated",
+            vec![
+                segment(&["dialog"], GAME),
+                segment(&["listing"], STORE),
+                segment(&["updating", "updating", "done"], STORE),
+                segment(&["home"], GAME),
+            ],
+            UPDATED,
+        ),
+        (
+            "not needed",
+            vec![
+                segment(&["dialog"], GAME),
+                segment(&["done"], STORE),
+                segment(&["home"], GAME),
+            ],
+            NOT_NEEDED,
+        ),
+    ];
+    for (case, segments, key) in cases {
+        let run = fixture(&[STORE]);
+        run.host
+            .record_application_update_for_test(ALIAS, true)
+            .expect("the dialog's fact");
+        scene(&run, segments);
+        assert_completed_on_home(&run.run_store());
+        assert_eq!(run.outcome_keys(), [Some(key.to_owned())], "{case}");
+        let (value, source) = run
+            .host
+            .application_update_for_test(ALIAS)
+            .expect("the instance fact")
+            .expect("a record");
+        assert!(!value, "{case}: cleared");
+        assert!(
+            source.starts_with("application_update:run:"),
+            "{case}: {source}"
+        );
+        let (cleared, completed) = cleared_and_completed(&run);
+        let ([cleared], [completed]) = (cleared.as_slice(), completed.as_slice()) else {
+            panic!("{case}: one clear and one terminal: {cleared:?} {completed:?}");
+        };
+        assert!(cleared < completed, "{case}: the fact before the terminal");
+        run.close();
+    }
+}
+
+// UPD-1 A6: a store update package's run that fails (another application's listing, a sign-in
+// page) leaves the fact true: the instance still waits for its client update.
+#[test]
+fn upd1_a6_a_failed_store_update_keeps_the_fact() {
+    let run = fixture(&[STORE]);
+    run.host
+        .record_application_update_for_test(ALIAS, true)
+        .expect("the dialog's fact");
+    scene(
+        &run,
+        vec![
+            segment(&["dialog"], GAME),
+            segment(&["another_listing"], STORE),
+        ],
+    );
+    assert_ended_on_error_page(&run, &run.run_store(), "another_listing");
+    scene(
+        &run,
+        vec![segment(&["dialog"], GAME), segment(&["sign_in"], STORE)],
+    );
+    assert_ended_on_error_page(&run, &run.run_store(), "sign_in");
+    assert_eq!(
+        run.host
+            .application_update_for_test(ALIAS)
+            .expect("the instance fact"),
+        Some((true, "application_update:test".to_owned())),
+        "the fact is as the dialog left it"
+    );
+    assert!(cleared_and_completed(&run).0.is_empty(), "nothing cleared");
     run.close();
 }

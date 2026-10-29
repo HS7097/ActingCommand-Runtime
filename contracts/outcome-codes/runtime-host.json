@@ -22587,6 +22587,70 @@
       "description": "SCH-M ED-2 (Fail Loud): a row of the instance's health.run_duration record (instance_id, the instance alias) was dropped, or a run's sample was not recorded: a new package's row beyond the 256-row bound dropped the row with the oldest at (package_id that row's); the write dropped a stored row it could not read (package_id when it could be read); or the store refused the record's publication (package_id the run's, the refusal as the caused_by link). That package's next expected duration is its declared one until it has runs again. One runtime.failed record with system links (operation record_run_duration_sample) and the same line in the daemon's log.",
       "common_causes": "More than 256 task packages ran on one instance; or the instance fact store is full (fact_store_capacity_exceeded as the cause).",
       "handling": "None for the bound: the oldest package gets its samples again from its next runs. For a refusal, read the cause; a full store is booked in the capacity ledger of contracts/instance-fact-store.md."
+    },
+    "contained_task_application_update_required": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "page_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.30",
+      "description": "UPD-1 (contracts/package-reference.md, Shared interrupt pages): a shared interrupt page whose interrupts.json entry declares result application_update_required (page_id) ended the run after its handler (then end_run), or after its handler failed short of fatal (UPD-1 fix round 1: the failure is linked as related): the game says its client must be updated. The run ends with no further input, and before its terminal the Runtime records the instance fact health.application.update_required true, which holds every other task of the instance until a store_update package's run succeeds there. A scheduled run ends by a condition under the default scheduling.rerun.condition_codes (no streak, counts given back, its rerun owed after the update); it never accumulates toward a pause. Its ladder class is none, so no default trigger opens a recovery ladder; a ladder rung's package run that ends with it stops the ladder (recovery_ladder_interrupted). A startup package that ends with it is a runtime.failed warning.",
+      "common_causes": "The game released a client version that the installed one may no longer connect with.",
+      "handling": "None when the game root's schedule.json has a rule for its store_update package: that rule runs on the fact and its success clears the fact. Otherwise update the client by hand and run the store update package directly (ac_run_pack); its success clears the fact."
+    },
+    "application_update_pending": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "fact_key": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.30",
+      "description": "UPD-1 (contracts/scheduling-blackout.md, Order of the deferrals, position 4a): the candidate's instance (instance_id, the instance alias) waits for its game's client update, its fact health.application.update_required (fact_key) being true. Every task of the instance except a store_update package's is deferred with no wake of its own, owed reruns, immediate reruns, remedy requests and the fact refresh (fact_refresh_pending with this code as gate_code) included; the change of the fact wakes the evaluation. Other instances are not affected. The idle plan wakes no instance for such a task.",
+      "common_causes": "A run on the instance met the game's update dialog, and no store_update package's run has succeeded there since.",
+      "handling": "None: the store update rule runs on the fact. When none exists, or its task is paused, update the client and run the store update package directly (ac_run_pack)."
+    },
+    "application_update_key_reserved": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.30",
+      "description": "UPD-1 (contracts/instance-fact-store.md, Application update facts): a publication named health.application.update_required (fact_key), which only the Runtime writes (true when a run ends with contained_task_application_update_required, false when a store_update package's run succeeds, false as a start's seed). A client's PublishFact or PublishFacts is refused before the fact write gate and nothing is appended. Not fatal.",
+      "common_causes": "A script that copies or restores an instance's facts, or tries to lift the gate by hand.",
+      "handling": "Leave the key out. To lift the gate, run the instance's store update package directly (ac_run_pack): its success clears the fact."
     }
   },
   "locations": {

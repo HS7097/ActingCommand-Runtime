@@ -554,15 +554,17 @@ instances is booked once.
 | feature locks | `session.feature.<feature_key>` | instance | *F*: the distinct feature keys the bound packages declare | SR-5a, SR-5b | 0 (no package declares `feature_locks` yet) |
 | instance performance baseline | `health.perf_baseline.<signal>.<backend>` | instance | 2 (two signals × backends in use, usually one) | P-m | 6 |
 | run-duration samples | `health.run_duration` | instance | 1 (one record of at most 256 package rows; "Run duration facts" below) | SCH-M ED-2 | 3 |
+| application update | `health.application.update_required` | instance | 1 ("Application update facts" below; seeded at the start) | UPD-1 (0.12.30) | 3 (5 with five instances) |
 | instruction lines (reserved) | `session.instructions` | instance, server, game | ≤ 3 (one per scope used) | GOAL-1 | ≤ 9 |
 | display facts | `display.frame_extent`, `.rotation`, `.orientation`, `.aspect` | instance | 4 for an instance bound to a device ("Display facts" above); 0 otherwise | DA-A (#392) | 12 |
 | selector identities (#308 SEL-L2) | — | — | 0: the business identity domain is package data, not a fact | — | 0 |
 
-- **Today's deployment total**: 9 + 3 + *O* + 44 + 9 + 6 + 0 + 6 + 3 + 9 + 12 = **101 + *O***,
-  well under 256.
+- **Today's deployment total**: 9 + 3 + *O* + 44 + 9 + 6 + 0 + 6 + 3 + 3 + 9 + 12 = **104 + *O***
+  (UPD-1's application update row included), well under 256.
 - **Five instances** (two more with unknown packages): 15 + 5 + *O* + *R₄* + *R₅* + 44 + 15 + 10 + 10
-  + 5 + 15 + 20 = **139 + *O* + *R₄* + *R₅* + *F***, the 20 being the display facts of five instances
-  bound to a device; the reading keys of new packages are the variable that matters.
+  + 5 + 5 + 15 + 20 = **144 + *O* + *R₄* + *R₅* + *F*** (UPD-1's 5 included), the 20 being the
+  display facts of five instances bound to a device; the reading keys of new packages are the
+  variable that matters.
 - DA-4's display keys (`display.logical_extent`, `display.safe_area.reported`,
   `display.safe_area.declared`, `display.map`; register §1.25 X10) have no writer on main and are
   not counted; DA-4 books them here when it adds them.
@@ -824,6 +826,64 @@ E ([scheduling/README.md](scheduling/README.md), "Settlement Feedback And Eligib
   `combined_policy_snapshot_id`; a sample that changes a pair's E refuses an intent evaluated
   before it as `policy_facts_stale`. With no sample, with the switch off, or with the package's id
   not read yet, the members are absent and the input is today's, byte for byte.
+
+## Application update facts (UPD-1, since 0.12.30)
+
+Design `rd-1029/design-upd1.md` §3 (Alice's rulings 95 and 96 of 2026-10-29: a pack declares its
+store, the game's update dialog invokes the store update package automatically; register
+§1.215). Whether the instance's game client waits for its update: a run met the page that
+`interrupts.json` declares with `result: "application_update_required"`
+([package-reference.md](package-reference.md), "Standard package root"), and no store update
+package's run has succeeded there since.
+
+| Key | Value | Scope |
+| --- | --- | --- |
+| `health.application.update_required` | `boolean` | `instance` only |
+
+- **Writers.** Only the Runtime writes the key, in one `fact.published` each (purpose
+  `ApplicationUpdate`, origin and actor `runtime`, `source_detector` `runtime.application-update`,
+  confidence 1000, no expiry, no `invalidate_on`, `resource_bundle_hash` the SHA-256 of the alias,
+  the observation time and the value; a run's record is observed at max(now on the Runtime clock,
+  the previous record's observation + 1), the start's seed at 1, see below):
+  - `true`, before the terminal of any run (scheduled, direct, a startup package's, a ladder
+    rung's) that the page ended with `contained_task_application_update_required`, after its
+    handler, or (fix round 1) after its handler failed short of fatal
+    (`source_snapshot_id` `application_update:run:<run_id>`). A refusal of the store fails that
+    run with the refusal (Fail Loud); a fatal failure halts as any other.
+  - `false`, before the successful terminal of the own run of a package whose `control.json`
+    declares `store_update`, scheduled or direct (`application_update:run:<run_id>`), after its
+    readings are published. A refusal of the store fails the run instead (its terminal carries
+    the refusal; the fact stays as it was). A failed store update run writes nothing.
+  - `false`, at the start, beside the policy instance seeds ("Seeding at startup"), for each
+    configured policy instance that has no record of the key (`application_update:seed`), so a
+    store update rule's trigger is never Unknown. A record already there (`true` included) is
+    kept, and a second start appends nothing. A refusal fails the start, as a seed's does. The
+    seed is observed at 1, the earliest time a record may carry (fix round 2): it states the
+    default, not something the Runtime saw. The fact is an evaluation input, and the policy
+    evaluator refuses a whole input that holds a fact observed after the evaluation's time
+    (`policy_evaluation_rejected`; `policy_evaluation_input_invalid` for a forward projection).
+    Dated at the start, the seed made every evaluation or forward projection asked about an
+    earlier time refuse its input; dated at 1, it never does, and the first record a run writes is
+    always newer than it.
+  A write of the value the active record already holds appends nothing.
+- **Reserved key.** A `PublishFact` / `PublishFacts` of the key from any client, and any other
+  publication path of the Runtime, is refused before the fact write gate as the non-fatal request
+  error `application_update_key_reserved` (`fact_key`), with nothing appended. To lift the gate by
+  hand, run the instance's store update package directly (`ac_run_pack`): its success clears the
+  fact, also when no update was needed.
+- **Lifetime.** The record never expires. A restart (it is an ordinary tagged record, loaded with
+  the store), a takeover, and an emulator stop or restart leave it as it is: the client is still
+  the old one. A timeline event whose `invalidates_fact_prefixes` covers the key (the key or any
+  prefix of it) would invalidate it, so the composer refuses a `schedule.json` that writes one
+  (UPD-1 fix round 5, [standard-pack-schedule.md](standard-pack-schedule.md), "The store update
+  rule").
+- **Projection.** It is an ordinary evaluation fact: the projection passes it to the evaluation
+  (a catalog predicate reads it; its change changes `fact_snapshot_id`, so an intent evaluated
+  before it is `policy_facts_stale` at admission). A missing `health.` key raises no reading
+  refresh. While it is `true`, position 4a of the eligibility closure holds every candidate of the
+  instance except a store update package's task ([scheduling-blackout.md](scheduling-blackout.md),
+  "Order of the deferrals"; [scheduling/README.md](scheduling/README.md), "Application update
+  hold").
 
 ## Run parameters (`session.dispatch.`, never stored)
 

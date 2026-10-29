@@ -811,6 +811,49 @@ their runs go on in parallel (#427-A):
   the decisions, the schedule explanation (`why` keeps its values) and, when a dispatch decision
   record lists such a candidate, as its `why`.
 
+## Application Update Hold (UPD-1)
+
+Since 0.12.30 (design `rd-1029/design-upd1.md` §4, §6; Alice's rulings 95 and 96 of
+2026-10-29; register §1.215). When a run meets the game's "client out of date" dialog (an
+`interrupts.json` page with `result: "application_update_required"`,
+[package-reference.md](../package-reference.md)), the Runtime records the instance fact
+`health.application.update_required` true ([instance-fact-store.md](../instance-fact-store.md),
+"Application update facts") and the instance waits for its update:
+
+- **The hold.** Position 4a of the eligibility closure
+  ([scheduling-blackout.md](../scheduling-blackout.md), "Order of the deferrals") defers every
+  candidate of that instance with `application_update_pending` (`instance_id`, `fact_key`) and no
+  wake, except a store update task: a task whose procedure's bound package declares
+  `store_update`. The fact refresh is held too (`fact_refresh_pending`, `gate_code`
+  `application_update_pending`). The hold does not depend on the ranking (fix round 3): a
+  candidate behind the store update task that took the instance, behind the shared run limits or
+  held by a chain handover is deferred `application_update_pending` too, never left eligible
+  with `instance_already_selected`. Other instances are not held (#419). Nothing in a catalog
+  names the hold: it is the Runtime's, so every rule of the game is held without a change.
+- **The store update rule.** The game root's `schedule.json` writes one rule per server for its
+  store update package whose trigger is the typed `fact` predicate
+  `health.application.update_required eq true` (`max_age_ms` null), with its own `cooldown_ms`,
+  the time before it looks again when the store has no new version yet
+  ([standard-pack-schedule.md](../standard-pack-schedule.md)). The rule passes position 4a and
+  every other gate as any task does.
+- **After the update.** The store update package's successful run (with or without an update)
+  records the fact false before its terminal; the evaluation it wakes lets the instance's
+  candidates through again, the runs the dialog interrupted first, as owed reruns
+  (`policy_rerun_owed`, "Condition termination and owed reruns" of
+  [policy-suspension.md](../policy-suspension.md)); the rest follow their own triggers. The path
+  makes no startup claim. A failed store update run leaves the fact true and the instance held;
+  its task fails as any task does.
+- **Explanation.** `actingctl schedule` and `ac_schedule` show `application_update_pending` as a
+  held candidate's `why`; `ac_facts --instance` shows the fact and the run that wrote it. The idle
+  plan counts a held decision neither due nor as a wake, so it does not wake the instance for it.
+  The gate only sees candidates, so (fix round 1) the idle plan reads the waiting instances and
+  the store update tasks of the same evaluation and counts no decision of a waiting instance but
+  the store update task's, whatever its reason: a task in its cooldown or before its clock
+  trigger, and the fact refresh, wake no waiting instance; the store update task's own cooldown
+  still does.
+- **No configuration key.** The store update rule's cadence is its `cooldown_ms`; the hold and
+  its order are code.
+
 ## Dispatch Decision Record
 
 Workflow #308 RT-S1c. Every selected candidate's reason chain ends with the

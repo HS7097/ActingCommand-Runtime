@@ -231,7 +231,8 @@ fn strategic_report_uses_authoritative_policy_projection() {
     assert_eq!(pool.shortfall, Some(60));
     assert_eq!(pool.capacity, Some(50));
     assert_eq!(pool.urgency_milli, Some(1_200));
-    // The three configuration seeds plus the one fact this test publishes.
+    // The three configuration seeds, (UPD-1 A7, 0.12.30) the application update seed, plus the one
+    // fact this test publishes.
     assert_eq!(
         projected_events(
             &mut client,
@@ -241,7 +242,7 @@ fn strategic_report_uses_authoritative_policy_projection() {
             }
         )
         .len(),
-        4
+        5
     );
     let signal_events = projected_events(
         &mut client,

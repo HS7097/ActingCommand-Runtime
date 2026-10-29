@@ -53,7 +53,9 @@
 //! --schedule`, or a game root that holds it), the file is composed by the Runtime's composer with
 //! one bound instance per server ([`crate::standard_pack_schedule`]); a refusal is
 //! `standard_pack_root_invalid` naming it, and each unclassified package is one
-//! `standard_pack_package_unclassified` warning, after the remedy report.
+//! `standard_pack_package_unclassified` warning, after the remedy report. UPD-1 fix round 1
+//! (review L6): then a rule that runs a store update package (`store_update`) with a `cooldown_ms`
+//! of 0 is refused the same way, `schedule_invalid` at its `cooldown_ms`.
 //!
 //! Last, with or without `pages.json`, the remedy report (Workflow #411 B15, contracts/remedies.md
 //! section 10): every package of the root is read by the Runtime's metadata reader, and one
@@ -77,7 +79,7 @@ use actingcommand_contract::{
     STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
     STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE,
     StandardPackProblem, StandardPackRoot, StandardPackRootBytes, StandardPackRootIssue,
-    read_standard_pack_root,
+    parse_standard_pack_schedule, read_standard_pack_root,
 };
 use actingcommand_execution_kernel::{
     ContainedTaskError, NavigationPackageDescriptor, PreparedContainedTask, RemedyDeclarations,
@@ -291,6 +293,14 @@ pub fn check_standard_pack_root(
             schedule,
             &root.join(STANDARD_PACK_SCHEDULE_FILE),
         )?);
+        // UPD-1 fix round 1 (review L6): a store update rule needs a cooldown.
+        store_update_cooldowns(
+            &game,
+            &checked,
+            schedule,
+            &root.join(STANDARD_PACK_SCHEDULE_FILE),
+            &|directory: &str| root.join(directory),
+        )?;
     }
     Ok(StandardPackCheckResponse {
         status: "checked".to_owned(),
@@ -511,7 +521,9 @@ fn preprocess_divergences(
 /// `package_bundle_interrupt_page_shadowed` warning per package of the registry and shared
 /// interrupt page it declares, in registry order and then `interrupts.json` order; nothing is
 /// refused. A feature package of `pages.json` (its pages are the list's) and a handler of the
-/// page (its entry holds the page) declare it by their part and are not reported.
+/// page (its entry holds the page) declare it by their part and are not reported; UPD-1 (design
+/// §7): so does a store update package (`store_update`) for a page whose entry names a `result`
+/// (the page it starts from, which the shared interrupt must not take from its own run).
 fn shadowed_interrupt_pages(
     root: &StandardPackRoot,
     features: &[String],
@@ -531,7 +543,8 @@ fn shadowed_interrupt_pages(
                 .handlers
                 .iter()
                 .any(|handler| handler == package_id);
-            if !handles && package.page_ids().contains(&interrupt.page) {
+            let store_entry = interrupt.result.is_some() && package.declares_store_update();
+            if !handles && !store_entry && package.page_ids().contains(&interrupt.page) {
                 warnings.push(
                     Outcome::new(ResourceToolingCode::PackageBundleInterruptPageShadowed)
                         .package_id(package_id)
@@ -706,6 +719,71 @@ fn declared_parameters(provided: &ProvidedCapability) -> BTreeMap<&str, (BTreeSe
             )
         })
         .collect()
+}
+
+/// UPD-1 fix round 1 (review L6; contracts/standard-pack-schedule.md, "The store update rule"):
+/// a rule that runs a store update package (`control.json` `store_update`, read by the Runtime's
+/// metadata reader) looks again only after its `cooldown_ms` when the store has no new version
+/// yet; with 0 it would run the store and the game in turn without a pause. So such a rule of
+/// `schedule` (the bytes of `schedule.json` at `path`, already composed by `check_schedule`) whose
+/// `cooldown_ms` is 0 is `standard_pack_root_invalid`, `schedule_invalid` at
+/// `/rules/<index>/cooldown_ms`. A rule without the member never gets here: the composer refuses
+/// it, `cooldown_ms` being a required V2 task member. Other rules are not judged.
+pub(crate) fn store_update_cooldowns(
+    game: &str,
+    root: &StandardPackRoot,
+    schedule: &[u8],
+    path: &Path,
+    pack_directory: &dyn Fn(&str) -> PathBuf,
+) -> LabResult<()> {
+    let schedule =
+        parse_standard_pack_schedule(schedule).map_err(|issue| root_invalid(game, path, &issue))?;
+    let mut store_update = BTreeMap::<&str, bool>::new();
+    for (index, rule) in schedule.rules.iter().enumerate() {
+        if rule
+            .body
+            .get("cooldown_ms")
+            .and_then(serde_json::Value::as_u64)
+            != Some(0)
+        {
+            continue;
+        }
+        let declares = match store_update.get(rule.package_id.as_str()) {
+            Some(declares) => *declares,
+            None => {
+                let entry = root.registry.get(rule.package_id.as_str()).ok_or_else(|| {
+                    LabError::package_invalid(format!(
+                        "{} is no package of the bundle",
+                        rule.package_id
+                    ))
+                })?;
+                let package = pack_directory(&entry.directory);
+                let declares = PreparedContainedTask::read_remedy_declarations(
+                    CHECK_LABEL,
+                    &package,
+                    Instant::now() + PACK_DEADLINE,
+                )
+                .map_err(|error| {
+                    LabError::package_invalid(format!("{}: {error}", package.display()))
+                })?
+                .store_update;
+                store_update.insert(rule.package_id.as_str(), declares);
+                declares
+            }
+        };
+        if declares {
+            return Err(root_invalid(
+                game,
+                path,
+                &StandardPackRootIssue {
+                    file: STANDARD_PACK_SCHEDULE_FILE,
+                    problem: StandardPackProblem::ScheduleInvalid,
+                    pointer: format!("/rules/{index}/cooldown_ms"),
+                },
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// The packages of one game root, each admitted once by its path.

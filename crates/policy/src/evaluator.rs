@@ -258,6 +258,56 @@ pub struct RunSlots {
     pub max_concurrent_runs: Option<u16>,
 }
 
+/// UPD-1 fix round 3 (`contracts/scheduling-blackout.md`, "Order of the deferrals", position 4a):
+/// the instances a Runtime gate holds whole, but for some exempt tasks, whatever the ranking. The
+/// eligibility callback answers the gate for each candidate it is asked about; the round settles
+/// some candidates before it asks (one behind its instance's selected candidate, one behind the
+/// shared run limits, one a chain handover holds), and such a candidate of a held instance waits
+/// here with the hold's reason and no wake, a fact refresh naming the hold's gate. So no candidate
+/// of a held instance but an exempt task is ever left eligible and unselected. The Runtime passes
+/// them when it evaluates a cycle ([`evaluate_with_instance_holds`]); every other entry point has
+/// none. Memory only: none of it enters a snapshot or a decision identity.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InstanceHolds {
+    holds: BTreeMap<String, WholeInstanceHold>,
+}
+
+/// One held instance of [`InstanceHolds`] (named apart from the fact refresh's [`InstanceHold`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WholeInstanceHold {
+    reason: DecisionReason,
+    gate: Code,
+    exempt_tasks: BTreeSet<String>,
+}
+
+impl InstanceHolds {
+    /// Holds every candidate of `instance_id` but those of `exempt_tasks` with `reason` (no wake);
+    /// a fact refresh's deferral names `gate`. A later hold of the same instance replaces it.
+    pub fn hold(
+        &mut self,
+        instance_id: impl Into<String>,
+        reason: DecisionReason,
+        gate: Code,
+        exempt_tasks: BTreeSet<String>,
+    ) {
+        self.holds.insert(
+            instance_id.into(),
+            WholeInstanceHold {
+                reason,
+                gate,
+                exempt_tasks,
+            },
+        );
+    }
+
+    /// The hold of `task_id` on `instance_id`: none for an instance not held or an exempt task.
+    fn held(&self, task_id: &str, instance_id: &str) -> Option<&WholeInstanceHold> {
+        self.holds
+            .get(instance_id)
+            .filter(|hold| !hold.exempt_tasks.contains(task_id))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvaluationTime {
@@ -1028,6 +1078,7 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
         None,
         &RunSlots::default(),
         &OwedReruns::default(),
+        &InstanceHolds::default(),
         eligibility,
     )
 }
@@ -1061,6 +1112,7 @@ pub fn evaluate_with_fact_refresh<E: From<PolicyEvaluationError>>(
         None,
         &RunSlots::default(),
         &OwedReruns::default(),
+        &InstanceHolds::default(),
         eligibility,
     )
 }
@@ -1100,6 +1152,7 @@ pub fn evaluate_with_remedies<E: From<PolicyEvaluationError>>(
         None,
         &RunSlots::default(),
         &OwedReruns::default(),
+        &InstanceHolds::default(),
         eligibility,
     )
 }
@@ -1204,6 +1257,49 @@ pub fn evaluate_with_owed_reruns<E: From<PolicyEvaluationError>>(
     chain_handover: &ChainHandoverInputs,
     run_slots: &RunSlots,
     owed_reruns: &OwedReruns,
+    entry_holds: impl FnMut(&TaskSpec, &str, &str) -> Result<bool, E>,
+    eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
+) -> Result<PolicyEvaluation, E> {
+    evaluate_with_instance_holds(
+        catalog,
+        facts,
+        resources,
+        time,
+        seed,
+        immediate_retries,
+        fact_refresh,
+        remedies,
+        chain_handover,
+        run_slots,
+        owed_reruns,
+        &InstanceHolds::default(),
+        entry_holds,
+        eligibility,
+    )
+}
+
+/// UPD-1 fix round 3 (`contracts/scheduling-blackout.md`, "Order of the deferrals", position
+/// 4a): `evaluate_with_owed_reruns` with the instances the Runtime holds whole ([`InstanceHolds`]).
+/// A candidate of a held instance that is no exempt task and that the round settles before it
+/// asks the eligibility callback (behind its instance's selected candidate, behind the shared run
+/// limits, held by a chain handover) is deferred with the hold's reason and no wake instead of
+/// that settlement's own reason; a fact refresh's names the hold's gate. Every candidate the
+/// callback is asked about is answered by the callback, as before, so the order of the deferrals
+/// is unchanged. With no hold the evaluation is the one `evaluate_with_owed_reruns` gives.
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_with_instance_holds<E: From<PolicyEvaluationError>>(
+    catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
+    resources: &EvaluationResources,
+    time: EvaluationTime,
+    seed: u64,
+    immediate_retries: &BTreeSet<(String, String)>,
+    fact_refresh: &FactRefreshInputs,
+    remedies: &RemedyPlan,
+    chain_handover: &ChainHandoverInputs,
+    run_slots: &RunSlots,
+    owed_reruns: &OwedReruns,
+    instance_holds: &InstanceHolds,
     mut entry_holds: impl FnMut(&TaskSpec, &str, &str) -> Result<bool, E>,
     eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
 ) -> Result<PolicyEvaluation, E> {
@@ -1220,6 +1316,7 @@ pub fn evaluate_with_owed_reruns<E: From<PolicyEvaluationError>>(
         Some((chain_handover, entry_holds)),
         run_slots,
         owed_reruns,
+        instance_holds,
         eligibility,
     )
 }
@@ -1237,6 +1334,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
     chain: Option<(&ChainHandoverInputs, &mut ChainEntryHolds<'_, E>)>,
     run_slots: &RunSlots,
     owed_reruns: &OwedReruns,
+    instance_holds: &InstanceHolds,
     mut eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
 ) -> Result<PolicyEvaluation, E> {
     validate_inputs(catalog, facts, resources, time)?;
@@ -1736,10 +1834,23 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         // Workflow #384 D2-S4: the recognition maintenance package's own deferrals are read by
         // the fact refresh's table (D2 model §3.7 rows 4 and 6).
         let refresh = candidate.task_id == FACT_REFRESH_TASK_ID;
+        // UPD-1 fix round 3 (position 4a): the Runtime's hold of the candidate's instance, which
+        // each settlement below that comes before the eligibility callback gives way to.
+        let instance_hold = instance_holds.held(&candidate.task_id, &candidate.instance_id);
         // Workflow #411 B41: a candidate the instance's chain step goes before waits for it while
         // it is dispatched; the successor counts as not dispatched until it is selected below.
         if let Some(handover) = handovers.get_mut(candidate.instance_id.as_str()) {
             if handover.holds(candidate.work_index) {
+                if let Some(hold) = instance_hold {
+                    hold_unasked(
+                        hold,
+                        refresh,
+                        candidate.work_index,
+                        &mut work,
+                        &mut refresh_gates,
+                    );
+                    continue;
+                }
                 let task_work = &mut work[candidate.work_index];
                 task_work.state = SchedulingDecisionState::Deferred;
                 task_work
@@ -1761,6 +1872,18 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
             }
         }
         if selected_instances.contains(candidate.instance_id.as_str()) {
+            // UPD-1 fix round 3: on a held instance only an exempt task can have taken it; every
+            // other candidate behind it waits for the hold, not for the winner.
+            if let Some(hold) = instance_hold {
+                hold_unasked(
+                    hold,
+                    refresh,
+                    candidate.work_index,
+                    &mut work,
+                    &mut refresh_gates,
+                );
+                continue;
+            }
             work[candidate.work_index].reasons.push(reason(
                 PolicyCode::InstanceAlreadySelected,
                 "a higher-ranked task already owns this instance for the evaluation round",
@@ -1789,6 +1912,16 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         if let Some((code, deferral)) =
             round_slots.deferral(run_slots, &candidate.host_id, host, candidate.load)
         {
+            if let Some(hold) = instance_hold {
+                hold_unasked(
+                    hold,
+                    refresh,
+                    candidate.work_index,
+                    &mut work,
+                    &mut refresh_gates,
+                );
+                continue;
+            }
             work[candidate.work_index].reasons.push(deferral);
             if refresh {
                 refresh_gates.insert(
@@ -2064,6 +2197,31 @@ impl From<TaskWork> for TaskDecision {
             reasons: value.reasons,
             next_wake_unix_ms: value.next_wake_unix_ms,
         }
+    }
+}
+
+/// UPD-1 fix round 3 ([`InstanceHolds`]): a candidate of a held instance that the round settles
+/// before asking the eligibility callback waits with the hold's reason and no wake, as the
+/// callback's own deferral of it would; a fact refresh's names the hold's gate.
+fn hold_unasked(
+    hold: &WholeInstanceHold,
+    refresh: bool,
+    work_index: usize,
+    work: &mut [TaskWork],
+    refresh_gates: &mut BTreeMap<usize, RefreshGate>,
+) {
+    let task_work = &mut work[work_index];
+    task_work.state = SchedulingDecisionState::Deferred;
+    task_work.reasons.push(hold.reason.clone());
+    task_work.next_wake_unix_ms = None;
+    if refresh {
+        refresh_gates.insert(
+            work_index,
+            RefreshGate::Temporary {
+                gate: Some(hold.gate),
+                wake: None,
+            },
+        );
     }
 }
 

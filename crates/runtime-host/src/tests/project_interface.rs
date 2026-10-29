@@ -73,10 +73,13 @@ fn project_interface_projects_runtime_domains_and_rejects_unknown_versions() {
         snapshot
             .facts
             .iter()
-            .filter(|fact| !fact.key.starts_with("session.instance."))
+            .filter(|fact| {
+                !fact.key.starts_with("session.instance.")
+                    && fact.key != crate::application_update::APPLICATION_UPDATE_FACT_KEY
+            })
             .count(),
         1,
-        "one published fact besides the three configuration seeds"
+        "one published fact besides the three configuration seeds and (UPD-1 A7) the application update seed"
     );
     assert_eq!(snapshot.goals.len(), 1);
     assert_eq!(snapshot.decisions.len(), 1);

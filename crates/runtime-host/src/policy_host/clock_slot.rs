@@ -296,6 +296,14 @@ fn closure_gate(reason: &Outcome) -> Option<(Code, GateClass)> {
     {
         return Some((code.code(), GateClass::QueueWait));
     }
+    // UPD-1 (`scheduling-blackout.md`, "Order of the deferrals", position 4a): an instance that
+    // waits for its client update is a waiting gate, with no wake of its own.
+    if reason.is(crate::codes::ApplicationUpdateCode::Pending) {
+        return Some((
+            crate::codes::ApplicationUpdateCode::Pending.code(),
+            GateClass::QueueWait,
+        ));
+    }
     let code = HostCode::ALL
         .iter()
         .copied()

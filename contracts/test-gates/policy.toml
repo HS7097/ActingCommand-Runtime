@@ -680,6 +680,17 @@ tests = [
 ]
 incident = ["#386"]
 
+# UPD-13 (0.12.30; UPD-1 fix round 5, review rd-1029/review-upd1-r3.md L3; register §1.215 UPD-13; contracts/scheduling-blackout.md, "Order of the deferrals", position 4a; the runtime-host half is host.toml's UPD-1b row): evaluate_with_instance_holds with no hold, with a hold of an instance the round does not know, or with a hold whose exempt tasks are every task of the round equals evaluate_with_owed_reruns byte for byte and with every decision's wake, behind an instance's selected candidate and behind the shared run limit; with A held and its store update task exempt, a candidate of A the round settles before asking the eligibility closure (behind the store update task that took A, behind the shared run limit, the fact refresh behind it) is deferred application_update_pending (instance_id, fact_key) with no wake, never instance_already_selected or policy_concurrent_runs_deferred, and the candidate waiting for the fact refresh carries fact_refresh_pending with gate_code application_update_pending and no wake; the exempt task keeps policy_concurrent_runs_deferred; the other instance's decisions, intents and reason chains are those of the round without the hold (#419); a candidate the closure is asked about keeps its answer (position 1, dispatch_paused_instance, before 4a)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_upd1_holds::upd1_holds_t1_a_hold_that_holds_nothing_changes_no_byte",
+    "actingcommand-policy::lib::tests::gate_upd1_holds::upd1_holds_t2_behind_the_selected_store_task_the_hold_defers_and_spares_b",
+    "actingcommand-policy::lib::tests::gate_upd1_holds::upd1_holds_t2_behind_the_shared_run_limit_only_the_exempt_task_keeps_the_limit_code",
+    "actingcommand-policy::lib::tests::gate_upd1_holds::upd1_holds_t2_a_candidate_the_closure_is_asked_about_keeps_positions_1_to_4",
+]
+incident = ["UPD-1"]
+
 # Workflow #405 W1 (plan-405-406 brief-W1 requirements 1-7; contracts/scheduling/README.md "Fact-time wake"; register §1.134): the V2 catalog predicate fact_time_reached is true from the time its fact holds plus offset_ms on, with the fact's freshness and wake; before it, false with fact_time_pending and a wake at min(T + offset, freshness end + 1); a missing, zero-confidence, stale, expired or non-time fact is false with fact_time_unavailable and its problem, no suggestion, no fact refresh and no wake; under any with a clock whichever comes first dispatches; a V1 document naming it, offset_ms outside ±86 400 000, max_age_ms 0 or a missing member are refused; the V2 schema carries the Runtime's bounds
 [[gate]]
 key = "53"

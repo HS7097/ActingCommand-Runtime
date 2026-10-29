@@ -132,8 +132,9 @@ each game root that holds `schedule.json`, that file's bytes, the root as
 2. **Read** each game's file (above): the reader, `requires` (it names `fact_reference` when a
    rule writes a fact reference, `pool_fact_reference` when a pool's `capacity` or a
    `resource_projection`'s `value` is one, `reset_exclusions` when a timeline event writes
-   `excludes_fact_prefixes`, and the given subsystems name each entry), the references and the
-   classification. A refused game is reported with its game id.
+   `excludes_fact_prefixes`, and the given subsystems name each entry), no timeline event
+   invalidating `health.application.update_required` ("The store update rule"), the references
+   and the classification. A refused game is reported with its game id.
 3. **Instantiate**: for each bound instance `i` of game `g` on server `s`, every rule whose
    package belongs to `s` and is not held, and every pool, profile and event for every server or
    for `s`, each with every scope filled with `{kind: instance, instance_id: i}` (the item's own
@@ -183,7 +184,8 @@ composes a valid empty catalog (V2 accepts an empty task list and an empty `appr
   check's own (`standard-pack-check.<server>`), so every rule and item is placed and compiled as
   the Runtime places it for one instance of each server. A refusal is
   `standard_pack_root_invalid` naming `schedule.json`; each unclassified package is one
-  `standard_pack_package_unclassified` in `warnings`.
+  `standard_pack_package_unclassified` in `warnings`. Then (UPD-1 fix round 1, since 0.12.30) a
+  store update rule whose `cooldown_ms` is 0 is refused the same way ("The store update rule").
 - `actinglab standard-pack compose --root <standard_packs.root> --instance
   <alias>=<game>/<server>... --out <new directory>` composes the game roots below `--root` for
   the given bindings (`--instance` once per bound instance; given after the command's words it is
@@ -267,6 +269,53 @@ other games are composed.
   cannot be read adds `package_binding_unreadable`, a broken one or a refused `schedule.json`
   adds `standard_pack_root_invalid`, and that game has no row. The overview reads the same file
   without composing.
+
+## The store update rule (UPD-1, since 0.12.30)
+
+A game root whose `interrupts.json` names a page `result: "application_update_required"`
+([package-reference.md](package-reference.md)) writes, per server, one rule for its store update
+package (`control.json` `store_update`), triggered by the instance fact the Runtime records when a
+run meets that page ([scheduling/README.md](scheduling/README.md), "Application Update Hold"). Only
+the members that matter here; the rest are written as for the game's other rules (the composer
+checks them), and the composer fills the scope:
+
+```json
+{"id": "<game>.store_update",
+ "package_id": "<game>.store_update",
+ "trigger": {"kind": "fact", "fact_key": "health.application.update_required",
+             "comparison": "eq", "value": {"type": "boolean", "value": true}, "max_age_ms": null},
+ "feedback_stop": {"kind": "fact", "fact_key": "health.application.update_required",
+                   "comparison": "eq", "value": {"type": "boolean", "value": false}, "max_age_ms": null},
+ "cooldown_ms": 1800000,
+ "sensitive": false,
+ "on_failure": {"action": "pause", "retry_limit": 1, "retry_backoff_ms": 0, "escalation_threshold": 2}}
+```
+
+- `cooldown_ms` is how long the rule waits before it looks again when the store has no new version
+  yet (its run ends "not needed", the fact turns false, the next task meets the dialog again and
+  the fact is true again); 30 minutes is an example, the resource side chooses it. It is the only
+  pace of that loop, so it must be above 0 (UPD-1 fix round 1): `package bundle --schedule` and
+  `actinglab standard-pack check` refuse a rule whose package declares `store_update` and whose
+  `cooldown_ms` is 0 as `standard_pack_root_invalid`, `schedule_invalid` at
+  `/rules/<i>/cooldown_ms` (a rule without the member is refused already, the member being
+  required). This is a validity rule of the tools, not a tunable; the Runtime's composer does not
+  repeat it.
+- `requires` names nothing new (a typed `fact` predicate).
+- No other rule changes: the hold of the instance's other tasks is the Runtime's.
+- A timeline event whose `invalidates_fact_prefixes` covers `health.application.update_required`
+  (the key itself or any prefix of it, `health.` included) is refused (UPD-1 fix round 5): the
+  composer refuses the file, the Runtime and the resource tools (`package bundle --schedule`,
+  `actinglab standard-pack check`) alike, as `standard_pack_root_invalid`, `schedule_invalid` at
+  the first such entry in file order (`/timeline/<i>/invalidates_fact_prefixes/<j>`). Such a reset
+  would clear the fact, so the rule's trigger would read the key missing (Unknown) and never run,
+  while the Runtime's gate, which reads the fact as recorded, kept holding the instance. An event
+  whose `excludes_fact_prefixes` keeps the key (an entry the key starts with) does not invalidate
+  it and is not refused. A validity rule, not a key.
+- The page itself is no ordinary package's own page; the store update package declares it as its
+  entry page, and its "not needed" end is a success (for example a mapping `not_needed`), since
+  only a success clears the fact.
+- Without such a rule, an instance that met the dialog stays held, every candidate showing
+  `application_update_pending`: loud, not silent.
 
 ## What does not change
 

@@ -3251,6 +3251,13 @@ impl PreparedContainedTask {
         }
     }
 
+    /// UPD-1 (design-upd1 §3.3): whether the package declares `store_update`; the host clears
+    /// its instance's `health.application.update_required` before such a run's successful
+    /// terminal.
+    pub fn declares_store_update(&self) -> bool {
+        self.control.store_update.is_some()
+    }
+
     /// Workflow #411 B34: the clicks of the task's operations whose declared box is one point,
     /// in declaration order: a `point` click and a long press without a box (each a box of 1×1
     /// at its point), and a `rect`, `specific_rect` or long-press box of 1×1. A click located on

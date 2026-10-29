@@ -57,7 +57,7 @@ use actingcommand_policy::{
     MAX_EVALUATION_INSTANCES, MAX_TASK_FAILURE_STREAK, MAX_TASK_LAST_DURATION_MS, PolicyEvaluation,
     REMEDY_JOURNAL_MAX_RUNS, RemedyInputs, RemedyJournal, RemedyPlan, RemedyRun, RemedySettlement,
     RunSlots, SchedulingDecisionState, ScopeSelector, TaskDecision, TaskRuntimeSnapshot,
-    TaskTerminalState, activity_window_at, compile_catalog, evaluate_with_owed_reruns,
+    TaskTerminalState, activity_window_at, compile_catalog, evaluate_with_instance_holds,
     plan_remedies,
 };
 use actingcommand_runtime_state::{PlanningQuotaUsage as DetectionQuotaUsage, RuntimeStateStore};
@@ -2759,14 +2759,19 @@ impl PolicyHost {
                 fact_refresh_transitions: Vec::new(),
             });
         }
+        // UPD-1 (design §4.2, `scheduling-blackout.md` position 4a): the instances whose
+        // `health.application.update_required` is true in this evaluation's facts.
+        let update_pending = crate::application_update::pending_instances(facts);
         // Workflow #411 B15 R4 (model-b15 §9.1): the remedy table of the active catalog, built at
         // the first evaluation under it, and again at most once per interval while a round is
-        // open or a stop is recorded.
+        // open or a stop is recorded; UPD-1: or while an instance waits for its client update,
+        // so a store update package placed in place is known as one at the next interval.
         if let Some(active) = &self.active
             && self.remedies.table_due(
                 active.generation.catalog_hash(),
                 time.unix_ms,
                 remedy.table_interval_ms,
+                !update_pending.is_empty(),
             )
         {
             let table = crate::remedy::build_table(
@@ -2832,9 +2837,22 @@ impl PolicyHost {
         // SR-2b-2 review M1: a pair that owes a rerun in the occurrence it was exhausted in is
         // not rerun at once by R22 either; it waits for its own trigger and cooldown.
         immediate_retries.retain(|pair| !rerun_plan.exhausted.contains(pair));
+        // UPD-1: the catalog tasks whose bound package declares `store_update`, as the remedy
+        // table read them; a package the table could not read is no store task.
+        let store_tasks = self
+            .remedies
+            .table()
+            .map(crate::remedy::BuiltTable::store_tasks)
+            .unwrap_or_default();
+        // UPD-1 fix round 3: position 4a also holds every candidate the round settles before it
+        // asks the closure below (behind the store update task that took the instance, the shared
+        // run limits or a chain handover), so none of a waiting instance but a store update task's
+        // is left eligible and unselected.
+        let instance_holds =
+            crate::application_update::instance_holds(&update_pending, &store_tasks);
         let deferrals = clock_slot::Deferrals::default();
         let started = Instant::now();
-        let mut evaluation = evaluate_with_owed_reruns::<RuntimeHostError>(
+        let mut evaluation = evaluate_with_instance_holds::<RuntimeHostError>(
             &active.compiled,
             facts,
             resources,
@@ -2848,6 +2866,7 @@ impl PolicyHost {
             chain_handover,
             &run_slots,
             &rerun_plan.owed,
+            &instance_holds,
             |task, _instance_id, page_id| {
                 Ok(crate::host::chain_entry_holds_page(
                     procedure_manifest,
@@ -2881,6 +2900,18 @@ impl PolicyHost {
                 if let Some(covering) = blackout_holds.get(&intent.instance_id) {
                     return Ok(BlackoutGate::Active(covering.clone())
                         .eligibility(&intent.instance_id, refresh));
+                }
+                // UPD-1 (`scheduling-blackout.md`, "Order of the deferrals", position 4a): the
+                // instance waits for its client update; only a store update package's task
+                // passes, every other candidate (an owed rerun, an immediate rerun, a remedy
+                // request, the fact refresh) waits with no wake of its own.
+                if update_pending.contains(&intent.instance_id)
+                    && !store_tasks.contains(&intent.task_id)
+                {
+                    return Ok(crate::application_update::deferral(
+                        &intent.instance_id,
+                        refresh,
+                    ));
                 }
                 // Workflow #386 SR-2b-2 (`scheduling-blackout.md`, "Order of the deferrals",
                 // position 6): an owed rerun waits for the instance's pacing stage.
@@ -3115,6 +3146,13 @@ impl PolicyHost {
                     .map(|task| (task.expected_duration_ms, "declared".to_owned())),
             },
             &held_back,
+            // UPD-1 fix round 1 (review M1): the waiting instances and the store update tasks
+            // position 4a judged this evaluation by, so the idle plan wakes a waiting instance
+            // only for its store update task.
+            crate::application_update::IdleUpdateHold {
+                pending: &update_pending,
+                store_tasks: &store_tasks,
+            },
         );
         if let Some(decisions) = &remedy_decisions {
             self.remedies.retain_keys(decisions);

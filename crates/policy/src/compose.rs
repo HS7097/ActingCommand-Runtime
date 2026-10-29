@@ -15,7 +15,8 @@
 //!    to name `fact_reference` when a rule writes a fact reference (#386 CF-4) and
 //!    `pool_fact_reference` when a pool's `capacity` or a `resource_projection`'s `value` is one
 //!    (#386 CF-5) and `reset_exclusions` when a timeline event writes `excludes_fact_prefixes`
-//!    (Workflow #411 P19), and against the subsystems given (when given), its packages checked
+//!    (Workflow #411 P19), no timeline event invalidating the Runtime's application update fact
+//!    (UPD-1 fix round 5), and against the subsystems given (when given), its packages checked
 //!    against the registry, and the registry's packages classified. A refused game is reported
 //!    with its game id.
 //! 3. **Instantiate**: per bound instance `i` of game `g` on server `s`, every rule whose package
@@ -45,10 +46,11 @@ use std::fmt;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
-    BundleMaintenance, STANDARD_PACK_SCHEDULE_FILE, ScheduleItem, ScheduleMember, ScheduleRule,
-    StandardPackClassification, StandardPackProblem, StandardPackRoot, StandardPackRootIssue,
-    StandardPackSchedule, classify_standard_pack_packages, parse_standard_pack_schedule,
-    standard_pack_maintenance_packages, validate_standard_pack_schedule_references,
+    APPLICATION_UPDATE_REQUIRED_FACT_KEY, BundleMaintenance, STANDARD_PACK_SCHEDULE_FILE,
+    ScheduleItem, ScheduleMember, ScheduleRule, StandardPackClassification, StandardPackProblem,
+    StandardPackRoot, StandardPackRootIssue, StandardPackSchedule, classify_standard_pack_packages,
+    parse_standard_pack_schedule, standard_pack_maintenance_packages,
+    validate_standard_pack_schedule_references,
 };
 use serde::Serialize;
 use serde_json::{Map, Value, json};
@@ -494,6 +496,19 @@ fn read_game(
             ),
         ));
     }
+    // UPD-1 fix round 5 (`standard-pack-schedule.md`, "The store update rule"): no timeline event
+    // invalidates the Runtime's application update fact. A reset that cleared it would leave the
+    // store update rule's trigger reading the key missing (Unknown), so the rule would never run,
+    // while the Runtime's gate, which reads the fact as recorded, kept holding the instance.
+    if let Some(pointer) = first_application_update_invalidation(&schedule) {
+        return Err(refused(
+            schedule_issue(StandardPackProblem::ScheduleInvalid, pointer),
+            format!(
+                "a timeline event's {INVALIDATES_FACT_PREFIXES} may not cover \
+                 {APPLICATION_UPDATE_REQUIRED_FACT_KEY}, which only the Runtime writes"
+            ),
+        ));
+    }
     if let Some(subsystems) = subsystems
         && let Some((index, name)) = schedule
             .requires
@@ -555,6 +570,48 @@ fn first_reset_exclusion(schedule: &StandardPackSchedule) -> Option<String> {
         .iter()
         .position(|event| event.body.contains_key(EXCLUDES_FACT_PREFIXES))
         .map(|index| format!("/timeline/{index}/{EXCLUDES_FACT_PREFIXES}"))
+}
+
+/// The timeline event member whose prefixes an occurrence invalidates.
+const INVALIDATES_FACT_PREFIXES: &str = "invalidates_fact_prefixes";
+
+/// UPD-1 fix round 5: the pointer of the first `invalidates_fact_prefixes` entry, in file order,
+/// that makes a timeline event invalidate [`APPLICATION_UPDATE_REQUIRED_FACT_KEY`]: an entry the
+/// key starts with (the key itself or any prefix of it, `health.` included), unless one of the
+/// event's `excludes_fact_prefixes` keeps the key, as `TimelineEvent::invalidates_key` reads the
+/// two. Entries that are no string are left to the compiler. `None` when no event invalidates it.
+fn first_application_update_invalidation(schedule: &StandardPackSchedule) -> Option<String> {
+    let covers = |prefix: &Value| {
+        prefix
+            .as_str()
+            .is_some_and(|prefix| APPLICATION_UPDATE_REQUIRED_FACT_KEY.starts_with(prefix))
+    };
+    schedule
+        .timeline
+        .iter()
+        .enumerate()
+        .find_map(|(index, event)| {
+            if prefix_list(event, EXCLUDES_FACT_PREFIXES)
+                .iter()
+                .any(covers)
+            {
+                return None;
+            }
+            prefix_list(event, INVALIDATES_FACT_PREFIXES)
+                .iter()
+                .position(covers)
+                .map(|entry| format!("/timeline/{index}/{INVALIDATES_FACT_PREFIXES}/{entry}"))
+        })
+}
+
+/// The entries of a timeline event's prefix list `member` as written, none when it writes none or
+/// writes no list.
+fn prefix_list<'a>(event: &'a ScheduleItem, member: &str) -> &'a [Value] {
+    event
+        .body
+        .get(member)
+        .and_then(Value::as_array)
+        .map_or(&[][..], Vec::as_slice)
 }
 
 /// The pointer of the first fact reference a rule's `trigger` or `feedback_stop` writes as the

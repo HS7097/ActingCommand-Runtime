@@ -67,6 +67,7 @@ const INDEX_INVALID: &str = "package_bundle_index_invalid";
 const PAGES: &str = "pages.json";
 const INTERRUPTS: &str = "interrupts.json";
 const NAVIGATION: &str = "navigation.json";
+const SCHEDULE: &str = "schedule.json";
 
 // ---- Packs.
 
@@ -356,6 +357,18 @@ fn bundle(
     PackageBundleRequest,
     LabResult<PackageBundleResponse>,
 ) {
+    bundle_with_schedule(root, None)
+}
+
+// `bundle`, with `schedule` given as `--schedule` when there is one (UPD-1 fix round 1).
+fn bundle_with_schedule(
+    root: &Root,
+    schedule: Option<&Value>,
+) -> (
+    TempDir,
+    PackageBundleRequest,
+    LabResult<PackageBundleResponse>,
+) {
     let temp = TempDir::new().expect("temporary directory");
     let applications = temp.path().join("applications.json");
     fs::write(
@@ -383,6 +396,15 @@ fn bundle(
             INTERRUPTS => files.interrupts = Some(path),
             _ => files.navigation = Some(path),
         }
+    }
+    if let Some(schedule) = schedule {
+        let path = sources.join(SCHEDULE);
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(schedule).expect("schedule JSON"),
+        )
+        .expect("schedule file");
+        files.schedule = Some(path);
     }
     let request = PackageBundleRequest {
         applications,
@@ -1138,4 +1160,319 @@ fn store_fg1_s8_1_a_store_step_tapping_a_point_or_a_rect_gets_one_warning() {
         "no store update pack: {:?}",
         checked.warnings
     );
+}
+
+// ---- UPD-1.
+
+// UPD-1 A10 (design-upd1 §7, §9): the shared interrupt page `notice` declares
+// `result: "application_update_required"` with `then: "end_run"`. Both `package bundle` and the
+// check of the installed root accept it; a store update pack that starts on the page (its own
+// page, design §8.1) gets no `package_bundle_interrupt_page_shadowed`, while a pack without
+// `store_update` that declares the page still gets one. The same `result` on an entry whose `then`
+// is `resume` is refused by both with `standard_pack_root_invalid`, `interrupt_result_invalid` at
+// `/interrupts/0/result`.
+#[test]
+fn upd1_a10_a_named_result_is_accepted_on_end_run_only_and_a_store_pack_may_hold_its_page() {
+    let named = valid()
+        .with(own_notice())
+        .with(Pack {
+            store: Some("point"),
+            ..graph(
+                STORE_POINT,
+                "notice",
+                "home",
+                &[("tap_update", "notice", "home")],
+            )
+        })
+        .interrupt("then", json!("end_run"))
+        .interrupt("result", json!("application_update_required"));
+    let expected = vec![(json!(OWN_NOTICE), json!("notice"))];
+
+    let (_temp, request, result) = bundle(&named);
+    let response = result.unwrap_or_else(|error| panic!("{}: {}", error.code, error.message));
+    assert_eq!(response.status, "written");
+    assert_eq!(
+        fs::read(request.out.join(INTERRUPTS)).expect("written interrupts"),
+        fs::read(
+            request
+                .root_files
+                .interrupts
+                .as_ref()
+                .expect("given interrupts")
+        )
+        .expect("source interrupts"),
+        "the root file is laid byte for byte"
+    );
+    assert_eq!(shadowed(&response.warnings), expected, "package bundle");
+
+    let (_temp, game_root) = installed(&named, &[]);
+    let checked =
+        check(&game_root).unwrap_or_else(|error| panic!("{}: {}", error.code, error.message));
+    assert_eq!(checked.status, "checked");
+    assert_eq!(shadowed(&checked.warnings), expected, "standard-pack check");
+
+    let misplaced = valid().interrupt("result", json!("application_update_required"));
+    let (_temp, request, result) = bundle(&misplaced);
+    let error = result.expect_err("a result on resume");
+    let (code, values) = refusal(&error);
+    assert_eq!(code, ROOT_INVALID, "package bundle: {}", error.message);
+    assert_eq!(
+        (&values["standard_pack_problem"], &values["json_pointer"]),
+        (
+            &json!(StandardPackProblem::InterruptResultInvalid.as_str()),
+            &json!("/interrupts/0/result")
+        ),
+        "package bundle: {values}"
+    );
+    assert!(!request.out.exists(), "--out was written");
+
+    let (_temp, game_root) = installed(&misplaced, &[]);
+    let error = check(&game_root).expect_err("a result on resume");
+    let (code, values) = refusal(&error);
+    assert_eq!(code, ROOT_INVALID, "standard-pack check: {}", error.message);
+    assert_eq!(
+        (&values["standard_pack_problem"], &values["json_pointer"]),
+        (
+            &json!(StandardPackProblem::InterruptResultInvalid.as_str()),
+            &json!("/interrupts/0/result")
+        ),
+        "standard-pack check: {values}"
+    );
+}
+
+// One `schedule.json` rule `id` running the pack `package_id` on `trigger`, waiting `cooldown_ms`
+// after each dispatch; every other member as the game's other rules write it.
+fn schedule_rule(id: &str, package_id: &str, trigger: Value, cooldown_ms: u64) -> Value {
+    json!({
+        "id": id,
+        "package_id": package_id,
+        "priority": 100,
+        "trigger": trigger,
+        "feedback_stop": {
+            "kind": "outcome",
+            "task_id": id,
+            "outcome_key": "completed",
+            "comparison": "eq",
+            "value": {"type": "boolean", "value": true}
+        },
+        "consumes": [],
+        "produces": [],
+        "on_failure": {
+            "action": "continue",
+            "retry_limit": 2,
+            "retry_backoff_ms": 30000,
+            "escalation_threshold": 3
+        },
+        "sensitive": false,
+        "next_run_clamp_ms": 86400000,
+        "yield_points": [],
+        "expected_duration_ms": 60000,
+        "cooldown_ms": cooldown_ms,
+        "load_profile": {"kind": "weighted", "cpu_milli": 200, "gpu_milli": 100, "io_milli": 300},
+        "loop_budget": {"daily_limit": 24, "window_iteration_limit": 4, "max_runtime_ms": 300000},
+        "strategic_weight_milli": 1000
+    })
+}
+
+// UPD-1 fix round 1 (review L6; contracts/standard-pack-schedule.md, "The store update rule"): a
+// rule that runs a store update pack (`store_update`) with `cooldown_ms` 0 would run the store and
+// the game in turn without a pause while the store has no new version. `package bundle
+// --schedule` and the check of the installed root both refuse it, `standard_pack_root_invalid`
+// with `schedule_invalid` at its `cooldown_ms`, and `package bundle` writes no `--out`; with a
+// cooldown both pass. A rule of a pack without `store_update` may keep 0.
+#[test]
+fn upd1_l6_a_store_update_rule_without_a_cooldown_is_refused() {
+    let root = valid().with(Pack {
+        store: Some("point"),
+        ..graph(
+            STORE_POINT,
+            "notice",
+            "home",
+            &[("tap_update", "notice", "home")],
+        )
+    });
+    let schedule = |cooldown_ms: u64| {
+        json!({
+            "schema_version": "actingcommand.schedule.v1",
+            "rules": [
+                schedule_rule(
+                    "neutral.stage",
+                    STAGE,
+                    json!({
+                        "kind": "clock",
+                        "schedule": {"kind": "interval", "clock_source": {"kind": "local"},
+                                     "every_ms": 3600000, "anchor_ms": 0}
+                    }),
+                    0
+                ),
+                schedule_rule(
+                    "neutral.store_update",
+                    STORE_POINT,
+                    json!({
+                        "kind": "fact",
+                        "fact_key": "health.application.update_required",
+                        "comparison": "eq",
+                        "value": {"type": "boolean", "value": true},
+                        "max_age_ms": null
+                    }),
+                    cooldown_ms
+                )
+            ]
+        })
+    };
+    let installed_with = |schedule: &Value| {
+        let (temp, game_root) = installed(&root, &[]);
+        fs::write(
+            game_root.join(SCHEDULE),
+            serde_json::to_vec_pretty(schedule).expect("schedule JSON"),
+        )
+        .expect("schedule file");
+        (temp, game_root)
+    };
+
+    let paced = schedule(1_800_000);
+    let (_temp, request, result) = bundle_with_schedule(&root, Some(&paced));
+    let response = result.unwrap_or_else(|error| panic!("{}: {}", error.code, error.message));
+    assert_eq!(response.status, "written");
+    assert!(request.out.join(SCHEDULE).is_file(), "the schedule is laid");
+    let (_temp, game_root) = installed_with(&paced);
+    let checked =
+        check(&game_root).unwrap_or_else(|error| panic!("{}: {}", error.code, error.message));
+    assert_eq!(checked.status, "checked");
+
+    let unpaced = schedule(0);
+    let expected = (
+        &json!(StandardPackProblem::ScheduleInvalid.as_str()),
+        &json!("/rules/1/cooldown_ms"),
+    );
+    let (_temp, request, result) = bundle_with_schedule(&root, Some(&unpaced));
+    let error = result.expect_err("a store update rule without a cooldown");
+    let (code, values) = refusal(&error);
+    assert_eq!(code, ROOT_INVALID, "package bundle: {}", error.message);
+    assert_eq!(
+        (&values["standard_pack_problem"], &values["json_pointer"]),
+        expected,
+        "package bundle: {values}"
+    );
+    assert!(!request.out.exists(), "--out was written");
+
+    let (_temp, game_root) = installed_with(&unpaced);
+    let error = check(&game_root).expect_err("a store update rule without a cooldown");
+    let (code, values) = refusal(&error);
+    assert_eq!(code, ROOT_INVALID, "standard-pack check: {}", error.message);
+    assert_eq!(
+        (&values["standard_pack_problem"], &values["json_pointer"]),
+        expected,
+        "standard-pack check: {values}"
+    );
+}
+
+// UPD-1 fix round 5 (contracts/standard-pack-schedule.md, "The store update rule"): a timeline
+// event whose `invalidates_fact_prefixes` covers the Runtime's `health.application.update_required`
+// (the key itself or any prefix of it) would clear the fact at each occurrence, so the store update
+// rule would read the key missing and never run while the Runtime's gate kept holding the
+// instance. `package bundle --schedule` and the check of the installed root refuse it through the
+// one composer the Runtime runs too, `standard_pack_root_invalid` with `schedule_invalid` at the
+// entry, and `package bundle` writes no `--out`. A reset of other keys passes, and so does one
+// whose `excludes_fact_prefixes` keeps the key.
+#[test]
+fn upd1_r5_a_reset_that_invalidates_the_application_update_fact_is_refused() {
+    let root = valid();
+    let schedule = |invalidated: &[&str], excluded: Option<&[&str]>| {
+        let mut event = json!({
+            "id": "neutral.reset",
+            "event_kind": "reset",
+            "schedule": {"kind": "interval", "clock_source": {"kind": "local"},
+                         "every_ms": 86400000, "anchor_ms": 0},
+            "duration_ms": 0,
+            "invalidates_fact_prefixes": invalidated,
+            "validity": {"from_unix_ms": 0, "until_unix_ms": null}
+        });
+        let mut requires = Vec::<&str>::new();
+        if let Some(excluded) = excluded {
+            event["excludes_fact_prefixes"] = json!(excluded);
+            requires.push("reset_exclusions");
+        }
+        json!({
+            "schema_version": "actingcommand.schedule.v1",
+            "requires": requires,
+            "timeline": [event]
+        })
+    };
+    let installed_with = |schedule: &Value| {
+        let (temp, game_root) = installed(&root, &[]);
+        fs::write(
+            game_root.join(SCHEDULE),
+            serde_json::to_vec_pretty(schedule).expect("schedule JSON"),
+        )
+        .expect("schedule file");
+        (temp, game_root)
+    };
+
+    for (case, passing) in [
+        ("another prefix", schedule(&["resource."], None)),
+        (
+            "an exclusion keeps the key",
+            schedule(&["health."], Some(&["health.application."][..])),
+        ),
+    ] {
+        let (_temp, request, result) = bundle_with_schedule(&root, Some(&passing));
+        let response =
+            result.unwrap_or_else(|error| panic!("{case}: {}: {}", error.code, error.message));
+        assert_eq!(response.status, "written", "{case}");
+        assert!(
+            request.out.join(SCHEDULE).is_file(),
+            "{case}: the schedule is laid"
+        );
+        let (_temp, game_root) = installed_with(&passing);
+        let checked = check(&game_root)
+            .unwrap_or_else(|error| panic!("{case}: {}: {}", error.code, error.message));
+        assert_eq!(checked.status, "checked", "{case}");
+    }
+
+    for (case, refused, pointer) in [
+        (
+            "the key's family",
+            schedule(&["resource.", "health."], None),
+            "/timeline/0/invalidates_fact_prefixes/1",
+        ),
+        (
+            "the key itself",
+            schedule(&["health.application.update_required"], None),
+            "/timeline/0/invalidates_fact_prefixes/0",
+        ),
+    ] {
+        let expected = (
+            &json!(StandardPackProblem::ScheduleInvalid.as_str()),
+            &json!(pointer),
+        );
+        let (_temp, request, result) = bundle_with_schedule(&root, Some(&refused));
+        let error = result.expect_err(case);
+        let (code, values) = refusal(&error);
+        assert_eq!(
+            code, ROOT_INVALID,
+            "{case}, package bundle: {}",
+            error.message
+        );
+        assert_eq!(
+            (&values["standard_pack_problem"], &values["json_pointer"]),
+            expected,
+            "{case}, package bundle: {values}"
+        );
+        assert!(!request.out.exists(), "{case}: --out was written");
+
+        let (_temp, game_root) = installed_with(&refused);
+        let error = check(&game_root).expect_err(case);
+        let (code, values) = refusal(&error);
+        assert_eq!(
+            code, ROOT_INVALID,
+            "{case}, standard-pack check: {}",
+            error.message
+        );
+        assert_eq!(
+            (&values["standard_pack_problem"], &values["json_pointer"]),
+            expected,
+            "{case}, standard-pack check: {values}"
+        );
+    }
 }

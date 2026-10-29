@@ -320,8 +320,9 @@ page it declares itself, in registry order and then `interrupts.json` order: a p
 declares is its own, so that shared interrupt page does not act for its runs
 ([README.md](README.md), "Shared interrupt pages"), and a shared interrupt page added later changes
 nothing for it. A feature package of `pages.json` (its pages are the list's) and a handler of
-that page (its entry holds the page) declare it by their part and are not reported; nothing is
-refused. Then, with or without the navigation files (STORE-FG-1, since 0.12.29; design-store-fg
+that page (its entry holds the page) declare it by their part and are not reported; UPD-1
+(since 0.12.30): so does a store update package (`control.json` `store_update`) for a page whose
+entry names a `result`, the page its run starts from; nothing is refused. Then, with or without the navigation files (STORE-FG-1, since 0.12.29; design-store-fg
 §8.1), one `package_bundle_store_tap_unlocated` warning (with `package_id` and
 `pack_operation_id`) in `warnings` per package of the registry and declared store operation
 (`control.json` `store_update`) whose click taps a fixed place (`point`, `rect`,
@@ -345,7 +346,12 @@ composer with one bound instance per server of the registry: a refusal is
 (`schedule_invalid`, `rule_package_unregistered` or `rule_id_conflict`) and `json_pointer`, and each
 package of the registry that is neither maintenance-role, named by a rule nor held is one
 `standard_pack_package_unclassified` warning (with `game` and `package_id`) in `warnings`.
-Workflow #392 DA-4 (model 392 v1.2 §4.1): `--display-layout` names the game's display
+UPD-1 fix round 1 (since 0.12.30; [standard-pack-schedule.md](standard-pack-schedule.md), "The
+store update rule"): then a rule whose package declares `store_update` (read by the Runtime's
+metadata reader) and whose `cooldown_ms` is 0 is refused the same way, `schedule_invalid` at
+`/rules/<i>/cooldown_ms`: with no cooldown, a store that has no new version yet would have the
+store update package and the game's next run meet the dialog in turn without a pause. Workflow
+#392 DA-4 (model 392 v1.2 §4.1): `--display-layout` names the game's display
 declaration; every pack is admitted for real as with the other root files, the file is read by
 the one structure check ("Standard package root", `display-layout.json`: a refusal is
 `standard_pack_root_invalid` with `game`, the given file's `path`, `standard_pack_problem` and
@@ -670,7 +676,7 @@ data files beside its package directories, one directory per game below the conf
   the listed page whose id equals the package's page id without the game prefix. Unknown
   members are refused.
 - **`interrupts.json`.** `{schema_version, game, interrupts}`: at most 32 entries
-  `{page, handlers, then, max_per_run, limit_cause?}`; `page` is a page of `pages.json`, named
+  `{page, handlers, then, max_per_run, limit_cause?, result?}`; `page` is a page of `pages.json`, named
   once; `handlers` names 1–8 packages of the registry, at most one per server; `then` is
   `"resume"`, `"end_run"` or `{"run": [packages]}` (1–8 packages, at most one per server);
   `max_per_run` is 1–8. The file requires `pages.json`.
@@ -698,6 +704,34 @@ data files beside its package directories, one directory per game below the conf
     whole game root is `standard_pack_root_invalid` there: a resource repository adds the
     member only for a Runtime that reads it. An entry without it reads and serializes as
     before.
+  - **`result`** (UPD-1, since 0.12.30; optional; Alice's rulings 95 and 96 of 2026-10-29):
+    what a run that this page ends says, a word of a closed vocabulary. Its one value,
+    `"application_update_required"`, declares the page the game's "client out of date" dialog:
+    after its handler (which may tap the game's own button that opens the store's page of the
+    game) the run ends with `contained_task_application_update_required` (warning, ladder class
+    none, `page_id`) instead of `contained_task_interrupt_escalated`, and before its terminal the
+    Runtime records the instance fact `health.application.update_required` true
+    ([instance-fact-store.md](instance-fact-store.md), "Application update facts"), which holds
+    every other task of the instance until a store update package's run succeeds there
+    ([scheduling-blackout.md](scheduling-blackout.md), position 4a). The member is allowed only
+    with `then: "end_run"`; on another `then` it is `interrupt_result_invalid` at
+    `/interrupts/<i>/result`; another value or type is `malformed`. The shared parser refuses it
+    so for the Runtime, `package bundle` and `standard-pack check` alike. An ordinary task
+    package must not declare the page itself (the shared interrupt would not act for its runs,
+    and B35 reports it); a store update package declares it as its entry page by its part. The
+    `interrupt_handled` record is unchanged (`then` `end_run`). **A handler that fails** (UPD-1
+    fix round 1, the coordinator's decision of 2026-10-29): the page seen is what matters, and
+    the store update package starts from the dialog page itself, so when the handler fails short
+    of fatal (its step not confirmed, the store's page not reached, a chooser in the way) its
+    layer is still recorded failed with its own code (`EntryRecoveryFailed`, `role:
+    interrupt_handler`), no `interrupt_handled` follows, and the run still ends with
+    `contained_task_application_update_required` (`page_id`), the handler's failure its `related`
+    link, the fact recorded true first. A fatal failure of the handler poisons the run as before,
+    and a stop of the run while the handler runs (a cancellation, an operator pause, the deadline)
+    ends it as that stop. The member joins `package`
+    revision 6 (BT-PK6 names it beside `limit_cause`), admitted by code until then; a Runtime
+    before 0.12.30 refuses a file that names it, so the whole game root is
+    `standard_pack_root_invalid` there. An entry without it reads and serializes as before.
 - **`navigation.json`** (Workflow #373 NAV-5, M-373 §3.5). `{schema_version, game, edges,
   recovery_chain}`: at most 1024 edges `{from, to, package_id}`, each "run `package_id` on the
   page `from` to reach the page `to`"; `from` and `to` are different pages of `pages.json`
@@ -801,7 +835,11 @@ data files beside its package directories, one directory per game below the conf
   scene evaluation of the feature package. One match is handled: the handler runs as a layer of
   the run (`EntryRecovery*` records with `role: interrupt_handler`), then the `then.run`
   package, and the run resumes (a wait's budget is paused while it is handled), or ends with
-  `contained_task_interrupt_escalated` (`end_run`); an `interrupt_handled` record follows each.
+  `contained_task_interrupt_escalated` (`end_run`; UPD-1: with
+  `contained_task_application_update_required` when the entry's `result` is
+  `"application_update_required"`, the instance's `health.application.update_required` recorded
+  true first, and so too when that entry's handler fails short of fatal, its failure linked);
+  an `interrupt_handled` record follows each handled page.
   Two or more matches are an `interrupt_ambiguous` record and nothing is handled. A page
   handled `max_per_run` times, or a run that handled 16 pages, ends the run with
   `contained_task_interrupt_limit_reached`; a page whose `limit_cause` is `"environment"`

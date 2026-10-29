@@ -29,8 +29,9 @@ const DEVICE: DeviceBounds = DeviceBounds {
     emulator_start_ms: 190_000,
 };
 // SCHED §9 `scheduling.rerun.condition_codes`: the eight codes that end a run by a condition, and
-// since 0.12.28 the operator pause's `contained_task_paused` (Alice's decision 92, 2026-10-29).
-const CONDITION_CODES: [&str; 9] = [
+// since 0.12.28 the operator pause's `contained_task_paused` (Alice's decision 92, 2026-10-29), and
+// since 0.12.30 UPD-1's `contained_task_application_update_required` (design-upd1 §2.2 item 4).
+const CONDITION_CODES: [&str; 10] = [
     "recognition_sample_budget_insufficient",
     "candidate_sample_budget_insufficient",
     "recognition_sample_deadline_exceeded",
@@ -40,6 +41,7 @@ const CONDITION_CODES: [&str; 9] = [
     "perf_hold_expired",
     "cost_commit_time_insufficient",
     "contained_task_paused",
+    "contained_task_application_update_required",
 ];
 
 fn context() -> CheckContext {

@@ -367,7 +367,7 @@ both checks ([policy-suspension.md](policy-suspension.md), "Task package suspens
 | Key | Type | Default (`actingd.defaults.json`) |
 |---|---|---|
 | `scheduling.recognition.sample_timeout_retries` | integer `0..=4294967295` | `2` |
-| `scheduling.rerun.condition_codes` | list of codes the catalog lists and has not retired | the model's eight codes and, since 0.12.28 (Alice's decision 92, 2026-10-29), `contained_task_paused` ([policy-suspension.md](policy-suspension.md), "Which runs") |
+| `scheduling.rerun.condition_codes` | list of codes the catalog lists and has not retired | the model's eight codes and, since 0.12.28 (Alice's decision 92, 2026-10-29), `contained_task_paused`, and since 0.12.30 (UPD-1, a changed default), `contained_task_application_update_required` ([policy-suspension.md](policy-suspension.md), "Which runs") |
 | `scheduling.rerun.max_per_occurrence` | integer `0..=4294967295` | `2` |
 | `scheduling.rerun.resume_stage` | `s0`…`s4` (vocabulary `pacing_stage`) | `s2` |
 | `scheduling.rerun.resume_settle_ms` | milliseconds | `60000` |

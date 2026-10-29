@@ -82,6 +82,7 @@ use super::resource_fence::manual_claim;
 use super::runtime_config::ladder_profile;
 use super::startup_package::{HostPackageRun, PendingStartupPackage};
 use super::*;
+use crate::codes::ApplicationUpdateCode;
 use crate::codes::HostCode;
 use crate::codes::HostLocation;
 use crate::error::spelled;
@@ -2521,6 +2522,30 @@ impl HostShared {
                             None,
                         )?;
                         break;
+                    }
+                    // UPD-1 (design §5.2 item 2; contracts/emulator-control.md): a rung's package
+                    // run that the game's update dialog ended stops the ladder there: an old
+                    // client is cured by no restart. The rung is recorded failed with
+                    // `recovery_ladder_interrupted` caused by the run's code, and the ladder ends
+                    // `exhausted` at Warning without climbing on (no emulator restart).
+                    RungAttempt::Failed { run_id, reason }
+                        if reason == ApplicationUpdateCode::RunEnded.as_str() =>
+                    {
+                        self.append_recovery_rung_finished(
+                            pending,
+                            rung,
+                            RecoveryRungOutcome::Failed,
+                            run_id,
+                            Some(interrupted(rung_reason_outcome(pending, key, reason))),
+                            None,
+                        )?;
+                        return self.finish_interrupted_ladder(
+                            pending,
+                            key,
+                            None,
+                            reason,
+                            tried.count(),
+                        );
                     }
                     RungAttempt::Failed { run_id, reason } => {
                         last_interruption = is_hold_interruption(reason).then_some(reason);

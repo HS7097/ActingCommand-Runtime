@@ -327,6 +327,9 @@ mod gate_398_rd5b;
 // STORE-FG-2 (0.12.29): a store update package's store tap goes to exactly its allowed store;
 // every other input expects the assigned application.
 mod gate_store_fg2;
+// UPD-1 (0.12.30), register §1.215: `health.application.update_required`, its seed, its reserved
+// key and the scheduling gate it holds (position 4a).
+mod gate_upd1;
 // Workflow #403: an unconfirmed close of one instance's resources fences only that instance.
 mod gate_403;
 // #411 A38: a fence that waits for a person re-checks itself; an emulator control command that

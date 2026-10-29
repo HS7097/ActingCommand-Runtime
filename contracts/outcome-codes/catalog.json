@@ -5686,6 +5686,9 @@
         "max_per_run_invalid": {
           "description": "An interrupt's max_per_run is outside 1 to 8."
         },
+        "interrupt_result_invalid": {
+          "description": "An interrupt declares result but its then is not end_run (UPD-1, since 0.12.30)."
+        },
         "edges_count": {
           "description": "navigation.json holds more than 1024 edges (Workflow #373 NAV-5)."
         },

@@ -3038,3 +3038,30 @@ actingcommand_contract::outcome_locations! {
     }
 }
 // ---- STORE-FG-2: end ----
+
+// ---- UPD-1 (design-upd1 §2, §3, §4; Alice's rulings 95 and 96 of 2026-10-29 17:1x): begin ----
+actingcommand_contract::outcome_codes! {
+    /// The host's codes of the "client out of date" path (UPD-1, register §1.215): the named end
+    /// of a run, the reserved instance fact and the scheduling gate it holds. No existing code
+    /// fits: `contained_task_interrupt_escalated` is a pack-logic failure that accumulates and
+    /// opens the ladder, and the gate needs its own reason in the execution table.
+    pub(crate) enum ApplicationUpdateCode {
+        /// Warning. A shared interrupt page whose `interrupts.json` entry declares `result`
+        /// `application_update_required` ended the run (`then: end_run`) after its handler: the
+        /// game says its client must be updated, the run ends with no further input, and the
+        /// instance fact `health.application.update_required` is true. A scheduled run ends by
+        /// a condition (the default `scheduling.rerun.condition_codes`); no ladder by default.
+        /// Keys `page_id`.
+        RunEnded => "contained_task_application_update_required": warning / none,
+        /// Info. The candidate's instance waits for its game's client update
+        /// (`health.application.update_required` true): every task of the instance except a
+        /// `store_update` package's is deferred, position 4a, with no wake of its own. Keys
+        /// `instance_id` (the instance alias), `fact_key`.
+        Pending => "application_update_pending": info / none,
+        /// Error. A client published `health.application.update_required`, which only the
+        /// Runtime writes; the publication is refused before the fact write gate and nothing is
+        /// appended. Keys `fact_key`.
+        KeyReserved => "application_update_key_reserved": error / none,
+    }
+}
+// ---- UPD-1: end ----

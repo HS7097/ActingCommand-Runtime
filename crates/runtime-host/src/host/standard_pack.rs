@@ -52,10 +52,11 @@
 use super::contained_task::{EntryRecoveryRuntime, PackageIdentity, RuntimeContainedTask};
 use super::navigation::{RunNavigation, run_navigation};
 use super::*;
-use actingcommand_contract::outcome::{IoOp, Outcome};
+use crate::codes::ApplicationUpdateCode;
+use actingcommand_contract::outcome::{CauseRelation, IoOp, Outcome};
 use actingcommand_contract::{
-    InterruptLimitCause, MAX_INTERRUPT_HANDLINGS_PER_RUN, NavigationProblem, NavigationRole,
-    RegistryProblem, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE,
+    InterruptLimitCause, InterruptResult, MAX_INTERRUPT_HANDLINGS_PER_RUN, NavigationProblem,
+    NavigationRole, RegistryProblem, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE,
     STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE,
     STANDARD_PACK_TABLES_DIRECTORY, StandardPackDisplayLayout, StandardPackInterrupts,
     StandardPackNavigation, StandardPackPages, StandardPackRegistry, StandardPackRootBytes,
@@ -549,6 +550,8 @@ struct RunInterrupt {
     /// Workflow #411 B43: the code that ends a run meeting the page once more than
     /// `max_per_run`, as its `limit_cause` says.
     limit_code: HostCode,
+    /// UPD-1: the named result of a run this page ends (`then: end_run`), as its `result` says.
+    result: Option<InterruptResult>,
 }
 
 /// What a run's preparation read of its game's standard-pack root, fixed for the whole run (§7):
@@ -821,6 +824,7 @@ impl HostShared {
                     then,
                     max_per_run: interrupt.max_per_run,
                     limit_code,
+                    result: interrupt.result,
                 })
             })
             .collect::<Vec<_>>();
@@ -859,6 +863,32 @@ pub(super) fn interrupt_failure(error: RuntimeHostError) -> ContainedTaskRunErro
         severe: false,
     });
     ContainedTaskRunError::Boundary(failure)
+}
+
+/// UPD-1 fix round 1 (review M2): the outcome a failed interrupt handler links to the run's
+/// update-required end, or none when its failure keeps its own path: a fatal one (a poisoned or
+/// fatal boundary failure, which `run_interrupt_layer` carries out unrecorded) and a stop of the
+/// run (its cancellation, its operator pause or its deadline), which the terminal settles as such.
+fn handler_failure_link(error: &ContainedTaskRunError<RequestFailure>) -> Option<Outcome> {
+    match error {
+        ContainedTaskRunError::Task(error) => Some(error.outcome()),
+        ContainedTaskRunError::Boundary(failure)
+        | ContainedTaskRunError::NonfatalOperation(failure) => {
+            let own_path = failure.poison_runtime
+                || failure.error.is_fatal()
+                || matches!(
+                    failure.error.projection().code,
+                    RuntimeErrorCode::ContainedTaskDeadlineExceeded
+                        | RuntimeErrorCode::ContainedTaskCancelled
+                        | RuntimeErrorCode::ContainedTaskPaused
+                );
+            if own_path {
+                None
+            } else {
+                Some(failure.error.outcome())
+            }
+        }
+    }
 }
 
 /// `contained_task_navigation_package_invalid` for `package_id` in `role` (§9.1), with the
@@ -1221,7 +1251,20 @@ impl RuntimeContainedTask<'_> {
             )?
             .package_label()
             .to_owned();
-        self.run_interrupt_layer(interrupts, &entry.handler.package_id)?;
+        // UPD-1 fix round 1 (review M2, the coordinator's decision of 2026-10-29): on a page whose
+        // data names the run's result, the page seen is what matters (the store update package
+        // starts from the dialog page itself), so a handler that fails short of fatal still ends
+        // the run by that result, its failure linked. A fatal failure, and a stop of the run (a
+        // cancellation, a pause, the deadline), keep their own path.
+        if let Err(error) = self.run_interrupt_layer(interrupts, &entry.handler.package_id) {
+            if matches!(entry.then, RunThen::EndRun)
+                && entry.result == Some(InterruptResult::ApplicationUpdateRequired)
+                && let Some(handler_failure) = handler_failure_link(&error)
+            {
+                return Err(self.end_by_application_update(&entry.page, Some(handler_failure)));
+            }
+            return Err(error);
+        }
         let then = match &entry.then {
             RunThen::Resume => TaskInterruptThen::Resume,
             RunThen::EndRun => TaskInterruptThen::EndRun,
@@ -1258,6 +1301,13 @@ impl RuntimeContainedTask<'_> {
                 .count(count),
         })
         .map_err(ContainedTaskRunError::Boundary)?;
+        // UPD-1 (design §2.2, §3.3): a page whose data names the run's result `application
+        // update required` ends it with its own code (warning, ladder class none).
+        if then == TaskInterruptThen::EndRun
+            && entry.result == Some(InterruptResult::ApplicationUpdateRequired)
+        {
+            return Err(self.end_by_application_update(&entry.page, None));
+        }
         if then == TaskInterruptThen::EndRun {
             return Err(interrupt_failure(
                 RuntimeHostError::request(
@@ -1269,6 +1319,44 @@ impl RuntimeContainedTask<'_> {
             ));
         }
         Ok(SharedInterruptVerdict::Handled)
+    }
+
+    /// UPD-1 (design §2.2, §3.3): the failure that ends the run the update dialog `page` ended,
+    /// the instance's `health.application.update_required` recorded true first, before the
+    /// terminal: `contained_task_application_update_required` with `page_id` (warning, ladder
+    /// class none). Fix round 1 (review M2): `handler_failure`, the page's handler's own failure
+    /// short of fatal, rides along as a `related` link. A refusal of the store fails the run with
+    /// the refusal (Fail Loud); a fatal failure poisons it.
+    fn end_by_application_update(
+        &self,
+        page: &str,
+        handler_failure: Option<Outcome>,
+    ) -> ContainedTaskRunError<RequestFailure> {
+        if let Err(error) = self.host.record_application_update(
+            self.instance_alias,
+            true,
+            super::application_update::application_update_run_snapshot(self.run_id.transport()),
+        ) {
+            return if error.is_fatal() {
+                ContainedTaskRunError::Boundary(RequestFailure::poison_without_terminal(error))
+            } else {
+                interrupt_failure(error)
+            };
+        }
+        interrupt_failure(
+            RuntimeHostError::request(
+                ApplicationUpdateCode::RunEnded,
+                HostLocation::InterruptHandle,
+                RuntimeErrorCode::BackendOperationFailed,
+            )
+            .with_outcome_values(|outcome| {
+                let outcome = outcome.page_id(page);
+                match handler_failure {
+                    Some(failure) => outcome.joined(CauseRelation::Related, failure),
+                    None => outcome,
+                }
+            }),
+        )
     }
 
     /// Runs the admitted package `package_id` as a layer of the run (`role: interrupt_handler`,
