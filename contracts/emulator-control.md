@@ -130,9 +130,18 @@ before). After `stop` nothing reopens it; it opens on its next use.
   listing still showed the device process, `unknown` otherwise. A stop's worst case is 60 s
   (`control`) + 120 s (wait) + 10 s (last poll) + 10 s (last listing) = 200 s.
 - Failure: `launch_err_code != 0` (`mumu_manager_launch_error`, carrying `launch_err_msg` in the
-  summary), an `info` refusal (its existing typed stages, an expired poll excepted) or the
-  deadline (`mumu_manager_wait_timeout`, carrying the last observed state, or `no observation`
-  when every poll expired, and the count of expired polls).
+  summary) at once, or the deadline (`mumu_manager_wait_timeout`, carrying the last observed
+  state, or `no observation` when no poll answered, and the counts of expired and failed polls).
+  EMU-BIND A (since 0.12.28): during a Start's wait a poll that `info` refuses (a non-zero exit,
+  an errcode envelope, a shape error or another typed stage) is no observation yet, as an expired
+  poll is, and the wait goes on to its deadline, which then carries the last refusal's text; the
+  observation of 6.5.7.0 below (`info` answered throughout the launch) does not hold on 6.8.4.0,
+  whose `info` exited non-zero once while the VM of the first launch after a reboot came up.
+  During a Stop's wait an `info` refusal still ends the wait at once with its typed stage.
+  EMU-BIND C (Fail Loud): a failure that a refused poll ended or followed carries that poll's own
+  text (its exit status, stdout and stderr) after the control command's output in the summary,
+  which the failure record links as `foreign_mumu_manager_error`; `exit_code` stays the control
+  command's.
 - `player_state` is undocumented: it is recorded opaquely and never branched on.
 - The hidden `api` subcommand is never dispatched.
 
@@ -193,6 +202,15 @@ of its shell was lost when that shell's own shutdown hung, and the instance stay
   no `adb_host_ip`, no `adb_port`, no `player_state`, no `launch_err_code`, and the key is
   `error_code` (not `errcode`), so it is not an envelope.
 - `info -v all` lists a stopped instance with those same flat fields (no `adb_port`).
+
+### Observed on MuMuManager 6.8.4.0 (production host, 10-29, after a machine reboot; observations, not vendor guarantees)
+
+- The first `control -v <index> launch` after the reboot exited 0 with `{"errcode": 0, "errmsg":
+  ""}`; its VM process appeared about a second later, and about a second after that one
+  `info -v <index>` poll exited non-zero. A later `info` read the instance running. Before
+  EMU-BIND this ended the Start as `emulator_control_failed` with the launch's output only, and
+  the running emulator kept its endpoint pending until a person started it ("Emulator watch",
+  recognition).
 
 ## Cold start (slice #316-B2)
 
@@ -1185,7 +1203,10 @@ one included), never holds or queues the claim and never makes it yield.
   failure), `emulator_autostart_network_unready`, `emulator_autostart_superseded`,
   `emulator_autostart_skipped` (already running) and `emulator_autostart_interrupted` (a drain
   or a shutdown), each with the `alias` (emu-watch retires `emulator_autostart_yielded`: no
-  pause makes the claim yield). A report line that cannot be written never stops the daemon.
+  pause makes the claim yield). EMU-BIND (since 0.12.28): `emulator_autostart_skipped` and
+  `emulator_autostart_preparation_failed` with `watch_kind` `recognize` end the emulator watch's
+  recognition of a running emulator, which starts nothing ("Emulator watch"). A report line that
+  cannot be written never stops the daemon.
   Only a failure the Runtime does not survive (a ledger append) stops the host.
 
 ## Emulator watch (emu-watch)
@@ -1228,9 +1249,55 @@ the configured starts; the watch ends with the host.
   stuck-recovery ladder's direction ① counts no record committed while an autostart claim holds
   the instance's key ("Stuck-recovery ladder", "Triggers"), so the watch's failed Starts never
   admit a ladder whose emulator-restart rung would start the emulator beyond the bound.
+- **Recognition (EMU-BIND, since 0.12.28).** An instance, configured with `start_emulator` or
+  not, whose read shows its emulator running (Android started and an ADB port reported) while the
+  Runtime holds its endpoint pending or bound to another port, is recognized under the same
+  conditions as a restart (its key free, no autostart or emulator control claim waiting, not
+  held stopped by its idle action), paused or not (binding an endpoint is no scheduling):
+  `emulator_autostart_queued` (info; `count` 1, `alias`, `attempts`, `limit_count`,
+  `watch_kind` `recognize`), then one autostart claim marked `recognize`. The claim takes no
+  network wait and no start turn; inside a blackout of its instance it waits (queued, or holding
+  its key) until the blackout's end. On its key it runs the preparation of a self-check (#411
+  A48, [runtime-fact-store.md](runtime-fact-store.md), "Emulator status first"): the emulator
+  status read, the reported port bound
+  with `runtime.instance_bound`, the ADB baseline, `device.connected`, the opens of input and
+  capture (CAP-IDX: a port that is not the index's base port is checked when capture opens on
+  it). The hold then ends as after a start: once the endpoint is bound, the instance's startup
+  package is queued and takes the key through the gate (behind a scheduling pause it waits
+  queued as a gated entry), or waits behind the ladder a failed preparation admitted; an
+  endpoint still pending queues none. It never sends a launch or a shutdown. Its report line is
+  `emulator_autostart_skipped` (`watch_kind` `recognize`) when the self-check passed, or
+  `emulator_autostart_preparation_failed` (`watch_kind` `recognize`) when it did not, the failing
+  step recorded on that instance only (an adb child the ADB wait left unconfirmed fences that
+  instance only, #419). The bound is the restarts' (`emulator_control.restart_attempts` within
+  `emulator_control.restart_window_ms`), counted apart from them: once used up,
+  `emulator_watch_restart_exhausted` with `watch_kind` `recognize`, once, and no recognition
+  until the oldest leaves the window or a person's emulator control of the instance clears both
+  counts. A watch claim (R3) or an idle wake's claim whose read just before its Start finds the
+  emulator so (running, its endpoint pending or bound to another port) recognizes it the same way
+  instead of ending as `emulator_autostart_skipped` without it; one that finds the process
+  running without Android or a port still ends skipped, and the next poll recognizes it once it
+  runs. `watch_enabled = false` stops recognitions with the polls.
+  EMU-BIND fix 1 (since 0.12.28; review M1: a Start that bound the reported port and then
+  failed, at its ADB baseline with `emulator_control_adb_not_ready` or at its deadline with a
+  read that saw the emulator running, left the instance bound and `on` with its self-check
+  facts dropped, and no startup package and no ladder followed): the watch also recognizes an
+  instance bound to the reported port that holds no `backend.selfcheck.*` fact at all (dropped,
+  not failed), whose key no claim holds or waits for, and that neither its idle action
+  (IDLE-1, whatever its action), a scheduling pause of the instance in stage `released` (its
+  resume's reconnect recognizes it) nor a #403 fence (its ladder, recheck or person) holds;
+  same bound, same claim. On its key, just before the recognition, the claim reads the
+  emulator status once more (review L2): when no recognition is needed any more (the instance
+  bound to the reported port and prepared meanwhile, or the emulator not running with Android
+  and a port) it ends as `emulator_autostart_skipped` with `watch_kind` `recognize` and the
+  read's `process_started`, `android_started` and `adb_port_present`, also a
+  `device_state_observed` record under the instance, and closes, prepares and queues nothing;
+  a failed read ends it as `emulator_autostart_failed`. Every line that ends a recognition
+  (`emulator_autostart_failed`, `_interrupted`, `_superseded` too, review L1) carries
+  `watch_kind` `recognize`.
 - **Observe only (R4).** An instance without `start_emulator` is read and recorded, never
-  started. The watch never stops or restarts a running emulator, and no record names a device:
-  an emulator instance is its `alias`.
+  started (EMU-BIND: a running one is recognized). The watch never stops or restarts a running
+  emulator, and no record names a device: an emulator instance is its `alias`.
 - **Idle stop (IDLE-1).** An instance whose emulator its idle action `stop_emulator` stops, or
   stopped and has not woken yet ([runtime-config.md](runtime-config.md), "The `idle` section"),
   is read and recorded but not started again by the watch: its wake starts it, through the same
@@ -1250,7 +1317,12 @@ keys are the `emulator_control` section's ([runtime-config.md](runtime-config.md
 (#420 S4): two of its own, `emulator_watch_state_changed` and `emulator_watch_restart_exhausted`;
 the rest are existing codes (`emulator_state_read_failed`, `emulator_autostart_queued`, and
 `runtime_monitor_spawn_failed` when its thread cannot be spawned), and its operation is the
-location `emulator_watch`.
+location `emulator_watch`. EMU-BIND adds no code and no configuration key: the value
+`watch_kind` (vocabulary `emulator_watch_kind`: `restart`, `recognize`) on
+`emulator_autostart_queued`, `emulator_autostart_skipped`,
+`emulator_autostart_preparation_failed` and `emulator_watch_restart_exhausted` tells a
+recognition from a restart; since 0.12.28 also on `emulator_autostart_failed`,
+`emulator_autostart_interrupted` and `emulator_autostart_superseded`.
 
 ## Client and CLI
 

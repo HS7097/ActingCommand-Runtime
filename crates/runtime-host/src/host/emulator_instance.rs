@@ -629,7 +629,7 @@ impl HostShared {
     /// queued startup claims are cancelled first (coordinator ruling on review #716: a startup
     /// run against a stopped emulator is meaningless), then the release hands the key straight to
     /// the ladder a failed preparation admitted, or to the next eligible claim.
-    fn end_emulator_control_hold(
+    pub(super) fn end_emulator_control_hold(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
         key: &HostKey,
@@ -1900,6 +1900,9 @@ impl HostShared {
     /// that failure, which the caller settles (Workflow #387 D1c-G, `settle_unconfirmed_adb`).
     fn await_adb_baseline(&self, rebound: &RegisteredInstance) -> RuntimeHostResult<u64> {
         let started = Instant::now();
+        #[cfg(test)]
+        let deadline = started + self.adb_baseline_wait_for_test.unwrap_or(ADB_BASELINE_WAIT);
+        #[cfg(not(test))]
         let deadline = started + ADB_BASELINE_WAIT;
         let stopped = || self.fatal.is_shutdown_requested();
         let mut last_error = None;
@@ -2276,7 +2279,10 @@ fn timeout_settled(
 /// the control command exited, its output is a `foreign_mumu_manager_error` link with the exit
 /// status as `exit_code` (0 for an errcode envelope, a launch error or the wait deadline);
 /// without an exit the text is the device's, a `foreign_other_error` link. No exit status is
-/// recorded as an OS error.
+/// recorded as an OS error. EMU-BIND C (0.12.28, Fail Loud): when a refused `info` poll ended
+/// the wait (a Stop's) or was the last one before its deadline (a Start's), the summary carries
+/// that poll's own text (its exit status, stdout and stderr) after the control command's
+/// output, so the link names the failing read and not only the launch's `errcode 0`.
 fn control_output(error: RuntimeHostError, failure: &EmulatorControlFailure) -> RuntimeHostError {
     match failure.exit_code {
         Some(exit_code) => error.with_mumu_manager_output(&failure.output_summary, exit_code),

@@ -157,6 +157,9 @@ mod gate_369_s6clow;
 // emulators and starts a configured one it finds stopped, within a bound.
 mod gate_372k2;
 mod gate_emu_watch;
+// EMU-BIND (0.12.28): the watch recognizes a running emulator whose endpoint the Runtime holds
+// pending or bound to another port, and binds it without starting anything.
+mod gate_emu_bind;
 // IDLE-1 (Alice's ruling 41): the idle planner on a manual clock.
 mod gate_idle1;
 // IDLE-1 (#419): a failed idle stop is contained to its instance and the Runtime goes on.

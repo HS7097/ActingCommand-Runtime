@@ -135,7 +135,8 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
     if outcome.matched {
         refuse_layouts_beyond_the_frames(&evaluator, &outcome.page, frames.len())?;
     }
-    let frame_path = write_frame_if_requested(&flags, &loaded_scene)?;
+    // #411 A69 (P60): the frame file is written only once the answer stands (`write_frame`).
+    let frame_png = requested_frame(&flags, &loaded_scene)?;
     let (targets, explicit) = observe_targets(&evaluator, &frames, &flags, &outcome)?;
     // Workflow #308 SEL-L6a (FCM T-03): the page's operations with several destinations follow
     // its navigation edges, with every page they may reach; #411 A13 B part: each with the input
@@ -170,7 +171,8 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
         "instance": instance,
         "page": if outcome.matched { outcome.page.clone() } else { "unknown".to_string() },
         "matched": outcome.matched,
-        "standby": outcome.standby,
+        // #411 A70 (P61): the projection's, never true for a page not recognised.
+        "standby": observation.standby,
         "frame_age_ms": loaded_scene.frame_age_ms,
         "backend": loaded_scene.backend,
         "frame_source": loaded_scene.source,
@@ -191,6 +193,8 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
     if outcome.matched {
         let mut sets = Vec::new();
         let mut evidence = Vec::new();
+        // #411 B47: the layouts whose features need a provider the Tools do not hold.
+        let mut not_projected = Vec::new();
         // #411 Lab B-2: the most frames a projected layout used.
         let mut used_frames = 0;
         for layout in evaluator
@@ -203,17 +207,35 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
             // current frame last, as the kernel's select hands it its series.
             let required = layout.required_frames();
             let series = &frames[frames.len().saturating_sub(required)..];
-            let projected = evaluator
+            let projected = match evaluator
                 .scene_context(&loaded_scene.scene)
                 .project_candidates_with_samples(&layout.id, series, &mut |_, _, _, _| Ok(()))
-                .map_err(|error| {
-                    CliError::package_invalid(format!(
+            {
+                Ok(projected) => projected,
+                // #411 B47: a feature that needs an OCR or NN provider the Tools do not hold
+                // leaves its layout not projected, named with why; the page is still answered,
+                // as an action's OCR target is not evaluated without failing (LAB-3).
+                Err(error)
+                    if error.code()
+                        == actingcommand_recognition_pack::CANDIDATE_FEATURE_PROVIDER_MISSING =>
+                {
+                    not_projected.push(json!({
+                        "layout_id": layout.id,
+                        "item": error.item(),
+                        "code": error.code().as_str(),
+                        "detail": error.detail(),
+                    }));
+                    continue;
+                }
+                Err(error) => {
+                    return Err(CliError::package_invalid(format!(
                         "{}: layout={} {}",
                         error.code(),
                         layout.id,
                         error.detail()
-                    ))
-                })?;
+                    )));
+                }
+            };
             used_frames = used_frames.max(series.len());
             let (public, _) = projected
                 .split(&layout.candidate_privacy(&view.metadata, projected.candidates().len()))
@@ -228,6 +250,13 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
             payload["candidate_evidence"] = json!(evidence);
             payload["candidate_coverage"] = json!({"provided_frames":used_frames,"aggregation":"production_owner","task_preparation":"not_requested"});
         }
+        // #411 B47: each layout not projected, in declaration order, with the OCR state.
+        if !not_projected.is_empty() {
+            payload["candidate_not_projected"] = json!(not_projected);
+            if payload.get("ocr").is_none() {
+                payload["ocr"] = super::offline_ocr::status();
+            }
+        }
     }
     if !outcome.matched {
         payload["candidates"] = json!(lab2_page_candidates(&outcome));
@@ -238,7 +267,7 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
     if let Some(suspicion) = lab2_observation_suspicion(&outcome, loaded_scene.frame_age_ms) {
         payload["suspicion"] = suspicion;
     }
-    if let Some(path) = frame_path {
+    if let Some((path, _)) = &frame_png {
         payload["frame_path"] = json!(path.display().to_string());
     }
     // Workflow #410 item 1: the scene's coordinate system, and its preview when asked.
@@ -247,7 +276,13 @@ pub(crate) fn run_observe(global: &GlobalOptions, args: &[String]) -> CliOutcome
     if flags.bool("--preview") {
         payload["preview"] = frame::scene_preview(&loaded_scene.scene, loaded_scene.png.as_deref());
     }
-    observation::project(payload, observation, &flags, global.verbose)
+    let projected = observation::project(payload, observation, &flags, global.verbose)?;
+    // #411 A69 (P60): an answer that cannot be given (`observe_identity_limit_exceeded`) writes
+    // no frame file.
+    if let Some((path, png)) = frame_png {
+        write_frame(&path, png)?;
+    }
+    Ok(projected)
 }
 
 /// #411 Lab B-2 (R4): an offline answer's `recognition_coverage` over `provided` frames when the
@@ -430,15 +465,9 @@ fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<V
             "terminal": verified.receipt().terminal(),
             "arbitration": runtime_scheduler_projection(false),
         });
-        if let Some(path) = flags.optional_path("--with-frame") {
-            if let Some(parent) = path
-                .parent()
-                .filter(|parent| !parent.as_os_str().is_empty())
-            {
-                fs::create_dir_all(parent).map_err(|error| CliError::device(error.to_string()))?;
-            }
-            fs::write(&path, verified.png())
-                .map_err(|error| CliError::device(error.to_string()))?;
+        // #411 A69 (P60): the frame file is written only once the answer stands, below.
+        let frame_file = flags.optional_path("--with-frame");
+        if let Some(path) = &frame_file {
             payload["frame_path"] = json!(path.display().to_string());
         }
         // Workflow #410 item 1: the captured frame's coordinate system, and its preview when
@@ -492,6 +521,10 @@ fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<V
             projected["record"] = serde_json::to_value(recorded).map_err(|error| {
                 CliError::usage(format!("failed to encode the record: {error}"))
             })?;
+        }
+        // #411 A69 (P60): an answer that cannot be given writes no frame file.
+        if let Some(path) = &frame_file {
+            write_frame(path, verified.png())?;
         }
         Ok(projected)
     })();
@@ -2795,15 +2828,28 @@ fn load_lab2_scene(
     ))
 }
 
-fn write_frame_if_requested(flags: &FlagArgs, scene: &Lab2Scene) -> CliOutcome<Option<PathBuf>> {
+/// The `--with-frame` path and the PNG to write there, refused before anything is evaluated when
+/// the frame has no PNG. #411 A69 (P60): nothing is written here; [`write_frame`] writes it once
+/// the answer stands.
+fn requested_frame<'a>(
+    flags: &FlagArgs,
+    scene: &'a Lab2Scene,
+) -> CliOutcome<Option<(PathBuf, &'a [u8])>> {
     let Some(path) = flags.optional_path("--with-frame") else {
         return Ok(None);
     };
-    let png = scene.png.as_ref().ok_or_else(|| {
+    let png = scene.png.as_deref().ok_or_else(|| {
         CliError::device(
             "--with-frame requires a PNG-backed frame; selected capture backend returned raw pixels",
         )
     })?;
+    Ok(Some((path, png)))
+}
+
+/// `observe --with-frame`: `png` written as `path`, its directory created first. #411 A69 (P60):
+/// called only after the answer was projected, so an answer that fails
+/// (`observe_identity_limit_exceeded`) leaves no frame file.
+fn write_frame(path: &std::path::Path, png: &[u8]) -> CliOutcome<()> {
     if let Some(parent) = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -2812,13 +2858,29 @@ fn write_frame_if_requested(flags: &FlagArgs, scene: &Lab2Scene) -> CliOutcome<O
             CliError::device(format!("failed to create {}: {err}", parent.display()))
         })?;
     }
-    fs::write(&path, png)
-        .map_err(|err| CliError::device(format!("failed to write {}: {err}", path.display())))?;
-    Ok(Some(path))
+    fs::write(path, png)
+        .map_err(|err| CliError::device(format!("failed to write {}: {err}", path.display())))
 }
 
 /// `observe`'s `targets`, and the evaluations of the targets `--targets` names, by target id.
 type ObservedTargets = (Vec<Value>, Vec<(String, TargetEvaluation)>);
+
+/// #411 A62 (P57): where a `target_center` click on this evaluation lands, `{x, y}`: the centre of
+/// the matched template box as the kernel presses it (`x + width / 2`, `y + height / 2`, integer
+/// division), the box of the current frame; `null` when the target did not pass or matched no
+/// template box, where such a click is not made.
+fn target_center_point(evaluation: &TargetEvaluation) -> Value {
+    match evaluation
+        .template
+        .filter(|template| evaluation.passed && template.width > 0 && template.height > 0)
+    {
+        Some(template) => json!({
+            "x": template.x + template.width / 2,
+            "y": template.y + template.height / 2,
+        }),
+        None => Value::Null,
+    }
+}
 
 /// `observe`'s `targets`, and the evaluations of the targets `--targets` names (#411 Lab L6: the
 /// projection takes their values, as the online observation takes its explicit targets'). #411
@@ -2840,7 +2902,8 @@ fn observe_targets(
                 "id": target,
                 "passed": evaluation.passed,
                 "score": target_score(&evaluation),
-                "evaluation": target_eval_json(&evaluation)
+                "evaluation": target_eval_json(&evaluation),
+                "target_center": target_center_point(&evaluation)
             }));
             evaluations.push((target, evaluation));
         }

@@ -20,13 +20,13 @@ const ALIAS_OTHER: &str = "cap-idx-other";
 const INDEX_SHIFTED: u16 = 3;
 const INDEX_OTHER: u16 = 4;
 
-fn base_port(index: u16) -> u16 {
+pub(super) fn base_port(index: u16) -> u16 {
     mumu_instance_port(index).expect("base port")
 }
 
 /// A Nemu IPC capture registration bound through discovery to `index` on its base port, as
 /// actingd assembles a discovered instance.
-fn discovered_registration(alias: &str, index: u16) -> ExecutionBackendRegistration {
+pub(super) fn discovered_registration(alias: &str, index: u16) -> ExecutionBackendRegistration {
     let target = DeviceTarget {
         port: base_port(index),
         ..DeviceTarget::default()
@@ -54,7 +54,7 @@ fn discovered_registration(alias: &str, index: u16) -> ExecutionBackendRegistrat
 
 /// A fake `info -v <index>` read: a running instance reporting `reported[index]` as its ADB
 /// port; every index it is asked for is recorded in `reads`.
-fn fake_reader(
+pub(super) fn fake_reader(
     reported: BTreeMap<u16, u16>,
     reads: Arc<Mutex<Vec<u16>>>,
 ) -> impl Fn(&Path, u16) -> DeviceResult<InstanceState> + Send + Sync + 'static {

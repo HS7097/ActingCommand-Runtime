@@ -607,6 +607,9 @@ pub struct RuntimeHostConfig {
     /// the operating system's.
     #[cfg(test)]
     network_connectivity_for_test: Option<NetworkConnectivityForTest>,
+    /// EMU-BIND fix 1 (0.12.28), test only: a Start's ADB baseline wait in place of its 30 s.
+    #[cfg(test)]
+    adb_baseline_wait_for_test: Option<Duration>,
     /// Workflow #386 SR-3, test only: holds the task package admission after start until the
     /// test releases it.
     #[cfg(test)]
@@ -690,6 +693,8 @@ impl RuntimeHostConfig {
             settlement_refusal_for_test: None,
             #[cfg(test)]
             network_connectivity_for_test: None,
+            #[cfg(test)]
+            adb_baseline_wait_for_test: None,
             #[cfg(test)]
             pack_admission_hold_for_test: None,
             #[cfg(test)]
@@ -782,6 +787,14 @@ impl RuntimeHostConfig {
         read: NetworkConnectivityForTest,
     ) -> Self {
         self.network_connectivity_for_test = Some(read);
+        self
+    }
+
+    /// EMU-BIND fix 1 (0.12.28), test only: a Start's ADB baseline wait lasts `wait` instead of
+    /// 30 s, so a test reaches its `emulator_control_adb_not_ready` without waiting it out.
+    #[cfg(test)]
+    pub(crate) fn with_adb_baseline_wait_for_test(mut self, wait: Duration) -> Self {
+        self.adb_baseline_wait_for_test = Some(wait);
         self
     }
 
@@ -1884,6 +1897,8 @@ impl RuntimeHost {
             idle_action_ended: Condvar::new(),
             #[cfg(test)]
             network_connectivity_for_test: config.network_connectivity_for_test.clone(),
+            #[cfg(test)]
+            adb_baseline_wait_for_test: config.adb_baseline_wait_for_test,
             #[cfg(test)]
             contained_settlement_unrecorded_for_test: config
                 .contained_settlement_unrecorded_for_test,
@@ -5457,6 +5472,10 @@ struct HostShared {
     idle_action_ended: Condvar,
     #[cfg(test)]
     network_connectivity_for_test: Option<NetworkConnectivityForTest>,
+    /// EMU-BIND fix 1 (0.12.28), test only: see
+    /// [`RuntimeHostConfig::with_adb_baseline_wait_for_test`].
+    #[cfg(test)]
+    adb_baseline_wait_for_test: Option<Duration>,
     /// #411 A65 (Codex's counterexample on #420), test only: see
     /// [`RuntimeHostConfig::with_contained_settlement_unrecorded_for_test`].
     #[cfg(test)]
