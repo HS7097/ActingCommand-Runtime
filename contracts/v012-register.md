@@ -3912,6 +3912,20 @@ console pins A.5's stale-schema mark with the rest.
 | R0-9 | the edit-version token: `expected_version` in a request, the answer's own member after a write (`config_version`, `ResourceTargetsApplied.version`, `PackScheduleEdited.version`), `current_version` in a `fact_observation_version_conflict`; opaque, compared only for equality, never ordered, never related to a `QueryEvents` sequence; and the console's revision rules (a console that sends any revision-3 shape declares `min` 3) | contract wording | R-0 | R-4, R-8, R-13c | [runtime-interface.md](runtime-interface.md), "Workbench request kinds" |
 | R0-10 | `ResourceTargetView.stale_schema?` (a boolean at the view's top level, beside `active`) | new optional answer member (**`runtime-client` revision 3**) | R-0 | R-13a | #429 A.5: `true` when the instance's stored policy is a v1 or v2 record, which the v3 reader reads as no table (no `active`) instead of refusing the view; absent in every 0.12.30 answer, so the view serializes as before and a revision-2 reader still reads it; the release that first fills it raises `runtime-client` `min` to 3, as for R0-4 and R0-8 |
 
+### 1.214 Slice R-15a (0.12.30): the UI side of the installer's interface edges, and the two Lab flags from the graphical wizard (Workflow #429 A.4 increments a and h; design `rd-1029/429-A-runtime.md` §A.4, the R-15a entry; coordinator work order `rd-1029/brief-wave3a.md` R-15a)
+
+[install-cli.md](install-cli.md) ("Interface checks", "UI edges"; "Lab options from the graphical
+wizard") and [component-interfaces.md](component-interfaces.md) ("Checks per operation") are the
+contract. **No persisted ledger shape**, no outcome code, no configuration key, no wire or
+interface revision: the edges are the installer's own checks of declarations that already exist,
+and no anchor of a declared interface changes. The number 1.214 is the coordinator's.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| R15A-1 | party U\*: a UI build's declaration, read from its manifest's `interfaces` (the UI's `component-interfaces.json`) by the parse rules, a missing `runtime-outcomes` counting as [0, 0] (`UiDeclaration`) | behaviour (`actingctl install`) | R-15a | — (the release reader R-15b and the layout R-15c bring a UI build) | until then only the gate tests read one; the UI manifest's `installation_selection_schema` agreement stays with R-15b's reader |
+| R15A-2 | the U\* edge rows `actingd-config` `installer_ui_next_common` (I ∩ U\* ∩ R\*), `ledger` `previous_max_in_ui` (Rp.max ∈ U\*) and `next_max_in_ui` (R\*.max ∈ U\*), `runtime-client` `ui_meets_next` (U\* ∩ R\*), `runtime-outcomes` `next_max_in_ui` (R\*.max ∈ U\*), each naming every party with its source and range; U\*'s source `manifest`, or `default` for a `runtime-outcomes` it does not name | behaviour (edge rows of the plan document's existing shape) | R-15a | — (R-15d adds them to the update and rollback plans and the rollback gate's part 1) | `install-selection` has no edge on a single-location root (no `install\active.json`); `component-interfaces.md` defines no edge of the UI being replaced; a failed row will count in the existing refusal `interface_edge` |
+| R15A-3 | the graphical wizard always passes `--lab-authoring true\|false` and `--lab-debugging true\|false` to `install new` and shows the result's `lab_options_enabled` as returned; a flag given decides its option, interactive or not | contract rule | R-15a (contract only) | acsetup (UI U-2), `actingctl install new` (R-15e) | no code: `install new` and `config lab-options` are not built yet, and the contract's flags already take an explicit value |
+
 ### 1.215 Slice UPD-1 (0.12.30): a "client out of date" dialog ends the run by name, and the Runtime runs the store update package (Alice's rulings 95 and 96 of 2026-10-29 17:1x, 96 read as automatic; 97 stays open and is not built; design `rd-1029/design-upd1.md`; coordinator work order `rd-1029/brief-upd1.md`)
 
 [package-reference.md](package-reference.md) (`interrupts.json` `result`, "Shared interrupt
