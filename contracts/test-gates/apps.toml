@@ -192,6 +192,14 @@ tests = [
 ]
 incident = ["#381 A"]
 
+# WD-MT C (0.12.28; Workflow #421 INV-1119 §2 and §4 row C; brief rd-1029/brief-wd-mt.md; register §1.204 WDMT-1; contracts/runtime-watchdog.md, Observation 4): the watchdog dates a candidate log by the time read from the file, never by its directory entry; the err log of an owner that stopped by an error condition, whose entry still says its creation time (before the owner took the lock) while the file says just after the close record, leads to a start through row 5, and through row 6′ when a later owner closed formally without a log; the same fixture read by the time on disk alone decides a formal close, so the fixture discriminates
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd_mt::wd_mt_a_log_that_ends_in_an_error_is_restarted_even_when_its_directory_entry_is_stale",
+]
+incident = ["#421 INV-1119"]
+
 # Era classification and JSON-RPC errors
 [[gate]]
 key = "28"
@@ -1042,6 +1050,15 @@ tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::config::gate_rb2::rb2_a_failing_call_is_a_warning_with_its_failure_and_the_start_goes_on",
 ]
 incident = ["RB-2"]
+
+# WD-MT D (0.12.28; Workflow #421 INV-1119 §4 row D; brief rd-1029/brief-wd-mt.md; register §1.204 WDMT-2, WDMT-3; contracts/runtime-watchdog.md, "Logs held open"): through a recording fake system the daemon's start clears the inherit flag of its stdout, then its stderr, and writes nothing when both were cleared or are absent; a refused call is host_stdio_inheritance_failed (warning) with each refusal a caused_by foreign_os_error naming its operation (process_stdout_inheritance_clear, process_stderr_inheritance_clear), the other handle still cleared; on Windows a vendor stdio session's saved duplicates of stdout and stderr are not inheritable (their Dup step's after flags)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::standard_handles::tests::wd_mt_the_start_clears_the_inherit_flag_of_its_stdout_and_stderr",
+    "actingcommand-device::lib::vendor_stdio::tests::wd_mt_the_saved_standard_duplicates_are_not_inheritable",
+]
+incident = ["#421 INV-1119"]
 
 # Workflow #421 P12 (v0.12.25; W1-1, brief rd-1028/brief-wave1.md; #421 6441776975): on the fake host, the composite update's automatic rollback evaluates the rollback gate before it closes the new Runtime: a gate that fails closes nothing, the new Runtime keeps running with the hold, the rollback's close is never begun and the command ends rollback_gate_failed naming only release-hold (D-7, adapted); a gate that passes rolls back as before, after a failed check (D-5) or a new start that exited (D-6), and a rollback interrupted after each of its steps, the close past the gate's pass among them, is finished by resume (F-4)
 [[gate]]

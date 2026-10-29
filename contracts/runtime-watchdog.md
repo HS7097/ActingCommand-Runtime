@@ -88,6 +88,21 @@ installer update or rollback (or its undo), a tick that would consider a start a
    `runtime_stopped` after a requested stop, `runtime_stopped` followed by the
    stopping condition after any other stop, or the refusal that ended a start (a held
    start that stopped among them).
+
+   **A log's modification time is the file's own** (WD-MT, Workflow #421 INV-1119, since
+   0.12.28). F, row 6's close evidence and row 6′ read one list of candidate logs per tick,
+   and each log's time is read from the file itself (`fs::metadata`, which opens it without
+   data access), never from the directory listing's entry. NTFS refreshes a directory entry
+   only when the last handle to the writing file object closes, so while another process holds
+   a log open (on 2026-10-29 an adb server that had inherited actingd's stdout and stderr) the
+   entry keeps the time the log was created: the stop that ended in an error was read as a
+   formal close (row 6) for 35 minutes. A log's tail is read through its own open handle, so
+   its size is the file's own too. A log whose time cannot be read is
+   `watchdog_log_unreadable` (`path`); a log gone between the listing and the read is passed
+   over. `actingctl install`'s shutdown evidence reads the same list the same way, and its
+   rollback gate dates a start log without a time in its name by the file's own modification
+   time. Since 0.12.28 actingd also makes its own stdout and stderr not inheritable at its
+   start, so no child it starts keeps its log open ("Logs held open" below).
 5. Only when a start is considered:
    - **W**, `install\writer.lock` tried shared. Held exclusively means acsetup is
      working. A free lock stays held shared until the tick ends, so acsetup cannot
@@ -443,6 +458,34 @@ start refusal once it resolved its installation. Any other terminal outcome ther
 console-started Runtime's stop or a refusal before actingd resolved its installation,
 also counts for the other root of a machine with two installation roots while it is
 newer than that root's journal.
+
+### Logs held open (WD-MT, Workflow #421 INV-1119, since 0.12.28)
+
+A log is dated by the file's own modification time (Observation 4), so a log another process
+holds open no longer changes a decision. actingd also keeps its log out of every process it
+starts:
+
+- **At start**, before anything can start a child process, the daemon clears
+  `HANDLE_FLAG_INHERIT` on its own stdout and stderr handles (`SetHandleInformation`). Windows
+  hands a new process every inheritable handle of its parent, not only the standard handles it
+  is given, and a child that starts a long-lived process hands them on: on 2026-10-29 an adb
+  client started the adb server, which kept actingd's `.out.log` and `.err.log` open for its
+  whole life. The flag on actingd's own handles covers every child at once, whatever starts it:
+  the adb clients and the server they start, MuMuManager, PowerShell, and a vendor library's
+  own process starts. A failed call is one warning daemon line,
+  `host_stdio_inheritance_failed`, with each failure a `caused_by` `foreign_os_error`
+  whose operation is `process_stdout_inheritance_clear` or `process_stderr_inheritance_clear`;
+  the start goes on. Nothing is written when both were cleared or the process has none.
+- **Each child actingd starts** is given its stdout and stderr explicitly: pipes it reads, or
+  null where it reads nothing. None receives actingd's own.
+- **The vendor stdio capture** (Workflow #191 H, #411 A36a) keeps saved duplicates of the
+  process's stdout and stderr while its session lasts; they are made not inheritable as soon as
+  they are made, and a refusal ends the session's acquisition. Its restore gives the standard
+  descriptors back the inherit flag the originals had, which since this start step is cleared.
+- The adb server rules are unchanged: Tools never starts or kills an adb server on its own.
+
+The stop manner is still read from the log's end (row 5); recording it in the owner journal's
+close record is a follow-up.
 
 ## Limits
 

@@ -320,9 +320,10 @@ fn start_logs(host: &dyn Host, root: &Path) -> Vec<StartLog> {
             else {
                 continue;
             };
+            // WD-MT (Workflow #421): the modified time is the file's own, never its directory
+            // entry's, which NTFS leaves stale while another process holds the log open.
             let at_unix_ms = stem.parse::<u64>().ok().or_else(|| {
-                entry
-                    .metadata()
+                fs::metadata(entry.path())
                     .and_then(|metadata| metadata.modified())
                     .ok()
                     .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())

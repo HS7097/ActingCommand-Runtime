@@ -406,7 +406,9 @@ does not read the journals of kind `stop` or `start` or with `rollback` (review 
   `runtime_stop_failed`). Just before `request-shutdown` S0's run-time instructions and the
   other parties' pauses are read again and journalled (what another session set or lifted
   during the drains is what the start restores). The closed start's terminal outcome is read
-  from the start logs: one that is not a stop (its category neither `info` nor `success`, as the
+  from the start logs, each dated by the file's own modification time as the watchdog's F
+  (WD-MT, since 0.12.28; `contracts/runtime-watchdog.md`, Observation 4): one that is not a stop
+  (its category neither `info` nor `success`, as the
   watchdog judges it), or none found, is the caveat `stop_terminal_unconfirmed` (the Runtime is
   gone all the same). S0's ledger head is then read with the live build's reader
   (`ledger_head_unreadable` otherwise) and the running state checked again (`runtime_running`,
@@ -712,7 +714,9 @@ evaluated at `rollback plan`, again at apply under the writer lock, by `status
    `meta_ms`, `tail_ms`, `index_ms`, `import_ms`; a phase a build before LN-8 does not report
    counts 0), unscaled. It must be at most the deadline minus `install.rollback.open_margin_ms`.
    The start logs (`actingd-<ms>.log` in the root, `<root>\watchdog\` and the console's log
-   folder; `<ms>` the start, else the log's modified time) are attributed to builds by the
+   folder; `<ms>` the start, else the log's modified time, read from the file itself and never
+   from its directory entry, which NTFS leaves stale while another process holds the log open:
+   WD-MT, since 0.12.28) are attributed to builds by the
    operation journals: the build live on the root at `<ms>` is the one the newest journalled
    change before it made live (an adopt's build from the adopt on, an update's or rollback's
    previous build from its start and its target from its end, the previous build again from the
