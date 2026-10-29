@@ -11,13 +11,15 @@
 //! `touch`; #411 A50 adds `emulator_control`; #411 A66 adds `watchdog`; PERF-B1 adds
 //! `execution`; IDLE-1 adds `idle`; ROUT-L RL-1b adds `standard_packs`, the scheduler
 //! workbench's two keys; Workflow #392 DA-4b-D adds `display_safe_area`; #422 LN-7c Q adds
-//! `frame_retention_evidence_max_age_days`; Workflow #421 INST-1 adds `install`).
+//! `frame_retention_evidence_max_age_days`; Workflow #421 INST-1 adds `install`; RB-2 adds
+//! `host`).
 
 use crate::device_link::DeviceLinkFile;
 use crate::device_state::DeviceStateFile;
 use crate::display_safe_area::DisplaySafeAreaFile;
 use crate::emulator_control::EmulatorControlFile;
 use crate::execution::ExecutionFile;
+use crate::host::HostFile;
 use crate::host_claims::HostClaimsFile;
 use crate::idle::IdleFile;
 use crate::install::InstallFile;
@@ -95,6 +97,9 @@ pub struct DefaultsFile {
     /// Workflow #421 INST-1.
     #[serde(default)]
     pub install: Option<InstallFile>,
+    /// RB-2: both priorities `normal`.
+    #[serde(default)]
+    pub host: Option<HostFile>,
 }
 
 /// A defaults file that is not a JSON object of known sections.

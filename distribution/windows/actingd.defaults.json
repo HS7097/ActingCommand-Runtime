@@ -296,7 +296,8 @@
         "blackout_run_stopped",
         "perf_run_yielded",
         "perf_hold_expired",
-        "cost_commit_time_insufficient"
+        "cost_commit_time_insufficient",
+        "contained_task_paused"
       ],
       "max_per_occurrence": 2,
       "resume_stage": "s2",
@@ -540,5 +541,9 @@
       "drain_max_ms": 600000,
       "refused_retry_max_ms": 300000
     }
+  },
+  "host": {
+    "process_memory_priority": "normal",
+    "process_io_priority": "normal"
   }
 }

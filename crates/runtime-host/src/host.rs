@@ -303,8 +303,8 @@ use policy_outcome::{PolicyOutcomeCacheUpdate, validate_policy_run_admission_req
 pub(crate) use planning::{AROUND_VERIFIED_READ, verified_reference_sequences};
 #[cfg(test)]
 pub(crate) use policy_outcome::{
-    AROUND_COMPLETION_READ, AROUND_SETTLEMENT_READS, SettlementRead, policy_dispatch_intent,
-    policy_dispatch_intents,
+    AROUND_COMPLETION_READ, AROUND_SETTLEMENT_READS, AROUND_UNSETTLED_RECORD_READ, SettlementRead,
+    policy_dispatch_intent, policy_dispatch_intents,
 };
 use policy_outcome::{
     completed_run_matches_outcome, reconcile_policy_dispatches,

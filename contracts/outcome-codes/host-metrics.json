@@ -366,6 +366,38 @@
       "status": "active",
       "since": "0.12.0",
       "description": "Identifying the volume of a capacity target by its GUID root."
+    },
+    "process_memory_priority_set": {
+      "owner": "host-metrics",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.28",
+      "description": "Setting the calling process's own memory priority with SetProcessInformation(ProcessMemoryPriority) (RB-2, actingd's start)."
+    },
+    "process_memory_priority_read": {
+      "owner": "host-metrics",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.28",
+      "description": "Reading the calling process's own memory priority back with GetProcessInformation(ProcessMemoryPriority) (RB-2, actingd's start)."
+    },
+    "process_io_priority_set": {
+      "owner": "host-metrics",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.28",
+      "description": "Setting the calling process's own I/O priority hint with ntdll's NtSetInformationProcess(ProcessIoPriority), resolved at run time (RB-2, actingd's start); the status is raw_code."
+    },
+    "process_io_priority_read": {
+      "owner": "host-metrics",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.28",
+      "description": "Reading the calling process's own I/O priority hint back with ntdll's NtQueryInformationProcess(ProcessIoPriority), resolved at run time (RB-2, actingd's start); the status is raw_code."
     }
   }
 }

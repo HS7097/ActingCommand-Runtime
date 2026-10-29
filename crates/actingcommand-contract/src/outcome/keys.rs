@@ -614,4 +614,10 @@ outcome_keys! {
     base_width: integer,
     base_height: integer,
     // ---- Workflow #392 DA-1: end ----
+    // ---- RB-2 (actingd's own memory and I/O priority at start): begin ----
+    memory_priority_requested: integer,
+    memory_priority_read: integer,
+    io_priority_requested: integer,
+    io_priority_read: integer,
+    // ---- RB-2: end ----
 }

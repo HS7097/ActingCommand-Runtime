@@ -58,7 +58,9 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   `install.stop.busy_wait_ms` and retires `install.guard.blocked_windows`; revisions 5 to 17
 ///   are still read, so [5, 18]. Workflow #427-A and #427-B (one release): revision 19 adds
 ///   `scheduling.parallel.enabled` (#427-A) and `performance.pacing.max_concurrent_runs`
-///   (#427-B); revisions 5 to 18 are still read, so [5, 19].
+///   (#427-B); revisions 5 to 18 are still read, so [5, 19]. RB-2 (0.12.28, Alice's ruling of
+///   2026-10-29): revision 20 adds the `host` section (`host.process_memory_priority`,
+///   `host.process_io_priority`); revisions 5 to 19 are still read, so [5, 20].
 /// - `install-control` stays [0, 1] (model-378 §16 A-7; U-4 raises it in 0.12.x).
 /// - `install-selection` is unchanged (model-378 §10).
 /// - `ledger` [3, 3]: SQLite format 2, `actingcommand.event.v3`; format 1 is refused. Workflow
@@ -72,7 +74,7 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 /// - `runtime-client` [2, 2]: request v4, receipt v2; requests v1 to v3 are refused.
 /// - `runtime-outcomes` [1, 1]: the new interface of model-378 §10.
 const V0120: &[(&str, [u64; 2])] = &[
-    ("actingd-config", [5, 19]),
+    ("actingd-config", [5, 20]),
     ("install-control", [0, 1]),
     ("install-selection", [1, 1]),
     ("ledger", [3, 4]),

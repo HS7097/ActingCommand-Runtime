@@ -10,6 +10,8 @@ use std::path::Path;
 
 mod capacity;
 pub mod codes;
+// RB-2: this process's own memory and I/O priority, set and read back at actingd's start.
+pub mod process_priority;
 // Workflow #382 H-5 (test plan v2.2 §3.6 G20): capacity sampling with an injected volume
 // resolver and free-space query.
 #[cfg(test)]

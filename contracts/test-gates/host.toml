@@ -649,6 +649,14 @@ tests = [
 ]
 incident = ["#386"]
 
+# The shipped scheduling.rerun.condition_codes lists contained_task_paused since 0.12.28 (Alice's decision 92, 2026-10-29): a scheduled run of a task that is not sensitive which an operator pause cut off ends by a condition under the shipped table (refunded, count 1, the window's end), adds to no streak, owes its rerun with the pause's code, and after the resume is dispatched again the same day with policy_rerun_owed and its counts given back; a sensitive task's paused run stays an ordinary failure (Workflow #386 SR-2b, decision 92)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_386_sr2b1::sr92_an_operator_pause_ends_a_scheduled_run_by_a_condition_under_the_shipped_table",
+]
+incident = ["#386"]
+
 # An owed rerun is gated by the instance's pacing stage: above scheduling.rerun.resume_stage it waits with policy_rerun_waiting{pacing_stage}, back at or below it still waits until resume_settle_ms has passed (59 s waits, 60 s dispatches); past its window end it expires with policy_rerun_expired and the run's failure is back in the snapshot; while owed no dependency_completed(head, *) of a chain is true; actingd suspended lists owed, waiting and expired reruns; a pair exhausted in this window is not promoted again in it, nor rerun at once by R22 when its failure carries a failure identity, and the stage gate still holds it (Workflow #386 SR-2b-2, design P22 §6.2, tests 2 to 5 and the coordinator's decision on review M1; fix round 1, review M1)
 [[gate]]
 coverage = "Y"
@@ -660,6 +668,16 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_386_sr2b2::sr2b2_t6_a_pair_exhausted_in_this_window_is_not_promoted",
 ]
 incident = ["#386"]
+
+# UNSET-1 (0.12.28; register §1.158 UNSET-1; brief rd-1029/brief-unset1.md; production v0.12.26 on 10-29 05:24, #421 6485126610, 6485372261: a run cut by the 10-26 stop, which the start can never settle, paused its instance again at every start): the first start that cannot settle a run records policy_settlement_dispatch_unsettled (Error) and pauses its instance, as before; after a person lifted that pause, a later start that refuses the same run records policy_settlement_dispatch_left_open (Warning) with the refusal as failure_code, no second Error, and does not pause the instance; with the first pause still in place it adds no second pause; when its read of the run's earlier records is not answered within the writer's reply limit it holds as before, and the Error's note link is the read's failure
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::policy_admission::unset1_a_later_start_after_the_lifted_hold_records_left_open_without_a_pause",
+    "actingcommand-runtime-host::lib::tests::policy_admission::unset1_a_later_start_under_the_first_pause_adds_no_second_pause",
+    "actingcommand-runtime-host::lib::tests::policy_admission::unset1_a_failed_read_of_the_run_records_holds_as_before_and_says_why",
+]
+incident = ["#421 UNSET-1"]
 
 # A latched host answers a later request by its condition (runtime_halted over an error condition, a fatal condition as itself); a start reports its ledger open as ledger_opened and a released previous owner as owner_released; catalog_activation_not_newer names both generations; owner_resource_unconfirmed carries the previous owner's pid and probe state (Workflow #378 A6a)
 [[gate]]
