@@ -300,8 +300,9 @@ projection runs.
   `OCR request budget exhausted` error when nothing is left.
 
 **Evidence.** A chained read's evaluation (`OcrEvaluation`) and observation
-(`OcrObservationEvaluation`) carry `preprocess`; without a chain the member is absent and the
-serialized bytes are unchanged:
+(`OcrObservationEvaluation`) carry `preprocess`. Without a chain the `preprocess` member is
+absent and adds nothing to the serialized bytes; `shared_read` (below) is another member, on
+every evaluation a shared read serves, with a chain or without one. The `preprocess` member:
 
 ```json
 "preprocess": {
@@ -328,8 +329,11 @@ serialized bytes are unchanged:
 - With the frame (a Lab frame file or a saved frame's reference), `steps`, `rect` and
   `algorithm` recompute the processed region and its evidence with this document's functions;
   no package is needed.
-- A shared read's targets also carry `shared_read` (`selection-graph.md`, section Shared OCR
-  read, Preprocessing).
+- Every evaluation a layout's shared read serves carries `shared_read`, with a chain or without
+  one (design CF v2 §5.6; `selection-graph.md`, section Shared OCR read, Preprocessing). So an
+  evaluation a shared read serves without a chain gains this member where evaluations are
+  serialized as they are: the online observation's `candidate_sample` rows (`ac_observe`,
+  `ac_lab_observe` and the Lab's online `observe`).
 - The evidence goes to read-only answers that serialize these evaluations as they are: the
   read-only recognition entry and a saved frame's OCR report (`observation`), and (CFL-3) the
   Lab. The task diagnostic maps an OCR evaluation's members one by one and leaves it out, so the

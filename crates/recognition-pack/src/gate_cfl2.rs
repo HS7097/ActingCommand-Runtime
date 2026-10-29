@@ -1028,6 +1028,52 @@ fn cfl2_t9_preprocessing_that_spends_the_budget_calls_no_provider() {
     assert_eq!(provider.seen().len(), 1);
 }
 
+/// Review L3: the recheck after the chain guards a layout's shared read too. Its check before the
+/// chain passes (the deadline is an hour away on the wall clock), the chain runs once, and then
+/// the context's clock leaves 500 ms for the read's 5000 ms: the read fails with the existing
+/// error and the provider is not called.
+#[test]
+fn cfl2_t9b_a_chained_shared_read_that_spends_the_budget_calls_no_provider() {
+    let scene = scene();
+    let provider = RecordingOcr::seven(0.95);
+    let evaluator = build(
+        pack(
+            vec![
+                ocr("slot/a", region_json(SLOT_A), Some(white_chain())),
+                ocr("slot/b", region_json(SLOT_B), None),
+                ocr("slot/c", region_json(SLOT_C), Some(reordered_chain())),
+            ],
+            vec![slots_layout(Some(white_chain()))],
+        ),
+        provider.clone(),
+    );
+    let shared = evaluator.pack().candidate_layouts[0]
+        .shared_ocr
+        .clone()
+        .expect("a shared read");
+    let sample = CandidateSampleVariant {
+        frame: 0,
+        dx: 0,
+        dy: 0,
+        template_metric: None,
+    };
+    let runs = chain_runs();
+    let error = evaluator
+        .scene_context(&scene)
+        .with_sample_deadline(deadline())
+        .with_search_clock(late_clock)
+        .shared_text(&shared, "slot/a", None, sample, &mut BTreeMap::new())
+        .expect_err("the shared read no longer fits the sample");
+    assert!(
+        error
+            .message()
+            .contains("recognition sample budget insufficient"),
+        "{error}"
+    );
+    assert_eq!(chain_runs(), runs + 1, "refused after the chain");
+    assert!(provider.seen().is_empty(), "no provider call");
+}
+
 #[test]
 fn cfl2_t11_admission_refuses_each_malformed_chain_at_its_pointer() {
     use ResourceDeclarationReason::{
