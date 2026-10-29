@@ -60,8 +60,9 @@ pub struct StandardPackCheckResponse {
     /// then (Workflow #411 B35) one `package_bundle_interrupt_page_shadowed` per package and
     /// shared interrupt page it declares itself (none without `interrupts.json`); then
     /// (STORE-FG-1) one `package_bundle_store_tap_unlocated` per package and store step that taps
-    /// a fixed place; then (Workflow #411 B15) one `package_bundle_remedy_invalid` per remedy
-    /// finding.
+    /// a fixed place; then (Workflow #428 CFL-2) one `package_bundle_preprocess_divergent` per
+    /// package, OCR target and shared read whose chains differ; then (Workflow #411 B15) one
+    /// `package_bundle_remedy_invalid` per remedy finding.
     pub warnings: Vec<actingcommand_contract::outcome::Outcome>,
 }
 

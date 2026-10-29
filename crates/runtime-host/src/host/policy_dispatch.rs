@@ -7,6 +7,7 @@ use crate::codes::HostCode;
 use crate::codes::HostLocation;
 use crate::codes::SchedulingRuleHostCode;
 use crate::policy_host::InstanceOccupancy;
+use crate::{PolicyRecomputeDirective, PolicyRecomputeKind, PolicyRecomputeReason};
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::outcome::{Code, Location, Outcome};
 use actingcommand_contract::{
@@ -841,22 +842,261 @@ impl EventAppender for PolicyAdmissionAppender<'_> {
     }
 }
 
+/// ISO-PE (#419): where a policy evaluation takes its time from.
+#[derive(Clone, Copy)]
+pub(super) enum PolicyCycleClock {
+    /// The Runtime clock, sampled once the evaluation holds `fact_write_gate`, the gate under
+    /// which it reads its inputs: every fact, outcome and settlement it reads was committed
+    /// before the sample, so none was observed after the evaluation's time. (Until 0.12.28 the
+    /// time was sampled before the evaluation waited for its gates, so an input a concurrent
+    /// settlement observed and committed in between was "later than the evaluation time".)
+    Sampled,
+    /// A test's fixed time and monotonic reading.
+    #[cfg(test)]
+    Fixed {
+        time: EvaluationTime,
+        monotonic_ms: u64,
+    },
+}
+
+/// ISO-PE (#419): the policy evaluations in a row that did not evaluate (skipped ones and, fix 1,
+/// waits for an outcome projection not ready yet), and whether this run of them was escalated to
+/// a person. An evaluation that evaluated ends the run.
+#[derive(Debug, Default)]
+pub(super) struct PolicyEvaluationSkips {
+    consecutive: u32,
+    escalated: bool,
+}
+
+impl PolicyEvaluationSkips {
+    /// One more skip: the count in a row, and whether this one escalates (the first to reach
+    /// `escalate_after` in this run of skips).
+    fn record(&mut self, escalate_after: u32) -> (u32, bool) {
+        self.consecutive = self.consecutive.saturating_add(1);
+        let escalates = !self.escalated && self.consecutive >= escalate_after;
+        self.escalated |= escalates;
+        (self.consecutive, escalates)
+    }
+
+    /// ISO-PE fix 1 (review M1): one more evaluation whose outcome projection is not ready yet.
+    /// While fewer than `escalate_after` evaluations in a row have not evaluated, it waits
+    /// (`true`: actingd defers it by one debounce) and counts as one of them, with no record;
+    /// once they reach `escalate_after` it does not wait (`false`) and is skipped, and
+    /// [`Self::record`] counts it, so the skip escalates as every run of skips does.
+    fn wait_for_projection(&mut self, escalate_after: u32) -> bool {
+        let waits = self.consecutive < escalate_after;
+        if waits {
+            self.consecutive += 1;
+        }
+        waits
+    }
+
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
+/// ISO-PE (#419): whether a failed policy evaluation is skipped rather than returned. Only a
+/// failure whose scope is `Global` may stop the Runtime ([`RuntimeHostError::halts_runtime`]):
+/// a fatal failure the Runtime cannot vouch for (the ledger, a poisoned lock, the clock, the
+/// configuration in effect, the shared policy projection) and one on the closed Global list. Two
+/// non-global failures keep a bounded handling of their own, so this rule does not skip them:
+/// `policy_outcome_snapshot_changed` (re-sampled by actingd) and `outcome_projection_not_ready`
+/// (deferred by actingd's debounce while it waits, and skipped once
+/// `scheduling.evaluation.escalate_after` evaluations in a row have not evaluated:
+/// `HostShared::wait_for_policy_projection`).
+pub(crate) fn skips_policy_evaluation(error: &RuntimeHostError) -> bool {
+    !error.halts_runtime()
+        && error.code() != HostCode::PolicyOutcomeSnapshotChanged.as_str()
+        && error.code() != SharedCode::OutcomeProjectionNotReady.as_str()
+}
+
 impl HostShared {
+    /// One policy evaluation for actingd's driver. ISO-PE (#419): an evaluation whose failure is
+    /// not global ([`skips_policy_evaluation`]) is skipped: its failure is recorded with its
+    /// detail (`policy_evaluation_skipped`, warning), and the cycle is a deferred one with no
+    /// evaluation, due `scheduling.evaluation.retry_ms` later, so the driver keeps its trigger and
+    /// evaluates again then; the Runtime keeps running. `scheduling.evaluation.escalate_after`
+    /// skips in a row record `policy_evaluation_awaiting_person` (error) once. An outcome
+    /// projection not ready yet waits a bounded number of times before it is skipped too
+    /// ([`Self::wait_for_policy_projection`]).
     pub(super) fn evaluate_policy_cycle(
         &self,
         trigger: PolicyTrigger,
     ) -> RuntimeHostResult<PolicyCycle> {
-        let sample = self.runtime_clock_sample()?;
-        let time = EvaluationTime {
-            unix_ms: sample.unix_ms,
-            monotonic_ms: sample.monotonic_ms,
-        };
-        let cycle =
-            self.evaluate_policy_cycle_authoritative(time, None, trigger, sample.monotonic_ms)?;
-        // IDLE-1: the idle check right after the evaluation and before actingd admits its
-        // dispatches, so a wake's claim holds an idle instance before a due dispatch reaches it.
-        self.check_idle_instances(false)?;
-        Ok(cycle)
+        let evaluated = self
+            .evaluate_policy_cycle_authoritative(PolicyCycleClock::Sampled, None, trigger)
+            .and_then(|cycle| {
+                // IDLE-1: the idle check right after the evaluation and before actingd admits
+                // its dispatches, so a wake's claim holds an idle instance before a due dispatch
+                // reaches it.
+                self.check_idle_instances(false)?;
+                Ok(cycle)
+            });
+        match evaluated {
+            Ok(cycle) => {
+                if cycle.evaluation.is_some() {
+                    lock(
+                        &self.policy_evaluation_skips,
+                        HostLocation::EvaluatePolicyCycle,
+                    )?
+                    .reset();
+                }
+                Ok(cycle)
+            }
+            Err(error) if skips_policy_evaluation(&error) => self.skip_policy_evaluation(&error),
+            Err(error)
+                if !error.halts_runtime()
+                    && error.code() == SharedCode::OutcomeProjectionNotReady.as_str() =>
+            {
+                self.wait_for_policy_projection(error)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// ISO-PE fix 1 (review M1): an evaluation whose outcome projection is not ready yet. While
+    /// fewer than `scheduling.evaluation.escalate_after` evaluations in a row have not evaluated,
+    /// the failure is returned and actingd defers the trigger by one debounce; the wait counts as
+    /// one of them. Once they reach it, the next one is skipped as any failure that is not
+    /// global: `policy_evaluation_skipped` with its detail, evaluated again
+    /// `scheduling.evaluation.retry_ms` later, and `policy_evaluation_awaiting_person` as for
+    /// every run of skips. An evaluation that evaluates resets the count. (Until fix 1 it was
+    /// returned every time: a projection that stayed not ready was evaluated again every debounce
+    /// with no record, no daemon line, no bound and no escalation.)
+    fn wait_for_policy_projection(
+        &self,
+        failure: RuntimeHostError,
+    ) -> RuntimeHostResult<PolicyCycle> {
+        let escalate_after = self.evaluation_retry_settings()?.escalate_after;
+        let waits = lock(
+            &self.policy_evaluation_skips,
+            HostLocation::EvaluatePolicyCycle,
+        )?
+        .wait_for_projection(escalate_after);
+        if waits {
+            return Err(failure);
+        }
+        self.skip_policy_evaluation(&failure)
+    }
+
+    /// ISO-PE (#419): records the skipped evaluation's failure (`policy_evaluation_skipped`,
+    /// and `policy_evaluation_awaiting_person` when this skip reaches
+    /// `scheduling.evaluation.escalate_after` in a row) and returns the deferred cycle that
+    /// evaluates again `scheduling.evaluation.retry_ms` later. A failure to record is returned.
+    fn skip_policy_evaluation(&self, failure: &RuntimeHostError) -> RuntimeHostResult<PolicyCycle> {
+        // A Runtime that latched a condition meanwhile is stopping whatever this failure is (its
+        // monitor stops it): the failure is returned as before, not skipped.
+        if self.fatal.current()?.is_some() {
+            return Err(failure.clone());
+        }
+        let settings = self.evaluation_retry_settings()?;
+        let now_unix_ms = self.runtime_clock_sample()?.unix_ms;
+        let eligible_at_unix_ms = now_unix_ms.checked_add(settings.retry_ms).ok_or_else(|| {
+            RuntimeHostError::fatal(
+                HostCode::PolicyTimeOverflow,
+                HostLocation::EvaluatePolicyCycle,
+                RuntimeErrorCode::RuntimeHalted,
+            )
+        })?;
+        let (count, escalates) = lock(
+            &self.policy_evaluation_skips,
+            HostLocation::EvaluatePolicyCycle,
+        )?
+        .record(settings.escalate_after);
+        // The failure as its record carries it: its code, its operation, the policy's code with
+        // the refused input's values, and the policy's developer text as the foreign link.
+        let cause = failure.record_outcome();
+        let skipped = Outcome::new(HostCode::PolicyEvaluationSkipped)
+            .operation(HostLocation::EvaluatePolicyCycle)
+            .count(count)
+            .limit_count(settings.escalate_after)
+            .retry_after_ms(settings.retry_ms)
+            .next_eligible_unix_ms(eligible_at_unix_ms)
+            .caused_by(cause.clone());
+        self.record_policy_evaluation_skip(EventSeverity::Warning, skipped)?;
+        if escalates {
+            let awaiting = Outcome::new(HostCode::PolicyEvaluationAwaitingPerson)
+                .operation(HostLocation::EvaluatePolicyCycle)
+                .count(count)
+                .limit_count(settings.escalate_after)
+                .retry_after_ms(settings.retry_ms)
+                .caused_by(cause);
+            self.record_policy_evaluation_skip(EventSeverity::Error, awaiting)?;
+        }
+        Ok(PolicyCycle {
+            directive: PolicyRecomputeDirective {
+                kind: PolicyRecomputeKind::Deferred,
+                reason: PolicyRecomputeReason::Debounce,
+                eligible_at_unix_ms,
+            },
+            evaluation: None,
+            pending_dispatch_intents: Vec::new(),
+            detection_planning_signals: Vec::new(),
+            clock_slot_signals: Vec::new(),
+            measurement: None,
+            fact_refresh_transitions: Vec::new(),
+        })
+    }
+
+    /// ISO-PE (#419): one `runtime.failed` record of a skipped evaluation (its severity the
+    /// outcome's category) with system links, handed to the daemon's log too.
+    fn record_policy_evaluation_skip(
+        &self,
+        severity: EventSeverity,
+        outcome: Outcome,
+    ) -> RuntimeHostResult<()> {
+        self.append_event_raw(
+            severity,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            self.events.system_links()?,
+            RuntimePayloadDraft::failed(
+                DiagnosticCode::RuntimeDiagnostic,
+                EffectDisposition::NotPerformed,
+                outcome.clone(),
+                DiagnosticDetailDraft::new(
+                    "policy_evaluation",
+                    RuntimeLifecycleFailureStage::PolicyDriver.location(),
+                    "runtime_host",
+                    HostLocation::EvaluatePolicyCycle.as_str(),
+                ),
+                AuditInput::new(),
+            ),
+        )?;
+        self.fatal.report_warning(&outcome);
+        Ok(())
+    }
+
+    /// ISO-PE (#419), test builds: runs the hook a test set for the point after an evaluation
+    /// started and before it takes the gates under which it reads its inputs. Fix 1 (review M1):
+    /// then reports an outcome projection not ready yet (`outcome_projection_not_ready`, as the
+    /// projection would) while the test's count of them lasts.
+    #[cfg(test)]
+    fn before_policy_inputs_read_for_test(&self) -> RuntimeHostResult<()> {
+        let hook = lock(
+            &self.policy_inputs_read_hook_for_test,
+            HostLocation::EvaluatePolicyCycle,
+        )?
+        .take();
+        if let Some(hook) = hook {
+            hook();
+        }
+        let not_ready = self
+            .policy_projection_not_ready_for_test
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                count.checked_sub(1)
+            })
+            .is_ok();
+        if not_ready {
+            return Err(RuntimeHostError::request(
+                SharedCode::OutcomeProjectionNotReady,
+                HostLocation::ProjectPolicySchedulingOutcomes,
+                RuntimeErrorCode::RuntimeUnavailable,
+            ));
+        }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -880,15 +1120,18 @@ impl HostShared {
         }
         // The replaced configuration seeds the instance fact store exactly as a startup does.
         self.seed_policy_instance_facts()?;
-        self.evaluate_policy_cycle_authoritative(time, Some(seed), trigger, self.monotonic_ms()?)
+        let clock = PolicyCycleClock::Fixed {
+            time,
+            monotonic_ms: self.monotonic_ms()?,
+        };
+        self.evaluate_policy_cycle_authoritative(clock, Some(seed), trigger)
     }
 
     pub(super) fn evaluate_policy_cycle_authoritative(
         &self,
-        time: EvaluationTime,
+        clock: PolicyCycleClock,
         seed: Option<u64>,
         trigger: PolicyTrigger,
-        observed_monotonic_ms: u64,
     ) -> RuntimeHostResult<PolicyCycle> {
         if trigger == PolicyTrigger::Reconciliation {
             self.reconcile_pending_policy_settlements()?;
@@ -898,8 +1141,16 @@ impl HostShared {
         let idle_closed = self.idle_closed_for_policy()?;
         // ROUT-L RL-1b (frozen model v1.0 §3.3): the scheduler workbench's check, at most once
         // per `standard_packs.check_interval_ms`, before this cycle reads its manifest and
-        // catalog. Nothing in configured mode.
-        self.check_standard_pack_rules(observed_monotonic_ms)?;
+        // catalog. Nothing in configured mode. ISO-PE: it reads the monotonic clock as the cycle
+        // starts; the evaluation's own time is sampled under the fact gate below.
+        let started_monotonic_ms = match clock {
+            PolicyCycleClock::Sampled => self.monotonic_ms()?,
+            #[cfg(test)]
+            PolicyCycleClock::Fixed { monotonic_ms, .. } => monotonic_ms,
+        };
+        self.check_standard_pack_rules(started_monotonic_ms)?;
+        #[cfg(test)]
+        self.before_policy_inputs_read_for_test()?;
         let _detection_gate = lock(
             &self.detection_write_gate,
             HostLocation::PlanPolicyDetection,
@@ -915,7 +1166,15 @@ impl HostShared {
                 HostLocation::EvaluatePolicyCycle,
             )
         })?;
-        let (outcome_keys, facts, resources, missing_instance_facts, unknown_offset_tasks) = {
+        let (
+            time,
+            observed_monotonic_ms,
+            outcome_keys,
+            facts,
+            resources,
+            missing_instance_facts,
+            unknown_offset_tasks,
+        ) = {
             let _outcome_gate = lock(
                 &self.policy_outcome_gate,
                 HostLocation::SnapshotPolicyOutcomeState,
@@ -926,6 +1185,26 @@ impl HostShared {
             policy.apply_eligibility_verdicts();
             let outcome_keys = policy.outcome_key_snapshot()?;
             let _gate = lock(&self.fact_write_gate, HostLocation::ProjectPolicyFacts)?;
+            // ISO-PE (#419): the evaluation's time, sampled under the gates its inputs are
+            // written under (`policy_outcome_gate` for a settlement and its four facts,
+            // `fact_write_gate` for every fact). Every input read below was committed before this
+            // sample, so none was observed after the evaluation's time; sampled before the gates,
+            // a settlement committed while the evaluation waited for them made the evaluation
+            // reject its inputs (`policy_evaluation_input_invalid`, production 10-29 11:19).
+            let (time, observed_monotonic_ms) = match clock {
+                PolicyCycleClock::Sampled => {
+                    let sample = self.runtime_clock_sample()?;
+                    (
+                        EvaluationTime {
+                            unix_ms: sample.unix_ms,
+                            monotonic_ms: sample.monotonic_ms,
+                        },
+                        sample.monotonic_ms,
+                    )
+                }
+                #[cfg(test)]
+                PolicyCycleClock::Fixed { time, monotonic_ms } => (time, monotonic_ms),
+            };
             let (facts, resources, missing_instance_facts, unknown_offset_tasks) = self
                 .project_authoritative_policy_inputs_with_gaps_under_gate(
                     &mut policy,
@@ -936,6 +1215,8 @@ impl HostShared {
                     Some(time.unix_ms),
                 )?;
             (
+                time,
+                observed_monotonic_ms,
                 outcome_keys,
                 facts,
                 resources,

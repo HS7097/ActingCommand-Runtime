@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // STORE-FG-1 (0.12.29; design `rd-1029/design-store-fg.md` §2, §3, §5 rows T11 to T13 and §8;
-// register §1.205): a package's `control.json` may declare `store_update`, the steps it runs
+// register §1.207): a package's `control.json` may declare `store_update`, the steps it runs
 // while the store application it names is in front.
 //
 // - T11: admission refuses each broken shape of the member (`contained_task_control_invalid`,

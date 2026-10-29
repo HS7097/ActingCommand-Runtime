@@ -401,6 +401,8 @@ both checks ([policy-suspension.md](policy-suspension.md), "Task package suspens
 | `scheduling.remedy.max_per_round` (Workflow #411 B15) | integer `1..=8` | `2` |
 | `scheduling.remedy.choices` (Workflow #411 B15) | list of remedy choice rows (objects) | `[]` |
 | `scheduling.parallel.enabled` (Workflow #427-A) | boolean | `false` |
+| `scheduling.evaluation.retry_ms` (ISO-PE, #419) | milliseconds `1..=3600000` | `15000` |
+| `scheduling.evaluation.escalate_after` (ISO-PE, #419) | integer `1..=4294967295` | `3` |
 
 The section is checked whole at start, in `check-config` and after every instruction: a code
 list entry the catalog does not list is `config_value_invalid` with `code_unknown`, a retired
@@ -462,6 +464,20 @@ holds neither the round nor another instance ([scheduling/README.md](scheduling/
 included, so an instruction (`ac_config_set`, `actingctl config set`) takes effect at the next
 round; a run already handed to a worker finishes and is settled there. Accessor
 `EffectiveConfig::scheduling_parallel_enabled`.
+
+**Skipped evaluations (ISO-PE, #419; `actingd-config` revision 20, which RB-2 raised in the same
+release).** A policy evaluation whose failure is not global is skipped and recorded
+(`policy_evaluation_skipped`), and evaluated again `scheduling.evaluation.retry_ms` later
+(default `15000`, `1..=3600000`: never zero, so a failure that repeats is no busy loop);
+`scheduling.evaluation.escalate_after` skips in a row (default `3`, at least `1`) record
+`policy_evaluation_awaiting_person` once, and the Runtime keeps running
+([scheduling/README.md](scheduling/README.md), "Evaluation failures"). An outcome projection not
+ready yet waits one debounce instead, at most `escalate_after` times in a row (each wait counts
+toward the run), before it is skipped the same way. Both are settable; the
+host reads them at every skipped evaluation, so an instruction takes effect at the next one. In
+the file they are the `scheduling` section's `evaluation` member; a Runtime before 0.12.28
+refuses a file that names it, because the section denies unknown members. Read with
+`EffectiveConfig::scheduling` (`SchedulingConfig::evaluation`).
 
 **Remedies (Workflow #411 B15, [remedies.md](remedies.md); parsed and checked by slice R3,
 v0.12.3).** `scheduling.remedy.enabled` turns declared remedies on (`false`: every remedy key is a

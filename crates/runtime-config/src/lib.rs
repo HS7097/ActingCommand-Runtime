@@ -104,10 +104,10 @@ pub use recovery_ladder::{
 };
 pub use resolve::{file_value, member, render_parameters};
 pub use scheduling::{
-    BlackoutConfig, BlackoutEntry, BlackoutWindow, CostCommitConfig, ExpectedRuntimeConfig,
-    FactRefreshConfig, FeatureLockConfig, InstanceSchedulingFile, PacingStage, PackAdmissionConfig,
-    QuietHorizon, RandomDelay, RemedyChoiceRow, RemedyConfig, RerunConfig, RerunExpiry,
-    SchedulingConfig, SchedulingFile,
+    BlackoutConfig, BlackoutEntry, BlackoutWindow, CostCommitConfig, EvaluationRetryConfig,
+    ExpectedRuntimeConfig, FactRefreshConfig, FeatureLockConfig, InstanceSchedulingFile,
+    PacingStage, PackAdmissionConfig, QuietHorizon, RandomDelay, RemedyChoiceRow, RemedyConfig,
+    RerunConfig, RerunExpiry, SchedulingConfig, SchedulingFile,
 };
 pub use standard_packs::{
     CACHED_GENERATIONS as STANDARD_PACKS_CACHED_GENERATIONS,

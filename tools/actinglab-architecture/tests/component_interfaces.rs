@@ -60,9 +60,11 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   `scheduling.parallel.enabled` (#427-A) and `performance.pacing.max_concurrent_runs`
 ///   (#427-B); revisions 5 to 18 are still read, so [5, 19]. RB-2 (0.12.28, Alice's ruling of
 ///   2026-10-29): revision 20 adds the `host` section (`host.process_memory_priority`,
-///   `host.process_io_priority`); revisions 5 to 19 are still read, so [5, 20]. STORE-FG-2
-///   (0.12.29, Alice's ruling of 2026-10-29): revision 21 adds the `store_foreground` section
-///   (`store_foreground.allowed_application_ids`); revisions 5 to 20 are still read, so [5, 21].
+///   `host.process_io_priority`), and ISO-PE (#419, same release) `scheduling.evaluation.retry_ms`
+///   and `scheduling.evaluation.escalate_after`; revisions 5 to 19 are still read, so [5, 20].
+///   STORE-FG-2 (0.12.29, Alice's ruling of 2026-10-29): revision 21 adds the `store_foreground`
+///   section (`store_foreground.allowed_application_ids`); revisions 5 to 20 are still read, so
+///   [5, 21].
 /// - `install-control` stays [0, 1] (model-378 §16 A-7; U-4 raises it in 0.12.x).
 /// - `install-selection` is unchanged (model-378 §10).
 /// - `ledger` [3, 3]: SQLite format 2, `actingcommand.event.v3`; format 1 is refused. Workflow

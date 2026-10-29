@@ -3700,15 +3700,63 @@ for the parallel slices of wave 2.
 | B43-1 | an `interrupts.json` entry's optional `limit_cause`: `"pack_logic"` (default) or `"environment"` (`StandardPackInterrupt::limit_cause`, `InterruptLimitCause`) | new optional member (resource file format, not a ledger shape) | B43 | resource side | read by `parse_standard_pack_interrupts`, so the Runtime, `package bundle` and `standard-pack check` accept and refuse it alike; another value or type is `malformed` (pointer empty, as every decoding refusal of the file); absent, the entry serializes as before; joins `package` revision 6, which BT-PK6 declares, admitted by code until then; it is the first root-file member folded into a `package` revision (the earlier ones are pack members), so BT-PK6 must name `interrupts.json` `limit_cause` when it declares revision 6; a Runtime before 0.12.28 refuses a root that names it (`standard_pack_root_invalid`) |
 | B43-2 | a run that meets an `environment` page once more than its `max_per_run` ends with `contained_task_interrupt_environment_limit_reached` (error, `budget_or_permission`; `page_id`, `count`, `limit_count`) | behaviour | B43 | runtime-host | in place of `contained_task_interrupt_limit_reached`; the run's 16 handlings of all pages together keep the old code; the failure is rerun only in every scope (`failure_accumulates`), its identity keeps `g`; the recovery ladder follows its configuration: no default trigger matches the class, so by default the code starts no ladder; an operator who wants one adds a trigger item that names the code |
 
-### 1.205 Slice STORE-FG-1 (0.12.29): a package declares the steps it runs while the store application is in front (Alice 10-29 10:1x: 「从外部更新的可以单独做成一个独立包，只用官方应用商店更新就行」; design `rd-1029/design-store-fg.md` §2, §3, §6 and the resource side's §8; coordinator work order `rd-1029/brief-store-fg-1.md`)
+### 1.204 Slice WD-MT (0.12.28): the watchdog dates a log by the file's own time, and actingd's children do not inherit its log (Workflow #421; investigation `rd-1029/inv-1119.md` §2 and §4 rows C and D; coordinator work order `rd-1029/brief-wd-mt.md`)
+
+[runtime-watchdog.md](runtime-watchdog.md) (Observation 4 and "Logs held open"),
+[install-cli.md](install-cli.md) (the close's terminal and the rollback gate's start logs) and
+the actingd and host-metrics fragments of the outcome catalog are the contract. **No persisted
+ledger shape, no configuration key, no wire or interface revision**: the new code is a daemon
+line. The number 1.204 is settled (coordinator, 10-29): ISO-PE, also 0.12.28, takes 1.205.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| WDMT-1 | a candidate log's modification time is read from the file (`fs::metadata`), not from its directory entry (Rust's std falls back to the entry only when the open is refused as access denied); an observation lists the logs once (F, the closed-epoch log test of rows 6 and 6′, row 6′'s look-back), and `status` lists them once more after it decides a formal close, for its close evidence; a log whose time cannot be read is `watchdog_log_unreadable` (`path`, a `caused_by` `foreign_os_error` with `io_op` `metadata`), a log gone since the listing is passed over | behaviour | WD-MT | actingctl watchdog, `actingctl install` | before 0.12.28 the listing's entry time was used and an unreadable entry was passed over; the install rollback gate dates a start log without `<ms>` in its name the same way |
+| WDMT-2 | `host_stdio_inheritance_failed` (warning, `ladder_class` none, no values; each failed call a `caused_by` `foreign_os_error` with one of the two new host-metrics locations `process_stdout_inheritance_clear`, `process_stderr_inheritance_clear`) | new outcome code, a daemon line only on failure | WD-MT | actingd's start | the daemon clears `HANDLE_FLAG_INHERIT` on its own stdout and stderr before anything can start a child; nothing is written on success; the start goes on |
+| WDMT-3 | the vendor stdio session's saved duplicates of stdout and stderr are not inheritable (their `Dup` step's `after.flags` shows it); a refusal adds one `SetHandleInformation` step with its error and ends the acquisition | behaviour | WD-MT | device (vendor stdio) | the successful path keeps its 32 steps; the restore gives the standard descriptors the originals' inherit flag, cleared since WDMT-2 |
+
+### 1.205 Slice ISO-PE (0.12.28): a policy evaluation failure that is not global no longer stops the Runtime, and its detail is kept (#419; investigation `rd-1029/inv-1119.md`, production v0.12.26 on 10-29 11:19: one `policy_evaluation_input_invalid` ended the policy driver and the monitor stopped all five instances; coordinator work order `rd-1029/brief-iso-pe.md`)
+
+[scheduling/README.md](scheduling/README.md) ("Evaluation failures") and
+[runtime-config.md](runtime-config.md) ("Skipped evaluations") are the contract. **No persisted
+ledger shape**: the two new codes ride the existing `runtime.failed` record (a catalog entry each,
+§7), the refused input's values ride the existing `caused_by` link of `policy_evaluation_rejected`,
+and the policy's text the existing native detail; the two keys join **`actingd-config` revision
+20**, which RB-2 raised in this release (not raised again). The number 1.205 is the
+coordinator's (1.204 is WD-MT's, #1430). Fix round 1 (`rd-1029/brief-iso-pe-fix1.md`, review
+`rd-1029/review-iso-pe.md` M1) bounds `outcome_projection_not_ready` (PE-6).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| PE-1 | `policy_evaluation_input_invalid` gains the optional values `policy_input` (vocabulary `policy_input`: `fact`, `outcome`, `task_state`, `completed_window`, `pool`, `priority_offset`), `policy_input_problem` (vocabulary `policy_input_problem`: `observed_after_evaluation`, `unknown_reference`, `duplicate`, `value_invalid`), `fact_key`, `instance_id`, `task_id`, `pool_id`, `observed_at_unix_ms`, `evaluated_at_unix_ms` (two vocabularies and four keys new in the key table) | values of a pending code | ISO-PE | policy crate (`validate_inputs`) | set by the evaluator's input checks (the time checks with both times); `policy_evaluation_rejected` carries it as its `caused_by` link and the policy's code and developer text as its native detail (a `foreign_other_error` link), as `scheduling/README.md` already said; until 0.12.28 only the bare code was kept |
+| PE-2 | `policy_evaluation_skipped` (warning, `none`; `count`, `limit_count`, `retry_after_ms`, `next_eligible_unix_ms`, the failure as `caused_by`) | new outcome code, a `runtime.failed` record with system links and a daemon line | ISO-PE | runtime-host (`evaluate_policy_cycle`) | one per skipped evaluation; the host answers a deferred cycle with no evaluation, due `retry_after_ms` later, which the driver applies as any deferred cycle |
+| PE-3 | `policy_evaluation_awaiting_person` (error, `none`; `count`, `limit_count`, `retry_after_ms`, the latest failure as `caused_by`) | new outcome code, a `runtime.failed` record with system links and a daemon line | ISO-PE | runtime-host | once per run of skips, at the skip that reaches `scheduling.evaluation.escalate_after`; the run counts the evaluations in a row that did not evaluate, the waits of PE-6 included; an evaluation that evaluates ends the run; the Runtime keeps running |
+| PE-4 | `scheduling.evaluation.retry_ms` (milliseconds `1..=3600000`, default `15000`) and `scheduling.evaluation.escalate_after` (integer `1..=4294967295`, default `3`), settable | new configuration keys (**`actingd-config` revision 20**) | ISO-PE | read by the host at every skipped evaluation | a Runtime before 0.12.28 refuses a file that names `scheduling.evaluation`, because the section denies unknown members |
+| PE-5 | the evaluation's time is sampled under `fact_write_gate` (and `policy_outcome_gate`), after the evaluation waited for them, not as it starts | behaviour | ISO-PE | runtime-host | an input a concurrent settlement observed and committed while the evaluation waited for its gates is no longer "later than evaluation time" |
+| PE-6 | actingd defers `outcome_projection_not_ready` by one debounce also when the trigger has no recompute wake; the host returns it only while fewer than `scheduling.evaluation.escalate_after` evaluations in a row have not evaluated (each wait counts as one, with no record), and skips the next one (PE-2, PE-3) | behaviour | ISO-PE (fix 1 for the bound) | actingd's driver; runtime-host (`evaluate_policy_cycle`) | until 0.12.28 such a trigger ended the driver and the Runtime, and one with recompute wakes was deferred every debounce with no record and no bound |
+
+### 1.206 Slice CFL-1 (0.12.29): recognition preprocessing, the pure chain and its contract (Workflow #411 A58, comment 6371351838; #428 comment 6485683314; design `rd-1029/design-cf.md` §4.2, §4.3, §4.5, §4.6, §6 CFL-1, revised by `rd-1029/design-cf-v2.md` §5.3, §5.7 and §8 (the CFL-1 revision round); review `rd-1029/review-cfl1.md` L1–L3; coordinator work orders `rd-1029/brief-cfl1.md` and `rd-1029/brief-cfl1-fix1.md`, with the names, the hue scale, the tolerance and "kept is white" settled on 10-29)
+
+[recognition-preprocess.md](recognition-preprocess.md) is the contract. **No persisted ledger
+shape**, no code, no configuration key, no wire or interface revision: the chain is a library
+addition that no package can declare before CFL-2, which adds the member `preprocess` (into
+`package` revision 6, as the design says). The number 1.206 is the coordinator's (1.204 is
+WD-MT's, 1.205 is ISO-PE's).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| CFL1-1 | `actingcommand_recognition::preprocess`: the validated chain `Preprocess` (`new`, `steps`, `apply`), `PreprocessStep`, `PreprocessKind` (names and members), `ColorSpace`, `ThresholdValue`, `PreprocessOutput` with `PreprocessEvidence {kept_milli, inverted, threshold_value}`, `PreprocessError {step, member, reason}` with `pointer()`, `PreprocessApplyError {EmptyRegion, RegionTooLarge, Internal}`, `check_region_size`, the constants `PREPROCESS_ALGORITHM` (`"preprocess.v1"`) and `MAX_REGION_PIXELS` (2^24), `rgb_to_hsv`, and `Scene::preprocess_region` | library API addition (memory only, since 0.12.29) | CFL-1 | — (CFL-2 hands the processed region to the OCR reads) | the two shapes of at most 4 steps, at most 8 colors; every step integer arithmetic except `gray`, which is the scene's own gray (image 0.25 `to_luma8`, `f32`), so that `[gray]` equals the scene's gray byte for byte; the design's `floor((2126 R + 7152 G + 722 B) / 10000)` is not that gray (it differs on about half of all colors) and is not used |
+| CFL1-2 | the region domain: `apply` refuses a region of more than 2^24 pixels (`RegionTooLarge`) before any step, `Scene::preprocess_region` before it crops; within it Otsu compares the exact scores quotient first, remainder second, with every intermediate at most 108 bits (the contract's bound table) | behaviour (library) | CFL-1 revision round | — | a domain of the algorithm like the 4 steps and 8 colors, no configuration key; the `checked_mul` guards stay and cannot fail inside the domain; the tie rule (smallest `t`) is unchanged |
+| CFL1-3 | `kept_milli` is counted before `invert`, and `inverted` says whether the chain has it (in place of the first round's `foreground_milli`, counted after `invert`) | evidence definition (memory only) | CFL-1 revision round | — | golden values re-recorded with the coordinator's approval: `keep_range hsv` then `invert` 750 → 250, `gray` then `invert` 625 → 375; every other value unchanged |
+
+### 1.207 Slice STORE-FG-1 (0.12.29): a package declares the steps it runs while the store application is in front (Alice 10-29 10:1x: 「从外部更新的可以单独做成一个独立包，只用官方应用商店更新就行」; design `rd-1029/design-store-fg.md` §2, §3, §6 and the resource side's §8; coordinator work order `rd-1029/brief-store-fg-1.md`)
 
 [resource-declarations.md](resource-declarations.md) ("Store update packages") and
 [package-reference.md](package-reference.md) (the layer predicate and the cross-check) are the
 contract. **No persisted ledger shape**: the member is a pack format addition, the refusals reuse
 existing codes, and the run's records are the existing ones; no configuration key (the operator's
 allowlist `store_foreground.allowed_application_ids` is STORE-FG-2's), no wire or interface
-revision raised here. The number 1.205 is provisional for the parallel slices of 0.12.29 (1.204 is
-CFL-1).
+revision raised here. The number 1.207 is the coordinator's (1.204 is WD-MT's, 1.205 is ISO-PE's,
+1.206 is CFL-1's).
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
@@ -3718,15 +3766,35 @@ CFL-1).
 | SF-4 | `ContainedTaskRuntime::admit_store_foreground` and `ContainedTaskRuntime::store_input` | new kernel boundary methods with default implementations (admit every store; a store tap is any input) | STORE-FG-1 | STORE-FG-2 (host overrides) | asked and used only in the package's own run (entry `Ordinary`, no declared operation): the admission once before any capture, the store input for a declared store operation's `Tap` at the page-graph and the `linear_steps` input sites; every other input stays `input` |
 | SF-5 | `package_bundle_store_tap_unlocated` (warning, `ladder_class` none; `package_id`, `pack_operation_id`) | new outcome code (resource-tooling), design §8.1 | STORE-FG-1 | `package bundle`, `actinglab standard-pack check` | one per package and store step that taps a fixed place (`point`, `rect`, `specific_rect`); nothing is refused |
 
-### 1.206 Slice STORE-FG-2 (0.12.29): the store allowlist, and the host taps a declared store step only with exactly that store in front (Alice 10-29 10:1x; her questions 95 to 97, option A; design `rd-1029/design-store-fg.md` §2, §3, §5, §6; review `rd-1029/review-store-fg-1.md` L5; coordinator work order `rd-1029/brief-store-fg-2.md`)
+### 1.208 Slice CFL-2 (0.12.29): recognition preprocessing wired into the OCR reads (Workflow #411 A58; #428 comment 6485683314; design `rd-1029/design-cf-v2.md` §0, §5.4 to §5.8, §5.12, §8 CFL-2, with the five points the resource audit confirmed; question 94 built for option A, one fixed chain per target read once; coordinator work order `rd-1029/brief-cfl2-v2.md`)
+
+[recognition-preprocess.md](recognition-preprocess.md) (section Hand-over) and
+[resource-declarations.md](resource-declarations.md) (section Task schema `0.9` recognition
+preprocessing) are the contract; [ocr-fields.md](ocr-fields.md), [selection-graph.md](selection-graph.md)
+(Shared OCR read, Preprocessing) and [saved-artifact-ocr.md](saved-artifact-ocr.md) name the rest.
+**No persisted ledger shape** (the task diagnostic maps OCR evaluations member by member;
+ledger revision stays [3, 4]), no configuration key, no new error code. One new warning code. The
+package member joins `package` interface revision 6, which BT-PK6 declares; until then it is
+admitted by code (`component-interfaces.json` stays `package` [3, 5]). The number 1.208 is the
+coordinator's (1.204 is WD-MT's, 1.205 is ISO-PE's, 1.206 is CFL-1's, 1.207 is STORE-FG-1's).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| CFL2-1 | `preprocess` `{"steps": [...]}` on task schema `0.9` `ocr_targets[]` and `candidate_layouts[].shared_ocr`, and on recognition pack schema `0.7` `ocr` targets and `shared_ocr`; passed to the pack as declared (a source that uses it derives pack `0.7`; one without it derives every document byte for byte as before) | new optional package member (joins `package` revision 6) | CFL-2 | resource side (no production package before CF-RF1 passes, design §7) | one parser for source and pack (`OcrPreprocess::from_json`), refusals at their own pointers; pack `0.6` `UnconsumedField`; another target type `UnknownField`; a whole-frame OCR target without `locate` and a shared read's `otsu` `InvalidValue`; a Runtime before 0.12.29 refuses the member as unknown |
+| CFL2-2 | the hand-over of every OCR read: without a chain the frame itself as before; with one only the processed region `(0, 0, w, h)` as R = G = B pixels, `Implicit` read as `Region`, blocks moved back onto the region's origin | behaviour | CFL-2 | — | the chain runs once before each provider call, never on a remembered read, a kept observation or a shared read's targets; after it the sample deadline is checked again (`recognition sample budget insufficient`) and a saved frame's OCR timeout loses the chain's time (`OCR request budget exhausted` at zero) |
+| CFL2-3 | the chain is part of a text read's request (`TextReadKey`) and of the static read budget (`StaticTextRead`); a shared read serves only targets with an equal chain, and its "serves at least one target" admission counts with chains | behaviour | CFL-2 | — | two chains over one region are two reads; colors of `keep_colors` compare in their declared order |
+| CFL2-4 | `OcrEvaluation.preprocess`, `OcrEvaluation.shared_read`, `OcrObservationEvaluation.preprocess`: `{algorithm, steps, scope, rect, source_rect?, kept_milli, inverted, threshold_value}` and `{rect, detected?, limit?, kept_milli?, threshold_value?}` | read-only evidence (memory and read-only answers only) | CFL-2 | — | absent without a chain (`shared_read` on every evaluation a shared read serves); direct serializers carry them: the read-only page responses' `actual` evaluations, a saved frame's OCR report `observation`, and the online observation's `candidate_sample` rows (`ac_observe`, `ac_lab_observe` and the Lab's online `observe`); explicit mappings do not: the task diagnostic (ledger), the read-only target response, the field report artifact, the runtime client's DTOs |
+| CFL2-5 | `package_bundle_preprocess_divergent` (warning, ladder class `none`, since 0.12.29, pending; `package_id`, `target_id`, `json_pointer`): `package bundle` and `actinglab standard-pack check` report one per package, OCR target and shared read whose chains differ though the read would serve the target | new catalog entry and report entries (not persisted) | CFL-2 | resource tooling | no existing warning names a target and a shared read (the five package-bundle warnings are entry pages, remedies, shadowed interrupt pages, undeclared recognition packs and unlocated store taps); nothing is refused |
+
+### 1.209 Slice STORE-FG-2 (0.12.29): the store allowlist, and the host taps a declared store step only with exactly that store in front (Alice 10-29 10:1x; her questions 95 to 97, option A; design `rd-1029/design-store-fg.md` §2, §3, §5, §6; review `rd-1029/review-store-fg-1.md` L5; coordinator work order `rd-1029/brief-store-fg-2.md`)
 
 [application-lifecycle.md](application-lifecycle.md) ("Store foreground allowance"),
 [runtime-config.md](runtime-config.md) ("The `store_foreground` section") and the runtime-host
 fragment of the outcome catalog are the contract. **No persisted ledger shape**: the refusals are
 the existing `command.rejected`, `runtime.failed` and the run's terminal, the store in front is the
 existing `application.foreground` fact, and the key's row is a new row of the existing
-`config.parameters.<section>` fact. The number 1.206 is provisional for the parallel slices of
-0.12.29.
+`config.parameters.<section>` fact. The number 1.209 is the coordinator's (1.204 is WD-MT's,
+1.205 is ISO-PE's, 1.206 is CFL-1's, 1.207 is STORE-FG-1's, 1.208 is CFL-2's).
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
@@ -3856,7 +3924,7 @@ when it takes effect.
 | `touch.*` (**`actingd-config` revision 7**, Workflow #406; §1.136) | `sampling.sigma_ratio_milli`, `sampling.max_redraws`, `sampling.candidate_count`, `history.points_per_box`, `history.max_boxes` | 250 (`1..=1000`), 8 (`0..=64`), 4 (`1..=16`), 16 (`1..=256`), 1024 (`1..=65536`); host-wide, every key settable (plan Q13; [runtime-config.md](runtime-config.md)) | #406 T12 (§1.136) | #406 T12 (0.12.x) |
 | `emulator_control.*` (**`actingd-config` revision 8**, #411 A50; §1.158) | `restart_exit_wait_ms` | 60 000 (`1000..=300000`); host-wide, settable ([runtime-config.md](runtime-config.md)) | A50 (§1.158 A50-5) | A50 (0.12.x) |
 | `host.*` (**`actingd-config` revision 20**, RB-2; §1.202) | `process_memory_priority`, `process_io_priority` | `normal` (`normal` \| `low`); not settable, applied by actingd to its own process at start ([runtime-config.md](runtime-config.md), "The `host` section") | RB-2 (§1.202 RB2-1) | RB-2 (0.12.28) |
-| `store_foreground.*` (**`actingd-config` revision 21**, STORE-FG-2; §1.206) | `allowed_application_ids` | `[]` (0 to 16 unique Android package names, none an instance's `application_id`); not settable, only the configuration file widens it ([runtime-config.md](runtime-config.md), "The `store_foreground` section") | STORE-FG-2 (§1.206 SF2-1) | STORE-FG-2 (0.12.29) |
+| `store_foreground.*` (**`actingd-config` revision 21**, STORE-FG-2; §1.209) | `allowed_application_ids` | `[]` (0 to 16 unique Android package names, none an instance's `application_id`); not settable, only the configuration file widens it ([runtime-config.md](runtime-config.md), "The `store_foreground` section") | STORE-FG-2 (§1.209 SF2-1) | STORE-FG-2 (0.12.29) |
 
 - Removed by option 丙 in the same revision (PKG-S4): `startup_package.expected_sha256`,
   `prerequisite_packages[].package_digest`, `policy.procedure_manifest[].package_digest`. A

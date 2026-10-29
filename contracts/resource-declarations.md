@@ -469,7 +469,7 @@ lazily (section Task schema `0.9` value tests); the match is the one a full eval
 | Template with color | `anchors[].color_check`, `verify_templates[].color_check` (task schema `0.9`) | one candidate meets the template threshold and the color condition together (`template-relative-color.md`); the color distance is the check's `max_distance`, or the package default when absent; with `alternatives`, the nearest declared color counts (section Task schema `0.9` several expected colors) |
 | Color | `color_probes[]` with `expected` | the mean RGB of its region is within the target's `max_distance` of `expected` (with `alternatives`, of the nearest declared color, section Task schema `0.9` several expected colors); when `max_distance` is absent, the package's `defaults.color_max_distance` applies, taken from the entry task's `defaults` (20 when absent) |
 | Color digest | `color_probes[]` with `digest` | the `color_digest.v1` digest of its region is within the declared `max_mean_milli` (and `max_cell`, when declared) of the declared cells (`color-digest.md`); there is no default |
-| OCR | `ocr_targets[]` | the recognized text matches one `expected` value under `match_mode` and `case_sensitive`, with confidence at least `minimum_confidence` |
+| OCR | `ocr_targets[]` | the recognized text matches one `expected` value under `match_mode` and `case_sensitive`, with confidence at least `minimum_confidence`; with `preprocess`, the provider reads the target's region after its chain (section Task schema `0.9` recognition preprocessing) |
 | Located text | `ocr_targets[]` with `locate` (task schema `0.9`) | one block read in the region matches one `expected` value under `match_mode` after the identity normalization, with confidence at least `minimum_confidence`, and lies in a declared cell when `cells` is declared (`ocr-fields.md`, section Located text); with `unique`, no other matching block lies within its margin |
 | Check | `checks[]` | `all_of`: every member passes; `any_of`: at least one member passes. Every member is evaluated with its own threshold (`selection-graph.md`, section Checks) |
 | Value test | `checks[]` with `value_test` (task schema `0.9`) | both sides read, and the left value compared with the right one holds; `parses` needs only the left side to read (section Task schema `0.9` value tests) |
@@ -881,6 +881,67 @@ A target that declares the floor is refused when the evaluator is built as a `re
 anchor or as a candidate layout feature read at an offset (neither checks it), and
 template-region batch evaluation refuses it too. The member belongs to package interface
 revision 6, declared at the end of the 0.12.x B train; until then it is admitted by code.
+
+### Task schema `0.9` recognition preprocessing
+
+Workflow #411 A58, #428 CFL-2 (design CF v2 §5, since 0.12.29). Task schema `0.9` accepts
+`"preprocess": {"steps": [...]}` on `ocr_targets[]` entries and on a `fixed_slots` layout's
+`shared_ocr` (`selection-graph.md`, section Shared OCR read, Preprocessing): one fixed chain
+of 1 to 4 steps whose syntax, arithmetic, evidence and golden values
+[recognition-preprocess.md](recognition-preprocess.md) defines. An older task schema refuses it
+with `UnconsumedField`; `anchors[]`, `verify_templates[]`, `color_probes[]`, checks and
+operations do not take it (`UnknownField`). It passes to the derived recognition pack as
+declared, and a source that uses it derives pack schema `0.7`; a source that does not derives
+every document byte for byte as before. In the recognition pack, schema `0.7` `ocr` targets and
+`shared_ocr` accept it; an older pack schema refuses it with `UnconsumedField` at
+`/targets/<i>/preprocess`, and any other target type with `UnknownField`.
+
+```json
+{"id": "ocr/item_count",
+ "region": {"mode": "template_relative", "anchor_target_id": "icon/item",
+            "offset": {"x": 40, "y": 52}, "width": 56, "height": 24},
+ "languages": ["en"], "timeout_ms": 1000, "match_mode": "exact", "expected": ["0"],
+ "case_sensitive": false, "minimum_confidence": 0.9,
+ "model_ref": "<model>", "model_sha256": "<64 lowercase hex digits>",
+ "preprocess": {"steps": [
+   {"kind": "keep_colors", "colors": [[255, 255, 255], [240, 240, 232]], "tolerance": 40},
+   {"kind": "invert"}
+ ]}}
+```
+
+The declaration gate (source and pack alike, one parser) refuses with
+`resource_declaration_invalid`, at the declaration's pointer (`/ocr_targets/<i>` or
+`/candidate_layouts/<i>/shared_ocr` in `task.json`, `/targets/<i>` or
+`/candidate_layouts/<i>/shared_ocr` in the pack) followed by:
+
+| Pointer | Refused when | Reason |
+|---|---|---|
+| `/preprocess` | not an object | `InvalidType` |
+| `/preprocess/<member>` | a member other than `steps` | `UnknownField` |
+| `/preprocess/steps` | missing; not an array | `MissingField`; `InvalidType` |
+| `/preprocess/steps` | empty, or more than 4 steps | `InvalidValue` |
+| `/preprocess/steps/<k>` | a step that is not an object | `InvalidType` |
+| `/preprocess/steps/<k>/kind` | missing; not a string; an unknown kind; the chain's shape breaks (first step, order, repetition) | `MissingField`; `InvalidType`; `InvalidValue`; `InvalidValue` |
+| `/preprocess/steps/<k>/<member>` | a member the kind does not have; one it requires is missing | `UnknownField`; `MissingField` |
+| `/preprocess/steps/<k>/<member>` (and `…/<color>/<channel>`) | a number that is no integer, or a value of another type | `InvalidType` |
+| `/preprocess/steps/<k>/<member>` (and `…/<color>/<channel>`) | an integer outside 0 to 255; a color or bound that is not three integers; an unknown `space`; a `value` that is neither 1 to 255 nor `"otsu"`; and every refusal of the chain itself (`ColorCount`, `ColorRepeated`, `HueOutOfRange`, `BoundsReversed`, `ContrastBoundsReversed`, `ThresholdZero`) | `InvalidValue` |
+| `/preprocess` of an OCR target | its region is the whole frame (`full_frame`, or a `rect` or `template_relative` region the size of `coordinate_space`) and it does not declare `locate` | `InvalidValue` |
+| `/candidate_layouts/<i>/shared_ocr/preprocess/steps/<k>/value` | a shared read's `threshold` of `"otsu"` | `InvalidValue` |
+
+Why the whole frame needs `locate`: a chained read hands the provider only the processed region,
+so it can no longer tell the whole frame from a part of it; an implicit read of the whole frame
+would also drop the detector's boxes beyond the model folder's `max_boxes` without a count, and
+a color keep on the whole frame makes such boxes easily. With `locate` the block mode is explicit
+and a truncated read fails loud (`text_read_blocks_truncated`). A shared read is `detect`
+already.
+
+What a chained read does, its evidence and where the evidence goes are in
+[recognition-preprocess.md](recognition-preprocess.md), section Hand-over. A target without
+`preprocess` reads exactly as before. A target has one chain and is read once with it; a region
+that needs two chains is declared as two targets. Readings, fields, value tests, `target_consensus`,
+`agreement` and candidate features name the target as before and read through its chain. The
+member belongs to package interface revision 6, declared at the end of the 0.12.x B train; until
+then it is admitted by code.
 
 ### Task schema `0.9` observation windows and input rechecks
 
@@ -1333,7 +1394,7 @@ while a step waits for a page. No new member, code or record; any task schema.
 
 ### Store update packages
 
-STORE-FG-1 (since 0.12.29; [v012-register.md](v012-register.md) §1.205; design
+STORE-FG-1 (since 0.12.29; [v012-register.md](v012-register.md) §1.207; design
 `rd-1029/design-store-fg.md` §2, §3 and §8). A package updates its game's client through the
 store application with its own `control.json` member `store_update`: which store application its
 store steps run in, and which steps those are. The Runtime compares package ids for equality only

@@ -27,6 +27,10 @@ mod codes;
 // Workflow #411 B3.
 #[cfg(test)]
 mod gate_411_b3;
+// Workflow #411 A58, #428 CFL-2: recognition preprocessing on OCR reads.
+#[cfg(test)]
+mod gate_cfl2;
+mod ocr_preprocess;
 mod target_consensus;
 // Workflow #396 REC-7.
 mod template_mask;
@@ -44,6 +48,10 @@ mod value_test;
 // Workflow #411 B1 (slice BT-B1): a number's dictionary, and an agreement admitted.
 #[cfg(test)]
 mod gate_411_bt_b1;
+pub use ocr_preprocess::{
+    OcrPreprocess, OcrPreprocessEvidence, OcrPreprocessScope, OcrSharedReadEvidence,
+    PreprocessRefusal, shared_otsu_refusal,
+};
 pub use recognition::SearchClock;
 pub use target_consensus::{TargetConsensus, TargetSampleRecorder};
 pub use target_unique::{TargetUnique, TargetUniquenessEvidence};
@@ -533,6 +541,10 @@ pub struct OcrTarget {
     /// (Workflow #396 REC-2).
     #[serde(default)]
     pub unique: Option<TargetUnique>,
+    /// Schema 0.7 (Workflow #428 CFL-2): the chain the target's region passes before the
+    /// provider reads it (`contracts/recognition-preprocess.md`); absent means the frame itself.
+    #[serde(default)]
+    pub preprocess: Option<OcrPreprocess>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1087,6 +1099,14 @@ pub struct OcrEvaluation {
     /// A locate target's found block and cell (Workflow #396 REC-1); absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub located: Option<OcrLocatedEvidence>,
+    /// Workflow #428 CFL-2: the evidence of the target's chain; absent without one. Read-only
+    /// and Lab output only: the task diagnostic maps its members explicitly and leaves it out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preprocess: Option<OcrPreprocessEvidence>,
+    /// Workflow #428 CFL-2: the layout's shared read this evaluation took its text from; absent
+    /// for a target that read on its own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shared_read: Option<OcrSharedReadEvidence>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -1108,6 +1128,9 @@ pub struct OcrObservationEvaluation {
     pub confidence: Option<f32>,
     pub blocks: Vec<OcrTextEvidence>,
     pub execution: OcrProviderExecutionEvidence,
+    /// Workflow #428 CFL-2: the evidence of the target's chain; absent without one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preprocess: Option<OcrPreprocessEvidence>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -1161,6 +1184,8 @@ pub fn load_pack_from_json_str(json: &str) -> RecognitionPackResult<RecognitionP
         error
     };
     text_locate::validate_locate_declarations(&pack).map_err(refused)?;
+    // Workflow #428 CFL-2.
+    ocr_preprocess::validate_preprocess_declarations(&pack).map_err(refused)?;
     // Workflow #396 REC-6.
     value_test::validate_value_test_declarations(&pack).map_err(refused)?;
     if matches!(schema_version.as_str(), "0.1" | "0.3" | "0.4" | "0.5")
@@ -1240,6 +1265,9 @@ struct RememberedOcrObservation {
     region: PackRect,
     region_evidence: OcrRegionEvidence,
     observation: OcrProviderObservation,
+    /// Workflow #428 CFL-2: the chain's evidence of the kept read, reused with it; the chain does
+    /// not run again.
+    preprocess: Option<OcrPreprocessEvidence>,
 }
 
 impl SceneEvaluation<'_> {
@@ -1472,6 +1500,8 @@ pub(crate) fn anchor_not_matched(
             match_mode: target.match_mode,
             blocks: Vec::new(),
             located: None,
+            preprocess: None,
+            shared_read: None,
         })),
         nn: None,
         color_digest: None,
@@ -1900,6 +1930,8 @@ impl RecognitionEvaluator {
             Some(kept) => (kept.region, kept.region_evidence.clone()),
             None => context.ocr_region(target)?,
         };
+        // Workflow #428 CFL-2: a request budget (a saved frame's OCR) pays for the chain too.
+        let request_budget = timeout_ms.is_some();
         let timeout_ms = timeout_ms
             .unwrap_or(target.timeout_ms)
             .min(target.timeout_ms);
@@ -1908,11 +1940,12 @@ impl RecognitionEvaluator {
         }
         let mut diagnostics = Vec::new();
         (|| {
-            let observation = match kept {
+            let (observation, preprocess) = match kept {
+                // Workflow #428 CFL-2: the kept read's evidence, without running the chain again.
                 Some(kept) => {
                     let mut observation = kept.observation;
                     observation.result.ppocr_diagnostics = Vec::new();
-                    observation
+                    (observation, kept.preprocess)
                 }
                 None => {
                     let provider = self.vision_provider.as_ref().ok_or_else(|| {
@@ -1924,17 +1957,42 @@ impl RecognitionEvaluator {
                     provider
                         .require_ocr_model(&target.model_ref, &target.model_sha256)
                         .map_err(|error| provider_error(&target.id, "ocr admission", error))?;
-                    provider
-                        .read_text_with_execution_evidence(OcrProviderRequest {
-                            frame: provider_frame(scene),
-                            region,
-                            languages: &target.languages,
+                    let started = (context.search_clock)();
+                    let hand_over = context.ocr_hand_over(
+                        &target.id,
+                        region,
+                        OcrProviderBlocks::Implicit,
+                        target.preprocess.as_ref(),
+                        timeout_ms,
+                    )?;
+                    // The provider's timeout is what the chain left of the request budget, in
+                    // whole milliseconds rounded up; nothing left is the budget exhausted.
+                    let timeout_ms = if request_budget && hand_over.preprocessed() {
+                        let spent = (context.search_clock)()
+                            .saturating_duration_since(started)
+                            .as_nanos()
+                            .div_ceil(1_000_000);
+                        let left = u64::try_from(spent)
+                            .map_or(0, |spent| timeout_ms.saturating_sub(spent));
+                        if left == 0 {
+                            return Err(RecognitionPackError::fatal(
+                                "OCR request budget exhausted",
+                            ));
+                        }
+                        left
+                    } else {
+                        timeout_ms
+                    };
+                    let mut observation = provider
+                        .read_text_with_execution_evidence(hand_over.request(
+                            &target.languages,
                             timeout_ms,
-                            model_ref: &target.model_ref,
-                            model_sha256: &target.model_sha256,
-                            blocks: OcrProviderBlocks::Implicit,
-                        })
-                        .map_err(|err| provider_error(&target.id, "ocr observation", err))?
+                            &target.model_ref,
+                            &target.model_sha256,
+                        ))
+                        .map_err(|err| provider_error(&target.id, "ocr observation", err))?;
+                    observation.result = hand_over.restore(observation.result)?;
+                    (observation, hand_over.into_evidence())
                 }
             };
             diagnostics = observation.result.ppocr_diagnostics.clone();
@@ -1973,6 +2031,7 @@ impl RecognitionEvaluator {
                 confidence: ocr.confidence,
                 blocks: ocr.blocks,
                 execution,
+                preprocess,
             })
         })()
         .map_err(|error: RecognitionPackError| {
@@ -2467,7 +2526,6 @@ impl RecognitionEvaluator {
         if let Some(locate) = &target.locate {
             return self.evaluate_located_text(context, target, locate);
         }
-        let scene = context.scene;
         let (region, region_evidence) = match context.ocr_region(target) {
             Ok(region) => region,
             Err(error) => return anchor_not_matched(target, error),
@@ -2482,18 +2540,19 @@ impl RecognitionEvaluator {
             provider
                 .require_ocr_model(&target.model_ref, &target.model_sha256)
                 .map_err(|error| provider_error(&target.id, "ocr admission", error))?;
-            let request = OcrProviderRequest {
-                frame: provider_frame(scene),
-                region,
-                languages: &target.languages,
-                timeout_ms: target.timeout_ms,
-                model_ref: &target.model_ref,
-                model_sha256: &target.model_sha256,
-                blocks: OcrProviderBlocks::Implicit,
+            // Workflow #428 CFL-2: the read's hand-over, made only when the provider is called.
+            let hand_over = || {
+                context.ocr_hand_over(
+                    &target.id,
+                    region,
+                    OcrProviderBlocks::Implicit,
+                    target.preprocess.as_ref(),
+                    target.timeout_ms,
+                )
             };
             // Workflow #396 REC-6: a field or reading target keeps its observation for the
             // frame's collection, and a second evaluation here reuses it.
-            let result = if context
+            let (result, preprocess) = if context
                 .remembered_targets
                 .is_some_and(|targets| targets.contains(&target.id))
             {
@@ -2502,35 +2561,52 @@ impl RecognitionEvaluator {
                     .borrow()
                     .observations
                     .get(&target.id)
-                    .map(|kept| kept.observation.result.clone());
+                    .map(|kept| (kept.observation.result.clone(), kept.preprocess.clone()));
                 match kept {
-                    Some(mut result) => {
+                    Some((mut result, preprocess)) => {
                         result.ppocr_diagnostics = Vec::new();
-                        result
+                        (result, preprocess)
                     }
                     None => {
                         // Workflow #396 REC-8: the gate's read of a kept target is one read of
                         // this page recognition's budget.
                         context.admit_text_read(&target.id, region)?;
-                        let observation = provider.read_text_with_execution_evidence(request);
-                        context.count_text_read(region);
+                        let hand_over = hand_over()?;
                         let observation =
+                            provider.read_text_with_execution_evidence(hand_over.request(
+                                &target.languages,
+                                target.timeout_ms,
+                                &target.model_ref,
+                                &target.model_sha256,
+                            ));
+                        context.count_text_read(region);
+                        let mut observation =
                             observation.map_err(|err| provider_error(&target.id, "ocr", err))?;
+                        observation.result = hand_over.restore(observation.result)?;
+                        let preprocess = hand_over.into_evidence();
                         context.observations.borrow_mut().observations.insert(
                             target.id.clone(),
                             RememberedOcrObservation {
                                 region,
                                 region_evidence: region_evidence.clone(),
                                 observation: observation.clone(),
+                                preprocess: preprocess.clone(),
                             },
                         );
-                        observation.result
+                        (observation.result, preprocess)
                     }
                 }
             } else {
-                provider
-                    .read_text(request)
-                    .map_err(|err| provider_error(&target.id, "ocr", err))?
+                let hand_over = hand_over()?;
+                let result = provider
+                    .read_text(hand_over.request(
+                        &target.languages,
+                        target.timeout_ms,
+                        &target.model_ref,
+                        &target.model_sha256,
+                    ))
+                    .map_err(|err| provider_error(&target.id, "ocr", err))?;
+                (hand_over.restore(result)?, hand_over.into_evidence())
             };
             let ocr = validate_ocr_result(result, region)?;
             let (matched_expected, passed, message) =
@@ -2555,6 +2631,8 @@ impl RecognitionEvaluator {
                     match_mode: target.match_mode,
                     blocks: ocr.blocks,
                     located: None,
+                    preprocess,
+                    shared_read: None,
                 })),
                 nn: None,
                 color_digest: None,
@@ -3054,6 +3132,19 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
                     actingcommand_contract::ResourceDeclarationReason::UnconsumedField,
                 ));
             }
+            // Workflow #428 CFL-2.
+            "ocr" if schema != SCHEMA_0_7 && object.contains_key("preprocess") => {
+                return Err(RecognitionPackError::fatal_with_code(
+                    RecognitionPackErrorCode::UnsupportedTarget,
+                    format!(
+                        "schema {schema} target[{index}].preprocess requires schema_version '{SCHEMA_0_7}'"
+                    ),
+                )
+                .at_declaration(
+                    format!("/targets/{index}/preprocess"),
+                    actingcommand_contract::ResourceDeclarationReason::UnconsumedField,
+                ));
+            }
             "ocr" => &[
                 "type",
                 "id",
@@ -3069,6 +3160,7 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
                 "click",
                 "locate",
                 "unique",
+                "preprocess",
             ][..],
             "nn" => &[
                 "type",
@@ -3101,6 +3193,14 @@ fn validate_wire_shape(value: &Value, schema: &str) -> RecognitionPackResult<()>
         }
         if let Some(locate) = object.get("locate") {
             validate_locate_wire(locate, &format!("/targets/{index}/locate"))?;
+        }
+        // Workflow #428 CFL-2: only an OCR target admits the member (refused above otherwise).
+        if let Some(preprocess) = object.get("preprocess") {
+            ocr_preprocess::validate_preprocess_wire(
+                preprocess,
+                &format!("/targets/{index}/preprocess"),
+                false,
+            )?;
         }
         if target_type == "color_digest"
             && let Some(algorithm) = object.get("algorithm").and_then(Value::as_str)
@@ -6270,6 +6370,7 @@ mod tests {
                         click: None,
                         locate: None,
                         unique: None,
+                        preprocess: None,
                     }),
                     RecognitionTarget::Nn(NnTarget {
                         id: "nn/page".to_string(),

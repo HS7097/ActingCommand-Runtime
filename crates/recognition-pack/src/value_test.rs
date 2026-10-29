@@ -538,7 +538,9 @@ impl RecognitionEvaluator {
             provider
                 .require_ocr_model(&target.model_ref, &target.model_sha256)
                 .map_err(|error| provider_error(&target.id, "ocr admission", error))?;
-            let result = context.read_text_once(
+            // Workflow #428 CFL-2: the side reads through its target's chain; a value test keeps
+            // no OCR evaluation, so the chain's evidence is not carried here.
+            let (result, _preprocess) = context.read_text_once(
                 provider.as_ref(),
                 target,
                 region,

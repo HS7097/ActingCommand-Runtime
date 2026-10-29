@@ -194,6 +194,14 @@
       "layer": "policy",
       "uncertain": false,
       "values": {
+        "policy_input": "optional",
+        "policy_input_problem": "optional",
+        "fact_key": "optional",
+        "instance_id": "optional",
+        "task_id": "optional",
+        "pool_id": "optional",
+        "observed_at_unix_ms": "optional",
+        "evaluated_at_unix_ms": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -203,7 +211,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The scheduling evaluation refused its input: the catalog, facts or instance snapshot break a rule the evaluator checks.",
+      "description": "The scheduling evaluation refused its input: the catalog, facts or instance snapshot break a rule the evaluator checks. ISO-PE (#419, 0.12.28): an input check that names what it refused carries policy_input and policy_input_problem, and the fact_key, instance_id, task_id or pool_id it names; a time check (observed_after_evaluation) also carries observed_at_unix_ms and evaluated_at_unix_ms. The Runtime keeps the check's developer text as the native detail of policy_evaluation_rejected.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

@@ -339,7 +339,10 @@ fn navigation_check(
             packages.admit_listed(package_id)?;
         }
         // STORE-FG-1: the store-tap report needs no root file.
-        return unlocated_store_taps(root, &mut packages);
+        let mut warnings = unlocated_store_taps(root, &mut packages)?;
+        // Workflow #428 CFL-2: with or without `pages.json`.
+        warnings.extend(preprocess_divergences(root, &mut packages)?);
+        return Ok(warnings);
     };
     let listed = pages
         .pages
@@ -448,6 +451,8 @@ fn navigation_check(
         &mut packages,
     )?);
     warnings.extend(unlocated_store_taps(root, &mut packages)?);
+    // Workflow #428 CFL-2.
+    warnings.extend(preprocess_divergences(root, &mut packages)?);
     Ok(warnings)
 }
 
@@ -468,6 +473,31 @@ fn unlocated_store_taps(
                 Outcome::new(ResourceToolingCode::PackageBundleStoreTapUnlocated)
                     .package_id(package_id)
                     .pack_operation_id(operation_id.as_str()),
+            );
+        }
+    }
+    Ok(warnings)
+}
+
+/// Workflow #428 CFL-2 (design CF v2 §5.6, the resource side's request): a slot's or feature's OCR
+/// target whose chain differs from the chain of the layout's shared read it would otherwise take
+/// its text from reads on its own, which the author rarely means (colors in another order make
+/// another chain). One `package_bundle_preprocess_divergent` warning per package of the registry,
+/// target and shared read (`package_id`, `target_id`, and `json_pointer`, the shared read in the
+/// package's recognition pack), in registry order and then the pack's order; nothing is refused.
+fn preprocess_divergences(
+    root: &StandardPackRoot,
+    packages: &mut Packages<'_>,
+) -> LabResult<Vec<Outcome>> {
+    let mut warnings = Vec::new();
+    for package_id in root.registry.package_ids() {
+        let package = packages.admit_listed(package_id)?;
+        for (target_id, shared_read) in package.preprocess_divergences() {
+            warnings.push(
+                Outcome::new(ResourceToolingCode::PackageBundlePreprocessDivergent)
+                    .package_id(package_id)
+                    .target_id(target_id.as_str())
+                    .json_pointer(shared_read.clone()),
             );
         }
     }

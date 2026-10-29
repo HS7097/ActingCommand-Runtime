@@ -2971,6 +2971,10 @@ fn derive_candidate_layouts(
                 if let Some(line_merge) = shared.get("line_merge") {
                     generated["line_merge"] = line_merge.clone();
                 }
+                // Workflow #428 CFL-2: the read's chain, as declared.
+                if let Some(preprocess) = shared.get("preprocess") {
+                    generated["preprocess"] = preprocess.clone();
+                }
                 derived["shared_ocr"] = generated;
             }
             keep_candidate_layout(&mut layouts, derived, &id, refuse)?;
@@ -3022,6 +3026,8 @@ fn pack_schema_version(targets: &[Value], candidate_layouts: &[Value]) -> &'stat
                 || target.get("scales").is_some()
                 // Workflow #411 B13.
                 || target.get("luma_floor").is_some()
+                // Workflow #428 CFL-2.
+                || target.get("preprocess").is_some()
         });
     if uses_0_7 {
         PACK_SCHEMA_0_7
@@ -3065,6 +3071,7 @@ fn ocr_target_to_pack(source: &Value) -> CliOutcome<Value> {
             "click",
             "locate",
             "unique",
+            "preprocess",
         ],
         "ocr_targets entry",
     )?;
@@ -3122,6 +3129,11 @@ fn ocr_target_to_pack(source: &Value) -> CliOutcome<Value> {
     // Workflow #396 REC-2: `unique` passes to the pack as declared (pack schema `0.7`).
     if let Some(unique) = source.get("unique") {
         target.insert("unique".to_string(), unique.clone());
+    }
+    // Workflow #428 CFL-2: `preprocess` passes to the pack as declared (pack schema `0.7`); a
+    // target without it derives the same bytes as before.
+    if let Some(preprocess) = source.get("preprocess") {
+        target.insert("preprocess".to_string(), preprocess.clone());
     }
     Ok(Value::Object(target))
 }

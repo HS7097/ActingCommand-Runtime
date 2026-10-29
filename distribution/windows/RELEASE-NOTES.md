@@ -9,6 +9,183 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.28
+
+本版是 v0.12.27 之后合并的 10 个 PR：SR-92、UNSET-1、RB-2、RB-1、B35、B43、EMU-BIND、LAB-SMALL、WD-MT、ISO-PE。运行中
+会注意到的：10-29 11:19 那种长时间停机不会再出现。当时一轮策略评估因为一项输入不合法（`policy_evaluation_input_invalid`）
+结束了策略驱动线程，整个 Runtime 随即停下，所有实例都停了；看门狗又从目录项读到过时的日志时间（Runtime 拉起的 adb server
+继承并一直开着它的日志），把这次出错的停机判成正式关闭，35 分钟没有重启。本版里，不是全局性的评估失败只跳过这一轮，记
+一条 `policy_evaluation_skipped`，默认 15 秒后再评，连续 3 次再记一条 `policy_evaluation_awaiting_person` 等人看，Runtime
+一直运行（ISO-PE）；看门狗改按日志文件本身的时间判断，actingd 拉起的子进程也不再继承它的日志（WD-MT），出错的停机会在
+看门狗下一次检查时重启。整机重启后由看门狗拉起的 Runtime 不再以低内存优先级和低 I/O 优先级运行（RB-2）；冷启动后列运行
+和概况的运行块不再因为每页重读整段历史的 Lab 关系而连续几小时失败（RB-1）。启动模拟器时就绪等待里一次 `info` 读取失败
+不再判启动失败，模拟器已经在跑、端点还是 pending 的实例由监视识别并绑定，不用人手（EMU-BIND）。被一单结算不了的运行在
+每次启动时重新扣住的实例，现在只在第一次扣（UNSET-1）。操作员暂停或部署排空打断的计划运行按条件终止结算，不再算任务
+失败（SR-92，默认值有变）。资源侧可以给共享打断页声明 `limit_cause`，但要等本版部署之后（B43）。v0.12.27 已在本版之前
+发布。
+
+配置：`actingd-config` 升为 revision 20，本版声明 [5, 20]，仍读 revision 5 到 19 的配置文件；`runtime-client` 仍是
+[2, 2]，账本仍是 [3, 4]，其他接口不变。
+
+- 新键 `host.process_memory_priority`（RB-2）：`normal`（默认，在 `actingd.defaults.json` 里）或 `low`。不可在运行时设置
+  （账本打开之前就用了，`ConfigureSettings` 答 `config_key_not_settable`），每次启动读一次；要改就改配置文件，下次启动生效。
+- 新键 `host.process_io_priority`（RB-2）：同上，`normal`（默认）或 `low`。两个键写了别的值，启动和 `check-config` 都以
+  `config_value_invalid` 拒绝并点名这个键。
+- 新键 `scheduling.evaluation.retry_ms`（ISO-PE）：默认 `15000`，1 到 3 600 000 毫秒，可在运行时设置：跳过一轮评估之后隔
+  多久再评。
+- 新键 `scheduling.evaluation.escalate_after`（ISO-PE）：默认 `3`，至少 1，可在运行时设置：连续跳过多少轮记一次
+  `policy_evaluation_awaiting_person`。这两个键在每次跳过时读，指令从下一次跳过起生效。
+- 改了的默认值（SR-92，Alice 的裁定 92）：`scheduling.rerun.condition_codes` 末尾加了 `contained_task_paused`，从 8 个码
+  变成 9 个，原来的 8 个不变（见 v0.12.27 的说明）。部署计划的默认值对比会列出这一项和上面四个新键。配置文件自己写了
+  `condition_codes` 的按文件里的值，这次改动对它不起作用，需要的话自己加上这个码；用指令设过这个键的，指令照样恢复，在
+  `instructions` 检查的 `base_changed` 里点名，不算失败。
+- 其他默认值都没改，现有的配置都不需要修改。
+- 账本没有新表、新索引或新事件类型，格式不变；本版写的新记录都是已有的记录类型（见下面）。
+- 新结果码 7 个：`policy_evaluation_skipped`、`policy_evaluation_awaiting_person`（ISO-PE）、`host_process_priority_applied`、
+  `host_process_priority_failed`（RB-2）、`host_stdio_inheritance_failed`（WD-MT）、
+  `contained_task_interrupt_environment_limit_reached`（B43）、`package_bundle_interrupt_page_shadowed`（B35）。新位置 8 个：
+  `read_unsettled_dispatch_records`（UNSET-1）、`build_lab_relations`（RB-1）、`process_memory_priority_set`、
+  `process_memory_priority_read`、`process_io_priority_set`、`process_io_priority_read`（RB-2）、
+  `process_stdout_inheritance_clear`、`process_stderr_inheritance_clear`（WD-MT）。它们的评审状态都是 pending，结果码发布
+  文件只收已定稿或已退役的条目，所以本版的发布文件是空的。没有退役的码。已有的码只加了可选值：`arguments_invalid` 的
+  `req_id`、`policy_evaluation_input_invalid` 的输入说明、`policy_settlement_dispatch_left_open` 的 `failure_code`，以及
+  模拟器自动启动和监视的七个码的 `watch_kind`。
+
+升级时要知道的：
+
+- 进程优先级（RB-2）：从 v0.12.27 升级不用做什么。每次启动读完配置、打开账本之前，actingd 把自己进程的内存优先级和 I/O
+  优先级设成两个键的级别并读回；CPU 优先级类不动（看门狗拉起时仍低于正常）。启动日志里随即多一行 `OUTCOME actingd:`：
+  `host_process_priority_applied`（info），带 `memory_priority_requested`、`io_priority_requested`（Windows 的级别，默认
+  normal 是 5 和 2）和读回的 `memory_priority_read`、`io_priority_read`；有调用失败或读回的级别不对时是
+  `host_process_priority_failed`（warning），每个失败的调用一条 `caused_by` `foreign_os_error`，启动照常。这一行不进账本，
+  也不进概况，要核实就看启动日志开头。I/O 优先级用的是没有文档的原生调用，以后的 Windows 拒绝它时也只是这条警告。
+- 跳过的评估（ISO-PE）：账本里记的是已有类型 `runtime.failed` 的两种记录，同时写成 daemon 行。
+  `policy_evaluation_skipped`（warning）带 `count`、`limit_count`（即 `escalate_after`）、`retry_after_ms`、
+  `next_eligible_unix_ms`，`caused_by` 是这次评估的失败：策略的 `policy_evaluation_input_invalid` 和被拒的那项输入
+  （`policy_input`、`policy_input_problem`，以及 `fact_key`、`instance_id`、`task_id` 或 `pool_id`；时间检查还有
+  `observed_at_unix_ms`、`evaluated_at_unix_ms`），连同策略自己的说明。连续跳过到 `escalate_after` 次时再记一次
+  `policy_evaluation_awaiting_person`（error）。连续次数只记在内存里，评估成功一次或重启就清零。
+  - 跳过期间所有实例都不从策略得到新的派发（策略一次校验全部输入），已经交给实例工作线程的运行照常跑完。
+  - 概况里还看不到跳过和等人的状态（后续片）；在那之前，每次部署后查一下账本里有没有新出现的这两个码。
+  - 仍会停下 Runtime 的只有全局失败：账本读取失败、锁中毒、时钟出错、生效配置读不出、共享投影和账本对不上，以及已经锁存
+    的条件。
+  - 评估时间改在拿到两道闸门之后取样，并行结算不会再让评估把自己的输入判成“晚于评估时间”。投影还没就绪
+    （`outcome_projection_not_ready`）时，没有重算唤醒的触发也不再结束驱动线程，而是等一个去抖间隔，最多连续
+    `escalate_after` 次，之后按跳过处理。
+- 日志时间和句柄继承（WD-MT）：看门狗和 `actingctl install`（读停机结果、回退闸门给启动日志定时间）都按日志文件本身的修改
+  时间判断，不再读目录项；读不到时报 `watchdog_log_unreadable`。actingd 启动的第一步清掉自己 stdout、stderr 的继承标志：
+  成功时什么都不写，失败时写一行 `host_stdio_inheritance_failed`（warning），启动照常。本版部署之前已经被继承的句柄收不
+  回来：以前的 actingd 拉起的 adb server 会一直开着那时的日志，直到 adb server 或整机重启；因为改成读文件本身的时间，这
+  不影响判断。部署这一次的停机如果由旧版安装器读结果，仍可能报一次 `stop_terminal_unconfirmed` 提示。
+- 识别在跑的模拟器（EMU-BIND）：从 v0.12.27 升级不用做什么。
+  - 监视读到模拟器在跑、Android 已起、有 ADB 端口，而这个实例的端点是 pending 或绑在别的端口上时，在该实例自己的队列上排
+    一个识别认领（`emulator_autostart_queued`，`watch_kind` 为 `recognize`），暂停与否都排：绑定上报的端口
+    （`runtime.instance_bound`），等 ADB 基线，记 `device.connected`，打开输入和截图，再像启动之后那样排启动包。它从不
+    启动或关闭模拟器。
+  - 已绑定但没准备好的实例（复核 M1）：实例已经绑在上报的端口上，却没有任何 `backend.selfcheck.*` 事实（Start 绑了端口
+    之后在 ADB 基线或期限上失败），它的钥匙空着，也没有被空闲动作、`released` 阶段的暂停或实例隔离（fence）扣着，监视
+    也用同样的认领识别它一次：跑一次自检，启动包只排一次，不发 Start。升级前在 v0.12.27 下留成这样的实例，升级后在不再
+    被扣着时的第一次读取就会被识别。
+  - 识别次数和重启一样受 `restart_attempts` / `restart_window_ms` 限制，分开计数；用尽时记一次
+    `emulator_watch_restart_exhausted`（`watch_kind` `recognize`），处理是 `actingctl selfcheck`。
+  - 启动的就绪等待里 `info` 读取被拒只算没有读到，继续等到 120 秒期限；`launch_err_code` 不是 0 仍立即失败；失败记录带上
+    被拒那次读取的输出。
+- 只扣一次（UNSET-1）：启动结算不了一单计划运行时，先按这单的运行和任务链接读一次它以前的 `runtime.failed`，读到第一条
+  `policy_settlement_dispatch_unsettled` 为止。以前记过：改记已有的 warning `policy_settlement_dispatch_left_open`（带
+  `failure_code`），不再暂停实例，还在的暂停保持原样；没记过：照旧记 error 并扣住实例。v0.12.26、v0.12.27 记下的也算，
+  所以升级后的第一次启动就不会再为这种旧运行扣住实例。读取超时或超出读取预算时照旧扣住，记录里用 `note` 写明原因。放开
+  扣住之前先看画面。这种运行本身怎么结算留给后续片（UNSET-2）。
+- 暂停打断（SR-92）：从本版起，非敏感任务的计划运行被操作员暂停（`ac_pause`、`actingctl pause`）或部署排空打断时，按
+  v0.12.27 说明里的条件终止结算：退回次数、不加连败、记下欠补跑，恢复后补跑先等节奏段、到时段终点过期。敏感任务仍是
+  普通失败。
+- `limit_cause`（B43）：`interrupts.json` 的打断项可以写可选成员 `limit_cause`：`"pack_logic"`（缺省，同以前）或
+  `"environment"`。
+  - 声明 `environment` 的页在一次运行里超过自己的 `max_per_run` 时，运行以
+    `contained_task_interrupt_environment_limit_reached` 结束：任何范围都不累计，只重跑，不会因为重复失败暂停这对任务。
+  - 它的阶梯类是 `budget_or_permission`，默认配置没有触发项匹配，所以默认不开阶梯；要阶梯就在配置里加一个点名这个码的
+    触发项。
+  - 一次运行里所有页合计第 17 次处理仍以 `contained_task_interrupt_limit_reached` 结束。
+  - v0.12.28 之前的 Runtime 不认这个成员，会拒收写了它的整个游戏根。所以资源仓要等本版部署并核过之后，在同一个 PR 里把
+    CI 钉的 Tools 换到 0.12.28 或以上，再热放置；放置之后，要回退到 0.12.28 以下就得先把资源根换回去（见回退）。
+- 共享打断页被包挡住（B35）：`standard-pack check` 和带 `--interrupts` 的 `package bundle` 对每个声明了共享打断页的注册表
+  包报一条 `package_bundle_interrupt_page_shadowed` 警告（`package_id`、`page_id`），只警告不拒收；`pages.json` 的特征包
+  和该页自己的处理包不报。资源仓 CI 钉的 Tools 换到 0.12.28 以上之后才会看到。
+- Lab 关系索引（RB-1）：读者池每次启动后在后台用自己的读连接建一次 Lab 关系索引，期限是 `ledger_observer.open_timeout_ms`；
+  建好之前各页照以前那样读，建好之后每页只读索引之后新增的记录。建不成只是一条 warning（daemon 行
+  `actingd ledger reader_pool lab_relations`，位置 `build_lab_relations`），不致命，各页照以前那样读到下次启动。索引只在
+  内存里。
+- Lab（LAB-SMALL）：只改 Tools 和 MCP。离线 `observe` 遇到缺 OCR 或 NN 模型的布局只跳过这个布局，在
+  `candidate_not_projected` 里列出；`--targets` 的每项带 `target_center`；`--with-frame` 的帧文件在答复成立之后才写；
+  `observe` 的 `standby` 恒为 `false`，认没认出页面看 `matched` 和 `state`；`ac_lab_do` 在 actinglab 运行之前给出的
+  `arguments_invalid` 带一个 `req_id`（不记录任何东西）。升级时 MCP 入口还没切到本版子进程之前，旧子进程没有这个
+  `req_id`。
+
+退回 v0.12.27 之前要做的事（按代码核对过）：
+
+- 配置文件：v0.12.27 只认 [5, 19]，配置文件和 `scheduling` 节都拒绝不认识的成员。配置文件只要写了 `host` 节（哪怕写的是
+  默认的 `normal`）或 `scheduling.evaluation`，v0.12.27 的 `check-config` 和启动都会拒绝整个文件，回退闸门的 `config`
+  部分也不通过。回退前先把它们从配置文件里删掉并提交（`acsetup --commit-config`）；两样都没写的文件 v0.12.27 照常读。
+- 运行时指令：用 `config set` 或 `ac_config_set` 设过 `scheduling.evaluation.retry_ms` 或 `escalate_after` 的，指令记在
+  `host.config_overrides` 里。v0.12.27 不认识这两个键，启动时作为 `config_override_dropped` 丢掉（只是警告，启动照常），
+  并列进 `instructions_dropped`，所以回退启动的 `instructions` 检查不通过。回退前先执行
+  `actingctl config clear scheduling.evaluation.retry_ms` 和 `actingctl config clear scheduling.evaluation.escalate_after`。
+  `host.*` 不可设置，不会有指令。设过 `scheduling.rerun.condition_codes` 的指令照样恢复（`config_override_base_changed`），
+  不算失败。
+- 改了的默认值（SR-92）：v0.12.27 用它自己的默认表（8 个码）。回退后被暂停或部署排空打断的计划运行又按普通失败算：扣
+  次数、加连败，可能暂停这对任务。已经按条件终止结算的照记录重放；L7 里已经欠下的、`failure_code` 为
+  `contained_task_paused` 的补跑，v0.12.27 照样提前、等节奏段、到时段终点过期（它不按码表筛欠着的补跑）。
+- 用了 `limit_cause` 的资源根（B43）：v0.12.27 启动时把写了它的整个游戏根记为 `standard_pack_root_invalid`（`check-config`
+  也列出），准备阶段拒绝每个要用这个根的运行，Runtime 不停。回退前先把资源根换回不带 `limit_cause` 的版本（或删掉这个
+  成员）并热放置。已经以新码结算的运行照记录；v0.12.27 若要按终态补结算一条带新码的运行，会按旧规则（码以
+  `contained_task_interrupt_` 开头）在准备阶段以外累计。
+- 账本里的新记录：不用做什么。账本的格式、表、索引和事件类型都没变，v0.12.27 照样打开本版写过的账本。新记录都是已有
+  类型：ISO-PE 的 `runtime.failed`，UNSET-1 的 `policy_settlement_dispatch_left_open`（多一个可选值），EMU-BIND 的认领和
+  绑定记录（多一个 `watch_kind`），B43 的运行终态。本版的新码不在 v0.12.27 的目录里，它读回时显示为
+  `outcome_relay_unregistered`（`raw_code` 是原码）。RB-2、WD-MT 的那几行只写在启动日志里。
+- 只在程序里、不存状态的改动，回退后回到 v0.12.27 的行为：
+  - ISO-PE：不是全局的评估失败又会结束策略驱动线程并停下整个 Runtime（11:19 那种情况）。
+  - WD-MT：子进程又会继承 actingd 的日志；看门狗又读目录项的时间，日志被别的进程开着时可能把出错的停机判成正式关闭、
+    不重启，要人手启动。
+  - RB-2：看门狗拉起的 actingd 又以低内存优先级和低 I/O 优先级运行。
+  - RB-1：每页又重读整段历史的 Lab 关系，冷缓存下列运行和概况的运行块可能连续失败（`ledger_read_budget_exceeded`）。
+  - EMU-BIND：就绪等待里一次 `info` 读取失败又判启动失败；在跑但端点 pending 的实例没人绑定，只能手动
+    `ac_emulator start`。识别时记下的绑定是已有的 `runtime.instance_bound`，v0.12.27 照常读。
+  - UNSET-1：结算不了的旧运行又会在每次启动时扣住它的实例；每次重启后看一下有没有这样被扣住的实例，看过画面再恢复。
+  - B35、LAB-SMALL：Tools 和 MCP 回到旧的行为。
+- 请求成员：本版没有新增请求类型或请求成员，`runtime-client` 仍是 [2, 2]。新增的只是可设置的配置键（指令的取值）和
+  Lab、MCP 答复里的成员（`target_center`、`candidate_not_projected`、拒绝里的 `req_id`）。
+- 客户端和 Runtime 的配对：
+  - 本版的客户端连 v0.12.27 的 Runtime：照常。请求不变；对它设 `scheduling.evaluation.*` 会被当作未知键拒绝
+    （`config_key_unknown`）；Lab 的改动都在 Tools 和 MCP 自己里，不依赖 Runtime。
+  - v0.12.27 的客户端连本版的 Runtime：照常。请求不变；本版的新码它的目录里没有，读到时显示为
+    `outcome_relay_unregistered`；共享投影的 `standby` 在没认出页面时是 `false`，成员和形状不变。
+
+运行上的变化：
+
+- 条件码默认值（SR-92）：`contained_task_paused` 进默认码表，操作员暂停或部署排空打断的计划运行按条件终止结算。
+- 只扣一次（UNSET-1）：结算不了的同一单运行只在第一次扣住实例，之后的启动记 `policy_settlement_dispatch_left_open`、不暂停。
+- 进程优先级（RB-2）：actingd 启动时把自己的内存和 I/O 优先级设成 `host.*` 的级别（默认 normal），写一行 daemon 行。
+- Lab 关系索引（RB-1）：读者池在后台建一次 Lab 关系索引，各页只读索引之后新增的部分。
+- 打断页警告（B35）：`standard-pack check` 和 `package bundle` 对挡住共享打断页的包报 `package_bundle_interrupt_page_shadowed`。
+- 环境类打断上限（B43）：`limit_cause` 为 `"environment"` 的页到上限以新码结束，只重跑、不累计暂停。
+- 识别在跑的模拟器（EMU-BIND）：监视绑定端点 pending 的在跑模拟器，识别已绑定却没自检的实例；就绪等待里 `info` 读取失败继续等。
+- Lab 小修（LAB-SMALL）：离线 `observe` 跳过缺模型的布局、`target_center`、帧文件晚写、`standby` 恒为 `false`、`ac_lab_do` 拒绝带 `req_id`。
+- 日志时间（WD-MT）：看门狗按日志文件本身的时间判断；actingd 的子进程不再继承它的日志。
+- 评估失败（ISO-PE）：不是全局的评估失败跳过这一轮、`retry_ms` 后重评、连续 `escalate_after` 次等人，Runtime 不停；细节保留；评估时间的竞态已修。
+
+本版合并的 PR：
+
+- #1421 SR-92（#386）：`contained_task_paused` 加进 `scheduling.rerun.condition_codes` 的默认值（裁定 92），被暂停或部署排空打断的计划运行按条件终止结算；敏感任务仍是普通失败。
+- #1423 UNSET-1（#421）：结算不了的同一单计划运行只在第一次启动时扣住实例，之后记 `policy_settlement_dispatch_left_open`（带 `failure_code`）、不暂停；新位置 `read_unsettled_dispatch_records`。
+- #1424 RB-2（#421）：actingd 启动时把自己的内存和 I/O 优先级设回正常，新键 `host.process_memory_priority`、`host.process_io_priority`，`actingd-config` revision 19 → 20；新结果码 `host_process_priority_applied`、`host_process_priority_failed`。
+- #1425 RB-1（#422）：读者池的页改从后台建好的 Lab 关系索引读；新位置 `build_lab_relations`。
+- #1426 B35（#428）：`standard-pack check` 和 `package bundle` 对声明了共享打断页的包报警告；新结果码 `package_bundle_interrupt_page_shadowed`。
+- #1427 B43（#428）：打断项的可选成员 `limit_cause`，`environment` 的上限只重跑、不累计暂停；新结果码 `contained_task_interrupt_environment_limit_reached`；更早的 Runtime 拒收写了它的根。
+- #1422 EMU-BIND（#421）：监视识别并绑定端点 pending 的在跑模拟器，也识别已绑定却没准备好的实例（M1）；就绪等待里 `info` 读取失败继续等；失败带上读取的输出。
+- #1428 LAB-SMALL（#428）：B47，加上 Lab 的 P57、P58、P60、P61。
+- #1430 WD-MT（#421）：看门狗按日志文件本身的时间判断；actingd 的子进程不再继承它的 stdout、stderr；新结果码 `host_stdio_inheritance_failed`。
+- #1431 ISO-PE（#419）：不是全局的策略评估失败不再停下 Runtime：跳过这一轮、重试、连续 N 次后等人；修掉评估时间的竞态；保留错误细节；新键 `scheduling.evaluation.retry_ms`、`escalate_after`（revision 20）；新结果码 `policy_evaluation_skipped`、`policy_evaluation_awaiting_person`。
+
 ## v0.12.27
 
 本版是 v0.12.26 之后合并的 6 个 PR，都是 0.12 第二波：CAP-IDX、P32-B1、SR-2b-1、ISO-5a、IDLE-WG、SR-2b-2。运行中会注意

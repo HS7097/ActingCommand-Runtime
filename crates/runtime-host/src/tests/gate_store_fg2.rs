@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // STORE-FG-2 (0.12.29; design `rd-1029/design-store-fg.md` §2, §5 rows T1 to T9; Alice's ruling
-// of 2026-10-29 10:1x and her questions 95 to 97, option A; register §1.206, provisional): a
+// of 2026-10-29 10:1x and her questions 95 to 97, option A; register §1.209): a
 // store update package's own run taps its declared store step while exactly its store is in
 // front, and only when `store_foreground.allowed_application_ids` lists that store; every other
 // input expects the assigned application, as before.
