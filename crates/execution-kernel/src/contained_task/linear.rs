@@ -393,6 +393,9 @@ pub(super) struct LinearRun {
     pub(super) timing: ContainedTaskTimingContext,
     /// Workflow #386 SR-1: the pacing of the run's entry, then of the step in progress.
     pub(super) pacing: StepPacing,
+    /// STORE-FG-1 (design §2.3, §2.7): whether the run's declared store steps tap in the store:
+    /// the package's own run, not a layer or a declared operation's run.
+    pub(super) store_routing: bool,
 }
 
 /// What a wait is for: its sleep boundary and the stage of a task timeout inside it.
@@ -1414,9 +1417,13 @@ impl PreparedContainedTask {
                 )
                 .into());
         }
-        runtime
-            .input(action, input_context)
-            .map_err(ContainedTaskRunError::operation::<R>)?;
+        // STORE-FG-1 (design §2.7): a declared store step's tap goes to the store; every other
+        // input as before.
+        let sent = match self.store_input_target(run.store_routing, &operation.id, &action) {
+            Some(store) => runtime.store_input(action, input_context, store),
+            None => runtime.input(action, input_context),
+        };
+        sent.map_err(ContainedTaskRunError::operation::<R>)?;
         Self::linear_effect_completed(runtime, run, step_index, operation)
     }
 

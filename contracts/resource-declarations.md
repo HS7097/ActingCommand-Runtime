@@ -476,7 +476,7 @@ lazily (section Task schema `0.9` value tests); the match is the one a full eval
 | Template with color | `anchors[].color_check`, `verify_templates[].color_check` (task schema `0.9`) | one candidate meets the template threshold and the color condition together (`template-relative-color.md`); the color distance is the check's `max_distance`, or the package default when absent; with `alternatives`, the nearest declared color counts (section Task schema `0.9` several expected colors) |
 | Color | `color_probes[]` with `expected` | the mean RGB of its region is within the target's `max_distance` of `expected` (with `alternatives`, of the nearest declared color, section Task schema `0.9` several expected colors); when `max_distance` is absent, the package's `defaults.color_max_distance` applies, taken from the entry task's `defaults` (20 when absent) |
 | Color digest | `color_probes[]` with `digest` | the `color_digest.v1` digest of its region is within the declared `max_mean_milli` (and `max_cell`, when declared) of the declared cells (`color-digest.md`); there is no default |
-| OCR | `ocr_targets[]` | the recognized text matches one `expected` value under `match_mode` and `case_sensitive`, with confidence at least `minimum_confidence` |
+| OCR | `ocr_targets[]` | the recognized text matches one `expected` value under `match_mode` and `case_sensitive`, with confidence at least `minimum_confidence`; with `preprocess`, the provider reads the target's region after its chain (section Task schema `0.9` recognition preprocessing) |
 | Located text | `ocr_targets[]` with `locate` (task schema `0.9`) | one block read in the region matches one `expected` value under `match_mode` after the identity normalization, with confidence at least `minimum_confidence`, and lies in a declared cell when `cells` is declared (`ocr-fields.md`, section Located text); with `unique`, no other matching block lies within its margin |
 | Check | `checks[]` | `all_of`: every member passes; `any_of`: at least one member passes. Every member is evaluated with its own threshold (`selection-graph.md`, section Checks) |
 | Value test | `checks[]` with `value_test` (task schema `0.9`) | both sides read, and the left value compared with the right one holds; `parses` needs only the left side to read (section Task schema `0.9` value tests) |
@@ -888,6 +888,67 @@ A target that declares the floor is refused when the evaluator is built as a `re
 anchor or as a candidate layout feature read at an offset (neither checks it), and
 template-region batch evaluation refuses it too. The member belongs to package interface
 revision 6, declared at the end of the 0.12.x B train; until then it is admitted by code.
+
+### Task schema `0.9` recognition preprocessing
+
+Workflow #411 A58, #428 CFL-2 (design CF v2 §5, since 0.12.29). Task schema `0.9` accepts
+`"preprocess": {"steps": [...]}` on `ocr_targets[]` entries and on a `fixed_slots` layout's
+`shared_ocr` (`selection-graph.md`, section Shared OCR read, Preprocessing): one fixed chain
+of 1 to 4 steps whose syntax, arithmetic, evidence and golden values
+[recognition-preprocess.md](recognition-preprocess.md) defines. An older task schema refuses it
+with `UnconsumedField`; `anchors[]`, `verify_templates[]`, `color_probes[]`, checks and
+operations do not take it (`UnknownField`). It passes to the derived recognition pack as
+declared, and a source that uses it derives pack schema `0.7`; a source that does not derives
+every document byte for byte as before. In the recognition pack, schema `0.7` `ocr` targets and
+`shared_ocr` accept it; an older pack schema refuses it with `UnconsumedField` at
+`/targets/<i>/preprocess`, and any other target type with `UnknownField`.
+
+```json
+{"id": "ocr/item_count",
+ "region": {"mode": "template_relative", "anchor_target_id": "icon/item",
+            "offset": {"x": 40, "y": 52}, "width": 56, "height": 24},
+ "languages": ["en"], "timeout_ms": 1000, "match_mode": "exact", "expected": ["0"],
+ "case_sensitive": false, "minimum_confidence": 0.9,
+ "model_ref": "<model>", "model_sha256": "<64 lowercase hex digits>",
+ "preprocess": {"steps": [
+   {"kind": "keep_colors", "colors": [[255, 255, 255], [240, 240, 232]], "tolerance": 40},
+   {"kind": "invert"}
+ ]}}
+```
+
+The declaration gate (source and pack alike, one parser) refuses with
+`resource_declaration_invalid`, at the declaration's pointer (`/ocr_targets/<i>` or
+`/candidate_layouts/<i>/shared_ocr` in `task.json`, `/targets/<i>` or
+`/candidate_layouts/<i>/shared_ocr` in the pack) followed by:
+
+| Pointer | Refused when | Reason |
+|---|---|---|
+| `/preprocess` | not an object | `InvalidType` |
+| `/preprocess/<member>` | a member other than `steps` | `UnknownField` |
+| `/preprocess/steps` | missing; not an array | `MissingField`; `InvalidType` |
+| `/preprocess/steps` | empty, or more than 4 steps | `InvalidValue` |
+| `/preprocess/steps/<k>` | a step that is not an object | `InvalidType` |
+| `/preprocess/steps/<k>/kind` | missing; not a string; an unknown kind; the chain's shape breaks (first step, order, repetition) | `MissingField`; `InvalidType`; `InvalidValue`; `InvalidValue` |
+| `/preprocess/steps/<k>/<member>` | a member the kind does not have; one it requires is missing | `UnknownField`; `MissingField` |
+| `/preprocess/steps/<k>/<member>` (and `…/<color>/<channel>`) | a number that is no integer, or a value of another type | `InvalidType` |
+| `/preprocess/steps/<k>/<member>` (and `…/<color>/<channel>`) | an integer outside 0 to 255; a color or bound that is not three integers; an unknown `space`; a `value` that is neither 1 to 255 nor `"otsu"`; and every refusal of the chain itself (`ColorCount`, `ColorRepeated`, `HueOutOfRange`, `BoundsReversed`, `ContrastBoundsReversed`, `ThresholdZero`) | `InvalidValue` |
+| `/preprocess` of an OCR target | its region is the whole frame (`full_frame`, or a `rect` or `template_relative` region the size of `coordinate_space`) and it does not declare `locate` | `InvalidValue` |
+| `/candidate_layouts/<i>/shared_ocr/preprocess/steps/<k>/value` | a shared read's `threshold` of `"otsu"` | `InvalidValue` |
+
+Why the whole frame needs `locate`: a chained read hands the provider only the processed region,
+so it can no longer tell the whole frame from a part of it; an implicit read of the whole frame
+would also drop the detector's boxes beyond the model folder's `max_boxes` without a count, and
+a color keep on the whole frame makes such boxes easily. With `locate` the block mode is explicit
+and a truncated read fails loud (`text_read_blocks_truncated`). A shared read is `detect`
+already.
+
+What a chained read does, its evidence and where the evidence goes are in
+[recognition-preprocess.md](recognition-preprocess.md), section Hand-over. A target without
+`preprocess` reads exactly as before. A target has one chain and is read once with it; a region
+that needs two chains is declared as two targets. Readings, fields, value tests, `target_consensus`,
+`agreement` and candidate features name the target as before and read through its chain. The
+member belongs to package interface revision 6, declared at the end of the 0.12.x B train; until
+then it is admitted by code.
 
 ### Task schema `0.9` observation windows and input rechecks
 
@@ -1337,3 +1398,85 @@ while a step waits for a page. No new member, code or record; any task schema.
   its own limit or the task's deadline; a page that appears during a long pause is seen at the
   next frame. `execution.capture.backoff_enabled` (default `true`) switches it off. Entry
   checks, observation windows, input rechecks, samples and a scan's settle keep their interval.
+
+### Store update packages
+
+STORE-FG-1 (since 0.12.29; [v012-register.md](v012-register.md) §1.207; design
+`rd-1029/design-store-fg.md` §2, §3 and §8). A package updates its game's client through the
+store application with its own `control.json` member `store_update`: which store application its
+store steps run in, and which steps those are. The Runtime compares package ids for equality only
+and names no store. The member joins package revision 6, which the closing slice of the B train
+(BT-PK6) declares; until then the Runtime admits it by code, and a Runtime before 0.12.29 refuses
+a package that names it (`UnknownField`), so such a package is written for 0.12.29 or later. A
+package without the member runs, and serializes, as before.
+
+```json
+"store_update": {
+  "store_application_id": "test.store.alpha",
+  "store_operations": [{"operation": "tap_update", "proof": ["listing_title", "listing_publisher"]}]
+}
+```
+
+| Member (`control.json`) | Declaration gate (`resource_declaration_invalid` at the member) | Kernel admission (`contained_task_control_invalid`, `reason=store_update_invalid`) |
+| --- | --- | --- |
+| `store_update` | an object with exactly the members below (`InvalidType`, `UnknownField`, `MissingField`) | the execution mode is `navigable_route` or `linear_steps` |
+| `store_application_id` | a string; an Android package name `^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$` of at most 256 bytes (`InvalidValue`) | the same |
+| `store_operations` | an array of objects `{operation, proof}`; 1 to 8 entries, operations unique (`InvalidValue`) | the same |
+| `store_operations[].operation` | a string, not blank, at most 256 bytes | the same |
+| `store_operations[].proof` | an array of strings; 1 to 4 unique target ids, not blank (`InvalidValue`) | the same |
+
+**Cross-checks** (kernel admission, `contained_task_program_invalid` with `program_problem`, the
+path `control.json` and the refused member as `json_pointer`):
+
+- each store operation names one operation of the task whose effect is a guarded click that
+  draws a tap (`point`, `rect`, `specific_rect`, `target`, `target_center`, `offset`), from one
+  page of the package (not `any`): it declares a `guard` whose `page_id` is its `from` page and is
+  never an `unguarded_trusted_coordinate`. A long press, a drag, a select step, a wait step, an
+  `application` step and an unguarded tap are refused (`store_operation_invalid`, at
+  `/store_update/store_operations/<i>/operation`);
+- each proof target is an OCR target of the pack (an `ocr_targets[]` entry, plain or located;
+  its `expected` is never empty) that stands directly in the `required` list of that operation's
+  `from` page (`store_proof_invalid`, at `/store_update/store_operations/<i>/proof/<j>`). A
+  frame shows the `from` page only when its proof passed, and the kernel compares the page of
+  every frame a guarded tap is drawn for with the guard's page before the input: the decision
+  frame, a pre-input sampling retry, an input recheck and a retry after an unconfirmed tap alike
+  (an unguarded tap skips that comparison, so its retry could land on the store's next page,
+  where the same place is the download's cancel). So a store step taps only on a frame that
+  showed its proof. What the texts are is the package's data:
+  the title, the publisher or the id the store shows. A store page that is not the package's own
+  listing does not match the `from` page, so no store step is dispatched on it; the package names
+  that end with its error pages or its scheduling outcome;
+- the package declares an `application` operation that launches or restarts the assigned
+  application, its way back (`store_way_back_missing`, at `/store_update`).
+
+**Layers.** A `store_update` package is never a layer: the prerequisite incompatibility answers
+`store_update`, so it is no prerequisite, return-home, navigation edge, recovery chain, interrupt
+handler or `then.run` package (`contained_task_prerequisite_incompatible` `reason=store_update`,
+`contained_task_navigation_package_invalid` and `package_bundle_navigation_package_invalid`
+`role_ineligible`), and the startup incompatibility answers `store_update`, so it is no startup
+package and no ladder rung.
+
+**Run.** Only the package's own run (a direct or scheduled run; not a layer, a recovery entry or a
+declared operation's run) asks the runtime once, before any capture or input, whether it may tap
+in the declared store (`ContainedTaskRuntime::admit_store_foreground`), and hands the tap of each
+declared store operation to the runtime with that store (`ContainedTaskRuntime::store_input`).
+Every other input of every run is an ordinary input, under the assigned application's foreground
+gate. A runtime without a foreground gate (offline simulation, fixtures) admits every store and
+makes a store tap as any input. The host's allowance and its gate are STORE-FG-2's
+([application-lifecycle.md](application-lifecycle.md), "Store foreground allowance"): the run
+starts only when `store_foreground.allowed_application_ids` names the store, and a store tap is
+sent only while exactly that store is in front.
+
+**Waiting while the store updates** (design §8.3). After the store tap, the package waits without
+input with a wait step on the store's updating page ([Wait steps and wait pages](#wait-steps-and-wait-pages);
+`max_ms` up to 1800000, a long `expect_after.interval_ms`), or lets the tap's own confirmation
+hold on that page (`expect_after.wait_page`, `max_ms` up to 1800000). A wait makes no input, so
+nothing taps the cancel control of the download. The run's own `timeout_ms` is at most 1800000
+as well and ends the run whatever its wait still allows, so a store update package sets the
+wait's `max_ms` to at most its `timeout_ms` less the time its other steps take.
+
+**The check's warning** (design §8.1). `package bundle` and `actinglab standard-pack check` warn
+with `package_bundle_store_tap_unlocated` of each store operation whose click taps a fixed place
+(`point`, `rect`, `specific_rect`): a store's buttons move between devices, so a store step taps a
+text target located on the frame, whose expected text is the button's own label
+([package-reference.md](package-reference.md), the cross-check). Admission still takes it.

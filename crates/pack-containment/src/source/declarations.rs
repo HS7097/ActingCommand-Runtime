@@ -80,6 +80,25 @@ pub(super) fn task_declaration_error(
     error
 }
 
+/// Workflow #428 CFL-2 (design CF v2 §5.12): whether an OCR target's source `region` is the whole
+/// frame: `full_frame`, or a `rect` or `template_relative` region the size of `frame` (the
+/// declared `coordinate_space`).
+fn whole_frame_region(region: &Value, frame: [u64; 2]) -> bool {
+    let size = |object: &Value| {
+        [
+            object.get("width").and_then(Value::as_u64),
+            object.get("height").and_then(Value::as_u64),
+        ]
+    };
+    let frame = [Some(frame[0]), Some(frame[1])];
+    match region.get("mode").and_then(Value::as_str) {
+        Some("full_frame") => true,
+        Some("rect") => region.get("rect").is_some_and(|rect| size(rect) == frame),
+        Some("template_relative") => size(region) == frame,
+        _ => false,
+    }
+}
+
 impl Declaration<'_> {
     /// Task schema `0.6` and later, which accept the declarations of pack schema `0.7`
     /// (`checks`, color digests, per-target `max_distance`, `guard.check` and
@@ -116,6 +135,7 @@ impl Declaration<'_> {
                 "stability_termination",
                 "prerequisite_package_id",
                 "provides",
+                "store_update",
             ],
         )?;
         if object.contains_key("phases")
@@ -125,6 +145,9 @@ impl Declaration<'_> {
         }
         if let Some(provides) = object.get("provides") {
             self.provides(provides)?;
+        }
+        if let Some(store_update) = object.get("store_update") {
+            self.store_update(store_update)?;
         }
         for (field, value) in object {
             let pointer = child("", field);
@@ -1282,6 +1305,8 @@ impl Declaration<'_> {
                 "model_sha256",
                 "blocks",
                 "line_merge",
+                // Workflow #428 CFL-2.
+                "preprocess",
             ],
         )?;
         self.source_region(
@@ -1289,6 +1314,9 @@ impl Declaration<'_> {
             &child(pointer, "region"),
             false,
         )?;
+        if let Some(preprocess) = object.get("preprocess") {
+            self.preprocess(preprocess, &child(pointer, "preprocess"), true)?;
+        }
         self.strings(
             self.required(object, pointer, "languages")?,
             &child(pointer, "languages"),
@@ -1381,6 +1409,27 @@ impl Declaration<'_> {
             self.required(object, pointer, "margin_milli")?,
             &child(pointer, "margin_milli"),
         )
+    }
+
+    /// Workflow #428 CFL-2: `preprocess` of an `ocr_targets[]` entry or a layout's `shared_ocr`
+    /// of task schema `0.9`, the chain of `contracts/recognition-preprocess.md`: its shape,
+    /// members and chain are checked here by the recognition pack's own parser, a refusal at its
+    /// own pointer. With `per_pixel` (a shared read's), a `threshold` of `"otsu"` is refused.
+    fn preprocess(&self, value: &Value, pointer: &str, per_pixel: bool) -> CliOutcome<()> {
+        if self.schema_before(TaskSchema::V0_9) {
+            return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
+        }
+        let refused = |refusal: actingcommand_recognition_pack::PreprocessRefusal| {
+            self.error(&format!("{pointer}{}", refusal.pointer), refusal.reason)
+        };
+        let preprocess =
+            actingcommand_recognition_pack::OcrPreprocess::from_json(value).map_err(refused)?;
+        if per_pixel && let Some(step) = preprocess.otsu_step() {
+            return Err(refused(
+                actingcommand_recognition_pack::shared_otsu_refusal(step),
+            ));
+        }
+        Ok(())
     }
 
     /// Workflow #396 REC-5: `scales` of an `anchors[]` or `verify_templates[]` entry of task
@@ -1634,6 +1683,7 @@ impl Declaration<'_> {
                 "click",
                 "locate",
                 "unique",
+                "preprocess",
             ],
             _ => unreachable!("fixed declaration family"),
         };
@@ -1673,6 +1723,8 @@ impl Declaration<'_> {
                 "click" if !value.is_null() => self.rect(value, &pointer)?,
                 "locate" => self.locate(value, &pointer)?,
                 "unique" => self.unique(value, &pointer)?,
+                // Workflow #428 CFL-2.
+                "preprocess" => self.preprocess(value, &pointer, false)?,
                 // Workflow #396 REC-5.
                 "scales" => self.scales(value, &pointer)?,
                 // Workflow #411 B13.
@@ -1731,6 +1783,19 @@ impl Declaration<'_> {
                 "model_sha256",
             ] {
                 self.required(object, pointer, field)?;
+            }
+            // Workflow #428 CFL-2 (design CF v2 §5.12): a chain over the whole frame reads with
+            // `locate`, whose block mode is explicit.
+            if object.contains_key("preprocess")
+                && !object.contains_key("locate")
+                && object
+                    .get("region")
+                    .is_some_and(|region| whole_frame_region(region, frame))
+            {
+                return Err(self.error(
+                    &child(pointer, "preprocess"),
+                    ResourceDeclarationReason::InvalidValue,
+                ));
             }
         } else if family == "color_probes" {
             // A color probe matches a mean color (`expected`) or verifies a digest, never both.
@@ -3265,6 +3330,50 @@ impl Declaration<'_> {
                 &violation.pointer,
                 ResourceDeclarationReason::InvalidValue,
                 violation.problem.as_str(),
+            )
+        })
+    }
+
+    /// STORE-FG-1 (contracts/resource-declarations.md, "Store update packages"): a control
+    /// declaration's `store_update`, its members closed and typed, then the member's own rules
+    /// ([`actingcommand_contract::validate_store_update`]), refused at the member that breaks
+    /// them. The cross-checks against the task and its pages are kernel admission's.
+    fn store_update(&self, value: &Value) -> CliOutcome<()> {
+        let pointer = "/store_update";
+        let object = self.object(
+            value,
+            pointer,
+            &["store_application_id", "store_operations"],
+        )?;
+        self.string(
+            self.required(object, pointer, "store_application_id")?,
+            &child(pointer, "store_application_id"),
+        )?;
+        let operations_pointer = child(pointer, "store_operations");
+        let operations = self.array(
+            self.required(object, pointer, "store_operations")?,
+            &operations_pointer,
+        )?;
+        for (index, operation) in operations.iter().enumerate() {
+            let pointer = child(&operations_pointer, &index.to_string());
+            let operation = self.object(operation, &pointer, &["operation", "proof"])?;
+            self.string(
+                self.required(operation, &pointer, "operation")?,
+                &child(&pointer, "operation"),
+            )?;
+            self.strings(
+                self.required(operation, &pointer, "proof")?,
+                &child(&pointer, "proof"),
+            )?;
+        }
+        let declaration: actingcommand_contract::StoreUpdateDeclaration =
+            serde_json::from_value(value.clone())
+                .map_err(|_| self.error(pointer, ResourceDeclarationReason::InvalidValue))?;
+        actingcommand_contract::validate_store_update(&declaration).map_err(|violation| {
+            self.refuse(
+                &violation.pointer,
+                ResourceDeclarationReason::InvalidValue,
+                "store_update_invalid",
             )
         })
     }
@@ -5035,5 +5144,516 @@ mod tests {
                 Value::from("invalid_value")
             )
         );
+    }
+
+    // STORE-FG-1 T14 (design-store-fg §5 row T14, §3): the source parser's control gate takes
+    // `store_update` with its store application id and its store operations, each with its proof;
+    // it refuses a member it does not have (`unknown_field`), a missing member (`missing_field`),
+    // a member of the wrong type (`invalid_type`) and a member that breaks the member's own rules
+    // (`invalid_value`), each at that member's pointer in `control.json`. The cross-checks against
+    // the task are Runtime admission's. Ids are made up.
+    #[test]
+    fn store_fg1_t14_the_gate_takes_store_update_and_refuses_each_wrong_shape_at_its_pointer() {
+        let control = |store_update: Value| {
+            serde_json::json!({
+                "schema_version": "Lab-1y.control.v2", "package_id": "neutral.store.update",
+                "execution_mode": "navigable_route", "game": "neutral", "server": "test",
+                "resolution": {"width": 16, "height": 9}, "entry_task_id": "task",
+                "store_update": store_update
+            })
+        };
+        let valid = serde_json::json!({
+            "store_application_id": "test.store.alpha",
+            "store_operations": [
+                {"operation": "tap_update", "proof": ["listing_title", "listing_publisher"]},
+                {"operation": "tap_open", "proof": ["listing_title"]}
+            ]
+        });
+        let issue = |error: CliError| {
+            assert_eq!(
+                error.code, "resource_declaration_invalid",
+                "{}",
+                error.message
+            );
+            let issue = error.details.expect("declaration issue");
+            (
+                issue["declaration_file"].clone(),
+                issue["field_path"].clone(),
+                issue["reason"].clone(),
+            )
+        };
+
+        validate_control_declarations(Path::new("control.json"), &control(valid.clone()))
+            .expect("the gate takes store_update");
+
+        let changed = |change: &dyn Fn(&mut Value)| {
+            let mut store_update = valid.clone();
+            change(&mut store_update);
+            store_update
+        };
+        let nine = (0..9)
+            .map(|index| {
+                serde_json::json!({"operation": format!("tap_{index}"), "proof": ["listing_title"]})
+            })
+            .collect::<Vec<_>>();
+        let cases: [(&str, Value, &str, &str); 17] = [
+            (
+                "no object",
+                serde_json::json!(["test.store.alpha"]),
+                "/store_update",
+                "invalid_type",
+            ),
+            (
+                "a member store_update does not have",
+                changed(&|value| value["store_label"] = serde_json::json!("alpha")),
+                "/store_update/store_label",
+                "unknown_field",
+            ),
+            (
+                "no store application id",
+                changed(&|value| {
+                    value
+                        .as_object_mut()
+                        .expect("an object")
+                        .remove("store_application_id");
+                }),
+                "/store_update/store_application_id",
+                "missing_field",
+            ),
+            (
+                "a store application id that is no string",
+                changed(&|value| value["store_application_id"] = serde_json::json!(7)),
+                "/store_update/store_application_id",
+                "invalid_type",
+            ),
+            (
+                "a store application id that is no package name",
+                changed(&|value| {
+                    value["store_application_id"] = serde_json::json!("test.store-alpha");
+                }),
+                "/store_update/store_application_id",
+                "invalid_value",
+            ),
+            (
+                "no store operations",
+                changed(&|value| {
+                    value
+                        .as_object_mut()
+                        .expect("an object")
+                        .remove("store_operations");
+                }),
+                "/store_update/store_operations",
+                "missing_field",
+            ),
+            (
+                "store operations that are no list",
+                changed(&|value| value["store_operations"] = serde_json::json!({})),
+                "/store_update/store_operations",
+                "invalid_type",
+            ),
+            (
+                "an empty list of store operations",
+                changed(&|value| value["store_operations"] = serde_json::json!([])),
+                "/store_update/store_operations",
+                "invalid_value",
+            ),
+            (
+                "nine store operations",
+                changed(&|value| value["store_operations"] = Value::Array(nine.clone())),
+                "/store_update/store_operations",
+                "invalid_value",
+            ),
+            (
+                "a member a store operation does not have",
+                changed(&|value| {
+                    value["store_operations"][0]["click"] = serde_json::json!("point");
+                }),
+                "/store_update/store_operations/0/click",
+                "unknown_field",
+            ),
+            (
+                "a store operation without its operation",
+                changed(&|value| {
+                    value["store_operations"][1]
+                        .as_object_mut()
+                        .expect("an operation")
+                        .remove("operation");
+                }),
+                "/store_update/store_operations/1/operation",
+                "missing_field",
+            ),
+            (
+                "an operation named twice",
+                changed(&|value| {
+                    value["store_operations"][1]["operation"] = serde_json::json!("tap_update");
+                }),
+                "/store_update/store_operations/1/operation",
+                "invalid_value",
+            ),
+            (
+                "a store operation without proof",
+                changed(&|value| {
+                    value["store_operations"][0]
+                        .as_object_mut()
+                        .expect("an operation")
+                        .remove("proof");
+                }),
+                "/store_update/store_operations/0/proof",
+                "missing_field",
+            ),
+            (
+                "a proof target that is no string",
+                changed(&|value| value["store_operations"][0]["proof"][1] = serde_json::json!(2)),
+                "/store_update/store_operations/0/proof/1",
+                "invalid_type",
+            ),
+            (
+                "an empty proof",
+                changed(&|value| value["store_operations"][0]["proof"] = serde_json::json!([])),
+                "/store_update/store_operations/0/proof",
+                "invalid_value",
+            ),
+            (
+                "five proof targets",
+                changed(&|value| {
+                    value["store_operations"][0]["proof"] =
+                        serde_json::json!(["t_1", "t_2", "t_3", "t_4", "t_5"]);
+                }),
+                "/store_update/store_operations/0/proof",
+                "invalid_value",
+            ),
+            (
+                "a proof target named twice",
+                changed(&|value| {
+                    value["store_operations"][0]["proof"][1] = serde_json::json!("listing_title");
+                }),
+                "/store_update/store_operations/0/proof/1",
+                "invalid_value",
+            ),
+        ];
+        for (case, store_update, pointer, reason) in cases {
+            let error =
+                validate_control_declarations(Path::new("control.json"), &control(store_update))
+                    .expect_err(case);
+            assert_eq!(
+                issue(error),
+                (
+                    Value::from("control.json"),
+                    Value::from(pointer),
+                    Value::from(reason)
+                ),
+                "{case}"
+            );
+        }
+    }
+
+    /// Workflow #428 CFL-2 (design CF v2 §5.12 and test 11; the rows of the original design's
+    /// §4.8 table): the source gate refuses a `preprocess` of `task.json` as
+    /// `resource_declaration_invalid` at the pointer a resource author sees, with the row's
+    /// reason. A chain under a task schema below `0.9` is `UnconsumedField` (through the whole
+    /// gate at `0.6`, and at the target at `0.8`, whose task would also need
+    /// `post_admission_ocr`). On a color probe or a check it is `UnknownField` (NN targets are no
+    /// `task.json` family). Each malformed shape, step, member and value is refused below
+    /// `/ocr_targets/<i>/preprocess`, and below `/candidate_layouts/<i>/shared_ocr/preprocess`,
+    /// where `otsu` is `InvalidValue` at its `value` and a fixed threshold passes. A chained OCR
+    /// target over the whole frame (`full_frame`, or a `rect` or `template_relative` region the
+    /// size of `coordinate_space`) is `InvalidValue` at its `preprocess` without `locate`, and
+    /// passes with it; a smaller region passes without.
+    #[test]
+    fn cfl2_the_source_gate_refuses_each_preprocess_row_at_its_pointer() {
+        use serde_json::json;
+        const MODEL_SHA256: &str =
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let white = || {
+            json!({"steps": [
+                {"kind": "keep_colors", "colors": [[255, 255, 255]], "tolerance": 40},
+                {"kind": "invert"}
+            ]})
+        };
+        let rect = |x: u32, y: u32, width: u32, height: u32| {
+            let rect = json!({"x": x, "y": y, "width": width, "height": height});
+            json!({"mode": "rect", "rect": rect})
+        };
+        let roi = || rect(40, 8, 16, 8);
+        let ocr = |region: Value, preprocess: Value| {
+            json!({
+                "id": "count/one", "region": region, "languages": ["en"], "timeout_ms": 1000,
+                "match_mode": "exact", "expected": ["7"], "case_sensitive": false,
+                "minimum_confidence": 0.9, "model_ref": "neutral-ocr-model",
+                "model_sha256": MODEL_SHA256, "preprocess": preprocess
+            })
+        };
+        // A `fixed_slots` layout whose one slot's target lies in its shared read.
+        let layout = |preprocess: Value| {
+            json!({
+                "id": "layout/cells", "page_id": "cells", "kind": "fixed_slots",
+                "features": [{"name": "count", "value": "ocr_integer",
+                              "integer": {"min": 0, "max": 999, "minimum_confidence_milli": 800}}],
+                "slots": [{"rect": {"x": 32, "y": 0, "width": 16, "height": 12},
+                           "click": {"x": 32, "y": 0, "width": 16, "height": 12},
+                           "targets": {"count": "count/one"}}],
+                "shared_ocr": {
+                    "region": rect(32, 0, 32, 24), "languages": ["en"], "timeout_ms": 5000,
+                    "model_ref": "neutral-ocr-model", "model_sha256": MODEL_SHA256,
+                    "blocks": "detect", "line_merge": {"gap_factor": 0}, "preprocess": preprocess
+                }
+            })
+        };
+        // The source gate on a 64x24 task of `schema` that declares `member`.
+        let gate = |schema: &str, member: &str, value: Value| {
+            let mut data = json!({
+                "schema_version": schema, "task_id": "task", "game": "neutral",
+                "server_scope": ["test"], "coordinate_space": {"width": 64, "height": 24},
+                "operations": []
+            });
+            data[member] = value;
+            declaration_file_requests(&[Bundle {
+                task_id: "task".to_owned(),
+                dir: PathBuf::from("resources/operations/task"),
+                data,
+            }])
+            .map(|_| ())
+        };
+        let refused = |outcome: CliOutcome<()>| {
+            let error = outcome.expect_err("the gate refuses it");
+            assert_eq!(
+                error.code, "resource_declaration_invalid",
+                "{}",
+                error.message
+            );
+            let issue = error.details.expect("declaration issue");
+            (issue["field_path"].clone(), issue["reason"].clone())
+        };
+        let at = |pointer: &str, reason: &str| (Value::from(pointer), Value::from(reason));
+
+        // Task schema below 0.9.
+        assert_eq!(
+            refused(gate("0.6", "ocr_targets", json!([ocr(roi(), white())]))),
+            at("/ocr_targets/0/preprocess", "unconsumed_field")
+        );
+        let task_0_8 = Declaration {
+            file: Path::new("resources/operations/task/task.json"),
+            schema: Some("0.8"),
+        };
+        assert_eq!(
+            refused(task_0_8.target(
+                &ocr(roi(), white()),
+                "/ocr_targets/0",
+                "ocr_targets",
+                false,
+                [64, 24]
+            )),
+            at("/ocr_targets/0/preprocess", "unconsumed_field")
+        );
+
+        // A color probe and a check have no such member.
+        let probe = json!([{
+            "id": "mark/colour", "region": rect(0, 0, 1, 1), "expected": [255, 255, 255],
+            "preprocess": white()
+        }]);
+        assert_eq!(
+            refused(gate("0.9", "color_probes", probe)),
+            at("/color_probes/0/preprocess", "unknown_field")
+        );
+        let check =
+            json!([{"id": "check/both", "all_of": ["mark/a", "mark/b"], "preprocess": white()}]);
+        assert_eq!(
+            refused(gate("0.9", "checks", check)),
+            at("/checks/0/preprocess", "unknown_field")
+        );
+
+        // Each malformed shape, step, member and value, at its own pointer.
+        let keep = |member: &str, value: Value| {
+            let mut step =
+                json!({"kind": "keep_colors", "colors": [[255, 255, 255]], "tolerance": 40});
+            step[member] = value;
+            json!({"steps": [step]})
+        };
+        let gray_then = |steps: Value| {
+            let mut chain = vec![json!({"kind": "gray"})];
+            chain.extend(steps.as_array().expect("steps").iter().cloned());
+            json!({"steps": chain})
+        };
+        let range = |space: &str, lower: [u32; 3], upper: [u32; 3]| {
+            let step =
+                json!({"kind": "keep_range", "space": space, "lower": lower, "upper": upper});
+            json!({"steps": [step]})
+        };
+        for (preprocess, pointer, reason) in [
+            (json!([]), "", "invalid_type"),
+            (
+                json!({"steps": [{"kind": "gray"}], "fallback": []}),
+                "/fallback",
+                "unknown_field",
+            ),
+            (json!({}), "/steps", "missing_field"),
+            (json!({"steps": {"kind": "gray"}}), "/steps", "invalid_type"),
+            (json!({"steps": []}), "/steps", "invalid_value"),
+            (
+                gray_then(json!([{"kind": "contrast", "low": 1, "high": 2},
+                                 {"kind": "threshold", "value": 9}, {"kind": "invert"},
+                                 {"kind": "invert"}])),
+                "/steps",
+                "invalid_value",
+            ),
+            (json!({"steps": ["gray"]}), "/steps/0", "invalid_type"),
+            (json!({"steps": [{}]}), "/steps/0/kind", "missing_field"),
+            (
+                json!({"steps": [{"kind": 1}]}),
+                "/steps/0/kind",
+                "invalid_type",
+            ),
+            (
+                json!({"steps": [{"kind": "blur"}]}),
+                "/steps/0/kind",
+                "invalid_value",
+            ),
+            (
+                json!({"steps": [{"kind": "invert"}]}),
+                "/steps/0/kind",
+                "invalid_value",
+            ),
+            (
+                gray_then(json!([{"kind": "threshold", "value": 9},
+                                 {"kind": "contrast", "low": 1, "high": 2}])),
+                "/steps/2/kind",
+                "invalid_value",
+            ),
+            (
+                gray_then(json!([{"kind": "gray"}])),
+                "/steps/1/kind",
+                "invalid_value",
+            ),
+            (
+                json!({"steps": [{"kind": "keep_colors", "colors": [[1, 2, 3]]}]}),
+                "/steps/0/tolerance",
+                "missing_field",
+            ),
+            (
+                keep("tolerance", json!("40")),
+                "/steps/0/tolerance",
+                "invalid_type",
+            ),
+            (
+                json!({"steps": [{"kind": "gray", "low": 1}]}),
+                "/steps/0/low",
+                "unknown_field",
+            ),
+            (
+                keep("colors", json!([[255, -1, 0]])),
+                "/steps/0/colors/0/1",
+                "invalid_value",
+            ),
+            (
+                keep("colors", json!([[255, 255]])),
+                "/steps/0/colors/0",
+                "invalid_value",
+            ),
+            (
+                keep("colors", json!([])),
+                "/steps/0/colors",
+                "invalid_value",
+            ),
+            (
+                keep("colors", json!([[1, 2, 3], [1, 2, 3]])),
+                "/steps/0/colors",
+                "invalid_value",
+            ),
+            (
+                keep("tolerance", json!(256)),
+                "/steps/0/tolerance",
+                "invalid_value",
+            ),
+            (
+                range("lab", [0, 0, 0], [1, 1, 1]),
+                "/steps/0/space",
+                "invalid_value",
+            ),
+            (
+                range("hsv", [180, 0, 0], [10, 255, 255]),
+                "/steps/0/lower",
+                "invalid_value",
+            ),
+            (
+                range("rgb", [10, 0, 0], [5, 255, 255]),
+                "/steps/0/upper",
+                "invalid_value",
+            ),
+            (
+                gray_then(json!([{"kind": "contrast", "low": 9, "high": 9}])),
+                "/steps/1/high",
+                "invalid_value",
+            ),
+            (
+                gray_then(json!([{"kind": "threshold", "value": 0}])),
+                "/steps/1/value",
+                "invalid_value",
+            ),
+            (
+                gray_then(json!([{"kind": "threshold", "value": "auto"}])),
+                "/steps/1/value",
+                "invalid_value",
+            ),
+        ] {
+            assert_eq!(
+                refused(gate(
+                    "0.9",
+                    "ocr_targets",
+                    json!([ocr(roi(), preprocess.clone())])
+                )),
+                at(&format!("/ocr_targets/0/preprocess{pointer}"), reason),
+                "{preprocess}"
+            );
+        }
+
+        // A shared read's chain: refused at its own pointer, `otsu` too; a fixed threshold passes.
+        for (preprocess, pointer) in [
+            (json!({"steps": []}), "/steps"),
+            (
+                gray_then(json!([{"kind": "threshold", "value": "otsu"}])),
+                "/steps/1/value",
+            ),
+        ] {
+            assert_eq!(
+                refused(gate(
+                    "0.9",
+                    "candidate_layouts",
+                    json!([layout(preprocess)])
+                )),
+                at(
+                    &format!("/candidate_layouts/0/shared_ocr/preprocess{pointer}"),
+                    "invalid_value"
+                )
+            );
+        }
+        let fixed = gray_then(json!([{"kind": "threshold", "value": 128}]));
+        gate("0.9", "candidate_layouts", json!([layout(fixed)]))
+            .unwrap_or_else(|error| panic!("a fixed threshold: {}", error.message));
+
+        // The whole frame: refused without `locate`, read with it; a smaller region needs none.
+        let relative = json!({
+            "mode": "template_relative", "anchor_target_id": "mark/anchor",
+            "offset": {"x": 0, "y": 0}, "width": 64, "height": 24
+        });
+        for region in [json!({"mode": "full_frame"}), rect(0, 0, 64, 24), relative] {
+            assert_eq!(
+                refused(gate(
+                    "0.9",
+                    "ocr_targets",
+                    json!([ocr(region.clone(), white())])
+                )),
+                at("/ocr_targets/0/preprocess", "invalid_value"),
+                "{region}"
+            );
+            let mut located = ocr(region.clone(), white());
+            located["locate"] = json!({"normalize": "identity_v1", "blocks": "detect",
+                                       "line_merge": {"gap_factor": 0}});
+            gate("0.9", "ocr_targets", json!([located]))
+                .unwrap_or_else(|error| panic!("{region} with locate: {}", error.message));
+        }
+        for region in [roi(), rect(0, 0, 64, 12)] {
+            gate("0.9", "ocr_targets", json!([ocr(region.clone(), white())]))
+                .unwrap_or_else(|error| panic!("{region}: {}", error.message));
+        }
     }
 }

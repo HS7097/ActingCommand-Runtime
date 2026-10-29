@@ -12,7 +12,7 @@
 //! `execution`; IDLE-1 adds `idle`; ROUT-L RL-1b adds `standard_packs`, the scheduler
 //! workbench's two keys; Workflow #392 DA-4b-D adds `display_safe_area`; #422 LN-7c Q adds
 //! `frame_retention_evidence_max_age_days`; Workflow #421 INST-1 adds `install`; RB-2 adds
-//! `host`).
+//! `host`; STORE-FG-2 adds `store_foreground`).
 
 use crate::device_link::DeviceLinkFile;
 use crate::device_state::DeviceStateFile;
@@ -30,6 +30,7 @@ use crate::resolve::member;
 use crate::scheduling::SchedulingFile;
 use crate::standard_packs::StandardPacksDefaultsFile;
 use crate::startup_discovery::StartupDiscoveryFile;
+use crate::store_foreground::StoreForegroundFile;
 use crate::table::find_row;
 use crate::touch::TouchFile;
 use crate::value::parse_value;
@@ -100,6 +101,9 @@ pub struct DefaultsFile {
     /// RB-2: both priorities `normal`.
     #[serde(default)]
     pub host: Option<HostFile>,
+    /// STORE-FG-2: no store allowed (`[]`).
+    #[serde(default)]
+    pub store_foreground: Option<StoreForegroundFile>,
 }
 
 /// A defaults file that is not a JSON object of known sections.

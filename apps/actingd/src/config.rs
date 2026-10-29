@@ -67,6 +67,10 @@ mod gate_427b;
 // system.
 #[cfg(test)]
 mod gate_rb2;
+// Test-only: STORE-FG-2 (T10), the `store_foreground` section refuses a configured instance's
+// own application.
+#[cfg(test)]
+mod gate_store_fg2;
 
 const CONFIG_SCHEMA_VERSION: &str = "actingcommand.actingd.config.v1";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
@@ -276,6 +280,14 @@ pub(super) struct ActingdConfigFile {
     // a file that does not name it keeps its revision.
     #[serde(default)]
     host: Option<actingcommand_runtime_config::HostFile>,
+    /// STORE-FG-2 (Alice's ruling of 2026-10-29 10:1x; design-store-fg §2.2): the store
+    /// applications a store update package may tap in
+    /// (`store_foreground.allowed_application_ids`); the defaults file holds `[]`.
+    // Interface anchor `actingd-config` revision 21 (contracts/component-interfaces.md): a Runtime
+    // before STORE-FG-2 refuses a file that names the section, because the file denies unknown
+    // members; a file that does not name it keeps its revision.
+    #[serde(default)]
+    store_foreground: Option<actingcommand_runtime_config::StoreForegroundFile>,
     instances: Vec<InstanceConfig>,
     #[serde(skip)]
     source_root: PathBuf,
@@ -1346,6 +1358,12 @@ impl ActingdConfigFile {
         // Workflow #369 S6a: the instances whose emulator the daemon starts, in configuration
         // order.
         let mut emulator_autostart = Vec::new();
+        // STORE-FG-2 (design-store-fg §2.2): the instances' own applications, which the
+        // `store_foreground` list may not name.
+        let application_ids = instances
+            .iter()
+            .filter_map(|instance| instance.application_id.clone())
+            .collect::<BTreeSet<_>>();
         for instance in &mut instances {
             if instance.fixture_backend.is_none()
                 && device_binding::check_device(instance)
@@ -1572,6 +1590,8 @@ impl ActingdConfigFile {
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
             "host": serde_json::to_value(&self.host)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            "store_foreground": serde_json::to_value(&self.store_foreground)
+                .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
         });
         let standard_packs_root = self
             .standard_packs
@@ -1686,6 +1706,10 @@ impl ActingdConfigFile {
                         host.scheduler().maximum_client_heartbeat_interval_ms,
                         actingcommand_runtime_host::recovery_ladder_device_bounds(),
                     ))?;
+                    // STORE-FG-2: a game is never its own store.
+                    effective
+                        .store_foreground()?
+                        .refuse_instance_applications(application_ids.iter().map(String::as_str))?;
                     effective.host_process()
                 })
                 .map_err(|failure| {

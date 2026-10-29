@@ -1768,6 +1768,8 @@ impl LabOperationRuntime<'_> {
                 before_frame_id: reference.map(|reference| reference.frame_id),
                 input_frame: reference,
                 input_control: None,
+                // STORE-FG-2 (design §2.3): a Lab operation never taps in a store.
+                foreground: InputForeground::Assigned,
             },
         ) {
             Ok((success, _)) => (success.terminal, None),
@@ -1837,6 +1839,9 @@ impl LabOperationRuntime<'_> {
     }
 }
 
+// STORE-FG-2 (review L5): a declared operation's run never routes a store step (the kernel asks
+// only a package's own run), so this runtime overrides neither `admit_store_foreground` nor
+// `store_input`; its every tap expects the assigned application.
 impl ContainedTaskRuntime for LabOperationRuntime<'_> {
     type Error = RequestFailure;
 

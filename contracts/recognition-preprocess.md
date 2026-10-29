@@ -7,13 +7,14 @@ invert its gray. This document freezes the chain: its syntax, the arithmetic of 
 the region size it is proven for, the evidence of one application, the refusals, golden values
 and author examples. `actingcommand_recognition::preprocess` implements it.
 
-Where a chain is declared and how the processed region reaches the reader are not part of this
-document. Slice CFL-2 adds the optional member `preprocess` to OCR targets (task schema `0.9`
-`ocr_targets[]`, recognition pack schema `0.7` `ocr` targets) and to a candidate layout's
-`shared_ocr`, with its admission pointers, in [resource-declarations.md](resource-declarations.md);
-slice CFL-3 shows the evidence and a preview of the processed region in the Lab. Until CFL-2, a
-package that declares `preprocess` is refused like any unknown member. This document adds no
-configuration key, no outcome code, no ledger revision and no package revision.
+Slice CFL-2 (since 0.12.29) adds the optional member `preprocess` to OCR targets (task schema
+`0.9` `ocr_targets[]`, recognition pack schema `0.7` `ocr` targets) and to a candidate layout's
+`shared_ocr`, with its admission pointers, in [resource-declarations.md](resource-declarations.md)
+(section Task schema `0.9` recognition preprocessing), and hands the processed region to the OCR
+reads (section Hand-over below). Slice CFL-3 shows the evidence and a preview of the processed
+region in the Lab. The member joins `package` interface revision 6. This document adds no
+configuration key and no ledger revision; CFL-2 adds the warning
+`package_bundle_preprocess_divergent` of `standard-pack check`.
 
 ## Chain
 
@@ -246,6 +247,107 @@ its members. A refusal is a `PreprocessError` with a reason, the step's index an
 - A region outside the domain is not a refusal of the declaration and has no pointer:
   `Preprocess::apply` refuses it with `PreprocessApplyError` (`EmptyRegion`, `RegionTooLarge`;
   "The region domain and Otsu's bound").
+
+## Hand-over
+
+Workflow #428 CFL-2 (design CF v2 §5.4 to §5.8, since 0.12.29). Every OCR read of a target goes
+through one hand-over: an ordinary OCR target (its plain read and the read a page gate keeps for
+the frame's field and reading collection), the observation of a field, reading or `0.7`
+collection target and of a saved frame's OCR, a locate target and a value test's side (the
+remembered text read), and a layout's shared read.
+
+**Without a chain** the provider gets the frame itself, the target's region and its block mode,
+byte for byte as before.
+
+**With a chain:**
+
+1. The region is resolved on the original frame first; a `template_relative` anchor matches by
+   its own rules, which the chain does not touch. The model is admitted next, so a missing
+   model costs no processing.
+2. The chain runs once over the region's RGB pixels (`Scene::preprocess_region`).
+3. The provider gets only the processed region, as an RGB8 frame of the region's size whose
+   pixels are the processed values `(v, v, v)`, with the region `(0, 0, w, h)` and an explicit
+   block mode: `Implicit` (an OCR target without `locate`) becomes `Region`, which reads the
+   region as one block as an `Implicit` read of a part of the frame did; `Region` and `Detect`
+   stay.
+4. Every block that comes back is moved back onto the region's origin with checked additions
+   (a coordinate that leaves the `i32` range is `recognition_pack_provider_response_invalid`,
+   unreachable in practice) and then checked against the region in frame coordinates, as
+   before. Text, confidences and the detector's box count are kept as they are.
+
+The provider reads only the region's pixels, and its box coordinates are the region's origin
+plus local offsets, so reading the small frame and moving the blocks back gives what reading
+the same pixels in the frame would. A chained `Implicit` read of the whole frame cannot happen:
+admission refuses a chain on a whole-frame target without `locate`; were one to reach the read,
+it is a recognition error, never a silent change of read mode.
+
+**Once per call.** The chain runs exactly once before each provider call, and only then: a
+remembered text read of the same request (`ocr-fields.md`, Located text; the chain is part of
+the request), the observation a page gate kept for the frame's collection, and a shared read's
+targets reuse the evidence of the read that ran it, without running it again. A read refused
+after the chain (below) ran the chain but calls no provider. Nothing is kept per frame, except
+a shared read's processed region (one byte per pixel) for its targets' evidence while the
+projection runs.
+
+**Deadlines.** After the chain:
+
+- in a page recognition, a guard, or any context with a sample deadline, the deadline is
+  checked again as before the read: when what is left on the context's clock is less than the
+  provider's timeout, the read fails with the existing `recognition sample budget insufficient`
+  error and the provider is not called;
+- a saved frame's OCR ([saved-artifact-ocr.md](saved-artifact-ocr.md)) takes the chain's time
+  out of its OCR timeout, in whole milliseconds rounded up, and fails with the existing
+  `OCR request budget exhausted` error when nothing is left.
+
+**Evidence.** A chained read's evaluation (`OcrEvaluation`) and observation
+(`OcrObservationEvaluation`) carry `preprocess`. Without a chain the `preprocess` member is
+absent and adds nothing to the serialized bytes; `shared_read` (below) is another member, on
+every evaluation a shared read serves, with a chain or without one. The `preprocess` member:
+
+```json
+"preprocess": {
+  "algorithm": "preprocess.v1",
+  "steps": [{"kind": "keep_colors", "colors": [[255, 255, 255], [240, 240, 232]], "tolerance": 40},
+            {"kind": "invert"}],
+  "scope": "target",
+  "rect": {"x": 452, "y": 300, "width": 56, "height": 24},
+  "kept_milli": 183,
+  "inverted": true,
+  "threshold_value": null
+}
+```
+
+| Member | Value |
+|---|---|
+| `algorithm` | `preprocess.v1` (`PREPROCESS_ALGORITHM`) |
+| `steps` | the chain as declared, in its order; it can be pasted back as `preprocess.steps` |
+| `scope` | `target`: the target processed its own region; `shared`: it took its text from a layout's shared read |
+| `rect` | the rectangle processed, or for `shared` counted, in frame coordinates: the target's own region |
+| `source_rect` | `shared` only: the shared read's region |
+| `kept_milli`, `inverted`, `threshold_value` | the section Evidence above, over `rect` |
+
+- With the frame (a Lab frame file or a saved frame's reference), `steps`, `rect` and
+  `algorithm` recompute the processed region and its evidence with this document's functions;
+  no package is needed.
+- Every evaluation a layout's shared read serves carries `shared_read`, with a chain or without
+  one (design CF v2 §5.6; `selection-graph.md`, section Shared OCR read, Preprocessing). So an
+  evaluation a shared read serves without a chain gains this member where evaluations are
+  serialized as they are: the online observation's `candidate_sample` rows (`ac_observe`,
+  `ac_lab_observe` and the Lab's online `observe`).
+- The evidence goes to read-only answers that serialize these evaluations as they are: the
+  read-only recognition entry and a saved frame's OCR report (`observation`), and (CFL-3) the
+  Lab. The task diagnostic maps an OCR evaluation's members one by one and leaves it out, so the
+  ledger is unchanged (revision 4); so do the field report artifact and the runtime client's
+  DTOs.
+- The production run's chain is found again from the placement record of the package version
+  that ran (#428) and that version's `preprocess`; a package that declares `preprocess` is placed
+  only from committed, versioned resource-repository content.
+
+**The authoring warning.** `package bundle` and `actinglab standard-pack check` report one
+`package_bundle_preprocess_divergent` warning (`package_id`, `target_id`, and the shared read's
+`json_pointer` in the recognition pack) for each OCR target that a layout's shared read would
+serve but that declares another chain, colors in another order too, so that it reads on its
+own. Nothing is refused.
 
 ## Golden values
 

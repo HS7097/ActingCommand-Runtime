@@ -37,7 +37,13 @@
 //! Workflow #411 B35: then, with `interrupts.json`, one `package_bundle_interrupt_page_shadowed`
 //! warning per package and shared interrupt page it declares itself (a page a package declares is
 //! its own, so that interrupt does not act for its runs); a feature package and the page's
-//! handlers declare it by their part and are not reported.
+//! handlers declare it by their part and are not reported. STORE-FG-1 (design-store-fg §8.1):
+//! then, with or without `pages.json`, one `package_bundle_store_tap_unlocated` warning per
+//! package and declared store operation (`control.json` `store_update`) whose click taps a fixed
+//! place (`point`, `rect`, `specific_rect`) instead of a target located on the frame. A
+//! `store_update` package is never a layer (`TaskPackageDescriptor::prerequisite_incompatibility_with`
+//! answers `store_update`), so as an edge, recovery chain, handler or `then.run` package it is
+//! `role_ineligible`.
 //!
 //! Workflow #392 DA-4 (model 392 v1.2 §4.1): `display-layout.json` (`package bundle
 //! --display-layout`, or a game root that holds it) is a root file the one structure check reads
@@ -332,7 +338,11 @@ fn navigation_check(
         for package_id in root.registry.package_ids() {
             packages.admit_listed(package_id)?;
         }
-        return Ok(Vec::new());
+        // STORE-FG-1: the store-tap report needs no root file.
+        let mut warnings = unlocated_store_taps(root, &mut packages)?;
+        // Workflow #428 CFL-2: with or without `pages.json`.
+        warnings.extend(preprocess_divergences(root, &mut packages)?);
+        return Ok(warnings);
     };
     let listed = pages
         .pages
@@ -440,6 +450,57 @@ fn navigation_check(
         &pages.features,
         &mut packages,
     )?);
+    warnings.extend(unlocated_store_taps(root, &mut packages)?);
+    // Workflow #428 CFL-2.
+    warnings.extend(preprocess_divergences(root, &mut packages)?);
+    Ok(warnings)
+}
+
+/// STORE-FG-1 (design-store-fg §8.1; contracts/package-reference.md, the cross-check): a store's
+/// buttons move between devices, so a store step taps a text target located on the frame. One
+/// `package_bundle_store_tap_unlocated` warning per package of the registry and declared store
+/// operation whose click taps a fixed place (`point`, `rect`, `specific_rect`), in registry order
+/// and then declaration order, with or without the navigation files; nothing is refused.
+fn unlocated_store_taps(
+    root: &StandardPackRoot,
+    packages: &mut Packages<'_>,
+) -> LabResult<Vec<Outcome>> {
+    let mut warnings = Vec::new();
+    for package_id in root.registry.package_ids() {
+        let package = packages.admit_listed(package_id)?;
+        for operation_id in package.store_fixed_taps() {
+            warnings.push(
+                Outcome::new(ResourceToolingCode::PackageBundleStoreTapUnlocated)
+                    .package_id(package_id)
+                    .pack_operation_id(operation_id.as_str()),
+            );
+        }
+    }
+    Ok(warnings)
+}
+
+/// Workflow #428 CFL-2 (design CF v2 §5.6, the resource side's request): a slot's or feature's OCR
+/// target whose chain differs from the chain of the layout's shared read it would otherwise take
+/// its text from reads on its own, which the author rarely means (colors in another order make
+/// another chain). One `package_bundle_preprocess_divergent` warning per package of the registry,
+/// target and shared read (`package_id`, `target_id`, and `json_pointer`, the shared read in the
+/// package's recognition pack), in registry order and then the pack's order; nothing is refused.
+fn preprocess_divergences(
+    root: &StandardPackRoot,
+    packages: &mut Packages<'_>,
+) -> LabResult<Vec<Outcome>> {
+    let mut warnings = Vec::new();
+    for package_id in root.registry.package_ids() {
+        let package = packages.admit_listed(package_id)?;
+        for (target_id, shared_read) in package.preprocess_divergences() {
+            warnings.push(
+                Outcome::new(ResourceToolingCode::PackageBundlePreprocessDivergent)
+                    .package_id(package_id)
+                    .target_id(target_id.as_str())
+                    .json_pointer(shared_read.clone()),
+            );
+        }
+    }
     Ok(warnings)
 }
 

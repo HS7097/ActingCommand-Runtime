@@ -49,6 +49,8 @@ pub mod standard_pack_schedule;
 // Workflow #357 DB-1: the shared tables of a standard-pack game root (M-357a v1.1 §2).
 pub mod standard_pack_table;
 pub mod state;
+// STORE-FG-1 (since 0.12.29): a package's `control.json` `store_update` declaration.
+pub mod store_update;
 // Workflow #392 DA-5a: the ordered task schema of a `task.json`.
 pub mod task_schema;
 pub mod taskflow;
@@ -84,6 +86,7 @@ pub use standard_pack_display::*;
 pub use standard_pack_schedule::*;
 pub use standard_pack_table::*;
 pub use state::*;
+pub use store_update::*;
 pub use task_schema::TaskSchema;
 pub use taskflow::*;
 pub use types::{

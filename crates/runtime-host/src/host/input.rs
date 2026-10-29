@@ -44,6 +44,7 @@ impl HostShared {
             before_frame_id,
             input_frame,
             input_control,
+            foreground,
         } = context;
         let (resolved, transferred) = {
             let instance_guard = self.instance_guard(token.instance_id())?;
@@ -135,8 +136,16 @@ impl HostShared {
                 })?;
         }
         // Slice #316-B3: the foreground gate sits after the frame resolution and before the
-        // input is prepared, so both touch backends pass the same check.
-        self.require_foreground_application(request, token, &resolved, action, run_links)?;
+        // input is prepared, so both touch backends pass the same check. STORE-FG-2: it compares
+        // the foreground with the application this input expects.
+        self.require_foreground_application(
+            request,
+            token,
+            &resolved,
+            action,
+            run_links,
+            &foreground,
+        )?;
         let before_frame_id = input_frame.map(|frame| frame.frame_id).or(before_frame_id);
         // Workflow #387 D1c-F: every producer refused an invalid action before this point (a
         // request by its contract check, a pack's action at admission and when it was built), so
@@ -1171,6 +1180,22 @@ pub(super) struct RuntimeInputContext {
     pub(super) before_frame_id: Option<actingcommand_contract::FrameId>,
     pub(super) input_frame: Option<actingcommand_contract::InputFrameReference>,
     pub(super) input_control: Option<Arc<ContainedRunControl>>,
+    /// STORE-FG-2 (design-store-fg §2.7): the application the foreground gate expects in front.
+    pub(super) foreground: InputForeground,
+}
+
+/// STORE-FG-2 (design-store-fg §2.1, §2.7): the application an input expects in the foreground.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) enum InputForeground {
+    /// The instance's assigned application: every input of every package, of Lab operations and
+    /// of client `Input` requests, and of a store update package's other steps.
+    #[default]
+    Assigned,
+    /// A declared store step's tap in a store update package's own run (the kernel's
+    /// `ContainedTaskRuntime::store_input`): the store application its `store_update` names. The
+    /// gate checks it against `store_foreground.allowed_application_ids` again and expects it
+    /// only for a plain `Tap`; any other action still expects the assigned application.
+    Store(String),
 }
 
 fn input_execution_plan_record(

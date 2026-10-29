@@ -58,8 +58,11 @@ pub struct StandardPackCheckResponse {
     /// The report "entry page not in the list": one `package_bundle_entry_page_unlisted` per
     /// package whose entry pages `pages.json` does not all list (none without `pages.json`);
     /// then (Workflow #411 B35) one `package_bundle_interrupt_page_shadowed` per package and
-    /// shared interrupt page it declares itself (none without `interrupts.json`); then (Workflow
-    /// #411 B15) one `package_bundle_remedy_invalid` per remedy finding.
+    /// shared interrupt page it declares itself (none without `interrupts.json`); then
+    /// (STORE-FG-1) one `package_bundle_store_tap_unlocated` per package and store step that taps
+    /// a fixed place; then (Workflow #428 CFL-2) one `package_bundle_preprocess_divergent` per
+    /// package, OCR target and shared read whose chains differ; then (Workflow #411 B15) one
+    /// `package_bundle_remedy_invalid` per remedy finding.
     pub warnings: Vec<actingcommand_contract::outcome::Outcome>,
 }
 
@@ -74,8 +77,9 @@ pub struct PackageBundleResponse {
     /// `--pages`, one `package_bundle_entry_page_unlisted` per pack whose entry pages the page
     /// list does not all list; Workflow #411 B35: with `--interrupts`, one
     /// `package_bundle_interrupt_page_shadowed` per pack and shared interrupt page it declares
-    /// itself; Workflow #411 B15: with any root file, one `package_bundle_remedy_invalid` per
-    /// remedy finding. Absent when there is none.
+    /// itself; STORE-FG-1: with any root file, one `package_bundle_store_tap_unlocated` per pack
+    /// and store step that taps a fixed place; Workflow #411 B15: with any root file, one
+    /// `package_bundle_remedy_invalid` per remedy finding. Absent when there is none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<actingcommand_contract::outcome::Outcome>,
 }

@@ -21,20 +21,31 @@
 //! as for any ADB failure and fails with `instance_resources_fenced`. Only where no fence may
 //! take it (no registered owner, a ledger failure, a shutdown) does it poison the host
 //! (`application_foreground_unknown`, `runtime_halted`, Workflow #191 E3).
+//!
+//! STORE-FG-2 (design `rd-1029/design-store-fg.md` §2; `contracts/application-lifecycle.md`,
+//! "Store foreground allowance"): the gate compares the foreground with the application the
+//! input expects (`store_tap`). That is the assigned application for every input but one: a
+//! declared store step's plain `Tap` in a store update package's own run expects exactly the
+//! store its package names, and only while `store_foreground.allowed_application_ids` lists it
+//! (checked again here, `application_store_not_allowed`, before the foreground is read). A store
+//! update package's own run checks the list before any capture or input too
+//! (`HostShared::admit_store_foreground`).
 
 use super::emulator_instance::DEVICE_CONNECTED_FACT_KEY;
 use super::runtime_facts::TASK_PAGE_FACT_KEY;
 use super::*;
-use crate::codes::{HostCode, HostLocation};
-use actingcommand_contract::outcome::Code;
+use crate::codes::{HostCode, HostLocation, StoreForegroundCode, StoreForegroundLocation};
+use actingcommand_contract::outcome::{Code, Location};
 use actingcommand_contract::{APPLICATION_FOREGROUND_FACT_KEY, FactValue};
 use actingcommand_device::DeviceResourceQuiescence;
 
 const GATE_OPERATION: HostLocation = HostLocation::RequireForegroundApplication;
 
 impl HostShared {
-    /// Refuses a pointer input whose foreground package is not the assigned application.
-    /// Non-pointer actions (key, text, reset) and fixture instances pass untouched.
+    /// Refuses a pointer input whose foreground package is not the application it expects
+    /// (`store_tap`: the assigned application, or for a declared store step's tap the store,
+    /// which must still be allowed). Non-pointer actions (key, text, reset) and fixture instances
+    /// pass untouched.
     pub(super) fn require_foreground_application(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
@@ -42,6 +53,7 @@ impl HostShared {
         resolved: &RegisteredInstance,
         action: &InputAction,
         run_links: Option<RuntimeRunLinks>,
+        foreground_expected: &InputForeground,
     ) -> Result<(), RequestFailure> {
         if resolved.provenance() != ExecutionBackendProvenance::PhysicalDevice
             || !matches!(
@@ -58,6 +70,18 @@ impl HostShared {
         }
         let instance_id = resolved.instance_id();
         let alias = resolved.instance_alias.as_str();
+        // STORE-FG-2 (review L5): a store tap meets the allowlist again here, before the
+        // foreground is read, so a store the operator did not list is never tapped, even by a
+        // runtime that skipped its run's admission.
+        let store = store_tap(foreground_expected, action);
+        if let Some(store) = store
+            && !self
+                .store_foreground_allowed(store)
+                .map_err(RequestFailure::poison_without_terminal)?
+        {
+            let error = store_not_allowed(GATE_OPERATION, instance_id, alias, store);
+            return Err(self.reject_input(request, token, action, run_links, error)?);
+        }
         let observation = match self
             .execution()?
             .observe_foreground_application(&resolved.instance_alias)
@@ -123,18 +147,50 @@ impl HostShared {
         };
         self.record_foreground_application(instance_id, &foreground)
             .map_err(RequestFailure::poison_without_terminal)?;
-        if foreground != observation.assigned {
-            let error = gate_error(
-                HostCode::ApplicationNotForeground,
-                instance_id,
-                format!(
+        let expected = store.unwrap_or(observation.assigned.as_str());
+        if foreground != expected {
+            let detail = match store {
+                Some(store) => format!(
+                    "instance_alias={alias}; foreground={foreground}; expected={store}; assigned={}",
+                    observation.assigned
+                ),
+                None => format!(
                     "instance_alias={alias}; foreground={foreground}; assigned={}",
                     observation.assigned
                 ),
-            );
+            };
+            let error = gate_error(HostCode::ApplicationNotForeground, instance_id, detail);
             return Err(self.reject_input(request, token, action, run_links, error)?);
         }
         Ok(())
+    }
+
+    /// STORE-FG-2 (design-store-fg §2.2, §3; Alice's question 95, option A): the start of a
+    /// store update package's own run, before any capture or input: the store its `store_update`
+    /// names must be in `store_foreground.allowed_application_ids`, else the run is refused
+    /// `application_store_not_allowed` (`declaration_error`; values `alias`, `application_id`).
+    pub(super) fn admit_store_foreground(
+        &self,
+        instance_id: InstanceId,
+        instance_alias: &str,
+        store_application_id: &str,
+    ) -> Result<(), RequestFailure> {
+        if self
+            .store_foreground_allowed(store_application_id)
+            .map_err(RequestFailure::poison_without_terminal)?
+        {
+            return Ok(());
+        }
+        Err(RequestFailure::request(
+            store_not_allowed(
+                StoreForegroundLocation::Admit,
+                instance_id,
+                instance_alias,
+                store_application_id,
+            ),
+            RuntimeReceiptState::Denied,
+            None,
+        ))
     }
 
     /// `command.rejected` for the input's own action plus the `runtime.failed` record; the
@@ -238,4 +294,80 @@ fn gate_error(code: impl Into<Code>, instance_id: InstanceId, detail: String) ->
             .with_native_detail(detail);
     error.lifecycle.instance_id = Some(instance_id);
     error
+}
+
+/// STORE-FG-2 (design-store-fg §2.3, §2.7): the store an input expects in front, when it is a
+/// declared store step's plain `Tap`; `None` for every other input, which expects the assigned
+/// application (a store step's other actions included: only taps go to a store).
+fn store_tap<'a>(foreground: &'a InputForeground, action: &InputAction) -> Option<&'a str> {
+    match foreground {
+        InputForeground::Store(store) if matches!(action, InputAction::Tap { .. }) => {
+            Some(store.as_str())
+        }
+        InputForeground::Store(_) | InputForeground::Assigned => None,
+    }
+}
+
+/// STORE-FG-2: `application_store_not_allowed` at `operation` for the instance's declared store.
+fn store_not_allowed(
+    operation: impl Into<Location>,
+    instance_id: InstanceId,
+    instance_alias: &str,
+    store_application_id: &str,
+) -> RuntimeHostError {
+    let mut error = RuntimeHostError::request(
+        StoreForegroundCode::NotAllowed,
+        operation,
+        RuntimeErrorCode::InvalidRequest,
+    )
+    .with_native_detail(format!(
+        "instance_alias={instance_alias}; store={store_application_id}"
+    ))
+    .with_outcome_values(|outcome| {
+        outcome
+            .alias(instance_alias)
+            .application_id(store_application_id)
+    });
+    error.lifecycle.instance_id = Some(instance_id);
+    error
+}
+
+// STORE-FG-2 (design-store-fg §5 row T8, second half): a store step whose action is not a plain
+// `Tap` expects the assigned application, as every other input does.
+#[cfg(test)]
+mod store_fg2_tests {
+    use super::*;
+
+    #[test]
+    fn store_fg2_t8_only_a_store_steps_plain_tap_expects_the_store() {
+        let store = InputForeground::Store("test.store.alpha".to_owned());
+        assert_eq!(
+            store_tap(&store, &InputAction::Tap { x: 1, y: 2 }),
+            Some("test.store.alpha")
+        );
+        for action in [
+            InputAction::LongTap {
+                x: 1,
+                y: 2,
+                duration_ms: 500,
+            },
+            InputAction::Swipe {
+                x1: 1,
+                y1: 2,
+                x2: 3,
+                y2: 4,
+                duration_ms: 100,
+            },
+            InputAction::Key {
+                key: "BACK".to_owned(),
+            },
+        ] {
+            assert_eq!(store_tap(&store, &action), None, "{action:?}");
+        }
+        assert_eq!(
+            store_tap(&InputForeground::Assigned, &InputAction::Tap { x: 1, y: 2 }),
+            None
+        );
+        assert_eq!(InputForeground::default(), InputForeground::Assigned);
+    }
 }

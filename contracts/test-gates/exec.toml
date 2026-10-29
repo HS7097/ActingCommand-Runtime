@@ -1015,6 +1015,29 @@ tests = [
 ]
 incident = ["#428 CFL-1"]
 
+# Workflow #411 A58, #428 CFL-2 (0.12.29; register §1.208; no persisted ledger shape): recognition preprocessing wired into the OCR reads. Without a chain every read (an ordinary target and its kept read, its observation, a locate target, a shared read) hands the provider the frame itself, its region and block mode; with one the provider gets only the processed region (0,0,w,h) as R=G=B pixels equal to CFL-1's output, Implicit becomes Region and Region/Detect stay, blocks come back in frame coordinates, and a template_relative region is resolved on the frame; a fake provider that gives 0.95 only to a binary region lets the chained target pass the 0.9 gate the frame itself misses (0.816); a chained target over the whole frame (full_frame, a rect or template_relative the size of coordinate_space) without locate is refused at /targets/<i>/preprocess, with locate it reads with an explicit Detect; one region with two chains is two reads (runtime and static budget) and with one chain one; a kept observation and a remembered read reuse their evidence without running the chain; the observation path and a saved frame's OCR carry the same evidence as the kernel; a shared read serves only its own chain, counts each target over its own region as the target alone would, carries shared_read with the detector's count, still fails loud when truncated, and refuses otsu; preprocessing that leaves less than the provider timeout calls no provider (recognition sample budget insufficient), and a saved frame's OCR timeout loses the chain's time (OCR request budget exhausted at zero); each malformed chain is refused at its own pointer, and the declaration round-trips; a target whose chain differs from its shared read is named once per pair; the chain runs once per provider call and the hand-over buffer is 3*w*h; a chained target's task diagnostic target and OCR rows have the members of an unchained one. Fix round 1 (review M1, M2, L3): the source gate refuses each row of the preprocess table in task.json at the author's pointer (task schema below 0.9 UnconsumedField; a color probe or a check UnknownField; each malformed shape, step, member and value below /ocr_targets/<i>/preprocess and /candidate_layouts/<i>/shared_ocr/preprocess; a shared read's otsu InvalidValue at its value; a chained whole-frame target without locate InvalidValue at its preprocess, with locate admitted); standard-pack check reports one package_bundle_preprocess_divergent, category warning, with package_id, target_id and the shared read's json_pointer, on a root with pages.json and on one with bundle.json only; a chained shared read whose recheck after the chain finds too little time left fails with the existing error and calls no provider
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-recognition-pack::lib::gate_cfl2::cfl2_t1_without_a_chain_every_read_hands_the_provider_the_frame_itself",
+    "actingcommand-recognition-pack::lib::gate_cfl2::cfl2_t2_a_chained_read_hands_over_its_processed_region_and_moves_the_blocks_back",
+    "actingcommand-recognition-pack::lib::gate_cfl2::cfl2_t3_a_chained_read_passes_the_confidence_gate_that_the_frame_itself_misses",
+    "actingcommand-recognition-pack::lib::gate_cfl2::cfl2_t4_a_chained_target_over_the_whole_frame_declares_locate",
+    "actingcommand-recognition-pack::lib::gate_cfl2::cfl2_t5_one_region_read_with_two_chains_is_two_reads_and_with_one_chain_one_read",
+    "actingcommand-recognition-pack::lib::gate_cfl2::cfl2_t6_kept_and_remembered_reads_reuse_their_evidence_without_running_the_chain",
+    "actingcommand-recognition-pack::lib::gate_cfl2::cfl2_t7_the_observation_path_hands_over_and_a_saved_frame_report_carries_the_evidence",
+    "actingcommand-recognition-pack::lib::gate_cfl2::cfl2_t8_a_shared_read_serves_only_its_own_chain_and_counts_each_target_over_its_region",
+    "actingcommand-recognition-pack::lib::gate_cfl2::cfl2_t9_preprocessing_that_spends_the_budget_calls_no_provider",
+    "actingcommand-recognition-pack::lib::gate_cfl2::cfl2_t9b_a_chained_shared_read_that_spends_the_budget_calls_no_provider",
+    "actingcommand-runtime-host::lib::host::task_diagnostic::tests::cfl2_a_chained_target_writes_the_same_target_and_ocr_rows_as_an_unchained_one",
+    "actingcommand-recognition-pack::lib::gate_cfl2::cfl2_t11_admission_refuses_each_malformed_chain_at_its_pointer",
+    "actingcommand-pack-containment::lib::source::declarations::tests::cfl2_the_source_gate_refuses_each_preprocess_row_at_its_pointer",
+    "actingcommand-recognition-pack::lib::gate_cfl2::cfl2_t12_a_target_whose_chain_differs_from_its_shared_read_is_named_once",
+    "actingcommand-resource-tooling::lib::gate_428_cfl2::cfl2_standard_pack_check_names_a_target_whose_chain_differs_from_its_shared_read",
+    "actingcommand-recognition-pack::lib::gate_cfl2::cfl2_t13_the_chain_runs_once_per_provider_call_and_a_refused_read_calls_nothing",
+]
+incident = ["#428 CFL-2"]
+
 # Workflow #390 READ-1 (forced compromise O-08): a current_capacity reading mark that declares capacity_fact_key writes its denominator as that second reading key; the declaration gate admits the second key only on a fraction mark, under the reading key rule and unique among the task's reading keys; the run gives both readings from the mark's one evaluation on its frame, a requested key set of the second key reads the mark, and the host publishes the denominator as its own instance fact, an observation of its own under the snapshot `run:<run>/frame:<frame>/<reading id>/capacity` (register RE2), with the mark's observation time, expiry, confidence and detector
 [[gate]]
 key = "61"
@@ -2182,6 +2205,42 @@ tests = [
 ]
 incident = ["#411 B36", "#411 B19", "#412 B-3"]
 
+# STORE-FG-1 (0.12.29; register §1.207 SF-1, SF-2; design rd-1029/design-store-fg.md §3, §5 rows T11 and T14; package revision 6, declared by BT-PK6): control.json store_update; the source gate takes it and refuses each wrong shape or broken rule as resource_declaration_invalid at its member; kernel admission refuses a broken member, or one outside navigable_route and linear_steps, as contained_task_control_invalid reason=store_update_invalid, and each broken cross-check (a store step that is no tap from one page, or taps without a guard on that page, review H1; a proof that is no OCR target directly in its from page's required; no launch or restart way back) as contained_task_program_invalid with program_problem store_operation_invalid, store_proof_invalid or store_way_back_missing, path control.json and json_pointer; a valid declaration is admitted
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_store_fg1::store_fg1_t11_a_broken_store_update_member_is_refused_with_its_reason",
+    "actingcommand-execution-kernel::lib::contained_task::gate_store_fg1::store_fg1_t11_admission_checks_the_store_steps_their_proof_and_the_way_back",
+    "actingcommand-pack-containment::lib::source::declarations::tests::store_fg1_t14_the_gate_takes_store_update_and_refuses_each_wrong_shape_at_its_pointer",
+]
+incident = []
+
+# STORE-FG-1 (register §1.207 SF-3; design §2.3, §5 row T12): a store_update package answers store_update to the prerequisite incompatibility (prerequisite, return-home, edge, chain, handler and then.run checks) and to the startup incompatibility (startup package, ladder rung); run as a prerequisite or a host layer it is refused before any capture; package bundle and standard-pack check refuse it as an edge, a recovery chain step or a handler with package_bundle_navigation_package_invalid role_ineligible
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_store_fg1::store_fg1_t12_a_store_update_package_is_no_layer_and_no_startup_package",
+    "actingcommand-resource-tooling::lib::gate_373_navt::store_fg1_t12_a_store_update_pack_is_refused_as_an_edge_a_chain_step_or_a_handler",
+]
+incident = []
+
+# STORE-FG-1 (register §1.207 SF-4; design §2.7, §5 row T13): in the package's own run a declared store step's Tap goes through ContainedTaskRuntime::store_input with the declared store and every other input through input, on the page graph and on linear_steps (an admitted step plan with its way back); admit_store_foreground is asked once before any capture, and a refusal ends the run before any capture or input; a recovery entry run, a declared operation's run (a Lab operation) and a package without store_update ask nothing and route nothing
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_store_fg1::store_fg1_t13_a_declared_store_step_taps_through_store_input_and_every_other_through_input",
+    "actingcommand-execution-kernel::lib::contained_task::gate_store_fg1::store_fg1_t13_only_the_package_s_own_run_asks_for_the_store_and_routes_to_it",
+]
+incident = []
+
+# STORE-FG-1 (design §8.3, the resource side's field note 3): a store update package waits on the store's updating page without input, with a wait step (max_ms up to 1 800 000, expect_after.interval_ms 30 000) or the store tap's expect_after.wait_page; both are admitted, and a run waits there across frames 30 s apart with no input between the store tap and the restart
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_store_fg1::store_fg1_s8_3_a_store_run_waits_long_on_the_updating_page_without_an_input",
+]
+incident = []
+
 # PERF-B1 (Workflow #407 B1, 0.12.x; register §1.177; brief rd-1024/brief-perf-b1-capture.md, test row (a); requirement R1): a step's `expect_after.interval_ms` is its own wait's capture interval: a wait declared at 30 000 ms captures at most ⌈duration / interval⌉ + 1 frames, its pauses the declared interval and the last cut at its end, while the package's other steps keep their own interval
 [[gate]]
 coverage = "Y"
@@ -2423,3 +2482,11 @@ tests = [
     "actingcommand-resource-tooling::lib::gate_373_navt::b35_no_overlap_or_no_shared_interrupts_gives_no_warning",
 ]
 incident = ["#411 B35"]
+
+# STORE-FG-1 (0.12.29; register §1.207 SF-5; design rd-1029/design-store-fg.md §8.1; contracts/package-reference.md, the standard-pack cross-check): package bundle and standard-pack check report one package_bundle_store_tap_unlocated warning (package_id, pack_operation_id) per pack and store step of control.json store_update that taps with point, rect or specific_rect, in registry order, and both still pass; a root without such a pack reports none
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_373_navt::store_fg1_s8_1_a_store_step_tapping_a_point_or_a_rect_gets_one_warning",
+]
+incident = []

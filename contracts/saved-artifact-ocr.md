@@ -83,6 +83,17 @@ through the Runtime's existing diagnostic path; persistence failure remains
 fatal. Host work admission remains held until this operation and its resource
 scope finish.
 
+Workflow #428 CFL-2 (since 0.12.29): when the source target declares `preprocess`
+([recognition-preprocess.md](recognition-preprocess.md)), the evaluator runs the chain once
+over the target's region of the frame and the Provider reads the processed region ("Hand-over"
+there). The chain's time comes out of the OCR timeout: the Provider's timeout is the capped
+timeout less the chain's time in whole milliseconds rounded up, and when nothing is left the
+request fails with the existing `OCR request budget exhausted` error before the Provider is
+called. The preserved `observation` then carries `preprocess`, the chain's evidence (`algorithm`,
+the declared `steps`, `scope`, `rect`, `kept_milli`, `inverted`, `threshold_value`), from which
+the processed region can be recomputed from the frame alone; a target without a chain writes
+no `preprocess` member, and its report keeps its bytes.
+
 This entry proves what the configured OCR owner returned for one verified
 historical frame. Recognition confidence does not certify the displayed value's
 accuracy, and the result is not a current balance.

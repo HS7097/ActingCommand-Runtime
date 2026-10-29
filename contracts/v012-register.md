@@ -3748,13 +3748,70 @@ WD-MT's, 1.205 is ISO-PE's).
 | CFL1-2 | the region domain: `apply` refuses a region of more than 2^24 pixels (`RegionTooLarge`) before any step, `Scene::preprocess_region` before it crops; within it Otsu compares the exact scores quotient first, remainder second, with every intermediate at most 108 bits (the contract's bound table) | behaviour (library) | CFL-1 revision round | — | a domain of the algorithm like the 4 steps and 8 colors, no configuration key; the `checked_mul` guards stay and cannot fail inside the domain; the tie rule (smallest `t`) is unchanged |
 | CFL1-3 | `kept_milli` is counted before `invert`, and `inverted` says whether the chain has it (in place of the first round's `foreground_milli`, counted after `invert`) | evidence definition (memory only) | CFL-1 revision round | — | golden values re-recorded with the coordinator's approval: `keep_range hsv` then `invert` 750 → 250, `gray` then `invert` 625 → 375; every other value unchanged |
 
+### 1.207 Slice STORE-FG-1 (0.12.29): a package declares the steps it runs while the store application is in front (Alice 10-29 10:1x: 「从外部更新的可以单独做成一个独立包，只用官方应用商店更新就行」; design `rd-1029/design-store-fg.md` §2, §3, §6 and the resource side's §8; coordinator work order `rd-1029/brief-store-fg-1.md`)
+
+[resource-declarations.md](resource-declarations.md) ("Store update packages") and
+[package-reference.md](package-reference.md) (the layer predicate and the cross-check) are the
+contract. **No persisted ledger shape**: the member is a pack format addition, the refusals reuse
+existing codes, and the run's records are the existing ones; no configuration key (the operator's
+allowlist `store_foreground.allowed_application_ids` is STORE-FG-2's), no wire or interface
+revision raised here. The number 1.207 is the coordinator's (1.204 is WD-MT's, 1.205 is ISO-PE's,
+1.206 is CFL-1's).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SF-1 | `control.json` `store_update` {`store_application_id`, `store_operations[]` {`operation`, `proof[]`}} (`actingcommand_contract::StoreUpdateDeclaration`, `validate_store_update`) | new optional member (pack format, not a ledger shape) | STORE-FG-1 | resource side | the source gate refuses a wrong shape or a broken rule as `resource_declaration_invalid` at the member; kernel admission as `contained_task_control_invalid` `reason=store_update_invalid`, also outside `navigable_route` and `linear_steps`; joins `package` revision 6, which BT-PK6 declares, admitted by code until then (BT-PK6 must name `control.json` `store_update`); a Runtime before 0.12.29 refuses a package that names it (`UnknownField`) |
+| SF-2 | `program_problem` tokens `store_operation_invalid`, `store_proof_invalid`, `store_way_back_missing` | new tokens of an existing vocabulary on the existing `contained_task_program_invalid` | STORE-FG-1 | STORE-FG-1 | the cross-checks against the task (a store step is a guarded tap from one page, its `guard` on that page and never `unguarded_trusted_coordinate`, so every frame its tap is drawn for, retries and rechecks included, passes the page and with it the proof; each proof an OCR target directly in that page's `required`; a `launch` or `restart` way back), with the path `control.json` and the refused member as `json_pointer` |
+| SF-3 | the prerequisite and startup incompatibility token `store_update` | new value of existing refusal details (`contained_task_prerequisite_incompatible` `reason`, the navigation `role_ineligible`, the startup refusal) | STORE-FG-1 | STORE-FG-1 | a store update package is no prerequisite, return-home, edge, chain, handler, `then.run` or startup package and no ladder rung |
+| SF-4 | `ContainedTaskRuntime::admit_store_foreground` and `ContainedTaskRuntime::store_input` | new kernel boundary methods with default implementations (admit every store; a store tap is any input) | STORE-FG-1 | STORE-FG-2 (host overrides) | asked and used only in the package's own run (entry `Ordinary`, no declared operation): the admission once before any capture, the store input for a declared store operation's `Tap` at the page-graph and the `linear_steps` input sites; every other input stays `input` |
+| SF-5 | `package_bundle_store_tap_unlocated` (warning, `ladder_class` none; `package_id`, `pack_operation_id`) | new outcome code (resource-tooling), design §8.1 | STORE-FG-1 | `package bundle`, `actinglab standard-pack check` | one per package and store step that taps a fixed place (`point`, `rect`, `specific_rect`); nothing is refused |
+
+### 1.208 Slice CFL-2 (0.12.29): recognition preprocessing wired into the OCR reads (Workflow #411 A58; #428 comment 6485683314; design `rd-1029/design-cf-v2.md` §0, §5.4 to §5.8, §5.12, §8 CFL-2, with the five points the resource audit confirmed; question 94 built for option A, one fixed chain per target read once; coordinator work order `rd-1029/brief-cfl2-v2.md`)
+
+[recognition-preprocess.md](recognition-preprocess.md) (section Hand-over) and
+[resource-declarations.md](resource-declarations.md) (section Task schema `0.9` recognition
+preprocessing) are the contract; [ocr-fields.md](ocr-fields.md), [selection-graph.md](selection-graph.md)
+(Shared OCR read, Preprocessing) and [saved-artifact-ocr.md](saved-artifact-ocr.md) name the rest.
+**No persisted ledger shape** (the task diagnostic maps OCR evaluations member by member;
+ledger revision stays [3, 4]), no configuration key, no new error code. One new warning code. The
+package member joins `package` interface revision 6, which BT-PK6 declares; until then it is
+admitted by code (`component-interfaces.json` stays `package` [3, 5]). The number 1.208 is the
+coordinator's (1.204 is WD-MT's, 1.205 is ISO-PE's, 1.206 is CFL-1's, 1.207 is STORE-FG-1's).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| CFL2-1 | `preprocess` `{"steps": [...]}` on task schema `0.9` `ocr_targets[]` and `candidate_layouts[].shared_ocr`, and on recognition pack schema `0.7` `ocr` targets and `shared_ocr`; passed to the pack as declared (a source that uses it derives pack `0.7`; one without it derives every document byte for byte as before) | new optional package member (joins `package` revision 6) | CFL-2 | resource side (no production package before CF-RF1 passes, design §7) | one parser for source and pack (`OcrPreprocess::from_json`), refusals at their own pointers; pack `0.6` `UnconsumedField`; another target type `UnknownField`; a whole-frame OCR target without `locate` and a shared read's `otsu` `InvalidValue`; a Runtime before 0.12.29 refuses the member as unknown |
+| CFL2-2 | the hand-over of every OCR read: without a chain the frame itself as before; with one only the processed region `(0, 0, w, h)` as R = G = B pixels, `Implicit` read as `Region`, blocks moved back onto the region's origin | behaviour | CFL-2 | — | the chain runs once before each provider call, never on a remembered read, a kept observation or a shared read's targets; after it the sample deadline is checked again (`recognition sample budget insufficient`) and a saved frame's OCR timeout loses the chain's time (`OCR request budget exhausted` at zero) |
+| CFL2-3 | the chain is part of a text read's request (`TextReadKey`) and of the static read budget (`StaticTextRead`); a shared read serves only targets with an equal chain, and its "serves at least one target" admission counts with chains | behaviour | CFL-2 | — | two chains over one region are two reads; colors of `keep_colors` compare in their declared order |
+| CFL2-4 | `OcrEvaluation.preprocess`, `OcrEvaluation.shared_read`, `OcrObservationEvaluation.preprocess`: `{algorithm, steps, scope, rect, source_rect?, kept_milli, inverted, threshold_value}` and `{rect, detected?, limit?, kept_milli?, threshold_value?}` | read-only evidence (memory and read-only answers only) | CFL-2 | — | absent without a chain (`shared_read` on every evaluation a shared read serves); direct serializers carry them: the read-only page responses' `actual` evaluations, a saved frame's OCR report `observation`, and the online observation's `candidate_sample` rows (`ac_observe`, `ac_lab_observe` and the Lab's online `observe`); explicit mappings do not: the task diagnostic (ledger), the read-only target response, the field report artifact, the runtime client's DTOs |
+| CFL2-5 | `package_bundle_preprocess_divergent` (warning, ladder class `none`, since 0.12.29, pending; `package_id`, `target_id`, `json_pointer`): `package bundle` and `actinglab standard-pack check` report one per package, OCR target and shared read whose chains differ though the read would serve the target | new catalog entry and report entries (not persisted) | CFL-2 | resource tooling | no existing warning names a target and a shared read (the five package-bundle warnings are entry pages, remedies, shadowed interrupt pages, undeclared recognition packs and unlocated store taps); nothing is refused |
+
+### 1.209 Slice STORE-FG-2 (0.12.29): the store allowlist, and the host taps a declared store step only with exactly that store in front (Alice 10-29 10:1x; her questions 95 to 97, option A; design `rd-1029/design-store-fg.md` §2, §3, §5, §6; review `rd-1029/review-store-fg-1.md` L5; coordinator work order `rd-1029/brief-store-fg-2.md`)
+
+[application-lifecycle.md](application-lifecycle.md) ("Store foreground allowance"),
+[runtime-config.md](runtime-config.md) ("The `store_foreground` section") and the runtime-host
+fragment of the outcome catalog are the contract. **No persisted ledger shape**: the refusals are
+the existing `command.rejected`, `runtime.failed` and the run's terminal, the store in front is the
+existing `application.foreground` fact, and the key's row is a new row of the existing
+`config.parameters.<section>` fact. The number 1.209 is the coordinator's (1.204 is WD-MT's,
+1.205 is ISO-PE's, 1.206 is CFL-1's, 1.207 is STORE-FG-1's, 1.208 is CFL-2's).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SF2-1 | `store_foreground.allowed_application_ids` (list of 0 to 16 unique Android package names, default `[]` from the defaults file, not settable) | new configuration section (**`actingd-config` revision 21**) | STORE-FG-2 | the operator, in the configuration file | a value that is no list or an entry that is no string is `config_value_invalid` `wrong_type`; more than 16 entries or a malformed entry `out_of_range`; a duplicate or an instance's own `application_id` `section_check`; at start and in `check-config` |
+| SF2-2 | `application_store_not_allowed` (error, `declaration_error`; `alias`, `application_id`); location `admit_store_foreground` | new outcome code and location (runtime-host), design §3's one new code | STORE-FG-2 | runtime-host | the run of a store update package whose store the list does not name, before any capture or input (`denied`); a store tap that meets the same at the foreground gate (`command.rejected` + `runtime.failed`) |
+| SF2-3 | the foreground gate's expected application: the declared store for a store step's plain `Tap` (`RuntimeInputContext.foreground`, `InputForeground::Store`), else the assigned application | behaviour | STORE-FG-2 | runtime-host | a mismatch is the existing `application_not_foreground`, its detail naming `expected=` the store; client `Input`, Lab operations and layers always expect the assigned application; the host overrides both SF-4 methods in the one runtime that runs a package's own run (`RuntimeContainedTask`), neither in the layer and Lab runtimes |
+| SF2-4 | the handset start gate's `device_in_use` for a store update package's own run | behaviour | STORE-FG-2 | runtime-host | the declared store in front is no other application for that run; every other run unchanged |
+| SF2-5 | the startup refusal of a store update package: `startup_package_admission_failed` with `reason=store_update` | existing code, new detail (review L5) | STORE-FG-2 | runtime-host | before, `contained_task_resource_reading_run_kind_unsupported`; a resource-reading startup package keeps that code |
+
 ### 1.210 Slice LAB-WAIT (0.12.29): offline `observe` loads a wait step whose `to` is a page set (the resource side's report of 10-29: such a step refused the package with `missing field 'click'`; coordinator work order LAB-WAIT)
 
 [resource-declarations.md](resource-declarations.md) (offline `observe`'s page-set operations,
 and "Wait steps and wait pages") is the contract. **No persisted ledger shape**, no code, no
 configuration key, no wire or interface revision, no new member: actinglab reads an existing
-shape that pack containment and the kernel already admit. The number 1.210 is provisional; the
-coordinator renumbers it at merge.
+shape that pack containment and the kernel already admit. The number 1.210 is the coordinator's
+(1.204 is WD-MT's, 1.205 is ISO-PE's, 1.206 is CFL-1's, 1.207 is STORE-FG-1's, 1.208 is CFL-2's,
+1.209 is STORE-FG-2's).
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
@@ -3880,6 +3937,7 @@ when it takes effect.
 | `touch.*` (**`actingd-config` revision 7**, Workflow #406; §1.136) | `sampling.sigma_ratio_milli`, `sampling.max_redraws`, `sampling.candidate_count`, `history.points_per_box`, `history.max_boxes` | 250 (`1..=1000`), 8 (`0..=64`), 4 (`1..=16`), 16 (`1..=256`), 1024 (`1..=65536`); host-wide, every key settable (plan Q13; [runtime-config.md](runtime-config.md)) | #406 T12 (§1.136) | #406 T12 (0.12.x) |
 | `emulator_control.*` (**`actingd-config` revision 8**, #411 A50; §1.158) | `restart_exit_wait_ms` | 60 000 (`1000..=300000`); host-wide, settable ([runtime-config.md](runtime-config.md)) | A50 (§1.158 A50-5) | A50 (0.12.x) |
 | `host.*` (**`actingd-config` revision 20**, RB-2; §1.202) | `process_memory_priority`, `process_io_priority` | `normal` (`normal` \| `low`); not settable, applied by actingd to its own process at start ([runtime-config.md](runtime-config.md), "The `host` section") | RB-2 (§1.202 RB2-1) | RB-2 (0.12.28) |
+| `store_foreground.*` (**`actingd-config` revision 21**, STORE-FG-2; §1.209) | `allowed_application_ids` | `[]` (0 to 16 unique Android package names, none an instance's `application_id`); not settable, only the configuration file widens it ([runtime-config.md](runtime-config.md), "The `store_foreground` section") | STORE-FG-2 (§1.209 SF2-1) | STORE-FG-2 (0.12.29) |
 
 - Removed by option 丙 in the same revision (PKG-S4): `startup_package.expected_sha256`,
   `prerequisite_packages[].package_digest`, `policy.procedure_manifest[].package_digest`. A

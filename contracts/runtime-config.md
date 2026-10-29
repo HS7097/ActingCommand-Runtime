@@ -92,7 +92,9 @@ the `execution` section below (default `file`, settable). Workflow #392 DA-4b-D'
 `display_safe_area` section below (default `file`, settable) and the per-instance
 `display_safe_area.model` (string, default `section:display_safe_area.model`, settable). RB-2's
 rows: the `host` section below (string `normal` | `low`, default `file`, not settable: applied
-before the ledger opens; since 0.12.28). A manifest key the table does not have fails
+before the ledger opens; since 0.12.28). STORE-FG-2's row: the `store_foreground` section below
+(list, default `file` `[]`, not settable: only the configuration file widens it; since 0.12.29).
+A manifest key the table does not have fails
 the start (`config_key_unknown`). The manifest lists the exact keys in row order
 (`recovery_ladder`, `host_claims`, `standard_packs`, `performance`, `scheduling`,
 `ledger_observer`, the two Lab options), then each instance's per-instance keys together.
@@ -1099,6 +1101,33 @@ normal under the watchdog's task): no key names it and the start never changes i
 - **Elsewhere.** On an operating system without these priorities (not Windows) nothing is set
   or read, and the record is `host_process_priority_applied` with the two levels asked for and no
   level read. The tests apply the section through a fake of the same calls.
+
+## The `store_foreground` section (STORE-FG-2)
+
+STORE-FG-2 (Alice's ruling of 2026-10-29 10:1x: a client update comes only from the official app
+store, as a pack of its own; her question 95, option A; design `rd-1029/design-store-fg.md`
+§2.2): the store applications a store update package may tap in
+([application-lifecycle.md](application-lifecycle.md), "Store foreground allowance"). A package
+names the store its steps are written for (`control.json` `store_update.store_application_id`);
+its run starts, and each of its store taps is sent, only while this list names that store.
+
+| Key | Type | Default (`actingd.defaults.json`) | Settable |
+|---|---|---|---|
+| `store_foreground.allowed_application_ids` | list of 0 to 16 unique Android package names (two or more dot-separated segments, each a letter followed by letters, digits or `_`; at most 256 bytes) | `[]` (no store) | no (only a person widens it, in the configuration file) |
+
+- **Read at start only.** No instruction changes the list (`ConfigureSettings` refuses it,
+  `config_key_not_settable`), so no agent can widen it while the Runtime runs; the configuration
+  file changes it, and the Runtime takes it at its next start. `actingd-config` revision 21
+  ([component-interfaces.md](component-interfaces.md)) adds the section; a file that does not
+  name it keeps its revision. The host reads the list in effect at each store run's start and at
+  each of its store taps; the row is reported in `config.parameters.store_foreground`.
+- **Refusal**, each `config_value_invalid` naming the key (`config_key`), at start and in
+  `check-config`: a value that is no list, or an entry that is no string, `wrong_type`; more than
+  16 entries or an entry that is no Android package name, `out_of_range`; an entry listed twice,
+  or an entry equal to a configured instance's `application_id` (a game is never its own store),
+  `section_check`.
+- The Runtime compares package ids for equality only; no store is named in code, defaults or
+  tests. The operator adds the official store's package id once Alice confirmed it (question 95).
 
 ## Facts
 
