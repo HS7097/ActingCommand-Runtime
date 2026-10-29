@@ -317,7 +317,8 @@ fn k5_t1_a_task_renamed_mid_day_is_not_due_again_that_day() {
         } else {
             let admission = run(&mut slots, at(1, 12, 1), TASK_B, None);
             assert_eq!(
-                admission.budget.task_daily_used, 1,
+                admission.budget.task_daily_used,
+                Some(1),
                 "without the declaration the new id counts from zero"
             );
         }
@@ -335,7 +336,7 @@ fn k5_t2_the_receipt_counts_the_group_and_replays_without_a_mismatch() {
     let first = generation(1, &[task(TASK_A, unclocked(), 2)], &[]);
     let mut slots = Slots::start(&first, at(1, 6, 0));
     let admission = run(&mut slots, at(1, 6, 10), TASK_A, None);
-    assert_eq!(admission.budget.task_daily_used, 1);
+    assert_eq!(admission.budget.task_daily_used, Some(1));
     let second = generation(
         2,
         &[task(TASK_B, unclocked(), 2)],
@@ -344,7 +345,8 @@ fn k5_t2_the_receipt_counts_the_group_and_replays_without_a_mismatch() {
     let mut slots = switch(slots, at(1, 7, 0), &second);
     let admission = run(&mut slots, at(1, 7, 1), TASK_B, None);
     assert_eq!(
-        admission.budget.task_daily_used, 2,
+        admission.budget.task_daily_used,
+        Some(2),
         "the receipt counts fixture.a's run and fixture.b's"
     );
     let cycle = slots.evaluate(at(1, 7, 2));
@@ -771,8 +773,8 @@ fn k5_t6_a_removed_task_keeps_its_records_and_an_added_task_starts_fresh() {
     let second = generation(2, &[task(TASK_E, daily(&[300], None), 1)], &[]);
     let mut slots = switch(slots, at(1, 7, 0), &second);
     let admission = run(&mut slots, at(1, 7, 1), TASK_E, None);
-    assert_eq!(admission.budget.task_daily_used, 1);
-    assert_eq!(admission.budget.task_window_used, 1);
+    assert_eq!(admission.budget.task_daily_used, Some(1));
+    assert_eq!(admission.budget.task_window_used, Some(1));
     let rows = slots.new_rows();
     assert_eq!(rows.len(), 1, "{rows:#?}");
     assert_eq!(

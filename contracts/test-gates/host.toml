@@ -119,6 +119,18 @@ tests = [
 ]
 incident = []
 
+# SS-3 (Alice's ruling 100, #386 comment 6490879952; rd-1029 design-sch-state §5 SS-3 tests 1 to 4 and 6; contracts/scheduling/README.md, "Optional run-count bounds"; register §1.212; since 0.12.30): without loop_budget 50 runs meet no TaskDaily or TaskWindow refusal; a written daily_limit of 2 still refuses the third run; without max_runtime_ms back-to-back runs far above the example's runtime bounds record no policy_runtime_budget_exceeded, and the per-run deadline still holds the next run back before a blackout; receipts carry no dimension that was not written; a catalog that writes every bound gives the receipt bytes of before
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_ss3::ss3_t1_without_loop_budget_fifty_runs_meet_no_task_count_refusal",
+    "actingcommand-runtime-host::lib::tests::gate_ss3::ss3_t2_a_written_daily_limit_of_two_still_refuses_the_third_run",
+    "actingcommand-runtime-host::lib::tests::gate_ss3::ss3_t3_without_max_runtime_back_to_back_runs_record_no_runtime_budget_exceeded",
+    "actingcommand-runtime-host::lib::tests::gate_ss3::ss3_t4_receipts_carry_no_dimension_that_was_not_written",
+    "actingcommand-runtime-host::lib::tests::gate_ss3::ss3_t6_a_catalog_that_writes_every_bound_gives_the_same_receipt_bytes",
+]
+incident = ["#386 SS-3"]
+
 # Failure control
 [[gate]]
 key = "27"
