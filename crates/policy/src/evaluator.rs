@@ -2204,7 +2204,8 @@ struct RankRecord {
     base_total: i64,
     /// `None` when the score stage left the candidate untouched.
     stage: Option<StageRecord>,
-    /// Every candidate of an instance with an active v2 resource target policy.
+    /// Every candidate of an instance with an active v2 resource target policy; on another
+    /// instance every candidate a base term weighs, unless a v1 target applies to it (SS-1).
     resources: Option<ResourceRecord>,
     promoted: bool,
     affinity: bool,
@@ -2224,7 +2225,8 @@ struct StageRecord {
     superseded: bool,
 }
 
-/// A candidate's resource term under an active v2 policy (Workflow #335 S2b).
+/// A candidate's resource term under an active v2 policy (Workflow #335 S2b), or its base term
+/// alone on another instance (SS-1).
 #[derive(Debug, Clone)]
 struct ResourceRecord {
     /// `R`, zero for a candidate nothing of the policy weighs.
@@ -3126,12 +3128,17 @@ struct StagedCandidate {
     base_milli: i64,
     effective_milli: i64,
     target: TargetEffect,
+    /// SS-1: the base term without an active v2 policy (Alice's ruling 100).
+    base: Option<crate::resource_targets::ResourceTerm>,
 }
 
 /// The score stage between the predicate gate and ranking. Predicate outcomes are never
 /// revisited here: only candidates that already passed trigger, feedback stop, cooldown and
 /// placement are scored. Without a selection document, without a declared value, without
-/// offsets and without a resource target policy it is a no-op.
+/// offsets, without a resource target policy and without a pool valuation it is a no-op.
+///
+/// SS-1 (Alice's ruling 100): a pool valuation weighs every producing candidate of every
+/// instance; a resource target only adds its shortfall on top.
 ///
 /// Workflow #384 D2-S4: with `refreshing`, a candidate whose document read unknown realistic
 /// keys only is deferred and returned as affected, for the fact refresh to give its reasons;
@@ -3167,17 +3174,35 @@ fn apply_priority_selection(
         .tasks
         .iter()
         .any(|task| task.reserves.is_some());
+    // SS-1 (Alice's ruling 100): a pool's declared valuation weighs its producing tasks on every
+    // instance, with or without a resource target policy.
+    let valuation_declared = catalog
+        .catalog()
+        .pools
+        .pools
+        .iter()
+        .any(|pool| pool.valuation.is_some());
     if !utility_fields
         && facts.priority_offsets.is_empty()
         && target_policies.is_empty()
         && !reserves_declared
+        && !valuation_declared
     {
         return Ok((candidates, Vec::new()));
     }
     // Each instance's stored policy is resolved once: every target's pool and named tasks
-    // against the catalog, its inventory in the time-validity projected facts.
+    // against the catalog, its inventory in the time-validity projected facts; with a valued
+    // pool, every other instance too, for its base terms alone.
+    let no_policy = InstanceTargetPolicy::default();
     let mut instance_targets = BTreeMap::new();
-    for (instance_id, target_policy) in target_policies {
+    let unstored = facts
+        .instances
+        .iter()
+        .filter(|instance| {
+            valuation_declared && !target_policies.contains_key(&instance.instance_id)
+        })
+        .map(|instance| (&instance.instance_id, &no_policy));
+    for (instance_id, target_policy) in target_policies.iter().chain(unstored) {
         let instance = facts
             .instances
             .iter()
@@ -3277,15 +3302,22 @@ fn apply_priority_selection(
         let target = targets.map_or(TargetEffect::None, |targets| {
             targets.effect(&candidate.task_id)
         });
+        // SS-1: without an active v2 policy the base term still weighs the candidate; a v1
+        // target's score, if any, is its goal's part on top.
+        let base = targets
+            .and_then(|targets| targets.base_term(&candidate.task_id))
+            .cloned();
         let offset = effective_priority_offset(facts, &candidate.task_id, &candidate.instance_id);
         // Under an active v2 policy a candidate enters the stage when its resource term is
-        // positive or an override covering it is effective (Workflow #335 S2b).
+        // positive or an override covering it is effective (Workflow #335 S2b); on any other
+        // instance, when its base term is positive (SS-1).
         if policy.is_none()
             && offset.is_none()
             && candidate.value_milli.is_none()
             && target.applied().is_none()
             && !target
                 .resources()
+                .or(base.as_ref())
                 .is_some_and(crate::resource_targets::ResourceTerm::takes_part)
         {
             // Released untouched: its rank record keeps `stage: None`.
@@ -3293,7 +3325,10 @@ fn apply_priority_selection(
             if let Some(targets) = targets {
                 task_work.reasons.extend(targets.reasons(&target, None, 0));
             }
-            if let Some(resources) = target.resources() {
+            if let Some(base) = &base {
+                task_work.reasons.extend(base.reasons(None, 0));
+            }
+            if let Some(resources) = target.resources().or(base.as_ref()) {
                 task_work
                     .record
                     .as_mut()
@@ -3353,6 +3388,14 @@ fn apply_priority_selection(
                 .ok_or_else(overflow)?
             }
         };
+        // SS-1: the base term is added whatever the stored policy did above (an active v2
+        // policy's term already holds it, and then there is none here).
+        let effective_milli = match &base {
+            None => effective_milli,
+            Some(base) => effective_milli
+                .checked_add(i64::try_from(base.term_milli).map_err(|_| overflow())?)
+                .ok_or_else(overflow)?,
+        };
         staged.push(StagedCandidate {
             candidate,
             score_milli,
@@ -3362,6 +3405,7 @@ fn apply_priority_selection(
             base_milli,
             effective_milli,
             target,
+            base,
         });
     }
     let thresholds = selection.map(|selection| {
@@ -3380,6 +3424,7 @@ fn apply_priority_selection(
         base_milli: _,
         effective_milli,
         target,
+        base,
     } in staged
     {
         candidate.rank.total_score = candidate
@@ -3388,7 +3433,8 @@ fn apply_priority_selection(
             .saturating_add(effective_milli.saturating_mul(1_000));
         candidate.rank.effective_milli = effective_milli;
         let applied = target.applied();
-        let resources = target.resources();
+        // An active v2 policy's term, or else the base term alone (SS-1).
+        let resources = target.resources().or(base.as_ref());
         let overridden = applied.is_some_and(|applied| applied.mode == TargetMode::Override)
             || resources.is_some_and(|resources| resources.override_target.is_some());
         // An unknown verdict or cost never defers or promotes; only a scored one meets the
@@ -3475,7 +3521,11 @@ fn apply_priority_selection(
                 .map(|applied| (applied.id.clone(), applied.mode, applied.task_target_milli)),
             superseded: overridden,
         });
-        record.resources = resources.map(ResourceRecord::new);
+        // A candidate a v1 target applies to keeps its v1 record (`target=<s>`); its base term
+        // shows in `effective`, `score_computed` and `resource_weights` (SS-1).
+        record.resources = resources
+            .filter(|_| applied.is_none())
+            .map(ResourceRecord::new);
         record.promoted = matches!(
             disposition,
             ScoreDisposition::Promoted { .. } | ScoreDisposition::AgingCap { .. }
@@ -3513,6 +3563,11 @@ fn apply_priority_selection(
                 .reasons
                 .extend(targets.reasons(&target, score_milli, offset_milli));
         }
+        if let Some(base) = &base {
+            task_work
+                .reasons
+                .extend(base.reasons(score_milli, offset_milli));
+        }
         // An applied target is only as fresh as its inventory observation and its policy, and
         // the evaluation wakes when either lapses (RT17).
         if let Some(applied) = applied {
@@ -3539,13 +3594,14 @@ fn apply_priority_selection(
             }
         }
         // A candidate a v2 policy moves is only as fresh as the policy and every inventory
-        // observation behind a shortfall weighing it, and wakes when one lapses.
+        // observation behind a shortfall weighing it, and wakes when one lapses. A base term
+        // alone bounds nothing: the valuation is part of the catalog.
         if let Some(resources) = resources.filter(|resources| resources.takes_part()) {
             for lapse in resources
                 .inventory_expiries
                 .iter()
                 .copied()
-                .chain([resources.valid_until_unix_ms])
+                .chain(resources.valid_until_unix_ms)
             {
                 candidate.facts_fresh_until_unix_ms =
                     min_wake(candidate.facts_fresh_until_unix_ms, Some(lapse));

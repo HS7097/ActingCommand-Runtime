@@ -6,8 +6,9 @@
 //! stores as the instance fact `session.resource_targets`, the pure target helpers the entry and
 //! the evaluator share, and the evaluator's reading and scoring of stored policies: a v1 policy
 //! scores its named tasks as before, a v2 policy weighs every produced resource of the instance
-//! with its declared valuation plus its target's shortfall. Nothing here reads a clock, a file or
-//! the network.
+//! with its declared valuation plus its target's shortfall. Since SS-1 (Alice's ruling 100) the
+//! declared valuation weighs every producing task on every instance, with or without a policy.
+//! Nothing here reads a clock, a file or the network.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -33,7 +34,8 @@ use crate::{
     CatalogDiagnostic, CatalogDiagnosticCode, CompiledCatalog, DecisionReason, EvaluationFacts,
     EvaluationTime, FactScalar, FactValue, InstanceSnapshot, MAX_ID_BYTES, ObservationRef,
     ObservedFact, PolicyEvaluationError, PolicyEvaluationResult, PoolSpec, PoolValueSnapshot,
-    PoolValueSource, SchedulingDocumentKind, ScopeSelector, TaskRuntimeSnapshot, TaskSpec,
+    PoolValueSource, ResourceEffectSpec, SchedulingDocumentKind, ScopeSelector,
+    TaskRuntimeSnapshot, TaskSpec,
 };
 use actingcommand_selection_policy::UnknownReason;
 
@@ -800,7 +802,12 @@ pub(crate) fn resolve_target_task(
 /// `floor(amount * confidence / 1000)` contribution; explicit expectations are already
 /// probability/batch adjusted and are not multiplied by evidence confidence.
 fn per_run_production(task: &TaskSpec, pool_id: &str) -> u128 {
-    task.produces
+    per_run_yield(&task.produces, pool_id)
+}
+
+/// [`per_run_production`] from a task's yield declaration alone.
+fn per_run_yield(produces: &[ResourceEffectSpec], pool_id: &str) -> u128 {
+    produces
         .iter()
         .filter(|effect| effect.pool_id == pool_id)
         .map(|effect| match effect.expected_amount_milli {
@@ -1936,8 +1943,9 @@ pub(crate) enum TargetEffect {
     Resources(Box<ResourceTerm>),
 }
 
-/// The resource term `R` of one candidate under an active v2 policy, with everything its
-/// reasons show.
+/// The resource term `R` of one candidate, with everything its reasons show: under an active v2
+/// policy the base weights plus its targets' shortfall weights; on every other instance the base
+/// weights alone (SS-1, Alice's ruling 100: the base valuation always counts).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResourceTerm {
     /// `R = min(Σ T, 1_000_000)`, added to the effective score.
@@ -1946,11 +1954,12 @@ pub(crate) struct ResourceTerm {
     /// The effective override covering the candidate: its target id and offset switch.
     pub(crate) override_target: Option<(String, ManualOffset)>,
     /// The policy lifetime and the expiry of every inventory observation behind an applied
-    /// target that weighs the candidate: they bound its freshness when it takes part.
-    pub(crate) valid_until_unix_ms: u64,
+    /// target that weighs the candidate: they bound its freshness when it takes part. A base
+    /// term alone has neither: the valuation is a catalog declaration.
+    pub(crate) valid_until_unix_ms: Option<u64>,
     pub(crate) inventory_expiries: Vec<u64>,
-    policy_sha256: String,
-    applied_at_unix_ms: u64,
+    /// The active v2 policy `(policy_sha256, applied_at)`; `None` for the base weights alone.
+    policy: Option<(String, u64)>,
     /// One `resource_targets` item per target covering the candidate, in document order.
     targets: Vec<String>,
     /// `(target, resource, task, why)` when a target names the task but the task, or the
@@ -1981,7 +1990,11 @@ impl ResourceTerm {
     /// The candidate's v2 reasons after the policy-level one, in this order and each at most
     /// once: `resource_targets`, `resource_target_unmapped`, `resource_target_override` (each
     /// with its `resource_target_id`), `resource_weights`.
-    fn reasons(&self, score_milli: Option<i64>, offset_milli: i64) -> Vec<DecisionReason> {
+    pub(crate) fn reasons(
+        &self,
+        score_milli: Option<i64>,
+        offset_milli: i64,
+    ) -> Vec<DecisionReason> {
         let mut reasons = Vec::with_capacity(4);
         if !self.targets.is_empty() {
             reasons.push(DecisionReason {
@@ -2028,13 +2041,17 @@ impl ResourceTerm {
                     )
                 })
                 .collect::<Vec<_>>();
+            let policy = self.policy.as_ref().map_or_else(
+                || "none".to_owned(),
+                |(policy_sha256, applied_at_unix_ms)| {
+                    format!("{policy_sha256}@{applied_at_unix_ms}")
+                },
+            );
             reasons.push(DecisionReason {
                 outcome: Outcome::new(PolicyCode::ResourceWeights),
                 detail: bounded_list(
                     format!(
-                        "policy={}@{} term={}{} items=",
-                        self.policy_sha256,
-                        self.applied_at_unix_ms,
+                        "policy={policy} term={}{} items=",
                         self.term_milli,
                         if self.capped { " capped" } else { "" }
                     ),
@@ -2200,6 +2217,10 @@ impl TargetEffect {
 pub(crate) struct InstanceTargets {
     ignored: Option<(&'static str, u64)>,
     policy: ResolvedPolicy,
+    /// SS-1 (Alice's ruling 100): the base term of every catalog task of the instance that one
+    /// valued pool weighs, whatever the stored policy. Empty under an active v2 policy, whose
+    /// terms already hold the base weights.
+    base: BTreeMap<String, ResourceTerm>,
 }
 
 #[derive(Debug)]
@@ -2411,9 +2432,159 @@ pub(crate) fn resolve_instance_targets(
             targets,
         )?)),
     };
+    // SS-1 (Alice's ruling 100): without an active v2 policy (none, withdrawn, expired,
+    // unreadable, or v1) the pools' base valuation still weighs every producing task; a goal
+    // only adds its shortfall on top.
+    let base = match &resolved {
+        ResolvedPolicy::ActiveV2(_) => BTreeMap::new(),
+        _ => base_terms(catalog, instance)?,
+    };
     Ok(InstanceTargets {
         ignored: policy.ignored,
         policy: resolved,
+        base,
+    })
+}
+
+/// The base term of every catalog task whose scope covers `instance` and that produces at least
+/// one valued pool covering it (SS-1): the resource layer of [`weigh_production`] without any
+/// target. Nothing here reads a stored policy, a task's enablement, an instance override, a
+/// priority, an offset or a run state.
+fn base_terms(
+    catalog: &CompiledCatalog,
+    instance: &InstanceSnapshot,
+) -> Result<BTreeMap<String, ResourceTerm>, &'static str> {
+    let pools = instance_pools(catalog, instance);
+    let mut terms = BTreeMap::new();
+    for task in catalog
+        .catalog()
+        .tasks
+        .tasks
+        .iter()
+        .filter(|task| scope_matches_instance(&task.scope, instance))
+    {
+        let weighed = weigh_production(&task.id, &task.produces, &pools, &[])?;
+        if weighed.items.is_empty() {
+            continue;
+        }
+        terms.insert(
+            task.id.clone(),
+            ResourceTerm {
+                term_milli: weighed.term_milli,
+                capped: weighed.capped,
+                override_target: None,
+                valid_until_unix_ms: None,
+                inventory_expiries: Vec::new(),
+                policy: None,
+                targets: Vec::new(),
+                unmapped: None,
+                items: weighed.items,
+            },
+        );
+    }
+    Ok(terms)
+}
+
+/// The catalog pools whose scope covers `instance`, in catalog order.
+fn instance_pools<'a>(
+    catalog: &'a CompiledCatalog,
+    instance: &InstanceSnapshot,
+) -> Vec<&'a PoolSpec> {
+    catalog
+        .catalog()
+        .pools
+        .pools
+        .iter()
+        .filter(|pool| scope_matches_instance(&pool.scope, instance))
+        .collect()
+}
+
+/// What [`weigh_production`] finds for one task.
+struct Weighed {
+    term_milli: u64,
+    capped: bool,
+    items: Vec<WeightItem>,
+}
+
+/// The resource layer (SS-1; Alice's ruling 100: resource weight feeds task weight, never the
+/// reverse). For one task that yields `produces` per run, every pool `p` of `pools` it produces
+/// weighs `T = ⌊r · W / Q⌋` with `W = B_p + Γ`: `B_p` is the pool's `valuation.base_weight_milli`
+/// and counts on every instance; `Γ` is the shortfall weight of the target among `targets` that
+/// covers the task for `p`, the only part a goal adds. `R = min(Σ T + ⌊Σ F⌋, 1_000_000)`.
+///
+/// One-way guard: the inputs are the task's id (only to ask a target's coverage), its own yield
+/// declaration, the pools and the resolved targets. No task's enablement, instance override,
+/// priority, offset or run state reaches this function, so changing any of them for one task
+/// changes no pool weight and no other task's term.
+fn weigh_production(
+    task_id: &str,
+    produces: &[ResourceEffectSpec],
+    pools: &[&PoolSpec],
+    targets: &[ResolvedTargetV2<'_>],
+) -> Result<Weighed, &'static str> {
+    let mut items = Vec::new();
+    let mut total = 0_u128;
+    let mut fraction = (0_u128, 1_u128);
+    for pool in pools {
+        let per_run = per_run_yield(produces, &pool.id);
+        if per_run == 0 {
+            continue;
+        }
+        let covering = targets
+            .iter()
+            .find(|target| target.pool.id == pool.id && target.covers(task_id, per_run));
+        let valuation = pool.valuation.as_ref();
+        let Some(step) = valuation
+            .map(|valuation| valuation.scale)
+            .or_else(|| covering.and_then(|target| target.target.scale))
+        else {
+            continue;
+        };
+        let base_milli = valuation.map_or(0, |valuation| u64::from(valuation.base_weight_milli));
+        let gap_weight_milli = covering.map_or(0, ResolvedTargetV2::gap_weight_milli);
+        let effective_milli = base_milli + gap_weight_milli;
+        let numerator = per_run
+            .checked_mul(u128::from(effective_milli))
+            .ok_or("expected production weighted amount overflow")?;
+        let denominator = u128::from(step) * 1_000;
+        let term_milli = numerator
+            .checked_div(denominator)
+            .ok_or("resource valuation step is zero")?;
+        total = total
+            .checked_add(term_milli)
+            .ok_or("resource score sum overflow")?;
+        if produces
+            .iter()
+            .any(|effect| effect.pool_id == pool.id && effect.expected_amount_milli.is_some())
+        {
+            add_score_fraction(&mut fraction, numerator % denominator, denominator)?;
+        }
+        items.push(WeightItem {
+            pool: pool.id.clone(),
+            per_run,
+            step,
+            base_milli,
+            gap_weight_milli,
+            effective_milli,
+            term_milli,
+        });
+    }
+    items.sort_by(|left, right| {
+        right
+            .term_milli
+            .cmp(&left.term_milli)
+            .then_with(|| left.pool.cmp(&right.pool))
+    });
+    // Integer declarations retain their per-resource floor. Explicit expected
+    // contributions carry their exact remainder to this final score boundary.
+    total = total
+        .checked_add(fraction.0 / fraction.1)
+        .ok_or("resource score sum overflow")?;
+    let cap = u128::from(MAX_RESOURCE_TARGET_MILLI);
+    Ok(Weighed {
+        term_milli: u64::try_from(total.min(cap)).map_err(|_| "resource term cap exceeds u64")?,
+        capped: total > cap,
+        items,
     })
 }
 
@@ -2505,14 +2676,15 @@ fn resolve_v2(
         };
         // A target without `tasks` covers the producing candidates; when no task of the
         // instance produces its pool in the active catalog it can weigh nothing, and says so.
-        // A producing task only gated this round is not a lapse.
+        // A producing task only gated this round is not a lapse. SS-1 one-way guard: the lapse
+        // is a report only; the target still resolves, so no task's enablement decides any
+        // weight (a disabled task has no candidate to weigh anyway).
         if target.tasks.is_none()
             && !catalog.catalog().tasks.tasks.iter().any(|task| {
                 task_on_instance(task, instance).is_ok() && per_run_production(task, &pool.id) >= 1
             })
         {
             lapsed("no_producing_task");
-            continue;
         }
         let named = match &target.tasks {
             None => None,
@@ -2524,6 +2696,12 @@ fn resolve_v2(
                             named.insert(task.as_str());
                         }
                         Err(Reason::UnmappedTask) => mark_unmapped(task, "task_not_producing"),
+                        // SS-1 one-way guard: a disabled named task is reported and keeps its
+                        // coverage, so its enablement decides no weight.
+                        Err(Reason::TaskDisabled) => {
+                            named.insert(task.as_str());
+                            unevaluable.push(format!("{}/{task}:task_disabled", target.id));
+                        }
                         Err(reason) => unevaluable.push(format!(
                             "{}/{task}:{}",
                             target.id,
@@ -2583,21 +2761,14 @@ fn resolve_v2(
         term_milli: 0,
         capped: false,
         override_target: None,
-        valid_until_unix_ms: context.valid_until_unix_ms,
+        valid_until_unix_ms: Some(context.valid_until_unix_ms),
         inventory_expiries: Vec::new(),
-        policy_sha256: context.policy_sha256.to_owned(),
-        applied_at_unix_ms: context.applied_at_unix_ms,
+        policy: Some((context.policy_sha256.to_owned(), context.applied_at_unix_ms)),
         targets: Vec::new(),
         unmapped: None,
         items: Vec::new(),
     };
-    let pools = catalog
-        .catalog()
-        .pools
-        .pools
-        .iter()
-        .filter(|pool| scope_matches_instance(&pool.scope, instance))
-        .collect::<Vec<_>>();
+    let pools = instance_pools(catalog, instance);
     let mut terms = BTreeMap::new();
     for task in catalog
         .catalog()
@@ -2637,69 +2808,10 @@ fn resolve_v2(
                 term.inventory_expiries.push(expiry);
             }
         }
-        let mut total = 0_u128;
-        let mut fraction = (0_u128, 1_u128);
-        for pool in &pools {
-            let per_run = per_run_production(task, &pool.id);
-            if per_run == 0 {
-                continue;
-            }
-            let covering = resolved
-                .iter()
-                .find(|target| target.pool.id == pool.id && target.covers(&task.id, per_run));
-            let valuation = pool.valuation.as_ref();
-            let Some(step) = valuation
-                .map(|valuation| valuation.scale)
-                .or_else(|| covering.and_then(|target| target.target.scale))
-            else {
-                continue;
-            };
-            let base_milli =
-                valuation.map_or(0, |valuation| u64::from(valuation.base_weight_milli));
-            let gap_weight_milli = covering.map_or(0, ResolvedTargetV2::gap_weight_milli);
-            let effective_milli = base_milli + gap_weight_milli;
-            let numerator = per_run
-                .checked_mul(u128::from(effective_milli))
-                .ok_or("expected production weighted amount overflow")?;
-            let denominator = u128::from(step) * 1_000;
-            let term_milli = numerator
-                .checked_div(denominator)
-                .ok_or("resource valuation step is zero")?;
-            total = total
-                .checked_add(term_milli)
-                .ok_or("resource score sum overflow")?;
-            if task
-                .produces
-                .iter()
-                .any(|effect| effect.pool_id == pool.id && effect.expected_amount_milli.is_some())
-            {
-                add_score_fraction(&mut fraction, numerator % denominator, denominator)?;
-            }
-            term.items.push(WeightItem {
-                pool: pool.id.clone(),
-                per_run,
-                step,
-                base_milli,
-                gap_weight_milli,
-                effective_milli,
-                term_milli,
-            });
-        }
-        term.items.sort_by(|left, right| {
-            right
-                .term_milli
-                .cmp(&left.term_milli)
-                .then_with(|| left.pool.cmp(&right.pool))
-        });
-        // Integer declarations retain their per-resource floor. Explicit expected
-        // contributions carry their exact remainder to this final score boundary.
-        total = total
-            .checked_add(fraction.0 / fraction.1)
-            .ok_or("resource score sum overflow")?;
-        let cap = u128::from(MAX_RESOURCE_TARGET_MILLI);
-        term.capped = total > cap;
-        term.term_milli =
-            u64::try_from(total.min(cap)).map_err(|_| "resource term cap exceeds u64")?;
+        let weighed = weigh_production(&task.id, &task.produces, &pools, &resolved)?;
+        term.term_milli = weighed.term_milli;
+        term.capped = weighed.capped;
+        term.items = weighed.items;
         terms.insert(task.id.clone(), term);
     }
     Ok(ResolvedV2 {
@@ -2748,11 +2860,26 @@ fn target_effects(
         }
     };
     let mut mapped = Vec::with_capacity(target.tasks.len());
+    // SS-1 one-way guard: the yield of a named task an instance override disables still counts
+    // for `U`, so disabling one task never changes another task's target score.
+    let mut disabled_yields = Vec::new();
     for task in &target.tasks {
         match resolve_target_task(catalog, pool, task, instance) {
             Ok(per_run) => mapped.push((task, per_run)),
             Err(Reason::UnmappedTask) => {
                 effects.insert(task.clone(), unmapped(task, "task_not_producing"));
+            }
+            Err(Reason::TaskDisabled) => {
+                if let Some(spec) = catalog
+                    .catalog()
+                    .tasks
+                    .tasks
+                    .iter()
+                    .find(|spec| spec.id == *task)
+                {
+                    disabled_yields.push(per_run_production(spec, &pool.id));
+                }
+                unevaluable.push((target.id.clone(), task.clone(), "task_disabled"));
             }
             Err(reason) => {
                 unevaluable.push((target.id.clone(), task.clone(), resolution_why(reason)?));
@@ -2805,7 +2932,9 @@ fn target_effects(
     let gap_milli = u128::from(gap) * 1_000;
     let best_useful = mapped
         .iter()
-        .map(|(_, per_run)| (*per_run).min(gap_milli))
+        .map(|(_, per_run)| *per_run)
+        .chain(disabled_yields)
+        .map(|per_run| per_run.min(gap_milli))
         .max()
         .unwrap_or(0);
     let (weight_milli, _) =
@@ -2849,6 +2978,12 @@ fn target_effects(
 }
 
 impl InstanceTargets {
+    /// SS-1: the base term `task_id`'s candidate gains on this instance besides its effect,
+    /// when one valued pool weighs it and no active v2 policy already holds the base weights.
+    pub(crate) fn base_term(&self, task_id: &str) -> Option<&ResourceTerm> {
+        self.base.get(task_id)
+    }
+
     /// The effect `task_id`'s candidate meets on this instance.
     pub(crate) fn effect(&self, task_id: &str) -> TargetEffect {
         match &self.policy {

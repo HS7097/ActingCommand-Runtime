@@ -3804,6 +3804,22 @@ existing `application.foreground` fact, and the key's row is a new row of the ex
 | SF2-4 | the handset start gate's `device_in_use` for a store update package's own run | behaviour | STORE-FG-2 | runtime-host | the declared store in front is no other application for that run; every other run unchanged |
 | SF2-5 | the startup refusal of a store update package: `startup_package_admission_failed` with `reason=store_update` | existing code, new detail (review L5) | STORE-FG-2 | runtime-host | before, `contained_task_resource_reading_run_kind_unsupported`; a resource-reading startup package keeps that code |
 
+### 1.211 Slice SS-1 (0.12.30): a pool's base valuation counts on every instance, and the resource layer reads no task state (Alice's ruling 100, #386 comment 6490879952: 「没有玩家目标时，跑建模算出的基准最优解」, resource weight feeds task weight and never the reverse; ruling 102: a met goal only stops adding score; design `rd-1029/design-sch-state.md` §3, §4.1, §4.2, §5 SS-1 and `rd-1029/design-acm-fit.md` C1 to C3; coordinator work order `rd-1029/brief-wave3a.md` SS-1)
+
+[resource-targets.md](resource-targets.md) ("Base valuation on every instance", "Evaluation" and
+"Resource weights (v2)") and [scheduling/README.md](scheduling/README.md) ("Pool Valuation" and
+the dispatch decision record) are the contract. **No persisted ledger shape**: the term rides the
+existing `resource_weights` reason and `score_computed` detail, and the decision record's
+existing fields; no new code (`resource_weights` is reused, its catalog description updated), no
+configuration key, no wire or interface revision. In production no pool declares a `valuation`
+yet (`rd-1029/design-sch-state.md` §2.1), so nothing live changes until the resource side writes
+one. The number 1.211 is the coordinator's.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SS1-1 | without an active v2 policy (no record, a withdrawal, an expired or unreadable record, a v1 policy) every candidate that produces a valued pool covering its instance carries the base term `R` (`W = B`, `Γ = 0`): it is added to the effective score, enters the score stage when `R > 0`, and shows as `resource_weights` `policy=none …`, ` resources=<R>` in `score_computed` and, unless a v1 target applies, `target=<R> target_id=* mode=adjust … offset_kept=1` in the dispatch decision record | behaviour | SS-1 | the policy evaluator | until 0.12.29 the base weight counted only on an instance with an active non-empty v2 policy; a v1 target's score adds on top (`adjust`: `base + s + R`; `override`: `utility + s + R`), its record keeps `target=<s>`; a base term bounds no freshness and wakes nothing; a candidate that produces no valued pool, and every catalog without a valuation, is byte for byte as before; v2 has no paused target yet, so "every target paused" (v3) needs nothing here |
+| SS1-2 | the resource layer (`weigh_production`) reads the pools' valuation, the stored targets, the inventory readings and each task's own `produces` only; a v2 target's `no_producing_task` lapse and a named task's `task_disabled` are reports only (the target resolves and keeps covering the disabled task); a v1 target's `U` includes the named tasks an instance override disables | behaviour (one-way guard) | SS-1 | the policy evaluator | no observable v2 change: a disabled task has no candidate; v1: disabling a named task by instance override no longer raises the other named tasks' `s` (before, `U` dropped the disabled task's contribution); a v2 target's `tasks` list still narrows who receives `Γ` (it is target data, not task state; #429 A.5 v3 removes `tasks`) |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

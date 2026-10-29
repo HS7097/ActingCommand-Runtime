@@ -8,9 +8,39 @@ what each target currently observes, or refuses the document with a field positi
 nothing.
 
 The evaluator reads the stored policy in every evaluation and turns each open gap into a task
-target score in the score stage ("Evaluation" below). An instance without a policy decides
-exactly as before; the input identity (`fact_snapshot_id`) includes a stored policy like any
+target score in the score stage ("Evaluation" below). On an instance without a policy the
+pools' declared `valuation` alone weighs every producing task ("Base valuation on every
+instance" below); with no valued pool it decides exactly as before. The input identity (`fact_snapshot_id`) includes a stored policy like any
 other overlaid fact.
+
+### Base valuation on every instance
+
+SS-1 (0.12.30; Alice's rulings 100 and 102: with no player goal the scheduler runs the modelled
+baseline optimum, a goal only adds its shortfall, and a met goal only stops adding it). A pool's
+`valuation.base_weight_milli` counts for every producing task on every instance, whatever the
+instance's stored record: none, withdrawn (`targets: []`), expired, unreadable, a v1 policy or an
+active v2 policy. A goal only adds its shortfall term `Γ` on top; a met, pending or unresolved
+goal adds nothing and removes nothing. Without an active v2 policy a candidate that produces at
+least one valued pool covering its instance carries the base term `R` of "Resource weights (v2)"
+computed with no target (`W = B`), with its `resource_weights` reason (`policy=none`), its
+` resources=<R>` in `score_computed` and, unless a v1 target applies to it, its resource fields
+in the dispatch decision record; it enters the score stage when `R > 0`. A base term bounds no
+freshness and wakes nothing: the valuation is part of the catalog. Under a v1 policy the v1
+effect below is computed as before and `R` is added to its effective score (`adjust`: `base + s
++ R`; `override`: `utility + s + R`); its decision record keeps the v1 fields (`target=<s>`). A
+candidate that produces no valued pool, and every candidate of a catalog without a valuation,
+keeps every reason and record byte for byte.
+
+**One-way guard.** Resource weight feeds task weight, never the reverse (ruling 100). The
+resource layer, the pool weights `W = B + Γ` and each task's term `R`, reads the pools'
+valuation, the instance's inventory readings, the stored targets and each task's own `produces`
+only: never a task's enablement, an instance override, a priority, a manual offset or a run
+state. Changing any of them for one task changes no pool weight and no other task's term. A
+target that names a task an instance override disables keeps covering it (the task has no
+candidate, and the disablement is only reported in `resource_target_tasks_unevaluable`); a v2
+target without `tasks` that no enabled task produces still resolves and is only reported as
+lapsed; and a v1 target's best useful contribution `U` includes the named tasks an instance
+override disables ("Evaluation" below).
 
 Two document versions exist. `actingcommand.resource-targets.v1` (Workflow #308 RT-S1) is
 frozen: its fields, rejections, rows, identity and evaluation stay exactly as specified here,
@@ -18,7 +48,8 @@ and its override still supersedes the manual offset. `actingcommand.resource-tar
 (Workflow #335 S2b) weighs every produced resource of the instance with the pool's declared
 `valuation` (`contracts/scheduling/README.md`, "Pool Valuation") plus its target's shortfall
 ("Document `actingcommand.resource-targets.v2`" and "Resource weights (v2)" below). Agents
-submit v2; a v1 document keeps its v1 meaning.
+submit v2; a v1 document keeps its v1 meaning. Since SS-1 (0.12.30) the valuation weighs every
+instance whatever its record ("Base valuation on every instance" below).
 
 ## Document `actingcommand.resource-targets.v1`
 
@@ -332,6 +363,10 @@ A named task that can have no candidate on the instance (unknown, out of scope o
 listed on every candidate of the instance as `resource_target_tasks_unevaluable`, so a target
 never lapses silently.
 
+"Unchanged" in this table is the target's own part only: since SS-1 every effect leaves the base
+term of a candidate that produces a valued pool in place ("Base valuation on every instance"
+above).
+
 Score (`shortfall_linear`; exact integers with 128-bit intermediates, truncating):
 
 ```text
@@ -339,7 +374,8 @@ g   = max(T - c, 0)                          gap of the target (at_least T, inve
 w   = min(floor(g*I / S), 1_000_000)         target weight (scale S, importance_milli I)
 r_k = sum of effective production in real units, retaining milli-unit fractions (defined above)
 u_k = min(r_k, g)                            useful contribution of one run
-U   = max u_j over the target's tasks that still map   (>= 1 while g >= 1)
+U   = max u_j over the target's tasks that still map, and those an instance override
+      disables (SS-1 one-way guard)          (>= 1 while g >= 1)
 s_k = min(floor(g*I*u_k / (S*U)), 1_000_000) task target score, "capped" at the bound
 ```
 
@@ -400,9 +436,12 @@ reported as below, and the instance-level rules (unreadable, ignored, no stored 
 evaluation) are shared.
 
 **Enabled instance.** An instance is enabled exactly while its stored record decodes as v2,
-holds targets and `now <= valid_until_unix_ms`. Without a policy, after a withdrawal, after
-expiry, with an unreadable record or with a v1 policy no base weight counts: a v1 policy takes
-the path above and never reads `valuation`.
+holds targets and `now <= valid_until_unix_ms`. Since SS-1 (0.12.30) the base weight counts on
+every instance: without a policy, after a withdrawal, after expiry, with an unreadable record
+or with a v1 policy, every candidate takes the term `R` below with no target (`Γ = 0`, `W = B`),
+as "Base valuation on every instance" says; an enabled instance only adds its targets' shortfall
+`Γ`. (Until 0.12.29 no base weight counted on an instance that was not enabled.) A v1 policy
+still takes the path above for its own targets and never reads `valuation` for them.
 
 **Per evaluation.** Each target is resolved once for the instance against the active catalog:
 its pool (as v1), then `S = scale ?? valuation.scale` and `I = importance_milli ??
@@ -414,10 +453,12 @@ target *unresolved*: it contributes no shortfall weight and says so, never silen
 A target without `tasks` *lapses* when the active catalog no longer supports it on the
 instance: its pool no longer resolves (`unknown_resource`, `resource_not_observable`,
 `resource_out_of_scope`), or no task whose scope covers the instance and that no instance
-override disables produces the pool (`no_producing_task`). A lapsed target weighs nothing and
-is listed as `<id>@<pool>:<why>` in `resource_target_tasks_unevaluable` on every candidate of
+override disables produces the pool (`no_producing_task`). A lapsed target weighs no candidate
+and is listed as `<id>@<pool>:<why>` in `resource_target_tasks_unevaluable` on every candidate of
 the instance, beside the v1-style `<target>/<task>:<why>` items of named tasks that can have no
-candidate. Only these catalog-level failures are listed: a producing task that is merely held
+candidate. Since SS-1 a `no_producing_task` lapse is a report only: the target still resolves,
+and the only tasks it covers have no candidate (one-way guard); likewise a named task an
+instance override disables is listed as `task_disabled` and keeps its coverage. Only these catalog-level failures are listed: a producing task that is merely held
 back this round (trigger, feedback stop, cooldown, placement, budget) is not a lapse. A target
 with `tasks` whose pool no longer resolves shows `resource_target_unmapped` on its named
 candidates, as v1.
@@ -476,8 +517,9 @@ for v1. Every predicate gate, budget, window, pause, eligibility and admission c
 Runtime's catalog source runs no selection document, so an override that keeps the offset
 ranks like `adjust`; they differ in disposition and reasons only.
 
-**Other instances.** Their scores, relative order, thresholds and reasons are unchanged. The
-shared run limits are still allocated in global total order, so while one is short an enabled
+**Other instances.** Their scores, relative order, thresholds and reasons are those of their
+own record (with the base term of "Base valuation on every instance"), whatever this instance's
+policy says. The shared run limits are still allocated in global total order, so while one is short an enabled
 instance's candidates can take it first and another instance's candidate then records
 `heavy_scene_budget_deferred` or `policy_concurrent_runs_deferred` for the round, as with a v1
 target (since Workflow #427-B the round deducts no CPU, GPU or IO, and `host_budget_deferred`
@@ -498,7 +540,7 @@ projections run the same evaluator and include the resource term.
 | `resource_targets` | the targets covering the candidate in document order, joined by `; `, each `<id>@<pool>:applied current=<c> at_least=<T> gap=<g> step=<S> importance=<I> gap_weight=<Γ>[ capped]`, `<id>@<pool>:satisfied current=<c> at_least=<T> gap=0 gap_weight=0`, `<id>@<pool>:pending reason=<missing\|expired\|low_confidence\|invalid_value> gap_weight=pending` or `<id>@<pool>:unresolved why=<valuation_missing\|gap_missing> gap_weight=0` |
 | `resource_target_unmapped` | as v1, for a task a target names explicitly |
 | `resource_target_override` | `superseded score=<s\|none>; offset=<o> kept (manual_offset=keep); utility kept` or `superseded score=<s\|none> offset=<o> (manual_offset=supersede); utility kept` |
-| `resource_weights` | `policy=<sha>@<applied_at> term=<R>[ capped] items=<pool>:r=<r>,per=<Q>,base=<B>,gap=<Γ>,effective=<W>,term=<T>;…`, items by `T` descending then pool id; only for a candidate with at least one item |
+| `resource_weights` | `policy=<sha>@<applied_at> term=<R>[ capped] items=<pool>:r=<r>,per=<Q>,base=<B>,gap=<Γ>,effective=<W>,term=<T>;…`, items by `T` descending then pool id; only for a candidate with at least one item. On an instance that is not enabled (SS-1) the base term alone, `policy=none` and every `gap=0`, after the reasons of its record |
 
 List details are counted while joining and stay within 1010 bytes; items that do not fit fold
 into `+<n>more`. On an enabled instance `score_computed` ends with ` resources=<R>` and, under an
@@ -506,8 +548,10 @@ effective override, ` override=<id>:<keep|supersede>`; the dispatch decision rec
 `target=<R>` in `rank_breakdown` and `decision_candidate_not_selected`, `target_id=<override id|*>`,
 `mode=<override|adjust>`, `superseded=1` under an effective override, and ends `rank_breakdown`
 with ` offset_kept=<0|1>`; `decision_record` names the policy `active.v2:<sha>@<applied_at>`
-or `expired.v2:<sha>@<applied_at>`. A v1 instance and an instance without a policy keep every
-reason byte for byte.
+or `expired.v2:<sha>@<applied_at>`. On an instance that is not enabled a candidate with a base
+term shows the same ` resources=<R>` and, unless a v1 target applies to it, the same record
+fields (`target_id=*`, `mode=adjust`, ` offset_kept=1`); a candidate without one keeps every
+reason byte for byte (SS-1).
 
 ## Choosing scale and importance
 
@@ -576,8 +620,8 @@ of 100000 is sized this way; 1000 would weigh like a single priority level.
    `G >= ceil((ceil((Δ+1)*Q/r) - B) * S / g_want)`.
 4. `R <= 1_000_000`. A waiting competitor gains 1 of aging per second, so at the full term it
    overtakes after about `R - Δ` seconds.
-5. The base weight is a standing preference on every producing task of an enabled instance and
-   also orders the shared run limits, so keep `B` small.
+5. The base weight is a standing preference on every producing task of every instance (SS-1,
+   with or without a target) and also orders the shared run limits, so keep `B` small.
 
 Worked example: `Q = S = 1000`, `B = 100`, `G = 100`, `T = 100000`, one task with `r = 1000`
 against a light competitor five priority levels higher (`Δ = 5000` plus the aging difference in

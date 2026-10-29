@@ -88,4 +88,8 @@ mod tests {
     // Workflow #386 SR-2b-2 (test ①): an owed rerun is triggered past its cooldown with
     // `policy_rerun_owed` and ranks first only when it promotes.
     mod gate_386_sr2b2;
+
+    // SS-1 (0.12.30; Alice's rulings 100 and 102): a pool's base valuation counts on every
+    // instance, a goal only adds its shortfall, and the resource layer reads no task state.
+    mod gate_ss1;
 }

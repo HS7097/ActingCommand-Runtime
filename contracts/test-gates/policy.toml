@@ -519,6 +519,17 @@ tests = [
     "actingcommand-policy::lib::tests::gate_p2b::gate_p2b_g12_a_met_target_scores_nothing_more_shortfall_never_less_and_other_instances_are_unaffected",
 ]
 incident = ["#308", "#382 P-2b"]
+# SS-1 (0.12.30; Alice's rulings 100 and 102; contracts/resource-targets.md, "Base valuation on every instance"): without a target record a producing task's resource term is per-run yield × base / scale; disabling another producer by instance override leaves it unchanged (no record, v2, v1); a task's priority or offset changes no pool weight; a met goal keeps its producing task a candidate with only the base term; an expired, withdrawn, unreadable or v1 record keeps the base term
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_ss1::ss1_t1_without_a_target_record_a_producing_task_gets_yield_times_base_over_scale",
+    "actingcommand-policy::lib::tests::gate_ss1::ss1_t2_disabling_another_producer_by_instance_override_leaves_the_resource_term_unchanged",
+    "actingcommand-policy::lib::tests::gate_ss1::ss1_t3_a_task_priority_or_offset_changes_no_pool_weight",
+    "actingcommand-policy::lib::tests::gate_ss1::ss1_t4_a_met_goal_keeps_its_producing_task_a_candidate_with_only_the_base_term",
+    "actingcommand-policy::lib::tests::gate_ss1::ss1_t5_an_expired_withdrawn_unreadable_or_v1_record_keeps_the_base_term",
+]
+incident = ["#386 SS-1"]
 
 # Selection document: a catalog without one keeps its existing (frozen V1) hash, one enters the
 # hash, and the evaluation ranks by its score (Workflow #382 P-2b, test plan v2.2 P-2 G13; the
