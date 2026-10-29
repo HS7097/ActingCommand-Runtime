@@ -267,7 +267,10 @@ fn page(id: &str, required: &[&str]) -> Value {
 /// store step (a guarded tap on the listing, its proof the listing's title), `wait_download`
 /// waits on the updating page with no input, `restart` brings the game back; another listing and
 /// a sign-in page are error pages. `tap_update` is the designated operation: a run that ends on
-/// `home` after it completed has the outcome key [`UPDATED`], one without it [`NOT_NEEDED`].
+/// `home` after it completed has the outcome key [`UPDATED`], one without it [`NOT_NEEDED`]. The
+/// package carries an empty navigation resource: a Lab operation's observation admits only a
+/// package with pack, pages and navigation (`gate_412_b3_s2`'s package carries the same), so T7's
+/// Lab operation of `tap_update` is admitted and reaches its input; a run reads no navigation.
 fn store_package() -> Vec<u8> {
     let space = json!({"width": 16, "height": 9});
     let control = json!({
@@ -346,7 +349,7 @@ fn store_package() -> Vec<u8> {
         page("done", &["page/done"]),
         page("home", &["page/home"])
     ]});
-    let files: [(&str, Value); 5] = [
+    let files: [(&str, Value); 6] = [
         ("control.json", control),
         (
             "resources/manifest.json",
@@ -355,6 +358,10 @@ fn store_package() -> Vec<u8> {
         ("resources/operations/task/task.json", task),
         ("resources/recognition/neutral.test.pack.json", pack),
         ("resources/recognition/neutral.test.pages.json", pages),
+        (
+            "resources/navigation/neutral.test.navigation.json",
+            json!({"navigation": []}),
+        ),
     ];
     let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
     let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
@@ -818,8 +825,9 @@ fn store_fg2_t7_ordinary_lab_and_client_inputs_never_tap_the_store() {
     assert!(run.failures(NOT_FOREGROUND) > refused, "the client's tap");
 
     // A Lab operation of the declared store step: a declared operation's run never routes it.
-    // Its record fails at `input` with the refusal, as `gate_412_b3_s2` reads a failed Lab
-    // operation.
+    // The package is admitted (its navigation resource is there), the step starts on the listing
+    // and its tap is refused: the record fails at `input` with the refusal, as `gate_412_b3_s2`
+    // reads a failed Lab operation.
     scene(&run, vec![segment(&["listing"], STORE)]);
     let refused = run.failures(NOT_FOREGROUND);
     {
