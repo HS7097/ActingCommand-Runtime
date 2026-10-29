@@ -91,7 +91,7 @@ fn configure(
 ) -> (RuntimeRequest, RuntimeReceipt) {
     let request = client.request(RuntimeOperation::ConfigureSettings {
         changes,
-        expected_revision: None,
+        expected_version: None,
     });
     let receipt = client.send(&request);
     (request, receipt)
@@ -101,7 +101,7 @@ fn configure(
 fn fact_rows(client: &mut TestClient, key: &str) -> Option<Vec<BTreeMap<String, FactScalar>>> {
     let request = client.request(RuntimeOperation::RuntimeFactSnapshot);
     let receipt = client.send(&request);
-    let Some(RuntimeResult::RuntimeFactSnapshot { snapshot }) = receipt.result() else {
+    let Some(RuntimeResult::RuntimeFactSnapshot { snapshot, .. }) = receipt.result() else {
         panic!("expected the runtime fact snapshot: {receipt:?}");
     };
     snapshot
@@ -239,6 +239,7 @@ fn d1_m3_a_settable_key_changes_at_once_with_its_command_and_two_value_records()
                 value: FactScalar::Integer(120),
                 source: ConfigParameterSource::Instruction,
             }],
+            config_version: None,
         })
     );
     // The value in effect: what the ladder reads now, and what `config.parameters` reports.
@@ -653,6 +654,7 @@ fn d1_m7_clear_returns_a_key_to_its_file_value_and_source() {
                     source: ConfigParameterSource::Default,
                 },
             ],
+            config_version: None,
         })
     );
     assert_eq!(

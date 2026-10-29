@@ -324,27 +324,58 @@ wire shape the player workbench needs, defined once so that the console pins the
 Like U-1's shapes, this is the wire shape of new request kinds, no behaviour change: each
 kind below is refused `not_implemented` (Denied, recording nothing, as `LoadPack` before
 U-3) until the slice named adds its behaviour and its shape checks; until then only an
-instance alias is checked, as for every request that names one. No member says how many
-times a task ran or may run (Alice's ruling 100). Shapes: `crates/actingcommand-contract`,
-`runtime/workbench.rs`.
+instance alias is checked, as for every request that names one (`EditPackSchedule`: its
+scope's `instance_id` when the scope is an instance). No member says how many times a task
+ran or may run (Alice's ruling 100). Shapes: `crates/actingcommand-contract`,
+`runtime/workbench.rs` and `resource_targets.rs`.
 
 | Kind or member | Block | Class | Shape | Answer | Behaviour | G14 |
 |---|---|---|---|---|---|---|
 | `RunInstanceTask` | general | instruction (run a task bound to the instance now, as a direct run) | `{instance_alias, package_id, holder_id, response_deadline_ms?}`; the Runtime resolves `package_id` to the bound package's path | as `RunContainedTask` | R-5 | yes |
 | `StopInstanceRun` | general | instruction (stop the instance's scheduled or client-started run; the Runtime resets the device itself) | `{instance_alias, request_id, wait_ms}` | `InstanceRunStopped {stopped: {request_id, settled, reset?}}`; `reset` is `done`, `not_needed` or `failed`, absent while `settled` is `false` (still stopping after `wait_ms`) | R-6 | yes |
-| `EditPackSchedule` | general | instruction (replace one package's rows in one scope's `session.pack.schedule`) | `{scope, package_id, rows: [{from_unix_ms, until_unix_ms?, schedulable}], expected_version?}`; a row without `until_unix_ms` is open-ended ([instance-fact-store.md](instance-fact-store.md), "Pack schedule facts") | `PackScheduleEdited {edited: {version, event_id}}` | R-8 | yes |
-| `EditResourceTarget` | general | instruction (one change of one instance's resource target table, only at `expected_version`) | `{instance_alias, expected_version, op}`; `op` is `{kind: upsert, target_json}`, `{kind: set_paused, id, paused}` or `{kind: delete, id}`. `target_json` is one `actingcommand.resource-targets.v3` target as JSON text, as `ApplyResourceTargets` carries its document: `id`, the kind `maintain` with `at_least` or `gain` with `amount`, the resource pool, `paused?`, `valid_until_unix_ms?`; no `tasks`, no `on_met`. R-13a parses and checks it | as `ApplyResourceTargets` (`ResourceTargetsApplied`) | R-13c | yes |
-| `RoutineSummary` | general | read (health statistics from the host's memory; nothing read from or written to the ledger) | `{instance?, granularity: hour \| day, since_revision?}` | `RoutineSummary {summary: {granularity, revision, instances: [{instance_alias, coverage_from_unix_ms, buckets: [{start_unix_ms, end_unix_ms, revision, tasks: [{task_id, successes, failures?: [{code, count}], interruptions}]}]}]}}`: health statistics only, never a count of runs done or allowed | R-12 | no |
-| `ConfigureSettings.expected_revision?` | (the kind's) | | the ledger sequence of the `host.config_overrides` record in effect | as today | R-4; until then a request that names it is refused `not_implemented` (`operation` `configure_settings`) | (the kind's) |
-| `ApplyResourceTargets.expected_version?` | (the kind's) | | the table's version (the sequence of its `fact.published`) | as today | R-13c; until then a request that names it is refused `not_implemented` (`operation` `apply_resource_targets`) | (the kind's) |
+| `EditPackSchedule` | general | instruction (replace one package's rows in one scope's `session.pack.schedule`) | `{scope, package_id, rows: [{from_unix_ms, until_unix_ms?, schedulable}], expected_version?}`; a row without `until_unix_ms` is open-ended ([instance-fact-store.md](instance-fact-store.md), "Pack schedule facts") | `PackScheduleEdited {edited: {version, event_id}}`: `version` is the list's version after the edit, the next `expected_version` | R-8 | yes |
+| `EditResourceTarget` | general | instruction (one change of one instance's resource target table, only at `expected_version`) | `{instance_alias, expected_version, op}`; `expected_version` is `ResourceTargetView`'s `active.version`, or `0` when the view has no `active` (no table in effect: never sent, withdrawn, or not readable). `op` is `{kind: upsert, target_json}`, `{kind: set_paused, id, paused}` or `{kind: delete, id}`. `target_json` is one `actingcommand.resource-targets.v3` target as JSON text, as `ApplyResourceTargets` carries its document: `id`, the kind `maintain` with `at_least` or `gain` with `amount`, the resource pool, `paused?`, `valid_until_unix_ms?`; no `tasks`, no `on_met`. R-13a parses and checks it | as `ApplyResourceTargets` (`ResourceTargetsApplied`) | R-13c | yes |
+| `RoutineSummary` | general | read (health statistics from the host's memory; nothing read from or written to the ledger) | `{instance?, granularity: hour \| day, since_revision?}` | `RoutineSummary {summary: {owner_epoch, granularity, revision, instances: [{instance_alias, coverage_from_unix_ms, buckets: [{start_unix_ms, end_unix_ms, revision, tasks: [{task_id, successes, failures?: [{code, count}], interruptions}]}]}]}}`: health statistics only, never a count of runs done or allowed. `failures` counts the runs that failed, by code; `interruptions` counts the runs that ended `contained_task_cancelled` (a stop, `StopInstanceRun` or `CancelContainedTask`, or a drain's cancel), which are neither a success nor a failure of the task and never in `failures`. The summary and its `revision` live in one owner epoch's memory: when a page's `owner_epoch` differs from the one the client's `since_revision` came with, the client drops that cursor and reads again without it | R-12 | no |
+| `ConfigureSettings.expected_version?` | (the kind's) | | the settings' version: the `config_version` of `SettingsConfigured` or `RuntimeFactSnapshot` | as today | R-4; until then a request that names it is refused `not_implemented` (`operation` `configure_settings`) | (the kind's) |
+| `ApplyResourceTargets.expected_version?` | (the kind's) | | the table's version: `ResourceTargetView`'s `active.version`, or `0` when the view has no `active` | as today | R-13c; until then a request that names it is refused `not_implemented` (`operation` `apply_resource_targets`) | (the kind's) |
+| `SettingsConfigured.config_version?` | (`ConfigureSettings`') | | the settings' version after the change | the answer's member | R-4; absent in every answer of 0.12.30 | — |
+| `RuntimeFactSnapshot.config_version?` (the result, beside `snapshot`) | (`RuntimeFactSnapshot`'s) | | the settings' version now; beside the snapshot, never in the persisted `RuntimeFactSnapshot` | the answer's member | R-4; absent in every answer of 0.12.30 | — |
+| `ResourceTargetView`: `active.rows?` | (`ResourceTargetView`'s) | | #429 A.5's read model, one row per target in document order: `{id, kind: maintain \| gain, resource, goal, baseline?, current?, remaining, progress_milli, state, reading: {observed_at_unix_ms?, fresh_until_unix_ms?, pending_reason?}, completed_at_unix_ms?, updated_at_unix_ms}`; `state` is `active`, `met`, `completed`, `paused`, `awaiting_baseline`, `unknown` or `unmapped`; `pending_reason` as `ResourceTargetObservation.pending`. The table's version is `active.version` | the answer's member | R-13e; absent in every answer of 0.12.30 | — |
 | `RuntimeInstanceStatus.activity?` | — | — | `{kind, request_id?, package_id?, since_unix_ms}`; `kind` is `policy_run`, `direct_run`, `host_run`, `reconnect`, `selfcheck`, `emulator_control` or `ladder`; kept in memory, never read from the ledger | absent while the instance does none of these | each kind from the slice that fills it (`direct_run` R-5); absent in every answer of 0.12.30 | — |
+
+The edit-version tokens (Workflow #429 R-0, review M3 and L5) have one name for the three
+things edited, the settings, a resource target table and a pack schedule list:
+`expected_version` in a request (`ConfigureSettings`, `ApplyResourceTargets`,
+`EditResourceTarget`, `EditPackSchedule`), the answer's own member after a write
+(`config_version`, `ResourceTargetsApplied.version`, `PackScheduleEdited.version`) and
+`current_version` in a conflict: the slice that adds the check refuses a request whose
+`expected_version` is not the current one with the shared `fact_observation_version_conflict`,
+its `values` carrying `current_version`. Each token is opaque and compared only for
+equality: a client never orders tokens, never adds to or subtracts from one, and never
+relates one to a `QueryEvents` sequence.
+
+Revision rules for the console (review M7):
+
+1. A console that sends any revision-3 shape (a kind above or one of its request members)
+   declares `runtime-client` `min` 3. A Runtime that declares at most 2 cannot decode such a
+   request: it drops the connection, and the client latches it, as
+   [component-interfaces.md](component-interfaces.md) describes under `runtime-client`
+   revision 2.
+2. Until R-4 deploys, the console does not send `ConfigureSettings.expected_version`; until
+   R-13c deploys, it does not send `ApplyResourceTargets.expected_version`. A Denied
+   `not_implemented` whose `operation` is `configure_settings` or `apply_resource_targets`
+   changed nothing, and the request may be sent again without the member.
+3. The release that first fills any answer member above (`activity`, either
+   `config_version`, `active.rows`) raises `runtime-client` `min` to 3: each sits in a shape
+   that denies unknown members, which a revision-2 reader refuses.
 
 The kinds `ControlEmulatorInstance`, `SelfCheckInstance` and `ApplicationLifecycle` move
 to the general instructions in the same slice: each acts only on what is bound to the
 instance, so the workbench sends them without the Lab. The move changes no behaviour
 before U-6 (the gate marks and never refuses; the origin gates of `validate()` stay until
-U-6). Where the clean mapping below still moves them to actinglab or retires actingctl's
-emulator and self-check subcommands, this table supersedes it: they stay on the counters.
+U-6). They stay on the counters: the clean mapping below neither moves them to actinglab
+nor retires actingctl's emulator and self-check subcommands, and where any wording still
+read so, this section would supersede it.
 `RunContainedTask` (a package by its path), `CancelContainedTask` with the client's own
 `SafeReset`, `Input`, the leases, `RunContainedLabOperation`, `LoadPack`, `UnloadPack`,
 the signatures and `ReleaseLabPin` stay in option two.
@@ -408,7 +439,7 @@ of five families:
   transaction write them through it. `acsetup --commit-config` refuses a proposal that
   changes either key (`setup_lab_options_locked`). They are not in #387 D1's editable set:
   `config.parameters` reports their effective value and source, and no setting, MCP
-  tool or CLI command changes them.
+  tool or `actingctl config` command changes them; only `actingctl install` does (above).
 - actingd reads them once at start; they do not change during an epoch. They are
   reported as configuration facts (`config.*`), which `actingctl status --config` and
   MCP read. They are not part of `Status`.
@@ -554,8 +585,8 @@ handles it, and `via` keeps what the ledger already shows today (the `client.act
 | `install-transition` | InstallTransition | compat | stays until the install-control minimum is 2; not mapped |
 | `reset` | SafeReset | option two | retires → actinglab `runtime reset` |
 | `task-run` | RunContainedTask | option two | retires → actinglab `run start` (not `lab run`, which takes no recovery package or time limit, must write a zip and answers only at the end) |
-| `emulator start`, `stop`, `restart` | ControlEmulatorInstance | option two | retire → actinglab `emulator start`, `stop`, `restart` |
-| `selfcheck` | SelfCheckInstance | option two | retires → actinglab `emulator selfcheck` |
+| `emulator start`, `stop`, `restart` | ControlEmulatorInstance | general (Workflow #429 R-0; option two before) | stay |
+| `selfcheck` | SelfCheckInstance | general (Workflow #429 R-0; option two before) | stays |
 | new: `ladder-drill --instance <alias\|instance_id\|ADB port> [--device]` (#390 DRILL-1, before U-3) | DrillRecoveryLadder | option two | actingctl until U-3 moves the option-two commands; `ac_ladder_drill`; without `--device` a plan drill (`mode` `plan`) that never acts on the device; answers the admitted drill `{instance_alias, mode, ladder_request_id}`; success `recovery_ladder_drill_queued`; refusals `recovery_ladder_drill_disabled`, `recovery_ladder_drill_already_running`, `recovery_ladder_drill_cooling_down`, `recovery_admission_denied`, `instance_unknown`, `instance_ambiguous` |
 | new: `upgrade-state enter`, `cancel`, `leave`, `status` | UpgradeState, UpgradeStateStatus | general | actingctl only; not mapped to MCP or the console |
 | new: `overview`, `events`, `run get`, `material`, `diagnose`, `targets list`, `targets get` | as their MCP tools | general read | added so that every general MCP read has a CLI original |
@@ -615,8 +646,8 @@ tier goes from 8 to 9 tools, and U-3's count gains one general tool.
 | `ac_catalog_check` | offline | actinglab `resource catalog` | unchanged | option one |
 | `ac_run_pack` | operation | actinglab `run start` (new) | `instance`, `package`, `recovery_package`, `deadline_s` ↔ same flags; `deadline_s` 60–1800, default 1800 | option two |
 | `ac_stop_run` | operation | actinglab `run stop` (new) | `handle` ↔ `--request-id`; `wait_s` ↔ `--wait-s` (0–25); `--cancel-only` while this process's job still runs | option two |
-| `ac_emulator` | operation | actinglab `emulator start`, `stop`, `restart` (new) | `instance`, `action` ↔ `--instance` and the subcommand | option two |
-| `ac_app` (new, #389 MCP-13a; operator before U-3) | operation | actinglab `session app <launch\|restart\|stop\|force-stop>` | `action` ↔ the action word, `instance` ↔ `--instance` (both required); never `--record`; `force-stop` is the same action as `stop`; marked destructive; actinglab's data verbatim and its errors as every Lab tool relays them | option two |
+| `ac_emulator` | instruction | `actingctl emulator start`, `stop`, `restart` (stay) | `instance`, `action` ↔ `--instance` and the subcommand | general (Workflow #429 R-0; option two before) |
+| `ac_app` (new, #389 MCP-13a; operator before U-3) | instruction | actinglab `session app <launch\|restart\|stop\|force-stop>` | `action` ↔ the action word, `instance` ↔ `--instance` (both required); never `--record`; `force-stop` is the same action as `stop`; marked destructive; actinglab's data verbatim and its errors as every Lab tool relays them | general (Workflow #429 R-0; option two before) |
 | `ac_lab_do` | operation | actinglab `do` | unchanged, without package reference parameters (M-PKG); `preview` ↔ `--preview` (#410 item 1: every answer states `frame_coordinates`; after an action `after_attachment` is the known after page's projection or the after frame's path and preview path, never an image; an exported answer keeps the frame parts inline while they fit); `sample_scenes` (1 to 4) ↔ the earlier `--scene` frames, before `scene`'s (#411 Lab B-2); `operation` ↔ `--operation`, refused with an argument of another path or without `capture` (#412 Lab B-3 S2, [contained-lab-operation.md](contained-lab-operation.md)) | option two |
 | `ac_ladder_drill` (new, #390 DRILL-1; operator before U-3) | operation | `actingctl ladder-drill` | `instance` ↔ `--instance` (alias, `instance_id` or ADB port), `device` ↔ `--device` (a boolean, absent false); output as the CLI's; marked destructive (a device drill may stop the application or restart the emulator); answers at admission, before the drill climbs | option two |
 
@@ -726,7 +757,7 @@ Both console connections bind `ui`; from U-6 both send `(User, Ui)`.
 | Command | Request | Block |
 |---|---|---|
 | tap, swipe, long-tap, key, text, `touch-probe`, `session recover`, the stream's input forwarding | leases, Input | option two |
-| `session app`, `session instance app …` | ApplicationLifecycle | option two |
+| `session app`, `session instance app …` | ApplicationLifecycle | general (Workflow #429 R-0; option two before) |
 | `tap-target`, `navigate`, `ensure`, `do`, `lab run`, `runtime reset` | Lab operation, Input, manual run, reset | option two |
 | capture commands, `runtime observe` | ObserveReadonly, CaptureSequence | general read (pinned `Lab`) |
 | `observe --capture` | ObserveContainedPage | option one |
@@ -737,7 +768,7 @@ Both console connections bind `ui`; from U-6 both send `(User, Ui)`.
 | `session monitor-policy set`, `clear` | ConfigureMonitor, ClearMonitor | retires → `actingctl monitor-set`, `monitor-clear` |
 | new: `run start` | RunContainedTask | option two: `--instance` (three selector forms), `--package`, `--recovery-package`, `--deadline-s` (60–1800, default 1800), `--request-id`, `--correlation-id` (minted when absent), `--out` (only when given, a zip projection); output shaped as today's `actingctl task-run` (`receipt.result.outcome`, `final_page`, `executed_steps`) |
 | new: `run stop` | CancelContainedTask (and SafeReset) | option two: `--request-id`, `--wait-s`, `--cancel-only` |
-| new: `emulator start`, `stop`, `restart`, `selfcheck` | ControlEmulatorInstance, SelfCheckInstance | option two |
+| new: `emulator start`, `stop`, `restart`, `selfcheck` | ControlEmulatorInstance, SelfCheckInstance | general (Workflow #429 R-0; option two before) |
 | new: `pack load`, `pack unload` | LoadPack, UnloadPack | option two; `pack unload --wait-s` (0–25) |
 | new: `clear-kept` (planned) | ClearKeptFolder | option two, with #375 R5e |
 | `package check` (#411 A5); new: `record binding-draft` | offline (`record binding-draft` a composite) | option one |

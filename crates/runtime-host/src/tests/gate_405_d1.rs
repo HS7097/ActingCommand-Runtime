@@ -442,7 +442,7 @@ impl Fixture {
         );
         let mut client = TestClient::connect(&self.host);
         let request = client.request(RuntimeOperation::ConfigureSettings {
-            expected_revision: None,
+            expected_version: None,
             changes: vec![ConfigSettingChange {
                 key,
                 value: Some(value),

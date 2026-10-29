@@ -164,7 +164,7 @@ impl LadderHost {
                     &ids,
                     RuntimeOperation::ConfigureSettings {
                         changes,
-                        expected_revision: None,
+                        expected_version: None,
                     },
                 ),
                 ConnectionId::new(396).expect("connection"),

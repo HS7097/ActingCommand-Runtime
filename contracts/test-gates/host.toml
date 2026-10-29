@@ -879,7 +879,7 @@ tests = [
 ]
 incident = ["#389 U-2"]
 
-# Workflow #429 R-0 (0.12.30; register §1.213): each workbench kind without behaviour (RunInstanceTask, StopInstanceRun, EditPackSchedule, EditResourceTarget, RoutineSummary), and a ConfigureSettings naming expected_revision or an ApplyResourceTargets naming expected_version, is Denied not_implemented naming its operation, as LoadPack is before U-3, appends nothing to the ledger and changes no instance's status (no activity is filled yet)
+# Workflow #429 R-0 (0.12.30; register §1.213): each workbench kind without behaviour (RunInstanceTask, StopInstanceRun, EditPackSchedule, EditResourceTarget, RoutineSummary), and a ConfigureSettings naming expected_version or an ApplyResourceTargets naming expected_version, is Denied not_implemented naming its operation, as LoadPack is before U-3, appends nothing to the ledger and changes no instance's status (no activity is filled yet)
 [[gate]]
 coverage = "Y"
 tests = [

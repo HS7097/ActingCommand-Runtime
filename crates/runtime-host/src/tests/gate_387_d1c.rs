@@ -296,7 +296,7 @@ fn d1_l2_d1_l3_a_ladder_that_waits_for_release_climbs_by_the_configuration_it_wa
             &runtime_request(
                 &ids,
                 RuntimeOperation::ConfigureSettings {
-                    expected_revision: None,
+                    expected_version: None,
                     changes: vec![ConfigSettingChange {
                         key: "recovery_ladder.rungs".to_owned(),
                         value: Some(json!([{"action": "return_home"}])),
@@ -360,7 +360,7 @@ fn d1_l4_a_broken_ladder_value_by_instruction_is_refused_whole_and_the_runtime_g
                 &ids,
                 RuntimeOperation::ConfigureSettings {
                     changes,
-                    expected_revision: None,
+                    expected_version: None,
                 },
             ),
             ConnectionId::new(388).expect("connection"),

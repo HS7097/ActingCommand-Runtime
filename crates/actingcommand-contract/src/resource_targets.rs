@@ -177,6 +177,9 @@ pub struct NotTargetableResource {
 pub struct ActiveResourceTargets {
     pub policy_sha256: String,
     pub schema_version: String,
+    /// The table's version: the `expected_version` of the next `EditResourceTarget` or
+    /// `ApplyResourceTargets` (Workflow #429 R-0), an opaque token compared only for equality.
+    /// Never `0`: `0` is the `expected_version` of an instance whose view has no `active`.
     pub version: u64,
     pub event_id: EventId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -184,6 +187,84 @@ pub struct ActiveResourceTargets {
     pub expired: bool,
     pub targets: Vec<serde_json::Value>,
     pub conditions: Vec<ResourceTargetCondition>,
+    /// Workflow #429 A.5 (the console's read model; R-0 shape, register §1.213, `runtime-client`
+    /// 3): one row per target, in document order, as the workbench shows it. R-13e fills it;
+    /// absent in every answer of 0.12.30.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rows: Vec<ResourceTargetRow>,
+}
+
+/// One target as the workbench shows it (Workflow #429 A.5, the UI read model; R-13e fills it).
+/// `goal` is a `maintain` target's `at_least` or a `gain` target's `amount`; `remaining` is what
+/// is still missing to it and `progress_milli` the part reached, in thousandths. `met` and
+/// `completed` come only from a usable reading; a pending reading shows `unknown`, its reason in
+/// `reading.pending_reason` and its last value, if any, in `current`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceTargetRow {
+    pub id: String,
+    pub kind: ResourceTargetKind,
+    /// The target's pool.
+    pub resource: String,
+    pub goal: u64,
+    /// A `gain` target's baseline value, once the Runtime recorded one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline: Option<i64>,
+    /// The pool's latest value, while the instance has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current: Option<i64>,
+    pub remaining: u64,
+    pub progress_milli: u64,
+    pub state: ResourceTargetState,
+    pub reading: ResourceTargetReading,
+    /// A `gain` target's completion time, kept once reached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at_unix_ms: Option<u64>,
+    /// When the target itself was last changed.
+    pub updated_at_unix_ms: u64,
+}
+
+/// The two kinds of an `actingcommand.resource-targets.v3` target (Workflow #429 A.5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceTargetKind {
+    /// Keep the pool at least at `goal`.
+    Maintain,
+    /// Gain `goal` from the baseline on.
+    Gain,
+}
+
+/// Where a target stands (Workflow #429 A.5), a closed vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceTargetState {
+    /// Short of its goal; adds its shortfall.
+    Active,
+    /// A `maintain` target at its goal; back to `active` once the pool falls below.
+    Met,
+    /// A `gain` target that reached its goal; stays so.
+    Completed,
+    /// Paused: adds nothing and is never met.
+    Paused,
+    /// A `gain` target still waiting for a usable reading to record its baseline.
+    AwaitingBaseline,
+    /// The pool's reading is pending (`reading.pending_reason`).
+    Unknown,
+    /// The pool no longer resolves on the instance.
+    Unmapped,
+}
+
+/// The reading a target's row stands on: when it was observed, until when it counts as fresh,
+/// or why it is pending.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceTargetReading {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_at_unix_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fresh_until_unix_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_reason: Option<ResourceTargetPendingReason>,
 }
 
 impl ResourceTargetView {

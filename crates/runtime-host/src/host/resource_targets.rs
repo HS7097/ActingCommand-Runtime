@@ -271,6 +271,8 @@ impl HostShared {
                     expired,
                     targets,
                     conditions,
+                    // Workflow #429 R-0: the console's read model is R-13e's; none in 0.12.30.
+                    rows: Vec::new(),
                 })
             }
         };

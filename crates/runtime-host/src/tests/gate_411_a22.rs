@@ -258,7 +258,7 @@ fn a22_the_ladder_rule_trigger_accepts_the_binding() {
             &runtime_request(
                 &ids,
                 RuntimeOperation::ConfigureSettings {
-                    expected_revision: None,
+                    expected_version: None,
                     changes: vec![ConfigSettingChange {
                         key: "recovery_ladder.rules.direct_runs".to_owned(),
                         value: Some(json!("trigger")),

@@ -330,7 +330,11 @@ impl HostShared {
                         RequestFailure::request(error, RuntimeReceiptState::Denied, None)
                     }
                 })?;
-                let result = RuntimeResult::RuntimeFactSnapshot { snapshot };
+                // Workflow #429 R-0: `config_version` is R-4's; 0.12.30 answers none.
+                let result = RuntimeResult::RuntimeFactSnapshot {
+                    snapshot,
+                    config_version: None,
+                };
                 // Workflow #308 5d-1: a store whose reply exceeds one IPC frame is refused
                 // here instead of failing the frame write; paged reads are a follow-up.
                 let reply_bytes = RuntimeReceipt::success(
@@ -696,10 +700,10 @@ impl HostShared {
             RuntimeOperation::ResourceTargetView { instance_alias } => {
                 self.resource_target_view(instance_alias)
             }
-            // Workflow #429 R-0 (register §1.213): the revision check of `expected_revision` is
+            // Workflow #429 R-0 (register §1.213): the revision check of `expected_version` is
             // R-4's; until then a request that names it is refused and records nothing.
             RuntimeOperation::ConfigureSettings {
-                expected_revision: Some(_),
+                expected_version: Some(_),
                 ..
             } => Err(not_implemented(
                 crate::codes::ConfigHostLocation::ConfigureSettings,
@@ -707,7 +711,7 @@ impl HostShared {
             // Workflow #387 D1b: a general instruction of the three counters.
             RuntimeOperation::ConfigureSettings {
                 changes,
-                expected_revision: None,
+                expected_version: None,
             } => self.configure_settings(request, validated, changes),
             // Workflow #389 U-1: the contract has these shapes and later slices add the
             // behaviour (LoadPack and UnloadPack U-3, UpgradeState and UpgradeStateStatus U-4).

@@ -85,7 +85,7 @@ fn bind(
 
 fn set_stuck_recovery(key: &str) -> RuntimeOperation {
     RuntimeOperation::ConfigureSettings {
-        expected_revision: None,
+        expected_version: None,
         changes: vec![ConfigSettingChange {
             key: key.to_owned(),
             value: Some(json!(false)),
@@ -174,7 +174,7 @@ fn u2_a_bound_connection_marks_its_requests_with_its_channel_whatever_their_enve
     let overrides = {
         let request = reader.request(RuntimeOperation::RuntimeFactSnapshot);
         let receipt = reader.send(&request);
-        let Some(RuntimeResult::RuntimeFactSnapshot { snapshot }) = receipt.result() else {
+        let Some(RuntimeResult::RuntimeFactSnapshot { snapshot, .. }) = receipt.result() else {
             panic!("the runtime fact snapshot: {receipt:?}");
         };
         let record = snapshot

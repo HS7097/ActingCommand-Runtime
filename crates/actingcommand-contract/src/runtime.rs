@@ -3863,8 +3863,10 @@ pub enum RuntimeOperation {
     /// `actingcommand.resource-targets.v1` document (`1..=64 KiB`), parsed, checked and
     /// stored as the instance fact `session.resource_targets` by the Runtime, the only formal
     /// entry of that fact. Agent/Adapter only. Workflow #429 R-0 (register §1.213): with
-    /// `expected_version` the table is replaced only while its version is that one (R-13c);
-    /// until R-13c a request that names it is refused `not_implemented`.
+    /// `expected_version` the table is replaced only while its version is that one (R-13c),
+    /// `0` while the instance has no table (`ResourceTargetView` answers no `active`); the
+    /// version is an opaque token compared only for equality. Until R-13c a request that
+    /// names it is refused `not_implemented`.
     ApplyResourceTargets {
         document_json: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3879,13 +3881,14 @@ pub enum RuntimeOperation {
     /// §5.6), all of them or none: a general instruction the three counters send, recorded as
     /// a command with the new `host.config_overrides` and `config.parameters.<section>` facts.
     /// A change without a value returns its key to the configuration-file value. Workflow #429
-    /// R-0 (register §1.213): with `expected_revision` the changes apply only while the
-    /// `host.config_overrides` record in effect has that ledger sequence (R-4); until R-4 a
+    /// R-0 (register §1.213): with `expected_version` the changes apply only while the
+    /// settings' version is that one (R-4): the `config_version` that `SettingsConfigured` and
+    /// `RuntimeFactSnapshot` answer, an opaque token compared only for equality. Until R-4 a
     /// request that names it is refused `not_implemented`.
     ConfigureSettings {
         changes: Vec<ConfigSettingChange>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        expected_revision: Option<u64>,
+        expected_version: Option<u64>,
     },
     // Workflow #389 U-1: the shapes of the unified interface's new request kinds. Each slice
     // named below adds the behaviour; until then the host refuses the kind `not_implemented`.
@@ -3946,7 +3949,9 @@ pub enum RuntimeOperation {
         expected_version: Option<u64>,
     },
     /// One change of one instance's resource target table, only while the table's version is
-    /// `expected_version` (R-13c). Answers as `ApplyResourceTargets` does.
+    /// `expected_version` (R-13c): `ResourceTargetView`'s `active.version`, or `0` while the
+    /// view answers no `active` (the instance has no table in effect). Answers as
+    /// `ApplyResourceTargets` does.
     EditResourceTarget {
         instance_alias: String,
         expected_version: u64,
@@ -3954,7 +3959,8 @@ pub enum RuntimeOperation {
     },
     /// Reads the routine summary's health statistics from the host's memory, for one instance
     /// or every instance, by hour or by activity day; with `since_revision` only the buckets
-    /// changed after it (R-12). Reads and records nothing in the ledger.
+    /// changed after it (R-12), a cursor good only within the `owner_epoch` the page that gave
+    /// it answered. Reads and records nothing in the ledger.
     RoutineSummary {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         instance: Option<String>,
@@ -4123,7 +4129,10 @@ impl RuntimeOperation {
             Self::RoutineSummary { instance, .. } => {
                 instance.as_deref().map_or(Ok(()), validate_instance_alias)
             }
-            Self::EditPackSchedule { .. } => Ok(()),
+            Self::EditPackSchedule { scope, .. } => match scope {
+                crate::FactScope::Instance { instance_id } => validate_instance_alias(instance_id),
+                crate::FactScope::Server { .. } | crate::FactScope::Game { .. } => Ok(()),
+            },
             Self::AcquireLease { instance_alias, .. }
             | Self::ObserveReadonly { instance_alias }
             | Self::SafeReset { instance_alias, .. }
@@ -4267,7 +4276,12 @@ impl RuntimeOperation {
             | Self::ControlEmulatorInstance { instance_alias, .. }
             | Self::RunContainedTask { instance_alias, .. }
             | Self::ConfigureMonitor { instance_alias, .. }
-            | Self::ClearMonitor { instance_alias } => Some(instance_alias),
+            | Self::ClearMonitor { instance_alias }
+            // Workflow #429 R-0 (review L4): the workbench's instance-bound kinds, so that the
+            // request door contains their failures against their instance (#419 ISO-M).
+            | Self::RunInstanceTask { instance_alias, .. }
+            | Self::StopInstanceRun { instance_alias, .. }
+            | Self::EditResourceTarget { instance_alias, .. } => Some(instance_alias),
             Self::RecordClientAction { action } => action.instance_alias(),
             _ => None,
         }
@@ -5196,6 +5210,12 @@ pub enum RuntimeResult {
     },
     RuntimeFactSnapshot {
         snapshot: crate::RuntimeFactSnapshot,
+        /// Workflow #429 R-0 (register §1.213, `runtime-client` 3): the settings' version now,
+        /// the `expected_version` of the next `ConfigureSettings`; an opaque token compared only
+        /// for equality. Beside the snapshot, never in it (the persisted snapshot keeps its
+        /// shape). R-4 fills it; absent in every answer of 0.12.30.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        config_version: Option<u64>,
     },
     /// `InstanceFactSnapshot` (Workflow #389 MCP-4, register W2): the instance's facts and the
     /// read's state source (register W1), never a ledger position of the snapshot.
@@ -5432,6 +5452,11 @@ pub enum RuntimeResult {
     /// effect afterwards, in request order.
     SettingsConfigured {
         settings: Vec<ConfiguredSetting>,
+        /// Workflow #429 R-0 (register §1.213, `runtime-client` 3): the settings' version after
+        /// the change, the `expected_version` of the next `ConfigureSettings`; an opaque token
+        /// compared only for equality. R-4 fills it; absent in every answer of 0.12.30.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        config_version: Option<u64>,
     },
     // Workflow #389 U-1: the results of the new request kinds; the slices that add their
     // behaviour answer with them.
@@ -6213,7 +6238,7 @@ impl RuntimeReceipt {
                 }
                 view.validate()?;
             }
-            Some(RuntimeResult::SettingsConfigured { settings })
+            Some(RuntimeResult::SettingsConfigured { settings, .. })
                 if self.state != RuntimeReceiptState::Completed
                     || self.terminal.is_none()
                     || settings.is_empty()

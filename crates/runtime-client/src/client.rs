@@ -1156,7 +1156,7 @@ impl RuntimeClient {
             ClientLocation::RuntimeFactSnapshot.location(),
             RuntimeOperation::RuntimeFactSnapshot,
         )? {
-            RuntimeResult::RuntimeFactSnapshot { snapshot } => Ok(snapshot),
+            RuntimeResult::RuntimeFactSnapshot { snapshot, .. } => Ok(snapshot),
             _ => Err(self.unexpected_result(ClientLocation::RuntimeFactSnapshot.location())),
         }
     }
@@ -1406,10 +1406,10 @@ impl RuntimeClient {
             ClientLocation::RuntimeConfigureSettings.location(),
             RuntimeOperation::ConfigureSettings {
                 changes,
-                expected_revision: None,
+                expected_version: None,
             },
         )? {
-            RuntimeResult::SettingsConfigured { settings } => Ok(settings),
+            RuntimeResult::SettingsConfigured { settings, .. } => Ok(settings),
             _ => Err(self.unexpected_result(ClientLocation::RuntimeConfigureSettings.location())),
         }
     }

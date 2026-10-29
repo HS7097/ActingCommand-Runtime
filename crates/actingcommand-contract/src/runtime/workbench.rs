@@ -9,7 +9,7 @@
 //! summary's buckets are health statistics only.
 
 use crate::outcome::CodeStr;
-use crate::{EventId, RequestId};
+use crate::{EventId, OwnerEpoch, RequestId};
 use serde::{Deserialize, Serialize};
 
 /// What `StopInstanceRun` answers (R-6): the run it stopped, whether the run reached its
@@ -51,7 +51,9 @@ pub struct PackScheduleEditRow {
 /// one, or delete one. The target travels as JSON text, as `ApplyResourceTargets` carries its
 /// document: one `actingcommand.resource-targets.v3` target object (`id`, the kind `maintain`
 /// with `at_least` or `gain` with `amount`, the resource pool, optional `paused` and
-/// `valid_until_unix_ms`; no `tasks`, no `on_met`), parsed and checked by R-13a.
+/// `valid_until_unix_ms`; no `tasks`, no `on_met`), parsed and checked by R-13a. The request's
+/// `expected_version` is the view's `active.version`, or `0` when the view has no `active`
+/// (the first target of an instance, or one after the table was withdrawn).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ResourceTargetEdit {
@@ -71,10 +73,13 @@ pub enum RoutineSummaryGranularity {
 /// What `RoutineSummary` answers (R-12): health statistics from the host's memory, per instance
 /// and bucket. Nothing is read from or written to the ledger. `revision` is the summary's
 /// revision now, the `since_revision` of the next read; with `since_revision` only the buckets
-/// changed after it are answered.
+/// changed after it are answered. The memory and its revisions belong to one owner epoch, which
+/// the page names: a restart begins both again, so a client whose cursor came with another
+/// `owner_epoch` drops its `since_revision` and reads again without it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RoutineSummaryPage {
+    pub owner_epoch: OwnerEpoch,
     pub granularity: RoutineSummaryGranularity,
     pub revision: u64,
     pub instances: Vec<RoutineSummaryInstance>,
@@ -102,6 +107,8 @@ pub struct RoutineSummaryBucket {
 
 /// One task's health in one bucket: its runs that succeeded, that failed (by code) and that
 /// were interrupted. A health statistic, never a count of runs done or allowed (ruling 100).
+/// An interruption is a run that ended `contained_task_cancelled` (a stop, a drain's cancel):
+/// neither a success nor a failure of the task, so never in `failures`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RoutineSummaryTask {
@@ -154,8 +161,9 @@ pub enum InstanceActivityKind {
     Ladder,
 }
 
-/// What `EditPackSchedule` answers (R-8): the sequence and event of the `fact.published` that
-/// holds the scope's whole list after the edit; `version` is the next `expected_version`.
+/// What `EditPackSchedule` answers (R-8): the list's version after the edit, the next
+/// `expected_version` (an opaque token compared only for equality), and the event of the
+/// `fact.published` that holds the scope's whole list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackScheduleEdited {
@@ -306,7 +314,7 @@ mod tests {
                         key: "scheduling.parallel.enabled".to_owned(),
                         value: Some(json!(true)),
                     }],
-                    expected_revision: Some(12),
+                    expected_version: Some(12),
                 },
                 RuntimeOperationKind::ConfigureSettings,
                 vec![],
@@ -348,7 +356,7 @@ mod tests {
                 key: "scheduling.parallel.enabled".to_owned(),
                 value: None,
             }],
-            expected_revision: None,
+            expected_version: None,
         })
         .expect("encodes");
         assert_eq!(
@@ -423,8 +431,10 @@ mod tests {
         refuses_unknown::<RuntimeResult>(encoded.clone(), &[]);
         refuses_unknown::<RuntimeResult>(encoded, &["edited"]);
 
+        let owner_epoch = *ids.mint_owner_epoch().expect("owner epoch").transport();
         let summary = RuntimeResult::RoutineSummary {
             summary: Box::new(RoutineSummaryPage {
+                owner_epoch,
                 granularity: RoutineSummaryGranularity::Hour,
                 revision: 4,
                 instances: vec![RoutineSummaryInstance {
@@ -437,9 +447,13 @@ mod tests {
                         tasks: vec![RoutineSummaryTask {
                             task_id: "task.a".to_owned(),
                             successes: 2,
+                            // A failure is a run that failed; a stop (`contained_task_cancelled`)
+                            // counts only as an interruption (review L1).
                             failures: vec![RoutineSummaryFailure {
-                                code: serde_json::from_value(json!("contained_task_cancelled"))
-                                    .expect("code spelling"),
+                                code: serde_json::from_value(json!(
+                                    "contained_task_deadline_exceeded"
+                                ))
+                                .expect("code spelling"),
                                 count: 1,
                             }],
                             interruptions: 1,
@@ -449,6 +463,17 @@ mod tests {
             }),
         };
         let encoded = round_trips(&summary);
+        // The page names the owner epoch its revisions belong to (review M8).
+        assert_eq!(
+            encoded["summary"]["owner_epoch"],
+            serde_json::to_value(owner_epoch).expect("epoch encodes")
+        );
+        let mut without_epoch = encoded.clone();
+        without_epoch["summary"]
+            .as_object_mut()
+            .expect("an object")
+            .remove("owner_epoch");
+        assert!(serde_json::from_value::<RuntimeResult>(without_epoch).is_err());
         refuses_unknown::<RuntimeResult>(encoded.clone(), &[]);
         refuses_unknown::<RuntimeResult>(encoded.clone(), &["summary"]);
         let mut nested = encoded.clone();
@@ -513,5 +538,187 @@ mod tests {
             serde_json::to_value(InstanceActivityKind::EmulatorControl).expect("encodes"),
             json!("emulator_control")
         );
+
+        // Review M1: the settings' version beside the change's answer and the fact snapshot,
+        // absent when not filled (so both serialize as before), refused beside an unknown member.
+        let setting = crate::ConfiguredSetting {
+            key: "scheduling.parallel.enabled".to_owned(),
+            value: crate::FactScalar::Boolean(true),
+            source: crate::ConfigParameterSource::Instruction,
+        };
+        let configured = RuntimeResult::SettingsConfigured {
+            settings: vec![setting.clone()],
+            config_version: Some(13),
+        };
+        let encoded = round_trips(&configured);
+        assert_eq!(encoded["config_version"], json!(13));
+        refuses_unknown::<RuntimeResult>(encoded, &[]);
+        let encoded = round_trips(&RuntimeResult::SettingsConfigured {
+            settings: vec![setting],
+            config_version: None,
+        });
+        assert!(encoded.get("config_version").is_none());
+        let snapshot = crate::RuntimeFactSnapshot {
+            schema_version: crate::RUNTIME_FACT_SCHEMA_VERSION.to_owned(),
+            ledger_position: 9,
+            taken_at_unix_ms: 1_000,
+            snapshot_id: 9,
+            part: 1,
+            parts: 1,
+            records: Vec::new(),
+        };
+        let encoded = round_trips(&RuntimeResult::RuntimeFactSnapshot {
+            snapshot: snapshot.clone(),
+            config_version: Some(13),
+        });
+        assert_eq!(encoded["config_version"], json!(13));
+        // Beside the snapshot, never in the persisted snapshot.
+        assert!(encoded["snapshot"].get("config_version").is_none());
+        refuses_unknown::<RuntimeResult>(encoded.clone(), &[]);
+        refuses_unknown::<RuntimeResult>(encoded, &["snapshot"]);
+        let encoded = round_trips(&RuntimeResult::RuntimeFactSnapshot {
+            snapshot,
+            config_version: None,
+        });
+        assert!(encoded.get("config_version").is_none());
+
+        // Review M2: A.5's read model in `ResourceTargetView`'s `active`, one row per target,
+        // every `state` spelled, each level refusing an unknown member; absent when not filled.
+        let states = [
+            (crate::ResourceTargetState::Active, "active"),
+            (crate::ResourceTargetState::Met, "met"),
+            (crate::ResourceTargetState::Completed, "completed"),
+            (crate::ResourceTargetState::Paused, "paused"),
+            (
+                crate::ResourceTargetState::AwaitingBaseline,
+                "awaiting_baseline",
+            ),
+            (crate::ResourceTargetState::Unknown, "unknown"),
+            (crate::ResourceTargetState::Unmapped, "unmapped"),
+        ];
+        let rows = states
+            .iter()
+            .enumerate()
+            .map(|(index, (state, _))| crate::ResourceTargetRow {
+                id: format!("t{index}"),
+                kind: if index % 2 == 0 {
+                    crate::ResourceTargetKind::Maintain
+                } else {
+                    crate::ResourceTargetKind::Gain
+                },
+                resource: "pool.example".to_owned(),
+                goal: 100,
+                baseline: Some(10),
+                current: Some(40),
+                remaining: 70,
+                progress_milli: 300,
+                state: *state,
+                reading: crate::ResourceTargetReading {
+                    observed_at_unix_ms: Some(2_000),
+                    fresh_until_unix_ms: Some(3_000),
+                    pending_reason: Some(crate::ResourceTargetPendingReason::Expired),
+                },
+                completed_at_unix_ms: Some(2_500),
+                updated_at_unix_ms: 1_500,
+            })
+            .collect::<Vec<_>>();
+        let view = |rows: Vec<crate::ResourceTargetRow>| RuntimeResult::ResourceTargetView {
+            view: Box::new(crate::ResourceTargetView {
+                instance_alias: "node.a".to_owned(),
+                policy_instance: "node.a".to_owned(),
+                evaluated_at_unix_ms: 9_000,
+                as_of_ledger_position: 12,
+                catalog_hash: None,
+                targetable: Vec::new(),
+                not_targetable: Vec::new(),
+                active: Some(crate::ActiveResourceTargets {
+                    policy_sha256: format!("sha256:{}", "a".repeat(64)),
+                    schema_version: "actingcommand.resource-targets.v2".to_owned(),
+                    version: 12,
+                    event_id,
+                    valid_until_unix_ms: None,
+                    expired: false,
+                    targets: vec![json!({"id": "t0"})],
+                    conditions: Vec::new(),
+                    rows,
+                }),
+            }),
+        };
+        let encoded = round_trips(&view(rows));
+        for (index, (_, spelling)) in states.iter().enumerate() {
+            assert_eq!(
+                encoded["view"]["active"]["rows"][index]["state"],
+                json!(*spelling)
+            );
+        }
+        assert_eq!(encoded["view"]["active"]["rows"][1]["kind"], json!("gain"));
+        refuses_unknown::<RuntimeResult>(encoded.clone(), &["view"]);
+        refuses_unknown::<RuntimeResult>(encoded.clone(), &["view", "active"]);
+        let mut nested = encoded.clone();
+        nested["view"]["active"]["rows"][0]["unknown_member"] = json!(1);
+        assert!(serde_json::from_value::<RuntimeResult>(nested).is_err());
+        let mut nested = encoded;
+        nested["view"]["active"]["rows"][0]["reading"]["unknown_member"] = json!(1);
+        assert!(serde_json::from_value::<RuntimeResult>(nested).is_err());
+        let encoded = round_trips(&view(Vec::new()));
+        assert!(encoded["view"]["active"].get("rows").is_none());
+    }
+
+    // Review L6: the status member `activity` at the Status level. Filled, it round-trips in
+    // the instance's row; absent, the row has no `activity` key, which is why 0.12.30 keeps
+    // `runtime-client` `min` at 2 (a revision-2 reader refuses the member).
+    #[test]
+    fn r0_status_carries_activity_only_when_filled() {
+        let ids = IdentifierIssuer::new().expect("identifier issuer");
+        let owner_epoch = *ids.mint_owner_epoch().expect("owner epoch").transport();
+        let request_id = *ids.mint_request_id().expect("request id").transport();
+        let instance = |alias: &str| {
+            crate::RuntimeInstanceStatus::new(
+                alias,
+                *ids.mint_instance_id().expect("instance id").transport(),
+                false,
+                0,
+                false,
+                false,
+                false,
+            )
+            .expect("instance status")
+        };
+        let activity = InstanceActivity {
+            kind: InstanceActivityKind::DirectRun,
+            request_id: Some(request_id),
+            package_id: Some("package.example".to_owned()),
+            since_unix_ms: 5_000,
+        };
+        let status = crate::RuntimeControlPlaneStatus::new(
+            owner_epoch,
+            vec![
+                instance("node.a").with_activity(Some(activity.clone())),
+                instance("node.b"),
+            ],
+        )
+        .expect("status");
+        let encoded = round_trips(&RuntimeResult::Status { status });
+        let rows = encoded["status"]["instances"]
+            .as_array()
+            .expect("instance rows");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["instance_alias"], json!("node.a"));
+        assert_eq!(
+            rows[0]["activity"],
+            serde_json::to_value(&activity).expect("activity encodes")
+        );
+        assert_eq!(rows[1]["instance_alias"], json!("node.b"));
+        assert!(rows[1].get("activity").is_none());
+
+        let decoded: crate::RuntimeControlPlaneStatus =
+            serde_json::from_value(encoded["status"].clone()).expect("status decodes");
+        decoded.validate().expect("status validates");
+        assert_eq!(decoded.instances()[0].activity(), Some(&activity));
+        assert_eq!(decoded.instances()[1].activity(), None);
+
+        let mut nested = encoded;
+        nested["status"]["instances"][0]["activity"]["unknown_member"] = json!(1);
+        assert!(serde_json::from_value::<RuntimeResult>(nested).is_err());
     }
 }

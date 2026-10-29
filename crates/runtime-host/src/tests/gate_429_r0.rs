@@ -104,7 +104,7 @@ fn r0_each_workbench_kind_without_behaviour_answers_not_implemented_with_no_effe
                     key: "scheduling.parallel.enabled".to_owned(),
                     value: Some(json!(true)),
                 }],
-                expected_revision: Some(1),
+                expected_version: Some(1),
             }),
             "configure_settings",
         ),
