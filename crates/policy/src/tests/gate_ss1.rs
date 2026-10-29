@@ -79,7 +79,7 @@ fn ss1_t1_without_a_target_record_a_producing_task_gets_yield_times_base_over_sc
 #[test]
 fn ss1_t2_disabling_another_producer_by_instance_override_leaves_the_resource_term_unchanged() {
     let enabled = catalog(&[task_a(), task_b()]);
-    let disabled = catalog(&[task_a(), disabled(task_b())]);
+    let disabled = catalog(&[task_a(), disabled_on_a(task_b())]);
     let inventory = || vec![reading(POOL_A_KEY, 50)];
     let v2 = stored(&enabled, v2_target(None), NOW - HOUR_MS);
     let v1 = stored(&enabled, v1_target(&[TASK_A, TASK_B]), NOW - HOUR_MS);
@@ -267,7 +267,8 @@ fn task_b() -> Value {
     task(TASK_B, 200, &[(POOL_A, 30), (POOL_B, 3)])
 }
 
-fn disabled(mut task: Value) -> Value {
+/// `task` with an instance override that disables it on the instance.
+fn disabled_on_a(mut task: Value) -> Value {
     task["instance_overrides"] = json!([{
         "instance_id": A,
         "enabled": false,
