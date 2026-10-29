@@ -402,6 +402,8 @@ actingcommand_contract::outcome_locations! {
         EncodeLedgerQuery => "encode_ledger_query",
         EncodeMigrationIdentity => "encode_migration_identity",
         EncodeSourceMaterial => "encode_source_material",
+        /// #422 RB-1: the reader pool's background build of its Lab relations at its start.
+        BuildLabRelations => "build_lab_relations",
         /// #422 LN-7c R: the writer open's fill of the frame index (its gap and backfill).
         BuildLedgerFrameRefs => "build_ledger_frame_refs",
         FinishArtifactEviction => "finish_artifact_eviction",

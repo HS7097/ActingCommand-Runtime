@@ -463,6 +463,16 @@ tests = [
 ]
 incident = ["#373"]
 
+# A shared interrupt page whose data declares its limit an environment problem (limit_cause environment) ends the run at its limit with contained_task_interrupt_environment_limit_reached, which is rerun only and never pauses its pair; without the member a run ends as before; the static check reads the member and refuses another value or type (Workflow #411 B43)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_373_nav6::b43_1_an_environment_limit_ends_the_run_with_its_own_code_and_without_it_as_before",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav6::b43_2_a_scheduled_environment_limit_is_rerun_at_once_and_never_pauses_its_pair",
+    "actingcommand-contract::lib::standard_pack::tests::b43_an_interrupt_s_limit_cause_is_read_and_a_wrong_type_is_refused",
+]
+incident = ["#411"]
+
 # Settings the Runtime may change while it runs: the defaults file and the file layer, one change all or none with its command and value records, refusals, restore at restart by the later change, and clear (Workflow #387 D1b, D1-M1 to D1-M7)
 [[gate]]
 key = "52"

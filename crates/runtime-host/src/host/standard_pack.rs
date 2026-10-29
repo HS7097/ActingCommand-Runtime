@@ -27,8 +27,10 @@
 //!   layer of the run (`role: interrupt_handler`), then its `then.run` package, and the run
 //!   resumes, or ends with `contained_task_interrupt_escalated` (`then: end_run`). Two or more
 //!   matches are recorded and none is handled. A page handled `max_per_run` times, or a run that
-//!   handled 16, ends the run with `contained_task_interrupt_limit_reached`. A handler never
-//!   looks at the interrupt pages itself.
+//!   handled 16, ends the run with `contained_task_interrupt_limit_reached`; Workflow #411 B43:
+//!   a page whose `limit_cause` is `environment` ends it at its own limit with
+//!   `contained_task_interrupt_environment_limit_reached` instead, which is rerun only. A
+//!   handler never looks at the interrupt pages itself.
 //! - **Navigation data** (Workflow #373 NAV-5, §3.5, §5, §7). A game root that holds
 //!   `navigation.json` (with `pages.json`) is read in a run's preparation too, and the run keeps
 //!   its server's edges and recovery chain beside its interrupt pages ([`RunNavigation`]); the
@@ -52,12 +54,13 @@ use super::navigation::{RunNavigation, run_navigation};
 use super::*;
 use actingcommand_contract::outcome::{IoOp, Outcome};
 use actingcommand_contract::{
-    MAX_INTERRUPT_HANDLINGS_PER_RUN, NavigationProblem, NavigationRole, RegistryProblem,
-    STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
-    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_TABLES_DIRECTORY,
-    StandardPackDisplayLayout, StandardPackInterrupts, StandardPackNavigation, StandardPackPages,
-    StandardPackRegistry, StandardPackRootBytes, StandardPackRootIssue, StandardPackTableReport,
-    TaskEntryRecoveryRole, TaskInterruptThen, read_standard_pack_root, read_standard_pack_tables,
+    InterruptLimitCause, MAX_INTERRUPT_HANDLINGS_PER_RUN, NavigationProblem, NavigationRole,
+    RegistryProblem, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE,
+    STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE,
+    STANDARD_PACK_TABLES_DIRECTORY, StandardPackDisplayLayout, StandardPackInterrupts,
+    StandardPackNavigation, StandardPackPages, StandardPackRegistry, StandardPackRootBytes,
+    StandardPackRootIssue, StandardPackTableReport, TaskEntryRecoveryRole, TaskInterruptThen,
+    read_standard_pack_root, read_standard_pack_tables,
 };
 use actingcommand_execution_kernel::{
     MAX_GATED_STEPS, SharedInterruptFrame, SharedInterruptVerdict, canonical_page_anchor,
@@ -543,6 +546,9 @@ struct RunInterrupt {
     handler: RegisteredPack,
     then: RunThen,
     max_per_run: u8,
+    /// Workflow #411 B43: the code that ends a run meeting the page once more than
+    /// `max_per_run`, as its `limit_cause` says.
+    limit_code: HostCode,
 }
 
 /// What a run's preparation read of its game's standard-pack root, fixed for the whole run (§7):
@@ -799,11 +805,22 @@ impl HostShared {
                         listed: packages.first().cloned().unwrap_or_default(),
                     },
                 };
+                // Workflow #411 B43: the data, not the Runtime, says a page at its limit is an
+                // environment problem.
+                let limit_code = match interrupt.limit_cause {
+                    Some(InterruptLimitCause::Environment) => {
+                        HostCode::ContainedTaskInterruptEnvironmentLimitReached
+                    }
+                    Some(InterruptLimitCause::PackLogic) | None => {
+                        HostCode::ContainedTaskInterruptLimitReached
+                    }
+                };
                 Some(RunInterrupt {
                     page: interrupt.page.clone(),
                     handler,
                     then,
                     max_per_run: interrupt.max_per_run,
+                    limit_code,
                 })
             })
             .collect::<Vec<_>>();
@@ -1163,17 +1180,27 @@ impl RuntimeContainedTask<'_> {
     ) -> Result<SharedInterruptVerdict, ContainedTaskRunError<RequestFailure>> {
         let entry = interrupts.entries[index].clone();
         let handled = interrupts.counts.get(&entry.page).copied().unwrap_or(0);
+        // Workflow #411 B43: the page's own limit ends the run with the code its `limit_cause`
+        // chose; the run's 16 handlings of all pages together stay the pack's logic.
         let limit = if handled >= entry.max_per_run {
-            Some((u32::from(handled) + 1, u32::from(entry.max_per_run)))
+            Some((
+                entry.limit_code,
+                u32::from(handled) + 1,
+                u32::from(entry.max_per_run),
+            ))
         } else if interrupts.total >= MAX_INTERRUPT_HANDLINGS_PER_RUN {
-            Some((interrupts.total + 1, MAX_INTERRUPT_HANDLINGS_PER_RUN))
+            Some((
+                HostCode::ContainedTaskInterruptLimitReached,
+                interrupts.total + 1,
+                MAX_INTERRUPT_HANDLINGS_PER_RUN,
+            ))
         } else {
             None
         };
-        if let Some((count, limit_count)) = limit {
+        if let Some((code, count, limit_count)) = limit {
             return Err(interrupt_failure(
                 RuntimeHostError::request(
-                    HostCode::ContainedTaskInterruptLimitReached,
+                    code,
                     HostLocation::InterruptHandle,
                     RuntimeErrorCode::BackendOperationFailed,
                 )
