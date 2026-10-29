@@ -510,15 +510,18 @@ fn kept<T>(read: Result<T, Outcome>, failure: &mut Option<Outcome>) -> Option<T>
 }
 
 /// Whether another application than `application_id` and the home screen is in the foreground
-/// (§7.5). No resumed activity (a transition) is no other application.
+/// (§7.5). No resumed activity (a transition) is no other application. STORE-FG-2 (design
+/// §2.6): for a store update package's own run, its declared store (`store`) is no other
+/// application either.
 fn other_application(
     shell: &mut dyn DeviceStateShell,
     application_id: &str,
+    store: Option<&str>,
 ) -> Result<bool, Outcome> {
     let Some(foreground) = read_foreground(shell)? else {
         return Ok(false);
     };
-    if foreground == application_id {
+    if foreground == application_id || store == Some(foreground.as_str()) {
         return Ok(false);
     }
     Ok(foreground != read_home(shell)?)
@@ -758,7 +761,7 @@ impl HostShared {
                     screen_off_timeout_ms: kept(read_screen_timeout(shell), &mut failure)
                         .map(|settings| settings.screen_off_timeout_ms),
                     other_application: if look_at_foreground {
-                        kept(other_application(shell, application_id), &mut failure)
+                        kept(other_application(shell, application_id, None), &mut failure)
                     } else {
                         None
                     },
@@ -1004,7 +1007,8 @@ impl HostShared {
     ///    run from starting.
     /// 3. Under `device_state.in_use_gate`, another application than the instance's and the home
     ///    screen's in the foreground holds the handset and keeps the run from starting
-    ///    (`device_in_use`).
+    ///    (`device_in_use`). STORE-FG-2 (design §2.6): for a store update package's own run,
+    ///    `store_application_id`, its declared store, is not another application.
     /// 4. The screen-off timeout, for the keepalive; a failed read is recorded
     ///    (`device_state_unreadable`) and the run starts without the keepalive.
     ///
@@ -1016,6 +1020,7 @@ impl HostShared {
         instance_alias: &str,
         token: &LeaseToken,
         connection_id: ConnectionId,
+        store_application_id: Option<&str>,
     ) -> Result<(), RequestFailure> {
         if !self
             .device_state_watches(instance_id)
@@ -1075,7 +1080,7 @@ impl HostShared {
             &mut |shell: &mut dyn DeviceStateShell, application_id: &str| {
                 let foreground = config
                     .in_use_gate
-                    .then(|| other_application(shell, application_id));
+                    .then(|| other_application(shell, application_id, store_application_id));
                 rest = Some((foreground, read_screen_timeout(shell)));
             },
         )

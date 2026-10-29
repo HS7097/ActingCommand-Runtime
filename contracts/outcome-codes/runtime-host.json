@@ -1681,6 +1681,28 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "application_store_not_allowed": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "application_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.29",
+      "description": "STORE-FG-2 (design-store-fg §2.2, §3; contracts/application-lifecycle.md, Store foreground allowance): a store update package (control.json store_update) names the store application application_id, which store_foreground.allowed_application_ids does not list. Its own run on the instance alias is refused before any capture or input (operation admit_store_foreground), and the run's terminal records it; a store tap that meets the same is refused before it is sent (operation require_foreground_application, command.rejected and runtime.failed). Nothing reaches the device.",
+      "common_causes": "The allowlist is empty (its default) or names another store; or the package names the store by another package id than the operator listed.",
+      "handling": "When the store is the official one the operator approved, add its package id to store_foreground.allowed_application_ids in the configuration file and restart the Runtime (the key is not settable while it runs); otherwise correct the package's store_application_id."
+    },
     "approval_projection_capacity_exceeded": {
       "category": "error",
       "ladder_class": "none",
@@ -22672,6 +22694,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: admit runtime work."
+    },
+    "admit_store_foreground": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.29",
+      "description": "A Runtime host operation (STORE-FG-2): the allowlist check of a store update package's own run, before any capture or input: the store its control.json store_update names must be in store_foreground.allowed_application_ids."
     },
     "adopt_install_pause_origins": {
       "owner": "runtime-host",

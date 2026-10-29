@@ -1394,7 +1394,10 @@ in the declared store (`ContainedTaskRuntime::admit_store_foreground`), and hand
 declared store operation to the runtime with that store (`ContainedTaskRuntime::store_input`).
 Every other input of every run is an ordinary input, under the assigned application's foreground
 gate. A runtime without a foreground gate (offline simulation, fixtures) admits every store and
-makes a store tap as any input. The host's allowance and its gate are STORE-FG-2's.
+makes a store tap as any input. The host's allowance and its gate are STORE-FG-2's
+([application-lifecycle.md](application-lifecycle.md), "Store foreground allowance"): the run
+starts only when `store_foreground.allowed_application_ids` names the store, and a store tap is
+sent only while exactly that store is in front.
 
 **Waiting while the store updates** (design §8.3). After the store tap, the package waits without
 input with a wait step on the store's updating page ([Wait steps and wait pages](#wait-steps-and-wait-pages);

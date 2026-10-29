@@ -26,7 +26,8 @@
 //!   ruling 69: the declared safe areas' directory and each instance's device model); `install`
 //!   (Workflow #421 INST-1, read by `actingctl install` from the configuration file,
 //!   [`install::settings`]); `host` (RB-2, Alice's ruling of 2026-10-29: the memory and I/O
-//!   priority actingd gives its own process at start).
+//!   priority actingd gives its own process at start); `store_foreground` (STORE-FG-2: the store
+//!   applications a store update package may tap in, only from the configuration file).
 //!
 //! actingd reads the files and hands the assembled manifest to the host; the host applies
 //! instructions through this crate. It depends on the contract only (§5.1).
@@ -58,6 +59,8 @@ mod resolve;
 pub mod scheduling;
 mod standard_packs;
 pub mod startup_discovery;
+// STORE-FG-2: `store_foreground.*`, the store applications a store update package may tap in.
+pub mod store_foreground;
 mod table;
 pub mod touch;
 mod value;
@@ -112,6 +115,7 @@ pub use standard_packs::{
     StandardPackWorkbenchConfig, StandardPacksDefaultsFile, StandardPacksFile,
 };
 pub use startup_discovery::{StartupDiscoveryConfig, StartupDiscoveryFile};
+pub use store_foreground::{StoreForegroundConfig, StoreForegroundFile};
 pub use table::{
     DefaultSource, FilePath, INSTANCE_SECTION, KeyName, KeyRange, KeyRow, NotSettable, Settable,
     ValueType, assembly_rows, find_row, instance_key, mechanism_rows, rows,
@@ -178,3 +182,7 @@ mod gate_407_b1;
 // #422 LN-7c Q: the evidence-frame rule's age and the frame queries' pace and chunk.
 #[cfg(test)]
 mod gate_ln7c_q;
+
+// STORE-FG-2 (T10): the `store_foreground` section's key.
+#[cfg(test)]
+mod gate_store_fg2;

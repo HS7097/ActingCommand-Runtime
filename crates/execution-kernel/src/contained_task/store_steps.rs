@@ -132,6 +132,17 @@ impl TaskProgram {
 }
 
 impl PreparedContainedTask {
+    /// STORE-FG-2 (design §2.6): the store application the package's declared store steps tap
+    /// in, its `control.json` `store_update.store_application_id`; `None` for every other
+    /// package. The host reads it for the run's own package only: its allowlist check before any
+    /// capture and the handset start gate.
+    pub fn store_application_id(&self) -> Option<&str> {
+        self.control
+            .store_update
+            .as_ref()
+            .map(|store_update| store_update.store_application_id.as_str())
+    }
+
     /// Design §8.1 (the resource side's field note: the store's button moves between devices):
     /// the ids of the declared store operations whose click taps a fixed place (`point`, `rect`,
     /// `specific_rect`) rather than a target located on the frame, in declaration order. The

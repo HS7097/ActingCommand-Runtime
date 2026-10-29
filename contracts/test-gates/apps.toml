@@ -1044,6 +1044,14 @@ tests = [
 ]
 incident = ["RB-2"]
 
+# STORE-FG-2 (0.12.29; design rd-1029/design-store-fg.md §2.2, §5 row T10; Alice's question 95, option A; contracts/runtime-config.md, "The store_foreground section"; actingd-config revision 21): the start-up assembly reports store_foreground.allowed_application_ids as [] from the defaults file, not settable, takes a listed store as written (explicit), and refuses the start and check-config as config_value_invalid naming the key when the list names a configured instance's own application_id (section_check, alone or beside a store) or a malformed entry (out_of_range)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_store_fg2::store_fg2_t10_the_allowlist_defaults_to_empty_and_never_names_an_instances_own_application",
+]
+incident = ["STORE-FG-2"]
+
 # Workflow #421 P12 (v0.12.25; W1-1, brief rd-1028/brief-wave1.md; #421 6441776975): on the fake host, the composite update's automatic rollback evaluates the rollback gate before it closes the new Runtime: a gate that fails closes nothing, the new Runtime keeps running with the hold, the rollback's close is never begun and the command ends rollback_gate_failed naming only release-hold (D-7, adapted); a gate that passes rolls back as before, after a failed check (D-5) or a new start that exited (D-6), and a rollback interrupted after each of its steps, the close past the gate's pass among them, is finished by resume (F-4)
 [[gate]]
 coverage = "Y"

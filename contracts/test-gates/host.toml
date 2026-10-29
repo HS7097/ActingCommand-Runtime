@@ -970,6 +970,25 @@ tests = [
 ]
 incident = ["#398"]
 
+# STORE-FG-2 (0.12.29; Alice's ruling of 2026-10-29 10:1x and her questions 95 to 97, option A; design rd-1029/design-store-fg.md §2, §5 rows T1 to T10; review rd-1029/review-store-fg-1.md L5; contracts/application-lifecycle.md, "Store foreground allowance"; contracts/runtime-config.md, "The store_foreground section"; register §1.206, provisional), on the manual Runtime clock with a scripted foreground and made-up ids: a store update package's own run taps its declared store step only while exactly its store is in front and store_foreground.allowed_application_ids names it. T1 the right listing: the dialog tap with the game in front, the store tap with the store in front, the restart, completed on home, application.foreground recorded as the store once; T2 another application's listing: its error page, no store tap; T3a the game in front of a listing frame and T3b another package in front: the store tap refused application_not_foreground, nothing sent; T3b a sign-in page: its error page; T4 after the update and the restart the next ordinary tap passes and records the assigned application, a later one with the store in front is refused; T5 no update needed: no store tap, restart, completed; T6 an empty list or one naming another store: application_store_not_allowed (alias, application_id) before any capture or input; T7 an ordinary package's tap, a client Input and a Lab operation of the store step with the store in front: application_not_foreground; T8 a non-store step with the store in front is refused, and only a store step's plain Tap expects the store; T9 on a handset under in_use_gate the declared store in front does not hold the store run, and still holds an ordinary run (device_in_use); T10 the key parses, defaults to [] and allows nothing then, refuses a value that is no list, an entry that is no string, a malformed or duplicate entry and more than 16 entries, is not settable, and an instance's own application_id refuses the start
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_store_fg2::store_fg2_t1_the_right_listing_takes_the_store_tap_with_the_store_in_front",
+    "actingcommand-runtime-host::lib::tests::gate_store_fg2::store_fg2_t2_another_listing_ends_on_its_error_page_with_no_store_tap",
+    "actingcommand-runtime-host::lib::tests::gate_store_fg2::store_fg2_t3a_a_store_that_crashed_gets_no_tap",
+    "actingcommand-runtime-host::lib::tests::gate_store_fg2::store_fg2_t3b_a_sign_in_page_ends_the_run_and_another_package_in_front_gets_no_tap",
+    "actingcommand-runtime-host::lib::tests::gate_store_fg2::store_fg2_t4_after_the_update_the_game_is_back_and_the_ordinary_guard_holds",
+    "actingcommand-runtime-host::lib::tests::gate_store_fg2::store_fg2_t5_no_update_needed_makes_no_store_tap",
+    "actingcommand-runtime-host::lib::tests::gate_store_fg2::store_fg2_t6_a_store_the_allowlist_does_not_name_ends_the_run_before_any_capture",
+    "actingcommand-runtime-host::lib::tests::gate_store_fg2::store_fg2_t7_ordinary_lab_and_client_inputs_never_tap_the_store",
+    "actingcommand-runtime-host::lib::tests::gate_store_fg2::store_fg2_t8_a_non_store_step_with_the_store_in_front_is_refused",
+    "actingcommand-runtime-host::lib::host::foreground_gate::store_fg2_tests::store_fg2_t8_only_a_store_steps_plain_tap_expects_the_store",
+    "actingcommand-runtime-host::lib::tests::gate_store_fg2::store_fg2_t9_the_declared_store_in_front_does_not_hold_a_store_run_on_a_handset",
+    "actingcommand-runtime-config::lib::gate_store_fg2::store_fg2_t10_the_store_allowlist_parses_defaults_to_empty_and_is_not_settable",
+]
+incident = ["STORE-FG-2"]
+
 # Workflow #369 S6c (model-369-queue v3.1 §7 row 8, H-5; wave 13 coordinator ruling 6): the configured emulator start at daemon start is one autostart claim per stopped configured instance, held from the enqueue (status lease_active); it reads the operating system's connectivity status at once and every 5 s, starts once internet access is reported (network_ready with the wait) or at once on an unknown status (one network_status_unknown line), and after 600 s without internet access refuses the start with command.received, command.rejected and runtime.failed emulator_autostart_network_unready and releases its key, which never lapses while it waits; under a restored pause it is granted at once and starts (merge ledger :303; emu-watch, Alice's ruling 35: a pause never holds the emulator start), and a pause during the wait does not make it yield; an operator emulator control waiting on the instance supersedes it with no failure pair; a failed preparation after its start hands its key to the ladder by one transfer; two configured instances start in configuration order and the waiting claim renews its key; an emulator control whose provider step fails cancels the queued startup claim as a stop does (merge ledger :529, coordinator ruling on review #716 item 1)
 [[gate]]
 key = "86"

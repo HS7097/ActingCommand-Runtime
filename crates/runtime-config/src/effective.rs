@@ -20,13 +20,14 @@ use crate::scheduling::{
     RemedyConfig, SchedulingConfig,
 };
 use crate::startup_discovery::StartupDiscoveryConfig;
+use crate::store_foreground::StoreForegroundConfig;
 use crate::table::{DefaultSource, INSTANCE_SECTION, KeyName, KeyRange, KeyRow, find_row, rows};
 use crate::touch::TouchConfig;
 use crate::value::{canonical_json, parse_value, scalar_json};
 use crate::{
     device_link, device_state, display_safe_area, emulator_control, execution, host, host_claims,
     idle, instance, ledger_observer, performance, recovery_ladder, scheduling, startup_discovery,
-    touch,
+    store_foreground, touch,
 };
 use actingcommand_contract::outcome::{BlackoutSource, Outcome};
 use actingcommand_contract::{
@@ -520,6 +521,13 @@ impl EffectiveConfig {
         HostProcessConfig::parse(&|key: &str| self.value_or_shipped(key))
     }
 
+    /// STORE-FG-2: the `store_foreground` section in effect, the store applications a store
+    /// update package may tap in, checked whole; the host reads it at a store run's start and at
+    /// each of its store taps.
+    pub fn store_foreground(&self) -> Result<StoreForegroundConfig, ConfigFailure> {
+        StoreForegroundConfig::parse(&|key: &str| self.value_or_shipped(key))
+    }
+
     /// PERF-B1 (Workflow #407 B1): the `execution.capture` keys in effect, the kernel's capture
     /// cadence, which the host hands the kernel with each step's pacing.
     pub fn capture_cadence(&self) -> Result<CaptureCadenceConfig, ConfigFailure> {
@@ -825,6 +833,9 @@ impl EffectiveConfig {
         }
         if sections.contains(host::SECTION) {
             self.host_process()?;
+        }
+        if sections.contains(store_foreground::SECTION) {
+            self.store_foreground()?;
         }
         if !sections.contains(INSTANCE_SECTION) {
             return Ok(());
