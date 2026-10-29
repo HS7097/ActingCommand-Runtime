@@ -392,7 +392,10 @@ A select step of a contained task (see [the selection graph](selection-graph.md)
   (`dispatch_parameters: true`) also holds its dispatch's schedule values in the same overlay,
   `session.dispatch.schedule.<key>` (`next_occurrence_unix_ms` and `window_end_unix_ms` read as
   `integer`, `last_in_window` and `last_daily_slot` as `boolean`, `daily_remaining` as `integer`);
-  any other run holds none, and the document's `on_unknown` decides.
+  any other run holds none, and the document's `on_unknown` decides. SS-6 (since 0.12.31): a
+  policy run whose dispatch carries spend values also holds `spend_allowance.<i>`,
+  `gap_remaining.<j>` and `run_cap` under the same prefix, each read as `integer`
+  ([remedies.md](remedies.md), section 4, "Spend values").
 - A document that declares a record list needs a layout whose `unknown_identity` is
   `reject`, so the evaluator never meets an unknown key; admission and the parser refuse it
   otherwise (`contained_task_select_policy_mismatch`, `resource_declaration_invalid`).

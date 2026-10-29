@@ -572,6 +572,14 @@ outcome_keys! {
     last_daily_slot: boolean,
     daily_remaining: integer,
     // ---- Workflow #411 B8: end ----
+    // ---- SS-6 (a dispatch's spend allowance, remaining gap and run cap, contracts/remedies.md section 4): begin ----
+    run_cap: integer,
+    effect_index: integer,
+    spend_allowance: integer,
+    gap_remaining: integer,
+    spend_allowances: records(effect_index, spend_allowance),
+    gaps_remaining: records(effect_index, gap_remaining),
+    // ---- SS-6: end ----
     // ---- Workflow #411 E4 (B27, B28, B34, B39 A part: refusals and warnings that say what is wrong): begin ----
     argument_value: name,
     expected_shape: vocab(expected_shape),

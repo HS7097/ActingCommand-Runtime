@@ -1736,7 +1736,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         }
     }
 
-    let (mut candidates, scored_affected) = apply_priority_selection(
+    let (mut candidates, scored_affected, spends) = apply_priority_selection(
         catalog,
         facts,
         &placement_context,
@@ -2068,7 +2068,12 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
                 )
             })
             .transpose()?;
-        if let Some(parameters) = dispatch_parameters_reason(remedy_parameters, schedule) {
+        // SS-6: the spend values join the same reason, with no opt-in.
+        if let Some(parameters) = dispatch_parameters_reason(
+            remedy_parameters,
+            schedule,
+            spends.get(&candidate.work_index),
+        ) {
             reasons.push(parameters);
         }
         reasons.extend([
@@ -2318,39 +2323,48 @@ fn dispatch_schedule(
 }
 
 /// The `policy_dispatch_parameters` reason of a selected dispatch: the remedy plan's (Workflow
-/// #411 B15 R2) with the schedule values of Workflow #411 B8 added, or a reason of the schedule
-/// values alone when the plan gives none. A schedule with no known value adds nothing.
+/// #411 B15 R2) with the schedule values of Workflow #411 B8 and the spend values of SS-6 added,
+/// or a reason of those values alone when the plan gives none. A schedule with no known value
+/// and an empty spend add nothing, so the reason is then exactly the plan's, or none.
 fn dispatch_parameters_reason(
     parameters: Option<&DecisionReason>,
     schedule: Option<DispatchSchedule>,
+    spend: Option<&crate::resource_targets::SpendValues>,
 ) -> Option<DecisionReason> {
-    let Some(schedule) = schedule.filter(|schedule| {
+    let schedule = schedule.filter(|schedule| {
         schedule.next_occurrence_unix_ms.is_some()
             || schedule.window_end_unix_ms.is_some()
             || schedule.last_in_window.is_some()
             || schedule.last_daily_slot.is_some()
             || schedule.daily_remaining.is_some()
-    }) else {
+    });
+    let spend = spend.filter(|spend| !spend.is_empty());
+    if schedule.is_none() && spend.is_none() {
         return parameters.cloned();
-    };
+    }
     let mut outcome = parameters.map_or_else(
         || Outcome::new(PolicyCode::PolicyDispatchParameters),
         |parameters| parameters.outcome.clone(),
     );
-    if let Some(next) = schedule.next_occurrence_unix_ms {
-        outcome = outcome.next_occurrence_unix_ms(next);
+    if let Some(schedule) = schedule {
+        if let Some(next) = schedule.next_occurrence_unix_ms {
+            outcome = outcome.next_occurrence_unix_ms(next);
+        }
+        if let Some(end) = schedule.window_end_unix_ms {
+            outcome = outcome.window_end_unix_ms(end);
+        }
+        if let Some(last) = schedule.last_in_window {
+            outcome = outcome.last_in_window(last);
+        }
+        if let Some(last) = schedule.last_daily_slot {
+            outcome = outcome.last_daily_slot(last);
+        }
+        if let Some(remaining) = schedule.daily_remaining {
+            outcome = outcome.daily_remaining(remaining);
+        }
     }
-    if let Some(end) = schedule.window_end_unix_ms {
-        outcome = outcome.window_end_unix_ms(end);
-    }
-    if let Some(last) = schedule.last_in_window {
-        outcome = outcome.last_in_window(last);
-    }
-    if let Some(last) = schedule.last_daily_slot {
-        outcome = outcome.last_daily_slot(last);
-    }
-    if let Some(remaining) = schedule.daily_remaining {
-        outcome = outcome.daily_remaining(remaining);
+    if let Some(spend) = spend {
+        outcome = spend.add_to(outcome);
     }
     Some(DecisionReason {
         detail: outcome.to_string(),
@@ -3310,6 +3324,11 @@ struct StagedCandidate {
 /// Workflow #411 B16 part 2: a catalog whose tasks declare `reserves` runs the stage too; the
 /// document reads each reserve's fields, and the reserve gate holds the ranked candidates last
 /// (`apply_reserves`).
+///
+/// SS-6 (register §1.218): the third item holds, by work index, the spend values of every
+/// candidate the stage keeps that has any: its reserves' allowances, read from the reserve
+/// gate's own views and pending consumption, and its goals' gaps; a selected dispatch hands them
+/// its run.
 #[allow(clippy::type_complexity)]
 fn apply_priority_selection(
     catalog: &CompiledCatalog,
@@ -3319,7 +3338,11 @@ fn apply_priority_selection(
     work: &mut [TaskWork],
     target_policies: &BTreeMap<String, InstanceTargetPolicy>,
     refreshing: bool,
-) -> PolicyEvaluationResult<(Vec<PlacementCandidate>, Vec<AffectedCandidate>)> {
+) -> PolicyEvaluationResult<(
+    Vec<PlacementCandidate>,
+    Vec<AffectedCandidate>,
+    BTreeMap<usize, crate::resource_targets::SpendValues>,
+)> {
     let time = context.time;
     let policy = catalog.selection_policy();
     // The utility fields join the `score_computed` detail only once the catalog can score or
@@ -3351,7 +3374,7 @@ fn apply_priority_selection(
         && !reserves_declared
         && !valuation_declared
     {
-        return Ok((candidates, Vec::new()));
+        return Ok((candidates, Vec::new(), BTreeMap::new()));
     }
     // Each instance's stored policy is resolved once: every target's pool and named tasks
     // against the catalog, its inventory in the time-validity projected facts; with a valued
@@ -3807,10 +3830,42 @@ fn apply_priority_selection(
             ScoreDisposition::Neutral => ranked.push(candidate),
         }
     }
+    // The consumption the reserved pools' readings do not show yet: the gate's step 3 and, SS-6,
+    // the allowances read the same entries.
+    let unshown = if reserves_declared {
+        reserve_unshown(catalog, facts, context, &reserves)?
+    } else {
+        crate::resource_targets::UnshownConsumption::new()
+    };
     if reserves_declared {
-        ranked = apply_reserves(catalog, facts, context, ranked, work, &reserves)?;
+        ranked = apply_reserves(catalog, context, ranked, work, &reserves, &unshown)?;
     }
-    Ok((ranked, affected))
+    // SS-6: the spend values of the candidates the gate admitted, from the same reserve views and
+    // pending consumption (the gate's own available amount, at the same instant) and each
+    // instance's resolved goals.
+    let mut spends = BTreeMap::new();
+    for candidate in &ranked {
+        let task = catalog_task(catalog, &candidate.task_id)?;
+        let targets = instance_targets.get(candidate.instance_id.as_str());
+        let spend = crate::resource_targets::spend_values(
+            task,
+            reserves.get(&candidate.work_index).map(Vec::as_slice),
+            |pool_id| {
+                crate::resource_targets::pending_total(
+                    &unshown,
+                    &candidate.instance_id,
+                    pool_id,
+                    &task.id,
+                )
+            },
+            &catalog.catalog().pools.pools,
+            |pool_id| targets.and_then(|targets| targets.goal_gap(task, pool_id)),
+        );
+        if !spend.is_empty() {
+            spends.insert(candidate.work_index, spend);
+        }
+    }
+    Ok((ranked, affected, spends))
 }
 
 /// Workflow #411 B16 part 2: the reserve views of every candidate whose task declares
@@ -3867,17 +3922,44 @@ fn catalog_task<'a>(
         })
 }
 
+/// Workflow #411 B16 part 2: the consumption the reserved pools' latest readings do not show yet
+/// (`crate::resource_targets::unshown_consumption`), which the reserve gate's step 3 takes and,
+/// SS-6, the allowances take too.
+fn reserve_unshown<'a>(
+    catalog: &'a CompiledCatalog,
+    facts: &'a EvaluationFacts,
+    context: &PlacementContext<'_>,
+    reserves: &'a BTreeMap<usize, Vec<crate::resource_targets::ReserveView>>,
+) -> PolicyEvaluationResult<crate::resource_targets::UnshownConsumption<'a>> {
+    let pools = reserves
+        .values()
+        .flatten()
+        .map(|view| view.pool_id.as_str())
+        .collect::<BTreeSet<_>>();
+    crate::resource_targets::unshown_consumption(
+        &catalog.catalog().tasks.tasks,
+        &facts.tasks,
+        &pools,
+        |pool_id| {
+            context
+                .pool_values
+                .get(pool_id)
+                .map(|reading| reading.snapshot.observed_at_unix_ms)
+        },
+    )
+}
+
 /// Workflow #411 B16 part 2: the reserve gate over the ranked candidates
 /// (`crate::resource_targets::hold_reserves`), in allocation order. A held candidate is deferred
 /// with its `resource_reserve_insufficient` reason, and wakes at the next step of a regenerating
-/// pool; it takes no part in the allocation.
+/// pool; it takes no part in the allocation. `unshown` is [`reserve_unshown`]'s.
 fn apply_reserves(
     catalog: &CompiledCatalog,
-    facts: &EvaluationFacts,
     context: &PlacementContext<'_>,
     ranked: Vec<PlacementCandidate>,
     work: &mut [TaskWork],
     reserves: &BTreeMap<usize, Vec<crate::resource_targets::ReserveView>>,
+    unshown: &crate::resource_targets::UnshownConsumption<'_>,
 ) -> PolicyEvaluationResult<Vec<PlacementCandidate>> {
     // The allocation order (the round's own sort), without moving the candidates.
     let mut order = (0..ranked.len()).collect::<Vec<_>>();
@@ -3892,19 +3974,6 @@ fn apply_reserves(
             .then_with(|| left.task_id.cmp(&right.task_id))
             .then_with(|| left.instance_id.cmp(&right.instance_id))
     });
-    let tasks = &catalog.catalog().tasks.tasks;
-    let pools = reserves
-        .values()
-        .flatten()
-        .map(|view| view.pool_id.as_str())
-        .collect::<BTreeSet<_>>();
-    let unshown =
-        crate::resource_targets::unshown_consumption(tasks, &facts.tasks, &pools, |pool_id| {
-            context
-                .pool_values
-                .get(pool_id)
-                .map(|reading| reading.snapshot.observed_at_unix_ms)
-        })?;
     let candidates = order
         .iter()
         .map(|&index| -> PolicyEvaluationResult<_> {
@@ -3921,7 +3990,7 @@ fn apply_reserves(
         .into_iter()
         .zip(crate::resource_targets::hold_reserves(
             &candidates,
-            &unshown,
+            unshown,
         )?)
         .filter_map(|(index, hold)| hold.map(|hold| (index, hold)))
         .collect::<BTreeMap<_, _>>();

@@ -415,6 +415,9 @@ mod gate_411_b15r;
 // Workflow #411 B8 (host key 129), register §1.150: a policy run reads its dispatch's schedule
 // values as `session.dispatch.schedule.*`; a direct run has none.
 mod gate_411_b8;
+// SS-6 (0.12.31; register §1.218): a policy run reads its dispatch's run cap, spend allowances and
+// remaining gaps as `session.dispatch.schedule.*` integers.
+mod gate_ss6;
 // Workflow #411 B15 R6 (host key 115), register §1.116: an instance's remedy choices, their
 // family, their write rule and their identity.
 mod gate_411_b15w;

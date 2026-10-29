@@ -1701,6 +1701,14 @@ tests = [
 ]
 incident = ["#411 B8"]
 
+# SS-6 (rd-1029 brief-ss6 test 6, host half; contracts/remedies.md section 4, "Spend values"; register §1.218 SS6-2; since 0.12.31): a policy run reads the run_cap, spend allowances and remaining gaps its dispatch's policy_dispatch_parameters carries as the integer schedule values run_cap, spend_allowance.<i> and gap_remaining.<j>, after B8's values; a reason of B8's values alone reads as before
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_ss6::ss6_t6_a_policy_run_reads_the_dispatch_run_cap_allowances_and_gaps",
+]
+incident = ["#386 SS-6"]
+
 # #411 A51 (0.12.9; register §1.151 A51-7, A51-8; no persisted ledger shape; brief A51 T3, T5; the next free host key above 129): while the writer is held in a read, the performance loop's runtime-fact seal answers the non-fatal writer_response_timeout, nothing is latched and no stop is requested, and a Status completes, held or not (#422 W1-8 P30: it reads the published head, no longer the writer's); the first fatal condition the host latches reaches the daemon reporter at once, before any close, and only the first
 [[gate]]
 key = "130"

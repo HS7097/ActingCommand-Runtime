@@ -910,5 +910,10 @@ Written ahead of its code (B15 R0); slice R5 implements it.
   `daily_remaining` as `integer` (instance scope; confidence 1000; observed at the dispatch's
   admission; no expiry). A run without a dispatch holds none of them, so a policy that reads one
   meets an unknown fact and its `on_unknown` decides ([remedies.md](remedies.md), section 4).
+  SS-6 (since 0.12.31): a policy run whose dispatch carries spend values (a task that reserves a
+  pool it consumes, or produces a pool an active goal covers; no opt-in) also holds
+  `session.dispatch.schedule.spend_allowance.<i>`, `session.dispatch.schedule.gap_remaining.<j>`
+  and `session.dispatch.schedule.run_cap`, each an `integer` with the same members
+  ([remedies.md](remedies.md), section 4, "Spend values").
 - The overlay is never stored: it appends no record, takes no active fact identity (0 rows in the
   capacity ledger) and is not visible to `InstanceFactSnapshot` or `ac_facts`.

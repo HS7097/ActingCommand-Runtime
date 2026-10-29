@@ -118,6 +118,21 @@ constant; #386 CF-5) is `limit_exceeded` at `at_least`; an empty list or more th
 unknown member. A task without `reserves` serializes, and hashes, exactly as
 before.
 
+SS-6 (since 0.12.31; register §1.218; `../../remedies.md`, section 4, "Spend
+values"): a selected dispatch of a task whose `reserves` names a pool its
+`consumes` lists, or whose `produces` lists a pool an active resource goal
+covers, hands its run, without `dispatch_parameters`, per such `consumes` entry
+`i` the allowance `session.dispatch.schedule.spend_allowance.<i>` (the reserve
+gate's available amount, the pool's projection less the other tasks' consumption
+its reading does not show yet, less the reserve, at least 0), per such
+`produces` entry `j` the goal's gap `session.dispatch.schedule.gap_remaining.<j>`,
+and `session.dispatch.schedule.run_cap` (at most 1000), which reads each
+consumed pool's per-run `consumes[].amount` and, when no produced pool carries a
+base weight, each produced pool's per-run `produces[].amount` (an
+`expected_amount_milli` production with an open gap there gives no run cap).
+`<i>` and `<j>` are positions in the task's own lists, from 0. No member is
+added: a catalog serializes, and hashes, exactly as before.
+
 A predicate may be `{"kind":"fact_time_reached","scope":…,"fact_key":…,"offset_ms":N,"max_age_ms":M}`
 (Workflow #405), V2 only: true once the `timestamp_ms` value of the fact plus N
 has come, false with its reason before that or when the fact gives no time

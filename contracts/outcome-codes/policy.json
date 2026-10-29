@@ -2009,6 +2009,9 @@
         "last_in_window": "optional",
         "last_daily_slot": "optional",
         "daily_remaining": "optional",
+        "spend_allowances": "optional",
+        "gaps_remaining": "optional",
+        "run_cap": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -2018,8 +2021,8 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.3",
-      "description": "Workflow #411 B15 (contracts/remedies.md, section 4): the read-only parameters this policy dispatch hands to its run: run_parameters holds one record per parameter the task's package declares, with the value resolved from the target record, the configuration or the package default and the source that gave it. The run reads each as the instance fact session.dispatch.parameter.<parameter_name> in its snapshots, an overlay that is never stored. Workflow #411 B8: a dispatch of a task that opts in to dispatch_parameters also carries its schedule values, each when known: next_occurrence_unix_ms (the next occurrence of its trigger's clocks), window_end_unix_ms (the end of its activity window), last_in_window (no clock occurs again before that end), daily_remaining (the runs its daily budgets still allow today after this one) and last_daily_slot (none remains); the run reads each as session.dispatch.schedule.<key>, typed, in the same overlay. run_parameters is absent from a reason that carries only these values.",
-      "common_causes": "The task's package declares parameters (or a catalog opts in to Workflow #411 B8's values).",
+      "description": "Workflow #411 B15 (contracts/remedies.md, section 4): the read-only parameters this policy dispatch hands to its run: run_parameters holds one record per parameter the task's package declares, with the value resolved from the target record, the configuration or the package default and the source that gave it. The run reads each as the instance fact session.dispatch.parameter.<parameter_name> in its snapshots, an overlay that is never stored. Workflow #411 B8: a dispatch of a task that opts in to dispatch_parameters also carries its schedule values, each when known: next_occurrence_unix_ms (the next occurrence of its trigger's clocks), window_end_unix_ms (the end of its activity window), last_in_window (no clock occurs again before that end), daily_remaining (the runs its daily budgets still allow today after this one) and last_daily_slot (none remains); the run reads each as session.dispatch.schedule.<key>, typed, in the same overlay. run_parameters is absent from a reason that carries only these values. SS-6 (since 0.12.31): a dispatch of a task that reserves a pool it consumes, or that produces a pool an active resource goal covers, also carries, without any opt-in: spend_allowances (per such consumes entry, by its position effect_index, the reserve gate's available amount, the pool's projected amount less the other tasks' consumption its reading does not show yet, less the task's reserve, at least 0), gaps_remaining (per such produces entry, the goal's gap, 0 when met) and run_cap (the runs the allowances pay for at the task's declared consumption per run; when no produced pool carries a base weight, at most the runs the largest open goal gap still needs; at most 1000); the run reads them as session.dispatch.schedule.spend_allowance.<i>, session.dispatch.schedule.gap_remaining.<j> and session.dispatch.schedule.run_cap, integers, in the same overlay.",
+      "common_causes": "The task's package declares parameters (or a catalog opts in to Workflow #411 B8's values, or a task reserves a pool it consumes or produces toward an active goal).",
       "handling": "None."
     },
     "fact_time_pending": {

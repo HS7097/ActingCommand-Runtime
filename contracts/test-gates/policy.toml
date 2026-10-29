@@ -810,6 +810,20 @@ tests = [
 ]
 incident = ["#411 B16"]
 
+# SS-6 (Alice's rulings 100 and 106; rd-1029 brief-ss6 tests 1 to 5, 7 and 8, design-sch-state §4.3; contracts/remedies.md section 4, "Spend values"; register §1.218; since 0.12.31): a selected dispatch of a task that reserves a pool it consumes carries, with no opt-in, on policy_dispatch_parameters the allowance per such consumes entry (the reserve gate's own available amount, the projection less the other tasks' consumption its reading does not show yet, less the reserve, floored at 0, keyed by the entry's position: a pending 40 shrinks it by exactly 40) and run_cap, the least over the reserved consumed pools of allowance / per-run consumption, written as at most 1000; when no produced pool carries a base weight, at most the largest need over the open gaps (two goal-driven pools give the larger; a base-weighted produced pool removes the goal term; met goals add nothing); a task without reserves gets no allowance; without an active goal (no, withdrawn or expired record) no gap_remaining; an allowance of 0 always coincides with the reserve gate holding the candidate, which runs exactly when the allowance pays for one run, with or without pending consumption; a task that declares none of these keeps the dispatch reason of before byte for byte; incomplete declarations give no run_cap, and overflow-sized inputs saturate at i64::MAX without a panic
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_ss6::ss6_t1_the_allowance_is_the_projection_less_the_reserve_floored_at_zero",
+    "actingcommand-policy::lib::tests::gate_ss6::ss6_t2_without_reserves_there_is_no_allowance",
+    "actingcommand-policy::lib::tests::gate_ss6::ss6_t3_without_an_active_goal_there_is_no_gap_remaining",
+    "actingcommand-policy::lib::tests::gate_ss6::ss6_t4_run_cap_is_the_least_over_pools_and_a_goal_driven_gap_caps_it",
+    "actingcommand-policy::lib::tests::gate_ss6::ss6_t5_an_allowance_of_zero_coincides_with_the_reserve_gate_holding_the_candidate",
+    "actingcommand-policy::lib::tests::gate_ss6::ss6_t7_a_task_that_declares_none_of_these_keeps_its_dispatch_chain",
+    "actingcommand-policy::lib::tests::gate_ss6::ss6_t8_incomplete_declarations_give_no_run_cap_and_overflow_neither_panics_nor_wraps",
+]
+incident = ["#386 SS-6"]
+
 # Workflow #386 SR-4a1 (SCH-M frozen model v1.0 §3.2 D-1, §6 row SR-4a1; contracts/scheduling-blackout.md, "Pure judgement"; register §1.179; no persisted ledger shape): a weekly host entry (crossing midnight, on its weekdays only), a once entry of the instance and a catalog maintenance event of the instance's game each cover on their own, half-open, and the next start finds each within its bound
 [[gate]]
 coverage = "Y"
