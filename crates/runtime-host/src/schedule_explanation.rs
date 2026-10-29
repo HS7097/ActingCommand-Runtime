@@ -154,6 +154,13 @@ impl IdleDraft {
         evaluated_at_unix_ms: u64,
         held_back: Option<Option<u64>>,
     ) {
+        // UPD-1 (design §4.2): a decision that position 4a held waits for the instance's client
+        // update. It is neither due nor a wake, so the plan never wakes the instance for it (its
+        // startup package would only meet the update dialog again); the store update task's own
+        // decision still counts.
+        if crate::application_update::holds(decision) {
+            return;
+        }
         let eligible = decision.state == SchedulingDecisionState::Selected
             || decision.eligibility == EligibilityState::True;
         let due = decision.state == SchedulingDecisionState::Selected

@@ -98,11 +98,20 @@ pub(crate) struct BuiltTable {
     pub(crate) table: RemedyTable,
     pub(crate) findings: Vec<RemedyFinding>,
     pub(crate) unreadable: Vec<UnreadablePackage>,
+    /// UPD-1 (design-upd1 §4.2): the catalog tasks whose bound package declares `store_update`,
+    /// read by the same metadata-only scan; a package the scan could not read is not one.
+    store_tasks: BTreeSet<String>,
     catalog_hash: String,
     built_at_unix_ms: u64,
 }
 
 impl BuiltTable {
+    /// UPD-1: the catalog tasks whose bound package declares `store_update`; position 4a lets
+    /// only these run on an instance that waits for its client update.
+    pub(crate) fn store_tasks(&self) -> BTreeSet<String> {
+        self.store_tasks.clone()
+    }
+
     /// Whether a mapping of `task_id`'s package declares a remedy.
     pub(crate) fn declares_remedies(&self, task_id: &str) -> bool {
         self.table
@@ -179,11 +188,15 @@ pub(crate) fn build_table(
     let mut remedies = Vec::new();
     let mut providers = Vec::new();
     let mut packages = BTreeMap::<&str, &str>::new();
+    let mut store_tasks = BTreeSet::new();
     for task in tasks {
         let Some(declarations) = declared.get(task.id.as_str()) else {
             continue;
         };
         packages.insert(task.id.as_str(), declarations.package_id.as_str());
+        if declarations.store_update {
+            store_tasks.insert(task.id.clone());
+        }
         for (outcome_key, remedy) in &declarations.remedies {
             remedies.push(RemedyTableRemedy {
                 task_id: task.id.clone(),
@@ -243,6 +256,7 @@ pub(crate) fn build_table(
         },
         findings,
         unreadable,
+        store_tasks,
         catalog_hash: catalog.catalog_hash().to_owned(),
         built_at_unix_ms,
     }
@@ -697,12 +711,20 @@ impl RemedyState {
     /// is none or it is another catalog's (the start, an activation), or, while a round is open
     /// or a stop is recorded, at most once per `interval_ms` (a package fixed in place is seen
     /// without a restart, as the suspension lift checks see it).
-    pub(crate) fn table_due(&self, catalog_hash: &str, now_unix_ms: u64, interval_ms: u64) -> bool {
+    pub(crate) fn table_due(
+        &self,
+        catalog_hash: &str,
+        now_unix_ms: u64,
+        interval_ms: u64,
+        update_pending: bool,
+    ) -> bool {
         match &self.table {
             None => true,
             Some(table) if table.catalog_hash != catalog_hash => true,
             Some(table) => {
-                (self.active || !self.stops.is_empty())
+                // UPD-1 (design §4.2): an instance that waits for its client update rebuilds the
+                // table at the same interval, so a store update package placed in place counts.
+                (self.active || !self.stops.is_empty() || update_pending)
                     && now_unix_ms.saturating_sub(table.built_at_unix_ms) >= interval_ms
             }
         }

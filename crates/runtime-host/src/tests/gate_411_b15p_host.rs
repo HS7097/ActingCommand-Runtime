@@ -154,6 +154,7 @@ fn b15p_provides_with_parameters_is_admitted_and_read_without_preparing() {
             package_id: PACKAGE_ID.to_owned(),
             remedies: vec![("blocked_k".to_owned(), declared)],
             provides: provided,
+            store_update: false,
         }
     );
     let (reversible, irreversible) = (&read.provides[0], &read.provides[1]);

@@ -263,6 +263,24 @@ code is the decision's reason:
 3. the task package is suspended (`pack_admission_suspended`, `policy-suspension.md`);
 4. a blackout is active (`blackout_active`; SR-4a2: judged once per instance as the cycle
    starts, wake at the blackout's end);
+
+**4a.** the instance waits for its game's client update (`application_update_pending`, values
+`instance_id` and `fact_key`; UPD-1, since 0.12.30, design `rd-1029/design-upd1.md` §4): its
+`health.application.update_required` is `true` (confidence above zero) in the evaluation's facts
+([instance-fact-store.md](instance-fact-store.md), "Application update facts"), and the
+candidate's task is not a store update task (one whose procedure's bound package declares
+`store_update` in `control.json`, as the remedy table's metadata-only scan reads it; a package
+the scan cannot read is not one, and the table names it). Every other candidate of the instance
+waits, an owed rerun (before position 6), an immediate rerun (R22), a remedy request or retry
+and a chain's successor included, with no wake of its own: the fact's change wakes the
+evaluation. The fact refresh's deferral names this code as its `gate_code`
+(`fact_refresh_pending`), as a blackout's does. A store update task still passes positions 1 to
+4 and 5 onward. Other instances are not held (#419). The table is rebuilt, while an instance
+waits, at most once per `scheduling.suspension.lift_check_min_interval_ms`, so a store update
+package placed in place is known from the next rebuild. Admission does not judge it again: the
+fact is an evaluation input, so an intent evaluated before it turned true is
+`policy_facts_stale`. The idle plan counts such a decision neither due nor as a wake;
+
 5. the task package is not loaded (`pack_registry_not_loaded`, Workflow #389), then the pack
    schedule closes it (`pack_schedule_closed`, `instance-fact-store.md`, "Pack schedule facts");
 6. performance pacing pauses the instance or its run interval has not passed
@@ -328,8 +346,8 @@ is held for the fact refresh as positions 1-2 hold one (SR-4a2), so its candidat
 #372 K2, `blackout_active`, `blackout_approaching`, `policy_day_boundary_approaching`,
 `pack_schedule_closed`,
 `perf_scheduling_paused`, `perf_pacing_gap`, `policy_rerun_waiting`,
-`policy_cost_commit_waiting`, `policy_remedy_waiting` and `dispatch_random_delay_waiting` are
-waiting gates (a slot is recorded as `clock_slot_deferred` only once its window has passed); `pack_admission_suspended`,
+`policy_cost_commit_waiting`, `policy_remedy_waiting`, `dispatch_random_delay_waiting` and (UPD-1)
+`application_update_pending` are waiting gates (a slot is recorded as `clock_slot_deferred` only once its window has passed); `pack_admission_suspended`,
 `feature_locked`, `policy_remedy_unchosen`, `policy_remedy_unavailable` and
 `policy_remedy_exhausted` are persistent gates (`clock_slot_refused`). Position 8a's deferrals
 carry no wake of their own: a remedy round's events, a changed choice or a lift wake the

@@ -130,6 +130,10 @@ pub struct RemedyDeclarations {
     pub remedies: Vec<(String, RemedyDeclaration)>,
     /// The capabilities the package provides, in declaration order.
     pub provides: Vec<ProvidedCapability>,
+    /// UPD-1 (design-upd1 §4.2): whether its control declaration declares `store_update`; the
+    /// host's scheduling gate lets such a package's task run on an instance that waits for its
+    /// client update.
+    pub store_update: bool,
 }
 
 impl PreparedContainedTask {
@@ -166,6 +170,7 @@ impl PreparedContainedTask {
         };
         validate_own_remedies(&control, scheduling.as_ref())?;
         Ok(RemedyDeclarations {
+            store_update: control.store_update.is_some(),
             package_id: control.package_id,
             remedies: scheduling
                 .iter()

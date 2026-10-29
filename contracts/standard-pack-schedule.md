@@ -268,6 +268,39 @@ other games are composed.
   adds `standard_pack_root_invalid`, and that game has no row. The overview reads the same file
   without composing.
 
+## The store update rule (UPD-1, since 0.12.30)
+
+A game root whose `interrupts.json` names a page `result: "application_update_required"`
+([package-reference.md](package-reference.md)) writes, per server, one rule for its store update
+package (`control.json` `store_update`), triggered by the instance fact the Runtime records when a
+run meets that page ([scheduling/README.md](scheduling/README.md), "Application Update Hold"). Only
+the members that matter here; the rest are written as for the game's other rules (the composer
+checks them), and the composer fills the scope:
+
+```json
+{"id": "<game>.store_update",
+ "package_id": "<game>.store_update",
+ "trigger": {"kind": "fact", "fact_key": "health.application.update_required",
+             "comparison": "eq", "value": {"type": "boolean", "value": true}, "max_age_ms": null},
+ "feedback_stop": {"kind": "fact", "fact_key": "health.application.update_required",
+                   "comparison": "eq", "value": {"type": "boolean", "value": false}, "max_age_ms": null},
+ "cooldown_ms": 1800000,
+ "sensitive": false,
+ "on_failure": {"action": "pause", "retry_limit": 1, "retry_backoff_ms": 0, "escalation_threshold": 2}}
+```
+
+- `cooldown_ms` is how long the rule waits before it looks again when the store has no new version
+  yet (its run ends "not needed", the fact turns false, the next task meets the dialog again and
+  the fact is true again); 30 minutes is an example, the resource side chooses it.
+- `requires` names nothing new (a typed `fact` predicate).
+- No other rule changes: the hold of the instance's other tasks is the Runtime's.
+- A timeline event's `invalidates_fact_prefixes` must not cover `health.application.`.
+- The page itself is no ordinary package's own page; the store update package declares it as its
+  entry page, and its "not needed" end is a success (for example a mapping `not_needed`), since
+  only a success clears the fact.
+- Without such a rule, an instance that met the dialog stays held, every candidate showing
+  `application_update_pending`: loud, not silent.
+
 ## What does not change
 
 No ledger record type or member is added. A composed generation is activated with the existing
