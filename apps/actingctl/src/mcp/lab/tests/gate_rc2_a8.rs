@@ -166,3 +166,53 @@ fn a14_ac_lab_do_with_target_tap_and_tap_is_arguments_invalid_naming_tap() {
         "ac_lab_do with target tap and tap",
     );
 }
+
+/// #411 A27 (P58, 0.12.28 LAB-SMALL), reproduced from A14-1: ac_lab_do with target `tap` and tap
+/// coordinates is refused by this server before any child runs, as its description says, and the
+/// refusal carries a req_id in actinglab's form (`req-<generation>-<n>`).
+#[test]
+fn p58_ac_lab_do_target_tap_with_coordinates_is_refused_with_a_req_id() {
+    let lab = TempDir::new().expect("tempdir");
+    let package = lab.path().join("neutral-package");
+    let call_once = || {
+        call(
+            act,
+            &arguments(json!({
+                "instance": ALIAS,
+                "target": "tap",
+                "tap": TAP,
+                "capture": true,
+                "package": package.to_string_lossy(),
+            })),
+        )
+    };
+    let check = |answer: ToolOutcome| {
+        let Err(error) = answer else {
+            panic!("ac_lab_do with target tap and tap was not refused");
+        };
+        let shown = error.to_value();
+        assert_eq!(error.class(), "usage", "{shown}");
+        let outcome = error.outcome_ref();
+        assert!(outcome.is(ActingctlCode::ArgumentsInvalid), "{shown}");
+        assert_eq!(outcome.value("argument"), Some(&json!("tap")), "{shown}");
+        assert!(outcome.causes().is_empty(), "{shown}");
+        let req_id = outcome
+            .value("req_id")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("the refusal carries no req_id: {shown}"))
+            .to_owned();
+        assert!(
+            shown.to_string().contains(&req_id),
+            "the answer shows the req_id: {shown}"
+        );
+        let parts = req_id.split('-').collect::<Vec<_>>();
+        assert_eq!(parts.len(), 3, "{req_id}");
+        assert_eq!(parts[0], "req", "{req_id}");
+        assert!(
+            parts[1].len() == 16 && parts[1].bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "{req_id}"
+        );
+        assert!(parts[2].parse::<u64>().is_ok(), "{req_id}");
+    };
+    check(call_once());
+}

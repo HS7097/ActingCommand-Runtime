@@ -34,6 +34,11 @@ mod gate_lab_l7;
 // and a Lab2 path refuses an option it takes once given twice.
 #[path = "gate_lab_b2.rs"]
 mod gate_lab_b2;
+// 0.12.28 LAB-SMALL (#411 B47, A69, A70): offline `observe` answers the page when a layout needs
+// an OCR model the Tools lack, writes no frame file for a refused answer, and never says standby
+// for a page not recognised.
+#[path = "gate_lab_small.rs"]
+mod gate_lab_small;
 // #411 RV-1 (exec key 103): `resource verify` checks a resource repository commit as its CI does.
 #[path = "gate_rv1.rs"]
 mod gate_rv1;
@@ -3209,7 +3214,8 @@ fn lab2_observe_uses_unique_page_owner() {
             assert_eq!(result.exit_code(), 0, "{}", result.envelope_json());
             let data = result.envelope.data.as_ref().unwrap();
             assert_eq!(data["observation"]["matched"], matching);
-            assert_eq!(data["observation"]["standby"], !matching);
+            // #411 A70 (P61): a page not recognised is never standby.
+            assert_eq!(data["observation"]["standby"], false);
             assert_eq!(
                 data["observation"]["page"],
                 if matching { "fixture/home" } else { "unknown" }

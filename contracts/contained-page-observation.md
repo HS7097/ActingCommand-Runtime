@@ -116,3 +116,27 @@ Lab frame directory and answers `preview {path, width, height, scale}`, or
 itself is never in the answer. Both members are kept by Min and count toward its
 budget. `--preview` under the global `--dry-run` is refused like `--with-frame`
 (`dry_run_unsupported`).
+
+0.12.28 LAB-SMALL (offline `observe`; `observe --capture` where named):
+- #411 B47: a candidate layout of the recognised page whose feature needs an OCR
+  or NN provider the Tools do not hold (`candidate_feature_provider_missing`)
+  is not projected; the page is still answered, as an action's OCR target is
+  not evaluated without failing (Workflow #396 LAB-3).
+  `candidate_not_projected` lists each such layout in declaration order,
+  `{layout_id, item, code, detail}`, and `ocr` gives the OCR state. Min keeps
+  it. Any other projection failure still refuses the frame (`package_invalid`).
+- #411 A62: each entry of `targets` (`--targets`) carries `target_center
+  {x, y}`, where a `target_center` click on that target lands on the current
+  frame: the centre of the matched template box (`x + width / 2`,
+  `y + height / 2`, integer division), as the kernel presses it; `null` when
+  the target did not pass or matched no template box. A Min answer over its
+  soft limit summarises `targets` as before (`id`, `passed`, `score`), so the
+  member is read with `--verbose`.
+- #411 A69: the `--with-frame` file (offline and with `--capture`) is written
+  only after the answer stands; an answer refused as
+  `observe_identity_limit_exceeded` writes no file and creates no directory.
+- #411 A70: a page not recognised is never `standby`: the projection's
+  `standby` (offline and with `--capture`, written by the shared projection
+  owner) and the answer's `standby` are `false`; `matched` and `state` say
+  whether a page was recognised. `detect-page` and `current-page` keep their
+  own `standby` page.
