@@ -9,6 +9,114 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.27
+
+本版是 v0.12.26 之后合并的 6 个 PR，都是 0.12 第二波：CAP-IDX、P32-B1、SR-2b-1、ISO-5a、IDLE-WG、SR-2b-2。运行中会注意
+到的：宿主满载时，采样超时、采样预算不够这类负载造成的失败（默认码表的八个码，见下面）不再算任务失败，而是“条件终止”：退回
+这次占用的次数，不加连败，记下一次欠着的补跑（SR-2b-1）；欠着的补跑等实例的节奏段（pacing stage）回到 S2 及以下并稳定
+60 秒后，排在本实例其他任务前面先跑，到活动时段结束还没跑就过期，不顺延到第二天（SR-2b-2）。同一时段里连续第三次条件
+终止按普通失败结算，并记一条 `policy_rerun_exhausted`。`actingd suspended` 和 `ac_diagnose` 多了 `reruns`，列出欠着、
+在等和已过期的补跑。运行收尾、租约持有者收尾的任何一步都不再让 Runtime 停下，收尾时租约会在宽限期内到期就先续一次，
+账本里会多看到续租记录（ISO-5a）。模拟器重开后端口顺延到下一个时，截图按绑定里的编号打开，不再打不开（CAP-IDX）。空闲
+实例只为此刻真能派出去的任务叫醒，不再为被活动时段或黑名单挡着的任务白跑一次启动包（IDLE-WG）。运行列表的速度没有变：
+P32-B1 只定义了运行汇总的契约和折叠函数，Runtime 端的运行汇总还没有做。v0.12.26 已在本版之前发布。
+
+配置：没有新键，也没有新的 revision，`actingd-config` 仍是 [5, 19]，`runtime-client` 仍是 [2, 2]，账本仍是 [3, 4]；
+没有改任何默认值。
+
+- 组件接口表、默认配置文件、配置 crate、actingd 和账本都没有改动；契约 crate 只加了运行汇总的折叠函数、`QueryRuns`
+  的请求和结果类型（只定义，没有任何操作带它们）和一个结果码。
+- `scheduling.rerun` 这组键 v0.12.0 起就有、默认值没变，但以前没有代码读，本版开始生效：`condition_codes`、
+  `max_per_occurrence`、`refund_counts` 在一次运行第一次结算时读（实时结算或按终态对账；启动时的对账读 actingd 配置
+  文件里的值），`resume_stage`、`resume_settle_ms`、`promote` 在每轮评估时读。配置里改过这组键的，本版起按改过的值
+  生效。
+- `host_claims.run_end_grace_ms`（默认 120 秒）以前只在运行到截止时间时读，现在任何一次运行开始收尾时都读（ISO-5a）。
+- 账本没有新表、新索引或新事件类型，格式不变；本版写的新记录都是已有的记录类型（见下面）。
+- 新结果码一个：`invalid_query_runs`（`since` 0.12.27）。它的评审状态还是 pending，结果码发布文件只收已定稿或已退役
+  的条目，所以本版的发布文件是空的。没有退役的码。
+- 现有的配置都不需要修改。
+
+升级时要知道的：
+
+- 条件终止（SR-2b-1、SR-2b-2）：从 v0.12.26 升级不用做什么。v0.12.26 不写执行记录里的 `condition`，也不写 L7 的
+  `condition_reruns`，升级时没有欠着的补跑。默认码表是 `recognition_sample_budget_insufficient`、
+  `candidate_sample_budget_insufficient`、`recognition_sample_deadline_exceeded`、`candidate_sample_deadline_exceeded`、
+  `blackout_run_stopped`、`perf_run_yielded`、`perf_hold_expired` 和 `cost_commit_time_insufficient`：被黑名单时段停下、
+  被性能控制让出的运行也按条件终止。只限可恢复、非敏感任务的失败；操作员暂停（`contained_task_paused`）不在表里。
+- L7 和新记录：每对任务（任务、实例）的决策记录 `policy.control_state_recorded` 带 `condition_reruns`
+  `{failure_code, count, expires_at_unix_ms}`，每对至多一条，重启后照它载回；执行记录的失败部分带 `condition`
+  `{refunded, count, expires_at_unix_ms}`。新记的是三种计划信号，载体都是已有的 `policy.planning_signal_observed`
+  （kind `goal_missed`，`signal_id` 以 `signal:policy_rerun:` 开头）：`policy_rerun_exhausted`（warning，同一时段连续
+  超过 `max_per_occurrence` 次）、`policy_rerun_waiting`（info，每个欠补跑第一次因节奏段等待时记一次）和
+  `policy_rerun_expired`（warning，过了时段终点）。评估把欠着的补跑当作已触发、跳过冷却，原因 `policy_rerun_owed`。
+- 欠着补跑期间，这次运行的失败终态不进任务快照，依赖它的链条任务（`dependency_completed`）等着；过期之后失败终态回到
+  快照，按普通失败算。同一时段刚用尽的那对任务不再提前补跑，只等它自己的触发和冷却；这个“用尽”只记在内存里，重启后
+  同一时段里新欠的补跑又会被提前。
+- `reruns`（SR-2b-2）：`actingd suspended` 多了 `reruns` 列表，每对任务一行（`task_id`、`instance_id`、`failure_code`、
+  `count`、`expires_at_unix_ms`、`state`）；`ac_diagnose` 带出被诊断实例的那些行，按输出预算截断时排在 `remedies`
+  后面（`reruns_truncated`）。`state` 看 Runtime 自己写的记录：有 `policy_rerun_expired` 是 `expired`，否则有
+  `policy_rerun_waiting` 是 `waiting`，否则是 `owed`；时段在 Runtime 停机期间结束的，重启后第一轮评估记下过期之前仍
+  显示 `owed` 或 `waiting`。升级时 MCP 入口还没切到本版子进程之前，旧子进程的 `ac_diagnose` 没有 `reruns`。
+- 收尾续租（ISO-5a）：运行收尾（成功、其他失败、取消）时，只要还持有租约、租约没过期，而且会在 `run_end_grace_ms`
+  之内到期，就先续一次。这次运行的历史里会多三条已有类型的记录：`scheduler.admitted`、`lease.transition_intent`
+  （`lease.renew`）和 `lease.renewed`，和运行到截止时间时的收尾续租一样。成功终态已经写下、收尾超过宽限期才碰到租约
+  已结束的计划运行，按成功结算，只有它的回执失败。只让这一次操作失败的内核拒绝，回执的 `runtime_code` 由
+  `runtime_halted` 改为已有的 `backend_operation_failed`。还没修的：多 Nemu 截图时，客户端或宿主认领的租约带着打开的
+  会话过期，仍会让 Runtime 停下（后续 ISO-5b）。
+- 截图编号（CAP-IDX）：有发现绑定的实例，截图取绑定里的编号。端口不是该编号的基础端口时，打开截图或配对会话之前先用
+  MuMuManager `info` 读一次（有时限），报告的端口必须和绑定的一致，否则只有这一台打不开（`capture_backend_open_failed`
+  或 `paired_backend_open_failed`，原因 `target_identity_mismatch`；读取失败是 `target_identity_unavailable`）。没有
+  发现绑定的条目只在基础端口上推得出编号，原来前后两个端口的宽容没有了。
+- 空闲唤醒（IDLE-WG）：不用做什么。被别的门挡着的任务（预算用尽、间隔、退避、补救 hold）在暂停或占用期间仍可能叫醒
+  实例，这部分归后续片。
+- 新码 `invalid_query_runs`（P32-B1）：本版没有任何操作发送或答复 `QueryRuns`，账本和回执里不会出现这个码。
+
+退回 v0.12.26 之前要做的事（按代码核对过）：
+
+- 配置和运行时指令：本版没有新键，也没有改默认值，v0.12.26 照样读本版的配置文件（`scheduling.rerun` 各键它也解析，
+  只是不用），回退启动的 `instructions` 检查不会因本版失败。
+- L7 里的 `condition_reruns`：不用做什么，但要知道后果。这个成员 v0.12.0 起就在 L7 的形状里，v0.12.26 照常读这条记录、
+  校验通过，但载入时不理会它：欠着的补跑不提前、不等节奏段、不过期，`actingd suspended` 也不列；藏起来的失败终态回到
+  任务快照，依赖它的链条可能读到 `dependency_completed(head, failed)`。v0.12.26 下次写决策记录时，发现这些对的记录和
+  内存里的不同，就改写成不带 `condition_reruns` 的记录，之后再升到本版也找不回来。已经退回的次数仍是退回的，没加的
+  连败也仍没加（都在计数里）；那对任务回退后照常由它自己的触发再跑，需要马上补的手动跑一次。
+- 执行记录里的 `condition`：不用做什么。v0.12.26（SR-2a 起）重放时照它结算：不加连败、按 `refunded` 退回次数、不计
+  运行时长。回退后 v0.12.26 自己结算的负载失败又按普通失败算：扣次数、加连败，连续三次暂停这对任务。
+- 新记录：不用做什么。`policy_rerun_*` 三种计划信号是已有的记录类型和 kind，v0.12.26 当普通计划信号读；它的
+  `actingd suspended` 按 `signal_id` 前缀挑记录，不列它们。ISO-5a 的续租记录也是已有类型，v0.12.26 当普通续租读。
+- 收尾（ISO-5a）：规则编在程序里，不存状态。回退后这 13 种收尾情形又会让 Runtime 被 poison 或停机，只让操作失败的
+  拒绝回执又是 `runtime_halted`。
+- 截图编号（CAP-IDX）：不存状态。回退后截图又只按端口推算编号，端口顺延的实例又打不开截图（10-29 00:44 那种情况），
+  只能让它回到自己的基础端口（关掉再启动这台模拟器）。
+- 空闲唤醒（IDLE-WG）：不存状态。回退后又可能为被活动时段挡着的任务叫醒实例、白跑一次启动包。
+- 结果码：`invalid_query_runs` 只是新登记，本版不会把它写进账本或回执，回退不用做什么；没有退役的码。
+- 请求成员：本版没有新增请求类型或请求成员。`QueryRuns` 的请求和结果只定义了类型，没有操作带它们，`runtime-client`
+  仍是 [2, 2]。
+- 客户端和 Runtime 的配对：
+  - 本版的客户端连 v0.12.26 的 Runtime：照常。请求和以前一样，不发 `QueryRuns`；运行状态改用契约的折叠函数，读的是
+    同样的答复，结果不变。`ac_diagnose` 的 `reruns` 来自安装选中的那一代的 `actingd suspended`，那一代是 v0.12.26
+    时它是空列表。
+  - v0.12.26 的客户端连本版的 Runtime：照常。请求不变；回执里的 `backend_operation_failed` 是它认得的码；本版
+    `actingd suspended` 多出的 `reruns` 它不读，`ac_diagnose` 没有 `reruns`。
+
+运行上的变化：
+
+- 截图编号（CAP-IDX）：截图按绑定里的 MuMu 编号打开；端口顺延时先用 `info` 核对端口，不符只拒这一台。
+- 运行状态（P32-B1）：运行状态改由契约里可交换的折叠函数算出，结果不变；`QueryRuns` 只定义、不上线，列表速度不变。
+- 条件终止（SR-2b-1）：负载造成的失败退回次数、不加连败、记下欠补跑（L7 `condition_reruns`），超限记 `policy_rerun_exhausted`。
+- 收尾（ISO-5a）：运行和持有者收尾的 13 种情形不再让 Runtime 停下；收尾贴着租约终点时续租一次。
+- 空闲唤醒（IDLE-WG）：被黑名单或关着的活动时段挡着的任务不叫醒空闲实例，只把唤醒挪到门放行的时刻减去提前量。
+- 欠补跑（SR-2b-2）：欠着的补跑提前、等节奏段回落并稳定、到时段终点过期；`actingd suspended` 和 `ac_diagnose` 列 `reruns`。
+
+本版合并的 PR：
+
+- #1417 CAP-IDX（#421）：有发现绑定的条目截图取绑定的 MuMu 编号；端口不是基础端口时先用有时限的 `info` 核对端口，不符以 `target_identity_mismatch` 只拒这一台；没有绑定的条目只按基础端口推编号。
+- #1414 P32-B1（#422）：运行汇总的契约（`QueryRuns` 的请求和结果，只定义、不提供）和可交换的运行状态折叠函数，客户端已改用它；新结果码 `invalid_query_runs`。
+- #1415 SR-2b-1（#386）：负载造成的采样失败按条件终止结算：退回当日次数、不加连败；超限记 `policy_rerun_exhausted`；欠补跑记进 L7 的 `condition_reruns`。
+- #1416 ISO-5a（#419）：运行或持有者收尾的任何一步都不让 Runtime 停下（13 项）；降为非致命的失败回执 `backend_operation_failed`；收尾时租约会在宽限期内到期就续一次。
+- #1418 IDLE-WG：空闲实例只为此刻能派出去的任务叫醒（不为被活动时段或黑名单挡着的任务叫醒）。
+- #1419 SR-2b-2（#386）：欠着的补跑提前、等节奏段、到时段终点过期；`actingd suspended` 和 `ac_diagnose` 列出 `reruns`。
+
 ## v0.12.26
 
 本版是 v0.12.25 之后合并的 5 个 PR，都是 0.12 第二波：P32-A、W2-A、W2-B、W2-C、W2-E。运行中会注意到的：运行记录最多
