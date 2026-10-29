@@ -9,6 +9,127 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.29
+
+本版是 v0.12.28 之后合并的 5 个 PR：CFL-1、STORE-FG-1、CFL-2、STORE-FG-2、LAB-WAIT。运行中会注意到的新东西有两件。
+一是商店更新包：包可以在 `control.json` 里写 `store_update`，在官方应用商店处于前台时点它声明过的商店步骤，用来更新实例上
+的客户端（STORE-FG-1）；但只有配置里的允许名单 `store_foreground.allowed_application_ids` 写了这个商店才行。名单默认是空
+的，所以在操作员把商店写进配置文件并重启之前，每个商店更新包的运行都在截图和输入之前以 `application_store_not_allowed`
+被拒，设备上什么都不发生（STORE-FG-2）。二是识别预处理：包的 OCR 目标可以写 `preprocess`，先对目标区域跑一条固定的处理
+链（保留颜色、颜色范围、反转、灰度、对比度、二值化），再把处理后的区域交给 OCR（CFL-1、CFL-2）；没写的目标逐字节照旧读。
+按约定，生产资源包在真实画面验收（CF-RF1）之前不用它。另外，离线 `observe` 能加载 `to` 是页面集合的等待步骤了
+（LAB-WAIT）。不写这两个新成员的包、不改配置的实例，运行和 v0.12.28 一样。v0.12.28 已在本版之前发布。
+
+配置：`actingd-config` 升为 revision 21，本版声明 [5, 21]，仍读 revision 5 到 20 的配置文件；`runtime-client` 仍是
+[2, 2]，账本仍是 [3, 4]，`package` 仍是 [3, 5]，其他接口不变。
+
+- 新键 `store_foreground.allowed_application_ids`（STORE-FG-2）：商店更新包可以在其中点击的商店应用，0 到 16 个不重复的
+  Android 包名；默认 `[]`（在 `actingd.defaults.json` 里），即不允许任何商店。不可在运行时设置（`ConfigureSettings`、
+  `ac_config_set` 答 `config_key_not_settable`），任何代理都放宽不了它：只有人改配置文件，下次启动 Runtime 时生效。Runtime
+  只按包名逐字比较，代码和默认值里不写任何商店。
+- 这个键写错时，启动和 `check-config` 都以 `config_value_invalid` 拒绝并点名它：值不是列表或某项不是字符串
+  （`wrong_type`）；超过 16 项或某项不是 Android 包名（`out_of_range`）；某项重复，或某项等于某个已配置实例自己的
+  `application_id`（`section_check`，游戏不会是自己的商店）。
+- 改了的默认值：没有。`actingd.defaults.json` 只多了 `store_foreground` 一节（`"allowed_application_ids": []`），已有的
+  默认值一个都没改，现有的配置都不需要修改。
+- 账本没有新表、新索引或新事件类型，格式不变；本版写的新记录都是已有的记录类型（见下面）。
+- 新结果码 3 个：`application_store_not_allowed`（STORE-FG-2，error，阶梯类 `declaration_error`）、
+  `package_bundle_store_tap_unlocated`（STORE-FG-1，warning）、`package_bundle_preprocess_divergent`（CFL-2，warning）。新位置
+  1 个：`admit_store_foreground`（STORE-FG-2）。已有的 `contained_task_program_invalid` 的 `program_problem` 多了三个原因词：
+  `store_operation_invalid`、`store_proof_invalid`、`store_way_back_missing`（STORE-FG-1）。它们的评审状态都是 pending，结果
+  码发布文件只收已定稿或已退役的条目，所以本版的发布文件是空的。没有退役的码。
+- 两个包成员：`control.json` 的 `store_update` 和 OCR 目标的 `preprocess` 都归 package 接口 revision 6（由 B 列车的收尾片
+  BT-PK6 声明），在那之前 Runtime 按代码接纳它们，所以 `package` 仍是 [3, 5]。`preprocess` 只写在任务 schema 0.9 的
+  `ocr_targets[]`、`candidate_layouts[].shared_ocr` 上，派生到识别包 schema 0.7 的 OCR 目标和 `shared_ocr`（两个 schema
+  都是已有的）；更早的 schema 拒收（`UnconsumedField`）。
+
+升级时要知道的：
+
+- 新成员要本版或以上（STORE-FG-1、CFL-2）：v0.12.28 及更早的 Runtime 在准备阶段拒收写了 `store_update` 的包（`control.json`
+  的 `/store_update`）和写了 `preprocess` 的包（识别包的 `/targets/<i>/preprocess`），都是 `resource_declaration_invalid`
+  （`UnknownField`），要用这个包的每个运行都被拒，Runtime 不停；v0.12.28 的 Tools 打包时也一样拒收。所以资源仓要等本版部署并
+  核过之后，在同一个 PR 里把 CI 钉的 Tools 换到 0.12.29 或以上，再热放置。不写这两个成员的包，本版 Tools 派生出来的文件逐
+  字节和以前一样。
+- 商店不在允许名单里（STORE-FG-2）：商店更新包自己的运行（直接运行或计划运行）在开跑检查、任何截图和输入之前先核名单。名单
+  没写它声明的商店时，运行以 `application_store_not_allowed` 结束（error，阶梯类 `declaration_error`，回执 `denied`，带
+  `alias` 和声明的商店 `application_id`，位置 `admit_store_foreground`），记为这次运行的失败终态，什么都不点。默认配置的阶梯
+  触发项都不匹配这个阶梯类，所以默认不开阶梯。每次商店点击在读前台之前还会再核一次名单（位置
+  `require_foreground_application`，和其他被拒的输入一样记 `command.rejected` 和 `runtime.failed`）。处理：确认是官方应用
+  商店之后，把它的包名写进配置文件的 `store_foreground.allowed_application_ids` 并重启 Runtime；不是的话改正包里的
+  `store_application_id`。
+- 商店点击的前台（STORE-FG-2）：只有包声明的商店步骤的普通点击（`Tap`）要求前台正好是声明的商店，而且名单写了它。前台是游戏
+  （商店已经关了）、别的应用（登录页、浏览器）或没有活动页时，这次点击照已有的规则被拒：`application_not_foreground`（细节里
+  `expected=` 是商店）或 `application_foreground_unknown`；对上时记一次 `application.foreground` 为商店。包里的其他步骤（游戏
+  自己的更新对话框）、其他包、层、Lab 操作和客户端 `Input` 的所有输入照旧要求前台是实例分配的应用。真机开跑检查在
+  `device_state.in_use_gate` 下不把这次运行声明的商店算作别的应用（`device_in_use`），其他运行不变。商店运行失败时 Runtime
+  不自己把游戏拉回前台：计划运行的失败照恢复阶梯的触发项处理，直接运行由发起方 `ac_app restart`。允许只对这一次运行的商店点击
+  有效，不存任何事实、标志或实例状态。
+- 商店更新包从不当层用：作前置、回首页、导航边、恢复链、打断处理或 `then.run` 包时以 `reason=store_update` 拒绝；作启动包时
+  以 `startup_package_admission_failed`（`reason=store_update`）拒绝；也不当阶梯级。
+- 商店更新包的写法（STORE-FG-1，给包作者）：只用于 `navigable_route` 或 `linear_steps` 的包；每个商店步骤都是从包里的一个页
+  （不是 `any`）出发、带着该页守卫的点击（不能是 `unguarded_trusted_coordinate`）；每个证明目标是带 `expected` 的 OCR 目标，
+  直接写在出发页的 `required` 里；包里还要有一个 `application` 的 `launch` 或 `restart` 步骤回到游戏。违反的在准入时以
+  `contained_task_control_invalid`（`reason=store_update_invalid`）或 `contained_task_program_invalid`（上面三个原因词之一）
+  拒收。商店步骤点固定位置（`point`、`rect`、`specific_rect`）时，`package bundle` 和 `standard-pack check` 报
+  `package_bundle_store_tap_unlocated` 警告，不拒收。等商店更新用等待步骤或确认的 `wait_page`，`max_ms` 最多 1800000，并且要
+  留在运行的 `timeout_ms` 之内。
+- 识别预处理（CFL-1、CFL-2，给包作者）：一条链 1 到 4 步，算法版本 `preprocess.v1`；语法、算术、证据和金样见契约
+  `recognition-preprocess.md`。`gray` 一步和场景灰度逐字节相同（用的是场景同一个转换），其他步骤都是整数运算。带链的目标只把
+  处理后的区域交给 OCR；整帧的目标带链必须写 `locate`；共享读只服务链完全相同的目标、不收 `otsu`，链不同的目标自己读，
+  `package bundle` 和 `standard-pack check` 报 `package_bundle_preprocess_divergent` 警告。处理链跑完之后按采样期限再核一次，
+  不够时是已有的采样预算不足错误，不调 OCR；存档帧 OCR 的超时扣掉处理链用的时间。
+- 识别证据（CFL-2）：处理链的证据（`preprocess`）和共享读的证据（`shared_read`）只出现在只读识别、存档帧 OCR 报告、观测的
+  `candidate_sample` 行和 Lab 输出里，从不进账本，任务诊断的目标行和 OCR 行不变。由共享读服务的观测行不论有没有链都多一个
+  `shared_read`（每行约 90 字节）；目前各资源仓都没有用 `shared_ocr`。
+- 等待步骤（LAB-WAIT，给包作者）：只改 Tools。`to` 是页面集合、没有 `click` 的等待步骤（有 `wait`，没有 `click`、
+  `application`、`select`），离线 `observe` 现在能加载，不把它列为动作，它的目的页和内核给出的一样；以前它报
+  `missing field 'click'`，只能改写成 `expect_after.page_id`，那种写法照样可用。Runtime 和内核一直接受这种写法，所以不用等
+  Runtime 部署，CI 钉的 Tools 换到 0.12.29 或以上就行。同时写了 `wait` 和 `click` 的步骤仍按点击步骤读（内核拒收为
+  `wait_member_refused`）；`to` 是页面集合的点击步骤仍然必须有 `click`。
+
+退回 v0.12.28 之前要做的事（按代码核对过）：
+
+- 配置文件：v0.12.28 只认 [5, 20]，配置文件拒绝不认识的成员。配置文件只要写了 `store_foreground` 节（哪怕写的是默认的
+  `[]`），v0.12.28 的 `check-config` 和启动都会拒绝整个文件，回退闸门的 `config` 部分也不通过。回退前先把这一节从配置文件里
+  删掉并提交（`acsetup --commit-config`）；没写这一节的文件 v0.12.28 照常读。这个键不可设置，没有运行时指令要清。
+- 用了 `store_update` 或 `preprocess` 的包：v0.12.28 在准备阶段以 `resource_declaration_invalid`（`UnknownField`）拒收这个
+  包，要用它的每个运行都被拒（写了 `preprocess` 的包被别的运行当作层用时，那些运行也被拒），Runtime 不停。回退前先把资源根换
+  回不带这两个成员的版本并热放置。回退后 Runtime 做不了商店更新（v0.12.28 的前台闸门拒绝商店在前台时的任何点击），需要更新
+  客户端时由人手动更新。
+- 账本里的新记录：不用做什么。账本的格式、表、索引和事件类型都没变，v0.12.28 照样打开本版写过的账本。新记录都是已有类型：
+  `application_store_not_allowed` 的运行终态和被拒点击的 `command.rejected`、`runtime.failed`；商店点击记下的
+  `application.foreground`（值是商店的包名，回退后下一次普通点击会记回分配的应用）；`contained_task_program_invalid` 的新原因
+  词和 `startup_package_admission_failed` 的 `reason=store_update`。本版的新码不在 v0.12.28 的目录里，它读回时显示为
+  `outcome_relay_unregistered`（`raw_code` 是原码）。识别证据不进账本。
+- 只在程序里、不存状态的改动，回退后回到 v0.12.28 的行为：
+  - STORE-FG-2：允许名单、商店点击的前台判断和开跑检查的例外都没有了。
+  - CFL-1、CFL-2：没有预处理，OCR 目标只按原帧读。
+  - LAB-WAIT 和两个打包警告在 Tools 里：回退 Tools 后，离线 `observe` 又对 `to` 是页面集合的等待步骤报
+    `missing field 'click'`。
+- 请求成员：本版没有新增请求类型或请求成员，`runtime-client` 仍是 [2, 2]。新增的只是一个不可设置的配置键、两个包成员和识别
+  证据里的成员（`preprocess`、`shared_read`，只在用了链或共享读时出现）。
+- 客户端和 Runtime 的配对：
+  - 本版的客户端连 v0.12.28 的 Runtime：照常。请求不变；对它设 `store_foreground.*` 会被当作未知键拒绝（`config_key_unknown`，
+    本版的 Runtime 答 `config_key_not_settable`）；LAB-WAIT 和两个警告在 Tools 自己里，不依赖 Runtime。
+  - v0.12.28 的客户端连本版的 Runtime：照常。请求不变；`application_store_not_allowed` 不在它的目录里，读到时显示为
+    `outcome_relay_unregistered`；识别证据里的新成员只在包用了链或共享读时才出现，现在的包都没用。
+
+运行上的变化：
+
+- 识别预处理（CFL-1）：识别库多了一条纯函数的预处理链和它的契约，本身不接任何读取。
+- 商店更新包的声明（STORE-FG-1）：`control.json` 可以写 `store_update`；准入核对商店步骤、证明目标和回到游戏的步骤；商店步骤点固定位置时报 `package_bundle_store_tap_unlocated`。
+- 预处理接进 OCR（CFL-2）：OCR 目标和共享读可以写 `preprocess`，只把处理后的区域交给 OCR；目标和共享读的链不一致时报 `package_bundle_preprocess_divergent`。
+- 商店允许名单（STORE-FG-2）：商店更新包只在名单写了它的商店、前台正好是这个商店时点商店步骤，否则 `application_store_not_allowed` 或 `application_not_foreground`；名单默认空。
+- 等待步骤（LAB-WAIT）：离线 `observe` 能加载 `to` 是页面集合的等待步骤。
+
+本版合并的 PR：
+
+- #1429 CFL-1（#428）：识别预处理的纯函数链（`preprocess.v1`，六种步骤）和契约 `recognition-preprocess.md`；只是库，不接读取。
+- #1432 STORE-FG-1（#428）：`control.json` 的 `store_update`：包声明官方应用商店在前台时它执行的步骤；新的 `program_problem` 原因词；新警告 `package_bundle_store_tap_unlocated`；更早的 Runtime 拒收写了它的包。
+- #1433 CFL-2（#428）：预处理接进 OCR 读取；新的可选包成员 `preprocess`（任务 schema 0.9、识别包 0.7）；新警告 `package_bundle_preprocess_divergent`；生产包在真实画面验收 CF-RF1 之前不用。
+- #1434 STORE-FG-2（#428）：新键 `store_foreground.allowed_application_ids`（默认空，不可在运行时设置），`actingd-config` revision 20 → 21；新结果码 `application_store_not_allowed`；声明的商店步骤只在前台正好是声明的商店时点击；作启动包时以 `reason=store_update` 拒绝。
+- #1436 LAB-WAIT（#428）：actinglab 的离线 `observe` 能加载 `to` 是页面集合的等待步骤。
+
 ## v0.12.28
 
 本版是 v0.12.27 之后合并的 10 个 PR：SR-92、UNSET-1、RB-2、RB-1、B35、B43、EMU-BIND、LAB-SMALL、WD-MT、ISO-PE。运行中
