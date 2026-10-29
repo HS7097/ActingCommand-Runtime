@@ -38,10 +38,18 @@
 //! - **The head** (#422 W1-8, P30). The published point's head is the ledger's committed head
 //!   for a read that needs only that (`GlobalLedger::published_head`): it waits for no writer
 //!   command.
+//! - **The Lab relations** (#422 RB-1, 0.12.27). When the pool starts, a thread of its own builds
+//!   the pool's Lab relations once, through the point published then, on a read-only connection
+//!   of its own and within the open's deadline (`ledger_observer.open_timeout_ms`), outside every
+//!   page's budget; the readers then read only the records after it
+//!   (`sqlite::lab_relations`). Before it ends, and when it failed, the pages read the whole
+//!   history's relations, as before; a failure is said once, as the readers' ends are
+//!   (`take_findings`), and is never fatal. The close stops it within one look of its bound.
 
 use super::read_work::ReadWork;
 use super::retention::PublishedProofs;
 use super::sqlite::SnapshotMemo;
+use super::sqlite::lab_relations::{self, LabRelationCell};
 use super::store::LedgerStore;
 use super::write_failure::LedgerMonotonicClock;
 use super::{
@@ -110,6 +118,9 @@ pub(super) struct ReaderSettings {
     pub(super) read_check_vm_steps: u32,
     pub(super) history_page_rows: usize,
     pub(super) history_scan_rows: usize,
+    /// #422 RB-1: the deadline of the build of the pool's Lab relations, counted from its start
+    /// (the open's, `ledger_observer.open_timeout_ms`); `None`: the pool builds none.
+    pub(super) lab_relations_timeout: Option<Duration>,
 }
 
 struct ReadJob {
@@ -153,6 +164,8 @@ pub(super) struct ReaderPool {
     /// Fix 1: the queue's end, kept while the pool lives, so that a page queued as the last
     /// reader ends waits for its caller's reply limit (not fatal) instead of being dropped.
     _queue_end: Arc<Mutex<Receiver<ReadJob>>>,
+    /// #422 RB-1: the thread that builds the pool's Lab relations, joined by the close.
+    lab_relations_build: Option<JoinHandle<()>>,
 }
 
 impl ReaderPool {
@@ -182,12 +195,17 @@ impl ReaderPool {
         );
         let (sender, receiver) = mpsc::sync_channel(capacity.max(1));
         let receiver = Arc::new(Mutex::new(receiver));
+        let lab_relations_timeout = settings.lab_relations_timeout;
         let reader = Arc::new(Reader {
             #[cfg(any(test, feature = "test-hooks"))]
             hook_root: {
                 let root = settings.database.root();
                 root.canonicalize().unwrap_or_else(|_| root.to_path_buf())
             },
+            lab_relations: Arc::new(LabRelationCell::new(
+                settings.history_scan_rows,
+                lab_relations_timeout.is_some(),
+            )),
             settings,
             statistics,
             state: PoolState {
@@ -201,6 +219,7 @@ impl ReaderPool {
             interrupts,
             reader: Arc::clone(&reader),
             _queue_end: Arc::clone(&receiver),
+            lab_relations_build: None,
         };
         for (index, connection) in connections.into_iter().enumerate() {
             let receiver = Arc::clone(&receiver);
@@ -219,6 +238,11 @@ impl ReaderPool {
                     ));
                 }
             }
+        }
+        // #422 RB-1: the build of the pool's Lab relations; one that cannot start is said as a
+        // failed build, and the pages read the whole history's relations.
+        if let Some(timeout) = lab_relations_timeout {
+            pool.lab_relations_build = reader.start_lab_relations_build(timeout);
         }
         Ok(pool)
     }
@@ -311,6 +335,17 @@ impl ReaderPool {
         for thread in self.threads.drain(..) {
             let _ = thread.join();
         }
+        // #422 RB-1: the build stops at its bound's next look once the pool is closing.
+        if let Some(build) = self.lab_relations_build.take() {
+            let _ = build.join();
+        }
+    }
+
+    /// #422 RB-1, tests: waits at most `wait` for the build of the pool's Lab relations to end
+    /// (`LabRelationCell::settled_for_test`).
+    #[cfg(test)]
+    pub(super) fn lab_relations_settled_for_test(&self, wait: Duration) -> Option<Option<u64>> {
+        self.reader.lab_relations.settled_for_test(wait)
     }
 
     /// The close's first step (a test takes it alone, then lets a held read go on): the pool is
@@ -349,12 +384,98 @@ struct Reader {
     /// Fix 1 (review L-4): the writer's commit statistics, where each page read is recorded.
     statistics: Arc<CommitStatistics>,
     state: PoolState,
+    /// #422 RB-1: the pool's Lab relations, which its build makes and its readers read forward.
+    lab_relations: Arc<LabRelationCell>,
     /// The root the test hooks name this ledger by (the writer's `hook_root`).
     #[cfg(any(test, feature = "test-hooks"))]
     hook_root: std::path::PathBuf,
 }
 
 impl Reader {
+    /// #422 RB-1: starts the build of the pool's Lab relations on a read-only connection of its
+    /// own, within `timeout` from its start. A connection that does not open, or a thread that
+    /// does not start, is the build's failure: said once, never fatal, and the pages read the
+    /// whole history's relations.
+    fn start_lab_relations_build(self: &Arc<Self>, timeout: Duration) -> Option<JoinHandle<()>> {
+        let operation = LedgerLocation::BuildLabRelations.location();
+        let connection = match self.settings.database.read_snapshot_connection(operation) {
+            Ok(connection) => connection,
+            Err(error) => {
+                self.say_lab_relations_failure(GlobalLedgerError::from(error));
+                self.lab_relations.settle(None);
+                return None;
+            }
+        };
+        let builder = Arc::clone(self);
+        let spawned = thread::Builder::new()
+            .name("actingcommand-ledger-lab-relations".to_owned())
+            .spawn(move || builder.build_lab_relations(connection, timeout));
+        match spawned {
+            Ok(thread) => Some(thread),
+            Err(error) => {
+                self.say_lab_relations_failure(GlobalLedgerError::io(
+                    LedgerCode::WriterSpawnFailed.code(),
+                    operation,
+                    &error,
+                ));
+                self.lab_relations.settle(None);
+                None
+            }
+        }
+    }
+
+    /// #422 RB-1: the build's thread: the pool's Lab relations through the point the writer
+    /// published, before the deadline taken now. The close stops it (`closing`) at its bound's
+    /// next look, unsaid; any other end without the relations is said once.
+    fn build_lab_relations(self: Arc<Self>, mut connection: Connection, timeout: Duration) {
+        let mut end = BuildEnd {
+            reader: &self,
+            settled: false,
+        };
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .unwrap_or_else(Instant::now);
+        let built = match self.settings.points.current() {
+            Some(point) => {
+                let stopping = Arc::clone(&self);
+                lab_relations::build(
+                    &mut connection,
+                    point.head,
+                    deadline,
+                    self.settings.read_check_vm_steps,
+                    move || stopping.state.closing.load(Ordering::Acquire),
+                )
+            }
+            // The open publishes the first point before the pool starts.
+            None => Err(GlobalLedgerError::request(
+                LedgerCode::WriterUnavailable.code(),
+                LedgerLocation::BuildLabRelations.location(),
+            )),
+        };
+        end.settled = true;
+        // A failure is said before the pages are told the build ended.
+        match built {
+            Ok(index) => self.lab_relations.settle(Some(index)),
+            Err(error) => {
+                self.say_lab_relations_failure(error);
+                self.lab_relations.settle(None);
+            }
+        }
+    }
+
+    /// #422 RB-1: a build of the pool's Lab relations that ended without them, said once as the
+    /// readers' ends are (`ReaderPool::take_findings`), unless the close stopped it: a warning of
+    /// `build_lab_relations` with the failure's code, never fatal.
+    fn say_lab_relations_failure(&self, error: GlobalLedgerError) {
+        if self.state.closing.load(Ordering::Acquire) {
+            return;
+        }
+        lock(&self.state.findings).push(error.as_warning_of(
+            LedgerLocation::BuildLabRelations.location(),
+            "the pages read the whole history's Lab relations until the next start",
+        ));
+    }
+
     /// One reader: takes pages until the pool closes. A page taken once the pool is closing, or
     /// past its caller's deadline, is answered and not read (review M-1). The page read is
     /// recorded in the writer's statistics as a `ProjectViewPage` before it is answered (L-4).
@@ -365,8 +486,9 @@ impl Reader {
             answering: None,
         };
         // #422 QR-2: this reader's Lab relations and window starts, kept from one of its pages to
-        // the next (fix 1: a few snapshots, the least recently used dropped first).
-        let mut memo = SnapshotMemo::default();
+        // the next (fix 1: a few snapshots, the least recently used dropped first). #422 RB-1:
+        // with the pool's Lab relations.
+        let mut memo = SnapshotMemo::with_lab_relations(Arc::clone(&self.lab_relations));
         loop {
             let job = lock(receiver).recv();
             let Ok(ReadJob {
@@ -479,6 +601,27 @@ impl Reader {
             work.bound_callbacks(),
         );
         (page, observation)
+    }
+}
+
+/// #422 RB-1: the end of the build's thread. A build that unwinds from a panic leaves the pool
+/// without its index, said once as `writer_panicked` of `build_lab_relations`, never fatal: the
+/// pages read the whole history's relations.
+struct BuildEnd<'a> {
+    reader: &'a Reader,
+    settled: bool,
+}
+
+impl Drop for BuildEnd<'_> {
+    fn drop(&mut self) {
+        if !self.settled {
+            self.reader
+                .say_lab_relations_failure(GlobalLedgerError::request(
+                    LedgerCode::WriterPanicked.code(),
+                    LedgerLocation::BuildLabRelations.location(),
+                ));
+            self.reader.lab_relations.settle(None);
+        }
     }
 }
 

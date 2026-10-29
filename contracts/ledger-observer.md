@@ -1360,6 +1360,41 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
     When the handler interrupts that lookup, the page starts where it would have. Offline
     readers keep their path.
   - Both keys are read when the ledger opens (`false`). No code is added.
+- #422 RB-1 (since 0.12.27; production v0.12.26 after the machine restart of 2026-10-29 05:23:
+  with a cold page cache every run listing failed for five hours): a reader-pool page no longer
+  reads the Lab relations of the whole history. Before, a page that needed them (IDLE-OV above)
+  read every Lab anchor and the run of every link row naming one of their requests or
+  correlations, from sequence 1, mostly random reads; cold, that outlasted `read_budget_ms`, so
+  the page ended before its linked row and the next page was refused, and its work grew with the
+  Lab history.
+  - **Built once, in the background.** When the Runtime writer's reader pool starts, a thread of
+    its own builds the pool's Lab relations through the point the writer published then (the
+    build's anchor), in one read transaction on a read-only connection of its own, outside every
+    page's budget. Its deadline is the open's, `open_timeout_ms` in whole seconds as the open
+    counts it, taken afresh when the build starts; a progress handler looks every
+    `read_check_vm_steps` steps and also stops it when the pool closes. The relations keep, for
+    each request, correlation and run, the sequence at which it became Lab-related: a request or
+    correlation at its first Lab anchor; a run at the first record that names it with a request
+    or correlation related by then. They are memory only and grow with the Lab-related ids, not
+    with the history.
+  - **Pages read the records after it.** A page at a snapshot at or before the relations' end
+    takes the ids related at or before its snapshot, which are exactly what the whole history's
+    read gives at that snapshot, so a listing pinned to an older snapshot gets the same rows and
+    views. A page past their end reads only the records after it: the Lab anchors in that range
+    (through the source and type view indexes), the older link rows of a request or correlation
+    first anchored there (an anchor may name an old request, whose earlier records become related
+    from the anchor's sequence on), and the link rows in that range (the link table's own key).
+    It reads them in spans of one sequence, then each twice the one before up to
+    `history_scan_rows`, on its own connection under its own budget, as its history statements
+    are; each span it completed carries the pool's relations forward for every later page (never
+    backwards), also when the budget then cut the page, and a cut ends the page as IDLE-OV says.
+  - **Before the build ends, and when it failed,** the pages read the whole history's relations,
+    as before. A failed build is said once, as a reader that ended is: a warning, never fatal, of
+    the location `build_lab_relations` with the failure's code (its deadline:
+    `ledger_read_budget_exceeded`), actingd's developer line `actingd ledger reader_pool
+    lab_relations`; it is not tried again before the next start. A close that stops it says
+    nothing.
+  - No key, code, ledger format or table is added; the location `build_lab_relations` is new.
 - #422 LN-7c Q (`rd-1026/ln7c/final-query.md` §1.5, §5; v0.12.17, `actingd-config` revision
   16): the frame cleaner decides by ledger query on a read-only connection of its own
   ([ledger-store.md](ledger-store.md), "Frame cleaner"). `frame_query_steps_per_second` paces

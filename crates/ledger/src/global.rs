@@ -816,6 +816,21 @@ impl GlobalLedgerError {
         self
     }
 
+    /// #422 RB-1: this failure said as a warning of `operation`: its code, never terminal, with
+    /// its own operation and detail, and `consequence`, in its detail.
+    pub(super) fn as_warning_of(self, operation: Location, consequence: &str) -> Self {
+        let cause = match &self.detail {
+            Some(detail) => format!("{}: {detail}", self.operation),
+            None => self.operation.to_owned(),
+        };
+        Self {
+            operation: operation.as_str(),
+            detail: Some(format!("{cause}; {consequence}")),
+            terminal: false,
+            ..self
+        }
+    }
+
     /// #422 LN-7c V: this failure's outcome with the values its code declares (`outcome`, of
     /// this failure's code and operation).
     pub(crate) fn with_outcome(
@@ -966,6 +981,10 @@ pub struct GlobalLedgerConfig {
     /// #422 QR-1: the reader threads of the Runtime writer's pool (a writer with a failure plan
     /// and its database), `1..=8`; 2 unless set.
     reader_threads: usize,
+    /// #422 RB-1: the deadline of the pool's build of its Lab relations, from its start: the
+    /// open's (`ledger_observer.open_timeout_ms`), set by the formal writer open; without one the
+    /// pool builds none and its pages read the whole history's relations.
+    lab_relations_timeout: Option<Duration>,
 }
 
 impl fmt::Debug for GlobalLedgerConfig {
@@ -993,6 +1012,7 @@ impl fmt::Debug for GlobalLedgerConfig {
             .field("open_verify_tail_records", &self.open_verify_tail_records)
             .field("scrub", &self.scrub)
             .field("reader_threads", &self.reader_threads)
+            .field("lab_relations_timeout", &self.lab_relations_timeout)
             .finish()
     }
 }
@@ -1021,7 +1041,15 @@ impl GlobalLedgerConfig {
             scrub: None,
             scrub_database: None,
             reader_threads: reader_pool::DEFAULT_READER_THREADS,
+            lab_relations_timeout: None,
         }
+    }
+
+    /// #422 RB-1: the reader pool builds its Lab relations within `timeout` from the build's
+    /// start (the formal writer open's deadline, `ledger_observer.open_timeout_ms`).
+    pub(super) fn with_lab_relations_timeout(mut self, timeout: Duration) -> Self {
+        self.lab_relations_timeout = Some(timeout);
+        self
     }
 
     /// #422 QR-1: the reader threads of the Runtime writer's pool, `1..=8`; any other number is
@@ -1059,6 +1087,12 @@ impl GlobalLedgerConfig {
         #[cfg(test)]
         if let Some(threads) = plan.reader_threads_for_test() {
             self.reader_threads = threads;
+        }
+        // #422 RB-1, tests: the pool builds no Lab relations, or builds them within another
+        // deadline.
+        #[cfg(test)]
+        if let Some(timeout) = plan.lab_relations_timeout_for_test() {
+            self.lab_relations_timeout = timeout;
         }
         self.clock = plan.clock();
         if let Some(timeout) = plan.reply_timeout() {
@@ -2398,6 +2432,7 @@ impl GlobalLedger {
                 read_check_vm_steps: config.read_check_vm_steps,
                 history_page_rows: config.history_page_rows,
                 history_scan_rows: config.history_scan_rows,
+                lab_relations_timeout: config.lab_relations_timeout,
             });
         let reader_threads = config.reader_threads;
         // #422 W1-8 (P30): the ledger reads the published head from the same points.
@@ -3036,6 +3071,16 @@ impl GlobalLedger {
         request: RuntimeEventQueryPageRequest,
     ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
         self.project_view_page_on_writer(query, profile, request)?.0
+    }
+
+    /// #422 RB-1, tests: waits at most `wait` for the reader pool's build of its Lab relations to
+    /// end: `Some(Some(through))` once built (the index's end now), `Some(None)` when it ended
+    /// without them or none runs, `None` while it runs or for a ledger without a pool.
+    #[cfg(test)]
+    pub(crate) fn lab_relations_settled_for_test(&self, wait: Duration) -> Option<Option<u64>> {
+        self.reader_pool
+            .as_ref()
+            .and_then(|pool| pool.lab_relations_settled_for_test(wait))
     }
 
     fn project_view_page_observed(

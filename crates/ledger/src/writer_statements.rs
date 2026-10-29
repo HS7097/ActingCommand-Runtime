@@ -27,6 +27,8 @@ pub struct LedgerStatementRun {
     pub after: Option<u64>,
     /// Its SQLite virtual-machine steps.
     pub vm_steps: u64,
+    /// #422 RB-1: the rows it returned.
+    pub rows: u64,
 }
 
 /// What one read command of the writer did.
@@ -153,8 +155,9 @@ pub(crate) fn finish(
 }
 
 /// Called by the SQLite medium when a statement it read rows with is done, with its SQL text,
-/// its bound values and its virtual-machine steps: recorded when a command of this thread is.
-pub(crate) fn statement_done(sql: &str, parameters: &[Value], steps: i32) {
+/// its bound values, its virtual-machine steps and (#422 RB-1) the rows it returned: recorded
+/// when a command of this thread is.
+pub(crate) fn statement_done(sql: &str, parameters: &[Value], steps: i32, rows: usize) {
     let recorders = armed()
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
@@ -179,6 +182,7 @@ pub(crate) fn statement_done(sql: &str, parameters: &[Value], steps: i32) {
                     _ => None,
                 },
                 vm_steps: u64::try_from(steps).unwrap_or(0),
+                rows: u64::try_from(rows).unwrap_or(u64::MAX),
             });
         }
     }

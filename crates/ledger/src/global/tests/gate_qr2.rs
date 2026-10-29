@@ -153,7 +153,9 @@ impl Root {
     }
 
     /// The Runtime's writer of the root (a failure plan: it has a reader pool), with one reader,
-    /// so that every page is read by the same reader, and no read budget.
+    /// so that every page is read by the same reader, and no read budget. #422 RB-1: its pool
+    /// builds no Lab relations, so its pages read them as before the build ends (the reader's
+    /// memo pinned here); `gate_rb1` pins the pages with the built index.
     fn open(&self) -> GlobalLedger {
         let state_root = self.dir.path().canonicalize().expect("state root");
         let plan = LedgerFailurePlan::new(
@@ -165,7 +167,8 @@ impl Root {
             FIRST_MS,
         )
         .with_reply_timeout(REPLY_TIMEOUT)
-        .with_reader_threads_for_test(1);
+        .with_reader_threads_for_test(1)
+        .with_lab_relations_timeout_for_test(None);
         let deadline = MaintenanceLimits {
             timeout_seconds: OPEN_TIMEOUT_SECONDS,
             ..MaintenanceLimits::default()

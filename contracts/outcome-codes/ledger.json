@@ -7899,6 +7899,14 @@
       "since": "0.12.14",
       "description": "The paced background scrub of the Runtime's writer: a walk of the whole hash chain on its own read-only connection, in chunked read transactions, ended by the whole-file quick_check of each pass (#422 LN-9, ledger observer §15)."
     },
+    "build_lab_relations": {
+      "owner": "ledger",
+      "layer": "store",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.27",
+      "description": "The reader pool's background build of its Lab relations at its start, on a read-only connection of its own within the open's deadline; a failure is a warning and the pages read the whole history's Lab relations (#422 RB-1, ledger observer §15)."
+    },
     "build_ledger_frame_refs": {
       "owner": "ledger",
       "layer": "store",

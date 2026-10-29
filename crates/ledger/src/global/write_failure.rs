@@ -172,6 +172,10 @@ pub struct LedgerFailurePlan {
     /// #422 QR-1 fix 1, tests: the reader pool's threads, when a test needs another number.
     #[cfg(test)]
     reader_threads: Option<usize>,
+    /// #422 RB-1, tests: the deadline of the pool's build of its Lab relations when a test sets
+    /// one (`Some(None)`: no build).
+    #[cfg(test)]
+    lab_relations_timeout: Option<Option<Duration>>,
 }
 
 impl fmt::Debug for LedgerFailurePlan {
@@ -231,6 +235,8 @@ impl LedgerFailurePlan {
             scrub: None,
             #[cfg(test)]
             reader_threads: None,
+            #[cfg(test)]
+            lab_relations_timeout: None,
         }
     }
 
@@ -244,6 +250,19 @@ impl LedgerFailurePlan {
     #[cfg(test)]
     pub(super) fn reader_threads_for_test(&self) -> Option<usize> {
         self.reader_threads
+    }
+
+    /// #422 RB-1, tests: the reader pool builds its Lab relations within `timeout` instead of the
+    /// open's deadline; `None`: it builds none, and its pages read the whole history's relations.
+    #[cfg(test)]
+    pub(crate) fn with_lab_relations_timeout_for_test(mut self, timeout: Option<Duration>) -> Self {
+        self.lab_relations_timeout = Some(timeout);
+        self
+    }
+
+    #[cfg(test)]
+    pub(super) fn lab_relations_timeout_for_test(&self) -> Option<Option<Duration>> {
+        self.lab_relations_timeout
     }
 
     /// #411 A51 (R2): the work budget of one read on the writer thread
