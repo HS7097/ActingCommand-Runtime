@@ -2649,6 +2649,18 @@ tests = [
 ]
 incident = ["#419"]
 
+# ISO-PE (Workflow #419; brief rd-1029/brief-iso-pe.md; investigation rd-1029/inv-1119.md; production v0.12.26 on 10-29 11:19, where one policy_evaluation_input_invalid ended the policy driver and the monitor stopped all five instances), on a fake Runtime clock: an evaluation that refuses its input as later than its time returns no error, records policy_evaluation_skipped (count 1, limit_count and retry_after_ms the shipped defaults 3 and 15000, next_eligible_unix_ms) caused by policy_evaluation_rejected caused by policy_evaluation_input_invalid with policy_input outcome, policy_input_problem observed_after_evaluation, task_id, instance_id, observed_at_unix_ms and evaluated_at_unix_ms, and the policy's own text as the native detail; its cycle is deferred to retry_ms later with no evaluation and no dispatch; nothing latches and no stop is requested; after the wait the evaluation dispatches again; with scheduling.evaluation.retry_ms 5000 and escalate_after 2 from the configuration, four skips in a row count 1 to 4, each deferred 5 s, policy_evaluation_awaiting_person is recorded once at the second, the Runtime keeps running, and an evaluation that evaluates ends the run of skips; an input observed after the evaluation started but before it took its gates is not later than its time (the time is sampled under the gates) and the evaluation dispatches; a global failure (a ledger read, a poisoned lock) and the two failures actingd bounds itself (policy_outcome_snapshot_changed, outcome_projection_not_ready) are returned, an evaluation's rejection and one instance's fault are skipped; the host tests whose non-global evaluation refusal used to return (this block's policy_admission one, and mapped_startup_outcome_is_rejected_before_policy_dispatch in its own block) now see it skipped
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_419_iso_pe::iso_pe_t1_an_input_invalid_evaluation_is_skipped_with_its_detail_and_evaluated_again_after_the_wait",
+    "actingcommand-runtime-host::lib::tests::gate_419_iso_pe::iso_pe_t2_n_skips_in_a_row_escalate_to_a_person_once_and_never_stop_the_runtime",
+    "actingcommand-runtime-host::lib::tests::gate_419_iso_pe::iso_pe_t3_an_input_observed_while_the_evaluation_waits_for_its_gates_is_not_later_than_its_time",
+    "actingcommand-runtime-host::lib::tests::gate_419_iso_pe::iso_pe_t4_a_global_failure_is_returned_and_only_a_non_global_one_is_skipped",
+    "actingcommand-runtime-host::lib::tests::policy_admission::runtime_owned_policy_inputs_supply_time_and_reject_unknown_resource_hosts",
+]
+incident = ["#419 ISO-PE"]
+
 # W1-8 (#422; brief rd-1028/brief-wave1.md W1-8; #422 6463703245, 6461256427 L-4's follow-up): while the writer is held in a read of its own, Status, MonitorStatus and RuntimeFactSnapshot each complete at the one head the writer last published, nothing latches and no stop is requested (T7, P30); PerformanceStatus shows ledger_read_pages, which counts the QueryEvents pages the reader pool read, with their times in order and the status' shape rules kept (T8, P29)
 [[gate]]
 coverage = "Y"

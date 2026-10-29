@@ -210,6 +210,9 @@ mod performance;
 mod planning;
 mod policy_catalog;
 mod policy_dispatch;
+// ISO-PE (#419): which failed policy evaluations are skipped rather than returned.
+#[cfg(test)]
+pub(crate) use policy_dispatch::skips_policy_evaluation;
 // Workflow #427-A: the scheduled policy runs on the instance workers, one lane per instance.
 mod policy_lanes;
 #[cfg(any(test, feature = "test-hooks"))]
@@ -1895,6 +1898,9 @@ impl RuntimeHost {
             policy_sample_hook_for_test: Mutex::new(None),
             #[cfg(any(test, feature = "test-hooks"))]
             policy_snapshot_changes_for_test: AtomicU64::new(0),
+            #[cfg(test)]
+            policy_inputs_read_hook_for_test: Mutex::new(None),
+            policy_evaluation_skips: Mutex::new(policy_dispatch::PolicyEvaluationSkips::default()),
             #[cfg(any(test, feature = "test-hooks"))]
             pause_lane_wait_hook_for_test: Mutex::new(None),
             #[cfg(test)]
@@ -3535,6 +3541,22 @@ impl RuntimeHost {
         let shared = self.shared_ref(HostLocation::EvaluatePolicyCycle)?;
         *lock(
             &shared.policy_sample_hook_for_test,
+            HostLocation::EvaluatePolicyCycle,
+        )? = Some(hook);
+        Ok(())
+    }
+
+    /// ISO-PE (#419), test builds: runs `hook` once in the next policy evaluation, after it
+    /// started and before it takes the gates under which it reads its inputs (where another
+    /// thread's settlement may write an input observed after the evaluation started).
+    #[cfg(test)]
+    pub(crate) fn run_before_policy_inputs_read_for_test(
+        &self,
+        hook: Box<dyn FnOnce() + Send>,
+    ) -> RuntimeHostResult<()> {
+        let shared = self.shared_ref(HostLocation::EvaluatePolicyCycle)?;
+        *lock(
+            &shared.policy_inputs_read_hook_for_test,
             HostLocation::EvaluatePolicyCycle,
         )? = Some(hook);
         Ok(())
@@ -5460,6 +5482,13 @@ struct HostShared {
     policy_sample_hook_for_test: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     #[cfg(any(test, feature = "test-hooks"))]
     policy_snapshot_changes_for_test: AtomicU64,
+    // ISO-PE (#419), test builds: the hook a policy evaluation runs once after it starts and
+    // before it takes the gates under which it reads its inputs.
+    #[cfg(test)]
+    policy_inputs_read_hook_for_test: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    // ISO-PE (#419): the policy evaluations skipped in a row, and whether this run of skips was
+    // escalated to a person. A leaf lock.
+    policy_evaluation_skips: Mutex<policy_dispatch::PolicyEvaluationSkips>,
     // Workflow #427-A fix 1, test builds and the `test-hooks` feature: the hook a scheduling
     // pause's release runs once when it waits for a policy run an instance worker holds.
     #[cfg(any(test, feature = "test-hooks"))]

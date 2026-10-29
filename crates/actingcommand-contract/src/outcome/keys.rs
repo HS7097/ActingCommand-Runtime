@@ -617,4 +617,10 @@ outcome_keys! {
     io_priority_requested: integer,
     io_priority_read: integer,
     // ---- RB-2: end ----
+    // ---- ISO-PE (#419; a rejected policy evaluation input names itself): begin ----
+    policy_input: vocab(policy_input),
+    policy_input_problem: vocab(policy_input_problem),
+    observed_at_unix_ms: unix_ms,
+    evaluated_at_unix_ms: unix_ms,
+    // ---- ISO-PE: end ----
 }

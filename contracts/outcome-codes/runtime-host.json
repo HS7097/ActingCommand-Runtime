@@ -12633,6 +12633,53 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "policy_evaluation_skipped": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "count": "required",
+        "limit_count": "required",
+        "retry_after_ms": "required",
+        "next_eligible_unix_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.28",
+      "description": "A policy evaluation failed with a failure that is not global and the Runtime skipped it (ISO-PE, #419): nothing was dispatched from it, the Runtime keeps running, and the policy driver evaluates again at next_eligible_unix_ms, retry_after_ms later (scheduling.evaluation.retry_ms). count is the skipped evaluations in a row, limit_count scheduling.evaluation.escalate_after. The failure, with its detail, is the caused_by link: for an input the evaluation refused, policy_evaluation_rejected caused by the policy's code (policy_evaluation_input_invalid with the refused input's values) and the policy's developer text. Recorded as a runtime.failed record with system links, one per skipped evaluation.",
+      "common_causes": "An input of the evaluation broke a rule at that moment: a fact, outcome or settlement observed later than the evaluation's time (a wall clock set back), a reference to a task or instance the catalog or configuration no longer has, a duplicate or an invalid value.",
+      "handling": "Usually nothing: the next evaluation, retry_after_ms later, succeeds once the input is valid. When it repeats, read the caused_by link for the input and fix it; policy_evaluation_awaiting_person says when it has repeated limit_count times."
+    },
+    "policy_evaluation_awaiting_person": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "count": "required",
+        "limit_count": "required",
+        "retry_after_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.28",
+      "description": "limit_count policy evaluations in a row were skipped (scheduling.evaluation.escalate_after; ISO-PE, #419): the scheduling evaluation waits for a person to fix its input. The Runtime keeps running and keeps evaluating every retry_after_ms; nothing is dispatched by the policy until an evaluation succeeds. Recorded once per run of skips as a runtime.failed record with system links; the latest failure is the caused_by link.",
+      "common_causes": "An evaluation input that stays invalid: a configured fact, pool or outcome, an instance fact, or a settlement whose time lies ahead of the Runtime clock.",
+      "handling": "Read the caused_by link (policy_evaluation_input_invalid names the input and why) and fix that input or the clock; the next evaluation after the fix succeeds and ends the run of skips."
+    },
     "policy_execution_clock_regressed": {
       "category": "error",
       "ladder_class": "none",

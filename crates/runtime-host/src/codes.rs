@@ -976,6 +976,18 @@ actingcommand_contract::outcome_codes! {
         PolicyDispatchUnknown => "policy_dispatch_unknown": error / none,
         PolicyEvaluationMeasurementOverflow => "policy_evaluation_measurement_overflow": error / none,
         PolicyEvaluationRejected => "policy_evaluation_rejected": error / none,
+        /// Warning (ISO-PE, #419). A policy evaluation failed with a failure that is not global
+        /// and the Runtime skipped it: nothing was dispatched from it, and the driver evaluates
+        /// again at `next_eligible_unix_ms`, `retry_after_ms` later
+        /// (`scheduling.evaluation.retry_ms`). Keys `count` (the skipped evaluations in a row),
+        /// `limit_count` (`scheduling.evaluation.escalate_after`), `retry_after_ms`,
+        /// `next_eligible_unix_ms`; the failure is the `caused_by` link.
+        PolicyEvaluationSkipped => "policy_evaluation_skipped": warning / none,
+        /// Error (ISO-PE, #419). `limit_count` policy evaluations in a row were skipped: the
+        /// evaluation waits for a person to fix its input. The Runtime keeps running and keeps
+        /// evaluating every `retry_after_ms`; recorded once per run of skips (keys `count`,
+        /// `limit_count`, `retry_after_ms`; the latest failure is the `caused_by` link).
+        PolicyEvaluationAwaitingPerson => "policy_evaluation_awaiting_person": error / none,
         PolicyExecutionClockRegressed => "policy_execution_clock_regressed": error / none,
         PolicyExecutionDuplicate => "policy_execution_duplicate": error / none,
         PolicyExecutionIdentityConflict => "policy_execution_identity_conflict": error / none,

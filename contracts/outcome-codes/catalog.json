@@ -2214,6 +2214,22 @@
     "io_priority_read": {
       "type": "integer",
       "description": "The I/O priority hint of actingd's own process as the operating system reported it after the start set it, Windows' IO_PRIORITY_HINT (RB-2)."
+    },
+    "policy_input": {
+      "type": "vocab:policy_input",
+      "description": "Which input of a policy evaluation a check refused: a fact, a settled run's outcome, a pair's task state, its completed activity window, a pool reading or a priority offset (ISO-PE, #419)."
+    },
+    "policy_input_problem": {
+      "type": "vocab:policy_input_problem",
+      "description": "Why a check refused a policy evaluation input (ISO-PE, #419)."
+    },
+    "observed_at_unix_ms": {
+      "type": "unix_ms",
+      "description": "When a refused input was observed, in Unix milliseconds (ISO-PE, #419)."
+    },
+    "evaluated_at_unix_ms": {
+      "type": "unix_ms",
+      "description": "The time of the policy evaluation that refused an input, in Unix milliseconds (ISO-PE, #419)."
     }
   },
   "vocabularies": {
@@ -6380,6 +6396,48 @@
         },
         "not_a_time": {
           "description": "The fact's value is not a timestamp_ms value."
+        }
+      }
+    },
+    "policy_input": {
+      "description": "Which input of a policy evaluation a check refused (ISO-PE, #419).",
+      "review": "pending",
+      "tokens": {
+        "fact": {
+          "description": "An observed fact."
+        },
+        "outcome": {
+          "description": "A settled run's observed outcome."
+        },
+        "task_state": {
+          "description": "A (task, instance) pair's runtime state."
+        },
+        "completed_window": {
+          "description": "The activity window a pair's settled run completed."
+        },
+        "pool": {
+          "description": "A resource pool reading."
+        },
+        "priority_offset": {
+          "description": "A manual priority offset."
+        }
+      }
+    },
+    "policy_input_problem": {
+      "description": "Why a check refused a policy evaluation input (ISO-PE, #419).",
+      "review": "pending",
+      "tokens": {
+        "observed_after_evaluation": {
+          "description": "The input was observed later than the evaluation's time."
+        },
+        "unknown_reference": {
+          "description": "The input names a task, an instance or a pool the evaluation does not know."
+        },
+        "duplicate": {
+          "description": "Two inputs share one identity."
+        },
+        "value_invalid": {
+          "description": "The input's metadata or value breaks a rule."
         }
       }
     },

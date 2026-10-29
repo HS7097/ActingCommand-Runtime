@@ -1008,6 +1008,14 @@ tests = [
 ]
 incident = ["#427-A"]
 
+# ISO-PE (Workflow #419; brief rd-1029/brief-iso-pe.md; production v0.12.26 on 10-29 11:19): the driver applies the deferred cycle with no evaluation that the host answers for a skipped evaluation without an error, so the driver and the Runtime go on; it keeps the trigger and evaluates it again at the retry (scheduling.evaluation.retry_ms later), not before; a projection not ready yet with no recompute wake waits one debounce instead of ending the driver
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::tests::iso_pe_a_skipped_evaluation_keeps_its_trigger_until_the_retry_and_the_driver_goes_on",
+]
+incident = ["#419 ISO-PE"]
+
 # Workflow #427-A fix 1 (brief rd-1028/brief-427a-fix1.md item 5; review rd-1028/review-427a.md L1 and its item 10): a scheduling pause requested after the round handed a run to its instance's worker, while the worker holds it as it took it, does not fail the run: the pause's release waits for it, the run goes ahead as the synchronous round's run admitted before a pause does and is settled once as a success (never as a failure nor refused, so the pair's failure streak is unchanged), then the pause completes
 [[gate]]
 coverage = "Y"

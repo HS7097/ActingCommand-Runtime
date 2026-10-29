@@ -1176,7 +1176,9 @@ one detection-quota-exhausted signal per window. Errors of the catalog's own
 comparison (an operator on kinds it does not accept, such as `contains` on two
 integers) and arithmetic overflow still fail the evaluation; Runtime reports
 them as `policy_evaluation_rejected` and keeps the policy code and message as
-the lifecycle record's native detail.
+the record's native detail. Since 0.12.28 (ISO-PE, #419) such a failure no
+longer stops the Runtime: the evaluation is skipped and evaluated again later
+("Evaluation failures" below).
 
 `ObservedOutcome.expires_at_unix_ms` is optional and uses the fact TTL convention:
 the expiry millisecond is valid and expiry + 1 wakes reevaluation. Matching future
@@ -1416,6 +1418,50 @@ finishes and is settled there whatever the switch says afterwards.
   to actingd's host handle, so the host is released and closed, and its close joins the
   workers: a run a worker took finishes and is settled, one still queued is refused
   (`runtime_stopping`) and settled as interrupted, as above.
+
+## Evaluation failures
+
+ISO-PE (#419, 0.12.28; production v0.12.26 on 10-29 11:19, where one
+`policy_evaluation_input_invalid` ended the policy driver and the Runtime with it). Not behind
+the switch.
+
+- **What stops the Runtime.** Only a failure whose scope is `Global`
+  ([runtime-outcomes.md](../runtime-outcomes.md), the failure scope) is returned from an
+  evaluation and ends actingd's driver, and with it the Runtime. On the evaluation path these are:
+  a ledger read that failed (`ledger_failure`: the one ledger is the evaluation's source of
+  truth); a poisoned lock (`runtime_state_poisoned`: a thread died while it changed the host's
+  shared state); the Runtime clock (`monotonic_clock_regressed`, `system_clock_invalid`); the
+  configuration in effect that cannot be read; the shared policy projection disagreeing with the
+  ledger (`policy_outcome_projection_mismatch`, `policy_outcome_failed_run_residual`, and the
+  Global list's `policy_admission_event_invalid`, `policy_state_ledger_incomplete`); and any
+  condition the host latched (its monitor stops the Runtime whatever the driver does). Each of
+  them leaves no instance's work trustworthy, so none is one instance's.
+- **What is skipped.** Every other evaluation failure (an input the evaluator refuses, a
+  configured input the Runtime does not trust, an authority conflict, one instance's fault) is
+  recorded and skipped: `policy_evaluation_skipped` (warning) with the failure as its
+  `caused_by` link, and the cycle is a deferred one with no evaluation, due
+  `scheduling.evaluation.retry_ms` later ([runtime-config.md](../runtime-config.md), "Skipped
+  evaluations"). The driver keeps its trigger and evaluates again then; nothing is dispatched
+  from the skipped evaluation, runs already handed to workers go on, and the Runtime keeps
+  running. `scheduling.evaluation.escalate_after` skips in a row record
+  `policy_evaluation_awaiting_person` (error) once; an evaluation that evaluates ends the run of
+  skips. Two failures that are not global keep their own bounded handling:
+  `policy_outcome_snapshot_changed` is sampled again (above), and `outcome_projection_not_ready`
+  waits one debounce, with or without the trigger's recompute wakes.
+- **The detail.** `policy_evaluation_rejected` carries the policy's code as its `caused_by`
+  link and the policy's code and developer text as its native detail. An input check that names
+  what it refused gives that link `policy_input`, `policy_input_problem` and the `fact_key`,
+  `instance_id`, `task_id` or `pool_id` it names; a time check (`observed_after_evaluation`)
+  also gives the input's `observed_at_unix_ms` and the evaluation's `evaluated_at_unix_ms`.
+- **The evaluation's time.** The Runtime clock is sampled for an evaluation once it holds
+  `policy_outcome_gate` and `fact_write_gate`, the gates under which a settlement and every fact
+  are written and under which it reads its inputs. Every input it reads was committed before
+  that sample, so none was observed after the evaluation's time. (Until 0.12.28 the time was
+  sampled as the evaluation started, before it waited for the gates; a settlement on an instance
+  worker committed in between made the evaluation refuse its own inputs as "later than
+  evaluation time".) An input can still lie ahead of the Runtime clock when the wall clock is set
+  back: a settlement's time is its admission's wall time plus the run's monotonic duration. Such
+  an evaluation is skipped until the clock passes it.
 
 ## Forward Planning And Maintenance
 
