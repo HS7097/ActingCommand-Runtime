@@ -2173,6 +2173,42 @@ tests = [
 ]
 incident = ["#411 B36", "#411 B19", "#412 B-3"]
 
+# STORE-FG-1 (0.12.29; register §1.207 SF-1, SF-2; design rd-1029/design-store-fg.md §3, §5 rows T11 and T14; package revision 6, declared by BT-PK6): control.json store_update; the source gate takes it and refuses each wrong shape or broken rule as resource_declaration_invalid at its member; kernel admission refuses a broken member, or one outside navigable_route and linear_steps, as contained_task_control_invalid reason=store_update_invalid, and each broken cross-check (a store step that is no tap from one page, or taps without a guard on that page, review H1; a proof that is no OCR target directly in its from page's required; no launch or restart way back) as contained_task_program_invalid with program_problem store_operation_invalid, store_proof_invalid or store_way_back_missing, path control.json and json_pointer; a valid declaration is admitted
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_store_fg1::store_fg1_t11_a_broken_store_update_member_is_refused_with_its_reason",
+    "actingcommand-execution-kernel::lib::contained_task::gate_store_fg1::store_fg1_t11_admission_checks_the_store_steps_their_proof_and_the_way_back",
+    "actingcommand-pack-containment::lib::source::declarations::tests::store_fg1_t14_the_gate_takes_store_update_and_refuses_each_wrong_shape_at_its_pointer",
+]
+incident = []
+
+# STORE-FG-1 (register §1.207 SF-3; design §2.3, §5 row T12): a store_update package answers store_update to the prerequisite incompatibility (prerequisite, return-home, edge, chain, handler and then.run checks) and to the startup incompatibility (startup package, ladder rung); run as a prerequisite or a host layer it is refused before any capture; package bundle and standard-pack check refuse it as an edge, a recovery chain step or a handler with package_bundle_navigation_package_invalid role_ineligible
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_store_fg1::store_fg1_t12_a_store_update_package_is_no_layer_and_no_startup_package",
+    "actingcommand-resource-tooling::lib::gate_373_navt::store_fg1_t12_a_store_update_pack_is_refused_as_an_edge_a_chain_step_or_a_handler",
+]
+incident = []
+
+# STORE-FG-1 (register §1.207 SF-4; design §2.7, §5 row T13): in the package's own run a declared store step's Tap goes through ContainedTaskRuntime::store_input with the declared store and every other input through input, on the page graph and on linear_steps (an admitted step plan with its way back); admit_store_foreground is asked once before any capture, and a refusal ends the run before any capture or input; a recovery entry run, a declared operation's run (a Lab operation) and a package without store_update ask nothing and route nothing
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_store_fg1::store_fg1_t13_a_declared_store_step_taps_through_store_input_and_every_other_through_input",
+    "actingcommand-execution-kernel::lib::contained_task::gate_store_fg1::store_fg1_t13_only_the_package_s_own_run_asks_for_the_store_and_routes_to_it",
+]
+incident = []
+
+# STORE-FG-1 (design §8.3, the resource side's field note 3): a store update package waits on the store's updating page without input, with a wait step (max_ms up to 1 800 000, expect_after.interval_ms 30 000) or the store tap's expect_after.wait_page; both are admitted, and a run waits there across frames 30 s apart with no input between the store tap and the restart
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_store_fg1::store_fg1_s8_3_a_store_run_waits_long_on_the_updating_page_without_an_input",
+]
+incident = []
+
 # PERF-B1 (Workflow #407 B1, 0.12.x; register §1.177; brief rd-1024/brief-perf-b1-capture.md, test row (a); requirement R1): a step's `expect_after.interval_ms` is its own wait's capture interval: a wait declared at 30 000 ms captures at most ⌈duration / interval⌉ + 1 frames, its pauses the declared interval and the last cut at its end, while the package's other steps keep their own interval
 [[gate]]
 coverage = "Y"
@@ -2414,3 +2450,11 @@ tests = [
     "actingcommand-resource-tooling::lib::gate_373_navt::b35_no_overlap_or_no_shared_interrupts_gives_no_warning",
 ]
 incident = ["#411 B35"]
+
+# STORE-FG-1 (0.12.29; register §1.207 SF-5; design rd-1029/design-store-fg.md §8.1; contracts/package-reference.md, the standard-pack cross-check): package bundle and standard-pack check report one package_bundle_store_tap_unlocated warning (package_id, pack_operation_id) per pack and store step of control.json store_update that taps with point, rect or specific_rect, in registry order, and both still pass; a root without such a pack reports none
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_373_navt::store_fg1_s8_1_a_store_step_tapping_a_point_or_a_rect_gets_one_warning",
+]
+incident = []

@@ -3748,6 +3748,24 @@ WD-MT's, 1.205 is ISO-PE's).
 | CFL1-2 | the region domain: `apply` refuses a region of more than 2^24 pixels (`RegionTooLarge`) before any step, `Scene::preprocess_region` before it crops; within it Otsu compares the exact scores quotient first, remainder second, with every intermediate at most 108 bits (the contract's bound table) | behaviour (library) | CFL-1 revision round | — | a domain of the algorithm like the 4 steps and 8 colors, no configuration key; the `checked_mul` guards stay and cannot fail inside the domain; the tie rule (smallest `t`) is unchanged |
 | CFL1-3 | `kept_milli` is counted before `invert`, and `inverted` says whether the chain has it (in place of the first round's `foreground_milli`, counted after `invert`) | evidence definition (memory only) | CFL-1 revision round | — | golden values re-recorded with the coordinator's approval: `keep_range hsv` then `invert` 750 → 250, `gray` then `invert` 625 → 375; every other value unchanged |
 
+### 1.207 Slice STORE-FG-1 (0.12.29): a package declares the steps it runs while the store application is in front (Alice 10-29 10:1x: 「从外部更新的可以单独做成一个独立包，只用官方应用商店更新就行」; design `rd-1029/design-store-fg.md` §2, §3, §6 and the resource side's §8; coordinator work order `rd-1029/brief-store-fg-1.md`)
+
+[resource-declarations.md](resource-declarations.md) ("Store update packages") and
+[package-reference.md](package-reference.md) (the layer predicate and the cross-check) are the
+contract. **No persisted ledger shape**: the member is a pack format addition, the refusals reuse
+existing codes, and the run's records are the existing ones; no configuration key (the operator's
+allowlist `store_foreground.allowed_application_ids` is STORE-FG-2's), no wire or interface
+revision raised here. The number 1.207 is the coordinator's (1.204 is WD-MT's, 1.205 is ISO-PE's,
+1.206 is CFL-1's).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SF-1 | `control.json` `store_update` {`store_application_id`, `store_operations[]` {`operation`, `proof[]`}} (`actingcommand_contract::StoreUpdateDeclaration`, `validate_store_update`) | new optional member (pack format, not a ledger shape) | STORE-FG-1 | resource side | the source gate refuses a wrong shape or a broken rule as `resource_declaration_invalid` at the member; kernel admission as `contained_task_control_invalid` `reason=store_update_invalid`, also outside `navigable_route` and `linear_steps`; joins `package` revision 6, which BT-PK6 declares, admitted by code until then (BT-PK6 must name `control.json` `store_update`); a Runtime before 0.12.29 refuses a package that names it (`UnknownField`) |
+| SF-2 | `program_problem` tokens `store_operation_invalid`, `store_proof_invalid`, `store_way_back_missing` | new tokens of an existing vocabulary on the existing `contained_task_program_invalid` | STORE-FG-1 | STORE-FG-1 | the cross-checks against the task (a store step is a guarded tap from one page, its `guard` on that page and never `unguarded_trusted_coordinate`, so every frame its tap is drawn for, retries and rechecks included, passes the page and with it the proof; each proof an OCR target directly in that page's `required`; a `launch` or `restart` way back), with the path `control.json` and the refused member as `json_pointer` |
+| SF-3 | the prerequisite and startup incompatibility token `store_update` | new value of existing refusal details (`contained_task_prerequisite_incompatible` `reason`, the navigation `role_ineligible`, the startup refusal) | STORE-FG-1 | STORE-FG-1 | a store update package is no prerequisite, return-home, edge, chain, handler, `then.run` or startup package and no ladder rung |
+| SF-4 | `ContainedTaskRuntime::admit_store_foreground` and `ContainedTaskRuntime::store_input` | new kernel boundary methods with default implementations (admit every store; a store tap is any input) | STORE-FG-1 | STORE-FG-2 (host overrides) | asked and used only in the package's own run (entry `Ordinary`, no declared operation): the admission once before any capture, the store input for a declared store operation's `Tap` at the page-graph and the `linear_steps` input sites; every other input stays `input` |
+| SF-5 | `package_bundle_store_tap_unlocated` (warning, `ladder_class` none; `package_id`, `pack_operation_id`) | new outcome code (resource-tooling), design §8.1 | STORE-FG-1 | `package bundle`, `actinglab standard-pack check` | one per package and store step that taps a fixed place (`point`, `rect`, `specific_rect`); nothing is refused |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
