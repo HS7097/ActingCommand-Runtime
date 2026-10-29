@@ -1096,7 +1096,7 @@ fn notice_root_with_cause(base: &Path, max_per_run: u8, limit_cause: Option<&str
 
 /// B43-1: a notice whose entry declares `limit_cause: "environment"`, seen once more than its
 /// `max_per_run`, ends the run with `contained_task_interrupt_environment_limit_reached` (error,
-/// class `environment_fault`, the same values) and nothing is input after it. Without the
+/// class `budget_or_permission`, the same values) and nothing is input after it. Without the
 /// member, or with `"pack_logic"`, the same run ends as before with
 /// `contained_task_interrupt_limit_reached`. The new code is rerun only in every scope, while
 /// the old one still accumulates outside `prepare`; both name the data files in their identity.
@@ -1136,7 +1136,7 @@ fn b43_1_an_environment_limit_ends_the_run_with_its_own_code_and_without_it_as_b
 
     let environment = HostCode::ContainedTaskInterruptEnvironmentLimitReached;
     assert_eq!(environment.as_str(), ENVIRONMENT_LIMIT);
-    assert_eq!(environment.ladder_class(), LadderClass::EnvironmentFault);
+    assert_eq!(environment.ladder_class(), LadderClass::BudgetOrPermission);
     assert_eq!(
         HostCode::ContainedTaskInterruptLimitReached.ladder_class(),
         LadderClass::PackLogicMismatch

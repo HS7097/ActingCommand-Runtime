@@ -661,8 +661,12 @@ data files beside its package directories, one directory per game below the conf
     game runs in (its network or its servers, for example a retry dialog during a
     maintenance), not because of the pack: the run ends with
     `contained_task_interrupt_environment_limit_reached` (error, ladder class
-    `environment_fault`), which is rerun only and never accumulates toward a pause; the
-    recovery ladder follows its configuration for that code and class. The member covers the
+    `budget_or_permission`: the handling attempts the data allows the page are spent, as
+    `contained_task_navigation_limit_reached`'s), which is rerun only and never accumulates
+    toward a pause. The recovery ladder follows its configuration: no default trigger matches
+    the class, so by default the code starts no ladder (an outage of the game's network or
+    servers is not cured by restarting the application or the emulator); an operator who wants
+    a ladder for it adds a trigger item that names the code. The member covers the
     page's own limit only: a run's 17th handling of all pages together still ends with
     `contained_task_interrupt_limit_reached`. Which pages are environment problems is the
     resource repository's data; the Runtime names no page. Any other value or type is

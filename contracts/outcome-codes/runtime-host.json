@@ -20817,7 +20817,7 @@
     },
     "contained_task_interrupt_environment_limit_reached": {
       "category": "error",
-      "ladder_class": "environment_fault",
+      "ladder_class": "budget_or_permission",
       "owner": "runtime-host",
       "layer": "host",
       "uncertain": false,
