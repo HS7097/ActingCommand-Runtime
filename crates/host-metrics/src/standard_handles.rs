@@ -46,23 +46,29 @@ mod os {
     use crate::codes::HostMetricsLocation;
     use actingcommand_contract::codes::ContractCode;
     use actingcommand_contract::outcome::{Outcome, RawSource};
-    use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::Foundation::{GetLastError, HANDLE_FLAG_INHERIT, SetHandleInformation};
+    use windows_sys::Win32::Foundation::{
+        GetLastError, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, SetHandleInformation,
+    };
+    use windows_sys::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE};
 
     pub(super) fn clear_inheritance(stream: StandardStream) -> Result<bool, Outcome> {
-        // std answers null for a process without the handle (also when Windows answers
-        // INVALID_HANDLE_VALUE).
-        let (handle, operation) = match stream {
+        // The handle is read straight from the process's standard handle table; this crate
+        // never opens a std stream object of its own.
+        let (which, operation) = match stream {
             StandardStream::Output => (
-                std::io::stdout().as_raw_handle(),
+                STD_OUTPUT_HANDLE,
                 HostMetricsLocation::ProcessStdoutInheritanceClear,
             ),
             StandardStream::Error => (
-                std::io::stderr().as_raw_handle(),
+                STD_ERROR_HANDLE,
                 HostMetricsLocation::ProcessStderrInheritanceClear,
             ),
         };
-        if handle.is_null() {
+        // SAFETY: reads one entry of this process's standard handle table; nothing is opened.
+        let handle = unsafe { GetStdHandle(which) };
+        // NULL: the process has no such handle. INVALID_HANDLE_VALUE: none could be read.
+        // Either way there is no handle whose flag could be inherited.
+        if handle.is_null() || handle == INVALID_HANDLE_VALUE {
             return Ok(false);
         }
         // SAFETY: the process's own standard handle, live for the process; only its inherit

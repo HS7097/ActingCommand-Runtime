@@ -192,7 +192,7 @@ tests = [
 ]
 incident = ["#381 A"]
 
-# WD-MT C (0.12.28; Workflow #421 INV-1119 §2 and §4 row C; brief rd-1029/brief-wd-mt.md; register §1.204 WDMT-1; contracts/runtime-watchdog.md, Observation 4): the watchdog dates a candidate log by the time read from the file, never by its directory entry; the err log of an owner that stopped by an error condition, whose entry still says its creation time (before the owner took the lock) while the file says just after the close record, leads to a start through row 5, and through row 6′ when a later owner closed formally without a log; the same fixture read by the time on disk alone decides a formal close, so the fixture discriminates
+# WD-MT C (0.12.28; Workflow #421 INV-1119 §2 and §4 row C; brief rd-1029/brief-wd-mt.md; register §1.204 WDMT-1; contracts/runtime-watchdog.md, Observation 4): the watchdog dates a candidate log by the time read from the file, not by its directory entry; the err log of an owner that stopped by an error condition, whose entry still says its creation time (before the owner took the lock) while the file says just after the close record, leads to a start through row 5, and through row 6′ when a later owner closed formally without a log; the same fixture read by the time on disk alone decides a formal close, so the fixture discriminates
 [[gate]]
 coverage = "Y"
 tests = [

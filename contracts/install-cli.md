@@ -714,9 +714,10 @@ evaluated at `rollback plan`, again at apply under the writer lock, by `status
    `meta_ms`, `tail_ms`, `index_ms`, `import_ms`; a phase a build before LN-8 does not report
    counts 0), unscaled. It must be at most the deadline minus `install.rollback.open_margin_ms`.
    The start logs (`actingd-<ms>.log` in the root, `<root>\watchdog\` and the console's log
-   folder; `<ms>` the start, else the log's modified time, read from the file itself and never
-   from its directory entry, which NTFS leaves stale while another process holds the log open:
-   WD-MT, since 0.12.28) are attributed to builds by the
+   folder; `<ms>` the start, else the log's modified time, read from the file itself and not
+   from its directory entry, which NTFS can leave stale while another process holds the log
+   open: WD-MT, since 0.12.28; `contracts/runtime-watchdog.md`, Observation 4) are
+   attributed to builds by the
    operation journals: the build live on the root at `<ms>` is the one the newest journalled
    change before it made live (an adopt's build from the adopt on, an update's or rollback's
    previous build from its start and its target from its end, the previous build again from the

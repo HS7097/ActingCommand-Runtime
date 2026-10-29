@@ -496,7 +496,8 @@ pub(crate) fn observe_owner(
 
 /// [`observe_owner`] with the seam the candidate logs' modification times are read through
 /// (WD-MT, Workflow #421). The logs are listed once, for an unlocked journal with a record: F,
-/// the close's log evidence and R5b all read that one list.
+/// the close's log evidence and R5b all read that one list. (`status` lists them once more, the
+/// same way, after it decides a formal close: [`close_logged`].)
 pub(crate) fn observe_owner_with(
     state_root: &Path,
     log_directories: &[PathBuf],
@@ -592,11 +593,12 @@ pub(crate) fn live_owner(
 
 /// WD-MT (Workflow #421, INV-1119): where a candidate log's modification time is read. A
 /// directory listing's own entry data (`DirEntry::metadata`; on Windows what FindNextFile
-/// returns) is the directory entry, which NTFS refreshes only when the last handle to the
-/// writing file object closes. On 2026-10-29 an adb server that had inherited actingd's stdout
+/// returns) is the directory entry, which NTFS does not refresh as the file is written: it
+/// catches up when the last handle to the writing file object closes, or when any other process
+/// opens and closes the file. On 2026-10-29 an adb server that had inherited actingd's stdout
 /// and stderr kept the err log open, its entry stayed at the log's creation time, and a stop
 /// that ended in an error was read as a formal close for 35 minutes. The time is therefore read
-/// from the file itself, never from the directory entry.
+/// from the file itself, not from the directory listing.
 pub(crate) trait LogTimes {
     /// The modification time of the file at `path`, read from the file; `Ok(None)` when no
     /// regular file is there (it went away after the listing, or it is a directory).
@@ -605,7 +607,9 @@ pub(crate) trait LogTimes {
 
 /// The file system: `fs::metadata` opens the file without data access (so no sharing mode of
 /// the writer refuses it) and reads its time and size through that handle, the values every
-/// open handle of the file shares.
+/// open handle of the file shares. Only when that open is refused as access denied (an access
+/// control list that denies reading the file's attributes) does Rust's std fall back to the
+/// directory entry's data.
 pub(crate) struct FileTimes;
 
 impl LogTimes for FileTimes {

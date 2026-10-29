@@ -90,14 +90,22 @@ installer update or rollback (or its undo), a tick that would consider a start a
    start that stopped among them).
 
    **A log's modification time is the file's own** (WD-MT, Workflow #421 INV-1119, since
-   0.12.28). F, row 6's close evidence and row 6′ read one list of candidate logs per tick,
-   and each log's time is read from the file itself (`fs::metadata`, which opens it without
-   data access), never from the directory listing's entry. NTFS refreshes a directory entry
-   only when the last handle to the writing file object closes, so while another process holds
-   a log open (on 2026-10-29 an adb server that had inherited actingd's stdout and stderr) the
-   entry keeps the time the log was created: the stop that ended in an error was read as a
-   formal close (row 6) for 35 minutes. A log's tail is read through its own open handle, so
-   its size is the file's own too. A log whose time cannot be read is
+   0.12.28). An observation lists the candidate logs once: F, the test for a log written
+   during the closed epoch (row 6 or 6′) and row 6′'s look-back read that one list. When
+   `status` (and so the `overview` block) decides a formal close (row 6), it lists them once
+   more, the same way, for its close evidence (`watchdog_formal_close_unlogged`). Each log's
+   time is read from the file itself (`fs::metadata`, which opens it without data access, so
+   no sharing mode of the writer refuses it, and reads through that handle), not from the
+   directory listing's entry. Only when that open is refused as access denied (an access
+   control list that denies reading the file's attributes) does Rust's `fs::metadata` fall
+   back to the directory entry's data. NTFS does not refresh a directory entry as the file is
+   written: the entry catches up when the last handle to the writing file object closes, and
+   also whenever any other process opens and closes the file. So while another process holds
+   a log open (on 2026-10-29 an adb server that had inherited actingd's stdout and stderr) and
+   nothing else opens it, the entry keeps the time the log was created: the stop that ended in
+   an error was read as a formal close (row 6) for 35 minutes, until another process opened
+   and closed the err log. A log's tail is read through its own open handle, so its size is
+   the file's own too. A log whose time cannot be read is
    `watchdog_log_unreadable` (`path`); a log gone between the listing and the read is passed
    over. `actingctl install`'s shutdown evidence reads the same list the same way, and its
    rollback gate dates a start log without a time in its name by the file's own modification

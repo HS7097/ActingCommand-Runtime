@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // WD-MT (Workflow #421, INV-1119; 0.12.28): the watchdog reads a candidate log's modification
-// time from the file, never from its directory entry. On 2026-10-29 an adb server that had
+// time from the file, not from its directory entry. On 2026-10-29 an adb server that had
 // inherited actingd's stdout and stderr kept the err log open; NTFS left the directory entry at
 // the log's creation time, and a stop that ended in an error was read as a formal close for 35
 // minutes. Here each log on disk carries that stale time (what the directory listing presents),
