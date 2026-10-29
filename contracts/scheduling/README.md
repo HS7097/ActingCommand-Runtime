@@ -767,8 +767,9 @@ gives the member's rules). The reserve is a hard gate, never a score penalty (re
   the one before B16 part 2, and the catalog keeps its bytes and its hash.
 - **Spend values (SS-6, since 0.12.31; register §1.218).** A selected dispatch of a task with
   reserves on pools it consumes carries, on `policy_dispatch_parameters`, each such pool's
-  allowance (its projection as the gate read it, less `at_least`, at least 0), and a run cap from
-  them; a task that produces a pool an active goal covers also carries the goal's gap
+  allowance (the gate's own available amount, its projection less the consumption step 3
+  counts as not shown yet, less `at_least`, at least 0), and a run cap from them (at most 1000);
+  a task that produces a pool an active goal covers also carries the goal's gap
   ([../remedies.md](../remedies.md), section 4, "Spend values"). An allowance below the task's
   declared consumption of the pool, 0 included, is never dispatched: the gate holds it.
 

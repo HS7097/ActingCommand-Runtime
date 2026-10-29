@@ -3327,7 +3327,8 @@ struct StagedCandidate {
 ///
 /// SS-6 (register §1.218): the third item holds, by work index, the spend values of every
 /// candidate the stage keeps that has any: its reserves' allowances, read from the reserve
-/// gate's own views, and its goals' gaps; a selected dispatch hands them its run.
+/// gate's own views and pending consumption, and its goals' gaps; a selected dispatch hands them
+/// its run.
 #[allow(clippy::type_complexity)]
 fn apply_priority_selection(
     catalog: &CompiledCatalog,
@@ -3829,11 +3830,19 @@ fn apply_priority_selection(
             ScoreDisposition::Neutral => ranked.push(candidate),
         }
     }
+    // The consumption the reserved pools' readings do not show yet: the gate's step 3 and, SS-6,
+    // the allowances read the same entries.
+    let unshown = if reserves_declared {
+        reserve_unshown(catalog, facts, context, &reserves)?
+    } else {
+        crate::resource_targets::UnshownConsumption::new()
+    };
     if reserves_declared {
-        ranked = apply_reserves(catalog, facts, context, ranked, work, &reserves)?;
+        ranked = apply_reserves(catalog, context, ranked, work, &reserves, &unshown)?;
     }
-    // SS-6: the spend values of the candidates the gate admitted, from the same reserve views
-    // (the same projection, at the same instant) and each instance's resolved goals.
+    // SS-6: the spend values of the candidates the gate admitted, from the same reserve views and
+    // pending consumption (the gate's own available amount, at the same instant) and each
+    // instance's resolved goals.
     let mut spends = BTreeMap::new();
     for candidate in &ranked {
         let task = catalog_task(catalog, &candidate.task_id)?;
@@ -3841,6 +3850,14 @@ fn apply_priority_selection(
         let spend = crate::resource_targets::spend_values(
             task,
             reserves.get(&candidate.work_index).map(Vec::as_slice),
+            |pool_id| {
+                crate::resource_targets::pending_total(
+                    &unshown,
+                    &candidate.instance_id,
+                    pool_id,
+                    &task.id,
+                )
+            },
             &catalog.catalog().pools.pools,
             |pool_id| targets.and_then(|targets| targets.goal_gap(task, pool_id)),
         );
@@ -3905,17 +3922,44 @@ fn catalog_task<'a>(
         })
 }
 
+/// Workflow #411 B16 part 2: the consumption the reserved pools' latest readings do not show yet
+/// (`crate::resource_targets::unshown_consumption`), which the reserve gate's step 3 takes and,
+/// SS-6, the allowances take too.
+fn reserve_unshown<'a>(
+    catalog: &'a CompiledCatalog,
+    facts: &'a EvaluationFacts,
+    context: &PlacementContext<'_>,
+    reserves: &'a BTreeMap<usize, Vec<crate::resource_targets::ReserveView>>,
+) -> PolicyEvaluationResult<crate::resource_targets::UnshownConsumption<'a>> {
+    let pools = reserves
+        .values()
+        .flatten()
+        .map(|view| view.pool_id.as_str())
+        .collect::<BTreeSet<_>>();
+    crate::resource_targets::unshown_consumption(
+        &catalog.catalog().tasks.tasks,
+        &facts.tasks,
+        &pools,
+        |pool_id| {
+            context
+                .pool_values
+                .get(pool_id)
+                .map(|reading| reading.snapshot.observed_at_unix_ms)
+        },
+    )
+}
+
 /// Workflow #411 B16 part 2: the reserve gate over the ranked candidates
 /// (`crate::resource_targets::hold_reserves`), in allocation order. A held candidate is deferred
 /// with its `resource_reserve_insufficient` reason, and wakes at the next step of a regenerating
-/// pool; it takes no part in the allocation.
+/// pool; it takes no part in the allocation. `unshown` is [`reserve_unshown`]'s.
 fn apply_reserves(
     catalog: &CompiledCatalog,
-    facts: &EvaluationFacts,
     context: &PlacementContext<'_>,
     ranked: Vec<PlacementCandidate>,
     work: &mut [TaskWork],
     reserves: &BTreeMap<usize, Vec<crate::resource_targets::ReserveView>>,
+    unshown: &crate::resource_targets::UnshownConsumption<'_>,
 ) -> PolicyEvaluationResult<Vec<PlacementCandidate>> {
     // The allocation order (the round's own sort), without moving the candidates.
     let mut order = (0..ranked.len()).collect::<Vec<_>>();
@@ -3930,19 +3974,6 @@ fn apply_reserves(
             .then_with(|| left.task_id.cmp(&right.task_id))
             .then_with(|| left.instance_id.cmp(&right.instance_id))
     });
-    let tasks = &catalog.catalog().tasks.tasks;
-    let pools = reserves
-        .values()
-        .flatten()
-        .map(|view| view.pool_id.as_str())
-        .collect::<BTreeSet<_>>();
-    let unshown =
-        crate::resource_targets::unshown_consumption(tasks, &facts.tasks, &pools, |pool_id| {
-            context
-                .pool_values
-                .get(pool_id)
-                .map(|reading| reading.snapshot.observed_at_unix_ms)
-        })?;
     let candidates = order
         .iter()
         .map(|&index| -> PolicyEvaluationResult<_> {
@@ -3959,7 +3990,7 @@ fn apply_reserves(
         .into_iter()
         .zip(crate::resource_targets::hold_reserves(
             &candidates,
-            &unshown,
+            unshown,
         )?)
         .filter_map(|(index, hold)| hold.map(|hold| (index, hold)))
         .collect::<BTreeMap<_, _>>();

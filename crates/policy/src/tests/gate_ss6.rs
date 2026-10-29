@@ -5,18 +5,20 @@
 // SS-6 entry of §5; `contracts/remedies.md` section 4): a selected dispatch of a task that reserves
 // a pool it consumes, or that produces a pool an active goal covers, carries on
 // `policy_dispatch_parameters`, with no opt-in, its spend values: per such `consumes` entry `i`
-// the allowance (the pool's projection at the evaluation less the task's reserve, at least 0), per
-// such `produces` entry `j` the goal's gap, and `run_cap`, the least over the reserved consumed
-// pools of ⌊allowance / declared consumption per run⌋, at most ⌈gap / declared production per
-// run⌉ for a produced pool without base weight whose gap is open. Alice's ruling 100 (#386
+// the allowance (the reserve gate's own available amount at the evaluation, the pool's
+// projection less the other tasks' consumption its reading does not show yet, less the task's
+// reserve, at least 0), per such `produces` entry `j` the goal's gap, and `run_cap`, the least
+// over the reserved consumed pools of ⌊allowance / declared consumption per run⌋; when no
+// produced pool carries a base weight, at most the largest ⌈gap / declared production per run⌉
+// over the open gaps; and at most 1,000, the `max_repeats` ceiling. Alice's ruling 100 (#386
 // comment 6490879952): dispatch follows live account state, there is no "run task X N times";
 // ruling 106 (10-29 20:3x): until time joins the model the reserve line is the backstop. Every
-// expected value comes from the work order's formulas.
+// expected value comes from the work order's formulas and the coordinator's round-2 decisions.
 //
 // The catalog is neutral: tasks on one instance, each triggered by an hourly clock that is due at
-// NOW, and four pools of the instance that take their amount from readings of their keys and do
-// not regenerate: `pool_a` and `pool_d` are spent, `pool_b` has no valuation (a goal drives it
-// alone) and `pool_c` has a base weight.
+// NOW, and five pools of the instance that take their amount from readings of their keys and do
+// not regenerate: `pool_a` and `pool_d` are spent, `pool_b` and `pool_e` have no valuation (a goal
+// drives them alone) and `pool_c` has a base weight.
 
 use actingcommand_contract::outcome::Outcome;
 use serde_json::{Value, json};
@@ -26,8 +28,9 @@ use crate::resource_targets::{ReserveView, reserve_views, spend_values};
 use crate::{
     CatalogDocumentSource, CatalogSources, CompiledCatalog, DecisionReason, DecisionReasonChain,
     EvaluationFacts, EvaluationResources, EvaluationTime, FactValue, HostResourceSnapshot,
-    ObservedFact, PolicyCode, PolicyEvaluation, ScopeSelector, TaskDecision, TaskSpec,
-    check_resource_targets, compile_catalog, evaluate, parse_resource_targets, project_fact_pools,
+    ObservedFact, PolicyCode, PolicyEvaluation, ScopeSelector, TaskDecision, TaskRuntimeSnapshot,
+    TaskSpec, TaskTerminalState, check_resource_targets, compile_catalog, evaluate,
+    parse_resource_targets, project_fact_pools,
 };
 
 const A: &str = "instance-a";
@@ -36,6 +39,9 @@ const OPERATION: &str = "operation.run";
 const TASK_A: &str = "task_a";
 const TASK_B: &str = "task_b";
 const TASK_N: &str = "task_n";
+/// Consumes 40 of pool A and ran after its latest reading: consumption the reading does not show.
+const TASK_P: &str = "task_p";
+const PENDING: u64 = 40;
 /// Spent; no valuation.
 const POOL_A: &str = "pool_a";
 const POOL_A_KEY: &str = "resource.pool_a";
@@ -48,6 +54,9 @@ const POOL_C_KEY: &str = "resource.pool_c";
 /// Spent; no valuation.
 const POOL_D: &str = "pool_d";
 const POOL_D_KEY: &str = "resource.pool_d";
+/// Produced toward a goal; no valuation, so no base weight.
+const POOL_E: &str = "pool_e";
+const POOL_E_KEY: &str = "resource.pool_e";
 const V2: &str = "actingcommand.resource-targets.v2";
 const PARAMETERS: &str = "policy_dispatch_parameters";
 const RESERVE_INSUFFICIENT: &str = "resource_reserve_insufficient";
@@ -65,9 +74,14 @@ const B8_KEYS: [&str; 5] = [
 // Work order test 1: the allowance is the pool's projection less the task's reserve line, floored
 // at 0, keyed by the entry's position in the task's own `consumes`. Task A consumes 5 of pool D
 // (no reserve) and 30 of pool A, which must keep 100. Read at 1000, pool A allows 900 (30 runs);
-// read at 130, it allows 30 (one run, which leaves exactly the reserve). Pool D, consumed but not
-// reserved, gets no allowance. Below the line the allowance is 0, never negative: pool A projected
-// at 60 against its reserve of 100.
+// read at 130, it allows 30 (one run, which leaves exactly the reserve); read at 100000 it allows
+// 99900, 3330 runs, and `run_cap` is written as 1000, the `max_repeats` ceiling (round 2, item 2).
+// Pool D, consumed but not reserved, gets no allowance. Below the line the allowance is 0, never
+// negative: pool A projected at 60 against its reserve of 100.
+//
+// Round 2, item 1: the allowance is the reserve gate's own available amount. Task P consumes 40 of
+// pool A and was dispatched after the pool's reading (which therefore does not show it yet): read
+// at 1000, task A's allowance shrinks by exactly those 40, to 860 (28 runs).
 #[test]
 fn ss6_t1_the_allowance_is_the_projection_less_the_reserve_floored_at_zero() {
     let declared = TaskDecl {
@@ -76,7 +90,7 @@ fn ss6_t1_the_allowance_is_the_projection_less_the_reserve_floored_at_zero() {
         ..TaskDecl::new(TASK_A, 100)
     };
     let catalog = catalog(&[task(&declared)]);
-    for (reading, allowance, run_cap) in [(1000, 900, 30), (130, 30, 1)] {
+    for (reading, allowance, run_cap) in [(1000, 900, 30), (130, 30, 1), (100_000, 99_900, 1000)] {
         let evaluation = round(&catalog, vec![reading_of(POOL_A_KEY, reading)]);
         let reason = parameters(&evaluation, TASK_A)
             .unwrap_or_else(|| panic!("reading {reading}: {PARAMETERS}: {evaluation:#?}"));
@@ -99,9 +113,36 @@ fn ss6_t1_the_allowance_is_the_projection_less_the_reserve_floored_at_zero() {
 
     let spec = task_spec(&catalog, TASK_A);
     let views = projected_views(spec, 60);
-    let below = spend_values(spec, Some(views.as_slice()), &[], |_| None);
+    let below = spend_values(spec, Some(views.as_slice()), |_| 0, &[], |_| None);
     assert_eq!(below.spend_allowances, [(1, 0)], "{below:?}");
     assert_eq!(below.run_cap, Some(0), "{below:?}");
+
+    let pending = catalog_with_pending(&declared);
+    let allowance_of = |history: Vec<TaskRuntimeSnapshot>| {
+        let evaluation = round_after(&pending, vec![reading_of(POOL_A_KEY, 1000)], history);
+        let reason = parameters(&evaluation, TASK_A)
+            .unwrap_or_else(|| panic!("{PARAMETERS}: {evaluation:#?}"));
+        (
+            reason.outcome.value("spend_allowances").cloned(),
+            reason.outcome.value("run_cap").cloned(),
+        )
+    };
+    assert_eq!(
+        allowance_of(Vec::new()),
+        (
+            Some(json!([{"effect_index": 1, "spend_allowance": 900}])),
+            Some(json!(30))
+        ),
+        "nothing pending"
+    );
+    assert_eq!(
+        allowance_of(vec![pending_run()]),
+        (
+            Some(json!([{"effect_index": 1, "spend_allowance": 900 - PENDING}])),
+            Some(json!((900 - PENDING) / 30))
+        ),
+        "task P's {PENDING} pending"
+    );
 }
 
 // Work order test 2: a task without `reserves` gets no allowance. Task B consumes 30 of pool A
@@ -195,58 +236,104 @@ fn ss6_t3_without_an_active_goal_there_is_no_gap_remaining() {
     }
 }
 
-// Work order test 4: `run_cap` is the least over the reserved consumed pools, and a goal-driven
-// produced pool's gap caps it. Task A consumes 30 of pool A (reserve 100, read at 1000: 900, 30
-// runs) and 7 of pool D (reserve 10, read at 80: 70, 10 runs): the cap is 10. It also produces 10
-// of pool B (no base weight) and 10 of pool C (base weight 500) per run:
+// Work order test 4: `run_cap` is the least over the reserved consumed pools, and the goals'
+// gaps cap it when every produced pool is goal-driven. Each task consumes 30 of pool A (reserve
+// 100, read at 1000: 900, 30 runs) and 7 of pool D (reserve 10, read at 80: 70, 10 runs): the
+// spend term is 10. Round 2, item 3: the goal term applies only when no produced pool carries a
+// base weight, and is then the largest ⌈gap / per-run production⌉ over the produced pools.
+// The goal-driven task produces 10 of pool B and 5 of pool E per run (neither has a base weight):
 // - a goal of 100 on pool B read at 45 leaves a gap of 55: ⌈55 / 10⌉ = 6 runs cap it at 6;
-// - the same goal on pool C, which has a base weight, caps nothing: 10; its gap is still handed;
-// - pool B's goal met (read at 150, gap 0) caps nothing either (ruling 102: a met goal only stops
-//   adding score): 10.
+// - with a goal of 100 on pool E too, read at 60 (gap 40: ⌈40 / 5⌉ = 8 runs), the larger need
+//   holds: 8;
+// - both goals met (read at 150, gaps 0) add nothing, so there is no goal term (ruling 102): 10.
+// The mixed task produces 10 of pool B and 10 of pool C (base weight 500) per run: a goal on
+// pool B, or on pool C, caps nothing, since one produced pool carries a base weight: 10. Each
+// gap is still handed.
 #[test]
 fn ss6_t4_run_cap_is_the_least_over_pools_and_a_goal_driven_gap_caps_it() {
-    let declared = TaskDecl {
+    let driven = catalog(&[task(&TaskDecl {
+        consumes: &[(POOL_A, 30), (POOL_D, 7)],
+        reserves: &[(POOL_A, 100), (POOL_D, 10)],
+        produces: &[(POOL_B, 10), (POOL_E, 5)],
+        ..TaskDecl::new(TASK_A, 100)
+    })]);
+    let mixed = catalog(&[task(&TaskDecl {
         consumes: &[(POOL_A, 30), (POOL_D, 7)],
         reserves: &[(POOL_A, 100), (POOL_D, 10)],
         produces: &[(POOL_B, 10), (POOL_C, 10)],
         ..TaskDecl::new(TASK_A, 100)
-    };
-    let catalog = catalog(&[task(&declared)]);
+    })]);
     let spent = || vec![reading_of(POOL_A_KEY, 1000), reading_of(POOL_D_KEY, 80)];
-    for (label, goal_pool, reading_b, reading_c, gaps, run_cap) in [
-        ("no goal", None, 45, 45, None, 10),
+    for (label, catalog, goal_pools, readings, gaps, run_cap) in [
         (
-            "an open goal on the pool without base weight",
-            Some(POOL_B),
-            45,
-            45,
+            "goal-driven, no goal",
+            &driven,
+            &[][..],
+            [(POOL_B_KEY, 45), (POOL_E_KEY, 60)],
+            None,
+            10,
+        ),
+        (
+            "goal-driven, an open goal on pool B",
+            &driven,
+            &[POOL_B][..],
+            [(POOL_B_KEY, 45), (POOL_E_KEY, 60)],
             Some(json!([{"effect_index": 0, "gap_remaining": 55}])),
             6,
         ),
         (
-            "an open goal on the valued pool",
-            Some(POOL_C),
-            45,
-            45,
-            Some(json!([{"effect_index": 1, "gap_remaining": 55}])),
+            "goal-driven, open goals on pools B and E: the larger need",
+            &driven,
+            &[POOL_B, POOL_E][..],
+            [(POOL_B_KEY, 45), (POOL_E_KEY, 60)],
+            Some(json!([
+                {"effect_index": 0, "gap_remaining": 55},
+                {"effect_index": 1, "gap_remaining": 40}
+            ])),
+            8,
+        ),
+        (
+            "goal-driven, both goals met",
+            &driven,
+            &[POOL_B, POOL_E][..],
+            [(POOL_B_KEY, 150), (POOL_E_KEY, 150)],
+            Some(json!([
+                {"effect_index": 0, "gap_remaining": 0},
+                {"effect_index": 1, "gap_remaining": 0}
+            ])),
             10,
         ),
         (
-            "a met goal on the pool without base weight",
-            Some(POOL_B),
-            150,
-            45,
-            Some(json!([{"effect_index": 0, "gap_remaining": 0}])),
+            "mixed, an open goal on the pool without base weight",
+            &mixed,
+            &[POOL_B][..],
+            [(POOL_B_KEY, 45), (POOL_C_KEY, 45)],
+            Some(json!([{"effect_index": 0, "gap_remaining": 55}])),
+            10,
+        ),
+        (
+            "mixed, an open goal on the valued pool",
+            &mixed,
+            &[POOL_C][..],
+            [(POOL_B_KEY, 45), (POOL_C_KEY, 45)],
+            Some(json!([{"effect_index": 1, "gap_remaining": 55}])),
             10,
         ),
     ] {
         let mut facts = spent();
-        facts.push(reading_of(POOL_B_KEY, reading_b));
-        facts.push(reading_of(POOL_C_KEY, reading_c));
-        if let Some(pool) = goal_pool {
-            facts.push(stored(&catalog, &goals(&[goal(pool, 100)]), NOW - HOUR_MS));
+        facts.extend(
+            readings
+                .into_iter()
+                .map(|(fact_key, value)| reading_of(fact_key, value)),
+        );
+        if !goal_pools.is_empty() {
+            let targets = goal_pools
+                .iter()
+                .map(|pool| goal(pool, 100))
+                .collect::<Vec<_>>();
+            facts.push(stored(catalog, &goals(&targets), NOW - HOUR_MS));
         }
-        let evaluation = round(&catalog, facts);
+        let evaluation = round(catalog, facts);
         let reason = parameters(&evaluation, TASK_A)
             .unwrap_or_else(|| panic!("{label}: {PARAMETERS}: {evaluation:#?}"));
         assert_eq!(
@@ -272,10 +359,11 @@ fn ss6_t4_run_cap_is_the_least_over_pools_and_a_goal_driven_gap_caps_it() {
 
 // Work order test 5: an allowance of 0 coincides with the candidate being blocked at the reserve
 // gate. Task A consumes 30 of pool A per run and must keep 100. For each reading the allowance
-// is computed from the reserve view the gate judges by (the same projection at the same instant):
-// every reading whose allowance is 0 holds the candidate with `resource_reserve_insufficient`, and
-// the candidate runs exactly when the allowance covers one run (reading 130 and above), carrying
-// that allowance.
+// is computed from the reserve view the gate judges by and the consumption the gate counts as
+// not yet shown (the same amount at the same instant): every reading whose allowance is 0 holds
+// the candidate with `resource_reserve_insufficient`, and the candidate runs exactly when the
+// allowance covers one run, carrying that allowance. Without pending consumption that is reading
+// 130 and above; with task P's 40 pending (round 2, item 1), reading 170 and above.
 #[test]
 fn ss6_t5_an_allowance_of_zero_coincides_with_the_reserve_gate_holding_the_candidate() {
     let declared = TaskDecl {
@@ -283,42 +371,63 @@ fn ss6_t5_an_allowance_of_zero_coincides_with_the_reserve_gate_holding_the_candi
         reserves: &[(POOL_A, 100)],
         ..TaskDecl::new(TASK_A, 100)
     };
-    let catalog = catalog(&[task(&declared)]);
-    let spec = task_spec(&catalog, TASK_A);
-    for reading in [0_u64, 60, 99, 100, 101, 129, 130, 131, 400] {
-        let views = projected_views(spec, reading);
-        let allowance =
-            spend_values(spec, Some(views.as_slice()), &[], |_| None).spend_allowances[0].1;
-        assert_eq!(allowance, reading.saturating_sub(100), "reading {reading}");
-        let evaluation = round(
-            &catalog,
-            vec![reading_of(
-                POOL_A_KEY,
-                i64::try_from(reading).expect("a reading"),
-            )],
-        );
-        let runs = !dispatched(&evaluation).is_empty();
-        assert_eq!(runs, allowance >= 30, "reading {reading}: {evaluation:#?}");
-        if allowance == 0 {
-            assert!(!runs, "reading {reading}: an allowance of 0 never runs");
-        }
-        if runs {
-            let reason = parameters(&evaluation, TASK_A)
-                .unwrap_or_else(|| panic!("reading {reading}: {evaluation:#?}"));
+    let alone = catalog(&[task(&declared)]);
+    let pending = catalog_with_pending(&declared);
+    for (catalog, history, pending_amount) in [
+        (&alone, Vec::new(), 0),
+        (&pending, vec![pending_run()], PENDING),
+    ] {
+        let spec = task_spec(catalog, TASK_A);
+        for reading in [
+            0_u64, 60, 99, 100, 101, 129, 130, 131, 139, 140, 169, 170, 171, 400,
+        ] {
+            let views = projected_views(spec, reading);
+            let allowance = spend_values(
+                spec,
+                Some(views.as_slice()),
+                |_| pending_amount,
+                &[],
+                |_| None,
+            )
+            .spend_allowances[0]
+                .1;
+            let label = format!("reading {reading}, pending {pending_amount}");
             assert_eq!(
-                reason.outcome.value("spend_allowances"),
-                Some(&json!([{"effect_index": 0, "spend_allowance": allowance}])),
-                "reading {reading}: {reason:?}"
+                allowance,
+                reading.saturating_sub(pending_amount).saturating_sub(100),
+                "{label}"
             );
-        } else {
-            assert_eq!(
-                last_reason(decision(&evaluation, TASK_A))
-                    .outcome
-                    .code()
-                    .as_str(),
-                RESERVE_INSUFFICIENT,
-                "reading {reading}: {evaluation:#?}"
+            let evaluation = round_after(
+                catalog,
+                vec![reading_of(
+                    POOL_A_KEY,
+                    i64::try_from(reading).expect("a reading"),
+                )],
+                history.clone(),
             );
+            let runs = dispatched(&evaluation).contains(&TASK_A);
+            assert_eq!(runs, allowance >= 30, "{label}: {evaluation:#?}");
+            if allowance == 0 {
+                assert!(!runs, "{label}: an allowance of 0 never runs");
+            }
+            if runs {
+                let reason = parameters(&evaluation, TASK_A)
+                    .unwrap_or_else(|| panic!("{label}: {evaluation:#?}"));
+                assert_eq!(
+                    reason.outcome.value("spend_allowances"),
+                    Some(&json!([{"effect_index": 0, "spend_allowance": allowance}])),
+                    "{label}: {reason:?}"
+                );
+            } else {
+                assert_eq!(
+                    last_reason(decision(&evaluation, TASK_A))
+                        .outcome
+                        .code()
+                        .as_str(),
+                    RESERVE_INSUFFICIENT,
+                    "{label}: {evaluation:#?}"
+                );
+            }
         }
     }
 }
@@ -388,10 +497,12 @@ fn ss6_t7_a_task_that_declares_none_of_these_keeps_its_dispatch_chain() {
 // - A goal-driven produced pool declared by `expected_amount_milli` (no integer per-run amount)
 //   with an open gap: allowance and gap are handed, `run_cap` is not.
 // - A reserved pool whose projection is unknown: no allowance and no `run_cap`.
-// - A projection of u64::MAX with a reserve of 0 and a consumption of 1: the allowance and the cap
-//   are u64::MAX and are recorded as the key table's largest integer, i64::MAX; a gap of u64::MAX
-//   is recorded the same way, and against a production of u64::MAX twice (a saturating sum) it
-//   caps the runs at ⌈u64::MAX / u64::MAX⌉ = 1.
+// - A projection of u64::MAX with a reserve of 0 and a consumption of 1: the allowance is
+//   u64::MAX and is recorded as the key table's largest integer, i64::MAX; the cap of u64::MAX
+//   runs is written as 1000, the `max_repeats` ceiling (round 2, item 2). A gap of u64::MAX is
+//   recorded as i64::MAX, and against a production of u64::MAX twice (a saturating sum) it caps
+//   the runs at ⌈u64::MAX / u64::MAX⌉ = 1. A pending consumption of u64::MAX against it leaves an
+//   allowance of 0, not a wrapped one.
 #[test]
 fn ss6_t8_incomplete_declarations_give_no_run_cap_and_overflow_neither_panics_nor_wraps() {
     let milli = task_spec_of(task_with_production(
@@ -400,15 +511,19 @@ fn ss6_t8_incomplete_declarations_give_no_run_cap_and_overflow_neither_panics_no
         json!([production(POOL_B, json!({"expected_amount_milli": 5000}))]),
     ));
     let views = [view(POOL_A, 100, 30, Some(1000))];
-    let spend = spend_values(&milli, Some(views.as_slice()), &[], |pool| {
-        (pool == POOL_B).then_some(60)
-    });
+    let spend = spend_values(
+        &milli,
+        Some(views.as_slice()),
+        |_| 0,
+        &[],
+        |pool| (pool == POOL_B).then_some(60),
+    );
     assert_eq!(spend.spend_allowances, [(0, 900)], "{spend:?}");
     assert_eq!(spend.gaps_remaining, [(0, 60)], "{spend:?}");
     assert_eq!(spend.run_cap, None, "{spend:?}");
 
     let unknown = [view(POOL_A, 100, 30, None)];
-    let spend = spend_values(&milli, Some(unknown.as_slice()), &[], |_| None);
+    let spend = spend_values(&milli, Some(unknown.as_slice()), |_| 0, &[], |_| None);
     assert!(spend.spend_allowances.is_empty(), "{spend:?}");
     assert_eq!(spend.run_cap, None, "{spend:?}");
 
@@ -421,19 +536,27 @@ fn ss6_t8_incomplete_declarations_give_no_run_cap_and_overflow_neither_panics_no
         ]),
     ));
     let views = [view(POOL_A, 0, 1, Some(u64::MAX))];
-    let uncapped = spend_values(&huge, Some(views.as_slice()), &[], |_| None);
+    let uncapped = spend_values(&huge, Some(views.as_slice()), |_| 0, &[], |_| None);
     assert_eq!(uncapped.spend_allowances, [(0, u64::MAX)], "{uncapped:?}");
-    assert_eq!(uncapped.run_cap, Some(u64::MAX), "{uncapped:?}");
+    assert_eq!(uncapped.run_cap, Some(1000), "{uncapped:?}");
     let recorded = uncapped.add_to(Outcome::new(PolicyCode::PolicyDispatchParameters));
     assert_eq!(
         recorded.value("spend_allowances"),
         Some(&json!([{"effect_index": 0, "spend_allowance": i64::MAX}]))
     );
-    assert_eq!(recorded.value("run_cap"), Some(&json!(i64::MAX)));
+    assert_eq!(recorded.value("run_cap"), Some(&json!(1000)));
 
-    let capped = spend_values(&huge, Some(views.as_slice()), &[], |pool| {
-        (pool == POOL_B).then_some(u64::MAX)
-    });
+    let drained = spend_values(&huge, Some(views.as_slice()), |_| u64::MAX, &[], |_| None);
+    assert_eq!(drained.spend_allowances, [(0, 0)], "{drained:?}");
+    assert_eq!(drained.run_cap, Some(0), "{drained:?}");
+
+    let capped = spend_values(
+        &huge,
+        Some(views.as_slice()),
+        |_| 0,
+        &[],
+        |pool| (pool == POOL_B).then_some(u64::MAX),
+    );
     assert_eq!(capped.run_cap, Some(1), "{capped:?}");
     let recorded = capped.add_to(Outcome::new(PolicyCode::PolicyDispatchParameters));
     assert_eq!(
@@ -590,7 +713,35 @@ fn pool(id: &str, fact_key: &str, valuation: Option<Value>) -> Value {
     pool
 }
 
-/// The fixture catalog, `actingcommand.scheduling.v2`, with these tasks and the four pools.
+/// The fixture catalog with `declared` and task P, which consumes [`PENDING`] of pool A per run
+/// and ranks after it (priority 50, no reserve).
+fn catalog_with_pending(declared: &TaskDecl) -> CompiledCatalog {
+    let other = TaskDecl {
+        consumes: &[(POOL_A, PENDING)],
+        ..TaskDecl::new(TASK_P, 50)
+    };
+    catalog(&[task(declared), task(&other)])
+}
+
+/// Task P's run on the instance, dispatched half a minute before NOW: after pool A's reading (a
+/// minute before NOW) and after its clock's latest occurrence, so its consumption is not shown
+/// yet and it is not due again.
+fn pending_run() -> TaskRuntimeSnapshot {
+    TaskRuntimeSnapshot {
+        task_id: TASK_P.to_owned(),
+        instance_id: A.to_owned(),
+        last_dispatched_unix_ms: Some(NOW - 30_000),
+        eligible_since_unix_ms: None,
+        terminal_state: Some(TaskTerminalState::Succeeded),
+        completed_window: None,
+        last_duration_ms: None,
+        failure_streak: None,
+        expected_runtime_ms: None,
+        expected_runtime_runs: None,
+    }
+}
+
+/// The fixture catalog, `actingcommand.scheduling.v2`, with these tasks and the five pools.
 fn catalog(tasks: &[Value]) -> CompiledCatalog {
     let header = json!({
         "catalog_id": "fixture.spend-allowance",
@@ -616,6 +767,7 @@ fn catalog(tasks: &[Value]) -> CompiledCatalog {
                 "gap": {"rule": "shortfall_linear", "weight_milli": 100}}))
         ),
         pool(POOL_D, POOL_D_KEY, None),
+        pool(POOL_E, POOL_E_KEY, None),
     ]);
     let profile = json!({
         "id": "fixture-activity",
@@ -729,7 +881,19 @@ fn inputs(facts: Vec<ObservedFact>) -> EvaluationFacts {
 /// One round at NOW. The pools' values are the ones the Runtime derives from the readings; the
 /// instance has its own host and every candidate is admitted.
 fn round(catalog: &CompiledCatalog, facts: Vec<ObservedFact>) -> PolicyEvaluation {
-    let facts = inputs(facts);
+    round_after(catalog, facts, Vec::new())
+}
+
+/// [`round`] after the runs `history` records.
+fn round_after(
+    catalog: &CompiledCatalog,
+    facts: Vec<ObservedFact>,
+    history: Vec<TaskRuntimeSnapshot>,
+) -> PolicyEvaluation {
+    let facts = EvaluationFacts {
+        tasks: history,
+        ..inputs(facts)
+    };
     let resources = project_fact_pools(
         catalog,
         &facts,
@@ -754,7 +918,7 @@ fn round(catalog: &CompiledCatalog, facts: Vec<ObservedFact>) -> PolicyEvaluatio
 
 /// The tasks the round dispatches on the instance, by task id.
 fn dispatched(evaluation: &PolicyEvaluation) -> Vec<&'static str> {
-    [TASK_A, TASK_B, TASK_N]
+    [TASK_A, TASK_B, TASK_N, TASK_P]
         .into_iter()
         .filter(|task_id| {
             evaluation

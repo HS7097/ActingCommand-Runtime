@@ -2097,7 +2097,7 @@
     },
     "run_cap": {
       "type": "integer",
-      "description": "The runs a dispatch's spend allowances pay for: the least, over the consumed pools its task reserves, of the allowance divided by the task's declared consumption of the pool per run, rounded down; with a produced pool that has no base weight and an open goal gap, at most the runs that close the gap (SS-6)."
+      "description": "The runs a dispatch's spend allowances pay for: the least, over the consumed pools its task reserves, of the allowance divided by the task's declared consumption of the pool per run, rounded down; when no produced pool of the task carries a base weight, at most the runs its largest open goal gap still needs; and at most 1000, the ceiling of a max_repeats fact cap (SS-6)."
     },
     "effect_index": {
       "type": "integer",
@@ -2105,7 +2105,7 @@
     },
     "spend_allowance": {
       "type": "integer",
-      "description": "How much of a pool a dispatch may spend, in the pool's real units: the pool's projected amount at the evaluation less the task's reserve on it, at least 0 (SS-6)."
+      "description": "How much of a pool a dispatch may spend, in the pool's real units: the reserve gate's available amount at the evaluation (the pool's projected amount less the other tasks' consumption its latest reading does not show yet) less the task's reserve on it, at least 0 (SS-6)."
     },
     "gap_remaining": {
       "type": "integer",
