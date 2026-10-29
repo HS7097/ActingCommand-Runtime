@@ -953,6 +953,7 @@ fn serve(
                 &request,
                 RuntimeResult::RuntimeFactSnapshot {
                     snapshot: scheduling_parameters(),
+                    config_version: None,
                 },
             ),
             RuntimeOperation::QueryEvents { query, .. } if ledger.refuses(query) => {

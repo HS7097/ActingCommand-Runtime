@@ -24055,6 +24055,22 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: drain paused instance."
     },
+    "edit_pack_schedule": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.30",
+      "description": "A Runtime host operation or stage: edit pack schedule."
+    },
+    "edit_resource_target": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.30",
+      "description": "A Runtime host operation or stage: edit resource target."
+    },
     "effective_configuration_limit_exceeded": {
       "owner": "runtime-host",
       "layer": "host",
@@ -27927,6 +27943,22 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: run contained task capture."
     },
+    "routine_summary": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.30",
+      "description": "A Runtime host operation or stage: routine summary."
+    },
+    "run_instance_task": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.30",
+      "description": "A Runtime host operation or stage: run instance task."
+    },
     "run_instance_worker": {
       "owner": "runtime-host",
       "layer": "host",
@@ -28255,6 +28287,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: start runtime host."
+    },
+    "stop_instance_run": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.30",
+      "description": "A Runtime host operation or stage: stop instance run."
     },
     "stop_instance_workers": {
       "owner": "runtime-host",

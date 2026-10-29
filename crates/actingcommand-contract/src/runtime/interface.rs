@@ -272,6 +272,12 @@ runtime_operation_kinds! {
     UpgradeStateStatus,
     LoadPack,
     UnloadPack,
+    // Workflow #429 R-0 (register §1.213): the player workbench's kinds.
+    RunInstanceTask,
+    StopInstanceRun,
+    EditPackSchedule,
+    EditResourceTarget,
+    RoutineSummary,
 }
 
 impl RuntimeOperationKind {
@@ -297,7 +303,9 @@ impl RuntimeOperationKind {
             | Self::SubscribeEvents
             | Self::ReadMaterial
             | Self::ResourceTargetView
-            | Self::UpgradeStateStatus => GENERAL_QUERY,
+            | Self::UpgradeStateStatus
+            // Workflow #429 R-0: the routine summary, a general read from memory.
+            | Self::RoutineSummary => GENERAL_QUERY,
             // General reads that record: looking at frames, instance discovery.
             Self::ObserveReadonly | Self::CaptureSequence | Self::DiscoverInstances => {
                 GENERAL_RECORDED_READ
@@ -313,7 +321,18 @@ impl RuntimeOperationKind {
             | Self::PublishFacts
             | Self::ApplyResourceTargets
             | Self::ConfigureSettings
-            | Self::UpgradeState => GENERAL_INSTRUCTION,
+            | Self::UpgradeState
+            // Workflow #429 A.2 R-0: what the workbench needs without the Lab. Its new kinds act
+            // only on what is bound to the instance; emulator control, the self-check and the
+            // assigned application's start and stop already do (moved from option two; the
+            // origin gates of `RuntimeRequest::validate` stay until U-6).
+            | Self::RunInstanceTask
+            | Self::StopInstanceRun
+            | Self::EditPackSchedule
+            | Self::EditResourceTarget
+            | Self::ControlEmulatorInstance
+            | Self::SelfCheckInstance
+            | Self::ApplicationLifecycle => GENERAL_INSTRUCTION,
             // Option one, authoring: the agent planning session and the packaging tools.
             Self::StartAgentSession
             | Self::ResumeAgentSession
@@ -341,11 +360,8 @@ impl RuntimeOperationKind {
             | Self::ReleaseLease
             | Self::CancelQueuedLease
             | Self::SafeReset
-            | Self::ApplicationLifecycle
             | Self::RunContainedLabOperation
             | Self::CancelContainedTask
-            | Self::ControlEmulatorInstance
-            | Self::SelfCheckInstance
             // Workflow #390 DRILL-1: a ladder drill, an option-two operation.
             | Self::DrillRecoveryLadder
             | Self::RegisterDiagnosticSignature
@@ -467,6 +483,12 @@ impl RuntimeOperationKind {
             Self::UpgradeState | Self::UpgradeStateStatus | Self::LoadPack | Self::UnloadPack => {
                 None
             }
+            // Workflow #429 R-0: each gets its success code with its behaviour.
+            Self::RunInstanceTask
+            | Self::StopInstanceRun
+            | Self::EditPackSchedule
+            | Self::EditResourceTarget
+            | Self::RoutineSummary => None,
         }
     }
 }
@@ -558,6 +580,11 @@ impl RuntimeOperation {
             Self::UpgradeStateStatus { .. } => Kind::UpgradeStateStatus,
             Self::LoadPack { .. } => Kind::LoadPack,
             Self::UnloadPack { .. } => Kind::UnloadPack,
+            Self::RunInstanceTask { .. } => Kind::RunInstanceTask,
+            Self::StopInstanceRun { .. } => Kind::StopInstanceRun,
+            Self::EditPackSchedule { .. } => Kind::EditPackSchedule,
+            Self::EditResourceTarget { .. } => Kind::EditResourceTarget,
+            Self::RoutineSummary { .. } => Kind::RoutineSummary,
         }
     }
 
@@ -677,11 +704,14 @@ mod tests {
             K::ReleaseLease => (Lab(Debugging), Some(Operation), true),
             K::CancelQueuedLease => (Lab(Debugging), Some(Operation), true),
             K::SafeReset => (Lab(Debugging), Some(Operation), true),
-            K::ApplicationLifecycle => (Lab(Debugging), Some(Operation), true),
+            // Workflow #429 A.2 R-0: the assigned application's start and stop, emulator
+            // control and the self-check act only on what is bound to the instance, so the
+            // workbench sends them without the Lab: general instructions (were option two).
+            K::ApplicationLifecycle => (General, Some(Instruction), true),
             K::RunContainedLabOperation => (Lab(Debugging), Some(Operation), true),
             K::CancelContainedTask => (Lab(Debugging), Some(Operation), true),
-            K::ControlEmulatorInstance => (Lab(Debugging), Some(Operation), true),
-            K::SelfCheckInstance => (Lab(Debugging), Some(Operation), true),
+            K::ControlEmulatorInstance => (General, Some(Instruction), true),
+            K::SelfCheckInstance => (General, Some(Instruction), true),
             // Workflow #390 DRILL-1 (forced compromise T-08): the ladder drill is an option-two
             // operation (FCM: "CLI ↔ MCP option-two tools"), recorded through G14.
             K::DrillRecoveryLadder => (Lab(Debugging), Some(Operation), true),
@@ -698,6 +728,14 @@ mod tests {
             K::UpgradeStateStatus => (General, Some(Read), false),
             K::LoadPack => (Lab(Debugging), Some(Operation), true),
             K::UnloadPack => (Lab(Debugging), Some(Operation), true),
+            // Workflow #429 A.2 R-0: the workbench's kinds. The four writes are general
+            // instructions recorded through G14; the routine summary is a general read from
+            // memory that records nothing.
+            K::RunInstanceTask => (General, Some(Instruction), true),
+            K::StopInstanceRun => (General, Some(Instruction), true),
+            K::EditPackSchedule => (General, Some(Instruction), true),
+            K::EditResourceTarget => (General, Some(Instruction), true),
+            K::RoutineSummary => (General, Some(Read), false),
         }
     }
 

@@ -843,7 +843,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Scheduling decision reason: the resource weights and term of the candidate under an active v2 policy.",
+      "description": "Scheduling decision reason: the resource weights and term of the candidate: the pools' base valuation on every instance (policy=none without an active v2 policy, since 0.12.30) plus an active v2 policy's shortfall weights.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

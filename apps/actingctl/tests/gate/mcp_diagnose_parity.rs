@@ -907,6 +907,7 @@ fn serve(mut stream: TcpStream, owner_epoch: OwnerEpoch, ledger: &Ledger) {
             },
             RuntimeOperation::RuntimeFactSnapshot => RuntimeResult::RuntimeFactSnapshot {
                 snapshot: scheduling_parameters(),
+                config_version: None,
             },
             _ => panic!(
                 "the scripted Runtime answers Health, Status, QueryEvents, ScheduleExplanation and RuntimeFactSnapshot only"

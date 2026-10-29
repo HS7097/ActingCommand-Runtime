@@ -129,7 +129,7 @@ pub(super) fn instance_facts(
             ConnectionId::new(398).expect("connection"),
         )
         .expect("fact snapshot receipt");
-    let Some(RuntimeResult::RuntimeFactSnapshot { snapshot }) = receipt.result() else {
+    let Some(RuntimeResult::RuntimeFactSnapshot { snapshot, .. }) = receipt.result() else {
         panic!("a fact snapshot: {receipt:?}");
     };
     snapshot

@@ -162,10 +162,14 @@ field, while `json_path` and the line and column point at the nearest preceding
 value (the existing parser's behaviour).
 
 The block is a declaration. The compiler validates it and hashes it with the
-catalog. The evaluator reads it only for an instance with an active
-`actingcommand.resource-targets.v2` policy (Workflow #335 S2b,
-`contracts/resource-targets.md`, "Resource weights (v2)"); every other instance
-ranks exactly as with the same catalog without a valuation.
+catalog. Since SS-1 (0.12.30; Alice's ruling 100) the evaluator reads it for
+every instance: its base weight weighs every producing task with or without a
+resource target policy, and an active `actingcommand.resource-targets.v2`
+policy only adds its targets' shortfall (`contracts/resource-targets.md`, "Base
+valuation on every instance" and "Resource weights (v2)"). Until 0.12.29 it was
+read only for an instance with an active v2 policy. A catalog without a
+valuation ranks exactly as before, apart from the v1 `U` change of SS-1
+(`contracts/resource-targets.md`, "One-way guard").
 
 The bounds above are checked when the catalog is compiled (`compile_catalog`,
 `actinglab scheduling compile`, Runtime activation and startup reload).
@@ -919,7 +923,11 @@ A stored `actingcommand.resource-targets.v2` policy is named
 it is active the target fields carry the candidate's resource term instead
 (`target=<R>`, `target_id=<override id|*>`, `mode=<override|adjust>`) and
 `rank_breakdown` ends with ` offset_kept=<0|1>`, as
-`contracts/resource-targets.md`, "Resource weights (v2)", states.
+`contracts/resource-targets.md`, "Resource weights (v2)", states. Since SS-1
+(0.12.30) a candidate with a base term on any other instance carries the same
+fields with its base term `R` (`target_id=*`, `mode=adjust`, ` offset_kept=1`),
+unless a v1 target applies to it, which keeps `target=<s>` ("Base valuation on
+every instance").
 
 Bounds, every truncation marked: a chain of `L` reasons gains `rank_breakdown`,
 `decision_record` and at most `min(8, 128 - L - 2)` candidates when

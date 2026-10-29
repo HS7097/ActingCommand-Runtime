@@ -160,7 +160,13 @@ impl LadderHost {
         let ids = IdentifierIssuer::new().expect("identifier issuer");
         self.host
             .process_request_for_test(
-                &runtime_request(&ids, RuntimeOperation::ConfigureSettings { changes }),
+                &runtime_request(
+                    &ids,
+                    RuntimeOperation::ConfigureSettings {
+                        changes,
+                        expected_version: None,
+                    },
+                ),
                 ConnectionId::new(396).expect("connection"),
             )
             .expect("configure receipt")

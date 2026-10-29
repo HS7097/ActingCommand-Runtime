@@ -907,6 +907,12 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     ),
     bridge(
         "crates/policy/src/resource_targets.rs",
+        "base_terms",
+        &[Check::G2],
+        "B4: the error is the English message its caller wraps in policy_evaluation_input_invalid, not a code; B4 types the resolution chain",
+    ),
+    bridge(
+        "crates/policy/src/resource_targets.rs",
         "check_target_v2",
         &[Check::G2],
         "B4: not an outcome code: the refusal's String is the JSON pointer of the refused field, beside the typed ResourceTargetsRejectionReason",
@@ -944,6 +950,12 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     bridge(
         "crates/policy/src/resource_targets.rs",
         "target_effects",
+        &[Check::G2],
+        "B4: the error is the English message its caller wraps in policy_evaluation_input_invalid, not a code; B4 types the resolution chain",
+    ),
+    bridge(
+        "crates/policy/src/resource_targets.rs",
+        "weigh_production",
         &[Check::G2],
         "B4: the error is the English message its caller wraps in policy_evaluation_input_invalid, not a code; B4 types the resolution chain",
     ),
