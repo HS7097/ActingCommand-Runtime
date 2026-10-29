@@ -34,6 +34,10 @@
 //! Then the report "entry page not in the list" (M-373 §4.4, §10.1 NAV-4): one
 //! `package_bundle_entry_page_unlisted` warning per package whose entry pages, as the Runtime's
 //! entry gate reads them when its game has navigation data, are not all listed in `pages.json`.
+//! Workflow #411 B35: then, with `interrupts.json`, one `package_bundle_interrupt_page_shadowed`
+//! warning per package and shared interrupt page it declares itself (a page a package declares is
+//! its own, so that interrupt does not act for its runs); a feature package and the page's
+//! handlers declare it by their part and are not reported.
 //!
 //! Workflow #392 DA-4 (model 392 v1.2 §4.1): `display-layout.json` (`package bundle
 //! --display-layout`, or a game root that holds it) is a root file the one structure check reads
@@ -429,6 +433,50 @@ fn navigation_check(
                     .package_id(package_id)
                     .page_ids(unlisted),
             );
+        }
+    }
+    warnings.extend(shadowed_interrupt_pages(
+        root,
+        &pages.features,
+        &mut packages,
+    )?);
+    Ok(warnings)
+}
+
+/// Workflow #411 B35 (contracts/package-reference.md, the cross-check): a page a package declares
+/// is its own, and a shared interrupt page of the same id does not act for its runs (the
+/// Runtime's `RunInterrupts::candidates`; contracts/README.md, "Shared interrupt pages"), so a
+/// shared interrupt page added to `interrupts.json` silently does nothing for such a package. One
+/// `package_bundle_interrupt_page_shadowed` warning per package of the registry and shared
+/// interrupt page it declares, in registry order and then `interrupts.json` order; nothing is
+/// refused. A feature package of `pages.json` (its pages are the list's) and a handler of the
+/// page (its entry holds the page) declare it by their part and are not reported.
+fn shadowed_interrupt_pages(
+    root: &StandardPackRoot,
+    features: &[String],
+    packages: &mut Packages<'_>,
+) -> LabResult<Vec<Outcome>> {
+    let Some(interrupts) = &root.interrupts else {
+        return Ok(Vec::new());
+    };
+    let mut warnings = Vec::new();
+    for package_id in root.registry.package_ids() {
+        if features.iter().any(|feature| feature == package_id) {
+            continue;
+        }
+        let package = packages.admit_listed(package_id)?;
+        for interrupt in &interrupts.interrupts {
+            let handles = interrupt
+                .handlers
+                .iter()
+                .any(|handler| handler == package_id);
+            if !handles && package.page_ids().contains(&interrupt.page) {
+                warnings.push(
+                    Outcome::new(ResourceToolingCode::PackageBundleInterruptPageShadowed)
+                        .package_id(package_id)
+                        .page_id(interrupt.page.as_str()),
+                );
+            }
         }
     }
     Ok(warnings)

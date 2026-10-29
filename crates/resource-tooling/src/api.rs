@@ -57,7 +57,9 @@ pub struct StandardPackCheckResponse {
     pub pack_count: usize,
     /// The report "entry page not in the list": one `package_bundle_entry_page_unlisted` per
     /// package whose entry pages `pages.json` does not all list (none without `pages.json`);
-    /// then (Workflow #411 B15) one `package_bundle_remedy_invalid` per remedy finding.
+    /// then (Workflow #411 B35) one `package_bundle_interrupt_page_shadowed` per package and
+    /// shared interrupt page it declares itself (none without `interrupts.json`); then (Workflow
+    /// #411 B15) one `package_bundle_remedy_invalid` per remedy finding.
     pub warnings: Vec<actingcommand_contract::outcome::Outcome>,
 }
 
@@ -70,8 +72,10 @@ pub struct PackageBundleResponse {
     /// recognition maintenance package of a server that declares none (Workflow #411 A32: only
     /// the one a server declares counts); Workflow #373 NAV-T: with
     /// `--pages`, one `package_bundle_entry_page_unlisted` per pack whose entry pages the page
-    /// list does not all list; Workflow #411 B15: with any root file, one
-    /// `package_bundle_remedy_invalid` per remedy finding. Absent when there is none.
+    /// list does not all list; Workflow #411 B35: with `--interrupts`, one
+    /// `package_bundle_interrupt_page_shadowed` per pack and shared interrupt page it declares
+    /// itself; Workflow #411 B15: with any root file, one `package_bundle_remedy_invalid` per
+    /// remedy finding. Absent when there is none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<actingcommand_contract::outcome::Outcome>,
 }

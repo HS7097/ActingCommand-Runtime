@@ -311,8 +311,15 @@ the `navigation_role` and `navigation_problem` the Runtime's
 `admission_failed` with the loader's refusal as its cause. Then the report "entry page not in
 the list" (M-373 §4.4, §10.1 NAV-4): one `package_bundle_entry_page_unlisted` warning (with
 `package_id` and `page_ids`) in `warnings` per pack whose entry pages, as the Runtime's entry
-gate reads them when its game has navigation data, are not all listed in `pages.json`. After
-them, the report of item 5: one `package_bundle_remedy_invalid` warning in `warnings` per finding,
+gate reads them when its game has navigation data, are not all listed in `pages.json`. Then,
+with `interrupts.json` (Workflow #411 B35), one `package_bundle_interrupt_page_shadowed` warning
+(with `package_id` and `page_id`) in `warnings` per package of the registry and shared interrupt
+page it declares itself, in registry order and then `interrupts.json` order: a page a package
+declares is its own, so that shared interrupt page does not act for its runs
+([README.md](README.md), "Shared interrupt pages"), and a shared interrupt page added later changes
+nothing for it. A feature package of `pages.json` (its pages are the list's) and a handler of
+that page (its entry holds the page) declare it by their part and are not reported; nothing is
+refused. After them, the report of item 5: one `package_bundle_remedy_invalid` warning in `warnings` per finding,
 with `package_id`, `remedy_problem` (`capability_unprovided`: no package of the root provides the
 capability; `cycle`: one entry per package on the cycle; `parameters_mismatch`: two providers of
 one capability declare different parameters) and `need`, `capability` and `outcome_key` where they
