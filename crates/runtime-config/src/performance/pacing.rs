@@ -10,7 +10,7 @@
 //! `.paused` and `max_concurrent_runs` are settable. P-m reads `mode` at every evaluation, so a
 //! run's next step takes the factor of the new mode; the host reads the three limits at every
 //! policy evaluation, so the next round takes them and no run in progress is cut. `full` stays a
-//! file-only choice: an instruction that sets it is refused ([`check_instruction`]).
+//! file-only choice: an instruction that sets it is refused (`check_instruction`).
 
 use super::{
     AT_START, STAGE_WORDS, Values, WHEN_USED, at_least, between, exact_object, failure,
