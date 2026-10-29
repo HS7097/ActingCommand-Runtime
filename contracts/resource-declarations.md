@@ -109,7 +109,14 @@ task file declares it; #411 A13 B part: `input` is built from its row of the gen
 as an edge's `input` is, so it equals the `input` of an edge with the same click (a tap of a box
 or a point at its centre, a drag with its two boxes and their centres, a target click by its
 target), with no coordinate resolved on the frame, and `null` for a segmented or path drag, as an
-edge's, or when the navigation holds no row for the operation. A `long_press` navigation click
+edge's, or when the navigation holds no row for the operation. LAB-WAIT (0.12.29): a wait step
+(`wait` and none of `click`, `application` and `select`, as pack containment tells one; [Wait
+steps and wait pages](#wait-steps-and-wait-pages)) makes no input and is no click operation, so,
+as the generated navigation holds no row for it, offline `observe` lists no action for it, whether
+its destinations are a page-set `to` or `expect_after.page_id`; the package loads, and the step's
+destinations are the kernel's. Before 0.12.29 a wait step whose `to` is a page set refused the
+package (`missing field 'click'`). A click step whose `to` is a page set still requires its
+`click`. A `long_press` navigation click
 is read as a drag that does not move (one point held for its `duration_ms`). #411 Lab L3: wherever the Lab presses it (online `do <element-id>`, a route
 of `ensure`, `navigate` or `session recover`), it sends `InputAction::LongTap` at that point over the duration, as
 the kernel presses a pack's long press, and every other drag one `InputAction::Swipe`; a `drag`

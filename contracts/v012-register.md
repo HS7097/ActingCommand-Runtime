@@ -3748,6 +3748,18 @@ WD-MT's, 1.205 is ISO-PE's).
 | CFL1-2 | the region domain: `apply` refuses a region of more than 2^24 pixels (`RegionTooLarge`) before any step, `Scene::preprocess_region` before it crops; within it Otsu compares the exact scores quotient first, remainder second, with every intermediate at most 108 bits (the contract's bound table) | behaviour (library) | CFL-1 revision round | — | a domain of the algorithm like the 4 steps and 8 colors, no configuration key; the `checked_mul` guards stay and cannot fail inside the domain; the tie rule (smallest `t`) is unchanged |
 | CFL1-3 | `kept_milli` is counted before `invert`, and `inverted` says whether the chain has it (in place of the first round's `foreground_milli`, counted after `invert`) | evidence definition (memory only) | CFL-1 revision round | — | golden values re-recorded with the coordinator's approval: `keep_range hsv` then `invert` 750 → 250, `gray` then `invert` 625 → 375; every other value unchanged |
 
+### 1.210 Slice LAB-WAIT (0.12.29): offline `observe` loads a wait step whose `to` is a page set (the resource side's report of 10-29: such a step refused the package with `missing field 'click'`; coordinator work order LAB-WAIT)
+
+[resource-declarations.md](resource-declarations.md) (offline `observe`'s page-set operations,
+and "Wait steps and wait pages") is the contract. **No persisted ledger shape**, no code, no
+configuration key, no wire or interface revision, no new member: actinglab reads an existing
+shape that pack containment and the kernel already admit. The number 1.210 is provisional; the
+coordinator renumbers it at merge.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| LW-1 | offline `observe`'s page-set operations (`ObservationResources::multi_destination`, read from the task files) leave out a wait step, `wait` and none of `click`, `application` and `select` (pack containment's `is_wait_step`), as they leave out an application effect and a select step | behaviour (actinglab, since 0.12.29) | LAB-WAIT | — | the generated navigation holds no row for a wait step, so `actions` lists none for it, whether its destinations are a page-set `to` or `expect_after.page_id`; its destinations stay the kernel's (`to`, else `expect_after`); a step that declares `wait` beside a `click` is still read as a click step (pack containment's reading; the kernel refuses it, `wait_member_refused`); a click step whose `to` is a page set still requires its `click` |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
