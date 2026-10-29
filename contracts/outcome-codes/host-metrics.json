@@ -398,6 +398,22 @@
       "status": "active",
       "since": "0.12.28",
       "description": "Reading the calling process's own I/O priority hint back with ntdll's NtQueryInformationProcess(ProcessIoPriority), resolved at run time (RB-2, actingd's start); the status is raw_code."
+    },
+    "process_stdout_inheritance_clear": {
+      "owner": "host-metrics",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.28",
+      "description": "Making the calling process's own standard output handle not inheritable with SetHandleInformation(HANDLE_FLAG_INHERIT, 0) (WD-MT, Workflow #421, actingd's start), so no child process keeps actingd's log open."
+    },
+    "process_stderr_inheritance_clear": {
+      "owner": "host-metrics",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.28",
+      "description": "Making the calling process's own standard error handle not inheritable with SetHandleInformation(HANDLE_FLAG_INHERIT, 0) (WD-MT, Workflow #421, actingd's start), so no child process keeps actingd's log open."
     }
   }
 }

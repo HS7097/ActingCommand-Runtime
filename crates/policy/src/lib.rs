@@ -18,7 +18,7 @@ mod source;
 mod strategy;
 mod validation;
 
-pub use codes::{PolicyCode, RefreshLimit};
+pub use codes::{PolicyCode, PolicyInput, PolicyInputProblem, RefreshLimit};
 pub use compiler::*;
 pub use compose::*;
 pub use evaluator::*;

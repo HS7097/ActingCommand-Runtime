@@ -955,6 +955,14 @@ mod imp {
     ) -> DeviceResult<i32> {
         let duplicated = unsafe { _dup(fd) };
         let error = (duplicated < 0).then(native_facts::crt_error);
+        // WD-MT (Workflow #421, INV-1119): `_dup` duplicates the handle inheritable. The saved
+        // duplicate is the process's own stdout or stderr (actingd's log) and lives as long as
+        // the session, so every child process started meanwhile (an adb client that starts the
+        // adb server, MuMuManager, PowerShell) would inherit it and a long-lived one would keep
+        // the log open. It is made not inheritable at once, before it is observed: the `after`
+        // of this step shows its flags, the successful path keeps its steps, and a refusal is
+        // one more step that ends the acquisition.
+        let inheritance = (duplicated >= 0).then(|| not_inheritable(duplicated));
         let mut observation = native_facts::step(
             StdioPhase::Acquire,
             StdioApi::Dup,
@@ -974,7 +982,57 @@ mod imp {
                 "failed to duplicate vendor {name} fd"
             )));
         }
+        if let Some(Err(refusal)) = inheritance {
+            let mut observation = native_facts::step(
+                StdioPhase::Acquire,
+                StdioApi::SetHandleInformation,
+                target,
+                None,
+                0,
+                Some(refusal),
+            );
+            observation.after = Some(native_facts::owned_fd(duplicated, target));
+            facts.push(observation);
+            let mut failure = DeviceError::fatal(format!(
+                "failed to make the saved vendor {name} duplicate not inheritable"
+            ));
+            merge_close_result(
+                &mut failure,
+                close_fd(
+                    duplicated,
+                    name,
+                    target,
+                    StdioPhase::AcquisitionCleanup,
+                    facts,
+                )
+                .map_err(|error| {
+                    resource_close_error(
+                        error,
+                        DeviceResourceKind::FileDescriptor,
+                        DeviceResourceClosePhase::AcquisitionCleanup,
+                    )
+                }),
+            );
+            return Err(failure);
+        }
         Ok(duplicated)
+    }
+
+    /// WD-MT: clears `HANDLE_FLAG_INHERIT` on the handle descriptor `fd` owns; the CRT or Win32
+    /// error when the handle cannot be read or the flag cannot be cleared.
+    fn not_inheritable(fd: i32) -> Result<(), crate::StdioNativeError> {
+        use windows_sys::Win32::Foundation::{HANDLE_FLAG_INHERIT, SetHandleInformation};
+        let handle = unsafe { _get_osfhandle(fd) };
+        if handle == -1 {
+            return Err(native_facts::crt_error());
+        }
+        // SAFETY: `handle` is the live handle descriptor `fd` owns; only its inherit flag changes.
+        let returned =
+            unsafe { SetHandleInformation(handle as *mut c_void, HANDLE_FLAG_INHERIT, 0) };
+        if returned == 0 {
+            return Err(native_facts::win32_error());
+        }
+        Ok(())
     }
 
     fn dup2_fd(
@@ -1590,6 +1648,34 @@ mod tests {
         assert_eq!(&facts, guard.facts());
         let first = session.finish().expect("session finish");
         assert_eq!(first, session.finish().expect("cached session finish"));
+    }
+
+    /// WD-MT (Workflow #421, INV-1119): the session's saved duplicates of the process's stdout
+    /// and stderr are not inheritable, so no child process started while the session lasts
+    /// inherits the process's log.
+    #[cfg(windows)]
+    #[test]
+    fn wd_mt_the_saved_standard_duplicates_are_not_inheritable() {
+        let mut session = VendorStdioSession::start().expect("start vendor stdio session");
+        let guard = session.guard.as_mut().expect("active owner");
+        for reference in [
+            crate::StdioReference::SavedStdout,
+            crate::StdioReference::SavedStderr,
+        ] {
+            let saved = guard
+                .facts()
+                .steps
+                .iter()
+                .find(|step| step.api == crate::StdioApi::Dup && step.target == reference)
+                .and_then(|step| step.after.as_ref())
+                .expect("the saved duplicate");
+            assert!(
+                matches!(saved.flags, crate::StdioFact::Known(flags) if flags & 1 == 0),
+                "{reference:?}: {:?}",
+                saved.flags
+            );
+        }
+        session.finish().expect("session finish");
     }
 
     #[cfg(windows)]

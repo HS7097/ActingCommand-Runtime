@@ -114,6 +114,9 @@ actingcommand_contract::outcome_codes! {
         /// (each failure a `caused_by` link), or a level read back is not the one asked for;
         /// the same values as `host_process_priority_applied`. The start goes on.
         HostProcessPriorityFailed => "host_process_priority_failed": warning / none,
+        /// WD-MT (Workflow #421): at start actingd could not make its own stdout or stderr
+        /// handle not inheritable (each failed call a `caused_by` link). The start goes on.
+        HostStdioInheritanceFailed => "host_stdio_inheritance_failed": warning / none,
         VisionProviderUnavailable => "vision_provider_unavailable": error / none,
         VisionProviderPathEncodingInvalid => "vision_provider_path_encoding_invalid": error / none,
         AdbPathConflict => "adb_path_conflict": error / none,

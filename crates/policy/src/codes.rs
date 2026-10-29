@@ -309,6 +309,42 @@ actingcommand_contract::outcome_vocabulary! {
 }
 // ---- Workflow #405 W1: end ----
 
+// ---- ISO-PE (#419; a rejected evaluation input names itself): begin ----
+actingcommand_contract::outcome_vocabulary! {
+    /// Which input of a policy evaluation a check refused (the vocabulary `policy_input`), a
+    /// value of `policy_evaluation_input_invalid`.
+    pub enum PolicyInput: "policy_input" {
+        /// An observed fact.
+        Fact => "fact",
+        /// A settled run's observed outcome.
+        Outcome => "outcome",
+        /// A (task, instance) pair's runtime state.
+        TaskState => "task_state",
+        /// The activity window a pair's settled run completed.
+        CompletedWindow => "completed_window",
+        /// A resource pool reading.
+        Pool => "pool",
+        /// A manual priority offset.
+        PriorityOffset => "priority_offset",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Why a check refused a policy evaluation input (the vocabulary `policy_input_problem`), a
+    /// value of `policy_evaluation_input_invalid`.
+    pub enum PolicyInputProblem: "policy_input_problem" {
+        /// The input was observed later than the evaluation's time.
+        ObservedAfterEvaluation => "observed_after_evaluation",
+        /// The input names a task, an instance or a pool the evaluation does not know.
+        UnknownReference => "unknown_reference",
+        /// Two inputs share one identity.
+        Duplicate => "duplicate",
+        /// The input's metadata or value breaks a rule.
+        ValueInvalid => "value_invalid",
+    }
+}
+// ---- ISO-PE: end ----
+
 // ---- Workflow #411 A26 (why a listed candidate did not run, persisted): begin ----
 actingcommand_contract::outcome_vocabulary! {
     /// The state of a scheduling decision (the vocabulary `decision_state`): the state a

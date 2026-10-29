@@ -362,6 +362,10 @@
     },
     "parallel": {
       "enabled": false
+    },
+    "evaluation": {
+      "retry_ms": 15000,
+      "escalate_after": 3
     }
   },
   "ledger_observer": {

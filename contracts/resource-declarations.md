@@ -1333,7 +1333,7 @@ while a step waits for a page. No new member, code or record; any task schema.
 
 ### Store update packages
 
-STORE-FG-1 (since 0.12.29; [v012-register.md](v012-register.md) §1.205; design
+STORE-FG-1 (since 0.12.29; [v012-register.md](v012-register.md) §1.207; design
 `rd-1029/design-store-fg.md` §2, §3 and §8). A package updates its game's client through the
 store application with its own `control.json` member `store_update`: which store application its
 store steps run in, and which steps those are. The Runtime compares package ids for equality only

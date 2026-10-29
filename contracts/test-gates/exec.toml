@@ -989,6 +989,23 @@ tests = [
 ]
 incident = ["#396"]
 
+# Workflow #411 A58, #428 CFL-1: recognition preprocessing. Every step kind turns a small region into its golden bytes and evidence (keep_colors with its per-channel tolerance, keep_range in RGB and in HSV on the 0-179 hue scale with (255,0,8) at 179, gray, contrast, threshold, invert; kept_milli counted before invert, and inverted); an HSV hue range whose lower is above its upper wraps through 0; Otsu splits between two peaks, takes the smallest tied threshold and zeroes a region of one value; the remainder decides between two splits of the same quotient (0 0 0 1 1 1 2 4 gives 3); apply accepts a 720p region and one of 2^24 pixels, the domain check accepts up to 2^24 pixels, and apply refuses a larger region (RegionTooLarge); a gray chain gives the scene's gray byte for byte; the same region and chain give the same bytes twice; only the twelve chains of the two shapes are accepted, and a refusal names its step and member (step count, first step, order, repetition, colors, hue, bounds, contrast, threshold)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-recognition::lib::preprocess::tests::each_step_kind_turns_a_small_region_into_its_golden_bytes",
+    "actingcommand-recognition::lib::preprocess::tests::an_hsv_hue_range_whose_lower_is_above_its_upper_wraps_through_0",
+    "actingcommand-recognition::lib::preprocess::tests::otsu_splits_between_two_peaks_takes_the_smallest_tie_and_zeroes_a_flat_region",
+    "actingcommand-recognition::lib::preprocess::tests::otsu_lets_the_remainder_decide_between_equal_quotients",
+    "actingcommand-recognition::lib::preprocess::tests::apply_accepts_a_720p_region_and_a_region_of_2_24_pixels",
+    "actingcommand-recognition::lib::preprocess::tests::the_domain_accepts_up_to_2_24_pixels_and_apply_refuses_a_larger_region",
+    "actingcommand-recognition::lib::preprocess::tests::a_gray_chain_gives_the_scene_gray_byte_for_byte",
+    "actingcommand-recognition::lib::preprocess::tests::the_same_region_and_chain_give_the_same_bytes_and_evidence_twice",
+    "actingcommand-recognition::lib::preprocess::tests::only_the_two_chain_shapes_are_accepted_and_a_refusal_names_the_step",
+    "actingcommand-recognition::lib::preprocess::tests::members_out_of_range_are_refused_at_their_step_and_member",
+]
+incident = ["#428 CFL-1"]
+
 # Workflow #390 READ-1 (forced compromise O-08): a current_capacity reading mark that declares capacity_fact_key writes its denominator as that second reading key; the declaration gate admits the second key only on a fraction mark, under the reading key rule and unique among the task's reading keys; the run gives both readings from the mark's one evaluation on its frame, a requested key set of the second key reads the mark, and the host publishes the denominator as its own instance fact, an observation of its own under the snapshot `run:<run>/frame:<frame>/<reading id>/capacity` (register RE2), with the mark's observation time, expiry, confidence and detector
 [[gate]]
 key = "61"
@@ -2156,7 +2173,7 @@ tests = [
 ]
 incident = ["#411 B36", "#411 B19", "#412 B-3"]
 
-# STORE-FG-1 (0.12.29; register §1.205 SF-1, SF-2; design rd-1029/design-store-fg.md §3, §5 rows T11 and T14; package revision 6, declared by BT-PK6): control.json store_update; the source gate takes it and refuses each wrong shape or broken rule as resource_declaration_invalid at its member; kernel admission refuses a broken member, or one outside navigable_route and linear_steps, as contained_task_control_invalid reason=store_update_invalid, and each broken cross-check (a store step that is no tap from one page, or taps without a guard on that page, review H1; a proof that is no OCR target directly in its from page's required; no launch or restart way back) as contained_task_program_invalid with program_problem store_operation_invalid, store_proof_invalid or store_way_back_missing, path control.json and json_pointer; a valid declaration is admitted
+# STORE-FG-1 (0.12.29; register §1.207 SF-1, SF-2; design rd-1029/design-store-fg.md §3, §5 rows T11 and T14; package revision 6, declared by BT-PK6): control.json store_update; the source gate takes it and refuses each wrong shape or broken rule as resource_declaration_invalid at its member; kernel admission refuses a broken member, or one outside navigable_route and linear_steps, as contained_task_control_invalid reason=store_update_invalid, and each broken cross-check (a store step that is no tap from one page, or taps without a guard on that page, review H1; a proof that is no OCR target directly in its from page's required; no launch or restart way back) as contained_task_program_invalid with program_problem store_operation_invalid, store_proof_invalid or store_way_back_missing, path control.json and json_pointer; a valid declaration is admitted
 [[gate]]
 coverage = "Y"
 tests = [
@@ -2166,7 +2183,7 @@ tests = [
 ]
 incident = []
 
-# STORE-FG-1 (register §1.205 SF-3; design §2.3, §5 row T12): a store_update package answers store_update to the prerequisite incompatibility (prerequisite, return-home, edge, chain, handler and then.run checks) and to the startup incompatibility (startup package, ladder rung); run as a prerequisite or a host layer it is refused before any capture; package bundle and standard-pack check refuse it as an edge, a recovery chain step or a handler with package_bundle_navigation_package_invalid role_ineligible
+# STORE-FG-1 (register §1.207 SF-3; design §2.3, §5 row T12): a store_update package answers store_update to the prerequisite incompatibility (prerequisite, return-home, edge, chain, handler and then.run checks) and to the startup incompatibility (startup package, ladder rung); run as a prerequisite or a host layer it is refused before any capture; package bundle and standard-pack check refuse it as an edge, a recovery chain step or a handler with package_bundle_navigation_package_invalid role_ineligible
 [[gate]]
 coverage = "Y"
 tests = [
@@ -2175,7 +2192,7 @@ tests = [
 ]
 incident = []
 
-# STORE-FG-1 (register §1.205 SF-4; design §2.7, §5 row T13): in the package's own run a declared store step's Tap goes through ContainedTaskRuntime::store_input with the declared store and every other input through input, on the page graph and on linear_steps (an admitted step plan with its way back); admit_store_foreground is asked once before any capture, and a refusal ends the run before any capture or input; a recovery entry run, a declared operation's run (a Lab operation) and a package without store_update ask nothing and route nothing
+# STORE-FG-1 (register §1.207 SF-4; design §2.7, §5 row T13): in the package's own run a declared store step's Tap goes through ContainedTaskRuntime::store_input with the declared store and every other input through input, on the page graph and on linear_steps (an admitted step plan with its way back); admit_store_foreground is asked once before any capture, and a refusal ends the run before any capture or input; a recovery entry run, a declared operation's run (a Lab operation) and a package without store_update ask nothing and route nothing
 [[gate]]
 coverage = "Y"
 tests = [
@@ -2434,7 +2451,7 @@ tests = [
 ]
 incident = ["#411 B35"]
 
-# STORE-FG-1 (0.12.29; register §1.205 SF-5; design rd-1029/design-store-fg.md §8.1; contracts/package-reference.md, the standard-pack cross-check): package bundle and standard-pack check report one package_bundle_store_tap_unlocated warning (package_id, pack_operation_id) per pack and store step of control.json store_update that taps with point, rect or specific_rect, in registry order, and both still pass; a root without such a pack reports none
+# STORE-FG-1 (0.12.29; register §1.207 SF-5; design rd-1029/design-store-fg.md §8.1; contracts/package-reference.md, the standard-pack cross-check): package bundle and standard-pack check report one package_bundle_store_tap_unlocated warning (package_id, pack_operation_id) per pack and store step of control.json store_update that taps with point, rect or specific_rect, in registry order, and both still pass; a root without such a pack reports none
 [[gate]]
 coverage = "Y"
 tests = [

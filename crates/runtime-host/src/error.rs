@@ -207,13 +207,18 @@ impl Eq for RuntimeHostError {}
 impl From<actingcommand_policy::PolicyEvaluationError> for RuntimeHostError {
     fn from(error: actingcommand_policy::PolicyEvaluationError) -> Self {
         // Workflow #355 D12: the lifecycle record names the policy's failure. Ledger revision 3
-        // keeps its code as the `caused_by` link; the policy's English message is not recorded.
+        // keeps its code as the `caused_by` link. ISO-PE (#419): the link carries the refused
+        // input's values when the check named it (`policy_input`, `policy_input_problem`, the
+        // fact key, instance, task or pool, and a time check's two times), and the policy's code
+        // and developer text are the native detail (`contracts/scheduling/README.md`), so a
+        // record of the rejection says which input was refused and why.
         let mut result = Self::request(
             HostCode::PolicyEvaluationRejected,
             HostLocation::EvaluatePolicyCycle,
             RuntimeErrorCode::InvalidRequest,
-        );
-        result.lifecycle.caused_by = Some(Outcome::new(error.code()));
+        )
+        .with_native_detail(error.to_string());
+        result.lifecycle.caused_by = Some(error.outcome());
         result
     }
 }

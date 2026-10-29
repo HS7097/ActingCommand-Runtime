@@ -652,6 +652,19 @@ impl HostShared {
             })
     }
 
+    /// ISO-PE (#419): `scheduling.evaluation.retry_ms` and `.escalate_after` in effect, read at
+    /// every policy evaluation the Runtime skips, so an instruction takes effect at the next one.
+    pub(super) fn evaluation_retry_settings(
+        &self,
+    ) -> RuntimeHostResult<actingcommand_runtime_config::EvaluationRetryConfig> {
+        Ok(
+            lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+                .scheduling()
+                .map_err(remedy_config_failure)?
+                .evaluation,
+        )
+    }
+
     /// Workflow #386 SR-2b-1: the `scheduling.rerun` values in effect, read at each live
     /// settlement and online reconciliation, which decide a run's `condition` by them.
     pub(super) fn rerun_condition_rule(
