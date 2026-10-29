@@ -589,6 +589,28 @@ impl HostShared {
             && (nemu == passed || (input == passed && capture == passed)))
     }
 
+    /// EMU-BIND fix 1 (0.12.28, review M1): whether the store holds any `backend.selfcheck.*`
+    /// fact of the instance. `false` once a start, a failed control's observation or a
+    /// preparation dropped them (`invalidate_backend_selfcheck_facts`) and no open recorded them
+    /// again. A self-check whose opens failed keeps its `failed` facts (and admitted its ladder
+    /// when the failure is recoverable); one that ended at #411 A48's status read (before any
+    /// open: `instance_not_running`, `emulator_device_unrecognized`) records none and admits no
+    /// ladder (`recoverable` false), so the watch recognizes that instance again, within its
+    /// bound.
+    pub(super) fn backend_selfcheck_recorded(
+        &self,
+        instance_id: InstanceId,
+    ) -> RuntimeHostResult<bool> {
+        let scope = RuntimeFactScope::Instance { instance_id };
+        Ok(
+            lock(&self.runtime_facts, HostLocation::ReadBackendSelfcheckFacts)?
+                .records()
+                .any(|record| {
+                    record.scope == scope && record.key.starts_with(BACKEND_SELFCHECK_PREFIX)
+                }),
+        )
+    }
+
     /// Only an explicit current failure skips an entry. Unknown/missing channel facts leave
     /// the decision to the ordinary execution path; an input failure says nothing about ADB.
     pub(super) fn recovery_entry_unavailable(
