@@ -26,6 +26,8 @@ mod observe_export;
 mod observer;
 mod operator;
 mod packs;
+// Workflow #429 R-2: ac_perf_preset.
+mod perf_preset;
 mod protocol;
 // Workflow #411 B15 R6: ac_remedy_set, ac_remedy_get.
 mod remedy;

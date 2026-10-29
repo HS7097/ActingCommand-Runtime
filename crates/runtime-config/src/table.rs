@@ -162,7 +162,8 @@ pub fn assembly_rows() -> &'static [KeyRow] {
 /// per-instance section whose defaults they are. A new section is one more line; nothing counts
 /// the sections by hand (Workflow #420 S6).
 fn mechanism_sections() -> Vec<&'static [KeyRow]> {
-    let [monitor, responsiveness, pacing, calibration] = performance::sections();
+    // Workflow #429 R-2: `presets` after `calibration`, the last of the section.
+    let [monitor, responsiveness, pacing, calibration, presets] = performance::sections();
     vec![
         recovery_ladder::ROWS,
         host_claims::ROWS,
@@ -171,6 +172,7 @@ fn mechanism_sections() -> Vec<&'static [KeyRow]> {
         responsiveness,
         pacing,
         calibration,
+        presets,
         scheduling::ROWS,
         ledger_observer::ROWS,
         lab_module::ROWS,

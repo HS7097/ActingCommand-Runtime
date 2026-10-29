@@ -210,7 +210,7 @@
       }
     },
     "pacing": {
-      "mode": "observe",
+      "mode": "pace",
       "interpolate": "linear",
       "curve": [
         {"r_bp": 10000, "stage": "S0", "factor_milli": 1000, "extra_retries": 0, "share_milli": 1000},
@@ -281,6 +281,11 @@
       },
       "max_shift_bp": 500,
       "pressure_max_stage": "S2"
+    },
+    "presets": {
+      "standard": {"mode": "observe", "heavy_dispatch_limit_normal": 2, "parallel_enabled": true},
+      "adaptive": {"mode": "pace", "heavy_dispatch_limit_normal": 2, "parallel_enabled": true},
+      "light": {"mode": "pace", "max_concurrent_runs": 1, "heavy_dispatch_limit_normal": 1, "parallel_enabled": true}
     }
   },
   "scheduling": {
@@ -362,7 +367,7 @@
       "margin_ms": 300000
     },
     "parallel": {
-      "enabled": false
+      "enabled": true
     },
     "evaluation": {
       "retry_ms": 15000,

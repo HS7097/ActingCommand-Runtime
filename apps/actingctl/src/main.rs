@@ -91,6 +91,9 @@ mod evidence_read;
 // explanation, and what `overview` and `diagnose` show of it.
 mod schedule;
 
+// Workflow #429 R-2: `perf-preset set|get` (MCP `ac_perf_preset`), the performance presets.
+mod perf_preset;
+
 use actingcommand_contract::codes::{ContractCode, ContractLocation, SharedCode};
 use actingcommand_contract::outcome::{Category, Detail, IoOp, Outcome, RawSource};
 use actingcommand_contract::{
@@ -263,6 +266,11 @@ fn main() -> ExitCode {
     // #422 LN-7c C: `evidence` takes its action as the second word and leaves before
     // `Invocation::parse`; its flags are `flags_of`'s.
     if let Some(exit) = evidence_read::dispatch(&arguments, detail) {
+        return exit;
+    }
+    // Workflow #429 R-2: `perf-preset` takes its action as the second word (and `set` its preset
+    // as the third) and leaves before `Invocation::parse`; its flags are `flags_of`'s.
+    if let Some(exit) = perf_preset::dispatch(&arguments, detail) {
         return exit;
     }
     match run(arguments, detail) {
@@ -1727,6 +1735,10 @@ fn flags_of(command: &str, action: Option<&str>) -> Option<&'static [&'static st
         // #422 LN-7c C: a confirmation names one frame (`--artifact`) or one run (`--run`).
         evidence_read::COMMAND if action == Some(evidence_read::CONFIRM_READ) => {
             &["--state-root", "--artifact", "--run"]
+        }
+        // Workflow #429 R-2: `set` names its preset as a word; both read the Runtime's facts.
+        perf_preset::COMMAND if matches!(action, Some(perf_preset::SET | perf_preset::GET)) => {
+            &["--state-root"]
         }
         _ => return None,
     };

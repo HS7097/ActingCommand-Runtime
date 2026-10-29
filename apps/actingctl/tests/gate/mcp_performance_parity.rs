@@ -8,8 +8,9 @@
 //
 // The parity test (the rule of apps key 41): for the same arguments the CLI's stdout JSON without
 // its `outcome` and the `performance` block are the same object, apart from the time of each
-// read (`observed_at_unix_ms`). The mode in effect is observe, so the row's stage and factor in
-// effect are s0 and 1000; the monitor is unavailable. `--instance` / `instance` narrows the rows
+// read (`observed_at_unix_ms`). The mode in effect is the shipped one (`pace` since 0.12.31,
+// Workflow #429 R-2; `observe` before); with the monitor unavailable nothing is evaluated, so the
+// row's stage and factor in effect are s0 and 1000. `--instance` / `instance` narrows the rows
 // to the one instance. Workflow #378 A5: the CLI line carries `runtime_performance_reported`.
 //
 // Without actingd the CLI reports the Runtime's absence and exits 1 (§4.6: "actingd 不在时照
@@ -67,7 +68,7 @@ fn gate_actingctl_perf_status_and_ac_overview_answer_the_same_performance_status
             "actingctl {words:?} and ac_overview {arguments} answer differently:\nCLI {line}\nac_overview {tool}"
         );
         for (side, status) in [("CLI", &line), ("ac_overview", &block)] {
-            assert_eq!(status["pacing_mode"], json!("observe"), "{side}: {status}");
+            assert_eq!(status["pacing_mode"], json!("pace"), "{side}: {status}");
             assert_eq!(
                 status["monitor_health"],
                 json!("unavailable"),

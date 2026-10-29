@@ -547,7 +547,9 @@ pub struct RuntimeHostConfig {
     frame_retention_dedup_lab: bool,
     /// Workflow #385 P-c: the controller's clock jump and heavy-dispatch limits; actingd sets
     /// them from `performance.pacing.clock_jump_ms` and `.heavy_dispatch_limit.*`, a host
-    /// started without actingd keeps the controller's own values.
+    /// started without actingd keeps the controller's own values. Workflow #429 R-2: every
+    /// evaluation reads the heavy-dispatch limits and `max_concurrent_runs` from the
+    /// configuration in effect when it carries them, so these hold only where it does not.
     performance_control: PerformanceControlConfig,
     agent_dispatcher: Option<AgentDispatcherConfig>,
     secret_fingerprint_salt: Vec<u8>,
@@ -2148,7 +2150,8 @@ impl RuntimeHost {
                     )
                 })?;
                 // Workflow #427-B: every evaluation applies the configured limit of concurrent
-                // policy runs.
+                // policy runs; Workflow #429 R-2: the configuration's value in effect when it
+                // carries the key, this one otherwise.
                 policy.set_max_concurrent_runs(config.performance_control.max_concurrent_runs());
                 // ROUT-L RL-1b (model §3.4): in composer mode the procedures of the active
                 // composed generation are scheduled runs too, so a run a stop cut is told apart
@@ -4438,6 +4441,17 @@ impl RuntimeHost {
             .fail_policy_execution_append_once_for_test
             .store(true, Ordering::Release);
         Ok(())
+    }
+
+    /// Workflow #429 R-2, test only: what the shadow measurement's next evaluation reads from the
+    /// `performance` section in effect, an instruction value included (the read of every
+    /// performance tick).
+    #[cfg(test)]
+    pub(crate) fn performance_measurement_for_test(
+        &self,
+    ) -> RuntimeHostResult<actingcommand_runtime_config::performance::PerformanceMeasurement> {
+        self.shared_ref(crate::codes::test_spellings::TestLocation::ReadTestPerformanceContext)?
+            .performance_measurement()
     }
 
     /// #385 P-k, test only: every step of `instance_alias`'s contained runs is handed

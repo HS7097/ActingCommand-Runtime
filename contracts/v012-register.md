@@ -4071,6 +4071,64 @@ never writes one. Tested on a fixed sample of the rows (`runtime-config` `r1_tes
 | R1-1 | `ConfigureSettings` of a key whose default is `none` (`DefaultSource::None`) that the file does not write: accepted once its instance (a per-instance key) or its section (an exact key) is in the configuration; the key's own checks unchanged (type, range, whole-section check, `config_key_not_settable` for a key that is not settable); the row records `base_source` `default`, `base_json` `null`; the key then has a `config.parameters` row (source `instruction`); a change without a value returns it to no value, no row, and the receipt reports `{key, value: "null" (string), source: default}` | behaviour (configuration instruction layer) | R-1 | runtime-config (`EffectiveConfig::apply`) | before, `config_key_unknown`; settable keys with no default: the per-instance `scheduling.blackout` and `recovery_ladder_profile`, and `scheduling.fact_refresh.overdue_ms`; `performance.pacing.max_concurrent_runs` is read once at assembly (`Settable::No(ReadAtAssembly)`), so a file-silent instruction naming it is now `config_key_not_settable` (was `config_key_unknown`), as it already was with the file naming it; R-1 does not make it settable; `standard_packs.root` and the per-instance `device_kind`, `recognition_package`, `start_emulator` likewise; the receipt member keeps the wire shape (`ConfiguredSetting.value` is a scalar, and a receipt's `settings` is never empty) |
 | R1-2 | restore at start: a row over a key the file did not write (`default`, `null`) is kept while the file still does not write the key and superseded (`config_override_superseded`) once it does; a row over an explicit value of a key with no default that the file no longer writes is superseded | behaviour (restore rule) | R-1 | runtime-config (`EffectiveConfig::restore`) | before, a key with no default that the file did not write had no setting, so every such row was `config_override_dropped`; a key whose instance or section is gone is still dropped; the installer's instructions check counts dropped and superseded alike |
 
+### 1.220 Slice R-2 (0.12.31): performance keys hot, presets, defaults aligned to `adaptive` (Workflow #429 A.1 契约 1 and 2, its defaults and the R-2 entry of `rd-1029/429-A-runtime.md`; Alice's rulings 98, 99 and 110 of 10-29; coordinator work order `rd-1029/brief-r2.md`)
+
+[runtime-config.md](runtime-config.md) ("The performance section" with "Presets", "Per-instance
+lanes", "`ConfigureSettings`", "Restore at start", "Rollback"),
+[performance-control.md](performance-control.md), [scheduling/README.md](scheduling/README.md)
+("Shared Run Limits"), [runtime-interface.md](runtime-interface.md) (the `perf-preset` and
+`ac_perf_preset` rows) and [component-interfaces.md](component-interfaces.md) (`actingd-config`
+revision 22) are the contract. The number 1.220 is the coordinator's.
+
+**What.** The console's top bar switches between three performance presets and sets "how many
+tasks at most at once". Four keys become settable, each read again where it is used, and no run
+in progress is cut; one configuration key, `performance.presets`, defines the presets; a pure
+function of `runtime-config` names the current preset for the CLI, MCP and the console; the
+defaults file becomes `adaptive`'s members. **No new persisted ledger shape**: an applied preset
+is one `ConfigureSettings`, recorded as today (`command.*` records, one `host.config_overrides`
+record of the existing row shape, the changed `config.parameters.<section>` records), and the new
+key is one more row of `config.parameters.performance`. No outcome code (the refusal of `full` is
+`config_value_invalid` with `out_of_range`; the CLI and MCP reuse `actingctl_usage_invalid`,
+`arguments_invalid`, `config_facts_missing` and `invalid_fact_snapshot_record`), no request kind,
+no wire change, no `runtime-client` revision. **`actingd-config` revision 22** (from [5, 21] to
+[5, 22]): the optional member `presets` of the `performance` section.
+
+**Why.** Ruling 98: a new install defaults to `adaptive` (`pace`), so the defaults file changes
+the whole group (`mode` `pace`, `scheduling.parallel.enabled` `true`, `heavy_dispatch_limit.normal`
+2, no `max_concurrent_runs`); changing only `mode` would show a new install as `custom`. Ruling
+99: the top bar's number is the tasks run at once, `max_concurrent_runs`, not the emulators
+running. Ruling 110: production keeps today's behaviour; the coordinator writes production's
+default-dependent keys as online overrides at the deploy (a deploy step, not code), which needs
+`mode` settable while the deploy hold still pauses every instance. This slice therefore changes no
+production behaviour by itself once those overrides are written; a key an install holds no
+override for takes the new default at the update, and an override it holds is kept.
+
+**Rollback** (to 0.12.30). The configuration file: a file that does not name
+`performance.presets` (acsetup and the installers never write it) is read by 0.12.30 unchanged; a
+file that names it is refused by 0.12.30 at start and in `check-config` (an unknown member of the
+section), so the operator removes that member before rolling back. 0.12.30's own defaults file
+applies again (`mode` `observe`, `parallel.enabled` `false`) to every key without an override.
+Online overrides: the rows of `performance.pacing.mode`, `.max_concurrent_runs` and
+`.heavy_dispatch_limit.normal` / `.paused` this version writes have the existing row shape; 0.12.30
+parses them, finds those keys not settable (and `max_concurrent_runs` not in its configuration
+unless the file writes it) and drops each, `config_override_dropped`, listed in
+`StartReport.instructions_dropped`; it never refuses the record, so its start does not fail, and
+its next record of `host.config_overrides` no longer holds those rows (they are lost, not kept for
+a later update). A row of `scheduling.parallel.enabled` (settable in 0.12.30 too) is kept, over
+0.12.30's default `false` (`config_override_base_changed` when it was set over this release's
+default `true`). No override needs clearing before a rollback; an operator who wants the dropped
+values in 0.12.30 writes them into its configuration file.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| R2-1 | `performance.pacing.mode`, `performance.pacing.max_concurrent_runs`, `performance.pacing.heavy_dispatch_limit.normal` / `.paused` settable (`Settable::Yes`) | behaviour (the settable table) | R-2 | runtime-config (key rows) | before, `config_key_not_settable` (read once at assembly); `mode` is read by P-m at every evaluation, so a run's next step takes the new mode's factor; the heavy limits by the controller's resource overlay and `max_concurrent_runs` by the policy host at every evaluation and forward projection, from the configuration in effect (the assembly's value only for a key the configuration does not carry); no admitted dispatch is cut; `.paused` ≤ `.normal` stays the whole-section check (`config_value_invalid`, `section_check`); `max_concurrent_runs` is set whether or not the file writes it (R-1's rule), and clearing it returns to the file's value or to no limit |
+| R2-2 | `performance.pacing.mode` `full` by instruction: `config_value_invalid` (`config_value_problem` `out_of_range`, `config_key` the mode); a recorded value `full` is not restored (`config_override_dropped`) | behaviour (instruction layer) | R-2 | runtime-config (`pacing::check_instruction`, from `EffectiveConfig::apply` and `restore`) | `full` stays a file-only choice; leaving a file's `full` by instruction (or by any preset) is allowed and clearing returns to it |
+| R2-3 | `performance.presets` (object: preset name, 1 to 64 bytes of `a-z0-9_` and not `custom` → `{mode (observe \| pace), max_concurrent_runs? (1..=65535), heavy_dispatch_limit_normal (1..=65535), parallel_enabled (boolean)}`, no two presets alike; default from the defaults file: `standard` {observe, 2, true}, `adaptive` {pace, 2, true}, `light` {pace, max 1, 1, true}; not settable, read once at assembly) | new configuration key (**`actingd-config` revision 22**) | R-2 | the defaults file; the operator, in the configuration file | refused at start and in `check-config` as `perf_config_invalid` naming the key; one row of `config.parameters.performance` (canonical JSON text) |
+| R2-4 | defaults: `performance.pacing.mode` `pace` (was `observe`), `scheduling.parallel.enabled` `true` (was `false`) | changed defaults (Alice's ruling 98) | R-2 | the defaults file | `heavy_dispatch_limit.normal` stays 2, `max_concurrent_runs` stays unwritten; a new install with no override is `adaptive`; the statements that `observe` is every release's default and that `pace` and `full` are a person's choice only are gone |
+| R2-5 | `actingcommand_runtime_config::performance::presets`: `MEMBERS` (the mapping table: `mode`, `max_concurrent_runs` (optional), `heavy_dispatch_limit_normal`, `parallel_enabled` → their keys), `PresetTable`, `Preset::changes` (one change per member, no value for an unwritten one), `table_of`, `current_preset` (a preset's name when every member equals the value in effect, a key without a row equal only to an unwritten member; else `custom`), `CurrentPreset::answer`, `parameter_of_row` | library API (pure) | R-2 | — | shared by the CLI, MCP and the console; no `config.parameters` row is derived |
+| R2-6 | `actingctl perf-preset get` → `{preset, members: [{key, value, source}]}`; `actingctl perf-preset set <preset>` → one ConfigureSettings of the preset's members, `{preset, settings}` | CLI surface | R-2 | actingctl | reads `config.parameters.performance` and `.scheduling` with RuntimeFactSnapshot; success `request_runtime_fact_snapshot_completed` / `request_configure_settings_completed`; an unknown name `actingctl_usage_invalid` (`not_recognised`) before any write |
+| R2-7 | MCP `ac_perf_preset {action: get \| set, preset?}` | MCP surface (observer until U-3, a general tool) | R-2 | actingctl mcp | the CLI's answers; a `set` writes on its own (Cli, Cli) connection as `ac_config_set`; an unknown name `arguments_invalid` (`preset`, `not_recognised`) |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -4193,6 +4251,7 @@ when it takes effect.
 | `emulator_control.*` (**`actingd-config` revision 8**, #411 A50; §1.158) | `restart_exit_wait_ms` | 60 000 (`1000..=300000`); host-wide, settable ([runtime-config.md](runtime-config.md)) | A50 (§1.158 A50-5) | A50 (0.12.x) |
 | `host.*` (**`actingd-config` revision 20**, RB-2; §1.202) | `process_memory_priority`, `process_io_priority` | `normal` (`normal` \| `low`); not settable, applied by actingd to its own process at start ([runtime-config.md](runtime-config.md), "The `host` section") | RB-2 (§1.202 RB2-1) | RB-2 (0.12.28) |
 | `store_foreground.*` (**`actingd-config` revision 21**, STORE-FG-2; §1.209) | `allowed_application_ids` | `[]` (0 to 16 unique Android package names, none an instance's `application_id`); not settable, only the configuration file widens it ([runtime-config.md](runtime-config.md), "The `store_foreground` section") | STORE-FG-2 (§1.209 SF2-1) | STORE-FG-2 (0.12.29) |
+| `performance.presets` (**`actingd-config` revision 22**, Workflow #429 R-2; §1.220) | the key itself (an object of presets) | `standard`, `adaptive`, `light` (§1.220 R2-3); not settable, read once at assembly ([runtime-config.md](runtime-config.md), "Presets") | R-2 (§1.220 R2-3) | R-2 (0.12.31) |
 
 - Removed by option 丙 in the same revision (PKG-S4): `startup_package.expected_sha256`,
   `prerequisite_packages[].package_digest`, `policy.procedure_manifest[].package_digest`. A

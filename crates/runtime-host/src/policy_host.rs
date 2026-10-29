@@ -295,6 +295,10 @@ pub(crate) struct PolicyEvaluationContext<'a> {
     /// Workflow #386 SR-2b-2: the `scheduling.rerun` values and each instance's effective pacing
     /// stage as the cycle starts.
     pub(crate) rerun: RerunContext<'a>,
+    /// Workflow #429 R-2 (A.1 契约 1): `performance.pacing.max_concurrent_runs` in effect as the
+    /// cycle starts; `None` when the configuration does not carry the key, and the limit the host
+    /// was started with holds ([`PolicyHost::set_max_concurrent_runs`]).
+    pub(crate) max_concurrent_runs: Option<u16>,
 }
 
 /// Workflow #384 D2-S4 (D2 model §3.1, §3.4): the `scheduling.fact_refresh.*` settings in effect
@@ -2702,8 +2706,9 @@ impl PolicyHost {
     }
 
     /// Workflow #427-B: the limit of concurrent policy runs the host started with
-    /// (`performance.pacing.max_concurrent_runs`, through `PerformanceControlConfig`); every
-    /// evaluation applies it.
+    /// (`performance.pacing.max_concurrent_runs`, through `PerformanceControlConfig`). Workflow
+    /// #429 R-2: an evaluation applies the configuration's value in effect instead whenever the
+    /// configuration carries the key.
     pub(crate) fn set_max_concurrent_runs(&mut self, max_concurrent_runs: Option<u16>) {
         self.max_concurrent_runs = max_concurrent_runs;
     }
@@ -2711,15 +2716,17 @@ impl PolicyHost {
     /// Workflow #427-B (`contracts/scheduling/README.md`, "Shared run limits"): what takes the
     /// shared run limits' slots as this evaluation starts: every policy dispatch admitted and not
     /// yet settled, across every instance (the performance controller's workloads, read again
-    /// under this evaluation's policy lock), and the limit of concurrent runs.
-    fn run_slots(&self) -> RuntimeHostResult<RunSlots> {
+    /// under this evaluation's policy lock), and the limit of concurrent runs: Workflow #429 R-2,
+    /// `in_effect`, the configuration's value as the cycle starts, else the one the host started
+    /// with.
+    fn run_slots(&self, in_effect: Option<u16>) -> RuntimeHostResult<RunSlots> {
         Ok(RunSlots {
             admitted_load_profiles: self
                 .active_performance_workloads()?
                 .into_iter()
                 .map(|workload| workload.load_profile)
                 .collect(),
-            max_concurrent_runs: self.max_concurrent_runs,
+            max_concurrent_runs: in_effect.or(self.max_concurrent_runs),
         })
     }
 
@@ -2746,6 +2753,7 @@ impl PolicyHost {
             blackout,
             blackout_holds,
             rerun,
+            max_concurrent_runs,
         } = context;
         let directive = self.cadence.observe(trigger, time.unix_ms)?;
         if directive.kind == PolicyRecomputeKind::Deferred {
@@ -2821,8 +2829,9 @@ impl PolicyHost {
         // bound package declares a remedy or remedies are off.
         let (remedy_plan, remedy_decisions) =
             self.remedy_plan(&active.compiled, facts, time, remedy)?;
-        // Workflow #427-B: the dispatches admitted or running and the limit of concurrent runs.
-        let run_slots = self.run_slots()?;
+        // Workflow #427-B: the dispatches admitted or running and the limit of concurrent runs
+        // (Workflow #429 R-2: the configuration's value in effect as the cycle starts).
+        let run_slots = self.run_slots(max_concurrent_runs)?;
         // Workflow #386 SR-2b-2: the owed reruns let in, their stage gate's waits, and the
         // expiries and first waits to record.
         let store = &self.store;

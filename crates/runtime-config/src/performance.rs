@@ -9,7 +9,9 @@
 //!   `performance.pressure_end_samples` (§10.1; register §5);
 //! - [`responsiveness`]: `performance.responsiveness.*` (§10.2);
 //! - [`pacing`]: `performance.pacing.*` (§10.3);
-//! - [`calibration`]: `performance.calibration.*` (§10.4).
+//! - [`calibration`]: `performance.calibration.*` (§10.4);
+//! - [`presets`]: `performance.presets` (Workflow #429 R-2, since 0.12.31), the presets a person
+//!   switches between, and the current preset.
 //!
 //! Every default lives in the defaults file; a configuration names only what it changes, so a
 //! key it leaves out (`performance.pacing.mode` above all, §10.4 "缺键才用发布默认值") takes the
@@ -20,6 +22,7 @@
 pub mod calibration;
 pub mod monitor;
 pub mod pacing;
+pub mod presets;
 pub mod responsiveness;
 
 use crate::codes::{ConfigCode, ConfigValueProblem};
@@ -36,12 +39,13 @@ use serde_json::{Map, Value};
 pub const SECTION: &str = "performance";
 
 /// The rows of the section, one slice per subsection file, in manifest order.
-pub(crate) fn sections() -> [&'static [KeyRow]; 4] {
+pub(crate) fn sections() -> [&'static [KeyRow]; 5] {
     [
         monitor::ROWS,
         responsiveness::ROWS,
         pacing::ROWS,
         calibration::ROWS,
+        presets::ROWS,
     ]
 }
 
@@ -267,7 +271,8 @@ pub(crate) fn check(value: &dyn Fn(&str) -> Option<FactScalar>) -> Result<(), Co
     monitor::check(&values)?;
     responsiveness::check(&values)?;
     pacing::check(&values)?;
-    calibration::check(&values)
+    calibration::check(&values)?;
+    presets::check(&values)
 }
 
 /// Workflow #385 P-m (PERF §3, §4, §4.6, §10): what the shadow measurement reads, in effect.

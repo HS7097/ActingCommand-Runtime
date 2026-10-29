@@ -12,7 +12,9 @@
 //!   `ConfigureSettings` (all changes or none) and restored at start (§5.6, §5.7, §12 question 3).
 //! - The sections (D1c): `recovery_ladder` (§3, §4, §7), `host_claims` (§4.3) and
 //!   `standard_packs` (Workflow #373 NAV-6, moved here); `performance` (Workflow #385 P-c, PERF
-//!   §10); `scheduling` (Workflow #386 SR-1, with Workflow #405's random delay and Workflow #411
+//!   §10; Workflow #429 R-2 adds `performance.presets` and the current preset,
+//!   [`performance::presets`]); `scheduling` (Workflow #386 SR-1, with Workflow #405's random
+//!   delay and Workflow #411
 //!   B15 R3's remedy keys);
 //!   `ledger_observer` (Workflow #383 AO-1, `contracts/ledger-observer.md` §15); the two Lab
 //!   options `lab_module_authoring` and `lab_module_debugging` (Workflow #389 U-2); `device_link`
@@ -160,6 +162,9 @@ mod perf_tests;
 // Workflow #429 R-1.
 #[cfg(test)]
 mod r1_tests;
+// Workflow #429 R-2.
+#[cfg(test)]
+mod r2_tests;
 // Workflow #398 RD-4.
 #[cfg(test)]
 mod rd4_tests;

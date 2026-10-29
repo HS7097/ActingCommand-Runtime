@@ -67,7 +67,9 @@ the `recovery_ladder` and `host_claims` sections below (all settable, default `f
 read once at assembly); Workflow #398 RD-4 adds `recovery_ladder.rules.start_beyond_profile`,
 `recovery_ladder.profiles` and `recovery_ladder.kind_profiles` to the section and the
 per-instance `recovery_ladder_profile` (string, default `none`, settable). P-c's rows: the
-`performance` section below. Workflow #386 SR-1's rows: the `scheduling` section below.
+`performance` section below; Workflow #429 R-2 adds to it `performance.presets` (object, default
+`file`, not settable, read once at assembly; since 0.12.31) and makes four keys settable (the
+section below). Workflow #386 SR-1's rows: the `scheduling` section below.
 Workflow #383 AO-1's rows: the `ledger_observer` section below.
 Workflow #398 RD-1b's row: the per-instance `device_kind` (string
 `emulator` or `handset`, from the entry's `device.kind`, default `none`, not settable, read once
@@ -305,12 +307,27 @@ configuration nor any installer writes a performance key.
 |---|---|---|
 | `performance.monitor.*`, `performance.load.*`, `performance.pressure.*`, `performance.pressure_start_samples`, `performance.pressure_end_samples` (`src/performance/monitor.rs`) | PERF §10.1, 15 keys: sampling period (1 000..=5 000 ms), context window, summary interval, sample bounds, process coverage, failures, control freshness, stutter gap, heavy load threshold, the two pressure streaks (1..=30), `pressure.thresholds` and `pressure.severity` (objects), `pressure.gpu_aggregate` (`max_engine_type` \| `sum`) | every key, read once by the start-up assembly (`MonitorSettings`, Workflow #385 PM-CFG) and handed to the performance monitor, its host sampler (process thresholds and coverage) and the performance controller (`load.heavy_threshold_milli`, which the controller's resource overlay hands to the policy evaluator, so both judge heavy work by it); the streaks keep their file members |
 | `performance.responsiveness.*` (`src/performance/responsiveness.rs`) | PERF §10.2, 37 keys: window, smoothing, staleness, the timer and message probes, the capture, touch, recognition and page-settle signals (per-backend initial baselines are objects with a `default` member), the baseline | P-m |
-| `performance.pacing.*` (`src/performance/pacing.rs`) | PERF §10.3, 26 keys: `mode` (`observe` \| `pace` \| `full`, default `observe` in every release), `interpolate`, `curve` (a list of at most 70 points), the factor cap, hysteresis and sustains, pause timing, waits and gaps, `pressure_floor.*`, `tax_exempt_from_stage`, `heavy_dispatch_limit.normal` / `.paused`, `clock_jump_ms`, `hold.*`, `pause_probe.*`; and Workflow #427-B's optional `max_concurrent_runs` (an integer `1..=65535`, **no default**: a configuration that does not name it has no such limit and no `config.parameters` row; since 0.12.22; read once at assembly, so an instruction naming it is `config_key_not_settable` whether or not the file names it, since 0.12.31 also when it does not, Workflow #429 R-1) | `heavy_dispatch_limit.*`, `max_concurrent_runs` and `clock_jump_ms`: the performance controller, handed over by the start-up assembly (P-c; before, code constants; `max_concurrent_runs` from #427-B, which the policy host hands to every evaluation: at most that many policy dispatches admitted or running across every instance, those chosen earlier in the round included; `1` runs one at a time; [scheduling/README.md](scheduling/README.md), "Shared Run Limits"); `pre_input_wait_base_ms`, `curve[].extra_retries` and `pressure_floor.extra_retries`: P-k (the pre-input wait and the extra wait rounds each step is handed, Workflow #385 P-k S5); the rest: P-m, P-k, P-s, P-h |
+| `performance.pacing.*` (`src/performance/pacing.rs`) | PERF §10.3, 26 keys: `mode` (`observe` \| `pace` \| `full`; default `pace` since 0.12.31, Workflow #429 R-2 and Alice's ruling 98, `observe` before), `interpolate`, `curve` (a list of at most 70 points), the factor cap, hysteresis and sustains, pause timing, waits and gaps, `pressure_floor.*`, `tax_exempt_from_stage`, `heavy_dispatch_limit.normal` / `.paused`, `clock_jump_ms`, `hold.*`, `pause_probe.*`; and Workflow #427-B's optional `max_concurrent_runs` (an integer `1..=65535`, **no default**: a configuration that does not name it has no such limit and no `config.parameters` row; since 0.12.22; settable since 0.12.31, whether or not the file names it, Workflow #429 R-1 and R-2) | `clock_jump_ms`: the performance controller, handed over by the start-up assembly (P-c; before, code constants). `heavy_dispatch_limit.*` and `max_concurrent_runs` (from #427-B: at most that many policy dispatches admitted or running across every instance, those chosen earlier in the round included; `1` runs one at a time; [scheduling/README.md](scheduling/README.md), "Shared Run Limits"): handed over by the start-up assembly too, and since 0.12.31 (Workflow #429 R-2) read from the configuration in effect at every policy evaluation and forward projection, the heavy limits by the controller's resource overlay and `max_concurrent_runs` by the policy host; the assembly's values hold only for a key the configuration does not carry (a host without actingd's manifest, or `max_concurrent_runs` unset, which is no limit as at assembly). `pre_input_wait_base_ms`, `curve[].extra_retries` and `pressure_floor.extra_retries`: P-k (the pre-input wait and the extra wait rounds each step is handed, Workflow #385 P-k S5); `mode`: P-m at every evaluation; the rest: P-m, P-k, P-s, P-h |
+| `performance.presets` (`src/performance/presets.rs`; Workflow #429 R-2, since 0.12.31) | one key, an object: preset name → `{mode, max_concurrent_runs?, heavy_dispatch_limit_normal, parallel_enabled}` (below, "Presets") | read once at assembly, checked with the section; the CLI, MCP and the console read it from `config.parameters.performance` |
 | `performance.calibration.*` (`src/performance/calibration.rs`) | PERF §10.4, 19 keys: `apply`, `band_bp`, `trouble_codes` (a list of catalog codes), the learning period, `learning_max_stage` (S0..=S4), the backstop, interval, minimum steps, `tolerance.s0` / `.s1` / `.s2` / `.stop`, `bounds.s1` to `bounds.s4` (`[min, max]` basis points; PERF's `bounds.S1`, lowercase since a key is a token), `max_shift_bp`, `pressure_max_stage` | P-a |
 
-- **Settable:** `performance.pacing.curve` and `performance.pacing.hold.*` (M387 §5.5); every other
-  key is read once at assembly and changes by the file, a commit and a restart. `mode` in
-  particular is a person's configuration, never an instruction (PERF §4.6).
+- **Settable:** `performance.pacing.curve` and `performance.pacing.hold.*` (M387 §5.5), and since
+  0.12.31 (Workflow #429 R-2, design `429-A-runtime.md` A.1 契约 1) `performance.pacing.mode`,
+  `performance.pacing.max_concurrent_runs` and `performance.pacing.heavy_dispatch_limit.normal` /
+  `.paused`; every other key is read once at assembly and changes by the file, a commit and a
+  restart. Each settable key takes effect where it is read, and no run in progress is cut:
+
+  | Key | Read again | A run in progress |
+  |---|---|---|
+  | `mode` | by P-m at every evaluation of the shadow measurement | its next step's `step_pacing()` answer carries the factor of the new mode; the factor segments before stay as they were ([performance-control.md](performance-control.md), "Step pacing") |
+  | `max_concurrent_runs` | by the policy host at every evaluation, from the configuration in effect | not cancelled; a lower limit defers the next round's extra candidates, `policy_concurrent_runs_deferred` with the new `limit_count` |
+  | `heavy_dispatch_limit.normal` / `.paused` | by the controller's resource overlay at every evaluation and forward projection | as above; the next round's heavy-scene slots follow |
+
+  `mode` `full` stays a file-only choice: an instruction that sets it is `config_value_invalid`
+  with `config_value_problem` `out_of_range` (its learning phase, P-a, is no state to switch to and
+  from while the Runtime runs), and a recorded value `full` is not restored. Leaving a file's
+  `full` by instruction (`observe` or `pace`, or a preset) is allowed; clearing that instruction
+  returns to the file's `full`.
 - **Whole-section check** (`perf_config_invalid`, `config_key` and `config_value_problem`; through
   an instruction `config_value_invalid` with the same key and problem): the curve has at most
   **70 points** (`out_of_range` beyond; coordinator ruling 2026-10-14: 70 is the largest count
@@ -331,6 +348,55 @@ configuration nor any installer writes a performance key.
   pressure kinds, each once; `heavy_dispatch_limit.paused` is not above `.normal`. A value of the
   wrong type or outside a key's range is `config_value_invalid`. At start and in `check-config`
   the refusal comes before the ledger opens, exit code 1.
+
+**Presets (Workflow #429 R-2, design `429-A-runtime.md` A.1 契约 2, Alice's rulings 98 and 99;
+since 0.12.31).** `performance.presets` is the table of presets a person switches between; the
+Runtime defines it and the three counters share it (CLI `actingctl perf-preset set <name>|get`,
+MCP `ac_perf_preset`, the console's top bar). It is an object, preset name → `{mode,
+max_concurrent_runs?, heavy_dispatch_limit_normal, parallel_enabled}`; its default is in
+`actingd.defaults.json`, it is read once at assembly and is not settable. The mapping table, in
+`runtime-config` (`performance::presets::MEMBERS`), names the key each member sets, in this order:
+`mode` → `performance.pacing.mode`, `max_concurrent_runs` → `performance.pacing.max_concurrent_runs`
+(the only optional member), `heavy_dispatch_limit_normal` →
+`performance.pacing.heavy_dispatch_limit.normal`, `parallel_enabled` →
+`scheduling.parallel.enabled`. The shipped table, with the labels the console shows (the wire
+names stay `standard`, `adaptive`, `light` and `custom`):
+
+| Preset | Console label (zh / en) | `mode` | `max_concurrent_runs` | `heavy_dispatch_limit_normal` | `parallel_enabled` |
+|---|---|---|---|---|---|
+| `standard` | 标准（不额外放慢）/ Standard | `observe` | unwritten (no limit) | 2 | `true` |
+| `adaptive` | 自适应（电脑忙时自动放慢）/ Adaptive | `pace` | unwritten | 2 | `true` |
+| `light` | 轻载（我在用电脑）/ Light | `pace` | 1 | 1 | `true` |
+
+- **Checks** (with the section's, `perf_config_invalid` naming `performance.presets`): an object;
+  each name 1 to 64 bytes of `a-z`, `0-9` and `_` and not `custom` (`out_of_range`); each preset
+  an object of exactly the four members, `max_concurrent_runs` optional (`wrong_type`); each
+  member a value its key takes (`wrong_type`, `out_of_range`), and `mode` not `full`, which no
+  instruction sets (`out_of_range`); no two presets with the same members (`section_check`).
+- **Applying a preset** is one `ConfigureSettings` of its members, every key at once, all or none,
+  so `host.config_overrides` is recorded once; no request kind is added. A member the preset
+  leaves unwritten is a change without a value: it clears that key's online override and never
+  writes a value. Any preset may be applied over a file that writes `mode` `full`: that leaves
+  `full` through `mode`'s online override, and clearing it returns to the file's `full`.
+- **The current preset** (`performance::presets::current_preset`, a pure function the CLI, MCP and
+  the console share) is the name of the preset whose every member equals the value in effect of
+  its key, else `custom`; a key without a value in effect (an unwritten `max_concurrent_runs`, no
+  `config.parameters` row) equals only an unwritten member. The console reads the values from the
+  rows of `config.parameters.performance` and `config.parameters.scheduling`; no row is derived
+  from the current preset. A file that writes `full` with no override is `custom`. A file that
+  writes `max_concurrent_runs` keeps its value after `standard` or `adaptive` (clearing returns to
+  the file's value; no instruction writes "no limit"), so it is `custom` then, and `light`
+  after `light`.
+- **Concepts.** "Tasks at once" is `max_concurrent_runs`, policy dispatches only (Alice's ruling
+  99); no key counts running emulators ([performance-control.md](performance-control.md)).
+- **Defaults (Alice's ruling 98).** Since 0.12.31 the defaults file is `adaptive`'s members:
+  `performance.pacing.mode` `pace` (was `observe`), `scheduling.parallel.enabled` `true` (was
+  `false`), `heavy_dispatch_limit.normal` 2 and no `max_concurrent_runs`; so a new install with no
+  override is `adaptive`. Online overrides an install already holds are kept across the update and
+  are what its current preset is judged by; a key without one takes the new default.
+- **Revision.** `actingd-config` revision 22 ([component-interfaces.md](component-interfaces.md))
+  adds `performance.presets`; a file that does not name it keeps its revision, so the Runtime reads
+  revisions 5 to 21 and declares [5, 22].
 
 ## The `scheduling` section (Workflow #386 SR-1)
 
@@ -461,7 +527,8 @@ fact refresh read, whose intent record carries a value other than the spec's nom
 recovery reserves it again. ED-2 adds no key.
 
 **Per-instance lanes (Workflow #427-A; `actingd-config` revision 19).**
-`scheduling.parallel.enabled` (default `false`, settable) chooses where the policy driver runs
+`scheduling.parallel.enabled` (default `true` since 0.12.31, Workflow #429 R-2 and Alice's ruling
+98, `false` before; settable) chooses where the policy driver runs
 an admitted scheduled run: `false`, on its own thread, one run after another, as before;
 `true`, on the run's instance worker (`actingd-instance-<alias>`), so a long run on one instance
 holds neither the round nor another instance ([scheduling/README.md](scheduling/README.md),
@@ -1161,7 +1228,7 @@ All changes or none:
 |---|---|
 | the key is in the key table (a per-instance key of a configured instance); a key whose default is `none` counts whether or not the file writes it, once its instance (a per-instance key) or its section (an exact key) is in the configuration (Workflow #429 R-1, since 0.12.31) | `config_key_unknown` |
 | the key is settable | `config_key_not_settable` |
-| the value has the key's type and range; no key is named twice; the changed sections pass their whole-section check | `config_value_invalid` (`config_value_problem`: `wrong_type`, `out_of_range`, `repeated_key`, `section_check`; `range_min`, `range_max` for a bounded key) |
+| the value has the key's type and range, and is one an instruction may set (not `performance.pacing.mode` `full`, Workflow #429 R-2, since 0.12.31: `out_of_range`); no key is named twice; the changed sections pass their whole-section check | `config_value_invalid` (`config_value_problem`: `wrong_type`, `out_of_range`, `repeated_key`, `section_check`; `range_min`, `range_max` for a bounded key) |
 
 Records: `cli.command` (or the counter's own) and `command.received`; on a refusal
 `command.rejected` carrying the refusal as its outcome, and nothing else; otherwise the whole new
@@ -1189,11 +1256,11 @@ row records the base as absent, in the existing row shape: `base_source` `defaul
 `config.parameters` row with source `instruction`. A change without a value returns it to no
 value: the row goes, and the receipt reports the key as `{key, value: "null" (string), source:
 default}`, the base it was set over, since nothing is in effect. Settable keys with no default
-today: the per-instance `scheduling.blackout` and `recovery_ladder_profile` and
-`scheduling.fact_refresh.overdue_ms`; the other keys with no default (`standard_packs.root`,
-`performance.pacing.max_concurrent_runs`, the per-instance `device_kind`,
-`recognition_package` and `start_emulator`) are read once at assembly and stay
-`config_key_not_settable`.
+today: the per-instance `scheduling.blackout` and `recovery_ladder_profile`,
+`scheduling.fact_refresh.overdue_ms` and, since 0.12.31 (Workflow #429 R-2),
+`performance.pacing.max_concurrent_runs`; the other keys with no default
+(`standard_packs.root`, the per-instance `device_kind`, `recognition_package` and
+`start_emulator`) are read once at assembly and stay `config_key_not_settable`.
 
 ## Restore at start (M387 §12 question 3: the later change wins)
 
@@ -1202,7 +1269,7 @@ layer of this start:
 
 | Row | File layer now | Result |
 |---|---|---|
-| key gone, no longer settable, or value no longer fits | — | dropped, `config_override_dropped` (warning) |
+| key gone, no longer settable, or value no longer fits (or one no instruction sets, `mode` `full`; R-2) | — | dropped, `config_override_dropped` (warning) |
 | overrode an explicit value | the file still names the key with that value | kept |
 | overrode an explicit value | the file changed or removed it | dropped, `config_override_superseded` (info) |
 | overrode a default | the file names the key now | dropped, `config_override_superseded` (info) |
@@ -1222,6 +1289,17 @@ unchanged since 0.12.30), so a Runtime before 0.12.31 reads them: its configurat
 of a key the file does not write, so it drops each such row, `config_override_dropped`, listed in
 `StartReport`'s `instructions_dropped`, and never refuses the record. No `actingd-config`
 revision changes: the configuration file's format is unchanged.
+
+**Rollback** (Workflow #429 R-2; [v012-register.md](v012-register.md) §1.220). The rows of
+`performance.pacing.mode`, `.max_concurrent_runs` and `.heavy_dispatch_limit.normal` / `.paused`
+have the existing row shape; Runtime 0.12.30 reads them, finds those keys not settable and drops
+each row (`config_override_dropped`, listed in `instructions_dropped`) without refusing the
+record, and its next record of `host.config_overrides` no longer holds them. A row of
+`scheduling.parallel.enabled` is kept (settable there too), over 0.12.30's default `false`
+(`config_override_base_changed` when it was set over this release's `true`). A configuration file
+that names `performance.presets` is refused by 0.12.30 at start and in `check-config` (an unknown
+member of the section), so the operator removes that member before rolling back; nothing else
+needs clearing.
 
 The restored values then pass the whole-section check of their sections with this start's file
 layer; a section that fails it drops every value restored into it (`config_override_dropped`).

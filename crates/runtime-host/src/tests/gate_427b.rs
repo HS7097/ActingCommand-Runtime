@@ -3,23 +3,29 @@
 // Workflow #427-B (plan r2 point 5, #427 comment 6460013989, and review C4, comment 6459928838;
 // approved whole by Alice 10-28 12:4x; `contracts/scheduling/README.md`, "Shared run limits";
 // `contracts/performance-control.md`): through the host's policy cycle, the shared run limits
-// bind the same in each pacing mode. The release default `observe` never slows anything down,
-// so the protection is the limits themselves: the heavy-scene slots (`.normal` while the
+// bind the same in each pacing mode. `observe` never slows anything down, so the protection is
+// the limits themselves: the heavy-scene slots (`.normal` while the
 // performance controller is at Normal, `.paused` above it) and the optional
 // `performance.pacing.max_concurrent_runs`, which the host hands to every evaluation with the
 // policy dispatches admitted or running. The schedule explanation read answers the deferral with
 // its numbers. Two instances share one host; A's dispatch is admitted while B is held, then B is
 // released and the next cycles judge B's candidate. Times are fixed Unix milliseconds on a
 // manual Runtime clock; nothing sleeps.
+//
+// Workflow #429 R-2 (A.1 契约 1; register §1.220; since 0.12.31), tests 2 and 3: the limits are
+// settable and the host reads them at every evaluation, so an instruction moves the next round's
+// slots and cuts no dispatch already admitted.
 
 use super::*;
 use crate::{PolicyDispatchAdmission, PolicyTrigger};
 use actingcommand_contract::{
-    ConfigParameter, ConfigParameterSource, FactScalar, PerformancePacingMode,
+    ConfigParameter, ConfigParameterSource, ConfigSettingChange, FactScalar, PerformancePacingMode,
     RuntimeConfigManifest, RuntimeScheduleExplanation,
 };
 use actingcommand_policy::{PolicyEvaluation, SchedulingDecisionState, TaskDecision};
-use actingcommand_runtime_config::performance::pacing::MODE;
+use actingcommand_runtime_config::performance::pacing::{
+    HEAVY_DISPATCH_LIMIT_NORMAL, HEAVY_DISPATCH_LIMIT_PAUSED, MAX_CONCURRENT_RUNS, MODE,
+};
 
 /// The fixture tasks' weighted load sums to 600 milli: heavy on a host whose threshold is this.
 const HEAVY_AT_600: u64 = 600;
@@ -51,11 +57,20 @@ fn mode_manifest(mode: &str) -> RuntimeConfigManifest {
 
 /// A host of A and B in `mode`, with the controller's `control`, the two-task catalog active.
 fn two_instance_host(root: &TempDir, mode: &str, control: PerformanceControlConfig) -> RuntimeHost {
+    two_instance_host_on(root, mode_manifest(mode), control)
+}
+
+/// A host of A and B on `manifest`, with the controller's `control`, the two-task catalog active.
+fn two_instance_host_on(
+    root: &TempDir,
+    manifest: RuntimeConfigManifest,
+    control: PerformanceControlConfig,
+) -> RuntimeHost {
     let host = RuntimeHost::start(
         config(root)
             .with_runtime_clock(Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0)))
             .with_performance_control(control)
-            .with_config_manifest(mode_manifest(mode)),
+            .with_config_manifest(manifest),
         Arc::new(FakeProvider::from_entries([
             (
                 POLICY_INSTANCE_ALIAS.to_owned(),
@@ -312,4 +327,167 @@ fn gate_427b_the_max_key_binds_in_observe_pace_and_full_and_the_explanation_says
         );
         host.close().expect("close the host");
     }
+}
+
+// ---- Workflow #429 R-2 (A.1 契约 1; register §1.220; since 0.12.31): the limits by instruction.
+
+/// The configuration a start hands the host for R-2's tests: `mode` `observe` and the
+/// heavy-dispatch limits at the controller's 2 and 1, so an instruction may change each; the
+/// section is in the configuration, so `max_concurrent_runs` may be set though the file does not
+/// write it.
+fn limits_manifest() -> RuntimeConfigManifest {
+    let parameter = |key: &str, value: FactScalar, source: ConfigParameterSource| ConfigParameter {
+        key: key.to_owned(),
+        value,
+        source,
+        settable: false,
+    };
+    let mut parameters = vec![
+        parameter(
+            MODE,
+            FactScalar::String("observe".to_owned()),
+            ConfigParameterSource::Explicit,
+        ),
+        parameter(
+            HEAVY_DISPATCH_LIMIT_NORMAL,
+            FactScalar::Integer(2),
+            ConfigParameterSource::Default,
+        ),
+        parameter(
+            HEAVY_DISPATCH_LIMIT_PAUSED,
+            FactScalar::Integer(1),
+            ConfigParameterSource::Default,
+        ),
+    ];
+    actingcommand_runtime_config::annotate_settable(&mut parameters)
+        .expect("the keys are in the key table");
+    RuntimeConfigManifest {
+        subsystems: Vec::new(),
+        parameters,
+    }
+}
+
+/// One `ConfigureSettings` of `key` = `value`, and its receipt.
+fn configure(host: &RuntimeHost, key: &str, value: serde_json::Value) -> RuntimeReceipt {
+    let mut client = TestClient::connect(host);
+    let request = client.request(RuntimeOperation::ConfigureSettings {
+        changes: vec![ConfigSettingChange {
+            key: key.to_owned(),
+            value: Some(value),
+        }],
+        expected_version: None,
+    });
+    client.send(&request)
+}
+
+// R-2 test 2: lowering `max_concurrent_runs` while A's dispatch is admitted. At 2, the next round
+// chooses B beside A; the instruction lowers it to 1 and is in effect at once. A's dispatch is not
+// cancelled: it still takes its slot (1 admitted) and settles afterwards. The next round defers
+// B's candidate `policy_concurrent_runs_deferred` with the new `limit_count` 1: 1 used, 1
+// admitted, 0 chosen; once A's dispatch settled, the round after chooses B.
+#[test]
+fn r2_t2_lowering_max_concurrent_runs_cancels_no_run_and_defers_the_next_rounds_extra_candidates() {
+    let root = TempDir::new().expect("tempdir");
+    let host = two_instance_host_on(
+        &root,
+        limits_manifest(),
+        PerformanceControlConfig::default(),
+    );
+    let a_decision = admit_a_while_b_is_held(&host);
+    let receipt = configure(&host, MAX_CONCURRENT_RUNS, serde_json::json!(2));
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{receipt:?}"
+    );
+    let evaluation = evaluate(&host, PolicyTrigger::Recovery);
+    assert!(b_chosen(&evaluation), "1 of 2 taken: {evaluation:#?}");
+
+    let receipt = configure(&host, MAX_CONCURRENT_RUNS, serde_json::json!(1));
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{receipt:?}"
+    );
+    let evaluation = evaluate(&host, PolicyTrigger::Recovery);
+    assert!(!b_chosen(&evaluation), "1 of 1 taken: {evaluation:#?}");
+    let deferred = "policy_concurrent_runs_deferred";
+    assert_eq!(
+        slots_of(b_decision(&evaluation), deferred),
+        (deferred, [1, 1, 1, 0])
+    );
+
+    host.complete_policy_dispatch(&a_decision)
+        .expect("A's dispatch, admitted before the change, settles");
+    let evaluation = evaluate(&host, PolicyTrigger::Recovery);
+    assert!(b_chosen(&evaluation), "after A settled: {evaluation:#?}");
+    host.close().expect("close the host");
+}
+
+// R-2 test 3: changing `heavy_dispatch_limit.normal` while A's heavy dispatch is admitted, at
+// Normal. At 2 the next round chooses B's heavy candidate; at 1 the next round blocks it
+// `heavy_scene_budget_exhausted` with 1 of 1 used, 1 admitted, 0 chosen; `.paused` 2 above
+// `.normal` 1 is refused whole (`config_value_invalid`, `section_check`, naming `.paused`) and
+// changes nothing; back at 2 the next round chooses B again.
+#[test]
+fn r2_t3_changing_heavy_dispatch_limit_normal_moves_the_next_rounds_slots_and_paused_above_it_is_refused()
+ {
+    let root = TempDir::new().expect("tempdir");
+    let host = two_instance_host_on(
+        &root,
+        limits_manifest(),
+        PerformanceControlConfig::default()
+            .with_heavy_dispatch_limits(2, 1)
+            .with_heavy_threshold_milli(HEAVY_AT_600),
+    );
+    admit_a_while_b_is_held(&host);
+    let evaluation = evaluate(&host, PolicyTrigger::Recovery);
+    assert!(b_chosen(&evaluation), "1 of 2 heavy slots: {evaluation:#?}");
+
+    let receipt = configure(&host, HEAVY_DISPATCH_LIMIT_NORMAL, serde_json::json!(1));
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{receipt:?}"
+    );
+    let exhausted = "heavy_scene_budget_exhausted";
+    let evaluation = evaluate(&host, PolicyTrigger::Recovery);
+    assert!(!b_chosen(&evaluation), "1 of 1 heavy slot: {evaluation:#?}");
+    assert_eq!(
+        slots_of(b_decision(&evaluation), exhausted),
+        (exhausted, [1, 1, 1, 0])
+    );
+
+    let receipt = configure(&host, HEAVY_DISPATCH_LIMIT_PAUSED, serde_json::json!(2));
+    assert_eq!(receipt.state(), RuntimeReceiptState::Denied, "{receipt:?}");
+    let outcome = receipt.outcome();
+    assert_eq!(outcome.code().as_str(), "config_value_invalid");
+    assert_eq!(
+        outcome
+            .value("config_key")
+            .and_then(serde_json::Value::as_str),
+        Some(HEAVY_DISPATCH_LIMIT_PAUSED)
+    );
+    assert_eq!(
+        outcome
+            .value("config_value_problem")
+            .and_then(serde_json::Value::as_str),
+        Some("section_check")
+    );
+    let evaluation = evaluate(&host, PolicyTrigger::Recovery);
+    assert_eq!(
+        slots_of(b_decision(&evaluation), exhausted),
+        (exhausted, [1, 1, 1, 0]),
+        "nothing changed"
+    );
+
+    let receipt = configure(&host, HEAVY_DISPATCH_LIMIT_NORMAL, serde_json::json!(2));
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{receipt:?}"
+    );
+    let evaluation = evaluate(&host, PolicyTrigger::Recovery);
+    assert!(b_chosen(&evaluation), "1 of 2 heavy slots: {evaluation:#?}");
+    host.close().expect("close the host");
 }

@@ -2,10 +2,15 @@
 
 //! `performance.pacing.*` (Workflow #385 P-c, PERF §10.3): the mode, the graded curve and what
 //! each stage does, the stage-one pressure floor, the dispatch limits and clock jump the
-//! performance controller reads today, the hold and the pause probe. `mode` is `observe` in
-//! every release (§4.6); `pace` and `full` are a person's configuration, never a default.
-//! The start-up assembly hands the heavy-dispatch limits and the clock jump to the host (P-c);
-//! the other keys are read by P-m, P-k, P-s and P-h.
+//! performance controller reads today, the hold and the pause probe. The start-up assembly hands
+//! the heavy-dispatch limits and the clock jump to the host (P-c); the other keys are read by
+//! P-m, P-k, P-s and P-h.
+//!
+//! Workflow #429 R-2 (A.1 契约 1, since 0.12.31): `mode`, `heavy_dispatch_limit.normal` /
+//! `.paused` and `max_concurrent_runs` are settable. P-m reads `mode` at every evaluation, so a
+//! run's next step takes the factor of the new mode; the host reads the three limits at every
+//! policy evaluation, so the next round takes them and no run in progress is cut. `full` stays a
+//! file-only choice: an instruction that sets it is refused ([`check_instruction`]).
 
 use super::{
     AT_START, STAGE_WORDS, Values, WHEN_USED, at_least, between, exact_object, failure,
@@ -15,7 +20,7 @@ use crate::codes::ConfigValueProblem;
 use crate::effective::ConfigFailure;
 use crate::table::{DefaultSource, KeyRange, KeyRow, ValueType};
 use actingcommand_contract::{
-    PerformancePacingMode, PerformancePacingStage, PerformancePressureKind,
+    FactScalar, PerformancePacingMode, PerformancePacingStage, PerformancePressureKind,
     PerformancePressureSeverity,
 };
 use serde_json::Value;
@@ -41,9 +46,14 @@ pub const MAX_CONCURRENT_RUNS: &str = "performance.pacing.max_concurrent_runs";
 /// The jump between two controller inputs read as a clock jump.
 pub const CLOCK_JUMP_MS: &str = "performance.pacing.clock_jump_ms";
 
-/// The release default of `mode` in every release until Alice approves another (§4.6, §10.4).
+/// `mode` `observe`: every factor 1 000, nothing slowed down.
 pub const OBSERVE: &str = "observe";
-const MODES: &[&str] = &[OBSERVE, "pace", "full"];
+/// `mode` `pace`: the curve's factor (Workflow #429 R-2, Alice's ruling 98: the defaults file's
+/// mode since 0.12.31).
+pub const PACE: &str = "pace";
+/// `mode` `full`: `pace` with the learning view's stage cap; a configuration file's choice only.
+pub const FULL: &str = "full";
+const MODES: &[&str] = &[OBSERVE, PACE, FULL];
 const INTERPOLATIONS: &[&str] = &["linear", "step"];
 /// The pressure severities, lowest first.
 const SEVERITIES: &[&str] = &["elevated", "high", "critical"];
@@ -104,7 +114,9 @@ const fn when_used(
 }
 
 pub(crate) static ROWS: &[KeyRow] = &[
-    at_start(MODE, ValueType::String, KeyRange::Tokens(MODES), "P-m"),
+    // Workflow #429 R-2 (since 0.12.31): settable; P-m reads it at every evaluation, and an
+    // instruction may not set `full` (`check_instruction`).
+    when_used(MODE, ValueType::String, KeyRange::Tokens(MODES), "P-m"),
     at_start(
         INTERPOLATE,
         ValueType::String,
@@ -191,26 +203,29 @@ pub(crate) static ROWS: &[KeyRow] = &[
         STAGE_WORDS,
         "P-s",
     ),
-    at_start(
+    // Workflow #429 R-2 (since 0.12.31): both settable; the host reads them at every policy
+    // evaluation for the controller's resource overlay, and `.paused` stays at most `.normal`
+    // (the whole-section check, `check`).
+    when_used(
         HEAVY_DISPATCH_LIMIT_NORMAL,
         ValueType::Integer,
         between(1, u16::MAX as i64),
         "P-c",
     ),
-    at_start(
+    when_used(
         HEAVY_DISPATCH_LIMIT_PAUSED,
         ValueType::Integer,
         between(1, u16::MAX as i64),
         "P-c",
     ),
-    // Workflow #427-B: set as the heavy-dispatch limits are (read once at assembly), but with no
-    // default: only a file that names it carries it. Not settable, so an instruction naming it is
-    // `config_key_not_settable` whether or not the file names it (Workflow #429 R-1, since
-    // 0.12.31, lifts only the barrier of a key the file does not write, not this one's kind).
+    // Workflow #427-B: no default, so only a file that names it carries it. Workflow #429 R-2
+    // (since 0.12.31): settable, whether or not the file names it (R-1's rule for a key the file
+    // does not write); the host reads it at every policy evaluation. Clearing an instruction
+    // returns it to the file's value, or to no limit when the file does not name it.
     KeyRow {
         default: DefaultSource::None,
         since: "0.12.22",
-        ..at_start(
+        ..when_used(
             MAX_CONCURRENT_RUNS,
             ValueType::Integer,
             between(1, u16::MAX as i64),
@@ -266,6 +281,20 @@ pub(super) fn check(values: &Values<'_>) -> Result<(), ConfigFailure> {
         values.integer(HEAVY_DISPATCH_LIMIT_PAUSED)?
             <= values.integer(HEAVY_DISPATCH_LIMIT_NORMAL)?,
     )
+}
+
+/// Workflow #429 R-2 (A.1 契约 1): what an instruction may not set although the key's type and
+/// range allow it in the file. `mode` `full` is a configuration file's choice only (its learning
+/// phase, P-a, is no state to switch to and from while the Runtime runs): an instruction value
+/// `full` is `config_value_invalid` with `out_of_range`. Every other value passes.
+pub(crate) fn check_instruction(key: &str, value: &FactScalar) -> Result<(), ConfigFailure> {
+    if key == MODE && matches!(value, FactScalar::String(mode) if mode == FULL) {
+        return Err(ConfigFailure::invalid_value(
+            MODE,
+            ConfigValueProblem::OutOfRange,
+        ));
+    }
+    Ok(())
 }
 
 /// One point of the curve, its stage as its position in the stage words.
@@ -417,8 +446,8 @@ pub struct PacingSettings {
 pub(super) fn read(values: &Values<'_>) -> Result<PacingSettings, ConfigFailure> {
     let mode = match values.word(MODE)?.as_str() {
         OBSERVE => PerformancePacingMode::Observe,
-        "pace" => PerformancePacingMode::Pace,
-        "full" => PerformancePacingMode::Full,
+        PACE => PerformancePacingMode::Pace,
+        FULL => PerformancePacingMode::Full,
         _ => return Err(failure(MODE, ConfigValueProblem::OutOfRange)),
     };
     let interpolate = match values.word(INTERPOLATE)?.as_str() {

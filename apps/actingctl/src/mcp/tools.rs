@@ -552,6 +552,21 @@ pub(super) static TOOLS: &[ToolDef] = &[
         run: super::settings::config_set,
     },
     // ---- Workflow #387 D1b (end) ----
+    // ---- Workflow #429 R-2 (begin): `ac_perf_preset` ↔ `actingctl perf-preset set|get`; a
+    // general tool (observer until U-3), as `ac_config_set`: a preset is one ConfigureSettings. ----
+    ToolDef {
+        name: "ac_perf_preset",
+        title: "Performance preset",
+        tier: Tier::Observer,
+        description: super::perf_preset::DESCRIPTION,
+        read_only: false,
+        destructive: false,
+        idempotent: true,
+        input_schema: super::perf_preset::input,
+        result_schema: super::perf_preset::result,
+        run: super::perf_preset::run,
+    },
+    // ---- Workflow #429 R-2 (end) ----
     // ---- Workflow #389 MCP-11 (begin): `ac_packs` ↔ `actingctl packs`; observer before U-3,
     // a general read after it (command table §4.12). ----
     ToolDef {

@@ -529,18 +529,35 @@ tests = [
 ]
 incident = ["#387"]
 
-# Workflow #429 R-1 (0.12.31; brief rd-1029/brief-r1.md; register §1.219; contracts/runtime-config.md, "ConfigureSettings" and "Restore at start"; design rd-1029/429-A-runtime.md A.6 rule 4): a key whose default is none that the file does not write is set by instruction once its instance or section is in the configuration: an instance whose file has no blackout list of its own gets one online, in the receipt, config.parameters.instance and the policy cycle's blackout input, with one host.config_overrides row over base_source default and base_json null, and keeps it across a restart with no note (T1); clearing it returns the instance to no list (receipt null from default, no row, no override, no entry), also after a restart (T2); a file that later writes the key voids it with config_override_superseded and its list is in effect (T3); performance.pacing.max_concurrent_runs, read once at assembly, stays config_key_not_settable whether or not the file writes it (T4); the rows of instance blackout and scheduling.fact_refresh.overdue_ms set over a silent file carry base_source default and base_json null and take effect (T5); a fixed sample of those rows is what this build records, the row parser unchanged since 0.12.30 reads every row, a start without settings of those keys drops each with config_override_dropped and never refuses the record, and this build keeps both over the same silent file (T6, rollback safety)
+# Workflow #429 R-1 (0.12.31; brief rd-1029/brief-r1.md; register §1.219; contracts/runtime-config.md, "ConfigureSettings" and "Restore at start"; design rd-1029/429-A-runtime.md A.6 rule 4): a key whose default is none that the file does not write is set by instruction once its instance or section is in the configuration: an instance whose file has no blackout list of its own gets one online, in the receipt, config.parameters.instance and the policy cycle's blackout input, with one host.config_overrides row over base_source default and base_json null, and keeps it across a restart with no note (T1); clearing it returns the instance to no list (receipt null from default, no row, no override, no entry), also after a restart (T2); a file that later writes the key voids it with config_override_superseded and its list is in effect (T3); performance.pacing.max_concurrent_runs, settable since Workflow #429 R-2 (before, config_key_not_settable), is set by instruction whether or not the file writes it (T4); the rows of instance blackout and scheduling.fact_refresh.overdue_ms set over a silent file carry base_source default and base_json null and take effect (T5); a fixed sample of those rows is what this build records, the row parser unchanged since 0.12.30 reads every row, a start without settings of those keys drops each with config_override_dropped and never refuses the record, and this build keeps both over the same silent file (T6, rollback safety)
 [[gate]]
 coverage = "Y"
 tests = [
     "actingcommand-runtime-host::lib::tests::gate_387_d1b::r1_t1_an_instance_without_a_blackout_list_in_the_file_gets_one_online_that_survives_a_restart",
     "actingcommand-runtime-host::lib::tests::gate_387_d1b::r1_t2_clearing_it_returns_the_instance_to_no_blackout_list",
     "actingcommand-runtime-host::lib::tests::gate_387_d1b::r1_t3_a_file_that_later_writes_the_key_voids_the_instruction_as_superseded",
-    "actingcommand-runtime-config::lib::r1_tests::r1_t4_max_concurrent_runs_stays_not_settable_whether_or_not_the_file_writes_it",
+    "actingcommand-runtime-config::lib::r1_tests::r1_t4_max_concurrent_runs_is_settable_whether_or_not_the_file_writes_it",
     "actingcommand-runtime-config::lib::r1_tests::r1_t5_the_row_of_a_key_the_file_does_not_write_has_base_source_default_and_base_json_null",
     "actingcommand-runtime-config::lib::r1_tests::r1_t6_the_0_12_30_row_parser_reads_the_rows_of_keys_the_file_does_not_write",
 ]
 incident = ["#429 R-1"]
+
+# Workflow #429 R-2 (0.12.31; brief rd-1029/brief-r2.md; register §1.220; contracts/runtime-config.md, "Presets", "ConfigureSettings" and "Restore at start"; design rd-1029/429-A-runtime.md A.1 契约 1 and 2; Alice's rulings 98, 99, 110): applying a preset is one ConfigureSettings of its members as the shared function builds them from config.parameters, every key at once with one host.config_overrides record (light: four rows; standard after it: three, max_concurrent_runs cleared, receipt null from default), and the current preset follows (T4); one member that cannot be applied (light's heavy_dispatch_limit.normal 1 under a file's .paused 2) refuses the whole preset as config_value_invalid section_check naming .paused, with no record and nothing changed (T4); mode full by instruction is config_value_invalid out_of_range naming the mode over a silent or a full file, observe and pace are taken, and a recorded full is dropped at restore (T5); the mapping table key by key and A.1's shipped table, performance.presets an object from the defaults file, not settable, since 0.12.31, a preset's changes with no value for an unwritten member (T6); a new install with no override is adaptive, each member from default (T6); an exact match names the preset and any changed member is custom (T6); a 0.12.30 override of scheduling.parallel.enabled false is kept over the new default true (config_override_base_changed) and the install is custom, and a restart keeps a preset's overrides and its name (T6); a full file with no override is custom (T6); all three presets apply over a full file through mode's online override (T6); a file that writes max_concurrent_runs is custom after standard or adaptive and light after light (T6)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_387_d1b::r2_t4_applying_a_preset_sets_every_member_at_once_with_one_overrides_record",
+    "actingcommand-runtime-host::lib::tests::gate_387_d1b::r2_t4_one_member_that_cannot_be_applied_applies_none",
+    "actingcommand-runtime-config::lib::r2_tests::r2_t5_full_by_instruction_is_refused",
+    "actingcommand-runtime-config::lib::r2_tests::r2_t6_the_mapping_table_key_by_key_and_the_shipped_presets",
+    "actingcommand-runtime-config::lib::r2_tests::r2_t6_a_new_install_without_overrides_is_adaptive",
+    "actingcommand-runtime-config::lib::r2_tests::r2_t6_an_exact_match_names_the_preset_and_any_changed_member_is_custom",
+    "actingcommand-runtime-config::lib::r2_tests::r2_t6_an_install_with_online_overrides_keeps_them_after_the_update_and_is_judged_by_them",
+    "actingcommand-runtime-config::lib::r2_tests::r2_t6_a_full_file_without_overrides_is_custom",
+    "actingcommand-runtime-config::lib::r2_tests::r2_t6_all_three_presets_apply_over_a_full_file",
+    "actingcommand-runtime-config::lib::r2_tests::r2_t6_a_file_that_writes_max_concurrent_runs_is_custom_after_standard_or_adaptive_and_light_after_light",
+]
+incident = ["#429 R-2"]
 
 # The recovery ladder by configuration: the section's whole-section check at start and through an instruction, what the default trigger items match, the record shapes, the rules that stay in code and the five that switch, direction one's count, and a routine failure that climbs by its trigger item, its rungs and the snapshot it was admitted with (Workflow #387 D1c)
 [[gate]]
@@ -577,14 +594,14 @@ tests = [
 ]
 incident = ["#383"]
 
-# The performance configuration surface: every key of PERF §10 in the defaults file and in config.parameters with its source, the curve's and the calibration's rules refusing check-config and the start with perf_config_invalid naming the key and exit code 1, mode observe when the file names none, a curve of at most 70 points by file and by instruction (coordinator ruling 2026-10-14), and the controller taking the section's clock jump and dispatch limits (Workflow #385 P-c, Tc-1, Tc-2, Tc-4, Tc-5)
+# The performance configuration surface: every key of PERF §10 in the defaults file and in config.parameters with its source, the curve's and the calibration's rules refusing check-config and the start with perf_config_invalid naming the key and exit code 1, the release's mode when the file names none (observe, since 0.12.31 pace: Workflow #429 R-2), a curve of at most 70 points by file and by instruction (coordinator ruling 2026-10-14), and the controller taking the section's clock jump and dispatch limits (Workflow #385 P-c, Tc-1, Tc-2, Tc-4, Tc-5)
 [[gate]]
 key = "55"
 coverage = "Y"
 tests = [
     "actingcommand-runtime-config::lib::perf_tests::tc_1_every_performance_key_is_in_the_defaults_file_and_config_parameters_with_its_source",
     "actingcommand-runtime-config::lib::perf_tests::tc_2_a_curve_that_breaks_a_rule_is_refused_naming_the_curve",
-    "actingcommand-runtime-config::lib::perf_tests::tc_4_a_configuration_without_mode_takes_the_release_default_observe",
+    "actingcommand-runtime-config::lib::perf_tests::tc_4_a_configuration_without_mode_takes_the_release_default_pace",
     "actingcommand-runtime-config::lib::perf_tests::tc_5_calibration_values_that_break_a_rule_are_refused_naming_the_key",
     "actingcommand-runtime-config::lib::perf_tests::a_curve_of_seventy_points_is_accepted_and_seventy_one_are_refused_by_file_and_by_instruction",
     "actingcommand-actingd::bin:actingcommand-actingd::config::tests::tc_1_the_controller_takes_the_performance_section_s_clock_jump_and_dispatch_limits",
@@ -2694,6 +2711,16 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_427b::gate_427b_the_max_key_binds_in_observe_pace_and_full_and_the_explanation_says_the_numbers",
 ]
 incident = ["#427-B"]
+
+# Workflow #429 R-2 (0.12.31; brief rd-1029/brief-r2.md; register §1.220; contracts/runtime-config.md, "The performance section"; contracts/performance-control.md; design rd-1029/429-A-runtime.md A.1 契约 1): the performance keys are hot. mode switched from observe to pace by instruction while the Runtime runs: the evaluations before read observe, so the step factor stays 1000 at 6000 where the curve reads 2500, the next evaluation reads pace and the next step's StepPacing::factor_milli is 2500 (T1); max_concurrent_runs lowered from 2 to 1 while A's dispatch is admitted: A is not cancelled (it still takes its slot and settles afterwards) and the next round defers B policy_concurrent_runs_deferred with the new limit_count, 1 of 1 used, 1 admitted, 0 chosen (T2); heavy_dispatch_limit.normal from 2 to 1 and back: the next round's heavy slots follow (heavy_scene_budget_exhausted 1 of 1, then B chosen again), and .paused 2 above .normal 1 is refused config_value_invalid section_check naming .paused with nothing changed (T3)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_0122_pk1b::r2_t1_switching_mode_while_running_paces_the_next_step_and_leaves_the_part_before_at_1000",
+    "actingcommand-runtime-host::lib::tests::gate_427b::r2_t2_lowering_max_concurrent_runs_cancels_no_run_and_defers_the_next_rounds_extra_candidates",
+    "actingcommand-runtime-host::lib::tests::gate_427b::r2_t3_changing_heavy_dispatch_limit_normal_moves_the_next_rounds_slots_and_paused_above_it_is_refused",
+]
+incident = ["#429 R-2"]
 
 # #411 A56 (P10, 0.12.25; brief rd-1028/brief-wave1.md W1-3; #411 comments 6355540927 and 6355995369 fix 1; Friday review item 8; contracts/emulator-control.md, Entry pages on a recheck; no persisted ledger shape): on a recheck of the settle gate (a probe after a hold), a changing probe whose last frame shows a page of the return-home package's entry (entry_page home) runs the return-home rung again at once, though the screen still moves: one changing verdict only, the rerun after the hold recovers with rungs_tried 1, no comparison failure and no application stop; an unknown changing frame with the same package still holds as before: a second changing verdict of the same return-home run, held since the first one, with its next wait, and no application stop
 [[gate]]

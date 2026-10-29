@@ -103,32 +103,40 @@ fn unwritten_changes() -> Vec<ConfigSettingChange> {
     ]
 }
 
-// R-1 test 4: `performance.pacing.max_concurrent_runs` has no default and is read once at
-// assembly, so its kind is not settable; R-1 lifts only the barrier of a key the file does not
-// write, so an instruction naming it is refused `config_key_not_settable` whether the file is
-// silent or writes it (before R-1 a silent file answered `config_key_unknown`).
+// R-1 test 4: `performance.pacing.max_concurrent_runs` has no default; R-1 lifts only the barrier
+// of a key the file does not write, each key's own kind stays. Workflow #429 R-2 (since 0.12.31)
+// makes its kind settable (A.1 契约 1), so an instruction sets it whether the file is silent
+// (over the base `default` / `null`) or writes it (over the file's value, `explicit`); before
+// R-2 both answered `config_key_not_settable`.
 #[test]
-fn r1_t4_max_concurrent_runs_stays_not_settable_whether_or_not_the_file_writes_it() {
+fn r1_t4_max_concurrent_runs_is_settable_whether_or_not_the_file_writes_it() {
     let (row, _) = find_row(MAX_CONCURRENT_RUNS).expect("the key is in the key table");
     assert_eq!(row.default, DefaultSource::None);
-    assert!(!row.settable.is_settable());
-    for (case, file) in [
-        ("the file is silent", json!({})),
+    assert!(row.settable.is_settable());
+    for (case, file, base_json) in [
+        ("the file is silent", json!({}), "null"),
         (
             "the file writes it",
             json!({"performance": {"pacing": {"max_concurrent_runs": 2}}}),
+            "2",
         ),
     ] {
-        let config = from_file(file);
-        let refused = config
+        let config = from_file(file)
             .apply(&[set(MAX_CONCURRENT_RUNS, json!(1))], &stamp(), &context())
-            .expect_err(case);
+            .unwrap_or_else(|failure| panic!("{case}: {failure:?}"))
+            .config;
         assert_eq!(
-            refused.failure_code(),
-            ConfigCode::ConfigKeyNotSettable,
+            config.value(MAX_CONCURRENT_RUNS),
+            Some(&FactScalar::Integer(1)),
             "{case}"
         );
-        assert_eq!(refused.config_key(), MAX_CONCURRENT_RUNS, "{case}");
+        assert_eq!(
+            config
+                .instruction(MAX_CONCURRENT_RUNS)
+                .map(|instruction| instruction.base_json.as_str()),
+            Some(base_json),
+            "{case}"
+        );
     }
 }
 

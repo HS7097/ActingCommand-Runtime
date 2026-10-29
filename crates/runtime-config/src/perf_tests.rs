@@ -223,7 +223,8 @@ fn model_defaults() -> [Vec<(&'static str, Value)>; 4] {
         ),
     ];
     let pacing = vec![
-        ("performance.pacing.mode", json!("observe")),
+        // Workflow #429 R-2 (Alice's ruling 98, since 0.12.31): `pace`, `observe` before.
+        ("performance.pacing.mode", json!("pace")),
         ("performance.pacing.interpolate", json!("linear")),
         ("performance.pacing.curve", model_curve()),
         ("performance.pacing.max_factor_milli", json!(5_000)),
@@ -326,6 +327,8 @@ fn tc_1_every_performance_key_is_in_the_defaults_file_and_config_parameters_with
         .collect::<BTreeSet<_>>();
     let mut model_keys = model.iter().map(|(key, _)| *key).collect::<BTreeSet<_>>();
     model_keys.insert(crate::performance::pacing::MAX_CONCURRENT_RUNS);
+    // Workflow #429 R-2 (since 0.12.31): the preset table, beside the model's keys.
+    model_keys.insert(crate::performance::presets::PRESETS);
     assert_eq!(table_keys, model_keys);
     let (row, _) = find_row(crate::performance::pacing::MAX_CONCURRENT_RUNS)
         .expect("the optional key is in the key table");
@@ -448,7 +451,7 @@ fn tc_2_a_curve_that_breaks_a_rule_is_refused_naming_the_curve() {
 }
 
 #[test]
-fn tc_4_a_configuration_without_mode_takes_the_release_default_observe() {
+fn tc_4_a_configuration_without_mode_takes_the_release_default_pace() {
     // The file names other performance keys, never `mode`.
     let manifest = from_file(json!({"pacing": {"hold": {"max_ms": 600_000}}})).manifest();
     let mode = manifest
@@ -456,12 +459,13 @@ fn tc_4_a_configuration_without_mode_takes_the_release_default_observe() {
         .iter()
         .find(|parameter| parameter.key == "performance.pacing.mode")
         .expect("mode is in effect");
-    assert_eq!(mode.value, FactScalar::String("observe".to_owned()));
+    assert_eq!(mode.value, FactScalar::String("pace".to_owned()));
     assert_eq!(mode.source, ConfigParameterSource::Default);
-    // The release's default is `observe` (§4.6: every release until Alice approves another).
+    // The release's default is `pace` since 0.12.31 (Workflow #429 R-2, Alice's ruling 98: new
+    // installs default to `adaptive`); `observe` before.
     assert_eq!(
         member(&shipped(), "performance.pacing.mode"),
-        Some(&json!("observe"))
+        Some(&json!("pace"))
     );
     // The example configuration an installation starts from names no performance key, so a
     // user configuration carries `mode` only when a person writes it.

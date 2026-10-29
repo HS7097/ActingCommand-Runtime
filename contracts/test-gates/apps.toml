@@ -1002,7 +1002,7 @@ tests = [
 ]
 incident = ["#422 QR-2b"]
 
-# Workflow #427-A (brief rd-1028/brief-427a-lanes.md; plan r2 comment 6460013989, C1-C5): the per-instance lanes of the policy round behind scheduling.parallel.enabled, on the APPS-I7 cycle harness. A long run on one instance holds neither the round nor another instance; frozen after the terminal and before settlement there is no second dispatch, the reconciliation skips the run and its settlement and wake happen once; a failed run leaves the other instance running; a settlement between the sample and the validation is sampled again (C1), past the limit the round is given up and deferred; a shutdown refuses a run not taken and finishes a run taken; a worker panic drops the run and keeps its instance occupied for the reconciliation; the switch is off by default and an instruction turns it on at the next round
+# Workflow #427-A (brief rd-1028/brief-427a-lanes.md; plan r2 comment 6460013989, C1-C5): the per-instance lanes of the policy round behind scheduling.parallel.enabled, on the APPS-I7 cycle harness. A long run on one instance holds neither the round nor another instance; frozen after the terminal and before settlement there is no second dispatch, the reconciliation skips the run and its settlement and wake happen once; a failed run leaves the other instance running; a settlement between the sample and the validation is sampled again (C1), past the limit the round is given up and deferred; a shutdown refuses a run not taken and finishes a run taken; a worker panic drops the run and keeps its instance occupied for the reconciliation; the switch off in the file (the default before 0.12.31; on since, Workflow #429 R-2) is turned on by an instruction at the next round
 [[gate]]
 coverage = "Y"
 tests = [
@@ -1013,7 +1013,7 @@ tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::gate_427a::lanes_t5_past_the_resample_limit_the_round_is_given_up_and_the_driver_goes_on",
     "actingcommand-actingd::bin:actingcommand-actingd::gate_427a::lanes_t6_a_shutdown_refuses_a_run_not_taken_and_finishes_a_run_taken",
     "actingcommand-actingd::bin:actingcommand-actingd::gate_427a::lanes_t7_a_worker_panic_drops_the_run_and_leaves_its_instance_occupied",
-    "actingcommand-actingd::bin:actingcommand-actingd::gate_427a::lanes_t8_the_switch_is_off_by_default_and_an_instruction_turns_it_on_at_the_next_round",
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_427a::lanes_t8_the_switch_off_in_the_file_is_turned_on_by_an_instruction_at_the_next_round",
 ]
 incident = ["#427-A"]
 

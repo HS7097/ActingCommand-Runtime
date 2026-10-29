@@ -118,7 +118,7 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 - **暂停与恢复。** `actingctl pause` 全局或按实例（先排空其在途运行）停止策略派发。暂停没有过期时间，熬过重启；只有 `actingctl resume` 才解除（`contracts/scheduling-pause.md`）。
 - **恢复阶梯。** 调度运行以某个配置的触发条件所指的结果失败时，实例按配置的各级走；默认是回主页（运行绑定的恢复包或配置的回主页包）→ 重启应用 → 重启模拟器（再等 ADB、截图、输入与安卓就绪最多 120 s，然后跑启动包），真机用的档只到第二级。配置的 `recovery_ladder` 节写着触发条件（按结果码或类别，例如短时间内多次稳定性警告，或不符合包逻辑的行为）、各级及其时限、冷却与抑制规则；Runtime 运行中可用 `actingctl config set` 或 MCP `ac_config_set` 修改。从命令行、控制台或 MCP 直接跑的任务失败从不启动阶梯，由发起方凭回执决定。实例配置 `stuck_recovery: false` 即对它关闭阶梯。回主页停在包标为「忙」的画面上，或者画面还在变化时，阶梯等一阵再试，而不是升级。围栏后等人的实例按 `recovery_ladder.fence_recheck` 定时自检，通过就解除。`actingctl ladder-drill`（MCP `ac_ladder_drill`）按需演练阶梯（`contracts/emulator-control.md`，「Stuck-recovery ladder」与「Drills」）。
 - **重启结算。** 被重启留下的调度运行在下次启动时结算（按终态，或按「中断」一次）；结算不了的运行只暂停它的实例，并报 Error。
-- **性能。** 影子测量持续观察宿主负载与每个实例的响应率（`actingctl perf-status`）。`performance.pacing.mode` 默认是 `observe`，只测量；设为 `pace` 或 `full` 时，运行内的等待按该实例的节奏系数拉长（`contracts/performance-control.md`）。
+- **性能。** 影子测量持续观察宿主负载与每个实例的响应率（`actingctl perf-status`）。`performance.pacing.mode` 为 `observe` 时只测量；为 `pace`（0.12.31 起的默认值）或 `full` 时，运行内的等待按该实例的节奏系数拉长（`contracts/performance-control.md`）。`actingctl perf-preset get|set <档名>`（MCP `ac_perf_preset`）读取或套用 `standard`、`adaptive`、`light` 三个预设（`contracts/runtime-config.md`，“Presets”）。
 
 ## 证据面
 

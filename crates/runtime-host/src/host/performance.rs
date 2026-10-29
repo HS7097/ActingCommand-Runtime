@@ -462,8 +462,9 @@ impl HostShared {
     /// Workflow #385 P-m: what the shadow measurement reads from the `performance` section in
     /// effect (the defaults file's for a host started without actingd's manifest). The section
     /// passed its whole-section check when it was assembled or changed, so a refusal here is an
-    /// invariant breach.
-    fn performance_measurement(
+    /// invariant breach. Workflow #429 R-2: read at every evaluation, so a changed `mode` takes
+    /// effect at the next one.
+    pub(super) fn performance_measurement(
         &self,
     ) -> RuntimeHostResult<actingcommand_runtime_config::performance::PerformanceMeasurement> {
         lock(
