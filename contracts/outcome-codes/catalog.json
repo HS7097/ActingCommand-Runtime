@@ -7706,6 +7706,9 @@
     "earlier_": [
       "execution-kernel"
     ],
+    "edit_": [
+      "runtime-host"
+    ],
     "effect_": [
       "actinglab",
       "policy"
@@ -9061,6 +9064,9 @@
     "rotation_": [
       "contract",
       "device"
+    ],
+    "routine_": [
+      "runtime-host"
     ],
     "run_": [
       "actingctl",

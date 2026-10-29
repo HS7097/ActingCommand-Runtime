@@ -378,6 +378,7 @@ impl Fixture {
     fn configure(&self, key: String, value: Value) {
         let mut client = TestClient::connect(&self.host);
         let request = client.request(RuntimeOperation::ConfigureSettings {
+            expected_version: None,
             changes: vec![ConfigSettingChange {
                 key,
                 value: Some(value),
@@ -828,7 +829,7 @@ fn sr4a2_t18_a_clock_due_inside_a_blackout_runs_once_after_it_in_the_same_bookke
     let admission = fixture.run(&intent, &chain);
     let day = i64::try_from(at(1, 0, 0) / DAY_MS).expect("a day number");
     assert_eq!(admission.activity.local_day, day);
-    assert_eq!(admission.budget.task_daily_used, 1);
+    assert_eq!(admission.budget.task_daily_used, Some(1));
     assert!(
         dispatched(&fixture.evaluate(at(1, 13, 10)), TASK_A, A).is_none(),
         "the occurrence is served once"

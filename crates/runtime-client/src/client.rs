@@ -1156,7 +1156,7 @@ impl RuntimeClient {
             ClientLocation::RuntimeFactSnapshot.location(),
             RuntimeOperation::RuntimeFactSnapshot,
         )? {
-            RuntimeResult::RuntimeFactSnapshot { snapshot } => Ok(snapshot),
+            RuntimeResult::RuntimeFactSnapshot { snapshot, .. } => Ok(snapshot),
             _ => Err(self.unexpected_result(ClientLocation::RuntimeFactSnapshot.location())),
         }
     }
@@ -1230,7 +1230,10 @@ impl RuntimeClient {
         }
         match self.execute(
             ContractLocation::ApplyResourceTargets.location(),
-            RuntimeOperation::ApplyResourceTargets { document_json },
+            RuntimeOperation::ApplyResourceTargets {
+                document_json,
+                expected_version: None,
+            },
         )? {
             RuntimeResult::ResourceTargetsApplied { applied } => Ok(*applied),
             _ => Err(self.unexpected_result(ContractLocation::ApplyResourceTargets.location())),
@@ -1401,9 +1404,12 @@ impl RuntimeClient {
     ) -> RuntimeClientResult<Vec<actingcommand_contract::ConfiguredSetting>> {
         match self.execute(
             ClientLocation::RuntimeConfigureSettings.location(),
-            RuntimeOperation::ConfigureSettings { changes },
+            RuntimeOperation::ConfigureSettings {
+                changes,
+                expected_version: None,
+            },
         )? {
-            RuntimeResult::SettingsConfigured { settings } => Ok(settings),
+            RuntimeResult::SettingsConfigured { settings, .. } => Ok(settings),
             _ => Err(self.unexpected_result(ClientLocation::RuntimeConfigureSettings.location())),
         }
     }
@@ -6786,18 +6792,18 @@ mod run_summary_settlement_tests {
                 next_eligible_unix_ms: 1_001,
             },
             budget: PolicyBudgetReceipt {
-                task_daily_used: 1,
-                task_daily_limit: 1,
-                task_window_used: 1,
-                task_window_limit: 1,
-                task_runtime_reserved_ms: 1,
-                task_runtime_limit_ms: 1,
-                activity_daily_used: 1,
-                activity_daily_limit: 1,
-                activity_window_used: 1,
-                activity_window_limit: 1,
-                activity_runtime_reserved_ms: 1,
-                activity_runtime_limit_ms: 1,
+                task_daily_used: Some(1),
+                task_daily_limit: Some(1),
+                task_window_used: Some(1),
+                task_window_limit: Some(1),
+                task_runtime_reserved_ms: Some(1),
+                task_runtime_limit_ms: Some(1),
+                activity_daily_used: Some(1),
+                activity_daily_limit: Some(1),
+                activity_window_used: Some(1),
+                activity_window_limit: Some(1),
+                activity_runtime_reserved_ms: Some(1),
+                activity_runtime_limit_ms: Some(1),
             },
         };
         let failure = PolicyFailureRecord {

@@ -277,7 +277,11 @@ impl HostShared {
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: Some(terminal(&event)),
-            result: RuntimeResult::SettingsConfigured { settings },
+            // Workflow #429 R-0: `config_version` is R-4's; 0.12.30 answers none.
+            result: RuntimeResult::SettingsConfigured {
+                settings,
+                config_version: None,
+            },
             failure_outcome: None,
         })
     }

@@ -75,6 +75,7 @@ fn start(root: &TempDir, instance: InstanceId, manifest: RuntimeConfigManifest) 
 fn instruct(host: &RuntimeHost, values: &[(&str, Value)]) {
     let mut client = TestClient::connect(host);
     let request = client.request(RuntimeOperation::ConfigureSettings {
+        expected_version: None,
         changes: values
             .iter()
             .map(|(key, value)| ConfigSettingChange {
@@ -108,7 +109,7 @@ fn instructions_in_effect(host: &RuntimeHost) -> Vec<(String, String)> {
     let mut client = TestClient::connect(host);
     let request = client.request(RuntimeOperation::RuntimeFactSnapshot);
     let receipt = client.send(&request);
-    let Some(RuntimeResult::RuntimeFactSnapshot { snapshot }) = receipt.result() else {
+    let Some(RuntimeResult::RuntimeFactSnapshot { snapshot, .. }) = receipt.result() else {
         panic!("expected the runtime fact snapshot: {receipt:?}");
     };
     let text = |row: &BTreeMap<String, FactScalar>, member: &str| match row.get(member) {

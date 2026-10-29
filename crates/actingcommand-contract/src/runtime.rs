@@ -65,14 +65,19 @@ pub use start_report::*;
 // #422 P32 B-1 (since 0.12.27): the request and the result of `QueryRuns`, served from B-3.
 mod query_runs;
 pub use query_runs::*;
+// Workflow #429 R-0 (register §1.213, since 0.12.30): the player workbench's wire shapes.
+mod workbench;
 use std::net::{IpAddr, SocketAddr};
+pub use workbench::*;
 
 // Interface anchor `runtime-client` (contracts/component-interfaces.md): raise its revision in
 // distribution/windows/component-interfaces.json when older peers can no longer use these two.
 // Revision 2 (Workflow #378 A4 with #389 U-1): request v4 adds the optional `detail`, receipt v2
 // carries `outcome` on every receipt instead of the error projection, and the request kinds of
 // #389 section 2.3 (`BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `LoadPack`,
-// `UnloadPack`) belong to it. Declared once for v0.12.0 as [2, 2] (#378 A8).
+// `UnloadPack`) belong to it. Declared once for v0.12.0 as [2, 2] (#378 A8). Revision 3
+// (Workflow #429 R-0, register §1.213, since 0.12.30): the workbench's request kinds and members
+// (`workbench.rs`), declared [2, 3].
 pub const RUNTIME_REQUEST_SCHEMA_VERSION: &str = "actingcommand.runtime.request.v4";
 pub const RUNTIME_RECEIPT_SCHEMA_VERSION: &str = "actingcommand.runtime.receipt.v2";
 pub const RUNTIME_INFO_SCHEMA_VERSION: &str = "actingcommand.runtime.info.v1";
@@ -1590,6 +1595,11 @@ pub struct RuntimeInstanceStatus {
     /// otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     ladder_busy_hold: Option<InstanceLadderBusyHold>,
+    /// Workflow #429 R-0 (register §1.213, `runtime-client` 3): what the instance does now,
+    /// from memory; absent while it does nothing the vocabulary names, and until the slice that
+    /// fills each kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    activity: Option<InstanceActivity>,
 }
 
 /// Workflow #403: why and since when an instance is fenced, and whether it waits for a person.
@@ -1681,6 +1691,7 @@ impl RuntimeInstanceStatus {
             resource_fence: None,
             emulator_state: EmulatorRunningState::Unknown,
             ladder_busy_hold: None,
+            activity: None,
         };
         status.validate()?;
         Ok(status)
@@ -1835,6 +1846,16 @@ impl RuntimeInstanceStatus {
 
     pub const fn ladder_busy_hold(&self) -> Option<&InstanceLadderBusyHold> {
         self.ladder_busy_hold.as_ref()
+    }
+
+    /// Workflow #429 R-0: this status with what the instance does now.
+    pub fn with_activity(mut self, activity: Option<InstanceActivity>) -> Self {
+        self.activity = activity;
+        self
+    }
+
+    pub const fn activity(&self) -> Option<&InstanceActivity> {
+        self.activity.as_ref()
     }
 }
 
@@ -3841,9 +3862,15 @@ pub enum RuntimeOperation {
     /// Applies one instance resource target policy (Workflow #308 RT-S1a): the raw
     /// `actingcommand.resource-targets.v1` document (`1..=64 KiB`), parsed, checked and
     /// stored as the instance fact `session.resource_targets` by the Runtime, the only formal
-    /// entry of that fact. Agent/Adapter only.
+    /// entry of that fact. Agent/Adapter only. Workflow #429 R-0 (register §1.213): with
+    /// `expected_version` the table is replaced only while its version is that one (R-13c),
+    /// `0` while the instance has no table (`ResourceTargetView` answers no `active`); the
+    /// version is an opaque token compared only for equality. Until R-13c a request that
+    /// names it is refused `not_implemented`.
     ApplyResourceTargets {
         document_json: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_version: Option<u64>,
     },
     /// Reads what one instance can target and its stored resource target policy (Workflow #338
     /// R5). Read-only: records nothing and has no origin gate, like `Status`.
@@ -3853,9 +3880,15 @@ pub enum RuntimeOperation {
     /// Changes settings the Runtime may change while it runs (Workflow #387 D1b, model v1.2
     /// §5.6), all of them or none: a general instruction the three counters send, recorded as
     /// a command with the new `host.config_overrides` and `config.parameters.<section>` facts.
-    /// A change without a value returns its key to the configuration-file value.
+    /// A change without a value returns its key to the configuration-file value. Workflow #429
+    /// R-0 (register §1.213): with `expected_version` the changes apply only while the
+    /// settings' version is that one (R-4): the `config_version` that `SettingsConfigured` and
+    /// `RuntimeFactSnapshot` answer, an opaque token compared only for equality. Until R-4 a
+    /// request that names it is refused `not_implemented`.
     ConfigureSettings {
         changes: Vec<ConfigSettingChange>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_version: Option<u64>,
     },
     // Workflow #389 U-1: the shapes of the unified interface's new request kinds. Each slice
     // named below adds the behaviour; until then the host refuses the kind `not_implemented`.
@@ -3886,6 +3919,54 @@ pub enum RuntimeOperation {
     UnloadPack {
         key: PackRegistryKey,
         wait_ms: u64,
+    },
+    // Workflow #429 R-0 (register §1.213, since 0.12.30; `runtime-client` 3): the player
+    // workbench's request kinds (`workbench.rs`). Each slice named below adds the behaviour and
+    // its shape checks; until then the host refuses the kind `not_implemented`.
+    /// Runs now, as a direct run, the package `package_id` that a task bound to the instance
+    /// references; the Runtime resolves the path (R-5). Answers as `RunContainedTask` does.
+    RunInstanceTask {
+        instance_alias: String,
+        package_id: String,
+        holder_id: HolderId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        response_deadline_ms: Option<u64>,
+    },
+    /// Stops the instance's run `request_id`, a scheduled or a client-started one, and the
+    /// Runtime resets the device itself; answers once it ended or after `wait_ms` (R-6).
+    StopInstanceRun {
+        instance_alias: String,
+        request_id: RequestId,
+        wait_ms: u64,
+    },
+    /// Replaces the rows of one package in one scope's `session.pack.schedule` list (R-8);
+    /// with `expected_version`, only while the list's version is that one.
+    EditPackSchedule {
+        scope: crate::FactScope,
+        package_id: String,
+        rows: Vec<PackScheduleEditRow>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_version: Option<u64>,
+    },
+    /// One change of one instance's resource target table, only while the table's version is
+    /// `expected_version` (R-13c): `ResourceTargetView`'s `active.version`, or `0` while the
+    /// view answers no `active` (the instance has no table in effect). Answers as
+    /// `ApplyResourceTargets` does.
+    EditResourceTarget {
+        instance_alias: String,
+        expected_version: u64,
+        op: ResourceTargetEdit,
+    },
+    /// Reads the routine summary's health statistics from the host's memory, for one instance
+    /// or every instance, by hour or by activity day; with `since_revision` only the buckets
+    /// changed after it (R-12), a cursor good only within the `owner_epoch` the page that gave
+    /// it answered. Reads and records nothing in the ledger.
+    RoutineSummary {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        instance: Option<String>,
+        granularity: RoutineSummaryGranularity,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        since_revision: Option<u64>,
     },
 }
 
@@ -4026,7 +4107,7 @@ impl RuntimeOperation {
                     RuntimeContractError::new(RuntimeContractCode::InvalidCatalogProposal)
                 })
             }
-            Self::ApplyResourceTargets { document_json } => {
+            Self::ApplyResourceTargets { document_json, .. } => {
                 if document_json.is_empty()
                     || document_json.len() > crate::MAX_RESOURCE_TARGETS_DOCUMENT_BYTES
                 {
@@ -4036,7 +4117,22 @@ impl RuntimeOperation {
                 }
                 Ok(())
             }
-            Self::ConfigureSettings { changes } => validate_config_setting_changes(changes),
+            Self::ConfigureSettings { changes, .. } => validate_config_setting_changes(changes),
+            // Workflow #429 R-0: the workbench kinds' shape checks come with the slices that add
+            // their behaviour; until then only the instance alias is checked, as for every
+            // request that names one.
+            Self::RunInstanceTask { instance_alias, .. }
+            | Self::StopInstanceRun { instance_alias, .. }
+            | Self::EditResourceTarget { instance_alias, .. } => {
+                validate_instance_alias(instance_alias)
+            }
+            Self::RoutineSummary { instance, .. } => {
+                instance.as_deref().map_or(Ok(()), validate_instance_alias)
+            }
+            Self::EditPackSchedule { scope, .. } => match scope {
+                crate::FactScope::Instance { instance_id } => validate_instance_alias(instance_id),
+                crate::FactScope::Server { .. } | crate::FactScope::Game { .. } => Ok(()),
+            },
             Self::AcquireLease { instance_alias, .. }
             | Self::ObserveReadonly { instance_alias }
             | Self::SafeReset { instance_alias, .. }
@@ -4180,7 +4276,12 @@ impl RuntimeOperation {
             | Self::ControlEmulatorInstance { instance_alias, .. }
             | Self::RunContainedTask { instance_alias, .. }
             | Self::ConfigureMonitor { instance_alias, .. }
-            | Self::ClearMonitor { instance_alias } => Some(instance_alias),
+            | Self::ClearMonitor { instance_alias }
+            // Workflow #429 R-0 (review L4): the workbench's instance-bound kinds, so that the
+            // request door contains their failures against their instance (#419 ISO-M).
+            | Self::RunInstanceTask { instance_alias, .. }
+            | Self::StopInstanceRun { instance_alias, .. }
+            | Self::EditResourceTarget { instance_alias, .. } => Some(instance_alias),
             Self::RecordClientAction { action } => action.instance_alias(),
             _ => None,
         }
@@ -4317,6 +4418,11 @@ impl fmt::Debug for RuntimeOperation {
             Self::UpgradeStateStatus { .. } => "RuntimeOperation::UpgradeStateStatus(<transition>)",
             Self::LoadPack { .. } => "RuntimeOperation::LoadPack(<redacted>)",
             Self::UnloadPack { .. } => "RuntimeOperation::UnloadPack(<redacted>)",
+            Self::RunInstanceTask { .. } => "RuntimeOperation::RunInstanceTask(<redacted>)",
+            Self::StopInstanceRun { .. } => "RuntimeOperation::StopInstanceRun(<redacted>)",
+            Self::EditPackSchedule { .. } => "RuntimeOperation::EditPackSchedule(<redacted>)",
+            Self::EditResourceTarget { .. } => "RuntimeOperation::EditResourceTarget(<redacted>)",
+            Self::RoutineSummary { .. } => "RuntimeOperation::RoutineSummary(<redacted>)",
         })
     }
 }
@@ -5104,6 +5210,12 @@ pub enum RuntimeResult {
     },
     RuntimeFactSnapshot {
         snapshot: crate::RuntimeFactSnapshot,
+        /// Workflow #429 R-0 (register §1.213, `runtime-client` 3): the settings' version now,
+        /// the `expected_version` of the next `ConfigureSettings`; an opaque token compared only
+        /// for equality. Beside the snapshot, never in it (the persisted snapshot keeps its
+        /// shape). R-4 fills it; absent in every answer of 0.12.30.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        config_version: Option<u64>,
     },
     /// `InstanceFactSnapshot` (Workflow #389 MCP-4, register W2): the instance's facts and the
     /// read's state source (register W1), never a ledger position of the snapshot.
@@ -5340,6 +5452,11 @@ pub enum RuntimeResult {
     /// effect afterwards, in request order.
     SettingsConfigured {
         settings: Vec<ConfiguredSetting>,
+        /// Workflow #429 R-0 (register §1.213, `runtime-client` 3): the settings' version after
+        /// the change, the `expected_version` of the next `ConfigureSettings`; an opaque token
+        /// compared only for equality. R-4 fills it; absent in every answer of 0.12.30.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        config_version: Option<u64>,
     },
     // Workflow #389 U-1: the results of the new request kinds; the slices that add their
     // behaviour answer with them.
@@ -5373,6 +5490,21 @@ pub enum RuntimeResult {
         key: PackRegistryKey,
         stopped_runs: Vec<PackUnloadStoppedRun>,
         withdrawn_dispatches: u32,
+    },
+    // Workflow #429 R-0 (register §1.213): the results of the workbench kinds; the slices that
+    // add their behaviour answer with them. `RunInstanceTask` answers with the direct run's
+    // results and `EditResourceTarget` with `ResourceTargetsApplied`.
+    /// `StopInstanceRun` (R-6).
+    InstanceRunStopped {
+        stopped: InstanceRunStop,
+    },
+    /// `EditPackSchedule` (R-8).
+    PackScheduleEdited {
+        edited: PackScheduleEdited,
+    },
+    /// `RoutineSummary` (R-12).
+    RoutineSummary {
+        summary: Box<RoutineSummaryPage>,
     },
 }
 
@@ -6106,7 +6238,7 @@ impl RuntimeReceipt {
                 }
                 view.validate()?;
             }
-            Some(RuntimeResult::SettingsConfigured { settings })
+            Some(RuntimeResult::SettingsConfigured { settings, .. })
                 if self.state != RuntimeReceiptState::Completed
                     || self.terminal.is_none()
                     || settings.is_empty()

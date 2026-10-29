@@ -84,7 +84,8 @@ at assembly; allowed only on a discovery-bound instance, `start_emulator_require
 #389 U-2's rows: the top-level `lab_module_authoring` and `lab_module_debugging` (boolean, default
 `file`, `false` in `actingd.defaults.json`, not settable, read once at assembly), the Lab's two
 options ([runtime-interface.md](runtime-interface.md), "Lab options"); a file names one
-only when it is `true`, and only the installer's Lab transaction writes them. Until U-6 they are
+only when it is `true`, and only `actingctl install` writes them (`install new`, `install config
+lab-options`; acsetup's Lab transaction through it, Workflow #429 R-0). Until U-6 they are
 read and reported only: nothing is refused by them. Workflow #390 DISC-1's rows: the
 `startup_discovery` section below (default `file`, not settable, read once at assembly).
 Workflow #406 T12's rows: the `touch` section below (default `file`, settable). PERF-B1's rows:
@@ -441,7 +442,8 @@ at every policy cycle.
 **Expected duration (SCH-M slice ED-1, frozen model v1.0 §3.4; `actingd-config` revision
 11).** `scheduling.expected_runtime.enabled`, `.runs` and `.margin_ms` set the expected duration E
 of a task package on an instance: the mean of its latest `runs` successful scheduled runs, rounded
-up, plus `margin_ms`, at most the task's `loop_budget.max_runtime_ms`; with no run, or with
+up, plus `margin_ms`, at most the task's `loop_budget.max_runtime_ms` (SS-3, since 0.12.30: no
+ceiling when the task does not write it); with no run, or with
 `enabled` false, the declared value ([scheduling/README.md](scheduling/README.md), "Settlement
 Feedback And Eligibility Age"). Each is also per instance,
 `instance.<instance id>.scheduling.expected_runtime.<member>`, in the file the entry's

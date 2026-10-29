@@ -62,9 +62,9 @@ fn profile() -> ActivityProfile {
             start_minute_of_day: 6 * 60,
             end_minute_of_day: 23 * 60,
         }],
-        daily_budget: 100,
-        max_window_iterations: 100,
-        session_max_ms: 4 * HOUR_MS,
+        daily_budget: Some(100),
+        max_window_iterations: Some(100),
+        session_max_ms: Some(4 * HOUR_MS),
         detection_budget: DetectionBudget {
             window_dispatch_limit: 1,
             window_runtime_ms: MINUTE_MS,

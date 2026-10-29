@@ -1965,6 +1965,10 @@ const RUNTIME_OPEN_ORIGIN_OPERATIONS: &[&str] = &[
     // Workflow #387 D1b (M387 §5.6): a general instruction the three counters send; no origin
     // gate beyond the client sources the host checks.
     "ConfigureSettings",
+    // Workflow #429 R-0 (register §1.213): the workbench's kinds take no origin gate here; their
+    // slices add the behaviour and the channel decides at the door (U-6).
+    "EditPackSchedule",
+    "EditResourceTarget",
     // Workflow #384 D2-S5 (register §1.68): the fact refresh's waiting keys, a general read from
     // memory like Status.
     "FactRefreshStatus",
@@ -1988,7 +1992,11 @@ const RUNTIME_OPEN_ORIGIN_OPERATIONS: &[&str] = &[
     "ReleaseLease",
     "RenewLease",
     "ResourceTargetView",
+    // Workflow #429 R-0: a general read from memory like Status.
+    "RoutineSummary",
     "RunContainedTask",
+    // Workflow #429 R-0: a general instruction of the workbench (R-5).
+    "RunInstanceTask",
     "RuntimeFactSnapshot",
     "SafeReset",
     // Workflow #386 SR-6b, MCP-19a (register §1.143): the latest evaluation's not-run
@@ -1998,6 +2006,8 @@ const RUNTIME_OPEN_ORIGIN_OPERATIONS: &[&str] = &[
     // general read from memory like Status.
     "StartReport",
     "Status",
+    // Workflow #429 R-0: a general instruction of the workbench (R-6).
+    "StopInstanceRun",
     "SubscribeEvents",
     "UnloadPack",
     "UpgradeState",

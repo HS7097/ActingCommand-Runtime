@@ -119,6 +119,18 @@ tests = [
 ]
 incident = []
 
+# SS-3 (Alice's ruling 100, #386 comment 6490879952; rd-1029 design-sch-state §5 SS-3 tests 1 to 4 and 6; contracts/scheduling/README.md, "Optional run-count bounds"; register §1.212; since 0.12.30): without loop_budget 50 runs meet no TaskDaily or TaskWindow refusal; a written daily_limit of 2 still refuses the third run; without max_runtime_ms back-to-back runs far above the example's runtime bounds record no policy_runtime_budget_exceeded, and the per-run deadline still holds the next run back before a blackout; receipts carry no dimension that was not written; a catalog that writes every bound gives the receipt bytes of before
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_ss3::ss3_t1_without_loop_budget_fifty_runs_meet_no_task_count_refusal",
+    "actingcommand-runtime-host::lib::tests::gate_ss3::ss3_t2_a_written_daily_limit_of_two_still_refuses_the_third_run",
+    "actingcommand-runtime-host::lib::tests::gate_ss3::ss3_t3_without_max_runtime_back_to_back_runs_record_no_runtime_budget_exceeded",
+    "actingcommand-runtime-host::lib::tests::gate_ss3::ss3_t4_receipts_carry_no_dimension_that_was_not_written",
+    "actingcommand-runtime-host::lib::tests::gate_ss3::ss3_t6_a_catalog_that_writes_every_bound_gives_the_same_receipt_bytes",
+]
+incident = ["#386 SS-3"]
+
 # Failure control
 [[gate]]
 key = "27"
@@ -878,6 +890,14 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_389_u2::gate_u2_actinglab_s_lease_input_and_application_requests_keep_their_frame_s_retention",
 ]
 incident = ["#389 U-2"]
+
+# Workflow #429 R-0 (0.12.30; register §1.213): each workbench kind without behaviour (RunInstanceTask, StopInstanceRun, EditPackSchedule, EditResourceTarget, RoutineSummary), and a ConfigureSettings naming expected_version or an ApplyResourceTargets naming expected_version, is Denied not_implemented naming its operation, as LoadPack is before U-3, appends nothing to the ledger and changes no instance's status (no activity is filled yet)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_429_r0::r0_each_workbench_kind_without_behaviour_answers_not_implemented_with_no_effect",
+]
+incident = ["#429 R-0"]
 
 # Workflow #336 PKG-S3 (option 丙): a procedure binding names no package content and a dispatch records no package digest; a failure identity (format v2) names each package by its id hash and the content hash measured at settlement; a pause lifts once a package it names changes in place, measured at most once per scheduling.suspension.lift_check_min_interval_ms, without a restart; an unmeasurable package keeps the pause with lift_check_hash_unmeasured; a restart rebuilds the recorded hashes from the failure identity; the content hash is measured only at settlement and lift checks (M-PKG v1.1 §4.4 S3-T1 to S3-T6, S3-T8, S3-T9; S3-T7 stays with key 27's interrupted settlement row; key 74 is U-2's)
 [[gate]]

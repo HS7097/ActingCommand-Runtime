@@ -205,6 +205,7 @@ fn press_once(
 
 fn configure(client: &mut TestClient, changes: &[(&str, serde_json::Value)]) {
     let request = client.request(RuntimeOperation::ConfigureSettings {
+        expected_version: None,
         changes: changes
             .iter()
             .map(|(key, value)| ConfigSettingChange {
