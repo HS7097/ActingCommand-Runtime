@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! #422 RB-1 (0.12.27; production v0.12.26 after the machine restart of 2026-10-29 05:23,
+//! #422 RB-1 (0.12.28; production v0.12.26 after the machine restart of 2026-10-29 05:23,
 //! investigation `rd-1029/inv-reboot/rb.md`): a reader-pool page no longer reads the Lab
 //! relations of the whole history.
 //!

@@ -818,7 +818,7 @@ impl GlobalLedgerError {
 
     /// #422 RB-1: this failure said as a warning of `operation`: its code, never terminal, with
     /// its own operation and detail, and `consequence`, in its detail.
-    pub(super) fn as_warning_of(self, operation: Location, consequence: &str) -> Self {
+    pub(super) fn into_warning_of(self, operation: Location, consequence: &str) -> Self {
         let cause = match &self.detail {
             Some(detail) => format!("{}: {detail}", self.operation),
             None => self.operation.to_owned(),

@@ -38,7 +38,7 @@
 //! - **The head** (#422 W1-8, P30). The published point's head is the ledger's committed head
 //!   for a read that needs only that (`GlobalLedger::published_head`): it waits for no writer
 //!   command.
-//! - **The Lab relations** (#422 RB-1, 0.12.27). When the pool starts, a thread of its own builds
+//! - **The Lab relations** (#422 RB-1, 0.12.28). When the pool starts, a thread of its own builds
 //!   the pool's Lab relations once, through the point published then, on a read-only connection
 //!   of its own and within the open's deadline (`ledger_observer.open_timeout_ms`), outside every
 //!   page's budget; the readers then read only the records after it
@@ -470,7 +470,7 @@ impl Reader {
         if self.state.closing.load(Ordering::Acquire) {
             return;
         }
-        lock(&self.state.findings).push(error.as_warning_of(
+        lock(&self.state.findings).push(error.into_warning_of(
             LedgerLocation::BuildLabRelations.location(),
             "the pages read the whole history's Lab relations until the next start",
         ));

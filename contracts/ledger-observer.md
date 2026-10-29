@@ -1360,7 +1360,7 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
     When the handler interrupts that lookup, the page starts where it would have. Offline
     readers keep their path.
   - Both keys are read when the ledger opens (`false`). No code is added.
-- #422 RB-1 (since 0.12.27; production v0.12.26 after the machine restart of 2026-10-29 05:23:
+- #422 RB-1 (since 0.12.28; production v0.12.26 after the machine restart of 2026-10-29 05:23:
   with a cold page cache every run listing failed for five hours): a reader-pool page no longer
   reads the Lab relations of the whole history. Before, a page that needed them (IDLE-OV above)
   read every Lab anchor and the run of every link row naming one of their requests or

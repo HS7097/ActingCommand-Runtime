@@ -7904,7 +7904,7 @@
       "layer": "store",
       "review": "pending",
       "status": "active",
-      "since": "0.12.27",
+      "since": "0.12.28",
       "description": "The reader pool's background build of its Lab relations at its start, on a read-only connection of its own within the open's deadline; a failure is a warning and the pages read the whole history's Lab relations (#422 RB-1, ledger observer §15)."
     },
     "build_ledger_frame_refs": {

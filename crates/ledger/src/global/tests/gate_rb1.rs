@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! #422 RB-1 (0.12.27; production v0.12.26 after the machine restart of 2026-10-29 05:23;
+//! #422 RB-1 (0.12.28; production v0.12.26 after the machine restart of 2026-10-29 05:23;
 //! investigation rd-1029/inv-reboot/rb.md, coordinator work order rd-1029/brief-rb1.md). A page
 //! whose selection reached a row with a request, correlation or run link read the Lab relations
 //! of the whole history (`read_lab_relations`); with a cold cache that read outlasted the page's
@@ -9,7 +9,8 @@
 //! pages read only the records after the build's anchor. The required states:
 //! - T1: with and without the index, the pages are item for item the same, also pinned to old
 //!   snapshots: before the build's anchor (the index filtered by sequence), at it, and after it
-//!   (the index extended).
+//!   (the index extended); runs related through a request, and through a correlation only,
+//!   before the build and after it.
 //! - T2: with the index built, a page that reaches a linked row reads no full history, measured
 //!   in the rows its Lab relation statements return, and answers that row although its budget is
 //!   spent at every look; without the index, the same page stops before the row and the next one
@@ -420,13 +421,18 @@ fn named(error: &GlobalLedgerError) -> (&'static str, &'static str, bool) {
 
 /// T1's and T4's history before the build, on instance C unless said:
 /// - `FEW_ANCHORS` Lab anchors of instance A; a record under the first one's request in run R1,
-///   one under the second one's correlation, one in R1 alone, one under a request no anchor
-///   names;
+///   one under the second one's correlation, one in R1 alone, one under the third one's
+///   correlation in run R5 without a request and one in R5 alone (R5 is related through that
+///   correlation only), one under a request no anchor names;
 /// - a record under request R2 in run R2 and one in R2 alone, then a Lab anchor that names R2
 ///   (it relates both from its own sequence on);
 /// - a record under request R3 in run R3 and one in R3 alone; no anchor names R3 yet.
 struct Before {
     by_request: EventId,
+    /// The third Lab anchor's correlation, which R5's first record names without a request.
+    correlation: IssuedCorrelationId,
+    /// The record in R5 alone.
+    by_correlation: EventId,
     late_request: PersistedEvent,
     late_run: PersistedEvent,
     late_anchor: PersistedEvent,
@@ -454,6 +460,16 @@ fn history_before(root: &Root, history: &mut History) -> Before {
         EventLinksDraft::default().with_correlation_id(anchors[1].1),
     );
     history.record(&ledger, EventLinksDraft::default().with_run_id(r1));
+    let (correlation, r5) = (anchors[2].1, history.run());
+    history.record(
+        &ledger,
+        EventLinksDraft::default()
+            .with_correlation_id(correlation)
+            .with_run_id(r5),
+    );
+    let by_correlation = *history
+        .record(&ledger, EventLinksDraft::default().with_run_id(r5))
+        .event_id();
     let unrelated = history.request();
     history.record(
         &ledger,
@@ -484,6 +500,8 @@ fn history_before(root: &Root, history: &mut History) -> Before {
     ledger.close().expect("close");
     Before {
         by_request,
+        correlation,
+        by_correlation,
         late_request,
         late_run,
         late_anchor,
@@ -502,10 +520,22 @@ fn rb1_t1_pages_with_and_without_the_index_are_the_same_also_at_old_snapshots() 
     let before = history_before(&root, &mut history);
     let (ledger, anchor) = root.open_built(None);
     // After the build: a record without a link (so the snapshot before the next anchor is past
-    // the build's), a Lab anchor that names the old request R3, a record in R3; a new Lab anchor
-    // with its own request R4 and correlation C4, a record under R4 in run R4, one under C4, one
-    // in R4 alone; a record in the Lab run R1 and one under a request no anchor names.
+    // the build's); a record under the third Lab anchor's correlation in a new run R6 without a
+    // request and one in R6 alone (R6 is related through that correlation only); a Lab anchor
+    // that names the old request R3, a record in R3; a new Lab anchor with its own request R4 and
+    // correlation C4, a record under R4 in run R4, one under C4, one in R4 alone; a record in the
+    // Lab run R1 and one under a request no anchor names.
     history.record(&ledger, EventLinksDraft::default());
+    let r6 = history.run();
+    history.record(
+        &ledger,
+        EventLinksDraft::default()
+            .with_correlation_id(before.correlation)
+            .with_run_id(r6),
+    );
+    let by_correlation = *history
+        .record(&ledger, EventLinksDraft::default().with_run_id(r6))
+        .event_id();
     let new_anchor = history.anchor(
         &ledger,
         EventLinksDraft::default()
@@ -608,6 +638,12 @@ fn rb1_t1_pages_with_and_without_the_index_are_the_same_also_at_old_snapshots() 
         old.iter().all(|row| related(head).contains(row))
             && related(head).contains(&before.by_request),
         "R3's records and the first anchor's at the head"
+    );
+    assert!(
+        [before.by_correlation, by_correlation]
+            .iter()
+            .all(|row| related(head).contains(row)),
+        "R5's and R6's records in their run alone, related through a correlation only, at the head"
     );
     ledger.close().expect("close");
 
