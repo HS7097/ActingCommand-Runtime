@@ -2885,7 +2885,9 @@ actingcommand_contract::outcome_codes! {
         /// started it `emulator_control.restart_attempts` times within
         /// `emulator_control.restart_window_ms`: no start until the oldest leaves the window
         /// (`retry_after_ms`) or a person's emulator control of the instance. Once per streak
-        /// (keys `alias`, `attempts`, `limit_count`, `retry_after_ms`).
+        /// (keys `alias`, `attempts`, `limit_count`, `retry_after_ms`). EMU-BIND (0.12.27):
+        /// `watch_kind` `restart` for that bound, `recognize` for the recognitions of a running
+        /// emulator whose endpoint is pending or bound to another port, counted apart.
         RestartExhausted => "emulator_watch_restart_exhausted": warning / none,
     }
 }

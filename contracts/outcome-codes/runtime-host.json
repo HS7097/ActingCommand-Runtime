@@ -21745,6 +21745,7 @@
         "attempts": "optional",
         "limit_count": "optional",
         "idle_action": "optional",
+        "watch_kind": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -21754,7 +21755,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actingd enqueued the autostart claims of the configured instances whose emulator is stopped (Workflow #369 S6c, model 369 H-5), after policy initialization and before runtime_ready. count is how many. A report line. emu-watch (Alice's ruling 35, R3): the emulator watch found a configured instance's emulator stopped, its key free and no autostart or emulator control claim waiting, and enqueued one autostart claim for it, paused or not: count is 1, alias the instance, attempts this restart's place among the watch's restarts of the instance within emulator_control.restart_window_ms, limit_count emulator_control.restart_attempts; also a device_state_observed record under the instance. The claim's Start and its result follow as every configured start's. IDLE-1: the wake of an instance whose idle action stopped its emulator enqueued the same claim (count 1, alias the instance, idle_action stop_emulator).",
+      "description": "actingd enqueued the autostart claims of the configured instances whose emulator is stopped (Workflow #369 S6c, model 369 H-5), after policy initialization and before runtime_ready. count is how many. A report line. emu-watch (Alice's ruling 35, R3): the emulator watch found a configured instance's emulator stopped, its key free and no autostart or emulator control claim waiting, and enqueued one autostart claim for it, paused or not: count is 1, alias the instance, attempts this restart's place among the watch's restarts of the instance within emulator_control.restart_window_ms, limit_count emulator_control.restart_attempts, watch_kind restart (since 0.12.27); also a device_state_observed record under the instance. The claim's Start and its result follow as every configured start's. EMU-BIND (since 0.12.27): with watch_kind recognize, the watch found an instance's emulator running with Android and an ADB port while the Runtime held its endpoint pending or bound to another port, and enqueued one autostart claim marked recognize for it, paused or not; attempts and limit_count count the recognitions, apart from the restarts. That claim starts and stops nothing: it binds the reported port and self-checks the instance, then queues its startup package as after a start (emulator_autostart_skipped or emulator_autostart_preparation_failed with watch_kind recognize). IDLE-1: the wake of an instance whose idle action stopped its emulator enqueued the same claim (count 1, alias the instance, idle_action stop_emulator).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -21854,6 +21855,7 @@
       "uncertain": false,
       "values": {
         "alias": "required",
+        "watch_kind": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -21863,7 +21865,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A configured start was performed, but the connection preparation after it did not pass (Workflow #369 S6c); the preparation recorded its failure, and the ladder it admitted holds the key. A report line.",
+      "description": "A configured start was performed, but the connection preparation after it did not pass (Workflow #369 S6c); the preparation recorded its failure, and the ladder it admitted holds the key. A report line. EMU-BIND (since 0.12.27): with watch_kind recognize, the recognition of a running emulator whose endpoint was pending or bound to another port did not pass its self-check (the emulator status read, the port's binding, the ADB baseline or the opens; the preparation recorded the failing step), and nothing was started; a ladder it admitted holds the key, as after a start.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -21939,6 +21941,7 @@
       "uncertain": false,
       "values": {
         "alias": "required",
+        "watch_kind": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -21948,7 +21951,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The instance already runs when its autostart claim holds the key (an operator started it): the claim ends without action (Workflow #369 S6c, H-5). emu-watch: for the emulator watch's claim, the status read just before its Start found the emulator process running. A report line.",
+      "description": "The instance already runs when its autostart claim holds the key (an operator started it): the claim ends without action (Workflow #369 S6c, H-5). emu-watch: for the emulator watch's claim, the status read just before its Start found the emulator process running. A report line. EMU-BIND (since 0.12.27): with watch_kind recognize, the emulator ran but the Runtime held its endpoint pending or bound to another port (a watch claim's or an idle wake's status read found it so, or the claim was the watch's recognition): the claim started nothing, bound the reported port, passed the self-check and queued the instance's startup package as after a start.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -22381,6 +22384,7 @@
         "attempts": "required",
         "limit_count": "required",
         "retry_after_ms": "required",
+        "watch_kind": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -22390,7 +22394,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "A poll of the emulator watch (emu-watch, R3) found the configured instance's emulator stopped, but the watch already started it emulator_control.restart_attempts times (limit_count; attempts in the window) within emulator_control.restart_window_ms: it starts it no more until the oldest of those restarts leaves the window (retry_after_ms) or a person's emulator control of the instance clears the count. Once per streak; a device_state_observed record under the instance and the same report line.",
+      "description": "A poll of the emulator watch (emu-watch, R3) found the configured instance's emulator stopped, but the watch already started it emulator_control.restart_attempts times (limit_count; attempts in the window) within emulator_control.restart_window_ms: it starts it no more until the oldest of those restarts leaves the window (retry_after_ms) or a person's emulator control of the instance clears the count. Once per streak; a device_state_observed record under the instance and the same report line. EMU-BIND (since 0.12.27): watch_kind tells the two bounds apart: restart for the restarts above; recognize when the watch found the emulator running with its endpoint pending or bound to another port but already requested its recognition limit_count times within the window (counted apart from the restarts): it recognizes it no more until the oldest leaves the window or a person's emulator control of the instance clears the count.",
       "common_causes": "The emulator stops again soon after each start, or its Start keeps failing.",
       "handling": "Look at the instance's emulator and the failures of the watch's starts (emulator_autostart_failed and their causes). Start it by hand with actingctl emulator start (or ac_emulator), which also clears the count, or wait for the window to pass."
     },

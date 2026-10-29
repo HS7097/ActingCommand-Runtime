@@ -1223,6 +1223,41 @@ impl HostShared {
         .map(|prepared| (prepared.selfcheck, prepared.event, prepared.recoverable))
     }
 
+    /// EMU-BIND (0.12.27): the emulator watch's recognition of a running emulator whose endpoint
+    /// the Runtime holds pending or bound to another port, on its autostart claim's `key`: the
+    /// preparation phase of a self-check (stage `connection_preparation`), so it reads the
+    /// emulator status first (#411 A48, `selfcheck_emulator`: the reported port bound with
+    /// `runtime.instance_bound`, the ADB baseline, `device.connected`; a failure there opens
+    /// nothing and is recorded on this instance only), under the instance's admission guard for
+    /// the preparation's device steps only. It takes no dedicated lease and releases nothing;
+    /// returns the self-check and the ladder a failed preparation admitted, which the caller's
+    /// release hands the key to (H-1, P1).
+    pub(super) fn prepare_recognized_instance(
+        &self,
+        instance_alias: &str,
+        instance_id: InstanceId,
+        links: EventLinksDraft,
+        key: &super::host_claims::HostKey,
+    ) -> Result<(SchedulingResumeSelfCheck, Option<PendingRecoveryLadder>), RequestFailure> {
+        let instance_guard = self.instance_guard(instance_id)?;
+        let admission = self.lock_admission(&instance_guard, instance_id)?;
+        let prepared = self.prepare_instance_connection_with_cooldown(
+            instance_alias,
+            instance_id,
+            links,
+            &admission,
+            actingcommand_contract::RecoveryTriggerStage::ConnectionPreparation,
+            PreparationLease::Held {
+                token: &key.token,
+                connection_id: key.connection_id,
+            },
+            EmulatorStatusRead::First,
+        );
+        drop(admission);
+        let prepared = prepared.map_err(RequestFailure::poison_without_terminal)?;
+        Ok((prepared.selfcheck, prepared.ladder))
+    }
+
     /// `prepare_instance_connection`, also returning the monotonic deadline of the takeover
     /// cooldown when it refused the preparation lease (`lease_cooldown`, Workflow #191 h2), and
     /// whether a failed open is recoverable: an ordinary acquisition failure (#411 A7: a failed

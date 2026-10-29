@@ -29,6 +29,17 @@
 //!   (warning) once, and no restart until the oldest leaves the window or a person's emulator
 //!   control of the instance clears the count. The stuck-recovery ladder adds none: direction ①
 //!   does not count an autostart claim's records (`recovery_ladder`).
+//! - **Recognition (EMU-BIND, 0.12.27; production 10-29: a start whose readiness wait failed left
+//!   a running emulator with its endpoint pending for five hours).** An instance, configured or
+//!   not, whose read shows its emulator running with Android and an ADB port while the Runtime
+//!   holds its endpoint pending or bound to another port, under the same conditions as a restart
+//!   (key free, no autostart or emulator control claim waiting, not held stopped by IDLE-1),
+//!   paused or not, gets one autostart claim marked `recognize` (`emulator_autostart_queued`,
+//!   `watch_kind` `recognize`): on its key the self-check's recognition (#411 A48) binds the
+//!   reported port, awaits the ADB baseline and opens input and capture, then the startup package
+//!   is queued as after a start; it never launches or stops an emulator. Its bound is a restart's
+//!   (`restart_attempts` within `restart_window_ms`), counted apart; used up, one
+//!   `emulator_watch_restart_exhausted` with `watch_kind` `recognize`.
 //! - **Blackouts** (Workflow #386 SR-4a3, `scheduling-blackout.md`, "Complete silence"): the
 //!   polls go on (a status read starts nothing). A configured instance found stopped inside a
 //!   blackout gets its one autostart claim as above, which the routine gate holds until the
@@ -37,22 +48,25 @@
 //! - **Codes (#420 S4).** The watch's own codes are the state change and the used-up bound; the
 //!   read failure, the restart's enqueue and a failed thread spawn are existing codes
 //!   (`emulator_state_read_failed`, `emulator_autostart_queued`, `runtime_monitor_spawn_failed`).
-//! - **Observe only (R4).** An instance without `start_emulator` is read and recorded, never
-//!   started. Nothing here stops or restarts a running emulator, and nothing names a device: an
-//!   instance is its alias.
+//! - **Observe only (R4).** An instance without `start_emulator` is read and recorded (and
+//!   recognized, EMU-BIND), never started. Nothing here stops or restarts a running emulator, and
+//!   nothing names a device: an instance is its alias.
 //!
 //! Each record is also a report line, which actingd writes as a daemon line.
 
 use super::*;
+use crate::InstanceState;
 use crate::codes::{EmulatorWatchCode, EmulatorWatchLocation, HostCode};
 use actingcommand_contract::EmulatorRunningState;
+use actingcommand_contract::outcome::VocabularyToken;
 use actingcommand_runtime_config::EmulatorWatchConfig;
 
 /// How often the watch looks whether a poll is due and whether the Runtime stops.
 const WATCH_TICK: Duration = Duration::from_millis(250);
 
-/// The watch's state: its thread, and per instance the restarts it requested within the window
-/// and the streaks it reports once. A leaf lock: nothing else is taken while it is held.
+/// The watch's state: its thread, and per instance the restarts and the recognitions it
+/// requested within the window and the streaks it reports once. A leaf lock: nothing else is
+/// taken while it is held.
 #[derive(Default)]
 pub(super) struct EmulatorWatch {
     thread: Option<JoinHandle<RuntimeHostResult<()>>>,
@@ -60,11 +74,37 @@ pub(super) struct EmulatorWatch {
     restarts: BTreeMap<InstanceId, VecDeque<u64>>,
     /// The instances whose used-up bound was reported, until a restart is allowed again.
     exhausted: BTreeSet<InstanceId>,
+    /// EMU-BIND (0.12.27): the recognitions the watch requested, by instance, counted apart from
+    /// the restarts under the same bound.
+    recognitions: BTreeMap<InstanceId, VecDeque<u64>>,
+    /// EMU-BIND: the instances whose used-up recognition bound was reported.
+    recognitions_exhausted: BTreeSet<InstanceId>,
     /// The instances whose last status read failed (reported once per failing streak).
     unreadable: BTreeSet<InstanceId>,
     /// Test only: the polls finished so far.
     #[cfg(test)]
     polls: u64,
+}
+
+/// EMU-BIND (0.12.27): what the watch asks of an instance's emulator, as a token of the catalog
+/// vocabulary `emulator_watch_kind` (the `watch_kind` value): the start of a stopped one (R3), or
+/// the recognition of a running one whose endpoint the Runtime holds pending or bound to another
+/// port. Each has its own count under the one bound.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum WatchKind {
+    Restart,
+    Recognize,
+}
+
+impl VocabularyToken for WatchKind {
+    const VOCABULARY: &'static str = "emulator_watch_kind";
+
+    fn token(self) -> &'static str {
+        match self {
+            Self::Restart => "restart",
+            Self::Recognize => "recognize",
+        }
+    }
 }
 
 /// Whether the watch may start an instance's stopped emulator now (R3's bound).
@@ -81,15 +121,21 @@ enum RestartBudget {
 }
 
 impl EmulatorWatch {
-    /// The bound of `instance_id` at `now_ms`: the restarts that left the window are dropped
-    /// first; an allowed restart is counted.
+    /// The bound of `kind` for `instance_id` at `now_ms`: the requests that left the window are
+    /// dropped first; an allowed one is counted. EMU-BIND: restarts and recognitions are counted
+    /// apart, each against `restart_attempts` within `restart_window_ms`.
     fn restart_budget(
         &mut self,
+        kind: WatchKind,
         instance_id: InstanceId,
         now_ms: u64,
         settings: &EmulatorWatchConfig,
     ) -> RestartBudget {
-        let window = self.restarts.entry(instance_id).or_default();
+        let (requests, exhausted) = match kind {
+            WatchKind::Restart => (&mut self.restarts, &mut self.exhausted),
+            WatchKind::Recognize => (&mut self.recognitions, &mut self.recognitions_exhausted),
+        };
+        let window = requests.entry(instance_id).or_default();
         while window
             .front()
             .is_some_and(|at| now_ms.saturating_sub(*at) >= settings.restart_window_ms)
@@ -103,12 +149,12 @@ impl EmulatorWatch {
             return RestartBudget::UsedUp {
                 attempts,
                 retry_after_ms: settings.restart_window_ms.saturating_sub(since_oldest),
-                first: self.exhausted.insert(instance_id),
+                first: exhausted.insert(instance_id),
             };
         }
         window.push_back(now_ms);
         let attempts = window.len();
-        self.exhausted.remove(&instance_id);
+        exhausted.remove(&instance_id);
         RestartBudget::Allowed { attempts }
     }
 }
@@ -229,7 +275,9 @@ impl HostShared {
 
     /// One instance of a poll: its status read, and (R3) the restart of a configured instance
     /// (its place in the configuration `position`) found stopped; R4: an instance without
-    /// `start_emulator` is only read and recorded.
+    /// `start_emulator` is never started. EMU-BIND (0.12.27): an instance, configured or not,
+    /// found running with Android and an ADB port while the Runtime holds its endpoint pending or
+    /// bound to another port is recognized (`recognize_watched_emulator`).
     fn watch_emulator(
         &self,
         instance_id: InstanceId,
@@ -238,26 +286,55 @@ impl HostShared {
         settings: &EmulatorWatchConfig,
         now_ms: u64,
     ) -> RuntimeHostResult<()> {
-        let Some(stopped) = self.read_watched_emulator(instance_id, alias)? else {
+        let Some(state) = self.read_watched_emulator(instance_id, alias)? else {
             return Ok(());
         };
-        match position {
-            Some(position) if stopped => {
-                self.restart_watched_emulator(position, instance_id, alias, settings, now_ms)
-            }
-            _ => Ok(()),
+        if !state.process_started {
+            return match position {
+                Some(position) => {
+                    self.restart_watched_emulator(position, instance_id, alias, settings, now_ms)
+                }
+                None => Ok(()),
+            };
         }
+        if self.needs_recognition(instance_id, &state)? {
+            return self.recognize_watched_emulator(position, instance_id, alias, settings, now_ms);
+        }
+        Ok(())
+    }
+
+    /// EMU-BIND (0.12.27): whether the status read `state` asks for a recognition of the
+    /// instance: its emulator runs with Android and a reported ADB port, and the Runtime holds
+    /// the instance's endpoint pending or bound to another port (CAP-IDX: a port that is not the
+    /// index's base port is checked when capture opens on it).
+    pub(super) fn needs_recognition(
+        &self,
+        instance_id: InstanceId,
+        state: &InstanceState,
+    ) -> RuntimeHostResult<bool> {
+        let Some(adb_port) = state.adb_port.filter(|port| *port != 0 && state.running()) else {
+            return Ok(false);
+        };
+        Ok(
+            lock(&self.registered_instances, EmulatorWatchLocation::Watch)?
+                .get(&instance_id)
+                .is_some_and(|record| {
+                    record.endpoint_pending()
+                        || record
+                            .bound_adb_endpoint()
+                            .is_none_or(|endpoint| endpoint.port() != adb_port)
+                }),
+        )
     }
 
     /// The status read of one instance under its admission guard, when the guard is free: the
-    /// reading replaces `emulator_state`, recorded when it changed. `Some(true)` when no emulator
-    /// process runs, `Some(false)` when one does, `None` when the guard was taken or the read
-    /// failed.
+    /// reading replaces `emulator_state`, recorded when it changed. The reading, or `None` when
+    /// the guard was taken or the read failed.
     fn read_watched_emulator(
         &self,
         instance_id: InstanceId,
         alias: &str,
-    ) -> RuntimeHostResult<Option<bool>> {
+    ) -> RuntimeHostResult<Option<InstanceState>> {
         let instance_guard = self
             .instance_guard(instance_id)
             .map_err(|failure| *failure.error)?;
@@ -311,7 +388,7 @@ impl HostShared {
                     .adb_port_present(state.adb_port.is_some()),
             )?;
         }
-        Ok(Some(!state.process_started))
+        Ok(Some(state))
     }
 
     /// R3: the restart of a configured instance whose emulator the poll found stopped, paused or
@@ -325,9 +402,49 @@ impl HostShared {
         settings: &EmulatorWatchConfig,
         now_ms: u64,
     ) -> RuntimeHostResult<()> {
+        if !self.watch_may_request(WatchKind::Restart, instance_id, alias, settings, now_ms)? {
+            return Ok(());
+        }
+        self.request_watch_autostart(position, instance_id, alias, false)
+    }
+
+    /// EMU-BIND (0.12.27): the recognition of an instance whose emulator the poll found running
+    /// with Android and an ADB port while the Runtime holds its endpoint pending or bound to
+    /// another port, paused or not (binding an endpoint is no scheduling), under the same
+    /// conditions and bound as a restart, counted apart: one autostart claim marked `recognize`
+    /// (`request_watch_recognition`), which starts and stops nothing. `position` is the
+    /// instance's place in the configuration, if it names `start_emulator`.
+    fn recognize_watched_emulator(
+        &self,
+        position: Option<usize>,
+        instance_id: InstanceId,
+        alias: &str,
+        settings: &EmulatorWatchConfig,
+        now_ms: u64,
+    ) -> RuntimeHostResult<()> {
+        if !self.watch_may_request(WatchKind::Recognize, instance_id, alias, settings, now_ms)? {
+            return Ok(());
+        }
+        self.request_watch_recognition(position, instance_id, alias)
+    }
+
+    /// R3 and EMU-BIND: whether the watch requests a claim of `kind` for the instance now, and
+    /// its record. Never while the idle action holds the emulator stopped (IDLE-1), a claim
+    /// holds the instance's key or an autostart or emulator control claim waits for it (at most
+    /// one per instance at a time), nor beyond the bound of `kind`: once it is used up,
+    /// `emulator_watch_restart_exhausted` (`watch_kind`) once per streak. An allowed request is
+    /// counted and recorded as `emulator_autostart_queued` (`watch_kind`).
+    fn watch_may_request(
+        &self,
+        kind: WatchKind,
+        instance_id: InstanceId,
+        alias: &str,
+        settings: &EmulatorWatchConfig,
+        now_ms: u64,
+    ) -> RuntimeHostResult<bool> {
         // IDLE-1: an emulator the idle action stopped stays stopped until its wake starts it.
         if self.idle_holds_emulator_stopped(alias)? {
-            return Ok(());
+            return Ok(false);
         }
         let busy = {
             let scheduler = lock(&self.scheduler, EmulatorWatchLocation::Watch)?;
@@ -340,9 +457,10 @@ impl HostShared {
                     .is_empty()
         };
         if busy {
-            return Ok(());
+            return Ok(false);
         }
         let budget = lock(&self.emulator_watch, EmulatorWatchLocation::Watch)?.restart_budget(
+            kind,
             instance_id,
             now_ms,
             settings,
@@ -360,10 +478,11 @@ impl HostShared {
                             .alias(alias)
                             .attempts(attempts)
                             .limit_count(settings.restart_attempts)
-                            .retry_after_ms(retry_after_ms),
+                            .retry_after_ms(retry_after_ms)
+                            .watch_kind(kind),
                     )?;
                 }
-                Ok(())
+                Ok(false)
             }
             RestartBudget::Allowed { attempts } => {
                 self.record_emulator_watch(
@@ -372,18 +491,22 @@ impl HostShared {
                         .count(1_usize)
                         .alias(alias)
                         .attempts(attempts)
-                        .limit_count(settings.restart_attempts),
+                        .limit_count(settings.restart_attempts)
+                        .watch_kind(kind),
                 )?;
-                self.request_watch_autostart(position, instance_id, alias, false)
+                Ok(true)
             }
         }
     }
 
-    /// R3: a person's emulator control of `instance_id` clears the restarts the watch made there.
+    /// R3: a person's emulator control of `instance_id` clears the restarts the watch made there;
+    /// EMU-BIND: and its recognitions.
     pub(super) fn forget_watch_restarts(&self, instance_id: InstanceId) -> RuntimeHostResult<()> {
         let mut watch = lock(&self.emulator_watch, EmulatorWatchLocation::Watch)?;
         watch.restarts.remove(&instance_id);
         watch.exhausted.remove(&instance_id);
+        watch.recognitions.remove(&instance_id);
+        watch.recognitions_exhausted.remove(&instance_id);
         Ok(())
     }
 
