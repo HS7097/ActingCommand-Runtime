@@ -80,6 +80,25 @@ pub(super) fn task_declaration_error(
     error
 }
 
+/// Workflow #428 CFL-2 (design CF v2 §5.12): whether an OCR target's source `region` is the whole
+/// frame: `full_frame`, or a `rect` or `template_relative` region the size of `frame` (the
+/// declared `coordinate_space`).
+fn whole_frame_region(region: &Value, frame: [u64; 2]) -> bool {
+    let size = |object: &Value| {
+        [
+            object.get("width").and_then(Value::as_u64),
+            object.get("height").and_then(Value::as_u64),
+        ]
+    };
+    let frame = [Some(frame[0]), Some(frame[1])];
+    match region.get("mode").and_then(Value::as_str) {
+        Some("full_frame") => true,
+        Some("rect") => region.get("rect").is_some_and(|rect| size(rect) == frame),
+        Some("template_relative") => size(region) == frame,
+        _ => false,
+    }
+}
+
 impl Declaration<'_> {
     /// Task schema `0.6` and later, which accept the declarations of pack schema `0.7`
     /// (`checks`, color digests, per-target `max_distance`, `guard.check` and
@@ -1282,6 +1301,8 @@ impl Declaration<'_> {
                 "model_sha256",
                 "blocks",
                 "line_merge",
+                // Workflow #428 CFL-2.
+                "preprocess",
             ],
         )?;
         self.source_region(
@@ -1289,6 +1310,9 @@ impl Declaration<'_> {
             &child(pointer, "region"),
             false,
         )?;
+        if let Some(preprocess) = object.get("preprocess") {
+            self.preprocess(preprocess, &child(pointer, "preprocess"), true)?;
+        }
         self.strings(
             self.required(object, pointer, "languages")?,
             &child(pointer, "languages"),
@@ -1381,6 +1405,27 @@ impl Declaration<'_> {
             self.required(object, pointer, "margin_milli")?,
             &child(pointer, "margin_milli"),
         )
+    }
+
+    /// Workflow #428 CFL-2: `preprocess` of an `ocr_targets[]` entry or a layout's `shared_ocr`
+    /// of task schema `0.9`, the chain of `contracts/recognition-preprocess.md`: its shape,
+    /// members and chain are checked here by the recognition pack's own parser, a refusal at its
+    /// own pointer. With `per_pixel` (a shared read's), a `threshold` of `"otsu"` is refused.
+    fn preprocess(&self, value: &Value, pointer: &str, per_pixel: bool) -> CliOutcome<()> {
+        if self.schema_before(TaskSchema::V0_9) {
+            return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
+        }
+        let refused = |refusal: actingcommand_recognition_pack::PreprocessRefusal| {
+            self.error(&format!("{pointer}{}", refusal.pointer), refusal.reason)
+        };
+        let preprocess =
+            actingcommand_recognition_pack::OcrPreprocess::from_json(value).map_err(refused)?;
+        if per_pixel && let Some(step) = preprocess.otsu_step() {
+            return Err(refused(
+                actingcommand_recognition_pack::shared_otsu_refusal(step),
+            ));
+        }
+        Ok(())
     }
 
     /// Workflow #396 REC-5: `scales` of an `anchors[]` or `verify_templates[]` entry of task
@@ -1634,6 +1679,7 @@ impl Declaration<'_> {
                 "click",
                 "locate",
                 "unique",
+                "preprocess",
             ],
             _ => unreachable!("fixed declaration family"),
         };
@@ -1673,6 +1719,8 @@ impl Declaration<'_> {
                 "click" if !value.is_null() => self.rect(value, &pointer)?,
                 "locate" => self.locate(value, &pointer)?,
                 "unique" => self.unique(value, &pointer)?,
+                // Workflow #428 CFL-2.
+                "preprocess" => self.preprocess(value, &pointer, false)?,
                 // Workflow #396 REC-5.
                 "scales" => self.scales(value, &pointer)?,
                 // Workflow #411 B13.
@@ -1731,6 +1779,19 @@ impl Declaration<'_> {
                 "model_sha256",
             ] {
                 self.required(object, pointer, field)?;
+            }
+            // Workflow #428 CFL-2 (design CF v2 §5.12): a chain over the whole frame reads with
+            // `locate`, whose block mode is explicit.
+            if object.contains_key("preprocess")
+                && !object.contains_key("locate")
+                && object
+                    .get("region")
+                    .is_some_and(|region| whole_frame_region(region, frame))
+            {
+                return Err(self.error(
+                    &child(pointer, "preprocess"),
+                    ResourceDeclarationReason::InvalidValue,
+                ));
             }
         } else if family == "color_probes" {
             // A color probe matches a mean color (`expected`) or verifies a digest, never both.

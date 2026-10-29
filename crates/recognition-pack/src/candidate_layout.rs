@@ -21,14 +21,14 @@ use crate::codes::{RecognitionPackCode, RecognitionPackLocation};
 use crate::{
     CandidateConsensus, CandidateIdentityDeclaration, CandidateIdentityRecognition,
     CandidateIdentityTemplate, CandidateSampleVariant, OcrEvaluation, OcrLocateBlocks,
-    OcrLocateLineMerge, OcrProviderBlocks, OcrProviderRequest, OcrTarget, PackCoordinateSpace,
-    PackPoint, PackRect, PackRegion, RecognitionEvaluator, RecognitionPack, RecognitionPackError,
-    RecognitionPackErrorCode, RecognitionPackResult, RecognitionTarget, SCHEMA_0_7,
-    SceneEvaluation, TargetEvaluation, TargetKind, TemplateEvaluation, TemplateRelativeRegion,
-    UnsupportedRecognitionTarget, ValueTestPart, ocr_verdict, primitive_error, provider_error,
-    provider_frame, provider_region, rect_is_within, reject_unknown_fields,
-    resolve_template_relative_region, target_region, template_message, validate_ocr_result,
-    validate_rect_shape, validate_region_within_coordinate_space,
+    OcrLocateLineMerge, OcrPreprocess, OcrPreprocessEvidence, OcrProviderBlocks,
+    OcrSharedReadEvidence, OcrTarget, PackCoordinateSpace, PackPoint, PackRect, PackRegion,
+    RecognitionEvaluator, RecognitionPack, RecognitionPackError, RecognitionPackErrorCode,
+    RecognitionPackResult, RecognitionTarget, SCHEMA_0_7, SceneEvaluation, TargetEvaluation,
+    TargetKind, TemplateEvaluation, TemplateRelativeRegion, UnsupportedRecognitionTarget,
+    ValueTestPart, ocr_verdict, primitive_error, provider_error, provider_region, rect_is_within,
+    reject_unknown_fields, resolve_template_relative_region, target_region, template_message,
+    validate_ocr_result, validate_rect_shape, validate_region_within_coordinate_space,
 };
 use actingcommand_contract::ResourceDeclarationReason;
 use actingcommand_contract::candidate_projection::{
@@ -123,6 +123,8 @@ const SHARED_OCR_FIELDS: &[&str] = &[
     "model_sha256",
     "blocks",
     "line_merge",
+    // Workflow #428 CFL-2.
+    "preprocess",
 ];
 /// The longest OCR timeout a shared read declares, as for an OCR target.
 const MAX_SHARED_OCR_TIMEOUT_MS: u64 = 60_000;
@@ -197,12 +199,23 @@ pub struct CandidateSharedOcr {
     /// Required with `detect`.
     #[serde(default)]
     pub line_merge: Option<OcrLocateLineMerge>,
+    /// Workflow #428 CFL-2: the chain the read's region passes, pixel by pixel only (no `otsu`);
+    /// absent means the frame itself.
+    #[serde(default)]
+    pub preprocess: Option<OcrPreprocess>,
 }
 
 impl CandidateSharedOcr {
-    /// Whether the read gives `target` its text: an OCR target without `locate` whose model and
-    /// languages are the read's. Its region decides whether it lies inside the read.
+    /// Whether the read gives `target` its text: an OCR target without `locate` whose model,
+    /// languages and (Workflow #428 CFL-2) chain are the read's, both without a chain or with
+    /// equal chains. Its region decides whether it lies inside the read.
     fn reads_text_of(&self, target: &OcrTarget) -> bool {
+        self.would_read_text_of(target) && target.preprocess == self.preprocess
+    }
+
+    /// Workflow #428 CFL-2: whether the read would give `target` its text if their chains were
+    /// equal: an OCR target without `locate` whose model and languages are the read's.
+    fn would_read_text_of(&self, target: &OcrTarget) -> bool {
         target.locate.is_none()
             && target.model_ref == self.model_ref
             && target.model_sha256 == self.model_sha256
@@ -241,12 +254,18 @@ fn space_rect(space: PackCoordinateSpace) -> PackRect {
 }
 
 /// One frame's shared read: its blocks in the sorted order, each block's index in the provider's
-/// order, and the PP-OCR reports, which go with the first target the read serves.
+/// order, and the PP-OCR reports, which go with the first target the read serves. Workflow #428
+/// CFL-2: also its rectangle, the detector's count, and with a chain its evidence and processed
+/// region, from which each served target's evidence is counted.
 #[derive(Debug, Clone)]
-struct SharedTextRead {
+pub(crate) struct SharedTextRead {
     blocks: Vec<crate::OcrTextEvidence>,
     source_order: Vec<usize>,
     diagnostics: actingcommand_contract::PpocrDiagnostics,
+    rect: PackRect,
+    detection: Option<crate::OcrProviderDetection>,
+    preprocess: Option<OcrPreprocessEvidence>,
+    processed: Option<std::sync::Arc<Vec<u8>>>,
 }
 
 /// How a `repeated_anchor` layout numbers its instances: `top_to_bottom` by (`y`, `x`),
@@ -1282,7 +1301,7 @@ impl SceneEvaluation<'_> {
     /// `placement` and shifted by the sample, lies inside the read's region; `None` for any
     /// other target, which reads on its own. The frame's read calls the provider once; its
     /// result, an error too, is kept in `reads` under the sample's frame.
-    fn shared_text(
+    pub(crate) fn shared_text(
         &self,
         shared: &CandidateSharedOcr,
         target_id: &str,
@@ -1333,6 +1352,31 @@ impl SceneEvaluation<'_> {
         if !first {
             read.diagnostics = Vec::new();
         }
+        // Workflow #428 CFL-2: with a chain, the target's evidence is counted over its own region
+        // of the processed region, without running the chain again; the read's own evidence and
+        // the detector's count come with it, with or without a chain.
+        let preprocess = match (&read.preprocess, &read.processed) {
+            (Some(evidence), Some(processed)) => Some(
+                crate::ocr_preprocess::shared_evidence(
+                    evidence,
+                    processed.as_slice(),
+                    read.rect,
+                    region,
+                )
+                .map_err(|error| error.with_region(&region_evidence))?,
+            ),
+            _ => None,
+        };
+        let shared_read = OcrSharedReadEvidence {
+            rect: read.rect,
+            detected: read.detection.map(|detection| detection.detected),
+            limit: read.detection.map(|detection| detection.limit),
+            kept_milli: read.preprocess.as_ref().map(|evidence| evidence.kept_milli),
+            threshold_value: read
+                .preprocess
+                .as_ref()
+                .and_then(|evidence| evidence.threshold_value),
+        };
         let (blocks, block_source_order): (Vec<_>, Vec<_>) = read
             .blocks
             .into_iter()
@@ -1368,6 +1412,8 @@ impl SceneEvaluation<'_> {
                 match_mode: target.match_mode,
                 blocks,
                 located: None,
+                preprocess,
+                shared_read: Some(shared_read),
             })),
             nn: None,
             color_digest: None,
@@ -1407,17 +1453,29 @@ impl SceneEvaluation<'_> {
         provider
             .require_ocr_model(&shared.model_ref, &shared.model_sha256)
             .map_err(|error| provider_error(served, "ocr admission", error))?;
+        // Workflow #428 CFL-2: the chain runs once over the read's region, which is kept for the
+        // targets the read serves; after it, the sample budget is checked again.
+        let hand_over = crate::ocr_preprocess::hand_over(
+            self.scene,
+            served,
+            rect,
+            shared.provider_blocks(),
+            shared.preprocess.as_ref(),
+            true,
+        )?;
+        if hand_over.preprocessed() {
+            self.recheck_sample_budget(shared.timeout_ms)?;
+        }
         let result = provider
-            .read_text(OcrProviderRequest {
-                frame: provider_frame(self.scene),
-                region: rect,
-                languages: &shared.languages,
-                timeout_ms: shared.timeout_ms,
-                model_ref: &shared.model_ref,
-                model_sha256: &shared.model_sha256,
-                blocks: shared.provider_blocks(),
-            })
+            .read_text(hand_over.request(
+                &shared.languages,
+                shared.timeout_ms,
+                &shared.model_ref,
+                &shared.model_sha256,
+            ))
             .map_err(|error| provider_error(served, "ocr", error))?;
+        let result = hand_over.restore(result)?;
+        let (preprocess, processed) = hand_over.into_shared();
         let detection = result.detection;
         let ocr = validate_ocr_result(result, rect)?;
         if let Some(detection) = detection.filter(|detection| detection.truncated()) {
@@ -1434,6 +1492,10 @@ impl SceneEvaluation<'_> {
             blocks: ocr.blocks,
             source_order: ocr.block_source_order,
             diagnostics: ocr.ppocr_diagnostics,
+            rect,
+            detection,
+            preprocess,
+            processed,
         })
     }
 }
@@ -1654,6 +1716,7 @@ impl CandidateLayout {
             evaluator.pack.defaults.match_metric,
             evaluator.pack.coordinate_space,
             &lookup,
+            false,
         );
         let shared_ms = self.shared_ocr.as_ref().map_or(0, |shared| {
             shared
@@ -1704,12 +1767,14 @@ impl CandidateLayout {
 /// gives text to, at a rectangle known before the frame (the target's own rectangle or
 /// `full_frame`, or its rectangle moved to a slot, shifted by the sample's jitter) that lies
 /// inside the read's region. A `template_relative` region is known only on the frame, so the
-/// count keeps its call; the frame may still serve it.
+/// count keeps its call; the frame may still serve it. Workflow #428 CFL-2: with `any_chain`, a
+/// target counts whatever its chain (the calls the read would serve if the chains were equal).
 fn shared_calls<'t>(
     layout: &CandidateLayout,
     default_metric: crate::RecognitionMatchMetric,
     coordinate_space: Option<PackCoordinateSpace>,
     target: &impl Fn(&str) -> Option<&'t RecognitionTarget>,
+    any_chain: bool,
 ) -> (BTreeSet<SampleKey>, BTreeSet<u8>) {
     let mut served = BTreeSet::new();
     let mut frames = BTreeSet::new();
@@ -1723,7 +1788,12 @@ fn shared_calls<'t>(
         let Some(RecognitionTarget::Ocr(ocr)) = target(&key.4) else {
             continue;
         };
-        if !shared.reads_text_of(ocr) {
+        let serves = if any_chain {
+            shared.would_read_text_of(ocr)
+        } else {
+            shared.reads_text_of(ocr)
+        };
+        if !serves {
             continue;
         }
         let (dx, dy) = (i32::from(key.1), i32::from(key.2));
@@ -1999,7 +2069,8 @@ fn provider_evaluations<'t>(
             Some(RecognitionTarget::Ocr(_) | RecognitionTarget::Nn(_))
         )
     };
-    let (served, shared_frames) = shared_calls(layout, default_metric, coordinate_space, &target);
+    let (served, shared_frames) =
+        shared_calls(layout, default_metric, coordinate_space, &target, false);
     let own = sample_calls(layout, default_metric)
         .into_keys()
         .filter(|key| !served.contains(key))
@@ -2554,16 +2625,52 @@ fn validate_shared_ocr(
             "{pointer}/timeout_ms must be in 1..={MAX_SHARED_OCR_TIMEOUT_MS}"
         ));
     }
+    // Workflow #428 CFL-2: a target serves only with the read's chain.
     let (served, _) = shared_calls(
         layout,
         pack.defaults.match_metric,
         pack.coordinate_space,
         &|target_id: &str| targets.get(target_id).copied(),
+        false,
     );
     if served.is_empty() {
         errors.push(format!(
             "{pointer}: no slot or feature target reads its text from the shared read"
         ));
+    }
+}
+
+impl RecognitionPack {
+    /// Workflow #428 CFL-2 (design CF v2 §5.6, the resource side's request): each OCR target a
+    /// `fixed_slots` layout's slots or features read inside its shared read, with the read's model
+    /// and languages, whose chain differs from the read's (colors in another order too), so that
+    /// it reads on its own instead: `(layout index, target id)`, once per pair, in layout order
+    /// and then in the order of the layout's sample calls. `standard-pack check` warns of each.
+    pub fn preprocess_divergences(&self) -> Vec<(usize, String)> {
+        let lookup = |target_id: &str| self.targets.iter().find(|target| target.id() == target_id);
+        let mut divergences = Vec::new();
+        for (index, layout) in self.candidate_layouts.iter().enumerate() {
+            let Some(shared) = &layout.shared_ocr else {
+                continue;
+            };
+            let (would, _) = shared_calls(
+                layout,
+                self.defaults.match_metric,
+                self.coordinate_space,
+                &lookup,
+                true,
+            );
+            for key in would {
+                let Some(RecognitionTarget::Ocr(target)) = lookup(&key.4) else {
+                    continue;
+                };
+                let pair = (index, key.4);
+                if target.preprocess != shared.preprocess && !divergences.contains(&pair) {
+                    divergences.push(pair);
+                }
+            }
+        }
+        divergences
     }
 }
 
@@ -2831,10 +2938,9 @@ fn validate_repeated_anchor(
 /// typed declaration.
 fn validate_shared_ocr_wire(value: &Value, pointer: &str) -> RecognitionPackResult<()> {
     let shared = wire_object(value, SHARED_OCR_FIELDS, pointer)?;
-    if let Some(field) = SHARED_OCR_FIELDS
-        .iter()
-        .find(|field| **field != "line_merge" && !shared.contains_key(**field))
-    {
+    if let Some(field) = SHARED_OCR_FIELDS.iter().find(|field| {
+        !matches!(**field, "line_merge" | "preprocess") && !shared.contains_key(**field)
+    }) {
         return Err(declaration(
             format!("{pointer}/{field}"),
             ResourceDeclarationReason::MissingField,
@@ -2878,6 +2984,14 @@ fn validate_shared_ocr_wire(value: &Value, pointer: &str) -> RecognitionPackResu
             region,
             &["x", "y", "width", "height"],
             &format!("{pointer}/region"),
+        )?;
+    }
+    // Workflow #428 CFL-2: a chain that works pixel by pixel; `otsu` is refused.
+    if let Some(preprocess) = shared.get("preprocess") {
+        crate::ocr_preprocess::validate_preprocess_wire(
+            preprocess,
+            &format!("{pointer}/preprocess"),
+            true,
         )?;
     }
     Ok(())

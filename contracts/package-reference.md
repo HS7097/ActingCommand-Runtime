@@ -319,7 +319,13 @@ declares is its own, so that shared interrupt page does not act for its runs
 ([README.md](README.md), "Shared interrupt pages"), and a shared interrupt page added later changes
 nothing for it. A feature package of `pages.json` (its pages are the list's) and a handler of
 that page (its entry holds the page) declare it by their part and are not reported; nothing is
-refused. After them, the report of item 5: one `package_bundle_remedy_invalid` warning in `warnings` per finding,
+refused. Then, with or without `pages.json` (Workflow #428 CFL-2), one
+`package_bundle_preprocess_divergent` warning (with `package_id`, `target_id` and the shared
+read's `json_pointer` in the pack's recognition pack) per package of the registry and OCR target
+that a layout's shared read would serve but whose `preprocess` chain differs from the read's, so
+that it reads on its own ([selection-graph.md](selection-graph.md), Shared OCR read,
+Preprocessing), in registry order and then the recognition pack's order; nothing is refused.
+After them, the report of item 5: one `package_bundle_remedy_invalid` warning in `warnings` per finding,
 with `package_id`, `remedy_problem` (`capability_unprovided`: no package of the root provides the
 capability; `cycle`: one entry per package on the cycle; `parameters_mismatch`: two providers of
 one capability declare different parameters) and `need`, `capability` and `outcome_key` where they

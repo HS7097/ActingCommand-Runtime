@@ -1173,6 +1173,24 @@
       "description": "Workflow #411 B35 (contracts/package-reference.md, the standard-pack cross-check; contracts/README.md, shared interrupt pages): a package of the game root declares page_id, which interrupts.json lists as a shared interrupt page. A page a package declares is its own, so that shared interrupt page does not act for the package's runs, and adding it to interrupts.json changes nothing for them. package bundle and actinglab standard-pack check list one entry in warnings per package and such page; a feature package of pages.json and a handler of that page declare it by their part and are not listed. Nothing is refused.",
       "common_causes": "The package recognises the dialog itself, written before the shared interrupt page existed.",
       "handling": "Remove the page from the package so that the shared interrupt page handles it, or keep it when the package must handle that page itself."
+    },
+    "package_bundle_preprocess_divergent": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "target_id": "required",
+        "json_pointer": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.29",
+      "description": "Workflow #428 CFL-2 (contracts/recognition-preprocess.md, Hand-over; contracts/selection-graph.md, Shared OCR read): an OCR target that a fixed_slots layout's slots or features read lies inside the layout's shared read with its model and languages, but its preprocess chain differs from the shared read's (two chains are the same only step by step, colors in their declared order), so it reads on its own instead of taking its text from the shared read. json_pointer names the shared read in the package's recognition pack (/candidate_layouts/<i>/shared_ocr). package bundle and actinglab standard-pack check list one entry in warnings per package, target and shared read. Nothing is refused.",
+      "common_causes": "The chain was edited on the shared read or on the slot target only, or copied with its colors in another order.",
+      "handling": "Copy the shared read's preprocess to the target verbatim, or remove it from both, unless the target must read on its own."
     }
   }
 }

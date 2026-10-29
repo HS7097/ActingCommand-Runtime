@@ -1520,6 +1520,7 @@ mod tests {
                     click: None,
                     locate: None,
                     unique: None,
+                    preprocess: None,
                 }),
                 RecognitionTarget::Nn(NnTarget {
                     id: "fixture/unselected_nn".to_string(),

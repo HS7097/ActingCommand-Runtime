@@ -111,6 +111,13 @@ actingcommand_contract::outcome_codes! {
         /// standard-pack check` list one per package and page in `warnings`; a feature package
         /// and the page's handlers are not listed.
         PackageBundleInterruptPageShadowed => "package_bundle_interrupt_page_shadowed": warning / none,
+        /// Warning (Workflow #428 CFL-2, design CF v2 §5.6): a slot's or feature's OCR target lies
+        /// in a layout's shared read with its model and languages, but declares another
+        /// `preprocess` chain (colors in another order too), so it reads on its own (keys
+        /// `package_id`, `target_id`, and `json_pointer`, the shared read in the package's
+        /// recognition pack). `package bundle` and `actinglab standard-pack check` list one per
+        /// package, target and shared read in `warnings`; nothing is refused.
+        PackageBundlePreprocessDivergent => "package_bundle_preprocess_divergent": warning / none,
         /// Warning (Workflow #384 D2-S2, transitional): a pack of a bundle with maintenance
         /// declarations only navigates and reads, but the declarations do not name it for
         /// `recognition` (key `package_id`). The resource repositories make it an error once

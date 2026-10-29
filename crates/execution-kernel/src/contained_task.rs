@@ -4257,6 +4257,20 @@ impl PreparedContainedTask {
         self.detector.page_ids().collect()
     }
 
+    /// Workflow #428 CFL-2: each OCR target of this package's recognition pack that reads on its
+    /// own, beside a layout's shared read it would take its text from, because its chain differs
+    /// from the read's: the target and the shared read's pointer in the recognition pack.
+    pub fn preprocess_divergences(&self) -> Vec<(String, String)> {
+        self.evaluator
+            .pack()
+            .preprocess_divergences()
+            .into_iter()
+            .map(|(layout, target_id)| {
+                (target_id, format!("/candidate_layouts/{layout}/shared_ocr"))
+            })
+            .collect()
+    }
+
     /// Workflow #373 NAV-6: whether this package's declared `entry_page` holds `page` (a page id
     /// without the game prefix): the page itself or a page of its entry page set; `any` holds
     /// none.

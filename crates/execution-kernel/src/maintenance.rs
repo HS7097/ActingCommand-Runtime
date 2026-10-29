@@ -74,6 +74,8 @@ pub struct NavigationPackageDescriptor {
     terminal_pages: Vec<String>,
     application_entry: bool,
     navigation_entry_pages: Option<Vec<String>>,
+    /// Workflow #428 CFL-2: [`PreparedContainedTask::preprocess_divergences`].
+    preprocess_divergences: Vec<(String, String)>,
 }
 
 impl PreparedContainedTask {
@@ -94,6 +96,7 @@ impl PreparedContainedTask {
                     .map(|page| crate::canonical_page_anchor(game, page))
                     .collect()
             }),
+            preprocess_divergences: self.preprocess_divergences(),
         }
     }
 }
@@ -126,6 +129,11 @@ impl NavigationPackageDescriptor {
     /// `None` without a page entry.
     pub fn navigation_entry_pages(&self) -> Option<&[String]> {
         self.navigation_entry_pages.as_deref()
+    }
+    /// Workflow #428 CFL-2: each OCR target whose chain differs from the shared read it would
+    /// take its text from, with the shared read's pointer in the recognition pack.
+    pub fn preprocess_divergences(&self) -> &[(String, String)] {
+        &self.preprocess_divergences
     }
 }
 
