@@ -220,7 +220,8 @@ fn r2_t6_a_new_install_without_overrides_is_adaptive() {
 }
 
 // R-2 test 6: after a preset is applied the current preset is its name; any member changed on its
-// own afterwards makes it `custom`.
+// own afterwards makes it `custom`, unless the change lands exactly on another preset: `standard`
+// and `adaptive` differ only in `mode`, so switching `mode` turns one into the other.
 #[test]
 fn r2_t6_an_exact_match_names_the_preset_and_any_changed_member_is_custom() {
     let file = from_file(json!({}));
@@ -247,7 +248,14 @@ fn r2_t6_an_exact_match_names_the_preset_and_any_changed_member_is_custom() {
                 .apply(std::slice::from_ref(&change), &stamp(), &context())
                 .unwrap_or_else(|failure| panic!("{name} {change:?}: {failure:?}"))
                 .config;
-            assert_eq!(current(&changed), CUSTOM, "{name} with {change:?}");
+            let expected = if name == "standard" && change == set(MODE, json!("pace")) {
+                "adaptive"
+            } else if name == "adaptive" && change == set(MODE, json!("observe")) {
+                "standard"
+            } else {
+                CUSTOM
+            };
+            assert_eq!(current(&changed), expected, "{name} with {change:?}");
         }
     }
 }
