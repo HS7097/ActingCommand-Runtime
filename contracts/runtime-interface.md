@@ -341,6 +341,7 @@ ran or may run (Alice's ruling 100). Shapes: `crates/actingcommand-contract`,
 | `SettingsConfigured.config_version?` | (`ConfigureSettings`') | | the settings' version after the change | the answer's member | R-4; absent in every answer of 0.12.30 | — |
 | `RuntimeFactSnapshot.config_version?` (the result, beside `snapshot`) | (`RuntimeFactSnapshot`'s) | | the settings' version now; beside the snapshot, never in the persisted `RuntimeFactSnapshot` | the answer's member | R-4; absent in every answer of 0.12.30 | — |
 | `ResourceTargetView`: `active.rows?` | (`ResourceTargetView`'s) | | #429 A.5's read model, one row per target in document order: `{id, kind: maintain \| gain, resource, goal, baseline?, current?, remaining, progress_milli, state, reading: {observed_at_unix_ms?, fresh_until_unix_ms?, pending_reason?}, completed_at_unix_ms?, updated_at_unix_ms}`; `state` is `active`, `met`, `completed`, `paused`, `awaiting_baseline`, `unknown` or `unmapped`; `pending_reason` as `ResourceTargetObservation.pending`. The table's version is `active.version` | the answer's member | R-13e; absent in every answer of 0.12.30 | — |
+| `ResourceTargetView.stale_schema?` (top level, beside `active`) | (`ResourceTargetView`'s) | | a boolean, #429 A.5: `true` when the instance's stored policy is an `actingcommand.resource-targets.v1` or `v2` record, which the v3 reader reads as no table (no `active`, so `expected_version` `0`) instead of refusing the view | the answer's member | R-13a; absent in every answer of 0.12.30 | — |
 | `RuntimeInstanceStatus.activity?` | — | — | `{kind, request_id?, package_id?, since_unix_ms}`; `kind` is `policy_run`, `direct_run`, `host_run`, `reconnect`, `selfcheck`, `emulator_control` or `ladder`; kept in memory, never read from the ledger | absent while the instance does none of these | each kind from the slice that fills it (`direct_run` R-5); absent in every answer of 0.12.30 | — |
 
 The edit-version tokens (Workflow #429 R-0, review M3 and L5) have one name for the three
@@ -366,8 +367,8 @@ Revision rules for the console (review M7):
    `not_implemented` whose `operation` is `configure_settings` or `apply_resource_targets`
    changed nothing, and the request may be sent again without the member.
 3. The release that first fills any answer member above (`activity`, either
-   `config_version`, `active.rows`) raises `runtime-client` `min` to 3: each sits in a shape
-   that denies unknown members, which a revision-2 reader refuses.
+   `config_version`, `active.rows`, `stale_schema`) raises `runtime-client` `min` to 3: each
+   sits in a shape that denies unknown members, which a revision-2 reader refuses.
 
 The kinds `ControlEmulatorInstance`, `SelfCheckInstance` and `ApplicationLifecycle` move
 to the general instructions in the same slice: each acts only on what is bound to the
@@ -472,6 +473,12 @@ In order; the first match decides.
    - option-two kind: likewise with `lab_module_debugging`, `lab_option` = `debugging`.
 
 From U-6 a refusal's receipt carries its specific code, not only `InvalidRequest`.
+
+Since Workflow #429 R-0, actinglab's `session app` and `emulator start`, `stop`, `restart`
+and `selfcheck` send general instructions (ApplicationLifecycle, ControlEmulatorInstance,
+SelfCheckInstance) on the Lab channel, which step 5 would refuse from U-6
+(`channel_request_refused`), so R-14, which closes this gate, must settle the rule "the Lab
+channel takes no general instruction" for them.
 
 ### Before U-6
 
@@ -612,7 +619,11 @@ tool table goes from 34 to 35 tools (observer 19 to 20), and U-3's count gains o
 tool. #386 SR-6b, MCP-19b adds one general read, `ac_schedule` (observer until U-3): the build's
 observer tier goes from 22 to 23 tools, and U-3's count gains one general tool. #422 LN-7c C
 adds one tool that writes, `ac_evidence_confirm_read` (operator until U-3): the build's operator
-tier goes from 8 to 9 tools, and U-3's count gains one general tool.
+tier goes from 8 to 9 tools, and U-3's count gains one general tool. Workflow #429 R-0 moves
+`ac_emulator`, one of the four option-two tools above, and `ac_app` (#389 MCP-13a, option two
+until then) to the general tools, and `ac_ladder_drill` (#390 DRILL-1) is option two: U-3's
+option two is four tools, `ac_run_pack`, `ac_stop_run`, `ac_lab_do` and `ac_ladder_drill`, and
+its count gains two general tools.
 
 | Tool | Class | Maps to | Parameters | Block |
 |---|---|---|---|---|

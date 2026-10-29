@@ -642,6 +642,7 @@ mod tests {
                     conditions: Vec::new(),
                     rows,
                 }),
+                stale_schema: None,
             }),
         };
         let encoded = round_trips(&view(rows));
@@ -662,6 +663,35 @@ mod tests {
         assert!(serde_json::from_value::<RuntimeResult>(nested).is_err());
         let encoded = round_trips(&view(Vec::new()));
         assert!(encoded["view"]["active"].get("rows").is_none());
+    }
+
+    // Fix round 2 (register §1.213 R0-10): A.5's `stale_schema` mark at `ResourceTargetView`'s
+    // top level. Filled, it round-trips beside a view with no `active` (a stored v1 or v2 record
+    // reads as no table); absent, the view has no `stale_schema` key; either way the view still
+    // refuses an unknown member.
+    #[test]
+    fn r0_resource_target_view_carries_stale_schema_only_when_filled() {
+        let view = |stale_schema: Option<bool>| RuntimeResult::ResourceTargetView {
+            view: Box::new(crate::ResourceTargetView {
+                instance_alias: "node.a".to_owned(),
+                policy_instance: "node.a".to_owned(),
+                evaluated_at_unix_ms: 9_000,
+                as_of_ledger_position: 12,
+                catalog_hash: None,
+                targetable: Vec::new(),
+                not_targetable: Vec::new(),
+                active: None,
+                stale_schema,
+            }),
+        };
+        let encoded = round_trips(&view(Some(true)));
+        assert_eq!(encoded["view"]["stale_schema"], json!(true));
+        assert!(encoded["view"].get("active").is_none());
+        refuses_unknown::<RuntimeResult>(encoded.clone(), &["view"]);
+
+        let encoded = round_trips(&view(None));
+        assert!(encoded["view"].get("stale_schema").is_none());
+        refuses_unknown::<RuntimeResult>(encoded, &["view"]);
     }
 
     // Review L6: the status member `activity` at the Status level. Filled, it round-trips in

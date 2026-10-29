@@ -22,10 +22,14 @@ pub struct ResourceTargetsApplied {
     pub instance_alias: String,
     /// `sha256:<hex>` of the policy crate's canonical serialization of the document.
     pub policy_sha256: String,
-    /// Sequence of the `fact.published` event that holds the policy.
+    /// The table's version after this request: the `expected_version` of the next
+    /// `EditResourceTarget` or `ApplyResourceTargets` (Workflow #429 R-0). Clients treat it as an
+    /// opaque token compared only for equality: never ordered, never added to or subtracted
+    /// from, never related to a `QueryEvents` sequence. Implementation note: the Runtime fills it
+    /// with the sequence of the `fact.published` event that holds the policy.
     pub version: u64,
     pub event_id: EventId,
-    /// Sequence of the policy active before this request; equals `version` on a replay.
+    /// The `version` of the policy active before this request; equals `version` on a replay.
     pub previous_version: Option<u64>,
     /// The same policy was already active and unexpired; nothing was appended.
     pub replayed: bool,
@@ -128,6 +132,12 @@ pub struct ResourceTargetView {
     pub not_targetable: Vec<NotTargetableResource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active: Option<ActiveResourceTargets>,
+    /// Workflow #429 A.5 (R-0 shape, register §1.213 R0-10, `runtime-client` 3): `true` when the
+    /// instance's stored policy is an `actingcommand.resource-targets.v1` or `v2` record, which
+    /// the v3 reader reads as no table (no `active`) instead of refusing the view. R-13a fills
+    /// it; absent in every answer of 0.12.30.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stale_schema: Option<bool>,
 }
 
 /// A pool a v2 target of this instance may name.

@@ -285,6 +285,8 @@ impl HostShared {
             targetable,
             not_targetable,
             active,
+            // Workflow #429 R-0: the stale-schema mark is R-13a's; none in 0.12.30.
+            stale_schema: None,
         };
         view.validate().map_err(|_| {
             RuntimeHostError::request(
