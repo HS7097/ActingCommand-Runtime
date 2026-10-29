@@ -1404,6 +1404,16 @@ impl HostShared {
         Ok(lock(&self.idle, IdleLocation::Check)?.emulator_held_stopped(alias))
     }
 
+    /// EMU-BIND fix 1 (0.12.28, review M1): whether the idle action holds the instance, whatever
+    /// its action (closing or closed, its wake not come yet): the emulator watch recognizes no
+    /// unprepared instance it holds, which its wake brings back.
+    pub(super) fn idle_holds_instance(&self, alias: &str) -> RuntimeHostResult<bool> {
+        Ok(lock(&self.idle, IdleLocation::Check)?
+            .closed()
+            .get(alias)
+            .is_some_and(|kept| !kept.woken))
+    }
+
     /// One `device_state_observed` record carrying `outcome` under the instance (`links`), and
     /// the same report line.
     fn record_idle(&self, links: EventLinksDraft, outcome: Outcome) -> RuntimeHostResult<()> {

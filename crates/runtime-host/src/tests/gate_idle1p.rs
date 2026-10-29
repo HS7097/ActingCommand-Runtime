@@ -80,13 +80,13 @@ const WAIT: Duration = Duration::from_secs(60);
 const X_ALIAS: &str = "idle1p.instance.x";
 const MINUTE_MS: u64 = 60_000;
 /// The manual clock's Unix reading at the first start.
-const NOW_UNIX_MS: u64 = 1_000;
+pub(super) const NOW_UNIX_MS: u64 = 1_000;
 /// X's next due task: four hours away, past `idle.min_gap_ms`'s default.
 const NEXT_DUE_UNIX_MS: u64 = NOW_UNIX_MS + 4 * 60 * MINUTE_MS;
 /// `idle.stop_emulator_wake_lead_ms`'s default.
 const STOP_EMULATOR_LEAD_MS: u64 = 300_000;
 /// X's wake: its next due task minus the lead.
-const WAKE_UNIX_MS: u64 = NEXT_DUE_UNIX_MS - STOP_EMULATOR_LEAD_MS;
+pub(super) const WAKE_UNIX_MS: u64 = NEXT_DUE_UNIX_MS - STOP_EMULATOR_LEAD_MS;
 /// The kept state's key.
 const IDLE_STATE: &str = "host.idle_state";
 
@@ -129,7 +129,7 @@ fn action_manifest(x: InstanceId, action: &str) -> RuntimeConfigManifest {
 
 /// X's scripted device: emulator-controlled from the start, so it registers with its emulator
 /// running.
-fn x_state() -> Arc<FakeState> {
+pub(super) fn x_state() -> Arc<FakeState> {
     let state = Arc::new(FakeState::default());
     state.emulator_control.store(true, Ordering::Release);
     state.physical_task_geometry.store(true, Ordering::Release);
@@ -142,7 +142,7 @@ fn x_state() -> Arc<FakeState> {
 
 /// A start of the Runtime on `root` with X alone (X's stuck recovery off, so no ladder acts on
 /// it), on `clock`; `failing`, the start fails right after its start event.
-fn start(
+pub(super) fn start(
     root: &TempDir,
     clock: &Arc<ManualRuntimeClock>,
     x: InstanceId,
@@ -196,7 +196,7 @@ fn start_with(
 }
 
 /// X's plan evaluated at `at`: no task due, the next one at `NEXT_DUE_UNIX_MS`.
-fn x_plan_at(at: u64) -> BTreeMap<String, IdlePlan> {
+pub(super) fn x_plan_at(at: u64) -> BTreeMap<String, IdlePlan> {
     BTreeMap::from([(
         X_ALIAS.to_owned(),
         IdlePlan {
@@ -209,7 +209,7 @@ fn x_plan_at(at: u64) -> BTreeMap<String, IdlePlan> {
 }
 
 /// No plan at all: before the first evaluated cycle of a start.
-fn no_plan() -> BTreeMap<String, IdlePlan> {
+pub(super) fn no_plan() -> BTreeMap<String, IdlePlan> {
     BTreeMap::new()
 }
 

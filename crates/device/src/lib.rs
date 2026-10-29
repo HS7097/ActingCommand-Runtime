@@ -19,6 +19,9 @@ mod tests {
     // Workflow #398 RD-2: the `adb track-devices` decoder (test row RD-2-T1).
     mod gate_398_rd2;
     mod gate_398_rd5a;
+    // EMU-BIND A and C (0.12.28): a Start's failed `info` read is no observation yet, and a
+    // failure carries the failing read's own text.
+    mod gate_emu_bind;
 }
 
 pub mod adb;

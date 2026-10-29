@@ -756,6 +756,11 @@ maximum of `restart_exit_wait_ms` (745 s).
 emu-watch (Alice's ruling 35; [emulator-control.md](emulator-control.md), "Emulator watch"): the
 watch reads its four keys at every tick, so an instruction changes them while the Runtime runs;
 `watch_enabled` false stops the polls (and so the watch's restarts) until it is true again.
+EMU-BIND (since 0.12.28): the watch's recognitions of a running emulator whose endpoint is pending
+or bound to another port, or bound to the reported port but unprepared (EMU-BIND fix 1, since
+0.12.28: the instance holds no `backend.selfcheck.*` fact), stop with the polls too, and
+`restart_attempts` within `restart_window_ms` bounds them as well, counted apart from the
+restarts (no new key).
 `actingd-config` revision 11 ([component-interfaces.md](component-interfaces.md)) adds the four
 keys; a file that names none of them keeps its revision.
 

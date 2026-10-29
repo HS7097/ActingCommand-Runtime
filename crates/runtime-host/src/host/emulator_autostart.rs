@@ -30,6 +30,23 @@
 //! restart that came while the woken instance's startup package waited in memory (behind a pause
 //! or an install hold) does not leave the game unstarted.
 //!
+//! EMU-BIND (0.12.28; production 10-29: after a reboot a configured start's readiness wait failed
+//! while its emulator came up, and the running emulator kept its endpoint pending for five
+//! hours): the watch requests the same claim, marked `recognize`, for an instance whose emulator
+//! runs with Android and an ADB port while the Runtime holds its endpoint pending or bound to
+//! another port. Its hold takes no network wait and no start turn; inside a blackout it holds on
+//! until the end. On its key the self-check's recognition (#411 A48) binds the reported port
+//! (`runtime.instance_bound`), awaits the ADB baseline and opens input and capture, and the hold
+//! then ends as after a start: the startup package takes the key through the gate, or the ladder
+//! a failed preparation admitted does. It never launches or stops an emulator. A watch claim or an
+//! idle wake's claim whose read finds the emulator so recognizes it the same way instead of
+//! ending as skipped. EMU-BIND fix 1 (0.12.28, review M1, L1, L2): the watch also requests it for
+//! an instance bound to the reported port but unprepared (`emulator_watch`); on its key, before
+//! the recognition, the claim reads the emulator status once more and ends as
+//! `emulator_autostart_skipped` (`watch_kind` `recognize` with the read's values, also a
+//! `device_state_observed` record) without closing, preparing or queueing anything when no
+//! recognition is needed any more; every end of a recognition carries `watch_kind` `recognize`.
+//!
 //! Once granted, the claim runs on its instance's worker and holds the key throughout. It reads
 //! the operating system's connectivity status (`actingcommand_host_metrics`, P3; the Runtime
 //! opens no connection and resolves no name) at once and every 5 s, for at most 600 s: internet
@@ -58,9 +75,11 @@
 //! as after every configured start. A claim granted before a blackout that then covers its
 //! instance holds without its Start until the end.
 
+use super::emulator_watch::WatchKind;
 use super::host_claims::{HostClaimWork, HostKey};
 use super::lease::HostClaim;
 use super::*;
+use crate::InstanceState;
 use crate::codes::{HostCode, HostLocation};
 use actingcommand_host_metrics::NetworkConnectivity;
 
@@ -191,6 +210,11 @@ pub(super) struct PendingAutostart {
     /// #405 O-2 (0.12.25, review M-1): an idle wake requested the claim (a `watch` claim): when it
     /// finds the emulator running, it still queues the instance's startup package.
     idle_wake: bool,
+    /// EMU-BIND (0.12.28): the watch requested the claim (a `watch` claim) to recognize a running
+    /// emulator whose endpoint the Runtime holds pending or bound to another port: it takes no
+    /// network wait and no start turn (`position` is unused) and never launches or stops the
+    /// emulator (`drive_recognition`).
+    recognize: bool,
 }
 
 /// Binds the configured aliases to registered physical instances at startup, in configuration
@@ -232,11 +256,27 @@ enum HoldEnd {
     Superseded,
     /// The instance already runs.
     Running,
+    /// EMU-BIND fix 1 (0.12.28, review L2): the recognition claim's read on its key found no
+    /// recognition needed any more (the instance bound to the reported port and prepared, or the
+    /// emulator not running with Android and a port): the read.
+    Unneeded(Box<InstanceState>),
     /// emu-watch: the watch's claim could not read the emulator status before its Start: the
     /// read's failure.
     Unread(Box<Outcome>),
     /// A renewal was refused (`lease_expired`, `lease_missing`).
     RenewalRefused(Box<RequestFailure>),
+}
+
+/// emu-watch: what the watch claim's status read just before its Start found.
+enum WatchRead {
+    /// No read (a daemon start's claim), or the emulator is stopped: the Start goes on.
+    Start,
+    /// The hold ends before the Start.
+    End(HoldEnd),
+    /// EMU-BIND (0.12.28): the emulator runs with Android and an ADB port while the Runtime holds
+    /// the endpoint pending or bound to another port: it is recognized instead of answered
+    /// skipped (a watch claim's or an idle wake's).
+    Recognize,
 }
 
 /// The network wait (P3).
@@ -289,6 +329,7 @@ impl HostShared {
                         position,
                         watch: false,
                         idle_wake: false,
+                        recognize: false,
                     },
                 )
                 .collect::<Vec<_>>()
@@ -347,6 +388,7 @@ impl HostShared {
             position,
             watch: true,
             idle_wake,
+            recognize: false,
         };
         self.autostart_turn(|turn| turn.enter(claim.position))?;
         match self.request_autostart_claim(&claim) {
@@ -363,6 +405,41 @@ impl HostShared {
                         .caused_by(failure.error.outcome()),
                 )
             }
+        }
+    }
+
+    /// EMU-BIND (0.12.28): one autostart claim, marked `watch` and `recognize`, for the instance
+    /// whose emulator the watch found running while the Runtime holds its endpoint pending or
+    /// bound to another port; it does not block and takes no start turn. `position` is the
+    /// instance's place in the configuration, if it names `start_emulator` (unused by the claim).
+    /// A claim the queue refuses is recorded by the queue and reported
+    /// (`emulator_autostart_failed`); only a failure the Runtime does not survive is returned.
+    pub(super) fn request_watch_recognition(
+        &self,
+        position: Option<usize>,
+        instance_id: InstanceId,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<()> {
+        let claim = PendingAutostart {
+            instance_id,
+            instance_alias: instance_alias.to_owned(),
+            position: position.unwrap_or(usize::MAX),
+            watch: true,
+            idle_wake: false,
+            recognize: true,
+        };
+        match self.request_autostart_claim(&claim) {
+            Ok(_) => Ok(()),
+            Err(failure) if failure.poison_runtime || failure.error.is_fatal() => {
+                Err(*failure.error)
+            }
+            // EMU-BIND fix 1 (0.12.28, review L1): the refusal names the recognition.
+            Err(failure) => self.report_emulator_autostart(
+                Outcome::new(HostCode::EmulatorAutostartFailed)
+                    .alias(instance_alias)
+                    .watch_kind(WatchKind::Recognize)
+                    .caused_by(failure.error.outcome()),
+            ),
         }
     }
 
@@ -442,6 +519,10 @@ impl HostShared {
         pending: &PendingAutostart,
         key: HostKey,
     ) -> RuntimeHostResult<()> {
+        // EMU-BIND: a recognition launches nothing, so it takes no start turn.
+        if pending.recognize {
+            return self.hold_recognition_claim(pending, key);
+        }
         let held = self
             .autostart_turn(|turn| turn.enter(pending.position))
             .and_then(|()| self.hold_autostart_claim(pending, key));
@@ -510,12 +591,77 @@ impl HostShared {
                 if let Some(end) = self.autostart_hold_ends(pending, &mut key)? {
                     return self.end_autostart_hold(pending, &key, end);
                 }
-                if let Some(end) = self.watch_start_unneeded(pending)? {
-                    return self.end_autostart_hold(pending, &key, end);
-                }
-                return self.drive_autostart(pending, key);
+                return match self.watch_start_unneeded(pending)? {
+                    WatchRead::Start => self.drive_autostart(pending, key),
+                    WatchRead::End(end) => self.end_autostart_hold(pending, &key, end),
+                    WatchRead::Recognize => self.drive_recognition(pending, key),
+                };
             }
             thread::sleep(AUTOSTART_TICK);
+        }
+    }
+
+    /// EMU-BIND (0.12.28): the hold of the watch's recognition claim, from the grant to the
+    /// recognition: the checks of every tick (a drain or a shutdown, the renewal, an operator
+    /// emulator control waiting on the instance), and inside a blackout of the instance it holds
+    /// on, renewing its key, until the blackout's end (Workflow #386 SR-4a3). No network wait and
+    /// no start turn: it launches nothing. A scheduling pause does not hold it. EMU-BIND fix 1
+    /// (0.12.28, review L2): just before the recognition, the check that one is still needed
+    /// (`recognition_unneeded`).
+    fn hold_recognition_claim(
+        &self,
+        pending: &PendingAutostart,
+        mut key: HostKey,
+    ) -> RuntimeHostResult<()> {
+        loop {
+            if let Some(end) = self.autostart_hold_ends(pending, &mut key)? {
+                return self.end_autostart_hold(pending, &key, end);
+            }
+            if self
+                .blackout_covering(pending.instance_id, &pending.instance_alias)?
+                .is_none()
+            {
+                return match self.recognition_unneeded(pending)? {
+                    None => self.drive_recognition(pending, key),
+                    Some(end) => self.end_autostart_hold(pending, &key, end),
+                };
+            }
+            thread::sleep(AUTOSTART_TICK);
+        }
+    }
+
+    /// EMU-BIND fix 1 (0.12.28, review L2: something may have bound and prepared the instance
+    /// between the poll and the grant, or during a blackout's hold, such as a person's start or
+    /// self-check): on the recognition claim's key, the emulator status read once more
+    /// (`MuMuManager info`, bounded; it starts nothing). `None` while a recognition is still
+    /// needed (`recognition_still_needed`); `Unneeded` with the read when it no longer is, so the
+    /// claim ends without closing the instance's session, preparing it or queueing a second
+    /// startup package; `Unread` with the read's failure.
+    fn recognition_unneeded(
+        &self,
+        pending: &PendingAutostart,
+    ) -> RuntimeHostResult<Option<HoldEnd>> {
+        match self
+            .execution()?
+            .read_emulator_instance_state(&pending.instance_alias)
+        {
+            Ok(state)
+                if self.recognition_still_needed(
+                    pending.instance_id,
+                    &pending.instance_alias,
+                    &state,
+                )? =>
+            {
+                Ok(None)
+            }
+            Ok(state) => Ok(Some(HoldEnd::Unneeded(Box::new(state)))),
+            Err(error) => Ok(Some(HoldEnd::Unread(Box::new(
+                self.emulator_watch_read_failure(
+                    &pending.instance_alias,
+                    HostLocation::RunEmulatorAutostart,
+                    error.to_string(),
+                ),
+            )))),
         }
     }
 
@@ -562,9 +708,14 @@ impl HostShared {
     }
 
     /// Ends a hold before its Start: the key is released, and one report line says why. A
-    /// refused renewal is the start's refusal pair. #405 O-2 (review M-1): an idle wake's claim
-    /// that found the emulator running first queues the instance's startup package
-    /// (`queue_idle_wake_startup_package`); a failure to queue it is the line's cause.
+    /// refused renewal is the start's refusal pair (EMU-BIND: a recognition's, which drives no
+    /// Start, is one connection-preparation `runtime.failed` record). #405 O-2 (review M-1): an
+    /// idle wake's claim that found the emulator running first queues the instance's startup
+    /// package (`queue_idle_wake_startup_package`); a failure to queue it is the line's cause.
+    /// EMU-BIND fix 1 (0.12.28, review L1): every line that ends a recognition carries
+    /// `watch_kind` `recognize`; review L2: a recognition found unneeded on its key is
+    /// `emulator_autostart_skipped` with the read's values, also a `device_state_observed` record
+    /// under the instance (`record_emulator_watch`), and prepares and queues nothing.
     fn end_autostart_hold(
         &self,
         pending: &PendingAutostart,
@@ -572,11 +723,30 @@ impl HostShared {
         end: HoldEnd,
     ) -> RuntimeHostResult<()> {
         let alias = pending.instance_alias.as_str();
+        let kind = |line: Outcome| {
+            if pending.recognize {
+                line.watch_kind(WatchKind::Recognize)
+            } else {
+                line
+            }
+        };
+        let mut recorded = false;
         let line = match end {
             HoldEnd::Interrupted => {
-                Outcome::new(HostCode::EmulatorAutostartInterrupted).alias(alias)
+                kind(Outcome::new(HostCode::EmulatorAutostartInterrupted).alias(alias))
             }
-            HoldEnd::Superseded => Outcome::new(HostCode::EmulatorAutostartSuperseded).alias(alias),
+            HoldEnd::Superseded => {
+                kind(Outcome::new(HostCode::EmulatorAutostartSuperseded).alias(alias))
+            }
+            HoldEnd::Unneeded(state) => {
+                recorded = true;
+                Outcome::new(HostCode::EmulatorAutostartSkipped)
+                    .alias(alias)
+                    .watch_kind(WatchKind::Recognize)
+                    .process_started(state.process_started)
+                    .android_started(state.android_started)
+                    .adb_port_present(state.adb_port.is_some())
+            }
             HoldEnd::Running if pending.idle_wake => {
                 match self.queue_idle_wake_startup_package(pending, key) {
                     Ok(()) => Outcome::new(HostCode::EmulatorAutostartSkipped).alias(alias),
@@ -589,21 +759,39 @@ impl HostShared {
                 }
             }
             HoldEnd::Running => Outcome::new(HostCode::EmulatorAutostartSkipped).alias(alias),
-            HoldEnd::Unread(cause) => Outcome::new(HostCode::EmulatorAutostartFailed)
-                .alias(alias)
-                .caused_by(*cause),
+            HoldEnd::Unread(cause) => kind(
+                Outcome::new(HostCode::EmulatorAutostartFailed)
+                    .alias(alias)
+                    .caused_by(*cause),
+            ),
             HoldEnd::RenewalRefused(refused) => {
                 let code = refused.error.projection().code;
                 let mut error =
                     RuntimeHostError::request(code, HostLocation::RunEmulatorAutostart, code);
                 error.lifecycle.instance_id = Some(pending.instance_id);
-                let failure = self.refuse_autostart(pending, key, error)?;
-                Outcome::new(HostCode::EmulatorAutostartFailed)
-                    .alias(alias)
-                    .caused_by(failure.error.outcome())
+                // EMU-BIND: a recognition drives no Start, so it records no start intent.
+                let cause = if pending.recognize {
+                    self.append_lifecycle_failure(
+                        RuntimeLifecycleFailureStage::ConnectionPreparation,
+                        RuntimeLifecycleFailure::Host(&error),
+                        self.autostart_links(pending, key)?,
+                        None,
+                    )?;
+                    error.outcome()
+                } else {
+                    self.refuse_autostart(pending, key, error)?.error.outcome()
+                };
+                kind(
+                    Outcome::new(HostCode::EmulatorAutostartFailed)
+                        .alias(alias)
+                        .caused_by(cause),
+                )
             }
         };
         self.release_host_key(key)?;
+        if recorded {
+            return self.record_emulator_watch(pending.instance_id, line);
+        }
         self.report_emulator_autostart(line)
     }
 
@@ -731,28 +919,136 @@ impl HostShared {
     /// emu-watch: before the Start of the watch's claim, the emulator status read once
     /// (`MuMuManager info`, bounded; it never starts anything): `Running` when the emulator
     /// process runs (a person or an operator control started it meanwhile), `Unread` when the
-    /// read fails, `None` (the Start goes on) when the emulator is stopped. A daemon start's claim
-    /// reads nothing here.
-    fn watch_start_unneeded(
-        &self,
-        pending: &PendingAutostart,
-    ) -> RuntimeHostResult<Option<HoldEnd>> {
+    /// read fails, `Start` when the emulator is stopped. A daemon start's claim reads nothing
+    /// here. EMU-BIND (0.12.28): `Recognize` instead of `Running` when the emulator runs with
+    /// Android and an ADB port while the Runtime holds the endpoint pending or bound to another
+    /// port (the gap a skipped watch or idle-wake claim left open).
+    fn watch_start_unneeded(&self, pending: &PendingAutostart) -> RuntimeHostResult<WatchRead> {
         if !pending.watch {
-            return Ok(None);
+            return Ok(WatchRead::Start);
         }
         match self
             .execution()?
             .read_emulator_instance_state(&pending.instance_alias)
         {
-            Ok(state) if state.process_started => Ok(Some(HoldEnd::Running)),
-            Ok(_) => Ok(None),
-            Err(error) => Ok(Some(HoldEnd::Unread(Box::new(
+            Ok(state) if self.needs_recognition(pending.instance_id, &state)? => {
+                Ok(WatchRead::Recognize)
+            }
+            Ok(state) if state.process_started => Ok(WatchRead::End(HoldEnd::Running)),
+            Ok(_) => Ok(WatchRead::Start),
+            Err(error) => Ok(WatchRead::End(HoldEnd::Unread(Box::new(
                 self.emulator_watch_read_failure(
                     &pending.instance_alias,
                     HostLocation::RunEmulatorAutostart,
                     error.to_string(),
                 ),
             )))),
+        }
+    }
+
+    /// EMU-BIND (0.12.28): the recognition of a running emulator on the claim's own `key`, which
+    /// never launches or stops it: the key renewed to the hold's TTL (a refusal ends the hold as
+    /// a recognition's), then `recognize_on_key`, then one report line:
+    /// `emulator_autostart_skipped` (`watch_kind` `recognize`) when the self-check passed,
+    /// `emulator_autostart_preparation_failed` (`watch_kind` `recognize`) when it did not (the
+    /// preparation recorded the failing step on this instance; a ladder it admitted holds the
+    /// key), or `emulator_autostart_failed` (`watch_kind` `recognize`, since 0.12.28) with the
+    /// failure that ended it. Only a failure the Runtime does not survive is returned.
+    fn drive_recognition(
+        &self,
+        pending: &PendingAutostart,
+        mut key: HostKey,
+    ) -> RuntimeHostResult<()> {
+        // EMU-BIND fix 1 (0.12.28, review L1): a recognition routed from a watch claim or an idle
+        // wake's ends as one too (its lines carry `watch_kind` `recognize`, and a refused renewal
+        // records no start intent: it drives no Start).
+        let routed;
+        let pending = if pending.recognize {
+            pending
+        } else {
+            routed = PendingAutostart {
+                recognize: true,
+                ..pending.clone()
+            };
+            &routed
+        };
+        let alias = pending.instance_alias.as_str();
+        if let Err(refused) = self.renew_host_key(&mut key, AUTOSTART_HOLD_TTL_MS) {
+            if refused.poison_runtime || refused.error.is_fatal() {
+                return Err(*refused.error);
+            }
+            return self.end_autostart_hold(
+                pending,
+                &key,
+                HoldEnd::RenewalRefused(Box::new(refused)),
+            );
+        }
+        let line = match self.recognize_on_key(pending, key) {
+            Ok(()) if self.backend_selfcheck_passed(pending.instance_id)? => {
+                Outcome::new(HostCode::EmulatorAutostartSkipped)
+                    .alias(alias)
+                    .watch_kind(WatchKind::Recognize)
+            }
+            Ok(()) => Outcome::new(HostCode::EmulatorAutostartPreparationFailed)
+                .alias(alias)
+                .watch_kind(WatchKind::Recognize),
+            Err(failure) if failure.poison_runtime || failure.error.is_fatal() => {
+                return Err(*failure.error);
+            }
+            Err(failure) => Outcome::new(HostCode::EmulatorAutostartFailed)
+                .alias(alias)
+                .watch_kind(WatchKind::Recognize)
+                .caused_by(failure.error.outcome()),
+        };
+        self.report_emulator_autostart(line)
+    }
+
+    /// EMU-BIND: on the claim's `key`, the preparation of a self-check (#411 A48,
+    /// `prepare_recognized_instance`: the emulator status read, the reported port bound with
+    /// `runtime.instance_bound`, the ADB baseline, `device.connected`, the opens), then the hold's
+    /// end as after a start (`end_emulator_control_hold`): once the endpoint is bound, the
+    /// instance's startup package is queued and takes the key through the gate, or waits behind
+    /// the ladder a failed preparation admitted; an endpoint still pending queues none and the key
+    /// goes to that ladder or is released. The error is a failure that ended the key.
+    fn recognize_on_key(
+        &self,
+        pending: &PendingAutostart,
+        key: HostKey,
+    ) -> Result<(), RequestFailure> {
+        let validated = key.request.validate().map_err(|_| {
+            RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
+                HostCode::HostKeyRequestInvalid,
+                HostLocation::RunEmulatorAutostart,
+                RuntimeErrorCode::RuntimeHalted,
+            ))
+        })?;
+        let links = self
+            .events
+            .request_links(&validated, Some(pending.instance_id), None, None);
+        let prepared = self
+            .prepare_recognized_instance(
+                &pending.instance_alias,
+                pending.instance_id,
+                links.clone(),
+                &key,
+            )
+            .and_then(|(_, ladder)| {
+                let resolved = self.resolve_instance(&pending.instance_alias)?;
+                let startup_package = if resolved.endpoint_pending() {
+                    None
+                } else {
+                    self.prepare_startup_package(&resolved, links, key.request.request_id())?
+                };
+                Ok((startup_package, ladder))
+            });
+        let ended = prepared.and_then(|(startup_package, ladder)| {
+            self.end_emulator_control_hold(&validated, &key, startup_package, ladder)
+        });
+        match ended {
+            Ok(_) => Ok(()),
+            Err(failure) => {
+                Err(self.cleanup_composite_failure(key.token, key.connection_id, failure))
+            }
         }
     }
 
