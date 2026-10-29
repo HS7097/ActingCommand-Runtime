@@ -74,6 +74,8 @@ pub struct NavigationPackageDescriptor {
     terminal_pages: Vec<String>,
     application_entry: bool,
     navigation_entry_pages: Option<Vec<String>>,
+    /// STORE-FG-1 (design-store-fg §8.1): its declared store operations that tap a fixed place.
+    store_fixed_taps: Vec<String>,
 }
 
 impl PreparedContainedTask {
@@ -94,6 +96,7 @@ impl PreparedContainedTask {
                     .map(|page| crate::canonical_page_anchor(game, page))
                     .collect()
             }),
+            store_fixed_taps: self.store_fixed_taps(),
         }
     }
 }
@@ -126,6 +129,12 @@ impl NavigationPackageDescriptor {
     /// `None` without a page entry.
     pub fn navigation_entry_pages(&self) -> Option<&[String]> {
         self.navigation_entry_pages.as_deref()
+    }
+    /// STORE-FG-1 (design-store-fg §8.1): the ids of its declared store operations whose click
+    /// taps a fixed place (`point`, `rect`, `specific_rect`) rather than a target located on the
+    /// frame, in declaration order; empty for a package without `store_update`.
+    pub fn store_fixed_taps(&self) -> &[String] {
+        &self.store_fixed_taps
     }
 }
 

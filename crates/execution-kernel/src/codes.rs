@@ -358,5 +358,18 @@ actingcommand_contract::outcome_vocabulary! {
         /// A confirmation's wait page is not one page of the package, or is a destination of its
         /// operation or an error page.
         WaitPageInvalid => "wait_page_invalid",
+        // STORE-FG-1 (since 0.12.29; design-store-fg §2.3, §2.4, §2.5, §3): the cross-checks of a
+        // control declaration's `store_update` (contracts/resource-declarations.md, "Store update
+        // packages"); the refused member is in `control.json`.
+        /// A store operation names no operation of the task, or one whose effect is no click
+        /// that draws a tap (`point`, `rect`, `specific_rect`, `target`, `target_center`,
+        /// `offset`), or one whose `from` is not one page of the package.
+        StoreOperationInvalid => "store_operation_invalid",
+        /// A store operation's proof target is no OCR target with an `expected` text, or does not
+        /// stand directly in the `required` list of the operation's `from` page.
+        StoreProofInvalid => "store_proof_invalid",
+        /// A store update package declares no `application` operation that launches or restarts
+        /// the assigned application.
+        StoreWayBackMissing => "store_way_back_missing",
     }
 }

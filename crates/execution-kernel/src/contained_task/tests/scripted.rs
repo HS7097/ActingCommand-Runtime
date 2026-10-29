@@ -26,6 +26,11 @@
 // Workflow #392 DA-2a: a frame may carry the geometry its producer recorded (`with_geometry`;
 // without one a fixture's), and the runtime may answer a game's display declaration
 // (`with_display_layout`; without one none).
+//
+// STORE-FG-1: it may perform the application effect (`with_application_effect`; without it the
+// effect is unsupported), each effect then counting as an input does for the script, and it keeps
+// the stores the kernel asked it to admit and the taps the kernel routed to a store, which count
+// as inputs too (a store it refuses, `refusing_store`, ends the run with that error).
 
 use super::super::*;
 use actingcommand_device::CaptureBackendName;
@@ -127,6 +132,11 @@ pub(crate) struct ScriptedRuntime {
     inputs: Vec<InputAction>,
     traces: Vec<ContainedTaskTrace>,
     display_layout: Option<StandardPackDisplayLayout>,
+    // STORE-FG-1.
+    applications: Option<Vec<ApplicationLifecycleAction>>,
+    store_admissions: Vec<String>,
+    store_inputs: Vec<(InputAction, String)>,
+    store_refusal: Option<&'static str>,
 }
 
 impl ScriptedRuntime {
@@ -154,7 +164,50 @@ impl ScriptedRuntime {
             inputs: Vec::new(),
             traces: Vec::new(),
             display_layout: None,
+            applications: None,
+            store_admissions: Vec::new(),
+            store_inputs: Vec::new(),
+            store_refusal: None,
         }
+    }
+
+    // The same device, performing the application effect; each effect moves the script on as an
+    // input does (STORE-FG-1).
+    pub(crate) fn with_application_effect(self) -> Self {
+        Self {
+            applications: Some(Vec::new()),
+            ..self
+        }
+    }
+
+    // The same device, refusing every store the kernel asks it to admit with `error`
+    // (STORE-FG-1).
+    pub(crate) fn refusing_store(self, error: &'static str) -> Self {
+        Self {
+            store_refusal: Some(error),
+            ..self
+        }
+    }
+
+    // The application effects the kernel asked for, in order (STORE-FG-1).
+    pub(crate) fn applications(&self) -> &[ApplicationLifecycleAction] {
+        self.applications.as_deref().unwrap_or_default()
+    }
+
+    // The stores the kernel asked the runtime to admit, in order (STORE-FG-1).
+    pub(crate) fn store_admissions(&self) -> &[String] {
+        &self.store_admissions
+    }
+
+    // The taps the kernel routed to a store and that store, in order (STORE-FG-1); each is also
+    // one of `inputs`.
+    pub(crate) fn store_inputs(&self) -> &[(InputAction, String)] {
+        &self.store_inputs
+    }
+
+    // How many effects (inputs and application effects) moved the script on.
+    fn effects(&self) -> usize {
+        self.inputs.len() + self.applications().len()
     }
 
     // The same device, its run under the game's display declaration `layout` (Workflow #392
@@ -244,7 +297,7 @@ impl ContainedTaskRuntime for ScriptedRuntime {
     type Error = &'static str;
 
     fn capture(&mut self) -> Result<ObservedFrame, Self::Error> {
-        let segment = self.inputs.len().min(self.screens.len() - 1);
+        let segment = self.effects().min(self.screens.len() - 1);
         let frames = &self.screens[segment];
         let shown = &mut self.shown[segment];
         let scripted = &frames[(*shown).min(frames.len() - 1)];
@@ -266,6 +319,42 @@ impl ContainedTaskRuntime for ScriptedRuntime {
         self.inputs.push(action);
         self.events.push(ScriptedEvent::Input);
         Ok(())
+    }
+
+    fn admit_store_foreground(&mut self, store_application_id: &str) -> Result<(), Self::Error> {
+        self.store_admissions.push(store_application_id.to_owned());
+        match self.store_refusal {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    fn store_input(
+        &mut self,
+        action: InputAction,
+        frame: Option<InputFrameContext>,
+        store_application_id: &str,
+    ) -> Result<(), Self::Error> {
+        self.store_inputs
+            .push((action.clone(), store_application_id.to_owned()));
+        self.input(action, frame)
+    }
+
+    fn supports_application_effect(&self) -> bool {
+        self.applications.is_some()
+    }
+
+    fn control_application(
+        &mut self,
+        action: ApplicationLifecycleAction,
+    ) -> Result<ApplicationEffectSupport, Self::Error> {
+        match self.applications.as_mut() {
+            Some(applications) => {
+                applications.push(action);
+                Ok(ApplicationEffectSupport::Performed)
+            }
+            None => Ok(ApplicationEffectSupport::Unsupported),
+        }
     }
 
     fn record(&mut self, trace: ContainedTaskTrace) -> Result<(), Self::Error> {

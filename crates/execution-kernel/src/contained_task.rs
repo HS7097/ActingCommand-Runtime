@@ -91,6 +91,8 @@ mod remedies;
 mod sample_retry;
 // #411 A43b: a wait on a still screen it cannot recognise is counted unpaced.
 mod still_wait;
+// STORE-FG-1: the admission cross-checks of a control declaration's `store_update`.
+mod store_steps;
 // Workflow #308 SEL-L3: the scan session engine.
 mod scan;
 mod selection;
@@ -188,6 +190,9 @@ mod gate_390_r10;
 // confirmation's wait page.
 #[cfg(test)]
 mod gate_411_b36;
+// STORE-FG-1: the `store_update` declaration, its admission and the routing of a store step's tap.
+#[cfg(test)]
+mod gate_store_fg1;
 
 // Workflow #387 D1c-G: a vision provider failure during a run is reported by its cause.
 #[cfg(test)]
@@ -2480,6 +2485,28 @@ pub trait ContainedTaskRuntime {
         frame: Option<InputFrameContext>,
     ) -> Result<(), Self::Error>;
 
+    /// STORE-FG-1 (design-store-fg §2.7): asked once, before any capture or input, at the start
+    /// of the own run of a package that declares `store_update` (never for a layer, a recovery
+    /// entry or a declared operation's run): whether this run may tap while the store application
+    /// `store_application_id` is in front. A refusal ends the run with the runtime's error. A
+    /// runtime without a foreground gate (offline simulation, fixtures) admits every store.
+    fn admit_store_foreground(&mut self, _store_application_id: &str) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    /// STORE-FG-1 (design-store-fg §2.7): the tap of a declared store operation of such a run, in
+    /// place of [`Self::input`]: it may land only while `store_application_id` is in front. Every
+    /// other input of every run stays [`Self::input`]. A runtime without a foreground gate makes
+    /// it as any input.
+    fn store_input(
+        &mut self,
+        action: InputAction,
+        frame: Option<InputFrameContext>,
+        _store_application_id: &str,
+    ) -> Result<(), Self::Error> {
+        self.input(action, frame)
+    }
+
     /// Slice #316-B3: launches, restarts or stops the application the instance is assigned,
     /// through the runtime's own application lifecycle path. A runtime without that surface
     /// (fixtures, offline runs, recovery entries) reports `Unsupported` and the interpreter
@@ -3021,6 +3048,8 @@ impl PreparedContainedTask {
         program.validate_when_targets(bundle.operation_path(), &evaluator)?;
         // #411 B16 part 1 and B22: keyed `on_max_runs` and `on_guard_refused`.
         program.validate_keyed_ends(&evaluator)?;
+        // STORE-FG-1: the store steps, their listing proof and the way back.
+        program.validate_store_operations(&control, &detector, &evaluator)?;
         selection::prepare_select_steps(&mut program, &control, &bundle, &evaluator)?;
         let admission_limit = control
             .step_timeout()
@@ -3190,9 +3219,31 @@ impl PreparedContainedTask {
         }
     }
 
-    /// A host-scheduled startup package publishes no instance resource facts.
+    /// STORE-FG-1 (design §2.3, §2.7): the store a tap goes to: the package's
+    /// `store_application_id` when the run routes store steps (`routing`: the package's own run),
+    /// `operation_label` is one of its declared store operations and the input is a plain `Tap`;
+    /// `None` for every other input, which keeps the assigned application's guard.
+    fn store_input_target(
+        &self,
+        routing: bool,
+        operation_label: &str,
+        action: &InputAction,
+    ) -> Option<&str> {
+        if !routing || !matches!(action, InputAction::Tap { .. }) {
+            return None;
+        }
+        self.control
+            .store_update
+            .as_ref()?
+            .store_for(operation_label)
+    }
+
+    /// A host-scheduled startup package publishes no instance resource facts. STORE-FG-1
+    /// (design §2.3): a store update package is no startup package and no ladder rung.
     pub fn startup_incompatibility(&self) -> Option<&'static str> {
-        if self.has_resource_readings() {
+        if self.control.store_update.is_some() {
+            Some(STORE_UPDATE)
+        } else if self.has_resource_readings() {
             Some("resource_readings")
         } else {
             self.has_resource_adjustments()
@@ -3450,7 +3501,12 @@ impl PreparedContainedTask {
     /// Workflow #336 L2b: the first declaration that keeps the package from running as a
     /// prerequisite package, or `None`.
     pub fn prerequisite_incompatibility(&self) -> Option<&'static str> {
-        if self.control.execution_mode == "recognize_only" {
+        if self.control.store_update.is_some() {
+            // STORE-FG-1 (design §2.3): a store update package is never a layer: no
+            // prerequisite, return-home, navigation edge, recovery chain, interrupt handler or
+            // `then.run` package, so no layer ever taps in the store.
+            Some(STORE_UPDATE)
+        } else if self.control.execution_mode == "recognize_only" {
             Some("recognize_only")
         } else if self.control.stability_termination.is_some()
             || self.program.stability_termination.is_some()
@@ -4531,6 +4587,16 @@ impl PreparedContainedTask {
             )
             .into());
         }
+        // STORE-FG-1 (design §2.3, §2.7): only the package's own run routes its declared store
+        // steps to the store, never a layer or a recovery entry (entry `BoundRecovery`) and never
+        // a declared operation's run (a Lab operation); it asks the runtime once, here, before any
+        // capture or input.
+        let store_routing = entry == ContainedTaskEntry::Ordinary && declared.is_none();
+        if store_routing && let Some(store_update) = &self.control.store_update {
+            runtime
+                .admit_store_foreground(&store_update.store_application_id)
+                .map_err(ContainedTaskRunError::operation::<R>)?;
+        }
         // Workflow #386 SR-1 (scheduling model §2.1 item 4): the pacing of the run's first
         // observations; every step takes its own at its start.
         let mut pacing = runtime
@@ -4555,6 +4621,7 @@ impl PreparedContainedTask {
                     capture_interval,
                     timing: observation_timing,
                     pacing,
+                    store_routing,
                 },
             );
         }
@@ -5288,9 +5355,17 @@ impl PreparedContainedTask {
                                     )
                                     .into());
                             }
-                            runtime
-                                .input(action, input_context)
-                                .map_err(ContainedTaskRunError::operation::<R>)?;
+                            // STORE-FG-1 (design §2.7): a declared store step's tap goes to the
+                            // store; every other input as before.
+                            let sent = match self.store_input_target(
+                                store_routing,
+                                &operation_id,
+                                &action,
+                            ) {
+                                Some(store) => runtime.store_input(action, input_context, store),
+                                None => runtime.input(action, input_context),
+                            };
+                            sent.map_err(ContainedTaskRunError::operation::<R>)?;
                         }
                         let boundary =
                             actingcommand_contract::TaskTimingBoundary::EffectCompletedRecord;
@@ -7824,14 +7899,46 @@ fn parse_task_control_declaration(
 ) -> Result<TaskControl, ContainedTaskError> {
     // Workflow #411 B15: `provides` is read apart, so its refusal names its rule.
     let provides = value.get("provides").map(remedies::parse_control_provides);
+    // STORE-FG-1: so is `store_update`.
+    let store_update = value.get("store_update").map(parse_store_update);
     let mut control: TaskControl = serde_json::from_value(value).map_err(|_| {
         ContainedTaskError::new(ExecutionKernelCode::ContainedTaskControlInvalid.code())
     })?;
     if let Some(provides) = provides {
         control.provides = provides?;
     }
+    if let Some(store_update) = store_update {
+        control.store_update = Some(store_update?);
+    }
     control.validate()?;
     Ok(control)
+}
+
+/// STORE-FG-1 (design §3): the reason of every `contained_task_control_invalid` refusal of the
+/// `store_update` member.
+const STORE_UPDATE_INVALID: &str = "store_update_invalid";
+/// STORE-FG-1 (design §2.3, §3): the token of a store update package's prerequisite and startup
+/// incompatibility (`reason=store_update` of the layer and startup refusals).
+const STORE_UPDATE: &str = "store_update";
+
+fn store_update_refusal() -> ContainedTaskError {
+    ContainedTaskError::with_detail(
+        ExecutionKernelCode::ContainedTaskControlInvalid.code(),
+        format!("reason={STORE_UPDATE_INVALID}"),
+    )
+}
+
+/// STORE-FG-1: the `store_update` member of a control declaration, read and checked by the
+/// member's own rules ([`actingcommand_contract::validate_store_update`]); a refusal is
+/// `contained_task_control_invalid` with `reason=store_update_invalid`.
+fn parse_store_update(
+    value: &serde_json::Value,
+) -> Result<actingcommand_contract::StoreUpdateDeclaration, ContainedTaskError> {
+    let declaration: actingcommand_contract::StoreUpdateDeclaration =
+        serde_json::from_value(value.clone()).map_err(|_| store_update_refusal())?;
+    actingcommand_contract::validate_store_update(&declaration)
+        .map_err(|_| store_update_refusal())?;
+    Ok(declaration)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -7867,6 +7974,11 @@ struct TaskControl {
     /// the other members ([`parse_task_control_declaration`]).
     #[serde(skip)]
     provides: Vec<actingcommand_contract::ProvidedCapability>,
+    /// STORE-FG-1 (design §2): the store application the package's declared store steps tap in,
+    /// and those steps; `None` for every other package. Read and checked apart from the other
+    /// members ([`parse_task_control_declaration`]).
+    #[serde(skip)]
+    store_update: Option<actingcommand_contract::StoreUpdateDeclaration>,
 }
 
 /// Workflow #336 L2b: a `prerequisite_package_id` is not empty, at most 256 bytes and has no
@@ -7980,6 +8092,15 @@ impl TaskControl {
             if prerequisite == self.package_id {
                 return Err(invalid(SharedCode::PrerequisiteSelf.as_str()));
             }
+        }
+        // STORE-FG-1 (design §2.3): a store update package is a page graph or a step plan.
+        if self.store_update.is_some()
+            && !matches!(
+                self.execution_mode.as_str(),
+                linear::LINEAR_STEPS | "navigable_route"
+            )
+        {
+            return Err(store_update_refusal());
         }
         Ok(())
     }

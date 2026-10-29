@@ -50,6 +50,12 @@ const STAGE: &str = "neutral.test.stage";
 const BAD: &str = "neutral.test.bad";
 // Workflow #411 B35: a pack that declares the shared interrupt page `notice` and is no handler.
 const OWN_NOTICE: &str = "neutral.test.own_notice";
+// STORE-FG-1: two packs that declare `store_update`, a made-up store application, and the
+// warning of a store step that taps a fixed place.
+const STORE_POINT: &str = "neutral.test.store_point";
+const STORE_RECT: &str = "neutral.test.store_rect";
+const STORE_APPLICATION: &str = "test.store.alpha";
+const STORE_TAP_UNLOCATED: &str = "package_bundle_store_tap_unlocated";
 
 const NAVIGATION_PACKAGE_INVALID: &str = "package_bundle_navigation_package_invalid";
 const ENTRY_PAGE_UNLISTED: &str = "package_bundle_entry_page_unlisted";
@@ -74,6 +80,11 @@ struct Pack {
     target: &'static str,
     operations: Vec<(&'static str, &'static str, &'static str)>,
     width: u32,
+    // STORE-FG-1: with a click kind (`point` or `rect`), the pack declares `store_update`: its
+    // first operation is its store step, tapping with that kind and proved by the OCR target
+    // `store_title` its page requires, and an `application` restart from its target page back to
+    // its entry page is its way back.
+    store: Option<&'static str>,
 }
 
 // A `navigable_route` pack from `entry` to `target`.
@@ -91,6 +102,7 @@ fn graph(
         target,
         operations: operations.to_vec(),
         width: 16,
+        store: None,
     }
 }
 
@@ -133,7 +145,7 @@ impl Pack {
         if let Some(prerequisite) = self.prerequisite {
             control["prerequisite_package_id"] = json!(prerequisite);
         }
-        let task = json!({
+        let mut task = json!({
             "schema_version": "0.9",
             "task_id": "task",
             "game": GAME,
@@ -169,6 +181,36 @@ impl Pack {
                 }))
                 .collect::<Vec<_>>()
         });
+        if let Some(kind) = self.store {
+            let (store_step, store_page, _) = self.operations[0];
+            control["store_update"] = json!({
+                "store_application_id": STORE_APPLICATION,
+                "store_operations": [{"operation": store_step, "proof": ["store_title"]}]
+            });
+            task["ocr_targets"] = json!([{
+                "id": "store_title",
+                "region": {"mode": "rect", "rect": {"x": 0, "y": 0, "width": 4, "height": 2}},
+                "languages": ["en"], "timeout_ms": 1000, "match_mode": "contains",
+                "expected": ["Neutral listing", "Neutral store page"], "case_sensitive": false,
+                "minimum_confidence": 0.8, "model_ref": "PP-OCRv6_medium",
+                "model_sha256": "a".repeat(64)
+            }]);
+            task["page_rules"][store_page]["required"] =
+                json!([format!("{store_page}_colour"), "store_title"]);
+            task["operations"][0]["click"] = if kind == "rect" {
+                json!({"kind": "rect", "x": 0, "y": 0, "width": 2, "height": 2})
+            } else {
+                json!({"kind": "point", "x": 1, "y": 0})
+            };
+            if let Some(operations) = task["operations"].as_array_mut() {
+                operations.push(json!({
+                    "id": "way_back",
+                    "from": self.target,
+                    "to": self.entry,
+                    "application": {"action": "restart"}
+                }));
+            }
+        }
         for (path, value) in [
             ("control.json", control),
             (
@@ -919,4 +961,161 @@ fn b35_no_overlap_or_no_shared_interrupts_gives_no_warning() {
             checked.warnings
         );
     }
+}
+
+// ---- STORE-FG-1.
+
+// STORE-FG-1 T12 (design-store-fg §2.3, §5 row T12): a pack that declares `store_update` is never
+// a layer, so as a navigation edge, a recovery chain step or an interrupt handler it is refused
+// with `package_bundle_navigation_package_invalid`, `role_ineligible`, by `package bundle` and by
+// the check of the installed root alike, as the Runtime refuses it
+// (`contained_task_navigation_package_invalid`).
+#[test]
+fn store_fg1_t12_a_store_update_pack_is_refused_as_an_edge_a_chain_step_or_a_handler() {
+    let cases: [(&str, Arrange, &str, &str); 3] = [
+        (
+            "an edge whose package declares store_update",
+            |root| {
+                root.with(Pack {
+                    store: Some("point"),
+                    ..graph(HOME_TO_SHOP, "home", "shop", &[("go", "home", "shop")])
+                })
+            },
+            HOME_TO_SHOP,
+            "edge",
+        ),
+        (
+            "a recovery chain step that declares store_update",
+            |root| {
+                root.with(Pack {
+                    store: Some("point"),
+                    ..graph(RETURN_HOME, "shop", "home", &[("back", "shop", "home")])
+                })
+            },
+            RETURN_HOME,
+            "chain",
+        ),
+        (
+            "a handler that declares store_update",
+            |root| {
+                root.with(Pack {
+                    store: Some("point"),
+                    ..graph(
+                        CLOSE_NOTICE,
+                        "notice",
+                        "home",
+                        &[("close", "notice", "home")],
+                    )
+                })
+            },
+            CLOSE_NOTICE,
+            "handler",
+        ),
+    ];
+    for (case, arrange, package_id, role) in cases {
+        let expected = json!({
+            "package_id": package_id,
+            "navigation_role": role,
+            "navigation_problem": "role_ineligible"
+        });
+
+        let (_temp, request, result) = bundle(&arrange(valid()));
+        let error = result.expect_err(case);
+        let (code, values) = refusal(&error);
+        assert_eq!(
+            code, NAVIGATION_PACKAGE_INVALID,
+            "{case}: {}",
+            error.message
+        );
+        assert_eq!(values, expected, "{case}: package bundle");
+        assert!(!request.out.exists(), "{case}: --out was written");
+
+        let (_temp, game_root) = installed(&arrange(valid()), &[]);
+        let error = check(&game_root).expect_err(case);
+        let (code, values) = refusal(&error);
+        assert_eq!(
+            code, NAVIGATION_PACKAGE_INVALID,
+            "{case}: {}",
+            error.message
+        );
+        assert_eq!(values, expected, "{case}: standard-pack check");
+    }
+}
+
+// Each `package_bundle_store_tap_unlocated` of `warnings`: its package and its operation. Each one
+// is a warning.
+fn unlocated(warnings: &[Outcome]) -> Vec<(Value, Value)> {
+    warnings
+        .iter()
+        .filter(|warning| warning.code().as_str() == STORE_TAP_UNLOCATED)
+        .map(|warning| {
+            assert_eq!(warning.category(), Category::Warning, "{warning:?}");
+            (
+                warning.value("package_id").cloned().unwrap_or(Value::Null),
+                warning
+                    .value("pack_operation_id")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            )
+        })
+        .collect()
+}
+
+// STORE-FG-1 §8.1 (the resource side's field note 1: the store's button moves between devices):
+// a store step that taps with `point` or `rect` gets one `package_bundle_store_tap_unlocated`,
+// naming the pack and the step, from `package bundle` and from the check of the installed root
+// alike, in registry order; both still pass, and no pack without `store_update` is reported.
+#[test]
+fn store_fg1_s8_1_a_store_step_tapping_a_point_or_a_rect_gets_one_warning() {
+    let root = valid()
+        .with(Pack {
+            store: Some("point"),
+            ..graph(
+                STORE_POINT,
+                "home",
+                "shop",
+                &[("tap_update", "home", "shop")],
+            )
+        })
+        .with(Pack {
+            store: Some("rect"),
+            ..graph(
+                STORE_RECT,
+                "home",
+                "shop",
+                &[("tap_update", "home", "shop")],
+            )
+        });
+    let expected = vec![
+        (json!(STORE_POINT), json!("tap_update")),
+        (json!(STORE_RECT), json!("tap_update")),
+    ];
+
+    let (_temp, request, result) = bundle(&root);
+    let response = result.unwrap_or_else(|error| panic!("{}: {}", error.code, error.message));
+    assert_eq!(response.status, "written");
+    assert!(
+        request.out.join("bundle.json").is_file(),
+        "--out was not written"
+    );
+    assert_eq!(unlocated(&response.warnings), expected, "package bundle");
+
+    let (_temp, game_root) = installed(&root, &[]);
+    let checked =
+        check(&game_root).unwrap_or_else(|error| panic!("{}: {}", error.code, error.message));
+    assert_eq!(checked.status, "checked");
+    assert_eq!(
+        unlocated(&checked.warnings),
+        expected,
+        "standard-pack check"
+    );
+
+    let (_temp, game_root) = installed(&valid(), &[]);
+    let checked =
+        check(&game_root).unwrap_or_else(|error| panic!("{}: {}", error.code, error.message));
+    assert!(
+        unlocated(&checked.warnings).is_empty(),
+        "no store update pack: {:?}",
+        checked.warnings
+    );
 }
