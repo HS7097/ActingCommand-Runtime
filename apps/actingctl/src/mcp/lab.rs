@@ -1266,8 +1266,15 @@ fn refuse_operation_conflicts(arguments: &Map<String, Value>) -> Result<(), Tool
 /// element id): `arguments_invalid {argument: tap, argument_problem: conflicting}`, before the
 /// install is located and before any child runs; #411 Lab L1: so is a destructive guard argument
 /// with capture and without dry_run; #412 Lab B-3 S2: so is `operation` with an argument it does
-/// not read, or without capture.
+/// not read, or without capture. #411 A27 (P58): each such refusal carries a `req_id`
+/// ([`with_refusal_req_id`]).
 pub(super) fn act(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
+    refuse_do_before_child(arguments).map_err(with_refusal_req_id)?;
+    author(context, arguments, &DO, "ac_lab_do")
+}
+
+/// The refusals ac_lab_do gives itself, before the install is located and before any child runs.
+fn refuse_do_before_child(arguments: &Map<String, Value>) -> Result<(), ToolError> {
     command_line(&DO, arguments)?;
     if arguments.get("target").and_then(Value::as_str) == Some("tap") && given(arguments, "tap") {
         return Err(invalid_argument("tap", ArgumentProblem::Conflicting));
@@ -1275,8 +1282,21 @@ pub(super) fn act(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> 
     refuse_operation_conflicts(arguments)?;
     refuse_destructive_guard_on_capture(arguments)?;
     refuse_samples_without_scene(arguments)?;
-    require_locator(arguments)?;
-    author(context, arguments, &DO, "ac_lab_do")
+    require_locator(arguments)
+}
+
+/// #411 A27 (P58): an `arguments_invalid` refusal ac_lab_do gives before actinglab runs carries a
+/// `req_id`, issued here as actinglab issues its own (`req-<generation>-<n>`), so the refusal can
+/// be named like every Lab answer. No Lab request exists under it: nothing is recorded (no
+/// `client.action`, no Runtime record).
+fn with_refusal_req_id(error: ToolError) -> ToolError {
+    if !error.is(ActingctlCode::ArgumentsInvalid) {
+        return error;
+    }
+    let req_id = actingcommand_ledger::IdIssuer::new()
+        .issue(actingcommand_ledger::IdKind::Req)
+        .value;
+    error.with(|outcome| outcome.req_id(req_id.as_str()))
 }
 
 pub(super) fn record_start(

@@ -507,6 +507,8 @@ pub(super) fn project(
             "frame_path",
             "candidate_sets",
             "candidate_coverage",
+            // #411 B47: the layouts offline `observe` could not project, and why.
+            "candidate_not_projected",
             "recognition_coverage",
             "ocr",
         ]
@@ -899,6 +901,11 @@ mod gate_406_t4;
 // that holds its model and fills the values of every target it evaluated, as online.
 #[cfg(test)]
 mod gate_lab_l6;
+
+// #411 A62 (P57, 0.12.28 LAB-SMALL): `observe --targets` names where a `target_center` click on
+// each target lands.
+#[cfg(test)]
+mod gate_411_p57;
 
 #[cfg(test)]
 mod lab3_tests {

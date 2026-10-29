@@ -733,7 +733,7 @@ tests = [
 ]
 incident = ["#411 A7"]
 
-# #411 A8, A14 (v0.12.1-rc.2; register §1.100 A8-1, A14-1; related keys 41, 43): MCP ac_lab_do and ac_lab_observe with capture, without dry_run and with neither package nor zip answer arguments_invalid {argument: package, argument_problem: required} (class usage) before the install is located and before any actinglab child runs; with package or zip, without capture, or with dry_run the package check lets the call through; ac_lab_do with target tap and tap answers arguments_invalid {argument: tap, argument_problem: conflicting} (class usage), equally before any child
+# #411 A8, A14 (v0.12.1-rc.2; register §1.100 A8-1, A14-1; related keys 41, 43): MCP ac_lab_do and ac_lab_observe with capture, without dry_run and with neither package nor zip answer arguments_invalid {argument: package, argument_problem: required} (class usage) before the install is located and before any actinglab child runs; with package or zip, without capture, or with dry_run the package check lets the call through; ac_lab_do with target tap and tap answers arguments_invalid {argument: tap, argument_problem: conflicting} (class usage), equally before any child; #411 A27 (0.12.28 LAB-SMALL P58): that refusal carries a req_id this server issued in actinglab's form (req-<16 hex digits>-<n>), shown in the answer
 [[gate]]
 key = "73"
 coverage = "Y"
@@ -742,8 +742,9 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_rc2_a8::a8_ac_lab_observe_with_capture_and_no_package_is_refused_the_same",
     "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_rc2_a8::a8_a_locator_no_capture_or_dry_run_passes_the_package_check",
     "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_rc2_a8::a14_ac_lab_do_with_target_tap_and_tap_is_arguments_invalid_naming_tap",
+    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_rc2_a8::p58_ac_lab_do_target_tap_with_coordinates_is_refused_with_a_req_id",
 ]
-incident = ["#411 A8", "#411 A14"]
+incident = ["#411 A8", "#411 A14", "#411 A27"]
 
 # #411 Lab L1 (v0.12.x; register §1.118, no persisted ledger shape; G7; related: exec 96, apps 73): MCP ac_lab_do no longer takes priority, lease_id, no_wait, recovery_timeout_ms or recovery_poll_ms, nor ac_lab_observe require_fresh, so a call naming one answers arguments_invalid {argument, argument_problem: unknown} (class usage) before the install is located and before any actinglab child runs; ac_lab_do with capture true and dry_run not true setting destructive or allow_destructive answers arguments_invalid {argument, argument_problem: conflicting} equally before any child; offline (scene), with dry_run, or with both guard arguments false the call passes MCP's own checks
 [[gate]]
