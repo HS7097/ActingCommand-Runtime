@@ -220,9 +220,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.11.6",
-      "description": "A start could not settle a scheduled run: the host's recovery or the ledger refused its settlement (failure_code is the refusal's code). The start carries on: the run's dispatch stays open, out of the active workloads, and the run's instance is paused with this code as the pause reason, so no new dispatch meets the open one. Recorded once per start, under the run's links, which carry the run id; lease_id is present when the dispatch has one lease grant.",
-      "common_causes": "A run whose recorded facts do not fit any settlement the Runtime knows, for example a ledger written by a defect in an earlier version.",
-      "handling": "Report it with the run id and failure_code: the open dispatch needs a fix in the Runtime. After looking, lift the instance's scheduling pause (resume scheduling for the instance) to let other tasks dispatch there again; the open dispatch itself stays open until a version that can settle it starts."
+      "description": "A start could not settle a scheduled run: the host's recovery or the ledger refused its settlement (failure_code is the refusal's code). The start carries on: the run's dispatch stays open, out of the active workloads, and the run's instance is paused with this code as the pause reason, so no new dispatch meets the open one. Recorded at the first start that meets the run, under the run's links, which carry the run id; lease_id is present when the dispatch has one lease grant. A later start that refuses the same run finds this record by the run's links and records policy_settlement_dispatch_left_open instead, without a pause (0.12.28). When that start could not read the run's records (the ledger did not answer the read in time, or stopped it at its read budget), it records this code again and pauses the instance again; the read's failure is a note link.",
+      "common_causes": "A run whose recorded facts do not fit any settlement the Runtime knows, for example a ledger written by a defect in an earlier version, or a run cut by a stop after it wrote its own lease release but before its terminal.",
+      "handling": "Report it with the run id and failure_code: the open dispatch needs a fix in the Runtime. Only the first start that meets the run pauses the instance: look at the instance's screen once, then lift the instance's scheduling pause (resume scheduling for the instance) to let other tasks dispatch there again. Later starts do not pause it again for this run. With a note link (the run's earlier records could not be read), check the run id: a run already recorded before needs no new look, and the pause can be lifted. The open dispatch itself stays open until a version that can settle it starts."
     },
     "policy_settlement_release_recovered": {
       "category": "info",
@@ -254,6 +254,7 @@
       "layer": "host",
       "uncertain": false,
       "values": {
+        "failure_code": "optional",
         "instance_id": "required",
         "lease_id": "optional",
         "task_id": "required",
@@ -266,9 +267,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.11.6",
-      "description": "After a start's reconciliation, a scheduled dispatch (its task's procedure is one the policy driver runs as a scheduled run) still has no outcome. The start settles every scheduled dispatch it can; this one stays open, and a later dispatch on its instance may be refused as a conflict. Recorded once per start, under the run's links, which carry the run id; lease_id is present when the dispatch has one lease grant.",
-      "common_causes": "The run's instance is no longer in the configuration, or the run's lease ended in more than one way (for example two transfers).",
-      "handling": "Report it with the run id: the open dispatch needs a fix in the Runtime. When the instance was removed from the configuration, adding it back lets the next start settle the run."
+      "description": "After a start's reconciliation, a scheduled dispatch (its task's procedure is one the policy driver runs as a scheduled run) still has no outcome. The start settles every scheduled dispatch it can; this one stays open, and a later dispatch on its instance may be refused as a conflict. Recorded once per start, under the run's links, which carry the run id; lease_id is present when the dispatch has one lease grant. Since 0.12.28 a start also records it, with failure_code (the refusal's code) and the operation hold_unsettled_dispatches, for a run whose settlement it refused again although an earlier start already recorded policy_settlement_dispatch_unsettled for it: that start held the instance once, so this one does not pause it again, and a pause still in place stays as it is.",
+      "common_causes": "The run's instance is no longer in the configuration, or the run's lease ended in more than one way (for example two transfers). With failure_code: a run an earlier start could not settle either, recorded and held then (policy_settlement_dispatch_unsettled).",
+      "handling": "Report it with the run id: the open dispatch needs a fix in the Runtime. When the instance was removed from the configuration, adding it back lets the next start settle the run. With failure_code, the instance was held once already; no new look at the screen is needed for this run."
     },
     "proposal_report_unavailable": {
       "category": "error",
@@ -26743,6 +26744,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: read unsettled dispatch instance."
+    },
+    "read_unsettled_dispatch_records": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.28",
+      "description": "A Runtime host operation (UNSET-1): a start's read, by the run's links, of whether the run of a dispatch it could not settle already holds a policy_settlement_dispatch_unsettled record from an earlier start; it reads the run's runtime.failed records up to the first such record, never a type's history."
     },
     "rebind_instance_endpoint": {
       "owner": "runtime-host",

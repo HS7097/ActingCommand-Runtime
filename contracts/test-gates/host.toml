@@ -661,6 +661,16 @@ tests = [
 ]
 incident = ["#386"]
 
+# UNSET-1 (0.12.28; register §1.158 UNSET-1; brief rd-1029/brief-unset1.md; production v0.12.26 on 10-29 05:24, investigation rd-1029/inv-reboot/ak.md: a run cut by the 10-26 stop, which the start can never settle, paused its instance again at every start): the first start that cannot settle a run records policy_settlement_dispatch_unsettled (Error) and pauses its instance, as before; after a person lifted that pause, a later start that refuses the same run records policy_settlement_dispatch_left_open (Warning) with the refusal as failure_code, no second Error, and does not pause the instance; with the first pause still in place it adds no second pause; when its read of the run's earlier records is not answered within the writer's reply limit it holds as before, and the Error's note link is the read's failure
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::policy_admission::unset1_a_later_start_after_the_lifted_hold_records_left_open_without_a_pause",
+    "actingcommand-runtime-host::lib::tests::policy_admission::unset1_a_later_start_under_the_first_pause_adds_no_second_pause",
+    "actingcommand-runtime-host::lib::tests::policy_admission::unset1_a_failed_read_of_the_run_records_holds_as_before_and_says_why",
+]
+incident = ["#369 E3"]
+
 # A latched host answers a later request by its condition (runtime_halted over an error condition, a fatal condition as itself); a start reports its ledger open as ledger_opened and a released previous owner as owner_released; catalog_activation_not_newer names both generations; owner_resource_unconfirmed carries the previous owner's pid and probe state (Workflow #378 A6a)
 [[gate]]
 key = "65"
