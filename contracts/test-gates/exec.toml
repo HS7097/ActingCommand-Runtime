@@ -981,13 +981,16 @@ tests = [
 ]
 incident = ["#396"]
 
-# Workflow #411 A58, #428 CFL-1: recognition preprocessing. Every step kind turns a small region into its golden bytes and evidence (keep_colors with its per-channel tolerance, keep_range in RGB and in HSV on the 0-179 hue scale, gray, contrast, threshold, invert); an HSV hue range whose lower is above its upper wraps through 0; Otsu splits between two peaks, takes the smallest tied threshold and zeroes a region of one value; a gray chain gives the scene's gray byte for byte; the same region and chain give the same bytes twice; only the twelve chains of the two shapes are accepted, and a refusal names its step and member (step count, first step, order, repetition, colors, hue, bounds, contrast, threshold)
+# Workflow #411 A58, #428 CFL-1: recognition preprocessing. Every step kind turns a small region into its golden bytes and evidence (keep_colors with its per-channel tolerance, keep_range in RGB and in HSV on the 0-179 hue scale with (255,0,8) at 179, gray, contrast, threshold, invert; kept_milli counted before invert, and inverted); an HSV hue range whose lower is above its upper wraps through 0; Otsu splits between two peaks, takes the smallest tied threshold and zeroes a region of one value; the remainder decides between two splits of the same quotient (0 0 0 1 1 1 2 4 gives 3); apply accepts a 720p region and one of 2^24 pixels, the domain check accepts up to 2^24 pixels, and apply refuses a larger region (RegionTooLarge); a gray chain gives the scene's gray byte for byte; the same region and chain give the same bytes twice; only the twelve chains of the two shapes are accepted, and a refusal names its step and member (step count, first step, order, repetition, colors, hue, bounds, contrast, threshold)
 [[gate]]
 coverage = "Y"
 tests = [
     "actingcommand-recognition::lib::preprocess::tests::each_step_kind_turns_a_small_region_into_its_golden_bytes",
     "actingcommand-recognition::lib::preprocess::tests::an_hsv_hue_range_whose_lower_is_above_its_upper_wraps_through_0",
     "actingcommand-recognition::lib::preprocess::tests::otsu_splits_between_two_peaks_takes_the_smallest_tie_and_zeroes_a_flat_region",
+    "actingcommand-recognition::lib::preprocess::tests::otsu_lets_the_remainder_decide_between_equal_quotients",
+    "actingcommand-recognition::lib::preprocess::tests::apply_accepts_a_720p_region_and_a_region_of_2_24_pixels",
+    "actingcommand-recognition::lib::preprocess::tests::the_domain_accepts_up_to_2_24_pixels_and_apply_refuses_a_larger_region",
     "actingcommand-recognition::lib::preprocess::tests::a_gray_chain_gives_the_scene_gray_byte_for_byte",
     "actingcommand-recognition::lib::preprocess::tests::the_same_region_and_chain_give_the_same_bytes_and_evidence_twice",
     "actingcommand-recognition::lib::preprocess::tests::only_the_two_chain_shapes_are_accepted_and_a_refusal_names_the_step",

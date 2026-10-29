@@ -28,8 +28,9 @@ pub use exact_score::{
     ExactScoreMap, RegionSpectra, ScaledMatch, ScaledScoreMaps, ScaledSelection, score_milli,
 };
 pub use preprocess::{
-    ColorSpace, Preprocess, PreprocessError, PreprocessErrorReason, PreprocessEvidence,
-    PreprocessKind, PreprocessOutput, PreprocessStep, ThresholdValue,
+    ColorSpace, PREPROCESS_ALGORITHM, Preprocess, PreprocessApplyError, PreprocessError,
+    PreprocessErrorReason, PreprocessEvidence, PreprocessKind, PreprocessOutput, PreprocessStep,
+    ThresholdValue,
 };
 pub use window_luma::{LumaRatios, LumaReference};
 

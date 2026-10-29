@@ -12,22 +12,32 @@
 //! A kept pixel becomes 255 and every other pixel 0; `invert` flips them. Every step except `gray`
 //! is integer arithmetic. `gray` is the gray every template search reads (the [`Scene`]'s), so a
 //! `[gray]` chain gives the scene's gray byte for byte. The chain is a pure function of the pixels
-//! and the declaration: the same region and chain always give the same bytes and evidence.
-//! `contracts/recognition-preprocess.md` spells out the arithmetic, the evidence and the refusals.
+//! and the declaration: the same region and chain always give the same bytes and evidence. A
+//! region has 1 to [`MAX_REGION_PIXELS`] pixels, the domain in which Otsu's exact comparison is
+//! proven to fit `u128`. `contracts/recognition-preprocess.md` spells out the arithmetic, its
+//! bound, the evidence and the refusals.
 
 use super::{RecognitionError, RecognitionResult, Rect, Scene, validate_rect};
 use image::{DynamicImage, GrayImage, RgbImage, imageops};
 use std::error::Error;
 use std::fmt;
 
+/// The version of the arithmetic of every step (contract, "Arithmetic"). A change to the output
+/// bytes of any step raises it, with a row in the register.
+pub const PREPROCESS_ALGORITHM: &str = "preprocess.v1";
 /// The most steps a chain holds (`gray`, `contrast`, `threshold`, `invert`).
 pub const MAX_STEPS: usize = 4;
 /// The most colors one `keep_colors` step lists.
 pub const MAX_COLORS: usize = 8;
+/// The most pixels a region may have: 2^24 (4096 x 4096, which holds 3840 x 2160). Within it the
+/// widest intermediate of Otsu's exact comparison has 108 bits (contract, "The region domain and
+/// Otsu's bound"). The limit belongs to the algorithm, as the step and color limits do, and is no
+/// configuration.
+pub const MAX_REGION_PIXELS: u64 = 16_777_216;
 /// The largest hue of the HSV scale (the OpenCV 8-bit scale: degrees halved, 0 to 179).
 pub const HUE_MAX: u8 = 179;
-/// A processed pixel of at least this value counts as foreground in `foreground_milli`.
-pub const FOREGROUND_MIN: u8 = 128;
+/// A value of at least this before `invert` counts as kept in `kept_milli`.
+pub const KEPT_MIN: u8 = 128;
 /// The declared `value` of a `threshold` step that computes its threshold from the region.
 pub const OTSU: &str = "otsu";
 
@@ -172,7 +182,8 @@ impl PreprocessStep {
 }
 
 /// A chain that holds the syntax: one of the two shapes, at most [`MAX_STEPS`] steps, every
-/// member in its range. Two chains are the same exactly when their steps are equal.
+/// member in its range. Two chains are the same exactly when their steps are equal; the colors of
+/// `keep_colors` compare in their declared order.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Preprocess {
     steps: Vec<PreprocessStep>,
@@ -189,11 +200,67 @@ pub struct PreprocessOutput {
 /// The evidence of one application, for read-only and Lab output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PreprocessEvidence {
-    /// The share of processed pixels of at least [`FOREGROUND_MIN`], in thousandths, rounded down.
-    pub foreground_milli: u32,
+    /// The share of pixels of at least [`KEPT_MIN`] **before** `invert`, in thousandths, rounded
+    /// down: the kept share after a color keep or a threshold, the light share of a gray chain
+    /// without one.
+    pub kept_milli: u32,
+    /// Whether the chain has `invert` (its last step).
+    pub inverted: bool,
     /// The threshold the `threshold` step used (Otsu's, as computed); `None` without a `threshold`
     /// step and for Otsu on a region of one value.
     pub threshold_value: Option<u8>,
+}
+
+/// Why [`Preprocess::apply`] refused a region or failed on it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PreprocessApplyError {
+    /// The region has no pixel.
+    EmptyRegion { width: u32, height: u32 },
+    /// The region has more than [`MAX_REGION_PIXELS`] pixels, outside the domain of the arithmetic.
+    RegionTooLarge { width: u32, height: u32 },
+    /// A check that holds for every chain [`Preprocess::new`] accepted, on a region of the domain,
+    /// failed. Reported, never a panic.
+    Internal { detail: String },
+}
+
+impl fmt::Display for PreprocessApplyError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptyRegion { width, height } => write!(
+                formatter,
+                "preprocessing needs a region of at least one pixel: {width}x{height}"
+            ),
+            Self::RegionTooLarge { width, height } => write!(
+                formatter,
+                "preprocessing takes a region of at most {MAX_REGION_PIXELS} pixels, not \
+                 {width}x{height} ({} pixels)",
+                u64::from(*width) * u64::from(*height)
+            ),
+            Self::Internal { detail } => write!(formatter, "preprocessing failed: {detail}"),
+        }
+    }
+}
+
+impl Error for PreprocessApplyError {}
+
+impl From<PreprocessApplyError> for RecognitionError {
+    fn from(error: PreprocessApplyError) -> Self {
+        RecognitionError::fatal(error.to_string())
+    }
+}
+
+/// The pixel count of a `width` x `height` region, when it lies in the chain's domain: at least one
+/// pixel and at most [`MAX_REGION_PIXELS`]. [`Preprocess::apply`] checks it before anything else;
+/// a caller may check it before it crops a region.
+pub fn check_region_size(width: u32, height: u32) -> Result<u64, PreprocessApplyError> {
+    let pixels = u64::from(width) * u64::from(height);
+    if pixels == 0 {
+        return Err(PreprocessApplyError::EmptyRegion { width, height });
+    }
+    if pixels > MAX_REGION_PIXELS {
+        return Err(PreprocessApplyError::RegionTooLarge { width, height });
+    }
+    Ok(pixels)
 }
 
 impl Preprocess {
@@ -207,18 +274,17 @@ impl Preprocess {
         &self.steps
     }
 
-    /// The chain applied to the RGB pixels of `region` (at least one pixel).
-    pub fn apply(&self, region: &RgbImage) -> RecognitionResult<PreprocessOutput> {
+    /// The chain applied to the RGB pixels of `region`, which must lie in the domain
+    /// ([`check_region_size`]): a region outside it is refused before any step runs.
+    pub fn apply(&self, region: &RgbImage) -> Result<PreprocessOutput, PreprocessApplyError> {
         let (width, height) = region.dimensions();
-        if width == 0 || height == 0 {
-            return Err(RecognitionError::fatal(format!(
-                "preprocessing needs a region of at least one pixel: {width}x{height}"
-            )));
-        }
-        let (first, rest) = self
-            .steps
-            .split_first()
-            .ok_or_else(|| RecognitionError::fatal("preprocessing chain has no step"))?;
+        let pixels = check_region_size(width, height)?;
+        let (first, rest) =
+            self.steps
+                .split_first()
+                .ok_or_else(|| PreprocessApplyError::Internal {
+                    detail: "the chain has no step".to_owned(),
+                })?;
         let mut values = match first {
             PreprocessStep::KeepColors { colors, tolerance } => {
                 keep(region, |pixel| keeps_color(pixel, colors, *tolerance))
@@ -234,13 +300,14 @@ impl Preprocess {
                 .to_luma8()
                 .into_raw(),
             other => {
-                return Err(RecognitionError::fatal(format!(
-                    "preprocessing chain cannot start with {}",
-                    other.kind()
-                )));
+                return Err(PreprocessApplyError::Internal {
+                    detail: format!("the chain cannot start with {}", other.kind()),
+                });
             }
         };
         let mut threshold_value = None;
+        // The kept count before `invert`, taken when `invert` runs.
+        let mut kept_before_invert = None;
         for step in rest {
             match step {
                 PreprocessStep::Contrast { low, high } => {
@@ -262,33 +329,34 @@ impl Preprocess {
                     }
                 }
                 PreprocessStep::Invert => {
+                    kept_before_invert = Some(kept_count(&values));
                     for pixel in &mut values {
                         *pixel = 255 - *pixel;
                     }
                 }
                 other => {
-                    return Err(RecognitionError::fatal(format!(
-                        "preprocessing step {} cannot follow {}",
-                        other.kind(),
-                        first.kind()
-                    )));
+                    return Err(PreprocessApplyError::Internal {
+                        detail: format!("step {} cannot follow {}", other.kind(), first.kind()),
+                    });
                 }
             }
         }
-        let foreground = values
-            .iter()
-            .filter(|value| **value >= FOREGROUND_MIN)
-            .count() as u64;
-        let pixels = u64::from(width) * u64::from(height);
-        let foreground_milli = u32::try_from(foreground * 1000 / pixels)
-            .map_err(|_| RecognitionError::fatal("foreground share leaves the u32 range"))?;
+        let inverted = kept_before_invert.is_some();
+        let kept = kept_before_invert.unwrap_or_else(|| kept_count(&values));
+        let kept_milli =
+            u32::try_from(kept * 1000 / pixels).map_err(|_| PreprocessApplyError::Internal {
+                detail: "the kept share leaves the u32 range".to_owned(),
+            })?;
         let image = GrayImage::from_raw(width, height, values).ok_or_else(|| {
-            RecognitionError::fatal("preprocessed region has the wrong number of pixels")
+            PreprocessApplyError::Internal {
+                detail: "the processed region has the wrong number of pixels".to_owned(),
+            }
         })?;
         Ok(PreprocessOutput {
             image,
             evidence: PreprocessEvidence {
-                foreground_milli,
+                kept_milli,
+                inverted,
                 threshold_value,
             },
         })
@@ -297,17 +365,25 @@ impl Preprocess {
 
 impl Scene {
     /// The chain applied to the RGB pixels of `region` of this frame (CFL-1). The region is
-    /// checked as every region of a scene is, and never clipped.
+    /// checked as every region of a scene is, and never clipped; a region outside the chain's
+    /// domain is refused before it is cropped. A refusal of [`Preprocess::apply`] comes back as a
+    /// fatal recognition error with its text.
     pub fn preprocess_region(
         &self,
         region: Rect,
         preprocess: &Preprocess,
     ) -> RecognitionResult<PreprocessOutput> {
         let bounds = validate_rect(region, self.width(), self.height())?;
+        check_region_size(bounds.width, bounds.height)?;
         let pixels = imageops::crop_imm(&self.rgb, bounds.x, bounds.y, bounds.width, bounds.height)
             .to_image();
-        preprocess.apply(&pixels)
+        preprocess.apply(&pixels).map_err(RecognitionError::from)
     }
+}
+
+/// The count of values of at least [`KEPT_MIN`].
+fn kept_count(values: &[u8]) -> u64 {
+    values.iter().filter(|value| **value >= KEPT_MIN).count() as u64
 }
 
 /// HSV on the OpenCV 8-bit scale, in integers: `V = max`, `d = V - min`,
@@ -391,9 +467,14 @@ fn stretch(value: u8, low: u8, high: u8) -> u8 {
 ///
 /// For a split with `n0`, `s0` (count and sum of the low class) of `N` values summing to `S`, the
 /// variance times `N^2` is `a^2 / (n0 * n1)` with `a = |s0 * N - S * n0|`. Two splits are
-/// compared exactly in `u128` by quotient and remainder, never in floating point.
-fn otsu_threshold(values: &[u8]) -> RecognitionResult<Option<u8>> {
-    let overflow = || RecognitionError::fatal("otsu threshold overflows over this region");
+/// compared exactly in `u128`, first by quotient and then by remainder, never in floating point.
+/// For `N` up to [`MAX_REGION_PIXELS`] the widest intermediate, `a^2`, has at most 108 bits
+/// (contract, "The region domain and Otsu's bound"), so the checked products below cannot fail
+/// inside the domain; they stay as a second guard.
+fn otsu_threshold(values: &[u8]) -> Result<Option<u8>, PreprocessApplyError> {
+    let overflow = || PreprocessApplyError::Internal {
+        detail: "the otsu comparison overflows over this region".to_owned(),
+    };
     let mut histogram = [0_u128; 256];
     for value in values {
         histogram[usize::from(*value)] += 1;

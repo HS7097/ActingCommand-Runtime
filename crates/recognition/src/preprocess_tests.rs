@@ -2,9 +2,11 @@
 
 // Workflow #411 A58, #428 CFL-1 (design CF §6 CFL-1, tests 1 to 6): every step kind's golden bytes
 // on a small region, the HSV hue range that wraps through 0, Otsu's threshold, the gray step
-// against the scene's gray, determinism, and the refusals of the chain syntax. The expected bytes
-// were computed off-repo by an independent reference of the arithmetic in
-// contracts/recognition-preprocess.md (the gray values with the sRGB luminance row in f32, each
+// against the scene's gray, determinism, and the refusals of the chain syntax. The CFL-1 revision
+// round (design CF v2 §5.3, §5.7, §8) adds the evidence `kept_milli` (before `invert`) and
+// `inverted`, the hue 179, the Otsu split a remainder decides, and the region domain of 2^24
+// pixels. The expected bytes were computed off-repo by an independent reference of the arithmetic
+// in contracts/recognition-preprocess.md (the gray values with the sRGB luminance row in f32, each
 // at least 0.05 away from a rounding tie). Regions are synthetic.
 
 use super::*;
@@ -45,11 +47,31 @@ fn applied(steps: Vec<PreprocessStep>, pixels: &RgbImage) -> (Vec<u8>, Preproces
     (output.image.into_raw(), output.evidence)
 }
 
-fn evidence(foreground_milli: u32, threshold_value: Option<u8>) -> PreprocessEvidence {
+/// The evidence of a chain without `invert`.
+fn evidence(kept_milli: u32, threshold_value: Option<u8>) -> PreprocessEvidence {
     PreprocessEvidence {
-        foreground_milli,
+        kept_milli,
+        inverted: false,
         threshold_value,
     }
+}
+
+/// The evidence of a chain that ends with `invert`: `kept_milli` is counted before it.
+fn inverted_evidence(kept_milli: u32, threshold_value: Option<u8>) -> PreprocessEvidence {
+    PreprocessEvidence {
+        kept_milli,
+        inverted: true,
+        threshold_value,
+    }
+}
+
+/// A neutral region whose values are `runs` of `(value, count)`, in row-major order.
+fn neutral_runs(width: u32, height: u32, runs: &[(u8, usize)]) -> RgbImage {
+    let mut pixels = Vec::with_capacity(width as usize * height as usize * 3);
+    for (value, count) in runs {
+        pixels.resize(pixels.len() + count * 3, *value);
+    }
+    RgbImage::from_raw(width, height, pixels).expect("fixture size")
 }
 
 fn keep_colors(colors: &[[u8; 3]], tolerance: u8) -> PreprocessStep {
@@ -142,11 +164,12 @@ fn each_step_kind_turns_a_small_region_into_its_golden_bytes() {
         applied(vec![light.clone()], &colored),
         (vec![255, 255, 0, 0, 0, 0, 0, 0], evidence(250, None))
     );
+    // `kept_milli` is counted before `invert`: the two kept pixels, 250.
     assert_eq!(
         applied(vec![light, PreprocessStep::Invert], &colored),
         (
             vec![0, 0, 255, 255, 255, 255, 255, 255],
-            evidence(750, None)
+            inverted_evidence(250, None)
         )
     );
     assert_eq!(
@@ -170,6 +193,9 @@ fn each_step_kind_turns_a_small_region_into_its_golden_bytes() {
         ([255, 0, 255], [150, 255, 255]),
         // 359.76 degrees, 179.88 on the scale, rounds to 180 and so to 0.
         ([255, 0, 1], [0, 255, 255]),
+        // 358.12 degrees, 179.06 on the scale: floor(-225 / 510) = -1, and -1 mod 180 = 179; a
+        // truncating division would give 0.
+        ([255, 0, 8], [179, 255, 255]),
     ] {
         assert_eq!(rgb_to_hsv(pixel), hsv, "{pixel:?}");
     }
@@ -201,7 +227,7 @@ fn each_step_kind_turns_a_small_region_into_its_golden_bytes() {
         applied(vec![PreprocessStep::Gray, PreprocessStep::Invert], &levels),
         (
             vec![255, 205, 204, 155, 130, 56, 55, 0],
-            evidence(625, None)
+            inverted_evidence(375, None)
         )
     );
     assert_eq!(
@@ -216,7 +242,7 @@ fn each_step_kind_turns_a_small_region_into_its_golden_bytes() {
         ),
         (
             vec![255, 255, 255, 255, 0, 0, 0, 0],
-            evidence(500, Some(128))
+            inverted_evidence(500, Some(128))
         )
     );
 }
@@ -298,6 +324,91 @@ fn otsu_splits_between_two_peaks_takes_the_smallest_tie_and_zeroes_a_flat_region
         applied(gray_otsu(), &neutral(3, 2, &[77; 6])),
         (vec![0; 6], evidence(0, None))
     );
+}
+
+#[test]
+fn otsu_lets_the_remainder_decide_between_equal_quotients() {
+    // 0 0 0 1 1 1 2 4: the splits t = 1 (900 / 12) and t = 2 (529 / 7) have the same quotient,
+    // 75; the remainders 0 / 12 < 4 / 7 decide for t = 2, so the threshold is 3. A comparison by
+    // the quotient alone would keep t = 1 and give 2.
+    assert_eq!(
+        applied(
+            vec![PreprocessStep::Gray, otsu()],
+            &neutral(4, 2, &[0, 0, 0, 1, 1, 1, 2, 4])
+        ),
+        (vec![0, 0, 0, 0, 0, 0, 0, 255], evidence(125, Some(3)))
+    );
+}
+
+#[test]
+fn apply_accepts_a_720p_region_and_a_region_of_2_24_pixels() {
+    let gray_otsu = || chain(vec![PreprocessStep::Gray, otsu()]);
+
+    // 1280 x 720: 0, 128 and 255, 460 000, 1 600 and 460 000 times. A direct cross-multiplication
+    // of two splits would need 129 bits here. The split {0} against {128, 255} wins: threshold 1.
+    let output = gray_otsu()
+        .apply(&neutral_runs(
+            1280,
+            720,
+            &[(0, 460_000), (128, 1_600), (255, 460_000)],
+        ))
+        .expect("a 720p region");
+    assert_eq!(output.evidence, evidence(500, Some(1)));
+    let mut expected = vec![0_u8; 460_000];
+    expected.resize(921_600, 255);
+    assert!(
+        output.image.as_raw()[..] == expected[..],
+        "720p output bytes"
+    );
+
+    // 4096 x 4096 = 2^24 pixels, half 0 and half 255: a^2 reaches its widest, 108 bits. Every
+    // split scores the same, so the smallest t, 0, wins: threshold 1.
+    let half = 1_usize << 23;
+    let output = gray_otsu()
+        .apply(&neutral_runs(4096, 4096, &[(0, half), (255, half)]))
+        .expect("a region of 2^24 pixels");
+    assert_eq!(output.evidence, evidence(500, Some(1)));
+    let mut expected = vec![0_u8; half];
+    expected.resize(2 * half, 255);
+    assert!(
+        output.image.as_raw()[..] == expected[..],
+        "2^24 output bytes"
+    );
+}
+
+#[test]
+fn the_domain_accepts_up_to_2_24_pixels_and_apply_refuses_a_larger_region() {
+    assert_eq!(check_region_size(4096, 4096), Ok(16_777_216));
+    assert_eq!(check_region_size(16_777_216, 1), Ok(16_777_216));
+    assert_eq!(check_region_size(1, 1), Ok(1));
+    for (width, height) in [(4097, 4096), (16_777_217, 1), (u32::MAX, u32::MAX)] {
+        assert_eq!(
+            check_region_size(width, height),
+            Err(PreprocessApplyError::RegionTooLarge { width, height })
+        );
+    }
+    assert_eq!(
+        check_region_size(0, 5),
+        Err(PreprocessApplyError::EmptyRegion {
+            width: 0,
+            height: 5
+        })
+    );
+
+    // apply refuses before any step runs, for every shape of chain.
+    let larger = RgbImage::new(4097, 4096);
+    for steps in [
+        vec![PreprocessStep::Gray, otsu()],
+        vec![keep_colors(&[[255, 255, 255]], 40), PreprocessStep::Invert],
+    ] {
+        assert_eq!(
+            chain(steps).apply(&larger).err(),
+            Some(PreprocessApplyError::RegionTooLarge {
+                width: 4097,
+                height: 4096
+            })
+        );
+    }
 }
 
 #[test]
