@@ -2370,3 +2370,12 @@ tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_392_da2a::da2a_t15_a_cropped_frame_waits_for_da_2b_and_sends_nothing",
 ]
 incident = ["#392 DA-2a"]
+
+# Workflow #411 B35 (0.12.28; register §1.158 B35-1; no persisted ledger shape; contracts/package-reference.md, the standard-pack cross-check): package bundle and standard-pack check report one package_bundle_interrupt_page_shadowed warning (package_id, page_id) per pack that declares a shared interrupt page of interrupts.json itself and is neither a feature package of pages.json nor a handler of that page, and both still pass; a root without such a pack, or without interrupts.json, reports none
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_373_navt::b35_a_pack_declaring_a_shared_interrupt_page_gets_one_warning_naming_both",
+    "actingcommand-resource-tooling::lib::gate_373_navt::b35_no_overlap_or_no_shared_interrupts_gives_no_warning",
+]
+incident = ["#411 B35"]

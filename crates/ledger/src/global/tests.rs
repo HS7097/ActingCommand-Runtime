@@ -2999,6 +2999,11 @@ mod gate_qr1;
 // the Lab relations once per snapshot, for a few snapshots, and a window's start once.
 #[path = "tests/gate_qr2.rs"]
 mod gate_qr2;
+// #422 RB-1: the reader pool builds its Lab relations once in the background and its pages read
+// only the records after the build: the same pages with and without it, no full-history read on
+// a linked page, a failed build said as a warning, a new anchor naming an old request.
+#[path = "tests/gate_rb1.rs"]
+mod gate_rb1;
 // #422 W1-8: the QR-1 leftovers and the published read point: the persistent proof set (P27), a
 // pool page with real proofs, the pool's budget refusal and the trim's keep rule (P28), the pool's
 // page times (P29) and the published head (P30).

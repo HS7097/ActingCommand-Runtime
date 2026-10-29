@@ -1059,6 +1059,44 @@
       "common_causes": "The Runtime started before the emulator after a boot (an autostart that runs first), or MuMuManager failing or timing out for a short while.",
       "handling": "None while the attempts last. If the start still fails, check that MuMu is installed and starts, or raise startup_discovery.attempts or startup_discovery.retry_interval_ms in the configuration and commit it again with acsetup --commit-config."
     },
+    "host_process_priority_applied": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "memory_priority_requested": "required",
+        "io_priority_requested": "required",
+        "memory_priority_read": "optional",
+        "io_priority_read": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.28",
+      "description": "At start, right after the configuration is read and before the ledger opens, actingd set its own memory priority and I/O priority to the levels of host.process_memory_priority and host.process_io_priority and read both back unchanged (RB-2, Alice's ruling of 2026-10-29). The CPU priority class is left as the process was started. memory_priority_read and io_priority_read are absent on an operating system without these priorities, where nothing is set. One daemon line per start.",
+      "common_causes": "Every start.",
+      "handling": "None."
+    },
+    "host_process_priority_failed": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "memory_priority_requested": "required",
+        "io_priority_requested": "required",
+        "memory_priority_read": "optional",
+        "io_priority_read": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.28",
+      "description": "At start a call setting or reading back actingd's own memory or I/O priority failed, or a level read back is not the one asked for (RB-2). Each failed call is a caused_by foreign_os_error link whose operation names it (process_memory_priority_set, process_memory_priority_read, process_io_priority_set, process_io_priority_read; a native call's NTSTATUS is its raw_code). The read values are present where the read succeeded. The start goes on with whatever priorities the process has.",
+      "common_causes": "A Windows that refuses the native I/O priority class, or a process the operating system will not raise.",
+      "handling": "The Runtime runs on at the priorities it has. Check them (for example with Process Explorer); until the cause is fixed, start the Runtime from a process that itself runs at normal memory and I/O priority."
+    },
     "vision_provider_unavailable": {
       "category": "error",
       "ladder_class": "none",

@@ -54,5 +54,13 @@ actingcommand_contract::outcome_locations! {
         ResolveCapacityTarget => "resolve_capacity_target",
         CanonicalizeCapacityTarget => "canonicalize_capacity_target",
         IdentifyCapacityVolume => "identify_capacity_volume",
+        /// RB-2: setting this process's memory priority (`SetProcessInformation`).
+        ProcessMemoryPrioritySet => "process_memory_priority_set",
+        /// RB-2: reading this process's memory priority back (`GetProcessInformation`).
+        ProcessMemoryPriorityRead => "process_memory_priority_read",
+        /// RB-2: setting this process's I/O priority (`NtSetInformationProcess`).
+        ProcessIoPrioritySet => "process_io_priority_set",
+        /// RB-2: reading this process's I/O priority back (`NtQueryInformationProcess`).
+        ProcessIoPriorityRead => "process_io_priority_read",
     }
 }

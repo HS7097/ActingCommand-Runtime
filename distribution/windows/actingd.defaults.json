@@ -541,5 +541,9 @@
       "drain_max_ms": 600000,
       "refused_retry_max_ms": 300000
     }
+  },
+  "host": {
+    "process_memory_priority": "normal",
+    "process_io_priority": "normal"
   }
 }

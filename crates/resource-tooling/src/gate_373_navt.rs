@@ -14,6 +14,11 @@
 // a name the game root reserves is refused by `package bundle` and by the bundle index the
 // Runtime reads.
 //
+// Workflow #411 B35 (contracts/package-reference.md, the cross-check): both report each pack
+// that declares a shared interrupt page itself, one `package_bundle_interrupt_page_shadowed` per
+// pack and page, a warning that refuses nothing; the page's handlers and the feature package
+// declare it by their part and are not reported.
+//
 // A synthetic `neutral` game, server `test`, 16x9. Each page is told by the colour of the first
 // pixel: `home` blue, `shop` red, `notice` white, `stage` green, `done` yellow. The page list
 // holds `home`, `shop` and `notice`; the feature package recognises exactly those; the edge
@@ -24,7 +29,7 @@ use crate::{
     PackageBundleRequest, PackageBundleResponse, StandardPackCheckRequest,
     StandardPackCheckResponse, StandardPackRootFiles, check_standard_pack_root, package_bundle,
 };
-use actingcommand_contract::outcome::Outcome;
+use actingcommand_contract::outcome::{Category, Outcome};
 use actingcommand_contract::{
     LabError, LabResult, StandardPackProblem, StandardPackRegistry, StandardPackRootBytes,
     read_standard_pack_root,
@@ -43,9 +48,12 @@ const RETURN_HOME: &str = "neutral.test.return_home";
 const CLOSE_NOTICE: &str = "neutral.test.close_notice";
 const STAGE: &str = "neutral.test.stage";
 const BAD: &str = "neutral.test.bad";
+// Workflow #411 B35: a pack that declares the shared interrupt page `notice` and is no handler.
+const OWN_NOTICE: &str = "neutral.test.own_notice";
 
 const NAVIGATION_PACKAGE_INVALID: &str = "package_bundle_navigation_package_invalid";
 const ENTRY_PAGE_UNLISTED: &str = "package_bundle_entry_page_unlisted";
+const INTERRUPT_PAGE_SHADOWED: &str = "package_bundle_interrupt_page_shadowed";
 const ROOT_INVALID: &str = "standard_pack_root_invalid";
 const INDEX_INVALID: &str = "package_bundle_index_invalid";
 
@@ -826,6 +834,89 @@ fn nt_4_a_reserved_package_id_is_refused() {
             refused.problem,
             StandardPackProblem::BundleInvalid,
             "{package_id}"
+        );
+    }
+}
+
+// ---- Workflow #411 B35.
+
+// A pack that is no handler of the shared interrupt page `notice` but declares it itself: it
+// starts on `notice` and closes it to `home`, as the handler does.
+fn own_notice() -> Pack {
+    graph(OWN_NOTICE, "notice", "home", &[("close", "notice", "home")])
+}
+
+// Each `package_bundle_interrupt_page_shadowed` of `warnings`: its package and its page. Each one
+// is a warning.
+fn shadowed(warnings: &[Outcome]) -> Vec<(Value, Value)> {
+    warnings
+        .iter()
+        .filter(|warning| warning.code().as_str() == INTERRUPT_PAGE_SHADOWED)
+        .map(|warning| {
+            assert_eq!(warning.category(), Category::Warning, "{warning:?}");
+            (
+                warning.value("package_id").cloned().unwrap_or(Value::Null),
+                warning.value("page_id").cloned().unwrap_or(Value::Null),
+            )
+        })
+        .collect()
+}
+
+// B35: a pack that declares the shared interrupt page `notice` and is not its handler gets
+// exactly one `package_bundle_interrupt_page_shadowed`, naming the pack and the page, from
+// `package bundle` and from the check of the installed root alike. Both still pass: the warning
+// refuses nothing.
+#[test]
+fn b35_a_pack_declaring_a_shared_interrupt_page_gets_one_warning_naming_both() {
+    let root = valid().with(own_notice());
+    let expected = vec![(json!(OWN_NOTICE), json!("notice"))];
+
+    let (_temp, request, result) = bundle(&root);
+    let response = result.unwrap_or_else(|error| panic!("{}: {}", error.code, error.message));
+    assert_eq!(response.status, "written");
+    assert!(
+        request.out.join("bundle.json").is_file(),
+        "--out was not written"
+    );
+    assert_eq!(shadowed(&response.warnings), expected, "package bundle");
+
+    let (_temp, game_root) = installed(&root, &[]);
+    let checked =
+        check(&game_root).unwrap_or_else(|error| panic!("{}: {}", error.code, error.message));
+    assert_eq!(checked.status, "checked");
+    assert_eq!(checked.pack_count, 6);
+    assert_eq!(shadowed(&checked.warnings), expected, "standard-pack check");
+}
+
+// B35: no overlap, and no shared interrupt pages, give no such warning. In the valid root the
+// feature package and the handler declare `notice` by their part, and no other pack declares it;
+// without `interrupts.json` a pack that declares `notice` shadows nothing.
+#[test]
+fn b35_no_overlap_or_no_shared_interrupts_gives_no_warning() {
+    let without_interrupts = Root {
+        interrupts: None,
+        ..valid().with(own_notice())
+    };
+    for (case, root) in [
+        ("no overlap", valid()),
+        ("no shared interrupts", without_interrupts),
+    ] {
+        let (_temp, _request, result) = bundle(&root);
+        let response = result.unwrap_or_else(|error| panic!("{case}: {}", error.message));
+        assert_eq!(response.status, "written", "{case}");
+        assert!(
+            shadowed(&response.warnings).is_empty(),
+            "{case}: package bundle: {:?}",
+            response.warnings
+        );
+
+        let (_temp, game_root) = installed(&root, &[]);
+        let checked = check(&game_root).unwrap_or_else(|error| panic!("{case}: {}", error.message));
+        assert_eq!(checked.status, "checked", "{case}");
+        assert!(
+            shadowed(&checked.warnings).is_empty(),
+            "{case}: standard-pack check: {:?}",
+            checked.warnings
         );
     }
 }

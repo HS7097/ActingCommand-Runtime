@@ -305,7 +305,8 @@ pub struct StandardPackInterrupts {
 }
 
 /// One shared interrupt page: its handler packages (at most one per server), where the run
-/// goes once one handled it, and how often one run may handle it.
+/// goes once one handled it, how often one run may handle it and (Workflow #411 B43) what
+/// reaching that limit says.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StandardPackInterrupt {
@@ -313,6 +314,24 @@ pub struct StandardPackInterrupt {
     pub handlers: Vec<String>,
     pub then: InterruptThen,
     pub max_per_run: u8,
+    /// Workflow #411 B43 (since 0.12.28): the cause of a run that meets the page once more
+    /// than `max_per_run`; absent it is [`InterruptLimitCause::PackLogic`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit_cause: Option<InterruptLimitCause>,
+}
+
+/// Workflow #411 B43: what an interrupt page met once more than its `max_per_run` says
+/// (`limit_cause`). The data names the cause; the Runtime names no page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InterruptLimitCause {
+    /// The default: the standard pack no longer matches the game; the run ends with
+    /// `contained_task_interrupt_limit_reached`, which accumulates toward a pause.
+    PackLogic,
+    /// The page keeps coming back because of the environment the game runs in (its network or
+    /// its servers), not because of the pack; the run ends with
+    /// `contained_task_interrupt_environment_limit_reached`, which is rerun only.
+    Environment,
 }
 
 /// Where the run goes after a handler (§6.2): back to what it awaited, to its end with
@@ -532,7 +551,9 @@ pub fn parse_standard_pack_pages(
 
 /// `interrupts.json`'s bytes, decoded and checked against `pages` (§3.6): `game` as for
 /// [`parse_standard_pack_pages`], at most 32 entries, each `page` a page of `pages` and named
-/// once, 1..=8 handlers, 1..=8 `then.run` packages, and `max_per_run` within 1..=8.
+/// once, 1..=8 handlers, 1..=8 `then.run` packages, and `max_per_run` within 1..=8. Workflow
+/// #411 B43: an optional `limit_cause` that is not `"pack_logic"` or `"environment"` is
+/// `malformed`, as every member of another type is.
 pub fn parse_standard_pack_interrupts(
     bytes: &[u8],
     game: Option<&str>,
@@ -1049,6 +1070,55 @@ mod tests {
         // A repository root's page list names its game itself.
         parse_standard_pack_pages(&bytes(&pages_with("game", json!("neutral"))), None)
             .expect("a page list read without its directory");
+    }
+
+    /// Workflow #411 B43: an interrupt may declare `limit_cause`; absent it is none and the
+    /// entry serializes as before, `"environment"` and `"pack_logic"` are read, and any other
+    /// value or type is `malformed` (the static check the Runtime, `package bundle` and
+    /// `standard-pack check` share).
+    #[test]
+    fn b43_an_interrupt_s_limit_cause_is_read_and_a_wrong_type_is_refused() {
+        let absent = read_interrupts(&interrupts()).expect("interrupts without the member");
+        assert!(
+            absent
+                .interrupts
+                .iter()
+                .all(|interrupt| interrupt.limit_cause.is_none())
+        );
+        let serialized = serde_json::to_value(&absent.interrupts[0]).expect("an interrupt");
+        assert!(
+            serialized.get("limit_cause").is_none(),
+            "an absent cause serializes as before: {serialized}"
+        );
+        for (value, expected) in [
+            ("environment", InterruptLimitCause::Environment),
+            ("pack_logic", InterruptLimitCause::PackLogic),
+        ] {
+            let read = read_interrupts(&interrupt_with("limit_cause", json!(value)))
+                .unwrap_or_else(|issue| panic!("limit_cause {value}: {issue}"));
+            assert_eq!(read.interrupts[0].limit_cause, Some(expected), "{value}");
+            assert_eq!(read.interrupts[1].limit_cause, None, "{value}");
+            assert_eq!(
+                serde_json::to_value(&read.interrupts[0]).expect("an interrupt")["limit_cause"],
+                json!(value)
+            );
+        }
+        for (case, value) in [
+            ("a boolean", json!(true)),
+            ("a number", json!(1)),
+            ("a list", json!(["environment"])),
+            ("an unknown cause", json!("network")),
+        ] {
+            assert_eq!(
+                read_interrupts(&interrupt_with("limit_cause", value)).map(|_| ()),
+                Err(issue(
+                    STANDARD_PACK_INTERRUPTS_FILE,
+                    StandardPackProblem::Malformed,
+                    ""
+                )),
+                "{case}"
+            );
+        }
     }
 
     #[test]
