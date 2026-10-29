@@ -9,7 +9,7 @@ use actingcommand_runtime_database::{
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -374,8 +374,12 @@ impl LedgerMaintenance {
     ) -> GlobalLedgerResult<GlobalLedger> {
         self.validate_database(&database)?;
         // LN-9 (#422, LEAN-L §6): a plan's scrub reads this database on its own connection.
+        // #422 RB-1: a plan's reader pool builds its Lab relations within the open's deadline
+        // (`ledger_observer.open_timeout_ms`, in whole seconds as the open counts it), taken
+        // afresh when the build starts.
         let config = GlobalLedgerConfig::new(self.root.join("ledger"), owner_id)
-            .with_scrub_database(Arc::clone(&database));
+            .with_scrub_database(Arc::clone(&database))
+            .with_lab_relations_timeout(Duration::from_secs(self.limits.timeout_seconds));
         let config = match plan {
             Some(plan) => config.with_failure_plan(plan),
             None => config,

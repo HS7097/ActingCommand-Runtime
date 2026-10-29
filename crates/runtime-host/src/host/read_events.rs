@@ -24,10 +24,18 @@ impl HostShared {
     /// is said as its start fallback is, once each: one warning and the developer line
     /// `actingd ledger reader_pool reader_ended`, for the first reader that ended unexpectedly
     /// and, once no reader is left, for the writer reading the pages again (`fallback=writer`
-    /// in its detail). Nothing is latched: the Runtime keeps running.
+    /// in its detail). Nothing is latched: the Runtime keeps running. #422 RB-1: a failed build
+    /// of the pool's Lab relations is said the same way, its developer line `lab_relations`.
     pub(super) fn report_ledger_reader_pool_findings(&self) {
         for finding in self.ledger.take_reader_pool_findings() {
-            self.report_ledger_reader_pool_finding("reader_ended", &finding);
+            let what = if finding.operation()
+                == actingcommand_ledger::LedgerLocation::BuildLabRelations.as_str()
+            {
+                "lab_relations"
+            } else {
+                "reader_ended"
+            };
+            self.report_ledger_reader_pool_finding(what, &finding);
         }
     }
 
