@@ -188,6 +188,7 @@ fn explained(
         at,
         &|_: &str, _: &str| -> Option<(u64, String)> { None },
         &held_back,
+        crate::application_update::IdleUpdateHold::default(),
     );
     table.idle_plan(NODE)
 }

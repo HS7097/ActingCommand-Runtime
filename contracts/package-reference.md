@@ -346,7 +346,12 @@ composer with one bound instance per server of the registry: a refusal is
 (`schedule_invalid`, `rule_package_unregistered` or `rule_id_conflict`) and `json_pointer`, and each
 package of the registry that is neither maintenance-role, named by a rule nor held is one
 `standard_pack_package_unclassified` warning (with `game` and `package_id`) in `warnings`.
-Workflow #392 DA-4 (model 392 v1.2 §4.1): `--display-layout` names the game's display
+UPD-1 fix round 1 (since 0.12.30; [standard-pack-schedule.md](standard-pack-schedule.md), "The
+store update rule"): then a rule whose package declares `store_update` (read by the Runtime's
+metadata reader) and whose `cooldown_ms` is 0 is refused the same way, `schedule_invalid` at
+`/rules/<i>/cooldown_ms`: with no cooldown, a store that has no new version yet would have the
+store update package and the game's next run meet the dialog in turn without a pause. Workflow
+#392 DA-4 (model 392 v1.2 §4.1): `--display-layout` names the game's display
 declaration; every pack is admitted for real as with the other root files, the file is read by
 the one structure check ("Standard package root", `display-layout.json`: a refusal is
 `standard_pack_root_invalid` with `game`, the given file's `path`, `standard_pack_problem` and
@@ -714,7 +719,16 @@ data files beside its package directories, one directory per game below the conf
     so for the Runtime, `package bundle` and `standard-pack check` alike. An ordinary task
     package must not declare the page itself (the shared interrupt would not act for its runs,
     and B35 reports it); a store update package declares it as its entry page by its part. The
-    `interrupt_handled` record is unchanged (`then` `end_run`). The member joins `package`
+    `interrupt_handled` record is unchanged (`then` `end_run`). **A handler that fails** (UPD-1
+    fix round 1, the coordinator's decision of 2026-10-29): the page seen is what matters, and
+    the store update package starts from the dialog page itself, so when the handler fails short
+    of fatal (its step not confirmed, the store's page not reached, a chooser in the way) its
+    layer is still recorded failed with its own code (`EntryRecoveryFailed`, `role:
+    interrupt_handler`), no `interrupt_handled` follows, and the run still ends with
+    `contained_task_application_update_required` (`page_id`), the handler's failure its `related`
+    link, the fact recorded true first. A fatal failure of the handler poisons the run as before,
+    and a stop of the run while the handler runs (a cancellation, an operator pause, the deadline)
+    ends it as that stop. The member joins `package`
     revision 6 (BT-PK6 names it beside `limit_cause`), admitted by code until then; a Runtime
     before 0.12.30 refuses a file that names it, so the whole game root is
     `standard_pack_root_invalid` there. An entry without it reads and serializes as before.
@@ -824,7 +838,8 @@ data files beside its package directories, one directory per game below the conf
   `contained_task_interrupt_escalated` (`end_run`; UPD-1: with
   `contained_task_application_update_required` when the entry's `result` is
   `"application_update_required"`, the instance's `health.application.update_required` recorded
-  true first); an `interrupt_handled` record follows each.
+  true first, and so too when that entry's handler fails short of fatal, its failure linked);
+  an `interrupt_handled` record follows each handled page.
   Two or more matches are an `interrupt_ambiguous` record and nothing is handled. A page
   handled `max_per_run` times, or a run that handled 16 pages, ends the run with
   `contained_task_interrupt_limit_reached`; a page whose `limit_cause` is `"environment"`

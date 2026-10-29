@@ -839,6 +839,11 @@ Since 0.12.30 (design `rd-1029/design-upd1.md` §4, §6; Alice's rulings 95 and 
 - **Explanation.** `actingctl schedule` and `ac_schedule` show `application_update_pending` as a
   held candidate's `why`; `ac_facts --instance` shows the fact and the run that wrote it. The idle
   plan counts a held decision neither due nor as a wake, so it does not wake the instance for it.
+  The gate only sees candidates, so (fix round 1) the idle plan reads the waiting instances and
+  the store update tasks of the same evaluation and counts no decision of a waiting instance but
+  the store update task's, whatever its reason: a task in its cooldown or before its clock
+  trigger, and the fact refresh, wake no waiting instance; the store update task's own cooldown
+  still does.
 - **No configuration key.** The store update rule's cadence is its `cooldown_ms`; the hold and
   its order are code.
 

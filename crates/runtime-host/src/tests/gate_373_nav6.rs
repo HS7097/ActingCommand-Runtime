@@ -18,7 +18,7 @@ use crate::codes::HostCode;
 use crate::failure_identity::{
     FailureIdentity, IdentityLayer, failure_accumulates, navigation_failure_code,
 };
-use actingcommand_contract::outcome::{Category, CodeStr, LadderClass, Outcome};
+use actingcommand_contract::outcome::{Category, CauseRelation, CodeStr, LadderClass, Outcome};
 use actingcommand_contract::{
     RuntimeLifecyclePhase, RuntimePayload, TaskEntryRecoveryRole, TaskInterruptThen,
 };
@@ -2015,6 +2015,76 @@ fn upd1_a9_a_direct_run_meeting_the_update_dialog_ends_with_its_code_and_records
             );
         }
     }
+}
+
+/// UPD-1 fix round 1 (review M2, the coordinator's decision of 2026-10-29), after N6-11: the
+/// update dialog's handler fails (the dialog never leaves, so the handler's one step,
+/// `retryable: false`, sees its own page again: `contained_task_step_unconfirmed`). The page seen
+/// is what matters: the handler layer is still recorded failed with its own code, and the run
+/// ends with `contained_task_application_update_required` (`page_id`, warning) with the handler's
+/// failure as its `related` link; `health.application.update_required` is published true before
+/// the terminal; no interrupt is recorded handled and no ladder starts.
+#[test]
+fn upd1_m2_a_failed_update_handler_still_ends_the_run_by_its_result() {
+    let state = Arc::new(FakeState::default());
+    let temp = TempDir::new().expect("tempdir");
+    let root = update_root(temp.path());
+    script(&state, |_, _| frame(RED, Some(Overlay::Notice)));
+    let host = start(&temp, &state, Some(&root));
+    let run = run(&host, &temp, "run", &away_to_home());
+    let events = host
+        .query_persisted_events_for_test(EventQuery::default())
+        .expect("ledger events");
+    let fact = host
+        .application_update_for_test(ALIAS)
+        .expect("the instance fact");
+    host.close().expect("close runtime host");
+
+    assert_eq!(run.receipt.state(), RuntimeReceiptState::Failed);
+    let (admitted, completed, failed) = run.handler_layers();
+    assert_eq!(admitted, 1);
+    assert!(completed.is_empty());
+    let [handler_failure] = failed.as_slice() else {
+        panic!("one failed handler layer: {failed:?}");
+    };
+    assert_eq!(
+        handler_failure.code().as_str(),
+        "contained_task_step_unconfirmed"
+    );
+    let failure = run.failure();
+    assert_eq!(failure.code().as_str(), UPDATE_REQUIRED);
+    assert_eq!(failure.category(), Category::Warning);
+    assert_eq!(text(&failure, "page_id"), Some("notice"));
+    assert_eq!(
+        failure
+            .causes()
+            .iter()
+            .filter(|link| *link.relation() == CauseRelation::Related)
+            .map(|link| link.outcome().code().as_str())
+            .collect::<Vec<_>>(),
+        ["contained_task_step_unconfirmed"],
+        "the handler's failure is linked: {failure:?}"
+    );
+    assert!(run.handled().is_empty(), "the page was not handled");
+    assert_eq!(
+        state.input_count.load(Ordering::Acquire),
+        1,
+        "the handler's tap only"
+    );
+    let publications = update_publications(&events, ALIAS);
+    let [(published_at, true, source)] = publications.as_slice() else {
+        panic!("one publication of true: {publications:?}");
+    };
+    assert!(
+        source.starts_with("application_update:run:"),
+        "the run's write: {source}"
+    );
+    assert!(
+        *published_at < failed_terminal(&events),
+        "the fact before the terminal"
+    );
+    assert_eq!(fact.map(|(value, _)| value), Some(true));
+    assert!(!ladder_started(&events), "a direct run starts no ladder");
 }
 
 /// UPD-1 A1 and B2 (design §2.3, §6): a scheduled run of a page-graph task, under the catalog

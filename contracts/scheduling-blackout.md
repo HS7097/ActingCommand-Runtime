@@ -279,7 +279,10 @@ evaluation. The fact refresh's deferral names this code as its `gate_code`
 waits, at most once per `scheduling.suspension.lift_check_min_interval_ms`, so a store update
 package placed in place is known from the next rebuild. Admission does not judge it again: the
 fact is an evaluation input, so an intent evaluated before it turned true is
-`policy_facts_stale`. The idle plan counts such a decision neither due nor as a wake;
+`policy_facts_stale`. The idle plan counts such a decision neither due nor as a wake, nor
+(fix round 1) any other decision of a waiting instance but a store update task's: a task the
+position never saw (its cooldown, its clock trigger not come) names its own wake, and would only
+be held here once it became a candidate;
 
 5. the task package is not loaded (`pack_registry_not_loaded`, Workflow #389), then the pack
    schedule closes it (`pack_schedule_closed`, `instance-fact-store.md`, "Pack schedule facts");

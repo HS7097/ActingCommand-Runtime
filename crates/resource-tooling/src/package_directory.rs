@@ -12,7 +12,7 @@
 //! Workflow #392 DA-4: and `display-layout.json` (`--display-layout`), checked by the root reader.
 
 use crate::codes::ResourceToolingCode;
-use crate::standard_pack_check::{RootFileInputs, cross_check};
+use crate::standard_pack_check::{RootFileInputs, cross_check, store_update_cooldowns};
 use crate::standard_pack_schedule::check_schedule;
 use crate::{PackageBundleRequest, PackageBundleResponse};
 use actingcommand_contract::outcome::{Detail, Outcome};
@@ -285,6 +285,14 @@ fn write_bundle(
                 &schedule.bytes,
                 &schedule.path,
             )?);
+            // UPD-1 fix round 1 (review L6): a store update rule needs a cooldown.
+            store_update_cooldowns(
+                &applications.game,
+                &root,
+                &schedule.bytes,
+                &schedule.path,
+                &|directory: &str| packs_dir.join(directory),
+            )?;
         }
     }
     write_new(&staging.join("applications.json"), applications_bytes)?;

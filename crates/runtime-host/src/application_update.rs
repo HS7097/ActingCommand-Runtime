@@ -14,7 +14,10 @@
 //! - **The gate** (`contracts/scheduling-blackout.md`, "Order of the deferrals", position 4a):
 //!   while an instance's fact is true, every candidate of the instance except a `store_update`
 //!   package's task is deferred with `application_update_pending` and no wake of its own; the fact
-//!   refresh's deferral names it as its gate. The idle plan wakes no instance for such a decision.
+//!   refresh's deferral names it as its gate. The idle plan wakes no instance for such a decision,
+//!   nor (fix round 1, review M1) for any other decision of a waiting instance but a store update
+//!   task's: a task not a candidate yet (its cooldown, its clock trigger) would only be held by the
+//!   gate once it became one ([`IdleUpdateHold`]).
 //!
 //! The Runtime names no game, store or page here.
 
@@ -82,7 +85,7 @@ pub(crate) fn deferral(instance_id: &str, fact_refresh: bool) -> CandidateEligib
 
 /// Whether position 4a held `decision`: one of its reasons is `application_update_pending`, or
 /// names it as its gate (a fact refresh's `fact_refresh_pending`). The idle plan counts such a
-/// decision neither due nor as a wake.
+/// decision neither due nor as a wake ([`IdleUpdateHold::holds`] keeps this as its fallback).
 pub(crate) fn holds(decision: &TaskDecision) -> bool {
     let code = ApplicationUpdateCode::Pending.as_str();
     decision.reasons.iter().any(|reason| {
@@ -93,4 +96,46 @@ pub(crate) fn holds(decision: &TaskDecision) -> bool {
                 .and_then(serde_json::Value::as_str)
                 == Some(code)
     })
+}
+
+/// UPD-1 fix round 1 (review M1; design §4.2): what the idle plan reads of position 4a, from the
+/// evaluation it plans after: the instances whose fact was true ([`pending_instances`]) and the
+/// store update tasks (the remedy table's, as the gate read them). The gate only sees candidates,
+/// so a task of a waiting instance that is no candidate yet (its cooldown, a clock trigger not
+/// come) names its own wake and no position 4a; once it became a candidate the gate would hold it.
+/// The idle plan therefore counts no decision of a waiting instance but a store update task's.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct IdleUpdateHold<'a> {
+    /// The instances whose `health.application.update_required` was true in the evaluation.
+    pub(crate) pending: &'a BTreeSet<String>,
+    /// The catalog tasks whose bound package declares `store_update`.
+    pub(crate) store_tasks: &'a BTreeSet<String>,
+}
+
+/// The empty set the test-only default of `IdleUpdateHold` names.
+#[cfg(test)]
+static NO_IDS: BTreeSet<String> = BTreeSet::new();
+
+#[cfg(test)]
+impl Default for IdleUpdateHold<'_> {
+    /// No instance waits.
+    fn default() -> Self {
+        Self {
+            pending: &NO_IDS,
+            store_tasks: &NO_IDS,
+        }
+    }
+}
+
+impl IdleUpdateHold<'_> {
+    /// Whether the idle plan leaves `decision` out: its instance waits for its client update and
+    /// its task is no store update task, whatever its reason; or, as a fallback, position 4a held
+    /// it by name ([`holds`]).
+    pub(crate) fn holds(&self, decision: &TaskDecision) -> bool {
+        let waiting = decision
+            .instance_id
+            .as_deref()
+            .is_some_and(|alias| self.pending.contains(alias));
+        (waiting && !self.store_tasks.contains(decision.task_id.as_str())) || holds(decision)
+    }
 }

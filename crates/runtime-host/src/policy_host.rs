@@ -3139,6 +3139,13 @@ impl PolicyHost {
                     .map(|task| (task.expected_duration_ms, "declared".to_owned())),
             },
             &held_back,
+            // UPD-1 fix round 1 (review M1): the waiting instances and the store update tasks
+            // position 4a judged this evaluation by, so the idle plan wakes a waiting instance
+            // only for its store update task.
+            crate::application_update::IdleUpdateHold {
+                pending: &update_pending,
+                store_tasks: &store_tasks,
+            },
         );
         if let Some(decisions) = &remedy_decisions {
             self.remedies.retain_keys(decisions);

@@ -7,6 +7,7 @@
 //! it was, and a start begins with none. Nothing here reaches the ledger and no decision reads
 //! it: only the read `ScheduleExplanation` and the idle check (IDLE-1, its plan per instance) do.
 
+use crate::application_update::IdleUpdateHold;
 use crate::idle_action::IdlePlan;
 use actingcommand_contract::codes::ScheduleExplanationRowCode;
 use actingcommand_contract::outcome::Outcome;
@@ -148,17 +149,22 @@ struct IdleDraft {
 
 impl IdleDraft {
     /// `held_back`: the instance's entry of [`IdleHeldBack`], when a time-bound gate holds it.
+    /// `update_held`: the instance waits for its client update and the decision is no store update
+    /// task's ([`crate::application_update::IdleUpdateHold::holds`]).
     fn add(
         &mut self,
         decision: &TaskDecision,
         evaluated_at_unix_ms: u64,
         held_back: Option<Option<u64>>,
+        update_held: bool,
     ) {
-        // UPD-1 (design §4.2): a decision that position 4a held waits for the instance's client
-        // update. It is neither due nor a wake, so the plan never wakes the instance for it (its
-        // startup package would only meet the update dialog again); the store update task's own
-        // decision still counts.
-        if crate::application_update::holds(decision) {
+        // UPD-1 (design §4.2; fix round 1, review M1): on an instance that waits for its client
+        // update, a decision other than the store update task's is neither due nor a wake,
+        // whatever its reason (a cooldown or a clock trigger not come included: the gate holds it
+        // once it is a candidate). So the plan never wakes the instance for it (its startup
+        // package would only meet the update dialog again); the store update task's own decision,
+        // its cooldown's wake included, still counts.
+        if update_held {
             return;
         }
         let eligible = decision.state == SchedulingDecisionState::Selected
@@ -209,7 +215,7 @@ struct Draft<'a> {
 }
 
 impl ScheduleExplanationTable {
-    /// `record_held_back` with no instance held back.
+    /// `record_held_back` with no instance held back and none waiting for its client update.
     #[cfg(test)]
     pub(crate) fn record(
         &mut self,
@@ -224,6 +230,7 @@ impl ScheduleExplanationTable {
             evaluated_at_unix_ms,
             expected,
             &IdleHeldBack::new(),
+            IdleUpdateHold::default(),
         );
     }
 
@@ -235,7 +242,9 @@ impl ScheduleExplanationTable {
     /// alias), the duration its dispatch would reserve and where it comes from (`declared` or
     /// `runs:<n>`); a row carries both. IDLE-WG (0.12.27): `held_back`, the instances a
     /// time-bound gate holds back as the evaluation ran ([`idle_held_back`]), which only the idle
-    /// plan reads; the rows stay the evaluation's own.
+    /// plan reads; the rows stay the evaluation's own. UPD-1 fix round 1 (review M1):
+    /// `update_hold`, the instances position 4a holds as the evaluation ran and the store update
+    /// tasks it lets through, which only the idle plan reads too.
     pub(crate) fn record_held_back(
         &mut self,
         evaluation: &PolicyEvaluation,
@@ -243,6 +252,7 @@ impl ScheduleExplanationTable {
         evaluated_at_unix_ms: u64,
         expected: &ExpectedRuntimeOf<'_>,
         held_back: &IdleHeldBack,
+        update_hold: IdleUpdateHold<'_>,
     ) {
         let previous = self.latest.take();
         let mut wakes = BTreeMap::<&str, Option<u64>>::new();
@@ -259,6 +269,7 @@ impl ScheduleExplanationTable {
                 decision,
                 evaluated_at_unix_ms,
                 held_back.get(alias).copied(),
+                update_hold.holds(decision),
             );
             let rows = drafts.entry(alias).or_default();
             if decision.state == SchedulingDecisionState::Selected {

@@ -834,7 +834,8 @@ package's run has succeeded there since.
   the observation time and the value; observed at max(now, the previous record's observation +
   1)):
   - `true`, before the terminal of any run (scheduled, direct, a startup package's, a ladder
-    rung's) that the page ended with `contained_task_application_update_required`
+    rung's) that the page ended with `contained_task_application_update_required`, after its
+    handler, or (fix round 1) after its handler failed short of fatal
     (`source_snapshot_id` `application_update:run:<run_id>`). A refusal of the store fails that
     run with the refusal (Fail Loud); a fatal failure halts as any other.
   - `false`, before the successful terminal of the own run of a package whose `control.json`

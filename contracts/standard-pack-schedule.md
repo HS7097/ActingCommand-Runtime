@@ -183,7 +183,8 @@ composes a valid empty catalog (V2 accepts an empty task list and an empty `appr
   check's own (`standard-pack-check.<server>`), so every rule and item is placed and compiled as
   the Runtime places it for one instance of each server. A refusal is
   `standard_pack_root_invalid` naming `schedule.json`; each unclassified package is one
-  `standard_pack_package_unclassified` in `warnings`.
+  `standard_pack_package_unclassified` in `warnings`. Then (UPD-1 fix round 1, since 0.12.30) a
+  store update rule whose `cooldown_ms` is 0 is refused the same way ("The store update rule").
 - `actinglab standard-pack compose --root <standard_packs.root> --instance
   <alias>=<game>/<server>... --out <new directory>` composes the game roots below `--root` for
   the given bindings (`--instance` once per bound instance; given after the command's words it is
@@ -291,7 +292,13 @@ checks them), and the composer fills the scope:
 
 - `cooldown_ms` is how long the rule waits before it looks again when the store has no new version
   yet (its run ends "not needed", the fact turns false, the next task meets the dialog again and
-  the fact is true again); 30 minutes is an example, the resource side chooses it.
+  the fact is true again); 30 minutes is an example, the resource side chooses it. It is the only
+  pace of that loop, so it must be above 0 (UPD-1 fix round 1): `package bundle --schedule` and
+  `actinglab standard-pack check` refuse a rule whose package declares `store_update` and whose
+  `cooldown_ms` is 0 as `standard_pack_root_invalid`, `schedule_invalid` at
+  `/rules/<i>/cooldown_ms` (a rule without the member is refused already, the member being
+  required). This is a validity rule of the tools, not a tunable; the Runtime's composer does not
+  repeat it.
 - `requires` names nothing new (a typed `fact` predicate).
 - No other rule changes: the hold of the instance's other tasks is the Runtime's.
 - A timeline event's `invalidates_fact_prefixes` must not cover `health.application.`.

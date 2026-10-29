@@ -2491,6 +2491,14 @@ tests = [
 ]
 incident = ["UPD-1"]
 
+# UPD-1 fix round 1 (0.12.30; review L6; register §1.215; contracts/standard-pack-schedule.md, "The store update rule"): package bundle --schedule and standard-pack check refuse a schedule.json rule that runs a store update pack (control.json store_update) with cooldown_ms 0, standard_pack_root_invalid with schedule_invalid at /rules/<i>/cooldown_ms, and package bundle writes no --out; with a cooldown both pass, and a rule of a pack without store_update may keep 0
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_373_navt::upd1_l6_a_store_update_rule_without_a_cooldown_is_refused",
+]
+incident = ["UPD-1"]
+
 # STORE-FG-1 (0.12.29; register §1.207 SF-5; design rd-1029/design-store-fg.md §8.1; contracts/package-reference.md, the standard-pack cross-check): package bundle and standard-pack check report one package_bundle_store_tap_unlocated warning (package_id, pack_operation_id) per pack and store step of control.json store_update that taps with point, rect or specific_rect, in registry order, and both still pass; a root without such a pack reports none
 [[gate]]
 coverage = "Y"
