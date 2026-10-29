@@ -25,7 +25,8 @@
 //!   no task soon, also per instance); `display_safe_area` (Workflow #392 DA-4b-D, Alice's
 //!   ruling 69: the declared safe areas' directory and each instance's device model); `install`
 //!   (Workflow #421 INST-1, read by `actingctl install` from the configuration file,
-//!   [`install::settings`]).
+//!   [`install::settings`]); `host` (RB-2, Alice's ruling of 2026-10-29: the memory and I/O
+//!   priority actingd gives its own process at start).
 //!
 //! actingd reads the files and hands the assembled manifest to the host; the host applies
 //! instructions through this crate. It depends on the contract only (§5.1).
@@ -42,6 +43,8 @@ pub mod emulator_control;
 pub mod execution;
 mod existing;
 pub mod frame_retention;
+// RB-2: `host.*`, the memory and I/O priority actingd gives its own process at start.
+pub mod host;
 mod host_claims;
 pub mod idle;
 // Workflow #421 INST-1: `install.*`, read by `actingctl install` from the configuration file.
@@ -81,6 +84,7 @@ pub use emulator_control::{
     RESTART_EXIT_WAIT_MS as EMULATOR_RESTART_EXIT_WAIT_MS,
 };
 pub use execution::{CaptureCadenceConfig, ExecutionCaptureFile, ExecutionFile};
+pub use host::{HostFile, HostProcessConfig, ProcessPriorityLevel};
 pub use host_claims::{HostClaimsFile, RENEWAL_SLACK_MS, RUN_END_GRACE_MS};
 pub use idle::{IdleAction, IdleConfig, IdleFile};
 pub use instance::{

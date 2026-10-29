@@ -63,6 +63,10 @@ mod gate_390_disc1;
 // reach the controller in every pacing mode.
 #[cfg(test)]
 mod gate_427b;
+// Test-only: RB-2, the `host` section's keys and the start's own priorities through a fake
+// system.
+#[cfg(test)]
+mod gate_rb2;
 
 const CONFIG_SCHEMA_VERSION: &str = "actingcommand.actingd.config.v1";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
@@ -264,6 +268,14 @@ pub(super) struct ActingdConfigFile {
     // unknown members; a file that does not name it keeps its revision.
     #[serde(default)]
     install: Option<actingcommand_runtime_config::install::InstallFile>,
+    /// RB-2 (Alice's ruling of 2026-10-29 10:2x): the memory and I/O priority actingd gives its
+    /// own process at start (`host.*`), each member optional; the defaults file holds both
+    /// defaults (`normal`).
+    // Interface anchor `actingd-config` revision 20 (contracts/component-interfaces.md): a Runtime
+    // before RB-2 refuses a file that names the section, because the file denies unknown members;
+    // a file that does not name it keeps its revision.
+    #[serde(default)]
+    host: Option<actingcommand_runtime_config::HostFile>,
     instances: Vec<InstanceConfig>,
     #[serde(skip)]
     source_root: PathBuf,
@@ -955,6 +967,9 @@ pub(super) struct RuntimeAssembly {
     /// configuration order: the daemon starts their stopped emulators at its start (S6c);
     /// `check-config` reports each instance's value.
     pub(super) emulator_autostart: Vec<String>,
+    /// RB-2: the `host` section in effect, the memory and I/O priority the start gives its own
+    /// process before the Runtime host starts (`crate::process_priority`).
+    pub(super) process_priority: actingcommand_runtime_config::HostProcessConfig,
 }
 
 /// A refused `resource_package`: the code, the offending instance and path and, for
@@ -1555,6 +1570,8 @@ impl ActingdConfigFile {
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
             "install": serde_json::to_value(&self.install)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            "host": serde_json::to_value(&self.host)
+                .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
         });
         let standard_packs_root = self
             .standard_packs
@@ -1661,17 +1678,20 @@ impl ActingdConfigFile {
         })?;
         // Workflow #387 D1b: the whole-section checks of the file layer, with the facts of other
         // crates they read (§5.3); a start and check-config refuse the same way.
-        actingcommand_runtime_config::EffectiveConfig::from_manifest(&manifest)
-            .and_then(|effective| {
-                effective.check(&actingcommand_runtime_config::CheckContext::new(
-                    host.scheduler().maximum_client_heartbeat_interval_ms,
-                    actingcommand_runtime_host::recovery_ladder_device_bounds(),
-                ))
-            })
-            .map_err(|failure| {
-                *refused = Some(failure.outcome());
-                failure.failure_code().code()
-            })?;
+        // RB-2: the start applies the `host` section to its own process right after this.
+        let process_priority =
+            actingcommand_runtime_config::EffectiveConfig::from_manifest(&manifest)
+                .and_then(|effective| {
+                    effective.check(&actingcommand_runtime_config::CheckContext::new(
+                        host.scheduler().maximum_client_heartbeat_interval_ms,
+                        actingcommand_runtime_host::recovery_ladder_device_bounds(),
+                    ))?;
+                    effective.host_process()
+                })
+                .map_err(|failure| {
+                    *refused = Some(failure.outcome());
+                    failure.failure_code().code()
+                })?;
         host = host.with_config_manifest(manifest.clone());
         if let Some(selection) = &config_selection {
             host = host.with_config_selection(selection.clone());
@@ -1715,6 +1735,7 @@ impl ActingdConfigFile {
             unbound_handsets,
             unused_device_bindings,
             emulator_autostart,
+            process_priority,
         })
     }
 

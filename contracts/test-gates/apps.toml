@@ -1033,6 +1033,16 @@ tests = [
 ]
 incident = ["#427-B"]
 
+# RB-2 (0.12.28; Alice's ruling of 2026-10-29 10:2x 「设回正常」; brief rd-1029/brief-rb2.md; contracts/runtime-config.md, "The host section"; actingd-config revision 20): host.process_memory_priority and host.process_io_priority default to normal from the defaults file, are not settable, take low, and refuse any other value as config_value_invalid naming the key (out_of_range for another word, wrong_type for no string); on a fake system that starts as a below-normal scheduled task leaves a process (memory 2, I/O 1, CPU below normal) the start sets memory then I/O to the configured levels (5/2, 2/1) and reads each back, calls nothing else and leaves the CPU class, and records host_process_priority_applied (info) with memory_priority_requested/_read and io_priority_requested/_read; a system without the priorities records the same code with the requested levels only; a refused call or a level the system keeps is host_process_priority_failed (warning) with each refusal a caused_by foreign_os_error naming its operation, the remaining calls still made
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_rb2::rb2_the_host_keys_default_to_normal_take_low_and_refuse_any_other_value_by_name",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_rb2::rb2_the_start_applies_the_configured_levels_reads_them_back_and_leaves_the_cpu_class",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_rb2::rb2_a_failing_call_is_a_warning_with_its_failure_and_the_start_goes_on",
+]
+incident = ["RB-2"]
+
 # Workflow #421 P12 (v0.12.25; W1-1, brief rd-1028/brief-wave1.md; #421 6441776975): on the fake host, the composite update's automatic rollback evaluates the rollback gate before it closes the new Runtime: a gate that fails closes nothing, the new Runtime keeps running with the hold, the rollback's close is never begun and the command ends rollback_gate_failed naming only release-hold (D-7, adapted); a gate that passes rolls back as before, after a failed check (D-5) or a new start that exited (D-6), and a rollback interrupted after each of its steps, the close past the gate's pass among them, is finished by resume (F-4)
 [[gate]]
 coverage = "Y"

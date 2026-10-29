@@ -3664,6 +3664,18 @@ wave 1.
 | P19-2 | a reset never clears a task's own last result: its own `dependency_completed`, `since_own_run`'s own run and `once_per_reading`'s served check read the task's state as the input holds it | behaviour | W1-4 | the policy evaluator | the window result before `feedback_stop` and another task's `dependency_completed` still read the state as the resets leave it; `clock_slot_live` reads the trigger the same way, so the K4 clock-slot liveness changes with it: a pair whose own dependency was Unknown after a reset may now be live, and more `clock_slot_superseded` or `clock_slot_expired` records are written (diagnostics only, not dispatch) |
 | P19-3 | `config.subsystems` row `reset_exclusions` (always on, `config_subsystem_always_on`) | new row value of an existing fact (no shape) | W1-4 | W1-4 | [actingd-check-config.md](actingd-check-config.md); a `schedule.json` whose event writes P19-1 must list it in `requires`, else the composer refuses the file (`schedule_invalid` at the first `/timeline/<i>/excludes_fact_prefixes`); a file that relies on P19-2 names it too |
 
+### 1.202 Slice RB-2 (0.12.28): actingd sets its own memory and I/O priority at start (Alice's ruling of 2026-10-29 10:2x: 「设回正常」; investigation `rd-1029/inv-reboot/rb.md` §3 and RB-2; coordinator work order `rd-1029/brief-rb2.md`)
+
+[runtime-config.md](runtime-config.md) ("The `host` section") and the actingd and host-metrics
+fragments of the outcome catalog are the contract. **No persisted ledger shape**: the record is
+a daemon line, and the section's rows are new rows of the existing `config.parameters.<section>`
+fact. The number 1.202 is provisional for the parallel slices.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| RB2-1 | `host.process_memory_priority`, `host.process_io_priority` (string `normal` \| `low`, default `normal` from the defaults file, not settable: applied before the ledger opens) | new configuration section (**`actingd-config` revision 20**) | RB-2 | actingd's start | another value refuses the start and check-config as `config_value_invalid` naming the key; the CPU priority class is no key and is never changed |
+| RB2-2 | `host_process_priority_applied` (info) and `host_process_priority_failed` (warning), `ladder_class` none, values `memory_priority_requested`, `io_priority_requested` (required), `memory_priority_read`, `io_priority_read` (optional; the four new keys of the key table) | new outcome codes, one daemon line per start | RB-2 | actingd's start | a failed call is a `caused_by` `foreign_os_error` with one of the four new host-metrics locations `process_memory_priority_set`, `_read`, `process_io_priority_set`, `_read`; the start goes on |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -3783,6 +3795,7 @@ when it takes effect.
 | `scheduling.remedy.*`, and per instance `instance.<id>.scheduling.remedy.choices` (**`actingd-config` revision 6**, Workflow #411 B15; §1.110 B15-8) | `enabled`, `max_per_round`, `choices` | `true`, 2 (`1..=8`), `[]`; an instance's list replaces the section's as a whole, default the section's; every key settable; rows of the `session.remedy.choices` shape ([runtime-config.md](runtime-config.md)) | #411 B15 R3 (built, §1.113) | #411 B15 R4 (0.12.3); R7 (check-config notes) |
 | `touch.*` (**`actingd-config` revision 7**, Workflow #406; §1.136) | `sampling.sigma_ratio_milli`, `sampling.max_redraws`, `sampling.candidate_count`, `history.points_per_box`, `history.max_boxes` | 250 (`1..=1000`), 8 (`0..=64`), 4 (`1..=16`), 16 (`1..=256`), 1024 (`1..=65536`); host-wide, every key settable (plan Q13; [runtime-config.md](runtime-config.md)) | #406 T12 (§1.136) | #406 T12 (0.12.x) |
 | `emulator_control.*` (**`actingd-config` revision 8**, #411 A50; §1.158) | `restart_exit_wait_ms` | 60 000 (`1000..=300000`); host-wide, settable ([runtime-config.md](runtime-config.md)) | A50 (§1.158 A50-5) | A50 (0.12.x) |
+| `host.*` (**`actingd-config` revision 20**, RB-2; §1.202) | `process_memory_priority`, `process_io_priority` | `normal` (`normal` \| `low`); not settable, applied by actingd to its own process at start ([runtime-config.md](runtime-config.md), "The `host` section") | RB-2 (§1.202 RB2-1) | RB-2 (0.12.28) |
 
 - Removed by option 丙 in the same revision (PKG-S4): `startup_package.expected_sha256`,
   `prerequisite_packages[].package_digest`, `policy.procedure_manifest[].package_digest`. A

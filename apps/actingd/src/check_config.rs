@@ -101,6 +101,9 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
         unbound_handsets,
         unused_device_bindings,
         emulator_autostart,
+        // RB-2: check-config checks the `host` section (its rows are in the manifest) and
+        // applies nothing; only the start sets its own priorities.
+        process_priority: _,
     } = file.assemble_or_refusal().map_err(|(code, refusal)| {
         let error = match device.filter(|device| device.code() == code) {
             Some(device) => {

@@ -105,6 +105,15 @@ actingcommand_contract::outcome_codes! {
         /// start tries again after the configured wait (`attempts`, `limit_count`,
         /// `retry_after_ms`; the attempt's failure is the `caused_by` link).
         InstanceDiscoveryRetried => "instance_discovery_retried": warning / none,
+        /// RB-2: at start actingd set its own memory and I/O priority to the `host` section's
+        /// levels and read back the same levels (`memory_priority_requested`,
+        /// `io_priority_requested`, and `memory_priority_read`, `io_priority_read` where the
+        /// operating system has them).
+        HostProcessPriorityApplied => "host_process_priority_applied": info / none,
+        /// RB-2: at start a call setting or reading actingd's own memory or I/O priority failed
+        /// (each failure a `caused_by` link), or a level read back is not the one asked for;
+        /// the same values as `host_process_priority_applied`. The start goes on.
+        HostProcessPriorityFailed => "host_process_priority_failed": warning / none,
         VisionProviderUnavailable => "vision_provider_unavailable": error / none,
         VisionProviderPathEncodingInvalid => "vision_provider_path_encoding_invalid": error / none,
         AdbPathConflict => "adb_path_conflict": error / none,
