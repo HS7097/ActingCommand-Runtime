@@ -15,8 +15,10 @@
 //!   fact, so a store update rule's trigger reads it.
 //! - **The gate** (`contracts/scheduling-blackout.md`, "Order of the deferrals", position 4a):
 //!   while an instance's fact is true, every candidate of the instance except a `store_update`
-//!   package's task is deferred with `application_update_pending` and no wake of its own; the fact
-//!   refresh's deferral names it as its gate. The idle plan wakes no instance for such a decision,
+//!   package's task is deferred with `application_update_pending` and no wake of its own, whatever
+//!   its rank (fix round 3: [`instance_holds`], for a candidate the round settles before asking
+//!   the eligibility closure); the fact refresh's deferral names it as its gate. The idle plan
+//!   wakes no instance for such a decision,
 //!   nor (fix round 1, review M1) for any other decision of a waiting instance but a store update
 //!   task's: a task not a candidate yet (its cooldown, its clock trigger) would only be held by the
 //!   gate once it became one ([`IdleUpdateHold`]).
@@ -26,7 +28,8 @@
 use crate::codes::ApplicationUpdateCode;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_policy::{
-    CandidateEligibility, DecisionReason, EvaluationFacts, FactValue, ScopeSelector, TaskDecision,
+    CandidateEligibility, DecisionReason, EvaluationFacts, FactValue, InstanceHolds, ScopeSelector,
+    TaskDecision,
 };
 use std::collections::BTreeSet;
 
@@ -66,17 +69,44 @@ pub(crate) fn pending_instances(facts: &EvaluationFacts) -> BTreeSet<String> {
         .collect()
 }
 
-/// Position 4a's deferral of a candidate on the instance `instance_id`: no wake of its own (the
-/// fact's change wakes the evaluation); a fact refresh's names the gate, as a blackout's does.
-pub(crate) fn deferral(instance_id: &str, fact_refresh: bool) -> CandidateEligibility {
-    let reason = DecisionReason {
+/// Position 4a's reason for a candidate on the instance `instance_id`.
+fn reason(instance_id: &str) -> DecisionReason {
+    DecisionReason {
         outcome: Outcome::new(ApplicationUpdateCode::Pending)
             .instance_id(instance_id)
             .fact_key(APPLICATION_UPDATE_FACT_KEY),
         detail: format!(
             "Runtime application update pending: instance_id={instance_id}; fact_key={APPLICATION_UPDATE_FACT_KEY}"
         ),
-    };
+    }
+}
+
+/// UPD-1 fix round 3 (CI run 40858239951): position 4a as the evaluator's [`InstanceHolds`]: each
+/// waiting instance (`pending`) held with the gate's reason, the store update tasks exempt. The
+/// eligibility closure is asked only about a candidate the round has not settled already; a
+/// candidate behind the instance's selected store update task, behind the shared run limits or
+/// held by a chain handover is never asked, and without this hold it stayed eligible and
+/// unselected (`instance_already_selected`) while its instance waited.
+pub(crate) fn instance_holds(
+    pending: &BTreeSet<String>,
+    store_tasks: &BTreeSet<String>,
+) -> InstanceHolds {
+    let mut holds = InstanceHolds::default();
+    for instance_id in pending {
+        holds.hold(
+            instance_id.clone(),
+            reason(instance_id),
+            ApplicationUpdateCode::Pending.code(),
+            store_tasks.clone(),
+        );
+    }
+    holds
+}
+
+/// Position 4a's deferral of a candidate on the instance `instance_id`: no wake of its own (the
+/// fact's change wakes the evaluation); a fact refresh's names the gate, as a blackout's does.
+pub(crate) fn deferral(instance_id: &str, fact_refresh: bool) -> CandidateEligibility {
+    let reason = reason(instance_id);
     if fact_refresh {
         CandidateEligibility::Refresh {
             reason,

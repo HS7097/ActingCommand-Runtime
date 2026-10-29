@@ -57,7 +57,7 @@ use actingcommand_policy::{
     MAX_EVALUATION_INSTANCES, MAX_TASK_FAILURE_STREAK, MAX_TASK_LAST_DURATION_MS, PolicyEvaluation,
     REMEDY_JOURNAL_MAX_RUNS, RemedyInputs, RemedyJournal, RemedyPlan, RemedyRun, RemedySettlement,
     RunSlots, SchedulingDecisionState, ScopeSelector, TaskDecision, TaskRuntimeSnapshot,
-    TaskTerminalState, activity_window_at, compile_catalog, evaluate_with_owed_reruns,
+    TaskTerminalState, activity_window_at, compile_catalog, evaluate_with_instance_holds,
     plan_remedies,
 };
 use actingcommand_runtime_state::{PlanningQuotaUsage as DetectionQuotaUsage, RuntimeStateStore};
@@ -2844,9 +2844,15 @@ impl PolicyHost {
             .table()
             .map(crate::remedy::BuiltTable::store_tasks)
             .unwrap_or_default();
+        // UPD-1 fix round 3: position 4a also holds every candidate the round settles before it
+        // asks the closure below (behind the store update task that took the instance, the shared
+        // run limits or a chain handover), so none of a waiting instance but a store update task's
+        // is left eligible and unselected.
+        let instance_holds =
+            crate::application_update::instance_holds(&update_pending, &store_tasks);
         let deferrals = clock_slot::Deferrals::default();
         let started = Instant::now();
-        let mut evaluation = evaluate_with_owed_reruns::<RuntimeHostError>(
+        let mut evaluation = evaluate_with_instance_holds::<RuntimeHostError>(
             &active.compiled,
             facts,
             resources,
@@ -2860,6 +2866,7 @@ impl PolicyHost {
             chain_handover,
             &run_slots,
             &rerun_plan.owed,
+            &instance_holds,
             |task, _instance_id, page_id| {
                 Ok(crate::host::chain_entry_holds_page(
                     procedure_manifest,

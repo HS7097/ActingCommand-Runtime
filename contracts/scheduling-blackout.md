@@ -282,7 +282,17 @@ fact is an evaluation input, so an intent evaluated before it turned true is
 `policy_facts_stale`. The idle plan counts such a decision neither due nor as a wake, nor
 (fix round 1) any other decision of a waiting instance but a store update task's: a task the
 position never saw (its cooldown, its clock trigger not come) names its own wake, and would only
-be held here once it became a candidate;
+be held here once it became a candidate. **Whatever the ranking** (fix round 3, CI run
+40858239951): the round settles some candidates before it asks the closure (one behind its
+instance's selected candidate, one behind the shared run limits, one a chain handover holds); on
+a waiting instance such a candidate that is not a store update task is held here all the same,
+`application_update_pending` with no wake in place of `instance_already_selected`,
+`heavy_scene_budget_deferred`, `heavy_scene_budget_exhausted`,
+`policy_concurrent_runs_deferred` or `policy_chain_handover_waiting` (the policy crate's
+`InstanceHolds`, `evaluate_with_instance_holds`; the fact refresh's names it as its gate). So a
+store update task that ranks first never leaves the instance's other candidates eligible and
+unselected. A candidate the closure is asked about is answered by positions 1 to 4 first, as
+above;
 
 5. the task package is not loaded (`pack_registry_not_loaded`, Workflow #389), then the pack
    schedule closes it (`pack_schedule_closed`, `instance-fact-store.md`, "Pack schedule facts");

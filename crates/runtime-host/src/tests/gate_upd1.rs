@@ -571,7 +571,9 @@ fn upd1_b4_without_a_new_version_the_store_task_looks_again_only_after_its_coold
     let first_at = POLICY_NOW_UNIX_MS + 1_000;
     let due = first_at + STORE_COOLDOWN_MS;
 
-    // 1.
+    // 1. Fix round 3 (CI run 40858239951): here the store update task ranks first and takes the
+    // instance, so the round settles the ordinary task without asking the eligibility closure;
+    // position 4a holds it all the same (the evaluator's `InstanceHolds`).
     let first = bench.evaluate(first_at, 1);
     assert_pending(&first, TASK, "the dialog met");
     let (intent, chain) = dispatched_task(&first, STORE_TASK)

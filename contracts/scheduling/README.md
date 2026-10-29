@@ -825,8 +825,11 @@ Since 0.12.30 (design `rd-1029/design-upd1.md` §4, §6; Alice's rulings 95 and 
   candidate of that instance with `application_update_pending` (`instance_id`, `fact_key`) and no
   wake, except a store update task: a task whose procedure's bound package declares
   `store_update`. The fact refresh is held too (`fact_refresh_pending`, `gate_code`
-  `application_update_pending`). Other instances are not held (#419). Nothing in a catalog names
-  the hold: it is the Runtime's, so every rule of the game is held without a change.
+  `application_update_pending`). The hold does not depend on the ranking (fix round 3): a
+  candidate behind the store update task that took the instance, behind the shared run limits or
+  held by a chain handover is deferred `application_update_pending` too, never left eligible
+  with `instance_already_selected`. Other instances are not held (#419). Nothing in a catalog
+  names the hold: it is the Runtime's, so every rule of the game is held without a change.
 - **The store update rule.** The game root's `schedule.json` writes one rule per server for its
   store update package whose trigger is the typed `fact` predicate
   `health.application.update_required eq true` (`max_age_ms` null), with its own `cooldown_ms`,
