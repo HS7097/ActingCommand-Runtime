@@ -3681,6 +3681,21 @@ fact. The number 1.202 is provisional for the parallel slices.
 | RB2-1 | `host.process_memory_priority`, `host.process_io_priority` (string `normal` \| `low`, default `normal` from the defaults file, not settable: applied before the ledger opens) | new configuration section (**`actingd-config` revision 20**) | RB-2 | actingd's start | another value refuses the start and check-config as `config_value_invalid` naming the key; the CPU priority class is no key and is never changed |
 | RB2-2 | `host_process_priority_applied` (info) and `host_process_priority_failed` (warning), `ladder_class` none, values `memory_priority_requested`, `io_priority_requested` (required), `memory_priority_read`, `io_priority_read` (optional; the four new keys of the key table) | new outcome codes, one daemon line per start | RB-2 | actingd's start | a failed call is a `caused_by` `foreign_os_error` with one of the four new host-metrics locations `process_memory_priority_set`, `_read`, `process_io_priority_set`, `_read`; the start goes on |
 
+### 1.203 Slice B43 (0.12.28): a shared interrupt page can declare that reaching its limit is an environment problem (Workflow #411 B43; triage `rd-1028/triage-p71.md` B43, Alice's item 88 of 10-29: 「全部放行」; coordinator work order `rd-1029/brief-wave2d.md` B43)
+
+[package-reference.md](package-reference.md) ("Standard package root", `interrupts.json` and
+"Shared interrupt pages") and [policy-suspension.md](policy-suspension.md) ("Which failures
+accumulate") are the contract. **No persisted ledger shape**: the member is a root-file format
+addition, and the new code rides the existing `task.failed` terminal and
+`policy.execution_recorded` failure as any code does (a catalog entry, not a row, §7); no
+configuration key, no wire or interface revision raised here. The number 1.203 is provisional
+for the parallel slices of wave 2.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| B43-1 | an `interrupts.json` entry's optional `limit_cause`: `"pack_logic"` (default) or `"environment"` (`StandardPackInterrupt::limit_cause`, `InterruptLimitCause`) | new optional member (resource file format, not a ledger shape) | B43 | resource side | read by `parse_standard_pack_interrupts`, so the Runtime, `package bundle` and `standard-pack check` accept and refuse it alike; another value or type is `malformed` (pointer empty, as every decoding refusal of the file); absent, the entry serializes as before; joins `package` revision 6, which BT-PK6 declares, admitted by code until then; it is the first root-file member folded into a `package` revision (the earlier ones are pack members), so BT-PK6 must name `interrupts.json` `limit_cause` when it declares revision 6; a Runtime before 0.12.28 refuses a root that names it (`standard_pack_root_invalid`) |
+| B43-2 | a run that meets an `environment` page once more than its `max_per_run` ends with `contained_task_interrupt_environment_limit_reached` (error, `budget_or_permission`; `page_id`, `count`, `limit_count`) | behaviour | B43 | runtime-host | in place of `contained_task_interrupt_limit_reached`; the run's 16 handlings of all pages together keep the old code; the failure is rerun only in every scope (`failure_accumulates`), its identity keeps `g`; the recovery ladder follows its configuration: no default trigger matches the class, so by default the code starts no ladder; an operator who wants one adds a trigger item that names the code |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

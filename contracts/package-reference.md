@@ -655,10 +655,34 @@ data files beside its package directories, one directory per game below the conf
   the listed page whose id equals the package's page id without the game prefix. Unknown
   members are refused.
 - **`interrupts.json`.** `{schema_version, game, interrupts}`: at most 32 entries
-  `{page, handlers, then, max_per_run}`; `page` is a page of `pages.json`, named once;
-  `handlers` names 1–8 packages of the registry, at most one per server; `then` is `"resume"`,
-  `"end_run"` or `{"run": [packages]}` (1–8 packages, at most one per server); `max_per_run`
-  is 1–8. The file requires `pages.json`.
+  `{page, handlers, then, max_per_run, limit_cause?}`; `page` is a page of `pages.json`, named
+  once; `handlers` names 1–8 packages of the registry, at most one per server; `then` is
+  `"resume"`, `"end_run"` or `{"run": [packages]}` (1–8 packages, at most one per server);
+  `max_per_run` is 1–8. The file requires `pages.json`.
+  - **`limit_cause`** (Workflow #411 B43, since 0.12.28; optional): what a run that meets the
+    page once more than its `max_per_run` says. `"pack_logic"`, the default when the member is
+    absent, ends the run with `contained_task_interrupt_limit_reached`: the standard pack no
+    longer matches the game, and a scheduled task pair that fails so again is paused
+    ([policy-suspension.md](policy-suspension.md), "Which failures accumulate").
+    `"environment"` declares that the page keeps coming back because of the environment the
+    game runs in (its network or its servers, for example a retry dialog during a
+    maintenance), not because of the pack: the run ends with
+    `contained_task_interrupt_environment_limit_reached` (error, ladder class
+    `budget_or_permission`: the handling attempts the data allows the page are spent, as
+    `contained_task_navigation_limit_reached`'s), which is rerun only and never accumulates
+    toward a pause. The recovery ladder follows its configuration: no default trigger matches
+    the class, so by default the code starts no ladder (an outage of the game's network or
+    servers is not cured by restarting the application or the emulator); an operator who wants
+    a ladder for it adds a trigger item that names the code. The member covers the
+    page's own limit only: a run's 17th handling of all pages together still ends with
+    `contained_task_interrupt_limit_reached`. Which pages are environment problems is the
+    resource repository's data; the Runtime names no page. Any other value or type is
+    `malformed`, as an unknown member is. The member joins `package` revision 6, which BT-PK6
+    declares at the end of the B train; until then the Runtime admits it by code. A Runtime
+    before 0.12.28 refuses a file that names it (the entry denies unknown members), so the
+    whole game root is `standard_pack_root_invalid` there: a resource repository adds the
+    member only for a Runtime that reads it. An entry without it reads and serializes as
+    before.
 - **`navigation.json`** (Workflow #373 NAV-5, M-373 §3.5). `{schema_version, game, edges,
   recovery_chain}`: at most 1024 edges `{from, to, package_id}`, each "run `package_id` on the
   page `from` to reach the page `to`"; `from` and `to` are different pages of `pages.json`
@@ -765,7 +789,10 @@ data files beside its package directories, one directory per game below the conf
   `contained_task_interrupt_escalated` (`end_run`); an `interrupt_handled` record follows each.
   Two or more matches are an `interrupt_ambiguous` record and nothing is handled. A page
   handled `max_per_run` times, or a run that handled 16 pages, ends the run with
-  `contained_task_interrupt_limit_reached`. A feature, handler or `then.run` package that is
+  `contained_task_interrupt_limit_reached`; a page whose `limit_cause` is `"environment"`
+  (Workflow #411 B43) ends it at its own limit with
+  `contained_task_interrupt_environment_limit_reached` instead (`page_id`, `count`,
+  `limit_count` as the other). A feature, handler or `then.run` package that is
   not of the run's server, cannot be admitted or is not eligible (a `recognize_only` feature
   package of the run's game, server and resolution with exactly the listed pages; a handler or
   `then.run` package eligible as a prerequisite layer of the run, declaring no prerequisite
