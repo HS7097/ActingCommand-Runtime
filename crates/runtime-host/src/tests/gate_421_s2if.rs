@@ -75,6 +75,7 @@ fn start(root: &TempDir, instance: InstanceId, manifest: RuntimeConfigManifest) 
 fn instruct(host: &RuntimeHost, values: &[(&str, Value)]) {
     let mut client = TestClient::connect(host);
     let request = client.request(RuntimeOperation::ConfigureSettings {
+        expected_revision: None,
         changes: values
             .iter()
             .map(|(key, value)| ConfigSettingChange {

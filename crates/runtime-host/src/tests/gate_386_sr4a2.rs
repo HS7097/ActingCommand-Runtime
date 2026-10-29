@@ -378,6 +378,7 @@ impl Fixture {
     fn configure(&self, key: String, value: Value) {
         let mut client = TestClient::connect(&self.host);
         let request = client.request(RuntimeOperation::ConfigureSettings {
+            expected_revision: None,
             changes: vec![ConfigSettingChange {
                 key,
                 value: Some(value),

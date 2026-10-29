@@ -276,6 +276,8 @@ mod gate_389_mcp4;
 mod gate_389_mcp9a;
 // Workflow #389 U-2: the door binds each connection to its channel and marks, never refuses.
 mod gate_389_u2;
+// Workflow #429 R-0: the workbench's kinds have their shapes and answer `not_implemented`.
+mod gate_429_r0;
 // Workflow #390 OUT-1 (forced compromises O-03, O-04, O-05): outcome subsets, unproduced
 // outcomes and zero-input packages with several outcomes.
 mod gate_390_out1;

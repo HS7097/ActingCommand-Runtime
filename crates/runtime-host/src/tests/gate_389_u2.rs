@@ -85,6 +85,7 @@ fn bind(
 
 fn set_stuck_recovery(key: &str) -> RuntimeOperation {
     RuntimeOperation::ConfigureSettings {
+        expected_revision: None,
         changes: vec![ConfigSettingChange {
             key: key.to_owned(),
             value: Some(json!(false)),
@@ -381,6 +382,7 @@ fn u2_the_lab_channel_takes_option_requests_before_u6_without_any_lab_option() {
         EventActor::Agent,
         EventSource::Adapter,
         RuntimeOperation::ApplyResourceTargets {
+            expected_version: None,
             document_json: "{}".to_owned(),
         },
     );

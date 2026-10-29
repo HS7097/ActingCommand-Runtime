@@ -681,16 +681,34 @@ impl HostShared {
             }
             RuntimeOperation::CompileProposal { proposal } => self.compile_proposal(proposal),
             RuntimeOperation::PromoteProposal { proposal } => self.promote_proposal(proposal),
-            RuntimeOperation::ApplyResourceTargets { document_json } => {
-                self.apply_resource_targets(validated, document_json)
-            }
+            // Workflow #429 R-0 (register §1.213): the version check of `expected_version` is
+            // R-13c's; until then a request that names it is refused and records nothing.
+            RuntimeOperation::ApplyResourceTargets {
+                expected_version: Some(_),
+                ..
+            } => Err(not_implemented(
+                actingcommand_contract::codes::ContractLocation::ApplyResourceTargets,
+            )),
+            RuntimeOperation::ApplyResourceTargets {
+                document_json,
+                expected_version: None,
+            } => self.apply_resource_targets(validated, document_json),
             RuntimeOperation::ResourceTargetView { instance_alias } => {
                 self.resource_target_view(instance_alias)
             }
+            // Workflow #429 R-0 (register §1.213): the revision check of `expected_revision` is
+            // R-4's; until then a request that names it is refused and records nothing.
+            RuntimeOperation::ConfigureSettings {
+                expected_revision: Some(_),
+                ..
+            } => Err(not_implemented(
+                crate::codes::ConfigHostLocation::ConfigureSettings,
+            )),
             // Workflow #387 D1b: a general instruction of the three counters.
-            RuntimeOperation::ConfigureSettings { changes } => {
-                self.configure_settings(request, validated, changes)
-            }
+            RuntimeOperation::ConfigureSettings {
+                changes,
+                expected_revision: None,
+            } => self.configure_settings(request, validated, changes),
             // Workflow #389 U-1: the contract has these shapes and later slices add the
             // behaviour (LoadPack and UnloadPack U-3, UpgradeState and UpgradeStateStatus U-4).
             // Until then each is refused and records nothing.
@@ -710,13 +728,31 @@ impl HostShared {
             RuntimeOperation::UpgradeStateStatus { .. } => {
                 Err(not_implemented(HostLocation::UpgradeStateStatus))
             }
+            // Workflow #429 R-0 (register §1.213): the player workbench's kinds have their wire
+            // shapes; R-5, R-6, R-8, R-13c and R-12 add the behaviour. Until then each is refused
+            // and records nothing.
+            RuntimeOperation::RunInstanceTask { .. } => {
+                Err(not_implemented(HostLocation::RunInstanceTask))
+            }
+            RuntimeOperation::StopInstanceRun { .. } => {
+                Err(not_implemented(HostLocation::StopInstanceRun))
+            }
+            RuntimeOperation::EditPackSchedule { .. } => {
+                Err(not_implemented(HostLocation::EditPackSchedule))
+            }
+            RuntimeOperation::EditResourceTarget { .. } => {
+                Err(not_implemented(HostLocation::EditResourceTarget))
+            }
+            RuntimeOperation::RoutineSummary { .. } => {
+                Err(not_implemented(HostLocation::RoutineSummary))
+            }
         }
     }
 }
 
-/// A request kind whose behaviour a later slice adds: Denied with the shared code
-/// `not_implemented` (Workflow #389 U-1).
-fn not_implemented(operation: HostLocation) -> RequestFailure {
+/// A request kind (or member) whose behaviour a later slice adds: Denied with the shared code
+/// `not_implemented` (Workflow #389 U-1; Workflow #429 R-0).
+fn not_implemented(operation: impl Into<Location>) -> RequestFailure {
     RequestFailure::request(
         RuntimeHostError::request(
             actingcommand_contract::codes::SharedCode::NotImplemented,

@@ -112,6 +112,7 @@ fn set_host_blackouts(host: &RuntimeHost, entries: Value, connection: u64) {
             &runtime_request(
                 &ids,
                 RuntimeOperation::ConfigureSettings {
+                    expected_revision: None,
                     changes: vec![ConfigSettingChange {
                         key: "scheduling.blackout.host".to_owned(),
                         value: Some(entries),

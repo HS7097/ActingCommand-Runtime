@@ -1745,6 +1745,10 @@ actingcommand_contract::outcome_locations! {
         DeviceDiagnosticBudgetClosed => "device_diagnostic_budget_closed",
         DeviceDiagnosticCountOverflow => "device_diagnostic_count_overflow",
         DrainPausedInstance => "drain_paused_instance",
+        // Workflow #429 R-0 (register §1.213): the workbench's kinds, refused `not_implemented`
+        // until their slices (R-8, R-13c) add the behaviour.
+        EditPackSchedule => "edit_pack_schedule",
+        EditResourceTarget => "edit_resource_target",
         EffectiveConfigurationLimitExceeded => "effective_configuration_limit_exceeded",
         EncodeBackupBinding => "encode_backup_binding",
         EncodeEffectiveConfiguration => "encode_effective_configuration",
@@ -2253,9 +2257,13 @@ actingcommand_contract::outcome_locations! {
         RollbackLease => "rollback_lease",
         RollbackPolicyCatalog => "rollback_policy_catalog",
         RollbackReleaseSet => "rollback_release_set",
+        // Workflow #429 R-0: the routine summary read (R-12).
+        RoutineSummary => "routine_summary",
         RunContainedTaskCapture => "run_contained_task_capture",
         /// Workflow #369 S6c: an autostart claim's hold and Start on its instance's worker.
         RunEmulatorAutostart => "run_emulator_autostart",
+        // Workflow #429 R-0: run a bound task now (R-5).
+        RunInstanceTask => "run_instance_task",
         RunInstanceWorker => "run_instance_worker",
         /// Workflow #427-A: the policy driver hands an admitted scheduled run to its instance's
         /// worker, registering it as in flight.
@@ -2309,6 +2317,8 @@ actingcommand_contract::outcome_locations! {
         StagePolicyCatalog => "stage_policy_catalog",
         StageReleaseSet => "stage_release_set",
         StartRuntimeHost => "start_runtime_host",
+        // Workflow #429 R-0: stop an instance's run, the Runtime resetting (R-6).
+        StopInstanceRun => "stop_instance_run",
         StopInstanceWorkers => "stop_instance_workers",
         StoreStrategicReport => "store_strategic_report",
         SupersedePreparationAttempt => "supersede_preparation_attempt",

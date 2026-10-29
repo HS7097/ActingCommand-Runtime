@@ -184,7 +184,10 @@ static and exhaustive over `RuntimeOperation`: no content, no heuristics.
   - Instructions: a decision or setting handed to the Runtime, which does the work
     itself: pause and resume, monitor settings, whether a package is scheduled for a
     period, the priority offset, instance facts and resource targets, request shutdown,
-    and the upgrade state (for upgrades only).
+    and the upgrade state (for upgrades only). Workflow #429 R-0 (section Workbench
+    request kinds): running a task bound to the instance now, stopping the instance's
+    run, and what acts only on what is bound to the instance: emulator start, stop and
+    restart, the self-check, and the assigned application's start and stop.
   - Approvals stay in the configuration; they are not requests.
 - **Lab: the debugging module.** It takes the kinds its two options open:
   - option one, authoring: the agent planning session and the package tools
@@ -192,10 +195,11 @@ static and exhaustive over `RuntimeOperation`: no content, no heuristics.
     recognition, signature matching, package check, evidence export) and the
     resource-authoring event;
   - option two, debugging: what only the Runtime itself could otherwise do: tap and
-    input, manual package runs, stopping a run, reset, application start and stop,
-    emulator start, stop and restart and the self-check, pack load and unload, Lab
-    operations, releasing a frame pin and clearing kept frames, registering and
-    retiring diagnostic signatures, debug events.
+    input, manual runs of a package named by its path, stopping a run with the client's
+    own reset, reset, pack load and unload, Lab operations, releasing a frame pin and
+    clearing kept frames, registering and retiring diagnostic signatures, debug events.
+    (Application start and stop, emulator control and the self-check were here until
+    Workflow #429 R-0 moved them to the general interface.)
   - The Lab channel also takes general reads (actinglab reads status, events and
     receipts). It takes no general instruction: the counters are their only entry.
 - **Handshake**: `Health` and `BindChannel`, on any connection and any channel, before
@@ -225,10 +229,13 @@ one would be (section Records).
 | ObserveReadonly, CaptureSequence | general | read (frames) | cli `observe`, `stream`; mcp `ac_observe`, `ac_stream` (new); both pin `Explicit`. Lab channel: actinglab's capture commands and `runtime observe`, pinned `Lab` | yes |
 | DiscoverInstances | general | read (instance discovery) | cli `emulator discover` (and acsetup's instance step); mcp `ac_emulator_discover` (new); ui instance discovery | yes (the request only; a successful discovery appends no observation record, Workflow #383 AO-4q) |
 
-**General instructions (7)**
+**General instructions (10)**
 
 | Kind | Block | Class | Sent by | G14 |
 |---|---|---|---|---|
+| ApplicationLifecycle | general (Workflow #429 R-0; option two before) | instruction (the assigned application's start and stop) | ui (the workbench's "restart the game"); the senders of today (actinglab `session app`, mcp `ac_app`) keep sending it | yes |
+| ControlEmulatorInstance | general (Workflow #429 R-0; option two before) | instruction (emulator start, stop, restart) | ui (the workbench); the senders of today (actingctl's emulator subcommands, mcp `ac_emulator`, actinglab) keep sending it. Its origin gate (User+Ui, Cli+Cli) stays until U-6 | yes |
+| SelfCheckInstance | general (Workflow #429 R-0; option two before) | instruction (self-check) | ui (the workbench's check); the senders of today (`actingctl selfcheck`, actinglab) keep sending it. Its origin gate (User+Ui, Cli+Cli) stays until U-6 | yes |
 | PauseScheduling, ResumeScheduling | general | instruction | cli `pause`, `resume`; mcp `ac_pause`, `ac_resume`; ui later | yes |
 | ConfigureMonitor, ClearMonitor | general | instruction (monitor settings, `recovery_enabled` included) | cli `monitor-set`, `monitor-clear`; mcp `ac_monitor_set`, `ac_monitor_clear` (new). actinglab `session monitor-policy` retires | yes |
 | RequestShutdown | general | instruction (the Runtime closes itself) | cli `request-shutdown` (stays); ui "request shutdown", sent directly as today; mcp `ac_request_shutdown` (new) | yes |
@@ -251,7 +258,7 @@ one would be (section Records).
 | RecognizeArtifact, MatchDiagnosticSignatures, DebugPackage, ExportEvidence | option one | read (package tools; an export writes a copy only) | actinglab `recognize-artifact`, `lab signatures match`, `lab debug-package`, `lab export-evidence` | yes |
 | RecordAuthoringEvent | option one | operation (resource-authoring event) | actinglab's resource-authoring session | yes |
 
-**Option two, debugging (18)**
+**Option two, debugging (15)**
 
 | Kind | Block | Class | Sent by | G14 |
 |---|---|---|---|---|
@@ -259,11 +266,8 @@ one would be (section Records).
 | Input | option two | operation (tap and input) | actinglab tap commands, `touch-probe`, `session recover`, `tap-target`, `navigate`, `ensure`, the stream's input forwarding | yes |
 | AcquireLease, QueueLease, PollQueuedLease, RenewLease, ReleaseLease, CancelQueuedLease | option two | operation (the leases input needs) | actinglab's input proxy and debug session; queueing and polling stay on one Lab connection | yes |
 | SafeReset | option two | operation (reset) | actinglab `runtime reset`, `run stop`; `actingctl reset` retires | yes |
-| ApplicationLifecycle | option two | operation (application start and stop) | actinglab `session app` | yes |
 | RunContainedLabOperation | option two | operation (Lab operation) | actinglab `do`; mcp `ac_lab_do` | yes |
 | CancelContainedTask | option two | operation (stop a run) | actinglab `run stop` (`--cancel-only` stops without reset); mcp `ac_stop_run` | yes |
-| ControlEmulatorInstance | option two | operation (emulator start, stop, restart) | actinglab `emulator start`, `stop`, `restart` (new); mcp `ac_emulator`. actingctl's three subcommands retire | yes |
-| SelfCheckInstance | option two | operation (self-check) | actinglab `emulator selfcheck` (new); `actingctl selfcheck` retires | yes |
 | RegisterDiagnosticSignature, RetireDiagnosticSignature | option two | operation | actinglab `lab signatures register`, `retire` | yes |
 | RecordDebugEvent | option two | operation (debug event) | actinglab's debug session | yes |
 | ReleaseLabPin | option two | operation (release a frame pin) | actinglab `lab unpin` | yes |
@@ -280,9 +284,10 @@ one would be (section Records).
 |---|---|---|---|---|
 | InstallTransition | compat: general on `cli`, only for an old acsetup speaking install-control revision 1; superseded by the upgrade state from U-4; retires when the install-control minimum becomes 2 | instruction | an old acsetup through the installed slot's `actingctl install-transition` | yes |
 
-Counts: handshake 2, general reads 11, general instructions 7, general by key family 2,
-option one 16, option two 18, retired 1, compat 1; 58 in total. Tests assert each kind,
-never a total.
+Counts: handshake 2, general reads 11, general instructions 10, general by key family 2,
+option one 16, option two 15, retired 1, compat 1; 58 in total (Workflow #429 R-0 moved
+three kinds from option two to the general instructions). Tests assert each kind, never a
+total.
 
 Two consequences of §14.2 for U-3 (the model's body predates it): `actingctl
 agent-apply-resource-targets` and `agent-publish-facts` stay in actingctl and do not
@@ -311,6 +316,38 @@ U-6 deletes the source gates.
 
 Until U-6 the new option-two kinds `LoadPack` and `UnloadPack` accept only a
 `(Lab, Lab)` envelope, like today's Lab-only kinds.
+
+### Workbench request kinds
+
+Workflow #429 A.2 R-0 (register §1.213, since 0.12.30; `runtime-client` revision 3): every
+wire shape the player workbench needs, defined once so that the console pins them once.
+Like U-1's shapes, this is the wire shape of new request kinds, no behaviour change: each
+kind below is refused `not_implemented` (Denied, recording nothing, as `LoadPack` before
+U-3) until the slice named adds its behaviour and its shape checks; until then only an
+instance alias is checked, as for every request that names one. No member says how many
+times a task ran or may run (Alice's ruling 100). Shapes: `crates/actingcommand-contract`,
+`runtime/workbench.rs`.
+
+| Kind or member | Block | Class | Shape | Answer | Behaviour | G14 |
+|---|---|---|---|---|---|---|
+| `RunInstanceTask` | general | instruction (run a task bound to the instance now, as a direct run) | `{instance_alias, package_id, holder_id, response_deadline_ms?}`; the Runtime resolves `package_id` to the bound package's path | as `RunContainedTask` | R-5 | yes |
+| `StopInstanceRun` | general | instruction (stop the instance's scheduled or client-started run; the Runtime resets the device itself) | `{instance_alias, request_id, wait_ms}` | `InstanceRunStopped {stopped: {request_id, settled, reset?}}`; `reset` is `done`, `not_needed` or `failed`, absent while `settled` is `false` (still stopping after `wait_ms`) | R-6 | yes |
+| `EditPackSchedule` | general | instruction (replace one package's rows in one scope's `session.pack.schedule`) | `{scope, package_id, rows: [{from_unix_ms, until_unix_ms?, schedulable}], expected_version?}`; a row without `until_unix_ms` is open-ended ([instance-fact-store.md](instance-fact-store.md), "Pack schedule facts") | `PackScheduleEdited {edited: {version, event_id}}` | R-8 | yes |
+| `EditResourceTarget` | general | instruction (one change of one instance's resource target table, only at `expected_version`) | `{instance_alias, expected_version, op}`; `op` is `{kind: upsert, target_json}`, `{kind: set_paused, id, paused}` or `{kind: delete, id}`. `target_json` is one `actingcommand.resource-targets.v3` target as JSON text, as `ApplyResourceTargets` carries its document: `id`, the kind `maintain` with `at_least` or `gain` with `amount`, the resource pool, `paused?`, `valid_until_unix_ms?`; no `tasks`, no `on_met`. R-13a parses and checks it | as `ApplyResourceTargets` (`ResourceTargetsApplied`) | R-13c | yes |
+| `RoutineSummary` | general | read (health statistics from the host's memory; nothing read from or written to the ledger) | `{instance?, granularity: hour \| day, since_revision?}` | `RoutineSummary {summary: {granularity, revision, instances: [{instance_alias, coverage_from_unix_ms, buckets: [{start_unix_ms, end_unix_ms, revision, tasks: [{task_id, successes, failures?: [{code, count}], interruptions}]}]}]}}`: health statistics only, never a count of runs done or allowed | R-12 | no |
+| `ConfigureSettings.expected_revision?` | (the kind's) | | the ledger sequence of the `host.config_overrides` record in effect | as today | R-4; until then a request that names it is refused `not_implemented` (`operation` `configure_settings`) | (the kind's) |
+| `ApplyResourceTargets.expected_version?` | (the kind's) | | the table's version (the sequence of its `fact.published`) | as today | R-13c; until then a request that names it is refused `not_implemented` (`operation` `apply_resource_targets`) | (the kind's) |
+| `RuntimeInstanceStatus.activity?` | — | — | `{kind, request_id?, package_id?, since_unix_ms}`; `kind` is `policy_run`, `direct_run`, `host_run`, `reconnect`, `selfcheck`, `emulator_control` or `ladder`; kept in memory, never read from the ledger | absent while the instance does none of these | each kind from the slice that fills it (`direct_run` R-5); absent in every answer of 0.12.30 | — |
+
+The kinds `ControlEmulatorInstance`, `SelfCheckInstance` and `ApplicationLifecycle` move
+to the general instructions in the same slice: each acts only on what is bound to the
+instance, so the workbench sends them without the Lab. The move changes no behaviour
+before U-6 (the gate marks and never refuses; the origin gates of `validate()` stay until
+U-6). Where the clean mapping below still moves them to actinglab or retires actingctl's
+emulator and self-check subcommands, this table supersedes it: they stay on the counters.
+`RunContainedTask` (a package by its path), `CancelContainedTask` with the client's own
+`SafeReset`, `Input`, the leases, `RunContainedLabOperation`, `LoadPack`, `UnloadPack`,
+the signatures and `ReleaseLabPin` stay in option two.
 
 ### Instance fact key families
 
@@ -365,9 +402,11 @@ of five families:
 - A file names them only when `true`; a configuration that ticks neither does not name
   them and keeps its revision. A file that names one needs `actingd-config` revision 5,
   the one revision v0.12.0 raises (`component-interfaces.md`).
-- One committer: acsetup commits configuration generations. `acsetup --commit-config`
-  refuses a proposal that changes either key (`setup_lab_options_locked`); only the
-  installer's Lab transaction changes them. They are not in #387 D1's editable set:
+- One writer (Workflow #429 R-0, which settles the earlier wording): `actingctl install`
+  is the only writer of the two keys, by `install new` and `install config lab-options`
+  ([install-cli.md](install-cli.md), "Lab options"); acsetup's Lab page and Lab
+  transaction write them through it. `acsetup --commit-config` refuses a proposal that
+  changes either key (`setup_lab_options_locked`). They are not in #387 D1's editable set:
   `config.parameters` reports their effective value and source, and no setting, MCP
   tool or CLI command changes them.
 - actingd reads them once at start; they do not change during an epoch. They are
@@ -416,14 +455,17 @@ refusing earlier would cut every machine that uses the Lab today.
   frames, discovery, pause, resume, monitor settings, offsets, pack schedule, instance
   facts, resource targets, shutdown request, upgrade state), and every requester of the
   Runtime itself.
-- Neither option: nobody outside the Runtime starts a run, taps a device, loads or
-  unloads a package, or controls an emulator, so a blackout is complete silence. No
-  planning session. Stopping the Runtime works as before (request shutdown is general);
+- Neither option: nobody outside the Runtime taps a device, runs a package by its path,
+  or loads or unloads a package. Since Workflow #429 R-0 the counters still run a task
+  bound to the instance, stop its run, control its emulator, self-check it and start or
+  stop its assigned application (section Workbench request kinds); a blackout keeps the
+  Runtime's own work silent, and a person's request is that person's. No planning
+  session. Stopping the Runtime works as before (request shutdown is general);
   `kept\` still collects the Runtime's own error-window frames, and clearing it is an
   option-two operation, so without it the folder is cleared by hand. MCP lists general
   tools only.
-- Option one only: planning sessions and the package tools; no tap, run, stop, reset,
-  application or emulator control, pack load or unload, kept clearing or pin release.
+- Option one only: planning sessions and the package tools; no tap, run by path, stop with
+  the client's own reset, reset, pack load or unload, kept clearing or pin release.
 - Option two only: every option-two kind; no planning session, Lab observation page,
   artifact recognition, signature matching, package check or evidence export. MCP does
   not list the option-one tools, and actinglab's offline package tools refuse with
@@ -1180,8 +1222,9 @@ its number in the step bar are settled with the UI channel.
 - **Transaction**: place or retire `tools\actinglab.exe` (retire = move into the backup;
   root tools are never deleted); write the ticked keys (only `true`) into the new
   configuration generation, only when the target Runtime speaks `actingd-config` 5;
-  restart through the upgrade state. Failure rolls back as today. This is the only path
-  that changes the two keys.
+  restart through the upgrade state. Failure rolls back as today. acsetup writes the two
+  keys through `actingctl install config lab-options`, their only writer (Workflow #429
+  R-0; section Lab options).
 - **Lab options only** (a new maintenance path, like "resource-only update"): page 0 →
   the Lab page → apply; close and start through the lifecycle (the upgrade state for a
   Runtime speaking install-control 2), holding the writer lock from before the close to
@@ -1209,8 +1252,8 @@ its number in the step bar are settled with the UI channel.
   prevents misuse (a script sending taps through the CLI, an MCP read connection sending
   a debug operation), not malice.
 - The two Lab options are enforced by the Runtime, not by the frontends: a copied-back
-  `actinglab.exe` is still refused. Only the installer's Lab transaction changes them;
-  editing a configuration generation by hand is not prevented.
+  `actinglab.exe` is still refused. Only `actingctl install` changes them (acsetup's Lab
+  transaction through it); editing a configuration generation by hand is not prevented.
 - The installer page is a threshold, not authentication: its labels say "I/the agent",
   and whoever ticks counts.
 - After U-6 the Runtime's identity rules are four, all by channel: option kinds only on

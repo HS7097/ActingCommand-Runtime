@@ -89,7 +89,10 @@ fn configure(
     client: &mut TestClient,
     changes: Vec<ConfigSettingChange>,
 ) -> (RuntimeRequest, RuntimeReceipt) {
-    let request = client.request(RuntimeOperation::ConfigureSettings { changes });
+    let request = client.request(RuntimeOperation::ConfigureSettings {
+        changes,
+        expected_revision: None,
+    });
     let receipt = client.send(&request);
     (request, receipt)
 }

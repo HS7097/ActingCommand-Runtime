@@ -1230,7 +1230,10 @@ impl RuntimeClient {
         }
         match self.execute(
             ContractLocation::ApplyResourceTargets.location(),
-            RuntimeOperation::ApplyResourceTargets { document_json },
+            RuntimeOperation::ApplyResourceTargets {
+                document_json,
+                expected_version: None,
+            },
         )? {
             RuntimeResult::ResourceTargetsApplied { applied } => Ok(*applied),
             _ => Err(self.unexpected_result(ContractLocation::ApplyResourceTargets.location())),
@@ -1401,7 +1404,10 @@ impl RuntimeClient {
     ) -> RuntimeClientResult<Vec<actingcommand_contract::ConfiguredSetting>> {
         match self.execute(
             ClientLocation::RuntimeConfigureSettings.location(),
-            RuntimeOperation::ConfigureSettings { changes },
+            RuntimeOperation::ConfigureSettings {
+                changes,
+                expected_revision: None,
+            },
         )? {
             RuntimeResult::SettingsConfigured { settings } => Ok(settings),
             _ => Err(self.unexpected_result(ClientLocation::RuntimeConfigureSettings.location())),

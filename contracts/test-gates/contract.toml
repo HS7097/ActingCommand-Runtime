@@ -180,6 +180,15 @@ tests = [
 ]
 incident = ["#389 U-1"]
 
+# Workflow #429 R-0 (0.12.30; register §1.213; #429 A.2 R-0): the player workbench's request and answer shapes (RunInstanceTask, StopInstanceRun, EditPackSchedule, EditResourceTarget, RoutineSummary, ConfigureSettings.expected_revision, ApplyResourceTargets.expected_version, their results and RuntimeInstanceStatus.activity) round-trip and refuse an unknown member, each new operation takes its own kind, and a routine-summary task row holds only its health statistics (ruling 100); each kind's block and class are K17's per-kind rows
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::runtime::workbench::tests::r0_every_workbench_request_shape_round_trips_and_refuses_an_unknown_member",
+    "actingcommand-contract::lib::runtime::workbench::tests::r0_every_workbench_answer_shape_round_trips_and_refuses_an_unknown_member",
+]
+incident = ["#429 R-0"]
+
 # The selector's record shapes (S0 §1.9, §3.4): projection v2, the three scan confirmations and
 # unknown_check round-trip for every path shape, v1 keeps its bytes, each path rule refuses, and
 # the reader bounds hold at 256 viewports, 64 members and 64 unknown positions
