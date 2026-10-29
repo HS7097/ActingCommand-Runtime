@@ -1080,7 +1080,7 @@ CREATE TABLE ledger_frame_refs_extent (
   The UI reader changes with the UI's next version.
 - **Receipts** of gate-class operations (inputs, leases, dispatch included) carry the event id and
   the store revisions, never a ledger sequence; install control receipts are sent after the commit
-  and carry the event id too (AO-4; with runtime-client revision 3). The offline subcommands'
+  and carry the event id too (AO-4; with a later revision, §1.213 R0-7). The offline subcommands'
   receipts stay as today.
 - History by ledger position (`fact_store.rs:474-498`) remains for actingledger forensics only.
 

@@ -3789,6 +3789,54 @@
       "status": "active",
       "since": "0.12.19",
       "description": "A runtime client operation: what the Runtime knows about its own start (StartReport, Workflow #421 INST-2)."
+    },
+    "runtime_run_instance_task": {
+      "owner": "runtime-client",
+      "layer": "client",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.30",
+      "description": "A runtime client operation: run a task bound to the instance now, as a direct run (RunInstanceTask, Workflow #429 R-0c)."
+    },
+    "runtime_stop_instance_run": {
+      "owner": "runtime-client",
+      "layer": "client",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.30",
+      "description": "A runtime client operation: stop an instance's run, the Runtime resetting the device (StopInstanceRun, Workflow #429 R-0c)."
+    },
+    "runtime_edit_pack_schedule": {
+      "owner": "runtime-client",
+      "layer": "client",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.30",
+      "description": "A runtime client operation: replace one package's rows in one scope's pack schedule list (EditPackSchedule, Workflow #429 R-0c)."
+    },
+    "runtime_edit_resource_target": {
+      "owner": "runtime-client",
+      "layer": "client",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.30",
+      "description": "A runtime client operation: one change of an instance's resource target table (EditResourceTarget, Workflow #429 R-0c)."
+    },
+    "runtime_routine_summary": {
+      "owner": "runtime-client",
+      "layer": "client",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.30",
+      "description": "A runtime client operation: read the routine summary's health statistics (RoutineSummary, Workflow #429 R-0c)."
+    },
+    "runtime_pack_schedule_view": {
+      "owner": "runtime-client",
+      "layer": "client",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.30",
+      "description": "A runtime client operation: read an instance's pack schedule per package (PackScheduleView, Workflow #429 R-0c)."
     }
   }
 }

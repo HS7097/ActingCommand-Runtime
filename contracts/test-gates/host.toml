@@ -928,6 +928,14 @@ tests = [
 ]
 incident = ["#429 R-0"]
 
+# Workflow #429 R-0c (0.12.30; register §1.216): PackScheduleView, a general read without behaviour until R-8, is Denied not_implemented naming pack_schedule_view, with no result and no terminal, appends nothing to the ledger and changes no instance's status
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_429_r0::r0c_pack_schedule_view_answers_not_implemented_with_no_effect",
+]
+incident = ["#429 R-0c"]
+
 # Workflow #336 PKG-S3 (option 丙): a procedure binding names no package content and a dispatch records no package digest; a failure identity (format v2) names each package by its id hash and the content hash measured at settlement; a pause lifts once a package it names changes in place, measured at most once per scheduling.suspension.lift_check_min_interval_ms, without a restart; an unmeasurable package keeps the pause with lift_check_hash_unmeasured; a restart rebuilds the recorded hashes from the failure identity; the content hash is measured only at settlement and lift checks (M-PKG v1.1 §4.4 S3-T1 to S3-T6, S3-T8, S3-T9; S3-T7 stays with key 27's interrupted settlement row; key 74 is U-2's)
 [[gate]]
 key = "75"

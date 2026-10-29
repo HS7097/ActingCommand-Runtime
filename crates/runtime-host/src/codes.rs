@@ -1894,6 +1894,9 @@ actingcommand_contract::outcome_locations! {
         OpenPolicyWakes => "open_policy_wakes",
         OpenRecoveryLadderWindow => "open_recovery_ladder_window",
         OpenSuspensionLedger => "open_suspension_ledger",
+        // Workflow #429 R-0c (register §1.216): the pack schedule's read view, refused
+        // `not_implemented` until R-8 adds the behaviour.
+        PackScheduleView => "pack_schedule_view",
         PauseGlobalScheduling => "pause_global_scheduling",
         PauseInstanceScheduling => "pause_instance_scheduling",
         PersistContainedPageObservation => "persist_contained_page_observation",

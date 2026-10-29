@@ -610,11 +610,18 @@ Before #389's slice U-6 removes the origin exception, SR-11 accepts it like a pr
 from `(agent, adapter)`, `(user, ui)` and `(cli, cli)`. There is no offline writer: a write goes
 through a running actingd, like `actingctl task-offset`.
 
-**Which row applies.** For instance `I`, task package `P` and time `t`:
+**Which row applies.** For instance `I`, task package `P` and time `t`, each package is
+resolved on its own (Workflow #429 R-0c, the coordinator's decision of 2026-10-29 on #429 item
+4, register §1.216 R0C-5; R-8 implements it): instance over server over game over the pack's
+default row, per package, never per record. A layer that holds no row of `P` decides nothing for
+`P`, so an instance record that names only package `A` leaves every other package to the server,
+game and pack default layers, and `EditPackSchedule` replaces only `P`'s rows in its scope.
+The general read `PackScheduleView` answers, per package, the decision, the layer that made it
+and its row ([runtime-interface.md](runtime-interface.md), "Workbench request kinds").
 
-1. the instruction layer: the `session.pack.schedule` record that applies to `I`, the most
-   specific scope first (instance over server over game, per key: an instance record replaces
-   the server and game records as a whole); a row of `P` that covers `t` decides;
+1. the instruction layer: of the `session.pack.schedule` records that apply to `I`, the most
+   specific scope that has a row of `P` (instance over server over game); a row of `P` there
+   that covers `t` decides;
 2. otherwise the standard package layer: the default rows the instance's standard package
    declares in a data file at its root, compiled when the catalog is activated. The Runtime
    only reads them and never stores them here; the file's name and format belong to the

@@ -171,6 +171,65 @@ pub struct PackScheduleEdited {
     pub event_id: EventId,
 }
 
+/// What `PackScheduleView` answers (Workflow #429 R-0c, register §1.216 R0C-3, since 0.12.30;
+/// `runtime-client` 3; until R-8 the host refuses the read `not_implemented`; R-8 fills it, R-9 the
+/// pack defaults): for one instance, the version of each scope's `session.pack.schedule` list
+/// that applies to it and, per package, whether it is schedulable now and which layer decided.
+/// Each package is resolved on its own (`contracts/instance-fact-store.md`, "Pack schedule
+/// facts", SR-11 items 1 to 3): of the layers that have a row of that package, the most specific
+/// (instance over server over game) decides with its row that covers now; when none covers now,
+/// a default row of the pack that covers now decides, and otherwise the package is schedulable.
+/// A layer without a row of it decides nothing for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackScheduleView {
+    pub instance_alias: String,
+    /// One entry per scope that applies to the instance: the list's version, the next
+    /// `EditPackSchedule.expected_version` of that scope (an opaque token compared only for
+    /// equality), `0` while the scope has no list.
+    pub scopes: Vec<PackScheduleScopeVersion>,
+    pub packages: Vec<PackSchedulePackage>,
+}
+
+/// One scope's `session.pack.schedule` list version in a [`PackScheduleView`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackScheduleScopeVersion {
+    pub scope: crate::FactScope,
+    pub version: u64,
+}
+
+/// One package in a [`PackScheduleView`]: whether it is schedulable now, the layer that
+/// decided, the row that decided (absent when no row covers now: `source` `none`), and when the
+/// decision next changes (absent when no row bounds it; a row that takes effect later gives its
+/// start).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackSchedulePackage {
+    pub package_id: String,
+    pub schedulable: bool,
+    pub source: PackScheduleSource,
+    /// The row that decided, in the shape an `EditPackSchedule` writes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub row: Option<PackScheduleEditRow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_change_unix_ms: Option<u64>,
+}
+
+/// The layer that decided a package in a [`PackScheduleView`], a closed vocabulary: the
+/// instance's, server's or game's `session.pack.schedule` row, the pack's default row (R-9), or
+/// none (no row covers now, SR-11 item 3, so it is schedulable; a row that takes effect later
+/// gives `next_change_unix_ms` its start).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PackScheduleSource {
+    Instance,
+    Server,
+    Game,
+    PackDefault,
+    None,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -692,6 +751,104 @@ mod tests {
         let encoded = round_trips(&view(None));
         assert!(encoded["view"].get("stale_schema").is_none());
         refuses_unknown::<RuntimeResult>(encoded, &["view"]);
+    }
+
+    // R-0c (register §1.216 R0C-3): `PackScheduleView`'s request and answer round-trip, each
+    // object level refuses an unknown member, every source is spelled, the optional members are
+    // absent when not filled, and the request takes its own kind.
+    #[test]
+    fn r0c_pack_schedule_view_round_trips_and_refuses_an_unknown_member() {
+        let operation = RuntimeOperation::PackScheduleView {
+            instance_alias: "node.a".to_owned(),
+        };
+        assert_eq!(operation.kind(), RuntimeOperationKind::PackScheduleView);
+        assert!(operation.validate().is_ok());
+        let encoded = round_trips(&operation);
+        assert_eq!(
+            encoded,
+            json!({"operation": "pack_schedule_view", "instance_alias": "node.a"})
+        );
+        refuses_unknown::<RuntimeOperation>(encoded, &[]);
+
+        let sources = [
+            (PackScheduleSource::Instance, "instance"),
+            (PackScheduleSource::Server, "server"),
+            (PackScheduleSource::Game, "game"),
+            (PackScheduleSource::PackDefault, "pack_default"),
+            (PackScheduleSource::None, "none"),
+        ];
+        let packages = sources
+            .iter()
+            .enumerate()
+            .map(|(index, (source, _))| PackSchedulePackage {
+                package_id: format!("package.{index}"),
+                schedulable: index % 2 == 0,
+                source: *source,
+                row: (*source != PackScheduleSource::None).then_some(PackScheduleEditRow {
+                    from_unix_ms: 1_000,
+                    until_unix_ms: Some(2_000),
+                    schedulable: index % 2 == 0,
+                }),
+                next_change_unix_ms: (*source != PackScheduleSource::None).then_some(2_000),
+            })
+            .collect::<Vec<_>>();
+        let viewed = RuntimeResult::PackScheduleViewed {
+            view: Box::new(PackScheduleView {
+                instance_alias: "node.a".to_owned(),
+                scopes: vec![
+                    PackScheduleScopeVersion {
+                        scope: FactScope::Instance {
+                            instance_id: "node.a".to_owned(),
+                        },
+                        version: 0,
+                    },
+                    PackScheduleScopeVersion {
+                        scope: FactScope::Server {
+                            server_id: "server.a".to_owned(),
+                        },
+                        version: 7,
+                    },
+                    PackScheduleScopeVersion {
+                        scope: FactScope::Game {
+                            game_id: "game.a".to_owned(),
+                        },
+                        version: 9,
+                    },
+                ],
+                packages,
+            }),
+        };
+        let encoded = round_trips(&viewed);
+        for (index, (_, spelling)) in sources.iter().enumerate() {
+            assert_eq!(
+                encoded["view"]["packages"][index]["source"],
+                json!(*spelling)
+            );
+        }
+        // A package no layer decides has no row and no next change.
+        let undecided = &encoded["view"]["packages"][4];
+        assert!(undecided.get("row").is_none(), "{undecided}");
+        assert!(
+            undecided.get("next_change_unix_ms").is_none(),
+            "{undecided}"
+        );
+        refuses_unknown::<RuntimeResult>(encoded.clone(), &[]);
+        refuses_unknown::<RuntimeResult>(encoded.clone(), &["view"]);
+        let mut nested = encoded.clone();
+        nested["view"]["scopes"][0]["unknown_member"] = json!(1);
+        assert!(serde_json::from_value::<RuntimeResult>(nested).is_err());
+        let mut nested = encoded.clone();
+        nested["view"]["scopes"][1]["scope"]["unknown_member"] = json!(1);
+        assert!(serde_json::from_value::<RuntimeResult>(nested).is_err());
+        let mut nested = encoded.clone();
+        nested["view"]["packages"][0]["unknown_member"] = json!(1);
+        assert!(serde_json::from_value::<RuntimeResult>(nested).is_err());
+        let mut nested = encoded.clone();
+        nested["view"]["packages"][0]["row"]["unknown_member"] = json!(1);
+        assert!(serde_json::from_value::<RuntimeResult>(nested).is_err());
+        let mut nested = encoded;
+        nested["view"]["packages"][0]["source"] = json!("default");
+        assert!(serde_json::from_value::<RuntimeResult>(nested).is_err());
     }
 
     // Review L6: the status member `activity` at the Status level. Filled, it round-trips in

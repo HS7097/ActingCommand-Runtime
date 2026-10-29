@@ -25151,6 +25151,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: open suspension ledger."
     },
+    "pack_schedule_view": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.30",
+      "description": "A Runtime host operation or stage: pack schedule view."
+    },
     "pause_global_scheduling": {
       "owner": "runtime-host",
       "layer": "host",
