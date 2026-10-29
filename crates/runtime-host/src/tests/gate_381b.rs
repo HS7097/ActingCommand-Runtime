@@ -115,7 +115,7 @@ fn status_port(host: &RuntimeHost) -> Option<u16> {
 
 fn instance_facts(host: &RuntimeHost, instance_id: InstanceId) -> Vec<RuntimeFactRecord> {
     let receipt = send(host, RuntimeOperation::RuntimeFactSnapshot);
-    let Some(RuntimeResult::RuntimeFactSnapshot { snapshot }) = receipt.result() else {
+    let Some(RuntimeResult::RuntimeFactSnapshot { snapshot, .. }) = receipt.result() else {
         panic!("a fact snapshot: {receipt:?}");
     };
     snapshot

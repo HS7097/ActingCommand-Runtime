@@ -206,6 +206,7 @@ fn configure(host: &RuntimeHost, key: String, value: Value) {
             &runtime_request(
                 &ids,
                 RuntimeOperation::ConfigureSettings {
+                    expected_version: None,
                     changes: vec![ConfigSettingChange {
                         key,
                         value: Some(value),

@@ -75,7 +75,7 @@ fn w1_8_t7_status_monitor_and_fact_snapshot_answer_at_the_published_head_while_t
             panic!("a monitor status: {monitor:?}");
         };
         let facts = read(host, &ids, RuntimeOperation::RuntimeFactSnapshot);
-        let Some(RuntimeResult::RuntimeFactSnapshot { snapshot }) = facts.result() else {
+        let Some(RuntimeResult::RuntimeFactSnapshot { snapshot, .. }) = facts.result() else {
             panic!("a fact snapshot: {facts:?}");
         };
         let heads = [

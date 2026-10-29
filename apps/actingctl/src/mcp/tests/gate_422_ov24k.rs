@@ -1206,6 +1206,7 @@ fn serve(
                 record("runtime_fact_snapshot");
                 RuntimeResult::RuntimeFactSnapshot {
                     snapshot: answers.facts.clone(),
+                    config_version: None,
                 }
             }
             RuntimeOperation::MonitorStatus => {

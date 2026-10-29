@@ -271,6 +271,8 @@ impl HostShared {
                     expired,
                     targets,
                     conditions,
+                    // Workflow #429 R-0: the console's read model is R-13e's; none in 0.12.30.
+                    rows: Vec::new(),
                 })
             }
         };
@@ -283,6 +285,8 @@ impl HostShared {
             targetable,
             not_targetable,
             active,
+            // Workflow #429 R-0: the stale-schema mark is R-13a's; none in 0.12.30.
+            stale_schema: None,
         };
         view.validate().map_err(|_| {
             RuntimeHostError::request(

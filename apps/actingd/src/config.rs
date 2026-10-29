@@ -127,7 +127,8 @@ pub(super) struct ActingdConfigFile {
     frame_retention_evidence_max_age_days: Option<serde_json::Value>,
     /// Workflow #389 U-2 (model §4.1): the Lab's two options, option one (authoring) and option
     /// two (debugging); absent means not installed. Read and reported only until U-6
-    /// (`crates/runtime-config`, `lab_module`); only the installer's Lab transaction writes them.
+    /// (`crates/runtime-config`, `lab_module`); only `actingctl install` writes them (acsetup
+    /// through it; Workflow #429 R-0).
     // Interface anchor `actingd-config` revision 5 (contracts/component-interfaces.md): a Runtime
     // before v0.12.0 refuses a file that names either key; one that names neither keeps its
     // revision.

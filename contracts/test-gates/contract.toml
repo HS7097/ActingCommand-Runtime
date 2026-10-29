@@ -180,6 +180,17 @@ tests = [
 ]
 incident = ["#389 U-1"]
 
+# Workflow #429 R-0 (0.12.30; register §1.213; #429 A.2 R-0): the player workbench's request and answer shapes (RunInstanceTask, StopInstanceRun, EditPackSchedule, EditResourceTarget, RoutineSummary, ConfigureSettings.expected_version, ApplyResourceTargets.expected_version, their results with the routine summary's owner_epoch, SettingsConfigured.config_version, RuntimeFactSnapshot.config_version, ResourceTargetView's active.rows and RuntimeInstanceStatus.activity) round-trip and refuse an unknown member, each optional answer member is absent when not filled, each new operation takes its own kind, a routine-summary task row holds only its health statistics (ruling 100) and a stop is no failure, and the Status carries activity only when filled (review L6); fix round 2 (R0-10): ResourceTargetView's top-level stale_schema round-trips when filled, leaves no key when absent, and the view still refuses an unknown member; each kind's block and class are K17's per-kind rows
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::runtime::workbench::tests::r0_every_workbench_request_shape_round_trips_and_refuses_an_unknown_member",
+    "actingcommand-contract::lib::runtime::workbench::tests::r0_every_workbench_answer_shape_round_trips_and_refuses_an_unknown_member",
+    "actingcommand-contract::lib::runtime::workbench::tests::r0_status_carries_activity_only_when_filled",
+    "actingcommand-contract::lib::runtime::workbench::tests::r0_resource_target_view_carries_stale_schema_only_when_filled",
+]
+incident = ["#429 R-0"]
+
 # The selector's record shapes (S0 §1.9, §3.4): projection v2, the three scan confirmations and
 # unknown_check round-trip for every path shape, v1 keeps its bytes, each path rule refuses, and
 # the reader bounds hold at 256 viewports, 64 members and 64 unknown positions
