@@ -719,6 +719,15 @@ tests = [
 ]
 incident = ["#308"]
 
+# LAB-WAIT (0.12.29; the resource side's report of 10-29; register §1.210, provisional; contracts/resource-declarations.md, offline observe's page-set operations; related: exec 51, 90, A35-S3): offline observe reads a wait step as pack containment and the kernel do: a step with wait and none of click, application and select makes no input and is no click operation, so a package whose wait step's to is a page set (or whose expect_after.page_id is) loads and observe lists no action for it (before 0.12.29: missing field 'click'), and the kernel admits the same package with the step's destinations the declared set; a click step whose to is a page set is listed with its pages and click, and without its click is still refused with missing field 'click'
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::observation::gate_lab_wait::lab_wait_a_wait_step_to_a_page_set_loads_and_its_destinations_are_the_kernels",
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::observation::gate_lab_wait::lab_wait_a_click_step_to_a_page_set_still_requires_its_click",
+]
+incident = []
+
 # Workflow #396 REC-8: a fixed_slots layout's shared OCR read gives every slot target inside it the blocks of its region with one provider call; a slot without blocks is Unknown; the projection counts the read as one provider evaluation; a truncated read fails with text_read_blocks_truncated; a slot target outside the read reads on its own; a shared read no target uses is refused; the field and reading targets a page gate names count one read each in the page recognition's text read budget, at admission and at run time
 [[gate]]
 key = "52"
