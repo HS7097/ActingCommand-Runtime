@@ -4,9 +4,11 @@
 // `contracts/runtime-config.md`, "The `host` section"): the start sets its own memory priority
 // and I/O priority to `host.process_memory_priority` and `host.process_io_priority` (default
 // `normal`, `low` allowed, any other value refused naming its key), reads both back and records
-// one outcome; a failed call is a warning and the start goes on; the CPU priority class is never
-// touched. The operating system is a fake that starts as a below-normal scheduled task leaves a
-// process: memory priority 2, I/O priority Low (1), CPU class below normal.
+// one outcome; a failed call is a warning and the start goes on. The CPU priority class is never
+// touched, and that holds by construction, not by a test value: the seam (`ProcessPriorityApi`)
+// has no CPU-class call, so these tests pin that the start makes exactly its memory and I/O calls
+// and nothing else. The operating system is a fake that starts as a below-normal scheduled task
+// leaves a process: memory priority 2, I/O priority Low (1).
 
 use super::*;
 use crate::process_priority::{self, ProcessPriorityApi};
@@ -18,10 +20,6 @@ use actingcommand_runtime_config::host::{PROCESS_IO_PRIORITY, PROCESS_MEMORY_PRI
 use actingcommand_runtime_config::{HostProcessConfig, ProcessPriorityLevel};
 use serde_json::{Value, json};
 use std::cell::{Cell, RefCell};
-
-/// `BELOW_NORMAL_PRIORITY_CLASS`, the CPU priority class of a process a below-normal scheduled
-/// task starts.
-const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x4000;
 
 /// An actingd configuration without instances, with this `host` section when one is given.
 fn configuration(host: Option<Value>) -> ActingdConfigFile {
@@ -171,13 +169,12 @@ enum Call {
 }
 
 /// The operating system as the start sees it: the process's memory and I/O priority (`None`
-/// on a system without them), its CPU priority class, which no call of the seam can reach, and
-/// the calls that fail or that the system takes without changing anything.
+/// on a system without them), every call the start made through the seam, and the calls that
+/// fail or that the system takes without changing anything.
 struct FakeSystem {
     calls: RefCell<Vec<Call>>,
     memory: Cell<Option<u32>>,
     io: Cell<Option<u32>>,
-    cpu_class: Cell<u32>,
     refuse_set_memory: Option<Outcome>,
     refuse_read_memory: Option<Outcome>,
     refuse_set_io: Option<Outcome>,
@@ -192,7 +189,6 @@ impl FakeSystem {
             calls: RefCell::new(Vec::new()),
             memory: Cell::new(Some(2)),
             io: Cell::new(Some(1)),
-            cpu_class: Cell::new(BELOW_NORMAL_PRIORITY_CLASS),
             refuse_set_memory: None,
             refuse_read_memory: None,
             refuse_set_io: None,
@@ -271,7 +267,7 @@ impl ProcessPriorityApi for FakeSystem {
 fn refusal(operation: HostMetricsLocation) -> Outcome {
     Outcome::new(ContractCode::ForeignOsError)
         .raw_source(RawSource::Os)
-        .raw_code("0xC0000022")
+        .raw_code("0xc0000022")
         .os_error(5u32)
         .raw_text("Access is denied. (os error 5)")
         .operation(operation)
@@ -320,7 +316,8 @@ fn rb2_the_start_applies_the_configured_levels_reads_them_back_and_leaves_the_cp
         let system = FakeSystem::inherited();
         let outcome = process_priority::apply(assembly.process_priority, &system);
         // Exactly these calls, in this order: memory set and read back, then I/O set and read
-        // back. Nothing else is called, and the CPU class is as the task started the process.
+        // back. Nothing else is called through the seam, which has no CPU-class call, so the CPU
+        // class stays as the task started the process.
         assert_eq!(
             system.calls(),
             vec![
@@ -334,11 +331,6 @@ fn rb2_the_start_applies_the_configured_levels_reads_them_back_and_leaves_the_cp
         assert_eq!(
             (system.memory.get(), system.io.get()),
             (Some(memory), Some(io)),
-            "{section:?}"
-        );
-        assert_eq!(
-            system.cpu_class.get(),
-            BELOW_NORMAL_PRIORITY_CLASS,
             "{section:?}"
         );
         // The one record: what was asked for and what was read back.
@@ -375,7 +367,6 @@ fn rb2_the_start_applies_the_configured_levels_reads_them_back_and_leaves_the_cp
         record(&outcome),
         [Some(&json!(5)), None, Some(&json!(2)), None]
     );
-    assert_eq!(system.cpu_class.get(), BELOW_NORMAL_PRIORITY_CLASS);
 }
 
 #[test]
@@ -418,7 +409,7 @@ fn rb2_a_failing_call_is_a_warning_with_its_failure_and_the_start_goes_on() {
     );
     assert_eq!(
         outcome.causes()[0].outcome().value("raw_code"),
-        Some(&json!("0xC0000022"))
+        Some(&json!("0xc0000022"))
     );
 
     // The memory set and its read are both refused: the I/O priority is still applied, the
@@ -479,8 +470,6 @@ fn rb2_a_failing_call_is_a_warning_with_its_failure_and_the_start_goes_on() {
     );
     assert!(outcome.causes().is_empty());
 
-    // A warning ends nothing: its exit category is that of a start that goes on, and the CPU
-    // class was never touched by any of the three.
+    // A warning ends nothing: its exit category is that of a start that goes on.
     assert_eq!(outcome.category().exit_code(), 0);
-    assert_eq!(system.cpu_class.get(), BELOW_NORMAL_PRIORITY_CLASS);
 }

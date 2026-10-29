@@ -1060,8 +1060,9 @@ normal under the watchdog's task): no key names it and the start never changes i
 - **The I/O priority call.** Windows documents no call that sets a process's I/O priority: its
   `SetPriorityClass(PROCESS_MODE_BACKGROUND_END)` only ends a background mode the process entered
   itself (a process of a below-normal task is in none), and `SetFileInformationByHandle`
-  (`FileIoPriorityHintInfo`) sets one file handle's hint. The native class `ProcessIoPriority` is
-  the one Task Scheduler's own task priority sets, unchanged since Windows Vista, and raising a
+  (`FileIoPriorityHintInfo`) sets one file handle's hint. The native class `ProcessIoPriority` has
+  kept its number and values since Windows Vista. What was observed: on 2026-10-29 the actingd
+  the watchdog's scheduled task started read I/O priority Low (1) through this class. Raising a
   process's own I/O priority to normal needs no privilege. Its risk: a later Windows may change or
   refuse it; then the call fails with its NTSTATUS, recorded as below, and the start goes on.
 - **Record.** The start writes one outcome as its daemon lines (`OUTCOME actingd:`), at once,
@@ -1071,9 +1072,9 @@ normal under the watchdog's task): no key names it and the start never changes i
   where the read succeeded, `memory_priority_read` and `io_priority_read`; each failed call is a
   `caused_by` `foreign_os_error` link whose `operation` names it (`process_memory_priority_set`,
   `process_memory_priority_read`, `process_io_priority_set`, `process_io_priority_read`; a native
-  call's NTSTATUS is its `raw_code`). Memory is set and read first, then I/O; a failed call does
-  not skip the next. **A failure is never fatal**: the Runtime starts with whatever priorities
-  the process has.
+  call's NTSTATUS is its `raw_code`, `0x` and eight lowercase hex digits such as `0xc0000022`).
+  Memory is set and read first, then I/O; a failed call does not skip the next. **A failure is
+  never fatal**: the Runtime starts with whatever priorities the process has.
 - **Elsewhere.** On an operating system without these priorities (not Windows) nothing is set
   or read, and the record is `host_process_priority_applied` with the two levels asked for and no
   level read. The tests apply the section through a fake of the same calls.

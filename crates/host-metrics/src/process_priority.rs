@@ -12,11 +12,12 @@
 //!   ends a background mode the process entered itself (a process started by a below-normal
 //!   scheduled task is not in one, so it fails with `ERROR_PROCESS_NOT_IN_BACKGROUND`), and
 //!   `SetFileInformationByHandle(FileIoPriorityHintInfo)` sets one file handle's hint, not the
-//!   process's. The native class is the one Task Scheduler's own priority uses and has kept its
-//!   number and its `IO_PRIORITY_HINT` values since Windows Vista; raising the process's own
-//!   priority to normal needs no privilege. The risk is that an undocumented call may change or
-//!   be refused in a later Windows: then the call fails with its NTSTATUS, the caller records
-//!   a warning, and the start goes on.
+//!   process's. The native class has kept its number and its `IO_PRIORITY_HINT` values since
+//!   Windows Vista. What was observed: on 2026-10-29 the actingd the watchdog's scheduled task
+//!   started read I/O priority Low (1) through this class. Raising the process's own priority to
+//!   normal needs no privilege. The risk is that an undocumented call may change or be refused
+//!   in a later Windows: then the call fails with its NTSTATUS, the caller records a warning,
+//!   and the start goes on.
 //!
 //! On an operating system other than Windows nothing is set and nothing is read: a set is a
 //! no-op and a read answers `None`.
@@ -125,14 +126,15 @@ mod os {
             .operation(operation)
     }
 
-    /// `foreign_os_error` for a failed native call: the NTSTATUS as `raw_code`, the Win32 error
-    /// it maps to and that error's system text.
+    /// `foreign_os_error` for a failed native call: the NTSTATUS as `raw_code` (`0x` and eight
+    /// lowercase hex digits, since `raw_code` is a token), the Win32 error it maps to and that
+    /// error's system text.
     fn status_error(status: NTSTATUS, operation: HostMetricsLocation) -> Outcome {
         // SAFETY: a pure mapping of a status value.
         let os_error = unsafe { RtlNtStatusToDosError(status) };
         Outcome::new(ContractCode::ForeignOsError)
             .raw_source(RawSource::Os)
-            .raw_code(format!("0x{:08X}", status as u32))
+            .raw_code(format!("0x{:08x}", status as u32))
             .os_error(os_error)
             .raw_text(std::io::Error::from_raw_os_error(os_error as i32).to_string())
             .operation(operation)
