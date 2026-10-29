@@ -325,6 +325,14 @@ impl Bench {
     }
 
     /// One full evaluation at `at`, the Runtime clock moved there first.
+    ///
+    /// Fix round 6 (CI run 40870670143): these tests pin the evaluator's decisions at each time,
+    /// not the host's pacing of its cycles, so the cycle is asked for as a full one. An event
+    /// trigger (`FactsChanged`) within the policy cadence's cooldown of the previous cycle is
+    /// deferred with no evaluation by design (`PolicyCadenceState::observe`); B4 evaluates 1 ms
+    /// before the store update task's cooldown ends and again at its end. In the daemon a reached
+    /// wake raises `ClockObserved`, and a cycle the cadence defers runs again at its end. The
+    /// evaluation's monotonic time is the Runtime clock's, as a sampled cycle's is.
     fn evaluate(&self, at: u64, seed: u64) -> PolicyEvaluation {
         advance_manual_clock_to(&self.clock, at);
         self.host
@@ -333,10 +341,10 @@ impl Bench {
                 &policy_resources(),
                 EvaluationTime {
                     unix_ms: at,
-                    monotonic_ms: at,
+                    monotonic_ms: self.clock.monotonic_ms(),
                 },
                 seed,
-                PolicyTrigger::FactsChanged,
+                PolicyTrigger::Recovery,
             )
             .expect("evaluate the policy")
             .evaluation
