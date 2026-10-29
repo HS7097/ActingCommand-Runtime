@@ -157,6 +157,9 @@ mod ledger_observer_tests;
 // Workflow #386 SR-1.
 #[cfg(test)]
 mod perf_tests;
+// Workflow #429 R-1.
+#[cfg(test)]
+mod r1_tests;
 // Workflow #398 RD-4.
 #[cfg(test)]
 mod rd4_tests;

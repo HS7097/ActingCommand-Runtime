@@ -2883,6 +2883,19 @@ impl RuntimeHost {
         shared.instance_stuck_recovery(instance_id, &ladder)
     }
 
+    /// Workflow #429 R-1: how many blackout entries of its own the instance `alias` has in the
+    /// blackout input every policy cycle reads now.
+    #[cfg(test)]
+    pub(crate) fn own_blackout_entries_for_test(&self, alias: &str) -> RuntimeHostResult<usize> {
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::ReadStuckRecoveryForTest)?;
+        Ok(shared
+            .blackout_context(&[alias], HostLocation::EvaluatePolicyCycle)?
+            .instances
+            .get(alias)
+            .map_or(0, Vec::len))
+    }
+
     /// Workflow #387 D1c (§3.7): holds every instance back from performance release, or lets
     /// it go, as performance control's suspension would.
     #[cfg(test)]

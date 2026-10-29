@@ -4046,6 +4046,31 @@ order and reasons.
 | SS6-2 | the overlay records `session.dispatch.schedule.spend_allowance.<i>`, `session.dispatch.schedule.gap_remaining.<j>`, `session.dispatch.schedule.run_cap` (`integer`) | kernel overlay of a policy run's snapshots (memory only, not persisted) | SS-6 | runtime-host (`fact_refresh::dispatch_schedule_values`) | after B8's values, in record order; the longest key is 45 bytes (`…spend_allowance.127`, at most 128 entries per list), within the 128-byte fact key limit of a selection-policy document and an outcome key (the instance fact store allows 192); indices keep pool ids out of the keys; a package reads them as B8's: `max_repeats: {"fact_key": "session.dispatch.schedule.run_cap"}` (an integer from 0 to 1,000, which `run_cap` always is; a missing key ends the run with the existing named error before any input) or an integer fact of a selection strategy |
 | SS6-3 | `ReserveView.projected`; `resource_targets::pending_consumption` and `pending_total` (the gate's step 3 entries, now shared); `InstanceTargets::goal_gap`; v1 `TargetEffect::Satisfied.resource`; the evaluator computes the pending consumption once (`reserve_unshown`) for the gate and the allowances | policy internals (memory only) | SS-6 | policy crate | the allowance reads the projection the gate's `after` is taken from and the pending consumption its step 3 takes, at the same instant, so an allowance below the declared consumption, 0 included, is a candidate the gate already holds; no reason or record of the gate changes |
 
+### 1.219 Slice R-1 (0.12.31): a key the configuration file does not write can be set online (Workflow #429 A.6 rule 4, A.8's R-1 row and the R-1 entry of `rd-1029/429-A-runtime.md`: the console sets everything that may change at run time through `ConfigureSettings`, never through the file; coordinator work order `rd-1029/brief-r1.md`)
+
+[runtime-config.md](runtime-config.md) ("`ConfigureSettings`", "Keys the file does not write",
+"Restore at start", "Rollback") and [scheduling-blackout.md](scheduling-blackout.md) are the
+contract. **No new persisted ledger shape**: the rows are `host.config_overrides` rows of the
+existing shape (D1b), whose `base_json` is the JSON text `null` for a key the file did not write.
+No outcome code, no configuration key, no `actingd-config` or other interface revision (the file
+format and the wire are unchanged). Only the barrier "the file does not write the key" goes; each
+key's kind stays as its row says. This supersedes D53's "an instruction can change it only then
+(`config_key_unknown` otherwise)" for `scheduling.fact_refresh.overdue_ms`. The number 1.219 is
+the coordinator's.
+
+**Rollback.** Runtime 0.12.30 reads the new rows with its row parser (unchanged since then) and
+drops each, `config_override_dropped`, listed in `StartReport.instructions_dropped`, because its
+configuration has no setting of a key the file does not write; it never refuses the record, so
+its start does not fail. The installer's post-start `instructions` check lists those keys as
+dropped, as it lists any instruction a rollback target cannot keep (A.6 rule 5: a rollback
+resets them and the console says so); an update from 0.12.30 meets no such row, since 0.12.30
+never writes one. Tested on a fixed sample of the rows (`runtime-config` `r1_tests::r1_t6`).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| R1-1 | `ConfigureSettings` of a key whose default is `none` (`DefaultSource::None`) that the file does not write: accepted once its instance (a per-instance key) or its section (an exact key) is in the configuration; the key's own checks unchanged (type, range, whole-section check, `config_key_not_settable` for a key that is not settable); the row records `base_source` `default`, `base_json` `null`; the key then has a `config.parameters` row (source `instruction`); a change without a value returns it to no value, no row, and the receipt reports `{key, value: "null" (string), source: default}` | behaviour (configuration instruction layer) | R-1 | runtime-config (`EffectiveConfig::apply`) | before, `config_key_unknown`; settable keys with no default: the per-instance `scheduling.blackout` and `recovery_ladder_profile`, and `scheduling.fact_refresh.overdue_ms`; `performance.pacing.max_concurrent_runs` is read once at assembly (`Settable::No(ReadAtAssembly)`), so a file-silent instruction naming it is now `config_key_not_settable` (was `config_key_unknown`), as it already was with the file naming it; R-1 does not make it settable; `standard_packs.root` and the per-instance `device_kind`, `recognition_package`, `start_emulator` likewise; the receipt member keeps the wire shape (`ConfiguredSetting.value` is a scalar, and a receipt's `settings` is never empty) |
+| R1-2 | restore at start: a row over a key the file did not write (`default`, `null`) is kept while the file still does not write the key and superseded (`config_override_superseded`) once it does; a row over an explicit value of a key with no default that the file no longer writes is superseded | behaviour (restore rule) | R-1 | runtime-config (`EffectiveConfig::restore`) | before, a key with no default that the file did not write had no setting, so every such row was `config_override_dropped`; a key whose instance or section is gone is still dropped; the installer's instructions check counts dropped and superseded alike |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

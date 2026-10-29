@@ -127,9 +127,10 @@ pub(crate) static ROWS: &[KeyRow] = &[
         reader: "S6c",
         since: "0.12.0",
     },
-    // Workflow #398 RD-4 (model-398 §6.2): reported only for an instance that names it;
-    // settable while the Runtime runs, as the `recovery_ladder` section is; a ladder takes it
-    // into its snapshot when it is admitted.
+    // Workflow #398 RD-4 (model-398 §6.2): reported only for an instance that names it (or, since
+    // 0.12.31, Workflow #429 R-1, that an instruction sets it for); settable while the Runtime
+    // runs, as the `recovery_ladder` section is; a ladder takes it into its snapshot when it is
+    // admitted.
     KeyRow {
         name: KeyName::PerInstance(RECOVERY_LADDER_PROFILE),
         file_path: FilePath::InstanceMember,
@@ -154,7 +155,8 @@ pub(crate) static ROWS: &[KeyRow] = &[
     },
     // Workflow #386 SR-4a1 (SCH-M §3.2 D-1): the instance's own blackout list; reported only for
     // an instance whose entry names one (none: no entries of its own); settable while the
-    // Runtime runs.
+    // Runtime runs, since 0.12.31 (Workflow #429 R-1) also for an instance whose entry names
+    // none, and clearing that instruction leaves the instance with no entries of its own.
     KeyRow {
         name: KeyName::PerInstance(INSTANCE_BLACKOUT),
         file_path: FilePath::InstanceMember,

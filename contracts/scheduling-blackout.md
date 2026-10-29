@@ -69,8 +69,10 @@ Two lists of the actingd configuration hold blackout entries:
   no list has no entries of its own; nothing in the Runtime, the defaults file or the contracts
   names a game.
 
-Both lists are settable while the Runtime runs (`ConfigureSettings`; an instance's list once its
-entry names one, even `[]`) and accept two kinds of entry:
+Both lists are settable while the Runtime runs (`ConfigureSettings`; an instance's list whether
+or not its entry names one: since 0.12.31, Workflow #429 R-1, an instruction sets the list of an
+instance whose entry names none, and clearing it leaves the instance with no entries of its own;
+before, only once its entry named one, even `[]`) and accept two kinds of entry:
 
 - `weekly` (an entry without `kind` is one):
   `{kind?: "weekly", id, weekdays, utc_offset_minutes, start_minute_of_day, end_minute_of_day}`,

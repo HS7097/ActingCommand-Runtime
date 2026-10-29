@@ -529,6 +529,19 @@ tests = [
 ]
 incident = ["#387"]
 
+# Workflow #429 R-1 (0.12.31; brief rd-1029/brief-r1.md; register §1.219; contracts/runtime-config.md, "ConfigureSettings" and "Restore at start"; design rd-1029/429-A-runtime.md A.6 rule 4): a key whose default is none that the file does not write is set by instruction once its instance or section is in the configuration: an instance whose file has no blackout list of its own gets one online, in the receipt, config.parameters.instance and the policy cycle's blackout input, with one host.config_overrides row over base_source default and base_json null, and keeps it across a restart with no note (T1); clearing it returns the instance to no list (receipt null from default, no row, no override, no entry), also after a restart (T2); a file that later writes the key voids it with config_override_superseded and its list is in effect (T3); performance.pacing.max_concurrent_runs, read once at assembly, stays config_key_not_settable whether or not the file writes it (T4); the rows of instance blackout and scheduling.fact_refresh.overdue_ms set over a silent file carry base_source default and base_json null and take effect (T5); a fixed sample of those rows is what this build records, the row parser unchanged since 0.12.30 reads every row, a start without settings of those keys drops each with config_override_dropped and never refuses the record, and this build keeps both over the same silent file (T6, rollback safety)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_387_d1b::r1_t1_an_instance_without_a_blackout_list_in_the_file_gets_one_online_that_survives_a_restart",
+    "actingcommand-runtime-host::lib::tests::gate_387_d1b::r1_t2_clearing_it_returns_the_instance_to_no_blackout_list",
+    "actingcommand-runtime-host::lib::tests::gate_387_d1b::r1_t3_a_file_that_later_writes_the_key_voids_the_instruction_as_superseded",
+    "actingcommand-runtime-config::lib::r1_tests::r1_t4_max_concurrent_runs_stays_not_settable_whether_or_not_the_file_writes_it",
+    "actingcommand-runtime-config::lib::r1_tests::r1_t5_the_row_of_a_key_the_file_does_not_write_has_base_source_default_and_base_json_null",
+    "actingcommand-runtime-config::lib::r1_tests::r1_t6_the_0_12_30_row_parser_reads_the_rows_of_keys_the_file_does_not_write",
+]
+incident = ["#429 R-1"]
+
 # The recovery ladder by configuration: the section's whole-section check at start and through an instruction, what the default trigger items match, the record shapes, the rules that stay in code and the five that switch, direction one's count, and a routine failure that climbs by its trigger item, its rungs and the snapshot it was admitted with (Workflow #387 D1c)
 [[gate]]
 key = "53"

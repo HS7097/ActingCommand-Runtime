@@ -642,7 +642,8 @@ pub(crate) static ROWS: &[KeyRow] = &[
         "D2-S2",
     ),
     // Workflow #384 D2-S5: no default (register §5: unset = not reported), so only a file that
-    // names the key carries it, and an instruction can change it only then.
+    // names the key carries it; since 0.12.31 (Workflow #429 R-1) an instruction can set it
+    // either way, and clearing that instruction leaves it unset again.
     KeyRow {
         default: DefaultSource::None,
         ..row(

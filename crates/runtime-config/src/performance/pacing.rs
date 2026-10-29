@@ -204,7 +204,9 @@ pub(crate) static ROWS: &[KeyRow] = &[
         "P-c",
     ),
     // Workflow #427-B: set as the heavy-dispatch limits are (read once at assembly), but with no
-    // default: only a file that names it carries it.
+    // default: only a file that names it carries it. Not settable, so an instruction naming it is
+    // `config_key_not_settable` whether or not the file names it (Workflow #429 R-1, since
+    // 0.12.31, lifts only the barrier of a key the file does not write, not this one's kind).
     KeyRow {
         default: DefaultSource::None,
         since: "0.12.22",
