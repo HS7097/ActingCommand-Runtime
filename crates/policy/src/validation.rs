@@ -626,11 +626,37 @@ fn validate_task(
             descriptor,
         ));
     }
+    // SS-3 (register §1.212): V1 requires `loop_budget` and its three items; V2 makes the member
+    // and each item optional, and an item that is written must still be nonzero.
+    if map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2) {
+        let missing = match &task.loop_budget {
+            None => Some(format!("{path}/loop_budget")),
+            Some(budget) => [
+                ("daily_limit", budget.daily_limit.is_none()),
+                (
+                    "window_iteration_limit",
+                    budget.window_iteration_limit.is_none(),
+                ),
+                ("max_runtime_ms", budget.max_runtime_ms.is_none()),
+            ]
+            .into_iter()
+            .find(|(_, absent)| *absent)
+            .map(|(item, _)| format!("{path}/loop_budget/{item}")),
+        };
+        if let Some(missing) = missing {
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::MissingRequiredField,
+                missing,
+                "an actingcommand.scheduling.v1 task requires loop_budget with daily_limit, window_iteration_limit and max_runtime_ms",
+                descriptor,
+            ));
+        }
+    }
     if task.next_run_clamp_ms == 0
         || task.expected_duration_ms == 0
-        || task.loop_budget.daily_limit == 0
-        || task.loop_budget.window_iteration_limit == 0
-        || task.loop_budget.max_runtime_ms == 0
+        || task.daily_limit() == Some(0)
+        || task.window_iteration_limit() == Some(0)
+        || task.max_runtime_ms() == Some(0)
     {
         diagnostics.push(map.diagnostic(
             CatalogDiagnosticCode::LoopBudgetMissing,
@@ -639,8 +665,12 @@ fn validate_task(
             descriptor,
         ));
     }
-    if task.loop_budget.daily_limit > MAX_BUDGET_COUNT
-        || task.loop_budget.window_iteration_limit > MAX_BUDGET_COUNT
+    if task
+        .daily_limit()
+        .is_some_and(|limit| limit > MAX_BUDGET_COUNT)
+        || task
+            .window_iteration_limit()
+            .is_some_and(|limit| limit > MAX_BUDGET_COUNT)
     {
         diagnostics.push(map.diagnostic(
             CatalogDiagnosticCode::LimitExceeded,
@@ -1852,9 +1882,30 @@ fn validate_activity_profile(
             ));
         }
     }
-    if profile.daily_budget == 0
-        || profile.max_window_iterations == 0
-        || profile.session_max_ms == 0
+    // SS-3 (register §1.212): V1 requires the three activity run-count bounds; V2 makes each
+    // optional, and one that is written must still be nonzero.
+    if map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2)
+        && let Some((item, _)) = [
+            ("daily_budget", profile.daily_budget.is_none()),
+            (
+                "max_window_iterations",
+                profile.max_window_iterations.is_none(),
+            ),
+            ("session_max_ms", profile.session_max_ms.is_none()),
+        ]
+        .into_iter()
+        .find(|(_, absent)| *absent)
+    {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::MissingRequiredField,
+            format!("{path}/{item}"),
+            "an actingcommand.scheduling.v1 activity profile requires daily_budget, max_window_iterations and session_max_ms",
+            descriptor,
+        ));
+    }
+    if profile.daily_budget == Some(0)
+        || profile.max_window_iterations == Some(0)
+        || profile.session_max_ms == Some(0)
         || profile.detection_budget.window_dispatch_limit == 0
         || profile.detection_budget.window_runtime_ms == 0
         || profile.detection_budget.expected_duration_ms == 0
@@ -1869,7 +1920,13 @@ fn validate_activity_profile(
             descriptor,
         ));
     }
-    if profile.daily_budget > MAX_BUDGET_COUNT || profile.max_window_iterations > MAX_BUDGET_COUNT {
+    if profile
+        .daily_budget
+        .is_some_and(|budget| budget > MAX_BUDGET_COUNT)
+        || profile
+            .max_window_iterations
+            .is_some_and(|budget| budget > MAX_BUDGET_COUNT)
+    {
         diagnostics.push(map.diagnostic(
             CatalogDiagnosticCode::LimitExceeded,
             path,

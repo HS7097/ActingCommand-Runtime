@@ -300,9 +300,9 @@ fn dispatch_intent(catalog: &CompiledCatalog, suffix: u64) -> DispatchIntent {
             evaluated_at_unix_ms: POLICY_NOW_UNIX_MS,
             facts_fresh_until_unix_ms: None,
             activity_profile_id: "fixture-activity-a".to_owned(),
-            daily_limit: task.loop_budget.daily_limit,
-            window_iteration_limit: task.loop_budget.window_iteration_limit,
-            max_runtime_ms: task.loop_budget.max_runtime_ms,
+            daily_limit: task.daily_limit(),
+            window_iteration_limit: task.window_iteration_limit(),
+            max_runtime_ms: task.max_runtime_ms(),
             urgency_milli: 0,
         },
     }

@@ -424,8 +424,10 @@ impl FakeAdmission {
             let Some(day) = self.window_day(intent) else {
                 return Ok(deferred(WINDOW_CLOSED, Some(next_window_start(time))));
             };
-            if self.used(&intent.task_id, &intent.instance_id, day)
-                >= intent.prerequisites.daily_limit
+            if intent
+                .prerequisites
+                .daily_limit
+                .is_some_and(|limit| self.used(&intent.task_id, &intent.instance_id, day) >= limit)
             {
                 return Ok(deferred(BUDGET_EXHAUSTED, Some(next_window_start(time))));
             }

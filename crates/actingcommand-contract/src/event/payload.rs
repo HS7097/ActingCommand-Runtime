@@ -2868,41 +2868,89 @@ pub struct PolicyActivitySample {
     pub next_eligible_unix_ms: u64,
 }
 
+/// An admission's budget receipt: per dimension, what the admission counted (`used`, or the
+/// `reserved` runtime) and the limit it counted against. SS-3 (register §1.212): a dimension
+/// whose limit the catalog does not write is no dimension, and the receipt carries neither of
+/// its two members (they serialize as nothing at all); a receipt of a catalog that writes every
+/// limit is unchanged, byte for byte.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyBudgetReceipt {
-    pub task_daily_used: u32,
-    pub task_daily_limit: u32,
-    pub task_window_used: u32,
-    pub task_window_limit: u32,
-    pub task_runtime_reserved_ms: u64,
-    pub task_runtime_limit_ms: u64,
-    pub activity_daily_used: u32,
-    pub activity_daily_limit: u32,
-    pub activity_window_used: u32,
-    pub activity_window_limit: u32,
-    pub activity_runtime_reserved_ms: u64,
-    pub activity_runtime_limit_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_daily_used: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_daily_limit: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_window_used: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_window_limit: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_runtime_reserved_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_runtime_limit_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity_daily_used: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity_daily_limit: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity_window_used: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity_window_limit: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity_runtime_reserved_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity_runtime_limit_ms: Option<u64>,
 }
 
 impl PolicyBudgetReceipt {
     /// Whether a run of `runtime_ms` exceeds this admission's runtime budget: the reserved task
     /// (or activity) runtime less the dispatch's expected duration, plus the run's runtime,
     /// above the task (or activity) limit. `None` when the receipt reserves less than the
-    /// expected duration or a total overflows. The policy's classification, the host's recovery
-    /// check and the ledger's settlement check use this one rule (Workflow #369 E3); the
-    /// ledger, which does not record the expected duration, passes 0 and so checks the bound
-    /// every rewrite meets.
+    /// expected duration, a total overflows, or a runtime dimension carries only one of its two
+    /// members. SS-3: a runtime dimension the receipt does not carry is never exceeded. The
+    /// policy's classification, the host's recovery check and the ledger's settlement check use
+    /// this one rule (Workflow #369 E3); the ledger, which does not record the expected
+    /// duration, passes 0 and so checks the bound every rewrite meets.
     pub fn runtime_exceeded(&self, expected_duration_ms: u64, runtime_ms: u64) -> Option<bool> {
-        let task = self
-            .task_runtime_reserved_ms
-            .checked_sub(expected_duration_ms)?
-            .checked_add(runtime_ms)?;
-        let activity = self
-            .activity_runtime_reserved_ms
-            .checked_sub(expected_duration_ms)?
-            .checked_add(runtime_ms)?;
-        Some(task > self.task_runtime_limit_ms || activity > self.activity_runtime_limit_ms)
+        let exceeded = |reserved: Option<u64>, limit: Option<u64>| -> Option<bool> {
+            match (reserved, limit) {
+                (None, None) => Some(false),
+                (Some(reserved), Some(limit)) => Some(
+                    reserved
+                        .checked_sub(expected_duration_ms)?
+                        .checked_add(runtime_ms)?
+                        > limit,
+                ),
+                _ => None,
+            }
+        };
+        let task = exceeded(self.task_runtime_reserved_ms, self.task_runtime_limit_ms)?;
+        let activity = exceeded(
+            self.activity_runtime_reserved_ms,
+            self.activity_runtime_limit_ms,
+        )?;
+        Some(task || activity)
+    }
+
+    /// Whether every dimension the receipt carries is valid: it carries both or neither of its
+    /// two members, and a carried count (or reservation) is between 1 and its limit.
+    pub fn is_valid(&self) -> bool {
+        fn dimension<T: Copy + PartialOrd + From<u8>>(used: Option<T>, limit: Option<T>) -> bool {
+            match (used, limit) {
+                (None, None) => true,
+                (Some(used), Some(limit)) => used >= T::from(1_u8) && used <= limit,
+                _ => false,
+            }
+        }
+        dimension(self.task_daily_used, self.task_daily_limit)
+            && dimension(self.task_window_used, self.task_window_limit)
+            && dimension(self.task_runtime_reserved_ms, self.task_runtime_limit_ms)
+            && dimension(self.activity_daily_used, self.activity_daily_limit)
+            && dimension(self.activity_window_used, self.activity_window_limit)
+            && dimension(
+                self.activity_runtime_reserved_ms,
+                self.activity_runtime_limit_ms,
+            )
     }
 }
 
@@ -7939,20 +7987,9 @@ fn validate_policy_admission(value: &PolicyAdmissionRecord) -> Result<(), Saniti
             "activity",
         ));
     }
-    let budget = &value.budget;
-    if budget.task_daily_used == 0
-        || budget.task_daily_used > budget.task_daily_limit
-        || budget.task_window_used == 0
-        || budget.task_window_used > budget.task_window_limit
-        || budget.task_runtime_reserved_ms == 0
-        || budget.task_runtime_reserved_ms > budget.task_runtime_limit_ms
-        || budget.activity_daily_used == 0
-        || budget.activity_daily_used > budget.activity_daily_limit
-        || budget.activity_window_used == 0
-        || budget.activity_window_used > budget.activity_window_limit
-        || budget.activity_runtime_reserved_ms == 0
-        || budget.activity_runtime_reserved_ms > budget.activity_runtime_limit_ms
-    {
+    // SS-3 (register §1.212): each dimension the receipt carries is checked as before; one it
+    // does not carry is no dimension.
+    if !value.budget.is_valid() {
         return Err(SanitizationError::new(
             SanitizationCode::InvalidPolicyBudgetReceipt,
             "budget",

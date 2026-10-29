@@ -41,7 +41,7 @@ fn policy_budget_recovery_keeps_the_window_count_across_runtime_restarts() {
             panic!("expected budget admission")
         };
         let admission = context.admission();
-        assert_eq!(admission.budget.task_window_used, index as u32 + 1);
+        assert_eq!(admission.budget.task_window_used, Some(index as u32 + 1));
         clock.advance(75_000);
         host.record_policy_dispatch_outcome(&intent.decision_id, &PolicyExecutionInput::Succeeded)
             .expect("record bounded execution");
@@ -287,11 +287,14 @@ fn accelerated_48h_replay_consumes_runtime_owned_counts_and_runtime_budget() {
                 panic!("expected accelerated budget admission")
             };
             let admission = context.admission();
-            assert_eq!(admission.budget.task_daily_used, iteration as u32 + 1);
-            assert_eq!(admission.budget.task_window_used, iteration as u32 + 1);
+            assert_eq!(admission.budget.task_daily_used, Some(iteration as u32 + 1));
+            assert_eq!(
+                admission.budget.task_window_used,
+                Some(iteration as u32 + 1)
+            );
             assert_eq!(
                 admission.budget.task_runtime_reserved_ms,
-                iteration * 75_000 + 60_000
+                Some(iteration * 75_000 + 60_000)
             );
             clock.advance(75_000);
             host.record_policy_dispatch_outcome(

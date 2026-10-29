@@ -248,6 +248,9 @@ mod gate_386_sr2b1;
 // owed reruns are promoted, gated by the pacing stage, expire, hide their terminal and are listed
 // by `actingd suspended`.
 mod gate_386_sr2b2;
+// SS-3 (register §1.212): run-count quotas are optional; an item that is not written is no
+// dimension, and a written one applies as before.
+mod gate_ss3;
 // Workflow #386 SR-3, test rows T10, T11, T13 and T31: the suspension of a task package that
 // admission refuses with a suspend code.
 mod gate_386_sr3;

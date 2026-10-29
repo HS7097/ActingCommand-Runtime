@@ -77,7 +77,7 @@ fn t6d_a_start_reads_the_condition_endings_and_blackout_suppressions_a_later_bui
     else {
         panic!("expected the first admission")
     };
-    assert_eq!(context.admission().budget.task_daily_used, 1);
+    assert_eq!(context.admission().budget.task_daily_used, Some(1));
     clock.advance(75_000);
     host.settle_next_policy_run_by_condition_for_test(condition)
         .expect("the condition of the next settlement");
@@ -146,7 +146,7 @@ fn t6d_a_start_reads_the_condition_endings_and_blackout_suppressions_a_later_bui
     else {
         panic!("expected the rerun admission")
     };
-    assert_eq!(context.admission().budget.task_daily_used, 1);
+    assert_eq!(context.admission().budget.task_daily_used, Some(1));
 
     // The streak: the condition ending added none, so the same code ending this run as an
     // ordinary failure is the pair's first.

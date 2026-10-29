@@ -904,15 +904,19 @@ fn catalog_production_rate(
                 "catalog production task has a zero duration",
             ));
         }
+        // SS-3 (register §1.212): a `loop_budget` item the task does not write is no bound, and
+        // the estimate comes from the remaining ones; the period bound is always present.
         let executions = [
-            u64::from(task.loop_budget.daily_limit),
-            u64::from(task.loop_budget.window_iteration_limit),
-            task.loop_budget.max_runtime_ms / expected_duration_ms,
-            RATE_PERIOD_MS / task_cycle,
+            task.daily_limit().map(u64::from),
+            task.window_iteration_limit().map(u64::from),
+            task.max_runtime_ms()
+                .map(|max_runtime_ms| max_runtime_ms / expected_duration_ms),
+            Some(RATE_PERIOD_MS / task_cycle),
         ]
         .into_iter()
+        .flatten()
         .min()
-        .expect("four production bounds are present");
+        .expect("the period bound is always present");
         for effect in task
             .produces
             .iter()
@@ -2260,6 +2264,86 @@ mod tests {
                 .as_str(),
             "strategy_numeric_overflow"
         );
+    }
+
+    // SS-3 (rd-1029 design-sch-state §5 SS-3 test 5; register §1.212): a `loop_budget` item a V2
+    // task does not write is no bound, and the production estimate comes from the bounds that
+    // remain; with none written it is the period bound alone. The fixture task makes 10 per run,
+    // E 1 s, cycle 1 s: the period allows 3 600 runs an hour.
+    #[test]
+    fn ss3_t5_production_estimate_without_daily_limit_uses_the_remaining_bounds() {
+        let rate = |loop_budget: Option<serde_json::Value>| {
+            let mut sources = catalog_sources();
+            for source in [
+                &mut sources.tasks,
+                &mut sources.pools,
+                &mut sources.activity,
+                &mut sources.timeline,
+            ] {
+                let mut document: serde_json::Value =
+                    serde_json::from_slice(&source.bytes).expect("fixture document");
+                document["schema_version"] = serde_json::json!(crate::SCHEDULING_SCHEMA_VERSION_V2);
+                if let Some(tasks) = document
+                    .get_mut("tasks")
+                    .and_then(serde_json::Value::as_array_mut)
+                {
+                    let task = tasks[0].as_object_mut().expect("fixture task");
+                    match &loop_budget {
+                        Some(budget) => {
+                            task.insert("loop_budget".to_owned(), budget.clone());
+                        }
+                        None => {
+                            task.remove("loop_budget");
+                        }
+                    }
+                }
+                source.bytes = serde_json::to_vec(&document).expect("fixture bytes");
+            }
+            let catalog = compile_catalog(&sources).expect("V2 fixture catalog");
+            let report = report(
+                &catalog,
+                vec![assessment("instance-a", Some(50), Some(100))],
+            );
+            let (facts, _) = frozen_inputs(&report);
+            catalog_production_rate(
+                &catalog,
+                &MetricRef::Pool {
+                    pool_id: "fixture-pool".to_owned(),
+                },
+                &facts.instances[0],
+                &[],
+            )
+            .expect("production rate")
+        };
+        // All three written: min(10, 5, 60 000 / 1 000, 3 600) = 5 runs, as before.
+        assert_eq!(
+            rate(Some(serde_json::json!({
+                "daily_limit": 10, "window_iteration_limit": 5, "max_runtime_ms": 60000
+            }))),
+            Some(50)
+        );
+        // The daily bound the tightest: min(2, 5, 60, 3 600) = 2 runs.
+        assert_eq!(
+            rate(Some(serde_json::json!({
+                "daily_limit": 2, "window_iteration_limit": 5, "max_runtime_ms": 60000
+            }))),
+            Some(20)
+        );
+        // The same bounds without daily_limit: the window bound, 5 runs, binds instead.
+        assert_eq!(
+            rate(Some(serde_json::json!({
+                "window_iteration_limit": 5, "max_runtime_ms": 60000
+            }))),
+            Some(50)
+        );
+        // Only max_runtime_ms: 60 000 / 1 000 = 60 runs.
+        assert_eq!(
+            rate(Some(serde_json::json!({"max_runtime_ms": 60000}))),
+            Some(600)
+        );
+        // Nothing written: the period, 3 600 runs.
+        assert_eq!(rate(None), Some(36_000));
+        assert_eq!(rate(Some(serde_json::json!({}))), Some(36_000));
     }
 
     #[test]

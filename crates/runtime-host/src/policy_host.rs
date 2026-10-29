@@ -1124,15 +1124,16 @@ fn draw_random_delay(
 
 /// Workflow #411 B8: the runs the daily budgets still allow a pair after the dispatch `budget`
 /// previews (its counts include that dispatch): the fewer of the task's and its activity
-/// profile's remaining runs in the activity day.
-fn daily_remaining(budget: &actingcommand_contract::PolicyBudgetReceipt) -> u32 {
-    let task = budget
-        .task_daily_limit
-        .saturating_sub(budget.task_daily_used);
-    let activity = budget
-        .activity_daily_limit
-        .saturating_sub(budget.activity_daily_used);
-    task.min(activity)
+/// profile's remaining runs in the activity day. SS-3 (register §1.212): a daily dimension the
+/// receipt does not carry gives no count, and with neither there is none.
+fn daily_remaining(budget: &actingcommand_contract::PolicyBudgetReceipt) -> Option<u32> {
+    let remaining = |used: Option<u32>, limit: Option<u32>| {
+        used.zip(limit)
+            .map(|(used, limit)| limit.saturating_sub(used))
+    };
+    let task = remaining(budget.task_daily_used, budget.task_daily_limit);
+    let activity = remaining(budget.activity_daily_used, budget.activity_daily_limit);
+    [task, activity].into_iter().flatten().min()
 }
 
 /// Per instance, the highest `effective_milli` and the longest `aging_ms` over the ranked
@@ -2974,11 +2975,13 @@ impl PolicyHost {
                             )
                         })
                         .map(|eligibility| match eligibility {
-                            CandidateEligibility::Eligible => {
-                                CandidateEligibility::EligibleWithDailyRemaining {
-                                    daily_remaining: daily_remaining(&admission.budget),
-                                }
-                            }
+                            // SS-3: without a daily dimension the pair is plainly eligible.
+                            CandidateEligibility::Eligible => daily_remaining(&admission.budget)
+                                .map_or(CandidateEligibility::Eligible, |daily_remaining| {
+                                    CandidateEligibility::EligibleWithDailyRemaining {
+                                        daily_remaining,
+                                    }
+                                }),
                             other => other,
                         }),
                     Err(error) if is_availability_denial(&error) => {
@@ -3125,9 +3128,7 @@ impl PolicyHost {
                 Some((expected_ms, runs)) => Some((
                     compiled
                         .dispatch_task(task_id)
-                        .map_or(*expected_ms, |task| {
-                            (*expected_ms).min(task.loop_budget.max_runtime_ms)
-                        }),
+                        .map_or(*expected_ms, |task| task.runtime_capped(*expected_ms)),
                     format!("runs:{runs}"),
                 )),
                 None if task_id == FACT_REFRESH_TASK_ID => {
@@ -3689,7 +3690,7 @@ impl PolicyHost {
         // else the declared one (a fact refresh's configured, a catalog task's own).
         let expected_runtime_ms = duration
             .expected_runtime_ms
-            .map(|expected| expected.min(task.loop_budget.max_runtime_ms));
+            .map(|expected| task.runtime_capped(expected));
         let declared_ms = if intent.task_id == FACT_REFRESH_TASK_ID {
             duration.refresh_declared_ms
         } else {
@@ -3700,10 +3701,9 @@ impl PolicyHost {
             || (expected_runtime_ms.is_none() && declared_ms != intent.expected_duration_ms)
             || task.yield_points != intent.yield_points
             || task.load_profile != intent.load_profile
-            || task.loop_budget.daily_limit != intent.prerequisites.daily_limit
-            || task.loop_budget.window_iteration_limit
-                != intent.prerequisites.window_iteration_limit
-            || task.loop_budget.max_runtime_ms != intent.prerequisites.max_runtime_ms
+            || task.daily_limit() != intent.prerequisites.daily_limit
+            || task.window_iteration_limit() != intent.prerequisites.window_iteration_limit
+            || task.max_runtime_ms() != intent.prerequisites.max_runtime_ms
             || intent.prerequisites.urgency_milli > 1_000
             || !active
                 .compiled
@@ -3773,10 +3773,16 @@ impl PolicyHost {
                 HostLocation::ValidatePolicyDispatch,
             ));
         }
-        if intent.prerequisites.daily_limit == 0
-            || intent.prerequisites.window_iteration_limit == 0
-            || intent.prerequisites.max_runtime_ms == 0
-            || intent.expected_duration_ms > intent.prerequisites.max_runtime_ms
+        // SS-3 (register §1.212): each loop-budget item the intent carries must be above 0, and
+        // the expected duration within a written runtime bound; an item it does not carry is no
+        // dimension.
+        if intent.prerequisites.daily_limit == Some(0)
+            || intent.prerequisites.window_iteration_limit == Some(0)
+            || intent.prerequisites.max_runtime_ms == Some(0)
+            || intent
+                .prerequisites
+                .max_runtime_ms
+                .is_some_and(|max_runtime_ms| intent.expected_duration_ms > max_runtime_ms)
         {
             return Err(request(
                 HostCode::PolicyBudgetExhausted,
@@ -6157,9 +6163,9 @@ fn control_intent(
             evaluated_at_unix_ms: admission.activity.admitted_at_unix_ms,
             facts_fresh_until_unix_ms: None,
             activity_profile_id: admission.activity.profile_id.clone(),
-            daily_limit: task.loop_budget.daily_limit,
-            window_iteration_limit: task.loop_budget.window_iteration_limit,
-            max_runtime_ms: task.loop_budget.max_runtime_ms,
+            daily_limit: task.daily_limit(),
+            window_iteration_limit: task.window_iteration_limit(),
+            max_runtime_ms: task.max_runtime_ms(),
             urgency_milli: data.urgency_milli,
         },
     })

@@ -3817,6 +3817,57 @@ shape that pack containment and the kernel already admit. The number 1.210 is th
 |---|---|---|---|---|---|
 | LW-1 | offline `observe`'s page-set operations (`ObservationResources::multi_destination`, read from the task files) leave out a wait step, `wait` and none of `click`, `application` and `select` (pack containment's `is_wait_step`), as they leave out an application effect and a select step | behaviour (actinglab, since 0.12.29) | LAB-WAIT | — | the generated navigation holds no row for a wait step, so `actions` lists none for it, whether its destinations are a page-set `to` or `expect_after.page_id`; its destinations stay the kernel's (`to`, else `expect_after`); a step that declares `wait` beside a `click` is still read as a click step (pack containment's reading; the kernel refuses it, `wait_member_refused`); a click step whose `to` is a page set still requires its `click` |
 
+### 1.212 Slice SS-3 (0.12.30): run-count quotas become optional (Alice's ruling 100, #386 comment 6490879952: dispatch follows live account state, there is no "run task X N times"; design `rd-1029/design-sch-state.md` §1.1, §4, §5 SS-3; coordinator work order `rd-1029/brief-wave3a.md` SS-3)
+
+[scheduling/README.md](scheduling/README.md) ("Optional run-count bounds"),
+[scheduling/v2/README.md](scheduling/v2/README.md) and the V2 `tasks` and `activity` schemas are
+the contract; [remedies.md](remedies.md) (B8's `daily_remaining`, `last_daily_slot`) and
+[runtime-config.md](runtime-config.md) (the ceiling of E) name the rest. **A persisted shape
+changes** (SS3-3): the members of the budget receipt become optional. Every reader of the receipt
+sees the change: the admission record of `policy.dispatch_admitted` and of
+`policy.dispatch_completed`, the retry round of `policy.control_state_recorded`, and the global
+ledger query's public projection `PublicPayload.policy_admission`, which reaches clients through
+runtime-client. A receipt of a catalog that writes every bound is unchanged byte for byte, and so
+is every existing catalog's identity; `ledger` stays [3, 4], the record type, its other members,
+the tables and the schema strings are unchanged.
+
+A receipt that leaves members out is written only after the resource side first leaves a bound
+out. From then on a reader before 0.12.30 cannot decode it (no downgrade, Alice 10-11):
+
+- **A Runtime before 0.12.30** refuses the ledger with `corrupt_ledger_record`. It does so at open
+  when such a record lies among the newest `ledger_observer.open_verify_tail_records` rows it
+  verifies. Otherwise it does so later, when the background recheck reaches the record; the
+  recheck latches a Global failure and stops the Runtime with the same code. It also refuses a V2
+  catalog that leaves `loop_budget` out.
+- **Tools and the UI before 0.12.30** fail to decode a ledger event query page that carries such
+  a receipt in `PublicPayload.policy_admission`.
+
+No ledger revision is bumped now (the coordinator's decision of 10-29). The 0.12.30 release notes
+and Workflow #428 say both:
+
+- after the resource side first leaves a bound out, no rollback below 0.12.30 is possible;
+- the resource side leaves bounds out only once every deployment runs 0.12.30 or later.
+
+The bump comes with SS-9, which deletes the members.
+
+No code, location, configuration key, wire or interface revision is added. The refusals reuse
+`missing_required_field`, `type_mismatch` (an explicit `null`), `loop_budget_missing` and
+`policy_budget_exhausted`. The number 1.212 is the coordinator's. Safety bounds are untouched:
+`on_failure` retries and escalation, `scheduling.rerun.max_per_occurrence`, the recovery ladder,
+the per-run deadline, in-pack loop caps and concurrency. The recognition maintenance daily
+throttle (safety bound S4, `scheduling.fact_refresh.daily_limit`) relies on the `task_daily`
+counter, which the Runtime keeps only because the fact refresh task writes `daily_limit`
+(`fact_refresh_task`); SS-9 must keep that item or give the throttle a counter of its own. The
+no-progress guard (SS-4), batch allowances (SS-6) and deleting the members (SS-9) are later
+slices.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SS3-1 | V2 `tasks[].loop_budget` and each of its items `daily_limit`, `window_iteration_limit`, `max_runtime_ms`; V2 `profiles[]` `daily_budget`, `max_window_iterations`, `session_max_ms` | required members become optional (catalog format, not a ledger shape) | SS-3 | resource side (each rule migrates; RS-1 to RS-7 of the design) | an absent one serializes and hashes as nothing; a written one is checked as before (`loop_budget_missing` for 0, `limit_exceeded` above 1 000 000); V1 still requires all six, now as `missing_required_field` at the member from the validator instead of the parser; in V1 and V2 an explicit `null` is refused as `type_mismatch`, as before SS-3 and as the V2 schemas declare (no file in the repository writes one) |
+| SS3-2 | an unwritten bound is no dimension: admission reserves and refuses nothing on it, the retry round does not judge it, settlement never rewrites a run to `policy_runtime_budget_exceeded` on it, a refund gives back only the counts taken, E has no ceiling without `max_runtime_ms`, B8 derives `daily_remaining` and `last_daily_slot` only from the written daily bounds (both absent with neither), the strategy estimate takes the bounds written and the period | behaviour | SS-3 | runtime-host, policy crate | a written bound applies exactly as before; the Runtime keeps no count for an unwritten dimension and does not clear the counts it kept, so a bound written back within the same day (or window) reads back the count recorded before it was left out, and the runs admitted while it was absent are not counted; the fact refresh task keeps `daily_limit` written for S4 (section head) |
+| SS3-3 | `PolicyBudgetReceipt`: each of `task_daily_used`/`task_daily_limit`, `task_window_used`/`task_window_limit`, `task_runtime_reserved_ms`/`task_runtime_limit_ms`, `activity_daily_used`/`activity_daily_limit`, `activity_window_used`/`activity_window_limit`, `activity_runtime_reserved_ms`/`activity_runtime_limit_ms` optional, a pair present together or not at all (`PolicyBudgetReceipt::is_valid`; payload validation `invalid_policy_budget_receipt` otherwise); `runtime_exceeded` never exceeds an absent runtime pair | persisted shape: required members become optional (the admission record of `policy.dispatch_admitted` and `policy.dispatch_completed`, the retry round of `policy.control_state_recorded`), and the public projection of the global ledger query (`PublicPayload.policy_admission`, to clients through runtime-client) with them | SS-3 | runtime-host (admission; the dispatch's completion carries it into `policy.dispatch_completed`) | written exactly as before for a catalog that writes every bound; a carried pair keeps the rule `used` between 1 and the limit; a reader before 0.12.30 cannot decode a receipt with members left out, which is written only after the resource side first leaves a bound out (section head) |
+| SS3-4 | `DispatchPrerequisites.daily_limit`, `window_iteration_limit`, `max_runtime_ms` optional; the intent check requires each one carried to be above 0 and the intent's expected duration within a carried `max_runtime_ms` | policy interface (memory only; the intent is rebuilt from the record) | SS-3 | policy crate | a dispatch of a catalog that writes all three pins them with the bytes of before |
+
 ### 1.215 Slice UPD-1 (0.12.30): a "client out of date" dialog ends the run by name, and the Runtime runs the store update package (Alice's rulings 95 and 96 of 2026-10-29 17:1x, 96 read as automatic; 97 stays open and is not built; design `rd-1029/design-upd1.md`; coordinator work order `rd-1029/brief-upd1.md`)
 
 [package-reference.md](package-reference.md) (`interrupts.json` `result`, "Shared interrupt
