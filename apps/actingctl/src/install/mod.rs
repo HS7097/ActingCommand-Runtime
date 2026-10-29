@@ -55,6 +55,9 @@ mod gate_inst2_deploy;
 // (MCP-ENTRY review L4).
 #[cfg(test)]
 mod gate_411_p49;
+// Test-only: Workflow #429 A.4 a (R-15a), the edges of the UI that runs after an operation.
+#[cfg(test)]
+mod gate_r15a_ui_edges;
 
 pub(crate) use host::{Host, SystemHost};
 // Workflow #421 INST-1, watchdog row 7a″: what the watchdog and `actingctl start` read.
