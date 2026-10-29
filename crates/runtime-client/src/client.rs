@@ -6699,11 +6699,8 @@ pub(super) fn receipt_response_timeout(
 
 /// The deadline a `RunInstanceTask` runs under: the one it names, else the contained task's
 /// default (`run_instance_task` always names one).
-const fn run_instance_task_deadline_ms(response_deadline_ms: Option<u64>) -> u64 {
-    match response_deadline_ms {
-        Some(deadline_ms) => deadline_ms,
-        None => ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS,
-    }
+fn run_instance_task_deadline_ms(response_deadline_ms: Option<u64>) -> u64 {
+    response_deadline_ms.unwrap_or(ContainedTaskRequest::DEFAULT_RESPONSE_DEADLINE_MS)
 }
 
 /// The result of `send_or_dropped`: the Runtime's result, or the connection ending before the

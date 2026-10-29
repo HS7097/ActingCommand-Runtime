@@ -88,8 +88,11 @@ fn completed(
         .operation()
         .kind()
         .success_code()
-        .or(RuntimeOperationKind::Status.success_code())
-        .expect("a success code");
+        .unwrap_or_else(|| {
+            RuntimeOperationKind::Status
+                .success_code()
+                .expect("Status completes")
+        });
     let mut receipt = json!({
         "schema_version": RUNTIME_RECEIPT_SCHEMA_VERSION,
         "request_id": request.request_id(),
@@ -247,7 +250,7 @@ fn pack_schedule(instance_alias: &str) -> PackScheduleView {
     }
 }
 
-/// The one request of `kind` a connection received after its handshake.
+/// Every request of `kind` one connection received, as it came on the wire, in order.
 fn sent(record: &ScriptedRecord, connection: usize, kind: RuntimeOperationKind) -> Vec<Value> {
     record.connections[connection]
         .requests
