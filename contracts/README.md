@@ -325,7 +325,9 @@ neither: in an ordinary run it is taken once, without a wait, and when it shows 
 of the package the application effect runs without offering the frame to the shared
 interrupt pages (Workflow #411 A31). A `linear_steps` application entry, and a
 page-graph one in a run the host starts itself, take no frame before the effect. An
-interrupt page the running package declares itself is the package's own. One
+interrupt page the running package declares itself is the package's own
+(`package bundle` and `actinglab standard-pack check` warn of each such page, Workflow #411
+B35: `package_bundle_interrupt_page_shadowed`). One
 matched page is handled by its handler package as a layer of the run, and the wait
 resumes with its budget paused for the handling; an entry check starts again.
 Without `interrupts.json` for the game nothing is read and nothing changes.

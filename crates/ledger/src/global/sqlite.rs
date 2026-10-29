@@ -52,6 +52,8 @@ pub(super) mod scrub;
 pub(super) mod frame_refs;
 // #422 LN-7c Q (final-query.md §1): the frame cleaner's ledger query.
 pub(super) mod frame_query;
+// #422 RB-1: the reader pool's Lab relations, built once in the background and read forward.
+pub(super) mod lab_relations;
 mod tagged;
 mod views;
 pub use release_source::*;
@@ -2508,12 +2510,20 @@ impl ViewReader<'_> {
         // #422 QR-2: a reader-pool page takes the relations its thread already read at this
         // snapshot (`SnapshotMemo`, which keeps a few snapshots) and reads none; relations it
         // reads are kept for the next.
+        // #422 RB-1: a reader-pool page reads them from its pool's index once that is built: at
+        // or before the index's end it reads nothing, past it the records after it only
+        // (`lab_relations::relations_at`); before, and without one, the whole history's.
         let known = memo.as_deref().and_then(|memo| memo.lab(snapshot));
+        let cell = memo.as_deref().and_then(SnapshotMemo::lab_relations);
         let no_relations = LabRelations::default();
         let lab_view = if query.view == Some(LedgerView::Lab) {
             Some(match known.clone() {
                 Some(lab) => lab,
-                None => Arc::new(read_lab_relations(connection, snapshot, &no_relations)?),
+                None => Arc::new(lab_relations::relations_at(
+                    connection,
+                    snapshot,
+                    cell.as_deref(),
+                )?),
             })
         } else {
             None
@@ -2523,6 +2533,7 @@ impl ViewReader<'_> {
             after,
             snapshot,
             relations: known,
+            cell,
         });
         let selection_lab = lab_view.as_deref().unwrap_or(&no_relations);
         let view = query
@@ -2929,6 +2940,9 @@ pub(super) struct SnapshotMemo {
     /// Window starts and the first record a lookup found at or after each, the most recently
     /// used last.
     window_starts: VecDeque<(u64, u64)>,
+    /// #422 RB-1: the Lab relations of the reader's pool, shared by its readers
+    /// (`lab_relations::LabRelationCell`); relations taken from it are kept per snapshot above.
+    lab_relations: Option<Arc<lab_relations::LabRelationCell>>,
 }
 
 /// What a [`SnapshotMemo`] keeps at one snapshot.
@@ -2940,6 +2954,19 @@ struct SnapshotValues {
 }
 
 impl SnapshotMemo {
+    /// #422 RB-1: the memo of a reader of the pool whose Lab relations `cell` holds.
+    pub(super) fn with_lab_relations(cell: Arc<lab_relations::LabRelationCell>) -> Self {
+        Self {
+            lab_relations: Some(cell),
+            ..Self::default()
+        }
+    }
+
+    /// #422 RB-1: the Lab relations of the reader's pool.
+    fn lab_relations(&self) -> Option<Arc<lab_relations::LabRelationCell>> {
+        self.lab_relations.clone()
+    }
+
     /// The Lab relations kept at `snapshot`.
     fn lab(&self, snapshot: u64) -> Option<Arc<LabRelations>> {
         self.values(snapshot).and_then(|values| values.lab.clone())
@@ -3013,7 +3040,8 @@ impl SnapshotMemo {
 /// that names a request, a correlation or a run, so a page reads them no later in its work than
 /// at that row, and a page without such a row never reads them (`relations` stays `None`).
 /// #422 QR-2: a reader-pool page starts with the relations its thread kept at the page's
-/// snapshot (`SnapshotMemo`), when it has them, and then reads none.
+/// snapshot (`SnapshotMemo`), when it has them, and then reads none. #422 RB-1: a reader-pool
+/// page reads them from its pool's index (`cell`) once that is built.
 struct LinkedRelations {
     /// The page's own rows (its `limit`).
     rows: usize,
@@ -3021,6 +3049,8 @@ struct LinkedRelations {
     after: u64,
     snapshot: u64,
     relations: Option<Arc<LabRelations>>,
+    /// #422 RB-1: the Lab relations of the reader's pool; a writer's page has none.
+    cell: Option<Arc<lab_relations::LabRelationCell>>,
 }
 
 impl LinkedRelations {
@@ -3046,10 +3076,10 @@ impl LinkedRelations {
         sequence: u64,
     ) -> GlobalLedgerResult<Option<u64>> {
         // A page's first span runs past the budget (`ReadWork::exempt`); its relations, a
-        // statement of their own, never do.
+        // statement of their own, never do. #422 RB-1: from the pool's index once it is built.
         let exempt = work.is_exempt();
         work.exempt(false);
-        let read = read_lab_relations(connection, self.snapshot, &LabRelations::default());
+        let read = lab_relations::relations_at(connection, self.snapshot, self.cell.as_deref());
         work.exempt(exempt);
         let stop = sequence.saturating_sub(1);
         match read {
@@ -5254,7 +5284,7 @@ fn read_rows_bound(
         let steps = statement.get_status(rusqlite::StatementStatus::VmStep);
         #[cfg(test)]
         crate::read_count::statement_steps(steps);
-        crate::writer_statements::statement_done(sql, parameters, steps);
+        crate::writer_statements::statement_done(sql, parameters, steps, result.len());
     }
     Ok(result)
 }

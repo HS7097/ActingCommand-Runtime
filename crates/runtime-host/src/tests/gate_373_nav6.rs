@@ -9,9 +9,16 @@
 //! interrupt pages: `notice` turns the first pixel white, `alert` the third pixel white and
 //! `banner` the second pixel white (both with the first pixel black). No page of the run's own
 //! package matches an overlay. The game root's packages are source package directories.
+//!
+//! Workflow #411 B43 (test rows B43-1 and B43-2): an interrupt page whose `limit_cause` is
+//! `environment` ends a run at its limit with its own code, which is rerun only.
 
 use super::*;
-use actingcommand_contract::outcome::{Category, Outcome};
+use crate::codes::HostCode;
+use crate::failure_identity::{
+    FailureIdentity, IdentityLayer, failure_accumulates, navigation_failure_code,
+};
+use actingcommand_contract::outcome::{Category, CodeStr, LadderClass, Outcome};
 use actingcommand_contract::{
     RuntimeLifecyclePhase, RuntimePayload, TaskEntryRecoveryRole, TaskInterruptThen,
 };
@@ -1058,6 +1065,336 @@ fn n6_7_handling_beyond_max_per_run_or_sixteen_in_a_run_ends_the_run() {
     assert_eq!(integer(&failure, "limit_count"), Some(16));
     assert_eq!(total.handled().len(), 16);
     assert_eq!(state.input_count.load(Ordering::Acquire), 16);
+}
+
+// ---- Workflow #411 B43: an interrupt page whose limit is an environment problem.
+
+const ENVIRONMENT_LIMIT: &str = "contained_task_interrupt_environment_limit_reached";
+const PACK_LOGIC_LIMIT: &str = "contained_task_interrupt_limit_reached";
+/// The fixture catalog's one task (`contracts/scheduling/examples/catalog-a`).
+const B43_TASK: &str = "fixture.observe";
+
+/// `notice_root` with `then: resume`, whose notice entry declares `limit_cause` when one is
+/// given.
+fn notice_root_with_cause(base: &Path, max_per_run: u8, limit_cause: Option<&str>) -> GameRoot {
+    let mut entry = interrupt("notice", CLOSE_NOTICE, json!("resume"), max_per_run);
+    if let Some(cause) = limit_cause {
+        entry["limit_cause"] = json!(cause);
+    }
+    let mut root = GameRoot::new(base);
+    root.features()
+        .pack(
+            CLOSE_NOTICE,
+            "navigable_route",
+            handler_task("notice", "first_white", TO_AWAY),
+        )
+        .bundle()
+        .pages()
+        .interrupts(json!([entry]));
+    root
+}
+
+/// B43-1: a notice whose entry declares `limit_cause: "environment"`, seen once more than its
+/// `max_per_run`, ends the run with `contained_task_interrupt_environment_limit_reached` (error,
+/// class `budget_or_permission`, the same values) and nothing is input after it. Without the
+/// member, or with `"pack_logic"`, the same run ends as before with
+/// `contained_task_interrupt_limit_reached`. The new code is rerun only in every scope, while
+/// the old one still accumulates outside `prepare`; both name the data files in their identity.
+#[test]
+fn b43_1_an_environment_limit_ends_the_run_with_its_own_code_and_without_it_as_before() {
+    for (limit_cause, expected) in [
+        (Some("environment"), ENVIRONMENT_LIMIT),
+        (Some("pack_logic"), PACK_LOGIC_LIMIT),
+        (None, PACK_LOGIC_LIMIT),
+    ] {
+        let state = Arc::new(FakeState::default());
+        let temp = TempDir::new().expect("tempdir");
+        let root = notice_root_with_cause(temp.path(), 1, limit_cause);
+        recurring_overlay(&state, |_| Overlay::Notice);
+        let host = start(&temp, &state, Some(&root));
+        let run = run(&host, &temp, "run", &away_to_home());
+        host.close().expect("close runtime host");
+
+        assert_eq!(
+            run.receipt.state(),
+            RuntimeReceiptState::Failed,
+            "{limit_cause:?}"
+        );
+        let failure = run.failure();
+        assert_eq!(failure.code().as_str(), expected, "{limit_cause:?}");
+        assert_eq!(failure.category(), Category::Error, "{limit_cause:?}");
+        assert_eq!(text(&failure, "page_id"), Some("notice"), "{limit_cause:?}");
+        assert_eq!(integer(&failure, "count"), Some(2), "{limit_cause:?}");
+        assert_eq!(integer(&failure, "limit_count"), Some(1), "{limit_cause:?}");
+        assert_eq!(run.handled().len(), 1, "{limit_cause:?}");
+        assert_eq!(
+            state.input_count.load(Ordering::Acquire),
+            1,
+            "{limit_cause:?}"
+        );
+    }
+
+    let environment = HostCode::ContainedTaskInterruptEnvironmentLimitReached;
+    assert_eq!(environment.as_str(), ENVIRONMENT_LIMIT);
+    assert_eq!(environment.ladder_class(), LadderClass::BudgetOrPermission);
+    assert_eq!(
+        HostCode::ContainedTaskInterruptLimitReached.ladder_class(),
+        LadderClass::PackLogicMismatch
+    );
+    let environment = CodeStr::from(environment.code());
+    let pack_logic = CodeStr::from(HostCode::ContainedTaskInterruptLimitReached.code());
+    assert!(navigation_failure_code(&environment) && navigation_failure_code(&pack_logic));
+    for scope in ["prepare", "gate", "pre:0123abcd", "main"] {
+        for restart_segment in [false, true] {
+            assert!(
+                !failure_accumulates(&environment, scope, restart_segment),
+                "{scope} {restart_segment}"
+            );
+            assert_eq!(
+                failure_accumulates(&pack_logic, scope, restart_segment),
+                scope != "prepare",
+                "{scope} {restart_segment}"
+            );
+        }
+    }
+}
+
+/// The fixture catalog with the recommended `on_failure` of a page-graph task
+/// (`contracts/policy-suspension.md`, "Catalog"): a failure that repeats its identity pauses
+/// the pair.
+fn pausing_policy_sources() -> CatalogSources {
+    let mut sources = policy_sources(1);
+    let mut tasks: Value = serde_json::from_slice(&sources.tasks.bytes).expect("policy tasks");
+    tasks["tasks"][0]["on_failure"] = json!({
+        "action": "pause",
+        "retry_limit": 1,
+        "retry_backoff_ms": 0,
+        "escalation_threshold": 2
+    });
+    sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("policy task bytes");
+    sources
+}
+
+/// The Runtime clock's time now.
+fn clock_now(clock: &ManualRuntimeClock) -> u64 {
+    clock.sample().expect("sample the runtime clock").unix_ms
+}
+
+/// Evaluates at `at` (or at the Runtime clock's time when that is later; the clock moved there
+/// first), admits the task's dispatch and runs it as a scheduled run that fails without
+/// poisoning the Runtime (as `gate_390_exec3` does).
+fn b43_failed_scheduled_run(
+    host: &RuntimeHost,
+    clock: &ManualRuntimeClock,
+    request: &ContainedTaskRequest,
+    at: u64,
+    seed: u64,
+) -> (Box<PolicyRunContext>, RuntimeHostError) {
+    let at = at.max(clock_now(clock));
+    advance_manual_clock_to(clock, at);
+    // Admission refuses a stale capacity sample (contracts/capacity-admission.md); a jump of
+    // the Runtime clock leaves the monitor's last one stale, so one is taken at the new time.
+    host.capacity_sampler_for_test().expect("capacity owner")()
+        .expect("capacity sample at the admission time");
+    let (_, intent, reasons) =
+        evaluated_policy_dispatch_at(host, PolicyTrigger::FactsChanged, at, seed);
+    assert_eq!(intent.task_id, B43_TASK);
+    record_policy_approval(host, &intent);
+    let PolicyDispatchAdmission::Granted { context } = host
+        .admit_scheduled_policy_dispatch(&intent, &reasons, &policy_context(host, &intent), request)
+        .expect("policy admission")
+    else {
+        panic!("expected one policy run context")
+    };
+    let error = host
+        .run_scheduled_contained_task(&context, request)
+        .expect_err("the scheduled run fails");
+    assert!(!error.is_fatal(), "{error:?}");
+    (context, error)
+}
+
+/// The failure the policy execution record of `run_id` settled.
+fn b43_recorded_failure(
+    host: &RuntimeHost,
+    run_id: RunId,
+) -> actingcommand_contract::PolicyFailureRecord {
+    let mut client = TestClient::connect(host);
+    let events = projected_events(
+        &mut client,
+        EventQuery {
+            run_id: Some(run_id),
+            ..EventQuery::default()
+        },
+    );
+    drop(client);
+    events
+        .iter()
+        .find_map(|event| match &event.payload {
+            ProjectionPayload::Full(payload) => match payload.as_ref() {
+                EventPayload::Policy(PolicyPayload::ExecutionRecorded(payload)) => {
+                    match payload.policy_result() {
+                        PolicyExecutionOutcome::Failed { failure } => Some(failure.clone()),
+                        PolicyExecutionOutcome::Succeeded { .. } => None,
+                    }
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("the failed execution record")
+}
+
+/// R22's rerun time: the retry backoff and the activity's sampled interval after the admission
+/// of `context` have both passed.
+fn b43_rerun_time(
+    failure: &actingcommand_contract::PolicyFailureRecord,
+    context: &PolicyRunContext,
+) -> u64 {
+    failure
+        .retry_at_unix_ms
+        .expect("a failure scheduled for a retry has its retry time")
+        .max(context.admission().activity.next_eligible_unix_ms)
+}
+
+/// A settled `limit_cause: environment` failure: rerun only (its identity's frame segment is
+/// the decision's, so no later failure repeats it), still naming the data files, and scheduled
+/// for a retry with no count carried over.
+fn assert_rerun_only(failure: &actingcommand_contract::PolicyFailureRecord, case: &str) {
+    assert_eq!(
+        actingcommand_contract::scheduled_failure_code_str(&failure.outcome).as_str(),
+        ENVIRONMENT_LIMIT,
+        "{case}"
+    );
+    let identity = failure
+        .failure_identity
+        .as_deref()
+        .and_then(FailureIdentity::parse)
+        .unwrap_or_else(|| {
+            panic!(
+                "{case}: a format v2 failure identity: {:?}",
+                failure.failure_identity
+            )
+        });
+    assert_eq!(identity.base, ENVIRONMENT_LIMIT, "{case}");
+    assert!(!identity.accumulates(), "{case}: rerun only: {identity:?}");
+    assert!(
+        identity
+            .layers
+            .iter()
+            .any(|layer| matches!(layer, IdentityLayer::StandardPackRoot(_))),
+        "{case}: the identity names the data files: {identity:?}"
+    );
+    assert_eq!(failure.consecutive_same_error, 1, "{case}");
+    assert_eq!(
+        failure.disposition,
+        PolicyFailureDisposition::RetryScheduled,
+        "{case}"
+    );
+}
+
+/// B43-2: under the recommended catalog value, which pauses a pair whose failure repeats, a
+/// scheduled run that ends with `contained_task_interrupt_environment_limit_reached` is rerun
+/// at once (R22) and fails the same way again without pausing its pair: each failure is
+/// scheduled for a retry, and the next evaluation reruns the pair with
+/// `failure_retry_immediate` and no `policy_task_paused`.
+#[test]
+fn b43_2_a_scheduled_environment_limit_is_rerun_at_once_and_never_pauses_its_pair() {
+    let state = Arc::new(FakeState::default());
+    let temp = TempDir::new().expect("tempdir");
+    let root = notice_root_with_cause(temp.path(), 1, Some("environment"));
+    recurring_overlay(&state, |_| Overlay::Notice);
+    let package = away_to_home();
+    let package_path = temp.path().join("scheduled.zip");
+    fs::write(&package_path, &package).expect("write the scheduled package");
+    let request = ContainedTaskRequest::new(package_path.to_string_lossy().into_owned())
+        .expect("scheduled request");
+    let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
+    state.physical_task_geometry.store(true, Ordering::Release);
+    let host = RuntimeHost::start(
+        config(&temp)
+            .with_runtime_clock(clock.clone())
+            .with_procedure_manifest(procedure_manifest_with_primary(
+                &package,
+                vec!["after_observation".to_owned()],
+            ))
+            .with_standard_packs_root(Some(root.root.clone())),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::clone(&state),
+        )),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&pausing_policy_sources())
+        .expect("activate policy catalog");
+
+    let (first_context, first_error) =
+        b43_failed_scheduled_run(&host, &clock, &request, POLICY_NOW_UNIX_MS, 7);
+    assert_eq!(first_error.code(), ENVIRONMENT_LIMIT);
+    let first = b43_recorded_failure(&host, first_context.run_id());
+    assert_rerun_only(&first, "first");
+
+    // The immediate rerun meets the page again: the same failure, a new identity, no pause.
+    let (second_context, second_error) = b43_failed_scheduled_run(
+        &host,
+        &clock,
+        &request,
+        b43_rerun_time(&first, &first_context),
+        8,
+    );
+    assert_eq!(second_error.code(), ENVIRONMENT_LIMIT);
+    let second = b43_recorded_failure(&host, second_context.run_id());
+    assert_rerun_only(&second, "second");
+    assert_ne!(
+        second.failure_identity, first.failure_identity,
+        "a repeat never carries the first identity"
+    );
+
+    // The pair is rerun again, at once and not paused.
+    let at = b43_rerun_time(&second, &second_context).max(clock_now(&clock));
+    advance_manual_clock_to(&clock, at);
+    let cycle = host
+        .evaluate_policy_cycle_with_test_inputs(
+            &policy_facts(),
+            &policy_resources(),
+            EvaluationTime {
+                unix_ms: at,
+                monotonic_ms: at,
+            },
+            9,
+            PolicyTrigger::FactsChanged,
+        )
+        .expect("evaluate the policy");
+    host.close().expect("close runtime host");
+    let evaluation = cycle.evaluation.expect("an evaluation");
+    let paused = evaluation
+        .decisions
+        .iter()
+        .filter(|decision| {
+            decision.task_id == B43_TASK
+                && decision.instance_id.as_deref() == Some(POLICY_INSTANCE_ALIAS)
+        })
+        .flat_map(|decision| decision.reasons.iter())
+        .any(|reason| reason.outcome.code().as_str() == "policy_task_paused");
+    assert!(!paused, "no pause keeps the pair: {evaluation:#?}");
+    let rerun = evaluation
+        .dispatch_intents
+        .iter()
+        .find(|intent| intent.task_id == B43_TASK && intent.instance_id == POLICY_INSTANCE_ALIAS)
+        .unwrap_or_else(|| panic!("the pair is rerun: {evaluation:#?}"));
+    let chain = evaluation
+        .reason_chains
+        .iter()
+        .find(|chain| chain.id == rerun.reason_chain_id)
+        .expect("the rerun's reason chain");
+    assert!(
+        chain.reasons.iter().any(|reason| {
+            reason
+                .outcome
+                .is(actingcommand_policy::PolicyCode::FailureRetryImmediate)
+        }),
+        "the rerun is the immediate rerun: {chain:#?}"
+    );
 }
 
 /// N6-8: one frame matches two interrupt pages: an `interrupt_ambiguous` record, nothing is

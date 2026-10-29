@@ -105,6 +105,12 @@ actingcommand_contract::outcome_codes! {
         /// `remedy_problem`; optional `need`, `capability`, `outcome_key`). `package bundle` and
         /// `actinglab standard-pack check` list one per finding in `warnings`.
         PackageBundleRemedyInvalid => "package_bundle_remedy_invalid": warning / none,
+        /// Warning (Workflow #411 B35): a package declares a page that `interrupts.json` lists as
+        /// a shared interrupt page (keys `package_id`, `page_id`); the page is the package's own,
+        /// so that interrupt does not act for its runs. `package bundle` and `actinglab
+        /// standard-pack check` list one per package and page in `warnings`; a feature package
+        /// and the page's handlers are not listed.
+        PackageBundleInterruptPageShadowed => "package_bundle_interrupt_page_shadowed": warning / none,
         /// Warning (Workflow #384 D2-S2, transitional): a pack of a bundle with maintenance
         /// declarations only navigates and reads, but the declarations do not name it for
         /// `recognition` (key `package_id`). The resource repositories make it an error once

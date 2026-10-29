@@ -812,6 +812,17 @@ tests = [
 ]
 incident = ["#422 QR-2"]
 
+# RB-1 (#422; 0.12.28; production v0.12.26 after the machine restart of 2026-10-29 05:23, investigation rd-1029/inv-reboot/rb.md, work order rd-1029/brief-rb1.md): the reader pool builds its Lab relations once at its start, in the background, and its pages read only the records after the build. With and without the index the pool's pages are the writer's item for item, pinned before, at and after the build's anchor, up and down (T1). With the index built, a page that reaches a linked row runs no statement of the whole history's Lab relations, its index statements return at most one row per record after the anchor and each stays within one look interval, and it answers that row with its budget spent at every look; without the index, the same page stops before the row and the next is refused ledger_read_budget_exceeded, and with its budget whole it reads thousands of rows (T2). A build whose deadline passed is said once as ledger_read_budget_exceeded of build_lab_relations, not fatal, and the pages read the whole history's relations as before (T3). A Lab anchor after the build naming a request whose run's records are older than the build relates them from its own sequence on, not before (T4)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_rb1::rb1_t1_pages_with_and_without_the_index_are_the_same_also_at_old_snapshots",
+    "actingcommand-ledger::lib::global::tests::gate_rb1::rb1_t2_a_linked_page_with_the_index_reads_no_full_history_and_answers_within_its_budget",
+    "actingcommand-ledger::lib::global::tests::gate_rb1::rb1_t3_a_failed_build_is_a_warning_and_the_pages_read_as_before",
+    "actingcommand-ledger::lib::global::tests::gate_rb1::rb1_t4_a_new_anchor_that_names_an_old_request_relates_its_records_from_its_own_sequence",
+]
+incident = ["#422 RB-1"]
+
 # W1-8 (#422; brief rd-1028/brief-wave1.md W1-8; #422 6460155516 L-3 and L-5, 6461256427 L-4's follow-up, 6463703245): the writer's eviction proofs are kept in a persistent set of a few shared levels, each artifact's newest proof answered, and a copy taken as a publication takes it keeps its proofs while the set moves on (T1, P27); a reader-pool page over records whose artifact has a real eviction proof is the writer's page byte for byte and carries the eviction, and a commit that changes no proof publishes a point sharing the earlier point's proofs (T2, P28); a reader-pool page whose statement bound interrupts a statement outside its selection is ledger_read_budget_exceeded of project_ledger_view_page, not fatal, as the writer's page is, and the pool goes on (T3, P28); a pass start's trim keeps a frame object outside the live listing that a record named after the first chunk's head, in every chunk, and drops one named at or before it (T4, P28); the pool's pages are counted with their times while the writer runs, and a ledger without a pool has none (T5, P29); the published head answers while the writer is held inside an append's write transaction, names each answered commit, and a ledger that publishes no point reads the writer's head (T6, P30); the published head of a writer that ended is the fatal writer_unavailable of latest_sequence, and that of a writer its probe sealed the fatal ledger_write_failed, each while its point is still published (L2-a, L2-b, P30; W1-8 review L-2)
 [[gate]]
 coverage = "Y"

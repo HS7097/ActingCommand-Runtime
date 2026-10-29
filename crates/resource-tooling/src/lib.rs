@@ -16,7 +16,8 @@ mod declaration_exclusions;
 #[cfg(test)]
 mod gate_336_pkgs5;
 // Workflow #373 NAV-T (exec key 80): the standard-pack cross-check of package bundle and
-// standard-pack check, the root files laid beside bundle.json and the reserved package ids.
+// standard-pack check, the root files laid beside bundle.json and the reserved package ids;
+// Workflow #411 B35: the warning of a pack that declares a shared interrupt page itself.
 #[cfg(test)]
 mod gate_373_navt;
 // Workflow #411 A25 (exec key 113): standard-pack check admits every registry package, with or
