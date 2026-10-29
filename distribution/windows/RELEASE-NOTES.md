@@ -9,6 +9,152 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.30
+
+本版是 v0.12.29 之后合并的 7 个 PR：SS-3、SS-1、R-0、R-15a、R-0c、R-0d、UPD-1。运行中会注意到的新东西有两件。
+一是客户端过期时自动更新（UPD-1）：资源根可以在 `interrupts.json` 里给游戏的「客户端过期」弹窗页写
+`result: "application_update_required"`。运行碰到这个页时，处理包照跑，然后运行以 `contained_task_application_update_required`
+（warning，不开阶梯）结束；结束之前 Runtime 给这台实例记下事实 `health.application.update_required` 为 true。之后这台实例上
+除商店更新包（`control.json` 写了 `store_update` 的包）以外的计划任务都推迟（`application_update_pending`），由 `schedule.json`
+里按这个事实触发的商店更新规则去跑商店更新包；它运行成功后事实变回 false，被弹窗打断的任务按欠下的补跑先跑。别的实例不受
+影响。这套流程要等资源根同时写了 `result` 和商店更新规则才生效，商店更新包点商店仍要配置的允许名单
+`store_foreground.allowed_application_ids` 写了这个商店（v0.12.29）。二是工作台的地基（R-0、R-0c、R-0d、R-15a）：控制台要用
+的请求和回答形状一次定下，`runtime-client` 声明 [2, 3]，客户端有了对应的方法；新的请求种类本版都答 `not_implemented`，什么
+都不做，行为由后续版本补。另外，派单的次数上限可以不写了（SS-3），池的基础估值在每个实例上都计入（SS-1）；生产资源仓的规则
+都写齐了次数上限，也没有池写估值，所以这两项本版不改变线上派单。不写 `result` 的根、不改配置的实例，运行和 v0.12.29 一样，
+只多了启动时的一条种子事实（见下面）。v0.12.29 已在本版之前发布。
+
+配置：`actingd-config` 仍是 [5, 21]；`runtime-client` 从 [2, 2] 改为 [2, 3]（`min` 仍是 2）；账本仍是 [3, 4]，`package` 仍是
+[3, 5]，其他接口不变。
+
+- 新键：没有。`actingd-config` 没有升 revision，现有的配置文件照常读。
+- 改了的默认值（UPD-1）：`scheduling.rerun.condition_codes` 末尾加了 `contained_task_application_update_required`，从 9 个码
+  变成 10 个，原来的 9 个不变。`actingd.defaults.json` 只改了这一处。部署计划的默认值对比会列出这一项。配置文件自己写了
+  `condition_codes` 的按文件里的值，这次改动对它不起作用：碰到弹窗的计划运行不按条件终止，按普通失败结算（扣次数、加连败），
+  需要的话自己加上这个码；用指令设过这个键的，指令照样恢复，在 `instructions` 检查的 `base_changed` 里点名，不算失败。
+- 其他默认值都没改，现有的配置都不需要修改。
+- 账本没有新表、新索引或新事件类型，`ledger` 不升；本版写的新记录都是已有的记录类型（见下面）。SS-3 的准入回执成员改为可选，
+  但只在资源侧省略某个界之后才会写出少成员的回执（见下面的回退）。
+- 新结果码 3 个（UPD-1）：`contained_task_application_update_required`（warning，阶梯类 none，带 `page_id`）、
+  `application_update_pending`（info，带 `instance_id`、`fact_key`）、`application_update_key_reserved`（error，带 `fact_key`）。
+  `standard_pack_problem` 多了一个原因词 `interrupt_result_invalid`。新位置 12 个（R-0、R-0c）：runtime-host 的
+  `run_instance_task`、`stop_instance_run`、`edit_pack_schedule`、`edit_resource_target`、`routine_summary`、
+  `pack_schedule_view`，runtime-client 的同名六个（前缀 `runtime_`）。它们的评审状态都是 pending，结果码发布文件只收已定稿或
+  已退役的条目，所以本版的发布文件是空的。没有退役的码。
+- 新事实键 `health.application.update_required`（布尔，实例范围），只有 Runtime 写；每台实例占事实库 256 条容量里的 1 条。
+
+升级时要知道的：
+
+- `result` 要本版或以上（UPD-1）：v0.12.29 及更早的 Runtime 不认 `interrupts.json` 的 `result`（打断项拒绝不认识的成员），
+  启动时把写了它的整个游戏根记为 `standard_pack_root_invalid`（`malformed`，`check-config` 也列出），准备阶段拒绝每个要用这个
+  根的运行，Runtime 不停；v0.12.29 的 Tools 打包时也一样拒收。商店更新规则本身是普通的事实触发规则，v0.12.29 读得了，但它
+  不写这个事实，规则永远不会触发。所以资源仓要等本版部署并核过之后，在同一个 PR 里把 CI 钉的 Tools 换到 0.12.30 或以上，把
+  `result` 和商店更新规则一起加上，再热放置。
+- 先把商店写进允许名单：商店更新包点商店要 `store_foreground.allowed_application_ids` 写了它声明的商店（只能改配置文件、重启
+  生效）。名单没写时商店更新包的运行以 `application_store_not_allowed` 失败，失败的商店运行不写事实，实例一直被扣住。
+- 只写了 `result`、没写商店更新规则的根：碰到弹窗后这台实例的计划任务一直推迟，每个候选都显示 `application_update_pending`，
+  不是静默的。处理：手动更新客户端后直接运行这个游戏的商店更新包（`ac_run_pack`），它成功（包括「不需要更新」的成功）就解除。
+- 扣住的范围（UPD-1）：事实为 true 时，这台实例除商店更新任务以外的所有候选都推迟，欠下的补跑、立即重跑、补救请求和读数刷新
+  （`fact_refresh_pending`，`gate_code` 是 `application_update_pending`）都算在内，不论排名；不设唤醒时间，事实一变就重新评估。
+  空闲计划不为被扣住的任务唤醒这台实例。其他实例不受影响。商店更新任务照常过其他各道门。
+- 启动种子（UPD-1）：本版每次启动时，给每个配置了的例行实例中还没有这条记录的写一条 `health.application.update_required` =
+  false（`source_snapshot_id` 为 `application_update:seed`，观测时间为 1，不过期），所以升级后第一次启动每台实例一条，以后的
+  启动不再写；已有的记录（包括 true）保留。观测时间取 1 而不是启动时刻：种在启动时刻会让问更早时间的评估和前推整份被拒。
+  种子写不进去（比如事实库满）时启动失败，和其他种子一样。
+- 商店更新规则的写法（给资源侧）：每个服一条，`trigger` 为 `health.application.update_required` eq true，`feedback_stop` 为
+  eq false，`cooldown_ms` 是商店还没有新版本时隔多久再看，必须大于 0：`package bundle --schedule` 和 `standard-pack check` 以
+  `standard_pack_root_invalid`（`schedule_invalid`，`/rules/<i>/cooldown_ms`）拒收为 0 的规则（这是 Tools 的检查，Runtime 的
+  组装不重复）。
+- 时间线不能作废这个事实（UPD-1）：`schedule.json` 里某个时间线事件的 `invalidates_fact_prefixes` 覆盖这个键（键本身或它的
+  任何前缀，包括 `health.`），而同一事件的 `excludes_fact_prefixes` 没有保住它的，组装时被拒：Runtime、`check-config`、
+  `package bundle --schedule`、`standard-pack check` 都记为 `standard_pack_root_invalid`（`schedule_invalid`，
+  `/timeline/<i>/invalidates_fact_prefixes/<j>`），这个游戏沿用当前生效代的规则。这一条对所有资源根都生效，部署前先核现有的
+  时间线有没有这样的前缀。
+- 弹窗页的写法（给资源侧）：`result` 只能配 `then: "end_run"`，配别的 `then` 是 `interrupt_result_invalid`
+  （`/interrupts/<i>/result`），别的值或类型是 `malformed`；Runtime、`package bundle`、`standard-pack check` 用同一个解析。普通
+  任务包不要把这个页声明成自己的页；商店更新包把它当入口页，`package_bundle_interrupt_page_shadowed` 不再对这种包报。商店更新
+  包「不需要更新」的结束要算成功，只有成功才清掉事实。处理包非致命失败时运行仍以新码结束（处理包的失败作为 `related` 链接，
+  事实照样先记 true）；致命失败照旧毒化运行，处理期间被取消、暂停或到期按那次停止结束。
+- 阶梯和开机包（UPD-1）：阶梯某一级的包运行以新码结束时，这一级记 `recovery_ladder_interrupted`，阶梯以 `exhausted`（warning）
+  结束，不再爬下一级，不会因为客户端旧而重启模拟器。开机包碰到弹窗记一条 warning 的 `runtime.failed`，不开阶梯。敏感任务碰到
+  弹窗仍按普通失败结算。
+- 保留键（UPD-1）：客户端的 `PublishFact`、`PublishFacts` 写这个键一律被拒（`application_update_key_reserved`），什么都不记。
+  要手动解除就直接运行商店更新包。
+- 次数上限可以不写（SS-3，给资源侧）：V2 目录里任务的 `loop_budget` 和它的三项、活动档的三项都可以不写；不写的那一维准入不
+  预留、不拒绝，结算不会因它改写成 `policy_runtime_budget_exceeded`，没写 `max_runtime_ms` 时预计时长不封顶，B8 的
+  `daily_remaining` 只从写了的日界算。写了的界照旧生效，全部写齐的目录哈希、回执和意图逐字节不变。V1 仍要六项都写（缺了报
+  `missing_required_field`），显式写 `null` 是 `type_mismatch`。Runtime 不记没写那一维的计数，也不清已记的计数：当天（或时段
+  内）又写回时读回省略前的计数，省略期间准入的运行不计。**资源根一旦省略某个界，就不能再退到 0.12.30 以下**（见下面的回退），
+  所以资源侧要等所有部署都在 0.12.30 或以上之后才省略。
+- 基础估值常开（SS-1）：没有生效中的 v2 目标（没有记录、已撤回、已过期、读不了、v1 目标）时，产出带 `valuation` 的池的任务也
+  得到基础项（每次产出 × base / scale），原因链里是 `resource_weights` 的 `policy=none`；目标只叠加缺口项，达成后任务仍是候选。
+  资源层不读任务开关、实例覆盖、优先级和偏移。v1 目标的 `U` 现在把被实例覆盖禁用的点名任务也算进去，以前禁用一个点名任务会抬高
+  其他点名任务的分。
+- 工作台（R-0、R-0c、R-0d，给控制台）：新请求种类 `RunInstanceTask`、`StopInstanceRun`、`EditPackSchedule`、
+  `EditResourceTarget`、`RoutineSummary`、`PackScheduleView` 本版都只先核实例别名，然后答 `not_implemented`，不写记录、不改状态。
+  请求带了 `ConfigureSettings.expected_version` 或 `ApplyResourceTargets.expected_version` 也答 `not_implemented`、什么都不改，
+  去掉这个成员重发即可。新的回答成员（`activity`、两个 `config_version`、`active.rows`、`stale_schema`、`below`）本版都不填。
+  控制台发任何修订 3 的形状就要声明 `min` 3；第一个填新回答成员的版本会把 Runtime 的 `min` 升到 3。`ControlEmulatorInstance`、
+  `SelfCheckInstance`、`ApplicationLifecycle` 改划为一般指令，只在握手时读，行为不变。runtime-client 的 `configure_settings`、
+  `apply_resource_targets` 多了可选的 `expected_version` 参数；actingctl 和 MCP 的命令、参数都没变。
+- 安装器（R-15a）：`actingctl install` 有了判 UI 接口声明的五条边（`actingd-config`、`ledger` 两条、`runtime-client`、
+  `runtime-outcomes`），目前只有测试调用，更新和回退计划要到后续片才接入；图形向导显式传两个 Lab 旗标的约定只改了契约。
+
+退回 v0.12.29 之前要做的事（按代码核对过）：
+
+- 配置文件：本版没有新键，v0.12.29 照常读本版的配置文件。例外是配置文件自己的 `scheduling.rerun.condition_codes` 写了
+  `contained_task_application_update_required`：v0.12.29 的目录里没有这个码，`check-config` 和启动以 `config_value_invalid`
+  （`code_unknown`）拒绝整个文件。回退前先把这个码从文件里去掉并提交（`acsetup --commit-config`）。用指令设过这个键、值里有
+  这个码的，v0.12.29 启动时作为 `config_override_dropped` 丢掉并列进 `instructions_dropped`，回退启动的 `instructions` 检查
+  不通过；回退前先 `actingctl config clear scheduling.rerun.condition_codes`，或重设一个不含这个码的值。
+- 种子和其他事实记录：不用做什么，v0.12.29 读得了。它们是普通的 `fact.published`（`fact.v1`，置信度 1000，不过期，观测时间
+  不小于 1），账本的格式、表、索引和事件类型都没变，v0.12.29 照样打开本版写过的账本，把它们当普通的实例事实载入。v0.12.29
+  不扣住、也不保留这个键：值为 true 的记录不再挡任何任务，只有点名这个键的规则会读它。再升回本版时记录照原样生效：值为 true
+  的实例又被扣住，直到商店更新包运行成功。
+- 用了 `result` 的资源根：v0.12.29 把整个游戏根记为 `standard_pack_root_invalid`，准备阶段拒绝每个要用这个根的运行，Runtime
+  不停。回退前先把资源根换回不带 `result` 的版本并热放置，商店更新规则一起去掉：v0.12.29 读得了这条规则，但商店更新成功后不把
+  事实写回 false，事实为 true 时它会每隔 `cooldown_ms` 再跑一次商店更新包。回退后客户端过期又要人手更新。
+- 省略了界的资源根和回执（SS-3）：资源侧没省略任何界之前，准入回执逐字节和以前一样，v0.12.29 照常读，可以回退。资源侧第一次
+  省略某个界之后就**不能退到 0.12.30 以下**，只能往前修：按它准入的运行写下的回执少了成员，v0.12.29 和更早的 Runtime 解不了。
+  这种记录在账本打开时校验的尾部（`ledger_observer.open_verify_tail_records` 行）里时，以 `corrupt_ledger_record` 拒开账本；
+  不在尾部的，后台复核读到它时记全局失败，以同一个码停下 Runtime。v0.12.29 也拒收省略了界的目录（那个游戏的 `schedule.json`
+  记为 `standard_pack_root_invalid`，沿用当前生效代的规则）。0.12.30 之前的 Tools 和 UI 解码带这种回执的账本查询页
+  （`PublicPayload.policy_admission`）也会失败。
+- 改了的默认值和新码：v0.12.29 用它自己的默认表（9 个码）。已经以新码按条件终止结算的运行照记录重放；本版的新码不在 v0.12.29
+  的目录里，读回时显示为 `outcome_relay_unregistered`（`raw_code` 是原码）。
+- 只在程序里、不存状态的改动，回退后回到 v0.12.29 的行为：
+  - UPD-1：扣住、空闲计划的例外、阶梯在新码处停下、开机包的处理、保留键和两条组装检查都没有了。
+  - SS-1：只有实例持有生效中的非空 v2 目标表时才计基础估值；v1 目标的 `U` 又不算被禁用的点名任务。生产没有池写估值，派单不变。
+  - R-0、R-0c、R-0d、R-15a：新请求种类、客户端方法、安装器的 UI 边都没有了；三个种类回到原来的分区，行为不变。
+- 客户端和 Runtime 的配对：
+  - 本版的客户端（`runtime-client` [2, 3]）连 v0.12.29 的 Runtime（[2, 2]）：照常。修订 2 的请求不变，`configure_settings`、
+    `apply_resource_targets` 不带 `expected_version` 时线上字节和以前一样。只有发修订 3 的新种类时 v0.12.29 不认，断开连接、
+    不给回执：`routine_summary`、`pack_schedule_view` 报 `runtime_operation_unsupported`，另外四个方法报连接断开。本版的
+    actingctl 和 MCP 不发这些种类。v0.12.29 不保留 `health.application.update_required`，把它当普通事实键处理。
+  - v0.12.29 的客户端连本版的 Runtime：照常。请求不变；本版不填任何新回答成员，严格的旧 DTO 照样解码；新码读到时显示为
+    `outcome_relay_unregistered`；它写 `health.application.update_required` 会被拒（`application_update_key_reserved`）。资源侧
+    省略界之后，它解码带少成员回执的账本查询页会失败（同上）。
+
+运行上的变化：
+
+- 次数上限可选（SS-3）：派单的次数、窗口和时长上限可以不写，不写的那一维不限；写齐的目录逐字节不变。
+- 基础估值常开（SS-1）：池的基础估值在每个实例上都计入，资源层不读任务状态；生产没有池写估值，派单不变。
+- 工作台形状（R-0）：工作台的请求和回答形状定下，新种类答 `not_implemented`；`runtime-client` [2, 3]；三个种类改划为一般指令。
+- 安装器 UI 边（R-15a）：安装器有了判 UI 接口声明的判据，暂不接入计划；Lab 两个旗标由图形向导显式传入。
+- 客户端方法（R-0c）：runtime-client 有了工作台的方法；新读面 `PackScheduleView`，本版答 `not_implemented`。
+- 下层生效值（R-0d）：`PackScheduleView` 的每个包可带 `below`（下一层的决定），本版不填。
+- 客户端过期（UPD-1）：弹窗页以 `contained_task_application_update_required` 结束运行，记下事实，扣住这台实例的其他任务，商店更新包成功后解除并先补跑被打断的任务。
+
+本版合并的 PR：
+
+- #1440 SS-3（#386）：次数上限（`loop_budget` 各项、活动档各项）改为可选；写齐的目录逐字节不变；`PolicyBudgetReceipt` 的成员成对可选，账本修订号不变。
+- #1438 SS-1（#386）：池的基础估值在每个实例上都计入，不论有没有目标记录；资源层不读任何任务状态（单向规则）。生产没有池声明估值，线上不变。
+- #1439 R-0（#429）：工作台的线上形状；新种类答 `not_implemented`；`runtime-client` 声明 [2, 3]，`min` 仍是 2；三个种类改划为一般指令。
+- #1437 R-15a（#429）：安装器的 UI 方接口边（判据和测试），以及 Lab 两个旗标显式传入的约定。
+- #1443 R-0c（#429）：runtime-client 的工作台方法；`PackScheduleView`（R-8 之前答 `not_implemented`）；契约收尾。
+- #1444 R-0d（#429）：`PackScheduleView` 的包带 `below`。
+- #1442 UPD-1（#428）：「客户端过期」弹窗以 `contained_task_application_update_required` 结束运行；只由宿主写的事实 `health.application.update_required`；扣住这台实例的非商店任务；商店更新包运行；更新后补跑被打断的任务。改了的默认值：这个码加进 `scheduling.rerun.condition_codes`。
+
 ## v0.12.29
 
 本版是 v0.12.28 之后合并的 5 个 PR：CFL-1、STORE-FG-1、CFL-2、STORE-FG-2、LAB-WAIT。运行中会注意到的新东西有两件。
