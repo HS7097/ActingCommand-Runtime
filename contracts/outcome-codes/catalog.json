@@ -2198,6 +2198,22 @@
     "base_height": {
       "type": "integer",
       "description": "The height of a task package's base coordinate space (its coordinate_space), pixels (Workflow #392 DA-1)."
+    },
+    "memory_priority_requested": {
+      "type": "integer",
+      "description": "The memory priority actingd asked the operating system for its own process at start, Windows' MEMORY_PRIORITY level: 5 for host.process_memory_priority normal, 2 for low (RB-2)."
+    },
+    "memory_priority_read": {
+      "type": "integer",
+      "description": "The memory priority of actingd's own process as the operating system reported it after the start set it, Windows' MEMORY_PRIORITY level (RB-2)."
+    },
+    "io_priority_requested": {
+      "type": "integer",
+      "description": "The I/O priority hint actingd asked the operating system for its own process at start, Windows' IO_PRIORITY_HINT: 2 for host.process_io_priority normal, 1 for low (RB-2)."
+    },
+    "io_priority_read": {
+      "type": "integer",
+      "description": "The I/O priority hint of actingd's own process as the operating system reported it after the start set it, Windows' IO_PRIORITY_HINT (RB-2)."
     }
   },
   "vocabularies": {

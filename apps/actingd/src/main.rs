@@ -10,6 +10,8 @@ mod config;
 mod ledger_maintenance;
 mod monitor_retry;
 mod owner_unlock;
+// RB-2: the memory and I/O priority the start gives its own process.
+mod process_priority;
 mod suspended;
 
 // Test-only: the shared sealed C4 fixture support, reused for its 16x9 fake-device fixtures.
@@ -588,6 +590,7 @@ fn start_daemon(
         recognition_packages,
         adb_requirement,
         emulator_autostart,
+        process_priority: priorities,
         ..
     } = file.assemble_or_refusal().map_err(|(code, refusal)| {
         match device_refusal.filter(|refused| refused.code() == code) {
@@ -598,6 +601,14 @@ fn start_daemon(
                 .unwrap_or_else(|| ActingdError::refused(code, refusal)),
         }
     })?;
+    // RB-2 (Alice 2026-10-29 「设回正常」): right after the configuration is read, the process's
+    // own memory and I/O priority, before the ledger opens; the CPU priority class stays as
+    // started. The one outcome is a daemon line at once; a failure is a warning and the start
+    // goes on.
+    write_stderr(&daemon_lines(
+        &process_priority::apply(priorities, &process_priority::SystemProcessPriority),
+        None,
+    ));
     // Workflow #337: the install root's adb check of `check-config`, before any side effect.
     config::ac_adb::require(&adb_requirement).map_err(|rejection| {
         ActingdError::refused(rejection.code(), rejection.outcome())

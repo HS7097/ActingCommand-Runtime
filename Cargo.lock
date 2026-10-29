@@ -49,6 +49,7 @@ dependencies = [
  "actingcommand-contract",
  "actingcommand-device",
  "actingcommand-execution-kernel",
+ "actingcommand-host-metrics",
  "actingcommand-ledger",
  "actingcommand-ledger-forensics",
  "actingcommand-policy",
