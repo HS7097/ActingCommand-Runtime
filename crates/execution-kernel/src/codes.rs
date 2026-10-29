@@ -363,7 +363,8 @@ actingcommand_contract::outcome_vocabulary! {
         // packages"); the refused member is in `control.json`.
         /// A store operation names no operation of the task, or one whose effect is no click
         /// that draws a tap (`point`, `rect`, `specific_rect`, `target`, `target_center`,
-        /// `offset`), or one whose `from` is not one page of the package.
+        /// `offset`), or one whose `from` is not one page of the package, or one without a guard
+        /// on its `from` page (no `guard`, or `unguarded_trusted_coordinate`).
         StoreOperationInvalid => "store_operation_invalid",
         /// A store operation's proof target is no OCR target with an `expected` text, or does not
         /// stand directly in the `required` list of the operation's `from` page.

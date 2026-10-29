@@ -7,11 +7,16 @@
 //! declared store step's tap is the run's (`ContainedTaskRuntime::store_input`).
 //!
 //! - Each store operation names one operation of the task whose effect is a click that draws a
-//!   tap, from one page of the package (`store_operation_invalid`).
+//!   tap, from one page of the package, and that carries a guard on that `from` page, never
+//!   `unguarded_trusted_coordinate` (`store_operation_invalid`). The kernel compares the page of
+//!   every frame a guarded tap is drawn for with the guard's page before the input: the first
+//!   frame, a pre-input sampling retry, an input recheck and a retry after an unconfirmed tap
+//!   alike. An unguarded tap skips that comparison, so a retry could land on the store's next
+//!   page, where the same place is another button (the download's cancel).
 //! - Each of its proof targets is an OCR target with an `expected` text that stands directly in
-//!   the `required` list of that `from` page (`store_proof_invalid`), so the kernel, which
-//!   dispatches an operation only after its `from` page passed, taps only on a frame that showed
-//!   the proof.
+//!   the `required` list of that `from` page (`store_proof_invalid`). A frame shows the `from`
+//!   page only when its proof passed, so with the guard above the kernel taps a store step only
+//!   on a frame that showed the proof.
 //! - The package brings the assigned application back with an `application` `launch` or
 //!   `restart` operation (`store_way_back_missing`).
 //!
@@ -72,6 +77,12 @@ impl TaskProgram {
                             .click
                             .as_ref()
                             .is_some_and(|click| TAP_KINDS.contains(&click.kind.as_str()))
+                        // STORE-FG-1 fix 1 (review H1): a guard on the `from` page, so that every
+                        // frame the tap is drawn for passes the page, and with it the proof.
+                        && !operation.unguarded_trusted_coordinate
+                        && operation.guard.as_ref().is_some_and(|guard| {
+                            crate::page_anchor_matches(game, &guard.page_id, &operation.from)
+                        })
                 })
                 .ok_or_else(|| refuse(ProgramProblem::StoreOperationInvalid, "operation"))?;
             let resolved = if operation.from == linear::ANY_PAGE {

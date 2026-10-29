@@ -2156,7 +2156,7 @@ tests = [
 ]
 incident = ["#411 B36", "#411 B19", "#412 B-3"]
 
-# STORE-FG-1 (0.12.29; register §1.205 SF-1, SF-2; design rd-1029/design-store-fg.md §3, §5 rows T11 and T14; package revision 6, declared by BT-PK6): control.json store_update; the source gate takes it and refuses each wrong shape or broken rule as resource_declaration_invalid at its member; kernel admission refuses a broken member, or one outside navigable_route and linear_steps, as contained_task_control_invalid reason=store_update_invalid, and each broken cross-check (a store step that is no tap from one page, a proof that is no OCR target directly in its from page's required, no launch or restart way back) as contained_task_program_invalid with program_problem store_operation_invalid, store_proof_invalid or store_way_back_missing, path control.json and json_pointer; a valid declaration is admitted
+# STORE-FG-1 (0.12.29; register §1.205 SF-1, SF-2; design rd-1029/design-store-fg.md §3, §5 rows T11 and T14; package revision 6, declared by BT-PK6): control.json store_update; the source gate takes it and refuses each wrong shape or broken rule as resource_declaration_invalid at its member; kernel admission refuses a broken member, or one outside navigable_route and linear_steps, as contained_task_control_invalid reason=store_update_invalid, and each broken cross-check (a store step that is no tap from one page, or taps without a guard on that page, review H1; a proof that is no OCR target directly in its from page's required; no launch or restart way back) as contained_task_program_invalid with program_problem store_operation_invalid, store_proof_invalid or store_way_back_missing, path control.json and json_pointer; a valid declaration is admitted
 [[gate]]
 coverage = "Y"
 tests = [
@@ -2175,7 +2175,7 @@ tests = [
 ]
 incident = []
 
-# STORE-FG-1 (register §1.205 SF-4; design §2.7, §5 row T13): in the package's own run a declared store step's Tap goes through ContainedTaskRuntime::store_input with the declared store and every other input through input, on the page graph and on linear_steps; admit_store_foreground is asked once before any capture, and a refusal ends the run before any capture or input; a recovery entry run and a package without store_update ask nothing and route nothing
+# STORE-FG-1 (register §1.205 SF-4; design §2.7, §5 row T13): in the package's own run a declared store step's Tap goes through ContainedTaskRuntime::store_input with the declared store and every other input through input, on the page graph and on linear_steps (an admitted step plan with its way back); admit_store_foreground is asked once before any capture, and a refusal ends the run before any capture or input; a recovery entry run, a declared operation's run (a Lab operation) and a package without store_update ask nothing and route nothing
 [[gate]]
 coverage = "Y"
 tests = [
@@ -2434,7 +2434,7 @@ tests = [
 ]
 incident = ["#411 B35"]
 
-# STORE-FG-1 (0.12.29; register §1.205 SF-5; design rd-1029/design-store-fg.md §8.1; contracts/package-reference.md, the standard-pack cross-check): package bundle and standard-pack check report one package_bundle_store_tap_unlocated warning (package_id, pack_operation_id) per pack and store step of control.json store_update that taps with point or rect, in registry order, and both still pass; a root without such a pack reports none
+# STORE-FG-1 (0.12.29; register §1.205 SF-5; design rd-1029/design-store-fg.md §8.1; contracts/package-reference.md, the standard-pack cross-check): package bundle and standard-pack check report one package_bundle_store_tap_unlocated warning (package_id, pack_operation_id) per pack and store step of control.json store_update that taps with point, rect or specific_rect, in registry order, and both still pass; a root without such a pack reports none
 [[gate]]
 coverage = "Y"
 tests = [

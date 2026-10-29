@@ -50,10 +50,11 @@ const STAGE: &str = "neutral.test.stage";
 const BAD: &str = "neutral.test.bad";
 // Workflow #411 B35: a pack that declares the shared interrupt page `notice` and is no handler.
 const OWN_NOTICE: &str = "neutral.test.own_notice";
-// STORE-FG-1: two packs that declare `store_update`, a made-up store application, and the
+// STORE-FG-1: three packs that declare `store_update`, a made-up store application, and the
 // warning of a store step that taps a fixed place.
 const STORE_POINT: &str = "neutral.test.store_point";
 const STORE_RECT: &str = "neutral.test.store_rect";
+const STORE_SPECIFIC_RECT: &str = "neutral.test.store_specific_rect";
 const STORE_APPLICATION: &str = "test.store.alpha";
 const STORE_TAP_UNLOCATED: &str = "package_bundle_store_tap_unlocated";
 
@@ -80,10 +81,11 @@ struct Pack {
     target: &'static str,
     operations: Vec<(&'static str, &'static str, &'static str)>,
     width: u32,
-    // STORE-FG-1: with a click kind (`point` or `rect`), the pack declares `store_update`: its
-    // first operation is its store step, tapping with that kind and proved by the OCR target
-    // `store_title` its page requires, and an `application` restart from its target page back to
-    // its entry page is its way back.
+    // STORE-FG-1: with a click kind (`point`, `rect` or `specific_rect`), the pack declares
+    // `store_update`: its first operation is its store step, tapping with that kind under a guard
+    // on its page's colour (a store step is never a trusted coordinate) and proved by the OCR
+    // target `store_title` its page requires, and an `application` restart from its target page
+    // back to its entry page is its way back.
     store: Option<&'static str>,
 }
 
@@ -197,11 +199,18 @@ impl Pack {
             }]);
             task["page_rules"][store_page]["required"] =
                 json!([format!("{store_page}_colour"), "store_title"]);
-            task["operations"][0]["click"] = if kind == "rect" {
-                json!({"kind": "rect", "x": 0, "y": 0, "width": 2, "height": 2})
-            } else {
+            task["operations"][0]["click"] = if kind == "point" {
                 json!({"kind": "point", "x": 1, "y": 0})
+            } else {
+                json!({"kind": kind, "x": 0, "y": 0, "width": 2, "height": 2})
             };
+            task["operations"][0]["unguarded_trusted_coordinate"] = json!(false);
+            task["operations"][0]["guard"] = json!({
+                "page_id": store_page,
+                "target_id": format!("{store_page}_colour"),
+                "expected_rect": {"x": 1, "y": 0, "width": 1, "height": 1},
+                "color_probe": format!("{store_page}_colour")
+            });
             if let Some(operations) = task["operations"].as_array_mut() {
                 operations.push(json!({
                     "id": "way_back",
@@ -1062,9 +1071,10 @@ fn unlocated(warnings: &[Outcome]) -> Vec<(Value, Value)> {
 }
 
 // STORE-FG-1 §8.1 (the resource side's field note 1: the store's button moves between devices):
-// a store step that taps with `point` or `rect` gets one `package_bundle_store_tap_unlocated`,
-// naming the pack and the step, from `package bundle` and from the check of the installed root
-// alike, in registry order; both still pass, and no pack without `store_update` is reported.
+// a store step that taps with `point`, `rect` or `specific_rect` (review L2) gets one
+// `package_bundle_store_tap_unlocated`, naming the pack and the step, from `package bundle` and
+// from the check of the installed root alike, in registry order; both still pass, and no pack
+// without `store_update` is reported.
 #[test]
 fn store_fg1_s8_1_a_store_step_tapping_a_point_or_a_rect_gets_one_warning() {
     let root = valid()
@@ -1085,10 +1095,20 @@ fn store_fg1_s8_1_a_store_step_tapping_a_point_or_a_rect_gets_one_warning() {
                 "shop",
                 &[("tap_update", "home", "shop")],
             )
+        })
+        .with(Pack {
+            store: Some("specific_rect"),
+            ..graph(
+                STORE_SPECIFIC_RECT,
+                "home",
+                "shop",
+                &[("tap_update", "home", "shop")],
+            )
         });
     let expected = vec![
         (json!(STORE_POINT), json!("tap_update")),
         (json!(STORE_RECT), json!("tap_update")),
+        (json!(STORE_SPECIFIC_RECT), json!("tap_update")),
     ];
 
     let (_temp, request, result) = bundle(&root);

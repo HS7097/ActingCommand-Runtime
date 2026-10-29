@@ -1360,15 +1360,21 @@ package without the member runs, and serializes, as before.
 **Cross-checks** (kernel admission, `contained_task_program_invalid` with `program_problem`, the
 path `control.json` and the refused member as `json_pointer`):
 
-- each store operation names one operation of the task whose effect is a click that draws a tap
-  (`point`, `rect`, `specific_rect`, `target`, `target_center`, `offset`), from one page of the
-  package (not `any`); a long press, a drag, a select step, a wait step or an `application` step
-  is refused (`store_operation_invalid`, at `/store_update/store_operations/<i>/operation`);
+- each store operation names one operation of the task whose effect is a guarded click that
+  draws a tap (`point`, `rect`, `specific_rect`, `target`, `target_center`, `offset`), from one
+  page of the package (not `any`): it declares a `guard` whose `page_id` is its `from` page and is
+  never an `unguarded_trusted_coordinate`. A long press, a drag, a select step, a wait step, an
+  `application` step and an unguarded tap are refused (`store_operation_invalid`, at
+  `/store_update/store_operations/<i>/operation`);
 - each proof target is an OCR target of the pack (an `ocr_targets[]` entry, plain or located;
   its `expected` is never empty) that stands directly in the `required` list of that operation's
-  `from` page (`store_proof_invalid`, at `/store_update/store_operations/<i>/proof/<j>`). The
-  kernel dispatches an operation only after its `from` page passed on the decision frame, so a
-  store step taps only on a frame that showed its proof. What the texts are is the package's data:
+  `from` page (`store_proof_invalid`, at `/store_update/store_operations/<i>/proof/<j>`). A
+  frame shows the `from` page only when its proof passed, and the kernel compares the page of
+  every frame a guarded tap is drawn for with the guard's page before the input: the decision
+  frame, a pre-input sampling retry, an input recheck and a retry after an unconfirmed tap alike
+  (an unguarded tap skips that comparison, so its retry could land on the store's next page,
+  where the same place is the download's cancel). So a store step taps only on a frame that
+  showed its proof. What the texts are is the package's data:
   the title, the publisher or the id the store shows. A store page that is not the package's own
   listing does not match the `from` page, so no store step is dispatched on it; the package names
   that end with its error pages or its scheduling outcome;
@@ -1394,7 +1400,9 @@ makes a store tap as any input. The host's allowance and its gate are STORE-FG-2
 input with a wait step on the store's updating page ([Wait steps and wait pages](#wait-steps-and-wait-pages);
 `max_ms` up to 1800000, a long `expect_after.interval_ms`), or lets the tap's own confirmation
 hold on that page (`expect_after.wait_page`, `max_ms` up to 1800000). A wait makes no input, so
-nothing taps the cancel control of the download.
+nothing taps the cancel control of the download. The run's own `timeout_ms` is at most 1800000
+as well and ends the run whatever its wait still allows, so a store update package sets the
+wait's `max_ms` to at most its `timeout_ms` less the time its other steps take.
 
 **The check's warning** (design §8.1). `package bundle` and `actinglab standard-pack check` warn
 with `package_bundle_store_tap_unlocated` of each store operation whose click taps a fixed place

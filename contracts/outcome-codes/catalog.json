@@ -6463,7 +6463,7 @@
           "description": "A confirmation's wait page (expect_after.wait_page.page_id) is not one page of the package, or is a destination of its operation or an error page."
         },
         "store_operation_invalid": {
-          "description": "STORE-FG-1 (since 0.12.29): a store operation of control.json store_update names no operation of the task, one whose effect is no click that draws a tap (point, rect, specific_rect, target, target_center, offset), or one whose from is not one page of the package; json_pointer /store_update/store_operations/<i>/operation."
+          "description": "STORE-FG-1 (since 0.12.29): a store operation of control.json store_update names no operation of the task, one whose effect is no click that draws a tap (point, rect, specific_rect, target, target_center, offset), one whose from is not one page of the package, or one without a guard on its from page (no guard, or unguarded_trusted_coordinate), whose tap could land on a frame where the page and its proof were not checked; json_pointer /store_update/store_operations/<i>/operation."
         },
         "store_proof_invalid": {
           "description": "STORE-FG-1 (since 0.12.29): a proof target of a store operation is no OCR target of the pack with an expected text, or does not stand directly in the required list of the operation's from page; json_pointer /store_update/store_operations/<i>/proof/<j>."

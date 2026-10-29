@@ -7,14 +7,15 @@
 // - T11: admission refuses each broken shape of the member (`contained_task_control_invalid`,
 //   `reason=store_update_invalid`), a store update package of another execution mode, and each
 //   broken cross-check (`contained_task_program_invalid` with its `program_problem`, the path
-//   `control.json` and the refused member); a valid declaration is admitted.
+//   `control.json` and the refused member), among them a store step without a guard on its `from`
+//   page (fix round 1, review H1) and one from `any`; a valid declaration is admitted.
 // - T12: a store update package is no prerequisite, return-home, navigation or interrupt layer
 //   (`store_update`, the prerequisite incompatibility every layer check reads) and no startup
 //   package or ladder rung; run as a layer it is refused before any capture.
 // - T13: in the package's own run, a declared store step's tap goes through `store_input` with
 //   the declared store, every other input through `input`, and the run asks `admit_store_foreground`
-//   once, before any capture; a layer, a recovery entry and a package without `store_update`
-//   never ask and never route.
+//   once, before any capture; a layer, a recovery entry, a declared operation's run (a Lab
+//   operation) and a package without `store_update` never ask and never route.
 // - §8.3: a store run waits long on the updating page with a wait step, which makes no input;
 //   the tap's own confirmation may hold on that page instead (`expect_after.wait_page`).
 //
@@ -86,8 +87,22 @@ fn with(mut operation: Value, extra: Value) -> Value {
     operation
 }
 
-// A trusted tap from `from` to `to`.
+// The guard on `page`: its colour target, checked on every frame a tap is drawn for (review H1:
+// a store step taps only so).
+fn guard(page: &str) -> Value {
+    json!({"page_id": page, "target_id": format!("page/{page}"),
+           "expected_rect": {"x": 1, "y": 0, "width": 1, "height": 1},
+           "color_probe": format!("page/{page}")})
+}
+
+// A guarded tap from `from` to `to`.
 fn tap(id: &str, from: &str, to: &str) -> Value {
+    json!({"id": id, "from": from, "to": to, "click": {"kind": "point", "x": 1, "y": 0},
+           "guard": guard(from), "retryable": false})
+}
+
+// The same tap without a guard, trusted (`unguarded_trusted_coordinate`).
+fn trusted(id: &str, from: &str, to: &str) -> Value {
     json!({"id": id, "from": from, "to": to, "click": {"kind": "point", "x": 1, "y": 0},
            "unguarded_trusted_coordinate": true, "retryable": false})
 }
@@ -260,8 +275,17 @@ impl VisionProvider for ModelsOnly {
 // The package of `control` and `task`, its recognition pack holding the colour of every page and
 // the OCR targets `proof/title` and `proof/other`, admitted.
 fn admit(control: Value, task: Value) -> Result<PreparedContainedTask, ContainedTaskError> {
+    admit_with_title(control, task, ocr("proof/title"))
+}
+
+// `admit` with `title` as the target `proof/title`.
+fn admit_with_title(
+    control: Value,
+    task: Value,
+    title: Value,
+) -> Result<PreparedContainedTask, ContainedTaskError> {
     let mut targets = colour_targets();
-    targets.push(ocr("proof/title"));
+    targets.push(title);
     targets.push(ocr("proof/other"));
     let pack = json!({
         "schema_version": "0.7",
@@ -502,10 +526,14 @@ fn store_fg1_t11_a_broken_store_update_member_is_refused_with_its_reason() {
     }
 }
 
-// T11 (design §2.3 to §2.5, §3): admission takes a store update package whose store step taps
-// from the listing page that requires its OCR proof, and whose way back is a `restart` or a
-// `launch`; it refuses each broken cross-check with `contained_task_program_invalid`, its
-// `program_problem`, the path `control.json` and the refused member.
+// T11 (design §2.3 to §2.5, §3; fix round 1, review H1): admission takes a store update package
+// whose store step is a guarded tap from the listing page that requires its OCR proof, and whose
+// way back is a `restart` or a `launch`; it refuses each broken cross-check with
+// `contained_task_program_invalid`, its `program_problem`, the path `control.json` and the
+// refused member, among them a store step that taps without a guard
+// (`unguarded_trusted_coordinate`) and a store step from `any`. A package whose proof target is
+// an OCR target without `expected` is never admitted: the recognition pack refuses such a target
+// itself, before any cross-check.
 #[test]
 fn store_fg1_t11_admission_checks_the_store_steps_their_proof_and_the_way_back() {
     admitted(
@@ -540,9 +568,38 @@ fn store_fg1_t11_admission_checks_the_store_steps_their_proof_and_the_way_back()
         wait_download(),
         with(restart(), json!({"application": {"action": "stop"}})),
     ];
+    let unguarded = vec![
+        tap("open_store", "dialog", "listing"),
+        trusted("tap_update", "listing", "updating"),
+        wait_download(),
+        restart(),
+    ];
+    let from_any = vec![
+        tap("open_store", "dialog", "listing"),
+        with(
+            tap("tap_update", "listing", "updating"),
+            json!({"from": "any"}),
+        ),
+        wait_download(),
+        restart(),
+    ];
     let operation =
         |index: usize, member: &str| format!("/store_update/store_operations/{index}/{member}");
-    let cases: [(&str, Value, Vec<Value>, &str, String); 11] = [
+    let cases: [(&str, Value, Vec<Value>, &str, String); 13] = [
+        (
+            "a store step that taps without a guard",
+            tap_update(&["proof/title"]),
+            unguarded,
+            "store_operation_invalid",
+            operation(0, "operation"),
+        ),
+        (
+            "a store step from any page",
+            tap_update(&["proof/title"]),
+            from_any,
+            "store_operation_invalid",
+            operation(0, "operation"),
+        ),
         (
             "an operation the task does not declare",
             declaration(json!([{"operation": "tap_missing", "proof": ["proof/title"]}])),
@@ -642,6 +699,24 @@ fn store_fg1_t11_admission_checks_the_store_steps_their_proof_and_the_way_back()
             "{case}: {error}"
         );
     }
+
+    let mut untexted = ocr("proof/title");
+    untexted
+        .as_object_mut()
+        .expect("OCR target object")
+        .remove("expected");
+    let error = admit_with_title(
+        control("navigable_route", Some(tap_update(&["proof/title"]))),
+        task(store_run()),
+        untexted,
+    )
+    .err()
+    .expect("admission took a proof target without expected");
+    assert_eq!(
+        error.code().as_str(),
+        "contained_task_admission_failed",
+        "an OCR proof target without expected: {error}"
+    );
 }
 
 // T12 (design §2.3): a store update package answers `store_update` to every layer check (the
@@ -703,7 +778,8 @@ fn store_fg1_t12_a_store_update_package_is_no_layer_and_no_startup_package() {
 
 // T13 (design §2.7): in the package's own run, the store step `tap_update` taps through
 // `store_input` with the declared store, the game's dialog tap `open_store` through `input`, and
-// the run asks `admit_store_foreground` once; on the page graph and on the step plan alike.
+// the run asks `admit_store_foreground` once; on the page graph and on the step plan alike. The
+// step plan restarts the game at its end, its way back, so admission takes it (review L3).
 #[test]
 fn store_fg1_t13_a_declared_store_step_taps_through_store_input_and_every_other_through_input() {
     let graph = prepared(
@@ -727,38 +803,42 @@ fn store_fg1_t13_a_declared_store_step_taps_through_store_input_and_every_other_
     );
 
     let mut linear = control("linear_steps", Some(tap_update(&["proof/title"])));
-    linear["max_steps"] = json!(2);
-    let steps = prepared(
-        linear,
-        json!({
-            "schema_version": "0.9",
-            "task_id": "task",
-            "game": "neutral",
-            "server_scope": ["test"],
-            "coordinate_space": {"width": 2, "height": 1},
-            "entry_page": "dialog",
-            "target_page": "updating",
-            "max_steps": 2,
-            "operations": [
-                {"id": "open_store", "from": "dialog", "to": "listing",
-                 "click": {"kind": "point", "x": 1, "y": 0}, "unguarded_trusted_coordinate": true},
-                {"id": "tap_update", "from": "listing", "to": "updating",
-                 "click": {"kind": "point", "x": 1, "y": 0}, "unguarded_trusted_coordinate": true}
-            ]
-        }),
-    );
-    let mut runtime = device(&[&["dialog"], &["listing"], &["updating"]]);
+    linear["max_steps"] = json!(3);
+    let plan = json!({
+        "schema_version": "0.9",
+        "task_id": "task",
+        "game": "neutral",
+        "server_scope": ["test"],
+        "coordinate_space": {"width": 2, "height": 1},
+        "entry_page": "dialog",
+        "target_page": "home",
+        "max_steps": 3,
+        "operations": [
+            tap("open_store", "dialog", "listing"),
+            tap("tap_update", "listing", "updating"),
+            {"id": "restart", "from": "updating", "to": "home",
+             "application": {"action": "restart"}}
+        ]
+    });
+    admitted("step plan", linear.clone(), plan.clone());
+    let steps = prepared(linear, plan);
+    let mut runtime = device(&[&["dialog"], &["listing"], &["updating"], &["home"]]);
     let outcome = succeeded("step plan", steps.run(&mut runtime));
-    assert_eq!(outcome.final_page.as_deref(), Some("neutral/updating"));
+    assert_eq!(outcome.final_page.as_deref(), Some("neutral/home"));
     assert_eq!(runtime.store_admissions(), [STORE]);
     assert_eq!(store_taps(&runtime), [STORE]);
     assert_eq!(runtime.inputs().len(), 2, "open_store and tap_update");
+    assert_eq!(
+        runtime.applications(),
+        [ApplicationLifecycleAction::Restart]
+    );
 }
 
 // T13 (design §2.3, §2.7): only the package's own run asks for the store and routes to it. Its
 // recovery entry run (a bound recovery package, entered as a layer) asks for none and taps
-// through `input` alone, as does a run of the same package without `store_update`; a runtime that
-// refuses the store ends the run before any capture or input.
+// through `input` alone, as does a declared operation's run of its store step (a Lab operation,
+// review L2) and a run of the same package without `store_update`; a runtime that refuses the
+// store ends the run before any capture or input.
 #[test]
 fn store_fg1_t13_only_the_package_s_own_run_asks_for_the_store_and_routes_to_it() {
     let screens: [&[&str]; 4] = [&["dialog"], &["listing"], &["updating", "done"], &["home"]];
@@ -771,6 +851,17 @@ fn store_fg1_t13_only_the_package_s_own_run_asks_for_the_store_and_routes_to_it(
     assert!(runtime.store_admissions().is_empty());
     assert!(runtime.store_inputs().is_empty());
     assert_eq!(runtime.inputs().len(), 2);
+
+    let mut runtime = device(&[&["listing"], &["updating"]]);
+    match store.run_declared_operation(&mut runtime, "tap_update") {
+        Ok(DeclaredOperationOutcome::Confirmed { page }) => {
+            assert_eq!(page, "neutral/updating");
+        }
+        other => panic!("expected the declared store step to be confirmed, got {other:?}"),
+    }
+    assert!(runtime.store_admissions().is_empty());
+    assert!(runtime.store_inputs().is_empty());
+    assert_eq!(runtime.inputs().len(), 1, "tap_update through input");
 
     let ordinary = prepared(control("navigable_route", None), task(store_run()));
     let mut runtime = device(&screens);
@@ -805,7 +896,7 @@ fn store_fg1_s8_3_a_store_run_waits_long_on_the_updating_page_without_an_input()
         tap("open_store", "dialog", "listing"),
         json!({"id": "tap_update", "from": "listing",
                "click": {"kind": "point", "x": 1, "y": 0},
-               "unguarded_trusted_coordinate": true, "retryable": false,
+               "guard": guard("listing"), "retryable": false,
                "expect_after": {"page_id": "done", "timeout_ms": 60_000, "interval_ms": 30_000,
                                 "wait_page": {"page_id": "updating", "max_ms": 1_800_000}}}),
         restart(),
