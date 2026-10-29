@@ -126,17 +126,27 @@ budget. `--preview` under the global `--dry-run` is refused like `--with-frame`
   `{layout_id, item, code, detail}`, and `ocr` gives the OCR state. Min keeps
   it. Any other projection failure still refuses the frame (`package_invalid`).
 - #411 A62: each entry of `targets` (`--targets`) carries `target_center
-  {x, y}`, where a `target_center` click on that target lands on the current
-  frame: the centre of the matched template box (`x + width / 2`,
-  `y + height / 2`, integer division), as the kernel presses it; `null` when
-  the target did not pass or matched no template box. A Min answer over its
-  soft limit summarises `targets` as before (`id`, `passed`, `score`), so the
-  member is read with `--verbose`.
+  {x, y}`, the centre of the matched template box on the current frame
+  (`x + width / 2`, `y + height / 2`, integer division): where the kernel
+  presses a `target_center` click without `offset`. It is not the tap point
+  after a tap `offset`: a `target_center` click with `offset` presses the
+  centre of its offset box, which this member does not give. `null`
+  when the target did not pass or matched no template box. A Min answer over
+  its soft limit summarises `targets` as before (`id`, `passed`, `score`), so
+  the member is read with `--verbose`.
 - #411 A69: the `--with-frame` file (offline and with `--capture`) is written
   only after the answer stands; an answer refused as
-  `observe_identity_limit_exceeded` writes no file and creates no directory.
+  `observe_identity_limit_exceeded` writes no `--with-frame` file and creates
+  no directory for it. Writes made before the answer is projected still
+  happen: with `--preview` the preview is written into the Lab frame
+  directory, and with `--capture --record` the frame is attached to the
+  active recording.
 - #411 A70: a page not recognised is never `standby`: the projection's
   `standby` (offline and with `--capture`, written by the shared projection
   owner) and the answer's `standby` are `false`; `matched` and `state` say
-  whether a page was recognised. `detect-page` and `current-page` keep their
-  own `standby` page.
+  whether a page was recognised. `detect-page` and `current-page` keep the
+  kernel's sentinel: when no page matched they answer `page: "standby"` with
+  `standby: true`, which only means that no page matched and is what
+  `session recover` wakes the session on, never that the screen is ready for
+  input; observe's `standby` is always `false`, so read `matched` and `state`
+  there.

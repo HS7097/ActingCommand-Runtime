@@ -145,11 +145,12 @@ fn zip_entries(entries: &[(&str, Value)]) -> Vec<u8> {
     zip.finish().expect("finish zip").into_inner()
 }
 
-/// `--json observe --scene <scene> --zip <package>` with `extra` before the scene.
+/// `--json observe <extra> --scene <scene> --zip <package>`: `extra` follows the command word, so
+/// an observe option such as `--with-frame` reaches observe and is not read as the command.
 fn observe(extra: &[&str], scene: &str, package: &str) -> CliResult {
-    let mut line = vec!["--json".to_string()];
+    let mut line = vec!["--json".to_string(), "observe".to_string()];
     line.extend(extra.iter().map(|word| (*word).to_string()));
-    line.extend(["observe", "--scene", scene, "--zip", package].map(str::to_string));
+    line.extend(["--scene", scene, "--zip", package].map(str::to_string));
     run_cli(line, true)
 }
 
