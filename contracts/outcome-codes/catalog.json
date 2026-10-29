@@ -1567,7 +1567,7 @@
     },
     "watch_kind": {
       "type": "vocab:emulator_watch_kind",
-      "description": "What the emulator watch asked of an instance's emulator: the restart of a stopped one, or the recognition of a running one whose endpoint the Runtime holds pending or bound to another port (EMU-BIND, since 0.12.27), or bound to the reported port but never prepared on it (since 0.12.28)."
+      "description": "What the emulator watch asked of an instance's emulator: the restart of a stopped one, or the recognition of a running one whose endpoint the Runtime holds pending or bound to another port (EMU-BIND, since 0.12.28), or bound to the reported port but never prepared on it (since 0.12.28)."
     },
     "duplicate_count": {
       "type": "integer",
@@ -5196,7 +5196,7 @@
       }
     },
     "emulator_watch_kind": {
-      "description": "What the emulator watch asked of an instance's emulator (EMU-BIND, since 0.12.27).",
+      "description": "What the emulator watch asked of an instance's emulator (EMU-BIND, since 0.12.28).",
       "tokens": {
         "restart": {
           "description": "The start of a configured instance's stopped emulator (R3)."

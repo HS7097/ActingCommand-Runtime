@@ -1223,7 +1223,7 @@ impl HostShared {
         .map(|prepared| (prepared.selfcheck, prepared.event, prepared.recoverable))
     }
 
-    /// EMU-BIND (0.12.27): the emulator watch's recognition of a running emulator whose endpoint
+    /// EMU-BIND (0.12.28): the emulator watch's recognition of a running emulator whose endpoint
     /// the Runtime holds pending or bound to another port, on its autostart claim's `key`: the
     /// preparation phase of a self-check (stage `connection_preparation`), so it reads the
     /// emulator status first (#411 A48, `selfcheck_emulator`: the reported port bound with

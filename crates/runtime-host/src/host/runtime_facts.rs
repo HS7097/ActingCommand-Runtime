@@ -592,7 +592,11 @@ impl HostShared {
     /// EMU-BIND fix 1 (0.12.28, review M1): whether the store holds any `backend.selfcheck.*`
     /// fact of the instance. `false` once a start, a failed control's observation or a
     /// preparation dropped them (`invalidate_backend_selfcheck_facts`) and no open recorded them
-    /// again; a failed self-check keeps its `failed` facts (and admitted its ladder).
+    /// again. A self-check whose opens failed keeps its `failed` facts (and admitted its ladder
+    /// when the failure is recoverable); one that ended at #411 A48's status read (before any
+    /// open: `instance_not_running`, `emulator_device_unrecognized`) records none and admits no
+    /// ladder (`recoverable` false), so the watch recognizes that instance again, within its
+    /// bound.
     pub(super) fn backend_selfcheck_recorded(
         &self,
         instance_id: InstanceId,

@@ -29,7 +29,7 @@
 //!   (warning) once, and no restart until the oldest leaves the window or a person's emulator
 //!   control of the instance clears the count. The stuck-recovery ladder adds none: direction ①
 //!   does not count an autostart claim's records (`recovery_ladder`).
-//! - **Recognition (EMU-BIND, 0.12.27; production 10-29: a start whose readiness wait failed left
+//! - **Recognition (EMU-BIND, 0.12.28; production 10-29: a start whose readiness wait failed left
 //!   a running emulator with its endpoint pending for five hours).** An instance, configured or
 //!   not, whose read shows its emulator running with Android and an ADB port while the Runtime
 //!   holds its endpoint pending or bound to another port, under the same conditions as a restart
@@ -82,7 +82,7 @@ pub(super) struct EmulatorWatch {
     restarts: BTreeMap<InstanceId, VecDeque<u64>>,
     /// The instances whose used-up bound was reported, until a restart is allowed again.
     exhausted: BTreeSet<InstanceId>,
-    /// EMU-BIND (0.12.27): the recognitions the watch requested, by instance, counted apart from
+    /// EMU-BIND (0.12.28): the recognitions the watch requested, by instance, counted apart from
     /// the restarts under the same bound.
     recognitions: BTreeMap<InstanceId, VecDeque<u64>>,
     /// EMU-BIND: the instances whose used-up recognition bound was reported.
@@ -94,7 +94,7 @@ pub(super) struct EmulatorWatch {
     polls: u64,
 }
 
-/// EMU-BIND (0.12.27): what the watch asks of an instance's emulator, as a token of the catalog
+/// EMU-BIND (0.12.28): what the watch asks of an instance's emulator, as a token of the catalog
 /// vocabulary `emulator_watch_kind` (the `watch_kind` value): the start of a stopped one (R3), or
 /// the recognition of a running one whose endpoint the Runtime holds pending or bound to another
 /// port. Each has its own count under the one bound.
@@ -283,7 +283,7 @@ impl HostShared {
 
     /// One instance of a poll: its status read, and (R3) the restart of a configured instance
     /// (its place in the configuration `position`) found stopped; R4: an instance without
-    /// `start_emulator` is never started. EMU-BIND (0.12.27): an instance, configured or not,
+    /// `start_emulator` is never started. EMU-BIND (0.12.28): an instance, configured or not,
     /// found running with Android and an ADB port while the Runtime holds its endpoint pending or
     /// bound to another port is recognized (`recognize_watched_emulator`); EMU-BIND fix 1
     /// (0.12.28, review M1): so is one bound to the reported port but unprepared on it, whose key
@@ -375,7 +375,7 @@ impl HostShared {
             || self.unprepared_on_reported_port(instance_id, alias, state)?)
     }
 
-    /// EMU-BIND (0.12.27): whether the status read `state` asks for a recognition of the
+    /// EMU-BIND (0.12.28): whether the status read `state` asks for a recognition of the
     /// instance: its emulator runs with Android and a reported ADB port, and the Runtime holds
     /// the instance's endpoint pending or bound to another port (CAP-IDX: a port that is not the
     /// index's base port is checked when capture opens on it).
@@ -480,7 +480,7 @@ impl HostShared {
         self.request_watch_autostart(position, instance_id, alias, false)
     }
 
-    /// EMU-BIND (0.12.27): the recognition of an instance whose emulator the poll found running
+    /// EMU-BIND (0.12.28): the recognition of an instance whose emulator the poll found running
     /// with Android and an ADB port while the Runtime holds its endpoint pending or bound to
     /// another port, paused or not (binding an endpoint is no scheduling), under the same
     /// conditions and bound as a restart, counted apart: one autostart claim marked `recognize`

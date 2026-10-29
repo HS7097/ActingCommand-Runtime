@@ -132,7 +132,7 @@ before). After `stop` nothing reopens it; it opens on its next use.
 - Failure: `launch_err_code != 0` (`mumu_manager_launch_error`, carrying `launch_err_msg` in the
   summary) at once, or the deadline (`mumu_manager_wait_timeout`, carrying the last observed
   state, or `no observation` when no poll answered, and the counts of expired and failed polls).
-  EMU-BIND A (since 0.12.27): during a Start's wait a poll that `info` refuses (a non-zero exit,
+  EMU-BIND A (since 0.12.28): during a Start's wait a poll that `info` refuses (a non-zero exit,
   an errcode envelope, a shape error or another typed stage) is no observation yet, as an expired
   poll is, and the wait goes on to its deadline, which then carries the last refusal's text; the
   observation of 6.5.7.0 below (`info` answered throughout the launch) does not hold on 6.8.4.0,
@@ -1203,7 +1203,7 @@ one included), never holds or queues the claim and never makes it yield.
   failure), `emulator_autostart_network_unready`, `emulator_autostart_superseded`,
   `emulator_autostart_skipped` (already running) and `emulator_autostart_interrupted` (a drain
   or a shutdown), each with the `alias` (emu-watch retires `emulator_autostart_yielded`: no
-  pause makes the claim yield). EMU-BIND (since 0.12.27): `emulator_autostart_skipped` and
+  pause makes the claim yield). EMU-BIND (since 0.12.28): `emulator_autostart_skipped` and
   `emulator_autostart_preparation_failed` with `watch_kind` `recognize` end the emulator watch's
   recognition of a running emulator, which starts nothing ("Emulator watch"). A report line that
   cannot be written never stops the daemon.
@@ -1249,7 +1249,7 @@ the configured starts; the watch ends with the host.
   stuck-recovery ladder's direction ① counts no record committed while an autostart claim holds
   the instance's key ("Stuck-recovery ladder", "Triggers"), so the watch's failed Starts never
   admit a ladder whose emulator-restart rung would start the emulator beyond the bound.
-- **Recognition (EMU-BIND, since 0.12.27).** An instance, configured with `start_emulator` or
+- **Recognition (EMU-BIND, since 0.12.28).** An instance, configured with `start_emulator` or
   not, whose read shows its emulator running (Android started and an ADB port reported) while the
   Runtime holds its endpoint pending or bound to another port, is recognized under the same
   conditions as a restart (its key free, no autostart or emulator control claim waiting, not

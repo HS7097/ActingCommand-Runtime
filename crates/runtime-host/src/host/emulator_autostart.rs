@@ -30,7 +30,7 @@
 //! restart that came while the woken instance's startup package waited in memory (behind a pause
 //! or an install hold) does not leave the game unstarted.
 //!
-//! EMU-BIND (0.12.27; production 10-29: after a reboot a configured start's readiness wait failed
+//! EMU-BIND (0.12.28; production 10-29: after a reboot a configured start's readiness wait failed
 //! while its emulator came up, and the running emulator kept its endpoint pending for five
 //! hours): the watch requests the same claim, marked `recognize`, for an instance whose emulator
 //! runs with Android and an ADB port while the Runtime holds its endpoint pending or bound to
@@ -210,7 +210,7 @@ pub(super) struct PendingAutostart {
     /// #405 O-2 (0.12.25, review M-1): an idle wake requested the claim (a `watch` claim): when it
     /// finds the emulator running, it still queues the instance's startup package.
     idle_wake: bool,
-    /// EMU-BIND (0.12.27): the watch requested the claim (a `watch` claim) to recognize a running
+    /// EMU-BIND (0.12.28): the watch requested the claim (a `watch` claim) to recognize a running
     /// emulator whose endpoint the Runtime holds pending or bound to another port: it takes no
     /// network wait and no start turn (`position` is unused) and never launches or stops the
     /// emulator (`drive_recognition`).
@@ -273,7 +273,7 @@ enum WatchRead {
     Start,
     /// The hold ends before the Start.
     End(HoldEnd),
-    /// EMU-BIND (0.12.27): the emulator runs with Android and an ADB port while the Runtime holds
+    /// EMU-BIND (0.12.28): the emulator runs with Android and an ADB port while the Runtime holds
     /// the endpoint pending or bound to another port: it is recognized instead of answered
     /// skipped (a watch claim's or an idle wake's).
     Recognize,
@@ -408,7 +408,7 @@ impl HostShared {
         }
     }
 
-    /// EMU-BIND (0.12.27): one autostart claim, marked `watch` and `recognize`, for the instance
+    /// EMU-BIND (0.12.28): one autostart claim, marked `watch` and `recognize`, for the instance
     /// whose emulator the watch found running while the Runtime holds its endpoint pending or
     /// bound to another port; it does not block and takes no start turn. `position` is the
     /// instance's place in the configuration, if it names `start_emulator` (unused by the claim).
@@ -601,7 +601,7 @@ impl HostShared {
         }
     }
 
-    /// EMU-BIND (0.12.27): the hold of the watch's recognition claim, from the grant to the
+    /// EMU-BIND (0.12.28): the hold of the watch's recognition claim, from the grant to the
     /// recognition: the checks of every tick (a drain or a shutdown, the renewal, an operator
     /// emulator control waiting on the instance), and inside a blackout of the instance it holds
     /// on, renewing its key, until the blackout's end (Workflow #386 SR-4a3). No network wait and
@@ -920,7 +920,7 @@ impl HostShared {
     /// (`MuMuManager info`, bounded; it never starts anything): `Running` when the emulator
     /// process runs (a person or an operator control started it meanwhile), `Unread` when the
     /// read fails, `Start` when the emulator is stopped. A daemon start's claim reads nothing
-    /// here. EMU-BIND (0.12.27): `Recognize` instead of `Running` when the emulator runs with
+    /// here. EMU-BIND (0.12.28): `Recognize` instead of `Running` when the emulator runs with
     /// Android and an ADB port while the Runtime holds the endpoint pending or bound to another
     /// port (the gap a skipped watch or idle-wake claim left open).
     fn watch_start_unneeded(&self, pending: &PendingAutostart) -> RuntimeHostResult<WatchRead> {
@@ -946,7 +946,7 @@ impl HostShared {
         }
     }
 
-    /// EMU-BIND (0.12.27): the recognition of a running emulator on the claim's own `key`, which
+    /// EMU-BIND (0.12.28): the recognition of a running emulator on the claim's own `key`, which
     /// never launches or stops it: the key renewed to the hold's TTL (a refusal ends the hold as
     /// a recognition's), then `recognize_on_key`, then one report line:
     /// `emulator_autostart_skipped` (`watch_kind` `recognize`) when the self-check passed,

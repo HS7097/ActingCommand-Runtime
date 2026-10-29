@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// EMU-BIND (0.12.27; production 10-29 after the 05:23 reboot): a configured start's readiness
+// EMU-BIND (0.12.28; production 10-29 after the 05:23 reboot): a configured start's readiness
 // wait failed while its emulator came up, the autostart tried once, and the watch never bound the
 // running emulator, so the instance kept its endpoint pending for five hours. The watch now
 // recognizes a running emulator whose endpoint the Runtime holds pending or bound to another

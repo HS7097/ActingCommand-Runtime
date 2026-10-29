@@ -388,7 +388,7 @@ outcome_keys! {
     device_process_present: vocab(device_process_presence),
     // #411 A50: why a capture backend's open failed, when the backend can tell.
     capture_open_cause: vocab(capture_open_cause),
-    // EMU-BIND (0.12.27): what the emulator watch asked of an instance's emulator, a restart of a
+    // EMU-BIND (0.12.28): what the emulator watch asked of an instance's emulator, a restart of a
     // stopped one or the recognition of a running one whose endpoint is not bound to it.
     watch_kind: vocab(emulator_watch_kind),
     // Workflow #383 AO-0 (ledger observer): the values of the observer's codes. Begin.

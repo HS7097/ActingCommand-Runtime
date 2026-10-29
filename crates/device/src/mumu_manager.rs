@@ -976,7 +976,7 @@ fn control_failure_context(error: DeviceError) -> DeviceError {
 /// `{"errcode","errmsg"}` envelope with `errcode != 0` are failures exactly like `info`;
 /// `errcode == 0` is the success acknowledgment. A poll whose bound expires (observed while
 /// `player_state` is `stopping`) is no observation yet and polling continues until `wait`
-/// elapses; `launch_err_code != 0` ends the wait early. EMU-BIND A (0.12.27): during a Start
+/// elapses; `launch_err_code != 0` ends the wait early. EMU-BIND A (0.12.28): during a Start
 /// every other failed read (an envelope with `errcode != 0`, a non-zero exit, a shape error or
 /// another typed reader failure) is no observation yet either, and the deadline carries the last
 /// one; during a Stop it ends the wait early, its own text after the control output (EMU-BIND
@@ -1101,7 +1101,7 @@ pub(crate) fn control_instance_with(
     let deadline = runner.now() + wait;
     let mut last_state: Option<InstanceState> = None;
     let mut expired_polls: u32 = 0;
-    // EMU-BIND A (0.12.27): a Start's `info` reads that failed, and the last failure's text.
+    // EMU-BIND A (0.12.28): a Start's `info` reads that failed, and the last failure's text.
     let mut failed_reads: u32 = 0;
     let mut last_read_failure: Option<String> = None;
     // Workflow #381 B F2: the last listing's answer and when the next one may run.
@@ -1173,7 +1173,7 @@ pub(crate) fn control_instance_with(
             {
                 expired_polls += 1;
             }
-            // EMU-BIND A (0.12.27): during a Start's readiness wait a failed `info` read is no
+            // EMU-BIND A (0.12.28): during a Start's readiness wait a failed `info` read is no
             // observation yet (on 10-29, MuMuManager 6.8.4.0 exited non-zero once while the VM
             // of the first launch after a reboot came up): the wait goes on to its deadline,
             // which carries the last failure. A non-zero `launch_err_code` still fails at once.

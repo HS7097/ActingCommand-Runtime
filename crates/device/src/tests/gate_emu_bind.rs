@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! EMU-BIND A and C (0.12.27; production 10-29 after the 05:23 reboot): during a Start's
+//! EMU-BIND A and C (0.12.28; production 10-29 after the 05:23 reboot): during a Start's
 //! readiness wait a failed `info` read is no observation yet, and a failure carries the failing
 //! read's own text. Replayed over the injected vendor surface (EXEC-I1) on the replay's own
 //! clock: a read and a sleep advance it, nothing waits.
