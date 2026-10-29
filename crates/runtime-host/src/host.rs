@@ -4808,15 +4808,24 @@ impl RuntimeHost {
 
     /// UPD-1, test only: records `required` as the instance `alias`'s
     /// `health.application.update_required`, as the end of a run that met the update dialog
-    /// (true) or a store update package's success (false) writes it.
+    /// (true) or a store update package's success (false) writes it. UPD-1 fix round 2: a true
+    /// and a false each come from a source of their own (`application_update:test`,
+    /// `application_update:test:cleared`), as two runs' writes do: the store refuses one source
+    /// that names two values (`fact_source_snapshot_identity_conflict`, fatal), so a test that
+    /// sets the fact true, false and true again records three ordinary replacements.
     #[cfg(test)]
     pub(crate) fn record_application_update_for_test(
         &self,
         alias: &str,
         required: bool,
     ) -> RuntimeHostResult<()> {
+        let source = if required {
+            "application_update:test"
+        } else {
+            "application_update:test:cleared"
+        };
         self.shared_ref(HostLocation::SeedPolicyInstanceFacts)?
-            .record_application_update(alias, required, "application_update:test".to_owned())
+            .record_application_update(alias, required, source.to_owned())
     }
 
     /// UPD-1, test only: the instance `alias`'s `health.application.update_required` as the

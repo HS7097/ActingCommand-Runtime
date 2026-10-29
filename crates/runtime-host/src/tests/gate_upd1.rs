@@ -78,6 +78,25 @@ fn publications(host: &RuntimeHost) -> Vec<(bool, String)> {
     .collect()
 }
 
+/// The `observed_at_unix_ms` of every seed publication of the key for the policy instance.
+fn seed_observations(host: &RuntimeHost) -> Vec<u64> {
+    host.query_persisted_events_for_test(EventQuery {
+        event_type: Some(EventType::FactPublished),
+        ..EventQuery::default()
+    })
+    .expect("the fact publications")
+    .iter()
+    .filter_map(|event| match event.payload() {
+        EventPayload::Fact(actingcommand_contract::FactPayload::Published(payload)) => {
+            Some(payload.record().clone())
+        }
+        _ => None,
+    })
+    .filter(|record| record.key == KEY && record.source_snapshot_id == SEED)
+    .map(|record| record.observed_at_unix_ms)
+    .collect()
+}
+
 /// A host on `root` whose configuration names the policy instance (its inputs), as actingd
 /// starts with a policy configuration.
 fn configured_host(root: &TempDir) -> RuntimeHost {
@@ -107,6 +126,12 @@ fn upd1_a7_a_start_seeds_false_once_and_keeps_a_record_already_there() {
         Some((false, SEED.to_owned()))
     );
     assert_eq!(publications(&host), [(false, SEED.to_owned())]);
+    // Fix round 2: the seed is the default, not an observation: it is dated at the earliest valid
+    // time, never at the start, so no evaluation is ever asked about a time before it.
+    assert_eq!(
+        seed_observations(&host),
+        [crate::application_update::APPLICATION_UPDATE_SEED_OBSERVED_AT_UNIX_MS]
+    );
     host.close().expect("close the host");
 
     let host = configured_host(&root);

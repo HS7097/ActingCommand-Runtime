@@ -78,8 +78,14 @@ fn runtime_fact_store_shares_server_facts_invalidates_and_recovers_from_ledger()
             game_id: "fixture-game-a".to_owned(),
         })
         .expect("snapshot after invalidation");
-    assert_eq!(after.records.len(), 4);
-    assert_eq!(after.records[0].key, "inventory.items");
+    // UPD-1 A7 (0.12.30): the application update seed stays beside the instance fact and the
+    // three configuration seeds, and its key sorts first.
+    assert_eq!(after.records.len(), 5);
+    assert_eq!(
+        after.records[0].key,
+        crate::application_update::APPLICATION_UPDATE_FACT_KEY
+    );
+    assert_eq!(after.records[1].key, "inventory.items");
     let stale = host
         .publish_fact(server_record)
         .expect_err("invalidated source snapshot must not be resurrected");
@@ -87,6 +93,8 @@ fn runtime_fact_store_shares_server_facts_invalidates_and_recovers_from_ledger()
     assert!(!stale.is_fatal());
 
     let mut client = TestClient::connect(&host);
+    // The three configuration seeds, (UPD-1 A7, 0.12.30) the application update seed and the two
+    // facts this test publishes.
     assert_eq!(
         projected_events(
             &mut client,
@@ -96,7 +104,7 @@ fn runtime_fact_store_shares_server_facts_invalidates_and_recovers_from_ledger()
             }
         )
         .len(),
-        5
+        6
     );
     assert_eq!(
         projected_events(
@@ -128,8 +136,13 @@ fn runtime_fact_store_shares_server_facts_invalidates_and_recovers_from_ledger()
             game_id: "fixture-game-a".to_owned(),
         })
         .expect("recovered snapshot");
-    assert_eq!(recovered.records.len(), 4);
-    assert_eq!(recovered.records[0].key, "inventory.items");
+    // The reopened start seeds nothing over the application update seed (UPD-1 A7).
+    assert_eq!(recovered.records.len(), 5);
+    assert_eq!(
+        recovered.records[0].key,
+        crate::application_update::APPLICATION_UPDATE_FACT_KEY
+    );
+    assert_eq!(recovered.records[1].key, "inventory.items");
     reopened.close().expect("close reopened host");
 }
 
@@ -197,6 +210,8 @@ fn agent_adapter_publish_fact_uses_authoritative_fact_owner_once() {
         duplicate_receipt.result(),
         Some(RuntimeResult::FactPublished { event_id }) if *event_id == published_event_id
     ));
+    // The duplicate appends nothing: still the four seeds (UPD-1 A7, 0.12.30: the application
+    // update seed with the three configuration seeds) and the adapter's publication.
     assert_eq!(
         projected_events(
             &mut client,
@@ -206,7 +221,7 @@ fn agent_adapter_publish_fact_uses_authoritative_fact_owner_once() {
             }
         )
         .len(),
-        4
+        5
     );
 
     let invalid = client.agent_request(RuntimeOperation::PublishFact { record });
@@ -216,6 +231,7 @@ fn agent_adapter_publish_fact_uses_authoritative_fact_owner_once() {
         serde_json::from_value(invalid).expect("invalid record transport shape");
     let invalid_receipt = client.send(&invalid);
     assert_eq!(invalid_receipt.state(), RuntimeReceiptState::Denied);
+    // The refused record appends nothing either (the same five, UPD-1 A7).
     assert_eq!(
         projected_events(
             &mut client,
@@ -225,7 +241,7 @@ fn agent_adapter_publish_fact_uses_authoritative_fact_owner_once() {
             }
         )
         .len(),
-        4
+        5
     );
     assert!(host.fatal_error().expect("runtime health").is_none());
     let health = client.request(RuntimeOperation::Health);
@@ -315,6 +331,8 @@ fn agent_adapter_publish_fact_uses_authoritative_fact_owner_once() {
     );
     let request = client.agent_request(RuntimeOperation::PublishFacts { observation: batch });
     assert_eq!(client.send(&request).state(), RuntimeReceiptState::Denied);
+    // The five above (UPD-1 A7, 0.12.30: the application update seed among them), the batch and
+    // its refresh.
     assert_eq!(
         projected_events(
             &mut client,
@@ -324,7 +342,7 @@ fn agent_adapter_publish_fact_uses_authoritative_fact_owner_once() {
             }
         )
         .len(),
-        6
+        7
     );
     assert_eq!(state.input_count.load(Ordering::SeqCst), 0);
     assert!(host.fatal_error().unwrap().is_none());

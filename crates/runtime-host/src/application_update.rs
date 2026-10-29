@@ -8,7 +8,9 @@
 //!   (`application_update_key_reserved` refuses it from a client). True before the terminal of
 //!   a run that a shared interrupt page with `result: application_update_required` ended; false
 //!   before the successful terminal of a `store_update` package's own run; false as a start's seed
-//!   of a configured instance with no record. It never expires and carries no `invalidate_on`; a
+//!   of a configured instance with no record, observed at the earliest valid time
+//!   ([`APPLICATION_UPDATE_SEED_OBSERVED_AT_UNIX_MS`], fix round 2), never at the start's own
+//!   time. It never expires and carries no `invalidate_on`; a
 //!   restart, a takeover and an emulator stop leave it as it is. It is an ordinary evaluation
 //!   fact, so a store update rule's trigger reads it.
 //! - **The gate** (`contracts/scheduling-blackout.md`, "Order of the deferrals", position 4a):
@@ -38,6 +40,13 @@ pub(crate) const APPLICATION_UPDATE_SCHEMA: &str = "fact.v1";
 pub(crate) const APPLICATION_UPDATE_RUN_PREFIX: &str = "application_update:run:";
 /// The `source_snapshot_id` of a start's seed.
 pub(crate) const APPLICATION_UPDATE_SEED: &str = "application_update:seed";
+/// UPD-1 fix round 2: a start's seed's `observed_at_unix_ms`, the earliest time a fact record may
+/// carry (`FactRecord::validate` refuses 0). The seed states the default, not something the
+/// Runtime saw. Dated at the start, the seed post-dated every evaluation or forward projection
+/// asked about an earlier time, and each refused its whole input for it (the policy evaluator's
+/// `observed_after_evaluation`). Dated here, it never does, and the first record a run writes is
+/// always newer than it.
+pub(crate) const APPLICATION_UPDATE_SEED_OBSERVED_AT_UNIX_MS: u64 = 1;
 
 /// The instance aliases whose `health.application.update_required` is true in `facts` (with a
 /// confidence above zero). Only `true` holds: a missing key or `false` holds nothing.

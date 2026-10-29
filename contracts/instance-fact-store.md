@@ -831,8 +831,8 @@ package's run has succeeded there since.
 - **Writers.** Only the Runtime writes the key, in one `fact.published` each (purpose
   `ApplicationUpdate`, origin and actor `runtime`, `source_detector` `runtime.application-update`,
   confidence 1000, no expiry, no `invalidate_on`, `resource_bundle_hash` the SHA-256 of the alias,
-  the observation time and the value; observed at max(now, the previous record's observation +
-  1)):
+  the observation time and the value; a run's record is observed at max(now on the Runtime clock,
+  the previous record's observation + 1), the start's seed at 1, see below):
   - `true`, before the terminal of any run (scheduled, direct, a startup package's, a ladder
     rung's) that the page ended with `contained_task_application_update_required`, after its
     handler, or (fix round 1) after its handler failed short of fatal
@@ -845,7 +845,14 @@ package's run has succeeded there since.
   - `false`, at the start, beside the policy instance seeds ("Seeding at startup"), for each
     configured policy instance that has no record of the key (`application_update:seed`), so a
     store update rule's trigger is never Unknown. A record already there (`true` included) is
-    kept, and a second start appends nothing. A refusal fails the start, as a seed's does.
+    kept, and a second start appends nothing. A refusal fails the start, as a seed's does. The
+    seed is observed at 1, the earliest time a record may carry (fix round 2): it states the
+    default, not something the Runtime saw. The fact is an evaluation input, and the policy
+    evaluator refuses a whole input that holds a fact observed after the evaluation's time
+    (`policy_evaluation_rejected`; `policy_evaluation_input_invalid` for a forward projection).
+    Dated at the start, the seed made every evaluation or forward projection asked about an
+    earlier time refuse its input; dated at 1, it never does, and the first record a run writes is
+    always newer than it.
   A write of the value the active record already holds appends nothing.
 - **Reserved key.** A `PublishFact` / `PublishFacts` of the key from any client, and any other
   publication path of the Runtime, is refused before the fact write gate as the non-fatal request

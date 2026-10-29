@@ -11,8 +11,10 @@
 //! - false, at the start, for each configured instance that has no record yet (beside the
 //!   policy instance seeds); a record already there, `true` included, is kept.
 //!
-//! A write of the value the active record already holds appends nothing. Each record is observed
-//! at max(now, the previous record's observation + 1), never expires and carries no
+//! A write of the value the active record already holds appends nothing. A run's record is
+//! observed at max(now on the Runtime clock, the previous record's observation + 1); the seed at
+//! [`APPLICATION_UPDATE_SEED_OBSERVED_AT_UNIX_MS`] (fix round 2: it is the default, not an
+//! observation, so it never post-dates the time of an evaluation). No record expires or carries
 //! `invalidate_on`.
 
 use super::contained_task::ContainedTaskTerminalDraft;
@@ -21,14 +23,16 @@ use super::*;
 use crate::application_update::{
     APPLICATION_UPDATE_DETECTOR, APPLICATION_UPDATE_FACT_KEY, APPLICATION_UPDATE_RUN_PREFIX,
     APPLICATION_UPDATE_SCHEMA, APPLICATION_UPDATE_SEED,
+    APPLICATION_UPDATE_SEED_OBSERVED_AT_UNIX_MS,
 };
 use crate::codes::{HostCode, HostLocation};
 use actingcommand_contract::codes::ContractLocation;
 
 impl HostShared {
     /// Records `required` as the instance `alias`'s `health.application.update_required`, from
-    /// `source_snapshot_id`, unless its active record already holds that value. A refusal of the
-    /// store is returned as it is (the caller fails its run, Fail Loud); a fatal one too.
+    /// `source_snapshot_id`, unless its active record already holds that value. The record is
+    /// observed at max(now on the Runtime clock, the previous record's observation + 1). A refusal
+    /// of the store is returned as it is (the caller fails its run, Fail Loud); a fatal one too.
     pub(super) fn record_application_update(
         &self,
         alias: &str,
@@ -38,9 +42,8 @@ impl HostShared {
         let scope = FactScope::Instance {
             instance_id: alias.to_owned(),
         };
-        let value = ContractFactValue::Boolean(required);
         let content = FactContent::Inline {
-            value: value.clone(),
+            value: ContractFactValue::Boolean(required),
         };
         let active = self.active_fact_revision(&scope, APPLICATION_UPDATE_FACT_KEY)?;
         if active
@@ -53,13 +56,30 @@ impl HostShared {
         let observed_at_unix_ms = active.as_ref().map_or(now_unix_ms, |(record, _, _)| {
             now_unix_ms.max(record.observed_at_unix_ms.saturating_add(1))
         });
+        self.publish_application_update(alias, required, source_snapshot_id, observed_at_unix_ms)
+    }
+
+    /// Publishes one record of the instance `alias`'s `health.application.update_required`:
+    /// `required`, from `source_snapshot_id`, observed at `observed_at_unix_ms`, through the key's
+    /// only entry (`FactPublicationPurpose::ApplicationUpdate`).
+    fn publish_application_update(
+        &self,
+        alias: &str,
+        required: bool,
+        source_snapshot_id: String,
+        observed_at_unix_ms: u64,
+    ) -> RuntimeHostResult<()> {
+        let scope = FactScope::Instance {
+            instance_id: alias.to_owned(),
+        };
+        let value = ContractFactValue::Boolean(required);
         let digest = application_update_digest(alias, observed_at_unix_ms, &value)?;
         self.publish_facts(
             actingcommand_contract::FactObservation {
                 records: vec![FactRecord {
                     scope,
                     key: APPLICATION_UPDATE_FACT_KEY.to_owned(),
-                    content,
+                    content: FactContent::Inline { value },
                     observed_at_unix_ms,
                     expires_at_unix_ms: None,
                     ttl_policy: None,
@@ -81,6 +101,13 @@ impl HostShared {
     /// record of the key, so a store update rule's trigger is never Unknown. A record already
     /// there (true or false) is kept; a second start appends nothing. Any refusal fails the start,
     /// as a policy instance seed's does.
+    ///
+    /// UPD-1 fix round 2: the seed is observed at [`APPLICATION_UPDATE_SEED_OBSERVED_AT_UNIX_MS`],
+    /// not at the start. The fact is an ordinary evaluation input, and the policy evaluator refuses
+    /// a whole input that holds a fact observed after the evaluation's time; a seed dated at the
+    /// start made every evaluation or forward projection asked about an earlier time fail
+    /// (`policy_evaluation_rejected`; `policy_evaluation_input_invalid` for a forward projection)
+    /// for a default nothing observed.
     pub(super) fn seed_application_update_facts(&self) -> RuntimeHostResult<()> {
         let Some(inputs) =
             lock(&self.policy_inputs, HostLocation::SeedPolicyInstanceFacts)?.clone()
@@ -97,10 +124,11 @@ impl HostShared {
             {
                 continue;
             }
-            self.record_application_update(
+            self.publish_application_update(
                 &instance.instance_id,
                 false,
                 APPLICATION_UPDATE_SEED.to_owned(),
+                APPLICATION_UPDATE_SEED_OBSERVED_AT_UNIX_MS,
             )?;
         }
         Ok(())

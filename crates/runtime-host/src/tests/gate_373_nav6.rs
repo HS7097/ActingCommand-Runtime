@@ -2131,9 +2131,11 @@ fn upd1_a1_b2_a_scheduled_run_meeting_the_update_dialog_ends_by_a_condition_and_
         .query_persisted_events_for_test(EventQuery::default())
         .expect("ledger events");
     let publications = update_publications(&events, POLICY_INSTANCE_ALIAS);
-    let [(published_at, true, _)] = publications.as_slice() else {
-        panic!("one publication of true: {publications:?}");
+    // This host starts with the policy configuration, so the start's seed (A7) comes first.
+    let [(_, false, seed), (published_at, true, _)] = publications.as_slice() else {
+        panic!("the start's seed, then one publication of true: {publications:?}");
     };
+    assert_eq!(seed, "application_update:seed");
     assert!(*published_at < failed_terminal(&events));
     assert!(!ladder_started(&events), "class none opens no ladder");
     let failure = b43_recorded_failure(&host, context.run_id());
@@ -2236,8 +2238,12 @@ fn upd1_a1_b2_a_scheduled_run_meeting_the_update_dialog_ends_by_a_condition_and_
 }
 
 /// UPD-1 A3 (design §5.2 item 1): the instance's startup package meets the update dialog. It
-/// ends with the new code, `runtime.failed` records it at Warning, the fact is true, no ladder
-/// starts and the Runtime stays healthy (the instance is not fenced).
+/// ends with the new code, recorded at Warning, the fact is true, no ladder starts and the Runtime
+/// stays healthy (the instance is not fenced). Fix round 2: the end's record is the run's own
+/// `task.failed` terminal, at Warning (the code's category). A host package's failure whose
+/// terminal is recorded gets no second `runtime.failed` (`record_startup_package_failure` hands it
+/// to `append_lifecycle_failure`, which records an already recorded failure once), so no record
+/// that names the code may be above Warning.
 #[test]
 fn upd1_a3_a_startup_package_meeting_the_update_dialog_ends_with_its_code_and_opens_no_ladder() {
     let state = Arc::new(FakeState::default());
@@ -2276,20 +2282,25 @@ fn upd1_a3_a_startup_package_meeting_the_update_dialog_ends_with_its_code_and_op
     assert!(host.fatal_error().expect("runtime health").is_none());
     host.close().expect("close runtime host");
 
-    let terminal = events
+    let (terminal, terminal_severity) = events
         .iter()
         .find_map(|event| match event.payload() {
             EventPayload::Task(TaskPayload::Semantic(payload)) => match payload.fact() {
                 TaskSemanticFact::TerminalCommitted {
                     outcome: Some(outcome),
                     ..
-                } => Some(outcome.clone()),
+                } => Some((outcome.clone(), event.severity())),
                 _ => None,
             },
             _ => None,
         })
         .expect("the startup run's failed terminal");
     assert_eq!(terminal.code().as_str(), UPDATE_REQUIRED);
+    assert_eq!(
+        terminal_severity,
+        EventSeverity::Warning,
+        "the run's end is recorded at Warning"
+    );
     let recorded = events
         .iter()
         .filter_map(|event| match event.payload() {
@@ -2301,10 +2312,11 @@ fn upd1_a3_a_startup_package_meeting_the_update_dialog_ends_with_its_code_and_op
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(
-        recorded,
-        [EventSeverity::Warning],
-        "one runtime.failed at Warning"
+    assert!(
+        recorded
+            .iter()
+            .all(|severity| *severity == EventSeverity::Warning),
+        "no runtime.failed of the code above Warning: {recorded:?}"
     );
     assert_eq!(fact.map(|(value, _)| value), Some(true));
     assert!(
