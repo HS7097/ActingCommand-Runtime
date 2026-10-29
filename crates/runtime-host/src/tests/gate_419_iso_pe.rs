@@ -8,8 +8,10 @@
 // evaluates again `scheduling.evaluation.retry_ms` later; `scheduling.evaluation.escalate_after`
 // skips in a row record `policy_evaluation_awaiting_person` once; a global failure is still
 // returned. The evaluation's time is sampled under the gates its inputs are read under, so an
-// input committed while it waited for them is never later than its time. Every expected value is
-// the work order's; the Runtime clock is a manual one.
+// input committed while it waited for them is never later than its time. Fix 1 (brief
+// `rd-1029/brief-iso-pe-fix1.md`, review `rd-1029/review-iso-pe.md` M1): an outcome projection not
+// ready yet waits at most `escalate_after` times in a row before it is skipped the same way. Every
+// expected value is the work order's; the Runtime clock is a manual one.
 
 use super::gate_386_sr2b1::{rerun_manifest, start};
 use super::*;
@@ -360,4 +362,117 @@ fn iso_pe_t4_a_global_failure_is_returned_and_only_a_non_global_one_is_skipped()
             "{case}: only a global failure halts"
         );
     }
+}
+
+#[test]
+fn iso_pe_t5_projection_waits_in_a_row_turn_into_one_skip_and_one_escalation_and_an_evaluation_resets_them()
+ {
+    // Fix 1 (review M1): an outcome projection not ready yet is returned, so actingd defers the
+    // trigger by one debounce, while fewer than scheduling.evaluation.escalate_after evaluations
+    // in a row have not evaluated; the next one takes the skip path. Both values come from the
+    // configuration: retry 5 s, escalate after 3. At the fixture's time the evaluation evaluates
+    // once the projection is ready. The second round shows the evaluation in between reset the
+    // count.
+    let retry_ms = 5_000;
+    let escalate_after = 3_u64;
+    let manifest = rerun_manifest(vec![
+        (EVALUATION_RETRY_MS, FactScalar::DurationMs(retry_ms)),
+        (EVALUATION_ESCALATE_AFTER, FactScalar::Integer(3)),
+    ]);
+    let root = TempDir::new().expect("tempdir");
+    let (host, _clock) = host_at(&root, POLICY_NOW_UNIX_MS, Some(manifest));
+    let not_ready = SharedCode::OutcomeProjectionNotReady.as_str();
+
+    for round in 1..=2_usize {
+        host.hold_policy_outcome_projection_for_test(escalate_after + 1)
+            .expect("hold the projection");
+
+        // escalate_after waits: the failure is returned, and nothing is recorded.
+        for wait in 1..=escalate_after {
+            let error = match host.evaluate_policy_cycle(PolicyTrigger::Recovery) {
+                Ok(_) => panic!("round {round}, wait {wait}: the failure is returned"),
+                Err(error) => error,
+            };
+            assert_eq!(error.code(), not_ready, "round {round}, wait {wait}");
+            assert!(!error.halts_runtime(), "round {round}, wait {wait}");
+            assert_eq!(
+                failed(&host, SKIPPED).len(),
+                round - 1,
+                "round {round}, wait {wait}: a wait records no skip"
+            );
+            assert_eq!(
+                failed(&host, AWAITING).len(),
+                round - 1,
+                "round {round}, wait {wait}: a wait escalates nothing"
+            );
+            assert_running(&host);
+        }
+
+        // The next one takes the skip path: one skip record, one escalation, the retry.
+        let cycle = host
+            .evaluate_policy_cycle(PolicyTrigger::Recovery)
+            .unwrap_or_else(|error| panic!("round {round}: the skip is no error: {error:?}"));
+        assert!(
+            cycle.evaluation.is_none(),
+            "round {round}: nothing evaluated"
+        );
+        assert!(
+            cycle.pending_dispatch_intents.is_empty(),
+            "round {round}: nothing dispatched"
+        );
+        assert_eq!(cycle.directive.kind, PolicyRecomputeKind::Deferred);
+        assert_eq!(
+            cycle.directive.eligible_at_unix_ms,
+            POLICY_NOW_UNIX_MS + retry_ms,
+            "round {round}: evaluated again scheduling.evaluation.retry_ms later"
+        );
+        let skipped = failed(&host, SKIPPED);
+        assert_eq!(
+            skipped.len(),
+            round,
+            "round {round}: one skip: {skipped:#?}"
+        );
+        let skip = &skipped[round - 1];
+        assert_eq!(
+            value(skip, "count"),
+            json!(escalate_after + 1),
+            "round {round}: the waits count toward the run"
+        );
+        assert_eq!(value(skip, "limit_count"), json!(escalate_after));
+        assert_eq!(value(skip, "retry_after_ms"), json!(retry_ms));
+        assert_eq!(
+            value(skip, "next_eligible_unix_ms"),
+            json!(POLICY_NOW_UNIX_MS + retry_ms)
+        );
+        assert_eq!(
+            skipped_failure_codes(&host)[round - 1],
+            not_ready,
+            "round {round}: the skip names its failure"
+        );
+        let awaiting = failed(&host, AWAITING);
+        assert_eq!(
+            awaiting.len(),
+            round,
+            "round {round}: one escalation: {awaiting:#?}"
+        );
+        let escalation = &awaiting[round - 1];
+        assert_eq!(value(escalation, "count"), json!(escalate_after + 1));
+        assert_eq!(value(escalation, "limit_count"), json!(escalate_after));
+        assert_eq!(value(escalation, "retry_after_ms"), json!(retry_ms));
+        assert!(
+            find(escalation, not_ready).is_some(),
+            "round {round}: the escalation names the failure: {escalation:#?}"
+        );
+        assert_running(&host);
+
+        // The projection ready, the evaluation evaluates and resets the count, so the next
+        // round waits escalate_after times again before it is skipped.
+        let cycle = host
+            .evaluate_policy_cycle(PolicyTrigger::Recovery)
+            .unwrap_or_else(|error| panic!("round {round}: the evaluation: {error:?}"));
+        assert!(cycle.evaluation.is_some(), "round {round}: evaluated");
+        assert_eq!(failed(&host, SKIPPED).len(), round, "round {round}");
+        assert_running(&host);
+    }
+    host.close().expect("close the host");
 }

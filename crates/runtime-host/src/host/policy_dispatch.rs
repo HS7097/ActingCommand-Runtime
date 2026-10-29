@@ -859,8 +859,9 @@ pub(super) enum PolicyCycleClock {
     },
 }
 
-/// ISO-PE (#419): the policy evaluations skipped in a row, and whether this run of skips was
-/// escalated to a person. An evaluation that evaluated ends the run.
+/// ISO-PE (#419): the policy evaluations in a row that did not evaluate (skipped ones and, fix 1,
+/// waits for an outcome projection not ready yet), and whether this run of them was escalated to
+/// a person. An evaluation that evaluated ends the run.
 #[derive(Debug, Default)]
 pub(super) struct PolicyEvaluationSkips {
     consecutive: u32,
@@ -877,6 +878,19 @@ impl PolicyEvaluationSkips {
         (self.consecutive, escalates)
     }
 
+    /// ISO-PE fix 1 (review M1): one more evaluation whose outcome projection is not ready yet.
+    /// While fewer than `escalate_after` evaluations in a row have not evaluated, it waits
+    /// (`true`: actingd defers it by one debounce) and counts as one of them, with no record;
+    /// once they reach `escalate_after` it does not wait (`false`) and is skipped, and
+    /// [`Self::record`] counts it, so the skip escalates as every run of skips does.
+    fn wait_for_projection(&mut self, escalate_after: u32) -> bool {
+        let waits = self.consecutive < escalate_after;
+        if waits {
+            self.consecutive += 1;
+        }
+        waits
+    }
+
     fn reset(&mut self) {
         *self = Self::default();
     }
@@ -886,9 +900,11 @@ impl PolicyEvaluationSkips {
 /// failure whose scope is `Global` may stop the Runtime ([`RuntimeHostError::halts_runtime`]):
 /// a fatal failure the Runtime cannot vouch for (the ledger, a poisoned lock, the clock, the
 /// configuration in effect, the shared policy projection) and one on the closed Global list. Two
-/// non-global failures keep the bounded handling actingd already gives them, so they are
-/// returned too: `policy_outcome_snapshot_changed` (re-sampled) and `outcome_projection_not_ready`
-/// (deferred by the debounce).
+/// non-global failures keep a bounded handling of their own, so this rule does not skip them:
+/// `policy_outcome_snapshot_changed` (re-sampled by actingd) and `outcome_projection_not_ready`
+/// (deferred by actingd's debounce while it waits, and skipped once
+/// `scheduling.evaluation.escalate_after` evaluations in a row have not evaluated:
+/// `HostShared::wait_for_policy_projection`).
 pub(crate) fn skips_policy_evaluation(error: &RuntimeHostError) -> bool {
     !error.halts_runtime()
         && error.code() != HostCode::PolicyOutcomeSnapshotChanged.as_str()
@@ -901,7 +917,9 @@ impl HostShared {
     /// detail (`policy_evaluation_skipped`, warning), and the cycle is a deferred one with no
     /// evaluation, due `scheduling.evaluation.retry_ms` later, so the driver keeps its trigger and
     /// evaluates again then; the Runtime keeps running. `scheduling.evaluation.escalate_after`
-    /// skips in a row record `policy_evaluation_awaiting_person` (error) once.
+    /// skips in a row record `policy_evaluation_awaiting_person` (error) once. An outcome
+    /// projection not ready yet waits a bounded number of times before it is skipped too
+    /// ([`Self::wait_for_policy_projection`]).
     pub(super) fn evaluate_policy_cycle(
         &self,
         trigger: PolicyTrigger,
@@ -927,8 +945,39 @@ impl HostShared {
                 Ok(cycle)
             }
             Err(error) if skips_policy_evaluation(&error) => self.skip_policy_evaluation(&error),
+            Err(error)
+                if !error.halts_runtime()
+                    && error.code() == SharedCode::OutcomeProjectionNotReady.as_str() =>
+            {
+                self.wait_for_policy_projection(error)
+            }
             Err(error) => Err(error),
         }
+    }
+
+    /// ISO-PE fix 1 (review M1): an evaluation whose outcome projection is not ready yet. While
+    /// fewer than `scheduling.evaluation.escalate_after` evaluations in a row have not evaluated,
+    /// the failure is returned and actingd defers the trigger by one debounce; the wait counts as
+    /// one of them. Once they reach it, the next one is skipped as any failure that is not
+    /// global: `policy_evaluation_skipped` with its detail, evaluated again
+    /// `scheduling.evaluation.retry_ms` later, and `policy_evaluation_awaiting_person` as for
+    /// every run of skips. An evaluation that evaluates resets the count. (Until fix 1 it was
+    /// returned every time: a projection that stayed not ready was evaluated again every debounce
+    /// with no record, no daemon line, no bound and no escalation.)
+    fn wait_for_policy_projection(
+        &self,
+        failure: RuntimeHostError,
+    ) -> RuntimeHostResult<PolicyCycle> {
+        let escalate_after = self.evaluation_retry_settings()?.escalate_after;
+        let waits = lock(
+            &self.policy_evaluation_skips,
+            HostLocation::EvaluatePolicyCycle,
+        )?
+        .wait_for_projection(escalate_after);
+        if waits {
+            return Err(failure);
+        }
+        self.skip_policy_evaluation(&failure)
     }
 
     /// ISO-PE (#419): records the skipped evaluation's failure (`policy_evaluation_skipped`,
@@ -1021,7 +1070,9 @@ impl HostShared {
     }
 
     /// ISO-PE (#419), test builds: runs the hook a test set for the point after an evaluation
-    /// started and before it takes the gates under which it reads its inputs.
+    /// started and before it takes the gates under which it reads its inputs. Fix 1 (review M1):
+    /// then reports an outcome projection not ready yet (`outcome_projection_not_ready`, as the
+    /// projection would) while the test's count of them lasts.
     #[cfg(test)]
     fn before_policy_inputs_read_for_test(&self) -> RuntimeHostResult<()> {
         let hook = lock(
@@ -1031,6 +1082,19 @@ impl HostShared {
         .take();
         if let Some(hook) = hook {
             hook();
+        }
+        let not_ready = self
+            .policy_projection_not_ready_for_test
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                count.checked_sub(1)
+            })
+            .is_ok();
+        if not_ready {
+            return Err(RuntimeHostError::request(
+                SharedCode::OutcomeProjectionNotReady,
+                HostLocation::ProjectPolicySchedulingOutcomes,
+                RuntimeErrorCode::RuntimeUnavailable,
+            ));
         }
         Ok(())
     }

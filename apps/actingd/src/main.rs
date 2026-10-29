@@ -893,7 +893,8 @@ const MAX_POLICY_RESAMPLES: usize = 3;
 /// not global: it records it (`policy_evaluation_skipped`) and answers a deferred cycle with no
 /// evaluation, due `scheduling.evaluation.retry_ms` later, which the driver applies as any
 /// deferred cycle; what is returned here ends the driver, and the Runtime, only because it is
-/// global (or `outcome_projection_not_ready`, which `apply_policy_cycle_result` defers).
+/// global (or `outcome_projection_not_ready`, which `apply_policy_cycle_result` defers; the host
+/// returns it at most `scheduling.evaluation.escalate_after` times in a row, then skips it).
 fn evaluate_policy_cycle_resampled(
     host: &RuntimeHost,
     trigger: PolicyTrigger,
@@ -2263,7 +2264,10 @@ fn apply_policy_cycle_result(
         // ISO-PE (#419): a projection not ready yet is a wait, not a global failure, so it never
         // ends the driver: the trigger, with its recompute wakes when it has any, is deferred by
         // one debounce. (Until 0.12.28 only a trigger with recompute wakes was; one without
-        // ended the driver and, with it, the Runtime.)
+        // ended the driver and, with it, the Runtime.) Fix 1 (review M1): the host returns it
+        // only while fewer than `scheduling.evaluation.escalate_after` evaluations in a row have
+        // not evaluated; the next one it skips, recorded, and answers with a deferred cycle due
+        // `scheduling.evaluation.retry_ms` later (the `Ok` arm above), so these waits are bounded.
         Err(error) if error.code.is(SharedCode::OutcomeProjectionNotReady) => {
             schedule.defer_projection(trigger, recomputes, now_unix_ms)
         }

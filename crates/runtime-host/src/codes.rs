@@ -979,12 +979,14 @@ actingcommand_contract::outcome_codes! {
         /// Warning (ISO-PE, #419). A policy evaluation failed with a failure that is not global
         /// and the Runtime skipped it: nothing was dispatched from it, and the driver evaluates
         /// again at `next_eligible_unix_ms`, `retry_after_ms` later
-        /// (`scheduling.evaluation.retry_ms`). Keys `count` (the skipped evaluations in a row),
+        /// (`scheduling.evaluation.retry_ms`). Keys `count` (the evaluations in a row that did
+        /// not evaluate: the skipped ones and, fix 1, the waits for an outcome projection),
         /// `limit_count` (`scheduling.evaluation.escalate_after`), `retry_after_ms`,
         /// `next_eligible_unix_ms`; the failure is the `caused_by` link.
         PolicyEvaluationSkipped => "policy_evaluation_skipped": warning / none,
-        /// Error (ISO-PE, #419). `limit_count` policy evaluations in a row were skipped: the
-        /// evaluation waits for a person to fix its input. The Runtime keeps running and keeps
+        /// Error (ISO-PE, #419). `limit_count` policy evaluations in a row did not evaluate (fix
+        /// 1: waits for an outcome projection count) and the latest was skipped: the evaluation
+        /// waits for a person to fix its input. The Runtime keeps running and keeps
         /// evaluating every `retry_after_ms`; recorded once per run of skips (keys `count`,
         /// `limit_count`, `retry_after_ms`; the latest failure is the `caused_by` link).
         PolicyEvaluationAwaitingPerson => "policy_evaluation_awaiting_person": error / none,

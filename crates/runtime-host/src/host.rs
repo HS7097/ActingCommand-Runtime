@@ -1915,6 +1915,8 @@ impl RuntimeHost {
             policy_snapshot_changes_for_test: AtomicU64::new(0),
             #[cfg(test)]
             policy_inputs_read_hook_for_test: Mutex::new(None),
+            #[cfg(test)]
+            policy_projection_not_ready_for_test: AtomicU64::new(0),
             policy_evaluation_skips: Mutex::new(policy_dispatch::PolicyEvaluationSkips::default()),
             #[cfg(any(test, feature = "test-hooks"))]
             pause_lane_wait_hook_for_test: Mutex::new(None),
@@ -3574,6 +3576,20 @@ impl RuntimeHost {
             &shared.policy_inputs_read_hook_for_test,
             HostLocation::EvaluatePolicyCycle,
         )? = Some(hook);
+        Ok(())
+    }
+
+    /// ISO-PE fix 1 (review M1), test builds: the next `count` policy evaluations find an
+    /// outcome projection not ready yet (`outcome_projection_not_ready`), as when a settled run's
+    /// outcome is not projected yet, after they started and before they take their gates.
+    #[cfg(test)]
+    pub(crate) fn hold_policy_outcome_projection_for_test(
+        &self,
+        count: u64,
+    ) -> RuntimeHostResult<()> {
+        self.shared_ref(HostLocation::EvaluatePolicyCycle)?
+            .policy_projection_not_ready_for_test
+            .store(count, Ordering::Release);
         Ok(())
     }
 
@@ -5505,8 +5521,13 @@ struct HostShared {
     // before it takes the gates under which it reads its inputs.
     #[cfg(test)]
     policy_inputs_read_hook_for_test: Mutex<Option<Box<dyn FnOnce() + Send>>>,
-    // ISO-PE (#419): the policy evaluations skipped in a row, and whether this run of skips was
-    // escalated to a person. A leaf lock.
+    // ISO-PE fix 1 (review M1), test builds: while this count lasts, a policy evaluation finds
+    // an outcome projection not ready yet, at the point of that hook.
+    #[cfg(test)]
+    policy_projection_not_ready_for_test: AtomicU64,
+    // ISO-PE (#419): the policy evaluations in a row that did not evaluate (skipped, or, fix 1,
+    // waiting for an outcome projection), and whether this run of them was escalated to a
+    // person. A leaf lock.
     policy_evaluation_skips: Mutex<policy_dispatch::PolicyEvaluationSkips>,
     // Workflow #427-A fix 1, test builds and the `test-hooks` feature: the hook a scheduling
     // pause's release runs once when it waits for a policy run an instance worker holds.

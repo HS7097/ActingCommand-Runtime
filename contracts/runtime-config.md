@@ -469,7 +469,9 @@ release).** A policy evaluation whose failure is not global is skipped and recor
 (default `15000`, `1..=3600000`: never zero, so a failure that repeats is no busy loop);
 `scheduling.evaluation.escalate_after` skips in a row (default `3`, at least `1`) record
 `policy_evaluation_awaiting_person` once, and the Runtime keeps running
-([scheduling/README.md](scheduling/README.md), "Evaluation failures"). Both are settable; the
+([scheduling/README.md](scheduling/README.md), "Evaluation failures"). An outcome projection not
+ready yet waits one debounce instead, at most `escalate_after` times in a row (each wait counts
+toward the run), before it is skipped the same way. Both are settable; the
 host reads them at every skipped evaluation, so an instruction takes effect at the next one. In
 the file they are the `scheduling` section's `evaluation` member; a Runtime before 0.12.28
 refuses a file that names it, because the section denies unknown members. Read with

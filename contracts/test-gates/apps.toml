@@ -1009,7 +1009,7 @@ tests = [
 ]
 incident = ["#427-A"]
 
-# ISO-PE (Workflow #419; brief rd-1029/brief-iso-pe.md; production v0.12.26 on 10-29 11:19): the driver applies the deferred cycle with no evaluation that the host answers for a skipped evaluation without an error, so the driver and the Runtime go on; it keeps the trigger and evaluates it again at the retry (scheduling.evaluation.retry_ms later), not before; a projection not ready yet with no recompute wake waits one debounce instead of ending the driver
+# ISO-PE (Workflow #419; brief rd-1029/brief-iso-pe.md; register §1.205; production v0.12.26 on 10-29 11:19): the driver applies the deferred cycle with no evaluation that the host answers for a skipped evaluation without an error, so the driver and the Runtime go on; it keeps the trigger and evaluates it again at the retry (scheduling.evaluation.retry_ms later), not before; a projection not ready yet with no recompute wake waits one debounce instead of ending the driver
 [[gate]]
 coverage = "Y"
 tests = [

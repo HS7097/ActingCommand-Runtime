@@ -1447,7 +1447,13 @@ the switch.
   `policy_evaluation_awaiting_person` (error) once; an evaluation that evaluates ends the run of
   skips. Two failures that are not global keep their own bounded handling:
   `policy_outcome_snapshot_changed` is sampled again (above), and `outcome_projection_not_ready`
-  waits one debounce, with or without the trigger's recompute wakes.
+  waits one debounce, with or without the trigger's recompute wakes, while fewer than
+  `escalate_after` evaluations in a row have not evaluated. Each such wait counts as one of them
+  (the `count` of the run) and records nothing; once they reach `escalate_after`, the next
+  `outcome_projection_not_ready` is skipped as above: recorded, evaluated again `retry_ms` later
+  and escalated as every run of skips. (Until 0.12.28 a projection that stayed not ready was
+  evaluated again every debounce, with no record and no bound, when the trigger had recompute
+  wakes, and ended the driver when it had none.)
 - **The detail.** `policy_evaluation_rejected` carries the policy's code as its `caused_by`
   link and the policy's code and developer text as its native detail. An input check that names
   what it refused gives that link `policy_input`, `policy_input_problem` and the `fact_key`,
