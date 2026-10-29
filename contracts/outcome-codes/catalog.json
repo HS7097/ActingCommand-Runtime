@@ -2095,6 +2095,38 @@
       "type": "integer",
       "description": "The runs the daily budgets of a task and its activity profile still allow in the activity day after this dispatch (Workflow #411 B8)."
     },
+    "run_cap": {
+      "type": "integer",
+      "description": "The runs a dispatch's spend allowances pay for: the least, over the consumed pools its task reserves, of the allowance divided by the task's declared consumption of the pool per run, rounded down; with a produced pool that has no base weight and an open goal gap, at most the runs that close the gap (SS-6)."
+    },
+    "effect_index": {
+      "type": "integer",
+      "description": "The position, from 0, of an entry in a task's own consumes or produces list of the scheduling catalog (SS-6)."
+    },
+    "spend_allowance": {
+      "type": "integer",
+      "description": "How much of a pool a dispatch may spend, in the pool's real units: the pool's projected amount at the evaluation less the task's reserve on it, at least 0 (SS-6)."
+    },
+    "gap_remaining": {
+      "type": "integer",
+      "description": "The gap of the active resource goal on a pool a task produces, in the pool's real units, at the evaluation; 0 when the goal is met (SS-6)."
+    },
+    "spend_allowances": {
+      "type": "records",
+      "fields": {
+        "effect_index": "required",
+        "spend_allowance": "required"
+      },
+      "description": "The spend allowances a dispatch hands its run, one record per entry of its task's consumes whose pool the task also reserves, in list order: the entry's position and the allowance (SS-6)."
+    },
+    "gaps_remaining": {
+      "type": "records",
+      "fields": {
+        "effect_index": "required",
+        "gap_remaining": "required"
+      },
+      "description": "The remaining goal gaps a dispatch hands its run, one record per entry of its task's produces whose pool an active goal covering the task holds with a known gap, in list order: the entry's position and the gap (SS-6)."
+    },
     "argument_value": {
       "type": "name",
       "description": "The value an MCP tool argument was given, verbatim, where the argument's refusal names it: for a list argument, the one element refused (Workflow #411 B27)."

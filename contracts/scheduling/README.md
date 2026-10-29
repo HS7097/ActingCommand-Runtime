@@ -765,6 +765,12 @@ gives the member's rules). The reserve is a hard gate, never a score penalty (re
 - **Records.** No record is new: the reason travels in the decisions and, when a dispatch
   decision record lists a held candidate, as its `why`. Without `reserves` every evaluation is
   the one before B16 part 2, and the catalog keeps its bytes and its hash.
+- **Spend values (SS-6, since 0.12.31; register §1.218).** A selected dispatch of a task with
+  reserves on pools it consumes carries, on `policy_dispatch_parameters`, each such pool's
+  allowance (its projection as the gate read it, less `at_least`, at least 0), and a run cap from
+  them; a task that produces a pool an active goal covers also carries the goal's gap
+  ([../remedies.md](../remedies.md), section 4, "Spend values"). An allowance below the task's
+  declared consumption of the pool, 0 included, is never dispatched: the gate holds it.
 
 ## Shared Run Limits (Workflow #427-B)
 

@@ -97,12 +97,22 @@ pub(crate) struct DispatchedParameters {
 
 /// Workflow #411 B8: the keys of `policy_dispatch_parameters` a run reads as
 /// `session.dispatch.schedule.<key>` (contracts/remedies.md section 4), with their fact types.
-const DISPATCH_SCHEDULE_KEYS: [(&str, ScheduleValueKind); 5] = [
+/// SS-6 adds `run_cap`.
+const DISPATCH_SCHEDULE_KEYS: [(&str, ScheduleValueKind); 6] = [
     ("next_occurrence_unix_ms", ScheduleValueKind::Timestamp),
     ("window_end_unix_ms", ScheduleValueKind::Timestamp),
     ("last_in_window", ScheduleValueKind::Boolean),
     ("last_daily_slot", ScheduleValueKind::Boolean),
     ("daily_remaining", ScheduleValueKind::Integer),
+    ("run_cap", ScheduleValueKind::Integer),
+];
+
+/// SS-6 (contracts/remedies.md section 4): the record lists of `policy_dispatch_parameters` a run
+/// reads as `session.dispatch.schedule.<field>.<effect_index>`, an `integer` per record: the list
+/// and its amount field, which also names the key.
+const DISPATCH_SCHEDULE_RECORDS: [(&str, &str); 2] = [
+    ("spend_allowances", "spend_allowance"),
+    ("gaps_remaining", "gap_remaining"),
 ];
 
 #[derive(Clone, Copy)]
@@ -141,10 +151,23 @@ pub(crate) fn dispatch_parameters(context: &PolicyRunContext) -> Option<Dispatch
                 })
                 .collect()
         });
-    let schedule = DISPATCH_SCHEDULE_KEYS
+    Some(DispatchedParameters {
+        values,
+        schedule: dispatch_schedule_values(&reason.outcome),
+        admitted_at_unix_ms: context.admission().activity.admitted_at_unix_ms,
+    })
+}
+
+/// Workflow #411 B8: each schedule value `outcome` (a `policy_dispatch_parameters`) carries,
+/// `(key, value)`, typed, in [`DISPATCH_SCHEDULE_KEYS`] order; then, SS-6, one
+/// `(<field>.<effect_index>, integer)` per record of its spend allowances and of its remaining
+/// gaps, in record order. A value of another type, and a record without an index or an integer
+/// amount, gives nothing: a package policy that reads its key meets an unknown fact.
+pub(crate) fn dispatch_schedule_values(outcome: &Outcome) -> Vec<(String, FactValue)> {
+    let mut schedule = DISPATCH_SCHEDULE_KEYS
         .iter()
         .filter_map(|(key, kind)| {
-            let value = reason.outcome.value(key)?;
+            let value = outcome.value(key)?;
             let value = match kind {
                 ScheduleValueKind::Timestamp => FactValue::TimestampMs(value.as_u64()?),
                 ScheduleValueKind::Boolean => FactValue::Boolean(value.as_bool()?),
@@ -152,12 +175,22 @@ pub(crate) fn dispatch_parameters(context: &PolicyRunContext) -> Option<Dispatch
             };
             Some(((*key).to_owned(), value))
         })
-        .collect();
-    Some(DispatchedParameters {
-        values,
-        schedule,
-        admitted_at_unix_ms: context.admission().activity.admitted_at_unix_ms,
-    })
+        .collect::<Vec<_>>();
+    for (list, field) in DISPATCH_SCHEDULE_RECORDS {
+        let records = outcome
+            .value(list)
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten();
+        schedule.extend(records.filter_map(|record| {
+            let index = record
+                .get("effect_index")
+                .and_then(serde_json::Value::as_u64)?;
+            let amount = record.get(field).and_then(serde_json::Value::as_i64)?;
+            Some((format!("{field}.{index}"), FactValue::Integer(amount)))
+        }));
+    }
+    schedule
 }
 
 /// What the closure's positions 1-2 hold an instance with: an operator scheduling pause (no

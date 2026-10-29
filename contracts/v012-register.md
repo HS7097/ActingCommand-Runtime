@@ -3996,6 +3996,49 @@ coordinator's (1.215 is UPD-1's, 1.216 R-0c's).
 |---|---|---|---|---|---|
 | R0D-1 | `PackSchedulePackage.below?: PackScheduleBelow {schedulable, source: server \| game \| pack_default \| none}` in R0C-3's `PackScheduleViewed` | new optional answer member (**`runtime-client` revision 3**) | R-0d | R-8 (`pack_default` R-9) | the package's decision now if the deciding layer had no row of it: SR-11 resolved again without that layer's rows of the package, ending at the pack default or `none`; never `instance`; absent when `source` is `pack_default` or `none`, so such a package serializes as under R-0c; both levels deny unknown members; Runtime 0.12.30 refuses the read `not_implemented`, so no 0.12.30 answer carries it and `min` stays 2; a console built before R-0d refuses a view that carries it, so the console pins a commit with it |
 
+### 1.218 Slice SS-6 (0.12.31): a dispatch hands its run the spend allowance, the remaining gap and a run cap (Alice's ruling 100, #386 comment 6490879952: dispatch follows live account state, there is no "run task X N times"; ruling 106 of 10-29 20:3x: do the highest-weight consuming task, time joins the model later, until then the reserve line is the backstop; design `rd-1029/design-sch-state.md` §4.3 and the SS-6 entry of §5; coordinator work order `rd-1029/brief-ss6.md`)
+
+[remedies.md](remedies.md) (section 4, "Spend values"; section 12) is the contract;
+[scheduling/v2/README.md](scheduling/v2/README.md), [scheduling/README.md](scheduling/README.md)
+("Task Reserves"), [instance-fact-store.md](instance-fact-store.md) ("Run parameters") and
+[selection-policy.md](selection-policy.md) (the in-task consumer) name it. The Runtime can work
+out how much may be spent and how much is still missing, the package can read the unit price
+and the dialog's cap on its screen; so the Runtime hands its part to the package at dispatch, on
+Workflow #411 B8's `session.dispatch.schedule.*` channel (§1.150), with no opt-in. B8's
+`daily_remaining` and `last_daily_slot` are unchanged; counts retire in SS-9. **No new persisted
+ledger shape**: the values are new optional values of the pending entry
+`policy_dispatch_parameters` in the existing dispatch reason chain of `policy.dispatch_intent`
+(`PolicyReasonRecord` is `#[serde(transparent)]` over `Outcome`, whose `values` every 0.12 reader
+keeps as a map without a key check), and the records `session.dispatch.schedule.<key>` are an
+overlay of the run's instance fact snapshots, never stored. No catalog member, no package format
+change, no configuration key, no outcome code, no wire or interface revision. One-way: the values
+come from the pools' state (the reserve gate's projection, the resolved goals) and the task's own
+`consumes`, `produces` and `reserves`; nothing reads a task's enablement, override, priority,
+offset or run state. Game-neutral. The number 1.218 is the coordinator's.
+
+**Recorded bytes.** A selected dispatch of a task that reserves a pool it consumes (its allowance
+is then always known and at least one run: the gate holds the candidate otherwise), or that
+produces a pool an active v1 or v2 goal covers, now carries `policy_dispatch_parameters` in its
+`policy.dispatch_intent` chain: a new reason when it carried none (no package parameter, no B8
+opt-in), or the same reason with `spend_allowances`, `gaps_remaining` and `run_cap` added (its
+developer detail rebuilt as the outcome's text, as B8 does). Every other dispatch, an opted-in B8
+task's included, carries the bytes of before. In production no task declares `reserves` and none
+produces toward a goal yet (`rd-1029/design-sch-state.md` §2.1; RS-2 of the plan writes them), so
+nothing changes live until the resource side writes them.
+
+**Rollback.** Runtime 0.12.30 reads the chains 0.12.31 writes: the reason decodes as every
+`policy_dispatch_parameters` does, unknown values kept and never checked. A 0.12.30 host resuming
+such a dispatch overlays only B8's keys, so a package that reads an SS-6 key meets an unknown fact
+(`max_repeats` ends the run with `contained_task_designated_effect_cap_unresolved` before any
+input). Rolling back below 0.12.31 is therefore possible; only the packages that read the new keys
+lose them.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SS6-1 | `policy_dispatch_parameters` values `spend_allowances` (records `{effect_index, spend_allowance}`), `gaps_remaining` (records `{effect_index, gap_remaining}`) and `run_cap` (integer); keys `run_cap`, `effect_index`, `spend_allowance`, `gap_remaining` (integers), `spend_allowances`, `gaps_remaining` (records) | new optional values of a pending entry and new key-table entries (no shape change) | SS-6 | the policy evaluator | on every selected dispatch, with or without remedies and B8's opt-in, merged into that reason or alone, each only when known: per `consumes` entry `i` whose pool the task reserves, the projection the reserve gate read less `at_least`, at least 0 (absent while unknown); per `produces` entry `j`, the gap of the active goal on its pool covering the task (v2: as its shortfall weight covers; v1: the target naming the task), 0 when met, absent without an active goal or while unknown; `run_cap` = min over reserved consumed pools of ⌊allowance / declared per-run consumption⌋, and for a produced pool without base weight whose gap is open at most ⌈gap / declared per-run `amount`⌉ (a met goal caps nothing, ruling 102); no `run_cap` without a reserved consumed pool, with an unknown projection, or when a goal-driven produced pool with an open gap is declared by `expected_amount_milli`; saturating integers, recorded at most `i64::MAX`; a record list keeps 64 records (`<key>_total` beyond) |
+| SS6-2 | the overlay records `session.dispatch.schedule.spend_allowance.<i>`, `session.dispatch.schedule.gap_remaining.<j>`, `session.dispatch.schedule.run_cap` (`integer`) | kernel overlay of a policy run's snapshots (memory only, not persisted) | SS-6 | runtime-host (`fact_refresh::dispatch_schedule_values`) | after B8's values, in record order; the longest key is 45 bytes (`…spend_allowance.127`, at most 128 entries per list), within the 128-byte fact key limit of a selection-policy document and an outcome key (the instance fact store allows 192); indices keep pool ids out of the keys; a package reads them as B8's: `max_repeats: {"fact_key": "session.dispatch.schedule.run_cap"}` (an integer from 0 to 1,000; a missing key or a cap above 1,000 ends the run with the existing named error before any input) or an integer fact of a selection strategy |
+| SS6-3 | `ReserveView.projected`; `InstanceTargets::goal_gap`; v1 `TargetEffect::Satisfied.resource` | policy internals (memory only) | SS-6 | policy crate | the allowance reads the projection the gate's `after` is taken from, so an allowance below the declared consumption, 0 included, is a candidate the gate already holds; no reason or record of the gate changes |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

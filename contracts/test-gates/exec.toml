@@ -939,6 +939,14 @@ tests = [
 ]
 incident = ["#390 O-01", "#390 O-02", "#390 R-03", "#390 S-01"]
 
+# SS-6 (rd-1029 brief-ss6 test 6, kernel half: the fact-cap test extended; contracts/remedies.md section 4, "Spend values"; register §1.218 SS6-2; since 0.12.31): a package's max_repeats {fact_key: session.dispatch.schedule.run_cap} reads the run cap the run's overlay of its dispatch's schedule values holds, once before the first step: 3 collects three times, 0 collects none
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_390_out2::ss6_t6_a_fact_cap_on_the_run_cap_reads_the_dispatch_run_cap",
+]
+incident = ["#386 SS-6"]
+
 # Workflow #308 SEL-L3 (frozen selector model S0 v2.1 §2.1-§2.6, §3.3, §6 row L3): the scan session of a select step settles the dispatched frame, proves the start of its list (rewinding toward it) and its end on positive evidence, aligns every viewport by clustered anchor pairs inside the window its motion admits (forward, corrective, and the content map that a return aligns against), closes each coverage gap with one corrective, finds missed anchors through the spacing checks, fixes a position by its first complete reading (a later different identity fails, a later different feature makes it unknown), evaluates each viewport with one pinned snapshot and instant, stops early only when no unknown or unseen position could outrank the best member, and is bounded by its own max_ms and viewport counts
 [[gate]]
 key = "59"

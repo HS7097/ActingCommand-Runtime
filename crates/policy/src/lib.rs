@@ -100,4 +100,6 @@ mod tests {
     // SS-3 (register §1.212): a catalog that writes every run-count bound evaluates identically
     // to before the bounds became optional.
     mod gate_ss3;
+    // SS-6 (0.12.31; register §1.218): a dispatch's spend allowance, remaining gap and run cap.
+    mod gate_ss6;
 }

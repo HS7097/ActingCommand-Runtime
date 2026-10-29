@@ -13,7 +13,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::{Code, Outcome};
+use actingcommand_contract::outcome::{Code, Outcome, Record};
 use actingcommand_contract::{
     FactScalar as ContractFactScalar, MAX_RESOURCE_TARGETS, MAX_RESOURCE_TARGETS_DOCUMENT_BYTES,
     NotTargetableResource, RESOURCE_TARGETS_FACT_KEY, ResourceTargetCondition,
@@ -1936,6 +1936,8 @@ pub(crate) enum TargetEffect {
         current: i64,
         at_least: u64,
         mode: TargetMode,
+        /// SS-6: the target's pool, whose gap a dispatch of the task hands its run as 0.
+        resource: String,
     },
     Applied(Box<AppliedTarget>),
     /// What an active v2 policy adds to the candidate (Workflow #335 S2b); every candidate of
@@ -2167,6 +2169,7 @@ impl TargetEffect {
                 current,
                 at_least,
                 mode,
+                ..
             } => (
                 PolicyCode::ResourceTargetSatisfied,
                 id,
@@ -2255,6 +2258,30 @@ struct ResolvedV2 {
     unevaluable: Vec<String>,
     /// The term of a candidate without an entry above: nothing weighed.
     empty: ResourceTerm,
+    /// SS-6: each resolved target's gap, in target order.
+    gaps: Vec<TargetGap>,
+}
+
+/// SS-6: one resolved v2 target as a dispatch's `gap_remaining` reads it.
+#[derive(Debug)]
+struct TargetGap {
+    pool: String,
+    /// The named tasks that map; `None` covers every producing candidate.
+    named: Option<BTreeSet<String>>,
+    /// The gap while it is known: open (applied) or 0 (met); `None` while the inventory is
+    /// pending or the target's weight does not resolve.
+    gap: Option<u64>,
+}
+
+impl TargetGap {
+    /// Whether the target covers `task`, which produces `per_run` of its pool per run, as
+    /// [`ResolvedTargetV2::covers`] decides it.
+    fn covers(&self, task: &str, per_run: u128) -> bool {
+        match &self.named {
+            Some(named) => named.contains(task),
+            None => per_run >= 1,
+        }
+    }
 }
 
 /// One v2 target resolved for one instance, once per evaluation.
@@ -2814,10 +2841,26 @@ fn resolve_v2(
         term.items = weighed.items;
         terms.insert(task.id.clone(), term);
     }
+    let gaps = resolved
+        .iter()
+        .map(|target| TargetGap {
+            pool: target.pool.id.clone(),
+            named: target
+                .named
+                .as_ref()
+                .map(|named| named.iter().map(|task| (*task).to_owned()).collect()),
+            gap: match target.status {
+                TargetStatus::Applied { gap, .. } => Some(gap),
+                TargetStatus::Satisfied { .. } => Some(0),
+                TargetStatus::Pending { .. } | TargetStatus::Unresolved { .. } => None,
+            },
+        })
+        .collect();
     Ok(ResolvedV2 {
         terms,
         unevaluable,
         empty,
+        gaps,
     })
 }
 
@@ -2923,6 +2966,7 @@ fn target_effects(
                     current,
                     at_least,
                     mode: target.apply.mode,
+                    resource: pool.id.clone(),
                 },
             );
         }
@@ -2982,6 +3026,35 @@ impl InstanceTargets {
     /// when one valued pool weighs it and no active v2 policy already holds the base weights.
     pub(crate) fn base_term(&self, task_id: &str) -> Option<&ResourceTerm> {
         self.base.get(task_id)
+    }
+
+    /// SS-6 (register §1.218): the gap, in the pool's real units, of the active goal on
+    /// `pool_id` that covers `task` on this instance; 0 when the goal is met. `None` without an
+    /// active goal there (no policy, or a withdrawn, expired or unreadable one) and while the
+    /// gap is unknown (the inventory is pending, or the goal's weight does not resolve): absent
+    /// means unknown. Under a v2 policy the goal covers the task as its shortfall weight does;
+    /// a v1 goal is the one target that names the task, on its pool.
+    pub(crate) fn goal_gap(&self, task: &TaskSpec, pool_id: &str) -> Option<u64> {
+        match &self.policy {
+            ResolvedPolicy::ActiveV2(resolved) => resolved
+                .gaps
+                .iter()
+                .find(|target| {
+                    target.pool == pool_id
+                        && target.covers(&task.id, per_run_production(task, pool_id))
+                })
+                .and_then(|target| target.gap),
+            ResolvedPolicy::Active { effects, .. } => match effects.get(&task.id) {
+                Some(TargetEffect::Applied(applied)) if applied.resource == pool_id => {
+                    Some(applied.gap)
+                }
+                Some(TargetEffect::Satisfied { resource, .. }) if resource == pool_id => Some(0),
+                _ => None,
+            },
+            ResolvedPolicy::None
+            | ResolvedPolicy::Unreadable(_)
+            | ResolvedPolicy::Expired { .. } => None,
+        }
     }
 
     /// The effect `task_id`'s candidate meets on this instance.
@@ -3231,6 +3304,9 @@ pub(crate) struct ReserveView {
     /// The pool's projected amount less `consumes`; `None` while the projected amount is
     /// unknown.
     pub(crate) after: Option<i64>,
+    /// SS-6: the pool's projected amount at the evaluation that `after` is taken from; `None`
+    /// while it is unknown.
+    pub(crate) projected: Option<u64>,
     /// The next instant the projected amount of a regenerating pool changes.
     pub(crate) next_change_unix_ms: Option<u64>,
 }
@@ -3310,6 +3386,7 @@ pub(crate) fn reserve_views(
             at_least: reserve.at_least,
             consumes,
             after,
+            projected: pool.map(|(amount, _)| amount),
             next_change_unix_ms: pool.and_then(|(_, next)| next),
         });
     }
@@ -3506,3 +3583,177 @@ fn reserve_insufficient(
     }
 }
 // ---- Workflow #411 B16 part 2: end ----
+
+// ---- SS-6 (register §1.218; `contracts/remedies.md` section 4, the spend values): begin ----
+
+/// SS-6 (Alice's rulings 100 and 106): what one selected dispatch of a task hands its run about
+/// spending, beside Workflow #411 B8's schedule values. The Runtime knows how much may be spent
+/// and how much is still missing; the package reads the unit price and the dialog's cap on its
+/// screen and turns them into a count. Every value comes from the pools' state and the task's
+/// own declarations only (one-way: the resource layer reads no task state).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct SpendValues {
+    /// `(i, allowance)` for each entry `i` of the task's `consumes` whose pool the task also
+    /// reserves and whose projected amount is known: that amount less the reserve's `at_least`,
+    /// at least 0. In `consumes` order.
+    pub(crate) spend_allowances: Vec<(usize, u64)>,
+    /// `(j, gap)` for each entry `j` of the task's `produces` whose pool an active goal covering
+    /// the task holds with a known gap (0 when met). In `produces` order.
+    pub(crate) gaps_remaining: Vec<(usize, u64)>,
+    /// The runs the allowances pay for, at most the runs a goal-driven gap still needs (the
+    /// function `run_cap` below says when there is one).
+    pub(crate) run_cap: Option<u64>,
+}
+
+impl SpendValues {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.spend_allowances.is_empty() && self.gaps_remaining.is_empty() && self.run_cap.is_none()
+    }
+
+    /// `outcome` with these values: `spend_allowances` and `gaps_remaining` as records of
+    /// `effect_index` and the amount, and `run_cap`; each only when there is one. An amount above
+    /// the key table's integer range is recorded as its largest value, `i64::MAX`.
+    pub(crate) fn add_to(&self, mut outcome: Outcome) -> Outcome {
+        if !self.spend_allowances.is_empty() {
+            outcome = outcome.spend_allowances(self.spend_allowances.iter().map(
+                |&(index, allowance)| {
+                    Record::new()
+                        .effect_index(index)
+                        .spend_allowance(saturated_integer(allowance))
+                },
+            ));
+        }
+        if !self.gaps_remaining.is_empty() {
+            outcome = outcome.gaps_remaining(self.gaps_remaining.iter().map(|&(index, gap)| {
+                Record::new()
+                    .effect_index(index)
+                    .gap_remaining(saturated_integer(gap))
+            }));
+        }
+        if let Some(run_cap) = self.run_cap {
+            outcome = outcome.run_cap(saturated_integer(run_cap));
+        }
+        outcome
+    }
+}
+
+/// `value` within the key table's integer range: `i64::MAX` above it.
+fn saturated_integer(value: u64) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
+
+/// SS-6: the [`SpendValues`] of a selected dispatch of `task`. `views` are the reserve views the
+/// reserve gate judged the candidate by (`None` when the task declares no reserves), so the
+/// allowance reads the gate's own projection at the same evaluation instant: an allowance below
+/// the task's declared consumption of the pool, 0 included, is a candidate the gate holds
+/// (`after = projected − consumes < at_least`). `pools` are the catalog's pools, for their base
+/// weight; `gap` answers the active goal's gap on a pool for the task
+/// ([`InstanceTargets::goal_gap`]). Integer arithmetic only, saturating: nothing panics or wraps.
+pub(crate) fn spend_values(
+    task: &TaskSpec,
+    views: Option<&[ReserveView]>,
+    pools: &[PoolSpec],
+    gap: impl Fn(&str) -> Option<u64>,
+) -> SpendValues {
+    let spend_allowances = task
+        .consumes
+        .iter()
+        .enumerate()
+        .filter_map(|(index, effect)| {
+            reserve_view(views, &effect.pool_id)
+                .and_then(spend_allowance)
+                .map(|allowance| (index, allowance))
+        })
+        .collect();
+    let gaps_remaining = task
+        .produces
+        .iter()
+        .enumerate()
+        .filter_map(|(index, effect)| gap(&effect.pool_id).map(|gap| (index, gap)))
+        .collect();
+    SpendValues {
+        spend_allowances,
+        gaps_remaining,
+        run_cap: run_cap(task, views, pools, &gap),
+    }
+}
+
+/// The view of `pool_id` among a candidate's reserve views.
+fn reserve_view<'a>(views: Option<&'a [ReserveView]>, pool_id: &str) -> Option<&'a ReserveView> {
+    views
+        .into_iter()
+        .flatten()
+        .find(|view| view.pool_id == pool_id)
+}
+
+/// The allowance of one reserved pool: its projected amount less `at_least`, at least 0;
+/// `None` while the projected amount is unknown.
+fn spend_allowance(view: &ReserveView) -> Option<u64> {
+    view.projected
+        .map(|projected| projected.saturating_sub(view.at_least))
+}
+
+/// The sum of the declared integer per-run `amount`s of `effects` on `pool_id`; `None` when one
+/// of them declares none (an `expected_amount_milli` production) or the sum is 0. The sum
+/// saturates.
+fn declared_amount(effects: &[ResourceEffectSpec], pool_id: &str) -> Option<u64> {
+    effects
+        .iter()
+        .filter(|effect| effect.pool_id == pool_id)
+        .try_fold(0_u64, |sum, effect| {
+            effect.amount.map(|amount| sum.saturating_add(amount))
+        })
+        .filter(|amount| *amount > 0)
+}
+
+/// SS-6 `run_cap`: the least, over the pools of the task's `consumes` that it also reserves,
+/// of ⌊allowance / the task's declared consumption of the pool per run⌋; and, for each pool of
+/// its `produces` that is goal-driven (no base weight: no `valuation`, or a
+/// `base_weight_milli` of 0) and whose goal gap is open, at most ⌈gap / the task's declared
+/// production of the pool per run⌉. A met goal (gap 0) caps nothing (ruling 102: it only stops
+/// adding score). `None` when the task reserves none of the pools it consumes, when one such
+/// pool's projected amount is unknown, or when a declaration it needs is incomplete: a consumed
+/// or goal-driven produced pool without an integer per-run `amount` on every entry.
+fn run_cap(
+    task: &TaskSpec,
+    views: Option<&[ReserveView]>,
+    pools: &[PoolSpec],
+    gap: &impl Fn(&str) -> Option<u64>,
+) -> Option<u64> {
+    let mut seen = BTreeSet::new();
+    let mut cap: Option<u64> = None;
+    for effect in &task.consumes {
+        if !seen.insert(effect.pool_id.as_str()) {
+            continue;
+        }
+        let Some(view) = reserve_view(views, &effect.pool_id) else {
+            continue;
+        };
+        let allowance = spend_allowance(view)?;
+        let per_run = declared_amount(&task.consumes, &effect.pool_id)?;
+        let runs = allowance / per_run;
+        cap = Some(cap.map_or(runs, |cap| cap.min(runs)));
+    }
+    let mut cap = cap?;
+    seen.clear();
+    for effect in &task.produces {
+        if !seen.insert(effect.pool_id.as_str()) {
+            continue;
+        }
+        let base_weight_milli = pools
+            .iter()
+            .find(|pool| pool.id == effect.pool_id)
+            .and_then(|pool| pool.valuation.as_ref())
+            .map_or(0, |valuation| valuation.base_weight_milli);
+        if base_weight_milli > 0 {
+            continue;
+        }
+        let Some(gap) = gap(&effect.pool_id).filter(|gap| *gap > 0) else {
+            continue;
+        };
+        let per_run = declared_amount(&task.produces, &effect.pool_id)?;
+        cap = cap.min(gap.div_ceil(per_run));
+    }
+    Some(cap)
+}
+// ---- SS-6: end ----

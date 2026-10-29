@@ -273,6 +273,44 @@ For a blocked pair whose key K declares `need` N and `capabilities` C:
   Lab's single-step evaluations) and a dispatch of a task that does not opt in hold none: a
   package policy that reads one meets an unknown fact and its `on_unknown` decides. No package
   format changes; a package declares nothing to read them.
+- **Spend values (SS-6, since 0.12.31; register §1.218).** Alice's ruling 100 (#386 comment
+  6490879952: dispatch follows live account state, there is no "run task X N times") and ruling
+  106 (do the highest-weight consuming task; until time joins the model the reserve line is the
+  backstop). The Runtime knows how much may be spent and how much is still missing; the package
+  reads the unit price and the dialog's cap on its screen. So every selected policy dispatch of a
+  V2 task that reserves a pool it consumes, or that produces a pool an active resource goal
+  covers, carries these values on the same `policy_dispatch_parameters` reason, **with no
+  opt-in** (`dispatch_parameters` is not needed; a reason of these values alone when the dispatch
+  carries nothing else, which leaves the package's parameters at their declared defaults), each
+  only when it is known:
+
+  | Key the run reads | Recorded as | Value |
+  |---|---|---|
+  | `spend_allowance.<i>` | `spend_allowances` records `{effect_index: i, spend_allowance}` | for the entry `i` (from 0) of the task's own `consumes` whose pool the task also lists in `reserves`: the pool's projected amount at the evaluation less that reserve's `at_least`, at least 0. The projection is the one the reserve gate judges the candidate by, at the same evaluation instant ([scheduling/README.md](scheduling/README.md), "Task Reserves"), so the gate holds every candidate whose allowance is below its declared consumption of the pool, 0 included, and a dispatched candidate's allowance always pays for at least one run. Absent for a consumed pool without a reserve, for a reserve on a pool the task does not consume, and while the projection is unknown (the gate holds the candidate then). A task without `reserves` has none. |
+  | `gap_remaining.<j>` | `gaps_remaining` records `{effect_index: j, gap_remaining}` | for the entry `j` (from 0) of the task's own `produces`: the gap of the active resource goal on its pool that covers the task, in the pool's real units ([resource-targets.md](resource-targets.md): under a v2 policy the target on the pool that covers the task as its shortfall weight does; under v1 the target that names the task, on its pool); 0 when the goal is met. Absent without an active goal (no record, a withdrawn, expired or unreadable one) and while the goal's gap is unknown (its inventory pending, its weight unresolved): absent means unknown. |
+  | `run_cap` | `run_cap` | the runs the allowances pay for: over the pools of the task's `consumes` that it also reserves, the least ⌊allowance / the task's declared consumption of the pool per run⌋ (the sum of its `consumes` `amount`s for the pool, as the gate reads it). Then, for each pool of its `produces` that is goal-driven (it has no base weight: no `valuation`, or a `base_weight_milli` of 0) and whose `gap_remaining` is above 0, at most ⌈gap / the task's declared production of the pool per run⌉ (the sum of its `produces` `amount`s for the pool). A met goal (gap 0) caps nothing: ruling 102, a met goal only stops adding score. Absent when the task reserves none of the pools it consumes, when one such pool's projection is unknown, and when a declaration it needs is incomplete: a goal-driven produced pool with an open gap that some `produces` entry declares by `expected_amount_milli` instead of an integer `amount`. |
+
+  Integer arithmetic only, saturating, never a panic: an amount above the key table's integer
+  range is recorded as `i64::MAX`. The values come from the pools' state and the task's own
+  declarations alone (one-way: the resource layer reads no task enablement, override, priority,
+  offset or run state). The host overlays each as the record `session.dispatch.schedule.<key>`
+  (`integer`; instance scope; confidence 1000; observed at the dispatch's admission; no expiry), after
+  Workflow #411 B8's values, never stored. The longest key, `session.dispatch.schedule.spend_allowance.127`
+  (a task lists at most 128 `consumes` and 128 `produces`), is 45 bytes; the binding limit is the
+  128 bytes a selection-policy document and an outcome key allow
+  ([selection-policy.md](selection-policy.md), "Limits"; the instance fact store itself allows
+  192). Indices, not pool ids, keep the keys within it. A record list keeps at most 64 records
+  (the outcome list limit); a task with more than 64 such entries hands the first 64 and records
+  `spend_allowances_total` or `gaps_remaining_total`, and its later keys are absent.
+
+  A package reads them as it reads B8's values: `designated_effects[].max_repeats: {"fact_key":
+  "session.dispatch.schedule.run_cap"}` ([resource-declarations.md](resource-declarations.md),
+  "Fact caps": an unexpired integer from 0 to 1,000; a missing key, or a run cap above 1,000,
+  ends the run before any input with `contained_task_designated_effect_cap_unresolved`, as
+  today), or as an integer fact of a selection strategy. A run without a dispatch, and a dispatch
+  of a task with none of these declarations, holds none of them: its reason chain is the one of
+  before, byte for byte. No package format change, no catalog member, no configuration key and
+  no outcome code is added.
 
 ## 5 Scheduler flow
 
@@ -541,7 +579,7 @@ the expected one is the key's remedy declaration. No third effect value is neede
 | `policy_remedy_exhausted` | policy | warning | as `policy_remedy_unchosen`, and `count`, `limit_count`, `remedy_depth` | R2, R4 |
 | `policy_remedy_lifted` | policy | info | `task_id`, `instance_id`, `decision_id`, `remedy_inputs_digest` | R2, R4 |
 | `policy_remedy_expired` | policy | warning | `task_id`, `instance_id`, `decision_id`, `outcome_key`, `need`, `window_end_unix_ms` (`gate_code`) | R2, R4 |
-| `policy_dispatch_parameters` | policy | info | (`run_parameters`, and Workflow #411 B8's `next_occurrence_unix_ms`, `window_end_unix_ms`, `last_in_window`, `last_daily_slot`, `daily_remaining`) | R2, B8 |
+| `policy_dispatch_parameters` | policy | info | (`run_parameters`, and Workflow #411 B8's `next_occurrence_unix_ms`, `window_end_unix_ms`, `last_in_window`, `last_daily_slot`, `daily_remaining`, and SS-6's `spend_allowances`, `gaps_remaining`, `run_cap`) | R2, B8, SS-6 |
 | `policy_remedy_round_closed` | runtime-host | info | `task_id`, `instance_id`, `decision_id` | R4 |
 | `policy_remedy_declaration_unusable` | runtime-host | warning | `remedy_problem` (`task_id`, `outcome_key`, `need`, `capability`, `instance_id`, `package_id`: a finding on a blocked mapping names all of `task_id`, `outcome_key` and `need`; a configuration row with an unknown need names `need` only of the three; a `parameter` row names none of them, and the developer detail names the row) | R7 |
 | `session_remedy_choices_invalid` | runtime-host | error | `fact_key`, `field` (`instance_id`) | R6 |
@@ -561,3 +599,8 @@ package format's refusals reuse `invalid_scheduling_outcome_declaration` (with t
 Workflow #411 B8 adds the keys `last_in_window`, `last_daily_slot` (booleans) and
 `daily_remaining` (integer), and makes `run_parameters` optional on `policy_dispatch_parameters`
 (a pending entry); its other two values reuse `next_occurrence_unix_ms` and `window_end_unix_ms`.
+
+SS-6 (since 0.12.31) adds the keys `run_cap`, `effect_index`, `spend_allowance`, `gap_remaining`
+(integers), `spend_allowances` (records of `effect_index`, `spend_allowance`) and
+`gaps_remaining` (records of `effect_index`, `gap_remaining`), the last two and `run_cap` as
+optional values of the pending entry `policy_dispatch_parameters`; no new code.

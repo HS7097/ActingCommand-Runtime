@@ -591,3 +591,63 @@ fn out2_a_fact_cap_is_read_once_before_the_first_step() {
         );
     }
 }
+
+// SS-6 work order test 6 (0.12.31; register §1.218; contracts/remedies.md section 4), the fact
+// cap above extended to the dispatch's run cap: a package's
+// `max_repeats: {"fact_key": "session.dispatch.schedule.run_cap"}` reads the same number as the
+// `run_cap` its policy dispatch carries. The snapshot the run reads is the one the host gives it:
+// the instance's records with the run's overlay of its dispatch's schedule values, here `run_cap`
+// alone (`RunParameters::with_dispatch_schedule`, then `overlay`). A run cap of 3 collects three
+// times; one of 0 runs no collect, as a fact cap of 0 does.
+#[test]
+fn ss6_t6_a_fact_cap_on_the_run_cap_reads_the_dispatch_run_cap() {
+    const RUN_CAP_KEY: &str = "session.dispatch.schedule.run_cap";
+    let capped = || {
+        task(
+            loop_operations(),
+            declaration(json!([{"operation_id": "collect",
+                "max_repeats": {"fact_key": RUN_CAP_KEY}}])),
+        )
+    };
+    for run_cap in [3_u32, 0] {
+        let mut snapshot = InstanceFactSnapshot {
+            snapshot_id: "snapshot:ss6".to_owned(),
+            ledger_position: 1,
+            context: InstanceFactContext {
+                instance_id: "neutral.instance".to_owned(),
+                server_id: "test".to_owned(),
+                game_id: "neutral".to_owned(),
+            },
+            records: Vec::new(),
+        };
+        capped()
+            .default_run_parameters()
+            .with_dispatch_schedule(
+                vec![("run_cap".to_owned(), FactValue::Integer(i64::from(run_cap)))],
+                NOW_UNIX_MS - 1_000,
+            )
+            .overlay(&mut snapshot, NOW_UNIX_MS);
+        assert_eq!(
+            snapshot
+                .records
+                .iter()
+                .map(|record| record.key.as_str())
+                .collect::<Vec<_>>(),
+            [RUN_CAP_KEY],
+            "run cap {run_cap}"
+        );
+        let collects = usize::try_from(run_cap).expect("a count");
+        let mut screens = vec![Screen::Home; collects + 1];
+        screens.push(Screen::Terminal);
+        let mut runtime = ScriptedRuntime::new(screens, Facts::Records(snapshot.records));
+        let ended = succeeded(capped().run(&mut runtime));
+        assert_eq!(runtime.effects_of("collect"), collects, "run cap {run_cap}");
+        assert_eq!(runtime.effects_of("leave"), 1, "run cap {run_cap}");
+        assert_eq!(runtime.fact_reads, 1, "run cap {run_cap}");
+        assert_eq!(
+            caps(&ended),
+            vec![("collect".to_owned(), run_cap)],
+            "run cap {run_cap}"
+        );
+    }
+}
