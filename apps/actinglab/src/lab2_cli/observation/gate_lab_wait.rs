@@ -158,7 +158,8 @@ fn lab_wait_a_wait_step_to_a_page_set_loads_and_its_destinations_are_the_kernels
 
 // A click step `branch` from `home` whose `to` is the page set is listed with every page it may
 // reach and its declared click; the same step without its click (and without `wait`) is refused
-// with `missing field 'click'`, as before.
+// while the package loads: pack containment finds `/operations/0/click` missing, so the package
+// never reaches observe.
 #[test]
 fn lab_wait_a_click_step_to_a_page_set_still_requires_its_click() {
     let click = json!({"kind": "point", "x": 1, "y": 0});
@@ -200,13 +201,11 @@ fn lab_wait_a_click_step_to_a_page_set_still_requires_its_click() {
         .as_object_mut()
         .expect("operation object")
         .remove("click");
-    let bundle = observed("without its click", &package(vec![without_click]));
-    let Err(error) = crate::contained_resources::observation_resources(&bundle) else {
-        panic!("a click step to a page set without its click is admitted");
-    };
-    assert!(
-        error.message.contains("missing field 'click'"),
-        "{}",
-        error.message
-    );
+    let bytes = package(vec![without_click]);
+    let error = ExternallyVerifiedBundle::load("semantic_observe", &bytes)
+        .expect_err("a click step to a page set without its click is admitted");
+    let refusal = "resource declaration resources/operations/task/task.json field \
+                   /operations/0/click is not consumable: MissingField";
+    let message = error.to_string();
+    assert!(message.contains(refusal), "{message}");
 }
