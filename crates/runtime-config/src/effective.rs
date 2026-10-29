@@ -4,6 +4,13 @@
 //! assembled (the configuration manifest) with the instruction layer over it. An instruction
 //! changes only a settable key, takes effect at once and is kept as one `host.config_overrides`
 //! row; a start restores the rows by the "later change wins" rule of §12 question 3.
+//!
+//! Workflow #429 R-1 (A.6 rule 4, since 0.12.31): a key whose default is none (`DefaultSource::
+//! None`) is a key of the configuration whether or not the file writes it, once its instance (a
+//! per-instance key) or its section (an exact key) is: an instruction may set it over no base,
+//! recorded as `base_source` `default` with `base_json` `null`. Such a setting holds no file
+//! value and lives only while an instruction value is set; a start keeps that value while the
+//! file still does not write the key, and voids it (`config_override_superseded`) once it does.
 
 use crate::codes::{ConfigCode, ConfigValueProblem};
 use crate::defaults::shipped_scalar;
@@ -53,6 +60,11 @@ pub const OVERRIDE_SET_IN_OWNER_EPOCH: &str = "set_in_owner_epoch";
 pub const OVERRIDE_REQUEST_ID: &str = "request_id";
 /// The row field naming the channel the instruction came through (written from U-2 on).
 pub const OVERRIDE_CHANNEL: &str = "channel";
+
+/// Workflow #429 R-1: the `base_json` of an instruction value set over a key the file does not
+/// write, whose default is none: the canonical JSON of no value. No value of any key type is
+/// this text (a key's value is a boolean, a number, a string, a list or an object).
+const ABSENT_BASE_JSON: &str = "null";
 
 /// The device layer's own bounds of the steps a recovery ladder's rungs take (M387 §4.2), in
 /// milliseconds: a rung configured shorter than the device would time out every time, so the
@@ -274,15 +286,23 @@ struct Setting {
     key: String,
     row: &'static KeyRow,
     instance: Option<String>,
-    file_value: FactScalar,
+    /// The file-layer value; `None` (Workflow #429 R-1) for a key whose default is none that the
+    /// file does not write, a setting that exists only while an instruction value is set.
+    file_value: Option<FactScalar>,
     file_source: ConfigParameterSource,
     instruction: Option<InstructionValue>,
 }
 
 impl Setting {
-    /// The canonical JSON of the file-layer value.
+    /// The canonical JSON of the file-layer value; (Workflow #429 R-1) `null` for a key the file
+    /// does not write.
     fn file_json(&self) -> Option<String> {
-        scalar_json(self.row.value_type, &self.file_value).map(|value| canonical_json(&value))
+        match &self.file_value {
+            None => Some(ABSENT_BASE_JSON.to_owned()),
+            Some(value) => {
+                scalar_json(self.row.value_type, value).map(|value| canonical_json(&value))
+            }
+        }
     }
 }
 
@@ -342,7 +362,7 @@ impl EffectiveConfig {
                     key: parameter.key.clone(),
                     row,
                     instance: instance.map(str::to_owned),
-                    file_value: parameter.value.clone(),
+                    file_value: Some(parameter.value.clone()),
                     file_source: parameter.source,
                     instruction: None,
                 })
@@ -372,7 +392,7 @@ impl EffectiveConfig {
             parameters: self
                 .settings
                 .iter()
-                .map(|setting| self.parameter(setting))
+                .filter_map(|setting| self.parameter(setting))
                 .collect(),
         }
     }
@@ -380,10 +400,14 @@ impl EffectiveConfig {
     /// A setting's value in effect and its source: its instruction value; otherwise, for a key
     /// whose default is a section-level key and that the file does not name, that key's
     /// instruction value (Workflow #387 D1c, §5.5 `section:` takes the section key's value in
-    /// effect); otherwise its file-layer value.
-    fn effective<'a>(&'a self, setting: &'a Setting) -> (&'a FactScalar, ConfigParameterSource) {
+    /// effect); otherwise its file-layer value. `None` (Workflow #429 R-1) for a key the file
+    /// does not write and no instruction sets: it is not in effect.
+    fn effective<'a>(
+        &'a self,
+        setting: &'a Setting,
+    ) -> Option<(&'a FactScalar, ConfigParameterSource)> {
         if let Some(instruction) = &setting.instruction {
-            return (&instruction.value, ConfigParameterSource::Instruction);
+            return Some((&instruction.value, ConfigParameterSource::Instruction));
         }
         if setting.file_source == ConfigParameterSource::Default
             && let DefaultSource::Section(section_key) = setting.row.default
@@ -391,24 +415,29 @@ impl EffectiveConfig {
                 .setting(section_key)
                 .and_then(|section| section.instruction.as_ref())
         {
-            return (&instruction.value, ConfigParameterSource::Default);
+            return Some((&instruction.value, ConfigParameterSource::Default));
         }
-        (&setting.file_value, setting.file_source)
+        setting
+            .file_value
+            .as_ref()
+            .map(|value| (value, setting.file_source))
     }
 
-    fn parameter(&self, setting: &Setting) -> ConfigParameter {
-        let (value, source) = self.effective(setting);
-        ConfigParameter {
+    fn parameter(&self, setting: &Setting) -> Option<ConfigParameter> {
+        let (value, source) = self.effective(setting)?;
+        Some(ConfigParameter {
             key: setting.key.clone(),
             value: value.clone(),
             source,
             settable: setting.row.settable.is_settable(),
-        }
+        })
     }
 
     /// The effective value of `key`, when the configuration has the key.
     pub fn value(&self, key: &str) -> Option<&FactScalar> {
-        self.setting(key).map(|setting| self.effective(setting).0)
+        self.setting(key)
+            .and_then(|setting| self.effective(setting))
+            .map(|(value, _)| value)
     }
 
     /// The effective value of `key`, or the defaults file's when the configuration does not
@@ -426,8 +455,9 @@ impl EffectiveConfig {
         for setting in &self.settings {
             if setting.row.name == KeyName::PerInstance(instance::RECOVERY_LADDER_PROFILE)
                 && let Some(instance) = setting.instance.as_deref()
+                && let Some((profile, _)) = self.effective(setting)
             {
-                ladder.bind_instance_profile(instance, self.effective(setting).0)?;
+                ladder.bind_instance_profile(instance, profile)?;
             }
         }
         Ok(ladder)
@@ -475,7 +505,8 @@ impl EffectiveConfig {
     ) -> Result<performance::PerformanceMeasurement, ConfigFailure> {
         let user_curve = self
             .setting(performance::pacing::CURVE)
-            .is_some_and(|setting| self.effective(setting).1 != ConfigParameterSource::Default);
+            .and_then(|setting| self.effective(setting))
+            .is_some_and(|(_, source)| source != ConfigParameterSource::Default);
         performance::measurement(&|key: &str| self.value_or_shipped(key), user_curve)
     }
 
@@ -694,7 +725,10 @@ impl EffectiveConfig {
     /// Applies one `ConfigureSettings`, all changes or none (§5.6): every key in the key table
     /// (`config_key_unknown`), settable (`config_key_not_settable`), each value of the key's
     /// type and range and every changed section whole (`config_value_invalid`). A change without
-    /// a value returns the key to its file-layer value.
+    /// a value returns the key to its file-layer value. Workflow #429 R-1: a key whose default is
+    /// none is in the configuration once its instance or section is, so an instruction sets it
+    /// whether or not the file writes it (over `base_json` `null` when it does not); clearing it
+    /// then leaves the key unset, and its receipt entry is `null` (text) from `default`.
     pub fn apply(
         &self,
         changes: &[ConfigSettingChange],
@@ -711,13 +745,10 @@ impl EffectiveConfig {
                     ConfigValueProblem::RepeatedKey,
                 ));
             }
-            let setting = next
-                .settings
-                .iter_mut()
-                .find(|setting| setting.key == change.key)
-                .ok_or_else(|| {
-                    ConfigFailure::new(ConfigCode::ConfigKeyUnknown, change.key.clone())
-                })?;
+            let at = next.setting_position(&change.key).ok_or_else(|| {
+                ConfigFailure::new(ConfigCode::ConfigKeyUnknown, change.key.clone())
+            })?;
+            let setting = &mut next.settings[at];
             if !setting.row.settable.is_settable() {
                 return Err(ConfigFailure::new(
                     ConfigCode::ConfigKeyNotSettable,
@@ -754,22 +785,34 @@ impl EffectiveConfig {
                 }
             }
         }
+        next.drop_unset_unwritten();
         next.check_sections(&sections, context)
             .map_err(ConfigFailure::into_instruction)?;
         let settings = changes
             .iter()
             .map(|change| {
-                let setting = next.setting(&change.key).ok_or_else(|| {
-                    ConfigFailure::new(ConfigCode::ConfigKeyUnknown, change.key.clone())
-                })?;
-                let (value, source) = next.effective(setting);
-                Ok(ConfiguredSetting {
+                // Every key passed the checks above, so a key without a value in effect is one
+                // whose default is none that the file does not write and this request cleared
+                // (Workflow #429 R-1): `null`, the `base_json` its instruction was set over.
+                let (value, source) = next
+                    .setting(&change.key)
+                    .and_then(|setting| next.effective(setting))
+                    .map_or_else(
+                        || {
+                            (
+                                FactScalar::String(ABSENT_BASE_JSON.to_owned()),
+                                ConfigParameterSource::Default,
+                            )
+                        },
+                        |(value, source)| (value.clone(), source),
+                    );
+                ConfiguredSetting {
                     key: change.key.clone(),
-                    value: value.clone(),
+                    value,
                     source,
-                })
+                }
             })
-            .collect::<Result<Vec<_>, ConfigFailure>>()?;
+            .collect::<Vec<_>>();
         Ok(AppliedSettings {
             config: next,
             settings,
@@ -914,6 +957,12 @@ impl EffectiveConfig {
     ///   with the new default as what it overrides (`config_override_base_changed`);
     /// - otherwise: kept as it was.
     ///
+    /// Workflow #429 R-1: a key whose default is none that the file does not write is still a key
+    /// of the configuration while its instance or section is, its base `null`; so a value set over
+    /// it (`base_source` `default`, `base_json` `null`) is kept while the file still does not
+    /// write the key and superseded once it does, and a value set over an explicit value the file
+    /// no longer writes is superseded.
+    ///
     /// The restored values then pass the whole-section check of their sections with this
     /// start's file layer (§5.3); a section that fails it drops every value restored into it
     /// (`config_override_dropped`). A record not of the shape this build writes is refused
@@ -935,14 +984,11 @@ impl EffectiveConfig {
                 note: code,
                 config_key: recorded.config_key.clone(),
             };
-            let Some(setting) = self
-                .settings
-                .iter_mut()
-                .find(|setting| setting.key == recorded.config_key)
-            else {
+            let Some(at) = self.setting_position(&recorded.config_key) else {
                 notes.push(note(ConfigCode::ConfigOverrideDropped));
                 continue;
             };
+            let setting = &mut self.settings[at];
             let value = serde_json::from_str::<Value>(&recorded.value_json)
                 .ok()
                 .and_then(|value| {
@@ -1004,7 +1050,54 @@ impl EffectiveConfig {
                 }
             }
         }
+        self.drop_unset_unwritten();
         Ok(notes)
+    }
+
+    /// Workflow #429 R-1 (A.6 rule 4): the position of `key`'s setting. A key whose default is
+    /// none that the file does not write gets a setting without a file value first, when the key
+    /// table has it and its instance (a per-instance key) or its section (an exact key) is in the
+    /// configuration; it goes among that instance's or section's keys at its key-table place,
+    /// where the file layer would have put it. `None` for any other key not in the configuration.
+    fn setting_position(&mut self, key: &str) -> Option<usize> {
+        if let Some(at) = self.settings.iter().position(|setting| setting.key == key) {
+            return Some(at);
+        }
+        let (row, instance) = find_row(key)?;
+        if row.default != DefaultSource::None {
+            return None;
+        }
+        let section = config_parameter_section(key);
+        let together = |setting: &Setting| match instance {
+            Some(instance) => setting.instance.as_deref() == Some(instance),
+            None => setting.instance.is_none() && config_parameter_section(&setting.key) == section,
+        };
+        let last = self.settings.iter().rposition(&together)?;
+        let place = |row: &KeyRow| rows().position(|other| other.name == row.name);
+        let at = self
+            .settings
+            .iter()
+            .position(|setting| together(setting) && place(setting.row) > place(row))
+            .unwrap_or(last + 1);
+        self.settings.insert(
+            at,
+            Setting {
+                key: key.to_owned(),
+                row,
+                instance: instance.map(str::to_owned),
+                file_value: None,
+                file_source: ConfigParameterSource::Default,
+                instruction: None,
+            },
+        );
+        Some(at)
+    }
+
+    /// Workflow #429 R-1: forgets each setting of a key the file does not write that no
+    /// instruction value sets any more; such a key is not in effect.
+    fn drop_unset_unwritten(&mut self) {
+        self.settings
+            .retain(|setting| setting.file_value.is_some() || setting.instruction.is_some());
     }
 }
 
@@ -1020,8 +1113,9 @@ fn base_source(file_source: ConfigParameterSource) -> ConfigParameterSource {
     }
 }
 
-/// One recorded `host.config_overrides` row.
-struct RecordedOverride {
+/// One recorded `host.config_overrides` row. Workflow #429 R-1: the row parser is unchanged since
+/// 0.12.30, so the rollback test reads the rows R-1 writes with it as 0.12.30 does.
+pub(crate) struct RecordedOverride {
     config_key: String,
     value_json: String,
     base_json: String,
@@ -1030,7 +1124,7 @@ struct RecordedOverride {
 }
 
 impl RecordedOverride {
-    fn parse(row: &BTreeMap<String, FactScalar>) -> Result<Self, OverridesInvalid> {
+    pub(crate) fn parse(row: &BTreeMap<String, FactScalar>) -> Result<Self, OverridesInvalid> {
         const FIELDS: [&str; 8] = [
             OVERRIDE_CONFIG_KEY,
             OVERRIDE_VALUE_JSON,

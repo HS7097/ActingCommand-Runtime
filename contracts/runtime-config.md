@@ -220,8 +220,9 @@ every trigger item's start rung and `trigger_defaults.start_rung` lie within eve
 rungs (`start_rung_out_of_range` on `recovery_ladder.profiles.<name>`). A profile set or object
 the file names replaces the default whole, as a list does, so a file whose `profiles` leave out
 `handset` is refused unless its `kind_profiles` no longer name it. The per-instance `recovery_ladder_profile` (string, the
-entry's member, default `none`: reported only for an instance that names it) is settable; a
-ladder takes the instance's profile with the section's snapshot when it is admitted.
+entry's member, default `none`: reported only for an instance that names it or, since 0.12.31
+(Workflow #429 R-1, "Keys the file does not write"), that an instruction sets it for) is
+settable; a ladder takes the instance's profile with the section's snapshot when it is admitted.
 
 The digest a ladder records (`recovery_ladder_started` `config_digest`) is the SHA-256 of the
 canonical JSON of the section's values in effect when the ladder was admitted; a ladder climbs by
@@ -304,7 +305,7 @@ configuration nor any installer writes a performance key.
 |---|---|---|
 | `performance.monitor.*`, `performance.load.*`, `performance.pressure.*`, `performance.pressure_start_samples`, `performance.pressure_end_samples` (`src/performance/monitor.rs`) | PERF §10.1, 15 keys: sampling period (1 000..=5 000 ms), context window, summary interval, sample bounds, process coverage, failures, control freshness, stutter gap, heavy load threshold, the two pressure streaks (1..=30), `pressure.thresholds` and `pressure.severity` (objects), `pressure.gpu_aggregate` (`max_engine_type` \| `sum`) | every key, read once by the start-up assembly (`MonitorSettings`, Workflow #385 PM-CFG) and handed to the performance monitor, its host sampler (process thresholds and coverage) and the performance controller (`load.heavy_threshold_milli`, which the controller's resource overlay hands to the policy evaluator, so both judge heavy work by it); the streaks keep their file members |
 | `performance.responsiveness.*` (`src/performance/responsiveness.rs`) | PERF §10.2, 37 keys: window, smoothing, staleness, the timer and message probes, the capture, touch, recognition and page-settle signals (per-backend initial baselines are objects with a `default` member), the baseline | P-m |
-| `performance.pacing.*` (`src/performance/pacing.rs`) | PERF §10.3, 26 keys: `mode` (`observe` \| `pace` \| `full`, default `observe` in every release), `interpolate`, `curve` (a list of at most 70 points), the factor cap, hysteresis and sustains, pause timing, waits and gaps, `pressure_floor.*`, `tax_exempt_from_stage`, `heavy_dispatch_limit.normal` / `.paused`, `clock_jump_ms`, `hold.*`, `pause_probe.*`; and Workflow #427-B's optional `max_concurrent_runs` (an integer `1..=65535`, **no default**: a configuration that does not name it has no such limit and no `config.parameters` row; since 0.12.22) | `heavy_dispatch_limit.*`, `max_concurrent_runs` and `clock_jump_ms`: the performance controller, handed over by the start-up assembly (P-c; before, code constants; `max_concurrent_runs` from #427-B, which the policy host hands to every evaluation: at most that many policy dispatches admitted or running across every instance, those chosen earlier in the round included; `1` runs one at a time; [scheduling/README.md](scheduling/README.md), "Shared Run Limits"); `pre_input_wait_base_ms`, `curve[].extra_retries` and `pressure_floor.extra_retries`: P-k (the pre-input wait and the extra wait rounds each step is handed, Workflow #385 P-k S5); the rest: P-m, P-k, P-s, P-h |
+| `performance.pacing.*` (`src/performance/pacing.rs`) | PERF §10.3, 26 keys: `mode` (`observe` \| `pace` \| `full`, default `observe` in every release), `interpolate`, `curve` (a list of at most 70 points), the factor cap, hysteresis and sustains, pause timing, waits and gaps, `pressure_floor.*`, `tax_exempt_from_stage`, `heavy_dispatch_limit.normal` / `.paused`, `clock_jump_ms`, `hold.*`, `pause_probe.*`; and Workflow #427-B's optional `max_concurrent_runs` (an integer `1..=65535`, **no default**: a configuration that does not name it has no such limit and no `config.parameters` row; since 0.12.22; read once at assembly, so an instruction naming it is `config_key_not_settable` whether or not the file names it, since 0.12.31 also when it does not, Workflow #429 R-1) | `heavy_dispatch_limit.*`, `max_concurrent_runs` and `clock_jump_ms`: the performance controller, handed over by the start-up assembly (P-c; before, code constants; `max_concurrent_runs` from #427-B, which the policy host hands to every evaluation: at most that many policy dispatches admitted or running across every instance, those chosen earlier in the round included; `1` runs one at a time; [scheduling/README.md](scheduling/README.md), "Shared Run Limits"); `pre_input_wait_base_ms`, `curve[].extra_retries` and `pressure_floor.extra_retries`: P-k (the pre-input wait and the extra wait rounds each step is handed, Workflow #385 P-k S5); the rest: P-m, P-k, P-s, P-h |
 | `performance.calibration.*` (`src/performance/calibration.rs`) | PERF §10.4, 19 keys: `apply`, `band_bp`, `trouble_codes` (a list of catalog codes), the learning period, `learning_max_stage` (S0..=S4), the backstop, interval, minimum steps, `tolerance.s0` / `.s1` / `.s2` / `.stop`, `bounds.s1` to `bounds.s4` (`[min, max]` basis points; PERF's `bounds.S1`, lowercase since a key is a token), `max_shift_bp`, `pressure_max_stage` | P-a |
 
 - **Settable:** `performance.pacing.curve` and `performance.pacing.hold.*` (M387 §5.5); every other
@@ -355,8 +356,10 @@ maintenance package dispatches ([scheduling/README.md](scheduling/README.md), "F
 change takes effect from the next round. Workflow #384 D2-S5 reads `fact_refresh.overdue_ms`
 at every policy cycle: how long one instance's candidates may wait for one key before the
 transition recorder reports `fact_reader_overdue`; it has no default, so without it nothing is
-reported, and an instruction can change it only when the configuration file names it (an unset
-key has no value to replace, `config_key_unknown`). Workflow #336 PKG-S3 reads
+reported; an instruction can set it whether or not the configuration file names it (before
+0.12.31 only when the file named it, `config_key_unknown` otherwise), and clearing an
+instruction over a file that does not name it leaves it unset (Workflow #429 R-1, "Keys the file
+does not write"). Workflow #336 PKG-S3 reads
 `suspension.lift_check_min_interval_ms` at each suspension lift check: a package's content
 hash is measured at most once per interval ([policy-suspension.md](policy-suspension.md),
 "Lifting (R19)"). Workflow #386 SR-3 reads `pack_admission.check_in_check_config` in
@@ -1156,7 +1159,7 @@ All changes or none:
 
 | Check | Refusal (Denied) |
 |---|---|
-| the key is in the key table (a per-instance key of a configured instance) | `config_key_unknown` |
+| the key is in the key table (a per-instance key of a configured instance); a key whose default is `none` counts whether or not the file writes it, once its instance (a per-instance key) or its section (an exact key) is in the configuration (Workflow #429 R-1, since 0.12.31) | `config_key_unknown` |
 | the key is settable | `config_key_not_settable` |
 | the value has the key's type and range; no key is named twice; the changed sections pass their whole-section check | `config_value_invalid` (`config_value_problem`: `wrong_type`, `out_of_range`, `repeated_key`, `section_check`; `range_min`, `range_max` for a bounded key) |
 
@@ -1176,6 +1179,22 @@ The receipt of a refusal in the table above, or of that failure, carries the out
 Once it is recorded, a refused section record stops the Runtime; the next start restores the
 recorded values, so the ledger and the values in effect never part.
 
+**Keys the file does not write** (Workflow #429 R-1, design `429-A-runtime.md` A.6 rule 4, since
+0.12.31). A key whose default is `none` has no value while the file does not write it, and no
+`config.parameters` row. An instruction may still set it: the key's own checks apply unchanged
+(its type, its range, its section's whole-section check, and `config_key_not_settable` for a
+key that is not settable, whether or not the file writes it), and its `host.config_overrides`
+row records the base as absent, in the existing row shape: `base_source` `default`, `base_json`
+`null` (the JSON text; no value of any key is that text). The key then has a
+`config.parameters` row with source `instruction`. A change without a value returns it to no
+value: the row goes, and the receipt reports the key as `{key, value: "null" (string), source:
+default}`, the base it was set over, since nothing is in effect. Settable keys with no default
+today: the per-instance `scheduling.blackout` and `recovery_ladder_profile` and
+`scheduling.fact_refresh.overdue_ms`; the other keys with no default (`standard_packs.root`,
+`performance.pacing.max_concurrent_runs`, the per-instance `device_kind`,
+`recognition_package` and `start_emulator`) are read once at assembly and stay
+`config_key_not_settable`.
+
 ## Restore at start (M387 §12 question 3: the later change wins)
 
 Before any instance is prepared, each `host.config_overrides` row is compared with the file
@@ -1189,6 +1208,20 @@ layer of this start:
 | overrode a default | the file names the key now | dropped, `config_override_superseded` (info) |
 | overrode a default | the file still does not name it; the default is unchanged | kept |
 | overrode a default | the file still does not name it; the default changed | kept, over the new default, `config_override_base_changed` (warning) |
+| overrode a key the file did not write (`base_source` `default`, `base_json` `null`; R-1, since 0.12.31) | the file still does not write it | kept |
+| overrode a key the file did not write | the file writes it now | dropped, `config_override_superseded` (info) |
+
+Since 0.12.31 (R-1) a key whose default is `none` that the file does not write is still a key
+of the configuration while its instance or section is, its base `null`; so the two rows above
+apply to it, and a value that overrode an explicit value of such a key the file no longer
+writes is `config_override_superseded` (before 0.12.31 it was `config_override_dropped`, the key
+being gone). A key whose instance or section is gone is still dropped.
+
+**Rollback** (R-1). The rows R-1 writes have the existing row shape (the row parser is
+unchanged since 0.12.30), so a Runtime before 0.12.31 reads them: its configuration has no setting
+of a key the file does not write, so it drops each such row, `config_override_dropped`, listed in
+`StartReport`'s `instructions_dropped`, and never refuses the record. No `actingd-config`
+revision changes: the configuration file's format is unchanged.
 
 The restored values then pass the whole-section check of their sections with this start's file
 layer; a section that fails it drops every value restored into it (`config_override_dropped`).

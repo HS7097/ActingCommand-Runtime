@@ -8,6 +8,11 @@
 //!
 //! Workflow #411 B15 R3 (model-b15 §5.2; register §1.113): the remedy keys are settable and
 //! recorded as rows (host key 112).
+//!
+//! Workflow #429 R-1 (A.6 rule 4; register §1.219; since 0.12.31), tests 1 to 3: an instance
+//! whose file writes no blackout list of its own gets one by instruction and keeps it across a
+//! restart; clearing it leaves the instance with none; a file that writes the key later voids the
+//! instruction (`config_override_superseded`). Tests 4 to 6 are `runtime-config`'s `r1_tests`.
 
 use super::*;
 use actingcommand_contract::{
@@ -16,11 +21,12 @@ use actingcommand_contract::{
     config_parameters_fact_key,
 };
 use actingcommand_runtime_config::scheduling::{
-    REMEDY_CHOICES, REMEDY_ENABLED, REMEDY_MAX_PER_ROUND,
+    INSTANCE_BLACKOUT, REMEDY_CHOICES, REMEDY_ENABLED, REMEDY_MAX_PER_ROUND,
 };
 use actingcommand_runtime_config::{
     ConfigCode, DefaultsFile, OVERRIDE_BASE_JSON, OVERRIDE_BASE_SOURCE, OVERRIDE_CONFIG_KEY,
-    STUCK_RECOVERY, STUCK_RECOVERY_COOLDOWN_SECS, instance_key, mechanism_rows, render_parameters,
+    STUCK_RECOVERY, STUCK_RECOVERY_COOLDOWN_SECS, canonical_json, instance_key, mechanism_rows,
+    render_parameters,
 };
 use serde_json::{Value, json};
 
@@ -761,6 +767,276 @@ fn b15c_remedy_keys_are_settable_and_recorded_as_rows() {
             "{key}"
         );
     }
+    drop(client);
+    host.close().expect("close host");
+}
+
+// ---- Workflow #429 R-1 (A.6 rule 4; register §1.219; since 0.12.31): a key whose default is
+// none that the file does not write, the instance's own blackout list.
+
+/// The R-1 tests' first start, before the entry of `away` begins; each later start is a minute
+/// on. The clock is fixed: nothing here reads the system clock.
+const R1_START_MS: u64 = 1_700_000_000_000;
+
+/// A host of the fixture instance on `manifest`, its clock fixed at `at_unix_ms`.
+fn start_at(
+    root: &TempDir,
+    instance: InstanceId,
+    manifest: RuntimeConfigManifest,
+    at_unix_ms: u64,
+) -> RuntimeHost {
+    RuntimeHost::start(
+        config(root)
+            .with_config_manifest(manifest)
+            .with_runtime_clock(Arc::new(ManualRuntimeClock::new(at_unix_ms, 0))),
+        Arc::new(FakeProvider::one(
+            ALIAS,
+            instance,
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host")
+}
+
+/// The file layer of the instance `id`: its stuck-recovery cool-down, so the file configures
+/// the instance, and its own blackout list only when the file writes one.
+fn r1_file(id: &str, blackout: Option<&Value>) -> RuntimeConfigManifest {
+    let mut parameters = vec![parameter(
+        &instance_key(id, STUCK_RECOVERY_COOLDOWN_SECS),
+        FactScalar::Integer(600),
+        ConfigParameterSource::Default,
+    )];
+    if let Some(list) = blackout {
+        parameters.push(parameter(
+            &instance_key(id, INSTANCE_BLACKOUT),
+            FactScalar::String(canonical_json(list)),
+            ConfigParameterSource::Explicit,
+        ));
+    }
+    manifest(parameters)
+}
+
+/// An own blackout list of one `once` entry (`scheduling-blackout.md`).
+fn away() -> Value {
+    json!([{"kind": "once", "id": "away", "from_unix_ms": 1_800_000_000_000_u64,
+            "until_unix_ms": 1_800_003_600_000_u64}])
+}
+
+/// Whether `config.parameters.<section>` has a row of `key`.
+fn has_row(client: &mut TestClient, key: &str) -> bool {
+    let section = actingcommand_contract::config_parameter_section(key);
+    fact_rows(client, &config_parameters_fact_key(section))
+        .unwrap_or_default()
+        .iter()
+        .any(|row| row.get("key") == Some(&FactScalar::String(key.to_owned())))
+}
+
+// R-1 test 1 (with test 5's row shape as the host records it): an instance whose file writes
+// no blackout list of its own gets one by instruction. The receipt, `config.parameters.instance`
+// and the blackout input of the policy cycle carry it, and `host.config_overrides` holds one row
+// over the base `default` / `null`; the next start over the same file restores it with no note.
+#[test]
+fn r1_t1_an_instance_without_a_blackout_list_in_the_file_gets_one_online_that_survives_a_restart() {
+    let root = TempDir::new().expect("tempdir");
+    let instance = instance_id();
+    let id = instance_text(instance);
+    let blackout = instance_key(&id, INSTANCE_BLACKOUT);
+    let list = away();
+    let host = start_at(&root, instance, r1_file(&id, None), R1_START_MS);
+    let mut client = TestClient::connect(&host);
+    assert!(!has_row(&mut client, &blackout));
+    assert_eq!(
+        host.own_blackout_entries_for_test(ALIAS)
+            .expect("the blackout input"),
+        0
+    );
+
+    let (_, receipt) = configure(&mut client, vec![set(&blackout, list.clone())]);
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{receipt:?}"
+    );
+    assert_eq!(
+        receipt.result(),
+        Some(&RuntimeResult::SettingsConfigured {
+            settings: vec![ConfiguredSetting {
+                key: blackout.clone(),
+                value: FactScalar::String(canonical_json(&list)),
+                source: ConfigParameterSource::Instruction,
+            }],
+            config_version: None,
+        })
+    );
+    let in_effect = (
+        FactScalar::String(canonical_json(&list)),
+        "instruction".to_owned(),
+        true,
+    );
+    assert_eq!(reported(&mut client, &blackout), in_effect);
+    assert_eq!(
+        host.own_blackout_entries_for_test(ALIAS)
+            .expect("the blackout input"),
+        1
+    );
+    let overrides = fact_rows(&mut client, CONFIG_OVERRIDES_FACT_KEY).expect("overrides");
+    assert_eq!(overrides.len(), 1);
+    assert_eq!(
+        overrides[0].get(OVERRIDE_CONFIG_KEY),
+        Some(&FactScalar::String(blackout.clone()))
+    );
+    assert_eq!(
+        overrides[0].get(OVERRIDE_BASE_SOURCE),
+        Some(&FactScalar::String("default".to_owned()))
+    );
+    assert_eq!(
+        overrides[0].get(OVERRIDE_BASE_JSON),
+        Some(&FactScalar::String("null".to_owned()))
+    );
+    drop(client);
+    host.close().expect("close host");
+
+    let host = start_at(&root, instance, r1_file(&id, None), R1_START_MS + 60_000);
+    let mut client = TestClient::connect(&host);
+    assert_eq!(
+        configuration_notes(&mut client),
+        Vec::<(String, String)>::new()
+    );
+    assert_eq!(reported(&mut client, &blackout), in_effect);
+    assert_eq!(
+        host.own_blackout_entries_for_test(ALIAS)
+            .expect("the blackout input"),
+        1
+    );
+    assert_eq!(
+        fact_rows(&mut client, CONFIG_OVERRIDES_FACT_KEY),
+        Some(overrides)
+    );
+    drop(client);
+    host.close().expect("close host");
+}
+
+// R-1 test 2: clearing that instruction returns the instance to no blackout list of its own. The
+// receipt names the key as not in effect (`null` text from `default`, the base it was set over),
+// `config.parameters` has no row of it, `host.config_overrides` is empty and the policy cycle's
+// input has no entry of the instance; the next start keeps it so.
+#[test]
+fn r1_t2_clearing_it_returns_the_instance_to_no_blackout_list() {
+    let root = TempDir::new().expect("tempdir");
+    let instance = instance_id();
+    let id = instance_text(instance);
+    let blackout = instance_key(&id, INSTANCE_BLACKOUT);
+    let host = start_at(&root, instance, r1_file(&id, None), R1_START_MS);
+    let mut client = TestClient::connect(&host);
+    let (_, receipt) = configure(&mut client, vec![set(&blackout, away())]);
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{receipt:?}"
+    );
+    assert_eq!(
+        host.own_blackout_entries_for_test(ALIAS)
+            .expect("the blackout input"),
+        1
+    );
+
+    let (_, receipt) = configure(&mut client, vec![clear(&blackout)]);
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{receipt:?}"
+    );
+    assert_eq!(
+        receipt.result(),
+        Some(&RuntimeResult::SettingsConfigured {
+            settings: vec![ConfiguredSetting {
+                key: blackout.clone(),
+                value: FactScalar::String("null".to_owned()),
+                source: ConfigParameterSource::Default,
+            }],
+            config_version: None,
+        })
+    );
+    assert!(!has_row(&mut client, &blackout));
+    assert_eq!(
+        fact_rows(&mut client, CONFIG_OVERRIDES_FACT_KEY),
+        Some(Vec::new())
+    );
+    assert_eq!(
+        host.own_blackout_entries_for_test(ALIAS)
+            .expect("the blackout input"),
+        0
+    );
+    drop(client);
+    host.close().expect("close host");
+
+    let host = start_at(&root, instance, r1_file(&id, None), R1_START_MS + 60_000);
+    let mut client = TestClient::connect(&host);
+    assert_eq!(
+        configuration_notes(&mut client),
+        Vec::<(String, String)>::new()
+    );
+    assert!(!has_row(&mut client, &blackout));
+    assert_eq!(
+        host.own_blackout_entries_for_test(ALIAS)
+            .expect("the blackout input"),
+        0
+    );
+    drop(client);
+    host.close().expect("close host");
+}
+
+// R-1 test 3: once the file writes the key, the next start voids the instruction set over its
+// absence, `config_override_superseded` naming the key: the file's list is in effect, as the
+// file wrote it, and `host.config_overrides` keeps no row.
+#[test]
+fn r1_t3_a_file_that_later_writes_the_key_voids_the_instruction_as_superseded() {
+    let root = TempDir::new().expect("tempdir");
+    let instance = instance_id();
+    let id = instance_text(instance);
+    let blackout = instance_key(&id, INSTANCE_BLACKOUT);
+    let host = start_at(&root, instance, r1_file(&id, None), R1_START_MS);
+    let mut client = TestClient::connect(&host);
+    let (_, receipt) = configure(&mut client, vec![set(&blackout, away())]);
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{receipt:?}"
+    );
+    drop(client);
+    host.close().expect("close host");
+
+    let host = start_at(
+        &root,
+        instance,
+        r1_file(&id, Some(&json!([]))),
+        R1_START_MS + 60_000,
+    );
+    let mut client = TestClient::connect(&host);
+    assert_eq!(
+        configuration_notes(&mut client),
+        vec![(
+            ConfigCode::ConfigOverrideSuperseded.as_str().to_owned(),
+            blackout.clone()
+        )]
+    );
+    assert_eq!(
+        reported(&mut client, &blackout),
+        (
+            FactScalar::String("[]".to_owned()),
+            "explicit".to_owned(),
+            true
+        )
+    );
+    assert_eq!(
+        host.own_blackout_entries_for_test(ALIAS)
+            .expect("the blackout input"),
+        0
+    );
+    assert_eq!(
+        fact_rows(&mut client, CONFIG_OVERRIDES_FACT_KEY),
+        Some(Vec::new())
+    );
     drop(client);
     host.close().expect("close host");
 }
