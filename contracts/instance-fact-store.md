@@ -615,7 +615,12 @@ default row, per package, never per record. A layer that holds no row of `P` dec
 `P`, so an instance record that names only package `A` leaves every other package to the server,
 game and pack default layers, and `EditPackSchedule` replaces only `P`'s rows in its scope.
 The general read `PackScheduleView` answers, per package, the decision, the layer that made it
-and its row ([runtime-interface.md](runtime-interface.md), "Workbench request kinds").
+and its row ([runtime-interface.md](runtime-interface.md), "Workbench request kinds"), and the
+layer below's decision `below` (Workflow #429 R-0d, register §1.217): the items below applied
+again to `P` without the deciding layer's rows of `P`, that is the decision `P` would have now,
+and the layer that would make it (`server`, `game`, `pack_default` or `none`), if those rows
+were withdrawn; absent when the pack default or item 3 decided. R-8 fills `below` with the rest
+of the view.
 
 1. the instruction layer: of the `session.pack.schedule` records that apply to `I`, the most
    specific scope that has a row of `P` (instance over server over game); a row of `P` there

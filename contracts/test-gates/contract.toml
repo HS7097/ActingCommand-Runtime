@@ -210,6 +210,14 @@ tests = [
 ]
 incident = ["#429 R-0c"]
 
+# Workflow #429 R-0d (0.12.30; register §1.217): a PackScheduleView package's below, the layer below's decision, round-trips as {schedulable, source} when filled, leaves no below key when absent (the deciding layer is the pack default or none) so such a package is R-0c's on the wire, and every level, below included, refuses an unknown member; the R-0c client gate's r0c_each_method_sends_its_request_member_by_member_and_reads_its_completed_answer also passes a filled and an absent below through pack_schedule_view unchanged
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::runtime::workbench::tests::r0d_pack_schedule_package_carries_below_only_when_filled_and_refuses_an_unknown_member",
+]
+incident = ["#429 R-0d"]
+
 # The selector's record shapes (S0 §1.9, §3.4): projection v2, the three scan confirmations and
 # unknown_check round-trip for every path shape, v1 keeps its bytes, each path rule refuses, and
 # the reader bounds hold at 256 viewports, 64 members and 64 unknown positions
