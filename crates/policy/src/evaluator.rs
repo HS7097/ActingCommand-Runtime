@@ -269,11 +269,12 @@ pub struct RunSlots {
 /// none. Memory only: none of it enters a snapshot or a decision identity.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InstanceHolds {
-    holds: BTreeMap<String, InstanceHold>,
+    holds: BTreeMap<String, WholeInstanceHold>,
 }
 
+/// One held instance of [`InstanceHolds`] (named apart from the fact refresh's [`InstanceHold`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct InstanceHold {
+struct WholeInstanceHold {
     reason: DecisionReason,
     gate: Code,
     exempt_tasks: BTreeSet<String>,
@@ -291,7 +292,7 @@ impl InstanceHolds {
     ) {
         self.holds.insert(
             instance_id.into(),
-            InstanceHold {
+            WholeInstanceHold {
                 reason,
                 gate,
                 exempt_tasks,
@@ -300,7 +301,7 @@ impl InstanceHolds {
     }
 
     /// The hold of `task_id` on `instance_id`: none for an instance not held or an exempt task.
-    fn held(&self, task_id: &str, instance_id: &str) -> Option<&InstanceHold> {
+    fn held(&self, task_id: &str, instance_id: &str) -> Option<&WholeInstanceHold> {
         self.holds
             .get(instance_id)
             .filter(|hold| !hold.exempt_tasks.contains(task_id))
@@ -2203,7 +2204,7 @@ impl From<TaskWork> for TaskDecision {
 /// before asking the eligibility callback waits with the hold's reason and no wake, as the
 /// callback's own deferral of it would; a fact refresh's names the hold's gate.
 fn hold_unasked(
-    hold: &InstanceHold,
+    hold: &WholeInstanceHold,
     refresh: bool,
     work_index: usize,
     work: &mut [TaskWork],
