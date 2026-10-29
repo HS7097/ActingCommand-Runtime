@@ -1278,6 +1278,23 @@ the configured starts; the watch ends with the host.
   instead of ending as `emulator_autostart_skipped` without it; one that finds the process
   running without Android or a port still ends skipped, and the next poll recognizes it once it
   runs. `watch_enabled = false` stops recognitions with the polls.
+  EMU-BIND fix 1 (since 0.12.28; review M1: a Start that bound the reported port and then
+  failed, at its ADB baseline with `emulator_control_adb_not_ready` or at its deadline with a
+  read that saw the emulator running, left the instance bound and `on` with its self-check
+  facts dropped, and no startup package and no ladder followed): the watch also recognizes an
+  instance bound to the reported port that holds no `backend.selfcheck.*` fact at all (dropped,
+  not failed), whose key no claim holds or waits for, and that neither its idle action
+  (IDLE-1, whatever its action), a scheduling pause of the instance in stage `released` (its
+  resume's reconnect recognizes it) nor a #403 fence (its ladder, recheck or person) holds;
+  same bound, same claim. On its key, just before the recognition, the claim reads the
+  emulator status once more (review L2): when no recognition is needed any more (the instance
+  bound to the reported port and prepared meanwhile, or the emulator not running with Android
+  and a port) it ends as `emulator_autostart_skipped` with `watch_kind` `recognize` and the
+  read's `process_started`, `android_started` and `adb_port_present`, also a
+  `device_state_observed` record under the instance, and closes, prepares and queues nothing;
+  a failed read ends it as `emulator_autostart_failed`. Every line that ends a recognition
+  (`emulator_autostart_failed`, `_interrupted`, `_superseded` too, review L1) carries
+  `watch_kind` `recognize`.
 - **Observe only (R4).** An instance without `start_emulator` is read and recorded, never
   started (EMU-BIND: a running one is recognized). The watch never stops or restarts a running
   emulator, and no record names a device: an emulator instance is its `alias`.
@@ -1304,7 +1321,8 @@ location `emulator_watch`. EMU-BIND adds no code and no configuration key: the v
 `watch_kind` (vocabulary `emulator_watch_kind`: `restart`, `recognize`) on
 `emulator_autostart_queued`, `emulator_autostart_skipped`,
 `emulator_autostart_preparation_failed` and `emulator_watch_restart_exhausted` tells a
-recognition from a restart.
+recognition from a restart; since 0.12.28 also on `emulator_autostart_failed`,
+`emulator_autostart_interrupted` and `emulator_autostart_superseded`.
 
 ## Client and CLI
 

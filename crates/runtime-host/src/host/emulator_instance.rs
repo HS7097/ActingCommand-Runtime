@@ -1900,6 +1900,9 @@ impl HostShared {
     /// that failure, which the caller settles (Workflow #387 D1c-G, `settle_unconfirmed_adb`).
     fn await_adb_baseline(&self, rebound: &RegisteredInstance) -> RuntimeHostResult<u64> {
         let started = Instant::now();
+        #[cfg(test)]
+        let deadline = started + self.adb_baseline_wait_for_test.unwrap_or(ADB_BASELINE_WAIT);
+        #[cfg(not(test))]
         let deadline = started + ADB_BASELINE_WAIT;
         let stopped = || self.fatal.is_shutdown_requested();
         let mut last_error = None;

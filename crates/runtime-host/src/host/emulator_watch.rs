@@ -39,7 +39,15 @@
 //!   reported port, awaits the ADB baseline and opens input and capture, then the startup package
 //!   is queued as after a start; it never launches or stops an emulator. Its bound is a restart's
 //!   (`restart_attempts` within `restart_window_ms`), counted apart; used up, one
-//!   `emulator_watch_restart_exhausted` with `watch_kind` `recognize`.
+//!   `emulator_watch_restart_exhausted` with `watch_kind` `recognize`. EMU-BIND fix 1 (0.12.28,
+//!   review M1: a Start that bound the reported port and then failed, at its ADB baseline or at
+//!   its deadline with a read that saw the emulator running, left the instance bound and `on`
+//!   with its self-check facts dropped, and no startup package and no ladder followed): so is an
+//!   instance bound to the reported port that has no self-check fact at all, whose key no claim
+//!   holds or waits for, and that neither its idle action, a scheduling pause in stage
+//!   `released` nor a #403 fence holds (same bound, same claim). On its key the claim reads the
+//!   status once more and ends as `emulator_autostart_skipped` (`watch_kind` `recognize`, the
+//!   read's values; also a record) without preparing when no recognition is needed any more.
 //! - **Blackouts** (Workflow #386 SR-4a3, `scheduling-blackout.md`, "Complete silence"): the
 //!   polls go on (a status read starts nothing). A configured instance found stopped inside a
 //!   blackout gets its one autostart claim as above, which the routine gate holds until the
@@ -277,7 +285,9 @@ impl HostShared {
     /// (its place in the configuration `position`) found stopped; R4: an instance without
     /// `start_emulator` is never started. EMU-BIND (0.12.27): an instance, configured or not,
     /// found running with Android and an ADB port while the Runtime holds its endpoint pending or
-    /// bound to another port is recognized (`recognize_watched_emulator`).
+    /// bound to another port is recognized (`recognize_watched_emulator`); EMU-BIND fix 1
+    /// (0.12.28, review M1): so is one bound to the reported port but unprepared on it, whose key
+    /// is idle (`unprepared_on_reported_port`, `instance_key_idle`).
     fn watch_emulator(
         &self,
         instance_id: InstanceId,
@@ -297,10 +307,72 @@ impl HostShared {
                 None => Ok(()),
             };
         }
-        if self.needs_recognition(instance_id, &state)? {
+        if self.needs_recognition(instance_id, &state)?
+            || (self.unprepared_on_reported_port(instance_id, alias, &state)?
+                && self.instance_key_idle(instance_id)?)
+        {
             return self.recognize_watched_emulator(position, instance_id, alias, settings, now_ms);
         }
         Ok(())
+    }
+
+    /// EMU-BIND fix 1 (0.12.28, review M1): whether the status read `state` asks for the
+    /// recognition of an instance the Runtime holds bound to the reported port but never prepared
+    /// on it: its emulator runs with Android and that port; the instance holds no
+    /// `backend.selfcheck.*` fact (dropped by the Start or the failed control's observation that
+    /// bound it, not failed: a failed self-check admitted its ladder); and neither its idle
+    /// action (IDLE-1, whatever its action), a scheduling pause of the instance in stage
+    /// `released` (the device handed back; the resume's reconnect recognizes it) nor a #403
+    /// fence (its ladder, recheck or person) holds it. Whether the instance's key is idle is the
+    /// caller's question: the watch asks it (`instance_key_idle`), a recognition claim holds it.
+    fn unprepared_on_reported_port(
+        &self,
+        instance_id: InstanceId,
+        alias: &str,
+        state: &InstanceState,
+    ) -> RuntimeHostResult<bool> {
+        let Some(adb_port) = state.adb_port.filter(|port| *port != 0 && state.running()) else {
+            return Ok(false);
+        };
+        let bound_here = lock(&self.registered_instances, EmulatorWatchLocation::Watch)?
+            .get(&instance_id)
+            .is_some_and(|record| {
+                !record.endpoint_pending()
+                    && record
+                        .bound_adb_endpoint()
+                        .is_some_and(|endpoint| endpoint.port() == adb_port)
+            });
+        if !bound_here || self.backend_selfcheck_recorded(instance_id)? {
+            return Ok(false);
+        }
+        let released = lock(&self.scheduling_pause, EmulatorWatchLocation::Watch)?
+            .instance_state(alias)
+            .is_some_and(|pause| {
+                pause.stage == actingcommand_contract::InstancePauseStage::Released
+            });
+        Ok(!released && !self.idle_holds_instance(alias)? && !self.resource_fenced(instance_id)?)
+    }
+
+    /// EMU-BIND fix 1 (0.12.28, review M1): whether no claim holds the instance's key and none
+    /// waits for it.
+    fn instance_key_idle(&self, instance_id: InstanceId) -> RuntimeHostResult<bool> {
+        let scheduler = lock(&self.scheduler, EmulatorWatchLocation::Watch)?;
+        Ok(scheduler.active_lease(instance_id).is_none()
+            && scheduler.queued_count(instance_id) == 0)
+    }
+
+    /// EMU-BIND fix 1 (0.12.28, review L2): whether the status read `state` still asks for the
+    /// recognition a claim holding the instance's key was queued for: the endpoint pending or
+    /// bound to another port (`needs_recognition`), or bound to the reported port but unprepared
+    /// (`unprepared_on_reported_port`).
+    pub(super) fn recognition_still_needed(
+        &self,
+        instance_id: InstanceId,
+        alias: &str,
+        state: &InstanceState,
+    ) -> RuntimeHostResult<bool> {
+        Ok(self.needs_recognition(instance_id, state)?
+            || self.unprepared_on_reported_port(instance_id, alias, state)?)
     }
 
     /// EMU-BIND (0.12.27): whether the status read `state` asks for a recognition of the
@@ -530,7 +602,7 @@ impl HostShared {
 
     /// One `device_state_observed` record carrying `outcome` under the instance, and the same
     /// report line.
-    fn record_emulator_watch(
+    pub(super) fn record_emulator_watch(
         &self,
         instance_id: InstanceId,
         outcome: Outcome,
