@@ -111,6 +111,12 @@ actingcommand_contract::outcome_codes! {
         /// standard-pack check` list one per package and page in `warnings`; a feature package
         /// and the page's handlers are not listed.
         PackageBundleInterruptPageShadowed => "package_bundle_interrupt_page_shadowed": warning / none,
+        /// Warning (STORE-FG-1, design-store-fg §8.1): a store step of a package that declares
+        /// `store_update` taps a fixed place (click kind `point`, `rect` or `specific_rect`)
+        /// rather than a target located on the frame (keys `package_id`, `pack_operation_id`).
+        /// `package bundle` and `actinglab standard-pack check` list one per package and such
+        /// step in `warnings`; nothing is refused.
+        PackageBundleStoreTapUnlocated => "package_bundle_store_tap_unlocated": warning / none,
         /// Warning (Workflow #428 CFL-2, design CF v2 §5.6): a slot's or feature's OCR target lies
         /// in a layout's shared read with its model and languages, but declares another
         /// `preprocess` chain (colors in another order too), so it reads on its own (keys

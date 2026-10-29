@@ -1174,6 +1174,23 @@
       "common_causes": "The package recognises the dialog itself, written before the shared interrupt page existed.",
       "handling": "Remove the page from the package so that the shared interrupt page handles it, or keep it when the package must handle that page itself."
     },
+    "package_bundle_store_tap_unlocated": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "resource-tooling",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "pack_operation_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.29",
+      "description": "STORE-FG-1 (design-store-fg §8.1; contracts/resource-declarations.md, store update packages; contracts/package-reference.md, the standard-pack cross-check): a package of the game root declares store_update, and the store operation pack_operation_id taps a fixed place (click kind point, rect or specific_rect) rather than a target located on the frame. A store's buttons move between devices and layouts, so such a tap can land on another button. package bundle and actinglab standard-pack check list one entry in warnings per package and such operation. Nothing is refused: kernel admission still takes the package.",
+      "common_causes": "The store step was written from one device's frame with the button's position.",
+      "handling": "Tap a text target located on the frame (click kind target or offset with a verify_text guard on the button's own label)."
+    },
     "package_bundle_preprocess_divergent": {
       "category": "warning",
       "ladder_class": "none",

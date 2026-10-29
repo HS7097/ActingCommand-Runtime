@@ -177,6 +177,12 @@ pub const REMEDY_CHOICES: &str = "scheduling.remedy.choices";
 /// on its instance's worker (`true`: one run per instance at a time, different instances at once)
 /// or on its own thread, one after another (`false`, the default).
 pub const PARALLEL_ENABLED: &str = "scheduling.parallel.enabled";
+/// ISO-PE (#419; `actingd-config` revision 20): how long the policy driver waits after an
+/// evaluation the Runtime skipped (one whose failure is not global) before it evaluates again.
+pub const EVALUATION_RETRY_MS: &str = "scheduling.evaluation.retry_ms";
+/// ISO-PE (#419; revision 20): the skipped evaluations in a row after which the Runtime records
+/// that the policy evaluation waits for a person (`policy_evaluation_awaiting_person`).
+pub const EVALUATION_ESCALATE_AFTER: &str = "scheduling.evaluation.escalate_after";
 
 /// The longest random delay any key may name: one day (the coordinator's order for Workflow
 /// #405, 2026-10-14). Schema, not a threshold.
@@ -285,6 +291,11 @@ pub struct SchedulingFile {
     // unknown fields; a file that does not name it keeps its revision.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     parallel: Option<ParallelFile>,
+    // Interface anchor `actingd-config` revision 20 (contracts/component-interfaces.md; ISO-PE,
+    // #419): a Runtime before ISO-PE refuses a file that names it, because the section denies
+    // unknown fields; a file that does not name it keeps its revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    evaluation: Option<EvaluationFile>,
 }
 
 /// Workflow #405: the `scheduling` member of an `instances[]` entry, which holds that instance's
@@ -408,6 +419,13 @@ file_struct!(
     /// Workflow #427-A: the switch of the per-instance lanes.
     ParallelFile { enabled }
 );
+file_struct!(
+    /// ISO-PE (#419): the wait after a skipped policy evaluation and when it escalates.
+    EvaluationFile {
+        retry_ms,
+        escalate_after
+    }
+);
 
 const fn row(
     name: &'static str,
@@ -461,6 +479,26 @@ const FACT_REFRESH_EXPECTED_DURATION: KeyRange = KeyRange::Integer {
     min: 1,
     max: actingcommand_contract::MAX_CONTAINED_TASK_TIMEOUT_MS as i64,
 };
+/// ISO-PE (#419): the wait after a skipped policy evaluation, `1..=3600000` ms: never zero, so a
+/// failure that repeats never turns into a busy loop, and at most an hour.
+const EVALUATION_RETRY: KeyRange = KeyRange::Integer {
+    min: 1,
+    max: 3_600_000,
+};
+/// ISO-PE (#419): the skipped evaluations in a row before the escalation, at least one.
+const EVALUATION_ESCALATE: KeyRange = KeyRange::Integer {
+    min: 1,
+    max: MAX_COUNT,
+};
+
+/// ISO-PE (#419): a key of the `evaluation` member, read from the release that joins
+/// `actingd-config` revision 20.
+const fn iso_pe_row(name: &'static str, value_type: ValueType, range: KeyRange) -> KeyRow {
+    KeyRow {
+        since: "0.12.28",
+        ..row(name, value_type, range, "ISO-PE")
+    }
+}
 
 /// Workflow #411 B15 R3: a remedy key's row, read by R4 from v0.12.3 on.
 const fn remedy_row(name: &'static str, value_type: ValueType, range: KeyRange) -> KeyRow {
@@ -668,6 +706,14 @@ pub(crate) static ROWS: &[KeyRow] = &[
             "#427-A",
         )
     },
+    // ISO-PE (#419): read by the host at every skipped policy evaluation, so an instruction
+    // takes effect at the next one.
+    iso_pe_row(EVALUATION_RETRY_MS, ValueType::DurationMs, EVALUATION_RETRY),
+    iso_pe_row(
+        EVALUATION_ESCALATE_AFTER,
+        ValueType::Integer,
+        EVALUATION_ESCALATE,
+    ),
 ];
 
 /// A pacing stage a stage key names (the vocabulary `pacing_stage`).
@@ -845,6 +891,14 @@ pub struct RemedyConfig {
     pub rows: Vec<RemedyChoiceRow>,
 }
 
+/// ISO-PE (#419): the policy evaluation's retry after an evaluation the Runtime skipped, and the
+/// skipped evaluations in a row after which it waits for a person.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EvaluationRetryConfig {
+    pub retry_ms: u64,
+    pub escalate_after: u32,
+}
+
 /// The `scheduling` section in effect, read and checked whole.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchedulingConfig {
@@ -865,6 +919,8 @@ pub struct SchedulingConfig {
     pub expected_runtime: ExpectedRuntimeConfig,
     /// Workflow #427-A: whether the policy driver runs scheduled runs on the instance workers.
     pub parallel_enabled: bool,
+    /// ISO-PE (#419): the retry and the escalation of a skipped policy evaluation.
+    pub evaluation: EvaluationRetryConfig,
 }
 
 fn invalid(key: &str, problem: ConfigValueProblem) -> ConfigFailure {
@@ -1300,6 +1356,10 @@ impl SchedulingConfig {
                 ],
             )?,
             parallel_enabled: reader.boolean(PARALLEL_ENABLED)?,
+            evaluation: EvaluationRetryConfig {
+                retry_ms: reader.duration(EVALUATION_RETRY_MS)?,
+                escalate_after: reader.count(EVALUATION_ESCALATE_AFTER)?,
+            },
         })
     }
 }

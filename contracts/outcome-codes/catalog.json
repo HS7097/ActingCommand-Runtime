@@ -2218,6 +2218,22 @@
     "io_priority_read": {
       "type": "integer",
       "description": "The I/O priority hint of actingd's own process as the operating system reported it after the start set it, Windows' IO_PRIORITY_HINT (RB-2)."
+    },
+    "policy_input": {
+      "type": "vocab:policy_input",
+      "description": "Which input of a policy evaluation a check refused: a fact, a settled run's outcome, a pair's task state, its completed activity window, a pool reading or a priority offset (ISO-PE, #419)."
+    },
+    "policy_input_problem": {
+      "type": "vocab:policy_input_problem",
+      "description": "Why a check refused a policy evaluation input (ISO-PE, #419)."
+    },
+    "observed_at_unix_ms": {
+      "type": "unix_ms",
+      "description": "When a refused input was observed, in Unix milliseconds (ISO-PE, #419)."
+    },
+    "evaluated_at_unix_ms": {
+      "type": "unix_ms",
+      "description": "The time of the policy evaluation that refused an input, in Unix milliseconds (ISO-PE, #419)."
     }
   },
   "vocabularies": {
@@ -6398,6 +6414,48 @@
         }
       }
     },
+    "policy_input": {
+      "description": "Which input of a policy evaluation a check refused (ISO-PE, #419).",
+      "review": "pending",
+      "tokens": {
+        "fact": {
+          "description": "An observed fact."
+        },
+        "outcome": {
+          "description": "A settled run's observed outcome."
+        },
+        "task_state": {
+          "description": "A (task, instance) pair's runtime state."
+        },
+        "completed_window": {
+          "description": "The activity window a pair's settled run completed."
+        },
+        "pool": {
+          "description": "A resource pool reading."
+        },
+        "priority_offset": {
+          "description": "A manual priority offset."
+        }
+      }
+    },
+    "policy_input_problem": {
+      "description": "Why a check refused a policy evaluation input (ISO-PE, #419).",
+      "review": "pending",
+      "tokens": {
+        "observed_after_evaluation": {
+          "description": "The input was observed later than the evaluation's time."
+        },
+        "unknown_reference": {
+          "description": "The input names a task, an instance or a pool the evaluation does not know."
+        },
+        "duplicate": {
+          "description": "Two inputs share one identity."
+        },
+        "value_invalid": {
+          "description": "The input's metadata or value breaks a rule."
+        }
+      }
+    },
     "decision_state": {
       "description": "The state of a scheduling decision, as a dispatch decision record gives it for each candidate it lists (Workflow #411 A26).",
       "review": "pending",
@@ -6461,6 +6519,15 @@
         },
         "wait_page_invalid": {
           "description": "A confirmation's wait page (expect_after.wait_page.page_id) is not one page of the package, or is a destination of its operation or an error page."
+        },
+        "store_operation_invalid": {
+          "description": "STORE-FG-1 (since 0.12.29): a store operation of control.json store_update names no operation of the task, one whose effect is no click that draws a tap (point, rect, specific_rect, target, target_center, offset), one whose from is not one page of the package, or one without a guard on its from page (no guard, or unguarded_trusted_coordinate), whose tap could land on a frame where the page and its proof were not checked; json_pointer /store_update/store_operations/<i>/operation."
+        },
+        "store_proof_invalid": {
+          "description": "STORE-FG-1 (since 0.12.29): a proof target of a store operation is no OCR target of the pack with an expected text, or does not stand directly in the required list of the operation's from page; json_pointer /store_update/store_operations/<i>/proof/<j>."
+        },
+        "store_way_back_missing": {
+          "description": "STORE-FG-1 (since 0.12.29): a package that declares store_update declares no application operation that launches or restarts the assigned application; json_pointer /store_update."
         }
       }
     },

@@ -192,6 +192,14 @@ tests = [
 ]
 incident = ["#381 A"]
 
+# WD-MT C (0.12.28; Workflow #421 INV-1119 §2 and §4 row C; brief rd-1029/brief-wd-mt.md; register §1.204 WDMT-1; contracts/runtime-watchdog.md, Observation 4): the watchdog dates a candidate log by the time read from the file, not by its directory entry; the err log of an owner that stopped by an error condition, whose entry still says its creation time (before the owner took the lock) while the file says just after the close record, leads to a start through row 5, and through row 6′ when a later owner closed formally without a log; the same fixture read by the time on disk alone decides a formal close, so the fixture discriminates
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::watchdog::gate_wd_mt::wd_mt_a_log_that_ends_in_an_error_is_restarted_even_when_its_directory_entry_is_stale",
+]
+incident = ["#421 INV-1119"]
+
 # Era classification and JSON-RPC errors
 [[gate]]
 key = "28"
@@ -725,7 +733,7 @@ tests = [
 ]
 incident = ["#411 A7"]
 
-# #411 A8, A14 (v0.12.1-rc.2; register §1.100 A8-1, A14-1; related keys 41, 43): MCP ac_lab_do and ac_lab_observe with capture, without dry_run and with neither package nor zip answer arguments_invalid {argument: package, argument_problem: required} (class usage) before the install is located and before any actinglab child runs; with package or zip, without capture, or with dry_run the package check lets the call through; ac_lab_do with target tap and tap answers arguments_invalid {argument: tap, argument_problem: conflicting} (class usage), equally before any child
+# #411 A8, A14 (v0.12.1-rc.2; register §1.100 A8-1, A14-1; related keys 41, 43): MCP ac_lab_do and ac_lab_observe with capture, without dry_run and with neither package nor zip answer arguments_invalid {argument: package, argument_problem: required} (class usage) before the install is located and before any actinglab child runs; with package or zip, without capture, or with dry_run the package check lets the call through; ac_lab_do with target tap and tap answers arguments_invalid {argument: tap, argument_problem: conflicting} (class usage), equally before any child; #411 A27 (0.12.28 LAB-SMALL P58): that refusal carries a req_id this server issued in actinglab's form (req-<16 hex digits>-<n>), shown in the answer
 [[gate]]
 key = "73"
 coverage = "Y"
@@ -734,8 +742,9 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_rc2_a8::a8_ac_lab_observe_with_capture_and_no_package_is_refused_the_same",
     "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_rc2_a8::a8_a_locator_no_capture_or_dry_run_passes_the_package_check",
     "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_rc2_a8::a14_ac_lab_do_with_target_tap_and_tap_is_arguments_invalid_naming_tap",
+    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_rc2_a8::p58_ac_lab_do_target_tap_with_coordinates_is_refused_with_a_req_id",
 ]
-incident = ["#411 A8", "#411 A14"]
+incident = ["#411 A8", "#411 A14", "#411 A27"]
 
 # #411 Lab L1 (v0.12.x; register §1.118, no persisted ledger shape; G7; related: exec 96, apps 73): MCP ac_lab_do no longer takes priority, lease_id, no_wait, recovery_timeout_ms or recovery_poll_ms, nor ac_lab_observe require_fresh, so a call naming one answers arguments_invalid {argument, argument_problem: unknown} (class usage) before the install is located and before any actinglab child runs; ac_lab_do with capture true and dry_run not true setting destructive or allow_destructive answers arguments_invalid {argument, argument_problem: conflicting} equally before any child; offline (scene), with dry_run, or with both guard arguments false the call passes MCP's own checks
 [[gate]]
@@ -1008,6 +1017,14 @@ tests = [
 ]
 incident = ["#427-A"]
 
+# ISO-PE (Workflow #419; brief rd-1029/brief-iso-pe.md; register §1.205; production v0.12.26 on 10-29 11:19): the driver applies the deferred cycle with no evaluation that the host answers for a skipped evaluation without an error, so the driver and the Runtime go on; it keeps the trigger and evaluates it again at the retry (scheduling.evaluation.retry_ms later), not before; a projection not ready yet with no recompute wake waits one debounce instead of ending the driver
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::tests::iso_pe_a_skipped_evaluation_keeps_its_trigger_until_the_retry_and_the_driver_goes_on",
+]
+incident = ["#419 ISO-PE"]
+
 # Workflow #427-A fix 1 (brief rd-1028/brief-427a-fix1.md item 5; review rd-1028/review-427a.md L1 and its item 10): a scheduling pause requested after the round handed a run to its instance's worker, while the worker holds it as it took it, does not fail the run: the pause's release waits for it, the run goes ahead as the synchronous round's run admitted before a pause does and is settled once as a success (never as a failure nor refused, so the pair's failure streak is unchanged), then the pause completes
 [[gate]]
 coverage = "Y"
@@ -1042,6 +1059,15 @@ tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::config::gate_rb2::rb2_a_failing_call_is_a_warning_with_its_failure_and_the_start_goes_on",
 ]
 incident = ["RB-2"]
+
+# WD-MT D (0.12.28; Workflow #421 INV-1119 §4 row D; brief rd-1029/brief-wd-mt.md; register §1.204 WDMT-2, WDMT-3; contracts/runtime-watchdog.md, "Logs held open"): through a recording fake system the daemon's start clears the inherit flag of its stdout, then its stderr, and writes nothing when both were cleared or are absent; a refused call is host_stdio_inheritance_failed (warning) with each refusal a caused_by foreign_os_error naming its operation (process_stdout_inheritance_clear, process_stderr_inheritance_clear), the other handle still cleared; on Windows a vendor stdio session's saved duplicates of stdout and stderr are not inheritable (their Dup step's after flags)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::standard_handles::tests::wd_mt_the_start_clears_the_inherit_flag_of_its_stdout_and_stderr",
+    "actingcommand-device::lib::vendor_stdio::tests::wd_mt_the_saved_standard_duplicates_are_not_inheritable",
+]
+incident = ["#421 INV-1119"]
 
 # Workflow #421 P12 (v0.12.25; W1-1, brief rd-1028/brief-wave1.md; #421 6441776975): on the fake host, the composite update's automatic rollback evaluates the rollback gate before it closes the new Runtime: a gate that fails closes nothing, the new Runtime keeps running with the hold, the rollback's close is never begun and the command ends rollback_gate_failed naming only release-hold (D-7, adapted); a gate that passes rolls back as before, after a failed check (D-5) or a new start that exited (D-6), and a rollback interrupted after each of its steps, the close past the gate's pass among them, is finished by resume (F-4)
 [[gate]]

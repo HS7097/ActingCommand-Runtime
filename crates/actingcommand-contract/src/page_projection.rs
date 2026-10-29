@@ -734,6 +734,8 @@ pub struct PageProjection {
     pub page: String,
     pub state: String,
     pub matched: bool,
+    /// #411 A70 (P61): never true for a page not recognised (`matched` false); [`project`]
+    /// writes false.
     pub standby: bool,
     pub frame: FrameIdentity,
     pub elements: Vec<Value>,
@@ -963,7 +965,9 @@ pub fn project_observation(
         }
         .to_string(),
         matched,
-        standby: !matched,
+        // #411 A70 (P61): a page not recognised is `matched: false` with its `state`; it is
+        // never `standby`, which a reader takes for an instance ready for input.
+        standby: false,
         frame: input.frame,
         elements: vec![],
         unscoped_controls: vec![],

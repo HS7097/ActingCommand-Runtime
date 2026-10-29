@@ -301,8 +301,10 @@ checked for their parts, as the Runtime checks them when a run first uses them:
    refused: the Runtime stops such a remedy for a person at run time.
 
 "Can be a layer" is the Runtime's predicate (`prerequisite_incompatibility_with`): no
-`recognize_only` package, stability termination, post-admission OCR, readings, adjustments,
-`on_empty` select step or designated operation, and the game, the package's bundle server, and
+`store_update` package (STORE-FG-1, since 0.12.29; [resource-declarations.md](resource-declarations.md),
+"Store update packages"), no `recognize_only` package, stability termination, post-admission OCR,
+readings, adjustments, `on_empty` select step or designated operation, and the game, the package's
+bundle server, and
 the resolution of that server's feature package (the one every run of the server that navigates
 or handles a shared interrupt page uses; a server without one compares no resolution). A
 package that does not fit is `package_bundle_navigation_package_invalid` with `package_id` and
@@ -319,7 +321,13 @@ declares is its own, so that shared interrupt page does not act for its runs
 ([README.md](README.md), "Shared interrupt pages"), and a shared interrupt page added later changes
 nothing for it. A feature package of `pages.json` (its pages are the list's) and a handler of
 that page (its entry holds the page) declare it by their part and are not reported; nothing is
-refused. Then, with or without `pages.json` (Workflow #428 CFL-2), one
+refused. Then, with or without the navigation files (STORE-FG-1, since 0.12.29; design-store-fg
+§8.1), one `package_bundle_store_tap_unlocated` warning (with `package_id` and
+`pack_operation_id`) in `warnings` per package of the registry and declared store operation
+(`control.json` `store_update`) whose click taps a fixed place (`point`, `rect`,
+`specific_rect`) instead of a target located on the frame, in registry order and then
+declaration order: a store's buttons move between devices; nothing is refused. Then, with or
+without `pages.json` (Workflow #428 CFL-2), one
 `package_bundle_preprocess_divergent` warning (with `package_id`, `target_id` and the shared
 read's `json_pointer` in the pack's recognition pack) per package of the registry and OCR target
 that a layout's shared read would serve but whose `preprocess` chain differs from the read's, so
@@ -461,11 +469,12 @@ complete prerequisite chain against the registry the bundle becomes (Workflow #3
 every pack of the bundle binds a prerequisite package, a declared prerequisite the bundle
 does not hold is `contained_task_prerequisite_unbound`, and `return_home` binds each server's
 fallback. Startup
-uses ordinary task admission and rejects resource readings through
+uses ordinary task admission and rejects resource readings (and, STORE-FG-1, a `store_update`
+package) through
 `PreparedContainedTask::startup_incompatibility`, the same predicate used by Host before
 its startup lease. Prerequisites retain the existing exclusions for
 recognize-only, stability termination, post-admission OCR/fields, resource readings and
-designated operations. Return-home packages additionally declare no prerequisite of
+designated operations, and (STORE-FG-1) refuse a `store_update` package. Return-home packages additionally declare no prerequisite of
 their own. A recognition package is no `recognize_only` package, declares no stability
 termination and no designated operation and carries at least one reading mark (Workflow #384
 D2-S2); it takes no part in the chains. The shared `PrerequisiteChain` predicate owns game/server/resolution

@@ -649,6 +649,14 @@ tests = [
 ]
 incident = ["#396"]
 
+# #411 B47 (0.12.28 LAB-SMALL; brief rd-1029/brief-wave2d.md, triage rd-1028/triage-p71.md B47; contracts/contained-page-observation.md, "0.12.28 LAB-SMALL"; related: exec 47): offline observe of a recognised page whose candidate layout has a feature that needs an OCR model the Tools do not hold does not refuse the frame: the layout is not projected, the page is still answered (page, matched, observation), and candidate_not_projected names the layout with {layout_id, item, code: candidate_feature_provider_missing, detail naming the OCR target}, beside the OCR state (ocr.available false)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_small::b47_a_layout_whose_ocr_feature_has_no_model_is_named_and_the_page_still_answered",
+]
+incident = ["#411 B47"]
+
 # Resource validation: a repository's declared directories admit its regression case families in place of the "no mapped parser" refusal; unknown JSON elsewhere and a malformed declaration are refused (#396 TOOL-2)
 [[gate]]
 key = "48"
@@ -998,7 +1006,7 @@ tests = [
 ]
 incident = ["#428 CFL-1"]
 
-# Workflow #411 A58, #428 CFL-2 (0.12.29; register §1.206; no persisted ledger shape): recognition preprocessing wired into the OCR reads. Without a chain every read (an ordinary target and its kept read, its observation, a locate target, a shared read) hands the provider the frame itself, its region and block mode; with one the provider gets only the processed region (0,0,w,h) as R=G=B pixels equal to CFL-1's output, Implicit becomes Region and Region/Detect stay, blocks come back in frame coordinates, and a template_relative region is resolved on the frame; a fake provider that gives 0.95 only to a binary region lets the chained target pass the 0.9 gate the frame itself misses (0.816); a chained target over the whole frame (full_frame, a rect or template_relative the size of coordinate_space) without locate is refused at /targets/<i>/preprocess, with locate it reads with an explicit Detect; one region with two chains is two reads (runtime and static budget) and with one chain one; a kept observation and a remembered read reuse their evidence without running the chain; the observation path and a saved frame's OCR carry the same evidence as the kernel; a shared read serves only its own chain, counts each target over its own region as the target alone would, carries shared_read with the detector's count, still fails loud when truncated, and refuses otsu; preprocessing that leaves less than the provider timeout calls no provider (recognition sample budget insufficient), and a saved frame's OCR timeout loses the chain's time (OCR request budget exhausted at zero); each malformed chain is refused at its own pointer, and the declaration round-trips; a target whose chain differs from its shared read is named once per pair; the chain runs once per provider call and the hand-over buffer is 3*w*h; a chained target's task diagnostic target and OCR rows have the members of an unchained one. Fix round 1 (review M1, M2, L3): the source gate refuses each row of the preprocess table in task.json at the author's pointer (task schema below 0.9 UnconsumedField; a color probe or a check UnknownField; each malformed shape, step, member and value below /ocr_targets/<i>/preprocess and /candidate_layouts/<i>/shared_ocr/preprocess; a shared read's otsu InvalidValue at its value; a chained whole-frame target without locate InvalidValue at its preprocess, with locate admitted); standard-pack check reports one package_bundle_preprocess_divergent, category warning, with package_id, target_id and the shared read's json_pointer, on a root with pages.json and on one with bundle.json only; a chained shared read whose recheck after the chain finds too little time left fails with the existing error and calls no provider
+# Workflow #411 A58, #428 CFL-2 (0.12.29; register §1.208; no persisted ledger shape): recognition preprocessing wired into the OCR reads. Without a chain every read (an ordinary target and its kept read, its observation, a locate target, a shared read) hands the provider the frame itself, its region and block mode; with one the provider gets only the processed region (0,0,w,h) as R=G=B pixels equal to CFL-1's output, Implicit becomes Region and Region/Detect stay, blocks come back in frame coordinates, and a template_relative region is resolved on the frame; a fake provider that gives 0.95 only to a binary region lets the chained target pass the 0.9 gate the frame itself misses (0.816); a chained target over the whole frame (full_frame, a rect or template_relative the size of coordinate_space) without locate is refused at /targets/<i>/preprocess, with locate it reads with an explicit Detect; one region with two chains is two reads (runtime and static budget) and with one chain one; a kept observation and a remembered read reuse their evidence without running the chain; the observation path and a saved frame's OCR carry the same evidence as the kernel; a shared read serves only its own chain, counts each target over its own region as the target alone would, carries shared_read with the detector's count, still fails loud when truncated, and refuses otsu; preprocessing that leaves less than the provider timeout calls no provider (recognition sample budget insufficient), and a saved frame's OCR timeout loses the chain's time (OCR request budget exhausted at zero); each malformed chain is refused at its own pointer, and the declaration round-trips; a target whose chain differs from its shared read is named once per pair; the chain runs once per provider call and the hand-over buffer is 3*w*h; a chained target's task diagnostic target and OCR rows have the members of an unchained one. Fix round 1 (review M1, M2, L3): the source gate refuses each row of the preprocess table in task.json at the author's pointer (task schema below 0.9 UnconsumedField; a color probe or a check UnknownField; each malformed shape, step, member and value below /ocr_targets/<i>/preprocess and /candidate_layouts/<i>/shared_ocr/preprocess; a shared read's otsu InvalidValue at its value; a chained whole-frame target without locate InvalidValue at its preprocess, with locate admitted); standard-pack check reports one package_bundle_preprocess_divergent, category warning, with package_id, target_id and the shared read's json_pointer, on a root with pages.json and on one with bundle.json only; a chained shared read whose recheck after the chain finds too little time left fails with the existing error and calls no provider
 [[gate]]
 coverage = "Y"
 tests = [
@@ -1441,6 +1449,14 @@ tests = [
 ]
 incident = ["#411 A9"]
 
+# #411 A69 (0.12.28 LAB-SMALL P60; brief rd-1029/brief-wave2d.md, inventory rd-1028/inventory-012.md P60; contracts/contained-page-observation.md, "0.12.28 LAB-SMALL"; related: exec 86): offline observe --with-frame writes its frame file only once the answer stands: an answer refused as observe_identity_limit_exceeded (exit 2; a --with-frame path over 2 KiB, which Min's identity keeps whole) writes no frame file and creates no directory for it, and an answer given writes the frame at the named path and answers it as frame_path
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_small::p60_a_refused_answer_writes_no_frame_file_and_a_given_one_does",
+]
+incident = ["#411 A69"]
+
 # Workflow #411 A12 part 1 (v0.12.1-rc.2; register §1.103; related: key 47): outside an install selection, the offline tools started from a single-location root (runtime\BUILD-MANIFEST.json two levels above the executable, no A/B slot folder) load the OCR provider over the vision root that <root>\actingd.config.json names; such a root without its configuration is config_read_failed, never lab_ocr_vision_unconfigured
 [[gate]]
 key = "87"
@@ -1601,6 +1617,22 @@ tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_lab_l6::l6_replay_reports_the_readings_and_fields_its_run_took",
 ]
 incident = ["#411 Lab L6"]
+
+# #411 A62 (0.12.28 LAB-SMALL P57; brief rd-1029/brief-wave2d.md; contracts/contained-page-observation.md, "0.12.28 LAB-SMALL"; related: exec 99): each entry offline observe --targets answers carries target_center {x, y}, the centre of the template box the target matched on the current frame (x + width / 2, y + height / 2), where the kernel presses a target_center click without offset; null when the target did not pass
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::observation::gate_411_p57::p57_observe_targets_names_where_a_target_center_click_lands",
+]
+incident = ["#411 A62"]
+
+# #411 A70 (0.12.28 LAB-SMALL P61; brief rd-1029/brief-wave2d.md, inventory rd-1028/inventory-012.md P61; contracts/contained-page-observation.md, "0.12.28 LAB-SMALL"; related: exec 86): offline observe of a frame no page matches is never standby: the answer (matched false, page unknown) and its projection observation both carry standby false
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_lab_small::p61_a_page_not_recognised_is_never_standby",
+]
+incident = ["#411 A70"]
 
 # #411 A21 (v0.12.x; register §1.123; no persisted structure change): an online observation admits the rows of each fact collection (facts, private_facts) by tier while each fits: the matched page's candidate evidence (and, with target consensus, the recognition samples) first, then the explicitly requested targets' rows and the page target evaluations they reuse, then every other row; kept rows stay in production order, omitted rows are counted as before, and an observation whose rows all fit is unchanged; explicit targets never change its status, page or candidate sets; it fails only when the required evidence alone exceeds the budget (candidate samples: candidate_sample_record_failed, partial); a failed actinglab observe --capture keeps device_error (exit 4) with details {error, state, req_id, receipt_state, runtime_outcome, correlation_id, hint}
 [[gate]]
@@ -2164,6 +2196,42 @@ tests = [
 ]
 incident = ["#411 B36", "#411 B19", "#412 B-3"]
 
+# STORE-FG-1 (0.12.29; register §1.207 SF-1, SF-2; design rd-1029/design-store-fg.md §3, §5 rows T11 and T14; package revision 6, declared by BT-PK6): control.json store_update; the source gate takes it and refuses each wrong shape or broken rule as resource_declaration_invalid at its member; kernel admission refuses a broken member, or one outside navigable_route and linear_steps, as contained_task_control_invalid reason=store_update_invalid, and each broken cross-check (a store step that is no tap from one page, or taps without a guard on that page, review H1; a proof that is no OCR target directly in its from page's required; no launch or restart way back) as contained_task_program_invalid with program_problem store_operation_invalid, store_proof_invalid or store_way_back_missing, path control.json and json_pointer; a valid declaration is admitted
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_store_fg1::store_fg1_t11_a_broken_store_update_member_is_refused_with_its_reason",
+    "actingcommand-execution-kernel::lib::contained_task::gate_store_fg1::store_fg1_t11_admission_checks_the_store_steps_their_proof_and_the_way_back",
+    "actingcommand-pack-containment::lib::source::declarations::tests::store_fg1_t14_the_gate_takes_store_update_and_refuses_each_wrong_shape_at_its_pointer",
+]
+incident = []
+
+# STORE-FG-1 (register §1.207 SF-3; design §2.3, §5 row T12): a store_update package answers store_update to the prerequisite incompatibility (prerequisite, return-home, edge, chain, handler and then.run checks) and to the startup incompatibility (startup package, ladder rung); run as a prerequisite or a host layer it is refused before any capture; package bundle and standard-pack check refuse it as an edge, a recovery chain step or a handler with package_bundle_navigation_package_invalid role_ineligible
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_store_fg1::store_fg1_t12_a_store_update_package_is_no_layer_and_no_startup_package",
+    "actingcommand-resource-tooling::lib::gate_373_navt::store_fg1_t12_a_store_update_pack_is_refused_as_an_edge_a_chain_step_or_a_handler",
+]
+incident = []
+
+# STORE-FG-1 (register §1.207 SF-4; design §2.7, §5 row T13): in the package's own run a declared store step's Tap goes through ContainedTaskRuntime::store_input with the declared store and every other input through input, on the page graph and on linear_steps (an admitted step plan with its way back); admit_store_foreground is asked once before any capture, and a refusal ends the run before any capture or input; a recovery entry run, a declared operation's run (a Lab operation) and a package without store_update ask nothing and route nothing
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_store_fg1::store_fg1_t13_a_declared_store_step_taps_through_store_input_and_every_other_through_input",
+    "actingcommand-execution-kernel::lib::contained_task::gate_store_fg1::store_fg1_t13_only_the_package_s_own_run_asks_for_the_store_and_routes_to_it",
+]
+incident = []
+
+# STORE-FG-1 (design §8.3, the resource side's field note 3): a store update package waits on the store's updating page without input, with a wait step (max_ms up to 1 800 000, expect_after.interval_ms 30 000) or the store tap's expect_after.wait_page; both are admitted, and a run waits there across frames 30 s apart with no input between the store tap and the restart
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_store_fg1::store_fg1_s8_3_a_store_run_waits_long_on_the_updating_page_without_an_input",
+]
+incident = []
+
 # PERF-B1 (Workflow #407 B1, 0.12.x; register §1.177; brief rd-1024/brief-perf-b1-capture.md, test row (a); requirement R1): a step's `expect_after.interval_ms` is its own wait's capture interval: a wait declared at 30 000 ms captures at most ⌈duration / interval⌉ + 1 frames, its pauses the declared interval and the last cut at its end, while the package's other steps keep their own interval
 [[gate]]
 coverage = "Y"
@@ -2405,3 +2473,11 @@ tests = [
     "actingcommand-resource-tooling::lib::gate_373_navt::b35_no_overlap_or_no_shared_interrupts_gives_no_warning",
 ]
 incident = ["#411 B35"]
+
+# STORE-FG-1 (0.12.29; register §1.207 SF-5; design rd-1029/design-store-fg.md §8.1; contracts/package-reference.md, the standard-pack cross-check): package bundle and standard-pack check report one package_bundle_store_tap_unlocated warning (package_id, pack_operation_id) per pack and store step of control.json store_update that taps with point, rect or specific_rect, in registry order, and both still pass; a root without such a pack reports none
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_373_navt::store_fg1_s8_1_a_store_step_tapping_a_point_or_a_rect_gets_one_warning",
+]
+incident = []

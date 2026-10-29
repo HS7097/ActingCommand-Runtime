@@ -135,6 +135,7 @@ impl Declaration<'_> {
                 "stability_termination",
                 "prerequisite_package_id",
                 "provides",
+                "store_update",
             ],
         )?;
         if object.contains_key("phases")
@@ -144,6 +145,9 @@ impl Declaration<'_> {
         }
         if let Some(provides) = object.get("provides") {
             self.provides(provides)?;
+        }
+        if let Some(store_update) = object.get("store_update") {
+            self.store_update(store_update)?;
         }
         for (field, value) in object {
             let pointer = child("", field);
@@ -3330,6 +3334,50 @@ impl Declaration<'_> {
         })
     }
 
+    /// STORE-FG-1 (contracts/resource-declarations.md, "Store update packages"): a control
+    /// declaration's `store_update`, its members closed and typed, then the member's own rules
+    /// ([`actingcommand_contract::validate_store_update`]), refused at the member that breaks
+    /// them. The cross-checks against the task and its pages are kernel admission's.
+    fn store_update(&self, value: &Value) -> CliOutcome<()> {
+        let pointer = "/store_update";
+        let object = self.object(
+            value,
+            pointer,
+            &["store_application_id", "store_operations"],
+        )?;
+        self.string(
+            self.required(object, pointer, "store_application_id")?,
+            &child(pointer, "store_application_id"),
+        )?;
+        let operations_pointer = child(pointer, "store_operations");
+        let operations = self.array(
+            self.required(object, pointer, "store_operations")?,
+            &operations_pointer,
+        )?;
+        for (index, operation) in operations.iter().enumerate() {
+            let pointer = child(&operations_pointer, &index.to_string());
+            let operation = self.object(operation, &pointer, &["operation", "proof"])?;
+            self.string(
+                self.required(operation, &pointer, "operation")?,
+                &child(&pointer, "operation"),
+            )?;
+            self.strings(
+                self.required(operation, &pointer, "proof")?,
+                &child(&pointer, "proof"),
+            )?;
+        }
+        let declaration: actingcommand_contract::StoreUpdateDeclaration =
+            serde_json::from_value(value.clone())
+                .map_err(|_| self.error(pointer, ResourceDeclarationReason::InvalidValue))?;
+        actingcommand_contract::validate_store_update(&declaration).map_err(|violation| {
+            self.refuse(
+                &violation.pointer,
+                ResourceDeclarationReason::InvalidValue,
+                "store_update_invalid",
+            )
+        })
+    }
+
     fn stability(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
         let object = self.object(
             value,
@@ -5096,6 +5144,207 @@ mod tests {
                 Value::from("invalid_value")
             )
         );
+    }
+
+    // STORE-FG-1 T14 (design-store-fg §5 row T14, §3): the source parser's control gate takes
+    // `store_update` with its store application id and its store operations, each with its proof;
+    // it refuses a member it does not have (`unknown_field`), a missing member (`missing_field`),
+    // a member of the wrong type (`invalid_type`) and a member that breaks the member's own rules
+    // (`invalid_value`), each at that member's pointer in `control.json`. The cross-checks against
+    // the task are Runtime admission's. Ids are made up.
+    #[test]
+    fn store_fg1_t14_the_gate_takes_store_update_and_refuses_each_wrong_shape_at_its_pointer() {
+        let control = |store_update: Value| {
+            serde_json::json!({
+                "schema_version": "Lab-1y.control.v2", "package_id": "neutral.store.update",
+                "execution_mode": "navigable_route", "game": "neutral", "server": "test",
+                "resolution": {"width": 16, "height": 9}, "entry_task_id": "task",
+                "store_update": store_update
+            })
+        };
+        let valid = serde_json::json!({
+            "store_application_id": "test.store.alpha",
+            "store_operations": [
+                {"operation": "tap_update", "proof": ["listing_title", "listing_publisher"]},
+                {"operation": "tap_open", "proof": ["listing_title"]}
+            ]
+        });
+        let issue = |error: CliError| {
+            assert_eq!(
+                error.code, "resource_declaration_invalid",
+                "{}",
+                error.message
+            );
+            let issue = error.details.expect("declaration issue");
+            (
+                issue["declaration_file"].clone(),
+                issue["field_path"].clone(),
+                issue["reason"].clone(),
+            )
+        };
+
+        validate_control_declarations(Path::new("control.json"), &control(valid.clone()))
+            .expect("the gate takes store_update");
+
+        let changed = |change: &dyn Fn(&mut Value)| {
+            let mut store_update = valid.clone();
+            change(&mut store_update);
+            store_update
+        };
+        let nine = (0..9)
+            .map(|index| {
+                serde_json::json!({"operation": format!("tap_{index}"), "proof": ["listing_title"]})
+            })
+            .collect::<Vec<_>>();
+        let cases: [(&str, Value, &str, &str); 17] = [
+            (
+                "no object",
+                serde_json::json!(["test.store.alpha"]),
+                "/store_update",
+                "invalid_type",
+            ),
+            (
+                "a member store_update does not have",
+                changed(&|value| value["store_label"] = serde_json::json!("alpha")),
+                "/store_update/store_label",
+                "unknown_field",
+            ),
+            (
+                "no store application id",
+                changed(&|value| {
+                    value
+                        .as_object_mut()
+                        .expect("an object")
+                        .remove("store_application_id");
+                }),
+                "/store_update/store_application_id",
+                "missing_field",
+            ),
+            (
+                "a store application id that is no string",
+                changed(&|value| value["store_application_id"] = serde_json::json!(7)),
+                "/store_update/store_application_id",
+                "invalid_type",
+            ),
+            (
+                "a store application id that is no package name",
+                changed(&|value| {
+                    value["store_application_id"] = serde_json::json!("test.store-alpha");
+                }),
+                "/store_update/store_application_id",
+                "invalid_value",
+            ),
+            (
+                "no store operations",
+                changed(&|value| {
+                    value
+                        .as_object_mut()
+                        .expect("an object")
+                        .remove("store_operations");
+                }),
+                "/store_update/store_operations",
+                "missing_field",
+            ),
+            (
+                "store operations that are no list",
+                changed(&|value| value["store_operations"] = serde_json::json!({})),
+                "/store_update/store_operations",
+                "invalid_type",
+            ),
+            (
+                "an empty list of store operations",
+                changed(&|value| value["store_operations"] = serde_json::json!([])),
+                "/store_update/store_operations",
+                "invalid_value",
+            ),
+            (
+                "nine store operations",
+                changed(&|value| value["store_operations"] = Value::Array(nine.clone())),
+                "/store_update/store_operations",
+                "invalid_value",
+            ),
+            (
+                "a member a store operation does not have",
+                changed(&|value| {
+                    value["store_operations"][0]["click"] = serde_json::json!("point");
+                }),
+                "/store_update/store_operations/0/click",
+                "unknown_field",
+            ),
+            (
+                "a store operation without its operation",
+                changed(&|value| {
+                    value["store_operations"][1]
+                        .as_object_mut()
+                        .expect("an operation")
+                        .remove("operation");
+                }),
+                "/store_update/store_operations/1/operation",
+                "missing_field",
+            ),
+            (
+                "an operation named twice",
+                changed(&|value| {
+                    value["store_operations"][1]["operation"] = serde_json::json!("tap_update");
+                }),
+                "/store_update/store_operations/1/operation",
+                "invalid_value",
+            ),
+            (
+                "a store operation without proof",
+                changed(&|value| {
+                    value["store_operations"][0]
+                        .as_object_mut()
+                        .expect("an operation")
+                        .remove("proof");
+                }),
+                "/store_update/store_operations/0/proof",
+                "missing_field",
+            ),
+            (
+                "a proof target that is no string",
+                changed(&|value| value["store_operations"][0]["proof"][1] = serde_json::json!(2)),
+                "/store_update/store_operations/0/proof/1",
+                "invalid_type",
+            ),
+            (
+                "an empty proof",
+                changed(&|value| value["store_operations"][0]["proof"] = serde_json::json!([])),
+                "/store_update/store_operations/0/proof",
+                "invalid_value",
+            ),
+            (
+                "five proof targets",
+                changed(&|value| {
+                    value["store_operations"][0]["proof"] =
+                        serde_json::json!(["t_1", "t_2", "t_3", "t_4", "t_5"]);
+                }),
+                "/store_update/store_operations/0/proof",
+                "invalid_value",
+            ),
+            (
+                "a proof target named twice",
+                changed(&|value| {
+                    value["store_operations"][0]["proof"][1] = serde_json::json!("listing_title");
+                }),
+                "/store_update/store_operations/0/proof/1",
+                "invalid_value",
+            ),
+        ];
+        for (case, store_update, pointer, reason) in cases {
+            let error =
+                validate_control_declarations(Path::new("control.json"), &control(store_update))
+                    .expect_err(case);
+            assert_eq!(
+                issue(error),
+                (
+                    Value::from("control.json"),
+                    Value::from(pointer),
+                    Value::from(reason)
+                ),
+                "{case}"
+            );
+        }
     }
 
     /// Workflow #428 CFL-2 (design CF v2 §5.12 and test 11; the rows of the original design's

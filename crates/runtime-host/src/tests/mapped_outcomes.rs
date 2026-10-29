@@ -984,10 +984,16 @@ fn mapped_startup_outcome_is_rejected_before_policy_dispatch() {
     .expect("runtime host");
     host.activate_policy_catalog(&mapped_policy_sources(1, "startup-forged"))
         .expect("activate mapped catalog");
-    let error = host
+    // ISO-PE (#419): the refusal is not global, so the evaluation is skipped with it (recorded
+    // as `policy_evaluation_skipped`) instead of returning it; nothing is dispatched either way.
+    let cycle = host
         .evaluate_policy_cycle(PolicyTrigger::FactsChanged)
-        .expect_err("startup outcome cannot become mapped policy authority");
-    assert_eq!(error.code(), "policy_outcome_authority_conflict");
+        .expect("startup outcome cannot become mapped policy authority: the evaluation is skipped");
+    assert!(cycle.evaluation.is_none());
+    assert_eq!(
+        super::gate_419_iso_pe::skipped_failure_codes(&host),
+        vec!["policy_outcome_authority_conflict".to_owned()]
+    );
     let mut client = TestClient::connect(&host);
     let events = projected_events(&mut client, EventQuery::default());
     assert_eq!(
