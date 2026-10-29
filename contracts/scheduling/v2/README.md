@@ -175,3 +175,17 @@ canonical integers (`limit_exceeded` at `…/offset`), B by `fact_key`'s rules
 reserve's `at_least` and an effect's quantity are not checked at compilation.
 A catalog whose capacities and projection values are numbers serializes, and
 hashes, exactly as before.
+
+SS-3 (since 0.12.30; register §1.212; `../README.md`, "Optional run-count
+bounds"): a V2 task may leave out `loop_budget`, and each of its items
+`daily_limit`, `window_iteration_limit` and `max_runtime_ms` on its own; a V2
+activity profile may leave out each of `daily_budget`, `max_window_iterations`
+and `session_max_ms`. A bound that is not written is no dimension: admission
+reserves nothing for it, the retry round does not judge it, the budget receipt
+carries none of its members, Workflow #411 B8 hands no `daily_remaining` or
+`last_daily_slot` from it and the strategy estimate uses the bounds that
+remain. A written bound must still be above 0 (`loop_budget_missing`) and
+applies exactly as before; a V1 document still requires all six
+(`missing_required_field` at the member). An absent bound serializes, and
+hashes, as nothing at all, so a catalog that writes every bound serializes, and
+hashes, exactly as before.

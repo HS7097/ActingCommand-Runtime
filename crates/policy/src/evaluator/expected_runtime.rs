@@ -5,7 +5,8 @@
 //! 平均时间加5分钟」.
 //!
 //! - E = min(⌈mean(S)⌉ + `margin_ms`, M): S is the latest min(`runs`, k) of the k samples stored
-//!   for the pair, M the task's `loop_budget.max_runtime_ms`.
+//!   for the pair, M the task's `loop_budget.max_runtime_ms` (SS-3: no ceiling when the task
+//!   writes none).
 //! - With no sample (k = 0) or with the switch off, E is the declared value D.
 //!
 //! The host (slice ED-2) computes E from the instance's `health.run_duration` record with this
@@ -58,7 +59,8 @@ impl ExpectedRuntime {
 }
 
 /// SCH-M §3.4 D-12: E for a pair from its samples, newest first (`d1` first), its declared value
-/// `declared_ms` and its task's `max_runtime_ms`:
+/// `declared_ms` and its task's `max_runtime_ms` (SS-3: `u64::MAX` for a task that writes none,
+/// so E has no ceiling):
 /// - the switch off, or no sample: `declared_ms`;
 /// - otherwise the mean of the newest min(`runs`, k) samples, rounded up, plus `margin_ms`, at
 ///   most `max_runtime_ms`.
@@ -104,12 +106,13 @@ pub fn expected_runtime(
 pub const MAX_EXPECTED_RUNTIME_RUNS: u8 = 16;
 
 /// SCH-M D-15: the E a pair's snapshot carries, at most the task's `max_runtime_ms` (the
-/// admission's own bound); none when the snapshot carries none, and the declared value applies.
+/// admission's own bound) when it writes one (SS-3); none when the snapshot carries none, and
+/// the declared value applies.
 pub(crate) fn snapshot_expected_runtime(
     task: &TaskSpec,
     state: Option<&TaskRuntimeSnapshot>,
 ) -> Option<u64> {
     state
         .and_then(|state| state.expected_runtime_ms)
-        .map(|expected| expected.min(task.loop_budget.max_runtime_ms))
+        .map(|expected| task.runtime_capped(expected))
 }

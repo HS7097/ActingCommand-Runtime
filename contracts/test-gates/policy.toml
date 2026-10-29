@@ -309,6 +309,14 @@ tests = [
 ]
 incident = []
 
+# SS-3 (Alice's ruling 100, #386 comment 6490879952; rd-1029 design-sch-state §5 SS-3 test 6; contracts/scheduling/README.md, "Optional run-count bounds"; register §1.212; since 0.12.30): a catalog that writes every run-count bound evaluates identically to before: the V1 example keeps its pinned hash, every written bound serializes as written in V1 and V2, and the dispatch intent pins the three loop-budget items with the bytes of before
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_ss3::ss3_t6_a_catalog_that_writes_every_bound_evaluates_identically",
+]
+incident = ["#386 SS-3"]
+
 # Resource projection
 [[gate]]
 key = "32"
@@ -359,6 +367,14 @@ tests = [
     "actingcommand-policy::lib::strategy::tests::report_identity_rejects_mutated_instance_state",
 ]
 incident = []
+
+# SS-3 (rd-1029 design-sch-state §5 SS-3 test 5; contracts/scheduling/README.md, "Optional run-count bounds"; register §1.212; since 0.12.30): without daily_limit the strategy's production estimate comes from the bounds written and the period; with none written it is the period bound alone, and with all three it is as before
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::strategy::tests::ss3_t5_production_estimate_without_daily_limit_uses_the_remaining_bounds",
+]
+incident = ["#386 SS-3"]
 
 # Explanation: every decision that is not Selected carries a registered reason (#386 SR-6a)
 [[gate]]

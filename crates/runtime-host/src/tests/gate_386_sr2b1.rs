@@ -263,7 +263,7 @@ fn sr2b1_t1_a_sampling_timeout_ends_by_a_condition_refunds_and_keeps_the_streak(
     host.activate_policy_catalog(&once_a_day_sources())
         .expect("activate the catalog");
     let (first, admission) = admit(&host, POLICY_NOW_UNIX_MS, 100, true);
-    assert_eq!(admission.budget.task_daily_used, 1);
+    assert_eq!(admission.budget.task_daily_used, Some(1));
     clock.advance(75_000);
     let ended = failure_of(
         &host
@@ -291,11 +291,13 @@ fn sr2b1_t1_a_sampling_timeout_ends_by_a_condition_refunds_and_keeps_the_streak(
     let (host, _clock) = start(&root, registered, at, None);
     let (_, rerun) = admit(&host, at, 101, false);
     assert_eq!(
-        rerun.budget.task_daily_used, 1,
+        rerun.budget.task_daily_used,
+        Some(1),
         "the daily count was given back"
     );
     assert_eq!(
-        rerun.budget.task_window_used, 1,
+        rerun.budget.task_window_used,
+        Some(1),
         "the window count was given back"
     );
     host.close().expect("close the host");
@@ -395,7 +397,7 @@ fn sr92_an_operator_pause_ends_a_scheduled_run_by_a_condition_under_the_shipped_
     host.activate_policy_catalog(&once_a_day_sources())
         .expect("activate the catalog");
     let (first, admission) = admit(&host, POLICY_NOW_UNIX_MS, 100, true);
-    assert_eq!(admission.budget.task_daily_used, 1);
+    assert_eq!(admission.budget.task_daily_used, Some(1));
     clock.advance(75_000);
     let paused = failure_of(
         &host
@@ -450,12 +452,12 @@ fn sr92_an_operator_pause_ends_a_scheduled_run_by_a_condition_under_the_shipped_
     };
     assert_eq!(
         context.admission().budget.task_daily_used,
-        1,
+        Some(1),
         "the daily count was given back"
     );
     assert_eq!(
         context.admission().budget.task_window_used,
-        1,
+        Some(1),
         "the window count was given back"
     );
     drop(context);
@@ -500,7 +502,7 @@ fn sr2b1_t3_the_third_condition_termination_is_exhausted() {
             None,
             &sampling_ended(),
         );
-        assert_eq!(admission.budget.task_daily_used, 1, "run {index}");
+        assert_eq!(admission.budget.task_daily_used, Some(1), "run {index}");
         assert_eq!(
             failure.condition,
             Some(PolicyConditionSettlement {
@@ -515,7 +517,7 @@ fn sr2b1_t3_the_third_condition_termination_is_exhausted() {
     let at = POLICY_NOW_UNIX_MS + 2 * BETWEEN_RUNS_MS;
     let (host, clock) = start(&root, registered, at, None);
     let (third, admission) = admit(&host, at, 102, false);
-    assert_eq!(admission.budget.task_daily_used, 1);
+    assert_eq!(admission.budget.task_daily_used, Some(1));
     clock.advance(75_000);
     let failure = failure_of(
         &host
@@ -593,7 +595,7 @@ fn sr2b1_t4_without_refund_counts_the_counts_are_kept() {
         Some(kept()),
         &sampling_ended(),
     );
-    assert_eq!(admission.budget.task_daily_used, 1);
+    assert_eq!(admission.budget.task_daily_used, Some(1));
     assert_eq!(
         failure.condition,
         Some(PolicyConditionSettlement {
@@ -606,10 +608,11 @@ fn sr2b1_t4_without_refund_counts_the_counts_are_kept() {
     let (host, _clock) = start(&root, registered, at, Some(kept()));
     let (_, next) = admit(&host, at, 101, false);
     assert_eq!(
-        next.budget.task_daily_used, 2,
+        next.budget.task_daily_used,
+        Some(2),
         "the count was not given back"
     );
-    assert_eq!(next.budget.task_window_used, 2);
+    assert_eq!(next.budget.task_window_used, Some(2));
     host.close().expect("close the host");
 }
 

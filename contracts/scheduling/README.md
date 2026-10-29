@@ -1008,7 +1008,8 @@ projects carries what earlier runs of that task on that instance settled:
 - `expected_runtime_ms` and `expected_runtime_runs` (SCH-M slice ED-1, frozen model v1.0 §3.4
   D-12, D-15) carry the expected duration E of the pair and how many samples it is the mean of:
   E = min(⌈mean of the latest `runs` successful scheduled runs of the task's package on the
-  instance⌉ + `margin_ms`, the task's `loop_budget.max_runtime_ms`), with the instance's
+  instance⌉ + `margin_ms`, the task's `loop_budget.max_runtime_ms`; SS-3, since 0.12.30: no
+  ceiling when the V2 task does not write it), with the instance's
   `scheduling.expected_runtime.*` in effect (`actingcommand_policy::expected_runtime`). With no
   sample, or with `enabled` false, E is the declared value and both members are absent, so the
   evaluation input and every evaluation are byte for byte those without samples. When present, E
@@ -1202,6 +1203,20 @@ transaction state.
 The evaluator pins the selected activity profile in every dispatch intent. Runtime owns activity sampling, budget counters, retry state, and failure escalation; callers cannot supply remaining-budget values. Admission and execution ledger events record the selected profile, sample seed, activity window, cadence, cumulative task and activity budget receipts, and classified outcome.
 
 Recoverable failures receive a positive, bounded backoff. Only repeated failures with the same failure code, failure identity and failure class share a consecutive-failure streak, and sensitive or severe failures are never automatically restarted. A failure records its `outcome` (whose category is the record's severity) and, for a scheduled `linear_steps` or (Workflow #390 EXEC-3) page-graph task, its `failure_identity`, which is rerun at once and lifted by a package update (`../policy-suspension.md`). Goal-missed, feasibility-red, and drift-predicted signals are informational planning facts: they do not consume failure tax, advance a failure streak, or pause execution.
+
+### Optional run-count bounds
+
+SS-3 (since 0.12.30; Alice's ruling 100 on Workflow #386: dispatch follows live account state, and there is no "run task X N times"; register §1.212). In an `actingcommand.scheduling.v2` catalog a task's `loop_budget` may be left out, and so may each of its three items, `daily_limit`, `window_iteration_limit` and `max_runtime_ms`, on its own; so may each of an activity profile's `daily_budget`, `max_window_iterations` and `session_max_ms`. V1 keeps all six required (`missing_required_field` at the member). A bound that is written applies exactly as before, and must still be above 0 (`loop_budget_missing`); a catalog that writes all of them serializes, hashes, admits, settles and records byte for byte as before. A bound that is not written is no dimension:
+
+- **Admission** reserves nothing for it and never refuses on it (`policy_budget_exhausted` names only a written dimension). The dispatch intent carries only the written items in `prerequisites` (`daily_limit`, `window_iteration_limit`, `max_runtime_ms`), and the intent check requires each one it carries to be above 0 and the intent's expected duration to be within a carried `max_runtime_ms`.
+- **The budget receipt** of `policy.dispatch_admitted` carries neither member of an unwritten dimension (`task_daily_used`/`task_daily_limit`, `task_window_used`/`task_window_limit`, `task_runtime_reserved_ms`/`task_runtime_limit_ms` and the three activity pairs); a carried dimension holds both members with the count between 1 and the limit, as before, and a receipt with one member of a pair is invalid. The Runtime keeps no count for an unwritten dimension, and a condition rerun's refund gives back only the counts the admission took.
+- **The retry round** does not judge an unwritten dimension; retries stay bounded by `on_failure` and the round's window.
+- **Settlement** never rewrites a run to `policy_runtime_budget_exceeded` on an unwritten runtime dimension: without `max_runtime_ms` (and `session_max_ms`) a window's cumulative runtime has no bound. The per-run deadline (the contained-task response bound and the package's own timeout) is unchanged, and so are failure retries and escalation, the per-occurrence rerun limit, the recovery ladder, in-pack loop caps and concurrency.
+- **Expected duration E** has no ceiling without `max_runtime_ms` ("Settlement Feedback And Eligibility Age").
+- **Workflow #411 B8** hands a task that opts in to `dispatch_parameters` `daily_remaining` and `last_daily_slot` only from the daily dimensions written (the task's `daily_limit`, the profile's `daily_budget`, the fewer of those written); with neither written both are absent (`../remedies.md`, section 4).
+- **The strategy report's production estimate** takes the fewest runs an hour of the bounds written (`daily_limit`, `window_iteration_limit`, `max_runtime_ms` / E) and the period bound (one hour over the task's cycle), which is always present.
+
+Deleting the members (SS-9), the no-progress guard (SS-4) and batch allowances (SS-6) are later slices.
 
 ## Task Execution Fields
 
@@ -1501,7 +1516,7 @@ The compiler enforces both schema limits and UTF-8 byte limits:
 | Pool valuation scale | 1..=9,007,199,254,740,991 |
 | Pool valuation base weight / gap weight | 0..=1,000,000 / 1..=1,000,000 milli |
 
-Loop budgets are mandatory. Arrays and strings that exceed their limit reject the entire catalog. Duplicate identifiers, duplicate object keys, and unbounded recursive input are invalid.
+Loop budgets are mandatory in V1; in V2 each run-count bound is optional (SS-3, "Optional run-count bounds"). Arrays and strings that exceed their limit reject the entire catalog. Duplicate identifiers, duplicate object keys, and unbounded recursive input are invalid.
 
 ## Canonical Serialization And Hash
 

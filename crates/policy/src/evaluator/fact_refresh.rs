@@ -178,11 +178,11 @@ pub fn fact_refresh_task() -> &'static TaskSpec {
         expected_duration_ms: FACT_REFRESH_EXPECTED_DURATION_MS,
         cooldown_ms: 0,
         load_profile: LoadProfile::Light,
-        loop_budget: LoopBudget {
-            daily_limit: u32::MAX,
-            window_iteration_limit: u32::MAX,
-            max_runtime_ms: FACT_REFRESH_WINDOW_RUNTIME_MS,
-        },
+        loop_budget: Some(LoopBudget {
+            daily_limit: Some(u32::MAX),
+            window_iteration_limit: Some(u32::MAX),
+            max_runtime_ms: Some(FACT_REFRESH_WINDOW_RUNTIME_MS),
+        }),
         strategic_weight_milli: 0,
         instance_overrides: Vec::new(),
         value_milli: None,
@@ -709,9 +709,9 @@ fn refresh_candidate(
         tie_breaker: deterministic_tie_breaker(context.seed, &task.id, &instance.instance_id),
         facts_fresh_until_unix_ms: None,
         activity_profile_id: profile.id.clone(),
-        daily_limit: task.loop_budget.daily_limit,
-        window_iteration_limit: task.loop_budget.window_iteration_limit,
-        max_runtime_ms: task.loop_budget.max_runtime_ms,
+        daily_limit: task.daily_limit(),
+        window_iteration_limit: task.window_iteration_limit(),
+        max_runtime_ms: task.max_runtime_ms(),
     })
 }
 

@@ -759,74 +759,113 @@ impl PolicyControlState {
             window_id.clone(),
         );
 
+        // SS-3 (register §1.212): a limit the catalog does not write is no dimension. The
+        // admission reserves nothing for it and its receipt carries neither member; a written
+        // limit is reserved against exactly as before, in the same order.
+        let task_daily_used = task
+            .daily_limit()
+            .map(|limit| -> RuntimeHostResult<u32> {
+                next_count(
+                    group_total(
+                        &self.task_daily,
+                        &accounting,
+                        &intent.instance_id,
+                        &local_day,
+                        u32::checked_add,
+                        HostLocation::ReservePolicyBudget,
+                    )?,
+                    limit,
+                    PolicyBudgetDimension::TaskDaily,
+                )
+            })
+            .transpose()?;
+        let task_window_used = task
+            .window_iteration_limit()
+            .map(|limit| -> RuntimeHostResult<u32> {
+                next_count(
+                    group_total(
+                        &self.task_window,
+                        &accounting,
+                        &intent.instance_id,
+                        &window_id,
+                        u32::checked_add,
+                        HostLocation::ReservePolicyBudget,
+                    )?,
+                    limit,
+                    PolicyBudgetDimension::TaskWindow,
+                )
+            })
+            .transpose()?;
+        let task_runtime_reserved_ms = task
+            .max_runtime_ms()
+            .map(|limit| -> RuntimeHostResult<u64> {
+                next_runtime(
+                    group_total(
+                        &self.task_runtime,
+                        &accounting,
+                        &intent.instance_id,
+                        &window_id,
+                        u64::checked_add,
+                        HostLocation::ReservePolicyBudget,
+                    )?,
+                    intent.expected_duration_ms,
+                    limit,
+                    PolicyBudgetDimension::TaskRuntime,
+                )
+            })
+            .transpose()?;
+        let activity_daily_used = profile
+            .daily_budget
+            .map(|limit| -> RuntimeHostResult<u32> {
+                next_count(
+                    self.activity_daily
+                        .get(&activity_daily_key)
+                        .copied()
+                        .unwrap_or(0),
+                    limit,
+                    PolicyBudgetDimension::ActivityDaily,
+                )
+            })
+            .transpose()?;
+        let activity_window_used = profile
+            .max_window_iterations
+            .map(|limit| -> RuntimeHostResult<u32> {
+                next_count(
+                    self.activity_window
+                        .get(&activity_window_key)
+                        .copied()
+                        .unwrap_or(0),
+                    limit,
+                    PolicyBudgetDimension::ActivityWindow,
+                )
+            })
+            .transpose()?;
+        let activity_runtime_reserved_ms = profile
+            .session_max_ms
+            .map(|limit| -> RuntimeHostResult<u64> {
+                next_runtime(
+                    self.activity_runtime
+                        .get(&activity_window_key)
+                        .copied()
+                        .unwrap_or(0),
+                    intent.expected_duration_ms,
+                    limit,
+                    PolicyBudgetDimension::ActivityRuntime,
+                )
+            })
+            .transpose()?;
         let budget = PolicyBudgetReceipt {
-            task_daily_used: next_count(
-                group_total(
-                    &self.task_daily,
-                    &accounting,
-                    &intent.instance_id,
-                    &local_day,
-                    u32::checked_add,
-                    HostLocation::ReservePolicyBudget,
-                )?,
-                task.loop_budget.daily_limit,
-                PolicyBudgetDimension::TaskDaily,
-            )?,
-            task_daily_limit: task.loop_budget.daily_limit,
-            task_window_used: next_count(
-                group_total(
-                    &self.task_window,
-                    &accounting,
-                    &intent.instance_id,
-                    &window_id,
-                    u32::checked_add,
-                    HostLocation::ReservePolicyBudget,
-                )?,
-                task.loop_budget.window_iteration_limit,
-                PolicyBudgetDimension::TaskWindow,
-            )?,
-            task_window_limit: task.loop_budget.window_iteration_limit,
-            task_runtime_reserved_ms: next_runtime(
-                group_total(
-                    &self.task_runtime,
-                    &accounting,
-                    &intent.instance_id,
-                    &window_id,
-                    u64::checked_add,
-                    HostLocation::ReservePolicyBudget,
-                )?,
-                intent.expected_duration_ms,
-                task.loop_budget.max_runtime_ms,
-                PolicyBudgetDimension::TaskRuntime,
-            )?,
-            task_runtime_limit_ms: task.loop_budget.max_runtime_ms,
-            activity_daily_used: next_count(
-                self.activity_daily
-                    .get(&activity_daily_key)
-                    .copied()
-                    .unwrap_or(0),
-                profile.daily_budget,
-                PolicyBudgetDimension::ActivityDaily,
-            )?,
+            task_daily_used,
+            task_daily_limit: task.daily_limit(),
+            task_window_used,
+            task_window_limit: task.window_iteration_limit(),
+            task_runtime_reserved_ms,
+            task_runtime_limit_ms: task.max_runtime_ms(),
+            activity_daily_used,
             activity_daily_limit: profile.daily_budget,
-            activity_window_used: next_count(
-                self.activity_window
-                    .get(&activity_window_key)
-                    .copied()
-                    .unwrap_or(0),
-                profile.max_window_iterations,
-                PolicyBudgetDimension::ActivityWindow,
-            )?,
+            activity_window_used,
             activity_window_limit: profile.max_window_iterations,
-            activity_runtime_reserved_ms: next_runtime(
-                self.activity_runtime
-                    .get(&activity_window_key)
-                    .copied()
-                    .unwrap_or(0),
-                intent.expected_duration_ms,
-                profile.session_max_ms,
-                PolicyBudgetDimension::ActivityRuntime,
-            )?,
+            activity_runtime_reserved_ms,
             activity_runtime_limit_ms: profile.session_max_ms,
         };
         Ok(PolicyAdmissionRecord {
@@ -990,53 +1029,78 @@ impl PolicyControlState {
                 })
             })
         };
-        let task_daily_own = own_count(
-            admission.budget.task_daily_used,
-            group_total(
-                &self.task_daily,
-                continued,
-                &intent.instance_id,
-                &admission.activity.local_day,
-                u32::checked_add,
-                HostLocation::CommitPolicyBudget,
-            )?,
-        )?;
-        let task_window_own = own_count(
-            admission.budget.task_window_used,
-            group_total(
-                &self.task_window,
-                continued,
-                &intent.instance_id,
-                &admission.activity.window_id,
-                u32::checked_add,
-                HostLocation::CommitPolicyBudget,
-            )?,
-        )?;
-        let task_runtime_own = own(
-            admission.budget.task_runtime_reserved_ms,
-            group_total(
-                &self.task_runtime,
-                continued,
-                &intent.instance_id,
-                &admission.activity.window_id,
-                u64::checked_add,
-                HostLocation::CommitPolicyBudget,
-            )?,
-        )?;
-        self.task_daily.insert(task_daily_key, task_daily_own);
-        self.task_window
-            .insert(task_window_key.clone(), task_window_own);
-        self.task_runtime.insert(task_window_key, task_runtime_own);
-        self.activity_daily
-            .insert(activity_daily_key, admission.budget.activity_daily_used);
-        self.activity_window.insert(
-            activity_window_key.clone(),
-            admission.budget.activity_window_used,
-        );
-        self.activity_runtime.insert(
-            activity_window_key,
-            admission.budget.activity_runtime_reserved_ms,
-        );
+        // SS-3 (register §1.212): only a dimension the receipt carries is counted; one it does
+        // not carry keeps no count.
+        let task_daily_own = admission
+            .budget
+            .task_daily_used
+            .map(|used| -> RuntimeHostResult<u32> {
+                own_count(
+                    used,
+                    group_total(
+                        &self.task_daily,
+                        continued,
+                        &intent.instance_id,
+                        &admission.activity.local_day,
+                        u32::checked_add,
+                        HostLocation::CommitPolicyBudget,
+                    )?,
+                )
+            })
+            .transpose()?;
+        let task_window_own = admission
+            .budget
+            .task_window_used
+            .map(|used| -> RuntimeHostResult<u32> {
+                own_count(
+                    used,
+                    group_total(
+                        &self.task_window,
+                        continued,
+                        &intent.instance_id,
+                        &admission.activity.window_id,
+                        u32::checked_add,
+                        HostLocation::CommitPolicyBudget,
+                    )?,
+                )
+            })
+            .transpose()?;
+        let task_runtime_own = admission
+            .budget
+            .task_runtime_reserved_ms
+            .map(|reserved| -> RuntimeHostResult<u64> {
+                own(
+                    reserved,
+                    group_total(
+                        &self.task_runtime,
+                        continued,
+                        &intent.instance_id,
+                        &admission.activity.window_id,
+                        u64::checked_add,
+                        HostLocation::CommitPolicyBudget,
+                    )?,
+                )
+            })
+            .transpose()?;
+        if let Some(count) = task_daily_own {
+            self.task_daily.insert(task_daily_key, count);
+        }
+        if let Some(count) = task_window_own {
+            self.task_window.insert(task_window_key.clone(), count);
+        }
+        if let Some(reserved) = task_runtime_own {
+            self.task_runtime.insert(task_window_key, reserved);
+        }
+        if let Some(count) = admission.budget.activity_daily_used {
+            self.activity_daily.insert(activity_daily_key, count);
+        }
+        if let Some(count) = admission.budget.activity_window_used {
+            self.activity_window
+                .insert(activity_window_key.clone(), count);
+        }
+        if let Some(reserved) = admission.budget.activity_runtime_reserved_ms {
+            self.activity_runtime.insert(activity_window_key, reserved);
+        }
         self.next_activity_eligible.insert(
             (
                 intent.instance_id.clone(),
@@ -1471,39 +1535,44 @@ impl PolicyControlState {
         let counted_runtime_ms = if condition.is_some() { 0 } else { runtime_ms };
         let (task_runtime_used_ms, activity_runtime_used_ms) =
             actual_runtime_totals(intent, admission, counted_runtime_ms)?;
-        // Workflow #372 K5: the receipt's runtime counts the task's accounting group; the task's
-        // own entry keeps only its own runtime.
-        let accounting = catalog.accounting_ids(&intent.task_id);
-        let continued_runtime_ms = group_total(
-            &self.task_runtime,
-            accounting.get(1..).unwrap_or_default(),
-            &intent.instance_id,
-            &admission.activity.window_id,
-            u64::checked_add,
-            HostLocation::CommitPolicyOutcome,
-        )?;
-        let task_runtime_own_ms = task_runtime_used_ms
-            .checked_sub(continued_runtime_ms)
-            .ok_or_else(|| {
-                fatal(
-                    HostCode::PolicyBudgetReceiptInvalid,
-                    HostLocation::CommitPolicyOutcome,
-                )
-            })?;
-        let task_window_key = (
-            intent.task_id.clone(),
-            intent.instance_id.clone(),
-            admission.activity.window_id.clone(),
-        );
-        let activity_window_key = (
-            admission.activity.profile_id.clone(),
-            intent.instance_id.clone(),
-            admission.activity.window_id.clone(),
-        );
-        self.task_runtime
-            .insert(task_window_key, task_runtime_own_ms);
-        self.activity_runtime
-            .insert(activity_window_key, activity_runtime_used_ms);
+        // SS-3 (register §1.212): a runtime dimension the receipt does not carry keeps no count.
+        if let Some(task_runtime_used_ms) = task_runtime_used_ms {
+            // Workflow #372 K5: the receipt's runtime counts the task's accounting group; the
+            // task's own entry keeps only its own runtime.
+            let accounting = catalog.accounting_ids(&intent.task_id);
+            let continued_runtime_ms = group_total(
+                &self.task_runtime,
+                accounting.get(1..).unwrap_or_default(),
+                &intent.instance_id,
+                &admission.activity.window_id,
+                u64::checked_add,
+                HostLocation::CommitPolicyOutcome,
+            )?;
+            let task_runtime_own_ms = task_runtime_used_ms
+                .checked_sub(continued_runtime_ms)
+                .ok_or_else(|| {
+                    fatal(
+                        HostCode::PolicyBudgetReceiptInvalid,
+                        HostLocation::CommitPolicyOutcome,
+                    )
+                })?;
+            let task_window_key = (
+                intent.task_id.clone(),
+                intent.instance_id.clone(),
+                admission.activity.window_id.clone(),
+            );
+            self.task_runtime
+                .insert(task_window_key, task_runtime_own_ms);
+        }
+        if let Some(activity_runtime_used_ms) = activity_runtime_used_ms {
+            let activity_window_key = (
+                admission.activity.profile_id.clone(),
+                intent.instance_id.clone(),
+                admission.activity.window_id.clone(),
+            );
+            self.activity_runtime
+                .insert(activity_window_key, activity_runtime_used_ms);
+        }
         let key = (intent.task_id.clone(), intent.instance_id.clone());
         // Workflow #372 K5: a success or a failure no condition settled sets the pair's failure
         // state, so it becomes the one its accounting group reads.
@@ -1744,31 +1813,42 @@ impl PolicyControlState {
             instance_id.to_owned(),
             origin.window_id.clone(),
         );
-        Ok(task_daily < limits.task_daily_limit
-            && task_window < limits.task_window_limit
-            && self
-                .activity_daily
-                .get(&activity_daily)
-                .copied()
-                .unwrap_or(0)
-                < limits.activity_daily_limit
-            && self
-                .activity_window
-                .get(&activity_window)
-                .copied()
-                .unwrap_or(0)
-                < limits.activity_window_limit
+        // SS-3 (register §1.212): a limit the round's receipt does not carry is not judged.
+        let activity_runtime = self
+            .activity_runtime
+            .get(&activity_window)
+            .copied()
+            .unwrap_or(0);
+        Ok(limits
+            .task_daily_limit
+            .is_none_or(|limit| task_daily < limit)
+            && limits
+                .task_window_limit
+                .is_none_or(|limit| task_window < limit)
+            && limits.activity_daily_limit.is_none_or(|limit| {
+                self.activity_daily
+                    .get(&activity_daily)
+                    .copied()
+                    .unwrap_or(0)
+                    < limit
+            })
+            && limits.activity_window_limit.is_none_or(|limit| {
+                self.activity_window
+                    .get(&activity_window)
+                    .copied()
+                    .unwrap_or(0)
+                    < limit
+            })
             && (!include_runtime
-                || (task_runtime
-                    .checked_add(round.expected_duration_ms)
-                    .is_some_and(|next| next <= limits.task_runtime_limit_ms)
-                    && self
-                        .activity_runtime
-                        .get(&activity_window)
-                        .copied()
-                        .unwrap_or(0)
+                || (limits.task_runtime_limit_ms.is_none_or(|limit| {
+                    task_runtime
                         .checked_add(round.expected_duration_ms)
-                        .is_some_and(|next| next <= limits.activity_runtime_limit_ms))))
+                        .is_some_and(|next| next <= limit)
+                }) && limits.activity_runtime_limit_ms.is_none_or(|limit| {
+                    activity_runtime
+                        .checked_add(round.expected_duration_ms)
+                        .is_some_and(|next| next <= limit)
+                }))))
     }
 
     pub(crate) fn validate_immediate_retry(
@@ -1804,38 +1884,49 @@ impl PolicyControlState {
         admission: &PolicyAdmissionRecord,
     ) -> RuntimeHostResult<()> {
         let activity = &admission.activity;
-        refund_count(
-            &mut self.task_daily,
-            (
-                intent.task_id.clone(),
-                intent.instance_id.clone(),
-                activity.local_day,
-            ),
-        )?;
-        refund_count(
-            &mut self.task_window,
-            (
-                intent.task_id.clone(),
-                intent.instance_id.clone(),
-                activity.window_id.clone(),
-            ),
-        )?;
-        refund_count(
-            &mut self.activity_daily,
-            (
-                activity.profile_id.clone(),
-                intent.instance_id.clone(),
-                activity.local_day,
-            ),
-        )?;
-        refund_count(
-            &mut self.activity_window,
-            (
-                activity.profile_id.clone(),
-                intent.instance_id.clone(),
-                activity.window_id.clone(),
-            ),
-        )
+        let budget = &admission.budget;
+        // SS-3 (register §1.212): only a count the admission took is given back.
+        if budget.task_daily_used.is_some() {
+            refund_count(
+                &mut self.task_daily,
+                (
+                    intent.task_id.clone(),
+                    intent.instance_id.clone(),
+                    activity.local_day,
+                ),
+            )?;
+        }
+        if budget.task_window_used.is_some() {
+            refund_count(
+                &mut self.task_window,
+                (
+                    intent.task_id.clone(),
+                    intent.instance_id.clone(),
+                    activity.window_id.clone(),
+                ),
+            )?;
+        }
+        if budget.activity_daily_used.is_some() {
+            refund_count(
+                &mut self.activity_daily,
+                (
+                    activity.profile_id.clone(),
+                    intent.instance_id.clone(),
+                    activity.local_day,
+                ),
+            )?;
+        }
+        if budget.activity_window_used.is_some() {
+            refund_count(
+                &mut self.activity_window,
+                (
+                    activity.profile_id.clone(),
+                    intent.instance_id.clone(),
+                    activity.window_id.clone(),
+                ),
+            )?;
+        }
+        Ok(())
     }
 
     fn end_exhausted_retry_rounds(
@@ -2075,43 +2166,41 @@ pub(crate) fn runtime_budget_exceeded(
         })
 }
 
+/// The task and activity window runtimes after a run of `runtime_ms` settles: each reservation
+/// less the expected duration, plus the run. SS-3: `None` for a runtime dimension the receipt
+/// does not carry.
 fn actual_runtime_totals(
     intent: &DispatchIntent,
     admission: &PolicyAdmissionRecord,
     runtime_ms: u64,
-) -> RuntimeHostResult<(u64, u64)> {
-    let task_before = admission
+) -> RuntimeHostResult<(Option<u64>, Option<u64>)> {
+    let total = |reserved: u64| -> RuntimeHostResult<u64> {
+        reserved
+            .checked_sub(intent.expected_duration_ms)
+            .ok_or_else(|| {
+                fatal(
+                    HostCode::PolicyBudgetReceiptInvalid,
+                    HostLocation::ClassifyPolicyOutcome,
+                )
+            })?
+            .checked_add(runtime_ms)
+            .ok_or_else(|| {
+                fatal(
+                    HostCode::PolicyBudgetCounterOverflow,
+                    HostLocation::ClassifyPolicyOutcome,
+                )
+            })
+    };
+    let task_total = admission
         .budget
         .task_runtime_reserved_ms
-        .checked_sub(intent.expected_duration_ms)
-        .ok_or_else(|| {
-            fatal(
-                HostCode::PolicyBudgetReceiptInvalid,
-                HostLocation::ClassifyPolicyOutcome,
-            )
-        })?;
-    let activity_before = admission
+        .map(&total)
+        .transpose()?;
+    let activity_total = admission
         .budget
         .activity_runtime_reserved_ms
-        .checked_sub(intent.expected_duration_ms)
-        .ok_or_else(|| {
-            fatal(
-                HostCode::PolicyBudgetReceiptInvalid,
-                HostLocation::ClassifyPolicyOutcome,
-            )
-        })?;
-    let task_total = task_before.checked_add(runtime_ms).ok_or_else(|| {
-        fatal(
-            HostCode::PolicyBudgetCounterOverflow,
-            HostLocation::ClassifyPolicyOutcome,
-        )
-    })?;
-    let activity_total = activity_before.checked_add(runtime_ms).ok_or_else(|| {
-        fatal(
-            HostCode::PolicyBudgetCounterOverflow,
-            HostLocation::ClassifyPolicyOutcome,
-        )
-    })?;
+        .map(&total)
+        .transpose()?;
     Ok((task_total, activity_total))
 }
 
@@ -2252,9 +2341,9 @@ mod tests {
                 evaluated_at_unix_ms: NOW,
                 facts_fresh_until_unix_ms: None,
                 activity_profile_id: "fixture-activity-a".to_owned(),
-                daily_limit: task.loop_budget.daily_limit,
-                window_iteration_limit: task.loop_budget.window_iteration_limit,
-                max_runtime_ms: task.loop_budget.max_runtime_ms,
+                daily_limit: task.daily_limit(),
+                window_iteration_limit: task.window_iteration_limit(),
+                max_runtime_ms: task.max_runtime_ms(),
                 urgency_milli: 0,
             },
         }
@@ -3019,7 +3108,7 @@ mod tests {
             let admission = window_state
                 .preview_admission(&window_catalog, &intent, now)
                 .expect("window admission through the declared limit");
-            assert_eq!(admission.budget.task_window_used, index as u32 + 1);
+            assert_eq!(admission.budget.task_window_used, Some(index as u32 + 1));
             window_state
                 .commit_admission(&window_catalog, &intent, &admission, false)
                 .expect("commit window budget");
@@ -3383,7 +3472,7 @@ mod tests {
                         budget.activity_daily_used,
                         budget.activity_window_used,
                     ),
-                    (1, 1, 1, 1)
+                    (Some(1), Some(1), Some(1), Some(1))
                 );
             } else {
                 let error = rerun.expect_err("nothing was given back");

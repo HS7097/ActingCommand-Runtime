@@ -306,7 +306,12 @@ pub struct TaskSpec {
     pub expected_duration_ms: u64,
     pub cooldown_ms: u64,
     pub load_profile: LoadProfile,
-    pub loop_budget: LoopBudget,
+    /// SS-3 (register §1.212): optional in an `actingcommand.scheduling.v2` document, required
+    /// in V1. Absent, the task has none of the three run-count dimensions, and the member
+    /// serializes as nothing at all; read it through [`TaskSpec::daily_limit`],
+    /// [`TaskSpec::window_iteration_limit`] and [`TaskSpec::max_runtime_ms`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_budget: Option<LoopBudget>,
     pub strategic_weight_milli: u16,
     pub instance_overrides: Vec<InstanceTaskOverride>,
     /// Declared value of one run; absent means the task carries no utility term.
@@ -375,12 +380,52 @@ pub enum LoadProfile {
     },
 }
 
+/// A task's run-count bounds. SS-3 (register §1.212): in an `actingcommand.scheduling.v2`
+/// document each item is optional on its own, and an item that is not written is no dimension:
+/// admission reserves nothing for it, the retry round does not judge it, Workflow #411 B8 hands
+/// no schedule value for it and the strategy report estimates from the other bounds. A written
+/// item applies as before. V1 requires all three. An absent item serializes as nothing at all.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LoopBudget {
-    pub daily_limit: u32,
-    pub window_iteration_limit: u32,
-    pub max_runtime_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daily_limit: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_iteration_limit: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_runtime_ms: Option<u64>,
+}
+
+impl TaskSpec {
+    /// SS-3: the task's written `loop_budget.daily_limit`, if any.
+    pub fn daily_limit(&self) -> Option<u32> {
+        self.loop_budget
+            .as_ref()
+            .and_then(|budget| budget.daily_limit)
+    }
+
+    /// SS-3: the task's written `loop_budget.window_iteration_limit`, if any.
+    pub fn window_iteration_limit(&self) -> Option<u32> {
+        self.loop_budget
+            .as_ref()
+            .and_then(|budget| budget.window_iteration_limit)
+    }
+
+    /// SS-3: the task's written `loop_budget.max_runtime_ms`, if any. Without it a window's
+    /// cumulative runtime has no bound and the expected duration E no ceiling; the per-run
+    /// deadline is unchanged.
+    pub fn max_runtime_ms(&self) -> Option<u64> {
+        self.loop_budget
+            .as_ref()
+            .and_then(|budget| budget.max_runtime_ms)
+    }
+
+    /// SS-3: `duration_ms` at most the task's written `max_runtime_ms`, or unchanged without
+    /// one.
+    pub fn runtime_capped(&self, duration_ms: u64) -> u64 {
+        self.max_runtime_ms()
+            .map_or(duration_ms, |ceiling| duration_ms.min(ceiling))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -946,9 +991,15 @@ pub struct ActivityProfile {
     pub id: String,
     pub scope: ScopeSelector,
     pub windows: Vec<ActivityWindow>,
-    pub daily_budget: u32,
-    pub max_window_iterations: u32,
-    pub session_max_ms: u64,
+    /// SS-3 (register §1.212): the three activity run-count bounds are each optional in an
+    /// `actingcommand.scheduling.v2` document and required in V1; an absent one is no dimension
+    /// (see [`LoopBudget`]) and serializes as nothing at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daily_budget: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_window_iterations: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_max_ms: Option<u64>,
     pub detection_budget: DetectionBudget,
     pub minimum_interval_ms: u64,
     pub maximum_interval_ms: u64,

@@ -3804,6 +3804,30 @@ existing `application.foreground` fact, and the key's row is a new row of the ex
 | SF2-4 | the handset start gate's `device_in_use` for a store update package's own run | behaviour | STORE-FG-2 | runtime-host | the declared store in front is no other application for that run; every other run unchanged |
 | SF2-5 | the startup refusal of a store update package: `startup_package_admission_failed` with `reason=store_update` | existing code, new detail (review L5) | STORE-FG-2 | runtime-host | before, `contained_task_resource_reading_run_kind_unsupported`; a resource-reading startup package keeps that code |
 
+### 1.212 Slice SS-3 (0.12.30): run-count quotas become optional (Alice's ruling 100, #386 comment 6490879952: dispatch follows live account state, there is no "run task X N times"; design `rd-1029/design-sch-state.md` §1.1, §4, §5 SS-3; coordinator work order `rd-1029/brief-wave3a.md` SS-3)
+
+[scheduling/README.md](scheduling/README.md) ("Optional run-count bounds"),
+[scheduling/v2/README.md](scheduling/v2/README.md) and the V2 `tasks` and `activity` schemas are
+the contract; [remedies.md](remedies.md) (B8's `daily_remaining`, `last_daily_slot`) and
+[runtime-config.md](runtime-config.md) (the ceiling of E) name the rest. **A persisted shape
+changes** (SS3-3): the members of `policy.dispatch_admitted`'s budget receipt become optional. A
+receipt of a catalog that writes every bound is unchanged byte for byte, and so is every existing
+catalog's identity; `ledger` stays [3, 4], the record type, its other members, the tables and the
+schema strings are unchanged. A build before 0.12.30 cannot read a receipt that leaves members
+out (no downgrade, Alice 10-11). No code, location, configuration key, wire or interface revision
+is added; the refusals reuse `missing_required_field`, `loop_budget_missing` and
+`policy_budget_exhausted`. The number 1.212 is the coordinator's. Safety bounds are untouched:
+`on_failure` retries and escalation, `scheduling.rerun.max_per_occurrence`, the recovery ladder,
+the per-run deadline, in-pack loop caps and concurrency. The no-progress guard (SS-4), batch
+allowances (SS-6) and deleting the members (SS-9) are later slices.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SS3-1 | V2 `tasks[].loop_budget` and each of its items `daily_limit`, `window_iteration_limit`, `max_runtime_ms`; V2 `profiles[]` `daily_budget`, `max_window_iterations`, `session_max_ms` | required members become optional (catalog format, not a ledger shape) | SS-3 | resource side (each rule migrates; RS-1 to RS-7 of the design) | an absent one serializes and hashes as nothing; a written one is checked as before (`loop_budget_missing` for 0, `limit_exceeded` above 1 000 000); V1 still requires all six, now as `missing_required_field` at the member from the validator instead of the parser |
+| SS3-2 | an unwritten bound is no dimension: admission reserves and refuses nothing on it, the retry round does not judge it, settlement never rewrites a run to `policy_runtime_budget_exceeded` on it, a refund gives back only the counts taken, E has no ceiling without `max_runtime_ms`, B8 derives `daily_remaining` and `last_daily_slot` only from the written daily bounds (both absent with neither), the strategy estimate takes the bounds written and the period | behaviour | SS-3 | runtime-host, policy crate | a written bound applies exactly as before; the Runtime keeps no count for an unwritten dimension, so a bound written later counts from that catalog's admissions |
+| SS3-3 | `PolicyBudgetReceipt`: each of `task_daily_used`/`task_daily_limit`, `task_window_used`/`task_window_limit`, `task_runtime_reserved_ms`/`task_runtime_limit_ms`, `activity_daily_used`/`activity_daily_limit`, `activity_window_used`/`activity_window_limit`, `activity_runtime_reserved_ms`/`activity_runtime_limit_ms` optional, a pair present together or not at all (`PolicyBudgetReceipt::is_valid`; payload validation `invalid_policy_budget_receipt` otherwise); `runtime_exceeded` never exceeds an absent runtime pair | persisted shape: required members become optional (`policy.dispatch_admitted`, and the retry round of `policy.control_state_recorded`) | SS-3 | runtime-host (admission) | written exactly as before for a catalog that writes every bound; a carried pair keeps the rule `used` between 1 and the limit |
+| SS3-4 | `DispatchPrerequisites.daily_limit`, `window_iteration_limit`, `max_runtime_ms` optional; the intent check requires each one carried to be above 0 and the intent's expected duration within a carried `max_runtime_ms` | policy interface (memory only; the intent is rebuilt from the record) | SS-3 | policy crate | a dispatch of a catalog that writes all three pins them with the bytes of before |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

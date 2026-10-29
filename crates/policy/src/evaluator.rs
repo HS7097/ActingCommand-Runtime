@@ -469,9 +469,14 @@ pub struct DispatchPrerequisites {
     pub evaluated_at_unix_ms: u64,
     pub facts_fresh_until_unix_ms: Option<u64>,
     pub activity_profile_id: String,
-    pub daily_limit: u32,
-    pub window_iteration_limit: u32,
-    pub max_runtime_ms: u64,
+    /// SS-3 (register §1.212): the task's written `loop_budget` items; an item the task does not
+    /// write is absent and serializes as nothing at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daily_limit: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_iteration_limit: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_runtime_ms: Option<u64>,
     #[serde(default)]
     pub urgency_milli: u16,
 }
@@ -2689,9 +2694,9 @@ struct PlacementCandidate {
     tie_breaker: u64,
     facts_fresh_until_unix_ms: Option<u64>,
     activity_profile_id: String,
-    daily_limit: u32,
-    window_iteration_limit: u32,
-    max_runtime_ms: u64,
+    daily_limit: Option<u32>,
+    window_iteration_limit: Option<u32>,
+    max_runtime_ms: Option<u64>,
 }
 
 enum PlacementResult {
@@ -2794,9 +2799,9 @@ fn build_candidate(
         tie_breaker: deterministic_tie_breaker(context.seed, &task.id, &instance.instance_id),
         facts_fresh_until_unix_ms,
         activity_profile_id: activity_profile.id.clone(),
-        daily_limit: task.loop_budget.daily_limit,
-        window_iteration_limit: task.loop_budget.window_iteration_limit,
-        max_runtime_ms: task.loop_budget.max_runtime_ms,
+        daily_limit: task.daily_limit(),
+        window_iteration_limit: task.window_iteration_limit(),
+        max_runtime_ms: task.max_runtime_ms(),
     })))
 }
 
@@ -8676,9 +8681,9 @@ pub(crate) mod tests {
 
         assert_eq!(prerequisites.facts_fresh_until_unix_ms, Some(NOW + 1_000));
         assert_eq!(prerequisites.activity_profile_id, "fixture-activity-a");
-        assert_eq!(prerequisites.daily_limit, 24);
-        assert_eq!(prerequisites.window_iteration_limit, 4);
-        assert_eq!(prerequisites.max_runtime_ms, 300_000);
+        assert_eq!(prerequisites.daily_limit, Some(24));
+        assert_eq!(prerequisites.window_iteration_limit, Some(4));
+        assert_eq!(prerequisites.max_runtime_ms, Some(300_000));
     }
 
     #[test]
