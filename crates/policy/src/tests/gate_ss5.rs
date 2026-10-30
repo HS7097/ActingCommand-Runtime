@@ -22,9 +22,9 @@ use super::selection_catalog::{DAY_MS, HOUR_MS, NOW, instance};
 use crate::{
     CandidateEligibility, CatalogCompileFailure, CatalogDiagnosticCode, CatalogDocumentSource,
     CatalogSources, CompiledCatalog, CompletedActivityWindow, DecisionReason, EligibilityState,
-    EvaluationFacts, EvaluationResources, EvaluationTime, FACT_PROBE_SUBSYSTEM,
-    FACT_REFRESH_TASK_ID, FactRefreshInputs, FactRefreshReader, FactRefreshSettings, FactValue,
-    HostResourceSnapshot, ObservedFact, PolicyEvaluation, PolicyEvaluationError,
+    EvaluationFacts, EvaluationResources, EvaluationTime, FACT_REFRESH_TASK_ID,
+    FACT_UNKNOWN_PROBE_SUBSYSTEM, FactRefreshInputs, FactRefreshReader, FactRefreshSettings,
+    FactValue, HostResourceSnapshot, ObservedFact, PolicyEvaluation, PolicyEvaluationError,
     SCHEDULING_SCHEMA_VERSION, SCHEDULING_SCHEMA_VERSION_V2, SchedulingDecisionState,
     ScopeSelector, StandardPackBinding, StandardPackComposeFailure, StandardPackComposeInput,
     StandardPackComposition, StandardPackGameFiles, TaskDecision, TaskRuntimeSnapshot,
@@ -198,9 +198,9 @@ fn ss5_t4_after_a_run_in_the_same_period_the_task_is_not_admitted_again() {
 // compiler refuses what no run of the task can read (a scope other than the instance's, a key no
 // reading mark writes) and a probe where its truth would not admit the task (under `not`, in the
 // feedback stop), each `predicate_uncomputable` at the member; a V1 document is refused at the
-// member as `unknown_field`. The composer requires `fact_probe` of a `schedule.json` whose rule
-// writes the member. Whether the key is one of the marks of the rule's own package is the resource
-// tools' cross-check (`resource-tooling` `gate_ss5`).
+// member as `unknown_field`. The composer requires `fact_unknown_probe` of a `schedule.json` whose
+// rule writes the member. Whether the key is one of the marks of the rule's own package is the
+// resource tools' cross-check (`resource-tooling` `gate_ss5`).
 #[test]
 fn ss5_t5_a_probe_on_a_key_its_package_does_not_read_is_refused() {
     let accepted = compile(single_task(probe_trigger(REMAINING), outcome_stop()))
@@ -254,7 +254,7 @@ fn ss5_t5_a_probe_on_a_key_its_package_does_not_read_is_refused() {
 
     let composed = compose(&schedule(true))
         .unwrap_or_else(|failure| panic!("the schedule composes: {failure}"));
-    assert_eq!(composed.games()[0].requires, [FACT_PROBE_SUBSYSTEM]);
+    assert_eq!(composed.games()[0].requires, [FACT_UNKNOWN_PROBE_SUBSYSTEM]);
     let trigger = serde_json::to_value(&composed.compiled().catalog().tasks.tasks[0].trigger)
         .expect("the trigger serializes");
     assert_eq!(trigger["on_unknown"], json!("probe"));
@@ -787,8 +787,8 @@ fn assert_refused(
 }
 
 // The game root's `schedule.json`: one rule running the package, due while its self-read count is
-// at least 1 and probed while it is unknown, with `requires` naming `fact_probe` when `declared`,
-// and one profile.
+// at least 1 and probed while it is unknown, with `requires` naming `fact_unknown_probe` when
+// `declared`, and one profile.
 fn schedule(declared: bool) -> Value {
     let mut predicate = probe_trigger(REMAINING);
     predicate
@@ -801,7 +801,7 @@ fn schedule(declared: bool) -> Value {
     rule.insert("package_id".to_owned(), json!(PACKAGE));
     rule.insert("priority".to_owned(), json!(100));
     let requires = if declared {
-        json!([FACT_PROBE_SUBSYSTEM])
+        json!([FACT_UNKNOWN_PROBE_SUBSYSTEM])
     } else {
         json!([])
     };

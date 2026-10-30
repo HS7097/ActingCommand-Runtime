@@ -100,9 +100,9 @@ same period, which the reset clears.
 ### Self-read fact probes
 
 A rule's `fact` predicate that writes `on_unknown` (SS-5, since 0.12.32;
-[scheduling/README.md](scheduling/README.md), "Self-read fact probe") requires `fact_probe`,
-alike: the composer refuses a file that writes it while `requires` does not name it,
-`schedule_invalid` at the first such member in file order (a rule's `trigger`, then its
+[scheduling/README.md](scheduling/README.md), "Self-read fact probe") requires
+`fact_unknown_probe`, alike: the composer refuses a file that writes it while `requires` does not
+name it, `schedule_invalid` at the first such member in file order (a rule's `trigger`, then its
 `feedback_stop`; for example `/rules/0/trigger/on_unknown`).
 
 The probe admits the rule's task while the fact is unknown so that the run of the rule's own
@@ -152,8 +152,8 @@ each game root that holds `schedule.json`, that file's bytes, the root as
 2. **Read** each game's file (above): the reader, `requires` (it names `fact_reference` when a
    rule writes a fact reference, `pool_fact_reference` when a pool's `capacity` or a
    `resource_projection`'s `value` is one, `reset_exclusions` when a timeline event writes
-   `excludes_fact_prefixes`, `fact_probe` when a rule's `fact` predicate writes `on_unknown`, and
-   the given subsystems name each entry), no timeline event
+   `excludes_fact_prefixes`, `fact_unknown_probe` when a rule's `fact` predicate writes
+   `on_unknown`, and the given subsystems name each entry), no timeline event
    invalidating `health.application.update_required` ("The store update rule"), the references
    and the classification. A refused game is reported with its game id.
 3. **Instantiate**: for each bound instance `i` of game `g` on server `s`, every rule whose

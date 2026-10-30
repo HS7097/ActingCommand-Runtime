@@ -15,8 +15,8 @@
 //!    to name `fact_reference` when a rule writes a fact reference (#386 CF-4) and
 //!    `pool_fact_reference` when a pool's `capacity` or a `resource_projection`'s `value` is one
 //!    (#386 CF-5) and `reset_exclusions` when a timeline event writes `excludes_fact_prefixes`
-//!    (Workflow #411 P19) and `fact_probe` when a rule's `fact` predicate writes `on_unknown`
-//!    (SS-5), no timeline event invalidating the Runtime's application update fact
+//!    (Workflow #411 P19) and `fact_unknown_probe` when a rule's `fact` predicate writes
+//!    `on_unknown` (SS-5), no timeline event invalidating the Runtime's application update fact
 //!    (UPD-1 fix round 5), and against the subsystems given (when given), its packages checked
 //!    against the registry, and the registry's packages classified. A refused game is reported
 //!    with its game id.
@@ -59,10 +59,11 @@ use sha2::{Digest, Sha256};
 
 use crate::canonical::canonical_serialized;
 use crate::{
-    ActivityProfile, CatalogDocumentSource, CatalogSources, CompiledCatalog, FACT_PROBE_SUBSYSTEM,
-    FACT_REFERENCE_SUBSYSTEM, FACT_REFERENCE_TYPE, POOL_FACT_REFERENCE_SUBSYSTEM, PoolSpec,
-    RESET_EXCLUSIONS_SUBSYSTEM, SCHEDULING_SCHEMA_VERSION_V2, SchedulingDocumentKind, TaskSpec,
-    TimelineEvent, compile_composed_catalog,
+    ActivityProfile, CatalogDocumentSource, CatalogSources, CompiledCatalog,
+    FACT_REFERENCE_SUBSYSTEM, FACT_REFERENCE_TYPE, FACT_UNKNOWN_PROBE_SUBSYSTEM,
+    POOL_FACT_REFERENCE_SUBSYSTEM, PoolSpec, RESET_EXCLUSIONS_SUBSYSTEM,
+    SCHEDULING_SCHEMA_VERSION_V2, SchedulingDocumentKind, TaskSpec, TimelineEvent,
+    compile_composed_catalog,
 };
 
 /// The catalog id of every composition (model §3.2 step 4).
@@ -532,13 +533,14 @@ fn read_game(
     if !schedule
         .requires
         .iter()
-        .any(|name| name == FACT_PROBE_SUBSYSTEM)
+        .any(|name| name == FACT_UNKNOWN_PROBE_SUBSYSTEM)
         && let Some(probe) = standard_pack_fact_probes(&schedule).into_iter().next()
     {
         return Err(refused(
             schedule_issue(StandardPackProblem::ScheduleInvalid, probe.pointer),
             format!(
-                "a fact predicate's {FACT_ON_UNKNOWN} needs requires to name {FACT_PROBE_SUBSYSTEM}"
+                "a fact predicate's {FACT_ON_UNKNOWN} needs requires to name \
+                 {FACT_UNKNOWN_PROBE_SUBSYSTEM}"
             ),
         ));
     }
@@ -696,8 +698,8 @@ pub struct StandardPackFactProbe {
 
 /// SS-5: every `fact` predicate that writes `on_unknown` in a rule's `trigger` or
 /// `feedback_stop`, in file order, through the children of `all`, `any` (`predicates`) and `not`
-/// (`predicate`). The composer requires `fact_probe` for the first; the resource tools check each
-/// key against the reading marks of the rule's package.
+/// (`predicate`). The composer requires `fact_unknown_probe` for the first; the resource tools
+/// check each key against the reading marks of the rule's package.
 pub fn standard_pack_fact_probes(schedule: &StandardPackSchedule) -> Vec<StandardPackFactProbe> {
     fn walk(
         node: &Value,

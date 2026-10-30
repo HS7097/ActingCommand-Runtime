@@ -623,7 +623,7 @@ pub enum FactUnknownRule {
 /// SS-5 (register §1.223): the configuration-manifest subsystem of a Runtime that reads a `fact`
 /// predicate's `on_unknown`. A `schedule.json` whose rule writes the member names it in
 /// `requires`, so an older Runtime refuses the file instead of misreading it.
-pub const FACT_PROBE_SUBSYSTEM: &str = "fact_probe";
+pub const FACT_UNKNOWN_PROBE_SUBSYSTEM: &str = "fact_unknown_probe";
 
 /// Workflow #361 R7: a clock predicate's rule for an occurrence that was not served in time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

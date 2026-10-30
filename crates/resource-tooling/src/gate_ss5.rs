@@ -28,7 +28,7 @@ const SERVER: &str = "test";
 // root marks `resource.other_a` and `resource.other_b`.
 const OWN: &str = "neutral.probe.own";
 const OTHER: &str = "neutral.probe.other";
-const FACT_PROBE: &str = "fact_probe";
+const FACT_UNKNOWN_PROBE: &str = "fact_unknown_probe";
 
 #[test]
 fn ss5_t5_a_probe_on_a_key_only_another_package_reads_is_refused() {
@@ -106,11 +106,11 @@ fn root() -> StandardPackRoot {
 }
 
 // `schedule.json`: one rule running the own package, due at every whole hour while its count `key`
-// is at least 1, the count probed while it is unknown; `requires` names `fact_probe`.
+// is at least 1, the count probed while it is unknown; `requires` names `fact_unknown_probe`.
 fn schedule(key: &str) -> Vec<u8> {
     let document: Value = json!({
         "schema_version": "actingcommand.schedule.v1",
-        "requires": [FACT_PROBE],
+        "requires": [FACT_UNKNOWN_PROBE],
         "rules": [{
             "id": OWN,
             "package_id": OWN,

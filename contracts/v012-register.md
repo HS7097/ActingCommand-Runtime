@@ -4268,7 +4268,7 @@ standard-pack check` and `package bundle --schedule` read the package's marks wi
 metadata reader and refuse a key the package does not mark (a key only another package reads, or
 none), `standard_pack_root_invalid` / `schedule_invalid` at `on_unknown` (the UPD-1 store-update
 cooldown rule is checked at the same place). A `schedule.json` that writes the member requires
-`fact_probe`.
+the subsystem `fact_unknown_probe`.
 
 **Why.** Missing or expired, such a fact made its gate Unknown, the maintenance package cannot read
 it, and only a run of the task would: a first-run deadlock; the resource side worked around it with
@@ -4289,18 +4289,18 @@ codes speak of the maintenance package. One code with an optional value covers b
 
 **Rollback** (to 0.12.31). Before the resource side writes the member: nothing to undo, no ledger,
 state, configuration or catalog shape is new and `fact_probe` is a reason of in-memory decisions
-and of the existing dispatch decision records. After it: 0.12.31 does not name `fact_probe`, so its
-composer refuses that `schedule.json` (`schedule_requires_missing`), records
-`standard_pack_root_invalid` and keeps the game's last good rules; roll the resource side back with
-it, or drop the member first. A dispatch decision record of 0.12.32 that holds `fact_probe` reads
-back on 0.12.31 as `outcome_relay_unregistered` with the spelling as `raw_code`, as every code an
-older build does not list.
+and of the existing dispatch decision records. After it: 0.12.31 does not name the subsystem
+`fact_unknown_probe`, so its composer refuses that `schedule.json` (`schedule_requires_missing`),
+records `standard_pack_root_invalid` and keeps the game's last good rules; roll the resource side
+back with it, or drop the member first. A dispatch decision record of 0.12.32 that holds
+`fact_probe` reads back on 0.12.31 as `outcome_relay_unregistered` with the spelling as
+`raw_code`, as every code an older build does not list.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
 | SS5-1 | `fact.on_unknown` (optional, `"probe"`; `PredicateSpec::Fact`, `FactUnknownRule`, `contracts/scheduling/v2/common.schema.json`) | catalog format addition (no ledger shape) | SS-5 | the resource side (RS-5) | V2 only; instance scope, a `resource.`/`inventory.` key, in the trigger outside every `not`; absent serializes as nothing |
 | SS5-2 | `fact_probe` (info / `none`; `fact_key`, `unknown_reason` required, `served_by_dispatch_unix_ms` optional) | new outcome code (`PolicyCode`, block `SS-5`) | SS-5 | the policy evaluator | layer `policy`, review `pending`; without the optional value the predicate is true, with it false and `trigger_false` follows when it decides the trigger |
-| SS5-3 | `config.subsystems` row `fact_probe` (always on, `config_subsystem_always_on`) | new row value of an existing fact (no shape) | SS-5 | actingd | the composer requires it of a `schedule.json` whose rule writes the member (`FACT_PROBE_SUBSYSTEM`) |
+| SS5-3 | `config.subsystems` row `fact_unknown_probe` (always on, `config_subsystem_always_on`) | new row value of an existing fact (no shape) | SS-5 | actingd | the composer requires it of a `schedule.json` whose rule writes the member (`FACT_UNKNOWN_PROBE_SUBSYSTEM`); named apart from the reason code `fact_probe` (SS5-2), since a subsystem name must not equal a registered outcome name (outcome guard G5) |
 | SS5-4 | the cross-check of a probe's key against the reading marks of the rule's own package (`probe_keys_marked`, `standard_pack_fact_probes`) | resource-tool check (no shape) | SS-5 | `actinglab standard-pack check`, `package bundle --schedule` | `standard_pack_root_invalid`, `schedule_invalid` at `/rules/<i>/…/on_unknown`; each package read once, metadata only |
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)

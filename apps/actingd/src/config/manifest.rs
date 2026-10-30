@@ -197,7 +197,7 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
         // writes the member requires it, so an older Runtime refuses the file instead of
         // misreading it.
         subsystem(
-            "fact_probe",
+            "fact_unknown_probe",
             true,
             Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
         ),
