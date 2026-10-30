@@ -4296,6 +4296,10 @@ back with it, or drop the member first. A dispatch decision record of 0.12.32 th
 `fact_probe` reads back on 0.12.31 as `outcome_relay_unregistered` with the spelling as
 `raw_code`, as every code an older build does not list.
 
+**Rollback correction** (release 0.12.32). An `on_unknown` member reaches the composed generation,
+so 0.12.31's start compiles it wherever its decision memory names that generation; SS-2b's
+rollback correction (§1.225) applies to it as well.
+
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
 | SS5-1 | `fact.on_unknown` (optional, `"probe"`; `PredicateSpec::Fact`, `FactUnknownRule`, `contracts/scheduling/v2/common.schema.json`) | catalog format addition (no ledger shape) | SS-5 | the resource side (RS-5) | V2 only; instance scope, a `resource.`/`inventory.` key, in the trigger outside every `not`; absent serializes as nothing |
@@ -4448,6 +4452,15 @@ generation without marks (take `schedule.json` out of the game roots, which comp
 empty catalog, or leave only maintenance-role rules) with no policy dispatch unsettled (the
 scheduler is stopped); 0.12.31 then starts on it and composes its own generation, unmarked, at
 its first check.
+
+**Rollback correction** (release 0.12.32, from 0.12.31's code). 0.12.31's start also compiles the
+generation of each (task, instance) pair's latest completed policy dispatch that its decision
+memory names, settled or not (`load_dispatch_journal`, `seen_intent_of`, `load_generation`).
+Every generation 0.12.32 composes carries the marks (`benefit_judged`, and `"pending"` or
+`on_unknown` wherever a `schedule.json` writes them). So the steps above suffice only while
+0.12.32 has dispatched no scheduled run, which is the case while the scheduler is stopped on every
+instance. After one has run, each such pair must first complete a dispatch under an unmarked
+generation; a pair whose rule is gone cannot, and 0.12.31 then cannot start on that state root.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
