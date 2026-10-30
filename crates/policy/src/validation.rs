@@ -595,6 +595,26 @@ fn validate_task(
         descriptor,
         diagnostics,
     );
+    // SS-5: a probe admits its task, so it stands in the trigger alone, outside every `not`. A
+    // V1 document is refused at the member itself (`validate_predicate_node`).
+    if map.schema_version.as_deref() == Some(SCHEDULING_SCHEMA_VERSION_V2) {
+        refuse_misplaced_probe(
+            &task.trigger,
+            &format!("{path}/trigger"),
+            true,
+            map,
+            descriptor,
+            diagnostics,
+        );
+        refuse_misplaced_probe(
+            &task.feedback_stop,
+            &format!("{path}/feedback_stop"),
+            false,
+            map,
+            descriptor,
+            diagnostics,
+        );
+    }
     validate_effects(
         &task.consumes,
         EffectDirection::Consume,
@@ -1028,6 +1048,7 @@ fn validate_predicate_node(
             comparison,
             value,
             max_age_ms,
+            on_unknown,
         } => {
             validate_scope(
                 map,
@@ -1043,6 +1064,9 @@ fn validate_predicate_node(
                 descriptor,
                 diagnostics,
             );
+            if on_unknown.is_some() {
+                validate_probe(scope, fact_key, path, map, descriptor, diagnostics);
+            }
             match value {
                 FactComparand::Value(value) => {
                     validate_comparison_value(
@@ -1479,6 +1503,106 @@ fn refuse_missed_under_not(
         | PredicateSpec::TimelineActive { .. }
         | PredicateSpec::ResourceProjection { .. }
         | PredicateSpec::Fact { .. }
+        | PredicateSpec::RecordDeadline { .. }
+        | PredicateSpec::FactTimeReached { .. }
+        | PredicateSpec::DependencyCompleted { .. }
+        | PredicateSpec::Outcome { .. } => {}
+    }
+}
+
+/// SS-5: `on_unknown` is a V2 member (a V1 document is refused as `unknown_field` at the member),
+/// and a probe names a fact only the task's own package reads: a reading of the instance's own
+/// scope (a reading writes nothing else), under a key a reading mark may write (`resource.` or
+/// `inventory.`). Any other is `predicate_uncomputable` at the member: no run of the task can make
+/// it known. Whether the key is one of the marks of the task's package is checked where the rule
+/// meets its package (`actinglab standard-pack check`, `package bundle --schedule`).
+fn validate_probe(
+    scope: &ScopeSelector,
+    fact_key: &str,
+    path: &str,
+    map: &SourceMap,
+    descriptor: Option<(&str, u64)>,
+    diagnostics: &mut Vec<CatalogDiagnostic>,
+) {
+    let member = format!("{path}/on_unknown");
+    if map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2) {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::UnknownField,
+            member,
+            "fact on_unknown requires actingcommand.scheduling.v2",
+            descriptor,
+        ));
+        return;
+    }
+    if !matches!(scope, ScopeSelector::Instance { .. }) {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::PredicateUncomputable,
+            member,
+            "a probe reads a fact of an instance's own scope, the only scope a reading writes",
+            descriptor,
+        ));
+        return;
+    }
+    if !crate::evaluator::REALISTIC_FACT_PREFIXES
+        .iter()
+        .any(|prefix| fact_key.starts_with(prefix))
+    {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::PredicateUncomputable,
+            member,
+            "a probe names a key a reading mark writes (resource. or inventory.)",
+            descriptor,
+        ));
+    }
+}
+
+/// SS-5: a probe admits its task, so a `fact` predicate with `on_unknown` stands only where its
+/// truth makes the task due: in the `trigger`, reached through `all` and `any`. Under a `not` (its
+/// true would block the task) or in the `feedback_stop` (its true would stop it) it is
+/// `predicate_uncomputable` at the member. `admits` says whether `predicate` at `path` is such a
+/// place.
+fn refuse_misplaced_probe(
+    predicate: &PredicateSpec,
+    path: &str,
+    admits: bool,
+    map: &SourceMap,
+    descriptor: Option<(&str, u64)>,
+    diagnostics: &mut Vec<CatalogDiagnostic>,
+) {
+    match predicate {
+        PredicateSpec::All { predicates } | PredicateSpec::Any { predicates } => {
+            for (index, child) in predicates.iter().enumerate() {
+                refuse_misplaced_probe(
+                    child,
+                    &format!("{path}/predicates/{index}"),
+                    admits,
+                    map,
+                    descriptor,
+                    diagnostics,
+                );
+            }
+        }
+        PredicateSpec::Not { predicate } => refuse_misplaced_probe(
+            predicate,
+            &format!("{path}/predicate"),
+            false,
+            map,
+            descriptor,
+            diagnostics,
+        ),
+        PredicateSpec::Fact {
+            on_unknown: Some(_),
+            ..
+        } if !admits => diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::PredicateUncomputable,
+            format!("{path}/on_unknown"),
+            "a probe stands only in a trigger, outside every not",
+            descriptor,
+        )),
+        PredicateSpec::Fact { .. }
+        | PredicateSpec::Clock { .. }
+        | PredicateSpec::TimelineActive { .. }
+        | PredicateSpec::ResourceProjection { .. }
         | PredicateSpec::RecordDeadline { .. }
         | PredicateSpec::FactTimeReached { .. }
         | PredicateSpec::DependencyCompleted { .. }

@@ -106,4 +106,7 @@ mod tests {
     // goes to the candidate closer to losing its eligibility, then more conditions, then declared
     // order.
     mod gate_ss2;
+    // SS-5 (0.12.32; register §1.223): a self-read fact's `on_unknown: probe` admits its task once
+    // per unknown period; a non-probe unknown still asks the maintenance package.
+    mod gate_ss5;
 }

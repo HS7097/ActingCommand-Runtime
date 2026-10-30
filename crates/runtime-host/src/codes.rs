@@ -178,7 +178,8 @@ actingcommand_contract::outcome_codes! {
         /// Info. The instance already runs when its autostart claim holds the key: the claim
         /// ends without action (Workflow #369 S6c; keys `alias`). emu-watch: for the watch's
         /// claim, the status read just before its Start found the emulator process running. A
-        /// report line.
+        /// report line. WATCH-P (0.12.32): with `skip_reason` `instance_paused`, the watch
+        /// requested no restart or recognition (`watch_kind`) for an instance its own pause holds.
         EmulatorAutostartSkipped => "emulator_autostart_skipped": info / none,
         /// Info. A drain or a shutdown ended the autostart claim before its Start; it releases
         /// its key (Workflow #369 S6c; keys `alias`). A report line.
@@ -2907,6 +2908,7 @@ actingcommand_contract::outcome_codes! {
     /// bound. Each is a `device_state_observed` record under the instance and the same report
     /// line, which actingd writes as a daemon line. #420 S4: everything else the watch says is an
     /// existing code (`emulator_state_read_failed`, `emulator_autostart_queued`,
+    /// `emulator_autostart_skipped` for a skip under a pause (WATCH-P),
     /// `runtime_monitor_spawn_failed`).
     pub(crate) enum EmulatorWatchCode {
         /// Info. A poll read the instance's emulator in another running state than the Runtime

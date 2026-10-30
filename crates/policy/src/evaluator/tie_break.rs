@@ -407,6 +407,7 @@ fn measure_condition(
             comparison,
             value,
             max_age_ms,
+            ..
         } => {
             // A fact the task's own runs lower: the reading key of a pool it consumes.
             let Some(pool) = task.consumes.iter().find_map(|effect| {
