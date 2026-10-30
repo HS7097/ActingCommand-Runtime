@@ -218,10 +218,14 @@ fn ss2c_t3_a_declaration_of_another_shape_is_refused_at_the_member() {
         ..composition.sources().clone()
     })
     .expect_err("a V2 task does not declare");
-    let path = format!("/tasks/0/{SCHEDULE_RULE_MAINTENANCE_MEMBER}");
+    // An unknown member is named by the reason; its JSON Pointer and position are the nearest
+    // preceding value's (the parser's documented behaviour, contracts/scheduling/README.md, "Pool
+    // Valuation").
+    let named = format!("unknown field `{SCHEDULE_RULE_MAINTENANCE_MEMBER}`");
     assert!(
         failure.diagnostics().iter().any(|diagnostic| {
-            diagnostic.code == CatalogDiagnosticCode::UnknownField && diagnostic.json_path == path
+            diagnostic.code == CatalogDiagnosticCode::UnknownField
+                && diagnostic.reason.contains(&named)
         }),
         "{:?}",
         failure.diagnostics()
