@@ -9,6 +9,128 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.31
+
+本版是 v0.12.30 之后合并的 4 个 PR：SS-6、R-1、R-2、RR-1。运行中会注意到的变化有五件，第一件是生产缺陷的修复。
+一是立即重跑占住实例的死循环修好了（RR-1）：在 v0.12.30 上，一个任务失败后开了立即重跑的一轮（`failure_retry_immediate`），
+这一轮开着时它的预计时长变了（最常见的是部署后第一次跑这个包时还不认得包、按声明时长记下，之后改按实测样本算；或者这个包
+又有了新的成功样本）。从此评估每一轮都选中这个立即重跑，准入每次都以 `policy_retry_round_ended` 拒掉，同一台实例上的其他
+任务一直轮不到（显示 `instance_already_selected`），账本里每 1–45 秒多一条错误事件。本版评估和准入用同一个判断，也比较
+预计时长：条件已变的立即重跑不再被选中，退回按自己的触发和冷却走；准入仍以这个码拒掉的（评估和准入之间窗口刚好结束），
+这一轮当场撤掉，实时和按账本重放都一样。升级后第一次评估起，卡住的实例就不再被这一轮占住、照常派其他任务；按账本重建决策
+记忆时，v0.12.30 记下的这种拒绝也会把那一轮撤掉。二是性能预设和性能键热改（R-2）：`performance.pacing.mode`、
+`.max_concurrent_runs`、`.heavy_dispatch_limit.normal` 和 `.paused` 可以在线改了，下一次评估就按新值，正在跑的运行不打断；
+新键 `performance.presets` 定义三个预设（standard、adaptive、light），`actingctl perf-preset get|set <档名>` 和 MCP
+`ac_perf_preset` 读当前档或一次套用一档。「同时执行」指同时执行的任务数 `max_concurrent_runs`，不是开着的模拟器数。三是
+新装的默认值改了（R-2）：`performance.pacing.mode` 默认 `pace`，`scheduling.parallel.enabled` 默认 `true`，新装不加覆盖就是
+adaptive 档；配置文件自己写了这两个键的、用指令设过的，按自己的值不变。四是派单时交给包的值（SS-6）：可花的量、剩余缺口和
+回数上限；生产目前没有包读它们，也没有任务写 `reserves` 或 `produces`，派单不变。五是配置文件没写、又没有默认值的键也能
+在线设了（R-1）：每实例的 `scheduling.blackout`、`recovery_ladder_profile` 和 `scheduling.fact_refresh.overdue_ms`。
+v0.12.30 已在本版之前发布。
+
+配置：`actingd-config` 从 [5, 21] 改为 [5, 22]；`runtime-client` 仍是 [2, 3]（`min` 仍是 2）；账本仍是 [3, 4]，`package` 仍是
+[3, 5]，其他接口不变。
+
+- 新键一个（R-2）：`performance.presets`，对象，档名 → `{mode, max_concurrent_runs（可不写）, heavy_dispatch_limit_normal,
+  parallel_enabled}`。默认值在 `actingd.defaults.json`：standard 是 `observe`、`heavy_dispatch_limit_normal` 2、并行开；
+  adaptive 是 `pace`、2、并行开；light 是 `pace`、`max_concurrent_runs` 1、`heavy_dispatch_limit_normal` 1、并行开。它在装配时
+  读一次，不能在线改（指令报 `config_key_not_settable`），`config.parameters.performance` 里多一行。配置文件可以自己写这个
+  成员：档名 1–64 字节、只用 `a-z0-9_`、不能叫 `custom`，预设里不能是 `full`，两档成员不能完全相同，不合规的启动和
+  `check-config` 以 `perf_config_invalid` 拒绝。`actingd-config` 升到 22 只因为这个成员；不写它的配置文件照常读。
+- 改了的默认值两个（R-2）：`actingd.defaults.json` 自 v0.12.30 以来只改了这两处，另外加了上面的 `performance.presets`：
+  - `performance.pacing.mode` 从 `observe` 改为 `pace`：运行内的等待按实例的节奏系数拉长（宿主不忙时系数是 1000，不拉长），
+    `observe` 只测量。
+  - `scheduling.parallel.enabled` 从 `false` 改为 `true`：准入的计划运行在各自实例的工作线程上跑，一台实例的长运行不再挡住这
+    一轮和其他实例。
+  - 其他都没改：`heavy_dispatch_limit.normal` 仍是 2、`.paused` 仍是 1，`max_concurrent_runs` 仍不写（不限）。部署计划的默认值
+    对比会列出这两项。配置文件自己写了这两个键的按文件里的值，这次改动对它不起作用。用指令设过的（v0.12.30 只能设
+    `scheduling.parallel.enabled`），指令照样恢复，在 `instructions` 检查的 `base_changed` 里点名，不算失败。想保持升级前行为
+    又没写文件的安装：升级后在部署挂起期间用指令把 `mode` 设回 `observe`、`parallel.enabled` 设回 `false`（`mode` 本版起能在线
+    设），或者写进配置文件。
+- 在线可改的键：`performance.pacing.mode`、`.max_concurrent_runs`、`.heavy_dispatch_limit.normal`、`.paused` 从不可改变为
+  可改（R-2）；`max_concurrent_runs` 不论文件写没写都能设，清掉回到文件的值，文件没写就是不限。配置文件没写、又没有默认值的
+  键，只要它的实例（每实例键）或它的节在配置里，就能在线设和清除（R-1）：每实例的 `scheduling.blackout`、
+  `recovery_ladder_profile`，以及 `scheduling.fact_refresh.overdue_ms`，以前报 `config_key_unknown`。其他没有默认值的键
+  （`standard_packs.root`，每实例的 `device_kind`、`recognition_package`、`start_emulator`）仍是装配时读，报
+  `config_key_not_settable`。
+- 新结果码：没有。结果码目录仍是 3814 个码、1725 个位置，本版的发布文件是空的，没有退役的码。新的值键 6 个（SS-6）：
+  `run_cap`、`effect_index`、`spend_allowance`、`gap_remaining`（整数），`spend_allowances`、`gaps_remaining`（记录列表），
+  都是 `policy_dispatch_parameters` 的可选值。
+- 账本没有新表、新索引、新事件类型或新形状，`ledger` 不升。`host.config_overrides` 的行沿用原形状；文件没写的键的那一行
+  `base_source` 是 `default`、`base_json` 是 `null`（R-1）。
+
+升级时要知道的：
+
+- `full` 不能用指令设（R-2）：`ConfigureSettings` 把 `performance.pacing.mode` 设成 `full` 以 `config_value_invalid`
+  （`config_value_problem` 为 `out_of_range`）拒绝，启动恢复时记录里的 `full` 也不恢复（`config_override_dropped`）。`full`
+  只能写在配置文件里；文件是 `full` 时，可以用指令或预设离开，清掉指令就回到 `full`。`.paused` 不大于 `.normal` 的整节检查照旧
+  （`section_check`）。
+- 套用预设是一次 `ConfigureSettings`（R-2）：四个成员（`mode`、`max_concurrent_runs`、`heavy_dispatch_limit.normal`、
+  `scheduling.parallel.enabled`）一起写，全成或全不成，`host.config_overrides` 只多一条记录。预设没写的成员（standard、adaptive
+  不写 `max_concurrent_runs`）发不带值的改动，清掉这个键的在线覆盖：回到文件的值，文件没写就是不限，回执里这一项是
+  `{key, value: "null"（字符串）, source: default}`。一个成员过不了检查（例如文件把 `.paused` 写得比 light 的 `normal` 1 大），
+  整档都不写。当前档：每个成员都等于某一档就是那一档，否则是 `custom`；standard 和 adaptive 只差 `mode`，单改 `mode` 就从一档
+  变成另一档；文件写了 `max_concurrent_runs` 的，套用 standard 或 adaptive 后回到文件的值，显示 `custom`。表里没有的档名在写之前
+  就被拒（CLI `actingctl_usage_invalid`，MCP `arguments_invalid`，都是 `not_recognised`）。`ac_perf_preset` 在 observer 层。
+- 热改的生效时机（R-2）：`mode` 每次评估读，运行中下一步就按新模式的系数；三个上限在每次策略评估和前向投影读，已准入的运行
+  不打断，下一轮按新值。
+- 派单交给包的值（SS-6，给资源侧）：任务写了 `reserves`、`consumes` 里有同一个池，或者 `produces` 的池被生效目标覆盖时，派单
+  不用 opt-in 就带上 `session.dispatch.schedule.spend_allowance.<i>`（`consumes` 第 i 项：保留门自己的可用量，即投影减去读数还
+  没反映的其他任务消耗，再减保留线，不足取 0，所以包永远不会被告知可以花到保留线以下）、`session.dispatch.schedule.gap_remaining.<j>`
+  （`produces` 第 j 项：生效目标的缺口，达成为 0）和 `session.dispatch.schedule.run_cap`，都是整数，只在运行的快照里叠加，
+  不落库。`run_cap` 是各保留消耗池上「允许量 ÷ 每次消耗」向下取整的最小值，产出池都没有基准权重时再和最大的「缺口 ÷ 每次产出」
+  向上取整取小，最后**不超过 1000**（`max_repeats` 事实上限的上限），所以包用 `max_repeats: {"fact_key":
+  "session.dispatch.schedule.run_cap"}` 读它不会撞上范围错误；声明不全时不给。B8 的 `daily_remaining`、`last_daily_slot` 不变。
+  只有这两类任务的派单记录会变，其他派单逐字节不变。
+- 清掉文件没写的键（R-1）：回执里这一项是 `{key, value: "null"（字符串）, source: default}`，值是四个字符的字符串 `null`，不是
+  JSON 的 null（回执的线上形状不变，`ConfiguredSetting.value` 是标量）；之后 `config.parameters` 里没有这个键的行。设在文件没写的
+  键上的覆盖，文件仍没写就保留，文件后来写了就作废（`config_override_superseded`）。无默认值的键原来文件写了、后来删了时，覆盖
+  以前报 `config_override_dropped`，现在报 `config_override_superseded`；部署工具的 `instructions` 检查对两者一样算不通过。
+- 重放的变化（RR-1）：v0.12.30 写下的、含被准入以 `policy_retry_round_ended` 拒掉的立即重跑的账本，本版重放时没有那一轮
+  （v0.12.30 重放会留着），这是有意的，留着的正是缺陷的状态。失败状态、连败、退避和计数都不变，这个任务下一次合法的正常触发
+  再开新的一轮；成功照旧清掉这一轮。被撤的那一对没有专门的原因码，靠它原有的原因说明在等什么（例如 `task_cooldown_active`）。
+
+退回 v0.12.30 之前要做的事（按代码核对过）：
+
+- 配置文件写了 `performance.presets`：v0.12.30 的性能节不认这个成员，启动和 `check-config` 拒绝整个文件。回退前先把这个成员
+  删掉并提交（`acsetup --commit-config`）。acsetup 和安装器不写它，没手写过就不用管。v0.12.30 自己的默认值重新生效：没有覆盖的
+  `mode` 回到 `observe`，`parallel.enabled` 回到 `false`。
+- 四个性能键的在线覆盖和 R-1 的行：行的形状没变，v0.12.30 读得了，但它认为这四个键不可改、配置里也没有文件没写的键的设置，
+  所以逐行作为 `config_override_dropped` 丢掉，列进 `instructions_dropped`。启动不失败，但它下一条 `host.config_overrides` 记录
+  不再有这些行（丢了，不会留到再升级），部署工具回退启动后的 `instructions` 检查也因此不通过。回退前先
+  `actingctl config clear <键>` 把它们清掉（包括套用预设留下的），或者接受这一项不过；想在 v0.12.30 保留这些值就写进配置文件。
+  `scheduling.parallel.enabled` 的覆盖 v0.12.30 也能设，照样保留（基值变回 `false`，在 `base_changed` 里点名，不算失败）。
+- 派单值（SS-6）：不用做什么，v0.12.30 读得了本版写的派单链（这类值不做键检查）。但它恢复这样的派单时只叠加 B8 的键，读新键
+  的包遇到未知事实：用 `max_repeats` 读 `run_cap` 的，在任何输入之前以已有的 `contained_task_designated_effect_cap_unresolved`
+  结束。所以资源侧要等所有部署都在 0.12.31 或以上之后才让包读这些键；回退前先把读它们的包换回不读的版本。
+- 立即重跑（RR-1）：账本和配置都不用处理，不带 `retry_round` 的值记录本来就是 v0.12.30 写和读的形状。但缺陷会回来：立即重跑的
+  一轮开着时预计时长一变，这台实例又会被占住，表现是 `ac_schedule` 里这台实例的其他候选一直是 `instance_already_selected`，
+  账本里反复出现 `policy_retry_round_ended`。
+- 只在程序里、不存状态的改动，回退后回到 v0.12.30 的行为：四个性能键回到装配时读、不可改；`perf-preset` 和 `ac_perf_preset`
+  没有了；文件没写的键又报 `config_key_unknown`；评估不再和准入共用判断。
+- 客户端和 Runtime 的配对（`runtime-client` 两边都是 [2, 3]，请求种类和回答形状都没变）：
+  - 本版的客户端连 v0.12.30 的 Runtime：照常。`actingctl perf-preset get|set` 和 `ac_perf_preset` 在 v0.12.30 上找不到
+    `performance.presets` 那一行，在写任何东西之前以 `config_facts_missing` 结束；`config set` 四个性能键被 v0.12.30 以
+    `config_key_not_settable` 拒绝（文件没写的 `max_concurrent_runs` 是 `config_key_unknown`），文件没写的 R-1 键以
+    `config_key_unknown` 拒绝。
+  - v0.12.30 的客户端连本版的 Runtime：照常。请求不变，它的 `config set` 现在也能设这四个键和 R-1 的键（设 `full` 被拒）；清掉
+    文件没写的键时回执值是字符串 `"null"`，旧的回执结构照样解码；`config.parameters.performance` 多一行 `performance.presets`。
+    本版没有新结果码。它没有 `perf-preset` 命令。
+
+运行上的变化：
+
+- 被拒的立即重跑不再占住实例（RR-1）：评估和准入用同一个判断；被准入以 `policy_retry_round_ended` 拒掉的立即重跑当场撤掉那一轮，同一台实例的其他任务照常派。
+- 派单给包的值（SS-6）：可花的量、剩余缺口和回数上限（最多 1000）随派单交给运行；生产没有包读它们，派单不变。
+- 文件没写的键也能在线设（R-1）：每实例的 `scheduling.blackout`、`recovery_ladder_profile` 和 `scheduling.fact_refresh.overdue_ms`。
+- 性能热改与预设（R-2）：四个性能键在线可改；三个性能预设，`actingctl perf-preset`、`ac_perf_preset`；新装默认 `pace`、并行开。
+
+本版合并的 PR：
+
+- #1446 SS-6（#386）：派单把 `session.dispatch.schedule.spend_allowance.<i>`、`.gap_remaining.<j>` 和 `.run_cap` 交给运行。允许量是保留门自己的可用量减保留线；`run_cap` 最多 1000。生产没有包读它们，派单不变。
+- #1447 R-1（#429）：文件没写、又没有默认值的键可以在线设和清除：每实例的 `scheduling.blackout`、`recovery_ladder_profile`，以及 `scheduling.fact_refresh.overdue_ms`。
+- #1448 R-2（#429）：`mode`、`max_concurrent_runs`、`heavy_dispatch_limit.normal`/`.paused` 可以在线改（指令设 `full` 被拒）；新键 `performance.presets`（standard、adaptive、light）；套用预设是一次全成或全不成的 `ConfigureSettings`；共用的「当前档」函数；`actingctl perf-preset`、MCP `ac_perf_preset`。改了的默认值：`performance.pacing.mode` → `pace`，`scheduling.parallel.enabled` → `true`。`actingd-config` [5, 22]。
+- #1449 RR-1（#428）：生产缺陷修复。被准入拒掉（`policy_retry_round_ended`）的立即重跑不再一直占住实例：选候选和准入共用一个判断，也比较预计时长；被拒的立即重跑撤掉那一轮，实时和重放都一样。
+
 ## v0.12.30
 
 本版是 v0.12.29 之后合并的 7 个 PR：SS-3、SS-1、R-0、R-15a、R-0c、R-0d、UPD-1。运行中会注意到的新东西有两件。
