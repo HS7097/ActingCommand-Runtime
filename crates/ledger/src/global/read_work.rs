@@ -229,6 +229,12 @@ impl ReadWork {
                 .is_some_and(|bound| bound.interrupted.load(Ordering::Relaxed))
     }
 
+    /// #422 LN-OFF-1: whether the read found its budget spent (a visited row, a look between its
+    /// statements or its statement bound saw it), without another look at the clock.
+    pub(in crate::global) fn was_spent(&self) -> bool {
+        self.is_spent()
+    }
+
     /// The rows visited so far.
     pub(in crate::global) fn visited(&self) -> usize {
         self.visited.get()

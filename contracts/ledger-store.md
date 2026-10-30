@@ -528,11 +528,65 @@ claim an atomic multi-event transaction.
 
 `GlobalLedger::open_metadata(GlobalLedgerEvidenceConfig)` returns an immutable
 `GlobalLedgerMetadata` for an explicit Runtime state root. It selects the formal
-SQLite or Segment reader through existing metadata and retains the supplied read
-budget. SQLite validates canonical records, sequence and IDs, integrity tags,
-relation indexes, head metadata and the complete migration marker/prefix. Segment
-uses its original bounded snapshot scan and reports the verified prefix and any
-corrupt tail. Neither path opens referenced artifact content.
+SQLite or Segment reader through existing metadata. Segment uses its original
+bounded snapshot scan with the supplied read budget and reports the verified
+prefix and any corrupt tail. Neither path opens referenced artifact content.
+
+SQLite (#422 LN-OFF-1, since 0.12.32; design option A) is a bounded snapshot at
+one pinned point, never a whole read:
+
+- **Opening.** The database opens read-only without the whole-file
+  `quick_check` (`RuntimeDatabase::open_existing_unchecked`), and the snapshot
+  holds a read-only connection of its own (`read_snapshot_connection`). In one
+  short read transaction it makes the Runtime writer open's checks: the format
+  and the views, the keyed meta row (head, head hash, marker `ready`, otherwise
+  `ledger_candidate_not_production`), the stored rows ending at the head
+  (`MAX(sequence)`), the contiguity of `1..=head` (`COUNT`, `MIN`, `MAX` through
+  an index) and the newest `ledger_observer.open_verify_tail_records` records,
+  each authenticated on its own with its link and artifact rows and chained to
+  the head hash. A damage of that tail, the meta row or the extent is refused
+  with the writer open's code and operation. In a second short read
+  transaction it reads the `artifact.eviction_intent` and
+  `artifact.eviction_outcome` records by type, each authenticated on its own,
+  as the eviction proof set the writer keeps resident, and pins the point
+  (head, head hash, marker, proofs). It reads no other record and does not
+  check the migrated prefix: an older record is authenticated when a read
+  reads it, and the whole-ledger check is `ledger-maintenance verify` (an
+  explicit offline mode is LN-OFF-3). `event_count()` is the head (`1..=head`
+  contiguous), `latest_sequence()` the head, `read_complete()` true,
+  `corrupt_tail()` and `repair_count()` none.
+- **Pages.** `project_view_page` reads the reader pool's page at the pinned
+  point (`view_page_at_point`): one short read transaction that checks the
+  medium against the point (`verify_published_extent`: the keyed meta row, the
+  marker, a head at or past the pinned one, the pinned head's hash), selects
+  through the indexes and authenticates each row it reads, with the eviction
+  observations of the pinned proofs. Its read scope's source is `offline`. A
+  page returns at most its request's limit (`MAX_RUNTIME_EVENT_QUERY_EVENTS`
+  records at most) and `MAX_RUNTIME_EVENT_QUERY_RESPONSE_BYTES`; one cut there
+  says so (`has_more`, limit `event_count` or `response_bytes`) and its cursor
+  reads the rest (Alice, pending decision 115, 10-30: the UI's every read is
+  bounded by its page, nothing is cut silently). A page of a root without the
+  derived views reads without the time index.
+- **Material.** `resolve_artifact` is one authenticated point read at the
+  pinned point, its eviction proof from the pinned proof set.
+- **Budgets** (no new key; the factory values of existing keys). The opening
+  ends within the supplied deadline (`with_budget`, `with_deadline`; its bytes
+  and events bound the opening's rows), else within
+  `ledger_observer.open_timeout_ms`'s 600 000 ms from its start. Each later read
+  ends within `ledger_observer.writer_reply_timeout_ms`'s 10 000 ms from its own
+  start, and no later than a deadline the caller set (`set_read_deadline`) or
+  passed (`resolve_artifact`). The deadline also holds inside a statement
+  (`ledger_observer.read_check_vm_steps`). A page reads under its deadline
+  alone and is refused whole when it passes; with
+  `sqlite_page_read_budget` it reads under a work budget
+  (`ledger_observer.read_budget_ms`) and answers incomplete with its cursor
+  (`read_budget`), as the Runtime's pages do. Every deadline refusal is
+  `ledger_read_budget_exceeded` (request error), its detail naming the bound
+  and the phase (`phase=open|proofs|page|resolve`).
+- **A live root** (pending decision 115, A): allowed. Every read is a short
+  read transaction at the pinned head; WAL lets the writer commit meanwhile, a
+  page never reads a record committed after the point, and the writer
+  observation reports the live writer (`Locked`).
 
 `GlobalLedger::open_selected(root, event_types, deadline)` returns the events of
 the given types. It opens the database read-only without the whole-file
@@ -607,7 +661,10 @@ applies the output profile. Pages report `material_read: not_requested`; source
 incompleteness is separate from count/byte pagination. The snapshot also exposes
 `latest_sequence`, `read_complete`, `writer_metadata`, `backend` and `corrupt_tail`
 without granting material access. CLI metadata pagination uses this entry rather
-than a material-verifying evidence open.
+than a material-verifying evidence open. #422 LN-OFF-1 (since 0.12.32): on an SQLite
+root the offline snapshot's page is the reader pool's page at the snapshot's
+pinned point (above, "Recovery, artifacts and forensic consumers"); its scope
+source is `offline`.
 
 SQLite page selection uses the six `ledger_view_*_v1` SQL views generated from
 `LedgerView::definition()`, with indexes for type, source, module, severity

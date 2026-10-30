@@ -22,9 +22,11 @@ read-only, with the same path, key and connection checks as
 `open_existing(root, true)`, but without `quick_check(1)`. Only the
 `check-config` catalog preview uses it, for its selected ledger read and its
 State view, and the range opening of the offline `actingledger events` and
-`export --performance` (`GlobalLedger::open_range`, Workflow #411 A4): every
-row they read is authenticated on its own. `ledger-maintenance` and the other
-forensic readers open through `open_existing` and keep the whole-file check.
+`export --performance` (`GlobalLedger::open_range`, Workflow #411 A4), and the
+bounded offline snapshot of an SQLite root (`GlobalLedger::open_metadata`, #422
+LN-OFF-1, since 0.12.32): every row they read is authenticated on its own.
+`ledger-maintenance` and the other forensic readers open through
+`open_existing` and keep the whole-file check.
 
 `RuntimeDatabase::open_existing_for_start(root)` (#422 LN-8, LEAN-L §3.2 step 1) is
 the Runtime start's open of existing storage: read-write, with the same path, key,

@@ -2999,6 +2999,11 @@ mod gate_qr1;
 // the Lab relations once per snapshot, for a few snapshots, and a window's start once.
 #[path = "tests/gate_qr2.rs"]
 mod gate_qr2;
+// #422 LN-OFF-1: the bounded offline snapshot (`open_metadata`): the writer open's checks, the
+// reader pool's pages at a pinned point, a point read for material, a deadline per read, pages of
+// at most their limit with a cursor to the rest.
+#[path = "tests/gate_ln_off1.rs"]
+mod gate_ln_off1;
 // #422 RB-1: the reader pool builds its Lab relations once in the background and its pages read
 // only the records after the build: the same pages with and without it, no full-history read on
 // a linked page, a failed build said as a warning, a new anchor naming an old request.

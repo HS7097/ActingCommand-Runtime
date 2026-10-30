@@ -290,7 +290,14 @@ and evidence of authorized eviction belong to the material reader.
 `GlobalLedgerMetadata::project_view_page`. `LedgerEventMetadata` contains the
 validated event fields, typed payload and original artifact references. Source
 validation verifies the ledger structure and integrity before exposing those
-fields; material state remains `not_requested`.
+fields; material state remains `not_requested`. On an SQLite root (#422
+LN-OFF-1, since 0.12.32) the opening verifies what the Runtime writer's open
+verifies (the keyed meta row, `1..=head` contiguous, the newest
+`ledger_observer.open_verify_tail_records` records chained to the head hash)
+and pins that point; each page is the reader pool's page at the point, one
+short read transaction that authenticates every row it reads, at most a page of
+records with a cursor to the rest, within its own deadline
+([ledger store](ledger-store.md), "Recovery, artifacts and forensic consumers").
 
 The executable delegates typed parsing and reading to `ledger-forensics`:
 
