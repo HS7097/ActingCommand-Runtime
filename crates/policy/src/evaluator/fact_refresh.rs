@@ -196,6 +196,8 @@ pub fn fact_refresh_task() -> &'static TaskSpec {
         continues_from: None,
         dispatch_parameters: None,
         reserves: None,
+        // SS-2b: the Runtime's own reading task is never judged by net benefit.
+        benefit_judged: None,
     })
 }
 
@@ -459,6 +461,7 @@ pub(super) fn plan(
                     tie_breaker: candidate.tie_breaker,
                     tie: candidate.tie.clone(),
                     chain_head: None,
+                    benefit: None,
                 });
                 candidates.push(candidate);
             }
@@ -720,6 +723,11 @@ fn refresh_candidate(
         // and comes after every declared task in a tie.
         tie: TieKey::runtime_task(),
         chain_head: None,
+        // SS-2b: the Runtime's own reading is readings maintenance (Alice's ruling 104 point 1):
+        // of the maintenance tier, never judged by net benefit.
+        business: false,
+        judged: false,
+        benefit: None,
         facts_fresh_until_unix_ms: None,
         activity_profile_id: profile.id.clone(),
         daily_limit: task.daily_limit(),

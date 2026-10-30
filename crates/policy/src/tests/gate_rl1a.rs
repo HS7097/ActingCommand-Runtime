@@ -816,9 +816,28 @@ fn evaluated(
 #[test]
 fn rl1a_t1_catalog_a_converted_by_the_as_is_rules_composes_back_and_decides_alike() {
     let as_is = catalog_a_as_is();
-    let schedule = convert_as_is(&as_is, INSTANCE_A, &bundle_a());
+    // SS-2b (register §1.225): the composer marks every rule whose package is not
+    // maintenance-role `benefit_judged`, so the rule's package is maintenance-role here (a startup
+    // use) and its rule composes back byte for byte, unjudged, as before.
+    let bundle = bundle(
+        GAME_A,
+        &[
+            (PACKAGE, SERVER_A),
+            (RETURN_PACKAGE, SERVER_A),
+            (EXTRA_PACKAGE, SERVER_A),
+        ],
+        &[
+            (PACKAGE, SERVER_A, "startup"),
+            (RETURN_PACKAGE, SERVER_A, "return_home"),
+        ],
+    );
+    let schedule = convert_as_is(&as_is, INSTANCE_A, &bundle);
     let composition = composed(
-        &[game_a(Some(schedule))],
+        &[GameRoot {
+            game: GAME_A,
+            schedule: Some(schedule),
+            bundle,
+        }],
         &[(INSTANCE_A, GAME_A, SERVER_A)],
         Some(&BTreeSet::new()),
     );

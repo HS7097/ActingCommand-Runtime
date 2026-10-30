@@ -2270,6 +2270,18 @@
     "evaluated_at_unix_ms": {
       "type": "unix_ms",
       "description": "The time of the policy evaluation that refused an input, in Unix milliseconds (ISO-PE, #419)."
+    },
+    "benefit_gap": {
+      "type": "vocab:benefit_gap",
+      "description": "Why a judged candidate's net benefit is unknown: no declared effect, a pending entry, a pending or missing valuation of a pool it touches, or an unknown reading the cost of a pool it consumes needs (SS-2b, contracts/scheduling/README.md \"Net benefit within a tier\")."
+    },
+    "benefit_milli": {
+      "type": "integer",
+      "description": "A judged candidate's net benefit B in milli: the value of what one run produces less the cost of what it consumes, each at the resource layer's weight per valuation step, a regenerating pool's cost discounted by its fullness (SS-2b)."
+    },
+    "expected_duration_ms": {
+      "type": "duration_ms",
+      "description": "The expected duration E a judged candidate's net benefit is divided by to rank it: the pair's expected duration, else its last settled run's, else the declared one, in milliseconds (SS-2b)."
     }
   },
   "vocabularies": {
@@ -3396,6 +3408,27 @@
         },
         "after_read_missing": {
           "description": "No reading of the key followed the confirmation; the key's record is dropped."
+        }
+      }
+    },
+    "benefit_gap": {
+      "description": "Why a judged candidate's net benefit is unknown, the value of benefit_unknown (SS-2b, contracts/scheduling/README.md \"Net benefit within a tier\"). Unknown is never 0: the known part is never added up.",
+      "review": "pending",
+      "tokens": {
+        "no_effects": {
+          "description": "The task declares no produces and no consumes entry."
+        },
+        "entry_pending": {
+          "description": "An entry's amount is the pending marker; pool_id names its pool."
+        },
+        "valuation_pending": {
+          "description": "A pool the task touches has the pending marker for its valuation; pool_id names it."
+        },
+        "valuation_missing": {
+          "description": "A pool the task touches has no valuation for the instance; pool_id names it."
+        },
+        "reading_unknown": {
+          "description": "The cost of a regenerating pool the task consumes needs the pool's reading, which is unknown or expired; pool_id names the pool, fact_key and unknown_reason its reading when it reads a fact, and the fact refresh is asked for it."
         }
       }
     },
@@ -7273,6 +7306,9 @@
       "runtime-database",
       "runtime-host",
       "runtime-state"
+    ],
+    "benefit_": [
+      "policy"
     ],
     "bind_": [
       "actingd",

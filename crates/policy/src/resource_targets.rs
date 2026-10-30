@@ -709,7 +709,7 @@ enum MissingTerm {
 /// `scale` and `gap.weight_milli`. The rule needs no resolution: `shortfall_linear`, the only
 /// one, is also what an absent rule and an absent gap block mean.
 fn target_terms(target: &ResourceTargetSpecV2, pool: &PoolSpec) -> Result<(u64, u64), MissingTerm> {
-    let valuation = pool.valuation.as_ref();
+    let valuation = pool.declared_valuation();
     let scale = target
         .scale
         .or_else(|| valuation.map(|valuation| valuation.scale))
@@ -806,15 +806,16 @@ fn per_run_production(task: &TaskSpec, pool_id: &str) -> u128 {
     per_run_yield(&task.produces, pool_id)
 }
 
-/// [`per_run_production`] from a task's yield declaration alone.
-fn per_run_yield(produces: &[ResourceEffectSpec], pool_id: &str) -> u128 {
+/// [`per_run_production`] from a task's yield declaration alone. SS-2b: an entry whose `amount` is
+/// pending declares no yield here (it only makes a judged candidate's net benefit unknown).
+pub(crate) fn per_run_yield(produces: &[ResourceEffectSpec], pool_id: &str) -> u128 {
     produces
         .iter()
-        .filter(|effect| effect.pool_id == pool_id)
+        .filter(|effect| effect.pool_id == pool_id && !effect.is_pending())
         .map(|effect| match effect.expected_amount_milli {
             Some(amount) => u128::from(amount),
             None => {
-                u128::from(effect.amount.expect("compiled integer effect"))
+                u128::from(effect.units().expect("compiled integer effect"))
                     * u128::from(effect.confidence_milli)
                     / 1_000
                     * 1_000
@@ -1717,7 +1718,7 @@ pub fn targetable_resources(
             });
             continue;
         }
-        let valuation = pool.valuation.as_ref();
+        let valuation = pool.declared_valuation();
         let default_scale = valuation.map(|valuation| valuation.scale);
         let default_importance_milli = valuation
             .and_then(|valuation| valuation.gap.as_ref())
@@ -1988,6 +1989,15 @@ impl ResourceTerm {
     /// Whether the policy moves the candidate: a positive term or an effective override.
     pub(crate) fn takes_part(&self) -> bool {
         self.term_milli > 0 || self.override_target.is_some()
+    }
+
+    /// SS-2b: the effective weight `W = B + Γ` of each pool this term weighs, by pool id; the
+    /// net benefit reads the resource layer's own weights and writes none.
+    pub(crate) fn pool_weights(&self) -> BTreeMap<String, u64> {
+        self.items
+            .iter()
+            .map(|item| (item.pool.clone(), item.effective_milli))
+            .collect()
     }
 
     /// The candidate's v2 reasons after the policy-level one, in this order and each at most
@@ -2561,7 +2571,7 @@ fn weigh_production(
         let covering = targets
             .iter()
             .find(|target| target.pool.id == pool.id && target.covers(task_id, per_run));
-        let valuation = pool.valuation.as_ref();
+        let valuation = pool.declared_valuation();
         let Some(step) = valuation
             .map(|valuation| valuation.scale)
             .or_else(|| covering.and_then(|target| target.target.scale))
@@ -2634,7 +2644,7 @@ fn weighed_tasks(
             bundle.pools.pools.iter().any(|pool| {
                 scope_matches_instance(&pool.scope, instance)
                     && per_run_production(task, &pool.id) >= 1
-                    && (pool.valuation.is_some()
+                    && (pool.declared_valuation().is_some()
                         || targets.iter().any(|target| {
                             target.resource == pool.id
                                 && target
@@ -2742,7 +2752,7 @@ fn resolve_v2(
         };
         let status = match target_terms(target, pool) {
             Err(_) => TargetStatus::Unresolved {
-                why: if pool.valuation.is_none() {
+                why: if pool.declared_valuation().is_none() {
                     "valuation_missing"
                 } else {
                     "gap_missing"
@@ -3342,13 +3352,14 @@ impl ReserveView {
 }
 
 /// A task's declared consumption of one pool in real units: the sum of its `consumes` amounts
-/// for the pool (the compiler admits only `amount` on a consumption).
+/// for the pool (the compiler admits only `amount` on a consumption). SS-2b: a pending `amount`
+/// declares no consumption here, as an entry without the pool would.
 pub(crate) fn declared_consumption(task: &TaskSpec, pool_id: &str) -> PolicyEvaluationResult<u64> {
     task.consumes
         .iter()
         .filter(|effect| effect.pool_id == pool_id)
         .try_fold(0_u64, |sum, effect| {
-            sum.checked_add(effect.amount.unwrap_or(0))
+            sum.checked_add(effect.units().unwrap_or(0))
         })
         .ok_or_else(|| {
             PolicyEvaluationError::overflow(format!(
@@ -3734,14 +3745,14 @@ fn spend_allowance(view: &ReserveView, pending: u64) -> Option<u64> {
 }
 
 /// The sum of the declared integer per-run `amount`s of `effects` on `pool_id`; `None` when one
-/// of them declares none (an `expected_amount_milli` production) or the sum is 0. The sum
-/// saturates.
+/// of them declares none (an `expected_amount_milli` production or, SS-2b, a pending amount) or
+/// the sum is 0. The sum saturates.
 fn declared_amount(effects: &[ResourceEffectSpec], pool_id: &str) -> Option<u64> {
     effects
         .iter()
         .filter(|effect| effect.pool_id == pool_id)
         .try_fold(0_u64, |sum, effect| {
-            effect.amount.map(|amount| sum.saturating_add(amount))
+            effect.units().map(|amount| sum.saturating_add(amount))
         })
         .filter(|amount| *amount > 0)
 }
@@ -3796,7 +3807,7 @@ fn goal_runs(
         pools
             .iter()
             .find(|pool| pool.id == effect.pool_id)
-            .and_then(|pool| pool.valuation.as_ref())
+            .and_then(|pool| pool.declared_valuation())
             .is_some_and(|valuation| valuation.base_weight_milli > 0)
     });
     if base_weighted {

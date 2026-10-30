@@ -68,7 +68,7 @@
 
 use crate::codes::ResourceToolingCode;
 use crate::package_directory::{PACK_DEADLINE, packs_empty};
-use crate::standard_pack_schedule::check_schedule;
+use crate::standard_pack_schedule::report_schedule;
 use crate::{
     DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES, StandardPackCheckRequest, StandardPackCheckResponse,
     StandardPackRootFiles,
@@ -283,19 +283,23 @@ pub fn check_standard_pack_root(
         &|directory: &str| root.join(directory),
         BTreeMap::new(),
     )?;
-    // ROUT-L RL-1a: the schedule rules, composed as the Runtime composes them.
+    // ROUT-L RL-1a: the schedule rules, composed as the Runtime composes them; SS-2b: with the
+    // judged rules' coverage and one warning per judged rule that declares no value.
+    let mut benefit_coverage = None;
     if let Some(schedule) = bytes(STANDARD_PACK_SCHEDULE_FILE) {
         let maintenance = bytes(STANDARD_PACK_BUNDLE_FILE)
             .and_then(|bundle| serde_json::from_slice::<BundleIndex>(bundle).ok())
             .map(|index| index.maintenance().to_vec())
             .unwrap_or_default();
-        warnings.extend(check_schedule(
+        let report = report_schedule(
             &game,
             &checked,
             &maintenance,
             schedule,
             &root.join(STANDARD_PACK_SCHEDULE_FILE),
-        )?);
+        )?;
+        warnings.extend(report.warnings);
+        benefit_coverage = Some(report.benefit_coverage);
         // UPD-1 fix round 1 (review L6): a store update rule needs a cooldown.
         store_update_cooldowns(
             &game,
@@ -320,6 +324,7 @@ pub fn check_standard_pack_root(
         root_files: present,
         pack_count: checked.registry.len(),
         warnings,
+        benefit_coverage,
     })
 }
 
@@ -736,7 +741,7 @@ fn declared_parameters(provided: &ProvidedCapability) -> BTreeMap<&str, (BTreeSe
 /// a rule that runs a store update package (`control.json` `store_update`, read by the Runtime's
 /// metadata reader) looks again only after its `cooldown_ms` when the store has no new version
 /// yet; with 0 it would run the store and the game in turn without a pause. So such a rule of
-/// `schedule` (the bytes of `schedule.json` at `path`, already composed by `check_schedule`) whose
+/// `schedule` (the bytes of `schedule.json` at `path`, already composed by `report_schedule`) whose
 /// `cooldown_ms` is 0 is `standard_pack_root_invalid`, `schedule_invalid` at
 /// `/rules/<index>/cooldown_ms`. A rule without the member never gets here: the composer refuses
 /// it, `cooldown_ms` being a required V2 task member. Other rules are not judged.
@@ -804,7 +809,7 @@ pub(crate) fn store_update_cooldowns(
 /// preparing the package). A key only another package reads, or one no package reads, is
 /// `standard_pack_root_invalid`, `schedule_invalid` at the member's pointer
 /// (`/rules/<index>/…/on_unknown`) of `schedule` (the bytes of `schedule.json` at `path`, already
-/// composed by `check_schedule`). Each package is read once, and only for a rule that writes one.
+/// composed by `report_schedule`). Each package is read once, and only for a rule that writes one.
 pub(crate) fn probe_keys_marked(
     game: &str,
     root: &StandardPackRoot,

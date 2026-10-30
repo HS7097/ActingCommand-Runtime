@@ -515,7 +515,7 @@ fn apply_declared_effects(
             ForwardError::invalid(format!("projected task '{}' is missing", intent.task_id))
         })?;
         for effect in task.consumes.iter().chain(task.produces.iter()) {
-            let amount = effect.amount.ok_or_else(|| {
+            let amount = effect.units().ok_or_else(|| {
                 ForwardError::invalid("expected production cannot update projected inventory")
             })?;
             let pool = pools.get_mut(&effect.pool_id).ok_or_else(|| {
@@ -573,7 +573,9 @@ fn uncertain_effect_gap(
             .iter()
             .chain(task.produces.iter())
             .any(|effect| {
+                // SS-2b: a pending quantity is no evidence either.
                 effect.expected_amount_milli.is_some()
+                    || effect.is_pending()
                     || effect.confidence_milli < 1_000
                     || effect.observation_source == ObservationSource::Inferred
             })

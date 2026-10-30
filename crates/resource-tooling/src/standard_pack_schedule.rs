@@ -5,13 +5,16 @@
 //! composes through the one function the Runtime runs, `compose_standard_pack_rules` of the policy
 //! crate, so the Tools accept exactly what the Runtime accepts.
 //!
-//! - [`check_schedule`]: `package bundle --schedule` and `actinglab standard-pack check` compose
+//! - [`report_schedule`]: `package bundle --schedule` and `actinglab standard-pack check` compose
 //!   the file with one bound instance per server of the root's registry (an alias of the check's
 //!   own, `standard-pack-check.<server>`), so every rule, pool, profile and event is placed and
 //!   compiled as the Runtime places it for one instance of each server. `requires` is reported, not
 //!   checked: no Runtime manifest is at hand, and the Runtime that loads the rules checks it. A
 //!   refusal is `standard_pack_root_invalid` naming `schedule.json`, its `standard_pack_problem` and
 //!   JSON pointer; each unclassified package is one `standard_pack_package_unclassified` warning.
+//!   SS-2b (register §1.225): each judged rule that declares no value is one
+//!   `standard_pack_benefit_undeclared` warning, and the game's judged rules are counted as
+//!   complete, pending and undeclared.
 //! - [`compose_standard_packs`]: `actinglab standard-pack compose --root <standard_packs.root>
 //!   --instance <alias>=<game>/<server>... --out <new directory>` composes the game roots of the
 //!   bound games for those bindings and writes the four V2 documents (`tasks.json`, `pools.json`,
@@ -29,9 +32,9 @@ use actingcommand_contract::{
     StandardPackRoot, StandardPackRootBytes, read_standard_pack_root, validate_instance_alias,
 };
 use actingcommand_policy::{
-    ComposedGame, ComposedProcedure, StandardPackBinding, StandardPackComposeFailure,
-    StandardPackComposeInput, StandardPackComposition, StandardPackGameFiles,
-    compose_standard_pack_rules,
+    BenefitCoverage, ComposedGame, ComposedProcedure, StandardPackBinding,
+    StandardPackComposeFailure, StandardPackComposeInput, StandardPackComposition,
+    StandardPackGameFiles, compose_standard_pack_rules,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -78,9 +81,10 @@ pub struct StandardPackComposeResponse {
     pub warnings: Vec<Outcome>,
 }
 
-/// Checks `schedule` (the bytes of the game root's `schedule.json` at `path`) against the game
-/// root `root` of `game` and the bundle's `maintenance` entries (module doc): the unclassified
-/// warnings, or the refusal.
+/// The composition's own warnings (unclassified packages, SS-2's priority tiers) for `schedule`,
+/// or the refusal, as [`report_schedule`] composes it, without SS-2b's report: what the gate
+/// tests of #386 CF-4 and CF-5 read.
+#[cfg(test)]
 pub(crate) fn check_schedule(
     game: &str,
     root: &StandardPackRoot,
@@ -88,6 +92,51 @@ pub(crate) fn check_schedule(
     schedule: &[u8],
     path: &Path,
 ) -> LabResult<Vec<Outcome>> {
+    compose_check(game, root, maintenance, schedule, path).map(|composition| composition.warnings())
+}
+
+/// What `package bundle --schedule` and `actinglab standard-pack check` report of a game's
+/// `schedule.json`: the composition's warnings followed by, SS-2b (register §1.225), one
+/// `standard_pack_benefit_undeclared` per judged rule that declares no value, and the game's
+/// judged rules' coverage (complete, pending, undeclared).
+pub(crate) struct ScheduleReport {
+    pub(crate) warnings: Vec<Outcome>,
+    pub(crate) benefit_coverage: BenefitCoverage,
+}
+
+/// Checks `schedule` (the bytes of the game root's `schedule.json` at `path`) against the game
+/// root `root` of `game` and the bundle's `maintenance` entries (module doc): its
+/// [`ScheduleReport`], or the refusal.
+pub(crate) fn report_schedule(
+    game: &str,
+    root: &StandardPackRoot,
+    maintenance: &[BundleMaintenance],
+    schedule: &[u8],
+    path: &Path,
+) -> LabResult<ScheduleReport> {
+    let composition = compose_check(game, root, maintenance, schedule, path)?;
+    let mut warnings = composition.warnings();
+    warnings.extend(composition.benefit_warnings());
+    let benefit_coverage = composition
+        .benefit_coverage()
+        .into_iter()
+        .find(|(game_id, _)| game_id == game)
+        .map(|(_, coverage)| coverage)
+        .unwrap_or_default();
+    Ok(ScheduleReport {
+        warnings,
+        benefit_coverage,
+    })
+}
+
+/// The composition [`report_schedule`] reads: one bound instance per server of the registry.
+fn compose_check(
+    game: &str,
+    root: &StandardPackRoot,
+    maintenance: &[BundleMaintenance],
+    schedule: &[u8],
+    path: &Path,
+) -> LabResult<StandardPackComposition> {
     let servers = root
         .registry
         .listed()
@@ -114,14 +163,13 @@ pub(crate) fn check_schedule(
             maintenance,
         },
     )]);
-    let composition = compose_standard_pack_rules(&StandardPackComposeInput {
+    compose_standard_pack_rules(&StandardPackComposeInput {
         instances: &instances,
         games: &games,
         subsystems: None,
         catalog_version: TOOLS_CATALOG_VERSION,
     })
-    .map_err(|failure| refused(&failure, game, &|_| path.to_owned()))?;
-    Ok(composition.warnings())
+    .map_err(|failure| refused(&failure, game, &|_| path.to_owned()))
 }
 
 /// `actinglab standard-pack compose` (module doc).

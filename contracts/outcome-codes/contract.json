@@ -17277,6 +17277,24 @@
       "common_causes": "The game's rules still carry one priority value per rule from before the two tiers.",
       "handling": "Give maintenance rules one high priority and every business rule one normal priority; a chain step ranks with its chain head by itself."
     },
+    "standard_pack_benefit_undeclared": {
+      "category": "warning",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "game": "required",
+        "task_id": "required",
+        "pool_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.32",
+      "description": "A rule of a standard-pack game root's schedule.json (task_id) that the composer judges by net benefit, because its package is not maintenance-role, declares no value: it has no produces and no consumes entry, or a pool it touches (pool_id) has neither a valuation nor the pending marker (SS-2b, Alice's ruling 116; contracts/standard-pack-schedule.md). Its candidates are not dispatched (benefit_unknown) until it does; the root is composed as before. The policy composer finds it, once per rule; actinglab standard-pack check and package bundle --schedule report it with the game's counts of complete, pending and undeclared judged rules.",
+      "common_causes": "The resource side has not written the rule's produces and consumes, or the touched pool's valuation, yet.",
+      "handling": "Write the rule's produces and consumes and the pools' valuation; write the pending marker \"pending\" where a value is not known yet (it changes nothing but the count)."
+    },
     "standard_pack_root_invalid": {
       "category": "error",
       "ladder_class": "declaration_error",

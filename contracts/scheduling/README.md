@@ -161,6 +161,13 @@ its source line and column. For a missing or unknown field the reason names the
 field, while `json_path` and the line and column point at the nearest preceding
 value (the existing parser's behaviour).
 
+SS-2b (since 0.12.32; register §1.225; Alice's ruling 116, 「无害占位符或者空值」): in a V2 catalog a
+pool may write `"valuation": "pending"`, the marker that its worth is not known yet. It does
+nothing but make the net benefit of a judged task that touches the pool unknown ("Net benefit
+within a tier"): every other reader sees no valuation, as without the member. Any other string
+is `type_mismatch` at `/pools/<i>/valuation`, and so is the marker in a V1 document; `null`
+stays what it was, no valuation. A catalog without the marker keeps its hash.
+
 The block is a declaration. The compiler validates it and hashes it with the
 catalog. Since SS-1 (0.12.30; Alice's ruling 100) the evaluator reads it for
 every instance: its base weight weighs every producing task with or without a
@@ -208,6 +215,15 @@ before applying a dispatched expected effect. The integer strategy planner retur
 unavailable production rate for a relevant expected producer, which follows its existing
 needs-detection path; it rejects a reported definite rate inconsistent with that result.
 Neither path records expected production as actual inventory.
+
+SS-2b (since 0.12.32; register §1.225): in a V2 catalog an effect of either direction may write
+`"amount": "pending"` as its one quantity, the marker that it is not known yet. It does nothing
+but make a judged task's net benefit unknown ("Net benefit within a tier"): the resource terms,
+the reserve gate, the tie-break and the spend values read it as no declared quantity of that
+entry, forward projection as `effect_evidence_insufficient`, and the strategy planner as an
+unavailable rate. With `expected_amount_milli` beside it the effect is `limit_exceeded`, as two
+quantities are; any other string is `type_mismatch`, and so is the marker in a V1 document (at
+the entry's `amount`). A catalog without the marker keeps its hash.
 
 The compiler enforces quantity exclusivity, version, direction and capacity together;
 the declaration-only parser checks wire types. Existing integer declarations serialize
@@ -728,8 +744,9 @@ A chain step that hands over on its page goes first (coordinator triage Q15; reg
 Since 0.12.32 (Alice's ruling 104 points 2, 4 and 5, approved 2026-10-30, Workflow #386
 comment 6523113979; register §1.222). Point 1, two priority tiers, is the resource side's
 (RS-8; [standard-pack-schedule.md](../standard-pack-schedule.md), "Two priority tiers" warns of a
-third). Point 3, net benefit within a tier, is not built: the rank value (`total`, "Dispatch
-Decision Record" item 1) is the one of before.
+third). Point 3, net benefit within a tier, is SS-2b's ("Net benefit within a tier" below); for a
+catalog that marks no task the rank value (`total`, "Dispatch Decision Record" item 1) is the
+one of before.
 
 - **Chain link.** A task's trigger *requires* a task when it names `dependency_completed` of
   it, accepting `succeeded`, reached from the trigger's root only through `all`: the trigger
@@ -785,6 +802,66 @@ Decision Record" item 1) is the one of before.
   reasons and details included, is the one before SS-2. No catalog member, configuration key or
   outcome code of the evaluation is added; a catalog serializes and hashes as before.
 
+## Net benefit within a tier (SS-2b)
+
+Since 0.12.32 (Alice's ruling 104 point 3, approved with 104 on 2026-10-30 and checked by the
+research channel, Workflow #386 comment 6523148251; ruling 116 of 2026-10-30: business dispatch
+waits until its values exist, 「当业务有了数据之后直接写进任务包」; register §1.225). No configuration
+key and no per-instance mode: a deployed Runtime judges every marked task.
+
+- **Who is judged.** A V2 task may carry `benefit_judged: true` ([v2/README.md](v2/README.md));
+  the standard-pack composer writes it on every rule whose package is not maintenance-role
+  ([standard-pack-schedule.md](../standard-pack-schedule.md), "Classification"). Such a task is a
+  *business* task. Its candidate is *judged* unless it ranks with a chain head ("Ties and chain
+  heads") or is a manual request: a task whose trigger requires an instruction, a `fact` or
+  `fact_time_reached` predicate on a key of the `session.` family reached from the root only
+  through `all` (design `rd-1029/design-sch-state.md` §4.9). Every other candidate is unjudged.
+- **The net benefit** of a judged candidate `k`, in milli, the exact sum floored once:
+  `B(k) = Σ_p produce(k,p)·W(k,p)/Q_p − Σ_p consume(k,p)·P(k,p)/Q_p`, with checked 128-bit
+  intermediates. `produce(k,p)` is the resource layer's own `r(k,p)` (`amount` or v2
+  `expected_amount_milli`; [resource-targets.md](../resource-targets.md), "Resource weights (v2)"),
+  `W(k,p)` its effective weight `B_p + Γ` (the base weight plus a covering goal's shortfall
+  weight), `consume(k,p)` the task's declared consumption of the pool (its `consumes` amounts, as
+  the reserve gate reads them) and `Q_p` the pool's `valuation.scale`. `P(k,p)`, the cost of
+  consuming pool `p`, is `W(k,p)`, discounted for a regenerating pool between the task's reserve
+  line on it (its `reserves` `at_least`, 0 without one) and its capacity: `P =
+  W·clamp((cap − cur)/(cap − reserve), 0, 1)`, `cur` the pool's projected amount as
+  `resource_projection` reads it: 0 at capacity, `W` at the reserve. A pool that does not
+  regenerate costs `W`. Nothing here writes a pool weight (the one-way rule, SS-1).
+- **Unknown is never 0.** A judged candidate whose task declares no `produces` and no `consumes`
+  entry, an entry whose `amount` is the pending marker, a pool it touches whose `valuation` is the
+  pending marker or absent (for the instance), or a regenerating pool it consumes whose reading is
+  unknown or expired has an unknown `B`: the known part is never added up. It is not dispatched:
+  deferred with `benefit_unknown` (info; `benefit_gap` `no_effects`, `entry_pending`,
+  `valuation_pending`, `valuation_missing` or `reading_unknown`; `pool_id`, and `fact_key` with
+  `unknown_reason` for an unknown reading of a fact), no wake of its own. An unknown reading also
+  asks the fact refresh for it ("Fact Refresh"), as a predicate on it would; that candidate's
+  decision then ends with the refresh's reason.
+- **Not positive.** A judged candidate whose known `B ≤ 0` is not dispatched: deferred with
+  `policy_benefit_nonpositive` (info; `benefit_milli`, `expected_duration_ms`); a regenerating
+  pool it consumes wakes the evaluation at its next step, its cost falling as it fills.
+- **Ranking, per instance** (catalogs that mark a task; "Dispatch Decision Record" item 1):
+  `promoted` first, as before; then the tier, the maintenance tier (every unmarked task, and the
+  Runtime's own reading) before the business tier (the marked tasks), as ruling 104 point 1 puts
+  maintenance high and business normal; within a tier the unjudged candidates first, in the order
+  of before (`total`, then `affinity`, then the tie-break), then the judged candidates by their
+  net benefit per expected millisecond `B ÷ E`, the higher first, `E` the duration the utility
+  term divides by (the pair's expected duration E, else its last settled run's, else the declared
+  one; at least 1), compared exactly as `B·E' > B'·E`; then `affinity` and the tie-break of
+  "Ties and chain heads" on integer equality. The handwritten `priority` no longer orders judged
+  candidates of one tier. The reserve gate takes each instance's candidates in this order.
+- **Where it sits.** The gate is part of the score stage: it follows the stage's own deferrals
+  and precedes the reserve gate, so a candidate it holds takes no reserve room, and it comes before
+  the closure's positions ([../scheduling-blackout.md](../scheduling-blackout.md), "Order of the
+  deferrals"), as `score_deferred` does. The idle plan counts a decision it holds neither due nor
+  as a wake of its own.
+- **Records.** No ledger record kind is new. A judged winner's `rank_breakdown` carries
+  `benefit_milli` and `expected_duration_ms` as values and ends its detail with ` benefit_milli=<B>
+  expected_duration_ms=<E>` (a ranked judged candidate of the record does too); the decision
+  record and the not-running row name the new reasons as `why`.
+- **No mark, no change.** A catalog without `benefit_judged` keeps its hash and decides byte for
+  byte as before: no candidate is judged and the order is the one of before.
+
 ## Task Reserves (Workflow #411 B16 part 2)
 
 A V2 task may declare `reserves: [{pool_id, at_least}]`: the least amount, in the pool's real
@@ -811,7 +888,10 @@ gives the member's rules). The reserve is a hard gate, never a score penalty (re
      run yet), is below `at_least`;
   4. that amount, less the declared consumption of a candidate of the instance taken before it
      and not held, is below `at_least`: of two tasks that each fit alone but not together, the
-     higher `effective_milli` runs this round, whatever their priorities.
+     higher `effective_milli` runs this round, whatever their priorities. SS-2b (since 0.12.32):
+     in a catalog that marks a task `benefit_judged` the candidates are taken in the allocation
+     order instead (the tier, then `B ÷ E` for the judged ones; "Net benefit within a tier"),
+     and a candidate the benefit gate holds is not among them.
 
   Its decision is deferred with `resource_reserve_insufficient` (info, `ladder_class` none;
   `pool_id`, `reserve_at_least`; `amount_after`, what the pool would hold after it, absent in
@@ -962,7 +1042,11 @@ no value keys and stay developer text.
      first; then `tie_breaker` ascending, the lower winning, which now only
      orders one task's candidates on different instances (they never compete for
      one instance). `saturated=1` when a saturating sum clipped the total (the
-     unsaturated 128-bit sum differs).
+     unsaturated 128-bit sum differs). SS-2b (since 0.12.32): in a catalog that
+     marks a task `benefit_judged`, the tier comes after `promoted` and judged
+     candidates rank by `B ÷ E` within it ("Net benefit within a tier"); a
+     judged winner's breakdown then ends with ` benefit_milli=<B>
+     expected_duration_ms=<E>`, and its outcome carries both as values.
    - SS-2 (since 0.12.32): ` chain_head=<task id>` follows when the candidate
      ranks with its chain head's priority and strategic weight; and when
      `lead=0` (another ranked candidate of the instance has the same total, so

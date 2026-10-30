@@ -40,7 +40,11 @@ mod rerun;
 // SS-2 (register §1.222; Alice's ruling 104 points 2, 4 and 5): chain inheritance and the
 // tie-break.
 mod tie_break;
+// SS-2b (register §1.225; Alice's ruling 104 point 3 and ruling 116): the net benefit of a judged
+// candidate within its tier.
+mod benefit;
 
+use benefit::KnownBenefit;
 pub use blackout::{
     Blackout, BlackoutEntry, BlackoutSources, BlackoutWindow, DayBoundaryDeferral, blackout_at,
     day_boundary_fit, next_blackout_start,
@@ -1737,6 +1741,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
                                             tie_breaker: candidate.tie_breaker,
                                             tie: candidate.tie.clone(),
                                             chain_head: candidate.chain_head.clone(),
+                                            benefit: None,
                                         });
                                         candidates.push(*candidate);
                                     }
@@ -1814,7 +1819,9 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
     // The gate that kept each planned package from the allocation's dispatch, by work index.
     let mut refresh_gates = BTreeMap::<usize, RefreshGate>::new();
 
-    candidates.sort_by(allocation_order);
+    // SS-2b: the tiers and the net benefit order the round only when the catalog marks a task.
+    let tiers = benefit_tiers(catalog);
+    candidates.sort_by(|left, right| allocation_order(left, right, tiers));
     // Workflow #411 B41: on an instance where a chain step hands over on its page, the successor
     // is allocated before the candidates that ranked ahead of it. A deferral under one of
     // `successor_waits` (the Runtime's random delay) is part of the successor's dispatch.
@@ -2401,6 +2408,19 @@ struct RankRecord {
     tie: TieKey,
     /// SS-2: the chain head whose priority and strategic weight the candidate ranks with.
     chain_head: Option<String>,
+    /// SS-2b: a judged candidate's known net benefit B and expected duration E.
+    benefit: Option<KnownBenefit>,
+}
+
+/// SS-2b (register §1.225): whether the catalog marks a task as judged by its net benefit. A
+/// catalog with no mark ranks every candidate exactly as before.
+fn benefit_tiers(catalog: &CompiledCatalog) -> bool {
+    catalog
+        .catalog()
+        .tasks
+        .tasks
+        .iter()
+        .any(TaskSpec::is_benefit_judged)
 }
 
 /// SS-2 (register §1.222): the allocation order of the round's candidates. `promoted` first, then
@@ -2408,11 +2428,33 @@ struct RankRecord {
 /// closer to losing its eligibility, then the one with more conditions, then the one declared
 /// first ([`TieKey::order`]); the deterministic hash and the ids keep the order total across
 /// instances, where one task's declared position is the same.
-fn allocation_order(left: &PlacementCandidate, right: &PlacementCandidate) -> std::cmp::Ordering {
-    right
-        .promoted
-        .cmp(&left.promoted)
-        .then_with(|| right.rank.total_score.cmp(&left.rank.total_score))
+///
+/// SS-2b (register §1.225; Alice's ruling 104 points 1 and 3): with `tiers` (a catalog that marks
+/// a task `benefit_judged`), `promoted` first, then the tier: the maintenance tier (every task the
+/// catalog does not mark, the Runtime's own reading included) before the business tier (the marked
+/// tasks); within a tier the unjudged candidates first, in the order above, then the judged ones
+/// by their net benefit per expected millisecond `B ÷ E`, the higher first
+/// ([`KnownBenefit::order`]), then `affinity` and the same tie-break. The handwritten priority no
+/// longer orders judged candidates of one tier. Without `tiers` the order is the one of before,
+/// byte for byte.
+fn allocation_order(
+    left: &PlacementCandidate,
+    right: &PlacementCandidate,
+    tiers: bool,
+) -> std::cmp::Ordering {
+    let promoted = right.promoted.cmp(&left.promoted);
+    let value = if tiers {
+        promoted
+            .then_with(|| left.business.cmp(&right.business))
+            .then_with(|| left.benefit.is_some().cmp(&right.benefit.is_some()))
+            .then_with(|| match (&left.benefit, &right.benefit) {
+                (Some(left), Some(right)) => left.order(right),
+                _ => right.rank.total_score.cmp(&left.rank.total_score),
+            })
+    } else {
+        promoted.then_with(|| right.rank.total_score.cmp(&left.rank.total_score))
+    };
+    value
         .then_with(|| right.affinity.cmp(&left.affinity))
         .then_with(|| left.tie.order(&right.tie))
         .then_with(|| left.tie_breaker.cmp(&right.tie_breaker))
@@ -2623,8 +2665,16 @@ fn decision_record(
         record_outcome = record_outcome.omitted_why(counts);
     }
     let mut reasons = Vec::with_capacity(2 + shown);
-    reasons.push(reason(
-        PolicyCode::RankBreakdown,
+    // SS-2b (register §1.225): a judged winner's net benefit B and expected duration E are values
+    // of its breakdown; every other breakdown keeps its outcome as before.
+    let mut breakdown = Outcome::new(PolicyCode::RankBreakdown);
+    if let Some(benefit) = &record.benefit {
+        breakdown = breakdown
+            .benefit_milli(benefit.benefit_milli)
+            .expected_duration_ms(benefit.expected_duration_ms);
+    }
+    reasons.push(reason_with(
+        breakdown,
         bounded_detail(rank_breakdown_detail(rank, record, lead)),
     ));
     reasons.push(reason_with(
@@ -2778,6 +2828,10 @@ fn push_ss2_fields(detail: &mut String, record: &RankRecord, tied: bool) {
         detail.push(' ');
         detail.push_str(&record.tie.detail());
     }
+    // SS-2b: a judged candidate's net benefit and expected duration; absent for every other.
+    if let Some(benefit) = &record.benefit {
+        detail.push_str(&benefit.detail());
+    }
 }
 
 /// The instance's stored target policy as its version `sha@applied_at`, or its state.
@@ -2920,6 +2974,14 @@ struct PlacementCandidate {
     tie: TieKey,
     /// SS-2: the chain head the candidate ranks with, while it is in that head's run window.
     chain_head: Option<String>,
+    /// SS-2b: the catalog marks its task `benefit_judged`: a business task, of the business tier
+    /// (Alice's ruling 104 point 1), which ranks after the maintenance tier.
+    business: bool,
+    /// SS-2b: a business task that is neither in a chain head's run window nor a manual request:
+    /// its net benefit decides whether and where it ranks.
+    judged: bool,
+    /// SS-2b: a judged candidate's known positive net benefit, set by the benefit gate.
+    benefit: Option<KnownBenefit>,
     facts_fresh_until_unix_ms: Option<u64>,
     activity_profile_id: String,
     daily_limit: Option<u32>,
@@ -3077,6 +3139,11 @@ fn build_candidate(
         expected_runtime_ms: snapshot_expected_runtime(task, task_state),
         tie_breaker: deterministic_tie_breaker(context.seed, &task.id, &instance.instance_id),
         tie,
+        // SS-2b: a business task's candidate ranks in the business tier; a chain successor in its
+        // head's window and a manual request are not judged.
+        business: task.is_benefit_judged(),
+        judged: task.is_benefit_judged() && chain_head.is_none() && !benefit::manual_request(task),
+        benefit: None,
         chain_head: chain_head.map(|head| head.id.clone()),
         facts_fresh_until_unix_ms,
         activity_profile_id: terms.activity_profile_id.to_owned(),
@@ -3483,14 +3550,27 @@ fn apply_priority_selection(
         .pools
         .pools
         .iter()
-        .any(|pool| pool.valuation.is_some());
+        .any(|pool| pool.declared_valuation().is_some());
     if !utility_fields
         && facts.priority_offsets.is_empty()
         && target_policies.is_empty()
         && !reserves_declared
         && !valuation_declared
     {
-        return Ok((candidates, Vec::new(), BTreeMap::new()));
+        // SS-2b: the benefit gate still judges a marked candidate; with no valued pool its
+        // weights are the pools' (absent) valuations, so it touches no known value. A catalog
+        // without a mark passes it untouched.
+        let mut affected = Vec::new();
+        let ranked = benefit::gate(
+            context,
+            facts,
+            candidates,
+            work,
+            &BTreeMap::new(),
+            refreshing,
+            &mut affected,
+        )?;
+        return Ok((ranked, affected, BTreeMap::new()));
     }
     // Each instance's stored policy is resolved once: every target's pool and named tasks
     // against the catalog, its inventory in the time-validity projected facts; with a valued
@@ -3539,6 +3619,9 @@ fn apply_priority_selection(
     let mut ranked = Vec::with_capacity(candidates.len());
     let mut staged = Vec::with_capacity(candidates.len());
     let mut affected = Vec::new();
+    // SS-2b: the effective weight of each pool a judged candidate's resource term weighs, by work
+    // index, for its net benefit.
+    let mut weights = BTreeMap::<usize, BTreeMap<String, u64>>::new();
     for (mut candidate, score) in candidates.into_iter().zip(scores) {
         let (score_milli, unknown_rule, known_until_unix_ms) = match score {
             None => (None, None, None),
@@ -3631,6 +3714,9 @@ fn apply_priority_selection(
                 task_work.reasons.extend(base.reasons(None, 0));
             }
             if let Some(resources) = target.resources().or(base.as_ref()) {
+                if candidate.judged {
+                    weights.insert(candidate.work_index, resources.pool_weights());
+                }
                 task_work
                     .record
                     .as_mut()
@@ -3737,6 +3823,9 @@ fn apply_priority_selection(
         let applied = target.applied();
         // An active v2 policy's term, or else the base term alone (SS-1).
         let resources = target.resources().or(base.as_ref());
+        if let Some(resources) = resources.filter(|_| candidate.judged) {
+            weights.insert(candidate.work_index, resources.pool_weights());
+        }
         let overridden = applied.is_some_and(|applied| applied.mode == TargetMode::Override)
             || resources.is_some_and(|resources| resources.override_target.is_some());
         // An unknown verdict or cost never defers or promotes; only a scored one meets the
@@ -3946,6 +4035,17 @@ fn apply_priority_selection(
             ScoreDisposition::Neutral => ranked.push(candidate),
         }
     }
+    // SS-2b (register §1.225): a judged candidate whose net benefit is unknown or not positive
+    // takes no part in the allocation, so it holds no reserve room from another candidate.
+    let mut ranked = benefit::gate(
+        context,
+        facts,
+        ranked,
+        work,
+        &weights,
+        refreshing,
+        &mut affected,
+    )?;
     // The consumption the reserved pools' readings do not show yet: the gate's step 3 and, SS-6,
     // the allowances read the same entries.
     let unshown = if reserves_declared {
@@ -4078,16 +4178,24 @@ fn apply_reserves(
     unshown: &crate::resource_targets::UnshownConsumption<'_>,
 ) -> PolicyEvaluationResult<Vec<PlacementCandidate>> {
     // The allocation order (the round's own sort), without moving the candidates.
+    let tiers = benefit_tiers(catalog);
     let mut order = (0..ranked.len()).collect::<Vec<_>>();
-    order.sort_by(|left, right| allocation_order(&ranked[*left], &ranked[*right]));
+    order.sort_by(|left, right| allocation_order(&ranked[*left], &ranked[*right], tiers));
     let candidates = order
         .iter()
-        .map(|&index| -> PolicyEvaluationResult<_> {
+        .enumerate()
+        .map(|(position, &index)| -> PolicyEvaluationResult<_> {
             let candidate = &ranked[index];
             Ok(crate::resource_targets::ReserveCandidate {
                 task: catalog_task(catalog, &candidate.task_id)?,
                 instance_id: candidate.instance_id.as_str(),
-                effective_milli: candidate.rank.effective_milli,
+                // SS-2b: with tiers, an instance's candidates are taken in the allocation order
+                // (the tier, then the net benefit), not by their score.
+                effective_milli: if tiers {
+                    i64::try_from(position).map_or(i64::MIN, |position| -position)
+                } else {
+                    candidate.rank.effective_milli
+                },
                 views: reserves.get(&candidate.work_index).map(Vec::as_slice),
             })
         })
@@ -10156,6 +10264,7 @@ pub(crate) mod tests {
             tie_breaker: 1,
             tie: TieKey::runtime_task(),
             chain_head: None,
+            benefit: None,
         });
         selected.rank = Some(rank);
         let mut reason_chains = vec![DecisionReasonChain {

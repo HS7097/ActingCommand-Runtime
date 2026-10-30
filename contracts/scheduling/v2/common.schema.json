@@ -486,7 +486,13 @@
       "properties": {
         "pool_id": { "$ref": "#/$defs/itemId" },
         "direction": { "enum": ["consume", "produce"] },
-        "amount": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "amount": {
+          "description": "A positive integer in real units, or (SS-2b) the marker \"pending\": the quantity is not known yet. A pending amount changes nothing but a judged task's net benefit, which it makes unknown.",
+          "oneOf": [
+            { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+            { "const": "pending" }
+          ]
+        },
         "expected_amount_milli": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
         "observation_source": { "enum": ["self_reported", "scan_verified", "inferred"] },
         "confidence_milli": { "type": "integer", "minimum": 0, "maximum": 1000 }

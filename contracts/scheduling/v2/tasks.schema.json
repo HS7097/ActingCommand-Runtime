@@ -164,6 +164,10 @@
           "items": { "$ref": "./common.schema.json#/$defs/identifier" }
         },
         "dispatch_parameters": { "type": "boolean" },
+        "benefit_judged": {
+          "description": "SS-2b: true marks a business task judged by its net benefit within its tier; the standard-pack composer writes it on every rule whose package is not maintenance-role. false is as without the member.",
+          "type": "boolean"
+        },
         "reserves": {
           "type": "array",
           "minItems": 1,

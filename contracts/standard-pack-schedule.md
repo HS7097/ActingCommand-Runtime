@@ -133,6 +133,29 @@ A package that is none of these is **unclassified**: it is not scheduled, and ea
 `standard_pack_package_unclassified` warning (keys `game`, `package_id`). The rest of the game
 still runs.
 
+**Judged rules** (SS-2b, since 0.12.32; Alice's rulings 104 point 3 and 116; register §1.225).
+The composer marks every composed rule whose package is not maintenance-role (item 1)
+`benefit_judged: true`: a business rule, ranked in the business tier and judged by its net
+benefit ([scheduling/README.md](scheduling/README.md), "Net benefit within a tier"). Its
+candidates are not dispatched while that benefit is unknown or not positive: until the rule
+declares its `produces` and `consumes` and every pool they touch its `valuation`, business
+dispatch waits (ruling 116: 「当业务有了数据之后直接写进任务包」). A maintenance-role package's rule is
+not marked and ranks as before. The mark is the composer's: a rule that writes `benefit_judged`
+itself is refused, `schedule_invalid` at `/rules/<i>/benefit_judged`. Where a value is not known
+yet the resource side writes the marker `"pending"` (a pool's `valuation`, an entry's `amount`;
+[scheduling/v2/README.md](scheduling/v2/README.md)); it changes nothing but the count below.
+
+- **Coverage** (the measure of 「业务覆盖完整」). Each judged rule of the file (its package not
+  maintenance-role, not held) counts once, whatever the instances it is composed for: *complete*
+  when it has an entry, every entry its quantity and every pool it touches a valuation;
+  *pending* when it is not complete and every value it lacks is the marker; *undeclared* when it
+  has no `produces` and no `consumes` entry, or touches a pool with neither a valuation nor the
+  marker. Each undeclared rule is one `standard_pack_benefit_undeclared` warning (keys `game`,
+  `task_id` the rule's id; `pool_id` the pool without a valuation, when that is why), a new code
+  because no code says "a business rule declares no value": `standard_pack_package_unclassified`
+  names a package nothing schedules. Only the resource tools report the coverage and these
+  warnings ("Tools"); the Runtime's workbench records neither.
+
 ## Composition
 
 `actingcommand_policy::compose_standard_pack_rules` is the one composer. The Runtime's
@@ -161,7 +184,8 @@ each game root that holds `schedule.json`, that file's bytes, the root as
    for `s`, each with every scope filled with `{kind: instance, instance_id: i}` (the item's own
    and that of each predicate node that reads a fact, the nodes with a `fact_key`); a rule's
    `entrypoint.operation_id` is `operation.package.run`, its `procedure_ref` is
-   `package.<package_id>`, and its `instance_overrides` is empty.
+   `package.<package_id>`, and its `instance_overrides` is empty; SS-2b: a rule whose package
+   is not maintenance-role gains `benefit_judged: true` ("Judged rules" above).
 4. **Ids.** An item copied to exactly one instance keeps the file's id, so one instance per
    (game, server) composes ids byte-identical to the file. An item copied to two or more
    instances gets the id `<id>@<alias>` in each copy; every reference inside that copy (an
@@ -194,7 +218,11 @@ game's rules carry two priorities: maintenance tasks (startup, return home, reco
 maintenance, store update) one high value, every business task one normal value. A chain step
 needs no priority of its own to follow its chain: the evaluator ranks it with its chain head
 ([scheduling/README.md](scheduling/README.md), "Ties and chain heads"), and business tasks of one
-tier are ordered by the ranking and its tie-break, the rules' order in this file last. When the
+tier are ordered by the ranking and its tie-break, the rules' order in this file last. SS-2b
+(since 0.12.32): the evaluator ranks the maintenance tier (the unmarked rules) before the
+business tier (the rules marked `benefit_judged`, "Judged rules" above), whatever their
+`priority`, and the judged business rules by their net benefit per expected millisecond
+([scheduling/README.md](scheduling/README.md), "Net benefit within a tier"). When the
 rules a game composes for its bound instances use more than two distinct `priority` values, the
 composition reports one `standard_pack_priority_tiers_exceeded` warning (keys `game`, `count` the
 number of values, `limit_count` 2) after the unclassified-package warnings, and composes and
@@ -220,6 +248,10 @@ record it.
   `standard_pack_root_invalid` naming `schedule.json`; each unclassified package is one
   `standard_pack_package_unclassified` in `warnings`. Then (UPD-1 fix round 1, since 0.12.30) a
   store update rule whose `cooldown_ms` is 0 is refused the same way ("The store update rule").
+  SS-2b (since 0.12.32): both answer `benefit_coverage: {complete, pending, undeclared}`, the
+  game's judged rules ("Judged rules"), and list one `standard_pack_benefit_undeclared` per
+  undeclared rule in `warnings`, after the composition's other warnings. Nothing is refused.
+  `standard-pack compose` reports neither.
 - `actinglab standard-pack compose --root <standard_packs.root> --instance
   <alias>=<game>/<server>... --out <new directory>` composes the game roots below `--root` for
   the given bindings (`--instance` once per bound instance; given after the command's words it is
@@ -350,6 +382,12 @@ checks them), and the composer fills the scope:
   only a success clears the fact.
 - Without such a rule, an instance that met the dialog stays held, every candidate showing
   `application_update_pending`: loud, not silent.
+- SS-2b (since 0.12.32): a store update package is no maintenance-role package of the root files
+  (the bundle's `maintenance[]` uses are startup, return home and recognition; it is no handler,
+  `then.run` or feature package), so the composer marks its rule `benefit_judged` like a
+  business rule ("Judged rules"). Its candidate is then `benefit_unknown` until the rule declares
+  values, and the held instance waits (the tools count the rule as undeclared). Register §1.225
+  names what the resource side, or a later slice, must decide.
 
 ## What does not change
 

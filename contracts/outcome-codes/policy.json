@@ -527,6 +527,8 @@
       "layer": "policy",
       "uncertain": false,
       "values": {
+        "benefit_milli": "optional",
+        "expected_duration_ms": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -536,7 +538,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Scheduling decision reason: the ranking terms of a dispatched task (decision record).",
+      "description": "Scheduling decision reason: the ranking terms of a dispatched task (decision record). SS-2b (since 0.12.32): a judged winner, ranked within its tier by its net benefit per expected millisecond, carries its net benefit benefit_milli and the expected duration expected_duration_ms it was divided by (contracts/scheduling/README.md \"Net benefit within a tier\").",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2228,6 +2230,52 @@
       "description": "Scheduling decision reason (SS-5, contracts/scheduling/README.md \"Self-read fact probe\"): a `fact` predicate with `on_unknown: probe` reads its fact (fact_key, a reading of the task's own package) as unknown for unknown_reason (fact_missing, fact_low_confidence, fact_stale, fact_expired or type_mismatch). The fact's unknown period began at the later of the latest occurrence of a timeline reset that clears the key and the end of the freshness of an expired reading. Without served_by_dispatch_unix_ms the predicate is true: the task is admitted so that its run reads the fact, and no fact refresh is requested for the key. With it the predicate is false, with no wake: this task's latest run succeeded and was dispatched (served_by_dispatch_unix_ms) after the period began, and the key is still unknown; the next reading, reset or expiry ends that. When the predicate decides the trigger, a false one ends the decision with trigger_false.",
       "common_causes": "The task's package has not read the fact since the last reset or since its last reading expired (admitted); or its run in this period read nothing usable for the key, for example the page with the reading mark was not reached (served).",
       "handling": "None when admitted. When served, the task waits for the next reset of the key; check that the package's reading mark is on a page its run reaches and that the key is the mark's fact_key."
+    },
+    "policy_benefit_nonpositive": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "benefit_milli": "required",
+        "expected_duration_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.32",
+      "description": "Scheduling decision reason (SS-2b, Alice's ruling 104 point 3; contracts/scheduling/README.md \"Net benefit within a tier\"): a judged candidate (a business task the catalog marks benefit_judged, not in a chain head's run window and not a manual request) has a known net benefit benefit_milli that is not positive: what one run produces is worth no more than what it consumes costs, each at the resource layer's weight per valuation step and a regenerating pool's cost discounted by its fullness. It is not dispatched this round; expected_duration_ms is the E it would be ranked with.",
+      "common_causes": "The task consumes more value than it produces at the current readings, or the pool valuations make its yield worth nothing.",
+      "handling": "None: the candidate is judged again at every evaluation; a regenerating pool it consumes wakes the evaluation at its next step, as its cost falls while it fills. Revise the task's produces and consumes or the pools' valuation in the resource side's schedule.json if the value is wrong."
+    },
+    "benefit_unknown": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "benefit_gap": "required",
+        "pool_id": "optional",
+        "fact_key": "optional",
+        "unknown_reason": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.32",
+      "description": "Scheduling decision reason (SS-2b, Alice's rulings 104 point 3 and 116; contracts/scheduling/README.md \"Net benefit within a tier\"): a judged candidate's net benefit is unknown, so it is not dispatched; unknown is never 0 and the known part is never added up. benefit_gap says why: the task declares no produces or consumes entry, an entry's amount or a pool valuation it touches is the pending marker or missing (pool_id), or the cost of a regenerating pool it consumes needs a reading that is unknown or expired (pool_id, and fact_key with unknown_reason when the pool reads a fact; the fact refresh is asked for that reading).",
+      "common_causes": "The resource side has not written the task's produces and consumes, or the pools' valuation, yet (Alice's ruling 116: business dispatch waits until values exist); or a pool reading has expired.",
+      "handling": "Write the task's produces and consumes and each touched pool's valuation in the game's schedule.json; actinglab standard-pack check reports how many judged rules are complete, pending and undeclared. A reading is refreshed by the fact refresh."
     }
   }
 }

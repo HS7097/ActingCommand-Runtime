@@ -62,8 +62,15 @@ pub struct StandardPackCheckResponse {
     /// (STORE-FG-1) one `package_bundle_store_tap_unlocated` per package and store step that taps
     /// a fixed place; then (Workflow #428 CFL-2) one `package_bundle_preprocess_divergent` per
     /// package, OCR target and shared read whose chains differ; then (Workflow #411 B15) one
-    /// `package_bundle_remedy_invalid` per remedy finding.
+    /// `package_bundle_remedy_invalid` per remedy finding. With `schedule.json`, the
+    /// composition's warnings follow, then (SS-2b) one `standard_pack_benefit_undeclared` per
+    /// judged rule that declares no value.
     pub warnings: Vec<actingcommand_contract::outcome::Outcome>,
+    /// SS-2b (register §1.225): with `schedule.json`, how many of the game's judged rules (their
+    /// package is not maintenance-role) have complete values, how many are pending, and how many
+    /// declare none. Absent without `schedule.json`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub benefit_coverage: Option<actingcommand_policy::BenefitCoverage>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -79,9 +86,15 @@ pub struct PackageBundleResponse {
     /// `package_bundle_interrupt_page_shadowed` per pack and shared interrupt page it declares
     /// itself; STORE-FG-1: with any root file, one `package_bundle_store_tap_unlocated` per pack
     /// and store step that taps a fixed place; Workflow #411 B15: with any root file, one
-    /// `package_bundle_remedy_invalid` per remedy finding. Absent when there is none.
+    /// `package_bundle_remedy_invalid` per remedy finding; with `--schedule`, the composition's
+    /// warnings, then (SS-2b) one `standard_pack_benefit_undeclared` per judged rule that
+    /// declares no value. Absent when there is none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<actingcommand_contract::outcome::Outcome>,
+    /// SS-2b (register §1.225): with `--schedule`, how many of the game's judged rules have
+    /// complete values, how many are pending, and how many declare none. Absent without it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub benefit_coverage: Option<actingcommand_policy::BenefitCoverage>,
 }
 
 #[derive(Debug, Clone)]

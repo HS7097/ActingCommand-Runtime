@@ -18,8 +18,9 @@ use actingcommand_contract::{
     ScheduleExplanationNotRunning, ScheduleExplanationSelected,
 };
 use actingcommand_policy::{
-    ActivityProfile, Blackout, EligibilityState, FACT_REFRESH_TASK_ID, PolicyEvaluation,
-    PolicyEvaluationResult, SchedulingDecisionState, TaskDecision, activity_window_at,
+    ActivityProfile, Blackout, EligibilityState, FACT_REFRESH_TASK_ID, PolicyCode,
+    PolicyEvaluation, PolicyEvaluationResult, SchedulingDecisionState, TaskDecision,
+    activity_window_at,
 };
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -169,8 +170,17 @@ impl IdleDraft {
         }
         let eligible = decision.state == SchedulingDecisionState::Selected
             || decision.eligibility == EligibilityState::True;
+        // SS-2b (register §1.225): a judged candidate the benefit gate holds (its net benefit
+        // unknown or not positive) cannot be dispatched now, so it is never due; only a wake of
+        // its own counts. Without it every business task waiting for its values would keep a
+        // closed game awake.
+        let benefit_held = decision.reasons.last().is_some_and(|reason| {
+            reason.outcome.is(PolicyCode::BenefitUnknown)
+                || reason.outcome.is(PolicyCode::PolicyBenefitNonpositive)
+        });
         let due = decision.state == SchedulingDecisionState::Selected
             || (eligible
+                && !benefit_held
                 && decision
                     .next_wake_unix_ms
                     .is_none_or(|wake| wake <= evaluated_at_unix_ms));

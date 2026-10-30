@@ -91,7 +91,13 @@
             }
           ]
         },
-        "valuation": { "$ref": "#/$defs/valuation" }
+        "valuation": {
+          "description": "What one step of the pool's resource is worth, or (SS-2b) the marker \"pending\": the worth is not known yet. A pending valuation changes nothing but the net benefit of a judged task that touches the pool, which it makes unknown.",
+          "oneOf": [
+            { "$ref": "#/$defs/valuation" },
+            { "const": "pending" }
+          ]
+        }
       },
       "additionalProperties": false
     },

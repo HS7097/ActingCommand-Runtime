@@ -253,8 +253,39 @@ actingcommand_contract::outcome_codes! {
         /// `served_by_dispatch_unix_ms`).
         FactProbe => "fact_probe": info / none,
         // ---- SS-5: end ----
+        // ---- SS-2b (net benefit within a tier, `contracts/scheduling/README.md`, "Net benefit
+        // within a tier"): begin ----
+        /// Info. A judged candidate's net benefit is known and not positive: it is not dispatched
+        /// (keys `benefit_milli`, `expected_duration_ms`).
+        PolicyBenefitNonpositive => "policy_benefit_nonpositive": info / none,
+        /// Info. A judged candidate's net benefit is unknown: it declares no effect, an entry or
+        /// a pool valuation it touches is pending or missing, or a reading the cost of a pool it
+        /// consumes needs is unknown or expired. It is not dispatched (keys `benefit_gap`;
+        /// optional `pool_id`, `fact_key`, `unknown_reason`).
+        BenefitUnknown => "benefit_unknown": info / none,
+        // ---- SS-2b: end ----
     }
 }
+
+// ---- SS-2b: begin ----
+actingcommand_contract::outcome_vocabulary! {
+    /// Why a judged candidate's net benefit is unknown (the vocabulary `benefit_gap`), a value of
+    /// `benefit_unknown`.
+    pub enum BenefitGap: "benefit_gap" {
+        /// The task declares no `produces` and no `consumes` entry.
+        NoEffects => "no_effects",
+        /// An entry's `amount` is the pending marker.
+        EntryPending => "entry_pending",
+        /// A pool the task touches has the pending marker for its valuation.
+        ValuationPending => "valuation_pending",
+        /// A pool the task touches has no valuation for the instance.
+        ValuationMissing => "valuation_missing",
+        /// The cost of a regenerating pool the task consumes needs its reading, which is
+        /// unknown or expired.
+        ReadingUnknown => "reading_unknown",
+    }
+}
+// ---- SS-2b: end ----
 
 // ---- Workflow #386 SR-0 (scheduling rules): registered ahead of their slices; begin ----
 actingcommand_contract::outcome_codes! {
