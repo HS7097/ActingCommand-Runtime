@@ -2906,7 +2906,9 @@ fn build_candidate(
         return Ok(PlacementResult::Blocked(blocked));
     }
 
-    let Some(activity_profile) = select_activity_profile(context.profiles, instance) else {
+    // RR-1 (register §1.221): the intent's profile and expected duration, as the immediate-rerun
+    // predicate reads them.
+    let Some(terms) = dispatch_terms(context.profiles, task, instance, task_state) else {
         return Ok(PlacementResult::Blocked(reason(
             PolicyCode::ActivityProfileMissing,
             format!(
@@ -2956,8 +2958,7 @@ fn build_candidate(
         host_id: instance.host_id.clone(),
         operation_id: task.entrypoint.operation_id.clone(),
         procedure_ref: task.procedure_ref.clone(),
-        expected_duration_ms: snapshot_expected_runtime(task, task_state)
-            .unwrap_or(task.expected_duration_ms),
+        expected_duration_ms: terms.expected_duration_ms,
         yield_points: task.yield_points.clone(),
         load_profile,
         load,
@@ -2972,7 +2973,7 @@ fn build_candidate(
         expected_runtime_ms: snapshot_expected_runtime(task, task_state),
         tie_breaker: deterministic_tie_breaker(context.seed, &task.id, &instance.instance_id),
         facts_fresh_until_unix_ms,
-        activity_profile_id: activity_profile.id.clone(),
+        activity_profile_id: terms.activity_profile_id.to_owned(),
         daily_limit: task.daily_limit(),
         window_iteration_limit: task.window_iteration_limit(),
         max_runtime_ms: task.max_runtime_ms(),
@@ -4443,6 +4444,59 @@ fn select_activity_profile<'a>(
                 .cmp(&activity_scope_specificity(&right.scope))
                 .then_with(|| right.id.cmp(&left.id))
         })
+}
+
+/// RR-1 (register §1.221): what a dispatch intent of a task on an instance carries besides its
+/// pair that an immediate rerun's round is bound to: the activity profile it is admitted under and
+/// its expected duration (`contracts/policy-suspension.md`, "Immediate rerun (R22)").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DispatchTerms<'a> {
+    pub activity_profile_id: &'a str,
+    pub expected_duration_ms: u64,
+}
+
+/// RR-1 (register §1.221): the terms of the dispatch intent the evaluation builds for `task` on
+/// `instance` with the pair's snapshot `state`: the activity profile the instance selects, and the
+/// pair's expected duration E (SCH-M ED-1, at most the task's runtime ceiling), else the task's
+/// declared duration. `None` when no profile matches the instance (the candidate is blocked with
+/// `activity_profile_missing`). The candidate builder and the Runtime's immediate-rerun predicate
+/// both read the terms here, so an evaluation offers an immediate rerun only on the terms its
+/// intent will carry.
+pub fn dispatch_terms<'a>(
+    profiles: &'a [ActivityProfile],
+    task: &TaskSpec,
+    instance: &InstanceSnapshot,
+    state: Option<&TaskRuntimeSnapshot>,
+) -> Option<DispatchTerms<'a>> {
+    let profile = select_activity_profile(profiles, instance)?;
+    Some(DispatchTerms {
+        activity_profile_id: profile.id.as_str(),
+        expected_duration_ms: snapshot_expected_runtime(task, state)
+            .unwrap_or(task.expected_duration_ms),
+    })
+}
+
+/// RR-1 (register §1.221): [`dispatch_terms`] of `task_id` on `instance_id` as an evaluation of
+/// `facts` under `catalog` reads them: the catalog's task, the facts' instance (one the task's
+/// scope matches) and the pair's snapshot (the last one the facts list, as the evaluation keys
+/// them). `None` when the evaluation builds no candidate of the pair for want of one of them.
+pub fn evaluated_dispatch_terms<'a>(
+    catalog: &'a CompiledCatalog,
+    facts: &EvaluationFacts,
+    task_id: &str,
+    instance_id: &str,
+) -> Option<DispatchTerms<'a>> {
+    let bundle = catalog.catalog();
+    let task = bundle.tasks.tasks.iter().find(|task| task.id == task_id)?;
+    let instance = facts.instances.iter().find(|instance| {
+        instance.instance_id == instance_id && scope_matches_instance(&task.scope, instance)
+    })?;
+    let state = facts
+        .tasks
+        .iter()
+        .rev()
+        .find(|state| state.task_id == task_id && state.instance_id == instance_id);
+    dispatch_terms(&bundle.activity.profiles, task, instance, state)
 }
 
 /// One half-open occurrence of a declared activity window, in declaration order.

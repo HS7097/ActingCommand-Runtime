@@ -4129,6 +4129,54 @@ values in 0.12.30 writes them into its configuration file.
 | R2-6 | `actingctl perf-preset get` → `{preset, members: [{key, value, source}]}`; `actingctl perf-preset set <preset>` → one ConfigureSettings of the preset's members, `{preset, settings}` | CLI surface | R-2 | actingctl | reads `config.parameters.performance` and `.scheduling` with RuntimeFactSnapshot; success `request_runtime_fact_snapshot_completed` / `request_configure_settings_completed`; an unknown name `actingctl_usage_invalid` (`not_recognised`) before any write |
 | R2-7 | MCP `ac_perf_preset {action: get \| set, preset?}` | MCP surface (observer until U-3, a general tool) | R-2 | actingctl mcp | the CLI's answers; a `set` writes on its own (Cli, Cli) connection as `ac_config_set`; an unknown name `arguments_invalid` (`preset`, `not_recognised`) |
 
+### 1.221 Slice RR-1 (0.12.31): an immediate rerun the admission refuses no longer keeps winning its instance (production defect of v0.12.30 on 10-30 08:4x: after its instance was resumed, one task's immediate rerun was selected at every evaluation and refused `policy_retry_round_ended`, and the instance's three other eligible candidates never ran; coordinator work order `rd-1029/brief-retry-livelock.md`)
+
+[policy-suspension.md](policy-suspension.md) ("Immediate rerun (R22)", the two RR-1 sentences) is
+the contract. The number 1.221 is the coordinator's.
+
+**What.** The evaluation offered a pair as `failure_retry_immediate` when it had a live retry
+round (`immediate_retry_pairs`: its failure, the round's window, budgets and declared duration),
+but the admission (`validate_immediate_retry`) also required the intent to keep the round's
+activity profile and expected duration, which the evaluation never checked. The intent's expected
+duration is the pair's E (SCH-M ED-2), recomputed at every evaluation: a new run sample of its
+package changes it, and so does the package becoming known after a start (a round opened by the
+first run after a start carries the declared duration, and that run's own preparation makes E
+readable). From then on every evaluation selected the pair, the admission refused it, and its
+instance ran nothing else. Now one predicate (`immediate_retry_admits`) serves both: the
+evaluation offers a pair only when a dispatch on the terms its intent will carry
+(`actingcommand_policy::dispatch_terms`, which the candidate builder uses too) is admitted, so a
+pair whose terms drifted waits for its own trigger and cooldown. And an immediate rerun the
+admission still refuses with `policy_retry_round_ended` (the window ended between the evaluation
+and the admission) ends its round at once, in memory, in the pair's value record written with the
+refusal, and in every replay of the recorded refusal. **No new persisted shape, no outcome code,
+no configuration key, no interface revision**; no reason code is added (a withdrawn pair carries no
+reason of its own: it is not offered, and its ordinary reasons, `task_cooldown_active` for one,
+say why it waits).
+
+**Why.** The contract already said a different profile or expected duration cannot use the
+round's immediate permission and that window expiry ends it; the evaluation did not apply the
+same rule, so it proposed a dispatch the admission was bound to refuse, at every round.
+
+**Unchanged.** Success clears the round; budgets, backoff, suspensions, pauses, refunds and the
+owed reruns of SR-2b; the one-way rule; game neutrality. A pair whose terms still match is
+offered and admitted as before.
+
+**Restart.** The withdrawal is in the pair's `policy.control_state_recorded` value record (its
+`retry_round` absent), which LN-4's start loads; a start that rebuilds the decision memory from
+the dispatch history withdraws the round again from the recorded refusal (`rejection.outcome`
+`policy_retry_round_ended`), so the loaded and the replayed decision memory stay equal. A ledger
+with such a refusal written by 0.12.30 replays to a memory without that round, where 0.12.30's
+replay kept it: the only difference, and the defect's own state.
+
+**Rollback** (to 0.12.30). Nothing to undo in the ledger or the configuration: a value record
+without `retry_round` is a shape 0.12.30 writes and reads. 0.12.30's evaluation brings the defect
+back for a pair whose expected duration changes while its round is open.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| RR1-1 | the evaluation's immediate reruns are those `PolicyControlState::immediate_retry_admits` admits on the terms `actingcommand_policy::evaluated_dispatch_terms` gives their intents (profile, expected duration); `validate_immediate_retry` is the same predicate on the intent's terms | behaviour (evaluation) | RR-1 | — | `dispatch_terms` (pure, policy crate) also fills the candidate's `expected_duration_ms` and `activity_profile_id`, so the evaluation and the intent cannot differ |
+| RR1-2 | a `policy.dispatch_rejected` whose `rejection.outcome` is `policy_retry_round_ended` ends the retry rounds of the pair's accounting group on its instance, live (`apply_admission_events`) and in replay (`apply_dispatch_event`) | behaviour (decision memory) | RR-1 | the admission | failure streak, backoff and counts unchanged; the pair's next legal normal trigger opens a new round |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

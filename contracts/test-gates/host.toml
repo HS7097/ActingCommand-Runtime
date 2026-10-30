@@ -119,6 +119,18 @@ tests = [
 ]
 incident = []
 
+# RR-1 (register §1.221; production v0.12.30 on 10-30 08:4x, coordinator work order rd-1029/brief-retry-livelock.md; contracts/policy-suspension.md, "Immediate rerun (R22)"; since 0.12.31): the evaluation offers an immediate rerun only by the admission's own predicate, on the profile and expected duration its intent carries: a failed task whose round is open and whose expected duration E changed (a new run sample, or its package becoming known) is not proposed at once and the instance's other eligible candidate runs, with nothing refused; an immediate rerun the admission refuses with policy_retry_round_ended (the window ended between evaluation and admission) is withdrawn at once and refused only once, the next round runs another candidate, a later legal normal trigger opens a new round and the task runs, success still clears the round, and a restart does not resurrect the withdrawn rerun (the loaded and the replayed decision memory agree)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_rr1::rr1_t1_a_changed_expected_duration_is_not_offered_at_once_and_the_instance_runs_another",
+    "actingcommand-runtime-host::lib::tests::gate_rr1::rr1_t2_a_refused_immediate_rerun_is_withdrawn_and_the_next_round_runs_another",
+    "actingcommand-runtime-host::lib::tests::gate_rr1::rr1_t3_a_legal_normal_trigger_afterwards_opens_a_new_round_and_the_task_runs",
+    "actingcommand-runtime-host::lib::tests::gate_rr1::rr1_t4_success_still_clears_the_round",
+    "actingcommand-runtime-host::lib::tests::gate_rr1::rr1_t5_a_restart_does_not_resurrect_the_withdrawn_immediate_rerun",
+]
+incident = ["#336 RR-1"]
+
 # SS-3 (Alice's ruling 100, #386 comment 6490879952; rd-1029 design-sch-state §5 SS-3 tests 1 to 4 and 6; contracts/scheduling/README.md, "Optional run-count bounds"; register §1.212; since 0.12.30): without loop_budget 50 runs meet no TaskDaily or TaskWindow refusal; a written daily_limit of 2 still refuses the third run; without max_runtime_ms back-to-back runs far above the example's runtime bounds record no policy_runtime_budget_exceeded, and the per-run deadline still holds the next run back before a blackout; receipts carry no dimension that was not written; a catalog that writes every bound gives the receipt bytes of before
 [[gate]]
 coverage = "Y"
