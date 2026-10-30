@@ -15,7 +15,8 @@
 //!    to name `fact_reference` when a rule writes a fact reference (#386 CF-4) and
 //!    `pool_fact_reference` when a pool's `capacity` or a `resource_projection`'s `value` is one
 //!    (#386 CF-5) and `reset_exclusions` when a timeline event writes `excludes_fact_prefixes`
-//!    (Workflow #411 P19), no timeline event invalidating the Runtime's application update fact
+//!    (Workflow #411 P19) and `fact_unknown_probe` when a rule's `fact` predicate writes
+//!    `on_unknown` (SS-5), no timeline event invalidating the Runtime's application update fact
 //!    (UPD-1 fix round 5), and against the subsystems given (when given), its packages checked
 //!    against the registry, and the registry's packages classified. A refused game is reported
 //!    with its game id.
@@ -59,9 +60,10 @@ use sha2::{Digest, Sha256};
 use crate::canonical::canonical_serialized;
 use crate::{
     ActivityProfile, CatalogDocumentSource, CatalogSources, CompiledCatalog,
-    FACT_REFERENCE_SUBSYSTEM, FACT_REFERENCE_TYPE, POOL_FACT_REFERENCE_SUBSYSTEM, PoolSpec,
-    RESET_EXCLUSIONS_SUBSYSTEM, SCHEDULING_SCHEMA_VERSION_V2, SchedulingDocumentKind, TaskSpec,
-    TimelineEvent, compile_composed_catalog,
+    FACT_REFERENCE_SUBSYSTEM, FACT_REFERENCE_TYPE, FACT_UNKNOWN_PROBE_SUBSYSTEM,
+    POOL_FACT_REFERENCE_SUBSYSTEM, PoolSpec, RESET_EXCLUSIONS_SUBSYSTEM,
+    SCHEDULING_SCHEMA_VERSION_V2, SchedulingDocumentKind, TaskSpec, TimelineEvent,
+    compile_composed_catalog,
 };
 
 /// The catalog id of every composition (model §3.2 step 4).
@@ -653,6 +655,21 @@ fn read_game(
             ),
         ));
     }
+    // SS-5: likewise a rule's `fact` predicate that writes `on_unknown`.
+    if !schedule
+        .requires
+        .iter()
+        .any(|name| name == FACT_UNKNOWN_PROBE_SUBSYSTEM)
+        && let Some(probe) = standard_pack_fact_probes(&schedule).into_iter().next()
+    {
+        return Err(refused(
+            schedule_issue(StandardPackProblem::ScheduleInvalid, probe.pointer),
+            format!(
+                "a fact predicate's {FACT_ON_UNKNOWN} needs requires to name \
+                 {FACT_UNKNOWN_PROBE_SUBSYSTEM}"
+            ),
+        ));
+    }
     // UPD-1 fix round 5 (`standard-pack-schedule.md`, "The store update rule"): no timeline event
     // invalidates the Runtime's application update fact. A reset that cleared it would leave the
     // store update rule's trigger reading the key missing (Unknown), so the rule would never run,
@@ -808,6 +825,89 @@ fn is_fact_reference(value: Option<&Value>) -> bool {
         .and_then(Value::as_str)
         == Some(FACT_REFERENCE_TYPE)
 }
+
+/// SS-5: one `fact` predicate of a `schedule.json` rule that writes `on_unknown`, as written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StandardPackFactProbe {
+    /// The rule's index in `rules`.
+    pub rule_index: usize,
+    /// The rule's package, the one whose run must read the fact.
+    pub package_id: String,
+    /// The predicate's `fact_key`; `None` when it writes none or no string (the compiler refuses
+    /// it).
+    pub fact_key: Option<String>,
+    /// The JSON pointer of the member `on_unknown` in the file.
+    pub pointer: String,
+}
+
+/// SS-5: every `fact` predicate that writes `on_unknown` in a rule's `trigger` or
+/// `feedback_stop`, in file order, through the children of `all`, `any` (`predicates`) and `not`
+/// (`predicate`). The composer requires `fact_unknown_probe` for the first; the resource tools
+/// check each key against the reading marks of the rule's package.
+pub fn standard_pack_fact_probes(schedule: &StandardPackSchedule) -> Vec<StandardPackFactProbe> {
+    fn walk(
+        node: &Value,
+        pointer: &str,
+        rule_index: usize,
+        package_id: &str,
+        probes: &mut Vec<StandardPackFactProbe>,
+    ) {
+        let Value::Object(members) = node else {
+            return;
+        };
+        if members.get("kind").and_then(Value::as_str) == Some("fact")
+            && members.contains_key(FACT_ON_UNKNOWN)
+        {
+            probes.push(StandardPackFactProbe {
+                rule_index,
+                package_id: package_id.to_owned(),
+                fact_key: members
+                    .get("fact_key")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                pointer: format!("{pointer}/{FACT_ON_UNKNOWN}"),
+            });
+        }
+        if let Some(Value::Array(children)) = members.get("predicates") {
+            for (index, child) in children.iter().enumerate() {
+                walk(
+                    child,
+                    &format!("{pointer}/predicates/{index}"),
+                    rule_index,
+                    package_id,
+                    probes,
+                );
+            }
+        }
+        if let Some(child) = members.get("predicate") {
+            walk(
+                child,
+                &format!("{pointer}/predicate"),
+                rule_index,
+                package_id,
+                probes,
+            );
+        }
+    }
+    let mut probes = Vec::new();
+    for (index, rule) in schedule.rules.iter().enumerate() {
+        for member in ["trigger", "feedback_stop"] {
+            if let Some(node) = rule.body.get(member) {
+                walk(
+                    node,
+                    &format!("/rules/{index}/{member}"),
+                    index,
+                    &rule.package_id,
+                    &mut probes,
+                );
+            }
+        }
+    }
+    probes
+}
+
+/// SS-5: the `fact` predicate member of a probe.
+const FACT_ON_UNKNOWN: &str = "on_unknown";
 
 /// The pointer of the first fact reference at or below the predicate node `node` at `pointer`,
 /// the `value` of a node of `kind`, through the children of `all`, `any` (`predicates`) and

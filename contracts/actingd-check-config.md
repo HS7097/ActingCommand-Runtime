@@ -360,6 +360,12 @@ The members of `report`:
       task's own last result"); a `schedule.json` whose event writes the
       member requires it, so it is composed only by a Runtime that names this
       row.
+    - `fact_unknown_probe` (SS-5, since 0.12.32): always on
+      (`config_subsystem_always_on`). The Runtime reads a `fact` predicate's
+      `on_unknown: probe`: a fact only the task's own package reads admits the
+      task once per unknown period ([scheduling/README.md](scheduling/README.md),
+      "Self-read fact probe"); a `schedule.json` whose rule writes the member
+      requires it, so it is composed only by a Runtime that names this row.
     - `expected_runtime` (SCH-M ED-2): always on
       (`config_subsystem_always_on`). The Runtime keeps the run-duration
       samples (`health.run_duration`) and dispatches by the expected duration

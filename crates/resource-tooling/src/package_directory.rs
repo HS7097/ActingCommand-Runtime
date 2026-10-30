@@ -12,7 +12,9 @@
 //! Workflow #392 DA-4: and `display-layout.json` (`--display-layout`), checked by the root reader.
 
 use crate::codes::ResourceToolingCode;
-use crate::standard_pack_check::{RootFileInputs, cross_check, store_update_cooldowns};
+use crate::standard_pack_check::{
+    RootFileInputs, cross_check, probe_keys_marked, store_update_cooldowns,
+};
 use crate::standard_pack_schedule::report_schedule;
 use crate::{PackageBundleRequest, PackageBundleResponse};
 use actingcommand_contract::outcome::{Detail, Outcome};
@@ -293,6 +295,14 @@ fn write_bundle(
             benefit_coverage = Some(report.benefit_coverage);
             // UPD-1 fix round 1 (review L6): a store update rule needs a cooldown.
             store_update_cooldowns(
+                &applications.game,
+                &root,
+                &schedule.bytes,
+                &schedule.path,
+                &|directory: &str| packs_dir.join(directory),
+            )?;
+            // SS-5: a probe names a key its rule's own package reads.
+            probe_keys_marked(
                 &applications.game,
                 &root,
                 &schedule.bytes,

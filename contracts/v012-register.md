@@ -4240,6 +4240,131 @@ the seeded hash.
 | SS2-3 | the allocation order `allocation_order` (the round's sort and the reserve gate's): `promoted`, `total`, `affinity`, `TieKey::order` (bounded first, chances, time left, runs left, more conditions, declared position), then `tie_breaker`, task id, instance id | behaviour (evaluation) | SS-2 | — | the Runtime's own fact refresh task has no key and comes after every declared task in a tie |
 | SS2-4 | `rank_breakdown` and ranked `decision_candidate_not_selected` details end with ` chain_head=<id>` for an inheriting candidate and, on a tie (`lead=0` / `behind_by=0`), ` tie=<bounded\|none\|unknown> chances=… time_left_ms=… runs_left=… conditions=… declared=…` | developer text (never persisted) | SS-2 | the policy evaluator | absent otherwise, so a decision without a chain window or a tie keeps its bytes |
 
+### 1.223 Slice SS-5 (0.12.32): a package's own unknown fact lets its task run once per unknown period (the coordinator's rule of 10-28, memory 「自读事实不能当本包的门」: a self-read fact must not gate its own package forever; Alice's ruling 100, #386 comment 6490879952: dispatch follows live account state; design `rd-1029/design-sch-state.md` §4.6 and the SS-5 entry of §5, `rd-1029/plan-state-driven.md` SS-5; coordinator work order `rd-1029/brief-ss5-lnoff1.md` SS-5)
+
+[scheduling/README.md](scheduling/README.md) ("Self-read fact probe"; "Why A Candidate Does Not
+Run"), [scheduling/v2/README.md](scheduling/v2/README.md),
+[standard-pack-schedule.md](standard-pack-schedule.md) ("Self-read fact probes") and
+[actingd-check-config.md](actingd-check-config.md) are the contract. The number 1.223 is the
+coordinator's.
+
+**What.** A `fact` predicate may carry `on_unknown: "probe"` (V2 only). It names a fact only the
+task's own package reads (a reading mark of that package: a clear count, an activity level, a slot
+count). While the fact is unknown the predicate is true once per unknown period, with `fact_probe`,
+so the task runs and its run reads the fact; no fact refresh is asked for the key. The period
+begins at the later of the latest occurrence of a timeline reset that clears the key and the end of
+an expired reading's freshness; a successful run of the task dispatched after that serves it, and
+the predicate is then false (`fact_probe` with `served_by_dispatch_unix_ms`, no wake) until a
+reading, the next reset or an expiry. A failed or cancelled run serves nothing (S1's retry, backoff
+and limits bound it, as for every failure). A non-probe unknown fact keeps its trigger Unknown and
+asks the maintenance package for its key, as before.
+
+**Guards.** The compiler refuses a probe no run of the task can read or whose truth would not admit
+the task, each `predicate_uncomputable` at `on_unknown`: a scope other than an instance, a key that
+is no reading-mark key (`resource.`, `inventory.`), a place below `not` or in the `feedback_stop`;
+a V1 document is refused `unknown_field` at the member. The compiler sees no package, so the key
+against the rule's own package is checked where the rule meets its package: `actinglab
+standard-pack check` and `package bundle --schedule` read the package's marks with the Runtime's
+metadata reader and refuse a key the package does not mark (a key only another package reads, or
+none), `standard_pack_root_invalid` / `schedule_invalid` at `on_unknown` (the UPD-1 store-update
+cooldown rule is checked at the same place). A `schedule.json` that writes the member requires
+the subsystem `fact_unknown_probe`.
+
+**Why.** Missing or expired, such a fact made its gate Unknown, the maintenance package cannot read
+it, and only a run of the task would: a first-run deadlock; the resource side worked around it with
+result keys.
+
+**Unchanged.** Every predicate without the member, the fact refresh (its demand, keys and gates),
+the ranking and every gate, placement and admission; game neutrality; the one-way rule (nothing in
+the resource layer reads it). **No new configuration key, no persisted ledger or state shape, no
+wire or interface revision.** One outcome code, `fact_probe` (info; `fact_key`, `unknown_reason`;
+optional `served_by_dispatch_unix_ms`, whose key description now names the probe too), because no
+code says "an unknown fact admits its task" or "the probe of this period was served":
+`fact_time_served` belongs to `fact_time_reached` and requires its key, and the `fact_refresh_*`
+codes speak of the maintenance package. One code with an optional value covers both verdicts
+(#420 S4). A catalog without the member evaluates, serializes and hashes exactly as before.
+
+**What changes live.** Nothing until the resource side writes the member (RS-5): no deployed
+`schedule.json` can hold it, since 0.12.31 and every Runtime before refuse it.
+
+**Rollback** (to 0.12.31). Before the resource side writes the member: nothing to undo, no ledger,
+state, configuration or catalog shape is new and `fact_probe` is a reason of in-memory decisions
+and of the existing dispatch decision records. After it: 0.12.31 does not name the subsystem
+`fact_unknown_probe`, so its composer refuses that `schedule.json` (`schedule_requires_missing`),
+records `standard_pack_root_invalid` and keeps the game's last good rules; roll the resource side
+back with it, or drop the member first. A dispatch decision record of 0.12.32 that holds
+`fact_probe` reads back on 0.12.31 as `outcome_relay_unregistered` with the spelling as
+`raw_code`, as every code an older build does not list.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SS5-1 | `fact.on_unknown` (optional, `"probe"`; `PredicateSpec::Fact`, `FactUnknownRule`, `contracts/scheduling/v2/common.schema.json`) | catalog format addition (no ledger shape) | SS-5 | the resource side (RS-5) | V2 only; instance scope, a `resource.`/`inventory.` key, in the trigger outside every `not`; absent serializes as nothing |
+| SS5-2 | `fact_probe` (info / `none`; `fact_key`, `unknown_reason` required, `served_by_dispatch_unix_ms` optional) | new outcome code (`PolicyCode`, block `SS-5`) | SS-5 | the policy evaluator | layer `policy`, review `pending`; without the optional value the predicate is true, with it false and `trigger_false` follows when it decides the trigger |
+| SS5-3 | `config.subsystems` row `fact_unknown_probe` (always on, `config_subsystem_always_on`) | new row value of an existing fact (no shape) | SS-5 | actingd | the composer requires it of a `schedule.json` whose rule writes the member (`FACT_UNKNOWN_PROBE_SUBSYSTEM`); named apart from the reason code `fact_probe` (SS5-2), since a subsystem name must not equal a registered outcome name (outcome guard G5) |
+| SS5-4 | the cross-check of a probe's key against the reading marks of the rule's own package (`probe_keys_marked`, `standard_pack_fact_probes`) | resource-tool check (no shape) | SS-5 | `actinglab standard-pack check`, `package bundle --schedule` | `standard_pack_root_invalid`, `schedule_invalid` at `/rules/<i>/…/on_unknown`; each package read once, metadata only |
+
+### 1.224 Slice LN-OFF-1 (0.12.32): the bounded offline opening of an SQLite ledger (Workflow #422 comments 6503130154 and 6508064467: the UI's offline face reached 12 GB in 60 s on the 8.1 GB production ledger; design `rd-1029/design-ln-off.md`, option A, §4.2 to §4.6; pending decision 115, recommendation A, with Alice's addition of 10-30 23:3x: 「我们直接限定UI每次可以读多少就行」; coordinator work order `rd-1029/brief-ss5-lnoff1.md`)
+
+[ledger-store.md](ledger-store.md) ("Recovery, artifacts and forensic consumers"),
+[global-ledger-query.md](global-ledger-query.md) ("Offline view entry") and
+[runtime-database.md](runtime-database.md) (`open_existing_unchecked`) are the contract. The number
+1.224 is the coordinator's.
+
+**What.** `GlobalLedger::open_metadata` keeps its signature and `GlobalLedgerMetadata` its public
+methods; on an SQLite root its implementation is replaced. (1) The database opens without the
+whole-file `quick_check` and the snapshot holds a read-only connection of its own. (2) The opening
+is two short read transactions: the Runtime writer open's checks (`verify_tail`, shared with
+`verify_open_tail`: format and views, the keyed meta row, marker `ready`, `MAX(sequence)` at the
+head, the newest `ledger_observer.open_verify_tail_records` records authenticated and chained to the
+head hash) plus contiguity (`COUNT`, `MIN`, `MAX` equal to head, 1, head); then the eviction intent
+and outcome records by type, each authenticated, as the proof set (`RetentionIndex::offline_proofs`);
+then it pins the point. (3) A page is the reader pool's page at that point (`ViewReader`, as
+`view_page_at_point`), one short read transaction, its scope source `offline`; a page returns at
+most its request's limit (`MAX_RUNTIME_EVENT_QUERY_EVENTS`, 256) and
+`MAX_RUNTIME_EVENT_QUERY_RESPONSE_BYTES` (768 KiB) with a cursor to the rest, as every Runtime page
+does. (4) A material fetch is one authenticated point read with its proof from the pinned set.
+(5) Every read has a deadline: the opening the supplied one, else `open_timeout_ms`'s factory value
+(600 s) from its start; each later read `writer_reply_timeout_ms`'s factory value (10 s) from its own
+start, no later than a deadline the caller set or passed; inside a statement too
+(`read_check_vm_steps`). A page whose deadline passes is refused whole; with
+`sqlite_page_read_budget` (the UI's interactive use, `read_budget_ms`) it answers incomplete with its
+cursor. (6) The whole-snapshot re-verification of every page (`SqliteViewSnapshot::verify_view_full`)
+and its CTE selection (`views::select_sequences`) are removed. **No outcome code** (a refusal is
+`ledger_read_budget_exceeded` with `phase=open|proofs|page|resolve` in its detail), **no
+configuration key** (the defaults are the factory values of existing `ledger_observer` keys; the
+page bound is the existing contract constants), **no persisted shape, no interface revision.** No
+caller changes code.
+
+**Why.** The opening read and authenticated the whole ledger into memory after an unbudgeted
+whole-file `quick_check(1)`, and every page did so again; the UI's 1 GiB / 300 000 / 60 s budget made
+the production root unopenable, and its absolute 60 s deadline refused every page a minute after the
+opening.
+
+**Integrity.** Not weaker than the writer open's (design §4.5): the meta row, the head, the tail and
+the extent at the opening (contiguity is more than the writer checks); every other record is
+authenticated when a read reads it. The opening no longer finds damage in records older than its
+tail, nor checks the migrated prefix: those move to the explicit whole-ledger mode of LN-OFF-3 and to
+`ledger-maintenance verify`, which reads every record.
+
+**Live root** (pending decision 115, A): read, not refused. Each read is a short transaction at the
+pinned head under WAL, so the writer commits meanwhile and the checkpoint catches up after it. A
+later B or C adds a refusal on top (`read_writer_metadata` is still read at the opening).
+
+**Unchanged.** The writer open (`verify_open_tail` reads exactly as before), the reader pool, the
+writer's pages, `open_evidence` (whole, LN-OFF-3), `open_selected`, `open_range`, Segment roots, game
+neutrality.
+
+**Rollback** (to 0.12.31). Nothing to undo: no ledger, state, configuration or wire shape is new. A
+0.12.31 offline reader again reads the whole ledger into memory at the opening and at every page.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| OFF1-1 | `GlobalLedger::open_metadata` on SQLite (`sqlite::SqliteViewSnapshot::open`) | reader behaviour | LN-OFF-1 | — | `open_existing_unchecked`; checks of `verify_tail` (`TailOpen::Offline`: also `verify_sequence_extent`, a non-ready marker `ledger_candidate_not_production`); the eviction rows by type; the pinned `ReadPoint` |
+| OFF1-2 | `GlobalLedgerMetadata::project_view_page` on SQLite | reader behaviour | LN-OFF-1 | — | the reader pool's page (`ViewReader`, `source` `offline`, `time_index` false on a root without the derived views); default: refused whole at its deadline (`ReadWork::was_spent`); optional work budget answers `read_budget` |
+| OFF1-3 | `GlobalLedgerMetadata::resolve_artifact` on SQLite | reader behaviour | LN-OFF-1 | — | `verify_published_extent` and one `read_history_rows`; the proof from `RetentionIndex::offline_proofs` |
+| OFF1-4 | `GlobalLedgerEvidenceConfig::new` and its setters `sqlite_open_verify_tail_records`, `sqlite_read_check_vm_steps`, `sqlite_page_read_budget` | interface defaults | LN-OFF-1 | — | defaults `open_timeout_ms` 600 000, `writer_reply_timeout_ms` 10 000, `open_verify_tail_records` 4 096, `read_check_vm_steps` 10 000, `history_page_rows`, `history_scan_rows`; out of range `invalid_ledger_config` (request); `with_budget` / `with_deadline` bound the opening only |
+| OFF1-5 | `GlobalLedgerMetadata::event_count()` on SQLite | interface meaning | LN-OFF-1 | — | the pinned head, `1..=head` found contiguous; not "each read and authenticated" |
+
 ### 1.225 Slice SS-2b (0.12.32): business candidates ranked by net benefit within a tier; unknown value is not dispatched (Alice's ruling 104 point 3, approved with 104 on 10-30 21:3x and checked by the research channel, Workflow #386 comment 6523148251; ruling 116 of 10-30 23:2x–23:3x, which overrides that check's "unknown is dispatched as today"; design `rd-1029/design-sch-state.md` §4.1 steps 3 and 5, §4.6, §4.10; coordinator work order `rd-1029/brief-116-112-114.md` SS-2b)
 
 [scheduling/README.md](scheduling/README.md) ("Net benefit within a tier"; "Pool Valuation" and

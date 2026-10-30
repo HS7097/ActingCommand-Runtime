@@ -234,7 +234,8 @@ impl RuntimeDatabase {
     /// Workflow #375 R375-3 v1.2: opens existing storage read-only exactly as
     /// `open_existing(root, true)` does, without the whole-file `PRAGMA quick_check(1)`.
     /// Only for the check-config catalog preview and the offline `actingledger events` and
-    /// `export --performance` range opening (Workflow #411 A4), which authenticate every row
+    /// `export --performance` range opening (Workflow #411 A4) and the bounded offline snapshot
+    /// of `GlobalLedger::open_metadata` (#422 LN-OFF-1), which authenticate every row
     /// they read, and the start's ledger format probe, which reads only the format
     /// (`user_version` and the ledger table count, Workflow #378 A3); `ledger-maintenance
     /// verify` opens through `open_existing`, which still runs the check, and the start through

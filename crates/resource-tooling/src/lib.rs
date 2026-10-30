@@ -66,6 +66,10 @@ mod gate_ss2b;
 #[cfg(test)]
 mod gate_428_cfl2;
 
+// SS-5: standard-pack check refuses a probe on a key the rule's own package does not mark.
+#[cfg(test)]
+mod gate_ss5;
+
 mod maa_task_graph;
 mod package_directory;
 mod package_publish;

@@ -242,6 +242,17 @@ actingcommand_contract::outcome_codes! {
         /// (keys `used`, `limit_count`, `admitted_count`, `round_selected_count`).
         PolicyConcurrentRunsDeferred => "policy_concurrent_runs_deferred": info / none,
         // ---- Workflow #427-B: end ----
+        // ---- SS-5 (self-read fact probe, `contracts/scheduling/README.md`, "Self-read fact
+        // probe"): begin ----
+        /// Info. A `fact` predicate with `on_unknown: probe` reads its fact as unknown. Without
+        /// `served_by_dispatch_unix_ms` the predicate is true: the task is admitted so that its
+        /// run reads the fact, and no fact refresh is requested. With it the predicate is false,
+        /// no wake: this task's latest run succeeded and was dispatched in the fact's current
+        /// unknown period, after the latest reset that clears the key and after the expiry of the
+        /// fact's last reading (keys `fact_key`, `unknown_reason`; optional
+        /// `served_by_dispatch_unix_ms`).
+        FactProbe => "fact_probe": info / none,
+        // ---- SS-5: end ----
         // ---- SS-2b (net benefit within a tier, `contracts/scheduling/README.md`, "Net benefit
         // within a tier"): begin ----
         /// Info. A judged candidate's net benefit is known and not positive: it is not dispatched

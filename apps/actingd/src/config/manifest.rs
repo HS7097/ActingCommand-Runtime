@@ -192,6 +192,15 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             true,
             Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
         ),
+        // SS-5 (register §1.223): this build reads a `fact` predicate's `on_unknown: probe` (a
+        // self-read fact admits its task once per unknown period); a `schedule.json` whose rule
+        // writes the member requires it, so an older Runtime refuses the file instead of
+        // misreading it.
+        subsystem(
+            "fact_unknown_probe",
+            true,
+            Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
+        ),
         // SCH-M ED-2 (frozen model v1.0 §3.4, §3.8): this build keeps the run-duration samples
         // (`health.run_duration`) and dispatches by the expected duration E; the catalog
         // generator emits catalog v35 only for a Runtime that names it.

@@ -1729,6 +1729,7 @@ mod tests {
                 comparison: crate::Comparison::Eq,
                 value: crate::FactValue::Boolean(true).into(),
                 max_age_ms: Some(60_000),
+                on_unknown: None,
             },
             match_bands: vec![
                 StrategicBand::Actionable,

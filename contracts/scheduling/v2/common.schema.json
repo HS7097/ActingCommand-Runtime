@@ -418,7 +418,8 @@
                 { "$ref": "#/$defs/factReference" }
               ]
             },
-            "max_age_ms": { "type": ["integer", "null"], "minimum": 1, "maximum": 31536000000 }
+            "max_age_ms": { "type": ["integer", "null"], "minimum": 1, "maximum": 31536000000 },
+            "on_unknown": { "enum": ["probe"] }
           },
           "additionalProperties": false
         },

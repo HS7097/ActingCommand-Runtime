@@ -2177,7 +2177,7 @@
     },
     "served_by_dispatch_unix_ms": {
       "type": "unix_ms",
-      "description": "When the task's latest successful run that served a fact_time_reached time was dispatched, in Unix milliseconds (SCH-M CF-1)."
+      "description": "When the task's latest successful run that served a fact_time_reached time (SCH-M CF-1) or a fact probe's unknown period (SS-5) was dispatched, in Unix milliseconds."
     },
     "table_column": {
       "type": "token",

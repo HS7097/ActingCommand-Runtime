@@ -55,7 +55,9 @@
 //! `standard_pack_root_invalid` naming it, and each unclassified package is one
 //! `standard_pack_package_unclassified` warning, after the remedy report. UPD-1 fix round 1
 //! (review L6): then a rule that runs a store update package (`store_update`) with a `cooldown_ms`
-//! of 0 is refused the same way, `schedule_invalid` at its `cooldown_ms`.
+//! of 0 is refused the same way, `schedule_invalid` at its `cooldown_ms`. SS-5: then a rule's
+//! `fact` predicate with `on_unknown` whose `fact_key` no reading mark of the rule's own package
+//! writes is refused the same way, `schedule_invalid` at its `on_unknown`.
 //!
 //! Last, with or without `pages.json`, the remedy report (Workflow #411 B15, contracts/remedies.md
 //! section 10): every package of the root is read by the Runtime's metadata reader, and one
@@ -84,6 +86,7 @@ use actingcommand_contract::{
 use actingcommand_execution_kernel::{
     ContainedTaskError, NavigationPackageDescriptor, PreparedContainedTask, RemedyDeclarations,
 };
+use actingcommand_policy::standard_pack_fact_probes;
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -299,6 +302,14 @@ pub fn check_standard_pack_root(
         benefit_coverage = Some(report.benefit_coverage);
         // UPD-1 fix round 1 (review L6): a store update rule needs a cooldown.
         store_update_cooldowns(
+            &game,
+            &checked,
+            schedule,
+            &root.join(STANDARD_PACK_SCHEDULE_FILE),
+            &|directory: &str| root.join(directory),
+        )?;
+        // SS-5: a probe names a key its rule's own package reads.
+        probe_keys_marked(
             &game,
             &checked,
             schedule,
@@ -784,6 +795,69 @@ pub(crate) fn store_update_cooldowns(
                     file: STANDARD_PACK_SCHEDULE_FILE,
                     problem: StandardPackProblem::ScheduleInvalid,
                     pointer: format!("/rules/{index}/cooldown_ms"),
+                },
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// SS-5 (register §1.223; contracts/standard-pack-schedule.md, "Self-read fact probes"): a rule's
+/// `fact` predicate with `on_unknown` admits the rule's task while the fact is unknown, so that
+/// the run of the rule's own package reads it. So its `fact_key` must be one the reading marks of
+/// that package write (`resource_readings`, read by the Runtime's metadata reader without
+/// preparing the package). A key only another package reads, or one no package reads, is
+/// `standard_pack_root_invalid`, `schedule_invalid` at the member's pointer
+/// (`/rules/<index>/…/on_unknown`) of `schedule` (the bytes of `schedule.json` at `path`, already
+/// composed by `report_schedule`). Each package is read once, and only for a rule that writes one.
+pub(crate) fn probe_keys_marked(
+    game: &str,
+    root: &StandardPackRoot,
+    schedule: &[u8],
+    path: &Path,
+    pack_directory: &dyn Fn(&str) -> PathBuf,
+) -> LabResult<()> {
+    let schedule =
+        parse_standard_pack_schedule(schedule).map_err(|issue| root_invalid(game, path, &issue))?;
+    let mut marks = BTreeMap::<String, BTreeSet<String>>::new();
+    for probe in standard_pack_fact_probes(&schedule) {
+        if !marks.contains_key(&probe.package_id) {
+            let entry = root
+                .registry
+                .get(probe.package_id.as_str())
+                .ok_or_else(|| {
+                    LabError::package_invalid(format!(
+                        "{} is no package of the bundle",
+                        probe.package_id
+                    ))
+                })?;
+            let package = pack_directory(&entry.directory);
+            let read = PreparedContainedTask::read_reading_marks(
+                CHECK_LABEL,
+                &package,
+                Instant::now() + PACK_DEADLINE,
+            )
+            .map_err(|error| {
+                LabError::package_invalid(format!("{}: {error}", package.display()))
+            })?;
+            marks.insert(
+                probe.package_id.clone(),
+                read.fact_keys.into_iter().collect(),
+            );
+        }
+        let marked = probe.fact_key.as_ref().is_some_and(|key| {
+            marks
+                .get(&probe.package_id)
+                .is_some_and(|keys| keys.contains(key))
+        });
+        if !marked {
+            return Err(root_invalid(
+                game,
+                path,
+                &StandardPackRootIssue {
+                    file: STANDARD_PACK_SCHEDULE_FILE,
+                    problem: StandardPackProblem::ScheduleInvalid,
+                    pointer: probe.pointer,
                 },
             ));
         }

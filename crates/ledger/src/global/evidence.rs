@@ -17,6 +17,9 @@ pub struct GlobalLedgerEvidenceConfig {
     budget: Option<(u64, usize, Instant)>,
     material: EvidenceMaterial,
     prefix: Option<u64>,
+    /// #422 LN-OFF-1: how `GlobalLedger::open_metadata` reads an SQLite root; the factory values
+    /// of the `ledger_observer` keys unless set (`sqlite::OfflineReads`).
+    offline: sqlite::OfflineReads,
 }
 /// How an SQLite opening treats referenced artifact material.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,13 +32,46 @@ enum EvidenceMaterial {
     NotRead,
 }
 impl GlobalLedgerEvidenceConfig {
+    /// #422 LN-OFF-1 (design-ln-off §4.6, K1): on an SQLite root, `GlobalLedger::open_metadata`
+    /// is never unbounded. Without `with_budget` or `with_deadline` its opening ends within the
+    /// factory value of `ledger_observer.open_timeout_ms` (600 s) from its start; each later read
+    /// of the snapshot (a page, a material fetch) within that of
+    /// `ledger_observer.writer_reply_timeout_ms` (10 s) from its own start. Each page returns at
+    /// most its request's limit (`MAX_RUNTIME_EVENT_QUERY_EVENTS`, 256 records, at most) and
+    /// `MAX_RUNTIME_EVENT_QUERY_RESPONSE_BYTES` (768 KiB), with a cursor to the rest (pending
+    /// decision 115); a material fetch returns one record. The other openings keep their own
+    /// budgets (`open_evidence` reads whole, LN-OFF-3).
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self {
             root: root.into(),
             budget: None,
             material: EvidenceMaterial::Required,
             prefix: None,
+            offline: sqlite::OfflineReads::default(),
         }
+    }
+    /// #422 LN-OFF-1, `open_metadata` on an SQLite root: how many of the newest records its
+    /// opening authenticates (`ledger_observer.open_verify_tail_records`, `1..=1000000`; 4 096
+    /// unless set). Outside the range the opening is `invalid_ledger_config`.
+    pub fn sqlite_open_verify_tail_records(mut self, records: usize) -> Self {
+        self.offline.tail_records = records;
+        self
+    }
+    /// #422 LN-OFF-1, `open_metadata` on an SQLite root: the SQLite steps between two looks at a
+    /// read's deadline inside a statement (`ledger_observer.read_check_vm_steps`, `1..=1000000`;
+    /// 10 000 unless set). Outside the range the opening is `invalid_ledger_config`.
+    pub fn sqlite_read_check_vm_steps(mut self, steps: u32) -> Self {
+        self.offline.read_check_vm_steps = steps;
+        self
+    }
+    /// #422 LN-OFF-1 (design-ln-off §4.3), `open_metadata` on an SQLite root: a page's work
+    /// budget (`ledger_observer.read_budget_ms`, whose factory value is 1 000 ms; non-zero). A page
+    /// that spends it answers incomplete with its cursor (`read_budget`, #411 A51), as the
+    /// Runtime's pages do; without it a page reads under its deadline alone and is refused whole
+    /// when the deadline passes.
+    pub fn sqlite_page_read_budget(mut self, budget: Duration) -> Self {
+        self.offline.page_read_budget = Some(budget);
+        self
     }
     /// SQLite only: authenticates records exactly as the default opening, then verifies
     /// each unevicted artifact separately. When the verifier returns `None`, that artifact
@@ -67,11 +103,15 @@ impl GlobalLedgerEvidenceConfig {
         self.prefix = Some(through_sequence);
         self
     }
+    /// #422 LN-OFF-1: for `open_metadata` on an SQLite root this bounds the opening only (its
+    /// deadline in place of the default, its bytes and events on the rows the opening reads);
+    /// each later read of the snapshot takes its own deadline when it starts.
     pub fn with_budget(mut self, bytes: u64, events: usize, deadline: Instant) -> Self {
         self.budget = Some((bytes, events, deadline));
         self
     }
-    /// Applies one operation deadline while retaining any stricter source limits.
+    /// Applies one operation deadline while retaining any stricter source limits. #422 LN-OFF-1:
+    /// for `open_metadata` on an SQLite root, the opening's deadline (see `with_budget`).
     pub fn with_deadline(mut self, deadline: Instant) -> Self {
         self.budget = Some(artifact_read_budget(self.budget, deadline));
         self
@@ -534,6 +574,8 @@ pub(super) fn resolve_artifact_from_events<E: LedgerEventRead>(
 
 /// An immutable, authenticated ledger snapshot with reference metadata only.
 /// This type exposes projected pages and cannot issue artifact material authority.
+/// #422 LN-OFF-1: on an SQLite root it holds a pinned point and no history
+/// (`sqlite::SqliteViewSnapshot`); each page and material fetch is one bounded read at that point.
 pub struct GlobalLedgerMetadata {
     sqlite: Option<sqlite::SqliteViewSnapshot>,
     events: Vec<LedgerEventMetadata>,
@@ -565,6 +607,10 @@ impl GlobalLedgerMetadata {
         selection: &LedgerArtifactSelection,
         deadline: Instant,
     ) -> GlobalLedgerResult<ResolvedLedgerArtifact> {
+        // #422 LN-OFF-1: one authenticated point read at the snapshot's pinned point.
+        if let Some(sqlite) = &self.sqlite {
+            return sqlite.resolve_artifact(selection, deadline);
+        }
         let budget = Some(artifact_read_budget(self.budget, deadline));
         read_only::check_read_budget(budget, 0, self.events.len())?;
         let resolved = resolve_artifact_from_events(
@@ -605,9 +651,15 @@ impl GlobalLedgerMetadata {
     }
     /// Counts this opening's authenticated, unfiltered events without further I/O.
     /// An incomplete read counts only the verified prefix; inspect `read_complete`,
-    /// `corrupt_tail` and `latest_sequence` for its boundary.
+    /// `corrupt_tail` and `latest_sequence` for its boundary. #422 LN-OFF-1: on an SQLite root
+    /// it is the pinned head, whose records `1..=head` the opening found contiguous; it read and
+    /// authenticated only the newest of them (`ledger_observer.open_verify_tail_records`), and
+    /// each other record is authenticated when a read reads it.
     pub fn event_count(&self) -> usize {
-        self.events.len()
+        match &self.sqlite {
+            Some(sqlite) => usize::try_from(sqlite.head()).unwrap_or(usize::MAX),
+            None => self.events.len(),
+        }
     }
 
     /// Counts the segment opening's repair records, including incomplete repairs.
@@ -671,7 +723,17 @@ impl GlobalLedger {
     }
 
     /// Reads ledger records and their integrity data without opening referenced artifacts.
-    /// Its projected views verify through the head, so `sqlite_prefix` is refused.
+    /// Its projected views read through the head, so `sqlite_prefix` is refused.
+    ///
+    /// #422 LN-OFF-1 (design-ln-off option A): on an SQLite root the database is opened without
+    /// the whole-file check and the opening makes only the Runtime writer open's checks, plus
+    /// contiguity: the keyed meta row (head, head hash, `ready` marker), the stored rows
+    /// `1..=head`, and the newest `ledger_observer.open_verify_tail_records` records, each
+    /// authenticated and chained to the head hash; then the eviction intent and outcome records,
+    /// each authenticated, as the proof set; and pins that point. Older records are authenticated
+    /// when a page or a material fetch reads them; the migrated prefix is not checked. Every read
+    /// is bounded (`GlobalLedgerEvidenceConfig::new`). A root whose writer runs is read at the
+    /// pinned point in short read transactions (pending decision 115, A).
     pub fn open_metadata(
         config: GlobalLedgerEvidenceConfig,
     ) -> GlobalLedgerResult<GlobalLedgerMetadata> {
@@ -705,16 +767,29 @@ impl GlobalLedger {
                 )
             })?;
         if database_exists || key_exists {
-            let database = RuntimeDatabase::open_existing(&config.root, true)?;
+            // #422 LN-OFF-1: no whole-file `quick_check`; the opening reads what it checks.
+            let database = RuntimeDatabase::open_existing_unchecked(&config.root)?;
             if sqlite::has_schema(&database)? {
-                let (events, sqlite, _) =
-                    sqlite::open_metadata(Arc::new(database), config.budget, None)?;
-                let through_sequence = sqlite.through_sequence;
+                config.offline.validate()?;
+                let budget = match config.budget {
+                    Some(budget) => budget,
+                    None => {
+                        let now = Instant::now();
+                        (
+                            u64::MAX,
+                            usize::MAX,
+                            now.checked_add(config.offline.open_timeout).unwrap_or(now),
+                        )
+                    }
+                };
+                let sqlite =
+                    sqlite::SqliteViewSnapshot::open(Arc::new(database), budget, config.offline)?;
+                let through_sequence = sqlite.head();
                 let writer = read_only::read_writer_metadata(&ledger_root)?;
                 return Ok(GlobalLedgerMetadata {
                     sqlite: Some(sqlite),
-                    indexes: projection::EventIndexes::from_events(&events),
-                    events,
+                    indexes: projection::EventIndexes::default(),
+                    events: Vec::new(),
                     repair_count: None,
                     through_sequence,
                     writer,
@@ -796,10 +871,11 @@ impl GlobalLedger {
                     });
                 }
                 // The same record authentication, ready marker and eviction annotation as
-                // `open_metadata`; material is then restored one artifact at a time. With a
+                // `open_metadata` made before LN-OFF-1 (`sqlite::read_metadata`, every record);
+                // material is then restored one artifact at a time. With a
                 // prefix, records, retention and availability stop at the prefix.
-                let (metadata, _view, read) =
-                    sqlite::open_metadata(Arc::new(database), config.budget, config.prefix)?;
+                let (metadata, read) =
+                    sqlite::read_metadata(&database, config.budget, config.prefix)?;
                 let restore_started = Instant::now();
                 let mut check = |count| read_only::check_read_budget(config.budget, 0, count);
                 let retention =

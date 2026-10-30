@@ -629,6 +629,19 @@ tests = [
     "actingcommand-policy::lib::tests::gate_d2_s4::w2a_an_unavailable_instance_names_its_gate_through_fact_refresh_pending",
 ]
 incident = ["#411 W2-A"]
+# SS-5 (the coordinator's rule of 10-28, a self-read fact must not gate its own package forever; Alice's ruling 100, #386 comment 6490879952; rd-1029 design-sch-state §4.6 and §5 SS-5 tests 1 to 6; contracts/scheduling/README.md, "Self-read fact probe"; register §1.223; since 0.12.32): a `fact` predicate with `on_unknown: probe` whose fact is unknown admits its task once per unknown period with fact_probe and asks for no reading; the probe run's reading of 0 makes the task yield; a reset that clears the key, or the expiry of its reading, admits it again; after a successful run in the same period it is false with fact_probe and served_by_dispatch_unix_ms, no wake, and a failed run served nothing; a probe the task's package cannot read (no instance scope, no reading-mark key, under not, in the feedback stop, a V1 document) is refused at compile, the composer requires fact_probe, and standard-pack check refuses a probe whose key the rule's own package does not mark; a non-probe unknown in the same trigger still requests the maintenance package, for that key alone
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_ss5::ss5_t1_an_unknown_self_read_key_admits_its_task_with_fact_probe",
+    "actingcommand-policy::lib::tests::gate_ss5::ss5_t2_a_probe_run_that_publishes_zero_yields",
+    "actingcommand-policy::lib::tests::gate_ss5::ss5_t3_a_reset_clears_the_key_and_admits_the_task_again",
+    "actingcommand-policy::lib::tests::gate_ss5::ss5_t4_after_a_run_in_the_same_period_the_task_is_not_admitted_again",
+    "actingcommand-policy::lib::tests::gate_ss5::ss5_t5_a_probe_on_a_key_its_package_does_not_read_is_refused",
+    "actingcommand-resource-tooling::lib::gate_ss5::ss5_t5_a_probe_on_a_key_only_another_package_reads_is_refused",
+    "actingcommand-policy::lib::tests::gate_ss5::ss5_t6_a_non_probe_unknown_still_requests_the_maintenance_package",
+]
+incident = ["#386 SS-5"]
 # Workflow #386 SR-3 (frozen scheduling model v1.4.2 §2.4 items 3-4, rows T10 and T11; M-PKG v1.1 §3.4, §5.2): the first preparation that refuses a task package with a suspend code suspends it by its package_id, with its content hash; every task bound to it, on every instance, is deferred with pack_admission_suspended and not prepared again, while another task package dispatches; a changed content hash or another build lifts it and the package is tried once, and the same refusal suspends it again
 [[gate]]
 key = "48"
