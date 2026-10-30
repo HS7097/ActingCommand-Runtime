@@ -14,7 +14,10 @@
 //!   JSON pointer; each unclassified package is one `standard_pack_package_unclassified` warning.
 //!   SS-2b (register §1.225): each judged rule that declares no value is one
 //!   `standard_pack_benefit_undeclared` warning, and the game's judged rules are counted as
-//!   complete, pending and undeclared.
+//!   complete, pending and undeclared. SS-2c (register §1.227): the rules that declare
+//!   themselves maintenance are not judged and are counted apart, and with exactly two priority
+//!   values a rule in the other tier than its declaration says is one
+//!   `standard_pack_priority_tier_mismatch` warning.
 //! - [`compose_standard_packs`]: `actinglab standard-pack compose --root <standard_packs.root>
 //!   --instance <alias>=<game>/<server>... --out <new directory>` composes the game roots of the
 //!   bound games for those bindings and writes the four V2 documents (`tasks.json`, `pools.json`,
@@ -97,8 +100,10 @@ pub(crate) fn check_schedule(
 
 /// What `package bundle --schedule` and `actinglab standard-pack check` report of a game's
 /// `schedule.json`: the composition's warnings followed by, SS-2b (register §1.225), one
-/// `standard_pack_benefit_undeclared` per judged rule that declares no value, and the game's
-/// judged rules' coverage (complete, pending, undeclared).
+/// `standard_pack_benefit_undeclared` per judged rule that declares no value, then, SS-2c
+/// (register §1.227), one `standard_pack_priority_tier_mismatch` per rule whose declaration
+/// disagrees with its tier, and the game's judged rules' coverage (complete, pending, undeclared;
+/// SS-2c: and the rules declared maintenance).
 pub(crate) struct ScheduleReport {
     pub(crate) warnings: Vec<Outcome>,
     pub(crate) benefit_coverage: BenefitCoverage,
@@ -117,6 +122,8 @@ pub(crate) fn report_schedule(
     let composition = compose_check(game, root, maintenance, schedule, path)?;
     let mut warnings = composition.warnings();
     warnings.extend(composition.benefit_warnings());
+    // SS-2c (register §1.227): the hint of a rule whose declaration disagrees with its tier.
+    warnings.extend(composition.tier_warnings());
     let benefit_coverage = composition
         .benefit_coverage()
         .into_iter()

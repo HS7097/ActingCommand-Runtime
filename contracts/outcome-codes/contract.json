@@ -17291,9 +17291,26 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.32",
-      "description": "A rule of a standard-pack game root's schedule.json (task_id) that the composer judges by net benefit, because its package is not maintenance-role, declares no value: it has no produces and no consumes entry, or a pool it touches (pool_id) has neither a valuation nor the pending marker (SS-2b, Alice's ruling 116; contracts/standard-pack-schedule.md). Its candidates are not dispatched (benefit_unknown) until it does; the root is composed as before. The policy composer finds it, once per rule; actinglab standard-pack check and package bundle --schedule report it with the game's counts of complete, pending and undeclared judged rules.",
-      "common_causes": "The resource side has not written the rule's produces and consumes, or the touched pool's valuation, yet.",
-      "handling": "Write the rule's produces and consumes and the pools' valuation; write the pending marker \"pending\" where a value is not known yet (it changes nothing but the count)."
+      "description": "A rule of a standard-pack game root's schedule.json (task_id) that the composer judges by net benefit, because its package is not maintenance-role and the rule does not declare itself maintenance (SS-2c), declares no value: it has no produces and no consumes entry, or a pool it touches (pool_id) has neither a valuation nor the pending marker (SS-2b, Alice's ruling 116; contracts/standard-pack-schedule.md). Its candidates are not dispatched (benefit_unknown) until it does; the root is composed as before. The policy composer finds it, once per rule; actinglab standard-pack check and package bundle --schedule report it with the game's counts of complete, pending and undeclared judged rules.",
+      "common_causes": "The resource side has not written the rule's produces and consumes, or the touched pool's valuation, yet; or the rule is a maintenance task that does not declare \"maintenance\": true.",
+      "handling": "Write the rule's produces and consumes and the pools' valuation; write the pending marker \"pending\" where a value is not known yet (it changes nothing but the count). A maintenance task declares \"maintenance\": true instead."
+    },
+    "standard_pack_priority_tier_mismatch": {
+      "category": "warning",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "game": "required",
+        "task_id": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.32",
+      "description": "The rules a standard-pack game root's schedule.json composes use exactly two priority values, the two tiers of Alice's ruling 104 point 1, and one rule (task_id) sits in the other tier than its declaration says: it declares itself maintenance (\"maintenance\": true) and carries the lower value, or it is judged by net benefit (no declaration, its package not maintenance-role) and carries the higher value (SS-2c, contracts/standard-pack-schedule.md \"Two priority tiers\"). A consistency hint only: the evaluator reads the tier from the benefit mark, not from the value, and the root is composed and scheduled as before. The policy composer finds it, once per rule; actinglab standard-pack check and package bundle --schedule report it.",
+      "common_causes": "A maintenance task whose rule lacks \"maintenance\": true (its candidates then wait for values that a maintenance task never declares), or a rule declared maintenance by mistake, or a priority value not yet moved to its tier.",
+      "handling": "Declare \"maintenance\": true on every maintenance rule and give it the higher value; give every business rule the lower value and no declaration."
     },
     "standard_pack_root_invalid": {
       "category": "error",

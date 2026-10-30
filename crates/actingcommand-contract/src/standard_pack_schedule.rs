@@ -57,6 +57,11 @@ const DOCUMENT_MEMBERS: [&str; 7] = [
 ];
 /// The members of one `held` entry.
 const HELD_MEMBERS: [&str; 3] = ["package_id", "reason", "reference"];
+/// SS-2c (register §1.227): the optional rule member by which a rule declares itself
+/// maintenance, `"maintenance": true`. It is `schedule.json`'s, not a V2 task member: the reader
+/// takes it out of the rule ([`ScheduleRule::maintenance`]), and the composer then does not mark
+/// the rule `benefit_judged`.
+pub const SCHEDULE_RULE_MAINTENANCE_MEMBER: &str = "maintenance";
 
 /// The four lists of rules and items, by their member name in `schedule.json`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -87,7 +92,11 @@ impl ScheduleMember {
 pub struct ScheduleRule {
     pub id: String,
     pub package_id: String,
-    /// Every other member as written, in file order (without `id` and `package_id`).
+    /// SS-2c (register §1.227): the rule declares itself maintenance (`"maintenance": true`,
+    /// [`SCHEDULE_RULE_MAINTENANCE_MEMBER`]); `false` when it does not write the member.
+    pub maintenance: bool,
+    /// Every other member as written, in file order (without `id`, `package_id` and
+    /// `maintenance`).
     pub body: Map<String, Value>,
 }
 
@@ -181,6 +190,8 @@ fn segment(name: &str) -> String {
 /// - every rule names a string `package_id` (1–128 bytes, no control character), and holds no
 ///   `entrypoint` and no `procedure_ref` (the composer fills both), and its `instance_overrides`
 ///   is absent or empty;
+/// - SS-2c: a rule's `maintenance`, if written, is `true` (`false` and every other value are
+///   refused: the absent member is the one way to say "not declared");
 /// - a pool, profile or event names its `server`, if at all, as a game-root identifier;
 /// - `requires` lists at most 32 distinct subsystem names of 1–64 bytes of `[a-z][a-z0-9_]*`;
 /// - `held` lists at most 4096 entries `{package_id, reason, reference?}` with distinct package
@@ -234,9 +245,23 @@ pub fn parse_standard_pack_schedule(
             Some(Value::Array(overrides)) if overrides.is_empty() => {}
             Some(_) => return Err(invalid(format!("{pointer}/instance_overrides"))),
         }
+        // SS-2c (register §1.227): the declaration is taken out of the rule, so the composed task
+        // never carries it; only `true` declares. `false` is refused: on a rule whose package is
+        // maintenance-role it would read as "business" and change nothing, and one spelling for
+        // "not declared" (no member) keeps the files uniform.
+        let maintenance = match body.shift_remove(SCHEDULE_RULE_MAINTENANCE_MEMBER) {
+            None => false,
+            Some(Value::Bool(true)) => true,
+            Some(_) => {
+                return Err(invalid(format!(
+                    "{pointer}/{SCHEDULE_RULE_MAINTENANCE_MEMBER}"
+                )));
+            }
+        };
         rules.push(ScheduleRule {
             id,
             package_id,
+            maintenance,
             body,
         });
     }

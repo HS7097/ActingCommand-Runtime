@@ -811,7 +811,11 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
 
 - **Who is judged.** A V2 task may carry `benefit_judged: true` ([v2/README.md](v2/README.md));
   the standard-pack composer writes it on every rule whose package is not maintenance-role
-  ([standard-pack-schedule.md](../standard-pack-schedule.md), "Classification"). Such a task is a
+  ([standard-pack-schedule.md](../standard-pack-schedule.md), "Classification") and that does not
+  declare itself maintenance (SS-2c, since 0.12.32, register §1.227: the `schedule.json` rule
+  member `"maintenance": true`, "The maintenance declaration" there; maintenance tasks are not
+  judged by net benefit, Alice's ruling 104 point 1 and design §4.10). A raw V2 catalog sets the
+  mark itself; `maintenance` is no V2 task member. Such a task is a
   *business* task. Its candidate is *judged* unless it ranks with a chain head ("Ties and chain
   heads") or is a manual request: a task whose trigger requires an instruction, a `fact` or
   `fact_time_reached` predicate on a key of the `session.` family reached from the root only
@@ -861,6 +865,11 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
   record and the not-running row name the new reasons as `why`.
 - **No mark, no change.** A catalog without `benefit_judged` keeps its hash and decides byte for
   byte as before: no candidate is judged and the order is the one of before.
+- **Declared maintenance** (SS-2c). A rule that declares itself maintenance composes unmarked, so
+  its task is in the maintenance tier and its candidate is never judged: it ranks there in the
+  order of before and is dispatched as before SS-2b, its `priority` and every gate unchanged. A
+  `schedule.json` that declares nothing composes byte for byte as with SS-2b alone. The
+  evaluator reads no new member: it sees only the mark, as before.
 
 ## Task Reserves (Workflow #411 B16 part 2)
 

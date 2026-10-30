@@ -184,12 +184,14 @@ impl Error for StandardPackComposeFailure {}
 pub const STANDARD_PACK_PRIORITY_TIERS: usize = 2;
 
 /// SS-2b (register §1.225): the task member the composer writes, `true`, on every rule whose
-/// package is not maintenance-role. A rule never writes it itself.
+/// package is not maintenance-role; SS-2c (register §1.227): and that does not declare itself
+/// maintenance (`"maintenance": true`). A rule never writes it itself.
 pub const BENEFIT_JUDGED_MEMBER: &str = "benefit_judged";
 
 /// SS-2b (register §1.225; Alice's ruling 116, 「业务覆盖完整」): how far one game's judged rules
-/// (those whose package is not maintenance-role, not held) declare their values, as the resource
-/// tools report it. Each rule counts once, whatever the instances it is composed for.
+/// (those whose package is not maintenance-role and that do not declare themselves maintenance,
+/// not held) declare their values, as the resource tools report it. Each rule counts once,
+/// whatever the instances it is composed for.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct BenefitCoverage {
     /// Every entry has its quantity and every pool it touches its valuation.
@@ -199,6 +201,10 @@ pub struct BenefitCoverage {
     /// No `produces` and no `consumes` entry, or a pool it touches with neither a valuation nor
     /// the pending marker: one `standard_pack_benefit_undeclared` warning each.
     pub undeclared: usize,
+    /// SS-2c (register §1.227): the rules, not held, that declare themselves maintenance
+    /// (`"maintenance": true`), whatever their package's role. They are not judged, so none of
+    /// them counts in the three above.
+    pub maintenance_declared: usize,
 }
 
 /// One judged rule that declares no value: its id and the touched pool without a valuation
@@ -223,6 +229,10 @@ pub struct StandardPackComposition {
     /// SS-2b: each game whose `schedule.json` was read, by game id, with its judged rules'
     /// coverage and the rules that declare no value, in file order.
     benefit: Vec<(String, BenefitCoverage, Vec<UndeclaredRule>)>,
+    /// SS-2c: each game whose composed rules use exactly two priority values and whose rules
+    /// include one in the other tier than its declaration says, by game id, with those rules' ids
+    /// in file order.
+    tier_mismatches: Vec<(String, Vec<String>)>,
 }
 
 impl StandardPackComposition {
@@ -300,12 +310,38 @@ impl StandardPackComposition {
             .map(|(game_id, coverage, _)| (game_id.clone(), *coverage))
             .collect()
     }
+
+    /// SS-2c (register §1.227): one `standard_pack_priority_tier_mismatch` per rule of a game
+    /// whose composed rules use exactly two priority values, when the rule declares itself
+    /// maintenance and carries the lower value or is judged and carries the higher (keys `game`,
+    /// `task_id` the rule's id), by game id, then in file order. A hint, never a refusal: only
+    /// the resource tools report them, after [`StandardPackComposition::benefit_warnings`]; the
+    /// Runtime's workbench records none.
+    pub fn tier_warnings(&self) -> Vec<Outcome> {
+        self.tier_mismatches
+            .iter()
+            .flat_map(|(game_id, rules)| {
+                rules.iter().map(move |rule_id| {
+                    Outcome::new(SharedCode::StandardPackPriorityTierMismatch)
+                        .game(game_id.as_str())
+                        .task_id(rule_id.as_str())
+                })
+            })
+            .collect()
+    }
+}
+
+/// Whether the composer judges `rule` by its net benefit: SS-2b, its package is not
+/// maintenance-role; SS-2c (register §1.227), and it does not declare itself maintenance.
+fn judged(rule: &ScheduleRule, classification: &StandardPackClassification) -> bool {
+    !rule.maintenance && !classification.maintenance.contains(&rule.package_id)
 }
 
 /// SS-2b: the judged rules of one game read from its file (module doc): every rule that is not
-/// held and whose package is not maintenance-role, in file order, as complete, pending or
-/// undeclared. The compiler has checked the shapes; a value that is no object, no list or no
-/// string here counts as missing.
+/// held, whose package is not maintenance-role and that does not declare itself maintenance
+/// (SS-2c), in file order, as complete, pending or undeclared; SS-2c: and the rules, not held,
+/// that declare themselves maintenance. The compiler has checked the shapes; a value that is no
+/// object, no list or no string here counts as missing.
 fn benefit_coverage(
     schedule: &StandardPackSchedule,
     classification: &StandardPackClassification,
@@ -318,8 +354,13 @@ fn benefit_coverage(
     let mut coverage = BenefitCoverage::default();
     let mut undeclared = Vec::new();
     for rule in &schedule.rules {
-        if schedule.holds(&rule.package_id) || classification.maintenance.contains(&rule.package_id)
-        {
+        if schedule.holds(&rule.package_id) {
+            continue;
+        }
+        if rule.maintenance {
+            coverage.maintenance_declared += 1;
+        }
+        if !judged(rule, classification) {
             continue;
         }
         let entries = ["produces", "consumes"]
@@ -364,13 +405,45 @@ fn benefit_coverage(
     (coverage, undeclared)
 }
 
-/// SS-2: the number of distinct `priority` values among composed rules.
-fn distinct_priorities(tasks: &[(Value, Origin)]) -> usize {
+/// SS-2: the distinct `priority` values among composed rules.
+fn priority_values(tasks: &[(Value, Origin)]) -> BTreeSet<i64> {
     tasks
         .iter()
         .filter_map(|(task, _)| task.get("priority").and_then(Value::as_i64))
-        .collect::<BTreeSet<_>>()
-        .len()
+        .collect()
+}
+
+/// SS-2c (register §1.227): the rules of one game, among its composed rules `tasks` (each once,
+/// in file order), whose tier by declaration disagrees with their `priority` when the composed
+/// rules use exactly two values: a rule that declares itself maintenance with the lower value, a
+/// judged rule (no declaration, its package not maintenance-role) with the higher. A rule whose
+/// package is maintenance-role and that declares nothing is in neither case. None with fewer or
+/// more values: more is SS-2's own warning.
+fn tier_mismatches(game: &ReadGame<'_>, tasks: &[(Value, Origin)]) -> Vec<String> {
+    let values = priority_values(tasks);
+    let (Some(lower), Some(higher)) = (values.first(), values.last()) else {
+        return Vec::new();
+    };
+    if values.len() != STANDARD_PACK_PRIORITY_TIERS {
+        return Vec::new();
+    }
+    let composed = tasks
+        .iter()
+        .map(|(_, origin)| origin.index)
+        .collect::<BTreeSet<_>>();
+    composed
+        .into_iter()
+        .filter_map(|index| game.schedule.rules.get(index))
+        .filter(|rule| {
+            let priority = rule.body.get("priority").and_then(Value::as_i64);
+            if rule.maintenance {
+                priority == Some(*lower)
+            } else {
+                judged(rule, &game.classification) && priority == Some(*higher)
+            }
+        })
+        .map(|rule| rule.id.clone())
+        .collect()
 }
 
 /// Where a composed element came from: its game, its list and its index in that game's file.
@@ -520,6 +593,7 @@ pub fn compose_standard_pack_rules(
     let mut manifest = BTreeMap::<String, ComposedProcedure>::new();
     let mut priority_tiers = Vec::new();
     let mut benefit = Vec::new();
+    let mut mismatches = Vec::new();
     for game in &read {
         let before = composed.tasks.len();
         instantiate(game, &mut composed, &mut manifest, &mut issues);
@@ -527,9 +601,14 @@ pub fn compose_standard_pack_rules(
         let (coverage, undeclared) = benefit_coverage(&game.schedule, &game.classification);
         benefit.push((game.game_id.to_owned(), coverage, undeclared));
         // SS-2: the game's composed rules, warned about past two tiers and never refused.
-        let tiers = distinct_priorities(&composed.tasks[before..]);
+        let tiers = priority_values(&composed.tasks[before..]).len();
         if tiers > STANDARD_PACK_PRIORITY_TIERS {
             priority_tiers.push((game.game_id.to_owned(), tiers));
+        }
+        // SS-2c: with exactly two tiers, the rules whose declaration disagrees with their tier.
+        let rules = tier_mismatches(game, &composed.tasks[before..]);
+        if !rules.is_empty() {
+            mismatches.push((game.game_id.to_owned(), rules));
         }
         games.push(ComposedGame {
             game_id: game.game_id.to_owned(),
@@ -586,6 +665,7 @@ pub fn compose_standard_pack_rules(
         })?;
     priority_tiers.sort();
     benefit.sort_by(|left, right| left.0.cmp(&right.0));
+    mismatches.sort_by(|left, right| left.0.cmp(&right.0));
     Ok(StandardPackComposition {
         sources,
         compiled,
@@ -594,6 +674,7 @@ pub fn compose_standard_pack_rules(
         rules_digest,
         priority_tiers,
         benefit,
+        tier_mismatches: mismatches,
     })
 }
 
@@ -697,7 +778,7 @@ fn read_game(
             ),
             format!(
                 "{BENEFIT_JUDGED_MEMBER} is the composer's: it marks every rule whose package is \
-                 not maintenance-role"
+                 not maintenance-role and that does not declare itself maintenance"
             ),
         ));
     }
@@ -1010,10 +1091,10 @@ fn instantiate(
                 }
                 continue;
             }
-            // SS-2b: a rule whose package is not maintenance-role is judged by its net benefit.
-            let judged = !game.classification.maintenance.contains(&rule.package_id);
+            // SS-2b: a rule whose package is not maintenance-role is judged by its net benefit;
+            // SS-2c: unless it declares itself maintenance.
             composed.tasks.push((
-                compose_task(rule, alias, &copies, judged),
+                compose_task(rule, alias, &copies, judged(rule, &game.classification)),
                 origin(ScheduleMember::Rules, *index),
             ));
         }

@@ -4506,6 +4506,83 @@ outcome's `values` are kept as a map without a key check), and the skip memory i
 | WP-1 | the watch's R3 restart and EMU-BIND recognition (both paths) are not requested for an instance its own scheduling pause holds, in any stage; `skip_watch_for_pause`, `instance_pause_revision` (`emulator_watch.rs`) | behaviour (emulator watch) (host gate row "WATCH-P") | WATCH-P | — | polls and `emulator_watch_state_changed` unchanged; no claim, no bound count, no used-up record; resume adds nothing; the global pause, the daemon start's claim, IDLE-1's wake and a claim requested before the pause are unchanged |
 | WP-2 | `skip_reason` (new key, vocabulary `emulator_autostart_skip_reason`: `instance_paused`, enum `WatchSkipReason`) on `emulator_autostart_skipped`, with `watch_kind` | new optional value of an existing code, a new key and vocabulary (no shape change) | WATCH-P | the emulator watch | once per pause revision and `watch_kind`; #429 R-7's `person_takeover` for the daemon start's skip would be a second token of this vocabulary |
 
+### 1.227 Slice SS-2c (0.12.32): a `schedule.json` rule may declare itself maintenance, so the net-benefit gate does not judge it (Alice's ruling 104 point 1: maintenance is startup, return home, recovery, readings maintenance and store update, everything else business; the approved design does not judge maintenance tasks by net benefit, `rd-1029/design-sch-state.md` §4.10 and the research check, Workflow #386 comment 6523148251; coordinator work order `rd-1029/brief-ss2c.md`)
+
+[standard-pack-schedule.md](standard-pack-schedule.md) ("The file", "Judged rules" and "The
+maintenance declaration", "Composition" step 3, "Two priority tiers", "Tools", "The store update
+rule"), [scheduling/README.md](scheduling/README.md) ("Net benefit within a tier") and
+[scheduling/v2/README.md](scheduling/v2/README.md) are the contract. The number 1.227 is the
+coordinator's.
+
+**What.** (1) A `schedule.json` rule may write `"maintenance": true`. The reader every composer
+runs (`parse_standard_pack_schedule`) takes the member out of the rule (`ScheduleRule::maintenance`)
+and refuses any other value, `false` included, as `standard_pack_root_invalid`, `schedule_invalid`
+at `/rules/<i>/maintenance`. (2) The composer marks `benefit_judged: true` only on a rule whose
+package is not maintenance-role **and** that does not declare itself maintenance; nothing else of
+a declared rule changes (its `priority`, its place in its tier, every gate). (3) The tools'
+`benefit_coverage` counts a declared rule as not judged (never complete, pending or undeclared,
+never `standard_pack_benefit_undeclared`) and gains `maintenance_declared`, the declared rules
+that are not held, whatever their package's role, for the resource side's RS-8 check. (4) When a
+game's composed rules use exactly two priority values, `actinglab standard-pack check` and
+`package bundle --schedule` warn `standard_pack_priority_tier_mismatch` (keys `game`, `task_id`)
+once per rule that declares itself maintenance and carries the lower value, or that is judged and
+carries the higher, after the undeclared-value warnings; never a refusal.
+
+**Why.** SS-2b judges by the package's maintenance role ("Classification" item 1: bundle
+`maintenance[]`, navigation edges and `recovery_chain`, interrupt handlers and `then.run`, page
+features), which is narrower than ruling 104's maintenance tier. SS-2b's implementer found judged
+as business in the four repositories: the store update rule (no root file can give it a role),
+readings packages beyond the first per server, and several return-home and recovery rules. Until
+values exist each is `benefit_unknown` and never dispatched, so restoring the scheduler (ruling
+116) would leave maintenance undone. A per-rule declaration lets the resource side put each rule
+in its tier without a new root-file role.
+
+**`false` is refused**, not read as "not declared": on a rule whose package is maintenance-role
+it would read as "business" while the role still exempts the rule, a declaration that does
+nothing; and with one spelling for "not declared" (no member) RS-8 can count and check the files
+uniformly. **Raw V2 catalogs** set `benefit_judged` themselves as SS-2b allows; `maintenance` is
+no V2 task member (`unknown_field`).
+
+**Unchanged.** A `schedule.json` without the member composes byte for byte as with SS-2b alone:
+the same documents, catalog hash and rules digest (the reader keeps such a rule's members and
+their order as before). A declared rule on a maintenance-role package composes byte for byte as
+without the declaration. The evaluator, the gate, the ranking and every record are SS-2b's: they
+read the mark only. The Runtime's workbench records none of the tools' warnings. Game
+neutrality: the Runtime names no game and no package.
+
+**New codes and keys.** `standard_pack_priority_tier_mismatch` (warning / `declaration_error`;
+`game`, `task_id`), a contract code beside SS-2's tiers warning and SS-2b's undeclared-value
+warning, because no code says "a rule's declaration and its tier disagree"
+(`standard_pack_priority_tiers_exceeded` counts values, `standard_pack_benefit_undeclared` names a
+judged rule without values). `standard_pack_benefit_undeclared`'s text (pending) now names the
+declaration. No key, **no new ledger record kind, no configuration key, no interface revision.**
+
+**What changes live.** Nothing at deploy: a `schedule.json` that loads in 0.12.31 cannot write
+the member (0.12.31 refuses it, below), so every production file composes as with SS-2b. Once the
+resource side (RS-8) declares its maintenance rules, the first workbench check composes a new
+generation (the declared rules lose the mark, so the rules digest changes) and activates it; the
+declared rules then rank in the maintenance tier and are dispatched as before SS-2b. The scheduler
+stays stopped by Alice's order meanwhile (`alice-116-scheduler-stop`); nothing here lifts or
+works around a pause.
+
+**Rollback** (to 0.12.31). The configuration and the ledger need nothing: no record, value or
+code of this slice reaches the ledger (the new warning is the tools'; a refused shape is the
+existing `standard_pack_root_invalid`). A composed generation carries no trace of the member (the
+reader takes it out), so SS-2b's rollback steps for the marks stand as they are. A game root
+whose `schedule.json` writes `maintenance` is refused by 0.12.31 (its reader passes the member
+into the task, its compiler answers `unknown_field`, mapped to `standard_pack_root_invalid`,
+`schedule_invalid` at `/rules/<i>/maintenance`, recorded once per game and file), and that game
+then has no rules unless the active generation holds an older good file. So before rolling back,
+take the member out of the game roots' `schedule.json`, or take the file out as SS-2b's recipe
+already does.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SS2c-1 | `schedule.json` rule member `maintenance` (only `true`; `ScheduleRule::maintenance`, `SCHEDULE_RULE_MAINTENANCE_MEMBER`) | file format addition (no V2 member, no ledger shape) | SS-2c | the resource side (RS-8) | any other value, `false` included, `standard_pack_root_invalid`, `schedule_invalid` at `/rules/<i>/maintenance` by the reader every composer runs; taken out of the rule, so no composed task carries it; a V2 task that writes it is `unknown_field` |
+| SS2c-2 | the composer's mark: `benefit_judged: true` on a rule whose package is not maintenance-role and that does not declare itself maintenance | behaviour (composition) | SS-2c | the standard-pack composer | nothing else of a declared rule changes; a file without the member composes byte for byte as with SS-2b alone |
+| SS2c-3 | `BenefitCoverage.maintenance_declared`; a declared rule is counted in none of `complete`, `pending`, `undeclared` | tools output addition | SS-2c | the resource tools (`standard-pack check`, `package bundle --schedule`) | counted per rule of the file that is not held, whatever its package's role |
+| SS2c-4 | `standard_pack_priority_tier_mismatch` (warning / `declaration_error`; `game`, `task_id`), `StandardPackComposition::tier_warnings` | new contract code, tools output | SS-2c | the policy composer; reported by the resource tools | only with exactly two `priority` values among a game's composed rules; a declared rule on the lower, a judged rule on the higher; never a refusal; `warnings()`, `standard-pack compose` and the Runtime unchanged |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
