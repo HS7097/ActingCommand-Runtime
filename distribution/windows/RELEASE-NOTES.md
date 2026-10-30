@@ -9,6 +9,150 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.32
+
+本版是 v0.12.31 之后合并的 6 个 PR：SS-2、WATCH-P、SS-5、LN-OFF-1、SS-2b、SS-2c。运行中会注意到的变化有三件，第一件会让业务任务
+停下来。
+一是业务任务按净收益评判（SS-2b）：包不是维护角色、规则也没有声明 `"maintenance": true` 的标准包规则都是业务规则，编排器给它们打上
+`benefit_judged`；评估时这类候选在同一档里按「一次运行的净收益 ÷ 预计时长」从高到低排，净收益未知或不为正的不派。规则文件现在都
+还没有写池的估值和每次运行的产出量、消耗量，所以部署后每个业务候选都是 `benefit_unknown`（`benefit_gap` 是 `no_effects`），一个也
+不派。这是裁定接受的停摆：资源侧把数值写进规则文件之后，才逐条恢复。维护角色包的规则、声明了 `"maintenance": true` 的规则和
+Runtime 自己的读数刷新照旧派；手动运行和 Lab 不经过这道门。没有开关，也没有配置键。资源工具（`actinglab standard-pack check`、
+`package bundle --schedule`）按游戏报 `benefit_coverage`，从中可以看出数值写到了哪一步。
+二是暂停中的实例，监视不再替它开模拟器（WATCH-P）：实例自己的调度暂停期间（`draining`、`paused`、`released` 任一阶段，重启后恢复的
+暂停也算），模拟器监视照常读状态、记录变化，但不再重启它关着的模拟器，也不再识别、绑定它开着的模拟器，改记一条
+`emulator_autostart_skipped`（`skip_reason` 是 `instance_paused`）。所以对暂停中、模拟器关着的实例做手动运行或 Lab 之前，先用模拟器
+控制（`actingctl emulator`、`ac_emulator`）把它开起来：手动运行和 Lab 操作自己不开模拟器，实例的端点待绑定时以
+`instance_not_running` 结束。为了不让监视碰暂停中的实例而设成 `false` 的 `emulator_control.watch_enabled`，现在可以打开了。
+三是离线读者不再把整本账读进内存（LN-OFF-1）：UI 的离线读面和 `actingledger views`、`material`、`facts --at` 打开账本时，只做写入端
+打开时的那套检查，之后在钉住的头上一页一页地短读，不再把整本账读进内存，也不再每读一页就把整本账重证一遍；运行中的根也能读。
+另外三件各一句。SS-5：事实谓词可以写 `on_unknown: "probe"`，只有本包读得到的事实未知时，每个未知期放这个任务跑一次；要等资源侧
+写了才起作用。SS-2c：`schedule.json` 的规则可以用 `"maintenance": true` 声明自己是维护，不受净收益评判；也要等资源侧写。SS-2：
+每个游戏的优先级按两档写（维护高、业务一般；规则用了超过两个值，资源工具报警告，只报不拒），链条后继在链头这次运行的窗口里随链头
+排序，平手时先失去资格的先跑、再按声明顺序；后两条部署后就生效。v0.12.31 已在本版之前发布。
+
+配置：没有改。`actingd-config` 仍是 [5, 22]，`runtime-client` 仍是 [2, 3]（`min` 仍是 2），账本仍是 [3, 4]，`package` 仍是 [3, 5]，
+其他接口也不变；`actingd.defaults.json` 自 v0.12.31 没有改动，没有新键，在线可改的键也不变。
+
+- 程序事实 `config.subsystems` 多一行常开的 `fact_unknown_probe`（SS-5，`config_subsystem_always_on`）：写了 `on_unknown` 的
+  `schedule.json` 必须在 `requires` 里写它，所以只有认得这一行的 Runtime 才编排这个文件。这是事实里的一行，不是配置键。
+- 离线读的期限（LN-OFF-1）不加新键：打开默认用 `ledger_observer.open_timeout_ms` 的出厂值（600 秒），之后每次读默认用
+  `ledger_observer.writer_reply_timeout_ms` 的出厂值（10 秒，从这次读开始算）；每页的上限沿用现有的常量（256 条、768 KiB）。
+- 新结果码 6 个，都还是待审（pending）：`standard_pack_priority_tiers_exceeded`（SS-2）、`fact_probe`（SS-5）、`benefit_unknown`、
+  `policy_benefit_nonpositive`、`standard_pack_benefit_undeclared`（SS-2b）、`standard_pack_priority_tier_mismatch`（SS-2c）。结果码目录
+  从 3814 个码变成 3820 个，位置仍是 1725 个；没有新定稿或退役的条目，所以本版的发布文件是空的。新值键 4 个：`skip_reason`
+  （WATCH-P）、`benefit_gap`、`benefit_milli`、`expected_duration_ms`（SS-2b）；新词表 `benefit_gap`、`emulator_autostart_skip_reason`；
+  policy 的码多一个前缀 `benefit_`。
+- 账本没有新表、新索引、新事件类型或新形状，`ledger` 不升；新原因和新值都放在已有的原因链里。
+- 目录和规则文件的格式多了几个成员，格式版本不变，v0.12.31 及以前的 Runtime 拒收它们（见下面的退回）：V2 任务的 `benefit_judged`
+  （由编排器写，规则文件自己写会被拒）；池的 `valuation` 和效果的 `amount` 可以写 `"pending"`；`fact` 谓词的 `on_unknown`（只在
+  V2）；`schedule.json` 规则的 `maintenance`（只认 `true`，不进编排出的任务）。
+
+升级时要知道的：
+
+- 业务停摆，以及怎么读 `benefit_unknown`（SS-2b）：部署后第一次工作台检查就编排出新的一代（业务规则都加了标记，规则摘要变了）并
+  启用。之后在 `actingctl schedule`、`ac_schedule` 和 `ac_overview`、`ac_diagnose` 的未运行一行里，业务候选的原因是
+  `benefit_unknown`，由 `benefit_gap` 说明缺什么：
+  - `no_effects`：任务既没写 `produces` 也没写 `consumes`；
+  - `entry_pending`：某一项的 `amount` 是 `"pending"`；
+  - `valuation_pending`：它碰到的池，估值是 `"pending"`；
+  - `valuation_missing`：它碰到的池在这台实例上没有估值；
+  - `reading_unknown`：它消耗的再生池读数未知或过期；这时同时请求读数刷新，候选最后的原因是刷新的原因。
+
+  `pool_id` 指出是哪个池，读事实的还带 `fact_key` 和 `unknown_reason`。部分已知也算未知，已知部分绝不相加。数值都有、净收益不大于
+  0 的是 `policy_benefit_nonpositive`（带 `benefit_milli`、`expected_duration_ms`），它消耗的再生池下一步变化时再评。两种都不派；空闲
+  计划不把它们算作到期，不会为了它们把关着的游戏叫醒。不评判的有：维护角色包的规则、声明了 `"maintenance": true` 的规则、在链头运行
+  窗口里的链条后继、由指令触发的任务（触发条件只经 `all` 要求一个 `session.` 事实），以及 Runtime 自己的读数刷新。排序：`promoted`
+  在前；然后分档，没有标记的（维护档）在有标记的（业务档）前面；档内没评判的照以前的顺序在前，评判的按净收益 ÷ 预计时长从高到低，
+  再按 SS-2 的平手规则；保留门也按这个顺序取候选。派出去的评判候选，`rank_breakdown` 带 `benefit_milli` 和
+  `expected_duration_ms`。商店更新规则的包按根文件不是维护角色，也会被评判：遇到客户端更新对话框的实例会一直等着，直到这条规则写上
+  `"maintenance": true`（SS-2c）或数值。这道门不解除、也不绕过任何暂停。
+- `schedule.json` 的新成员和 `requires` 的新子系统（SS-5、SS-2c）：
+  - `on_unknown: "probe"`（SS-5）写在规则 `trigger` 里的 `fact` 谓词上，只认 `"probe"`，只在 V2（V1 报 `unknown_field`）。键必须是
+    实例作用域的读数标记键（`resource.` 或 `inventory.`），也不能放在 `not` 下或 `feedback_stop` 里，否则报 `predicate_uncomputable`
+    （指在 `on_unknown`）。写了它的文件必须在 `requires` 里写 `fact_unknown_probe`，否则编排器拒收（`schedule_invalid`，指在第一个
+    `on_unknown`）。键还必须是这条规则所绑的包自己的读数标记写的键：Runtime 看不到包的内容，所以由 `actinglab standard-pack check`
+    和 `package bundle --schedule` 核，只有别的包读或没人读的键报 `standard_pack_root_invalid`、`schedule_invalid`。键未知时谓词为真
+    （原因 `fact_probe`，带 `fact_key`、`unknown_reason`），不为这个键请求读数维护包。未知期从清掉这个键的时间线重置最近一次发生、或
+    过期读数的新鲜期结束算起，取较晚的；这之后派出的本任务成功跑完一次，这一期就用掉了（`fact_probe` 带
+    `served_by_dispatch_unix_ms`，谓词为假，不设唤醒），直到有新读数、下一次重置或过期。失败或取消的运行不算用掉。从不重置的键只会
+    被探一次，资源侧要给这类键配上重置。
+  - `"maintenance": true`（SS-2c）写在 `schedule.json` 的 `rules[]` 上，和 `package_id` 同级，可选，只认布尔 `true`：`false`、字符串、
+    数字、`null` 一律拒收（`standard_pack_root_invalid`，`schedule_invalid`，指针 `/rules/<i>/maintenance`），「没声明」只有不写这一种
+    写法。读取器把它从规则里取出，编排出的任务里没有它；原始 V2 任务写它报 `unknown_field`。效果只有一条：编排器不给这条规则打
+    标记，它留在维护档，按 SS-2b 之前的顺序排、照旧派，`priority` 和各道门都不变；包已经是维护角色时再写也无害，编排结果逐字节相同。
+    工具的 `benefit_coverage` 多一个计数 `maintenance_declared`；一个游戏的规则恰好用两个 `priority` 值时，声明了维护却用低值、或被
+    评判却用高值的规则，工具报 `standard_pack_priority_tier_mismatch`（只是警告）。
+  - `requires` 新的子系统只有 `fact_unknown_probe`；`maintenance` 和 `"pending"` 没有子系统，旧 Runtime 直接拒收这些成员。
+- `"pending"` 的写法（SS-2b，只在 V2）：池写 `"valuation": "pending"`，效果（产出或消耗都行）写 `"amount": "pending"`，就写在值的位置
+  上，不加新成员。它只让碰到它的被评判任务的净收益变成未知，别的都不变：估值标记对其他读者等于没有估值；数量标记对资源项、保留门、
+  平手规则和派单值等于这一项没有声明数量，前向投影当作 `effect_evidence_insufficient`。别的字符串是 `type_mismatch`，V1 文档写它也是；
+  `amount` 写了 `"pending"` 又写 `expected_amount_milli` 是 `limit_exceeded`；估值写 `null` 仍是没有估值。工具里，缺的值全是
+  `"pending"` 的规则算 pending，不算 undeclared，也不报 `standard_pack_benefit_undeclared`。
+- 监视的新跳过记录（WATCH-P）：`emulator_autostart_skipped`（info，已有的码）带 `alias`、`watch_kind`（`restart` 或 `recognize`）和
+  新值 `skip_reason` `instance_paused`，同时是实例下的一条 `device_state_observed` 记录和一行报告；每个暂停 revision、每种
+  `watch_kind` 只记一次，不是每次轮询都记。跳过不排认领、不占重启次数（`emulator_control.restart_attempts`、`restart_window_ms`），
+  也不记 `emulator_watch_restart_exhausted`。恢复不加新东西：恢复照常重连、自检，暂停解除后的第一次轮询照常重启或识别；再暂停是
+  新的 revision，会再记一条。没变的：全局暂停不挡监视；守护进程启动时按配置开模拟器（`start_emulator`）、IDLE-1 的唤醒，以及暂停
+  开始前已经排下的监视认领都不看暂停，照旧执行；`watch_enabled = false` 仍是整个停掉轮询。
+- 离线读（LN-OFF-1）：打开时不再对整个文件跑 `quick_check`，只核写入端打开时核的那些（meta 行、标记 `ready`、头、最新
+  `open_verify_tail_records` 条逐条证实并链到头哈希），再加连续性；更早的记录读到时才核，所以打开时不再发现它们的损坏，整本核验用
+  `ledger-maintenance verify`。每页最多 256 条或 768 KiB，超出的部分带游标续读，不会被悄悄截断。超过期限以已有的
+  `ledger_read_budget_exceeded` 拒绝，detail 带 `phase=open|proofs|page|resolve`。`actingledger events`（走 `open_range`）和整本证实的
+  读法（`open_evidence`）不变。
+
+退回 v0.12.31 之前要做的事（按代码核对过）：
+
+- 业务规则的标记（SS-2b）：0.12.32 第一次工作台检查后，启用的那一代带 `benefit_judged`（规则文件写了 `"pending"` 或 `on_unknown`
+  的，那一代也带着它们）。v0.12.31 启动时要重新编译启用的那一代、每个未了结的派单钉住的那一代，以及决策记忆点名的每次派单（每个
+  任务和实例这一对最近一次完成的派单，补救任务已准入的运行）所在的那一代；它的 V2 读取器不认这些成员（`unknown_field`、
+  `type_mismatch`），于是以 `catalog_generation_invalid` 致命地停下，整个 Runtime 起不来。所以回退前先在 0.12.32 上让它启用一个不带
+  这些成员的代：把各游戏根里的 `schedule.json` 拿走（编排出合法的空目录），或者只留维护角色包的规则、并且不写 `"pending"`、
+  `on_unknown`、`maintenance`；等下一次工作台检查启用了它（程序事实 `config.catalog` 换成了新的代），再确认没有未了结的计划派单
+  （调度暂停并排空，计划运行都结束了）。在带标记的代下没派过计划运行时（调度一直暂停着就是这样），v0.12.31 就能在这一代上启动，
+  第一次检查再编排它自己的、不带标记的代。已经在带标记的代下派过计划运行的，每个这样的（任务、实例）对都要先在新的代下再完成一次
+  派单，把决策记忆点名的那一次换掉，否则 v0.12.31 启动照样以 `catalog_generation_invalid` 停下；规则已经拿走、不会再派的对换不掉，
+  这时不能退回。
+- `schedule.json` 里的 SS-5、SS-2c 成员：v0.12.31 不认 `fact_unknown_probe` 这个子系统，写了 `on_unknown` 的文件以
+  `schedule_requires_missing` 拒收；写了 `maintenance` 的，它的读取器把这个成员原样交给任务，编译器报 `unknown_field`。两种都记
+  `standard_pack_root_invalid`，这个游戏退回启用的代里的那份规则文件；那份也被拒、或者从来没有好的，这个游戏就没有规则，其他游戏
+  照常。回退前先把这两个成员从各游戏根的 `schedule.json` 里删掉。`on_unknown` 还会进编排出的代（`maintenance` 不会，读取器已把它
+  取出），所以它也受上一条的启动编译限制。
+- 监视（WATCH-P）：v0.12.31 的监视对暂停中的实例照样重启、识别（只有一条识别路径排除 `released` 阶段）。有实例暂停着时，回退前先
+  `actingctl config set emulator_control.watch_enabled=false`（或用 `ac_config_set`）；这个键 v0.12.31 也能在线设，覆盖照样保留。本版
+  写的跳过记录 v0.12.31 读得了（码是已有的，值按映射保留、不查键），跳过的记忆不落盘。
+- LN-OFF-1 和 SS-2：不用做什么，按代码核过，没有新的账本、状态、目录、配置或线上形状。退回后 v0.12.31 的离线读者打开时和每读一页
+  又会把整本账读进内存，大账本上不要用它们跑；SS-2 的决胜和链头字段只写在内存里那些决定的开发者文本里，档数警告只在工具里、不入
+  账本，退回后链条后继用自己的优先级，平手回到种子哈希。
+- 账本：本版写的新原因和新值都放在已有的原因链里，v0.12.31 读得了（结果码按原拼写、值按映射读回，不查键）。
+- 只在程序里、不存状态的改动，退回后回到 v0.12.31 的行为：不按净收益评判，监视又会动暂停中的实例，离线读整本，没有事实探针。
+- 客户端和 Runtime 的配对（`runtime-client` 两边都是 [2, 3]，请求种类和回答形状都没变）：
+  - 本版的客户端连 v0.12.31 的 Runtime：照常。客户端这边没有新命令、新请求或新工具（MCP 工具仍是 40 个），v0.12.31 也不会发出本版
+    的新码。本版的资源工具接受 `on_unknown`、`maintenance` 和 `"pending"`，它放行的规则文件 v0.12.31 的 Runtime 不收：还有部署在
+    0.12.31 上时，资源侧先别写这些成员。
+  - v0.12.31 的客户端连本版的 Runtime：照常，请求不变。`actingctl schedule`、`ac_schedule` 里会出现 `benefit_unknown`、
+    `policy_benefit_nonpositive`、`fact_probe`，`emulator_autostart_skipped` 多一个值 `skip_reason`，旧客户端照原样显示码和值；但它内嵌
+    的码目录没有这 6 个新码，`actingctl codes`、`ac_outcome_code` 查它们答 `outcome_code_unknown`，个别按码分类显示的地方把它们当作
+    未登记的码（`outcome_relay_unregistered`，原拼写在 `raw_code`）。
+
+运行上的变化：
+
+- 业务候选按净收益评判（SS-2b）：未知或不为正的不派；部署后业务候选都是 `benefit_unknown`，维护照旧派。
+- 暂停中的实例，监视不开模拟器、不识别（WATCH-P）：改记 `emulator_autostart_skipped`（`skip_reason=instance_paused`）。
+- 离线读账本有界（LN-OFF-1）：打开只核头尾，按页短读，每页最多 256 条或 768 KiB；运行中的根也能读。
+- 自读事实探针（SS-5）：`on_unknown: "probe"`，每个未知期放行一次。
+- 规则的维护声明（SS-2c）：写了 `"maintenance": true` 的规则不受净收益评判。
+- 两档优先级、链条随链头、平手规则（SS-2）：超过两档工具报警告；平手时先失去资格的先跑，再按声明顺序。
+
+本版合并的 PR：
+
+- #1451 SS-2（#386）：两档优先级，组合器在一个游戏的规则用了超过两个值时报 `standard_pack_priority_tiers_exceeded`（只是警告）；链条后继随链头排序；平手时限定条件紧的先跑，再按声明顺序。
+- #1452 SS-5（#386）：事实谓词可以写 `on_unknown: "probe"`，本包自己读的事实未知时，每个未知期放行这个任务一次。原因 `fact_probe`；子系统 `fact_unknown_probe`；资源工具核这个键是不是本包读数标记写的。
+- #1453 LN-OFF-1（#422）：只读读者的有界离线打开：先做写入端的头尾检查，之后钉住的短页读和取材料的单点读。运行中的根可以读。每页最多 256 条或 768 KiB，带游标续读。超期报 `ledger_read_budget_exceeded`，带 `phase=`。
+- #1454 WATCH-P（#386）：模拟器监视对实例自己的调度暂停（任一阶段）下的实例既不重启也不识别；每个暂停 revision 记一条 `emulator_autostart_skipped`（`skip_reason=instance_paused`）。
+- #1455 SS-2b（#386）：同一档里，非维护角色包的规则按净收益 ÷ 预计时长评判；`policy_benefit_nonpositive` 和 `benefit_unknown` 不派。`"pending"` 值标记。工具里的 `benefit_coverage` 和 `standard_pack_benefit_undeclared`。
+- #1456 SS-2c（#386）：`schedule.json` 规则上的 `"maintenance": true` 让它不受评判。覆盖率里的 `maintenance_declared`。警告 `standard_pack_priority_tier_mismatch`。
+
 ## v0.12.31
 
 本版是 v0.12.30 之后合并的 4 个 PR：SS-6、R-1、R-2、RR-1。运行中会注意到的变化有五件，第一件是生产缺陷的修复。
