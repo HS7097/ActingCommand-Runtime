@@ -2805,10 +2805,13 @@ impl PolicyHost {
             &facts.tasks,
             time.unix_ms,
         );
-        // Workflow #336 R22: the pairs a failure identity schedules for an immediate rerun.
-        let mut immediate_retries = self
-            .control
-            .immediate_retry_pairs(&active.compiled, time.unix_ms)?;
+        // Workflow #336 R22: the pairs a failure identity schedules for an immediate rerun. RR-1
+        // (register §1.221): only those the admission's own predicate admits on the terms this
+        // evaluation gives their intents (profile, expected duration E), so a round whose terms
+        // a pair no longer keeps never wins its instance only to be refused.
+        let mut immediate_retries =
+            self.control
+                .offered_immediate_retries(&active.compiled, facts, time.unix_ms)?;
         // Workflow #384 D2-S4: the fact refresh's readers, holds and settings for this cycle.
         let refresh_inputs = self.fact_refresh_inputs(
             &active.compiled,
@@ -4063,8 +4066,10 @@ impl PolicyHost {
     /// right after both were appended, under the same `HostShared.policy` guard, with the
     /// checks `recover_dispatches` runs on them (R1-R6, R11). `admitted` is the receipt the
     /// admission already committed into `control`, so an admitted outcome is compared with it
-    /// instead of committing it again; a rejected outcome leaves `control` unchanged. Nothing
-    /// is written unless every check passes.
+    /// instead of committing it again; a rejected outcome leaves `control` unchanged, except that
+    /// RR-1 (register §1.221) ends the round of an immediate rerun refused with
+    /// `policy_retry_round_ended`, as the replay of the refusal does (`apply_dispatch_event`).
+    /// Nothing is written unless every check passes.
     pub(crate) fn apply_admission_events(
         &mut self,
         intent: &PersistedEvent,
@@ -4151,6 +4156,11 @@ impl PolicyHost {
         )?;
         if let Some(generation) = pinned {
             self.pinned_dispatches.insert(decision_id, generation);
+        }
+        // RR-1 (register §1.221): the refused immediate rerun's round ends at once, so the next
+        // evaluation does not offer the pair again and the instance's other candidates run.
+        if next == DispatchLifecycle::Rejected {
+            withdraw_refused_immediate_retry(&self.store, &mut self.control, outcome_payload)?;
         }
         // Workflow #422 LN-4 (coordinator ruling 2): a pair's earlier rejected intent leaves.
         prune_journal(
@@ -5175,6 +5185,26 @@ fn seen_intent_of(
     ))
 }
 
+/// RR-1 (register §1.221): when `payload` is a rejected immediate rerun its admission refused with
+/// `policy_retry_round_ended` (only the immediate-rerun predicate answers that code), ends the
+/// round of its pair's accounting group under the catalog its intent pinned. Any other rejection
+/// changes nothing. The live admission and every replay of the refusal call it.
+fn withdraw_refused_immediate_retry(
+    store: &CatalogStore,
+    control: &mut PolicyControlState,
+    payload: &actingcommand_contract::PolicyDispatchPayload,
+) -> RuntimeHostResult<()> {
+    if !payload
+        .rejection()
+        .is_some_and(|rejection| rejection.outcome.is(HostCode::PolicyRetryRoundEnded))
+    {
+        return Ok(());
+    }
+    let catalog = store.load_generation(payload.catalog_hash())?;
+    control.withdraw_immediate_retry(&catalog.compiled, payload.task_id(), payload.instance_id());
+    Ok(())
+}
+
 /// One dispatch event applied to `journal` with the checks recovery runs (R1 to R11), and
 /// its admission or execution to `control` when it lies after `control_after`. With
 /// `applied_skips` an event the journal already holds is not applied to it again.
@@ -5264,21 +5294,25 @@ fn apply_dispatch_event(
             }
         }
         PolicyPayload::DispatchRejected(payload) => {
-            if applied_skips
+            let applied = applied_skips
                 && journal
                     .seen
                     .get(payload.decision_id())
-                    .is_some_and(|seen| seen.rejected_sequence == Some(event.sequence()))
-            {
-                return Ok(());
+                    .is_some_and(|seen| seen.rejected_sequence == Some(event.sequence()));
+            if !applied {
+                transition_dispatch(
+                    &mut journal.seen,
+                    payload,
+                    DispatchLifecycle::Intent,
+                    DispatchLifecycle::Rejected,
+                    event.sequence(),
+                )?;
             }
-            transition_dispatch(
-                &mut journal.seen,
-                payload,
-                DispatchLifecycle::Intent,
-                DispatchLifecycle::Rejected,
-                event.sequence(),
-            )?;
+            // RR-1 (register §1.221): a refused immediate rerun ended its round, as the live
+            // admission ended it ([`PolicyHost::apply_admission_events`]).
+            if counts {
+                withdraw_refused_immediate_retry(store, control, payload)?;
+            }
         }
         PolicyPayload::DispatchCompleted(payload) => {
             if applied_skips

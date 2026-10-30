@@ -503,6 +503,9 @@ mod gate_e4;
 // SCH-M ED-2 (frozen model v1.0 §3.4, §6 row ED-2): the run-duration samples of the instance store
 // record `health.run_duration` and the expected duration E in the evaluation and its admission.
 mod gate_ed2;
+// RR-1 (register §1.221): an immediate rerun is offered only by the admission's own predicate,
+// and one the admission refuses with `policy_retry_round_ended` ends its round at once.
+mod gate_rr1;
 // Workflow #386 SR-6b, MCP-19a (host keys 126 and 127), register §1.143: the latest evaluation's
 // not-run explanation in the policy host's memory and its read.
 mod gate_mcp19a;

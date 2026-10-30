@@ -19,7 +19,8 @@ use actingcommand_contract::{
     PolicyRetryRoundRecord, RuntimeErrorCode, scheduled_failure_code_str,
 };
 use actingcommand_policy::{
-    ActivityProfile, CompiledCatalog, DispatchIntent, FailureAction, TaskSpec, activity_window_at,
+    ActivityProfile, CompiledCatalog, DispatchIntent, DispatchTerms, EvaluationFacts,
+    FailureAction, TaskSpec, activity_window_at, evaluated_dispatch_terms,
 };
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -1851,29 +1852,99 @@ impl PolicyControlState {
                 }))))
     }
 
+    /// RR-1 (register §1.221): the one predicate of an immediate rerun, which the evaluation
+    /// offers by ([`Self::offered_immediate_retries`]) and the admission checks
+    /// ([`Self::validate_immediate_retry`]): the pair has a live round at `now_unix_ms`
+    /// ([`Self::immediate_retry_pairs`]: its failure, the round's window and budgets) and a
+    /// dispatch on `terms` keeps the round's activity profile and expected duration. A different
+    /// profile or expected duration cannot use the round's immediate permission
+    /// (`contracts/policy-suspension.md`, "Immediate rerun (R22)").
+    pub(crate) fn immediate_retry_admits(
+        &self,
+        catalog: &CompiledCatalog,
+        task_id: &str,
+        instance_id: &str,
+        terms: DispatchTerms<'_>,
+        now_unix_ms: u64,
+    ) -> RuntimeHostResult<bool> {
+        let pair = (task_id.to_owned(), instance_id.to_owned());
+        Ok(self
+            .immediate_retry_pairs(catalog, now_unix_ms)?
+            .contains(&pair)
+            && self
+                .group_round(catalog, task_id, instance_id)
+                .is_some_and(|round| {
+                    round.admission.activity.profile_id == terms.activity_profile_id
+                        && round.expected_duration_ms == terms.expected_duration_ms
+                }))
+    }
+
+    /// RR-1 (register §1.221): the pairs an evaluation of `facts` at `now_unix_ms` treats as
+    /// rerun at once (R22): those whose dispatch, on the terms the evaluation gives its intent
+    /// ([`evaluated_dispatch_terms`]), the admission's predicate admits. A pair whose round's
+    /// profile or expected duration its intent would not keep (an expected duration E a new
+    /// run sample changed, or one the pair has since its package became known) is not offered;
+    /// it waits for its own trigger and cooldown, as after any end of its round.
+    pub(crate) fn offered_immediate_retries(
+        &self,
+        catalog: &CompiledCatalog,
+        facts: &EvaluationFacts,
+        now_unix_ms: u64,
+    ) -> RuntimeHostResult<BTreeSet<(String, String)>> {
+        let mut offered = BTreeSet::new();
+        for (task_id, instance_id) in self.immediate_retry_pairs(catalog, now_unix_ms)? {
+            let Some(terms) = evaluated_dispatch_terms(catalog, facts, &task_id, &instance_id)
+            else {
+                continue;
+            };
+            if self.immediate_retry_admits(catalog, &task_id, &instance_id, terms, now_unix_ms)? {
+                offered.insert((task_id, instance_id));
+            }
+        }
+        Ok(offered)
+    }
+
     pub(crate) fn validate_immediate_retry(
         &self,
         catalog: &CompiledCatalog,
         intent: &DispatchIntent,
         now_unix_ms: u64,
     ) -> RuntimeHostResult<()> {
-        let pair = (intent.task_id.clone(), intent.instance_id.clone());
-        if !self
-            .immediate_retry_pairs(catalog, now_unix_ms)?
-            .contains(&pair)
-            || self
-                .group_round(catalog, &intent.task_id, &intent.instance_id)
-                .is_none_or(|round| {
-                    round.admission.activity.profile_id != intent.prerequisites.activity_profile_id
-                        || intent.expected_duration_ms != round.expected_duration_ms
-                })
-        {
+        let terms = DispatchTerms {
+            activity_profile_id: &intent.prerequisites.activity_profile_id,
+            expected_duration_ms: intent.expected_duration_ms,
+        };
+        if !self.immediate_retry_admits(
+            catalog,
+            &intent.task_id,
+            &intent.instance_id,
+            terms,
+            now_unix_ms,
+        )? {
             return Err(request(
                 HostCode::PolicyRetryRoundEnded,
                 HostLocation::ValidatePolicyDispatch,
             ));
         }
         Ok(())
+    }
+
+    /// RR-1 (register §1.221): an admission refused an immediate rerun of `task_id` on
+    /// `instance_id` with `policy_retry_round_ended`, so the round of its accounting group on the
+    /// instance ends now: no evaluation offers the pair at once again, and only the pair's next
+    /// legal normal trigger opens a new round. Its failure state, backoff and counts stay. The live
+    /// admission and the replay of its recorded refusal both call it, so a restart rebuilds the
+    /// same state.
+    pub(crate) fn withdraw_immediate_retry(
+        &mut self,
+        catalog: &CompiledCatalog,
+        task_id: &str,
+        instance_id: &str,
+    ) {
+        for id in catalog.accounting_ids(task_id) {
+            self.retry_rounds
+                .remove(&(id.to_owned(), instance_id.to_owned()));
+        }
     }
 
     /// Workflow #386 SR-2a (SCHED §4.2 item 3): gives back the task daily, task window,

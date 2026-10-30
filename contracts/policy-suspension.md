@@ -57,6 +57,12 @@ budget limits. The shared `activity_window_at` calculation assigns an overnight 
 its opening day; midnight inside it does not reset its budgets. A full-day occurrence ends at
 the next local midnight, and an ordinary occurrence ends at its declared end. A different
 profile/window or expected duration cannot use the original round's immediate permission.
+RR-1 (register §1.221, since 0.12.31): the evaluation offers a pair as `failure_retry_immediate`
+only by the admission's own predicate, on the profile and expected duration its intent will carry
+(the expected duration E of SCH-M ED-2 included, which a new run sample, or the pair's package
+becoming known after a start, changes); a pair whose round those terms no longer match is not
+offered and waits for its own trigger and cooldown, so it never takes its instance only to be
+refused.
 
 Admission spends task/activity daily and window counts. Once any original count limit is
 reached the round ends. Runtime usage settles the reservation to actual duration at execution
@@ -65,8 +71,12 @@ run's expected duration, the round ends then. Pending reservations still constra
 Shared activity consumption by another task of that instance uses the same counters and can
 end the round. A closed round stays closed when budgets become available again. Window expiry
 also ends immediate permission, including for an intent evaluated before the boundary and
-admitted after it (`policy_retry_round_ended`). The next legal normal trigger opens a new round;
-budget availability alone is not a trigger. A run already admitted finishes under its existing
+admitted after it (`policy_retry_round_ended`). RR-1: an immediate rerun the admission refuses
+with `policy_retry_round_ended` is withdrawn at once: its round (that of the pair's accounting
+group on the instance) ends in the Runtime's memory, the next evaluation does not offer it again
+and the instance's other candidates are selectable; the round's end is in the pair's value record
+written with the refusal, and a replay of the recorded refusal ends it too. The next legal
+normal trigger opens a new round; budget availability alone is not a trigger. A run already admitted finishes under its existing
 deadline and permission, with no additional stop at a date boundary.
 
 Success clears the round. Ending immediate permission does not clear failure history or
