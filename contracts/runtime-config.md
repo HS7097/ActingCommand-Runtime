@@ -470,7 +470,7 @@ both checks ([policy-suspension.md](policy-suspension.md), "Task package suspens
 | `scheduling.remedy.enabled` (Workflow #411 B15) | boolean | `true` |
 | `scheduling.remedy.max_per_round` (Workflow #411 B15) | integer `1..=8` | `2` |
 | `scheduling.remedy.choices` (Workflow #411 B15) | list of remedy choice rows (objects) | `[]` |
-| `scheduling.parallel.enabled` (Workflow #427-A) | boolean | `false` |
+| `scheduling.parallel.enabled` (Workflow #427-A) | boolean | `true` (since 0.12.31, Workflow #429 R-2 and Alice's ruling 98; `false` before) |
 | `scheduling.evaluation.retry_ms` (ISO-PE, #419) | milliseconds `1..=3600000` | `15000` |
 | `scheduling.evaluation.escalate_after` (ISO-PE, #419) | integer `1..=4294967295` | `3` |
 

@@ -845,8 +845,10 @@ package's run has succeeded there since.
   confidence 1000, no expiry, no `invalidate_on`, `resource_bundle_hash` the SHA-256 of the alias,
   the observation time and the value; a run's record is observed at max(now on the Runtime clock,
   the previous record's observation + 1), the start's seed at 1, see below):
-  - `true`, before the terminal of any run (scheduled, direct, a startup package's, a ladder
-    rung's) that the page ended with `contained_task_application_update_required`, after its
+  - `true`, before the terminal of any run (scheduled, direct, the readings refresh's (the fact
+    refresh's run of the instance's recognition package, register §1.215 UPD-16), a startup
+    package's, a ladder rung's) that the page ended with
+    `contained_task_application_update_required`, after its
     handler, or (fix round 1) after its handler failed short of fatal
     (`source_snapshot_id` `application_update:run:<run_id>`). A refusal of the store fails that
     run with the refusal (Fail Loud); a fatal failure halts as any other.
