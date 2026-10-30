@@ -162,19 +162,13 @@ fn ss2b_t3_every_unknown_input_is_benefit_unknown_and_never_dispatched() {
         NOW - 2 * MINUTE_MS,
         Some(NOW - MINUTE_MS),
     );
-    let cases: [(
-        &str,
-        Vec<Value>,
-        Vec<Value>,
-        Vec<ObservedFact>,
-        &str,
-        Option<&str>,
-    ); 7] = [
+    let none: Vec<ObservedFact> = Vec::new();
+    let cases = [
         (
             "no declaration",
             Vec::new(),
             Vec::new(),
-            Vec::new(),
+            none,
             "no_effects",
             None,
         ),
