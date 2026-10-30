@@ -176,6 +176,11 @@ impl fmt::Display for StandardPackComposeFailure {
 
 impl Error for StandardPackComposeFailure {}
 
+/// SS-2 (register §1.222; Alice's ruling 104 point 1): the priority tiers a game's rules use, the
+/// maintenance tier and the business tier. A game whose composed rules use more distinct
+/// priority values is warned about, never refused.
+pub const STANDARD_PACK_PRIORITY_TIERS: usize = 2;
+
 /// A composed catalog of the standard packs' rules.
 #[derive(Debug, Clone)]
 pub struct StandardPackComposition {
@@ -184,6 +189,9 @@ pub struct StandardPackComposition {
     manifest: Vec<ComposedProcedure>,
     games: Vec<ComposedGame>,
     rules_digest: String,
+    /// SS-2: each game whose composed rules use more than [`STANDARD_PACK_PRIORITY_TIERS`]
+    /// distinct priority values, with that number, by game id.
+    priority_tiers: Vec<(String, usize)>,
 }
 
 impl StandardPackComposition {
@@ -213,19 +221,34 @@ impl StandardPackComposition {
     }
 
     /// One `standard_pack_package_unclassified` warning per unclassified package of a game in
-    /// use (keys `game`, `package_id`).
+    /// use (keys `game`, `package_id`); then, SS-2, one `standard_pack_priority_tiers_exceeded`
+    /// per game whose composed rules use more than two distinct priority values (keys `game`,
+    /// `count` the number of values, `limit_count` 2), by game id.
     pub fn warnings(&self) -> Vec<Outcome> {
-        self.games
-            .iter()
-            .flat_map(|game| {
-                game.unclassified.iter().map(|package_id| {
-                    Outcome::new(SharedCode::StandardPackPackageUnclassified)
-                        .game(game.game_id.as_str())
-                        .package_id(package_id.as_str())
-                })
+        let unclassified = self.games.iter().flat_map(|game| {
+            game.unclassified.iter().map(|package_id| {
+                Outcome::new(SharedCode::StandardPackPackageUnclassified)
+                    .game(game.game_id.as_str())
+                    .package_id(package_id.as_str())
             })
-            .collect()
+        });
+        let tiers = self.priority_tiers.iter().map(|(game_id, count)| {
+            Outcome::new(SharedCode::StandardPackPriorityTiersExceeded)
+                .game(game_id.as_str())
+                .count(*count)
+                .limit_count(STANDARD_PACK_PRIORITY_TIERS)
+        });
+        unclassified.chain(tiers).collect()
     }
+}
+
+/// SS-2: the number of distinct `priority` values among composed rules.
+fn distinct_priorities(tasks: &[(Value, Origin)]) -> usize {
+    tasks
+        .iter()
+        .filter_map(|(task, _)| task.get("priority").and_then(Value::as_i64))
+        .collect::<BTreeSet<_>>()
+        .len()
 }
 
 /// Where a composed element came from: its game, its list and its index in that game's file.
@@ -373,9 +396,15 @@ pub fn compose_standard_pack_rules(
 
     let mut composed = Composed::default();
     let mut manifest = BTreeMap::<String, ComposedProcedure>::new();
+    let mut priority_tiers = Vec::new();
     for game in &read {
         let before = composed.tasks.len();
         instantiate(game, &mut composed, &mut manifest, &mut issues);
+        // SS-2: the game's composed rules, warned about past two tiers and never refused.
+        let tiers = distinct_priorities(&composed.tasks[before..]);
+        if tiers > STANDARD_PACK_PRIORITY_TIERS {
+            priority_tiers.push((game.game_id.to_owned(), tiers));
+        }
         games.push(ComposedGame {
             game_id: game.game_id.to_owned(),
             instances: game
@@ -429,12 +458,14 @@ pub fn compose_standard_pack_rules(
         rules_digest(&compiled, &manifest).map_err(|issue| StandardPackComposeFailure {
             issues: vec![issue],
         })?;
+    priority_tiers.sort();
     Ok(StandardPackComposition {
         sources,
         compiled,
         manifest,
         games,
         rules_digest,
+        priority_tiers,
     })
 }
 

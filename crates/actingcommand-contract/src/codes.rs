@@ -433,6 +433,11 @@ crate::outcome_codes! {
         // not scheduled; the rest of the game is (keys `game`, `package_id`). The policy
         // composer finds it; the Runtime and the resource tools report it.
         StandardPackPackageUnclassified => "standard_pack_package_unclassified": warning / declaration_error,
+        // SS-2 (register §1.222; Alice's ruling 104 point 1): a game root's composed rules use
+        // more distinct priority values than the two tiers, maintenance and business (keys
+        // `game`, `count` the values, `limit_count` 2). The root is composed as before. The
+        // policy composer finds it; the resource tools report it.
+        StandardPackPriorityTiersExceeded => "standard_pack_priority_tiers_exceeded": warning / declaration_error,
         // Workflow #373 NAV-6: a standard-pack root file breaks its shape, a limit or a
         // reference (keys `game`, `path`, `standard_pack_problem`, `json_pointer`). The Runtime's
         // root reader and check-config report it; the resource tools share the same check.

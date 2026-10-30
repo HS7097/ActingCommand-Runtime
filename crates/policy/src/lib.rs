@@ -102,4 +102,8 @@ mod tests {
     mod gate_ss3;
     // SS-6 (0.12.31; register §1.218): a dispatch's spend allowance, remaining gap and run cap.
     mod gate_ss6;
+    // SS-2 (0.12.32; register §1.222): chain successors rank with their chain head, and a tie
+    // goes to the candidate closer to losing its eligibility, then more conditions, then declared
+    // order.
+    mod gate_ss2;
 }

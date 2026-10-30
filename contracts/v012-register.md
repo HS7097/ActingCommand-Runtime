@@ -4183,6 +4183,63 @@ back for a pair whose expected duration changes while its round is open.
 | RR1-1 | the evaluation's immediate reruns are those `PolicyControlState::immediate_retry_admits` admits on the terms `actingcommand_policy::evaluated_dispatch_terms` gives their intents (profile, expected duration); `validate_immediate_retry` is the same predicate on the intent's terms | behaviour (evaluation) | RR-1 | — | `dispatch_terms` (pure, policy crate) also fills the candidate's `expected_duration_ms` and `activity_profile_id`, so the evaluation and the intent cannot differ |
 | RR1-2 | a `policy.dispatch_rejected` whose `rejection.outcome` is `policy_retry_round_ended` ends the retry rounds of the pair's accounting group on its instance, live (`apply_admission_events`) and in replay (`apply_dispatch_event`) | behaviour (decision memory) | RR-1 | the admission | failure streak, backoff and counts unchanged; the pair's next legal normal trigger opens a new round |
 
+### 1.222 Slice SS-2 (0.12.32): two priority tiers, chain inheritance, the constrained-first tie-break and declared order (Alice's ruling 104, relisted on 10-29 22:16 and approved on 10-30 21:3x, Workflow #386 comment 6523113979, points 1, 2, 4 and 5; point 3, net benefit within a tier, is not built and waits for the research channel's check against ruling 100; design `rd-1029/design-sch-state.md` §4 and the SS-2 entry; coordinator work order `rd-1029/brief-ss2.md`)
+
+[scheduling/README.md](scheduling/README.md) ("Ties and chain heads"; "Dispatch Decision Record"
+items 1 and 3), [scheduling/v2/README.md](scheduling/v2/README.md) and
+[standard-pack-schedule.md](standard-pack-schedule.md) ("Two priority tiers") are the contract. The
+number 1.222 is the coordinator's.
+
+**What.** (1) A game whose composed rules use more than two distinct priority values gets one
+`standard_pack_priority_tiers_exceeded` warning from the composer; the root is never refused
+(RS-8 collapses each game to two values). (2) A candidate whose trigger requires another task's
+success (a `dependency_completed` accepting `succeeded`, reached from the root only through `all`)
+ranks, while it continues that task's latest successful run (it has not served it, the
+`since_own_run` test), with the `priority` and `strategic_weight_milli` of its chain head, the
+task reached by walking such links up through runs that came one after the other. (3) Of
+candidates equal in `promoted`, `total` and `affinity`, the one closer to losing its eligibility
+goes first: fewer chances (the fewer of the runs its required thresholds and reserves still allow
+by its own declared consumption and the runs that can still start before a required window or
+missed-slot grace closes), then less time left, then fewer runs left; a candidate without a bound,
+or whose bound meets an unknown input, has none and comes after; then more required conditions;
+then (4) the earlier position in the catalog's task list. The seeded `tie_breaker` hash only orders
+one task's candidates on different instances after that.
+
+**Why.** Ruling 104: maintenance high, business normal, chain successors follow the chain head,
+a tie goes to the task that would become impossible later, declared order last. The hash made a
+tie depend on the evaluation's seed.
+
+**Unchanged.** The rank value (`total`) and every term of it but the inherited priority and weight;
+the score stage, the resource terms and pool weights (the one-way rule: nothing in the resource
+layer reads a chain); every gate, B41's handover, the reserve gate (its allocation order takes the
+same tie-break); game neutrality. **No new persisted shape, no configuration key, no catalog
+member, no interface revision.** One outcome code, `standard_pack_priority_tiers_exceeded`
+(warning, `declaration_error`; `game`, `count`, `limit_count`), because no code says "a game's
+rules use more tiers than ruling 104 allows": `standard_pack_package_unclassified` names one
+package that is not scheduled, and `standard_pack_root_invalid` refuses. Only the composer emits
+it and only the resource tools list it; the Runtime's workbench records only the unclassified
+warning, as before. Without a chain window and without a tie, every evaluation is byte for byte the
+one of 0.12.31.
+
+**What changes live.** In the two production `schedule.json` checked (two games, as of 10-28/29)
+every rule has nearly its own priority (78 distinct values per game), so each game gets the
+warning in the tools until RS-8. Their chain links (48 and 35) all have a predecessor of higher
+priority than the successor, so a successor in its window ranks a little higher, never lower. A required
+`dependency_completed` accepting `succeeded` or `failed` (a few) is a link too; one under an `any`
+(the ordering dependencies of the slot sequences) is not.
+
+**Rollback** (to 0.12.31). Nothing to undo: no ledger, state, catalog or configuration shape is
+new, the tie-break and chain fields are developer text of in-memory decisions, and the warning is
+never recorded. 0.12.31 ranks chain successors with their own priority again and breaks ties by
+the seeded hash.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SS2-1 | `standard_pack_priority_tiers_exceeded` (warning / `declaration_error`; `game`, `count`, `limit_count` required) in `StandardPackComposition::warnings`, after the unclassified ones, by game id; `STANDARD_PACK_PRIORITY_TIERS` = 2 | new outcome code (contract `SharedCode`) | SS-2 | the policy composer | counted over the rules the game composes for its bound instances; `actinglab standard-pack check`, `compose` and `package bundle --schedule` list it; never a refusal |
+| SS2-2 | chain inheritance in `placed_rank` (`evaluator/tie_break.rs`, `chain_head`) | behaviour (evaluation) | SS-2 | — | links through `all` only; the window is `since_own_run`'s "not served"; the head's instance override applies; the fact refresh lends the inherited rank |
+| SS2-3 | the allocation order `allocation_order` (the round's sort and the reserve gate's): `promoted`, `total`, `affinity`, `TieKey::order` (bounded first, chances, time left, runs left, more conditions, declared position), then `tie_breaker`, task id, instance id | behaviour (evaluation) | SS-2 | — | the Runtime's own fact refresh task has no key and comes after every declared task in a tie |
+| SS2-4 | `rank_breakdown` and ranked `decision_candidate_not_selected` details end with ` chain_head=<id>` for an inheriting candidate and, on a tie (`lead=0` / `behind_by=0`), ` tie=<bounded\|none\|unknown> chances=… time_left_ms=… runs_left=… conditions=… declared=…` | developer text (never persisted) | SS-2 | the policy evaluator | absent otherwise, so a decision without a chain window or a tie keeps its bytes |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

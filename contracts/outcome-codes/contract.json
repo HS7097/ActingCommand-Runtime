@@ -17259,6 +17259,24 @@
       "common_causes": "A package was added to the bundle without a rule or a held entry, or its rule was removed.",
       "handling": "Add a rule that names the package, or a held entry with its reason, to the game root's schedule.json."
     },
+    "standard_pack_priority_tiers_exceeded": {
+      "category": "warning",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "game": "required",
+        "count": "required",
+        "limit_count": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.32",
+      "description": "The rules a standard-pack game root's schedule.json composes for its bound instances use more distinct priority values (count) than the two tiers of Alice's ruling 104 point 1 (limit_count): maintenance tasks high, every business task normal (SS-2, contracts/standard-pack-schedule.md). The root is composed and scheduled as before; within a tier the ranking and its tie-break order the tasks. The policy composer finds it; actinglab standard-pack check and compose and package bundle report it once per game.",
+      "common_causes": "The game's rules still carry one priority value per rule from before the two tiers.",
+      "handling": "Give maintenance rules one high priority and every business rule one normal priority; a chain step ranks with its chain head by itself."
+    },
     "standard_pack_root_invalid": {
       "category": "error",
       "ladder_class": "declaration_error",

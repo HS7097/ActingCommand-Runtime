@@ -37,6 +37,9 @@ mod expected_runtime;
 mod fact_refresh;
 // Workflow #386 SR-2b-2: the owed reruns an evaluation reads.
 mod rerun;
+// SS-2 (register §1.222; Alice's ruling 104 points 2, 4 and 5): chain inheritance and the
+// tie-break.
+mod tie_break;
 
 pub use blackout::{
     Blackout, BlackoutEntry, BlackoutSources, BlackoutWindow, DayBoundaryDeferral, blackout_at,
@@ -55,6 +58,7 @@ pub use fact_refresh::{
     InstanceHold, fact_refresh_task,
 };
 pub use rerun::{OwedRerun, OwedReruns};
+use tie_break::TieKey;
 
 pub const MAX_EVALUATION_FACTS: usize = 16_384;
 pub const MAX_EVALUATION_OUTCOMES: usize = 16_384;
@@ -1428,6 +1432,14 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
             invalidation_wake.and_then(|boundary| boundary.checked_sub(1))
         };
     let mut preload_hint = None;
+    // SS-2: each task by id with its position in the catalog (its declared order).
+    let declared_tasks: BTreeMap<&str, (usize, &TaskSpec)> = catalog_bundle
+        .tasks
+        .tasks
+        .iter()
+        .enumerate()
+        .map(|(index, task)| (task.id.as_str(), (index, task)))
+        .collect();
     let placement_context = PlacementContext {
         profiles: catalog_bundle.activity.profiles.as_slice(),
         pool_specs: &pool_specs,
@@ -1435,6 +1447,11 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         hosts: &host_resources,
         time,
         seed,
+        tasks: &declared_tasks,
+        task_states: &task_states,
+        last_results: &last_results,
+        facts,
+        timeline_events: &timeline_events,
     };
     let mut work = Vec::new();
     let mut candidates = Vec::new();
@@ -1718,6 +1735,8 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
                                             promoted: false,
                                             affinity: candidate.affinity,
                                             tie_breaker: candidate.tie_breaker,
+                                            tie: candidate.tie.clone(),
+                                            chain_head: candidate.chain_head.clone(),
                                         });
                                         candidates.push(*candidate);
                                     }
@@ -1795,16 +1814,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
     // The gate that kept each planned package from the allocation's dispatch, by work index.
     let mut refresh_gates = BTreeMap::<usize, RefreshGate>::new();
 
-    candidates.sort_by(|left, right| {
-        right
-            .promoted
-            .cmp(&left.promoted)
-            .then_with(|| right.rank.total_score.cmp(&left.rank.total_score))
-            .then_with(|| right.affinity.cmp(&left.affinity))
-            .then_with(|| left.tie_breaker.cmp(&right.tie_breaker))
-            .then_with(|| left.task_id.cmp(&right.task_id))
-            .then_with(|| left.instance_id.cmp(&right.instance_id))
-    });
+    candidates.sort_by(allocation_order);
     // Workflow #411 B41: on an instance where a chain step hands over on its page, the successor
     // is allocated before the candidates that ranked ahead of it. A deferral under one of
     // `successor_waits` (the Runtime's random delay) is part of the successor's dispatch.
@@ -2387,6 +2397,27 @@ struct RankRecord {
     promoted: bool,
     affinity: bool,
     tie_breaker: u64,
+    /// SS-2: the candidate's tie-break key, printed when a tie was broken.
+    tie: TieKey,
+    /// SS-2: the chain head whose priority and strategic weight the candidate ranks with.
+    chain_head: Option<String>,
+}
+
+/// SS-2 (register §1.222): the allocation order of the round's candidates. `promoted` first, then
+/// the higher `total_score`, then `affinity`, as before; a tie left there goes to the candidate
+/// closer to losing its eligibility, then the one with more conditions, then the one declared
+/// first ([`TieKey::order`]); the deterministic hash and the ids keep the order total across
+/// instances, where one task's declared position is the same.
+fn allocation_order(left: &PlacementCandidate, right: &PlacementCandidate) -> std::cmp::Ordering {
+    right
+        .promoted
+        .cmp(&left.promoted)
+        .then_with(|| right.rank.total_score.cmp(&left.rank.total_score))
+        .then_with(|| right.affinity.cmp(&left.affinity))
+        .then_with(|| left.tie.order(&right.tie))
+        .then_with(|| left.tie_breaker.cmp(&right.tie_breaker))
+        .then_with(|| left.task_id.cmp(&right.task_id))
+        .then_with(|| left.instance_id.cmp(&right.instance_id))
 }
 
 /// The score stage's terms of one staged candidate.
@@ -2610,18 +2641,22 @@ fn decision_record(
         let state = decision_state_token(entry.state);
         let eligibility = eligibility_token(entry.eligibility);
         let detail = match view {
-            Some((related_rank, related_record)) => format!(
-                "why={why} state={state} total={} behind_by={} {} promoted={} tie_breaker={}",
-                related_rank.total_score,
-                i128::from(rank.total_score) - i128::from(related_rank.total_score),
-                rank_terms(
-                    related_rank,
-                    related_record.stage.as_ref(),
-                    related_record.resources.as_ref()
-                ),
-                u8::from(related_record.promoted),
-                related_record.tie_breaker
-            ),
+            Some((related_rank, related_record)) => {
+                let behind_by = i128::from(rank.total_score) - i128::from(related_rank.total_score);
+                let mut detail = format!(
+                    "why={why} state={state} total={} behind_by={behind_by} {} promoted={} tie_breaker={}",
+                    related_rank.total_score,
+                    rank_terms(
+                        related_rank,
+                        related_record.stage.as_ref(),
+                        related_record.resources.as_ref()
+                    ),
+                    u8::from(related_record.promoted),
+                    related_record.tie_breaker
+                );
+                push_ss2_fields(&mut detail, related_record, behind_by == 0);
+                detail
+            }
             None => format!("why={why} state={state} eligibility={eligibility}"),
         };
         // Workflow #411 A26: why, state and eligibility are persisted values as well.
@@ -2727,7 +2762,22 @@ fn rank_breakdown_detail(rank: &TaskRank, record: &RankRecord, lead: Option<i128
     if let Some(resources) = resources {
         detail.push_str(&format!(" offset_kept={}", u8::from(resources.offset_kept)));
     }
+    push_ss2_fields(&mut detail, record, lead == Some(0));
     detail
+}
+
+/// SS-2 (register §1.222): ` chain_head=<task id>` for a candidate that ranks with its chain
+/// head's priority and strategic weight, and, when `tied` (its total equals the other one's, so
+/// the tie-break decided), its tie-break key. A candidate in no chain window and no tie keeps
+/// its detail byte for byte.
+fn push_ss2_fields(detail: &mut String, record: &RankRecord, tied: bool) {
+    if let Some(head) = &record.chain_head {
+        detail.push_str(&format!(" chain_head={head}"));
+    }
+    if tied {
+        detail.push(' ');
+        detail.push_str(&record.tie.detail());
+    }
 }
 
 /// The instance's stored target policy as its version `sha@applied_at`, or its state.
@@ -2866,6 +2916,10 @@ struct PlacementCandidate {
     /// `expected_duration_ms` is E and the cost is E.
     expected_runtime_ms: Option<u64>,
     tie_breaker: u64,
+    /// SS-2: the tie-break key ([`allocation_order`]).
+    tie: TieKey,
+    /// SS-2: the chain head the candidate ranks with, while it is in that head's run window.
+    chain_head: Option<String>,
     facts_fresh_until_unix_ms: Option<u64>,
     activity_profile_id: String,
     daily_limit: Option<u32>,
@@ -2885,6 +2939,41 @@ struct PlacementContext<'a> {
     hosts: &'a BTreeMap<&'a str, HostView>,
     time: EvaluationTime,
     seed: u64,
+    /// SS-2: every catalog task by id, with its position in the catalog.
+    tasks: &'a BTreeMap<&'a str, (usize, &'a TaskSpec)>,
+    /// SS-2: the task snapshots as a gate reads another task (after the time-validity
+    /// projection).
+    task_states: &'a BTreeMap<(&'a str, &'a str), &'a TaskRuntimeSnapshot>,
+    /// SS-2: each task's own last result, as its own gates read it (Workflow #411 P19).
+    last_results: &'a BTreeMap<(&'a str, &'a str), &'a TaskRuntimeSnapshot>,
+    /// SS-2: the facts the gates read, after the time-validity projection.
+    facts: &'a EvaluationFacts,
+    timeline_events: &'a BTreeMap<&'a str, &'a TimelineEvent>,
+}
+
+impl PlacementContext<'_> {
+    /// SS-2: the task's own last result on `instance`.
+    fn last_result(
+        &self,
+        task: &TaskSpec,
+        instance: &InstanceSnapshot,
+    ) -> Option<&TaskRuntimeSnapshot> {
+        self.last_results
+            .get(&(task.id.as_str(), instance.instance_id.as_str()))
+            .copied()
+    }
+
+    /// SS-2: the chain head `task` ranks with on `instance`, while it is in that head's run
+    /// window.
+    fn chain_head(&self, task: &TaskSpec, instance: &InstanceSnapshot) -> Option<&TaskSpec> {
+        tie_break::chain_head(
+            task,
+            &instance.instance_id,
+            self.last_result(task, instance),
+            self.tasks,
+            self.task_states,
+        )
+    }
 }
 
 fn build_candidate(
@@ -2941,6 +3030,8 @@ fn build_candidate(
         )));
     }
 
+    // SS-2: a successor in its chain head's run window ranks with the head's priority and weight.
+    let chain_head = context.chain_head(task, instance);
     let rank = placed_rank(
         task,
         task_override,
@@ -2949,7 +3040,20 @@ fn build_candidate(
         context,
         load,
         host,
+        chain_head,
     )?;
+    let declared = context
+        .tasks
+        .get(task.id.as_str())
+        .map_or(usize::MAX, |(index, _)| *index);
+    let tie = tie_break::tie_key(
+        task,
+        context.last_result(task, instance),
+        instance,
+        context,
+        terms.expected_duration_ms,
+        declared,
+    );
 
     Ok(PlacementResult::Candidate(Box::new(PlacementCandidate {
         work_index,
@@ -2972,6 +3076,8 @@ fn build_candidate(
         last_duration_ms: task_state.and_then(|state| state.last_duration_ms),
         expected_runtime_ms: snapshot_expected_runtime(task, task_state),
         tie_breaker: deterministic_tie_breaker(context.seed, &task.id, &instance.instance_id),
+        tie,
+        chain_head: chain_head.map(|head| head.id.clone()),
         facts_fresh_until_unix_ms,
         activity_profile_id: terms.activity_profile_id.to_owned(),
         daily_limit: task.daily_limit(),
@@ -3046,6 +3152,10 @@ fn placed_load<'a>(
 }
 
 /// The task's rank on `instance`, with its instance override's priority and strategic weight.
+/// SS-2 (register §1.222): with a `chain_head`, the head's priority and strategic weight (the
+/// head's instance override on `instance` applied) stand in for the task's own; every other term
+/// stays the task's own.
+#[allow(clippy::too_many_arguments)]
 fn placed_rank(
     task: &TaskSpec,
     task_override: Option<&crate::InstanceTaskOverride>,
@@ -3054,13 +3164,18 @@ fn placed_rank(
     context: &PlacementContext<'_>,
     load: ResourceLoad,
     host: &HostView,
+    chain_head: Option<&TaskSpec>,
 ) -> PolicyEvaluationResult<TaskRank> {
-    let priority = task_override
+    let (source, source_override) = match chain_head {
+        Some(head) => (head, instance_override(head, instance)),
+        None => (task, task_override),
+    };
+    let priority = source_override
         .and_then(|value| value.priority.0)
-        .unwrap_or(task.priority);
-    let task_weight = task_override
+        .unwrap_or(source.priority);
+    let task_weight = source_override
         .and_then(|value| value.strategic_weight_milli.0)
-        .unwrap_or(task.strategic_weight_milli);
+        .unwrap_or(source.strategic_weight_milli);
     rank_task(
         task,
         task_state,
@@ -3964,17 +4079,7 @@ fn apply_reserves(
 ) -> PolicyEvaluationResult<Vec<PlacementCandidate>> {
     // The allocation order (the round's own sort), without moving the candidates.
     let mut order = (0..ranked.len()).collect::<Vec<_>>();
-    order.sort_by(|left, right| {
-        let (left, right) = (&ranked[*left], &ranked[*right]);
-        right
-            .promoted
-            .cmp(&left.promoted)
-            .then_with(|| right.rank.total_score.cmp(&left.rank.total_score))
-            .then_with(|| right.affinity.cmp(&left.affinity))
-            .then_with(|| left.tie_breaker.cmp(&right.tie_breaker))
-            .then_with(|| left.task_id.cmp(&right.task_id))
-            .then_with(|| left.instance_id.cmp(&right.instance_id))
-    });
+    order.sort_by(|left, right| allocation_order(&ranked[*left], &ranked[*right]));
     let candidates = order
         .iter()
         .map(|&index| -> PolicyEvaluationResult<_> {
@@ -4386,7 +4491,17 @@ fn predicate_refresh(
         return Ok(None);
     }
     let (_, load, host) = placed_load(task, task_override, instance, context)?;
-    let rank = placed_rank(task, task_override, state, instance, context, load, host)?;
+    let chain_head = context.chain_head(task, instance);
+    let rank = placed_rank(
+        task,
+        task_override,
+        state,
+        instance,
+        context,
+        load,
+        host,
+        chain_head,
+    )?;
     Ok(Some(AffectedCandidate {
         work_index,
         instance_id: instance.instance_id.clone(),
@@ -9955,6 +10070,8 @@ pub(crate) mod tests {
             promoted: false,
             affinity: false,
             tie_breaker: 1,
+            tie: TieKey::runtime_task(),
+            chain_head: None,
         });
         selected.rank = Some(rank);
         let mut reason_chains = vec![DecisionReasonChain {

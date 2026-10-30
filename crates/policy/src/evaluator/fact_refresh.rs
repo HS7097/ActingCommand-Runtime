@@ -35,7 +35,7 @@ use super::{
     DecisionReason, DetectionSuggestion, EligibilityState, EvaluationFacts, EvaluationTime,
     HostView, InstanceSnapshot, ObservedFact, PlacementCandidate, PolicyEvaluationError,
     PolicyEvaluationResult, RankRecord, ResourceLoad, SchedulingDecisionState, TaskRank,
-    TaskRuntimeSnapshot, TaskWork, UnknownReasonToken, activity_window_at,
+    TaskRuntimeSnapshot, TaskWork, TieKey, UnknownReasonToken, activity_window_at,
     deterministic_tie_breaker, min_wake, reason, reason_with, select_activity_profile,
     snapshot_expected_runtime, unknown_token,
 };
@@ -457,6 +457,8 @@ pub(super) fn plan(
                     promoted: false,
                     affinity: false,
                     tie_breaker: candidate.tie_breaker,
+                    tie: candidate.tie.clone(),
+                    chain_head: None,
                 });
                 candidates.push(candidate);
             }
@@ -714,6 +716,10 @@ fn refresh_candidate(
         last_duration_ms: state.and_then(|state| state.last_duration_ms),
         expected_runtime_ms: snapshot_expected_runtime(task, state),
         tie_breaker: deterministic_tie_breaker(context.seed, &task.id, &instance.instance_id),
+        // SS-2: no catalog declares the Runtime's own task: it has no measure and no condition,
+        // and comes after every declared task in a tie.
+        tie: TieKey::runtime_task(),
+        chain_head: None,
         facts_fresh_until_unix_ms: None,
         activity_profile_id: profile.id.clone(),
         daily_limit: task.daily_limit(),

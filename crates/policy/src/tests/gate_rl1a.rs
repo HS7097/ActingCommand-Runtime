@@ -1136,6 +1136,62 @@ fn rl1a_t5_an_unclassified_package_warns_and_a_held_one_is_not_scheduled() {
     assert!(evaluation.dispatched.is_empty());
 }
 
+/// SS-2 test 5 (register §1.222; Alice's ruling 104 point 1: two priority tiers, maintenance high
+/// and business normal): a game whose composed rules use three distinct priority values is one
+/// `standard_pack_priority_tiers_exceeded` warning (keys `game`, `count` 3, `limit_count` 2), and
+/// its rules are composed all the same; one whose rules use two values is no warning. The root is
+/// never refused.
+#[test]
+fn ss2_t5_three_priority_values_warn_and_two_do_not() {
+    let rule = schedule_a()["rules"][0].clone();
+    let with_priorities = |priorities: &[i64]| {
+        let mut schedule = schedule_a();
+        schedule["rules"] = Value::Array(
+            priorities
+                .iter()
+                .enumerate()
+                .map(|(index, priority)| {
+                    let mut copy = rule.clone();
+                    if index > 0 {
+                        let id = format!("{RULE}.{index}");
+                        copy["feedback_stop"]["task_id"] = json!(id);
+                        copy["id"] = json!(id);
+                    }
+                    copy["priority"] = json!(priority);
+                    copy
+                })
+                .collect(),
+        );
+        schedule
+    };
+
+    let three = composed(
+        &[game_a(Some(with_priorities(&[300, 200, 100])))],
+        &[(INSTANCE_A, GAME_A, SERVER_A)],
+        None,
+    );
+    assert_eq!(
+        three.compiled().catalog().tasks.tasks.len(),
+        3,
+        "the root is composed"
+    );
+    let warnings = three.warnings();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].is(SharedCode::StandardPackPriorityTiersExceeded));
+    assert_eq!(warnings[0].category(), Category::Warning);
+    assert_eq!(warnings[0].value("game"), Some(&json!(GAME_A)));
+    assert_eq!(warnings[0].value("count"), Some(&json!(3)));
+    assert_eq!(warnings[0].value("limit_count"), Some(&json!(2)));
+
+    let two = composed(
+        &[game_a(Some(with_priorities(&[300, 100, 100, 300])))],
+        &[(INSTANCE_A, GAME_A, SERVER_A)],
+        None,
+    );
+    assert_eq!(two.compiled().catalog().tasks.tasks.len(), 4);
+    assert!(two.warnings().is_empty(), "{:?}", two.warnings());
+}
+
 /// T6 (§3.6, "No rules at all is a valid state"): a file without rules, a bound game whose root
 /// holds no `schedule.json`, and no bound instance each compose a valid empty catalog.
 #[test]
