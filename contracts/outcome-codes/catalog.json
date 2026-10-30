@@ -1569,6 +1569,10 @@
       "type": "vocab:emulator_watch_kind",
       "description": "What the emulator watch asked of an instance's emulator: the restart of a stopped one, or the recognition of a running one whose endpoint the Runtime holds pending or bound to another port (EMU-BIND, since 0.12.28), or bound to the reported port but never prepared on it (since 0.12.28)."
     },
+    "skip_reason": {
+      "type": "vocab:emulator_autostart_skip_reason",
+      "description": "Why no autostart claim was requested for an instance where one would otherwise have been (WATCH-P, since 0.12.32: the emulator watch's restart or recognition)."
+    },
     "duplicate_count": {
       "type": "integer",
       "description": "Records skipped because their event id was already in the ledger."
@@ -5284,6 +5288,18 @@
         },
         "recognize": {
           "description": "The recognition of a running emulator whose endpoint the Runtime holds pending or bound to another port (since 0.12.28 also bound to the reported port but never prepared on it): the reported port bound and the instance self-checked, nothing started or stopped."
+        }
+      }
+    },
+    "emulator_autostart_skip_reason": {
+      "description": "Why no autostart claim was requested for an instance where one would otherwise have been (WATCH-P, since 0.12.32: the emulator watch's restart or recognition).",
+      "source": {
+        "file": "crates/runtime-host/src/host/emulator_watch.rs",
+        "enum": "WatchSkipReason"
+      },
+      "tokens": {
+        "instance_paused": {
+          "description": "The instance's own scheduling pause holds it, in any stage (draining, paused, released; Alice's ruling 112): the watch reads and records its emulator status but neither restarts nor recognizes it. Recorded once per pause revision and watch_kind."
         }
       }
     },

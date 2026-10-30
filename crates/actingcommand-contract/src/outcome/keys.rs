@@ -391,6 +391,9 @@ outcome_keys! {
     // EMU-BIND (0.12.28): what the emulator watch asked of an instance's emulator, a restart of a
     // stopped one or the recognition of a running one whose endpoint is not bound to it.
     watch_kind: vocab(emulator_watch_kind),
+    // WATCH-P (0.12.32): why the emulator watch requested no claim it would otherwise have
+    // requested (Alice's ruling 112: not for an instance its own pause holds).
+    skip_reason: vocab(emulator_autostart_skip_reason),
     // Workflow #383 AO-0 (ledger observer): the values of the observer's codes. Begin.
     duplicate_count: integer,
     dump_sealed: boolean,

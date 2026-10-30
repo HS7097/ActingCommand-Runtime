@@ -1124,6 +1124,16 @@ tests = [
 ]
 incident = ["#419", "EMU-BIND"]
 
+# WATCH-P (0.12.32; Alice's ruling 112; brief rd-1029/brief-116-112-114.md WATCH-P; production 10-29 21:35 and 21:38: the watch restarted an instance twice while it was paused for a person's own check): an instance its own scheduling pause holds, in each stage (draining, paused, released), is polled and its reading recorded, but gets no restart claim and no Start, no queued or used-up record, and one emulator_autostart_skipped (skip_reason instance_paused, watch_kind restart) per pause revision, over more polls than the restart bound allows; after the resume the next poll restarts it as the first restart of the window, and a second pause revision records its own skip (1); a paused instance running with its endpoint pending gets no recognition claim in any stage, one skip with watch_kind recognize, stays pending, and after the resume (whose reconnect binds nothing) the next poll recognizes and binds it (2); in the same poll an unpaused configured instance found stopped is restarted with the same queued record, claim and Start as before, while the paused one beside it is skipped (3)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_watch_p::watch_p_1_a_paused_instance_is_never_restarted_and_its_skip_is_recorded_once_per_revision",
+    "actingcommand-runtime-host::lib::tests::gate_watch_p::watch_p_2_a_paused_running_instance_is_not_recognized_until_the_resume",
+    "actingcommand-runtime-host::lib::tests::gate_watch_p::watch_p_3_an_unpaused_instance_beside_a_paused_one_is_restarted_as_before",
+]
+incident = ["WATCH-P"]
+
 # A person's drill of one physical instance's stuck-recovery ladder is recorded like a ladder a trigger started and tagged drill: its trigger (stage drill, no run, task, preparation, rule or match), its plan, one recovery_rung_finished per rung and its end; only a ladder's own phases carry the tag, and only a drill ends planned. A plan drill never acts on the device (each rung it would run skipped drill_plan, the climb planned at info, no Stop, Start or preparation) and opens no cool-down window; a device drill climbs its rungs on the instance under the same key as a real ladder and opens the window, after which a drill the cool-down holds is refused recovery_ladder_drill_cooling_down after its tagged suppression; a drill of an instance whose stuck recovery is off is refused recovery_ladder_drill_disabled, and no agent origin may ask for one (Workflow #390 DRILL-1, forced compromise T-08; wave 13 ruling 9); a recovery_ladder.triggers[] item that names the stage drill is refused stage_not_allowed naming recovery_ladder.triggers, at start and by instruction, and the configuration in effect stays (register DR2; TEST-FU, train 15 rulings DRILL-1 item 6)
 [[gate]]
 key = "88"

@@ -682,6 +682,21 @@ impl SchedulingPauseTable {
         self.instances.clone()
     }
 
+    /// WATCH-P (0.12.32), tests: the held pause of `instance_alias` in `stage`, its revision kept.
+    /// `false` when the instance holds none.
+    #[cfg(test)]
+    pub(super) fn set_instance_stage_for_test(
+        &mut self,
+        instance_alias: &str,
+        stage: InstancePauseStage,
+    ) -> bool {
+        let Some(state) = self.instances.get_mut(instance_alias) else {
+            return false;
+        };
+        state.stage = stage;
+        true
+    }
+
     pub(super) fn lift_instance(&mut self, instance_alias: &str) -> RuntimeHostResult<u64> {
         self.instances.remove(instance_alias);
         self.origins.remove(&Some(instance_alias.to_owned()));
