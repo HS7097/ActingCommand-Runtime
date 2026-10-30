@@ -521,7 +521,10 @@ read it, and the candidate waits.
   demand for that key (Workflow #390 POOL-1, "Pool Projection"); a static
   snapshot pool raises none. #386 CF-5: a pool of exactly the instance's scope
   whose capacity fact gives no capacity raises demand for that fact's key
-  ("Pool fact references").
+  ("Pool fact references"). SS-5 (since 0.12.32): a `fact` predicate with
+  `on_unknown: probe` raises none for its key, which the task's own package
+  reads ("Self-read fact probe"); every other unknown key of the same trigger
+  raises demand as before.
   Workflow #411 6438574534 follow-up 2 (since 0.12.26): a task's own placement
   never holds back the demand its undecided trigger or feedback stop raises.
   Whether the reading can be placed is R_I's own gates' to decide (below): an
@@ -1130,6 +1133,11 @@ A `fact` predicate whose value is a fact reference adds `fact_reference_unavaila
 integer (#386 CF-4, "Fact references" below), and so does a `resource_projection` whose value is
 one (#386 CF-5, "Pool fact references" below).
 
+A `fact` predicate with `on_unknown: probe` whose fact is unknown adds `fact_probe` (info;
+`fact_key`, `unknown_reason`; SS-5, "Self-read fact probe" below): without
+`served_by_dispatch_unix_ms` the predicate is true and the task is admitted to read the fact; with
+it the predicate is false and, when it decides the trigger, `trigger_false` follows.
+
 ## Settlement Feedback And Eligibility Age
 
 In the Runtime (Workflow #308 slice 5b) every `TaskRuntimeSnapshot` the host
@@ -1490,6 +1498,22 @@ A daily reset that clears a family of readings must not clear the ready times in
   - The latest dispatch, which `clock` and the cooldown read, was never cleared by a reset and is unchanged.
   - **The class of rule this changes.** A rule that uses a `dependency_completed` on its own task as the result of the current period, for example a retry branch on its own `failed`, now reads the task's last result across a reset, so after the reset it sees a result from before it. A retry branch that must fire only within the current period needs, as its period gate, a `dependency_completed` on an earlier task of the same period, which the reset clears.
 - **Capability.** A Runtime that reads `excludes_fact_prefixes` and keeps the task's own last result reports the always-on subsystem `reset_exclusions` in `config.subsystems` ([`actingd-check-config.md`](../actingd-check-config.md)). A `schedule.json` whose event writes the member must list `reset_exclusions` in `requires` ([`standard-pack-schedule.md`](../standard-pack-schedule.md)); the composer refuses the file without it, so a Runtime that does not name the subsystem refuses the file (`schedule_requires_missing`) instead of misreading it. A `schedule.json` that relies on a reset keeping the task's own last result names it as well: nothing in the file shows that reliance, so the composer cannot require it. An older Runtime given a catalog whose event writes the member refuses it at its reader (`unknown_field`).
+
+## Self-read fact probe (SS-5)
+
+A fact that only the task's own package reads (a clear count, an activity level, a slot count: a reading mark of the task's package) must never gate that package forever (the coordinator's rule of 10-28; Alice's ruling 100, dispatch follows live account state; since 0.12.32, register §1.223). Missing or expired, such a fact makes a `fact` predicate Unknown, the recognition maintenance package cannot read it ("Fact Refresh"), and only a run of the task would: a first-run deadlock. A `fact` predicate may therefore carry `"on_unknown": "probe"` ([v2/README.md](v2/README.md); `actingcommand.scheduling.v2` only). Absent, the predicate evaluates, serializes and hashes exactly as before.
+
+- **Known fact.** A fact that is present, above confidence 0, fresh (`max_age_ms`, its own expiry) and of the compared kind is compared as for every `fact` predicate; the member changes nothing.
+- **Unknown fact, the period.** The fact is unknown for the reasons of a `fact` predicate: `fact_missing`, `fact_low_confidence`, `fact_stale`, `fact_expired` or `type_mismatch`. Its **unknown period** began at the later of (a) the latest occurrence, at or before the evaluation, of a timeline event whose `invalidates_fact_prefixes` clears the key in the predicate's scope ("Runtime Enforcement", with "Reset exclusions" above), and (b) the end of the freshness of a reading past it (the earlier of its `expires_at_unix_ms` and `observed_at_unix_ms` + `max_age_ms`). Without either the key was never cleared, and the period is open-ended.
+- **Unknown fact, not served: true.** When this task's own latest run on the instance (its own last result, which no reset clears, "Reset exclusions" above) did not succeed, or was dispatched at or before the period began, the predicate is **true**, with the info reason `fact_probe` {`fact_key`, `unknown_reason`}. The task is admitted as for any true trigger (placement, gates, budgets and admission unchanged), and its run reads the fact. No detection suggestion is given and no fact refresh is asked for the key.
+- **Unknown fact, served: false.** When that run succeeded and was dispatched after the period began (or at all, when the period is open-ended), the probe was spent: the predicate is **false**, with `fact_probe` {`fact_key`, `unknown_reason`, `served_by_dispatch_unix_ms`} and no wake. A reading of the key (whose publication wakes the scheduler), the next reset that clears it (an occurrence is a wake already) or the expiry of a later reading begins a new period. When the predicate decides the trigger, the decision ends with `trigger_false` after its reason.
+  - A run that failed or was cancelled served nothing: the task stays due, and its cooldown, its retry and backoff and its daily limits bound how often it runs again, as for every failure.
+  - The probe's run publishes the reading; a known value then decides as usual. A `remaining` of 0 makes a `≥ 1` gate false, and the task yields to the instance's other work.
+- **Other unknowns ask as before.** A non-probe `fact` that is unknown in the same trigger keeps it Unknown (`trigger_unknown`), and the fact refresh asks the maintenance package for that key alone ("Fact Refresh"); the probed key is never requested, even when the maintenance package marks it too.
+- **Placement, compile time.** A probe names a fact only the task's own package reads, so the compiler refuses, each `predicate_uncomputable` at `on_unknown`: a scope other than an instance (a reading writes the instance's scope only); a `fact_key` that does not start with `resource.` or `inventory.` (the keys a reading mark writes, [resource-readings.md](../resource-readings.md)); and a probe where its truth would not admit the task, below a `not` or in the `feedback_stop`. A V1 document that writes the member is refused as `unknown_field` at the member.
+- **Placement, against the package.** Where a rule meets its package (`actinglab standard-pack check`, `package bundle --schedule`; [standard-pack-schedule.md](../standard-pack-schedule.md)) the key must be one of the reading-mark keys of the rule's own package; a key only another package reads, or none reads, is refused there (`standard_pack_root_invalid`, `schedule_invalid` at `on_unknown`).
+- **Capability.** A Runtime that reads the member reports the always-on subsystem `fact_probe` in `config.subsystems` ([`actingd-check-config.md`](../actingd-check-config.md)). A `schedule.json` whose rule writes it must list `fact_probe` in `requires` ([`standard-pack-schedule.md`](../standard-pack-schedule.md)); the composer refuses the file without it, so a Runtime that does not name the subsystem refuses the file (`schedule_requires_missing`) instead of misreading it. An older Runtime given a catalog with the member refuses it at its reader (`unknown_field`).
+- For example, a task due while its own count of remaining clears is at least 1, and admitted once per daily reset while the count is unknown: `{"kind": "fact", "scope": S, "fact_key": "resource.neutral.remaining", "comparison": "greater_than_or_equal", "value": {"type": "integer", "value": 1}, "max_age_ms": null, "on_unknown": "probe"}`, under a reset whose `invalidates_fact_prefixes` covers the key.
 
 ## Runtime Boundary
 

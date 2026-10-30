@@ -2205,6 +2205,29 @@
       "description": "Scheduling decision reason (Workflow #427-B, contracts/scheduling/README.md \"Shared run limits\"): a candidate waits because performance.pacing.max_concurrent_runs (limit_count) is reached. used policy dispatches take its slots: admitted_count admitted or running across every instance (admitted and not yet settled) and round_selected_count chosen earlier in the same evaluation round. Each dispatch counts once; a refused or settled one frees its slot. Without the key there is no such limit and the code is never given.",
       "common_causes": "performance.pacing.max_concurrent_runs is set, and that many policy dispatches run or were chosen ahead in the round.",
       "handling": "None: the candidate is evaluated again after a dispatch settles. Remove or raise performance.pacing.max_concurrent_runs (read when actingd starts) to let more run at once; 1 runs one policy dispatch at a time across every instance."
+    },
+    "fact_probe": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required",
+        "unknown_reason": "required",
+        "served_by_dispatch_unix_ms": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.32",
+      "description": "Scheduling decision reason (SS-5, contracts/scheduling/README.md \"Self-read fact probe\"): a `fact` predicate with `on_unknown: probe` reads its fact (fact_key, a reading of the task's own package) as unknown for unknown_reason (fact_missing, fact_low_confidence, fact_stale, fact_expired or type_mismatch). The fact's unknown period began at the later of the latest occurrence of a timeline reset that clears the key and the end of the freshness of an expired reading. Without served_by_dispatch_unix_ms the predicate is true: the task is admitted so that its run reads the fact, and no fact refresh is requested for the key. With it the predicate is false, with no wake: this task's latest run succeeded and was dispatched (served_by_dispatch_unix_ms) after the period began, and the key is still unknown; the next reading, reset or expiry ends that. When the predicate decides the trigger, a false one ends the decision with trigger_false.",
+      "common_causes": "The task's package has not read the fact since the last reset or since its last reading expired (admitted); or its run in this period read nothing usable for the key, for example the page with the reading mark was not reached (served).",
+      "handling": "None when admitted. When served, the task waits for the next reset of the key; check that the package's reading mark is on a page its run reaches and that the key is the mark's fact_key."
     }
   }
 }

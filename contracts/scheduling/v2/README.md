@@ -174,6 +174,21 @@ reference that names a `scope` is refused as an unknown field at `value/scope`
 refused as an unknown field at `value/type`. A catalog whose `fact` predicates
 hold typed values serializes, and hashes, exactly as before.
 
+SS-5 (since 0.12.32; register §1.223; `../README.md`, "Self-read fact probe"):
+a `fact` predicate may carry `on_unknown`, V2 only, whose one value is `probe`
+(schema: `{"enum": ["probe"]}`). It names a fact only the task's own package
+reads: while the fact is unknown the predicate is true once per unknown period
+(`fact_probe`), so the task runs and its run reads the fact, and no fact refresh
+is asked for the key; after a successful run of the task dispatched in that
+period it is false (`fact_probe` with `served_by_dispatch_unix_ms`) until a
+reading, a reset or an expiry. Its scope must be an instance (the only scope a
+reading writes) and its `fact_key` must start with `resource.` or `inventory.`
+(a reading mark's key), and it must stand in the `trigger`, reached through
+`all` and `any`, never under `not` and never in the `feedback_stop`; otherwise
+`predicate_uncomputable` at `on_unknown`. A V1 document that writes it is
+refused as an unknown field at the member. A catalog without it serializes, and
+hashes, exactly as before.
+
 A pool's `capacity` and a `resource_projection`'s `value` may each be a fact
 reference too (#386 CF-5), V2 only: `{"type": "fact", "fact_key": B, "offset":
 N}` (`../README.md`, "Pool fact references"; schema `factReference`). Both read

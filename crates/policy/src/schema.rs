@@ -560,6 +560,14 @@ pub enum PredicateSpec {
         /// this predicate's scope plus an integer offset ([`FactComparand`]).
         value: FactComparand,
         max_age_ms: Option<u64>,
+        /// SS-5 (register §1.223; `actingcommand.scheduling.v2` only, optional): what the
+        /// predicate is while its fact is unknown. `probe`: the fact is one the task's own package
+        /// reads, so an unknown value admits the task once per unknown period (true with
+        /// `fact_probe`), and after a successful run dispatched in that period the predicate is
+        /// false until a reading or the next reset or expiry. Absent, an unknown fact makes the
+        /// predicate unknown as before, and the member serializes as nothing.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on_unknown: Option<FactUnknownRule>,
     },
     RecordDeadline {
         scope: ScopeSelector,
@@ -601,6 +609,21 @@ pub enum PredicateSpec {
         value: FactValue,
     },
 }
+
+/// SS-5 (register §1.223): a `fact` predicate's rule for an unknown fact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FactUnknownRule {
+    /// The fact is a reading the task's own package declares (a reading mark, so a `resource.`
+    /// or `inventory.` key of the instance's scope): while it is unknown the task is admitted once
+    /// per unknown period, so its run reads the fact.
+    Probe,
+}
+
+/// SS-5 (register §1.223): the configuration-manifest subsystem of a Runtime that reads a `fact`
+/// predicate's `on_unknown`. A `schedule.json` whose rule writes the member names it in
+/// `requires`, so an older Runtime refuses the file instead of misreading it.
+pub const FACT_PROBE_SUBSYSTEM: &str = "fact_probe";
 
 /// Workflow #361 R7: a clock predicate's rule for an occurrence that was not served in time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
