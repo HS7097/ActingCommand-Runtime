@@ -168,6 +168,19 @@ changed.
 **No rules** is a valid state: no bound instance, no `schedule.json`, or a file without rules
 composes a valid empty catalog (V2 accepts an empty task list and an empty `approval_refs`).
 
+**Two priority tiers** (SS-2, since 0.12.32; Alice's ruling 104 point 1; register §1.222). A
+game's rules carry two priorities: maintenance tasks (startup, return home, recovery, readings
+maintenance, store update) one high value, every business task one normal value. A chain step
+needs no priority of its own to follow its chain: the evaluator ranks it with its chain head
+([scheduling/README.md](scheduling/README.md), "Ties and chain heads"), and business tasks of one
+tier are ordered by the ranking and its tie-break, the rules' order in this file last. When the
+rules a game composes for its bound instances use more than two distinct `priority` values, the
+composition reports one `standard_pack_priority_tiers_exceeded` warning (keys `game`, `count` the
+number of values, `limit_count` 2) after the unclassified-package warnings, and composes and
+schedules the game as before: it never refuses the root. `actinglab standard-pack check` and
+`compose` and `package bundle --schedule` list it in `warnings`; the Runtime's workbench does not
+record it.
+
 ## Tools
 
 - `actinglab package bundle ... --schedule <schedule.json>` checks the file against the game

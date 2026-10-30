@@ -720,6 +720,68 @@ A chain step that hands over on its page goes first (coordinator triage Q15; reg
   (`ac_schedule`) shows it as their `why`. Without a resting page every evaluation is the one
   before B41.
 
+## Ties and chain heads (SS-2)
+
+Since 0.12.32 (Alice's ruling 104 points 2, 4 and 5, approved 2026-10-30, Workflow #386
+comment 6523113979; register §1.222). Point 1, two priority tiers, is the resource side's
+(RS-8; [standard-pack-schedule.md](../standard-pack-schedule.md), "Two priority tiers" warns of a
+third). Point 3, net benefit within a tier, is not built: the rank value (`total`, "Dispatch
+Decision Record" item 1) is the one of before.
+
+- **Chain link.** A task's trigger *requires* a task when it names `dependency_completed` of
+  it, accepting `succeeded`, reached from the trigger's root only through `all`: the trigger
+  cannot be true unless that task's latest run on the instance ended in an accepted state. A
+  dependency under an `any` is one alternative among others, an order and not a continuation,
+  and one under a `not` the opposite: neither is a link. A task that names itself is not its own
+  link. ("Chain Handover" also counts the `any` branches: it only decides who goes first on a
+  page the instance already rests on.)
+- **The head's run window.** A candidate continues a task it requires while, on its instance,
+  that task's latest run succeeded and the candidate has not served it: it has no dispatch since
+  that run's dispatch, or its own latest run since did not succeed (the test of
+  `since_own_run`, "Condition edges"). Of several such tasks, the one with the latest dispatch
+  (then the smaller id). Its *chain head* is found by walking up: from the task it continues, to
+  a task that one requires whose latest run succeeded and was dispatched at or before its own
+  latest dispatch, and so on, never visiting a task twice. The other task is read as a gate
+  reads another task (after the timeline resets), the candidate itself from its own last result
+  (Workflow #411 P19).
+- **Chain inheritance.** In that window the candidate ranks with its chain head's `priority`
+  and `strategic_weight_milli` (the head's `instance_overrides` entry for the instance applied)
+  instead of its own; every other term (aging, urgency, contention, the score stage, its resource
+  term) stays its own. Outside every window, it ranks with its own. Only the task layer reads
+  this: the pool weights and resource terms read no task state (one-way rule, SS-1). The fact
+  refresh lends a candidate's rank as before, inheritance included.
+- **Tie-break (point 4).** Of candidates equal in `promoted`, `total` and `affinity`, the one
+  closer to losing its eligibility goes first, by a key computed at the evaluation instant from
+  the inputs its gates read, in integer arithmetic:
+  - *time left*: for each `timeline_active`, and each `clock` with `missed`, that the trigger
+    requires (through `all`), the milliseconds until it stops being true (the event window's end,
+    the occurrence's grace end); the least of them;
+  - *runs left*: for each threshold its own runs lower, the runs, this one included, that still
+    meet it, by the task's declared consumption `c` of the pool: a required `resource_projection`
+    on a pool it consumes, or a required `fact` on the reading key of a pool it consumes (same
+    scope), compared `greater_than_or_equal` T (`⌊(x − T)/c⌋ + 1`, 0 below T) or `greater_than`
+    T (the same with T + 1), T a number or a fact reference plus its offset; and each of its
+    `reserves` on a pool it consumes (`⌊(x − at_least)/c⌋`, 0 below it), x the pool's projection
+    or the fact's integer as the gate reads them; the least of them;
+  - *chances*: the fewer of the runs left and the runs that can still start before the time left
+    ends (`⌈time left / E⌉`, E the candidate's expected duration).
+
+  A key with a time left or runs left is `bounded`; one without either is `none`; one that meets
+  an unknown input (no pool value, a fact read as unknown, an evaluation error) is `unknown` and
+  never fails the evaluation. Bounded keys go first, by fewer chances, then less time left, then
+  fewer runs left. Then (the fallback, point 4) the key with more *conditions* (the trigger's
+  required nodes, an `any` or a `not` counting one, plus its `reserves`); then (point 5)
+  *declared order*, the task's position in the catalog's task list (a composed catalog keeps the
+  rules' order of `schedule.json` per instance), the earlier first. The Runtime's own fact refresh
+  task has no key (`unknown`, no condition) and comes after every declared task in a tie. The
+  deterministic `tie_breaker` hash comes only after, for one task's candidates on different
+  instances.
+- **Records.** No record is new: `rank_breakdown` and the ranked `decision_candidate_not_selected`
+  details carry `chain_head` and the tie-break key ("Dispatch Decision Record"); the developer
+  text is never persisted. Without a chain window and without a tie, every evaluation, its ranks,
+  reasons and details included, is the one before SS-2. No catalog member, configuration key or
+  outcome code of the evaluation is added; a catalog serializes and hashes as before.
+
 ## Task Reserves (Workflow #411 B16 part 2)
 
 A V2 task may declare `reserves: [{pool_id, at_least}]`: the least amount, in the pool's real
@@ -891,9 +953,20 @@ no value keys and stay developer text.
      (`none`/0 for a candidate the stage left untouched); `target_id` and `mode`
      name an applied resource target, `superseded=1` an applied override.
    - The ranking order is `promoted=1` first (ahead of every other candidate),
-     then `total` descending, then `affinity=1`, then `tie_breaker` ascending:
-     the lower `tie_breaker` wins. `saturated=1` when a saturating sum clipped
-     the total (the unsaturated 128-bit sum differs).
+     then `total` descending, then `affinity=1`, then (SS-2, since 0.12.32) the
+     tie-break of "Ties and chain heads" above: the candidate closer to losing
+     its eligibility, then the one with more conditions, then the one declared
+     first; then `tie_breaker` ascending, the lower winning, which now only
+     orders one task's candidates on different instances (they never compete for
+     one instance). `saturated=1` when a saturating sum clipped the total (the
+     unsaturated 128-bit sum differs).
+   - SS-2 (since 0.12.32): ` chain_head=<task id>` follows when the candidate
+     ranks with its chain head's priority and strategic weight; and when
+     `lead=0` (another ranked candidate of the instance has the same total, so
+     the tie-break decided) the winner's key follows: ` tie=<bounded|none|unknown>
+     chances=<n|none> time_left_ms=<n|none> runs_left=<n|none> conditions=<n>
+     declared=<n|none>`. A candidate in no chain window and without a tie keeps
+     the detail of before byte for byte.
    - `lead` is `total` minus the highest total among the instance's other
      ranked candidates, `score_deferred` ones included (`none` without one). It
      is negative when the winner was promoted above a higher total, or when a
@@ -923,7 +996,10 @@ no value keys and stay developer text.
    - Ranked: `why=<code> state=<state> total=<t> behind_by=<winner total - t>
      priority=… aging_ms=… strategic_milli=… urgency_milli=… contention=…
      effective=… score=… utility=… offset=… target=<s|none> promoted=<0|1>
-     tie_breaker=<u64>` (the lower `tie_breaker` wins a tie).
+     tie_breaker=<u64>` (the lower `tie_breaker` wins a tie the SS-2 tie-break
+     leaves), then, SS-2, ` chain_head=<task id>` as in `rank_breakdown` and,
+     when `behind_by=0`, the candidate's own tie-break key, so the two keys
+     side by side show why the winner went first.
    - Others: `why=<code> state=<state> eligibility=<true|false|unknown>`.
    - `why` is the candidate's last reason, the one that settled it
      (`instance_already_selected`, `heavy_scene_budget_deferred`,

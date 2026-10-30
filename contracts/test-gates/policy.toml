@@ -299,6 +299,17 @@ tests = [
     "actingcommand-policy::lib::evaluator::tests::aging_eventually_prevents_lower_priority_starvation",
 ]
 incident = []
+# SS-2 (Alice's ruling 104 points 2, 4 and 5, approved 2026-10-30, #386 comment 6523113979; rd-1029 brief-ss2 tests 1 to 4 and 6; contracts/scheduling/README.md, "Ties and chain heads"; register §1.222; since 0.12.32): of two candidates equal in the ranking the one that loses its eligibility sooner runs (a required window closes sooner, or fewer runs of its own consumption are left above its threshold), and a total one point higher still wins; without a measure more conditions go first, then declared order; declared order decides a full tie whatever the ids and the seed; a successor whose trigger requires its head's success ranks with the head's priority while it has not served the head's latest successful run, and with its own after it or when the dependency is only under an any, its resource term staying its own; a catalog without ties decides byte for byte as before
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_ss2::ss2_t1_of_two_tied_candidates_the_one_closer_to_losing_its_eligibility_runs",
+    "actingcommand-policy::lib::tests::gate_ss2::ss2_t2_without_a_measure_more_conditions_go_first_then_declared_order",
+    "actingcommand-policy::lib::tests::gate_ss2::ss2_t3_declared_order_decides_a_full_tie_in_every_evaluation",
+    "actingcommand-policy::lib::tests::gate_ss2::ss2_t4_a_successor_ranks_with_its_chain_head_in_the_head_run_window",
+    "actingcommand-policy::lib::tests::gate_ss2::ss2_t6_without_ties_the_decisions_are_those_of_before",
+]
+incident = ["#386 SS-2"]
 
 # The intent pins freshness, limits, catalog hash and ledger position
 [[gate]]
@@ -943,6 +954,13 @@ tests = [
     "actingcommand-policy::lib::tests::gate_rl1a::rl1a_t5_an_unclassified_package_warns_and_a_held_one_is_not_scheduled",
 ]
 incident = ["#420 ROUT-L RL-1a"]
+# SS-2 (Alice's ruling 104 point 1; rd-1029 brief-ss2 test 5; contracts/standard-pack-schedule.md, "Two priority tiers"; register §1.222; since 0.12.32): a game whose composed rules use three distinct priority values is one standard_pack_priority_tiers_exceeded warning (game, count 3, limit_count 2) and is composed all the same; two values give no warning; the root is never refused
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_rl1a::ss2_t5_three_priority_values_warn_and_two_do_not",
+]
+incident = ["#386 SS-2"]
 
 # ROUT-L RL-1a (frozen model v1.0 §3.6 "No rules at all is a valid state", §3.5, §6.1 row RL-1a; contracts/standard-pack-schedule.md): no rules, no schedule.json or no bound instance compose a valid empty V2 catalog with no approval
 [[gate]]

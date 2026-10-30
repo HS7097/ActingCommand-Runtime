@@ -206,3 +206,15 @@ requires all six
 (`missing_required_field` at the member). An absent bound serializes, and
 hashes, as nothing at all, so a catalog that writes every bound serializes, and
 hashes, exactly as before.
+
+SS-2 (since 0.12.32; register §1.222; `../README.md`, "Ties and chain heads"):
+no member is added; the order of `tasks` and the shape of a trigger now matter
+to ranking, in V1 as in V2. A task whose trigger requires another task's success
+(`dependency_completed` accepting `succeeded`, reached only through `all`)
+ranks with that chain's head's `priority` and `strategic_weight_milli` while it
+continues the head's latest successful run, and with its own otherwise. Of
+candidates the ranking leaves equal, the one closer to losing its eligibility
+(a required `timeline_active` or `missed` clock closing sooner, or fewer runs of
+its declared `consumes` left above a required threshold or a `reserves` line)
+goes first, then the one with more required conditions, then the one earlier in
+`tasks`. A catalog serializes, and hashes, exactly as before.
