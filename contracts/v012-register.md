@@ -4303,6 +4303,53 @@ back with it, or drop the member first. A dispatch decision record of 0.12.32 th
 | SS5-3 | `config.subsystems` row `fact_unknown_probe` (always on, `config_subsystem_always_on`) | new row value of an existing fact (no shape) | SS-5 | actingd | the composer requires it of a `schedule.json` whose rule writes the member (`FACT_UNKNOWN_PROBE_SUBSYSTEM`); named apart from the reason code `fact_probe` (SS5-2), since a subsystem name must not equal a registered outcome name (outcome guard G5) |
 | SS5-4 | the cross-check of a probe's key against the reading marks of the rule's own package (`probe_keys_marked`, `standard_pack_fact_probes`) | resource-tool check (no shape) | SS-5 | `actinglab standard-pack check`, `package bundle --schedule` | `standard_pack_root_invalid`, `schedule_invalid` at `/rules/<i>/…/on_unknown`; each package read once, metadata only |
 
+### 1.226 Slice WATCH-P (0.12.32): the emulator watch neither restarts nor recognizes an instance its own scheduling pause holds (Alice's ruling 112 of 10-30, 23:2x 「可以，按推荐，没问题」 and 23:3x 「没错」, on the recommendation 「暂停中的实例，监视只看状态、不重启、不识别绑定，和「玩家持有」一样；恢复时照常检查」; production 10-29 21:35 and 21:38: the watch restarted an instance twice while it was paused for a person's own check, and `emulator_control.watch_enabled` was then set false; coordinator work order `rd-1029/brief-116-112-114.md` WATCH-P)
+
+[emulator-control.md](emulator-control.md) ("Emulator watch", "Pauses (WATCH-P)") and
+[scheduling-pause.md](scheduling-pause.md) are the contract. For the watch, ruling 112 replaces
+ruling 35's "a scheduling pause holds only dispatches". The number 1.226 is the coordinator's.
+
+**What.** A poll still reads every discovery-bound instance and records its reading (R2). For an
+instance that its own scheduling pause holds, in any stage (`draining`, `paused`, `released`, a
+restored pause included), it then requests no R3 restart and no EMU-BIND recognition, on either
+recognition path (endpoint pending or bound to another port; bound to the reported port but
+unprepared). Where it would have requested one it records `emulator_autostart_skipped` (info;
+`alias`, `watch_kind`, the new value `skip_reason` `instance_paused`; a `device_state_observed`
+record under the instance and its report line) once per pause revision and `watch_kind`, not
+once per poll. A skip takes no claim, counts against neither bound and records no
+`emulator_watch_restart_exhausted`. The resume adds nothing: its reconnect and self-check run as
+before, and the first poll after the pause is gone applies R3 and EMU-BIND as for any instance.
+The player hold of #429 R-7 is an instance pause, so this covers R-7's watch row.
+
+**Why.** The watch's restart and recognition ran "paused or not"; only the fix-1 recognition path
+excluded the stage `released`. A person who pauses an instance to use it must not have its
+emulator started or its endpoint rebound under them.
+
+**Unchanged.** The global pause holds neither (it is no pause of the instance). The daemon start's
+configured emulator start, IDLE-1's wake and a watch claim requested before the pause began are
+autostart claims that no pause holds, as before. Blackouts, the bound, the idle hold and the
+watch's keys are unchanged; an instance no pause of its own holds is watched byte for byte as in
+0.12.31. **No new code, no configuration key, no persisted state shape, no interface revision.**
+One new outcome key with its vocabulary, because no existing key says why a claim was not
+requested: `pause_reason` names the operator's reason, not the watch's. The watch's memory of the
+skips is one entry per instance (a revision and two flags), never persisted.
+
+**What changes live.** Production holds all five instances under `alice-116-scheduler-stop`. With
+the watch on, each of them that is a configured instance found stopped, or a running one in need of
+a recognition, gets one skip record per pause revision and kind instead of a restart or a
+recognition, so `watch_enabled = false` is no longer needed to keep the watch off paused
+instances; its polls and their readings go on.
+
+**Rollback** (to 0.12.31). Nothing to undo: 0.12.31 reads the new records (the code exists, and an
+outcome's `values` are kept as a map without a key check), and the skip memory is not persisted.
+0.12.31's watch restarts and recognizes paused instances again, so set
+`emulator_control.watch_enabled` false before rolling back while instances are paused.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| WP-1 | the watch's R3 restart and EMU-BIND recognition (both paths) are not requested for an instance its own scheduling pause holds, in any stage; `skip_watch_for_pause`, `instance_pause_revision` (`emulator_watch.rs`) | behaviour (emulator watch) (host gate row "WATCH-P") | WATCH-P | — | polls and `emulator_watch_state_changed` unchanged; no claim, no bound count, no used-up record; resume adds nothing; the global pause, the daemon start's claim, IDLE-1's wake and a claim requested before the pause are unchanged |
+| WP-2 | `skip_reason` (new key, vocabulary `emulator_autostart_skip_reason`: `instance_paused`, enum `WatchSkipReason`) on `emulator_autostart_skipped`, with `watch_kind` | new optional value of an existing code, a new key and vocabulary (no shape change) | WATCH-P | the emulator watch | once per pause revision and `watch_kind`; #429 R-7's `person_takeover` for the daemon start's skip would be a second token of this vocabulary |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -1244,7 +1244,8 @@ the configured starts; the watch ends with the host.
   read's failure text its foreign cause), once per failing streak; the reading stays.
 - **Restarts (R3).** An instance configured with `start_emulator` whose read shows no emulator
   process, whose key no claim holds and on which no autostart or emulator control claim waits
-  (never two starts for one instance at once), is started again, paused or not:
+  (never two starts for one instance at once), is started again unless its own scheduling pause
+  holds it ("Pauses (WATCH-P)" below; the global pause does not):
   `emulator_autostart_queued` (info; `count` 1, `alias`, `attempts`, `limit_count`), then one
   autostart claim marked `watch`, held as a daemon start's claim ("Configured start at daemon
   start"), except that it does not ask whether the binding is pending (an emulator that stopped
@@ -1266,7 +1267,8 @@ the configured starts; the watch ends with the host.
   not, whose read shows its emulator running (Android started and an ADB port reported) while the
   Runtime holds its endpoint pending or bound to another port, is recognized under the same
   conditions as a restart (its key free, no autostart or emulator control claim waiting, not
-  held stopped by its idle action), paused or not (binding an endpoint is no scheduling):
+  held stopped by its idle action), unless its own scheduling pause holds it ("Pauses
+  (WATCH-P)" below; before 0.12.32 paused or not):
   `emulator_autostart_queued` (info; `count` 1, `alias`, `attempts`, `limit_count`,
   `watch_kind` `recognize`), then one autostart claim marked `recognize`. The claim takes no
   network wait and no start turn; inside a blackout of its instance it waits (queued, or holding
@@ -1308,6 +1310,26 @@ the configured starts; the watch ends with the host.
   a failed read ends it as `emulator_autostart_failed`. Every line that ends a recognition
   (`emulator_autostart_failed`, `_interrupted`, `_superseded` too, review L1) carries
   `watch_kind` `recognize`.
+- **Pauses (WATCH-P, since 0.12.32; Alice's ruling 112 of 10-30 on the recommendation
+  「暂停中的实例，监视只看状态、不重启、不识别绑定，和「玩家持有」一样；恢复时照常检查」; production 10-29
+  21:35 and 21:38: the watch restarted an instance twice while it was paused for a person's own
+  check).** For the watch, ruling 112 replaces ruling 35's "a scheduling pause holds only
+  dispatches". An instance that its own scheduling pause holds, in any stage
+  (`draining`, `paused` or `released`, a restored pause included; the player hold of #429 R-7 is
+  such a pause), is polled and recorded as every instance (R2: the reading,
+  `emulator_watch_state_changed`, `emulator_state_read_failed`), but the watch requests no restart
+  (R3) and no recognition for it, neither of an endpoint pending or bound to another port nor of
+  an instance unprepared on the reported port (EMU-BIND fix 1). Where it would have requested
+  one, it records `emulator_autostart_skipped` (info; `alias`, `watch_kind` `restart` or
+  `recognize`, `skip_reason` `instance_paused`; a `device_state_observed` record under the
+  instance and the same report line) once per pause revision and `watch_kind`, not once per
+  poll. A skip requests no claim, counts against neither bound and records no
+  `emulator_watch_restart_exhausted`. The resume adds nothing: its reconnect and self-check run
+  as before ([scheduling-pause.md](scheduling-pause.md)), and the first poll after the pause is
+  gone restarts or recognizes as for any instance, a resume and a new pause starting a new
+  revision. The global pause holds neither. A watch claim requested before the pause began runs
+  as before (a pause never holds an autostart claim, "Configured start at daemon start"). No
+  configuration key: `watch_enabled = false` still stops the polls altogether.
 - **Observe only (R4).** An instance without `start_emulator` is read and recorded, never
   started (EMU-BIND: a running one is recognized). The watch never stops or restarts a running
   emulator, and no record names a device: an emulator instance is its `alias`.
@@ -1335,7 +1357,10 @@ location `emulator_watch`. EMU-BIND adds no code and no configuration key: the v
 `emulator_autostart_queued`, `emulator_autostart_skipped`,
 `emulator_autostart_preparation_failed` and `emulator_watch_restart_exhausted` tells a
 recognition from a restart; since 0.12.28 also on `emulator_autostart_failed`,
-`emulator_autostart_interrupted` and `emulator_autostart_superseded`.
+`emulator_autostart_interrupted` and `emulator_autostart_superseded`. WATCH-P (since 0.12.32) adds
+no code and no configuration key either: the value `skip_reason` (vocabulary
+`emulator_autostart_skip_reason`: `instance_paused`) on `emulator_autostart_skipped` marks a
+restart or recognition the watch did not request because the instance's own pause held it.
 
 ## Client and CLI
 

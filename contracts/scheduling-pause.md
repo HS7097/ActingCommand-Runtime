@@ -73,7 +73,13 @@ configured emulator start, at daemon start or by the emulator watch (`contracts/
 included, never holds or queues it and never makes it yield, so the emulator is started under the
 pause; the pause holds that start's startup package, whose claim waits queued as a gated entry and
 runs after the resume. An instance pause whose hand-back (step (c)) meets such a start holding the
-instance's key waits for it as it waits for an operator's emulator control. A stuck-recovery ladder is admitted only while its instance is not paused; a pause
+instance's key waits for it as it waits for an operator's emulator control. WATCH-P (since 0.12.32,
+Alice's ruling 112, which replaces ruling 35 here for the watch): the emulator watch requests no
+such claim, neither a restart nor a recognition, for an instance its own pause holds in any stage;
+it only reads and records the emulator's status, records the skip once per pause revision
+(`emulator_autostart_skipped`, `skip_reason` `instance_paused`), and after the resume restarts or
+recognizes as before (`contracts/emulator-control.md`, "Emulator watch", "Pauses (WATCH-P)"). The
+daemon start's claim and a claim the watch requested before the pause are unchanged. A stuck-recovery ladder is admitted only while its instance is not paused; a pause
 that arrives while a ladder holds the instance ends the ladder at its next step
 (`recovery_admission_denied`), and its one release lets the pause complete (`contracts/emulator-control.md`, "Stuck-recovery ladder").
 
