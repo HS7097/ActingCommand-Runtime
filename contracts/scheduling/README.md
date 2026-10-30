@@ -824,7 +824,8 @@ their runs go on in parallel (#427-A):
 ## Application Update Hold (UPD-1)
 
 Since 0.12.30 (design `rd-1029/design-upd1.md` §4, §6; Alice's rulings 95 and 96 of
-2026-10-29; register §1.215). When a run meets the game's "client out of date" dialog (an
+2026-10-29; register §1.215). When any run, the readings refresh (fact refresh) and the startup
+package included (register §1.215 UPD-16), meets the game's "client out of date" dialog (an
 `interrupts.json` page with `result: "application_update_required"`,
 [package-reference.md](../package-reference.md)), the Runtime records the instance fact
 `health.application.update_required` true ([instance-fact-store.md](../instance-fact-store.md),
