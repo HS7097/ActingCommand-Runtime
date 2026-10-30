@@ -2,7 +2,9 @@
 
 //! emu-watch (Alice's ruling 35: starting the emulators belongs to the Runtime; one that runs is
 //! used, one that does not is started, and a scheduling pause holds only dispatches; review item
-//! 5): the Runtime watches the emulators of its instances.
+//! 5): the Runtime watches the emulators of its instances. WATCH-P (0.12.32, Alice's ruling 112:
+//! 「暂停中的实例，监视只看状态、不重启、不识别绑定，和「玩家持有」一样；恢复时照常检查」): for the
+//! watch, an instance's own scheduling pause holds its restarts and recognitions too (below).
 //!
 //! - **Start and stop.** One watch thread per Runtime, started by actingd
 //!   (`RuntimeHost::start_emulator_watch`) right after the configured starts are enqueued; it
@@ -21,7 +23,8 @@
 //!   streak; the reading stays.
 //! - **Restarts (R3).** A configured instance (`start_emulator`) whose read shows no emulator
 //!   process, whose key no claim holds and on which no autostart or emulator control claim waits
-//!   (never two starts at once), is started again, paused or not: `emulator_autostart_queued`
+//!   (never two starts at once), is started again unless its own scheduling pause holds it
+//!   (WATCH-P, below; the global pause does not): `emulator_autostart_queued`
 //!   (info, `count` 1), then one autostart claim marked `watch` (`emulator_autostart`), whose
 //!   Start and result are recorded and reported as every configured start's. At most
 //!   `emulator_control.restart_attempts` restarts of one instance within
@@ -34,7 +37,8 @@
 //!   not, whose read shows its emulator running with Android and an ADB port while the Runtime
 //!   holds its endpoint pending or bound to another port, under the same conditions as a restart
 //!   (key free, no autostart or emulator control claim waiting, not held stopped by IDLE-1),
-//!   paused or not, gets one autostart claim marked `recognize` (`emulator_autostart_queued`,
+//!   unless its own scheduling pause holds it (WATCH-P), gets one autostart claim marked
+//!   `recognize` (`emulator_autostart_queued`,
 //!   `watch_kind` `recognize`): on its key the self-check's recognition (#411 A48) binds the
 //!   reported port, awaits the ADB baseline and opens input and capture, then the startup package
 //!   is queued as after a start; it never launches or stops an emulator. Its bound is a restart's
@@ -48,14 +52,26 @@
 //!   `released` nor a #403 fence holds (same bound, same claim). On its key the claim reads the
 //!   status once more and ends as `emulator_autostart_skipped` (`watch_kind` `recognize`, the
 //!   read's values; also a record) without preparing when no recognition is needed any more.
+//! - **Pauses (WATCH-P, 0.12.32; production 10-29 21:35 and 21:38: the watch restarted an
+//!   instance twice while it was paused for a person's own check).** An instance that its own
+//!   scheduling pause holds, in any stage (`draining`, `paused`, `released`; the player hold of
+//!   #429 R-7 is such a pause), is polled and recorded as above (R2), but the watch requests no
+//!   restart and no recognition for it, on either recognition path. A restart or recognition so
+//!   skipped is `emulator_autostart_skipped` (info; `alias`, `watch_kind`, `skip_reason`
+//!   `instance_paused`; also a `device_state_observed` record), once per pause revision and
+//!   kind, not once per poll; it counts against no bound and reports no used-up bound. The resume
+//!   adds nothing: its reconnect and self-check run as before, and the first poll after the pause
+//!   is gone restarts or recognizes as for any instance. A watch claim requested before the pause
+//!   runs as before.
 //! - **Blackouts** (Workflow #386 SR-4a3, `scheduling-blackout.md`, "Complete silence"): the
 //!   polls go on (a status read starts nothing). A configured instance found stopped inside a
 //!   blackout gets its one autostart claim as above, which the routine gate holds until the
 //!   blackout's end (no key, no Start; `emulator_autostart`); while it waits, the watch requests
 //!   none again, so the restart counts once.
 //! - **Codes (#420 S4).** The watch's own codes are the state change and the used-up bound; the
-//!   read failure, the restart's enqueue and a failed thread spawn are existing codes
-//!   (`emulator_state_read_failed`, `emulator_autostart_queued`, `runtime_monitor_spawn_failed`).
+//!   read failure, the restart's enqueue, a skip for a pause and a failed thread spawn are
+//!   existing codes (`emulator_state_read_failed`, `emulator_autostart_queued`,
+//!   `emulator_autostart_skipped`, `runtime_monitor_spawn_failed`).
 //! - **Observe only (R4).** An instance without `start_emulator` is read and recorded (and
 //!   recognized, EMU-BIND), never started. Nothing here stops or restarts a running emulator, and
 //!   nothing names a device: an instance is its alias.
@@ -87,6 +103,9 @@ pub(super) struct EmulatorWatch {
     recognitions: BTreeMap<InstanceId, VecDeque<u64>>,
     /// EMU-BIND: the instances whose used-up recognition bound was reported.
     recognitions_exhausted: BTreeSet<InstanceId>,
+    /// WATCH-P (0.12.32): per instance, the revision of its own scheduling pause whose skipped
+    /// restart and recognition were recorded, and which of the two were.
+    paused_skips: BTreeMap<InstanceId, PausedSkips>,
     /// The instances whose last status read failed (reported once per failing streak).
     unreadable: BTreeSet<InstanceId>,
     /// Test only: the polls finished so far.
@@ -113,6 +132,24 @@ impl VocabularyToken for WatchKind {
             Self::Recognize => "recognize",
         }
     }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// WATCH-P (0.12.32): why the watch requested no claim it would otherwise have requested for an
+    /// instance (vocabulary `emulator_autostart_skip_reason`, the `skip_reason` value of
+    /// `emulator_autostart_skipped`).
+    pub(super) enum WatchSkipReason: "emulator_autostart_skip_reason" {
+        /// The instance's own scheduling pause holds it, in any stage (Alice's ruling 112).
+        InstancePaused => "instance_paused",
+    }
+}
+
+/// WATCH-P (0.12.32): the skips one pause revision of an instance has recorded, by kind.
+#[derive(Clone, Copy)]
+struct PausedSkips {
+    revision: u64,
+    restart: bool,
+    recognize: bool,
 }
 
 /// Whether the watch may start an instance's stopped emulator now (R3's bound).
@@ -164,6 +201,34 @@ impl EmulatorWatch {
         let attempts = window.len();
         exhausted.remove(&instance_id);
         RestartBudget::Allowed { attempts }
+    }
+
+    /// WATCH-P (0.12.32): whether the skip of `kind` for `instance_id`'s pause at `revision` is the
+    /// first of that revision, which marks it recorded. A new revision (the instance resumed and
+    /// paused again) starts over.
+    fn first_paused_skip(
+        &mut self,
+        kind: WatchKind,
+        instance_id: InstanceId,
+        revision: u64,
+    ) -> bool {
+        let skips = self.paused_skips.entry(instance_id).or_insert(PausedSkips {
+            revision,
+            restart: false,
+            recognize: false,
+        });
+        if skips.revision != revision {
+            *skips = PausedSkips {
+                revision,
+                restart: false,
+                recognize: false,
+            };
+        }
+        let recorded = match kind {
+            WatchKind::Restart => &mut skips.restart,
+            WatchKind::Recognize => &mut skips.recognize,
+        };
+        !std::mem::replace(recorded, true)
     }
 }
 
@@ -287,7 +352,10 @@ impl HostShared {
     /// found running with Android and an ADB port while the Runtime holds its endpoint pending or
     /// bound to another port is recognized (`recognize_watched_emulator`); EMU-BIND fix 1
     /// (0.12.28, review M1): so is one bound to the reported port but unprepared on it, whose key
-    /// is idle (`unprepared_on_reported_port`, `instance_key_idle`).
+    /// is idle (`unprepared_on_reported_port`, `instance_key_idle`). WATCH-P (0.12.32, Alice's
+    /// ruling 112): an instance its own scheduling pause holds, in any stage, is read as every
+    /// instance, but gets neither; the skip is recorded once per pause revision and kind
+    /// (`skip_watch_for_pause`).
     fn watch_emulator(
         &self,
         instance_id: InstanceId,
@@ -299,21 +367,70 @@ impl HostShared {
         let Some(state) = self.read_watched_emulator(instance_id, alias)? else {
             return Ok(());
         };
+        let paused = self.instance_pause_revision(alias)?;
         if !state.process_started {
-            return match position {
-                Some(position) => {
+            return match (position, paused) {
+                (None, _) => Ok(()),
+                (Some(_), Some(revision)) => {
+                    self.skip_watch_for_pause(WatchKind::Restart, instance_id, alias, revision)
+                }
+                (Some(position), None) => {
                     self.restart_watched_emulator(position, instance_id, alias, settings, now_ms)
                 }
-                None => Ok(()),
             };
         }
         if self.needs_recognition(instance_id, &state)?
             || (self.unprepared_on_reported_port(instance_id, alias, &state)?
                 && self.instance_key_idle(instance_id)?)
         {
-            return self.recognize_watched_emulator(position, instance_id, alias, settings, now_ms);
+            return match paused {
+                Some(revision) => {
+                    self.skip_watch_for_pause(WatchKind::Recognize, instance_id, alias, revision)
+                }
+                None => {
+                    self.recognize_watched_emulator(position, instance_id, alias, settings, now_ms)
+                }
+            };
         }
         Ok(())
+    }
+
+    /// WATCH-P (0.12.32): the revision of the scheduling pause of the instance `alias` itself, in
+    /// any stage; `None` when none holds it (the global pause is no pause of the instance).
+    fn instance_pause_revision(&self, alias: &str) -> RuntimeHostResult<Option<u64>> {
+        Ok(lock(&self.scheduling_pause, EmulatorWatchLocation::Watch)?
+            .instance_state(alias)
+            .map(|pause| pause.revision))
+    }
+
+    /// WATCH-P (0.12.32, Alice's ruling 112): the restart or recognition (`kind`) the watch does
+    /// not request because the instance's own pause at `revision` holds it. No claim, no count
+    /// against the bound of `kind` and no used-up record; the first skip of the revision and kind
+    /// is `emulator_autostart_skipped` (`alias`, `watch_kind`, `skip_reason` `instance_paused`),
+    /// a `device_state_observed` record under the instance and its report line, and every later
+    /// one records nothing.
+    fn skip_watch_for_pause(
+        &self,
+        kind: WatchKind,
+        instance_id: InstanceId,
+        alias: &str,
+        revision: u64,
+    ) -> RuntimeHostResult<()> {
+        let first = lock(&self.emulator_watch, EmulatorWatchLocation::Watch)?.first_paused_skip(
+            kind,
+            instance_id,
+            revision,
+        );
+        if !first {
+            return Ok(());
+        }
+        self.record_emulator_watch(
+            instance_id,
+            Outcome::new(HostCode::EmulatorAutostartSkipped)
+                .alias(alias)
+                .watch_kind(kind)
+                .skip_reason(WatchSkipReason::InstancePaused),
+        )
     }
 
     /// EMU-BIND fix 1 (0.12.28, review M1): whether the status read `state` asks for the
@@ -325,6 +442,8 @@ impl HostShared {
     /// `released` (the device handed back; the resume's reconnect recognizes it) nor a #403
     /// fence (its ladder, recheck or person) holds it. Whether the instance's key is idle is the
     /// caller's question: the watch asks it (`instance_key_idle`), a recognition claim holds it.
+    /// WATCH-P (0.12.32): a poll asks no recognition of an instance its own pause holds in any
+    /// stage (`watch_emulator`); the stage check here serves the claim's read on its key.
     fn unprepared_on_reported_port(
         &self,
         instance_id: InstanceId,
@@ -463,9 +582,10 @@ impl HostShared {
         Ok(Some(state))
     }
 
-    /// R3: the restart of a configured instance whose emulator the poll found stopped, paused or
-    /// not. Never while a claim holds its key or an autostart or emulator control claim waits for
-    /// it (never two starts at once), and within the bound.
+    /// R3: the restart of a configured instance whose emulator the poll found stopped and that no
+    /// pause of its own holds (WATCH-P; the caller asks). Never while a claim holds its key or an
+    /// autostart or emulator control claim waits for it (never two starts at once), and within the
+    /// bound.
     fn restart_watched_emulator(
         &self,
         position: usize,
@@ -482,7 +602,7 @@ impl HostShared {
 
     /// EMU-BIND (0.12.28): the recognition of an instance whose emulator the poll found running
     /// with Android and an ADB port while the Runtime holds its endpoint pending or bound to
-    /// another port, paused or not (binding an endpoint is no scheduling), under the same
+    /// another port and that no pause of its own holds (WATCH-P; the caller asks), under the same
     /// conditions and bound as a restart, counted apart: one autostart claim marked `recognize`
     /// (`request_watch_recognition`), which starts and stops nothing. `position` is the
     /// instance's place in the configuration, if it names `start_emulator`.
