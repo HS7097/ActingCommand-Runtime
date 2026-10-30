@@ -55,8 +55,16 @@ const SMALL_RECORDS: u64 = 3_000;
 const LARGE_RECORDS: u64 = 12_000;
 // The offline opening's tail on the synthetic roots, shorter than both histories.
 const SYNTHETIC_TAIL: usize = 256;
-// A page of the scale and equivalence tests.
+// A page of the equivalence and live-root tests.
 const PAGE_LIMIT: u16 = 50;
+// A page of the scale test (T2): two pages of each view, with their lookahead, lie within the
+// records both histories share. The generator writes the same records whatever the length, but
+// cuts the small history's last run short at its head and ends it with filler records; of its 76
+// Changes records the first 71 (through record 2 961) are the large history's too. Two pages of 50
+// read 102 Changes rows, more than the small history holds: its next page ended at its head with
+// 26 rows where the large one's was full with 51. Two pages of 30 read 62 rows, through record
+// 2 461, on both.
+const SCALE_PAGE_LIMIT: u16 = 30;
 // The plain roots of the damage and deadline tests: their records and tail, and a record well
 // before the tail (as `gate_ln8.rs`).
 const PLAIN_RECORDS: u64 = 40;
@@ -225,15 +233,16 @@ fn ln_off1_t1_the_opening_reads_the_same_rows_at_both_scales() {
 // T2: each view's first page and the page after it read at most their rows and lookahead, on
 // both histories; across the two pages only the lookahead row of the first (the second's first
 // row) is read twice. A view whose first page is full selects the same records of the history's
-// start on both (the generator writes the same records in the same order whatever the length):
-// it reads the same rows and does the same SQLite work on both (at most 1.5 times).
+// start on both (the generator writes the same records in the same order whatever the length,
+// and the two pages lie within the records both histories share, `SCALE_PAGE_LIMIT`): it reads
+// the same rows and does the same SQLite work on both (at most 1.5 times).
 #[test]
 fn ln_off1_t2_view_pages_read_the_same_rows_at_both_scales() {
     let small_root = synthetic_root(SMALL_RECORDS);
     let large_root = synthetic_root(LARGE_RECORDS);
     let small = offline(small_root.path(), SYNTHETIC_TAIL).expect("the small opening");
     let large = offline(large_root.path(), SYNTHETIC_TAIL).expect("the large opening");
-    let page_rows = 2 * (usize::from(PAGE_LIMIT) + 1);
+    let page_rows = 2 * (usize::from(SCALE_PAGE_LIMIT) + 1);
     for view in LedgerView::ALL {
         let mut read = Vec::new();
         for snapshot in [&small, &large] {
@@ -243,10 +252,10 @@ fn ln_off1_t2_view_pages_read_the_same_rows_at_both_scales() {
                 .project_view_page(
                     &query,
                     ProjectionProfile::Forensic,
-                    &first_request(PAGE_LIMIT, snapshot.latest_sequence()),
+                    &first_request(SCALE_PAGE_LIMIT, snapshot.latest_sequence()),
                 )
                 .expect("a first page");
-            if let Some(next) = next_request(&first, PAGE_LIMIT) {
+            if let Some(next) = next_request(&first, SCALE_PAGE_LIMIT) {
                 snapshot
                     .project_view_page(&query, ProjectionProfile::Forensic, &next)
                     .expect("the next page");
