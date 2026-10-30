@@ -395,12 +395,16 @@ fn delete_record(sequence: u64) -> String {
     )
 }
 
+/// One T4 damage: its name, the SQL that does it at a head, and the code and operation the
+/// writer open and the offline opening both refuse it with.
+type DamageCase = (&'static str, fn(u64) -> String, &'static str, &'static str);
+
 // T4: each damage the writer open refuses in its tail or meta row is refused by the offline
 // opening with the same code and operation; an older record the opening does not read is
 // refused, fatally, by the page that reads it.
 #[test]
 fn ln_off1_t4_the_opening_refuses_what_the_writer_open_refuses() {
-    let cases: [(&str, fn(u64) -> String, &str, &str); 5] = [
+    let cases: [DamageCase; 5] = [
         (
             "a tail record's tag",
             |head| {
