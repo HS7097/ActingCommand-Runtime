@@ -21,7 +21,8 @@ package path and no approval:
 {
   "schema_version": "actingcommand.schedule.v1",
   "requires": [ "<subsystem>", ... ],
-  "rules":    [ a V2 task without scope, entrypoint and procedure_ref, with "package_id" ],
+  "rules":    [ a V2 task without scope, entrypoint and procedure_ref, with "package_id"
+                and an optional "maintenance": true ],
   "pools":    [ a V2 pool without scope, with an optional "server" ],
   "activity": [ a V2 activity profile without scope, with an optional "server" ],
   "timeline": [ a V2 timeline event without scope, with an optional "server" ],
@@ -39,6 +40,7 @@ Every member but `schema_version` may be absent, which means empty. The reader
 | `schema_version` is `actingcommand.schedule.v1`; no member besides the seven above | `schedule_invalid` |
 | No member named `scope` at any depth of a rule, pool, profile or event (the item's own and those of predicate nodes such as `fact`, `record_deadline`, `fact_time_reached`) | `schedule_invalid` at the `scope` member |
 | A rule has a string `package_id` (1–128 bytes, no control character), no `entrypoint` and no `procedure_ref`; its `instance_overrides` is absent or empty | `schedule_invalid` at the member |
+| A rule's `maintenance` (SS-2c, since 0.12.32; "Judged rules" below), when written, is `true` | `schedule_invalid` at `maintenance` |
 | Every rule, pool, profile and event is an object with a string `id`, unique within its list | `schedule_invalid` at `id`; a repeated id is `rule_id_conflict` |
 | A pool, profile or event names its `server`, if at all, as a game-root identifier | `schedule_invalid` at `server` |
 | `requires` lists at most 32 distinct names of 1–64 bytes of `[a-z][a-z0-9_]*` | `schedule_invalid` at the entry |
@@ -145,16 +147,47 @@ itself is refused, `schedule_invalid` at `/rules/<i>/benefit_judged`. Where a va
 yet the resource side writes the marker `"pending"` (a pool's `valuation`, an entry's `amount`;
 [scheduling/v2/README.md](scheduling/v2/README.md)); it changes nothing but the count below.
 
+**The maintenance declaration** (SS-2c, since 0.12.32; Alice's ruling 104 point 1: the
+maintenance tier is startup, return home, recovery, readings maintenance and store update,
+everything else business; register §1.227). The root files give a package a maintenance role
+(item 1) for only part of that tier: no root file names a store update package, and a readings
+package beyond a server's recognition package, or a return-home or recovery package that no
+navigation edge, recovery chain or bundle use names, is business by item 1. So a rule may
+declare itself maintenance:
+
+```json
+{"id": "<rule>", "package_id": "<package>", "maintenance": true, ...}
+```
+
+- The composer then does not mark the rule `benefit_judged`, whatever its package's role: it is
+  unjudged, ranks in the maintenance tier in the order of before and runs as it ran before
+  SS-2b. Nothing else changes: not its `priority`, its ranking within the tier, nor any gate.
+- The member is `schedule.json`'s, not a V2 task member: the reader takes it out of the rule
+  (`ScheduleRule::maintenance`), so the composed task never carries it, and a file that does not
+  write it composes byte for byte as before (same documents, catalog hash and rules digest). A
+  raw V2 catalog marks its tasks with `benefit_judged` itself, as before; a V2 task that writes
+  `maintenance` is `unknown_field`.
+- Only `true` declares. Any other value, `false` included, is refused, `schedule_invalid` at
+  `/rules/<i>/maintenance`: `false` on a rule whose package is maintenance-role would read as
+  "business" and change nothing (the role still exempts it), and one spelling for "not
+  declared", no member, keeps the files uniform for the resource side's check.
+- Declared on a rule whose package is maintenance-role already, it is redundant and harmless:
+  the composition is byte for byte the one without it.
+- The declaration is per rule, the role per package: two rules of one package may differ.
+
 - **Coverage** (the measure of 「业务覆盖完整」). Each judged rule of the file (its package not
-  maintenance-role, not held) counts once, whatever the instances it is composed for: *complete*
+  maintenance-role, not declared maintenance, not held) counts once, whatever the instances it
+  is composed for: *complete*
   when it has an entry, every entry its quantity and every pool it touches a valuation;
   *pending* when it is not complete and every value it lacks is the marker; *undeclared* when it
   has no `produces` and no `consumes` entry, or touches a pool with neither a valuation nor the
   marker. Each undeclared rule is one `standard_pack_benefit_undeclared` warning (keys `game`,
   `task_id` the rule's id; `pool_id` the pool without a valuation, when that is why), a new code
   because no code says "a business rule declares no value": `standard_pack_package_unclassified`
-  names a package nothing schedules. Only the resource tools report the coverage and these
-  warnings ("Tools"); the Runtime's workbench records neither.
+  names a package nothing schedules. SS-2c: *maintenance_declared* counts the rules, not held,
+  that declare themselves maintenance, whatever their package's role; none of them is judged, so
+  none counts as complete, pending or undeclared. Only the resource tools report the coverage and
+  these warnings ("Tools"); the Runtime's workbench records neither.
 
 ## Composition
 
@@ -185,7 +218,8 @@ each game root that holds `schedule.json`, that file's bytes, the root as
    and that of each predicate node that reads a fact, the nodes with a `fact_key`); a rule's
    `entrypoint.operation_id` is `operation.package.run`, its `procedure_ref` is
    `package.<package_id>`, and its `instance_overrides` is empty; SS-2b: a rule whose package
-   is not maintenance-role gains `benefit_judged: true` ("Judged rules" above).
+   is not maintenance-role gains `benefit_judged: true` ("Judged rules" above), SS-2c: unless it
+   declares itself maintenance (`maintenance`, which the composed task does not carry).
 4. **Ids.** An item copied to exactly one instance keeps the file's id, so one instance per
    (game, server) composes ids byte-identical to the file. An item copied to two or more
    instances gets the id `<id>@<alias>` in each copy; every reference inside that copy (an
@@ -222,13 +256,28 @@ tier are ordered by the ranking and its tie-break, the rules' order in this file
 (since 0.12.32): the evaluator ranks the maintenance tier (the unmarked rules) before the
 business tier (the rules marked `benefit_judged`, "Judged rules" above), whatever their
 `priority`, and the judged business rules by their net benefit per expected millisecond
-([scheduling/README.md](scheduling/README.md), "Net benefit within a tier"). When the
+([scheduling/README.md](scheduling/README.md), "Net benefit within a tier"). SS-2c (since
+0.12.32): a maintenance rule whose package has no maintenance role by the root files declares
+`"maintenance": true` ("Judged rules", "The maintenance declaration"), so that it stays in the
+maintenance tier; its `priority` is still the high value of its tier. When the
 rules a game composes for its bound instances use more than two distinct `priority` values, the
 composition reports one `standard_pack_priority_tiers_exceeded` warning (keys `game`, `count` the
 number of values, `limit_count` 2) after the unclassified-package warnings, and composes and
 schedules the game as before: it never refuses the root. `actinglab standard-pack check` and
 `compose` and `package bundle --schedule` list it in `warnings`; the Runtime's workbench does not
 record it.
+
+SS-2c (since 0.12.32): when they use exactly two values, a rule that declares itself maintenance
+and carries the lower value, or a judged rule (no declaration, its package not maintenance-role)
+that carries the higher, is one `standard_pack_priority_tier_mismatch` warning (keys `game`,
+`task_id` the rule's id), in file order: a consistency hint for the resource side, most often a
+maintenance rule that lacks its declaration (its candidates would wait for values a maintenance
+task never declares). A rule whose package is maintenance-role and that declares nothing is in
+neither case. It is never a refusal and changes nothing: the evaluator reads the tier from the
+mark, not from the value. A new code, because no code says "a rule's declaration and its tier
+disagree": `standard_pack_priority_tiers_exceeded` counts values. Only `actinglab standard-pack
+check` and `package bundle --schedule` report it, after the `standard_pack_benefit_undeclared`
+warnings; `standard-pack compose` and the Runtime's workbench do not.
 
 ## Tools
 
@@ -251,7 +300,10 @@ record it.
   SS-2b (since 0.12.32): both answer `benefit_coverage: {complete, pending, undeclared}`, the
   game's judged rules ("Judged rules"), and list one `standard_pack_benefit_undeclared` per
   undeclared rule in `warnings`, after the composition's other warnings. Nothing is refused.
-  `standard-pack compose` reports neither.
+  `standard-pack compose` reports neither. SS-2c (since 0.12.32): `benefit_coverage` also
+  answers `maintenance_declared`, the rules that declare themselves maintenance, and `warnings`
+  ends with one `standard_pack_priority_tier_mismatch` per rule whose declaration disagrees with
+  its tier ("Two priority tiers"); a `maintenance` of another shape is refused as above.
 - `actinglab standard-pack compose --root <standard_packs.root> --instance
   <alias>=<game>/<server>... --out <new directory>` composes the game roots below `--root` for
   the given bindings (`--instance` once per bound instance; given after the command's words it is
@@ -387,7 +439,10 @@ checks them), and the composer fills the scope:
   `then.run` or feature package), so the composer marks its rule `benefit_judged` like a
   business rule ("Judged rules"). Its candidate is then `benefit_unknown` until the rule declares
   values, and the held instance waits (the tools count the rule as undeclared). Register §1.225
-  names what the resource side, or a later slice, must decide.
+  names what the resource side, or a later slice, must decide. SS-2c (since 0.12.32): the store
+  update rule is a maintenance task (Alice's ruling 104 point 1), so it declares
+  `"maintenance": true` ("The maintenance declaration"); it is then not judged and runs as it
+  did before SS-2b.
 
 ## What does not change
 

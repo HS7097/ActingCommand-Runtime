@@ -324,6 +324,14 @@ tests = [
     "actingcommand-policy::lib::tests::gate_ss2b::ss2b_t8_the_pending_markers_validate_in_v2_and_bad_shapes_are_refused",
 ]
 incident = ["#386 SS-2b"]
+# SS-2c (Alice's ruling 104 point 1; rd-1029 brief-ss2c tests 1 and 2; contracts/standard-pack-schedule.md, "The maintenance declaration"; contracts/scheduling/README.md, "Net benefit within a tier"; register §1.227; since 0.12.32): a schedule.json rule that declares "maintenance": true composes without benefit_judged whatever its package's role and nothing else of it changes; it ranks in the maintenance tier, decides as in a catalog without a mark and is dispatched while its undeclared sibling is judged and benefit_unknown; declared on a maintenance-role package it composes byte for byte as without the declaration
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_ss2c::ss2c_t1_a_declared_rule_composes_unmarked_and_runs_while_its_sibling_is_judged",
+    "actingcommand-policy::lib::tests::gate_ss2c::ss2c_t2_a_declaration_on_a_maintenance_role_rule_changes_nothing",
+]
+incident = ["#386 SS-2c"]
 
 # The intent pins freshness, limits, catalog hash and ledger position
 [[gate]]
@@ -995,6 +1003,18 @@ tests = [
     "actingcommand-policy::lib::tests::gate_ss2b::ss2b_t9_the_composer_marks_the_judged_rules_and_counts_their_coverage",
 ]
 incident = ["#386 SS-2b"]
+# SS-2c (rd-1029 brief-ss2c tests 3 to 6; contracts/standard-pack-schedule.md, "The file", "The maintenance declaration", "Two priority tiers" and "Tools"; register §1.227; since 0.12.32): a rule's maintenance of any value but true (false included) is standard_pack_root_invalid, schedule_invalid at /rules/<i>/maintenance, by the reader, the composer and the tools, and a V2 task that writes it is unknown_field; a file without the member composes byte for byte as SS-2b composes it; the coverage counts a declared rule as not judged and the declared rules as maintenance_declared; with exactly two priority values a declared rule on the lower and a judged rule on the higher are one standard_pack_priority_tier_mismatch each, never a refusal, and none with one or three values
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_ss2c::ss2c_t3_a_declaration_of_another_shape_is_refused_at_the_member",
+    "actingcommand-policy::lib::tests::gate_ss2c::ss2c_t4_a_schedule_without_the_member_composes_as_with_ss2b_alone",
+    "actingcommand-policy::lib::tests::gate_ss2c::ss2c_t5_the_coverage_counts_a_declared_rule_as_not_judged",
+    "actingcommand-policy::lib::tests::gate_ss2c::ss2c_t6_a_declaration_against_the_two_priority_values_warns_and_composes",
+    "actingcommand-resource-tooling::lib::gate_ss2c::ss2c_t3_the_check_refuses_a_declaration_of_another_shape",
+    "actingcommand-resource-tooling::lib::gate_ss2c::ss2c_t5_t6_the_check_counts_declared_rules_apart_and_warns_of_a_tier_mismatch",
+]
+incident = ["#386 SS-2c"]
 
 # ROUT-L RL-1a (frozen model v1.0 §3.6 "No rules at all is a valid state", §3.5, §6.1 row RL-1a; contracts/standard-pack-schedule.md): no rules, no schedule.json or no bound instance compose a valid empty V2 catalog with no approval
 [[gate]]

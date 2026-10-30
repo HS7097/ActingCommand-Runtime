@@ -645,6 +645,8 @@ fn ss2b_t9_the_composer_marks_the_judged_rules_and_counts_their_coverage() {
                 complete: 1,
                 pending: 2,
                 undeclared: 2,
+                // SS-2c (register §1.227): the count of rules declaring themselves maintenance.
+                maintenance_declared: 0,
             }
         )]
     );

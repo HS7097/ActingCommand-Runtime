@@ -112,4 +112,7 @@ mod tests {
     // SS-2b (0.12.32; register §1.225): business candidates rank by net benefit within their tier,
     // and a candidate whose value is unknown or not positive is not dispatched.
     mod gate_ss2b;
+    // SS-2c (0.12.32; register §1.227): a `schedule.json` rule that declares itself maintenance is
+    // not judged by net benefit.
+    mod gate_ss2c;
 }

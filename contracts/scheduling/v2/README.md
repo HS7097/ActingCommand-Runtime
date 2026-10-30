@@ -239,7 +239,9 @@ SS-2b (since 0.12.32; register §1.225; `../README.md`, "Net benefit within a ti
   candidate (unless it ranks with a chain head or is a manual request) is judged by its net
   benefit within its tier and is not dispatched while that benefit is unknown or not positive.
   With `false` it is as without the member. The standard-pack composer writes `true` on every
-  rule whose package is not maintenance-role, and refuses a rule that writes it itself. A V1
+  rule whose package is not maintenance-role and that does not declare itself maintenance
+  (SS-2c, since 0.12.32: the `schedule.json` rule member `"maintenance": true`, which is no V2
+  task member and is `unknown_field` here), and refuses a rule that writes it itself. A V1
   document that names it is refused as an unknown field at the member.
 - A pool's `valuation` may be the string `"pending"`, and an effect's `amount` (either
   direction, as the effect's one quantity) may be `"pending"`: the explicit marker that the

@@ -444,6 +444,13 @@ crate::outcome_codes! {
         // `game`, `task_id` the rule; optional `pool_id`). Its candidates are not dispatched
         // until it does. The policy composer finds it; the resource tools report it.
         StandardPackBenefitUndeclared => "standard_pack_benefit_undeclared": warning / declaration_error,
+        // SS-2c (register §1.227): a game whose composed rules use exactly two priority values
+        // has a rule whose tier by declaration disagrees with its value: a rule that declares
+        // itself maintenance carries the lower value, or a judged rule (no declaration, its
+        // package not maintenance-role) the higher (keys `game`, `task_id` the rule). A hint
+        // only; the root is composed as before. The policy composer finds it; the resource tools
+        // report it.
+        StandardPackPriorityTierMismatch => "standard_pack_priority_tier_mismatch": warning / declaration_error,
         // Workflow #373 NAV-6: a standard-pack root file breaks its shape, a limit or a
         // reference (keys `game`, `path`, `standard_pack_problem`, `json_pointer`). The Runtime's
         // root reader and check-config report it; the resource tools share the same check.

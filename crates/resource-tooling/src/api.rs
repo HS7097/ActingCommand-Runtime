@@ -64,11 +64,13 @@ pub struct StandardPackCheckResponse {
     /// package, OCR target and shared read whose chains differ; then (Workflow #411 B15) one
     /// `package_bundle_remedy_invalid` per remedy finding. With `schedule.json`, the
     /// composition's warnings follow, then (SS-2b) one `standard_pack_benefit_undeclared` per
-    /// judged rule that declares no value.
+    /// judged rule that declares no value, then (SS-2c) one `standard_pack_priority_tier_mismatch`
+    /// per rule whose maintenance declaration disagrees with its tier.
     pub warnings: Vec<actingcommand_contract::outcome::Outcome>,
     /// SS-2b (register §1.225): with `schedule.json`, how many of the game's judged rules (their
-    /// package is not maintenance-role) have complete values, how many are pending, and how many
-    /// declare none. Absent without `schedule.json`.
+    /// package is not maintenance-role and, SS-2c, they do not declare themselves maintenance)
+    /// have complete values, how many are pending, and how many declare none; SS-2c: and how many
+    /// rules declare themselves maintenance. Absent without `schedule.json`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub benefit_coverage: Option<actingcommand_policy::BenefitCoverage>,
 }
@@ -88,11 +90,13 @@ pub struct PackageBundleResponse {
     /// and store step that taps a fixed place; Workflow #411 B15: with any root file, one
     /// `package_bundle_remedy_invalid` per remedy finding; with `--schedule`, the composition's
     /// warnings, then (SS-2b) one `standard_pack_benefit_undeclared` per judged rule that
-    /// declares no value. Absent when there is none.
+    /// declares no value, then (SS-2c) one `standard_pack_priority_tier_mismatch` per rule whose
+    /// maintenance declaration disagrees with its tier. Absent when there is none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<actingcommand_contract::outcome::Outcome>,
     /// SS-2b (register §1.225): with `--schedule`, how many of the game's judged rules have
-    /// complete values, how many are pending, and how many declare none. Absent without it.
+    /// complete values, how many are pending, and how many declare none; SS-2c: and how many
+    /// rules declare themselves maintenance. Absent without it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub benefit_coverage: Option<actingcommand_policy::BenefitCoverage>,
 }

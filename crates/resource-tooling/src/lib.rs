@@ -61,6 +61,12 @@ mod gate_386_cf5;
 #[cfg(test)]
 mod gate_ss2b;
 
+// SS-2c (register §1.227): standard-pack check counts the rules declared maintenance apart, warns
+// of a rule in the other tier than its declaration says, and refuses a declaration of another
+// shape.
+#[cfg(test)]
+mod gate_ss2c;
+
 // Workflow #428 CFL-2: standard-pack check names a target whose chain differs from its shared
 // read, with and without `pages.json`.
 #[cfg(test)]
