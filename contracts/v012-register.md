@@ -4240,6 +4240,69 @@ the seeded hash.
 | SS2-3 | the allocation order `allocation_order` (the round's sort and the reserve gate's): `promoted`, `total`, `affinity`, `TieKey::order` (bounded first, chances, time left, runs left, more conditions, declared position), then `tie_breaker`, task id, instance id | behaviour (evaluation) | SS-2 | — | the Runtime's own fact refresh task has no key and comes after every declared task in a tie |
 | SS2-4 | `rank_breakdown` and ranked `decision_candidate_not_selected` details end with ` chain_head=<id>` for an inheriting candidate and, on a tie (`lead=0` / `behind_by=0`), ` tie=<bounded\|none\|unknown> chances=… time_left_ms=… runs_left=… conditions=… declared=…` | developer text (never persisted) | SS-2 | the policy evaluator | absent otherwise, so a decision without a chain window or a tie keeps its bytes |
 
+### 1.223 Slice SS-5 (0.12.32): a package's own unknown fact lets its task run once per unknown period (the coordinator's rule of 10-28, memory 「自读事实不能当本包的门」: a self-read fact must not gate its own package forever; Alice's ruling 100, #386 comment 6490879952: dispatch follows live account state; design `rd-1029/design-sch-state.md` §4.6 and the SS-5 entry of §5, `rd-1029/plan-state-driven.md` SS-5; coordinator work order `rd-1029/brief-ss5-lnoff1.md` SS-5)
+
+[scheduling/README.md](scheduling/README.md) ("Self-read fact probe"; "Why A Candidate Does Not
+Run"), [scheduling/v2/README.md](scheduling/v2/README.md),
+[standard-pack-schedule.md](standard-pack-schedule.md) ("Self-read fact probes") and
+[actingd-check-config.md](actingd-check-config.md) are the contract. The number 1.223 is the
+coordinator's.
+
+**What.** A `fact` predicate may carry `on_unknown: "probe"` (V2 only). It names a fact only the
+task's own package reads (a reading mark of that package: a clear count, an activity level, a slot
+count). While the fact is unknown the predicate is true once per unknown period, with `fact_probe`,
+so the task runs and its run reads the fact; no fact refresh is asked for the key. The period
+begins at the later of the latest occurrence of a timeline reset that clears the key and the end of
+an expired reading's freshness; a successful run of the task dispatched after that serves it, and
+the predicate is then false (`fact_probe` with `served_by_dispatch_unix_ms`, no wake) until a
+reading, the next reset or an expiry. A failed or cancelled run serves nothing (S1's retry, backoff
+and limits bound it, as for every failure). A non-probe unknown fact keeps its trigger Unknown and
+asks the maintenance package for its key, as before.
+
+**Guards.** The compiler refuses a probe no run of the task can read or whose truth would not admit
+the task, each `predicate_uncomputable` at `on_unknown`: a scope other than an instance, a key that
+is no reading-mark key (`resource.`, `inventory.`), a place below `not` or in the `feedback_stop`;
+a V1 document is refused `unknown_field` at the member. The compiler sees no package, so the key
+against the rule's own package is checked where the rule meets its package: `actinglab
+standard-pack check` and `package bundle --schedule` read the package's marks with the Runtime's
+metadata reader and refuse a key the package does not mark (a key only another package reads, or
+none), `standard_pack_root_invalid` / `schedule_invalid` at `on_unknown` (the UPD-1 store-update
+cooldown rule is checked at the same place). A `schedule.json` that writes the member requires
+the subsystem `fact_unknown_probe`.
+
+**Why.** Missing or expired, such a fact made its gate Unknown, the maintenance package cannot read
+it, and only a run of the task would: a first-run deadlock; the resource side worked around it with
+result keys.
+
+**Unchanged.** Every predicate without the member, the fact refresh (its demand, keys and gates),
+the ranking and every gate, placement and admission; game neutrality; the one-way rule (nothing in
+the resource layer reads it). **No new configuration key, no persisted ledger or state shape, no
+wire or interface revision.** One outcome code, `fact_probe` (info; `fact_key`, `unknown_reason`;
+optional `served_by_dispatch_unix_ms`, whose key description now names the probe too), because no
+code says "an unknown fact admits its task" or "the probe of this period was served":
+`fact_time_served` belongs to `fact_time_reached` and requires its key, and the `fact_refresh_*`
+codes speak of the maintenance package. One code with an optional value covers both verdicts
+(#420 S4). A catalog without the member evaluates, serializes and hashes exactly as before.
+
+**What changes live.** Nothing until the resource side writes the member (RS-5): no deployed
+`schedule.json` can hold it, since 0.12.31 and every Runtime before refuse it.
+
+**Rollback** (to 0.12.31). Before the resource side writes the member: nothing to undo, no ledger,
+state, configuration or catalog shape is new and `fact_probe` is a reason of in-memory decisions
+and of the existing dispatch decision records. After it: 0.12.31 does not name the subsystem
+`fact_unknown_probe`, so its composer refuses that `schedule.json` (`schedule_requires_missing`),
+records `standard_pack_root_invalid` and keeps the game's last good rules; roll the resource side
+back with it, or drop the member first. A dispatch decision record of 0.12.32 that holds
+`fact_probe` reads back on 0.12.31 as `outcome_relay_unregistered` with the spelling as
+`raw_code`, as every code an older build does not list.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SS5-1 | `fact.on_unknown` (optional, `"probe"`; `PredicateSpec::Fact`, `FactUnknownRule`, `contracts/scheduling/v2/common.schema.json`) | catalog format addition (no ledger shape) | SS-5 | the resource side (RS-5) | V2 only; instance scope, a `resource.`/`inventory.` key, in the trigger outside every `not`; absent serializes as nothing |
+| SS5-2 | `fact_probe` (info / `none`; `fact_key`, `unknown_reason` required, `served_by_dispatch_unix_ms` optional) | new outcome code (`PolicyCode`, block `SS-5`) | SS-5 | the policy evaluator | layer `policy`, review `pending`; without the optional value the predicate is true, with it false and `trigger_false` follows when it decides the trigger |
+| SS5-3 | `config.subsystems` row `fact_unknown_probe` (always on, `config_subsystem_always_on`) | new row value of an existing fact (no shape) | SS-5 | actingd | the composer requires it of a `schedule.json` whose rule writes the member (`FACT_UNKNOWN_PROBE_SUBSYSTEM`); named apart from the reason code `fact_probe` (SS5-2), since a subsystem name must not equal a registered outcome name (outcome guard G5) |
+| SS5-4 | the cross-check of a probe's key against the reading marks of the rule's own package (`probe_keys_marked`, `standard_pack_fact_probes`) | resource-tool check (no shape) | SS-5 | `actinglab standard-pack check`, `package bundle --schedule` | `standard_pack_root_invalid`, `schedule_invalid` at `/rules/<i>/…/on_unknown`; each package read once, metadata only |
+
 ### 1.226 Slice WATCH-P (0.12.32): the emulator watch neither restarts nor recognizes an instance its own scheduling pause holds (Alice's ruling 112 of 10-30, 23:2x 「可以，按推荐，没问题」 and 23:3x 「没错」, on the recommendation 「暂停中的实例，监视只看状态、不重启、不识别绑定，和「玩家持有」一样；恢复时照常检查」; production 10-29 21:35 and 21:38: the watch restarted an instance twice while it was paused for a person's own check, and `emulator_control.watch_enabled` was then set false; coordinator work order `rd-1029/brief-116-112-114.md` WATCH-P)
 
 [emulator-control.md](emulator-control.md) ("Emulator watch", "Pauses (WATCH-P)") and

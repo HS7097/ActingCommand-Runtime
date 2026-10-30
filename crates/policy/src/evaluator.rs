@@ -23,10 +23,10 @@ use crate::remedy::ProviderView;
 use crate::resource_targets::{InstanceTargetPolicy, TargetEffect, TargetPolicyState};
 use crate::{
     ActivityProfile, ClockSchedule, ClockSource, Comparison, CompiledCatalog, FactComparand,
-    FactReference, FactScalar, FactValue, LoadProfile, MAX_PRIORITY_OFFSET_MILLI, MAX_TEXT_BYTES,
-    ManualOffset, MissedSlotRule, ObservationRef, PoolCapacity, PoolProjection, PoolSpec,
-    PredicateSpec, PrioritySelection, ProjectionComparand, RemedyPlan, ResourceEffectSpec,
-    ScopeSelector, TargetMode, TaskSpec, TaskTerminalState, TimelineEvent,
+    FactReference, FactScalar, FactUnknownRule, FactValue, LoadProfile, MAX_PRIORITY_OFFSET_MILLI,
+    MAX_TEXT_BYTES, ManualOffset, MissedSlotRule, ObservationRef, PoolCapacity, PoolProjection,
+    PoolSpec, PredicateSpec, PrioritySelection, ProjectionComparand, RemedyPlan,
+    ResourceEffectSpec, ScopeSelector, TargetMode, TaskSpec, TaskTerminalState, TimelineEvent,
 };
 
 // Workflow #386 SR-4a1 (SCH-M §3.2 D-1, D-6): the pure blackout and day-boundary judgements.
@@ -4216,8 +4216,9 @@ fn score_candidates(
     Ok(scores)
 }
 
-/// The instance fact families recognition writes: the realistic keys (model §3.1).
-const REALISTIC_FACT_PREFIXES: [&str; 2] = ["resource.", "inventory."];
+/// The instance fact families recognition writes: the realistic keys (model §3.1). SS-5: the
+/// keys a reading mark writes, so the only keys `on_unknown: probe` may name.
+pub(crate) const REALISTIC_FACT_PREFIXES: [&str; 2] = ["resource.", "inventory."];
 
 /// What a candidate the document met unknown inputs for carries, by the first row of model
 /// §3.7 that matches:
@@ -5296,24 +5297,34 @@ fn evaluate_predicate(
             comparison,
             value,
             max_age_ms,
+            on_unknown,
         } => {
+            // SS-5: an unknown fact makes the predicate unknown, or with `on_unknown: probe` gives
+            // the probe's verdict. `expired_at` is the end of the reading's freshness when the
+            // reading is past it.
+            let mut unknown = |unknown_reason: UnknownReason, expired_at: Option<u64>| {
+                unknown_fact(
+                    *on_unknown,
+                    scope,
+                    fact_key,
+                    unknown_reason,
+                    expired_at,
+                    task_state,
+                    facts,
+                    time,
+                    timeline_events,
+                    &mut *reasons,
+                )
+            };
             let observation = facts
                 .facts
                 .iter()
                 .find(|fact| fact.scope == *scope && fact.fact_key == *fact_key);
             let Some(observation) = observation else {
-                return Ok(PredicateEvaluation::unknown(DetectionSuggestion {
-                    scope: scope.clone(),
-                    fact_key: fact_key.clone(),
-                    reason: "fact_missing".to_owned(),
-                }));
+                return unknown(UnknownReason::FactMissing, None);
             };
             if observation.confidence_milli == 0 {
-                return Ok(PredicateEvaluation::unknown(DetectionSuggestion {
-                    scope: scope.clone(),
-                    fact_key: fact_key.clone(),
-                    reason: "fact_low_confidence".to_owned(),
-                }));
+                return unknown(UnknownReason::FactLowConfidence, None);
             }
             let max_age_expiration = max_age_ms
                 .map(|max_age| {
@@ -5330,19 +5341,16 @@ fn evaluate_predicate(
                 })
                 .transpose()?;
             let fresh_until = min_wake(max_age_expiration, observation.expires_at_unix_ms);
-            if fresh_until.is_some_and(|expiration| time.unix_ms > expiration) {
-                return Ok(PredicateEvaluation::unknown(DetectionSuggestion {
-                    scope: scope.clone(),
-                    fact_key: fact_key.clone(),
-                    reason: if observation
-                        .expires_at_unix_ms
-                        .is_some_and(|expiration| time.unix_ms > expiration)
-                    {
-                        "fact_expired".to_owned()
-                    } else {
-                        "fact_stale".to_owned()
-                    },
-                }));
+            if let Some(expiration) = fresh_until.filter(|expiration| time.unix_ms > *expiration) {
+                let unknown_reason = if observation
+                    .expires_at_unix_ms
+                    .is_some_and(|expiration| time.unix_ms > expiration)
+                {
+                    UnknownReason::FactExpired
+                } else {
+                    UnknownReason::FactStale
+                };
+                return unknown(unknown_reason, Some(expiration));
             }
             // Workflow #355 D12: an observed kind the predicate does not compare makes this
             // predicate Unknown; it no longer fails the whole evaluation. #386 CF-4: a fact
@@ -5352,11 +5360,7 @@ fn evaluate_predicate(
                 FactComparand::Fact(_) => matches!(observation.value, FactValue::Integer(_)),
             };
             if !kind_matches {
-                return Ok(PredicateEvaluation::unknown(DetectionSuggestion {
-                    scope: scope.clone(),
-                    fact_key: fact_key.clone(),
-                    reason: SharedCode::TypeMismatch.as_str().to_owned(),
-                }));
+                return unknown(UnknownReason::TypeMismatch, None);
             }
             let (truth, fresh_until) = match value {
                 FactComparand::Value(value) => (
@@ -5674,6 +5678,86 @@ fn evaluate_predicate(
             Ok(result)
         }
     }
+}
+
+/// SS-5 (`contracts/scheduling/README.md`, "Self-read fact probe"): a `fact` predicate whose fact
+/// at (`scope`, `fact_key`) is unknown for `unknown_reason`. Without `on_unknown` the predicate is
+/// unknown, with the suggestion that asks for a reading, as before. With `on_unknown: probe` the
+/// fact is one the task's own package reads, so no reading is asked for:
+///
+/// - the fact's unknown period began at the later of the latest occurrence, at or before the
+///   evaluation, of a timeline reset that clears the key in this scope, and `expired_at`, the end
+///   of the freshness of a reading that is past it (neither: the key was never cleared);
+/// - the task served the period when its own latest run (`task_state`, which no reset clears)
+///   succeeded and was dispatched after that start (or at all, when there is none): then the
+///   predicate is false, no wake, until a reading, a reset or an expiry begins a new period;
+/// - otherwise it is true: the task is admitted, and its run reads the fact.
+///
+/// Either way the decision carries `fact_probe`, with `served_by_dispatch_unix_ms` when served.
+#[allow(clippy::too_many_arguments)]
+fn unknown_fact(
+    on_unknown: Option<FactUnknownRule>,
+    scope: &ScopeSelector,
+    fact_key: &str,
+    unknown_reason: UnknownReason,
+    expired_at: Option<u64>,
+    task_state: Option<&TaskRuntimeSnapshot>,
+    facts: &EvaluationFacts,
+    time: EvaluationTime,
+    timeline_events: &BTreeMap<&str, &TimelineEvent>,
+    reasons: &mut Vec<DecisionReason>,
+) -> PolicyEvaluationResult<PredicateEvaluation> {
+    let Some(FactUnknownRule::Probe) = on_unknown else {
+        return Ok(PredicateEvaluation::unknown(DetectionSuggestion {
+            scope: scope.clone(),
+            fact_key: fact_key.to_owned(),
+            reason: unknown_token(unknown_reason).to_owned(),
+        }));
+    };
+    let mut period_start = expired_at;
+    for event in timeline_events.values() {
+        if event.invalidates_fact_prefixes.is_empty()
+            || !scope_covers(&event.scope, scope, &facts.instances)
+            || !event.invalidates_key(fact_key)
+        {
+            continue;
+        }
+        if let Some(latest) = invalidation_occurrences(event, time)?.0 {
+            period_start = Some(period_start.map_or(latest, |start| start.max(latest)));
+        }
+    }
+    let served_by = task_state
+        .filter(|state| state.terminal_state == Some(TaskTerminalState::Succeeded))
+        .and_then(|state| state.last_dispatched_unix_ms)
+        .filter(|dispatched| period_start.is_none_or(|start| *dispatched > start));
+    let outcome = Outcome::new(PolicyCode::FactProbe)
+        .fact_key(fact_key)
+        .unknown_reason(UnknownReasonToken(unknown_reason));
+    let period = period_start.map_or_else(
+        || "it was never cleared".to_owned(),
+        |start| format!("its unknown period began after {start}"),
+    );
+    let fact = format!(
+        "fact '{}:{fact_key}' is unknown ({}); {period}",
+        scope_key(scope),
+        unknown_token(unknown_reason)
+    );
+    Ok(match served_by {
+        Some(served_by) => {
+            reasons.push(reason_with(
+                outcome.served_by_dispatch_unix_ms(served_by),
+                format!("{fact}; the task's run dispatched at {served_by} served the probe"),
+            ));
+            PredicateEvaluation::known(false, None)
+        }
+        None => {
+            reasons.push(reason_with(
+                outcome,
+                format!("{fact}; the task is admitted to read it"),
+            ));
+            PredicateEvaluation::known(true, None)
+        }
+    })
 }
 
 fn scope_instance_id(scope: &ScopeSelector) -> Option<&str> {

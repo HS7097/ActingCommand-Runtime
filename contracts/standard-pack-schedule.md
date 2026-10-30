@@ -97,6 +97,26 @@ reads its last result across the reset, from before it; a retry branch that must
 the current period needs, as its period gate, a `dependency_completed` on an earlier rule of the
 same period, which the reset clears.
 
+### Self-read fact probes
+
+A rule's `fact` predicate that writes `on_unknown` (SS-5, since 0.12.32;
+[scheduling/README.md](scheduling/README.md), "Self-read fact probe") requires
+`fact_unknown_probe`, alike: the composer refuses a file that writes it while `requires` does not
+name it, `schedule_invalid` at the first such member in file order (a rule's `trigger`, then its
+`feedback_stop`; for example `/rules/0/trigger/on_unknown`).
+
+The probe admits the rule's task while the fact is unknown so that the run of the rule's own
+package reads it, so its `fact_key` must be a key that package's reading marks write
+([resource-readings.md](resource-readings.md), "Declaration": a mark's `fact_key` or
+`capacity_fact_key`). Where a rule meets its package, `actinglab standard-pack check` and
+`package bundle --schedule` read each probing rule's package with the Runtime's metadata reader
+(its `resource_readings`, without preparing it), after the composition and the store update rule,
+and refuse a probe whose key the package does not mark (a key only another package reads, for
+example the recognition maintenance package's, or one no package reads):
+`standard_pack_root_invalid`, `schedule_invalid` at its `on_unknown`. The composer has no package
+content and the Runtime's compiler checks only what it can see (an instance scope, which the
+composer fills; a `resource.` or `inventory.` key; a place in the trigger outside every `not`).
+
 ## Classification
 
 Every package of the game root's registry is one or more of (R6, R7):
@@ -132,7 +152,8 @@ each game root that holds `schedule.json`, that file's bytes, the root as
 2. **Read** each game's file (above): the reader, `requires` (it names `fact_reference` when a
    rule writes a fact reference, `pool_fact_reference` when a pool's `capacity` or a
    `resource_projection`'s `value` is one, `reset_exclusions` when a timeline event writes
-   `excludes_fact_prefixes`, and the given subsystems name each entry), no timeline event
+   `excludes_fact_prefixes`, `fact_unknown_probe` when a rule's `fact` predicate writes
+   `on_unknown`, and the given subsystems name each entry), no timeline event
    invalidating `health.application.update_required` ("The store update rule"), the references
    and the classification. A refused game is reported with its game id.
 3. **Instantiate**: for each bound instance `i` of game `g` on server `s`, every rule whose
