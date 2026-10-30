@@ -4303,6 +4303,68 @@ back with it, or drop the member first. A dispatch decision record of 0.12.32 th
 | SS5-3 | `config.subsystems` row `fact_unknown_probe` (always on, `config_subsystem_always_on`) | new row value of an existing fact (no shape) | SS-5 | actingd | the composer requires it of a `schedule.json` whose rule writes the member (`FACT_UNKNOWN_PROBE_SUBSYSTEM`); named apart from the reason code `fact_probe` (SS5-2), since a subsystem name must not equal a registered outcome name (outcome guard G5) |
 | SS5-4 | the cross-check of a probe's key against the reading marks of the rule's own package (`probe_keys_marked`, `standard_pack_fact_probes`) | resource-tool check (no shape) | SS-5 | `actinglab standard-pack check`, `package bundle --schedule` | `standard_pack_root_invalid`, `schedule_invalid` at `/rules/<i>/…/on_unknown`; each package read once, metadata only |
 
+### 1.224 Slice LN-OFF-1 (0.12.32): the bounded offline opening of an SQLite ledger (Workflow #422 comments 6503130154 and 6508064467: the UI's offline face reached 12 GB in 60 s on the 8.1 GB production ledger; design `rd-1029/design-ln-off.md`, option A, §4.2 to §4.6; pending decision 115, recommendation A, with Alice's addition of 10-30 23:3x: 「我们直接限定UI每次可以读多少就行」; coordinator work order `rd-1029/brief-ss5-lnoff1.md`)
+
+[ledger-store.md](ledger-store.md) ("Recovery, artifacts and forensic consumers"),
+[global-ledger-query.md](global-ledger-query.md) ("Offline view entry") and
+[runtime-database.md](runtime-database.md) (`open_existing_unchecked`) are the contract. The number
+1.224 is the coordinator's.
+
+**What.** `GlobalLedger::open_metadata` keeps its signature and `GlobalLedgerMetadata` its public
+methods; on an SQLite root its implementation is replaced. (1) The database opens without the
+whole-file `quick_check` and the snapshot holds a read-only connection of its own. (2) The opening
+is two short read transactions: the Runtime writer open's checks (`verify_tail`, shared with
+`verify_open_tail`: format and views, the keyed meta row, marker `ready`, `MAX(sequence)` at the
+head, the newest `ledger_observer.open_verify_tail_records` records authenticated and chained to the
+head hash) plus contiguity (`COUNT`, `MIN`, `MAX` equal to head, 1, head); then the eviction intent
+and outcome records by type, each authenticated, as the proof set (`RetentionIndex::offline_proofs`);
+then it pins the point. (3) A page is the reader pool's page at that point (`ViewReader`, as
+`view_page_at_point`), one short read transaction, its scope source `offline`; a page returns at
+most its request's limit (`MAX_RUNTIME_EVENT_QUERY_EVENTS`, 256) and
+`MAX_RUNTIME_EVENT_QUERY_RESPONSE_BYTES` (768 KiB) with a cursor to the rest, as every Runtime page
+does. (4) A material fetch is one authenticated point read with its proof from the pinned set.
+(5) Every read has a deadline: the opening the supplied one, else `open_timeout_ms`'s factory value
+(600 s) from its start; each later read `writer_reply_timeout_ms`'s factory value (10 s) from its own
+start, no later than a deadline the caller set or passed; inside a statement too
+(`read_check_vm_steps`). A page whose deadline passes is refused whole; with
+`sqlite_page_read_budget` (the UI's interactive use, `read_budget_ms`) it answers incomplete with its
+cursor. (6) The whole-snapshot re-verification of every page (`SqliteViewSnapshot::verify_view_full`)
+and its CTE selection (`views::select_sequences`) are removed. **No outcome code** (a refusal is
+`ledger_read_budget_exceeded` with `phase=open|proofs|page|resolve` in its detail), **no
+configuration key** (the defaults are the factory values of existing `ledger_observer` keys; the
+page bound is the existing contract constants), **no persisted shape, no interface revision.** No
+caller changes code.
+
+**Why.** The opening read and authenticated the whole ledger into memory after an unbudgeted
+whole-file `quick_check(1)`, and every page did so again; the UI's 1 GiB / 300 000 / 60 s budget made
+the production root unopenable, and its absolute 60 s deadline refused every page a minute after the
+opening.
+
+**Integrity.** Not weaker than the writer open's (design §4.5): the meta row, the head, the tail and
+the extent at the opening (contiguity is more than the writer checks); every other record is
+authenticated when a read reads it. The opening no longer finds damage in records older than its
+tail, nor checks the migrated prefix: those move to the explicit whole-ledger mode of LN-OFF-3 and to
+`ledger-maintenance verify`, which reads every record.
+
+**Live root** (pending decision 115, A): read, not refused. Each read is a short transaction at the
+pinned head under WAL, so the writer commits meanwhile and the checkpoint catches up after it. A
+later B or C adds a refusal on top (`read_writer_metadata` is still read at the opening).
+
+**Unchanged.** The writer open (`verify_open_tail` reads exactly as before), the reader pool, the
+writer's pages, `open_evidence` (whole, LN-OFF-3), `open_selected`, `open_range`, Segment roots, game
+neutrality.
+
+**Rollback** (to 0.12.31). Nothing to undo: no ledger, state, configuration or wire shape is new. A
+0.12.31 offline reader again reads the whole ledger into memory at the opening and at every page.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| OFF1-1 | `GlobalLedger::open_metadata` on SQLite (`sqlite::SqliteViewSnapshot::open`) | reader behaviour | LN-OFF-1 | — | `open_existing_unchecked`; checks of `verify_tail` (`TailOpen::Offline`: also `verify_sequence_extent`, a non-ready marker `ledger_candidate_not_production`); the eviction rows by type; the pinned `ReadPoint` |
+| OFF1-2 | `GlobalLedgerMetadata::project_view_page` on SQLite | reader behaviour | LN-OFF-1 | — | the reader pool's page (`ViewReader`, `source` `offline`, `time_index` false on a root without the derived views); default: refused whole at its deadline (`ReadWork::was_spent`); optional work budget answers `read_budget` |
+| OFF1-3 | `GlobalLedgerMetadata::resolve_artifact` on SQLite | reader behaviour | LN-OFF-1 | — | `verify_published_extent` and one `read_history_rows`; the proof from `RetentionIndex::offline_proofs` |
+| OFF1-4 | `GlobalLedgerEvidenceConfig::new` and its setters `sqlite_open_verify_tail_records`, `sqlite_read_check_vm_steps`, `sqlite_page_read_budget` | interface defaults | LN-OFF-1 | — | defaults `open_timeout_ms` 600 000, `writer_reply_timeout_ms` 10 000, `open_verify_tail_records` 4 096, `read_check_vm_steps` 10 000, `history_page_rows`, `history_scan_rows`; out of range `invalid_ledger_config` (request); `with_budget` / `with_deadline` bound the opening only |
+| OFF1-5 | `GlobalLedgerMetadata::event_count()` on SQLite | interface meaning | LN-OFF-1 | — | the pinned head, `1..=head` found contiguous; not "each read and authenticated" |
+
 ### 1.226 Slice WATCH-P (0.12.32): the emulator watch neither restarts nor recognizes an instance its own scheduling pause holds (Alice's ruling 112 of 10-30, 23:2x 「可以，按推荐，没问题」 and 23:3x 「没错」, on the recommendation 「暂停中的实例，监视只看状态、不重启、不识别绑定，和「玩家持有」一样；恢复时照常检查」; production 10-29 21:35 and 21:38: the watch restarted an instance twice while it was paused for a person's own check, and `emulator_control.watch_enabled` was then set false; coordinator work order `rd-1029/brief-116-112-114.md` WATCH-P)
 
 [emulator-control.md](emulator-control.md) ("Emulator watch", "Pauses (WATCH-P)") and

@@ -14,7 +14,11 @@ use actingcommand_contract::{
 use std::collections::{BTreeMap, BTreeSet};
 
 mod views;
-pub(super) use views::{PageContext, PageSelection, page_bounds, project_selected};
+pub(super) use views::{PageContext, page_bounds, project_selected};
+// #422 LN-OFF-1: only the segment store's pages and the gate tests name a page selection; the
+// offline snapshot without an SQLite root passes its head (`From<u64>`).
+#[cfg(test)]
+pub(super) use views::PageSelection;
 
 /// The closed Lab link paths are shared by the in-memory and SQLite selectors.
 #[derive(Clone, Copy)]

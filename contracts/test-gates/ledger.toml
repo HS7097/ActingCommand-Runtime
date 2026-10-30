@@ -812,6 +812,21 @@ tests = [
 ]
 incident = ["#422 QR-2"]
 
+# LN-OFF-1 (#422; design rd-1029/design-ln-off.md option A, §6.3 T1 to T7; brief rd-1029/brief-ss5-lnoff1.md; register §1.224; since 0.12.32; the UI's offline face reached 12 GB in 60 s on the 8.1 GB production ledger, #422 comments 6503130154, 6508064467; pending decision 115, A, with Alice's 10-30 23:3x addition): GlobalLedger::open_metadata on an SQLite root is a bounded snapshot at one pinned point. On synthetic ledgers of 3 000 and 12 000 records the opening reads the same rows on both, the newest open_verify_tail_records (256) records and no older one (T1); each view's first page and its next page read at most their rows and lookahead and nothing twice but that lookahead, and a full first page reads the same rows and at most 1.5 times the VM steps on both (T2); an offline page equals the writer's page at the same point field by field but for its source, offline (T3); a damaged tail record, meta row, missing head, record past the head or missing tail record is refused with the writer open's code and operation, a missing older record by the contiguity check, and a damaged older record by the page that reads it, fatally (T4); with the defaults alone a passed deadline refuses the opening and a page with ledger_read_budget_exceeded naming phase=open or phase=page, between statements and inside one (read_check_vm_steps), and an opening whose deadline passed leaves later reads their own (T5); on a root whose writer appends meanwhile the pages stay at the pinned head, every append commits and a passive checkpoint reaches the WAL's end after the pages (T6); a material point read gives the reference, links, eviction proof and availability of the whole replay for a completed, a pending and no eviction (T7); a page returns at most its limit (MAX_RUNTIME_EVENT_QUERY_EVENTS at most) with a cursor, and paging returns every record once, in order; every deadline on the fake read clock or far ahead, no sleep
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_ln_off1::ln_off1_t1_the_opening_reads_the_same_rows_at_both_scales",
+    "actingcommand-ledger::lib::global::tests::gate_ln_off1::ln_off1_t2_view_pages_read_the_same_rows_at_both_scales",
+    "actingcommand-ledger::lib::global::tests::gate_ln_off1::ln_off1_t3_an_offline_page_is_the_writers_page_at_the_same_point",
+    "actingcommand-ledger::lib::global::tests::gate_ln_off1::ln_off1_t4_the_opening_refuses_what_the_writer_open_refuses",
+    "actingcommand-ledger::lib::global::tests::gate_ln_off1::ln_off1_t5_every_read_has_its_own_default_deadline",
+    "actingcommand-ledger::lib::global::tests::gate_ln_off1::ln_off1_t6_a_live_root_is_read_at_its_pinned_head_without_holding_the_writer",
+    "actingcommand-ledger::lib::global::tests::gate_ln_off1::ln_off1_t7_a_material_fetch_gives_the_proof_the_whole_replay_gave",
+    "actingcommand-ledger::lib::global::tests::gate_ln_off1::ln_off1_a_read_returns_at_most_the_bound_and_pages_to_the_rest",
+]
+incident = ["#422 LN-OFF-1"]
+
 # RB-1 (#422; 0.12.28; production v0.12.26 after the machine restart of 2026-10-29 05:23, investigation rd-1029/inv-reboot/rb.md, work order rd-1029/brief-rb1.md): the reader pool builds its Lab relations once at its start, in the background, and its pages read only the records after the build. With and without the index the pool's pages are the writer's item for item, pinned before, at and after the build's anchor, up and down (T1). With the index built, a page that reaches a linked row runs no statement of the whole history's Lab relations, its index statements return at most one row per record after the anchor and each stays within one look interval, and it answers that row with its budget spent at every look; without the index, the same page stops before the row and the next is refused ledger_read_budget_exceeded, and with its budget whole it reads thousands of rows (T2). A build whose deadline passed is said once as ledger_read_budget_exceeded of build_lab_relations, not fatal, and the pages read the whole history's relations as before (T3). A Lab anchor after the build naming a request whose run's records are older than the build relates them from its own sequence on, not before (T4)
 [[gate]]
 coverage = "Y"

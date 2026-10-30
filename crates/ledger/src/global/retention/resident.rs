@@ -46,6 +46,20 @@ impl RetentionIndex {
         index
     }
 
+    /// #422 LN-OFF-1 (design-ln-off §4.2 step 4): an offline reader's eviction proof set, as of
+    /// `head`: the eviction intent and outcome `records` alone, in ledger order, each
+    /// authenticated as it was read, applied as the writer's open applies them (`apply_selected`:
+    /// a sealed intent brings its own object). The proofs are what the writer's open keeps
+    /// resident and publishes to its reader pool; no other record is read.
+    pub(in crate::global) fn offline_proofs<E: LedgerEventRead>(records: &[E], head: u64) -> Self {
+        let mut index = Self::default();
+        for event in records {
+            index.apply_selected(event);
+        }
+        index.through_sequence = head;
+        index
+    }
+
     /// LN-7: applies one selected record as `apply` applies it after the record before it. The
     /// owner changes are already known, so an owner record changes nothing it would not; a
     /// retention fact whose object (or, for an eviction outcome, whose intent) was not selected

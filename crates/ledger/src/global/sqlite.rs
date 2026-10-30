@@ -54,8 +54,11 @@ pub(super) mod frame_refs;
 pub(super) mod frame_query;
 // #422 RB-1: the reader pool's Lab relations, built once in the background and read forward.
 pub(super) mod lab_relations;
+// #422 LN-OFF-1: the bounded offline snapshot of `GlobalLedger::open_metadata`.
+mod offline;
 mod tagged;
 mod views;
+pub(super) use offline::{OfflineReads, SqliteViewSnapshot};
 pub use release_source::*;
 
 // Interface anchor `ledger` (contracts/component-interfaces.md): raise its revision in
@@ -658,6 +661,7 @@ pub(super) fn open_formal(
         config.open_verify_tail_records,
         timing,
     )?;
+    // #422 LN-OFF-1: the offline open (`offline.rs`) verifies the same tail through `verify_tail`.
     let indexing = Instant::now();
     // LN-8d: a test gate may make the `index` phase start late by a delay it does not wait out.
     #[cfg(any(test, feature = "test-hooks"))]
@@ -750,47 +754,17 @@ fn verify_open_tail(
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .map_err(|error| sql_error(error, LedgerLocation::BeginSqliteSnapshot.location()))?;
-        refuse_unsupported_format(&transaction)?;
-        // A different view schema refuses; absent views are created in phase `index`.
-        views::installed(&transaction)?;
-        let (marker, head) = match authenticated_extent(database, &transaction)? {
-            Some((marker, head)) if marker.state == "ready" => (marker, head),
-            _ => {
-                return Err(failure(
-                    SharedCode::LedgerMigrationRequired.code(),
-                    LedgerLocation::OpenRuntimeLedger.location(),
-                ));
-            }
-        };
-        let head_hash = meta_head_hash(&transaction, head)?;
-        // Rows past the meta head, or a missing head row, as a full read reports them.
-        if !rows_end_at(&transaction, head, budget)? {
-            return Err(failure(
-                LedgerCode::LedgerMetaMismatch.code(),
-                LedgerLocation::VerifySqliteHead.location(),
-            ));
-        }
-        tail_started = Some(Instant::now());
-        {
-            let mut reader = RowReader::new(database, &transaction, budget);
-            let after = head.saturating_sub(u64::try_from(tail).unwrap_or(u64::MAX));
-            reader.read_chunks(&[], after, head, true, &mut |_| {
-                events += 1;
-                Ok(true)
-            })?;
-            // The newest row read is the head: its authenticated hash is the meta row's head
-            // hash.
-            if reader.last.take().map(|(_, hash)| hash) != head_hash {
-                return Err(failure(
-                    LedgerCode::LedgerMetaMismatch.code(),
-                    LedgerLocation::VerifySqliteHead.location(),
-                ));
-            }
-        }
+        let verified = verify_tail(
+            database,
+            &transaction,
+            budget,
+            (tail, TailOpen::Writer),
+            (&mut tail_started, &mut events),
+        )?;
         transaction
             .commit()
             .map_err(|error| sql_error(error, LedgerLocation::CloseSqliteSnapshot.location()))?;
-        Ok((marker, head, head_hash))
+        Ok(verified)
     })();
     let ended = Instant::now();
     let ms = |from: Instant, to: Instant| {
@@ -805,6 +779,82 @@ fn verify_open_tail(
     }
     timing.events = events;
     verified
+}
+
+/// #422 LN-OFF-1: which open verifies its tail ([`verify_tail`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TailOpen {
+    /// The Runtime's writer open (`verify_open_tail`).
+    Writer,
+    /// An offline reader's open (`GlobalLedger::open_metadata`, `offline.rs`).
+    Offline,
+}
+
+/// LN-8 (#422, LEAN-L §3.2 step 2, §6.2): the body of an open's verification, in the caller's
+/// read transaction. Phase `meta`: the format and the marker, the keyed meta row (its head and
+/// head hash) and the stored rows ending at that head (`MAX(sequence)`, through the primary key).
+/// Phase `tail`: the newest `tail.0` rows, read in chunks, each authenticated on its own
+/// (`RowReader`) with its link and artifact rows, contiguous through the head, the oldest chained
+/// to its predecessor's stored hash and the newest's hash the meta row's. `tail_started` is set
+/// when the tail starts; `events` counts the rows the tail authenticated.
+///
+/// #422 LN-OFF-1 (design-ln-off §4.2 step 3): an offline open (`tail.1`) also checks the stored
+/// sequences are exactly `1..=head` (`verify_sequence_extent`, `COUNT`, `MIN`, `MAX` through an
+/// index), so its `event_count` is the head; a medium whose marker is not `ready` is
+/// `ledger_candidate_not_production`, as the offline open always refused it, where the writer
+/// says `ledger_migration_required`.
+fn verify_tail(
+    database: &RuntimeDatabase,
+    transaction: &Connection,
+    budget: ReadBudget,
+    (tail, open): (usize, TailOpen),
+    (tail_started, events): (&mut Option<Instant>, &mut u64),
+) -> GlobalLedgerResult<(SqliteMarker, u64, Option<String>)> {
+    refuse_unsupported_format(transaction)?;
+    // A different view schema refuses; absent views are created in the writer's phase `index`,
+    // and an offline reader selects without them.
+    views::installed(transaction)?;
+    let (marker, head) = match authenticated_extent(database, transaction)? {
+        Some((marker, head)) if marker.state == "ready" => (marker, head),
+        _ => {
+            return Err(match open {
+                TailOpen::Writer => failure(
+                    SharedCode::LedgerMigrationRequired.code(),
+                    LedgerLocation::OpenRuntimeLedger.location(),
+                ),
+                TailOpen::Offline => failure(
+                    LedgerCode::LedgerCandidateNotProduction.code(),
+                    LedgerLocation::OpenRuntimeEvidence.location(),
+                ),
+            });
+        }
+    };
+    let head_hash = meta_head_hash(transaction, head)?;
+    // Rows past the meta head, or a missing head row, as a full read reports them.
+    if !rows_end_at(transaction, head, budget)? {
+        return Err(failure(
+            LedgerCode::LedgerMetaMismatch.code(),
+            LedgerLocation::VerifySqliteHead.location(),
+        ));
+    }
+    if open == TailOpen::Offline {
+        verify_sequence_extent(transaction, head, budget, &mut 0)?;
+    }
+    *tail_started = Some(Instant::now());
+    let mut reader = RowReader::new(database, transaction, budget);
+    let after = head.saturating_sub(u64::try_from(tail).unwrap_or(u64::MAX));
+    reader.read_chunks(&[], after, head, true, &mut |_| {
+        *events += 1;
+        Ok(true)
+    })?;
+    // The newest row read is the head: its authenticated hash is the meta row's head hash.
+    if reader.last.take().map(|(_, hash)| hash) != head_hash {
+        return Err(failure(
+            LedgerCode::LedgerMetaMismatch.code(),
+            LedgerLocation::VerifySqliteHead.location(),
+        ));
+    }
+    Ok((marker, head, head_hash))
 }
 
 pub(super) fn import_source(
@@ -1900,7 +1950,8 @@ impl DurableStorage for SqliteStorage {
     }
 }
 
-/// What one `open_metadata` read and how long each of its phases took (Workflow #363).
+/// What one record-path read (`read_metadata`) read and how long each of its phases took
+/// (Workflow #363).
 pub(super) struct SqliteMetadataRead {
     pub(super) through_sequence: u64,
     pub(super) head_sequence: u64,
@@ -1910,28 +1961,27 @@ pub(super) struct SqliteMetadataRead {
     pub(super) annotate: Duration,
 }
 
-/// With `prefix`, only the declared prefix is read and authenticated (`read_prefix_snapshot`);
-/// eviction annotation is then as of that prefix.
-pub(super) fn open_metadata(
-    database: Arc<RuntimeDatabase>,
+/// The record path of `GlobalLedger::open_evidence` (`sqlite_material_per_artifact`,
+/// `sqlite_material_not_read`): every record read and authenticated in one read transaction,
+/// annotated with its eviction proofs. With `prefix`, only the declared prefix is read and
+/// authenticated (`read_prefix_snapshot`); eviction annotation is then as of that prefix.
+/// #422 LN-OFF-1: `GlobalLedger::open_metadata` no longer reads this way (`offline.rs`).
+pub(super) fn read_metadata(
+    database: &RuntimeDatabase,
     budget: ReadBudget,
     prefix: Option<u64>,
-) -> GlobalLedgerResult<(
-    Vec<LedgerEventMetadata>,
-    SqliteViewSnapshot,
-    SqliteMetadataRead,
-)> {
+) -> GlobalLedgerResult<(Vec<LedgerEventMetadata>, SqliteMetadataRead)> {
     let started = Instant::now();
     let raw = match prefix {
-        Some(through) => read_prefix_snapshot(&database, budget, through)?,
-        None => read_snapshot(&database, budget)?,
+        Some(through) => read_prefix_snapshot(database, budget, through)?,
+        None => read_snapshot(database, budget)?,
     };
     let sql_read = started.elapsed();
     let bytes = raw.bytes;
     let bound = raw.bound;
     let marker = SqliteMarker::parse(&raw.meta)?;
     let verify_started = Instant::now();
-    let verified = verify_snapshot_records(&database, raw)?;
+    let verified = verify_snapshot_records(database, raw)?;
     let verify = verify_started.elapsed();
     if marker.state != "ready" {
         return Err(failure(
@@ -1946,9 +1996,7 @@ pub(super) fn open_metadata(
         .map_or(0, StoredEventRecord::sequence);
     let mut events = Vec::with_capacity(verified.records.len());
     let VerifiedSnapshotRecords {
-        records,
-        metadata,
-        head_hash,
+        records, metadata, ..
     } = verified;
     drop(records);
     for event in metadata {
@@ -1968,150 +2016,7 @@ pub(super) fn open_metadata(
         verify,
         annotate: annotate_started.elapsed(),
     };
-    Ok((
-        events,
-        SqliteViewSnapshot {
-            database,
-            through_sequence,
-            head_hash,
-            budget,
-        },
-        read,
-    ))
-}
-
-/// An offline snapshot (`open_metadata`): it retains the physical owner, and each view read reads
-/// and authenticates the whole snapshot in one read transaction; the stored view selects the
-/// page's rows. The Runtime's reads are the writer's (`SqliteStorage::view_page_on_disk`).
-pub(super) struct SqliteViewSnapshot {
-    database: Arc<RuntimeDatabase>,
-    pub(super) through_sequence: u64,
-    head_hash: Option<String>,
-    budget: ReadBudget,
-}
-
-impl SqliteViewSnapshot {
-    /// Workflow #395: see `GlobalLedgerMetadata::set_read_deadline`.
-    pub(super) fn set_read_deadline(&mut self, deadline: Instant) {
-        self.budget = Some(super::evidence::phase_read_budget(self.budget, deadline));
-    }
-
-    pub(super) fn project_view_page(
-        &self,
-        query: &EventQuery,
-        profile: ProjectionProfile,
-        request: &RuntimeEventQueryPageRequest,
-    ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
-        let bounds =
-            super::projection::page_bounds(query, profile, request, self.through_sequence)?;
-        check_read_budget(self.budget, 0, 0)?;
-        let mut connection = self
-            .database
-            .connection(LedgerLocation::QueryLedgerView.location())?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Deferred)
-            .map_err(|error| {
-                sql_error(error, LedgerLocation::BeginLedgerViewSnapshot.location())
-            })?;
-        match self.read_view_page(&transaction, query, profile, request, bounds) {
-            Ok(page) => {
-                transaction.commit().map_err(|error| {
-                    sql_error(error, LedgerLocation::CloseLedgerViewSnapshot.location())
-                })?;
-                Ok(page)
-            }
-            Err(error) => Err(
-                error.with_close_result(transaction.rollback().map_err(|error| {
-                    sql_error(error, LedgerLocation::RollbackLedgerViewSnapshot.location())
-                })),
-            ),
-        }
-    }
-
-    fn read_view_page(
-        &self,
-        connection: &Connection,
-        query: &EventQuery,
-        profile: ProjectionProfile,
-        request: &RuntimeEventQueryPageRequest,
-        (snapshot, after): (u64, u64),
-    ) -> GlobalLedgerResult<RuntimeEventQueryPage> {
-        let (bytes, verified) = self.verify_view_full(connection)?;
-        let VerifiedSnapshotRecords {
-            records, metadata, ..
-        } = verified;
-        // The original records go; the metadata is from this same authenticated snapshot.
-        drop(records);
-        let mut events = Vec::new();
-        for event in metadata
-            .into_iter()
-            .take_while(|event| event.sequence() <= self.through_sequence)
-        {
-            check_read_budget(self.budget, bytes, events.len() + 1)?;
-            events.push(event);
-        }
-        super::retention::annotate_metadata_checked(&mut events, |count| {
-            check_read_budget(self.budget, bytes, count)
-        })?;
-        let (sequences, _) = views::select_sequences(
-            connection,
-            &events,
-            query,
-            after,
-            snapshot,
-            usize::from(request.limit()) + 1,
-            self.budget,
-        )?;
-        let page = EventIndexes::from_events(&events).project_view_page(
-            &events,
-            query,
-            profile,
-            request,
-            LedgerReadScope {
-                source: LedgerReadSource::Offline,
-                material_read: LedgerMaterialReadState::NotRequested,
-                scanned_through_position: self.through_sequence,
-                read_complete: true,
-                limits: Vec::new(),
-            },
-            super::projection::PageSelection {
-                through_sequence: self.through_sequence,
-                sequences: Some(&sequences),
-                retention: None,
-                work: None,
-            },
-        )?;
-        check_read_budget(self.budget, bytes, events.len())?;
-        Ok(page)
-    }
-
-    fn verify_view_full(
-        &self,
-        connection: &Connection,
-    ) -> GlobalLedgerResult<(u64, VerifiedSnapshotRecords)> {
-        let raw = read_snapshot_connection(connection, self.budget)?;
-        let bytes = raw.bytes;
-        let prefix_hash = raw
-            .events
-            .iter()
-            .find(|row| row.first() == Some(&SqlValue::Integer(encode(self.through_sequence))))
-            .and_then(|row| row.get(11))
-            .cloned();
-        let verified = verify_snapshot_records(&self.database, raw)?;
-        if prefix_hash != self.head_hash.clone().map(SqlValue::Text)
-            || verified
-                .records
-                .last()
-                .map_or(0, StoredEventRecord::sequence)
-                < self.through_sequence
-        {
-            return Err(failure(
-                LedgerCode::LedgerSnapshotBoundaryMismatch.code(),
-                LedgerLocation::QueryLedgerView.location(),
-            ));
-        }
-        Ok((bytes, verified))
-    }
+    Ok((events, read))
 }
 
 /// LN-6 (#422, LEAN-L §3.3): the Runtime's view pages and artifact resolution read the store, on
@@ -2229,6 +2134,8 @@ impl SqliteStorage {
             head: self.head,
             extent: ViewExtent::Writer(self),
             proofs: PageProofs::Index(retention),
+            source: LedgerReadSource::Runtime,
+            time_index: true,
         }
         .page(
             || {
@@ -2274,6 +2181,8 @@ pub(super) fn view_page_at_point(
             proofs: point.proofs.as_ref(),
             through_sequence: point.head,
         },
+        source: LedgerReadSource::Runtime,
+        time_index: true,
     }
     .page(|| Ok(connection), page, observation, read, Some(memo))
 }
@@ -2326,12 +2235,20 @@ fn verify_published_extent(
 /// #422 QR-1: what one view page reads with: the database (for its keyed integrity), the committed
 /// head it reads at, how it checks the medium against that head, and where its rows' eviction
 /// proofs come from. The writer's pages read its own head and retention index; a reader-pool page
-/// reads the point the writer published.
+/// reads the point the writer published. #422 LN-OFF-1: an offline snapshot's page reads its own
+/// pinned point the same way (`offline.rs`); `source` is the page's read scope source (`Runtime`
+/// for the writer and its pool, `Offline` for an offline reader).
 struct ViewReader<'a> {
     database: &'a RuntimeDatabase,
     head: u64,
     extent: ViewExtent<'a>,
     proofs: PageProofs<'a>,
+    source: LedgerReadSource,
+    /// #422 LN-OFF-1: whether the time index (`ledger_view_index_time_v1`) exists, so a first page
+    /// with a window starts at the window's first record (LN-WS R3); the writer creates it at its
+    /// open, and an offline root opened before any writer of the views may lack it (its pages then
+    /// start where they would have, and select the same rows).
+    time_index: bool,
 }
 
 /// #422 QR-1: how a view page checks the medium before it selects.
@@ -2586,7 +2503,7 @@ impl ViewReader<'_> {
             profile,
             request,
             LedgerReadScope {
-                source: LedgerReadSource::Runtime,
+                source: self.source,
                 material_read: LedgerMaterialReadState::NotRequested,
                 scanned_through_position: snapshot,
                 read_complete: true,
@@ -2651,6 +2568,7 @@ impl ViewReader<'_> {
         let through = snapshot.min(query.to_sequence.unwrap_or(u64::MAX));
         if first_page
             && cursor < through
+            && self.time_index
             && let Some(since) = query.from_timestamp_unix_ms
         {
             let start = match memo
