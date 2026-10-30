@@ -2936,6 +2936,26 @@ impl RuntimeHost {
         Ok((table.global_state(), table.instance_states()))
     }
 
+    /// WATCH-P (0.12.32): moves the held pause of `instance_alias` to `stage`, its revision kept,
+    /// as a pause request does while it drains and hands the device back. `false` when the
+    /// instance holds no pause.
+    #[cfg(test)]
+    pub(crate) fn set_instance_pause_stage_for_test(
+        &self,
+        instance_alias: &str,
+        stage: actingcommand_contract::InstancePauseStage,
+    ) -> RuntimeHostResult<bool> {
+        Ok(lock(
+            &self
+                .shared_ref(
+                    crate::codes::test_spellings::TestLocation::ReadSchedulingPausesForTest,
+                )?
+                .scheduling_pause,
+            crate::codes::test_spellings::TestLocation::ReadSchedulingPausesForTest,
+        )?
+        .set_instance_stage_for_test(instance_alias, stage))
+    }
+
     #[cfg(test)]
     pub(crate) fn activate_policy_catalog_with_expected_for_test(
         &self,
