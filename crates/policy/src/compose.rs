@@ -181,6 +181,32 @@ impl Error for StandardPackComposeFailure {}
 /// priority values is warned about, never refused.
 pub const STANDARD_PACK_PRIORITY_TIERS: usize = 2;
 
+/// SS-2b (register §1.225): the task member the composer writes, `true`, on every rule whose
+/// package is not maintenance-role. A rule never writes it itself.
+pub const BENEFIT_JUDGED_MEMBER: &str = "benefit_judged";
+
+/// SS-2b (register §1.225; Alice's ruling 116, 「业务覆盖完整」): how far one game's judged rules
+/// (those whose package is not maintenance-role, not held) declare their values, as the resource
+/// tools report it. Each rule counts once, whatever the instances it is composed for.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct BenefitCoverage {
+    /// Every entry has its quantity and every pool it touches its valuation.
+    pub complete: usize,
+    /// Not complete, and every value it lacks is the pending marker.
+    pub pending: usize,
+    /// No `produces` and no `consumes` entry, or a pool it touches with neither a valuation nor
+    /// the pending marker: one `standard_pack_benefit_undeclared` warning each.
+    pub undeclared: usize,
+}
+
+/// One judged rule that declares no value: its id and the touched pool without a valuation
+/// (`None` when it has no entry at all).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UndeclaredRule {
+    rule_id: String,
+    pool_id: Option<String>,
+}
+
 /// A composed catalog of the standard packs' rules.
 #[derive(Debug, Clone)]
 pub struct StandardPackComposition {
@@ -192,6 +218,9 @@ pub struct StandardPackComposition {
     /// SS-2: each game whose composed rules use more than [`STANDARD_PACK_PRIORITY_TIERS`]
     /// distinct priority values, with that number, by game id.
     priority_tiers: Vec<(String, usize)>,
+    /// SS-2b: each game whose `schedule.json` was read, by game id, with its judged rules'
+    /// coverage and the rules that declare no value, in file order.
+    benefit: Vec<(String, BenefitCoverage, Vec<UndeclaredRule>)>,
 }
 
 impl StandardPackComposition {
@@ -240,6 +269,97 @@ impl StandardPackComposition {
         });
         unclassified.chain(tiers).collect()
     }
+
+    /// SS-2b (register §1.225): one `standard_pack_benefit_undeclared` per judged rule that
+    /// declares no value (keys `game`, `task_id` the rule's id; `pool_id` the touched pool without
+    /// a valuation), by game id, then in file order. Only the resource tools report them, after
+    /// [`StandardPackComposition::warnings`]; the Runtime's workbench records none.
+    pub fn benefit_warnings(&self) -> Vec<Outcome> {
+        self.benefit
+            .iter()
+            .flat_map(|(game_id, _, rules)| {
+                rules.iter().map(move |rule| {
+                    let outcome = Outcome::new(SharedCode::StandardPackBenefitUndeclared)
+                        .game(game_id.as_str())
+                        .task_id(rule.rule_id.as_str());
+                    match &rule.pool_id {
+                        Some(pool_id) => outcome.pool_id(pool_id.as_str()),
+                        None => outcome,
+                    }
+                })
+            })
+            .collect()
+    }
+
+    /// SS-2b: the judged rules' coverage of each game whose `schedule.json` was read, by game id.
+    pub fn benefit_coverage(&self) -> Vec<(String, BenefitCoverage)> {
+        self.benefit
+            .iter()
+            .map(|(game_id, coverage, _)| (game_id.clone(), *coverage))
+            .collect()
+    }
+}
+
+/// SS-2b: the judged rules of one game read from its file (module doc): every rule that is not
+/// held and whose package is not maintenance-role, in file order, as complete, pending or
+/// undeclared. The compiler has checked the shapes; a value that is no object, no list or no
+/// string here counts as missing.
+fn benefit_coverage(
+    schedule: &StandardPackSchedule,
+    classification: &StandardPackClassification,
+) -> (BenefitCoverage, Vec<UndeclaredRule>) {
+    let valuations = schedule
+        .pools
+        .iter()
+        .map(|pool| (pool.id.as_str(), pool.body.get("valuation")))
+        .collect::<BTreeMap<_, _>>();
+    let mut coverage = BenefitCoverage::default();
+    let mut undeclared = Vec::new();
+    for rule in &schedule.rules {
+        if schedule.holds(&rule.package_id) || classification.maintenance.contains(&rule.package_id)
+        {
+            continue;
+        }
+        let entries = ["produces", "consumes"]
+            .into_iter()
+            .filter_map(|member| rule.body.get(member).and_then(Value::as_array))
+            .flatten()
+            .collect::<Vec<_>>();
+        if entries.is_empty() {
+            coverage.undeclared += 1;
+            undeclared.push(UndeclaredRule {
+                rule_id: rule.id.clone(),
+                pool_id: None,
+            });
+            continue;
+        }
+        let mut pending = false;
+        let mut missing = None;
+        for entry in entries {
+            pending |= entry.get("amount").and_then(Value::as_str) == Some(crate::PENDING_MARKER);
+            let pool_id = entry.get("pool_id").and_then(Value::as_str).unwrap_or("");
+            match valuations.get(pool_id).copied().flatten() {
+                Some(Value::String(marker)) if marker == crate::PENDING_MARKER => pending = true,
+                Some(Value::Object(_)) => {}
+                _ => {
+                    missing = Some(pool_id.to_owned());
+                    break;
+                }
+            }
+        }
+        match missing {
+            Some(pool_id) => {
+                coverage.undeclared += 1;
+                undeclared.push(UndeclaredRule {
+                    rule_id: rule.id.clone(),
+                    pool_id: Some(pool_id),
+                });
+            }
+            None if pending => coverage.pending += 1,
+            None => coverage.complete += 1,
+        }
+    }
+    (coverage, undeclared)
 }
 
 /// SS-2: the number of distinct `priority` values among composed rules.
@@ -397,9 +517,13 @@ pub fn compose_standard_pack_rules(
     let mut composed = Composed::default();
     let mut manifest = BTreeMap::<String, ComposedProcedure>::new();
     let mut priority_tiers = Vec::new();
+    let mut benefit = Vec::new();
     for game in &read {
         let before = composed.tasks.len();
         instantiate(game, &mut composed, &mut manifest, &mut issues);
+        // SS-2b: how far the game's judged rules declare their values, counted once per rule.
+        let (coverage, undeclared) = benefit_coverage(&game.schedule, &game.classification);
+        benefit.push((game.game_id.to_owned(), coverage, undeclared));
         // SS-2: the game's composed rules, warned about past two tiers and never refused.
         let tiers = distinct_priorities(&composed.tasks[before..]);
         if tiers > STANDARD_PACK_PRIORITY_TIERS {
@@ -459,6 +583,7 @@ pub fn compose_standard_pack_rules(
             issues: vec![issue],
         })?;
     priority_tiers.sort();
+    benefit.sort_by(|left, right| left.0.cmp(&right.0));
     Ok(StandardPackComposition {
         sources,
         compiled,
@@ -466,6 +591,7 @@ pub fn compose_standard_pack_rules(
         games,
         rules_digest,
         priority_tiers,
+        benefit,
     })
 }
 
@@ -537,6 +663,24 @@ fn read_game(
             format!(
                 "a timeline event's {INVALIDATES_FACT_PREFIXES} may not cover \
                  {APPLICATION_UPDATE_REQUIRED_FACT_KEY}, which only the Runtime writes"
+            ),
+        ));
+    }
+    // SS-2b (register §1.225): the composer marks the judged rules by their package's
+    // classification; a rule that writes the mark itself would decide its own judgement.
+    if let Some(index) = schedule
+        .rules
+        .iter()
+        .position(|rule| rule.body.contains_key(BENEFIT_JUDGED_MEMBER))
+    {
+        return Err(refused(
+            schedule_issue(
+                StandardPackProblem::ScheduleInvalid,
+                format!("/rules/{index}/{BENEFIT_JUDGED_MEMBER}"),
+            ),
+            format!(
+                "{BENEFIT_JUDGED_MEMBER} is the composer's: it marks every rule whose package is \
+                 not maintenance-role"
             ),
         ));
     }
@@ -766,8 +910,10 @@ fn instantiate(
                 }
                 continue;
             }
+            // SS-2b: a rule whose package is not maintenance-role is judged by its net benefit.
+            let judged = !game.classification.maintenance.contains(&rule.package_id);
             composed.tasks.push((
-                compose_task(rule, alias, &copies),
+                compose_task(rule, alias, &copies, judged),
                 origin(ScheduleMember::Rules, *index),
             ));
         }
@@ -817,8 +963,9 @@ fn instance_scope(alias: &str) -> Value {
     json!({"kind": "instance", "instance_id": alias})
 }
 
-/// One rule's task for the instance `alias` (steps 3 and 4).
-fn compose_task(rule: &ScheduleRule, alias: &str, copies: &Copies<'_>) -> Value {
+/// One rule's task for the instance `alias` (steps 3 and 4); SS-2b: with `judged`, marked
+/// `benefit_judged: true`.
+fn compose_task(rule: &ScheduleRule, alias: &str, copies: &Copies<'_>, judged: bool) -> Value {
     let mut task = Map::new();
     task.insert(
         "id".to_owned(),
@@ -846,6 +993,9 @@ fn compose_task(rule: &ScheduleRule, alias: &str, copies: &Copies<'_>) -> Value 
     }
     task.entry("instance_overrides")
         .or_insert_with(|| Value::Array(Vec::new()));
+    if judged {
+        task.insert(BENEFIT_JUDGED_MEMBER.to_owned(), Value::Bool(true));
+    }
     if copies
         .tasks
         .get(rule.id.as_str())

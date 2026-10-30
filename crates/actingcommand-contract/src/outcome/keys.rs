@@ -634,4 +634,9 @@ outcome_keys! {
     observed_at_unix_ms: unix_ms,
     evaluated_at_unix_ms: unix_ms,
     // ---- ISO-PE: end ----
+    // ---- SS-2b (net benefit within a tier, contracts/scheduling/README.md): begin ----
+    benefit_gap: vocab(benefit_gap),
+    benefit_milli: integer,
+    expected_duration_ms: duration_ms,
+    // ---- SS-2b: end ----
 }

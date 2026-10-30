@@ -106,4 +106,7 @@ mod tests {
     // goes to the candidate closer to losing its eligibility, then more conditions, then declared
     // order.
     mod gate_ss2;
+    // SS-2b (0.12.32; register §1.225): business candidates rank by net benefit within their tier,
+    // and a candidate whose value is unknown or not positive is not dispatched.
+    mod gate_ss2b;
 }

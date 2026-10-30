@@ -561,6 +561,13 @@ term shows the same ` resources=<R>` and, unless a v1 target applies to it, the 
 fields (`target_id=*`, `mode=adjust`, ` offset_kept=1`); a candidate without one keeps every
 reason byte for byte (SS-1; the v1 `U` of the one-way guard aside).
 
+**Net benefit** (SS-2b, since 0.12.32; register §1.225). A judged candidate's net benefit reads
+this section's `r(k,p)`, `W(k,p)` and `Q_p` for what it produces, and `W(k,p)` (the base weight
+for a pool it only consumes) as the cost of what it consumes
+([scheduling/README.md](scheduling/README.md), "Net benefit within a tier"). It reads the weights
+the resource layer computed and writes none, so the one-way guard stands; `R` and every reason
+above are unchanged. A pool whose `valuation` is the pending marker has no valuation here.
+
 ## Choosing scale and importance
 
 On one instance, let H be the candidate that ranks first without the target and T a named

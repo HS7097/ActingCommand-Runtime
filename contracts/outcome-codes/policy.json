@@ -527,6 +527,8 @@
       "layer": "policy",
       "uncertain": false,
       "values": {
+        "benefit_milli": "optional",
+        "expected_duration_ms": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -536,7 +538,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Scheduling decision reason: the ranking terms of a dispatched task (decision record).",
+      "description": "Scheduling decision reason: the ranking terms of a dispatched task (decision record). SS-2b (since 0.12.32): a judged winner, ranked within its tier by its net benefit per expected millisecond, carries its net benefit benefit_milli and the expected duration expected_duration_ms it was divided by (contracts/scheduling/README.md \"Net benefit within a tier\").",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2205,6 +2207,52 @@
       "description": "Scheduling decision reason (Workflow #427-B, contracts/scheduling/README.md \"Shared run limits\"): a candidate waits because performance.pacing.max_concurrent_runs (limit_count) is reached. used policy dispatches take its slots: admitted_count admitted or running across every instance (admitted and not yet settled) and round_selected_count chosen earlier in the same evaluation round. Each dispatch counts once; a refused or settled one frees its slot. Without the key there is no such limit and the code is never given.",
       "common_causes": "performance.pacing.max_concurrent_runs is set, and that many policy dispatches run or were chosen ahead in the round.",
       "handling": "None: the candidate is evaluated again after a dispatch settles. Remove or raise performance.pacing.max_concurrent_runs (read when actingd starts) to let more run at once; 1 runs one policy dispatch at a time across every instance."
+    },
+    "policy_benefit_nonpositive": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "benefit_milli": "required",
+        "expected_duration_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.32",
+      "description": "Scheduling decision reason (SS-2b, Alice's ruling 104 point 3; contracts/scheduling/README.md \"Net benefit within a tier\"): a judged candidate (a business task the catalog marks benefit_judged, not in a chain head's run window and not a manual request) has a known net benefit benefit_milli that is not positive: what one run produces is worth no more than what it consumes costs, each at the resource layer's weight per valuation step and a regenerating pool's cost discounted by its fullness. It is not dispatched this round; expected_duration_ms is the E it would be ranked with.",
+      "common_causes": "The task consumes more value than it produces at the current readings, or the pool valuations make its yield worth nothing.",
+      "handling": "None: the candidate is judged again at every evaluation; a regenerating pool it consumes wakes the evaluation at its next step, as its cost falls while it fills. Revise the task's produces and consumes or the pools' valuation in the resource side's schedule.json if the value is wrong."
+    },
+    "benefit_unknown": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "benefit_gap": "required",
+        "pool_id": "optional",
+        "fact_key": "optional",
+        "unknown_reason": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.32",
+      "description": "Scheduling decision reason (SS-2b, Alice's rulings 104 point 3 and 116; contracts/scheduling/README.md \"Net benefit within a tier\"): a judged candidate's net benefit is unknown, so it is not dispatched; unknown is never 0 and the known part is never added up. benefit_gap says why: the task declares no produces or consumes entry, an entry's amount or a pool valuation it touches is the pending marker or missing (pool_id), or the cost of a regenerating pool it consumes needs a reading that is unknown or expired (pool_id, and fact_key with unknown_reason when the pool reads a fact; the fact refresh is asked for that reading).",
+      "common_causes": "The resource side has not written the task's produces and consumes, or the pools' valuation, yet (Alice's ruling 116: business dispatch waits until values exist); or a pool reading has expired.",
+      "handling": "Write the task's produces and consumes and each touched pool's valuation in the game's schedule.json; actinglab standard-pack check reports how many judged rules are complete, pending and undeclared. A reading is refreshed by the fact refresh."
     }
   }
 }

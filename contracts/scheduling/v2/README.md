@@ -218,3 +218,19 @@ candidates the ranking leaves equal, the one closer to losing its eligibility
 its declared `consumes` left above a required threshold or a `reserves` line)
 goes first, then the one with more required conditions, then the one earlier in
 `tasks`. A catalog serializes, and hashes, exactly as before.
+
+SS-2b (since 0.12.32; register §1.225; `../README.md`, "Net benefit within a tier"), V2 only:
+- A task may carry `benefit_judged`, a boolean. With `true` it is a business task: its
+  candidate (unless it ranks with a chain head or is a manual request) is judged by its net
+  benefit within its tier and is not dispatched while that benefit is unknown or not positive.
+  With `false` it is as without the member. The standard-pack composer writes `true` on every
+  rule whose package is not maintenance-role, and refuses a rule that writes it itself. A V1
+  document that names it is refused as an unknown field at the member.
+- A pool's `valuation` may be the string `"pending"`, and an effect's `amount` (either
+  direction, as the effect's one quantity) may be `"pending"`: the explicit marker that the
+  value is not known yet (Alice's ruling 116: 「无害占位符或者空值」). A marker changes nothing but a
+  judged task's net benefit, which it makes unknown. Any other string is `type_mismatch`; a V1
+  document that writes a marker is refused as `type_mismatch` at the member; an `amount` marker
+  beside `expected_amount_milli` is `limit_exceeded` at the entry.
+
+A catalog without these serializes, and hashes, exactly as before.

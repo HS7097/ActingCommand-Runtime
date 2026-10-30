@@ -351,7 +351,28 @@ pub struct TaskSpec {
     /// the member serializes as nothing at all.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reserves: Option<Vec<ReserveSpec>>,
+    /// SS-2b (register §1.225, `actingcommand.scheduling.v2` only): `true` marks a business task
+    /// whose candidates are judged by their net benefit within their tier (`contracts/scheduling/
+    /// README.md`, "Net benefit within a tier"). The standard-pack composer writes it on every
+    /// rule whose package is not maintenance-role; a V2 catalog may write it directly. `false`
+    /// is as without the member. Absent, the member serializes as nothing at all, so a catalog
+    /// without marks keeps its hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub benefit_judged: Option<bool>,
 }
+
+impl TaskSpec {
+    /// SS-2b: whether the catalog marks the task as judged by its net benefit.
+    pub fn is_benefit_judged(&self) -> bool {
+        self.benefit_judged == Some(true)
+    }
+}
+
+/// SS-2b (register §1.225): the explicit marker a resource side writes where a value is not
+/// known yet (Alice's ruling 116: 「无害占位符或者空值」): a pool's `valuation` and an effect's
+/// `amount` may each be this string instead of their value (`actingcommand.scheduling.v2`
+/// only). It changes nothing but the net benefit of a judged candidate, which it makes unknown.
+pub const PENDING_MARKER: &str = "pending";
 
 /// Workflow #411 B16 part 2: one reserve of a task, in the pool's real inventory units.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -478,12 +499,15 @@ pub enum FailureAction {
 pub struct ResourceEffectSpec {
     pub pool_id: String,
     pub direction: EffectDirection,
+    /// A positive integer in real inventory units, or (SS-2b, V2 only) the marker
+    /// [`PENDING_MARKER`]: the quantity is not known yet. Read it through
+    /// [`ResourceEffectSpec::units`] and [`ResourceEffectSpec::is_pending`].
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "effect_quantity"
+        deserialize_with = "effect_amount"
     )]
-    pub amount: Option<u64>,
+    pub amount: Option<EffectAmount>,
     /// Expected production per completed run, in thousandths of a real inventory unit.
     #[serde(
         default,
@@ -497,6 +521,76 @@ pub struct ResourceEffectSpec {
 
 fn effect_quantity<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<u64>, D::Error> {
     u64::deserialize(deserializer).map(Some)
+}
+
+/// An effect's written `amount` (SS-2b, register §1.225).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EffectAmount {
+    /// A non-negative integer as written; the compiler requires it to be positive.
+    Units(u64),
+    /// The marker [`PENDING_MARKER`]: the quantity is not known yet.
+    Pending,
+}
+
+impl Serialize for EffectAmount {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Units(amount) => serializer.serialize_u64(*amount),
+            Self::Pending => serializer.serialize_str(PENDING_MARKER),
+        }
+    }
+}
+
+/// An `amount` member: an unsigned integer, or the string [`PENDING_MARKER`]. Every other value,
+/// `null` included, is refused (`type_mismatch`), as an integer-only `amount` refused it before.
+fn effect_amount<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<EffectAmount>, D::Error> {
+    struct AmountVisitor;
+
+    impl serde::de::Visitor<'_> for AmountVisitor {
+        type Value = EffectAmount;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(formatter, "u64 or the string \"{PENDING_MARKER}\"")
+        }
+
+        fn visit_u64<E: serde::de::Error>(self, value: u64) -> Result<EffectAmount, E> {
+            Ok(EffectAmount::Units(value))
+        }
+
+        fn visit_i64<E: serde::de::Error>(self, value: i64) -> Result<EffectAmount, E> {
+            u64::try_from(value)
+                .map(EffectAmount::Units)
+                .map_err(|_| E::invalid_value(serde::de::Unexpected::Signed(value), &"u64"))
+        }
+
+        fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<EffectAmount, E> {
+            if value == PENDING_MARKER {
+                Ok(EffectAmount::Pending)
+            } else {
+                Err(E::invalid_value(serde::de::Unexpected::Str(value), &self))
+            }
+        }
+    }
+
+    deserializer.deserialize_any(AmountVisitor).map(Some)
+}
+
+impl ResourceEffectSpec {
+    /// The written integer `amount`; `None` for an `expected_amount_milli` production and for a
+    /// pending quantity.
+    pub fn units(&self) -> Option<u64> {
+        match self.amount {
+            Some(EffectAmount::Units(amount)) => Some(amount),
+            Some(EffectAmount::Pending) | None => None,
+        }
+    }
+
+    /// SS-2b: whether the effect's `amount` is the marker [`PENDING_MARKER`].
+    pub fn is_pending(&self) -> bool {
+        self.amount == Some(EffectAmount::Pending)
+    }
 }
 
 /// A member that must be present and may be null: with `deserialize_with`, an absent member is
@@ -922,9 +1016,125 @@ pub struct PoolSpec {
     #[serde(default, skip_serializing_if = "PoolValueSource::is_static")]
     pub value_source: PoolValueSource,
     pub group_delay: Option<GroupDelayPolicy>,
-    /// What one step of this pool's resource is worth; absent keeps the catalog hash.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub valuation: Option<PoolValuation>,
+    /// What one step of this pool's resource is worth; absent keeps the catalog hash. SS-2b (V2
+    /// only): the marker [`PENDING_MARKER`] says the worth is not known yet. Read the declared
+    /// block through [`PoolSpec::declared_valuation`].
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "valuation_declaration"
+    )]
+    pub valuation: Option<ValuationDeclaration>,
+}
+
+impl PoolSpec {
+    /// The pool's declared valuation block; `None` without one and for a pending valuation.
+    pub fn declared_valuation(&self) -> Option<&PoolValuation> {
+        match &self.valuation {
+            Some(ValuationDeclaration::Declared(valuation)) => Some(valuation),
+            Some(ValuationDeclaration::Pending) | None => None,
+        }
+    }
+
+    /// SS-2b: whether the pool's `valuation` is the marker [`PENDING_MARKER`].
+    pub fn valuation_pending(&self) -> bool {
+        self.valuation == Some(ValuationDeclaration::Pending)
+    }
+}
+
+/// A pool's written `valuation` (SS-2b, register §1.225): the block, or the marker
+/// [`PENDING_MARKER`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValuationDeclaration {
+    Declared(PoolValuation),
+    Pending,
+}
+
+impl Serialize for ValuationDeclaration {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Declared(valuation) => valuation.serialize(serializer),
+            Self::Pending => serializer.serialize_str(PENDING_MARKER),
+        }
+    }
+}
+
+/// A `valuation` member: the block (read as before, so its own refusals keep their codes and
+/// places), or the string [`PENDING_MARKER`]. `null` stays what it was, no valuation.
+fn valuation_declaration<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<ValuationDeclaration>, D::Error> {
+    struct DeclarationSeed;
+
+    impl<'de> serde::de::DeserializeSeed<'de> for DeclarationSeed {
+        type Value = ValuationDeclaration;
+
+        fn deserialize<D: Deserializer<'de>>(
+            self,
+            deserializer: D,
+        ) -> Result<ValuationDeclaration, D::Error> {
+            deserializer.deserialize_any(DeclarationVisitor)
+        }
+    }
+
+    struct DeclarationVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for DeclarationVisitor {
+        type Value = ValuationDeclaration;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(
+                formatter,
+                "struct PoolValuation or the string \"{PENDING_MARKER}\""
+            )
+        }
+
+        fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<ValuationDeclaration, E> {
+            if value == PENDING_MARKER {
+                Ok(ValuationDeclaration::Pending)
+            } else {
+                Err(E::invalid_value(serde::de::Unexpected::Str(value), &self))
+            }
+        }
+
+        fn visit_map<A: serde::de::MapAccess<'de>>(
+            self,
+            map: A,
+        ) -> Result<ValuationDeclaration, A::Error> {
+            PoolValuation::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+                .map(ValuationDeclaration::Declared)
+        }
+    }
+
+    struct OptionVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for OptionVisitor {
+        type Value = Option<ValuationDeclaration>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(
+                formatter,
+                "struct PoolValuation or the string \"{PENDING_MARKER}\""
+            )
+        }
+
+        fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_some<D: Deserializer<'de>>(
+            self,
+            deserializer: D,
+        ) -> Result<Self::Value, D::Error> {
+            serde::de::DeserializeSeed::deserialize(DeclarationSeed, deserializer).map(Some)
+        }
+    }
+
+    deserializer.deserialize_option(OptionVisitor)
 }
 
 /// A pool's resource valuation declaration (Workflow #335 S2a). The resource kind is the

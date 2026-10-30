@@ -310,6 +310,20 @@ tests = [
     "actingcommand-policy::lib::tests::gate_ss2::ss2_t6_without_ties_the_decisions_are_those_of_before",
 ]
 incident = ["#386 SS-2"]
+# SS-2b (Alice's ruling 104 point 3 and ruling 116, 2026-10-30; rd-1029 brief-116-112-114 SS-2b tests 1 to 8; contracts/scheduling/README.md, "Net benefit within a tier"; register §1.225; since 0.12.32): judged candidates of one tier rank by net benefit per expected millisecond, a higher benefit beating a higher handwritten priority; a known benefit at or below 0 is policy_benefit_nonpositive and an unknown input (no declaration, a pending entry or valuation, a missing valuation, an unknown or expired reading) benefit_unknown, neither dispatched and never the sum of a known part; maintenance-role tasks, manual requests and chain successors in their head's window are not judged and rank as before; a catalog without a mark decides as before; consumption costs its weight, a regenerating pool's discounted between the reserve line and the capacity; 350 expected milli count as 0.35; the pending markers validate in V2 and bad shapes are refused with named codes
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_ss2b::ss2b_t1_judged_candidates_rank_by_benefit_per_millisecond_within_a_tier",
+    "actingcommand-policy::lib::tests::gate_ss2b::ss2b_t2_a_known_nonpositive_benefit_is_not_dispatched",
+    "actingcommand-policy::lib::tests::gate_ss2b::ss2b_t3_every_unknown_input_is_benefit_unknown_and_never_dispatched",
+    "actingcommand-policy::lib::tests::gate_ss2b::ss2b_t4_unjudged_candidates_rank_as_before",
+    "actingcommand-policy::lib::tests::gate_ss2b::ss2b_t5_a_catalog_without_marks_decides_as_before",
+    "actingcommand-policy::lib::tests::gate_ss2b::ss2b_t6_consumption_lowers_the_benefit_by_its_cost",
+    "actingcommand-policy::lib::tests::gate_ss2b::ss2b_t7_an_expected_amount_of_350_milli_counts_as_a_fraction",
+    "actingcommand-policy::lib::tests::gate_ss2b::ss2b_t8_the_pending_markers_validate_in_v2_and_bad_shapes_are_refused",
+]
+incident = ["#386 SS-2b"]
 
 # The intent pins freshness, limits, catalog hash and ledger position
 [[gate]]
@@ -961,6 +975,13 @@ tests = [
     "actingcommand-policy::lib::tests::gate_rl1a::ss2_t5_three_priority_values_warn_and_two_do_not",
 ]
 incident = ["#386 SS-2"]
+# SS-2b (Alice's ruling 116, 「业务覆盖完整」; rd-1029 brief-116-112-114 SS-2b test 9; contracts/standard-pack-schedule.md, "Judged rules"; register §1.225; since 0.12.32): the composer marks benefit_judged every rule whose package is not maintenance-role and no other, counts the judged rules as complete, pending and undeclared, warns standard_pack_benefit_undeclared once per undeclared rule outside its own warnings, and refuses a rule that writes the mark
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_ss2b::ss2b_t9_the_composer_marks_the_judged_rules_and_counts_their_coverage",
+]
+incident = ["#386 SS-2b"]
 
 # ROUT-L RL-1a (frozen model v1.0 §3.6 "No rules at all is a valid state", §3.5, §6.1 row RL-1a; contracts/standard-pack-schedule.md): no rules, no schedule.json or no bound instance compose a valid empty V2 catalog with no approval
 [[gate]]

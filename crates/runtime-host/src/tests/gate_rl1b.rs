@@ -111,7 +111,10 @@ fn rule(id: &str, package_id: &str, priority: u64, pool: Option<&str>) -> Value 
     rule
 }
 
-/// catalog-a's pool as the pool `id`, with no scope.
+/// catalog-a's pool as the pool `id`, with no scope. SS-2b (register §1.225): with a valuation,
+/// so a composed rule that produces into it has a known positive net benefit and is dispatched as
+/// before; the composer judges every rule here, none of the fixture packages being
+/// maintenance-role.
 fn pool(id: &str) -> Value {
     let pools = parse(include_str!(
         "../../../../contracts/scheduling/examples/catalog-a/pools.json"
@@ -119,6 +122,8 @@ fn pool(id: &str) -> Value {
     let mut pool = pools["pools"][0].clone();
     strip_scopes(&mut pool);
     pool["id"] = json!(id);
+    pool["valuation"] =
+        json!({"name": "Fixture", "unit": "unit", "scale": 1, "base_weight_milli": 1000});
     pool
 }
 

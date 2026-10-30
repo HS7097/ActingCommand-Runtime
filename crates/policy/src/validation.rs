@@ -370,6 +370,18 @@ fn validate_tasks(
                 descriptor,
             ));
         }
+        // SS-2b (register §1.225): `benefit_judged` is a V2 member; a V1 document that names it
+        // is refused as an unknown member.
+        if task.benefit_judged.is_some()
+            && map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2)
+        {
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::UnknownField,
+                format!("{path}/benefit_judged"),
+                "benefit_judged requires actingcommand.scheduling.v2",
+                descriptor,
+            ));
+        }
         validate_reserves(
             task,
             &path,
@@ -819,7 +831,28 @@ fn validate_effects(
                 descriptor,
             ));
         }
-        let quantity_milli = match (effect.amount, effect.expected_amount_milli) {
+        // SS-2b (register §1.225): `amount` may be the pending marker in V2, in either direction,
+        // as the effect's one quantity. It has no quantity to bound against the pool's capacity.
+        let v2 = map.schema_version.as_deref() == Some(SCHEDULING_SCHEMA_VERSION_V2);
+        if effect.is_pending() {
+            if !v2 {
+                diagnostics.push(map.diagnostic(
+                    CatalogDiagnosticCode::TypeMismatch,
+                    format!("{effect_path}/amount"),
+                    "the pending amount requires actingcommand.scheduling.v2",
+                    descriptor,
+                ));
+            } else if effect.expected_amount_milli.is_some() || effect.confidence_milli > 1000 {
+                diagnostics.push(map.diagnostic(
+                    CatalogDiagnosticCode::LimitExceeded,
+                    effect_path.clone(),
+                    "effect requires exactly one positive amount or bounded v2 production expected_amount_milli; confidence must be in 0..=1000",
+                    descriptor,
+                ));
+            }
+            continue;
+        }
+        let quantity_milli = match (effect.units(), effect.expected_amount_milli) {
             (Some(amount), None) if amount > 0 => Some(u128::from(amount) * 1_000),
             (None, Some(amount))
                 if map.schema_version.as_deref() == Some(SCHEDULING_SCHEMA_VERSION_V2)
@@ -1721,7 +1754,18 @@ fn validate_pools(
                 descriptor,
             ));
         }
-        if let Some(valuation) = &pool.valuation {
+        // SS-2b (register §1.225): the pending marker in place of the block is V2's.
+        if pool.valuation_pending()
+            && map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2)
+        {
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::TypeMismatch,
+                format!("{path}/valuation"),
+                "the pending valuation requires actingcommand.scheduling.v2",
+                descriptor,
+            ));
+        }
+        if let Some(valuation) = pool.declared_valuation() {
             validate_valuation(
                 valuation,
                 &format!("{path}/valuation"),

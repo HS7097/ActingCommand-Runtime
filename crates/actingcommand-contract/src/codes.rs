@@ -438,6 +438,12 @@ crate::outcome_codes! {
         // `game`, `count` the values, `limit_count` 2). The root is composed as before. The
         // policy composer finds it; the resource tools report it.
         StandardPackPriorityTiersExceeded => "standard_pack_priority_tiers_exceeded": warning / declaration_error,
+        // SS-2b (register §1.225; Alice's ruling 116): a rule the composer judges by net benefit
+        // (its package is not maintenance-role) declares no value: no `produces` or `consumes`
+        // entry, or a pool it touches with neither a valuation nor the pending marker (keys
+        // `game`, `task_id` the rule; optional `pool_id`). Its candidates are not dispatched
+        // until it does. The policy composer finds it; the resource tools report it.
+        StandardPackBenefitUndeclared => "standard_pack_benefit_undeclared": warning / declaration_error,
         // Workflow #373 NAV-6: a standard-pack root file breaks its shape, a limit or a
         // reference (keys `game`, `path`, `standard_pack_problem`, `json_pointer`). The Runtime's
         // root reader and check-config report it; the resource tools share the same check.

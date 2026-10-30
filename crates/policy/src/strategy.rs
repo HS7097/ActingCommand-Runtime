@@ -882,12 +882,12 @@ fn catalog_production_rate(
         {
             continue;
         }
-        if task
-            .produces
-            .iter()
-            .any(|effect| effect.pool_id == *pool_id && effect.expected_amount_milli.is_some())
-        {
-            // This planner derives guaranteed integer inventory, not probabilistic yield.
+        if task.produces.iter().any(|effect| {
+            effect.pool_id == *pool_id
+                && (effect.expected_amount_milli.is_some() || effect.is_pending())
+        }) {
+            // This planner derives guaranteed integer inventory, not probabilistic yield (SS-2b:
+            // nor a quantity that is still pending).
             return Ok(None);
         }
         let state = tasks
@@ -922,7 +922,7 @@ fn catalog_production_rate(
             .iter()
             .filter(|effect| effect.pool_id == *pool_id)
         {
-            let amount = effect.amount.ok_or_else(|| {
+            let amount = effect.units().ok_or_else(|| {
                 StrategyError::invalid("integer production amount is unavailable")
             })?;
             let contribution = amount.checked_mul(executions).ok_or_else(|| {

@@ -13,7 +13,7 @@
 
 use crate::codes::ResourceToolingCode;
 use crate::standard_pack_check::{RootFileInputs, cross_check, store_update_cooldowns};
-use crate::standard_pack_schedule::check_schedule;
+use crate::standard_pack_schedule::report_schedule;
 use crate::{PackageBundleRequest, PackageBundleResponse};
 use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
@@ -23,6 +23,7 @@ use actingcommand_contract::{
 use actingcommand_execution_kernel::{NavigationPackageDescriptor, TaskPackageDescriptor};
 use actingcommand_execution_kernel::{PreparedContainedTask, validate_bundle_maintenance};
 use actingcommand_pack_containment::{Containment, ContainmentError, InstanceId};
+use actingcommand_policy::BenefitCoverage;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -92,13 +93,14 @@ pub fn package_bundle(request: PackageBundleRequest) -> LabResult<PackageBundleR
         request.maintenance,
         &root_files,
     )
-    .and_then(|(index, warnings)| {
+    .and_then(|(index, warnings, benefit_coverage)| {
         fs::rename(&staging, &out).map_err(|error| write_error(&out, error))?;
         Ok(PackageBundleResponse {
             status: "written".to_string(),
             out: out.display().to_string(),
             index,
             warnings,
+            benefit_coverage,
         })
     })
     .map_err(|mut error| {
@@ -119,7 +121,8 @@ fn write_bundle(
     source: Option<actingcommand_contract::BundleSource>,
     maintenance: Option<Vec<BundleMaintenance>>,
     root_files: &RootFileInputs,
-) -> LabResult<(BundleIndex, Vec<Outcome>)> {
+) -> LabResult<(BundleIndex, Vec<Outcome>, Option<BenefitCoverage>)> {
+    let mut benefit_coverage = None;
     let packs_dir = staging.join("packs");
     fs::create_dir(&packs_dir).map_err(|error| write_error(&packs_dir, error))?;
     let mut containment = Containment::for_metadata_validation();
@@ -276,15 +279,18 @@ fn write_bundle(
             &|directory: &str| packs_dir.join(directory),
             admitted,
         )?);
-        // ROUT-L RL-1a: `--schedule`, composed with this root as the Runtime composes it.
+        // ROUT-L RL-1a: `--schedule`, composed with this root as the Runtime composes it; SS-2b:
+        // with the judged rules' coverage and one warning per judged rule that declares no value.
         if let Some(schedule) = root_files.schedule() {
-            warnings.extend(check_schedule(
+            let report = report_schedule(
                 &applications.game,
                 &root,
                 index.maintenance(),
                 &schedule.bytes,
                 &schedule.path,
-            )?);
+            )?;
+            warnings.extend(report.warnings);
+            benefit_coverage = Some(report.benefit_coverage);
             // UPD-1 fix round 1 (review L6): a store update rule needs a cooldown.
             store_update_cooldowns(
                 &applications.game,
@@ -300,7 +306,7 @@ fn write_bundle(
     for (name, file) in root_files.files() {
         write_new(&staging.join(name), &file.bytes)?;
     }
-    Ok((index, warnings))
+    Ok((index, warnings, benefit_coverage))
 }
 
 /// The `package_id` a pack source's `control.json` declares, which names the pack's directory

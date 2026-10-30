@@ -4240,6 +4240,100 @@ the seeded hash.
 | SS2-3 | the allocation order `allocation_order` (the round's sort and the reserve gate's): `promoted`, `total`, `affinity`, `TieKey::order` (bounded first, chances, time left, runs left, more conditions, declared position), then `tie_breaker`, task id, instance id | behaviour (evaluation) | SS-2 | — | the Runtime's own fact refresh task has no key and comes after every declared task in a tie |
 | SS2-4 | `rank_breakdown` and ranked `decision_candidate_not_selected` details end with ` chain_head=<id>` for an inheriting candidate and, on a tie (`lead=0` / `behind_by=0`), ` tie=<bounded\|none\|unknown> chances=… time_left_ms=… runs_left=… conditions=… declared=…` | developer text (never persisted) | SS-2 | the policy evaluator | absent otherwise, so a decision without a chain window or a tie keeps its bytes |
 
+### 1.225 Slice SS-2b (0.12.32): business candidates ranked by net benefit within a tier; unknown value is not dispatched (Alice's ruling 104 point 3, approved with 104 on 10-30 21:3x and checked by the research channel, Workflow #386 comment 6523148251; ruling 116 of 10-30 23:2x–23:3x, which overrides that check's "unknown is dispatched as today"; design `rd-1029/design-sch-state.md` §4.1 steps 3 and 5, §4.6, §4.10; coordinator work order `rd-1029/brief-116-112-114.md` SS-2b)
+
+[scheduling/README.md](scheduling/README.md) ("Net benefit within a tier"; "Pool Valuation" and
+"Expected production (v2)" for the markers; "Task Reserves" item 4; "Dispatch Decision Record"
+item 1), [scheduling/v2/README.md](scheduling/v2/README.md) and the V2 `tasks`, `pools` and
+`common` schemas, [standard-pack-schedule.md](standard-pack-schedule.md) ("Judged rules", "Two
+priority tiers", "Tools", "The store update rule") and
+[resource-targets.md](resource-targets.md) ("Net benefit") are the contract. The number 1.225 is
+the coordinator's.
+
+**What.** (1) A V2 task may carry `benefit_judged: true`; the standard-pack composer writes it on
+every rule whose package is not maintenance-role (and refuses a rule that writes it). (2) A judged
+candidate (a marked task's, neither in a chain head's run window nor a manual request, a trigger
+that requires a `session.` instruction through `all`) has the net benefit `B = Σ produce·W/Q −
+Σ consume·P/Q` in milli, the resource layer's own `r`, `W` and `Q`, `P = W` discounted for a
+regenerating pool linearly between the task's reserve line and the capacity. An unknown input
+(no effect, a pending entry, a pending or missing valuation, an unknown or expired reading `P`
+needs) defers it with `benefit_unknown` and never adds up the known part; a known `B ≤ 0` defers
+it with `policy_benefit_nonpositive`. (3) In a catalog with a mark the round ranks `promoted`, then
+the tier (unmarked, the maintenance tier, before marked, the business tier), then within a tier
+the unjudged in the order of before and the judged by `B ÷ E`, then the SS-2 tie-break; the
+reserve gate takes candidates in that order. (4) The explicit marker `"pending"` may stand for a
+pool's `valuation` and an effect's `amount` (V2 only); it changes nothing but a judged
+candidate's `B`. (5) `actinglab standard-pack check` and `package bundle --schedule` answer each
+game's judged rules as complete, pending and undeclared, and warn once per undeclared rule
+(`standard_pack_benefit_undeclared`). (6) The idle plan counts a decision the gate holds neither
+due nor as a wake of its own.
+
+**Why.** Ruling 104 point 3: within a tier, net benefit from high to low; not positive is not
+dispatched. Ruling 116: write harmless placeholders or empty values now, so the scheduler may in
+effect stop, and business values go straight into the task packages once they exist; until then
+the business side is maintained by hand through the Lab. The research check (6523148251) asked
+that unknown never be 0 and that partial knowledge be unknown; 116 overrides its "unknown is
+dispatched as today". The tier is the task's §1.222 tier, read from the mark, not the raw
+`priority` value: production rules still carry about 78 priorities per game until RS-8, and the
+handwritten priority must not order the judged candidates of one tier (the work order's test 1).
+**No switch**: no configuration key and no per-instance mode (104 has no benefit-first switch).
+
+**Unchanged.** A catalog without `benefit_judged` and without a marker keeps its hash and decides
+byte for byte as before (no candidate is judged, the order is the one of before). The resource
+layer, every pool weight and `R` (one-way rule: nothing here writes a weight), the score stage's
+thresholds, the reserve gate's steps, every closure position, B41's handover, the shared run
+limits, the spend values (a pending `amount` reads as no declared quantity there, as in the
+reserve gate and the tie-break), game neutrality. Unjudged candidates (maintenance-role tasks, a
+chain successor in its head's window, a manual request, the Runtime's own reading) rank in the
+order of before within their tier.
+
+**New codes and keys.** `benefit_unknown` (info; `benefit_gap` required; `pool_id`, `fact_key`,
+`unknown_reason` optional) and `policy_benefit_nonpositive` (info; `benefit_milli`,
+`expected_duration_ms`), policy codes, because no code says "a judged candidate's value is unknown
+or not positive" (`score_deferred` is a selection document's threshold, `resource_reserve_insufficient`
+a reserve line); the domain `benefit_` for the policy crate; `standard_pack_benefit_undeclared`
+(warning / `declaration_error`; `game`, `task_id`; `pool_id` optional), a contract code beside
+SS-2's tiers warning, because `standard_pack_package_unclassified` names a package nothing
+schedules; the keys `benefit_gap` (vocabulary `benefit_gap`: `no_effects`, `entry_pending`,
+`valuation_pending`, `valuation_missing`, `reading_unknown`), `benefit_milli` (integer) and
+`expected_duration_ms` (duration); `rank_breakdown` gains `benefit_milli` and
+`expected_duration_ms` as optional values. **No new ledger record kind, no configuration key, no
+interface revision.**
+
+**What changes live.** Every production rule's package is a business package except the
+maintenance-role ones, and no rule declares `produces` or `consumes` and no pool a valuation
+(`rd-1029/design-sch-state.md` §2.1), so once deployed every business candidate is
+`benefit_unknown` (`no_effects`) and is not dispatched (ruling 116); maintenance-role rules and the
+Runtime's own reading run as before. The scheduler is stopped by Alice's order meanwhile
+(`alice-116-scheduler-stop`), and the gate lifts, bypasses or works around no pause. The store
+update rule's package is not maintenance-role by the root files, so it is judged too: an instance
+that meets the client update dialog stays held until the resource side gives that rule values, or
+a later slice classifies a `store_update` package as maintenance (the bundle's `maintenance[]`
+has no use for it). The first workbench check after the deploy composes a new generation (every
+business rule gains the mark, so the rules digest changes) and activates it.
+
+**Rollback** (to 0.12.31). The configuration needs nothing. The ledger: the new values and the
+new `why` codes ride in existing reason chains (`PolicyReasonRecord` is `#[serde(transparent)]`
+over `Outcome`, whose values every 0.12 reader keeps as a map without a key check). The catalog:
+a 0.12.31 build refuses `benefit_judged` and the pending markers (`unknown_field`,
+`type_mismatch`), and its start compiles the active generation and every generation an unsettled
+dispatch pins (`policy_host.rs`, `load_catalog_generation`), failing with
+`catalog_generation_invalid` on a marked one. So before rolling back, let 0.12.32 activate a
+generation without marks (take `schedule.json` out of the game roots, which composes the valid
+empty catalog, or leave only maintenance-role rules) with no policy dispatch unsettled (the
+scheduler is stopped); 0.12.31 then starts on it and composes its own generation, unmarked, at
+its first check.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SS2b-1 | V2 task member `benefit_judged` (boolean; `false` as absent) | catalog format addition (no ledger shape) | SS-2b | the standard-pack composer (`true` on every rule whose package is not maintenance-role) | V1: `unknown_field` at the member; a `schedule.json` rule that writes it is `standard_pack_root_invalid`, `schedule_invalid` at `/rules/<i>/benefit_judged`; absent serializes as nothing, so an unmarked catalog keeps its hash |
+| SS2b-2 | the marker `"pending"` as a V2 pool's `valuation` and as an effect's `amount` (`ValuationDeclaration::Pending`, `EffectAmount::Pending`) | catalog format addition (no ledger shape) | SS-2b | the resource side | chosen as the value's own place (no new member, no exclusivity rule: a marker cannot stand beside its value): any other string is `type_mismatch`, `null` keeps its meaning (a valuation: none; an amount: refused); V1: `type_mismatch` at the member; `amount` marker with `expected_amount_milli` is `limit_exceeded` at the entry; a marker reads as no value everywhere but the net benefit |
+| SS2b-3 | the benefit gate (`evaluator/benefit.rs`): `benefit_unknown`, `policy_benefit_nonpositive`; an unknown reading's key goes to the fact refresh as a predicate's does | behaviour (evaluation, score stage) | SS-2b | the policy evaluator | exact rational sum, floored once; overflow fails the evaluation (`policy_evaluation_numeric_overflow`), as the resource terms do; `B` recorded at most `i64::MAX`; a nonpositive candidate wakes at a consumed regenerating pool's next step |
+| SS2b-4 | `allocation_order` with tiers: `promoted`, tier (unmarked first), unjudged by `total`, judged by `B ÷ E` (`B·E' > B'·E` in 128 bits), `affinity`, SS-2's key, hash, ids; the reserve gate takes candidates in it | behaviour (evaluation) | SS-2b | — | only in a catalog with a mark; otherwise the order of before |
+| SS2b-5 | `rank_breakdown` values `benefit_milli`, `expected_duration_ms` (judged winner); detail suffix ` benefit_milli=<B> expected_duration_ms=<E>` on it and on a ranked judged related candidate | new optional values of a pending entry (no shape change) | SS-2b | the policy evaluator | persisted in the dispatch events' reason chain as values; the detail is developer text |
+| SS2b-6 | `StandardPackComposition::benefit_warnings`, `benefit_coverage` (`BenefitCoverage {complete, pending, undeclared}`); `StandardPackCheckResponse.benefit_coverage`, `PackageBundleResponse.benefit_coverage` (absent without `schedule.json`) | tools output addition | SS-2b | the resource tools | counted per rule of the file (not per instance copy); `warnings()` of the composition is unchanged, so the Runtime and `standard-pack compose` report neither |
+| SS2b-7 | the idle plan: a decision whose last reason is `benefit_unknown` or `policy_benefit_nonpositive` is not due | behaviour (runtime-host, IDLE-1) | SS-2b | `schedule_explanation.rs` (`IdleDraft::add`) | its own wake still counts; without it a business task waiting for values would keep a closed game awake |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -56,6 +56,11 @@ mod gate_386_cf4;
 #[cfg(test)]
 mod gate_386_cf5;
 
+// SS-2b (register §1.225): standard-pack check counts the judged rules' values and warns once per
+// rule that declares none.
+#[cfg(test)]
+mod gate_ss2b;
+
 // Workflow #428 CFL-2: standard-pack check names a target whose chain differs from its shared
 // read, with and without `pages.json`.
 #[cfg(test)]
