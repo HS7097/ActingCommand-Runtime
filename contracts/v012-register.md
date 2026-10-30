@@ -4117,7 +4117,12 @@ unless the file writes it) and drops each, `config_override_dropped`, listed in
 its next record of `host.config_overrides` no longer holds those rows (they are lost, not kept for
 a later update). A row of `scheduling.parallel.enabled` (settable in 0.12.30 too) is kept, over
 0.12.30's default `false` (`config_override_base_changed` when it was set over this release's
-default `true`). No override needs clearing before a rollback; an operator who wants the dropped
+default `true`). The Runtime start does not fail, but the install's rollback `instructions` check
+(`apps/actingctl/src/install/postcheck.rs`, #421 S2-IF) fails while `instructions_dropped` is not
+empty, and it lists these rows and R-1's (§1.219); so before rolling back the operator clears those
+keys (`actingctl config clear <key>`, a preset's rows included) or accepts that one check failing
+(corrected in the 0.12.31 snapshot, 2026-10-30: this sentence said no override needed clearing
+before a rollback, which holds for the Runtime start only). An operator who wants the dropped
 values in 0.12.30 writes them into its configuration file.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
