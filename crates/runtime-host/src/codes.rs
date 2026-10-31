@@ -183,7 +183,7 @@ actingcommand_contract::outcome_codes! {
         /// PAUSE-AUTO (0.12.34): with `skip_reason` and no `watch_kind`, the daemon start
         /// requested no configured start, or its claim met the pause on its key and started
         /// nothing; with `idle_action` `stop_emulator` too, IDLE-1's wake was not queued, or its
-        /// claim so ended; with `watch_kind` `restart`, also a watch restart claim requested
+        /// claim so ended; with `watch_kind`, also a watch restart or recognition claim requested
         /// before the pause so ended.
         EmulatorAutostartSkipped => "emulator_autostart_skipped": info / none,
         /// Info. A drain or a shutdown ended the autostart claim before its Start; it releases

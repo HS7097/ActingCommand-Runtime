@@ -83,10 +83,10 @@ PAUSE-AUTO (since 0.12.34, Alice's ruling 117 A, which replaces ruling 35 here f
 and IDLE-1's wake): neither the configured emulator start at daemon start nor IDLE-1's wake after
 `stop_emulator` starts the emulator of an instance its own pause holds in any stage. Neither
 requests its claim (the wake stays owed), and a claim either requested before the pause asks
-again on its key up to just before its Start, then releases the key and starts nothing; so does a
-restart claim the watch requested before the pause (the coordinator's ruling of 10-31 on rulings
-112 and 117 A), while a recognition claim the watch requested before the pause is unchanged. Each
-skip is `emulator_autostart_skipped` (`skip_reason` `instance_paused`) once per pause revision and
+again on its key up to just before its Start, then releases the key and starts nothing; so do a
+restart and a recognition claim the watch requested before the pause (the coordinator's rulings
+of 10-31 on rulings 112 and 117 A), which bind and prepare nothing either and give the place they
+took in the watch's bound back. Each skip is `emulator_autostart_skipped` (`skip_reason` `instance_paused`) once per pause revision and
 start (`contracts/emulator-control.md`, "Pauses (PAUSE-AUTO)"). The global pause holds neither, and an
 explicit emulator control runs under any pause as before. A stuck-recovery ladder is admitted only while its instance is not paused; a pause
 that arrives while a ladder holds the instance ends the ladder at its next step

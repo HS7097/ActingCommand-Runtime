@@ -1206,12 +1206,15 @@ requesting the claim, and ends one it meets on the claim's key, without a Start.
   hold, so the last time just before the Start: a claim requested before the pause began (waiting
   for the network, its turn or a blackout's end) ends there, releases its key with no `command.*`
   record and no failure pair, starts nothing, and records the same skip. IDLE-1's wake after
-  `stop_emulator` asks it the same way ("Emulator watch", "Idle stop (IDLE-1)"), and so does the
-  emulator watch's restart claim (R3; the coordinator's ruling of 10-31 on rulings 112 and 117 A):
-  the watch asks before it requests the claim (WATCH-P), and a restart claim requested before the
-  pause began asks again on its key and ends the same way, its skip with `watch_kind` `restart`.
-  Each start records its skip once per pause revision (the memory of WATCH-P's skips, never
-  persisted; the watch's restart shares one entry between its polls and its claim). The pause is
+  `stop_emulator` asks it the same way ("Emulator watch", "Idle stop (IDLE-1)"), and so do the
+  emulator watch's restart and recognition claims (R3, EMU-BIND; the coordinator's rulings of
+  10-31 on rulings 112 and 117 A): the watch asks before it requests a claim (WATCH-P), and a
+  claim requested before the pause began asks again on its key and ends the same way, starting,
+  binding and preparing nothing, its skip with its `watch_kind` (`restart` or `recognize`); the
+  request it counted against the watch's bound is given back, so a skipped restart or recognition
+  takes no place among `emulator_control.restart_attempts`. Each start records its skip once per
+  pause revision (the memory of WATCH-P's skips, never persisted; each of the watch's kinds shares
+  one entry between its polls and its claim). The pause is
   still no routine gate of the claim: it neither queues it nor makes it yield. After the resume a
   next daemon start, the watch's first poll and the next idle check behave as before; the daemon
   start does not run again at the resume, so an emulator a paused daemon start left stopped is
@@ -1286,8 +1289,9 @@ the configured starts; the watch ends with the host.
   fails. Its Start and the result are recorded as every configured start's (`command.received`,
   `command.validated` or `command.rejected` + `runtime.failed`, the report lines). Within
   `emulator_control.restart_window_ms` (default 30 min) the watch starts one instance at most
-  `emulator_control.restart_attempts` times (default 3), whether the Start passed or failed;
-  once they are used up, `emulator_watch_restart_exhausted` (warning; `alias`, `attempts`,
+  `emulator_control.restart_attempts` times (default 3), whether the Start passed or failed (a
+  restart whose claim a pause ended on its key before its Start counts not, PAUSE-AUTO since
+  0.12.34); once they are used up, `emulator_watch_restart_exhausted` (warning; `alias`, `attempts`,
   `limit_count`, `retry_after_ms`) is recorded once, and the instance is not started again until
   the oldest of those restarts leaves the window or a person's emulator control of the instance
   (`actingctl emulator`, `ac_emulator`) clears the count. Nothing else starts it meanwhile: the
@@ -1358,12 +1362,12 @@ the configured starts; the watch ends with the host.
   `emulator_watch_restart_exhausted`. The resume adds nothing: its reconnect and self-check run
   as before ([scheduling-pause.md](scheduling-pause.md)), and the first poll after the pause is
   gone restarts or recognizes as for any instance, a resume and a new pause starting a new
-  revision. The global pause holds neither. Since 0.12.34 a restart claim the watch requested
-  before the pause began asks the pause again on its key and, held, releases the key and starts
-  nothing (`emulator_autostart_skipped`, `watch_kind` `restart`, `skip_reason` `instance_paused`,
-  once per revision with the polls' skips; "Pauses (PAUSE-AUTO)"); a recognition claim requested
-  before the pause, which starts no emulator, runs as before. The watch asks the same question as
-  every automatic start (`automatic_start_hold`). No configuration key: `watch_enabled = false` still
+  revision. The global pause holds neither. Since 0.12.34 a restart or recognition claim the watch
+  requested before the pause began asks the pause again on its key and, held, releases the key
+  and starts, binds and prepares nothing (`emulator_autostart_skipped`, its `watch_kind`,
+  `skip_reason` `instance_paused`, once per revision with the polls' skips; "Pauses
+  (PAUSE-AUTO)"), and the request it counted leaves the bound again. The watch asks the same
+  question as every automatic start (`automatic_start_hold`). No configuration key: `watch_enabled = false` still
   stops the polls altogether.
 - **Observe only (R4).** An instance without `start_emulator` is read and recorded, never
   started (EMU-BIND: a running one is recognized). The watch never stops or restarts a running
