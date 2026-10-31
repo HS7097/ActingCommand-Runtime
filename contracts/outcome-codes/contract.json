@@ -17453,7 +17453,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A standard-pack root file (bundle.json, pages.json, interrupts.json, navigation.json or, Workflow #392 DA-4, display-layout.json of one game root) breaks its shape, a limit or a reference (Workflow #373 NAV-6). The Runtime records it at startup and refuses, in preparation, a run that needs the root; check-config lists it; the resource tools share the same check. A broken root never stops the Runtime.",
+      "description": "A standard-pack root file (bundle.json, pages.json, interrupts.json, navigation.json or, Workflow #392 DA-4, display-layout.json of one game root) breaks its shape, a limit or a reference (Workflow #373 NAV-6). The Runtime records it at startup and refuses, in preparation, a run that needs the root; check-config lists it; the resource tools share the same check. A broken root never stops the Runtime. Workflow #429 R-11 (since 0.12.36): a game root's optional ui.json, which only actingctl packs and ac_packs read, is checked by the same contract crate; each violation of a refused ui.json is one such warning there, at its json_pointer, and never breaks the root or changes a row.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

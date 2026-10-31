@@ -5955,7 +5955,7 @@
           "description": "bundle.json breaks the bundle index rules."
         },
         "bundle_missing": {
-          "description": "The game root holds interrupts.json, navigation.json, pages.json, (Workflow #392 DA-4) display-layout.json or (Workflow #357 DB-1) a tables directory but no bundle.json."
+          "description": "The game root holds interrupts.json, navigation.json, pages.json, (Workflow #392 DA-4) display-layout.json, (Workflow #357 DB-1) a tables directory or, for the readers of ui.json (Workflow #429 R-11, since 0.12.36), ui.json but no bundle.json."
         },
         "pages_missing": {
           "description": "The game root holds interrupts.json or navigation.json but no pages.json."
@@ -6052,6 +6052,18 @@
         },
         "display_layout_invalid": {
           "description": "display-layout.json breaks one of its rules: its correction.radius_px is above 64 (Workflow #392 DA-4, model 392 v1.2 section 4.1)."
+        },
+        "ui_out_of_limits": {
+          "description": "ui.json is larger than 256 KiB, or one of its lists, maps, words or texts is outside its limit (Workflow #429 R-11, since 0.12.36)."
+        },
+        "ui_duplicate": {
+          "description": "ui.json lists a group id, a pack's package_id, a risk word of one pack or an aspect ratio twice (Workflow #429 R-11, since 0.12.36)."
+        },
+        "ui_group_unknown": {
+          "description": "A pack's group in ui.json is not an id of its groups (Workflow #429 R-11, since 0.12.36)."
+        },
+        "ui_parameter_undeclared": {
+          "description": "A name under a pack's parameters in ui.json is not a parameter the package declares; until package-level declarations exist (R-10), every name (Workflow #429 R-11, since 0.12.36)."
         }
       }
     },

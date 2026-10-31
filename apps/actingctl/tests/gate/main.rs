@@ -9,6 +9,9 @@ mod emulator_controller;
 #[allow(dead_code)]
 #[path = "../../../../tests/support/held_runtime.rs"]
 mod held_runtime;
+// Workflow #429 R-11: the neutral standard-pack game roots of `mcp_packs`.
+#[path = "../../../../tests/support/standard_pack_schedule.rs"]
+mod standard_pack_schedule;
 
 // Workflow #382 A-1: usage errors before any connection, and refused requests' exits.
 mod cli_grammar;

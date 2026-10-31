@@ -431,7 +431,11 @@ other games are composed.
   subsystems, so `requires` is not checked there (check-config checks it). A game root that
   cannot be read adds `package_binding_unreadable`, a broken one or a refused `schedule.json`
   adds `standard_pack_root_invalid`, and that game has no row. The overview reads the same file
-  without composing.
+  without composing. Workflow #429 R-11 (since 0.12.36): each row also carries `task_ids`, the
+  composed tasks that run its package in id order (the rule's id, or `<rule id>@<alias>` for a
+  rule composed for two or more instances), `irreversible` when the package's `control.json`
+  reads, and its game's `ui.json` entry for the package and `display`
+  ([runtime-interface.md](runtime-interface.md), `packs`).
 
 ## The store update rule (UPD-1, since 0.12.30)
 

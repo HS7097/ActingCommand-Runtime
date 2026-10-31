@@ -940,6 +940,19 @@ tests = [
 ]
 incident = ["#411 RL-1c"]
 
+# Workflow #429 R-11 (0.12.36; register §1.240; design rd-1029/429-A-runtime.md A.7.3; work order rd-1031/brief-r11.md, tests 1 to 6): a game root's optional ui.json (actingcommand.ui.v1) reads back exactly as written when it keeps its rules (1), and each violation is standard_pack_root_invalid at its JSON pointer: shape (malformed, game_mismatch), limits (ui_out_of_limits), an unregistered package_id (package_not_listed), a missing group (ui_group_unknown), an undeclared parameter (ui_parameter_undeclared), an id twice (ui_duplicate), several in document order and at most 64, and ui.json without bundle.json bundle_missing (2); actingctl packs lists a composed row of a game root without ui.json as before plus task_ids and irreversible, with no ui, no display and no warning (3); irreversible is true exactly when an entry of the package's control.json provides declares it, absent with package_binding_unreadable when the control file cannot be read (4); task_ids are the composed tasks that run each package, <rule>@<alias> for a rule composed for two instances (5); actingctl packs and ac_packs answer the same ui, display, irreversible and task_ids, and a refused ui.json adds its warnings and leaves its game's rows listed (6)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::standard_pack_ui::tests::r11_t1_a_valid_ui_json_reads_back_exactly_as_written",
+    "actingcommand-contract::lib::standard_pack_ui::tests::r11_t2_each_ui_json_violation_is_reported_at_its_place",
+    "actingcommand-actingctl::bin:actingctl::packs::tests::r11_t3_without_ui_json_the_rows_are_as_before_with_irreversible_and_task_ids",
+    "actingcommand-actingctl::bin:actingctl::packs::tests::r11_t4_irreversible_is_derived_from_the_package_s_provides",
+    "actingcommand-actingctl::bin:actingctl::packs::tests::r11_t5_task_ids_are_the_composed_tasks_of_each_package",
+    "actingcommand-actingctl::gate::mcp_packs::gate_r11_packs_and_ac_packs_answer_the_same_ui_irreversible_and_task_ids",
+]
+incident = ["#429 R-11"]
+
 # ROUT-L RL-1c follow-up (#411 6444982862 L2; 0.12 wave 1 slice W1-9, brief rd-1028/brief-wave1.md): actingd suspended run by hand, without --deadline-ms, reads the ledger under the default deadline from the process's start, and a caller's run under the deadline it passes
 [[gate]]
 coverage = "Y"

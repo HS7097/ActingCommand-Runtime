@@ -80,8 +80,8 @@ crate::outcome_vocabulary! {
         /// `bundle.json` breaks the bundle index rules (M-PKG).
         BundleInvalid => "bundle_invalid",
         /// The game root holds `interrupts.json`, `navigation.json`, `pages.json`, (Workflow
-        /// #392 DA-4) `display-layout.json` or (Workflow #357 DB-1) a `tables/` directory but no
-        /// `bundle.json`.
+        /// #392 DA-4) `display-layout.json`, (Workflow #357 DB-1) a `tables/` directory or, for
+        /// the readers of `ui.json` (Workflow #429 R-11), `ui.json` but no `bundle.json`.
         BundleMissing => "bundle_missing",
         /// The game root holds `interrupts.json` or `navigation.json` but no `pages.json`.
         PagesMissing => "pages_missing",
@@ -158,6 +158,17 @@ crate::outcome_vocabulary! {
         /// Workflow #392 DA-4: `display-layout.json` breaks one of its rules: its
         /// `correction.radius_px` is above 64 (model 392 v1.2 §4.1).
         DisplayLayoutInvalid => "display_layout_invalid",
+        /// Workflow #429 R-11 (since 0.12.36): `ui.json` is larger than 256 KiB, or one of its
+        /// lists, maps, words or texts is outside its limit.
+        UiOutOfLimits => "ui_out_of_limits",
+        /// R-11: `ui.json` lists a group id, a pack's `package_id`, a risk word of one pack or an
+        /// aspect ratio twice.
+        UiDuplicate => "ui_duplicate",
+        /// R-11: a pack's `group` in `ui.json` is not an id of its `groups`.
+        UiGroupUnknown => "ui_group_unknown",
+        /// R-11: a name under a pack's `parameters` in `ui.json` is not a parameter the package
+        /// declares; until R-10 brings package-level declarations, every name.
+        UiParameterUndeclared => "ui_parameter_undeclared",
     }
 }
 
@@ -229,8 +240,9 @@ crate::outcome_vocabulary! {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StandardPackRootIssue {
     /// One of [`STANDARD_PACK_BUNDLE_FILE`], [`STANDARD_PACK_PAGES_FILE`],
-    /// [`STANDARD_PACK_INTERRUPTS_FILE`], [`STANDARD_PACK_NAVIGATION_FILE`] or (Workflow #392
-    /// DA-4) [`crate::STANDARD_PACK_DISPLAY_LAYOUT_FILE`].
+    /// [`STANDARD_PACK_INTERRUPTS_FILE`], [`STANDARD_PACK_NAVIGATION_FILE`], (Workflow #392
+    /// DA-4) [`crate::STANDARD_PACK_DISPLAY_LAYOUT_FILE`] or (Workflow #429 R-11)
+    /// [`crate::STANDARD_PACK_UI_FILE`].
     pub file: &'static str,
     pub problem: StandardPackProblem,
     pub pointer: String,
