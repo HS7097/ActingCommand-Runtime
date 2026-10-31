@@ -1248,6 +1248,15 @@ tests = [
 ]
 incident = ["#410"]
 
+# LAB-OBS-1 (0.12.33; register §1.228; production v0.12.32 on 10-31): an observe --capture whose frame matches no page of its package answers ok with state no_match and closes its runtime.debug_observe as command.validated, with no command.rejected (it was command.rejected, error, with no reason); a matching observe is unchanged
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::runtime_input_proxy::lab_obs_1_an_unmatched_capture_observe_records_no_rejected_debug_observe",
+    "actingcommand-actinglab::runtime_input_proxy::lab_obs_1_a_matching_capture_observe_is_unchanged",
+]
+incident = ["LAB-OBS-1"]
+
 # Workflow #390 R-10 (forced-compromises mapping R-10; REC-M §8.6, option 2; register §1.80): an OCR target located relative to an anchor template whose anchor did not pass did not pass, with failure ocr_region_unresolved, its region evidence (unresolved anchor_not_matched) and no provider call, in a page rule, an any_of group (another member may pass it), a check member and a guard (guard.check or verify_text: the guard refuses with zero input); one page's missing anchor no longer fails the recognition of the other pages; in forbidden, directly or as a member of a check, such a target is admitted only when its anchor is directly in the page's required (refused at /pages/<i>/forbidden/<j> otherwise, an anchor inside a required check included), and then a missing anchor rules the page out through required while the text present rules it out and its absence does not; an anchor that matched with its region out of the frame stays an evaluation error; the observation's page recognition and the package dry run decide the same page
 [[gate]]
 key = "75"

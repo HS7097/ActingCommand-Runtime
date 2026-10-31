@@ -4596,6 +4596,62 @@ already does.
 | SS2c-3 | `BenefitCoverage.maintenance_declared`; a declared rule is counted in none of `complete`, `pending`, `undeclared` | tools output addition | SS-2c | the resource tools (`standard-pack check`, `package bundle --schedule`) | counted per rule of the file that is not held, whatever its package's role |
 | SS2c-4 | `standard_pack_priority_tier_mismatch` (warning / `declaration_error`; `game`, `task_id`), `StandardPackComposition::tier_warnings` | new contract code, tools output | SS-2c | the policy composer; reported by the resource tools | only with exactly two `priority` values among a game's composed rules; a declared rule on the lower, a judged rule on the higher; never a refusal; `warnings()`, `standard-pack compose` and the Runtime unchanged |
 
+### 1.228 Slice LAB-OBS-1 (0.12.33): an unmatched `observe --capture` no longer leaves a rejected `runtime.debug_observe`, and a rejected debug command names its reason (production defect of v0.12.32 on 10-31 11:2x: four `ac_lab_observe` calls with `capture=true` whose frame matched no page of the package answered `ok:true`, `state: no_match`, and each was followed by a `runtime.debug_observe` recorded as `command.rejected`, error, `values: {}`, effect `not_performed`; observes that matched a page left none; coordinator work order `rd-1031/brief-lab-obs-1.md`)
+
+[contained-page-observation.md](contained-page-observation.md) (the LAB-OBS-1 paragraph) is the
+contract. The number 1.228 is the coordinator's.
+
+**Root cause.** The second request is actinglab's own: `observe --capture` (`run_runtime_observe`)
+closes its debug session's `runtime.debug_observe`, opened with `requested`, by `RecordDebugEvent`.
+It sent `completed` only for `recognized` and `failed` for `no_match`, `conflict` and `partial`,
+although the observation stood and the answer was `ok`. The Runtime did not refuse that request: it
+accepted it and wrote what it said, a failed non-run debug command being `command.rejected`
+(`command_rejected`, error) without an outcome, hence `values: {}`. Neither the instance pause, a
+lease (the request holds none) nor a missing field takes part. `do`, `ensure` and `wait` already
+close an answer that stands as `completed` (`finish_runtime_debug_result`).
+
+**What.** (1) `observe --capture` closes `runtime.debug_observe` with `completed` whatever the
+observation's status; the status stays the answer's `state` and the observation's own terminal
+(`PageUnmatched` for `no_match`). (2) `RuntimeDebugEvent` gains `failure_code`, a registered code,
+written on a `failed` `observe`, `do`, `ensure` or `wait` and on nothing else
+(`RuntimeDebugEvent::rejected`); `failed` stays for `lab_run`, recorded as `task.failed` as before.
+Validation refuses a failed command without a registered code, and any other event with one, as
+`invalid_runtime_debug_event` (the client before sending: `runtime_debug_event_invalid`; the Runtime:
+denied, nothing recorded). (3) The Runtime records a failed command as `command.rejected` whose
+outcome is `command_rejected` with `failure_code` (`RuntimeDebugEvent::outcome`). actinglab names the
+Runtime outcome's code when the observe request itself failed, and the answer's code when `do`,
+`ensure` or `wait` failed (relayed: a spelling the catalog does not list becomes
+`outcome_relay_unregistered`).
+
+**Why this fix.** The follow-up is needed: it is the terminal that pairs the `lab.request` of the
+same debug session, as every Lab debug command has one. So it is kept, in the shape the Runtime
+records as an accepted command. A `failed` terminal is still sent when the command fails, and it now
+carries its reason.
+
+**Unchanged.** A matching observe records the same `lab.request` and `command.validated`. The
+observation request, its records and the answer are unchanged. Game-neutral; no configuration key.
+
+**New codes and keys.** None. `command_rejected` (pending) declares the existing key `failure_code`
+as optional. **No new ledger record kind, no new record member** (`command.rejected` already carries
+`outcome`, ledger revision 3), **no configuration key, no interface revision**: only actinglab of
+the same build sends `RecordDebugEvent`.
+
+**What changes live.** After the deploy, an unmatched `ac_lab_observe` or `observe --capture` leaves
+`command.validated` (info) instead of `command.rejected` (error), so the error count and diagnose stop
+showing it. A failed Lab observe, do, ensure or wait shows its reason on its `command.rejected`.
+
+**Rollback** (to 0.12.32). Nothing to do. The configuration and state files are untouched. The
+records 0.12.33 wrote are of existing kinds, and 0.12.32 reads `failure_code` as a received value of
+a key its table holds. After the rollback an unmatched observe again leaves a reasonless
+`command.rejected`. actinglab and the Runtime roll back together; a 0.12.32 Runtime refuses the
+0.12.33 failed event's `failure_code` (`deny_unknown_fields`).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| LOB-1 | the terminal `RecordDebugEvent` of `observe --capture` | behaviour (no shape change) | LAB-OBS-1 | actinglab | `completed` for every status of an observation that stands; `failed` only when the command fails |
+| LOB-2 | `RuntimeDebugEvent.failure_code` (a registered code; `RuntimeDebugEvent::rejected`, `::outcome`) | wire member addition (optional, absent when unused) | LAB-OBS-1 | actinglab's debug session | required on a failed `observe`, `do`, `ensure`, `wait`; refused elsewhere; `invalid_runtime_debug_event` |
+| LOB-3 | `command.rejected` of a failed Lab debug command: outcome `command_rejected` with `failure_code` | rule of an existing record (shape unchanged) | LAB-OBS-1 | the Runtime (`record_debug_event`) | was the bare diagnostic code, `values: {}`; `command_rejected` declares `failure_code` optional |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

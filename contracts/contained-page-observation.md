@@ -105,6 +105,20 @@ otherwise), `runtime_outcome` is that outcome, `correlation_id` the debug
 session's and `hint` `inspect-runtime-ledger`. A failed terminal ledger append
 keeps its message and carries the same details.
 
+LAB-OBS-1 (register §1.228, since 0.12.33): an `observe --capture` whose
+observation stands closes its debug session's `runtime.debug_observe` with
+`completed` (recorded `command.validated`) whatever its status: `no_match`,
+`conflict` and `partial` are the answer's `state` and the observation's own
+terminal above, never a failed command, as `do`, `ensure` and `wait` close an
+answer that stands. Before, every status but `recognized` closed it `failed`,
+which the Runtime recorded as `command.rejected` with no reason. A failed
+`observe`, `do`, `ensure` or `wait` closes it `failed` and names the code it
+failed with (`RuntimeDebugEvent.failure_code`: the Runtime outcome's code, or the
+Lab answer's); the Runtime records `command.rejected` whose outcome is
+`command_rejected` with that code as `failure_code`. A failed command event that
+names no registered code, and any other event that names one, is refused
+(`invalid_runtime_debug_event`) and records nothing.
+
 Workflow #410 item 1: every `observe` answer, offline and with `--capture`,
 states the frame's coordinate system as `frame_coordinates {device_pixels:
 [width, height], orientation, applies_to: ["tap", "tap_rect", "swipe"]}`
