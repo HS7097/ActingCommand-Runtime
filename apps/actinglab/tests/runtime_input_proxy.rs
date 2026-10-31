@@ -1515,7 +1515,7 @@ fn l4_observe_capture_record_stores_the_runtime_frames_capture_backend() {
 // its `runtime.debug_observe` was then recorded as `command.rejected`, error, with no reason).
 // One `observe --capture` of a neutral package whose one page wants the colour `expected` on the
 // fake's red 1x1 frame: its answer, and the type of every `runtime.debug_observe` record the
-// Runtime's ledger then holds, oldest first.
+// Runtime's ledger then holds, oldest first. `label` seeds the state key: 16 to 1024 bytes.
 fn lab_obs_1_observe(expected: &str, label: &[u8]) -> (Value, Vec<EventType>) {
     let root = TempDir::new().unwrap();
     let runtime_root = root.path().join("runtime");
@@ -1617,7 +1617,7 @@ fn lab_obs_1_an_unmatched_capture_observe_records_no_rejected_debug_observe() {
 // one `command.validated` at the end with no `command.rejected`.
 #[test]
 fn lab_obs_1_a_matching_capture_observe_is_unchanged() {
-    let (answer, records) = lab_obs_1_observe("[255,0,0]", b"lab-obs-1-match");
+    let (answer, records) = lab_obs_1_observe("[255,0,0]", b"lab-obs-1-page-match");
     assert_eq!(answer["ok"], true, "{answer}");
     assert_eq!(answer["data"]["state"], "recognized", "{answer}");
     assert!(
