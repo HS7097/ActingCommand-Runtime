@@ -73,7 +73,10 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 /// - `ledger` [3, 3]: SQLite format 2, `actingcommand.event.v3`; format 1 is refused. Workflow
 ///   #411 BT-LR (register §1.153) raises `max` to 4 once for the 0.12.x B train (Alice
 ///   2026-10-20): additive members and two task record types; a revision-3 ledger is still read,
-///   so [3, 4], with no fresh state root and no migration.
+///   so [3, 4], with no fresh state root and no migration. Workflow 114-A (0.12.35, register
+///   §1.236) raises `max` to 5: the record type `policy.not_run_changed` and its payloads, shapes
+///   only (no Runtime of 114-A writes one); revision-3 and revision-4 ledgers are still read, so
+///   [3, 5], one way.
 /// - `package` 3: the one `package` bump of v0.12.0 (register §6); only bundle index v4 is read.
 ///   Workflow #411 B15 R1 (register §1.111) raises `max` to 4 in v0.12.3: a pack's `remedy` and
 ///   `provides`; a revision-3 pack is still read. Workflow #406 T3 (register §1.137) raises it to
@@ -89,7 +92,7 @@ const V0120: &[(&str, [u64; 2])] = &[
     ("actingd-config", [5, 23]),
     ("install-control", [0, 1]),
     ("install-selection", [1, 1]),
-    ("ledger", [3, 4]),
+    ("ledger", [3, 5]),
     ("package", [3, 5]),
     ("runtime-client", [2, 4]),
     ("runtime-outcomes", [1, 1]),

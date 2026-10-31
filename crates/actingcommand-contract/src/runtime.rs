@@ -72,6 +72,9 @@ pub use workbench::*;
 // Workflow #429 R-7a (register §1.233, since 0.12.35): the player hold's frozen contract.
 mod player_hold;
 pub use player_hold::*;
+// Workflow 114-A (register §1.236, since 0.12.35): the frozen vocabularies of `ScheduleHistory`.
+mod schedule_history;
+pub use schedule_history::*;
 
 // Interface anchor `runtime-client` (contracts/component-interfaces.md): raise its revision in
 // distribution/windows/component-interfaces.json when older peers can no longer use these two.

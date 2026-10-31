@@ -685,6 +685,8 @@ CREATE TABLE ledger_index (
       is an ended obligation;
     - the `lifecycle` key `tagged_state_enabled` names the seeding's marker
       (`runtime.lifecycle_observed` phase `tagged_state_enabled`).
+  - Workflow 114-A (register §1.236, §11.8) adds `not_run/<alias>/<task>` and
+    `not_run_stream/<alias>`, the keys of `policy.not_run_changed`.
   - `open`: the intents `policy.dispatch_intent`, `lease.transition_intent`,
     `task.terminal_intent`, `input.intent` and `application.intent`. A result (dispatch admitted
     or rejected, lease granted, transferred, renewed, released, expired or failed, task
@@ -1016,6 +1018,57 @@ CREATE TABLE ledger_frame_refs_extent (
   rows, and run only while the extent covers `1..=` their snapshot's head; otherwise the pass
   decides nothing (`actingd frame_retention pass skipped=frame_refs_incomplete`;
   [ledger-store.md](ledger-store.md), "Frame cleaner"). No configuration key of the index.
+
+### 11.8 The not-run history (Workflow 114-A, since 0.12.35; ledger revision 5)
+
+Register §1.236; design `rd-1031/design-114-reasons-v5.md` §2 with its freeze addendum. Alice's
+114 (method 2): when a candidate's not-run reason changes, one record carries the change, and the
+index keeps each key's latest record. 114-A builds the reader only; no Runtime of 114-A writes a
+record (114-B is the first writer, 114-C the start, 114-D the read `ScheduleHistory`).
+
+- **The record.** `policy.not_run_changed`, family `policy`, action `policy.not_run`, severity
+  info; durable, so it commits with FULL sync; in no view's type list (§14.3: only `Events`
+  shows it, and a type filter finds it), so the view DDL is unchanged. Its instance link is the
+  alias's registered `InstanceId`.
+- **One stream per alias and owner epoch.** Every record carries `instance_alias`,
+  `stream {owner_epoch, seq}` (`seq` from 1), `prev` (the alias's previous record, `null` when it
+  has none), `base` (the first part of the latest valid baseline it folds onto, `null` on a
+  baseline's first part), `evaluated_at_unix_ms`, `eval_seq`, `catalog_hash`,
+  `budget {window_start_unix_ms, used, bytes}`, `prior` (on the alias's first record of the
+  epoch) and `closes` (on the first record after a merged interval, only with `prev`). The four
+  kinds: `change` (`entries`, at most 64, each `{task_id, from, to}`; `control {from, to}`,
+  `summary {from, to}`, `player_hold_end`; never empty), `baseline` (`baseline_reason`, `rows`
+  and `selected` at most 256 each, `gone`, `control`, `summary`, `part` of `parts` at most 16,
+  `prev_base`), `suppressed` (the budget marker: `window`, `trigger`, `limit_records`,
+  `limit_bytes?`, `pending_key_changes`) and `retired` (`reason`: `unconfigured`, `unregistered`
+  or `recorder_faulted`; `gone?`; `recorder_faulted` carries no `gone` and names the failed
+  write-side check as `check`). One record is at most 64 KiB of compact JSON.
+- **The ledger's own copies.** The control block's four members (the player hold, the global
+  pause, the instance pause, the resource fence), `effective`, `PlayerHoldEnd` (with its
+  `operation`, or `superseded`, or the hold only), a row's `state` and `eligibility`, the summary
+  and the dispatch state are the ledger's shapes, versioned with the ledger revision, not with
+  `runtime-client`: a member or a word `Status` or `ScheduleExplanation` adds later reaches the
+  ledger only with a new `ledger` revision. The reused vocabularies (`instance_gate`,
+  `player_hold_phase` and the hold's others, `channel`, `via`) are the ledger's own plain enums,
+  word for word R-7a's `ALL` by their guard test.
+- **What the reader checks**, on every read of every row (a writer's open, an online page, an
+  offline page): the shape (unknown members refused, required members, the ranges above), the
+  closed vocabularies, the self-consistency that depends on no code (`value_gate` only on the
+  candidate layer; `class` and `class_since_unix_ms` together; `effective` present exactly when a
+  member is and naming a present one; `closes` only with `prev`; `prior.suppression_open` false
+  means `first_evaluated_at_unix_ms` is the record's own evaluation; the hold copy and the
+  operation copy by every condition of R-7a's two self-checks, an operation's `phase` and
+  `failed_phase` never `held`; `player_hold_end`'s `operation` and `superseded` not both;
+  `retired`'s `gone` and `check`), and the spelling of every code (`validate_policy_token`). It
+  never checks that a code is registered, the writer's golden table or whether `effective` is the
+  first gate in the order of the control gates ([player-hold.md](player-hold.md), R-7a §2.6;
+  114-B's write side holds those): an unknown code is carried as it is, so adding a code or
+  changing a golden-table class raises no revision, while a word added to a closed vocabulary or
+  a member added or removed does.
+- **The index** (§11.1): `not_run/<alias>/<task>` for each key a record names (a change set's
+  changed keys; a baseline part's `rows`, `selected` and `gone`; a retirement's `gone`) and
+  `not_run_stream/<alias>` for every record. A key whose latest record names it gone has no
+  current row. `control` and `summary` have no key. No start reads them before 114-C.
 
 ## 12 Start and shutdown order (AO-6; G16 from AO-3)
 

@@ -13,7 +13,7 @@ use actingcommand_actinglab_architecture::{
     inspect_enum_variants, inspect_field_accesses, inspect_function_origin_terms,
     inspect_generic_authoring_identity, inspect_generic_runtime_identity, inspect_lab_source,
     inspect_ledger_append_ingress, inspect_ledger_forbidden_sources, inspect_ledger_public_api,
-    inspect_persisted_event_ownership, inspect_producer_event_capabilities,
+    inspect_persisted_event_ownership, inspect_producer_event_capabilities_in_files,
     inspect_provider_symbol_literals, inspect_public_api, inspect_pure_decision_source,
     inspect_refusal_branches, inspect_source_facts, inspect_stderr_writes,
     lab_removability_violations, ledger_owns_query_matching,
@@ -551,23 +551,30 @@ fn ledger_ingress_accepts_only_sanitized_event_v2() {
         append_violations.join("\n")
     );
 
+    // Each file is handed over on its own: a module file may open with `//!` docs or
+    // inner attributes, which are only valid at the start of a file.
     let event_root = root.join("crates/actingcommand-contract/src/event");
-    let mut capability_files = Vec::new();
-    collect_rust_files(&event_root, &mut capability_files);
-    capability_files.sort();
-    let mut capability_source =
-        fs::read_to_string(root.join("crates/actingcommand-contract/src/event.rs"))
-            .expect("read event root source");
-    for file in capability_files {
-        capability_source.push('\n');
-        capability_source.push_str(
-            &fs::read_to_string(&file)
-                .unwrap_or_else(|error| panic!("read {}: {error}", file.display())),
-        );
-    }
-    let capability_violations = inspect_producer_event_capabilities(
+    let mut capability_files = vec![root.join("crates/actingcommand-contract/src/event.rs")];
+    let mut nested_files = Vec::new();
+    collect_rust_files(&event_root, &mut nested_files);
+    nested_files.sort();
+    capability_files.extend(nested_files);
+    let capability_sources = capability_files
+        .iter()
+        .map(|file| {
+            let label = file
+                .strip_prefix(&root)
+                .expect("event source inside workspace")
+                .display()
+                .to_string();
+            let source = fs::read_to_string(file)
+                .unwrap_or_else(|error| panic!("read {}: {error}", file.display()));
+            (label, source)
+        })
+        .collect::<Vec<_>>();
+    let capability_violations = inspect_producer_event_capabilities_in_files(
         "crates/actingcommand-contract/src/event.rs and event/**/*.rs",
-        &capability_source,
+        &capability_sources,
     )
     .expect("inspect producer capabilities");
     assert!(

@@ -109,6 +109,8 @@ closed_code!(EventAction {
     // Workflow #383 (register L7, L14; D1): the decision-memory and fact-refresh value records.
     PolicyControlState => "policy.control_state",
     PolicyFactRefresh => "policy.fact_refresh",
+    // Workflow 114-A (register §1.236): the not-run history's records.
+    PolicyNotRun => "policy.not_run",
     CatalogActivate => "catalog.activate",
     CatalogRollback => "catalog.rollback",
     RuntimeDebugWait => "runtime.debug_wait",

@@ -2963,6 +2963,9 @@
         "policy.fact_refresh": {
           "description": "Policy fact refresh."
         },
+        "policy.not_run": {
+          "description": "Policy not run."
+        },
         "catalog.activate": {
           "description": "Catalog activate."
         },
@@ -3946,6 +3949,10 @@
         },
         "policy.fact_refresh_transition": {
           "description": "Policy fact refresh transition.",
+          "category": "info"
+        },
+        "policy.not_run_changed": {
+          "description": "Policy not run changed.",
           "category": "info"
         },
         "catalog.transition_intent": {

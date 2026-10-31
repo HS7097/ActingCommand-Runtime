@@ -2319,9 +2319,32 @@ pub fn inspect_producer_event_capabilities(
     source: &str,
 ) -> Result<Vec<String>, String> {
     let file = syn::parse_file(source).map_err(|err| format!("failed to parse {path}: {err}"))?;
-    let aliases = local_type_aliases(&file.items);
+    Ok(producer_event_capability_violations(path, &file.items))
+}
+
+/// The same check over a module tree inspected as one surface, given as
+/// `(file path, source)` pairs. Each file is parsed on its own, so its inner
+/// attributes and `//!` module docs stay at the start of a file, the only place
+/// Rust allows them; joining the files into one source first would put them after
+/// the items of the files before it, which no parser accepts. The items of every
+/// file are then inspected together, as one source would be.
+pub fn inspect_producer_event_capabilities_in_files(
+    path: &str,
+    sources: &[(String, String)],
+) -> Result<Vec<String>, String> {
+    let mut file_items = Vec::new();
+    for (file_path, source) in sources {
+        let file =
+            syn::parse_file(source).map_err(|err| format!("failed to parse {file_path}: {err}"))?;
+        file_items.extend(file.items);
+    }
+    Ok(producer_event_capability_violations(path, &file_items))
+}
+
+fn producer_event_capability_violations(path: &str, file_items: &[Item]) -> Vec<String> {
+    let aliases = local_type_aliases(file_items);
     let mut items = Vec::new();
-    collect_nested_items(&file.items, &mut items);
+    collect_nested_items(file_items, &mut items);
     let mut violations = Vec::new();
     let mut found_store_issued_artifact = false;
     for item in items.iter().copied() {
@@ -2593,7 +2616,7 @@ pub fn inspect_producer_event_capabilities(
     if defined_or_aliased_static_code(&items, &aliases) {
         violations.push(format!("{path}: producer event surface retains StaticCode"));
     }
-    Ok(violations)
+    violations
 }
 
 fn inspect_public_artifact_capability_routes(

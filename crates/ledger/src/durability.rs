@@ -99,6 +99,9 @@ pub(crate) fn commit_sync(payload: &EventPayload) -> CommitSync {
         | EventType::PolicyControlStateRecorded
         | EventType::PolicyActivityStateRecorded
         | EventType::PolicyFactRefreshTransition
+        // Durable (Workflow 114-A, register §1.236): the not-run history, tagged by its two
+        // index prefixes, with the value records.
+        | EventType::PolicyNotRunChanged
         | EventType::AgentWakeObligationRecorded
         | EventType::PerformancePacingChanged
         | EventType::PerformanceDispatchShareChanged
