@@ -4,21 +4,26 @@
 //!
 //! - `run --plan <plan.toml> --run-dir <D:\.Claude\exp402\runs\<run_id>>`: one bench run on the
 //!   real backends. `--fake` uses the fake backend (D2, no device), with `--fake-hang-close
-//!   <instance>:<N|S>` and `--fake-no-self-exit` for the close-never-returns rehearsal.
+//!   <instance>:<N|S>` and `--fake-no-self-exit` for the close-never-returns rehearsal; each fake
+//!   S open starts a `fake-child` process outside the job object (the stand-in for S's host-side
+//!   `adb shell` child, D2 item 10), and the instances with `apk = true` get the fake APK.
 //! - `view --viewer-id <n> --run-dir <dir> --ttl-ms <ms> [--slow-fps <f>]
-//!   [--stop-renew-after-ms <ms>] [--unsubscribe-after-ms <ms>]`: a viewer (the bench starts it).
+//!   [--stop-renew-after-ms <ms>] [--unsubscribe-after-ms <ms>] [--gdi]`: a viewer (the bench
+//!   starts it); `--gdi` draws each frame in a minimal window (`A_submit`, not presentation).
 //! - `fake-child --scid <hex> [--max-seconds <s>]`: the stand-in for S's host-side `adb shell`
 //!   child in D2 (outside the job object).
 //!
 //! The bench writes nothing to its standard streams (§3.10 item 3); the result is the exit code
 //! and the run directory.
 
+use actingcommand_capture_bench::apk::{AdbApkConnector, ApkConnector, FakeApk, FakeApks};
 use actingcommand_capture_bench::backend::{BackendFactory, DeviceSideCheck, MaterialFactory};
 use actingcommand_capture_bench::clock::{Clock, SystemClock};
 use actingcommand_capture_bench::fake::{
-    CloseHang, FakeCheckScript, FakeDevice, FakeMaterials, FakeScript, FaultAt, Latch,
+    CloseHang, FakeCheckScript, FakeDevice, FakeMaterials, FakePattern, FakeScript, FaultAt, Latch,
+    ProcessChildren,
 };
-use actingcommand_capture_bench::metrics::HostMetrics;
+use actingcommand_capture_bench::metrics::{HostMetrics, HostProbes};
 use actingcommand_capture_bench::model::{BackendKind, RunResult};
 use actingcommand_capture_bench::plan::Plan;
 use actingcommand_capture_bench::real::{RealDevice, TimingSink};
@@ -40,7 +45,7 @@ fn options(arguments: &[String]) -> Result<BTreeMap<String, String>, String> {
         let name = arguments[index]
             .strip_prefix("--")
             .ok_or_else(|| format!("unexpected argument {}", arguments[index]))?;
-        let flag = matches!(name, "fake" | "fake-no-self-exit");
+        let flag = matches!(name, "fake" | "fake-no-self-exit" | "gdi");
         if flag {
             map.insert(name.to_owned(), String::new());
             index += 1;
@@ -76,13 +81,43 @@ fn run_command(arguments: &[String]) -> i32 {
         std::env::current_exe().unwrap_or_else(|_| PathBuf::from("ac-capture-bench.exe"));
     let fake = options.contains_key("fake");
     let mut limits = FixedLimits::production();
-    let (backends, device_check, materials, backend_label): (
+    let apk_instances: Vec<String> = plan
+        .instances
+        .iter()
+        .filter(|instance| instance.apk)
+        .map(|instance| instance.name.clone())
+        .collect();
+    let (backends, device_check, materials, backend_label, apk): (
         Arc<dyn BackendFactory>,
         Arc<dyn DeviceSideCheck>,
         Arc<dyn MaterialFactory>,
         &str,
+        Option<Arc<dyn ApkConnector>>,
     ) = if fake {
         let mut script = FakeScript::default();
+        // The fake APK of the first APK instance draws its timecode into the fake frames.
+        let apks: BTreeMap<String, Arc<FakeApk>> = apk_instances
+            .iter()
+            .map(|name| {
+                (
+                    name.clone(),
+                    FakeApk::new(Arc::clone(&clock), 7_000_000_000),
+                )
+            })
+            .collect();
+        if let Some(apk) = apk_instances.first().and_then(|name| apks.get(name)) {
+            script.width = 640;
+            script.height = 360;
+            script.pattern = Some(FakePattern {
+                apk: Arc::clone(apk),
+                geometry: actingcommand_capture_bench::timecode::BandGeometry {
+                    cell: 24,
+                    offset_x: 0,
+                    offset_y: 0,
+                },
+                view: (1280, 720),
+            });
+        }
         if let Some(target) = options.get("fake-hang-close")
             && let Some((instance, kind)) = target.split_once(':')
         {
@@ -105,18 +140,37 @@ fn run_command(arguments: &[String]) -> i32 {
             limits.self_exit = false;
         }
         let device = FakeDevice::new(Arc::clone(&clock), script, FakeCheckScript::default());
+        // D2 item 10: the stand-in `adb shell` children, outside the job object.
+        device.set_children(ProcessChildren::new(executable.clone()));
         let materials = Arc::new(FakeMaterials {
             writes: AtomicU64::new(0),
         });
+        let apk: Option<Arc<dyn ApkConnector>> =
+            (!apks.is_empty()).then(|| Arc::new(FakeApks { apks }) as Arc<dyn ApkConnector>);
         (
             Arc::new(Arc::clone(&device)),
             Arc::new(device),
             Arc::new(materials),
             "fake",
+            apk,
         )
     } else {
         let sink = TimingSink::install();
         let device = RealDevice::new(&plan, Arc::clone(&clock), sink);
+        let apk: Option<Arc<dyn ApkConnector>> = (!apk_instances.is_empty()).then(|| {
+            Arc::new(AdbApkConnector {
+                adb_path: plan.safety.adb_path.clone(),
+                serials: plan
+                    .instances
+                    .iter()
+                    .filter(|instance| {
+                        instance.apk && plan.safety.serial_whitelist.contains(&instance.serial)
+                    })
+                    .map(|instance| (instance.name.clone(), instance.serial.clone()))
+                    .collect(),
+                timeout: std::time::Duration::from_secs(5),
+            }) as Arc<dyn ApkConnector>
+        });
         (
             Arc::new(Arc::clone(&device)),
             Arc::new(device),
@@ -124,6 +178,7 @@ fn run_command(arguments: &[String]) -> i32 {
                 root: run_dir.join("bmodel"),
             }),
             "real",
+            apk,
         )
     };
     // §5.5: the bounded per-process GPU counters, in the job object.
@@ -177,6 +232,12 @@ fn run_command(arguments: &[String]) -> i32 {
             "bench_timing": actingcommand_device::bench_timing::ENABLED,
             "job_object": job.is_some(),
             "typeperf": typeperf.as_ref().map(std::process::Child::id),
+            "apk": apk.is_some(),
+        }),
+        apk,
+        probes: Arc::new(HostProbes {
+            temp_dir: std::env::temp_dir(),
+            pid: std::process::id(),
         }),
     };
     let outcome = run(&plan_text, &run_dir, env);
@@ -213,6 +274,7 @@ fn view_command(arguments: &[String]) -> i32 {
             .and_then(|value| value.parse::<f64>().ok()),
         stop_renew_after_ms: number("stop-renew-after-ms"),
         unsubscribe_after_ms: number("unsubscribe-after-ms"),
+        gdi: options.contains_key("gdi"),
     })
 }
 

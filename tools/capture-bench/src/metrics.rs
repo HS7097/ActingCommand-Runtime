@@ -35,6 +35,66 @@ pub trait MetricsSource: Send {
     fn sample(&mut self) -> MetricsSample;
 }
 
+/// #402 C2b: the per-cell readings (§5.5, §2.2): the vendor stdio capture files of this process
+/// and the `VMMHeadless` handle counts.
+pub trait CellProbes: Send + Sync {
+    /// The vendor stdio capture files of this process: total bytes and file count.
+    fn stdio_capture(&self) -> Result<(u64, u64), String>;
+    /// The `VMMHeadless` processes and their handle counts.
+    fn vmm_handles(&self) -> Result<Vec<crate::winproc::VmmProcess>, String>;
+}
+
+/// The host's readings: `actingcommand-vendor-stdio-<pid>-*.log` in the process TEMP (the
+/// launcher sets it to the run directory's `temp\`, §3.10 item 4), and a process snapshot.
+pub struct HostProbes {
+    pub temp_dir: PathBuf,
+    pub pid: u32,
+}
+
+impl CellProbes for HostProbes {
+    fn stdio_capture(&self) -> Result<(u64, u64), String> {
+        let prefix = format!("actingcommand-vendor-stdio-{}-", self.pid);
+        let entries = std::fs::read_dir(&self.temp_dir)
+            .map_err(|error| format!("read {}: {error}", self.temp_dir.display()))?;
+        let mut bytes = 0u64;
+        let mut files = 0u64;
+        for entry in entries {
+            let entry = entry.map_err(|error| format!("list the TEMP folder: {error}"))?;
+            let name = entry.file_name();
+            if name.to_string_lossy().starts_with(&prefix) {
+                let size = entry
+                    .metadata()
+                    .map_err(|error| format!("size of {}: {error}", name.to_string_lossy()))?
+                    .len();
+                bytes += size;
+                files += 1;
+            }
+        }
+        Ok((bytes, files))
+    }
+
+    fn vmm_handles(&self) -> Result<Vec<crate::winproc::VmmProcess>, String> {
+        crate::winproc::vmm_handle_counts()
+    }
+}
+
+/// The D1 readings: fixed values.
+#[derive(Default)]
+pub struct ScriptedProbes {
+    pub stdio: (u64, u64),
+    pub vmm: Vec<crate::winproc::VmmProcess>,
+}
+
+impl CellProbes for ScriptedProbes {
+    fn stdio_capture(&self) -> Result<(u64, u64), String> {
+        Ok(self.stdio)
+    }
+
+    fn vmm_handles(&self) -> Result<Vec<crate::winproc::VmmProcess>, String> {
+        Ok(self.vmm.clone())
+    }
+}
+
 /// A fake source that replays scripted samples (the D1 working-set and disk triggers).
 pub struct ScriptedMetrics {
     pub samples: Vec<MetricsSample>,

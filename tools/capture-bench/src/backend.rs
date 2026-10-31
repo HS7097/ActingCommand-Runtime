@@ -338,6 +338,16 @@ pub trait DeviceSideCheck: Send + Sync {
         method: IdentityMethod,
         stream: &StreamFacts,
     ) -> Result<(), CheckFailure>;
+
+    /// #402 C2b (C10 item 10): stops this stream's server on the device, only when a fresh scan
+    /// finds the identity tuple unchanged (pid, start time, `boot_id`, argv, server path);
+    /// returns the pid it stopped. Any difference or failed query stops nothing.
+    fn stop_server(&self, instance: &str, identity: &IdentityTuple) -> Result<u32, CheckFailure> {
+        let _ = (instance, identity);
+        Err(CheckFailure::Unconfirmed(
+            "this device-side check cannot stop a server".to_owned(),
+        ))
+    }
 }
 
 /// A device backend of one instance (§3.2 item 3). Every call runs under the instance's

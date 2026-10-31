@@ -28,6 +28,104 @@ pub struct Plan {
     pub budget: BudgetPlan,
     #[serde(default)]
     pub metrics: MetricsPlan,
+    /// #402 C2b: the test-pattern APK's control (C3's protocol).
+    #[serde(default)]
+    pub apk: ApkPlan,
+    /// #402 C2b: C8's pictures, truth and offline evaluation command (§5.8).
+    #[serde(default)]
+    pub c8: Option<C8Plan>,
+}
+
+/// #402 C2b: how the bench drives the test-pattern APK (PROTOCOL §5-§7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApkPlan {
+    /// The band's cell edge until INFO reports the layout (PROTOCOL §4.2, default 24).
+    #[serde(default = "default_cell")]
+    pub cell: u32,
+    /// PINGs per calibration (plan §5.1: 200).
+    #[serde(default = "default_pings")]
+    pub pings: u32,
+    /// The recalibration period inside a window (plan §5.1 item 2: 10 min).
+    #[serde(default = "default_recalibrate")]
+    pub recalibrate_ms: u64,
+    /// How often the record streams are fetched (the vsync ring holds about 9 min at 60 Hz).
+    #[serde(default = "default_records_period")]
+    pub records_period_ms: u64,
+    /// After a C6 tap: how long the bench looks for the first frame that shows the flip.
+    #[serde(default = "default_flip_wait")]
+    pub flip_wait_ms: u64,
+    /// A step trial waits this long for the first S frame that shows the step.
+    #[serde(default = "default_step_wait")]
+    pub step_wait_ms: u64,
+    /// A mode change or a rotation waits this long for the APK to show it.
+    #[serde(default = "default_mode_wait")]
+    pub mode_wait_ms: u64,
+}
+
+impl Default for ApkPlan {
+    fn default() -> Self {
+        Self {
+            cell: default_cell(),
+            pings: default_pings(),
+            recalibrate_ms: default_recalibrate(),
+            records_period_ms: default_records_period(),
+            flip_wait_ms: default_flip_wait(),
+            step_wait_ms: default_step_wait(),
+            mode_wait_ms: default_mode_wait(),
+        }
+    }
+}
+
+fn default_cell() -> u32 {
+    24
+}
+
+fn default_pings() -> u32 {
+    200
+}
+
+fn default_recalibrate() -> u64 {
+    600_000
+}
+
+fn default_records_period() -> u64 {
+    60_000
+}
+
+fn default_flip_wait() -> u64 {
+    1_000
+}
+
+fn default_step_wait() -> u64 {
+    2_000
+}
+
+fn default_mode_wait() -> u64 {
+    5_000
+}
+
+/// #402 C2b: C8 (plan §5.8). The pictures and `truth.json` stay on the Workflow side; the
+/// bench reads them by path and holds no game content.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct C8Plan {
+    /// The folder of the pictures `truth.json` names.
+    pub images_dir: String,
+    /// `truth.json`: `{"package", "package_sha256", "facts", "images": [{"image", "kind",
+    /// "targets": [{"target", "class", "hit", "text"}]}]}`.
+    pub truth: String,
+    /// Frames saved per picture and path (plan: 5).
+    #[serde(default = "default_frames_per_image")]
+    pub frames_per_image: u32,
+    /// The `actinglab` of the same build, named in the coverage list's command column; the
+    /// bench does not run it (the coordinator does, offline).
+    #[serde(default)]
+    pub actinglab: Option<String>,
+}
+
+fn default_frames_per_image() -> u32 {
+    5
 }
 
 fn default_seed() -> u64 {
@@ -67,8 +165,9 @@ pub enum Orientation {
 }
 
 /// How the simulated formal loop taps (§5.6). `adb_input` is `adb -s <E> shell input tap`.
-/// `nemu_ipc` would need a fenced-write witness, which only the Runtime's scheduler issues, so
-/// this slice refuses it at the start check.
+/// `nemu_ipc` taps through the instance's paired Nemu session, on the same worker thread as the
+/// N captures (§5.6 "N 预览和点按同线程排队"); the bench mints its own fenced-write witness
+/// under the experiment-only guard exception (Workflow #402, the branch is never merged).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TouchKind {
@@ -90,6 +189,9 @@ pub struct InstancePlan {
     /// the bench tries the candidates itself.
     #[serde(default)]
     pub identity_method: Option<IdentityMethod>,
+    /// #402 C2b: the test-pattern APK is installed on this E and the bench drives it.
+    #[serde(default)]
+    pub apk: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -103,6 +205,10 @@ pub struct CellPlan {
     /// Whether the segments of a round run in a seeded random order (§4.1 顺序).
     #[serde(default)]
     pub shuffle: bool,
+    /// #402 C2b (C9): the segments of a round run at the same time (one segment per instance),
+    /// for example E1's and E2's previews together.
+    #[serde(default)]
+    pub concurrent: bool,
     pub segments: Vec<SegmentPlan>,
 }
 
@@ -121,6 +227,18 @@ pub enum SegmentMode {
     PollSequence,
     /// Open to the first frame, close and confirm, `reps` times (C0, C2).
     ColdStart,
+    /// #402 C2b: `reps` calibrations of `apk.pings` PINGs (C1, K; plan §5.1).
+    Calibrate,
+    /// #402 C2b: `reps` step trials on S (C1, K; plan §5.3 `V_hi`).
+    StepTrials,
+    /// #402 C2b: `reps` rotations of the APK (C10 item 11): in-cell gate, drain, close and
+    /// confirm, rotate, wait for the new geometry, reopen with the generation + 1.
+    Rotate,
+    /// #402 C2b: `reps` reconnects (C10 item 10): N closes and reopens in-process; S stops this
+    /// stream's server by its identity, waits for the end, closes and confirms, reopens.
+    Reconnect,
+    /// #402 C2b: C8's pictures in the APK's static mode, frames saved per path (§5.8).
+    StaticImages,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -175,6 +293,17 @@ pub struct SegmentPlan {
     /// Viewers that unsubscribe at this offset (§4.4 item 3).
     #[serde(default)]
     pub viewer_unsubscribe_ms: Option<u64>,
+    /// #402 C2b: the APK mode the segment sets first (`pattern`, `flip`, `step`, `static`,
+    /// `replay`); `None` leaves it.
+    #[serde(default)]
+    pub apk_mode: Option<String>,
+    /// #402 C2b: the first viewer draws each frame in a minimal GDI window and records
+    /// `t_gdi_ret_us` (`A_submit`, a submit-side proxy, not presentation; §5.1).
+    #[serde(default)]
+    pub gdi_viewer: bool,
+    /// #402 C2b (C9 ii): N connects and disconnects around every sample.
+    #[serde(default)]
+    pub reconnect_each_sample: bool,
 }
 
 fn default_fps() -> f64 {
@@ -215,6 +344,13 @@ pub struct FormalPlan {
     /// Formal dispatches the segment needs (the count quota of C7).
     #[serde(default)]
     pub quota: Option<u64>,
+    /// #402 C2b (C9 iv): the dispatch records' `preview_state` (`off`, `on`) when the preview
+    /// runs on another instance; `None` takes the segment's own path.
+    #[serde(default)]
+    pub preview_state: Option<String>,
+    /// #402 C2b (C9 iv): the `<path>` of the dispatch file `opps-<cell>-<path>.jsonl`.
+    #[serde(default)]
+    pub record_path: Option<String>,
 }
 
 fn default_period() -> u64 {
@@ -338,12 +474,6 @@ impl Plan {
                     instance.name, instance.nemu_instance
                 ));
             }
-            if instance.touch == TouchKind::NemuIpc {
-                problems.push(format!(
-                    "instance {} touch nemu_ipc needs a fenced-write witness the bench cannot hold",
-                    instance.name
-                ));
-            }
         }
         let mut cells = BTreeSet::new();
         for cell in &self.cells {
@@ -385,7 +515,12 @@ impl Plan {
                     problems.push(format!("{label}: tap_grid must be in 1..=16"));
                 }
                 match segment.mode {
-                    SegmentMode::Preview => {}
+                    SegmentMode::Preview
+                    | SegmentMode::Calibrate
+                    | SegmentMode::StepTrials
+                    | SegmentMode::Rotate
+                    | SegmentMode::Reconnect
+                    | SegmentMode::StaticImages => {}
                     SegmentMode::TaskFloor | SegmentMode::ColdStart => {
                         if segment.path.is_none() {
                             problems.push(format!("{label}: the mode needs a path"));
@@ -399,6 +534,54 @@ impl Plan {
                 }
                 if segment.mode == SegmentMode::ColdStart && segment.reps.is_none() {
                     problems.push(format!("{label}: cold_start needs reps"));
+                }
+                let apk = self
+                    .instance_index(&segment.instance)
+                    .is_some_and(|index| self.instances[index].apk);
+                match segment.mode {
+                    SegmentMode::Calibrate
+                    | SegmentMode::StepTrials
+                    | SegmentMode::Rotate
+                    | SegmentMode::StaticImages => {
+                        if !apk {
+                            problems.push(format!("{label}: the mode needs the APK (apk = true)"));
+                        }
+                        if segment.reps.is_none() && segment.mode != SegmentMode::StaticImages {
+                            problems.push(format!("{label}: the mode needs reps"));
+                        }
+                    }
+                    SegmentMode::Reconnect => {
+                        if segment.reps.is_none() || segment.path.is_none() {
+                            problems.push(format!("{label}: reconnect needs reps and a path"));
+                        }
+                    }
+                    _ => {}
+                }
+                if matches!(segment.mode, SegmentMode::StepTrials)
+                    && segment.path != Some(PathKind::Scrcpy)
+                {
+                    problems.push(format!("{label}: step_trials is an S mode"));
+                }
+                if matches!(
+                    segment.mode,
+                    SegmentMode::Rotate | SegmentMode::StaticImages
+                ) && segment.path.is_none()
+                {
+                    problems.push(format!("{label}: the mode needs a path"));
+                }
+                if segment.mode == SegmentMode::StaticImages && self.c8.is_none() {
+                    problems.push(format!("{label}: static_images needs the [c8] table"));
+                }
+                if let Some(mode) = &segment.apk_mode {
+                    if !apk {
+                        problems.push(format!("{label}: apk_mode needs the APK (apk = true)"));
+                    }
+                    if !matches!(
+                        mode.as_str(),
+                        "pattern" | "flip" | "step" | "static" | "replay"
+                    ) {
+                        problems.push(format!("{label}: unknown apk_mode {mode}"));
+                    }
                 }
             }
         }

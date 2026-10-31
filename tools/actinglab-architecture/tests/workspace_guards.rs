@@ -585,6 +585,13 @@ fn ledger_ingress_accepts_only_sanitized_event_v2() {
 #[test]
 fn fenced_close_requires_scheduler_witness() {
     let sources = workspace_sources(&["crates", "apps", "providers", "tools"]);
+    // Workflow #402 experiment, branch never merged: the capture bench mints its own witness
+    // for the formal loop's `nemu_ipc` taps (plan v2.1 §5.6). This narrow exception exists only
+    // on the experiment branch `exp/402-capture-bench` and never reaches main.
+    let sources: Vec<(String, String)> = sources
+        .into_iter()
+        .filter(|(path, _)| !path.starts_with("tools/capture-bench/"))
+        .collect();
     let violations = actingcommand_actinglab_architecture::inspect_fenced_write_issuers(&sources)
         .expect("parse fenced-write issuer source inventory");
     assert!(

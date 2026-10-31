@@ -17,6 +17,7 @@
 //!   B_model pipeline, the viewers, the metrics, the start check, the job object;
 //! - [`fake`] and [`clock::VirtualClock`]: the deterministic fake-backend rehearsal (§6.2).
 
+pub mod apk;
 pub mod backend;
 pub mod bmodel;
 pub mod clock;
@@ -32,6 +33,7 @@ pub mod real;
 pub mod runner;
 pub mod safety;
 pub mod supervisor;
+pub mod timecode;
 pub mod viewer;
 pub mod views;
 pub mod winproc;

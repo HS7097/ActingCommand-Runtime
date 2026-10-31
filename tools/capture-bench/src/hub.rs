@@ -307,6 +307,34 @@ struct Demand {
     granted: Arc<Handoff<u64>>,
 }
 
+/// #402 C2b: one S soft-unsubscribe grace that ended (the `grace` event of the analysis
+/// schema §8).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct GraceNote {
+    pub instance: usize,
+    pub t_enter_us: Micros,
+    pub t_exit_us: Micros,
+    pub planned_ms: u64,
+    /// `reused`, `expired_closed` or `hard_gate`.
+    pub exit: &'static str,
+}
+
+/// #402 C2b: one entry × gate decision seen while a gate was in force (the `entry_gate` event).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct EntryGateNote {
+    pub count: u64,
+    pub t_first_us: Micros,
+}
+
+/// #402 C2b: what the hub notes for the runner's events; a leaf lock (rank 9), taken under the
+/// scheduler lock and never holding another.
+#[derive(Debug, Clone, Default)]
+pub struct HubNotes {
+    /// (instance, entry, gate, reaction word, admitted) → count and first time.
+    pub entry_gates: BTreeMap<(usize, Entry, GateKind, &'static str, bool), EntryGateNote>,
+    pub graces: Vec<GraceNote>,
+}
+
 /// The S soft-unsubscribe grace state of one instance (§3.4).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct GraceCounts {
@@ -330,6 +358,9 @@ pub struct InstanceState {
     pub preview_sequence: u64,
     /// S grace: until when an S producer without leases may live.
     pub grace_until: Option<Micros>,
+    /// #402 C2b: when the running grace began and how long it was planned.
+    pub grace_entered_us: Option<Micros>,
+    pub grace_planned_us: Micros,
     pub grace: GraceCounts,
     pub last_frame_bytes: u64,
 }
@@ -439,6 +470,7 @@ pub struct Hub {
     pub backends: Vec<Mutex<BackendSlots>>,
     pub views: Arc<ViewHub>,
     sink: Arc<dyn RecordSink>,
+    notes: Mutex<HubNotes>,
 }
 
 impl Hub {
@@ -497,6 +529,8 @@ impl Hub {
                     last_publish_us: None,
                     preview_sequence: 0,
                     grace_until: None,
+                    grace_entered_us: None,
+                    grace_planned_us: 0,
                     grace: GraceCounts::default(),
                     last_frame_bytes: 0,
                 })
@@ -525,7 +559,59 @@ impl Hub {
             scheduler: Mutex::new(state),
             views: Arc::new(ViewHub::new()),
             sink,
+            notes: Mutex::new(HubNotes::default()),
         }
+    }
+
+    /// #402 C2b: notes how `entry` met each gate in force on `instance` (the reaction of
+    /// §3.7.1 and whether the attempt went ahead); nothing without a gate.
+    pub fn note_entry(
+        &self,
+        instance: usize,
+        entry: Entry,
+        gates: &[GateKind],
+        in_close_chain: bool,
+    ) {
+        if gates.is_empty() {
+            return;
+        }
+        let now = self.clock.now_us();
+        let mut notes = lock(&self.notes);
+        for gate in gates {
+            let table = reaction(entry, *gate);
+            let key = (
+                instance,
+                entry,
+                *gate,
+                table.label(),
+                table.admits(in_close_chain),
+            );
+            notes
+                .entry_gates
+                .entry(key)
+                .and_modify(|note| note.count += 1)
+                .or_insert(EntryGateNote {
+                    count: 1,
+                    t_first_us: now,
+                });
+        }
+    }
+
+    fn note_grace(&self, entry: &mut InstanceState, instance: usize, exit: &'static str) {
+        let now = self.clock.now_us();
+        let entered = entry.grace_entered_us.take().unwrap_or(now);
+        lock(&self.notes).graces.push(GraceNote {
+            instance,
+            t_enter_us: entered,
+            t_exit_us: now,
+            planned_ms: entry.grace_planned_us / 1_000,
+            exit,
+        });
+    }
+
+    /// #402 C2b: the notes so far, taken (the runner writes them as events).
+    pub fn take_notes(&self) -> HubNotes {
+        std::mem::take(&mut *lock(&self.notes))
     }
 
     pub fn instance_count(&self) -> usize {
@@ -632,6 +718,7 @@ impl Hub {
             let entry = &mut state.instances[instance];
             if entry.leases.is_empty() && entry.grace_until.take().is_some() {
                 entry.grace.reused += 1;
+                self.note_grace(entry, instance, "reused");
             }
             entry.leases.insert(lease.lease_id, lease.clone());
             let active = entry.leases.len();
@@ -702,6 +789,8 @@ impl Hub {
         if active == 0 {
             let entry = &mut state.instances[instance];
             entry.grace_until = Some(now.saturating_add(grace_us.min(ms(10_000))));
+            entry.grace_entered_us = Some(now);
+            entry.grace_planned_us = grace_us.min(ms(10_000));
             entry.grace.entered += 1;
         }
         self.append(
@@ -765,6 +854,7 @@ impl Hub {
                 Some(until) if entry.leases.is_empty() && now >= until => {
                     entry.grace_until = None;
                     entry.grace.expired_closed += 1;
+                    self.note_grace(entry, instance, "expired_closed");
                     Some(true)
                 }
                 Some(_) if entry.leases.is_empty() => Some(false),
@@ -787,6 +877,7 @@ impl Hub {
             let entry = &mut state.instances[instance];
             if entry.grace_until.take().is_some() {
                 entry.grace.hard_closed += 1;
+                self.note_grace(entry, instance, "hard_gate");
                 true
             } else {
                 false
@@ -1098,6 +1189,7 @@ impl Op for SampleOp {
                 let now = hub.clock.now_us();
                 let mut state = hub.state(&self.who);
                 let gates = state.active_gates(instance);
+                hub.note_entry(instance, Entry::PreviewSample, &gates, false);
                 let refused = refusing_gate(Entry::PreviewSample, gates, false);
                 let entry = &state.instances[instance];
                 let skip = if let Some(gate) = refused {
@@ -1356,6 +1448,10 @@ pub struct FormalResult {
     pub failure: Option<BackendFailure>,
     pub floor_frame: Option<SampledFrame>,
     pub tap_done_us: Option<Micros>,
+    /// #402 C2b: the vendor stdio gate waits of the formal captures (C9 iv).
+    pub stdio_wait_us: Vec<Micros>,
+    /// #402 C2b (C6): the first frame that shows the tap's flip and when it was taken.
+    pub first_flip: Option<serde_json::Value>,
 }
 
 /// What one dispatch ended with.
@@ -1491,6 +1587,7 @@ impl Op for DispatchOp {
                 }
                 let mut state = hub.state(&self.who);
                 let gates = state.active_gates(instance);
+                hub.note_entry(instance, Entry::FormalLoop, &gates, false);
                 if let Some(gate) = refusing_gate(Entry::FormalLoop, gates, false) {
                     drop(state);
                     hub.scheduler_lock.release(&self.who);
@@ -1693,6 +1790,7 @@ pub fn manual_refresh(
     let admitted = {
         let mut state = hub.state(who);
         let gates = state.active_gates(instance);
+        hub.note_entry(instance, Entry::ManualRefresh, &gates, false);
         match refusing_gate(Entry::ManualRefresh, gates, false) {
             Some(gate) => Err(Disposition::SkippedGate(gate.as_str().to_owned())),
             None => {
@@ -1778,6 +1876,7 @@ pub fn aux_call<T>(
     let admitted = {
         let mut state = hub.state(who);
         let gates = state.active_gates(instance);
+        hub.note_entry(instance, entry, &gates, in_close_chain);
         match refusing_gate(entry, gates, in_close_chain) {
             Some(gate) => Err(gate),
             None => {
@@ -1830,6 +1929,7 @@ pub fn auto_reopen(
     let admitted = {
         let state = hub.state(who);
         let gates = state.active_gates(instance);
+        hub.note_entry(instance, Entry::AutoReopen, &gates, false);
         match refusing_gate(Entry::AutoReopen, gates, false) {
             Some(gate) => Err(ReopenOutcome::Refused(gate)),
             None if state.instances[instance].generation != expected_generation => {

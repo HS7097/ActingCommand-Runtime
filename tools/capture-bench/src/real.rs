@@ -13,14 +13,16 @@ use crate::backend::{
 };
 use crate::clock::{Clock, Micros};
 use crate::model::{BackendKind, CloseOutcome};
-use crate::plan::Plan;
+use crate::plan::{Plan, TouchKind};
 use actingcommand_device::bench_timing::{BenchDetail, BenchEvent, BenchPoint, BenchSink};
 use actingcommand_device::{
-    Adb, AdbConfig, CaptureBackend, CaptureFloor, DeviceCloseAuthority, DeviceError,
-    DeviceResourceQuiescence, DeviceTarget, NemuIpcBackend, NemuIpcConfig, ScrcpyBackend,
-    ScrcpyConfig,
+    Adb, AdbConfig, CaptureBackend, CaptureBackendChoice, CaptureBackendConfig, CaptureFloor,
+    DeviceCloseAuthority, DeviceError, DeviceResourceQuiescence, DeviceResult, DeviceTarget,
+    InputBackend, InputCheckPhase, InputExecutionContext, InputOperationCheck, NemuAppIndex,
+    NemuApplicationTarget, NemuFrameGeometry, NemuInputConfig, NemuIpcBackend, NemuIpcConfig,
+    NemuIpcSession, NemuSessionBackends, ScrcpyBackend, ScrcpyConfig,
 };
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -41,9 +43,9 @@ const EVENTS_PER_KEY: usize = 512;
 #[derive(Default)]
 pub struct TimingSink {
     nemu: Mutex<BTreeMap<i32, VecDeque<BenchEvent>>>,
-    opens: Mutex<BTreeMap<ThreadId, Vec<BenchEvent>>>,
+    opens: Mutex<HashMap<ThreadId, Vec<BenchEvent>>>,
     meets: Mutex<BTreeMap<u32, BenchEvent>>,
-    built: Mutex<BTreeMap<ThreadId, BenchEvent>>,
+    built: Mutex<HashMap<ThreadId, BenchEvent>>,
     stdio_restore_failed: Mutex<BTreeMap<i32, u64>>,
     dropped: AtomicU64,
 }
@@ -146,6 +148,8 @@ pub struct RealDevice {
     pub instances: BTreeMap<String, (String, i32)>,
     pub serial_whitelist: Vec<String>,
     pub nemu_whitelist: Vec<i32>,
+    /// #402 C2b: each instance's touch path (§5.6).
+    pub touch: BTreeMap<String, TouchKind>,
     markers: AtomicU64,
 }
 
@@ -168,6 +172,11 @@ impl RealDevice {
                 .collect(),
             serial_whitelist: plan.safety.serial_whitelist.clone(),
             nemu_whitelist: plan.safety.nemu_whitelist.clone(),
+            touch: plan
+                .instances
+                .iter()
+                .map(|instance| (instance.name.clone(), instance.touch))
+                .collect(),
             markers: AtomicU64::new(1),
         })
     }
@@ -375,9 +384,63 @@ fn adb_tap(adb: &Adb, serial: &str, x: i32, y: i32) -> Result<(), BackendFailure
         })
 }
 
+/// #402 C2b: the bench's own input check: the formal loop's tap has the Nemu command timeout.
+struct BenchInputCheck;
+
+impl InputOperationCheck for BenchInputCheck {
+    fn check(&self, _phase: InputCheckPhase) -> DeviceResult<Duration> {
+        Ok(Duration::from_secs(5))
+    }
+}
+
+/// #402 C2b: the experiment's fenced-write witness for the formal loop's `nemu_ipc` taps. Only
+/// the Runtime's scheduler issues one on the production graph; the workspace guard exempts
+/// `tools/capture-bench` on this experiment branch only (Workflow #402, never merged).
+fn bench_witness() -> Result<actingcommand_contract::FencedWrite, String> {
+    let issuer = actingcommand_contract::IdentifierIssuer::new()
+        .map_err(|error| format!("identifier issuer: {error:?}"))?;
+    let token = actingcommand_contract::LeaseToken::new(
+        *issuer
+            .mint_owner_epoch()
+            .map_err(|error| format!("owner epoch: {error:?}"))?
+            .transport(),
+        *issuer
+            .mint_lease_id()
+            .map_err(|error| format!("lease id: {error:?}"))?
+            .transport(),
+        *issuer
+            .mint_instance_id()
+            .map_err(|error| format!("instance id: {error:?}"))?
+            .transport(),
+        *issuer
+            .mint_holder_id()
+            .map_err(|error| format!("holder id: {error:?}"))?
+            .transport(),
+        u64::MAX,
+    )
+    .map_err(|error| format!("lease token: {error:?}"))?;
+    Ok(actingcommand_contract::issue_fenced_write(
+        token,
+        1,
+        std::num::NonZeroU64::MIN,
+        actingcommand_contract::FencedWritePurpose::Business,
+    ))
+}
+
+/// The Nemu session of an instance: a capture-only backend, or (`touch = "nemu_ipc"`) the
+/// paired session whose captures and taps share one worker thread.
+enum NemuSession {
+    Capture(NemuIpcBackend),
+    Paired {
+        session: NemuSessionBackends,
+        geometry: Option<Arc<NemuFrameGeometry>>,
+        witness: actingcommand_contract::FencedWrite,
+    },
+}
+
 struct RealNemu {
     device: Arc<RealDevice>,
-    backend: NemuIpcBackend,
+    backend: NemuSession,
     serial: String,
     nemu: i32,
     poisoned: bool,
@@ -393,7 +456,22 @@ impl PreviewBackend for RealNemu {
         let _ = self.device.sink.drain_nemu(self.nemu);
         let restores_before = self.device.sink.restore_failures(self.nemu);
         let _ = self.device.sink.take_built();
-        let captured = self.backend.capture_timed();
+        let captured = match &mut self.backend {
+            NemuSession::Capture(backend) => backend.capture_timed(),
+            NemuSession::Paired {
+                session, geometry, ..
+            } => {
+                let captured = session.capture.capture_timed();
+                if let Ok(frame) = &captured {
+                    // The taps need the geometry of the committed source frame.
+                    *geometry = frame
+                        .selection
+                        .as_ref()
+                        .and_then(|selection| selection.nemu_frame.clone());
+                }
+                captured
+            }
+        };
         let events = self.device.sink.drain_nemu(self.nemu);
         let built = self.device.sink.take_built();
         match captured {
@@ -430,11 +508,47 @@ impl PreviewBackend for RealNemu {
     }
 
     fn tap(&mut self, x: i32, y: i32) -> Result<(), BackendFailure> {
-        adb_tap(&self.device.adb(Duration::from_secs(5)), &self.serial, x, y)
+        match &mut self.backend {
+            NemuSession::Capture(_) => {
+                adb_tap(&self.device.adb(Duration::from_secs(5)), &self.serial, x, y)
+            }
+            NemuSession::Paired {
+                session,
+                geometry,
+                witness,
+            } => {
+                let context = InputExecutionContext {
+                    geometry: geometry.clone(),
+                    check: Arc::new(BenchInputCheck),
+                };
+                let _ = self.device.sink.drain_nemu(self.nemu);
+                let tapped = session.input.tap_in_frame(witness, x, y, &context);
+                let events = self.device.sink.drain_nemu(self.nemu);
+                tapped.map_err(|error| {
+                    let mut failure = classify_nemu(&error, &events, false);
+                    if failure.class == FailureClass::Poisoned {
+                        self.poisoned = true;
+                    } else if failure.code == "nemu_fatal" {
+                        failure.code = "nemu_input_tap_failed".to_owned();
+                    }
+                    failure
+                })
+            }
+        }
     }
 
     fn close(&mut self) -> CloseOutcome {
-        match self.backend.close_once(DeviceCloseAuthority::LocalOnly) {
+        let closed = match &mut self.backend {
+            NemuSession::Capture(backend) => backend.close_once(DeviceCloseAuthority::LocalOnly),
+            NemuSession::Paired { session, .. } => {
+                let _ = session.capture.close_once(DeviceCloseAuthority::LocalOnly);
+                let _ = session.input.close_once(DeviceCloseAuthority::LocalOnly);
+                session
+                    .owner
+                    .close_once(DeviceCloseAuthority::LocalOnly, None)
+            }
+        };
+        match closed {
             Ok(_) => CloseOutcome::Confirmed,
             Err(error) => CloseOutcome::Unconfirmed(error.message().to_owned()),
         }
@@ -601,26 +715,68 @@ impl BackendFactory for Arc<RealDevice> {
                 config.instance_id = Some(nemu);
                 config.display_id = 0;
                 let _ = self.sink.drain_nemu(nemu);
-                match NemuIpcBackend::new(
-                    RealDevice::target(&serial),
-                    config,
-                    Duration::from_secs(5),
-                ) {
-                    Ok(backend) => Ok(Box::new(RealNemu {
-                        device: Arc::clone(self),
-                        backend,
-                        serial,
-                        nemu,
-                        poisoned: false,
-                    })),
-                    Err(error) => Err(OpenFailure {
+                let nemu_failure = |error: DeviceError| OpenFailure {
+                    cause: OpenFailureCause::NemuOpen,
+                    detail: error.message().to_owned(),
+                    stream: None,
+                    cleanup_confirmed: error.resource_quiescence()
+                        != Some(DeviceResourceQuiescence::Unconfirmed),
+                };
+                let touch = self.touch.get(instance).copied();
+                let session = if touch == Some(TouchKind::NemuIpc) {
+                    // §5.6: captures and taps on one paired session, one worker thread.
+                    let witness = bench_witness().map_err(|detail| OpenFailure {
                         cause: OpenFailureCause::NemuOpen,
-                        detail: error.message().to_owned(),
+                        detail,
                         stream: None,
-                        cleanup_confirmed: error.resource_quiescence()
-                            != Some(DeviceResourceQuiescence::Unconfirmed),
-                    }),
-                }
+                        cleanup_confirmed: true,
+                    })?;
+                    let mut capture = CaptureBackendConfig::new(
+                        AdbConfig {
+                            adb_path: self.adb_path.clone(),
+                            command_timeout: Duration::from_secs(12),
+                        },
+                        RealDevice::target(&serial),
+                    );
+                    capture.requested = CaptureBackendChoice::NemuIpc;
+                    capture.capture_timeout = Duration::from_secs(5);
+                    capture.nemu = config;
+                    let application = NemuAppIndex::try_from(0_u32)
+                        .and_then(|index| NemuApplicationTarget::new(crate::apk::PACKAGE, index))
+                        .map_err(nemu_failure)?;
+                    let opened = NemuIpcSession::open(
+                        capture,
+                        application,
+                        NemuInputConfig {
+                            command_timeout: Duration::from_secs(5),
+                            shutdown_timeout: Duration::from_secs(5),
+                            tap_hold: Duration::from_millis(50),
+                        },
+                        None,
+                    )
+                    .map_err(nemu_failure)?;
+                    NemuSession::Paired {
+                        session: opened.backend,
+                        geometry: None,
+                        witness,
+                    }
+                } else {
+                    NemuSession::Capture(
+                        NemuIpcBackend::new(
+                            RealDevice::target(&serial),
+                            config,
+                            Duration::from_secs(5),
+                        )
+                        .map_err(nemu_failure)?,
+                    )
+                };
+                Ok(Box::new(RealNemu {
+                    device: Arc::clone(self),
+                    backend: session,
+                    serial,
+                    nemu,
+                    poisoned: false,
+                }))
             }
             BackendKind::Scrcpy => {
                 let mut config = ScrcpyConfig {
@@ -979,5 +1135,34 @@ impl DeviceSideCheck for Arc<RealDevice> {
             )));
         }
         Ok(())
+    }
+
+    fn stop_server(&self, instance: &str, identity: &IdentityTuple) -> Result<u32, CheckFailure> {
+        let serial = self.serial_of(instance)?;
+        let scan = self.scan(&serial, identity.method)?;
+        if scan.boot_id != identity.boot_id {
+            return Err(CheckFailure::Unconfirmed(
+                "boot_id changed; nothing is stopped".to_owned(),
+            ));
+        }
+        let same = scan.processes.iter().find(|process| {
+            process.pid == identity.pid
+                && process.start_ticks == identity.start_ticks
+                && process.argv == identity.argv
+                && process.classpath.as_deref() == Some(identity.server_path.as_str())
+        });
+        let Some(process) = same else {
+            return Err(CheckFailure::Unconfirmed(format!(
+                "no process matches the identity of {:08x} exactly; nothing is stopped",
+                identity.scid
+            )));
+        };
+        let pid = process.pid.to_string();
+        self.adb(Duration::from_secs(5))
+            .run(&["-s", serial.as_str(), "shell", "kill", pid.as_str()])
+            .map_err(|error| {
+                CheckFailure::Unconfirmed(format!("adb shell kill: {}", error.message()))
+            })?;
+        Ok(process.pid)
     }
 }

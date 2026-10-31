@@ -167,6 +167,228 @@ mod imp {
         let micros = (counter as u128) * 1_000_000 / (frequency as u128);
         u64::try_from(micros).ok()
     }
+
+    /// #402 C2b (plan §2.2, §5.5): the processes whose image name contains `VMMHeadless` and
+    /// their handle counts, read with a process snapshot and `GetProcessHandleCount` (read-only
+    /// queries; the processes are not otherwise touched).
+    pub fn vmm_handle_counts() -> Result<Vec<super::VmmProcess>, String> {
+        use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+        use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+            CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+            TH32CS_SNAPPROCESS,
+        };
+        use windows_sys::Win32::System::Threading::{
+            GetProcessHandleCount, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        // SAFETY: a snapshot of all processes; the handle is closed below.
+        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+        if snapshot == INVALID_HANDLE_VALUE || snapshot.is_null() {
+            return Err(format!(
+                "CreateToolhelp32Snapshot failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        // SAFETY: a plain-data structure; all-zero is its empty value.
+        let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut found = Vec::new();
+        // SAFETY: the snapshot handle and a sized entry.
+        let mut more = unsafe { Process32FirstW(snapshot, &mut entry) } != 0;
+        while more {
+            let length = entry
+                .szExeFile
+                .iter()
+                .position(|unit| *unit == 0)
+                .unwrap_or(entry.szExeFile.len());
+            let image = String::from_utf16_lossy(&entry.szExeFile[..length]);
+            if image.to_ascii_lowercase().contains("vmmheadless") {
+                let pid = entry.th32ProcessID;
+                // SAFETY: a query-only open of the listed pid; closed below.
+                let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+                let handle_count = if process.is_null() {
+                    None
+                } else {
+                    let mut count = 0u32;
+                    // SAFETY: an open process handle and a valid out pointer.
+                    let read = unsafe { GetProcessHandleCount(process, &mut count) } != 0;
+                    // SAFETY: the handle opened above.
+                    unsafe { CloseHandle(process) };
+                    read.then_some(count)
+                };
+                found.push(super::VmmProcess {
+                    pid,
+                    parent_pid: entry.th32ParentProcessID,
+                    image,
+                    handle_count,
+                });
+            }
+            // SAFETY: as above.
+            more = unsafe { Process32NextW(snapshot, &mut entry) } != 0;
+        }
+        // SAFETY: the snapshot handle.
+        unsafe { CloseHandle(snapshot) };
+        Ok(found)
+    }
+
+    /// #402 C2b (plan §3.2 item 4, §5.1): the minimal viewer window: each frame is drawn with
+    /// `SetDIBitsToDevice`, then `GdiFlush`; the time after it is `T_gdi_ret`, a submit-side
+    /// proxy (`A_submit`), not presentation: GDI may batch, and DWM composes later.
+    pub struct GdiWindow {
+        hwnd: windows_sys::Win32::Foundation::HWND,
+        bgra: Vec<u8>,
+    }
+
+    unsafe extern "system" fn window_proc(
+        hwnd: windows_sys::Win32::Foundation::HWND,
+        message: u32,
+        wparam: windows_sys::Win32::Foundation::WPARAM,
+        lparam: windows_sys::Win32::Foundation::LPARAM,
+    ) -> windows_sys::Win32::Foundation::LRESULT {
+        // SAFETY: the default handling of the window's own messages.
+        unsafe {
+            windows_sys::Win32::UI::WindowsAndMessaging::DefWindowProcW(
+                hwnd, message, wparam, lparam,
+            )
+        }
+    }
+
+    fn wide(text: &str) -> Vec<u16> {
+        text.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    impl GdiWindow {
+        pub fn create(width: u32, height: u32) -> Result<Self, String> {
+            use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                CW_USEDEFAULT, CreateWindowExW, RegisterClassW, WNDCLASSW, WS_OVERLAPPEDWINDOW,
+                WS_VISIBLE,
+            };
+            let class = wide("ac-capture-bench-view");
+            let title = wide("ac-capture-bench view (A_submit proxy)");
+            // SAFETY: the module handle of this executable.
+            let instance = unsafe { GetModuleHandleW(std::ptr::null()) };
+            // SAFETY: a plain-data structure; all-zero is its empty value.
+            let mut class_info: WNDCLASSW = unsafe { std::mem::zeroed() };
+            class_info.lpfnWndProc = Some(window_proc);
+            class_info.hInstance = instance;
+            class_info.lpszClassName = class.as_ptr();
+            // SAFETY: the class structure above; a second registration fails harmlessly.
+            unsafe { RegisterClassW(&class_info) };
+            // SAFETY: the class registered above and a plain overlapped window.
+            let hwnd = unsafe {
+                CreateWindowExW(
+                    0,
+                    class.as_ptr(),
+                    title.as_ptr(),
+                    WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+                    CW_USEDEFAULT,
+                    CW_USEDEFAULT,
+                    i32::try_from(width).unwrap_or(1280).saturating_add(16),
+                    i32::try_from(height).unwrap_or(720).saturating_add(39),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    instance,
+                    std::ptr::null(),
+                )
+            };
+            if hwnd.is_null() {
+                return Err(format!(
+                    "CreateWindowExW failed: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+            Ok(Self {
+                hwnd,
+                bgra: Vec::new(),
+            })
+        }
+
+        /// Pumps the window's messages, draws one frame (RGBA8 or RGB8) and flushes GDI.
+        pub fn present(
+            &mut self,
+            pixels: &[u8],
+            width: u32,
+            height: u32,
+            bytes_per_pixel: usize,
+        ) -> Result<(), String> {
+            use windows_sys::Win32::Graphics::Gdi::{
+                BI_RGB, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, GdiFlush, GetDC, ReleaseDC,
+                SetDIBitsToDevice,
+            };
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, TranslateMessage,
+            };
+            // SAFETY: a plain-data structure; all-zero is its empty value.
+            let mut message: MSG = unsafe { std::mem::zeroed() };
+            // SAFETY: the window's own message queue.
+            while unsafe { PeekMessageW(&mut message, self.hwnd, 0, 0, PM_REMOVE) } != 0 {
+                // SAFETY: the message just taken.
+                unsafe {
+                    TranslateMessage(&message);
+                    DispatchMessageW(&message);
+                }
+            }
+            let count = width as usize * height as usize;
+            if pixels.len() < count * bytes_per_pixel || !matches!(bytes_per_pixel, 3 | 4) {
+                return Err("the frame does not match its size".to_owned());
+            }
+            self.bgra.resize(count * 4, 0);
+            for index in 0..count {
+                let source = index * bytes_per_pixel;
+                let target = index * 4;
+                self.bgra[target] = pixels[source + 2];
+                self.bgra[target + 1] = pixels[source + 1];
+                self.bgra[target + 2] = pixels[source];
+                self.bgra[target + 3] = 255;
+            }
+            // SAFETY: a plain-data structure; all-zero is its empty value.
+            let mut info: BITMAPINFO = unsafe { std::mem::zeroed() };
+            info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+            info.bmiHeader.biWidth = i32::try_from(width).map_err(|_| "width".to_owned())?;
+            // A negative height is a top-down bitmap.
+            info.bmiHeader.biHeight = -i32::try_from(height).map_err(|_| "height".to_owned())?;
+            info.bmiHeader.biPlanes = 1;
+            info.bmiHeader.biBitCount = 32;
+            info.bmiHeader.biCompression = BI_RGB;
+            // SAFETY: the window's device context, released below.
+            let dc = unsafe { GetDC(self.hwnd) };
+            if dc.is_null() {
+                return Err("GetDC failed".to_owned());
+            }
+            // SAFETY: the context, a top-down 32-bit bitmap of `width` × `height` in `bgra`.
+            let lines = unsafe {
+                SetDIBitsToDevice(
+                    dc,
+                    0,
+                    0,
+                    width,
+                    height,
+                    0,
+                    0,
+                    0,
+                    height,
+                    self.bgra.as_ptr().cast(),
+                    &info,
+                    DIB_RGB_COLORS,
+                )
+            };
+            // SAFETY: flushes this thread's GDI batch.
+            unsafe { GdiFlush() };
+            // SAFETY: the context taken above.
+            unsafe { ReleaseDC(self.hwnd, dc) };
+            if lines == 0 {
+                return Err("SetDIBitsToDevice drew nothing".to_owned());
+            }
+            Ok(())
+        }
+    }
+
+    impl Drop for GdiWindow {
+        fn drop(&mut self) {
+            // SAFETY: the window this value created.
+            unsafe { windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow(self.hwnd) };
+        }
+    }
 }
 
 #[cfg(not(windows))]
@@ -200,6 +422,40 @@ mod imp {
     pub fn qpc_micros() -> Option<u64> {
         None
     }
+
+    pub fn vmm_handle_counts() -> Result<Vec<super::VmmProcess>, String> {
+        Err("process snapshots need Windows".to_owned())
+    }
+
+    pub struct GdiWindow;
+
+    impl GdiWindow {
+        pub fn create(_width: u32, _height: u32) -> Result<Self, String> {
+            Err("the GDI window needs Windows".to_owned())
+        }
+
+        pub fn present(
+            &mut self,
+            _pixels: &[u8],
+            _width: u32,
+            _height: u32,
+            _bytes_per_pixel: usize,
+        ) -> Result<(), String> {
+            Err("the GDI window needs Windows".to_owned())
+        }
+    }
 }
 
-pub use imp::{Job, own_creation_unix_ms, own_priority, qpc_micros, set_own_priority};
+/// #402 C2b: one `VMMHeadless` process and its handle count (`None` when it could not be read).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct VmmProcess {
+    pub pid: u32,
+    pub parent_pid: u32,
+    pub image: String,
+    pub handle_count: Option<u32>,
+}
+
+pub use imp::{
+    GdiWindow, Job, own_creation_unix_ms, own_priority, qpc_micros, set_own_priority,
+    vmm_handle_counts,
+};

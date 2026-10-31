@@ -5,17 +5,19 @@
 
 #![allow(dead_code)]
 
+use actingcommand_capture_bench::apk::{ApkConnector, FakeApk, FakeApks};
 use actingcommand_capture_bench::clock::{Clock, Participant, VirtualClock, spawn_participant};
 use actingcommand_capture_bench::fake::{
     FakeCheckScript, FakeDevice, FakeMaterials, FakeScript, FaultAt, RecordedExit,
 };
-use actingcommand_capture_bench::metrics::{MetricsSample, ScriptedMetrics};
+use actingcommand_capture_bench::metrics::{MetricsSample, ScriptedMetrics, ScriptedProbes};
 use actingcommand_capture_bench::model::BackendKind;
 use actingcommand_capture_bench::runner::{Env, RunOutcome, run};
 use actingcommand_capture_bench::safety::{AcceptStartChecks, Roots, StartChecks};
 use actingcommand_capture_bench::supervisor::FixedLimits;
 use actingcommand_capture_bench::viewer::InProcessViewers;
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -94,6 +96,10 @@ pub struct Harness {
     pub root: PathBuf,
     pub run_dir: PathBuf,
     pub roots: Roots,
+    /// #402 C2b: the fake APKs of the instances with `apk = true`.
+    pub apks: BTreeMap<String, Arc<FakeApk>>,
+    /// #402 C2b: the per-cell readings.
+    pub probes: Arc<ScriptedProbes>,
 }
 
 pub fn harness(name: &str, run_id: &str, script: FakeScript, check: FakeCheckScript) -> Harness {
@@ -117,6 +123,8 @@ pub fn harness(name: &str, run_id: &str, script: FakeScript, check: FakeCheckScr
         root,
         run_dir,
         roots,
+        apks: BTreeMap::new(),
+        probes: Arc::new(ScriptedProbes::default()),
     }
 }
 
@@ -148,6 +156,12 @@ impl Harness {
             limits,
             roots: self.roots.clone(),
             header_facts: json!({ "backend": "fake" }),
+            apk: (!self.apks.is_empty()).then(|| {
+                Arc::new(FakeApks {
+                    apks: self.apks.clone(),
+                }) as Arc<dyn ApkConnector>
+            }),
+            probes: self.probes.clone(),
         }
     }
 

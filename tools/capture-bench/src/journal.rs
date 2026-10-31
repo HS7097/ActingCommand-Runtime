@@ -217,6 +217,37 @@ impl Journal {
     pub fn now_us(&self) -> Micros {
         self.clock.now_us()
     }
+
+    /// #402 C2b: appends raw text to `name` (the CSV coverage list), creating the folders it
+    /// needs; a failure stops the run like any journal failure.
+    pub fn append_text(&self, name: &str, text: &str) {
+        let path = self.root.join(name);
+        let written = path
+            .parent()
+            .map_or(Ok(()), fs::create_dir_all)
+            .and_then(|()| OpenOptions::new().create(true).append(true).open(&path))
+            .and_then(|mut file| file.write_all(text.as_bytes()));
+        if let Err(error) = written {
+            self.note_failure(&JournalError(format!(
+                "append to {}: {error}",
+                path.display()
+            )));
+        }
+    }
+
+    /// #402 C2b: writes a whole binary file under the run directory (C8's saved frames).
+    pub fn write_bytes(&self, name: &str, bytes: &[u8]) -> Result<(), JournalError> {
+        let path = self.root.join(name);
+        let written = path
+            .parent()
+            .map_or(Ok(()), fs::create_dir_all)
+            .and_then(|()| fs::write(&path, bytes));
+        written.map_err(|error| {
+            let error = JournalError(format!("write {}: {error}", path.display()));
+            self.note_failure(&error);
+            error
+        })
+    }
 }
 
 fn write_staged(staged: &Path, target: &Path, text: &[u8]) -> Result<(), JournalError> {

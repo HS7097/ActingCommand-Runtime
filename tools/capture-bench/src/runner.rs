@@ -4,6 +4,7 @@
 //! cell end (§3.11.2 A), the whole-run stop (§3.11.2 B), the results and exit codes (§3.11.3),
 //! the error classes (§3.11.4) and the device-side close confirmation (§3.5.1).
 
+use crate::apk::{ApkClient, ApkConnector, ApkError, ApkStreams, Calibration};
 use crate::backend::{
     BackendFactory, BackendFailure, CheckFailure, DeviceSideCheck, FailureClass, Floor, GoneResult,
     IdentityMethod, IdentityTuple, MaterialFactory, OpenFailure, OpenFailureHandling, OpenOptions,
@@ -16,7 +17,7 @@ use crate::hub::{
 };
 use crate::journal::{Journal, JournalRecords, TeeRecords};
 use crate::locks::LockOwner;
-use crate::metrics::{MetricsSample, MetricsSource};
+use crate::metrics::{CellProbes, MetricsSample, MetricsSource};
 use crate::model::{
     BackendKind, CellResult, CloseOutcome, Disposition, Entry, GateKind, GlobalGate, PathKind,
     RunResult, StopCause,
@@ -27,6 +28,7 @@ use crate::supervisor::{
     CloseInfo, Closer, Emergency, ExitHook, FixedLimits, Terminal, control_tick, heartbeat_tick,
     spawn_ticker,
 };
+use crate::timecode::BandGeometry;
 use crate::viewer::{ViewerContext, ViewerHandle, ViewerLauncher};
 use crate::views::ViewMessage;
 use serde_json::{Value, json};
@@ -53,6 +55,10 @@ pub struct Env {
     pub roots: Roots,
     /// Extra header facts (the executable, the timing points, the scrcpy server pin).
     pub header_facts: Value,
+    /// #402 C2b: the test-pattern APK's connector (C3); `None` without one.
+    pub apk: Option<Arc<dyn ApkConnector>>,
+    /// #402 C2b: the per-cell readings (the stdio capture files, the VMMHeadless handles).
+    pub probes: Arc<dyn CellProbes>,
 }
 
 /// What a run ended with.
@@ -98,7 +104,8 @@ pub struct RunShared {
     stdio_unrestored: AtomicBool,
     safety_failed: AtomicBool,
     summary_written: AtomicBool,
-    owner: Arc<LockOwner>,
+    /// #402 C2b: one lock owner per thread (concurrent segments).
+    owners: Mutex<std::collections::HashMap<std::thread::ThreadId, Arc<LockOwner>>>,
     started_us: Micros,
     started_unix_ms: u64,
     next_subscriber: AtomicU64,
@@ -110,6 +117,17 @@ pub struct RunShared {
     cell_fatal: Mutex<BTreeMap<(usize, BackendKind), String>>,
     /// The opportunity files' `seq` (unique in every file).
     next_record: AtomicU64,
+    /// #402 C2b: the APK connector and each instance's APK state.
+    apk: Option<Arc<dyn ApkConnector>>,
+    apk_states: Vec<Mutex<ApkInstance>>,
+    /// #402 C2b: the band geometry INFO reported, per instance.
+    geometries: Mutex<BTreeMap<usize, BandGeometry>>,
+    /// #402 C2b: the orientation after a C10 rotation, per instance.
+    orientations: Mutex<BTreeMap<usize, crate::plan::Orientation>>,
+    probes: Arc<dyn CellProbes>,
+    /// #402 C2b: the lock-order and invariant violations already written as events.
+    violations_written: Mutex<(usize, usize)>,
+    ocr_header_written: AtomicBool,
 }
 
 fn key(plan: &Plan, instance: usize, path: PathKind) -> String {
@@ -130,6 +148,8 @@ pub fn run(plan_text: &str, run_dir: &Path, env: Env) -> RunOutcome {
         limits,
         roots,
         header_facts,
+        apk,
+        probes,
     } = env;
 
     // §3.3.4: the run directory is under the fixed runs root; otherwise nothing is written.
@@ -252,7 +272,7 @@ pub fn run(plan_text: &str, run_dir: &Path, env: Env) -> RunOutcome {
         stdio_unrestored: AtomicBool::new(false),
         safety_failed: AtomicBool::new(false),
         summary_written: AtomicBool::new(false),
-        owner: LockOwner::new("runner"),
+        owners: Mutex::new(std::collections::HashMap::new()),
         started_us: clock.now_us(),
         started_unix_ms: clock.unix_ms(),
         next_subscriber: AtomicU64::new(1),
@@ -260,6 +280,16 @@ pub fn run(plan_text: &str, run_dir: &Path, env: Env) -> RunOutcome {
         run_stop: Mutex::new(None),
         cell_fatal: Mutex::new(BTreeMap::new()),
         next_record: AtomicU64::new(1),
+        apk_states: names
+            .iter()
+            .map(|_| Mutex::new(ApkInstance::new()))
+            .collect(),
+        apk,
+        geometries: Mutex::new(BTreeMap::new()),
+        orientations: Mutex::new(BTreeMap::new()),
+        probes,
+        violations_written: Mutex::new((0, 0)),
+        ocr_header_written: AtomicBool::new(false),
     });
     closer.set_emergency(shared.clone());
     for (index, instance) in shared.plan.instances.iter().enumerate() {
@@ -331,6 +361,7 @@ pub fn run(plan_text: &str, run_dir: &Path, env: Env) -> RunOutcome {
     journal.event("run_started", json!({ "run_id": shared.plan.run_id }));
 
     let outcome = shared.execute();
+    shared.apk_disconnect_all();
 
     stop.store(true, Ordering::Release);
     closer.stop_supervisor();
@@ -352,11 +383,24 @@ struct SegmentShared {
     floor_checks: AtomicU64,
     dispatches: AtomicU64,
     busy_streak: AtomicU32,
+    /// #402 C2b: when the segment stopped new work (0 until then), and the calls in flight at
+    /// that time with their returns (the `drain` event).
+    stop_at: AtomicU64,
+    drained: Mutex<Vec<Value>>,
+    /// #402 C2b: delivered frames and B_model's material (the `artifact_delta` line).
+    delivered: AtomicU64,
+    material_bytes: AtomicU64,
+    material_events: AtomicU64,
 }
 
 impl SegmentShared {
     fn new() -> Arc<Self> {
         Arc::new(Self {
+            stop_at: AtomicU64::new(0),
+            drained: Mutex::new(Vec::new()),
+            delivered: AtomicU64::new(0),
+            material_bytes: AtomicU64::new(0),
+            material_events: AtomicU64::new(0),
             stop: AtomicBool::new(false),
             fatal: Mutex::new(Vec::new()),
             instance_fatal: Mutex::new(None),
@@ -374,6 +418,33 @@ impl SegmentShared {
 
     fn backend_disabled(&self, kind: BackendKind) -> bool {
         lock(&self.disabled_backends).contains(&kind)
+    }
+
+    fn stop_at(&self) -> Option<Micros> {
+        let at = self.stop_at.load(Ordering::Acquire);
+        (at > 0).then_some(at)
+    }
+
+    /// A call that was in flight when the segment stopped new work (§3.5 四个时刻).
+    fn note_drained(
+        &self,
+        k: u64,
+        start: Option<Micros>,
+        caller_return: Option<Micros>,
+        native_return: Option<Micros>,
+        unconfirmed: bool,
+    ) {
+        if let Some(stop_at) = self.stop_at()
+            && start.is_some_and(|start| start < stop_at)
+            && caller_return.is_none_or(|end| end >= stop_at)
+        {
+            lock(&self.drained).push(json!({
+                "k": k,
+                "t_caller_return_us": caller_return,
+                "t_native_return_us": native_return,
+                "unconfirmed": unconfirmed,
+            }));
+        }
     }
 }
 
@@ -395,9 +466,16 @@ enum SegmentEnd {
 /// Which analysis-schema record a dispatch writes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RecordShape {
-    Dispatch { preview_state: String },
-    Admission { j: u32 },
-    Poll { after_sequence: Option<u64> },
+    Dispatch {
+        preview_state: String,
+        record_path: String,
+    },
+    Admission {
+        j: u32,
+    },
+    Poll {
+        after_sequence: Option<u64>,
+    },
 }
 
 /// A small deterministic generator (the plan's seed).
@@ -546,10 +624,6 @@ fn timing_of(frame: Option<&crate::backend::SampledFrame>, extra: Value) -> Valu
     timing
 }
 
-/// Why `content` is null: the timecode is not decoded by this slice (its layout is C3's).
-const CONTENT_NULL_REASON: &str =
-    "the bench does not decode the test-pattern timecode yet (the layout is C3's)";
-
 impl RunShared {
     fn next_seq(&self) -> u64 {
         self.next_record.fetch_add(1, Ordering::Relaxed)
@@ -670,7 +744,9 @@ impl RunShared {
             return set;
         }
         let at = self.now();
-        let seq = self.hub.set_global(&self.owner, GlobalGate::RunStop, true);
+        let seq = self
+            .hub
+            .set_global(&self.owner(), GlobalGate::RunStop, true);
         self.hub.views.broadcast(None, ViewMessage::Ended);
         self.journal.event(
             "run_stop",
@@ -700,7 +776,7 @@ impl RunShared {
             }
             if index > 0 {
                 for instance in 0..self.hub.instance_count() {
-                    self.hub.bump_generation(&self.owner, instance);
+                    self.hub.bump_generation(&self.owner(), instance);
                 }
             }
             self.run_cell(cell);
@@ -744,6 +820,7 @@ impl RunShared {
         );
         self.set_status(&cell.id, Value::Null);
         lock(&self.cell_fatal).clear();
+        self.cell_probe(&cell.id, "start");
         let planned = Self::planned_paths(cell, &self.plan);
         let mut ends: BTreeMap<(usize, PathKind), Vec<SegmentEnd>> = BTreeMap::new();
         let mut rng = Rng::new(self.plan.seed ^ hash_text(&cell.id));
@@ -754,6 +831,80 @@ impl RunShared {
                     let pick = rng.below(position as u64 + 1) as usize;
                     order.swap(position, pick);
                 }
+            }
+            if cell.concurrent {
+                // #402 C2b (C9): the round's segments run at the same time, one thread each.
+                if self.whole_stop_requested() {
+                    break 'rounds;
+                }
+                let mut running = Vec::new();
+                for segment_index in order {
+                    let segment = cell.segments[segment_index].clone();
+                    let Some(instance) = self.plan.instance_index(&segment.instance) else {
+                        continue;
+                    };
+                    let path = segment.path;
+                    if self.now() >= deadline {
+                        if let Some(path) = path {
+                            ends.entry((instance, path))
+                                .or_default()
+                                .push(SegmentEnd::CellLimit);
+                        }
+                        continue;
+                    }
+                    let mut info = SegmentInfo::new(
+                        &self.plan,
+                        cell,
+                        &segment,
+                        instance,
+                        round,
+                        segment_index,
+                    );
+                    info.orientation = self.orientation_now(instance);
+                    let run = Arc::clone(self);
+                    let cell_plan = cell.clone();
+                    let mut segment_rng = Rng::new(rng.next());
+                    let name = format!("segment-{}", info.label);
+                    let spawned = spawn_participant(&self.clock, &name, move || {
+                        run.run_segment(
+                            &cell_plan,
+                            &segment,
+                            instance,
+                            &info,
+                            deadline,
+                            &mut segment_rng,
+                            true,
+                        )
+                    });
+                    match spawned {
+                        Ok(thread) => running.push((instance, path, thread)),
+                        Err(error) => {
+                            self.journal.event(
+                                "segment_spawn_failed",
+                                json!({ "cell": cell.id, "detail": error.to_string() }),
+                            );
+                            if let Some(path) = path {
+                                ends.entry((instance, path))
+                                    .or_default()
+                                    .push(SegmentEnd::Fatal("segment_spawn_failed".to_owned()));
+                            }
+                        }
+                    }
+                }
+                let mut whole = false;
+                for (instance, path, thread) in running {
+                    let end = thread
+                        .join()
+                        .unwrap_or_else(|_| SegmentEnd::Fatal("segment_panicked".to_owned()));
+                    whole |= end == SegmentEnd::Whole;
+                    if let Some(path) = path {
+                        ends.entry((instance, path)).or_default().push(end);
+                    }
+                }
+                if whole {
+                    break 'rounds;
+                }
+                continue;
             }
             for segment_index in order {
                 let segment = &cell.segments[segment_index];
@@ -771,9 +922,11 @@ impl RunShared {
                     }
                     continue;
                 }
-                let info =
+                let mut info =
                     SegmentInfo::new(&self.plan, cell, segment, instance, round, segment_index);
-                let end = self.run_segment(cell, segment, instance, &info, deadline, &mut rng);
+                info.orientation = self.orientation_now(instance);
+                let end =
+                    self.run_segment(cell, segment, instance, &info, deadline, &mut rng, false);
                 if let Some(path) = segment.path {
                     ends.entry((instance, path)).or_default().push(end.clone());
                 }
@@ -784,7 +937,9 @@ impl RunShared {
         }
         // §3.11.2 A: the cell-end gate, the drain (the segments joined their activities and
         // closed their backends), the cell summary, then the gate is lifted.
-        let gate_seq = self.hub.set_global(&self.owner, GlobalGate::CellEnd, true);
+        let gate_seq = self
+            .hub
+            .set_global(&self.owner(), GlobalGate::CellEnd, true);
         self.hub.views.broadcast(None, ViewMessage::CellEnded);
         let stop_reason = self.terminal.first().map(|cause| cause.label().to_owned());
         for (instance, path) in &planned {
@@ -817,7 +972,10 @@ impl RunShared {
             "progress.jsonl",
             &json!({ "t_us": self.now(), "event": "cell_end", "cell": cell.id, "results": results }),
         );
-        self.hub.set_global(&self.owner, GlobalGate::CellEnd, false);
+        self.hub
+            .set_global(&self.owner(), GlobalGate::CellEnd, false);
+        self.cell_probe(&cell.id, "end");
+        self.write_hub_notes();
     }
 
     /// One `{path, orientation, result, reason, ...}` entry of a summary (analysis schema §10).
@@ -902,7 +1060,7 @@ impl RunShared {
         for method in IdentityMethod::CANDIDATES {
             let checked = aux_call(
                 &self.hub,
-                &self.owner,
+                &self.owner(),
                 instance,
                 Entry::DeviceSideCheck,
                 false,
@@ -956,6 +1114,40 @@ impl RunShared {
             if self.whole_stop_requested() {
                 return Err(SegmentEnd::Whole);
             }
+            // §3.5.1 正例 1: before each S open the same method finds no bench server.
+            let mut negative_empty = None;
+            if let Some(method) = method {
+                let checked = aux_call(
+                    &self.hub,
+                    &self.owner(),
+                    instance,
+                    Entry::DeviceSideCheck,
+                    false,
+                    || self.device_check.negative_control(&name, method),
+                );
+                match checked {
+                    Ok(Ok(())) => negative_empty = Some(true),
+                    Ok(Err(CheckFailure::Residual(detail))) => {
+                        self.unconfirmed(format!(
+                            "{name}: a bench scrcpy server runs before the open: {detail}"
+                        ));
+                        return Err(SegmentEnd::Whole);
+                    }
+                    Ok(Err(CheckFailure::Unconfirmed(detail))) => {
+                        self.journal.event(
+                            "s_negative_control_failed",
+                            json!({ "instance": name, "detail": detail }),
+                        );
+                        return Err(SegmentEnd::Fatal("s_negative_control_failed".to_owned()));
+                    }
+                    Err(gate) => {
+                        return Err(SegmentEnd::Skipped(CellResult::Untested(format!(
+                            "the negative control was refused by {}",
+                            gate.as_str()
+                        ))));
+                    }
+                }
+            }
             let opened = self.backends.open(&name, kind, options);
             match opened {
                 Ok(backend) => {
@@ -967,11 +1159,27 @@ impl RunShared {
                         self.unconfirmed(format!("{name} scrcpy opened without stream facts"));
                         return Err(SegmentEnd::Whole);
                     };
+                    self.journal.event(
+                        "s_open",
+                        json!({ "instance": name, "scid": stream.scid_text(), "local_port": stream.local_port }),
+                    );
                     match self.positive_identity(instance, method, &stream) {
                         Ok(identity) => {
                             self.journal.event(
                                 "scrcpy_identity",
                                 json!({ "instance": name, "identity": identity }),
+                            );
+                            self.journal.event(
+                                "identity_positive",
+                                json!({
+                                    "instance": name,
+                                    "scid": stream.scid_text(),
+                                    "method": method,
+                                    "matches": 1,
+                                    "argv_equal": identity.argv == stream.expected_argv(),
+                                    "negative_control_empty": negative_empty,
+                                    "output_complete": true,
+                                }),
                             );
                             return Ok((backend, Some(identity)));
                         }
@@ -1058,7 +1266,7 @@ impl RunShared {
         if let (Some(stream), Some(method)) = (&failure.stream, method) {
             let checked = aux_call(
                 &self.hub,
-                &self.owner,
+                &self.owner(),
                 instance,
                 Entry::DeviceSideCheck,
                 true,
@@ -1099,7 +1307,7 @@ impl RunShared {
         for _ in 0..3 {
             let checked = aux_call(
                 &self.hub,
-                &self.owner,
+                &self.owner(),
                 instance,
                 Entry::DeviceSideCheck,
                 false,
@@ -1129,7 +1337,7 @@ impl RunShared {
         let kind = backend.kind();
         let generation = self
             .hub
-            .snapshot(&self.owner, |state| state.instances[instance].generation);
+            .snapshot(&self.owner(), |state| state.instances[instance].generation);
         let outcome = self.closer.close(
             backend,
             CloseInfo {
@@ -1155,7 +1363,7 @@ impl RunShared {
         if let Some(identity) = identity {
             let checked = aux_call(
                 &self.hub,
-                &self.owner,
+                &self.owner(),
                 instance,
                 Entry::DeviceSideCheck,
                 true,
@@ -1167,6 +1375,16 @@ impl RunShared {
                     self.journal
                         .event("device_rebooted", json!({ "instance": name }));
                     lock(&self.rebooted).insert(instance);
+                    if let Some(state) = self.apk_states.get(instance) {
+                        let client = {
+                            let mut state = lock(state);
+                            state.needs_calibration = true;
+                            state.client.take()
+                        };
+                        if let Some(client) = client {
+                            let _ = client.close();
+                        }
+                    }
                     for path in [PathKind::Nemu, PathKind::Scrcpy, PathKind::BModel] {
                         lock(&self.disabled)
                             .entry((instance, path))
@@ -1211,16 +1429,16 @@ impl RunShared {
     /// Takes the backend of `kind` out of `instance`'s slots, waiting for admission (so no call
     /// is in flight on it).
     fn take_backend(&self, instance: usize, kind: BackendKind) -> Option<Box<dyn PreviewBackend>> {
-        self.hub.admission[instance].acquire(&self.owner);
+        self.hub.admission[instance].acquire(&self.owner());
         let taken = lock(&self.hub.backends[instance]).take(kind);
-        self.hub.admission[instance].release(&self.owner);
+        self.hub.admission[instance].release(&self.owner());
         taken
     }
 
     fn put_backend(&self, instance: usize, backend: Box<dyn PreviewBackend>) {
-        self.hub.admission[instance].acquire(&self.owner);
+        self.hub.admission[instance].acquire(&self.owner());
         lock(&self.hub.backends[instance]).put(backend);
-        self.hub.admission[instance].release(&self.owner);
+        self.hub.admission[instance].release(&self.owner());
     }
 
     /// What a backend failure does (§3.11.4): `true` when the activity must stop.
@@ -1295,6 +1513,7 @@ impl RunShared {
         info: &SegmentInfo,
         cell_deadline: Micros,
         rng: &mut Rng,
+        concurrent: bool,
     ) -> SegmentEnd {
         let label = info.label.as_str();
         if let Some(path) = segment.path {
@@ -1334,6 +1553,17 @@ impl RunShared {
         if segment.mode == SegmentMode::ColdStart {
             return self.run_cold_start(cell, segment, instance, info, cell_deadline);
         }
+        if matches!(
+            segment.mode,
+            SegmentMode::Calibrate
+                | SegmentMode::StepTrials
+                | SegmentMode::Rotate
+                | SegmentMode::Reconnect
+                | SegmentMode::StaticImages
+        ) {
+            return self.run_procedure(cell, segment, instance, info, cell_deadline, rng);
+        }
+        self.apk_segment_start(instance, segment, &cell.id);
         let options = OpenOptions {
             scrcpy_bit_rate: segment.scrcpy.as_ref().and_then(|scrcpy| scrcpy.bit_rate),
             scrcpy_max_fps: segment.scrcpy.as_ref().and_then(|scrcpy| scrcpy.max_fps),
@@ -1372,9 +1602,9 @@ impl RunShared {
         if segment.path == Some(PathKind::BModel) {
             match self.materials.open(self.instance_name(instance), label) {
                 Ok(writer) => {
-                    self.hub.admission[instance].acquire(&self.owner);
+                    self.hub.admission[instance].acquire(&self.owner());
                     lock(&self.hub.backends[instance]).material = Some(writer);
-                    self.hub.admission[instance].release(&self.owner);
+                    self.hub.admission[instance].release(&self.owner());
                 }
                 Err(detail) => {
                     self.journal.event(
@@ -1387,6 +1617,9 @@ impl RunShared {
             }
         }
 
+        for identity in identities.values() {
+            self.sampling_start(instance, identity);
+        }
         let shared = SegmentShared::new();
         let preview = segment.mode == SegmentMode::Preview && segment.path.is_some();
         let producer = preview && self.hub.views.claim_producer(instance);
@@ -1419,6 +1652,7 @@ impl RunShared {
                         .viewer_unsubscribe_ms
                         .map(|offset| self.now() + ms(offset)),
                     grace_us: ms(segment.grace_ms),
+                    gdi: index == 0 && segment.gdi_viewer,
                 };
                 match self.viewers.start(context) {
                     Ok(viewer) => viewers.push(viewer),
@@ -1430,6 +1664,17 @@ impl RunShared {
             }
         }
 
+        if producer {
+            self.journal.event(
+                "producer_count",
+                json!({
+                    "instance": self.instance_name(instance),
+                    "segment": label,
+                    "count": self.hub.views.producers(instance),
+                    "viewers": viewers.iter().map(|viewer| viewer.subscriber()).collect::<Vec<_>>(),
+                }),
+            );
+        }
         // The activities.
         let mut activities: Vec<Participant<()>> = Vec::new();
         let seed = rng.next();
@@ -1443,9 +1688,19 @@ impl RunShared {
             let quota = segment.quota;
             let file = format!("opps-{}-{}.jsonl", cell.id, path.as_str());
             let info = info.clone();
+            let reconnect = segment.reconnect_each_sample;
             if let Ok(thread) =
                 spawn_participant(&self.clock, &format!("preview-{label}"), move || {
-                    run.preview_activity(&segment_shared, instance, path, fps, quota, &file, &info);
+                    run.preview_activity(
+                        &segment_shared,
+                        instance,
+                        path,
+                        fps,
+                        quota,
+                        &file,
+                        &info,
+                        reconnect,
+                    );
                 })
             {
                 activities.push(thread);
@@ -1454,8 +1709,15 @@ impl RunShared {
         if let Some(formal) = segment.formal.clone() {
             let run = Arc::clone(self);
             let segment_shared = Arc::clone(&shared);
-            let preview_state = segment.path.map_or("off", PathKind::as_str);
-            let file = format!("opps-{}-{preview_state}.jsonl", cell.id);
+            let preview_state = formal
+                .preview_state
+                .clone()
+                .unwrap_or_else(|| segment.path.map_or("off", PathKind::as_str).to_owned());
+            let record_path = formal
+                .record_path
+                .clone()
+                .unwrap_or_else(|| preview_state.clone());
+            let file = format!("opps-{}-{record_path}.jsonl", cell.id);
             let info = info.clone();
             let grid = segment.tap_grid;
             if let Ok(thread) =
@@ -1468,7 +1730,8 @@ impl RunShared {
                         seed,
                         &file,
                         &info,
-                        preview_state,
+                        &preview_state,
+                        &record_path,
                     );
                 })
             {
@@ -1525,6 +1788,7 @@ impl RunShared {
         let mut set_gates: Vec<GateKind> = Vec::new();
         let mut closed_by_gate: BTreeSet<BackendKind> = BTreeSet::new();
         let end = loop {
+            self.apk_periodic(instance);
             let now = self.now();
             self.check_time();
             if self.whole_stop_requested() {
@@ -1562,8 +1826,8 @@ impl RunShared {
             }
             if now >= next_sweep {
                 next_sweep = now + ms(segment.lease_check_ms);
-                self.hub.sweep(&self.owner, ms(segment.grace_ms));
-                if self.hub.grace_expired(&self.owner, instance) == Some(true)
+                self.hub.sweep(&self.owner(), ms(segment.grace_ms));
+                if self.hub.grace_expired(&self.owner(), instance) == Some(true)
                     && let Some(backend) = self.take_backend(instance, BackendKind::Scrcpy)
                 {
                     let identity = identities.remove(&BackendKind::Scrcpy);
@@ -1611,15 +1875,34 @@ impl RunShared {
         // §3.11.2 A/B step 1: no new grants (the cell-end gate; the whole-run stop gate is set
         // already when the run stops), then step 2: the activities stop at their next
         // checkpoint and are joined (the drain).
-        let segment_gate = self.hub.set_global(&self.owner, GlobalGate::CellEnd, true);
+        // A concurrent segment ends its own instance only (C9): the instance's stop gate.
+        let segment_gate = if concurrent {
+            self.hub
+                .set_gate(&self.owner(), instance, GateKind::StopClass, true)
+        } else {
+            self.hub
+                .set_global(&self.owner(), GlobalGate::CellEnd, true)
+        };
         self.journal.event(
             "segment_stop_new",
             json!({ "segment": label, "gate_seq": segment_gate, "end": format!("{end:?}") }),
         );
+        let drain_start = self.now();
+        shared.stop_at.store(drain_start.max(1), Ordering::Release);
         shared.stop.store(true, Ordering::Release);
         for activity in activities {
             let _ = activity.join();
         }
+        self.journal.event(
+            "drain",
+            json!({
+                "instance": self.instance_name(instance),
+                "segment": label,
+                "t_start_us": drain_start,
+                "t_end_us": self.now(),
+                "calls": *lock(&shared.drained),
+            }),
+        );
         if self.terminal.finished_by_supervisor() {
             return SegmentEnd::Whole;
         }
@@ -1628,9 +1911,18 @@ impl RunShared {
         }
         if producer {
             self.hub.views.release_producer(instance);
+            self.journal.event(
+                "producer_count",
+                json!({
+                    "instance": self.instance_name(instance),
+                    "segment": label,
+                    "count": self.hub.views.producers(instance),
+                    "viewers": [],
+                }),
+            );
         }
         for gate in set_gates {
-            self.hub.set_gate(&self.owner, instance, gate, false);
+            self.hub.set_gate(&self.owner(), instance, gate, false);
         }
         // The fatal backends close first (no more samples on them), then the rest.
         let fatal: Vec<(BackendKind, BackendFailure)> = lock(&shared.fatal).clone();
@@ -1648,12 +1940,24 @@ impl RunShared {
                 json!({ "segment": label, "backend": kind, "first_error": failure }),
             );
         }
-        self.hub.admission[instance].acquire(&self.owner);
+        self.hub.admission[instance].acquire(&self.owner());
         let material = lock(&self.hub.backends[instance]).material.take();
-        self.hub.admission[instance].release(&self.owner);
+        self.hub.admission[instance].release(&self.owner());
         drop(material);
         let confirmed = self.close_segment_backends(instance, &mut identities, "segment_end");
-        self.hub.set_global(&self.owner, GlobalGate::CellEnd, false);
+        if concurrent {
+            self.hub
+                .set_gate(&self.owner(), instance, GateKind::StopClass, false);
+        } else {
+            self.hub
+                .set_global(&self.owner(), GlobalGate::CellEnd, false);
+        }
+        if let Some(path) = segment.path {
+            let state_changes = 2 * kinds.len() as u64 + segment.gates.len() as u64;
+            self.write_artifact_delta(info, path, &shared, state_changes);
+        }
+        self.apk_fetch_records(instance);
+        self.write_hub_notes();
         if !confirmed && end != SegmentEnd::Whole {
             return SegmentEnd::Whole;
         }
@@ -1703,14 +2007,14 @@ impl RunShared {
         options: &OpenOptions,
     ) {
         if set {
-            let seq = self.hub.set_gate(&self.owner, instance, gate, true);
+            let seq = self.hub.set_gate(&self.owner(), instance, gate, true);
             set_gates.push(gate);
             self.journal.event(
                 "gate_applied",
                 json!({ "instance": self.instance_name(instance), "gate": gate, "seq": seq }),
             );
             if gate.is_hard() {
-                self.hub.end_grace_hard(&self.owner, instance);
+                self.hub.end_grace_hard(&self.owner(), instance);
             }
             for (entry, kind) in [
                 (Entry::ScrcpyProducer, BackendKind::Scrcpy),
@@ -1737,10 +2041,10 @@ impl RunShared {
             for cleared in [gate, GateKind::Holding] {
                 if let Some(position) = set_gates.iter().position(|known| *known == cleared) {
                     set_gates.remove(position);
-                    self.hub.set_gate(&self.owner, instance, cleared, false);
+                    self.hub.set_gate(&self.owner(), instance, cleared, false);
                 }
             }
-            let generation = self.hub.bump_generation(&self.owner, instance);
+            let generation = self.hub.bump_generation(&self.owner(), instance);
             self.journal.event(
                 "gate_cleared",
                 json!({ "instance": self.instance_name(instance), "gate": gate, "generation": generation }),
@@ -1775,12 +2079,12 @@ impl RunShared {
         // Drain: wait for the in-flight table of the instance (the formal loop stops at its next
         // checkpoint because E7 refuses new work under the hold request).
         let drain_deadline = self.now() + self.limits.nemu_close_deadline_us;
-        while self.hub.inflight(&self.owner, instance) > 0 && self.now() < drain_deadline {
+        while self.hub.inflight(&self.owner(), instance) > 0 && self.now() < drain_deadline {
             pause_until(self.clock.as_ref(), self.now() + ms(10));
         }
-        let drained = self.hub.inflight(&self.owner, instance) == 0;
+        let drained = self.hub.inflight(&self.owner(), instance) == 0;
         let open_after: Vec<&str> = {
-            self.hub.admission[instance].acquire(&self.owner);
+            self.hub.admission[instance].acquire(&self.owner());
             let slots = lock(&self.hub.backends[instance]);
             let mut open = Vec::new();
             if slots.nemu.is_some() {
@@ -1790,13 +2094,13 @@ impl RunShared {
                 open.push("scrcpy");
             }
             drop(slots);
-            self.hub.admission[instance].release(&self.owner);
+            self.hub.admission[instance].release(&self.owner());
             open
         };
         let unconfirmed_now = !lock(&self.unconfirmed).is_empty();
         if drained && open_after.is_empty() && !unconfirmed_now {
             self.hub
-                .set_gate(&self.owner, instance, GateKind::Holding, true);
+                .set_gate(&self.owner(), instance, GateKind::Holding, true);
             set_gates.push(GateKind::Holding);
             self.journal.event(
                 "held",
@@ -1926,7 +2230,7 @@ impl RunShared {
         kind: BackendKind,
         call: impl FnOnce(&mut Box<dyn PreviewBackend>) -> Result<T, BackendFailure>,
     ) -> Result<T, BackendFailure> {
-        self.hub.admission[instance].acquire(&self.owner);
+        self.hub.admission[instance].acquire(&self.owner());
         let result = match lock(&self.hub.backends[instance]).get(kind) {
             Some(backend) => call(backend),
             None => Err(BackendFailure::new(
@@ -1936,7 +2240,7 @@ impl RunShared {
             )
             .without_native_call()),
         };
-        self.hub.admission[instance].release(&self.owner);
+        self.hub.admission[instance].release(&self.owner());
         result
     }
 
@@ -1952,6 +2256,7 @@ impl RunShared {
         quota: Option<u64>,
         file: &str,
         info: &SegmentInfo,
+        reconnect: bool,
     ) {
         let owner = LockOwner::new(format!(
             "preview/{}/{}",
@@ -1970,10 +2275,67 @@ impl RunShared {
             opportunity += 1;
             segment.opportunities.fetch_add(1, Ordering::AcqRel);
             let tick = self.now();
+            let reconnected = (reconnect && path.backend() == BackendKind::Nemu).then(|| {
+                let started = self.now();
+                let reopened = self.reconnect_nemu_for_sample(instance);
+                json!({
+                    "t_start_us": started,
+                    "t_end_us": self.now(),
+                    "generation": reopened.as_ref().ok(),
+                    "failure": reopened.as_ref().err(),
+                })
+            });
             let mut op = SampleOp::new(instance, path, Arc::clone(&owner));
             let outcome = run_blocking(&self.hub, &mut op);
             let delivered = outcome.disposition.is_delivered();
-            let mut null_reasons = json!({ "content": CONTENT_NULL_REASON });
+            if delivered {
+                segment.delivered.fetch_add(1, Ordering::AcqRel);
+            }
+            if let Some(cost) = outcome.material {
+                segment
+                    .material_bytes
+                    .fetch_add(cost.bytes, Ordering::AcqRel);
+                segment
+                    .material_events
+                    .fetch_add(cost.events, Ordering::AcqRel);
+            }
+            let native_return = outcome
+                .frame
+                .as_ref()
+                .and_then(|frame| frame.native.iter().filter_map(|span| span.end_us).max())
+                .or(outcome.call_end_us);
+            segment.note_drained(
+                opportunity,
+                outcome.call_start_us,
+                outcome.call_end_us,
+                native_return,
+                outcome
+                    .failure
+                    .as_ref()
+                    .is_some_and(|failure| !failure.native_returned),
+            );
+            let decoded = if delivered {
+                self.hub
+                    .views
+                    .latest(instance)
+                    .filter(|frame| Some(frame.preview_sequence) == outcome.preview_sequence)
+                    .and_then(|frame| {
+                        self.decode_frame(
+                            instance,
+                            &frame.pixels,
+                            frame.width,
+                            frame.height,
+                            frame.layout,
+                        )
+                    })
+            } else {
+                None
+            };
+            let (content, mut null_reasons) = if delivered {
+                self.content_of(decoded.as_ref())
+            } else {
+                (Value::Null, json!({ "content": "not delivered" }))
+            };
             if !delivered && let Value::Object(map) = &mut null_reasons {
                 map.insert(
                     "timing.t_pub_us".to_owned(),
@@ -2001,8 +2363,9 @@ impl RunShared {
                             .zip(outcome.call_start_us)
                             .map(|(end, start)| end.saturating_sub(start))),
                     })),
-                    "content": null,
+                    "content": content,
                     "null_reasons": null_reasons,
+                    "reconnect": reconnected,
                     "discard_reason": match &outcome.disposition {
                         Disposition::DiscardedStale(reason) => Some(reason.clone()),
                         _ => None,
@@ -2039,8 +2402,10 @@ impl RunShared {
         file: &str,
         info: &SegmentInfo,
         preview_state: &str,
+        record_path: &str,
     ) {
         let owner = LockOwner::new(format!("formal/{}", self.instance_name(instance)));
+        let view = self.view_size(instance);
         let mut rng = Rng::new(seed ^ 0x5eed);
         let capture_kind = if formal.capture_from_scrcpy {
             BackendKind::Scrcpy
@@ -2069,6 +2434,8 @@ impl RunShared {
                     grid,
                     clock.as_ref(),
                     true,
+                    view,
+                    None,
                 )
             });
             let tick = self.now();
@@ -2081,7 +2448,9 @@ impl RunShared {
             let outcome = run_blocking(&self.hub, &mut op);
             let record = RecordShape::Dispatch {
                 preview_state: preview_state.to_owned(),
+                record_path: record_path.to_owned(),
             };
+            segment.note_drained(dispatch, Some(tick), Some(self.now()), None, false);
             let stop = self.record_dispatch(
                 segment,
                 instance,
@@ -2118,7 +2487,7 @@ impl RunShared {
         shape: &RecordShape,
     ) -> bool {
         let path = match shape {
-            RecordShape::Dispatch { preview_state } => preview_state.clone(),
+            RecordShape::Dispatch { record_path, .. } => record_path.clone(),
             _ => match kind {
                 BackendKind::Nemu => "N".to_owned(),
                 BackendKind::Scrcpy => "S".to_owned(),
@@ -2138,8 +2507,36 @@ impl RunShared {
                     |failure| format!("failed:{}", failure.code),
                 );
                 let wait = granted_us.saturating_sub(*registered_us);
+                let decoded = match shape {
+                    RecordShape::Admission { .. } => work.floor_frame.as_ref().and_then(|frame| {
+                        self.decode_frame(
+                            instance,
+                            &frame.pixels,
+                            frame.width,
+                            frame.height,
+                            frame.layout,
+                        )
+                    }),
+                    _ => None,
+                };
+                let (admission_content, mut admission_reasons) = match &work.floor_frame {
+                    Some(_) => self.content_of(decoded.as_ref()),
+                    None => (Value::Null, json!({ "content": "no frame was admitted" })),
+                };
+                if work.first_flip.is_none()
+                    && let Value::Object(map) = &mut admission_reasons
+                {
+                    map.insert(
+                        "first_flip".to_owned(),
+                        json!(if self.apk_enabled(instance) {
+                            "no frame showed the tap's flip within the wait"
+                        } else {
+                            "no test-pattern APK on this instance"
+                        }),
+                    );
+                }
                 match shape {
-                    RecordShape::Dispatch { preview_state } => json!({
+                    RecordShape::Dispatch { preview_state, .. } => json!({
                         "trial": trial,
                         "t_tick_us": tick,
                         "disposition": disposition,
@@ -2152,7 +2549,7 @@ impl RunShared {
                             { "dur_us": work.floor_capture_us, "ok": work.floor_frame.is_some(), "code": work.failure.as_ref().filter(|_| work.floor_frame.is_none()).map(|failure| failure.code.clone()) },
                         ],
                         "tap_us": work.tap_us,
-                        "stdio_wait_us": [],
+                        "stdio_wait_us": work.stdio_wait_us,
                         "register_seq": registration,
                         "formal_grant_seq": formal_grant,
                         "by_pump": by_pump,
@@ -2171,9 +2568,9 @@ impl RunShared {
                         "known_source_us": work.floor_frame.as_ref().and_then(|frame| frame.known_source_us),
                         "admission_wait_us": wait,
                         "floor_capture_us": work.floor_capture_us,
-                        "content": null,
-                        "first_flip": null,
-                        "null_reasons": { "content": CONTENT_NULL_REASON, "first_flip": CONTENT_NULL_REASON },
+                        "content": admission_content,
+                        "first_flip": work.first_flip,
+                        "null_reasons": admission_reasons,
                         "failure": work.failure,
                     }),
                     RecordShape::Poll { after_sequence } => json!({
@@ -2194,14 +2591,14 @@ impl RunShared {
                 "contended": true,
                 "register_seq": registration,
                 "tap_us": null,
-                "preview_state": match shape { RecordShape::Dispatch { preview_state } => Some(preview_state.clone()), _ => None },
+                "preview_state": match shape { RecordShape::Dispatch { preview_state, .. } => Some(preview_state.clone()), _ => None },
             }),
             DispatchOutcome::Refused { gate } => json!({
                 "trial": trial,
                 "t_tick_us": tick,
                 "disposition": format!("skipped_gate:{}", gate.as_str()),
                 "contended": false,
-                "preview_state": match shape { RecordShape::Dispatch { preview_state } => Some(preview_state.clone()), _ => None },
+                "preview_state": match shape { RecordShape::Dispatch { preview_state, .. } => Some(preview_state.clone()), _ => None },
             }),
         };
         let kind_name = match shape {
@@ -2242,6 +2639,10 @@ impl RunShared {
         let mut rng = Rng::new(seed ^ 0x7a5c);
         let kind = path.backend();
         let mut check = 0u64;
+        let view = self.view_size(instance);
+        let flip = self
+            .apk_enabled(instance)
+            .then(|| (self.band_geometry(instance), ms(self.plan.apk.flip_wait_ms)));
         let last_sequence = Arc::new(Mutex::new(None::<u64>));
         while !segment.stopped() {
             if quota.is_some_and(|quota| check >= quota) || segment.backend_disabled(kind) {
@@ -2273,7 +2674,17 @@ impl RunShared {
                     }
                     result
                 } else {
-                    formal_work(hub, instance, kind, cell_index, grid, clock.as_ref(), false)
+                    formal_work(
+                        hub,
+                        instance,
+                        kind,
+                        cell_index,
+                        grid,
+                        clock.as_ref(),
+                        false,
+                        view,
+                        flip,
+                    )
                 }
             });
             let tick = self.now();
@@ -2334,6 +2745,7 @@ impl RunShared {
             let mut identities = BTreeMap::new();
             self.close_segment_backends(instance, &mut identities, "run_end");
         }
+        self.write_hub_notes();
         let results = self.results();
         let result = RunResult::decisive(&results);
         self.write_summary_inner(result, &results, t_stop_new, Some(gate_seq), None);
@@ -2371,7 +2783,7 @@ impl RunShared {
         if !lock(&self.rebooted).is_empty() {
             results.insert(RunResult::Incomplete);
         }
-        let violations = self.hub.violations(&self.owner);
+        let violations = self.hub.violations(&self.owner());
         if !violations.is_empty() {
             results.insert(RunResult::InternalInvariant);
         }
@@ -2401,7 +2813,7 @@ impl RunShared {
         }
         let checker = self
             .hub
-            .snapshot(&self.owner, |state| state.checker.clone());
+            .snapshot(&self.owner(), |state| state.checker.clone());
         let summary = json!({
             "run_id": self.plan.run_id,
             "result": result.as_str(),
@@ -2452,7 +2864,36 @@ impl RunShared {
     }
 }
 
-/// P4's formal step: capture, tap a grid cell, capture with a floor after the tap.
+/// The vendor stdio gate waits a frame's timing points reported.
+fn stdio_waits(frame: &crate::backend::SampledFrame) -> impl Iterator<Item = Micros> + '_ {
+    frame
+        .native
+        .iter()
+        .filter(|span| span.kind == "stdio_wait")
+        .filter_map(|span| span.end_us.zip(span.start_us))
+        .map(|(end, start)| end.saturating_sub(start))
+}
+
+/// The flip number and grid cell a frame's timecode shows (flip mode), with the band geometry.
+fn flip_shown(
+    frame: &crate::backend::SampledFrame,
+    geometry: BandGeometry,
+) -> Option<crate::timecode::Payload> {
+    crate::timecode::decode(
+        &frame.pixels,
+        frame.width,
+        frame.height,
+        bytes_per_pixel(frame.layout),
+        geometry,
+    )
+    .payload
+    .filter(|payload| payload.mode == 2)
+}
+
+/// P4's formal step: capture, tap a grid cell, capture with a floor after the tap. With `flip`
+/// (C6 on the test pattern: the band geometry and the wait) a frame before the tap gives the
+/// flip number n, and the first frame showing n + 1 is the tap's `first_flip`.
+#[allow(clippy::too_many_arguments)]
 fn formal_work(
     hub: &Hub,
     instance: usize,
@@ -2461,18 +2902,29 @@ fn formal_work(
     grid: u32,
     clock: &dyn Clock,
     capture_first: bool,
+    view: (i32, i32),
+    flip: Option<(BandGeometry, Micros)>,
 ) -> FormalResult {
     let mut result = FormalResult::default();
     if capture_first {
         let started = clock.now_us();
-        if let Err(failure) = formal_capture(hub, instance, kind, None) {
-            result.failure = Some(failure);
-            return result;
+        match formal_capture(hub, instance, kind, None) {
+            Ok(frame) => result.stdio_wait_us.extend(stdio_waits(&frame)),
+            Err(failure) => {
+                result.failure = Some(failure);
+                return result;
+            }
         }
         result.capture_us = Some(clock.now_us().saturating_sub(started));
     }
+    let flip_before = flip.and_then(|(geometry, _)| {
+        formal_capture(hub, instance, kind, None)
+            .ok()
+            .and_then(|frame| flip_shown(&frame, geometry))
+            .map(|payload| payload.event)
+    });
     // The tap goes to the Nemu backend when it is open (the instance's touch path), else to S.
-    let (width, height) = (1280_i32, 720_i32);
+    let (width, height) = view;
     let grid = grid.max(1) as i32;
     let column = (cell_index as i32) % grid;
     let row = (cell_index as i32) / grid;
@@ -2496,6 +2948,48 @@ fn formal_work(
     match formal_capture(hub, instance, kind, Some(floor)) {
         Ok(frame) => {
             result.floor_capture_us = Some(clock.now_us().saturating_sub(started));
+            result.stdio_wait_us.extend(stdio_waits(&frame));
+            if let (Some((geometry, wait)), Some(before)) = (flip, flip_before) {
+                let expected = (before + 1) & 0x00ff_ffff;
+                let shows = |frame: &crate::backend::SampledFrame| {
+                    flip_shown(frame, geometry).filter(|payload| payload.event == expected)
+                };
+                let first = |frame: &crate::backend::SampledFrame,
+                             payload: crate::timecode::Payload,
+                             floor_frame: bool| {
+                    serde_json::json!({
+                        "n": payload.event,
+                        "j": payload.flip_j(),
+                        "t_pub_us": frame.received_us.or(frame.built_us),
+                        "t_capture_end_us": clock.now_us(),
+                        "is_first_floor_frame": floor_frame,
+                        "stream_seq": frame.stream_sequence,
+                    })
+                };
+                if let Some(payload) = shows(&frame) {
+                    result.first_flip = Some(first(&frame, payload, true));
+                } else {
+                    let deadline = clock.now_us().saturating_add(wait);
+                    let mut after = frame.stream_sequence;
+                    while clock.now_us() < deadline {
+                        let next = formal_capture(
+                            hub,
+                            instance,
+                            kind,
+                            after.map(|sequence| Floor {
+                                after_us: None,
+                                after_sequence: Some(sequence),
+                            }),
+                        );
+                        let Ok(next) = next else { break };
+                        after = next.stream_sequence.or(after);
+                        if let Some(payload) = shows(&next) {
+                            result.first_flip = Some(first(&next, payload, false));
+                            break;
+                        }
+                    }
+                }
+            }
             result.floor_frame = Some(frame);
         }
         Err(failure) => result.failure = Some(failure),
@@ -2554,6 +3048,1390 @@ impl Emergency for RunShared {
         }
         self.write_summary_inner(result, &results, self.now(), None, Some(reason));
     }
+}
+
+/// #402 C2b: the APK state of one instance (C3's protocol): the client, the record cursors and
+/// epochs, the calibrations of the current clock epoch.
+struct ApkInstance {
+    client: Option<ApkClient>,
+    streams: ApkStreams,
+    calibrations: Vec<Calibration>,
+    last_calibration_us: Option<Micros>,
+    last_fetch_us: Option<Micros>,
+    needs_calibration: bool,
+}
+
+impl ApkInstance {
+    fn new() -> Self {
+        Self {
+            client: None,
+            streams: ApkStreams::default(),
+            calibrations: Vec::new(),
+            last_calibration_us: None,
+            last_fetch_us: None,
+            needs_calibration: true,
+        }
+    }
+
+    fn client(&mut self) -> Result<&mut ApkClient, ApkError> {
+        self.client
+            .as_mut()
+            .ok_or_else(|| ApkError::new("apk_not_connected", "no APK connection"))
+    }
+}
+
+/// #402 C2b: quotes one CSV field when it needs it.
+fn csv_field(value: &str) -> String {
+    if value.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_owned()
+    }
+}
+
+/// #402 C2b: the columns of `ocr-coverage.csv` (analysis schema §9).
+const OCR_COLUMNS: [&str; 20] = [
+    "image",
+    "image_kind",
+    "target",
+    "target_class",
+    "path",
+    "bitrate",
+    "orientation",
+    "frame",
+    "command",
+    "package",
+    "package_sha256",
+    "facts",
+    "frame_count",
+    "result_json",
+    "truth_hit",
+    "truth_text",
+    "result_hit",
+    "result_text",
+    "verdict",
+    "verdict_reason",
+];
+
+/// #402 C2b: a slot name the APK accepts (`[A-Za-z0-9_-][A-Za-z0-9_.-]{0,63}`).
+fn slot_name(image: &str) -> String {
+    let mut slot: String = image
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .take(60)
+        .collect();
+    if slot.starts_with('.') || slot.is_empty() {
+        slot.insert(0, 's');
+    }
+    slot
+}
+
+fn bytes_per_pixel(layout: crate::backend::PixelLayout) -> usize {
+    match layout {
+        crate::backend::PixelLayout::Rgba8 => 4,
+        crate::backend::PixelLayout::Rgb8 => 3,
+    }
+}
+
+impl RunShared {
+    /// #402 C2b: the calling thread's lock owner (concurrent segments each have their own, so
+    /// the lock-order check sees each thread apart).
+    fn owner(&self) -> Arc<LockOwner> {
+        let thread = std::thread::current();
+        let mut owners = lock(&self.owners);
+        Arc::clone(owners.entry(thread.id()).or_insert_with(|| {
+            LockOwner::new(format!("runner/{}", thread.name().unwrap_or("thread")))
+        }))
+    }
+
+    fn apk_enabled(&self, instance: usize) -> bool {
+        self.apk.is_some() && self.plan.instances[instance].apk
+    }
+
+    fn calib_file(&self) -> String {
+        format!(
+            "calib-{}.jsonl",
+            self.plan.window.as_deref().unwrap_or("run")
+        )
+    }
+
+    /// The band geometry of `instance` (INFO's layout, or the plan's cell).
+    fn band_geometry(&self, instance: usize) -> BandGeometry {
+        lock(&self.geometries)
+            .get(&instance)
+            .copied()
+            .unwrap_or(BandGeometry {
+                cell: self.plan.apk.cell,
+                offset_x: 0,
+                offset_y: 0,
+            })
+    }
+
+    /// The view size the taps are given in: the instance's current orientation.
+    fn view_size(&self, instance: usize) -> (i32, i32) {
+        let orientation = lock(&self.orientations)
+            .get(&instance)
+            .copied()
+            .unwrap_or(self.plan.instances[instance].orientation);
+        match orientation {
+            crate::plan::Orientation::Landscape => (1280, 720),
+            crate::plan::Orientation::Portrait => (720, 1280),
+        }
+    }
+
+    fn orientation_now(&self, instance: usize) -> &'static str {
+        let orientation = lock(&self.orientations)
+            .get(&instance)
+            .copied()
+            .unwrap_or(self.plan.instances[instance].orientation);
+        orientation_code(orientation)
+    }
+
+    /// The timecode of a frame (`None` on an instance without the APK).
+    fn decode_frame(
+        &self,
+        instance: usize,
+        pixels: &[u8],
+        width: u32,
+        height: u32,
+        layout: crate::backend::PixelLayout,
+    ) -> Option<crate::timecode::Decoded> {
+        if !self.apk_enabled(instance) {
+            return None;
+        }
+        Some(crate::timecode::decode(
+            pixels,
+            width,
+            height,
+            bytes_per_pixel(layout),
+            self.band_geometry(instance),
+        ))
+    }
+
+    /// The `content` and its null reasons for a delivered frame (analysis schema §3.2).
+    fn content_of(&self, decoded: Option<&crate::timecode::Decoded>) -> (Value, Value) {
+        match decoded {
+            Some(decoded) => {
+                let mut reasons = serde_json::Map::new();
+                if decoded.is_ok() {
+                    reasons.insert(
+                        "content.t_vsync_next_dev_ns".to_owned(),
+                        json!("in the APK vsync record with counter + 1"),
+                    );
+                }
+                (
+                    crate::timecode::content_json(decoded),
+                    Value::Object(reasons),
+                )
+            }
+            None => (
+                Value::Null,
+                json!({ "content": "no test-pattern APK on this instance" }),
+            ),
+        }
+    }
+
+    /// Runs `call` on the instance's APK (entry E5 or E6, P6: no bench lock during the call),
+    /// connecting first. A HELLO that shows another APK process starts a new APK epoch (new
+    /// record file, cursors from 0); a device time away from the calibration's prediction starts
+    /// a new clock epoch; both need a new calibration. An error that ends the connection drops
+    /// the client, so the next call reconnects.
+    fn apk_call<T>(
+        &self,
+        instance: usize,
+        entry: Entry,
+        call: impl FnOnce(&RunShared, &mut ApkInstance) -> Result<T, ApkError>,
+    ) -> Result<T, String> {
+        let Some(connector) = self.apk.clone() else {
+            return Err("apk_not_configured: the run has no APK connector".to_owned());
+        };
+        if !self.plan.instances[instance].apk {
+            return Err(format!(
+                "apk_not_configured: {} has no APK",
+                self.instance_name(instance)
+            ));
+        }
+        let name = self.instance_name(instance).to_owned();
+        let owner = self.owner();
+        let result = aux_call(
+            &self.hub,
+            &owner,
+            instance,
+            entry,
+            false,
+            || -> Result<T, ApkError> {
+                let mut state = lock(&self.apk_states[instance]);
+                if state.client.is_none() {
+                    let link = connector.connect(&name)?;
+                    let mut client = ApkClient::new(link, Arc::clone(&self.clock));
+                    let hello = client.hello()?;
+                    let host_us = self.now();
+                    let last = state.calibrations.last().copied();
+                    let change = state.streams.on_hello(&hello, host_us, last.as_ref());
+                    if change.apk_restarted {
+                        self.journal.event(
+                            "apk_restart",
+                            json!({ "instance": name, "apk_instance": hello.instance, "apk_epoch": state.streams.epoch }),
+                        );
+                    }
+                    if change.clock_reset {
+                        state.calibrations.clear();
+                        self.journal.event(
+                            "device_clock_reset",
+                            json!({ "instance": name, "clock_epoch": state.streams.clock_epoch, "t_now_dev_ns": hello.t_now_dev_ns }),
+                        );
+                    }
+                    if change.apk_restarted || change.clock_reset {
+                        state.needs_calibration = true;
+                    }
+                    self.journal.event(
+                        "apk_hello",
+                        json!({ "instance": name, "hello": hello.raw, "marks": state.streams.marks() }),
+                    );
+                    if let Some(geometry) = client
+                        .info()
+                        .ok()
+                        .as_ref()
+                        .and_then(crate::apk::geometry_of_info)
+                    {
+                        lock(&self.geometries).insert(instance, geometry);
+                    }
+                    state.client = Some(client);
+                }
+                let outcome = call(self, &mut state);
+                if let Err(error) = &outcome
+                    && error.closes_connection()
+                    && let Some(client) = state.client.take()
+                {
+                    let _ = client.close();
+                }
+                outcome
+            },
+        );
+        match result {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(error)) => {
+                self.journal.event(
+                    "apk_error",
+                    json!({ "instance": name, "entry": entry, "error": error }),
+                );
+                Err(format!("{}: {}", error.code, error.detail))
+            }
+            Err(gate) => Err(format!("skipped_gate:{}", gate.as_str())),
+        }
+    }
+
+    /// Closes every APK connection (the bench's own forwards are removed).
+    fn apk_disconnect_all(&self) {
+        for (instance, state) in self.apk_states.iter().enumerate() {
+            let client = lock(state).client.take();
+            if let Some(client) = client
+                && let Err(detail) = client.close()
+            {
+                self.journal.event(
+                    "apk_close_failed",
+                    json!({ "instance": self.instance_name(instance), "detail": detail }),
+                );
+            }
+        }
+    }
+
+    /// One calibration (plan §5.1): `pings` PINGs in sequence; every round trip, the result and
+    /// the drift go to `calib-<window>.jsonl`.
+    fn calibrate(&self, instance: usize, source: &str, pings: u32) -> Result<Calibration, String> {
+        let file = self.calib_file();
+        let name = self.instance_name(instance).to_owned();
+        let calibrated = self.apk_call(instance, Entry::Calibration, |run, state| {
+            let mut samples = Vec::with_capacity(pings as usize);
+            {
+                let client = state.client()?;
+                for _ in 0..pings.max(1) {
+                    samples.push(client.ping()?);
+                }
+            }
+            let calibration = crate::apk::calibrate(&samples)
+                .ok_or_else(|| ApkError::new("apk_no_samples", "no PING sample"))?;
+            let marks = state.streams.marks();
+            for sample in &samples {
+                run.journal.append(
+                    &file,
+                    &crate::apk::marked(
+                        &json!({
+                            "type": "roundtrip",
+                            "instance": name,
+                            "source": source,
+                            "sent_us": sample.sent_us,
+                            "received_us": sample.received_us,
+                            "t_rx_dev_ns": sample.t_rx_dev_ns,
+                            "t_tx_dev_ns": sample.t_tx_dev_ns,
+                            "rtt_us": sample.rtt_us(),
+                        }),
+                        &marks,
+                    ),
+                );
+            }
+            let (residual, drift) =
+                crate::apk::residual_and_drift(&state.calibrations, &calibration);
+            run.journal.append(
+                &file,
+                &crate::apk::marked(
+                    &json!({
+                        "type": "calib",
+                        "instance": name,
+                        "source": source,
+                        "t_us": run.now(),
+                        "t_dev_us": calibration.t_dev_us,
+                        "t_host_us": calibration.t_host_us,
+                        "theta_us": calibration.theta_us,
+                        "u_us": calibration.u_us,
+                        "residual_us": residual,
+                        "rtt_min_us": calibration.rtt_min_us,
+                        "n": calibration.samples,
+                    }),
+                    &marks,
+                ),
+            );
+            if let Some(drift) = drift {
+                run.journal.append(
+                    &file,
+                    &crate::apk::marked(
+                        &json!({ "type": "drift", "instance": name, "source": source, "ppm": drift }),
+                        &marks,
+                    ),
+                );
+            }
+            state.calibrations.push(calibration);
+            state.last_calibration_us = Some(run.now());
+            state.needs_calibration = false;
+            Ok(calibration)
+        });
+        if let Err(detail) = &calibrated {
+            self.journal.event(
+                "calibration_failed",
+                json!({ "instance": name, "source": source, "detail": detail }),
+            );
+        }
+        calibrated
+    }
+
+    /// Connects and calibrates `instance` when it has no calibration of its current APK
+    /// process and clock (the device time restarts with the instance).
+    fn ensure_calibrated(&self, instance: usize, source: &str) {
+        if !self.apk_enabled(instance) {
+            return;
+        }
+        let needed = self.apk_call(instance, Entry::Calibration, |_, state| {
+            Ok(state.needs_calibration || state.calibrations.is_empty())
+        });
+        if needed == Ok(true) {
+            let _ = self.calibrate(instance, source, self.plan.apk.pings);
+        }
+    }
+
+    /// The periodic work of a segment's controller: recalibrate every `recalibrate_ms`, fetch
+    /// the records every `records_period_ms`.
+    fn apk_periodic(&self, instance: usize) {
+        if !self.apk_enabled(instance) {
+            return;
+        }
+        let now = self.now();
+        let (calibrate, fetch) = {
+            let state = lock(&self.apk_states[instance]);
+            (
+                state.client.is_some()
+                    && state.last_calibration_us.is_none_or(|at| {
+                        now.saturating_sub(at) >= ms(self.plan.apk.recalibrate_ms)
+                    }),
+                state.client.is_some()
+                    && state.last_fetch_us.is_none_or(|at| {
+                        now.saturating_sub(at) >= ms(self.plan.apk.records_period_ms)
+                    }),
+            )
+        };
+        if calibrate {
+            let _ = self.calibrate(instance, "periodic", self.plan.apk.pings);
+        }
+        if fetch {
+            self.apk_fetch_records(instance);
+        }
+    }
+
+    /// Pages both record streams to their ends: `flip`, `step` and `vsync` records to the APK
+    /// file of the current APK process, the others to `apkraw-<instance>.jsonl`.
+    fn apk_fetch_records(&self, instance: usize) {
+        if !self.apk_enabled(instance) {
+            return;
+        }
+        let name = self.instance_name(instance).to_owned();
+        let fetched = self.apk_call(instance, Entry::ApkControl, |run, state| {
+            let mut written = 0u64;
+            for stream in ["vsync", "event"] {
+                loop {
+                    let after = if stream == "vsync" {
+                        state.streams.vsync_after
+                    } else {
+                        state.streams.event_after
+                    };
+                    let page = state.client()?.records(stream, after, 5_000)?;
+                    let marks = state.streams.marks();
+                    if page.lost > 0 {
+                        run.journal.event(
+                            "apk_records_lost",
+                            json!({ "instance": name, "stream": stream, "lost": page.lost, "marks": marks }),
+                        );
+                    }
+                    let file = crate::apk::apk_file_name(&name, state.streams.epoch);
+                    let raw = crate::apk::apk_raw_file_name(&name);
+                    for record in &page.records {
+                        let line = crate::apk::marked(record, &marks);
+                        if crate::apk::analysis_record(record) {
+                            run.journal.append(&file, &line);
+                        } else {
+                            run.journal.append(&raw, &line);
+                        }
+                        written += 1;
+                    }
+                    if stream == "vsync" {
+                        state.streams.vsync_after = page.next;
+                    } else {
+                        state.streams.event_after = page.next;
+                    }
+                    if page.records.is_empty() || page.next >= page.newest {
+                        break;
+                    }
+                }
+            }
+            state.last_fetch_us = Some(run.now());
+            Ok(written)
+        });
+        if let Err(detail) = fetched {
+            self.journal.event(
+                "apk_records_failed",
+                json!({ "instance": name, "detail": detail }),
+            );
+        }
+    }
+
+    /// `MODE …`, then INFO until the APK shows the mode (it changes at the next vsync).
+    fn apk_set_mode(
+        &self,
+        instance: usize,
+        mode: &str,
+        options: Vec<(&'static str, String)>,
+    ) -> Result<Value, String> {
+        let wait = ms(self.plan.apk.mode_wait_ms);
+        let set = self.apk_call(instance, Entry::ApkControl, |run, state| {
+            let client = state.client()?;
+            let response = client.mode(mode, &options)?;
+            let deadline = run.now().saturating_add(wait);
+            loop {
+                let info = client.info()?;
+                if info["mode"] == json!(mode) && info["mode_pending"].is_null() {
+                    if let Some(geometry) = crate::apk::geometry_of_info(&info) {
+                        lock(&run.geometries).insert(instance, geometry);
+                    }
+                    return Ok(response);
+                }
+                if run.now() >= deadline {
+                    return Err(ApkError::new(
+                        "apk_mode_not_shown",
+                        format!("the APK did not show mode {mode} within the wait"),
+                    ));
+                }
+                pause_until(run.clock.as_ref(), run.now() + ms(20));
+            }
+        });
+        self.journal.event(
+            "apk_mode",
+            json!({ "instance": self.instance_name(instance), "mode": mode, "options": options, "ok": set.is_ok(), "detail": set.as_ref().err() }),
+        );
+        set
+    }
+
+    /// The segment's APK set-up: connection and calibration, then its mode.
+    fn apk_segment_start(&self, instance: usize, segment: &SegmentPlan, source: &str) {
+        if !self.apk_enabled(instance) {
+            return;
+        }
+        self.ensure_calibrated(instance, source);
+        if let Some(mode) = &segment.apk_mode {
+            let options = if mode == "step" {
+                vec![("level", "0".to_owned())]
+            } else {
+                Vec::new()
+            };
+            let _ = self.apk_set_mode(instance, mode, options);
+        }
+    }
+
+    /// The events the hub noted (entry × gate decisions, ended graces), and the invariant and
+    /// lock-order violations not written yet; a new violation stops the run (§3.11.2 B).
+    fn write_hub_notes(&self) {
+        let notes = self.hub.take_notes();
+        for ((instance, entry, gate, reaction, admitted), note) in notes.entry_gates {
+            self.journal.event(
+                "entry_gate",
+                json!({
+                    "instance": self.instance_name(instance),
+                    "entry": crate::gates::entry_code(entry),
+                    "entry_name": entry,
+                    "gate": gate,
+                    "reaction": reaction,
+                    "admitted": admitted,
+                    "count": note.count,
+                    "t_first_us": note.t_first_us,
+                }),
+            );
+        }
+        for grace in notes.graces {
+            self.journal.event(
+                "grace",
+                json!({
+                    "instance": self.instance_name(grace.instance),
+                    "t_enter_us": grace.t_enter_us,
+                    "t_exit_us": grace.t_exit_us,
+                    "planned_ms": grace.planned_ms,
+                    "exit": grace.exit,
+                }),
+            );
+        }
+        let owner = self.owner();
+        let lock_violations = self.hub.check.violations();
+        let invariant_violations = self
+            .hub
+            .snapshot(&owner, |state| state.checker.violations.clone());
+        let mut written = lock(&self.violations_written);
+        let mut new = false;
+        for violation in lock_violations.iter().skip(written.0) {
+            new = true;
+            self.journal
+                .event("lock_order_violation", json!({ "detail": violation }));
+        }
+        for violation in invariant_violations.iter().skip(written.1) {
+            new = true;
+            let which = violation
+                .split(':')
+                .next()
+                .unwrap_or("invariant")
+                .trim()
+                .to_owned();
+            self.journal.event(
+                "invariant_violation",
+                json!({ "which": which, "detail": violation }),
+            );
+        }
+        *written = (lock_violations.len(), invariant_violations.len());
+        drop(written);
+        if new {
+            self.terminal.request(
+                self.now(),
+                StopCause::InternalInvariant("a lock-order or invariant violation".to_owned()),
+            );
+        }
+    }
+
+    /// The per-cell readings (§5.5, §2.2): the stdio capture files (`stdio_size`, in
+    /// `host-<cell>.jsonl`) and the `VMMHeadless` handle counts (`vmm_handles`, in
+    /// `events.jsonl`), at the cell's start and end.
+    fn cell_probe(&self, cell: &str, phase: &str) {
+        let file = format!("host-{cell}.jsonl");
+        let line = match self.probes.stdio_capture() {
+            Ok((bytes, files)) => json!({
+                "type": "stdio_size",
+                "t_us": self.now(),
+                "cell": cell,
+                "instance": null,
+                "scope": "process",
+                "phase": phase,
+                "bytes": bytes,
+                "files": files,
+                "null_reasons": { "instance": "the vendor stdio redirect is process-wide (§1.2)" },
+            }),
+            Err(detail) => json!({
+                "type": "stdio_size",
+                "t_us": self.now(),
+                "cell": cell,
+                "instance": null,
+                "scope": "process",
+                "phase": phase,
+                "bytes": null,
+                "files": null,
+                "null_reasons": { "instance": "the vendor stdio redirect is process-wide (§1.2)", "bytes": detail },
+            }),
+        };
+        self.journal.append(&file, &line);
+        match self.probes.vmm_handles() {
+            Ok(processes) => self.journal.event(
+                "vmm_handles",
+                json!({ "cell": cell, "phase": phase, "processes": processes }),
+            ),
+            Err(detail) => self.journal.event(
+                "vmm_handles",
+                json!({ "cell": cell, "phase": phase, "processes": null, "null_reasons": { "processes": detail } }),
+            ),
+        }
+    }
+
+    /// One `artifact_delta` line (analysis schema §5, `host-<cell>.jsonl`): the material bytes
+    /// and events a segment's path wrote (B_model's pipeline; N and S write none) and its state
+    /// changes, each of which is one bounded diagnostic.
+    fn write_artifact_delta(
+        &self,
+        info: &SegmentInfo,
+        path: PathKind,
+        shared: &SegmentShared,
+        state_changes: u64,
+    ) {
+        let material_events = shared.material_events.load(Ordering::Acquire);
+        self.journal.append(
+            &format!("host-{}.jsonl", info.cell),
+            &json!({
+                "type": "artifact_delta",
+                "t_us": self.now(),
+                "cell": info.cell,
+                "path": path.as_str(),
+                "orientation": info.orientation,
+                "round": info.round,
+                "segment": info.name,
+                "frames": shared.delivered.load(Ordering::Acquire),
+                "bytes": shared.material_bytes.load(Ordering::Acquire),
+                "events": material_events + state_changes,
+                "state_changes": state_changes,
+            }),
+        );
+    }
+
+    /// The modes that drive the APK or a lifecycle step (C1, K, C8, C10).
+    fn run_procedure(
+        self: &Arc<Self>,
+        cell: &CellPlan,
+        segment: &SegmentPlan,
+        instance: usize,
+        info: &SegmentInfo,
+        cell_deadline: Micros,
+        rng: &mut Rng,
+    ) -> SegmentEnd {
+        let reps = segment.reps.unwrap_or(1).max(1);
+        if segment.mode == SegmentMode::Calibrate {
+            let pings = segment
+                .quota
+                .and_then(|quota| u32::try_from(quota).ok())
+                .unwrap_or(self.plan.apk.pings);
+            for _ in 0..reps {
+                self.check_time();
+                if self.whole_stop_requested() {
+                    return SegmentEnd::Whole;
+                }
+                if self.now() >= cell_deadline {
+                    return SegmentEnd::CellLimit;
+                }
+                if let Err(detail) = self.calibrate(instance, &cell.id, pings)
+                    && !detail.starts_with("skipped_gate:")
+                {
+                    return SegmentEnd::Fatal("calibration_failed".to_owned());
+                }
+            }
+            return SegmentEnd::Finished;
+        }
+        let Some(path) = segment.path else {
+            return SegmentEnd::Finished;
+        };
+        let kind = path.backend();
+        let options = OpenOptions {
+            scrcpy_bit_rate: segment.scrcpy.as_ref().and_then(|scrcpy| scrcpy.bit_rate),
+            scrcpy_max_fps: segment.scrcpy.as_ref().and_then(|scrcpy| scrcpy.max_fps),
+            scrcpy_encoder: segment
+                .scrcpy
+                .as_ref()
+                .and_then(|scrcpy| scrcpy.encoder.clone()),
+        };
+        self.apk_segment_start(instance, segment, &cell.id);
+        let mut identities: BTreeMap<BackendKind, IdentityTuple> = BTreeMap::new();
+        let mut reopens = 0;
+        match self.open_backend(instance, kind, &options, &mut reopens, false) {
+            Ok((backend, identity)) => {
+                if let Some(identity) = identity {
+                    self.sampling_start(instance, &identity);
+                    identities.insert(kind, identity);
+                }
+                self.put_backend(instance, backend);
+            }
+            Err(end) => return end,
+        }
+        let end = match segment.mode {
+            SegmentMode::StepTrials => {
+                self.step_trials(cell, instance, kind, reps, info, cell_deadline, rng)
+            }
+            SegmentMode::Rotate => self.rotations(
+                instance,
+                kind,
+                reps,
+                &options,
+                &mut identities,
+                cell_deadline,
+            ),
+            SegmentMode::Reconnect => self.reconnects(
+                instance,
+                path,
+                reps,
+                &options,
+                &mut identities,
+                cell_deadline,
+            ),
+            SegmentMode::StaticImages => self.static_images(cell, segment, instance, path, info),
+            _ => SegmentEnd::Finished,
+        };
+        self.apk_fetch_records(instance);
+        let confirmed = self.close_segment_backends(instance, &mut identities, "segment_end");
+        self.write_hub_notes();
+        if !confirmed && end != SegmentEnd::Whole {
+            return SegmentEnd::Whole;
+        }
+        end
+    }
+
+    /// `sampling_start` (analysis schema §8): the stream's identity is confirmed and its first
+    /// sample may be taken.
+    fn sampling_start(&self, instance: usize, identity: &IdentityTuple) {
+        self.journal.event(
+            "sampling_start",
+            json!({ "instance": self.instance_name(instance), "scid": format!("{:08x}", identity.scid) }),
+        );
+    }
+
+    /// C1/K step trials (plan §5.3): STEP k, then the first S frame whose timecode shows step k;
+    /// its arrival is a `step_arrival` record of the calibration file. `T_vsync(k)` is the APK's
+    /// `step` record.
+    #[allow(clippy::too_many_arguments)]
+    fn step_trials(
+        &self,
+        cell: &CellPlan,
+        instance: usize,
+        kind: BackendKind,
+        reps: u32,
+        info: &SegmentInfo,
+        cell_deadline: Micros,
+        rng: &mut Rng,
+    ) -> SegmentEnd {
+        let name = self.instance_name(instance).to_owned();
+        let file = self.calib_file();
+        if let Err(detail) = self.apk_set_mode(instance, "step", vec![("level", "0".to_owned())]) {
+            self.journal.event(
+                "step_trials_refused",
+                json!({ "instance": name, "segment": info.label, "detail": detail }),
+            );
+            return SegmentEnd::Fatal("apk_step_mode".to_owned());
+        }
+        for trial in 1..=reps {
+            self.check_time();
+            if self.whole_stop_requested() {
+                return SegmentEnd::Whole;
+            }
+            if self.now() >= cell_deadline {
+                return SegmentEnd::CellLimit;
+            }
+            let sent = self.now();
+            let stepped = self.apk_call(instance, Entry::ApkControl, |_, state| {
+                state.client()?.step(None)
+            });
+            let k = match stepped {
+                Ok(k) => k,
+                Err(detail) => {
+                    self.journal.event(
+                        "step_failed",
+                        json!({ "instance": name, "trial": trial, "detail": detail }),
+                    );
+                    return SegmentEnd::Fatal("apk_step".to_owned());
+                }
+            };
+            let deadline = self.now().saturating_add(ms(self.plan.apk.step_wait_ms));
+            let mut arrival: Option<(Option<Micros>, Option<u64>, u8)> = None;
+            let mut last_sequence = None;
+            while self.now() < deadline {
+                let sampled = self.with_backend(instance, kind, |backend| {
+                    backend.sample(last_sequence.map(|after| Floor {
+                        after_us: None,
+                        after_sequence: Some(after),
+                    }))
+                });
+                match sampled {
+                    Ok(frame) => {
+                        last_sequence = frame.stream_sequence.or(last_sequence);
+                        let decoded = self.decode_frame(
+                            instance,
+                            &frame.pixels,
+                            frame.width,
+                            frame.height,
+                            frame.layout,
+                        );
+                        if let Some(payload) = decoded.and_then(|decoded| decoded.payload)
+                            && payload.mode == 3
+                            && u64::from(payload.event) == k & 0x00ff_ffff
+                        {
+                            arrival =
+                                Some((frame.received_us, frame.stream_sequence, payload.level()));
+                            break;
+                        }
+                    }
+                    Err(failure) if failure.class == FailureClass::Measured => {}
+                    Err(failure) => {
+                        self.journal.event(
+                            "step_trial_capture_failed",
+                            json!({ "instance": name, "trial": trial, "failure": failure }),
+                        );
+                        return SegmentEnd::Fatal(failure.code);
+                    }
+                }
+                pause_until(self.clock.as_ref(), self.now() + ms(5));
+            }
+            let mut line = json!({
+                "type": "step_arrival",
+                "instance": name,
+                "k": k,
+                "source": cell.id,
+                "trial": trial,
+                "t_step_sent_us": sent,
+                "t_recv_us": arrival.and_then(|(received, _, _)| received),
+                "stream_seq": arrival.and_then(|(_, sequence, _)| sequence),
+                "level": arrival.map(|(_, _, level)| level),
+                "null_reasons": if arrival.is_some() { json!({}) } else { json!({ "t_recv_us": "no S frame showed the step within the wait" }) },
+            });
+            let marks = lock(&self.apk_states[instance]).streams.marks();
+            line = crate::apk::marked(&line, &marks);
+            self.journal.append(&file, &line);
+            let pause = 300 + rng.below(401);
+            pause_until(self.clock.as_ref(), self.now() + ms(pause));
+        }
+        SegmentEnd::Finished
+    }
+
+    /// C10 item 11: each rotation sets the in-cell gate, drains, closes the backend and confirms
+    /// it, lifts the gate, asks the APK for the other orientation, waits for the new geometry,
+    /// moves the generation and reopens.
+    fn rotations(
+        &self,
+        instance: usize,
+        kind: BackendKind,
+        reps: u32,
+        options: &OpenOptions,
+        identities: &mut BTreeMap<BackendKind, IdentityTuple>,
+        cell_deadline: Micros,
+    ) -> SegmentEnd {
+        let name = self.instance_name(instance).to_owned();
+        let owner = self.owner();
+        for rep in 1..=reps {
+            self.check_time();
+            if self.whole_stop_requested() {
+                return SegmentEnd::Whole;
+            }
+            if self.now() >= cell_deadline {
+                return SegmentEnd::CellLimit;
+            }
+            let (_, height_before) = self.view_size(instance);
+            let target = if height_before > 720 {
+                crate::plan::Orientation::Landscape
+            } else {
+                crate::plan::Orientation::Portrait
+            };
+            let target_word = match target {
+                crate::plan::Orientation::Landscape => "landscape",
+                crate::plan::Orientation::Portrait => "portrait",
+            };
+            let gate_seq = self
+                .hub
+                .set_gate(&owner, instance, GateKind::StopClass, true);
+            let drain_deadline = self.now() + self.limits.nemu_close_deadline_us;
+            while self.hub.inflight(&owner, instance) > 0 && self.now() < drain_deadline {
+                pause_until(self.clock.as_ref(), self.now() + ms(10));
+            }
+            let generation_before = self
+                .hub
+                .snapshot(&owner, |state| state.instances[instance].generation);
+            let confirmed = self.close_segment_backends(instance, identities, "rotation");
+            self.hub
+                .set_gate(&owner, instance, GateKind::StopClass, false);
+            if !confirmed {
+                return SegmentEnd::Whole;
+            }
+            let t_orient_us = self.now();
+            let wait = ms(self.plan.apk.mode_wait_ms);
+            let rotated = self.apk_call(instance, Entry::ApkControl, |run, state| {
+                let client = state.client()?;
+                client.orient(target_word)?;
+                let deadline = run.now().saturating_add(wait);
+                loop {
+                    let info = client.info()?;
+                    let width = info["display"]["real_width"].as_u64().unwrap_or(0);
+                    let height = info["display"]["real_height"].as_u64().unwrap_or(0);
+                    let portrait = height > width;
+                    if width > 0 && portrait == (target == crate::plan::Orientation::Portrait) {
+                        if let Some(geometry) = crate::apk::geometry_of_info(&info) {
+                            lock(&run.geometries).insert(instance, geometry);
+                        }
+                        return Ok((width, height));
+                    }
+                    if run.now() >= deadline {
+                        return Err(ApkError::new(
+                            "apk_rotation_not_shown",
+                            format!("the display did not turn {target_word} within the wait"),
+                        ));
+                    }
+                    pause_until(run.clock.as_ref(), run.now() + ms(20));
+                }
+            });
+            let t_stable_us = self.now();
+            let display = match rotated {
+                Ok(display) => display,
+                Err(detail) => {
+                    self.journal.event(
+                        "rotation",
+                        json!({ "instance": name, "rep": rep, "to": target_word, "ok": false, "detail": detail }),
+                    );
+                    return SegmentEnd::Fatal("rotation_failed".to_owned());
+                }
+            };
+            lock(&self.orientations).insert(instance, target);
+            let generation_after = self.hub.bump_generation(&owner, instance);
+            let mut reopens = 0;
+            let reopened = self.open_backend(instance, kind, options, &mut reopens, false);
+            let t_reopen_us = self.now();
+            match reopened {
+                Ok((backend, identity)) => {
+                    if let Some(identity) = identity {
+                        self.sampling_start(instance, &identity);
+                        identities.insert(kind, identity);
+                    }
+                    self.put_backend(instance, backend);
+                }
+                Err(end) => return end,
+            }
+            let first = self.with_backend(instance, kind, |backend| backend.sample(None));
+            self.journal.event(
+                "rotation",
+                json!({
+                    "instance": name,
+                    "rep": rep,
+                    "to": target_word,
+                    "ok": first.is_ok(),
+                    "gate_seq": gate_seq,
+                    "generation_before": generation_before,
+                    "generation_after": generation_after,
+                    "close_confirmed": confirmed,
+                    "display": [display.0, display.1],
+                    "frame": first.as_ref().ok().map(|frame| [frame.width, frame.height]),
+                    "failure": first.as_ref().err(),
+                    "t_orient_us": t_orient_us,
+                    "t_stable_us": t_stable_us,
+                    "t_reopen_us": t_reopen_us,
+                }),
+            );
+            if let Err(failure) = first
+                && failure.class != FailureClass::Measured
+            {
+                return SegmentEnd::Fatal(failure.code);
+            }
+        }
+        SegmentEnd::Finished
+    }
+
+    /// C10 item 10: N closes and reopens in-process; S stops this stream's server by its
+    /// identity (only when the identity tuple still matches), waits for the stream to end,
+    /// closes and confirms, and reopens with a new scid. Old frames never count as new: the
+    /// generation moves and the new stream's sequence starts at 1.
+    fn reconnects(
+        &self,
+        instance: usize,
+        path: PathKind,
+        reps: u32,
+        options: &OpenOptions,
+        identities: &mut BTreeMap<BackendKind, IdentityTuple>,
+        cell_deadline: Micros,
+    ) -> SegmentEnd {
+        let name = self.instance_name(instance).to_owned();
+        let owner = self.owner();
+        let kind = path.backend();
+        for rep in 1..=reps {
+            self.check_time();
+            if self.whole_stop_requested() {
+                return SegmentEnd::Whole;
+            }
+            if self.now() >= cell_deadline {
+                return SegmentEnd::CellLimit;
+            }
+            let generation_before = self
+                .hub
+                .snapshot(&owner, |state| state.instances[instance].generation);
+            let before = self.with_backend(instance, kind, |backend| backend.sample(None));
+            let sequence_before = before.as_ref().ok().and_then(|frame| frame.stream_sequence);
+            let old_scid = identities.get(&kind).map(|identity| identity.scid);
+            let mut stopped_pid = None;
+            let mut stream_end_seen = None;
+            if kind == BackendKind::Scrcpy {
+                let Some(identity) = identities.get(&kind).cloned() else {
+                    self.unconfirmed(format!("{name} scrcpy reconnect without an identity"));
+                    return SegmentEnd::Whole;
+                };
+                let stopped = aux_call(
+                    &self.hub,
+                    &owner,
+                    instance,
+                    Entry::DeviceSideCheck,
+                    false,
+                    || self.device_check.stop_server(&name, &identity),
+                );
+                match stopped {
+                    Ok(Ok(pid)) => stopped_pid = Some(pid),
+                    Ok(Err(failure)) => {
+                        self.journal.event(
+                            "reconnect",
+                            json!({ "instance": name, "path": path, "rep": rep, "ok": false, "stop_failure": failure }),
+                        );
+                        return SegmentEnd::Fatal("reconnect_stop_server".to_owned());
+                    }
+                    Err(gate) => {
+                        self.journal.event(
+                            "reconnect",
+                            json!({ "instance": name, "path": path, "rep": rep, "ok": false, "refused_by": gate }),
+                        );
+                        return SegmentEnd::Fatal("reconnect_refused".to_owned());
+                    }
+                }
+                let deadline = self.now() + ms(5_000);
+                while self.now() < deadline {
+                    match self.with_backend(instance, kind, |backend| backend.sample(None)) {
+                        Err(failure) if failure.code.starts_with("scrcpy_stream_ended") => {
+                            stream_end_seen = Some(self.now());
+                            break;
+                        }
+                        _ => pause_until(self.clock.as_ref(), self.now() + ms(50)),
+                    }
+                }
+            }
+            let confirmed = self.close_segment_backends(instance, identities, "reconnect");
+            if !confirmed {
+                return SegmentEnd::Whole;
+            }
+            let generation_after = self.hub.bump_generation(&owner, instance);
+            let mut reopens = 0;
+            match self.open_backend(instance, kind, options, &mut reopens, false) {
+                Ok((backend, identity)) => {
+                    if let Some(identity) = identity {
+                        self.sampling_start(instance, &identity);
+                        identities.insert(kind, identity);
+                    }
+                    self.put_backend(instance, backend);
+                }
+                Err(end) => return end,
+            }
+            let after = self.with_backend(instance, kind, |backend| backend.sample(None));
+            self.journal.event(
+                "reconnect",
+                json!({
+                    "instance": name,
+                    "path": path,
+                    "rep": rep,
+                    "ok": after.is_ok(),
+                    "old_scid": old_scid.map(|scid| format!("{scid:08x}")),
+                    "new_scid": identities.get(&kind).map(|identity| format!("{:08x}", identity.scid)),
+                    "stopped_pid": stopped_pid,
+                    "t_stream_end_us": stream_end_seen,
+                    "close_confirmed": confirmed,
+                    "generation_before": generation_before,
+                    "generation_after": generation_after,
+                    "sequence_before": sequence_before,
+                    "first_sequence_after": after.as_ref().ok().and_then(|frame| frame.stream_sequence),
+                    "failure": after.as_ref().err(),
+                }),
+            );
+            if let Err(failure) = after
+                && failure.class != FailureClass::Measured
+            {
+                return SegmentEnd::Fatal(failure.code);
+            }
+        }
+        SegmentEnd::Finished
+    }
+
+    /// C8 (plan §5.8): each picture of `truth.json` goes to the APK (PUT, static mode), then
+    /// `frames_per_image` frames of the segment's path are saved as PNG under `c8/`, each with a
+    /// `c8_frame` record; `ocr-coverage.csv` gets one row per picture × target × path × frame
+    /// (and the source row), with the offline `actinglab` command to run and the verdict
+    /// `not_evaluated` until the coordinator runs it.
+    fn static_images(
+        &self,
+        cell: &CellPlan,
+        segment: &SegmentPlan,
+        instance: usize,
+        path: PathKind,
+        info: &SegmentInfo,
+    ) -> SegmentEnd {
+        let name = self.instance_name(instance).to_owned();
+        let Some(c8) = self.plan.c8.clone() else {
+            return SegmentEnd::Fatal("c8_not_planned".to_owned());
+        };
+        let truth: Value = match std::fs::read_to_string(&c8.truth)
+            .map_err(|error| error.to_string())
+            .and_then(|text| serde_json::from_str(&text).map_err(|error| error.to_string()))
+        {
+            Ok(truth) => truth,
+            Err(detail) => {
+                self.journal.event(
+                    "c8_truth_unreadable",
+                    json!({ "truth": c8.truth, "detail": detail }),
+                );
+                return SegmentEnd::Fatal("c8_truth_unreadable".to_owned());
+            }
+        };
+        let package = truth["package"].as_str().unwrap_or_default().to_owned();
+        let package_sha = truth["package_sha256"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        let facts = truth["facts"].as_str().unwrap_or_default().to_owned();
+        let actinglab = c8
+            .actinglab
+            .clone()
+            .unwrap_or_else(|| "actinglab".to_owned());
+        let bitrate = if path == PathKind::Scrcpy {
+            match segment.scrcpy.as_ref().and_then(|scrcpy| scrcpy.bit_rate) {
+                Some(rate) if rate <= 4_000_000 => "4M".to_owned(),
+                _ => "8M".to_owned(),
+            }
+        } else {
+            String::new()
+        };
+        if !self.ocr_header_written.swap(true, Ordering::AcqRel) {
+            self.journal
+                .append_text("ocr-coverage.csv", &format!("{}\n", OCR_COLUMNS.join(",")));
+        }
+        let file = format!("opps-{}-{}.jsonl", cell.id, path.as_str());
+        let images = truth["images"].as_array().cloned().unwrap_or_default();
+        for image in images {
+            self.check_time();
+            if self.whole_stop_requested() {
+                return SegmentEnd::Whole;
+            }
+            let image_name = image["image"].as_str().unwrap_or_default().to_owned();
+            let image_kind = image["kind"].as_str().unwrap_or("truth").to_owned();
+            let targets = image["targets"].as_array().cloned().unwrap_or_default();
+            let source_path = std::path::Path::new(&c8.images_dir).join(&image_name);
+            let bytes = match std::fs::read(&source_path) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    self.journal.event(
+                        "c8_image_unreadable",
+                        json!({ "image": image_name, "detail": error.to_string() }),
+                    );
+                    return SegmentEnd::Fatal("c8_image_unreadable".to_owned());
+                }
+            };
+            let slot = slot_name(&image_name);
+            let put = self.apk_call(instance, Entry::ApkControl, |_, state| {
+                state.client()?.put(&slot, &bytes)
+            });
+            let shown = put
+                .and_then(|_| self.apk_set_mode(instance, "static", vec![("slot", slot.clone())]));
+            if let Err(detail) = shown {
+                self.journal.event(
+                    "c8_image_not_shown",
+                    json!({ "instance": name, "image": image_name, "detail": detail }),
+                );
+                return SegmentEnd::Fatal("c8_image_not_shown".to_owned());
+            }
+            let stem = slot.trim_end_matches(".png").to_owned();
+            let row = |path_word: &str, frame: &str, saved: &str, target: &Value| {
+                let class = target["class"].as_str().unwrap_or("template");
+                let target_name = target["target"].as_str().unwrap_or_default();
+                let verb = match class {
+                    "visibility" => "is-visible",
+                    "page" => "detect-page",
+                    _ => "recognize",
+                };
+                let command = if class == "page" {
+                    format!("{actinglab} --json {verb} --package {package} --scene {saved}")
+                } else {
+                    format!(
+                        "{actinglab} --json {verb} --package {package} --target {target_name} --scene {saved}"
+                    )
+                };
+                let result_json = format!(
+                    "c8/results/{stem}-{}-{path_word}-{frame}.json",
+                    slot_name(target_name)
+                );
+                let fields = [
+                    image_name.clone(),
+                    image_kind.clone(),
+                    target_name.to_owned(),
+                    class.to_owned(),
+                    path_word.to_owned(),
+                    if path_word == "S" {
+                        bitrate.clone()
+                    } else {
+                        String::new()
+                    },
+                    info.orientation.to_owned(),
+                    frame.to_owned(),
+                    command,
+                    package.clone(),
+                    package_sha.clone(),
+                    facts.clone(),
+                    "1".to_owned(),
+                    result_json,
+                    target["hit"]
+                        .as_bool()
+                        .map(|hit| hit.to_string())
+                        .unwrap_or_default(),
+                    target["text"].as_str().unwrap_or_default().to_owned(),
+                    String::new(),
+                    String::new(),
+                    "not_evaluated".to_owned(),
+                    "pending_offline_actinglab".to_owned(),
+                ];
+                let line: Vec<String> = fields
+                    .iter()
+                    .map(|field| csv_field(field.as_str()))
+                    .collect();
+                self.journal
+                    .append_text("ocr-coverage.csv", &format!("{}\n", line.join(",")));
+            };
+            if path == segment_first_path(cell, instance) {
+                let source = source_path.display().to_string();
+                for target in &targets {
+                    row("source", "", &source, target);
+                }
+            }
+            let mut last_sequence = None;
+            for frame_idx in 0..c8.frames_per_image {
+                let floor = last_sequence.map(|after| Floor {
+                    after_us: None,
+                    after_sequence: Some(after),
+                });
+                let sampled =
+                    self.with_backend(instance, path.backend(), |backend| backend.sample(floor));
+                let frame = match sampled {
+                    Ok(frame) => frame,
+                    Err(failure) => {
+                        self.journal.event(
+                            "c8_capture_failed",
+                            json!({ "instance": name, "image": image_name, "path": path, "failure": failure }),
+                        );
+                        return SegmentEnd::Fatal(failure.code);
+                    }
+                };
+                last_sequence = frame.stream_sequence.or(last_sequence);
+                let format = match frame.layout {
+                    crate::backend::PixelLayout::Rgba8 => actingcommand_device::PixelFormat::Rgba8,
+                    crate::backend::PixelLayout::Rgb8 => actingcommand_device::PixelFormat::Rgb8,
+                };
+                let png = match actingcommand_device::encode_png_fast(
+                    frame.width,
+                    frame.height,
+                    &frame.pixels,
+                    format,
+                ) {
+                    Ok(png) => png,
+                    Err(error) => {
+                        self.journal.event(
+                            "c8_encode_failed",
+                            json!({ "image": image_name, "path": path, "detail": error.message() }),
+                        );
+                        return SegmentEnd::Fatal("c8_encode_failed".to_owned());
+                    }
+                };
+                let path_word = if path == PathKind::Scrcpy && !bitrate.is_empty() {
+                    format!("{}-{bitrate}", path.as_str())
+                } else {
+                    path.as_str().to_owned()
+                };
+                let saved = format!("c8/{stem}/{path_word}-{frame_idx}.png");
+                if self.journal.write_bytes(&saved, &png).is_err() {
+                    return SegmentEnd::Whole;
+                }
+                let line = info.record(
+                    "c8_frame",
+                    path.as_str(),
+                    self.next_seq(),
+                    json!({
+                        "t_tick_us": self.now(),
+                        "disposition": "delivered",
+                        "image": image_name,
+                        "image_kind": image_kind,
+                        "frame_idx": frame_idx,
+                        "frame_sha256": crate::safety::sha256_hex(&png),
+                        "pixels_sha256": crate::safety::sha256_hex(&frame.pixels),
+                        "saved_path": saved,
+                        "bitrate": if path == PathKind::Scrcpy { Some(bitrate.clone()) } else { None },
+                        "width": frame.width,
+                        "height": frame.height,
+                        "null_reasons": {},
+                    }),
+                );
+                self.journal.append(&file, &line);
+                let saved_path = self.journal.path(&saved).display().to_string();
+                for target in &targets {
+                    row(path.as_str(), &frame_idx.to_string(), &saved_path, target);
+                }
+            }
+        }
+        SegmentEnd::Finished
+    }
+
+    /// C9 (ii): N connects and disconnects around a sample, through P7 (the automatic reopen,
+    /// E8): the old session closes and is confirmed, a new one opens, the generation moves.
+    fn reconnect_nemu_for_sample(&self, instance: usize) -> Result<u64, String> {
+        let owner = self.owner();
+        let expected = self
+            .hub
+            .snapshot(&owner, |state| state.instances[instance].generation);
+        let name = self.instance_name(instance).to_owned();
+        let outcome = crate::hub::auto_reopen(&self.hub, &owner, instance, expected, |slots| {
+            if let Some(backend) = slots.take(BackendKind::Nemu) {
+                let closed = self.closer.close(
+                    backend,
+                    CloseInfo {
+                        reason: "reconnect_each_sample".to_owned(),
+                        instance: name.clone(),
+                        generation: expected,
+                        identity: None,
+                    },
+                );
+                if !closed.is_confirmed() {
+                    return Err(format!("the N close is unconfirmed: {closed:?}"));
+                }
+            }
+            let backend = self
+                .backends
+                .open(&name, BackendKind::Nemu, &OpenOptions::default())
+                .map_err(|failure| format!("open_{}", failure.cause.as_str()))?;
+            slots.put(backend);
+            Ok(())
+        });
+        match outcome {
+            crate::hub::ReopenOutcome::Reopened { generation } => Ok(generation),
+            crate::hub::ReopenOutcome::Failed(detail) => {
+                if detail.contains("unconfirmed") {
+                    self.unconfirmed(format!("{name} N reconnect: {detail}"));
+                }
+                Err(detail)
+            }
+            other => Err(format!("{other:?}")),
+        }
+    }
+}
+
+/// The first path a cell's segments plan on `instance` (C8 writes the source rows once).
+fn segment_first_path(cell: &CellPlan, instance_index: usize) -> PathKind {
+    let _ = instance_index;
+    cell.segments
+        .iter()
+        .find_map(|segment| segment.path)
+        .unwrap_or(PathKind::Nemu)
 }
 
 /// The paths of a plan's run directory (for the launcher's view).

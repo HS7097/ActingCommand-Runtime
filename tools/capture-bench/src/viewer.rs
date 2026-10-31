@@ -39,6 +39,8 @@ pub struct ViewerContext {
     pub stop_renew_at_us: Option<Micros>,
     pub unsubscribe_at_us: Option<Micros>,
     pub grace_us: Micros,
+    /// #402 C2b: this viewer draws each frame in the minimal GDI window (`A_submit`).
+    pub gdi: bool,
 }
 
 pub trait ViewerHandle: Send {
@@ -257,6 +259,9 @@ impl ViewerLauncher for ChildViewers {
         if let Some(fps) = context.slow_fps {
             command.arg("--slow-fps").arg(fps.to_string());
         }
+        if context.gdi {
+            command.arg("--gdi");
+        }
         let now = context.hub.clock.now_us();
         if let Some(at) = context.stop_renew_at_us {
             command
@@ -428,6 +433,8 @@ pub struct ViewArgs {
     pub slow_fps: Option<f64>,
     pub stop_renew_after_ms: Option<u64>,
     pub unsubscribe_after_ms: Option<u64>,
+    /// #402 C2b: draw each frame in the minimal GDI window and record `t_gdi_ret_us`.
+    pub gdi: bool,
 }
 
 fn host_micros() -> u64 {
@@ -483,6 +490,9 @@ pub fn view_main(args: ViewArgs) -> i32 {
     }
     let mut input = BufReader::new(std::io::stdin().lock());
     let mut last_read = std::time::Instant::now();
+    // #402 C2b (§5.1): the minimal window; created at the first frame, at its size.
+    let mut window: Option<crate::winproc::GdiWindow> = None;
+    let mut window_error: Option<String> = None;
     let mut line = String::new();
     loop {
         line.clear();
@@ -509,6 +519,24 @@ pub fn view_main(args: ViewArgs) -> i32 {
                     }
                     last_read = std::time::Instant::now();
                 }
+                let mut gdi_ret = None;
+                if args.gdi {
+                    let width = message["width"].as_u64().unwrap_or(0) as u32;
+                    let height = message["height"].as_u64().unwrap_or(0) as u32;
+                    let bytes_per_pixel = if message["layout"] == "rgb8" { 3 } else { 4 };
+                    if window.is_none() && window_error.is_none() {
+                        match crate::winproc::GdiWindow::create(width, height) {
+                            Ok(created) => window = Some(created),
+                            Err(error) => window_error = Some(error),
+                        }
+                    }
+                    if let Some(window) = window.as_mut() {
+                        match window.present(&pixels, width, height, bytes_per_pixel) {
+                            Ok(()) => gdi_ret = Some(host_micros()),
+                            Err(error) => window_error = Some(error),
+                        }
+                    }
+                }
                 json!({
                     "kind": "frame",
                     "viewer_id": args.viewer_id,
@@ -516,6 +544,15 @@ pub fn view_main(args: ViewArgs) -> i32 {
                     "preview_seq": message["preview_seq"],
                     "t_view_recv_us": now,
                     "t_pub_us": message["t_pub_us"],
+                    "t_gdi_ret_us": gdi_ret,
+                    "gdi": if args.gdi { Some("submit_side_proxy_not_presentation") } else { None },
+                    "null_reasons": if args.gdi && gdi_ret.is_none() {
+                        json!({ "t_gdi_ret_us": window_error.clone().unwrap_or_else(|| "no window".to_owned()) })
+                    } else if args.gdi {
+                        json!({})
+                    } else {
+                        json!({ "t_gdi_ret_us": "this viewer has no GDI window" })
+                    },
                 })
             }
             Some("ping") => {

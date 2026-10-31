@@ -6,6 +6,7 @@
 //! to never return from a close, and to answer the device-side check with each kind of
 //! unconfirmed result. Every frame carries its known source time (`T_src`).
 
+use crate::apk::FakeApk;
 use crate::backend::{
     BackendFactory, BackendFailure, CheckFailure, DeviceSideCheck, FailureClass, Floor, FloorCheck,
     GoneResult, IdentityMethod, IdentityTuple, MaterialCost, MaterialFactory, MaterialWriter,
@@ -15,7 +16,8 @@ use crate::backend::{
 use crate::clock::{Clock, Micros, blocking};
 use crate::model::{BackendKind, CloseOutcome};
 use crate::supervisor::ExitHook;
-use std::collections::BTreeMap;
+use crate::timecode::BandGeometry;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
@@ -82,6 +84,100 @@ pub struct CloseHang {
     pub on_entry: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
+/// #402 C2b: the fake frames show the fake APK's timecode band (C3's protocol §4.3), and the
+/// fake taps reach the fake APK's flip mode.
+#[derive(Clone)]
+pub struct FakePattern {
+    pub apk: Arc<FakeApk>,
+    pub geometry: BandGeometry,
+    /// The view size the taps are given in (the plan's 1280 × 720 or 720 × 1280).
+    pub view: (i32, i32),
+}
+
+/// #402 C2b (D2 item 10): the stand-ins for S's host-side `adb shell` child. `run --fake` starts
+/// a real `fake-child` process per S open, outside the job object; the tests record the calls.
+pub trait FakeChildren: Send + Sync {
+    /// Starts the stand-in of stream `scid`; returns its pid.
+    fn spawn(&self, scid: u32) -> Result<u32, String>;
+    /// Stops it (the S close's `adb shell` child stop); a hung close never calls this.
+    fn stop(&self, scid: u32) -> Result<(), String>;
+}
+
+/// The real stand-ins: `<bench> fake-child --scid <hex>` processes, not in the job object.
+pub struct ProcessChildren {
+    pub executable: std::path::PathBuf,
+    children: Mutex<BTreeMap<u32, std::process::Child>>,
+}
+
+impl ProcessChildren {
+    pub fn new(executable: std::path::PathBuf) -> Arc<Self> {
+        Arc::new(Self {
+            executable,
+            children: Mutex::new(BTreeMap::new()),
+        })
+    }
+}
+
+impl FakeChildren for ProcessChildren {
+    fn spawn(&self, scid: u32) -> Result<u32, String> {
+        let child = std::process::Command::new(&self.executable)
+            .arg("fake-child")
+            .arg("--scid")
+            .arg(format!("{scid:08x}"))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|error| format!("the fake adb shell child did not start: {error}"))?;
+        let pid = child.id();
+        lock(&self.children).insert(scid, child);
+        Ok(pid)
+    }
+
+    fn stop(&self, scid: u32) -> Result<(), String> {
+        let Some(mut child) = lock(&self.children).remove(&scid) else {
+            return Err(format!("no fake adb shell child for {scid:08x}"));
+        };
+        child
+            .kill()
+            .and_then(|()| child.wait().map(|_| ()))
+            .map_err(|error| format!("the fake adb shell child did not stop: {error}"))
+    }
+}
+
+/// The recorded stand-ins of the D1 tests.
+#[derive(Default)]
+pub struct RecordedChildren {
+    pub spawned: Mutex<Vec<u32>>,
+    pub stopped: Mutex<Vec<u32>>,
+}
+
+impl RecordedChildren {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    pub fn spawned(&self) -> Vec<u32> {
+        lock(&self.spawned).clone()
+    }
+
+    pub fn stopped(&self) -> Vec<u32> {
+        lock(&self.stopped).clone()
+    }
+}
+
+impl FakeChildren for RecordedChildren {
+    fn spawn(&self, scid: u32) -> Result<u32, String> {
+        lock(&self.spawned).push(scid);
+        Ok(50_000 + scid % 1_000)
+    }
+
+    fn stop(&self, scid: u32) -> Result<(), String> {
+        lock(&self.stopped).push(scid);
+        Ok(())
+    }
+}
+
 /// The fake's script.
 pub struct FakeScript {
     pub width: u32,
@@ -97,6 +193,8 @@ pub struct FakeScript {
     pub scrcpy_estimate_bias_us: i64,
     /// Actions run when a sample call starts (a test writes `STOP` or `ABORT` at a known call).
     pub on_sample: Vec<(FaultAt, Arc<dyn Fn() + Send + Sync>)>,
+    /// #402 C2b: the frames carry the fake APK's timecode.
+    pub pattern: Option<FakePattern>,
 }
 
 impl Default for FakeScript {
@@ -113,6 +211,7 @@ impl Default for FakeScript {
             close_unconfirmed: Vec::new(),
             scrcpy_estimate_bias_us: 0,
             on_sample: Vec::new(),
+            pattern: None,
         }
     }
 }
@@ -164,6 +263,10 @@ pub struct FakeDevice {
     pub device_script: FakeCheckScript,
     check_calls: Mutex<Vec<String>>,
     pub boot_id: Mutex<String>,
+    /// #402 C2b: the streams whose server was stopped on the device (C10 reconnect).
+    ended_streams: Mutex<BTreeSet<u32>>,
+    /// #402 C2b: the stand-ins of S's host-side `adb shell` child.
+    children: Mutex<Option<Arc<dyn FakeChildren>>>,
 }
 
 /// How the fake device-side check answers.
@@ -201,7 +304,18 @@ impl FakeDevice {
             device_script,
             check_calls: Mutex::new(Vec::new()),
             boot_id: Mutex::new("fake-boot-1".to_owned()),
+            ended_streams: Mutex::new(BTreeSet::new()),
+            children: Mutex::new(None),
         })
+    }
+
+    /// #402 C2b: S opens start a stand-in `adb shell` child through `children`.
+    pub fn set_children(&self, children: Arc<dyn FakeChildren>) {
+        *lock(&self.children) = Some(children);
+    }
+
+    fn children(&self) -> Option<Arc<dyn FakeChildren>> {
+        lock(&self.children).clone()
     }
 
     pub fn calls(&self) -> Vec<FakeCall> {
@@ -283,6 +397,17 @@ impl BackendFactory for Arc<FakeDevice> {
         }
         if let Some(scid) = scid {
             lock(&self.live_streams).insert(scid, (instance.to_owned(), true));
+            if let Some(children) = self.children()
+                && let Err(detail) = children.spawn(scid)
+            {
+                lock(&self.live_streams).insert(scid, (instance.to_owned(), false));
+                return Err(OpenFailure {
+                    cause: OpenFailureCause::ShellSpawn,
+                    detail,
+                    stream: Some(FakeDevice::stream_facts(scid)),
+                    cleanup_confirmed: true,
+                });
+            }
         }
         Ok(Box::new(FakeBackend {
             device: Arc::clone(self),
@@ -334,6 +459,16 @@ impl PreviewBackend for FakeBackend {
                 "poisoned",
                 FailureClass::Poisoned,
                 "the fake backend is poisoned after a previous timeout",
+            )
+            .without_native_call());
+        }
+        if let Some(scid) = self.scid
+            && lock(&device.ended_streams).contains(&scid)
+        {
+            return Err(BackendFailure::new(
+                "scrcpy_stream_ended",
+                FailureClass::CellPath,
+                "fake: the stream's server was stopped on the device",
             )
             .without_native_call());
         }
@@ -409,7 +544,29 @@ impl PreviewBackend for FakeBackend {
             BackendKind::Nemu => (PixelLayout::Rgba8, 4),
             BackendKind::Scrcpy => (PixelLayout::Rgb8, 3),
         };
-        let size = (device.script.width * device.script.height) as usize * bytes_per_pixel;
+        let (width, height) = match &device.script.pattern {
+            Some(pattern) if pattern.apk.orientation() == "portrait" => {
+                (device.script.height, device.script.width)
+            }
+            _ => (device.script.width, device.script.height),
+        };
+        let size = (width * height) as usize * bytes_per_pixel;
+        let pixels = match &device.script.pattern {
+            Some(pattern) => {
+                let mut pixels = vec![128u8; size];
+                if let Some(payload) = pattern.apk.payload_at(source) {
+                    crate::timecode::render(
+                        &mut pixels,
+                        width,
+                        bytes_per_pixel,
+                        pattern.geometry,
+                        &payload,
+                    );
+                }
+                pixels
+            }
+            None => vec![(self.sequence % 251) as u8; size],
+        };
         // S with a floor: the fake's `meets` inputs. The fake's device clock is the host clock,
         // so the offset minimum is the transport latency and `T_est` is the source time plus
         // the scripted bias.
@@ -432,10 +589,10 @@ impl PreviewBackend for FakeBackend {
             _ => None,
         };
         Ok(SampledFrame {
-            width: device.script.width,
-            height: device.script.height,
+            width,
+            height,
             layout,
-            pixels: vec![(self.sequence % 251) as u8; size],
+            pixels,
             stream_sequence: (self.kind == BackendKind::Scrcpy).then_some(self.sequence),
             device_pts_us: (self.kind == BackendKind::Scrcpy).then_some(source),
             received_us: (self.kind == BackendKind::Scrcpy).then_some(ended),
@@ -447,11 +604,14 @@ impl PreviewBackend for FakeBackend {
         })
     }
 
-    fn tap(&mut self, _x: i32, _y: i32) -> Result<(), BackendFailure> {
+    fn tap(&mut self, x: i32, y: i32) -> Result<(), BackendFailure> {
         lock(&self.device.calls).push(FakeCall::Tap {
             instance: self.instance.clone(),
         });
         self.device.clock.sleep_us(2_000);
+        if let Some(pattern) = &self.device.script.pattern {
+            pattern.apk.tap(x, y, pattern.view.0, pattern.view.1);
+        }
         Ok(())
     }
 
@@ -495,6 +655,11 @@ impl PreviewBackend for FakeBackend {
         }
         if let Some(scid) = self.scid {
             lock(&device.live_streams).insert(scid, (self.instance.clone(), false));
+            if let Some(children) = device.children()
+                && let Err(detail) = children.stop(scid)
+            {
+                return CloseOutcome::Unconfirmed(detail);
+            }
         }
         CloseOutcome::Confirmed
     }
@@ -608,6 +773,29 @@ impl DeviceSideCheck for Arc<FakeDevice> {
             ));
         }
         Ok(())
+    }
+
+    fn stop_server(&self, instance: &str, identity: &IdentityTuple) -> Result<u32, CheckFailure> {
+        lock(&self.check_calls).push(format!("stop:{instance}:{:08x}", identity.scid));
+        if *lock(&self.boot_id) != identity.boot_id {
+            return Err(CheckFailure::Unconfirmed(
+                "fake: boot_id differs; nothing is stopped".to_owned(),
+            ));
+        }
+        let mut live = lock(&self.live_streams);
+        let running = live
+            .get(&identity.scid)
+            .is_some_and(|(owner, alive)| *alive && owner == instance);
+        if !running {
+            return Err(CheckFailure::Unconfirmed(format!(
+                "fake: no running server {:08x} on {instance}",
+                identity.scid
+            )));
+        }
+        live.insert(identity.scid, (instance.to_owned(), false));
+        drop(live);
+        lock(&self.ended_streams).insert(identity.scid);
+        Ok(identity.pid)
     }
 }
 

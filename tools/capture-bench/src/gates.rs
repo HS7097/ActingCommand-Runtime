@@ -61,6 +61,36 @@ impl Reaction {
     pub fn drains(self) -> bool {
         matches!(self, Self::DenyNewDrain | Self::Close)
     }
+
+    /// #402 C2b: the `entry_gate.reaction` word of the analysis schema §8.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::NoEffect => "no_effect",
+            Self::Deny | Self::DenyWithdraw => "reject",
+            Self::DenyNew => "reject_new",
+            Self::DenyNewDrain => "reject_new_drain",
+            Self::Close => "close",
+            Self::Keep => "keep",
+            Self::NotPresent => "not_exist",
+            Self::CloseChainOnly => "close_chain_only",
+        }
+    }
+}
+
+/// #402 C2b: the analysis schema's `entry` word (`E1` … `E9`, §8 `entry_gate`).
+pub fn entry_code(entry: Entry) -> &'static str {
+    match entry {
+        Entry::PreviewSample => "E1",
+        Entry::ScrcpyProducer => "E2",
+        Entry::NemuSession => "E3",
+        Entry::ManualRefresh => "E4",
+        Entry::Calibration => "E5",
+        Entry::ApkControl => "E6",
+        Entry::FormalLoop => "E7",
+        Entry::AutoReopen => "E8",
+        Entry::DeviceSideCheck => "E9",
+    }
 }
 
 /// The reaction of `entry` to `gate` (§3.7.1, row by row).
