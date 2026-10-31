@@ -43,7 +43,14 @@
 //!   keyless observe, the action's own claim) neither cancels the wake nor lets the action run
 //!   again before it, and a wake due while the instance is held is queued all the same, its
 //!   claims waiting behind the holder. While an instance's emulator is held stopped, the
-//!   emulator watch does not start it again.
+//!   emulator watch does not start it again. PAUSE-AUTO (0.12.34, Alice's ruling 117 A): the
+//!   exception is a wake after `stop_emulator`, whose first work starts the emulator: while an
+//!   automatic start may not start it (`automatic_start_hold`: the instance's own scheduling
+//!   pause, in any stage) the wake is not queued, the instance stays closed owing it, and one
+//!   `emulator_autostart_skipped` (`skip_reason` `instance_paused`, `idle_action`
+//!   `stop_emulator`) per pause revision says so; a wake whose configured start meets the hold on
+//!   its key starts nothing and is owed again (`withhold_idle_wake`). The first check after the
+//!   resume queues it. A `close_app` wake (its startup package alone) is unchanged.
 //! - **Records.** One `instance_idle_action` record per action and per wake (`operation`
 //!   `run_idle_action` or `queue_idle_wake`, `idle_action` naming the action), a
 //!   `device_state_observed` record under the instance and the same report line. An instance
@@ -99,6 +106,7 @@
 //!   from the tasks, so a reading alone never wakes a closed game.
 
 use super::contained_task::StartAnchors;
+use super::emulator_watch::SkippedStart;
 use super::failure_scope::Contained;
 use super::host_claims::{HostClaimWork, HostKey};
 use super::input::ApplicationKey;
@@ -354,7 +362,9 @@ impl HostShared {
             if self.fatal.is_shutdown_requested() {
                 break;
             }
-            let view = self.idle_view(instance_id, emulator_on)?;
+            // PAUSE-AUTO (0.12.34): whether an automatic start may start the emulator now.
+            let hold = self.automatic_start_hold(&alias, IdleLocation::Check)?;
+            let view = self.idle_view(instance_id, emulator_on, hold.is_some())?;
             let plan = plans.map_or_else(
                 || latest.get(&alias).copied().flatten(),
                 |given| given.get(&alias).copied(),
@@ -383,6 +393,10 @@ impl HostShared {
                 IdleStep::Wake { action, work } => {
                     self.queue_idle_wake(instance_id, &alias, action, work)
                 }
+                // PAUSE-AUTO: the planner holds a wake only while `hold` is some.
+                IdleStep::WakeHeld => hold.map_or(Ok(()), |hold| {
+                    self.skip_start_for_hold(SkippedStart::IdleWake, instance_id, &alias, hold)
+                }),
                 IdleStep::Unsupported { action, missing } => {
                     self.record_idle_unsupported(instance_id, &alias, action, missing)
                 }
@@ -712,8 +726,30 @@ impl HostShared {
         self.contain_startup_keep(instance_id, kept)
     }
 
-    /// W2-B: a failed record of a kept startup package, through the one decision point for
-    /// `instance_id` (#419).
+    /// PAUSE-AUTO (0.12.34, Alice's ruling 117 A): the configured emulator start a wake of
+    /// `instance_id` (`alias`) queued met a hold on its key and started nothing, so the woken
+    /// instance owes its wake again (`IdlePlanner::wake_held`), kept in `host.idle_state` as
+    /// closed with its wake at the time it was woken; called before the claim releases the key.
+    /// The next idle check that finds the start no longer held (after the resume) queues the
+    /// wake. A record that fails is this instance's failure (#419); only a failure the Runtime
+    /// does not survive is the error.
+    pub(super) fn withhold_idle_wake(
+        &self,
+        instance_id: InstanceId,
+        alias: &str,
+    ) -> RuntimeHostResult<()> {
+        let kept = (|| -> RuntimeHostResult<()> {
+            let mut planner = lock(&self.idle, HostLocation::RunEmulatorAutostart)?;
+            if !planner.wake_held(alias) {
+                return Ok(());
+            }
+            self.keep_idle_state(&mut planner)
+        })();
+        self.contain_startup_keep(instance_id, kept)
+    }
+
+    /// W2-B: a failed record of a kept startup package (PAUSE-AUTO: or of a withheld wake),
+    /// through the one decision point for `instance_id` (#419).
     fn contain_startup_keep(
         &self,
         instance_id: InstanceId,
@@ -786,7 +822,13 @@ impl HostShared {
 
     /// What the instance shows to the idle check now. Read without waiting: a held admission
     /// guard (a keyless observe, probe or Lab look, or work starting on the instance) is work.
-    fn idle_view(&self, instance_id: InstanceId, emulator_on: bool) -> RuntimeHostResult<IdleView> {
+    /// PAUSE-AUTO (0.12.34): `start_held`, an automatic start may not start its emulator now.
+    fn idle_view(
+        &self,
+        instance_id: InstanceId,
+        emulator_on: bool,
+        start_held: bool,
+    ) -> RuntimeHostResult<IdleView> {
         // Workflow #386 SR-4a3: a blackout that covers the instance holds its action as a pause
         // does (complete silence); a wake's claims wait at the gate for its end.
         let gate = self.routine_gate(instance_id)?;
@@ -819,6 +861,7 @@ impl HostShared {
             emulator_on,
             app_wakeable: startup_package,
             emulator_wakeable: startup_package && configured_start,
+            start_held,
         })
     }
 

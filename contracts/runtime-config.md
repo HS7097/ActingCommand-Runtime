@@ -1031,7 +1031,13 @@ provider's Stop, never MuMuManager `api`). The wake comes at the next due time m
 wake lead, or at once when a later evaluation shows a due task: after `close_app` the startup
 package is queued, after `stop_emulator` the configured emulator start, which hands the key to the
 startup package. While an instance's emulator is held stopped the emulator watch does not start
-it.
+it. PAUSE-AUTO (since 0.12.34, Alice's ruling 117 A): while the instance's own scheduling pause
+holds it, in any stage, a wake after `stop_emulator` is not queued: the instance stays closed owing
+its wake, one `emulator_autostart_skipped` (`skip_reason` `instance_paused`, `idle_action`
+`stop_emulator`) per pause revision says so, and a wake's configured start that meets the pause on
+its key starts nothing and leaves the wake owed again; the first idle check after the resume
+queues it ([emulator-control.md](emulator-control.md), "Pauses (PAUSE-AUTO)"). A wake after
+`close_app` queues its startup package behind the pause as before.
 
 What wakes an idle instance (IDLE-WG, since 0.12.27; production v0.12.26 on 10-29 02:43: an
 instance resume's reconnect claim held an idle instance, its candidates waited
@@ -1093,8 +1099,9 @@ its owner epoch is one), the start does not know what the action left: every ins
 could have run on it (its startup package, and for `stop_emulator` its emulator start) counts as
 closed, never as open, and owes its wake at the start's time (review N-1): the start's first idle
 check wakes it once, its startup package waits behind a scheduling pause or an install hold as
-after every wake (for `stop_emulator` after its configured emulator start, which a pause never
-holds, [emulator-control.md](emulator-control.md)), and the next plan
+after every wake (for `stop_emulator` after its configured emulator start, which no global pause
+holds; since 0.12.34 the instance's own pause holds the wake itself, PAUSE-AUTO above,
+[emulator-control.md](emulator-control.md)), and the next plan
 closes it again with its proper wake. So an instance whose only work waits for a status reading
 that expired meanwhile is not left closed with no wake. The configured emulator start at daemon
 start leaves an emulator the action holds stopped to its wake.

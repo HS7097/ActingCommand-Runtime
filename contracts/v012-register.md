@@ -4713,6 +4713,100 @@ exempts every candidate in a chain head's run window, successors of maintenance 
 |---|---|---|---|---|---|
 | SS2e-1 | `judged` of `build_candidate` (`evaluator.rs`) reads `ChainWalk.business_link` of `tie_break::chain_head` | behaviour (evaluation) | SS-2e | — | a marked candidate in a window is not judged only when a walked link, the head included, is marked; the rank reads `ChainWalk.head`, as SS-2's `chain_head` did; the fact refresh's lent rank is unchanged |
 
+### 1.230 Slice PAUSE-AUTO (0.12.34): neither the daemon start's configured emulator start nor IDLE-1's wake starts an instance its own scheduling pause holds, and the pause is asked again on the start's key (Alice's ruling 117 A of 10-31 13:22, relayed from the AC审计 window, Workflow #386 comment 6539002530, with the constraint of review 6538837616 §3 that a start queued before the pause must not slip past it; coordinator work order `rd-1031/brief-pause-auto.md`)
+
+[emulator-control.md](emulator-control.md) ("Configured start at daemon start", "Pauses
+(PAUSE-AUTO)", "Emulator watch"), [scheduling-pause.md](scheduling-pause.md) and
+[runtime-config.md](runtime-config.md) ("The `idle` section") are the contract. For the daemon
+start and IDLE-1's wake, ruling 117 A replaces ruling 35's "a scheduling pause holds only
+dispatches", as ruling 112 did for the watch (§1.226). The number 1.230 is the coordinator's.
+
+**What.** Every automatic emulator start asks one question before it starts an emulator,
+`automatic_start_hold` (`host/emulator_autostart.rs`): may this instance be started now. Today
+the instance's own scheduling pause, in any stage (`draining`, `paused`, `released`, a restored
+pause included), says no; the global pause does not.
+- The configured start at daemon start (also a watchdog's or a deploy's daemon start) asks it
+  before it requests a claim. A held instance whose emulator is stopped gets no claim and is not
+  counted in `emulator_autostart_queued`; one `emulator_autostart_skipped` (info; `alias`,
+  `skip_reason` `instance_paused`, no `watch_kind`; a `device_state_observed` record under the
+  instance and its report line) says so.
+- IDLE-1's wake after `stop_emulator` asks it before it queues anything (`IdleView::start_held`):
+  the wake is not queued (`IdleStep::WakeHeld`), the instance stays kept closed owing it
+  (`host.idle_state` unchanged), and one skip with `idle_action` `stop_emulator` says so per pause
+  revision, however many idle checks find it due.
+- The re-check: the daemon start's claim and an idle wake's claim ask it again on their key at
+  every tick of their hold (`autostart_hold_ends`), so the last time just before the Start. A
+  claim requested before the pause began (waiting for the network, its start turn or a
+  blackout's end) ends there: it releases its key with no `command.*` record and no failure
+  pair, starts nothing and records the same skip. An idle wake's claim so ended leaves the wake
+  owed again (`withhold_idle_wake`, `IdlePlanner::wake_held`): kept closed, not woken, its wake at
+  the time it was woken.
+- The watch's restart claim (R3) asks it on its key the same way (the coordinator's ruling of
+  10-31 on rulings 112 and 117 A, PR #1461's second commit: the restart claim the watch requested
+  before the pause began, which WATCH-P let run, is the very slip-through 117 A forbids). Held, it
+  ends as the two others do, its skip with `watch_kind` `restart`.
+- So does the watch's recognition claim (EMU-BIND; the coordinator's ruling of 10-31 on ruling
+  112, PR #1461's third commit: a paused instance is not recognized, and a recognition claim
+  requested before the pause, for example one a blackout held queued, must not bind it after).
+  Held on its key, it releases the key and binds, prepares and starts nothing, its skip with
+  `watch_kind` `recognize`.
+- The bound (the same ruling): a restart or recognition the watch counted when it requested the
+  claim, and that the pause then ended on its key, did not happen, so it leaves the window again
+  (`refund_watch_request`, `EmulatorWatch::refund_request`: the newest request of its kind for
+  the instance, since the watch requests none while a claim holds or waits for the key). It
+  takes no place among `emulator_control.restart_attempts`; a skip before a request already took
+  none (WATCH-P).
+- Each start records its skip once per pause revision and start (WATCH-P's in-memory skip
+  memory, `SkippedStart`, never persisted; each of the watch's kinds shares one entry between its
+  polls and its claim).
+- After the resume: the next idle check queues the owed wake as before, the watch's next poll
+  restarts or recognizes as before, and a next daemon start starts as before.
+
+**Why.** On every daemon start or deploy the configured start started the emulator of a paused
+instance, and IDLE-1's wake started a paused instance's stopped emulator; only the watch obeyed
+the pause (WATCH-P). Production now holds all five instances under `alice-116-scheduler-stop`,
+and the resource channel starts emulators by hand for its Lab maintenance.
+
+**The seam for the player hold.** `HostShared::automatic_start_hold` is the one place an automatic
+start asks; the watch now asks it too (it replaces WATCH-P's `instance_pause_revision`, same
+answer). #429 R-7b adds the player hold there (its reason a second token of
+`emulator_autostart_skip_reason`, `person_takeover` per WP-2), and every automatic start obeys it
+without another change.
+
+**Unchanged.** An explicit emulator control (`actingctl emulator`, `ac_emulator`, Lab) never asks
+and runs under a pause as before, its startup package held behind the pause (#411 A71). The
+watch's WATCH-P behaviour before a request: it asks before it requests a restart or a recognition.
+The global pause, blackouts, the idle hold of an
+emulator the action stopped, idle stop itself, a `close_app` wake (it starts no emulator) and every
+unpaused instance, byte for byte. The stuck-recovery ladder's emulator-restart rung already asks
+the pause at its admission and before each step (A6). **No new code, key, vocabulary token,
+configuration key, persisted shape or interface revision.** One more optional value on an existing
+code: `idle_action` on `emulator_autostart_skipped` (the key exists; `emulator_autostart_queued`
+already carries it for the wake).
+
+**What changes live.** All five instances are paused. A daemon start or deploy no longer starts the
+emulator of any of them that is stopped (one skip record each instead), no idle wake after
+`stop_emulator` starts one, and no watch restart or recognition claim requested before a pause
+starts or binds one after it, nor uses up the watch's bound. The daemon start does not run again
+at the resume: an emulator it left
+stopped is started by the watch's first poll after the resume (R3, while
+`emulator_control.watch_enabled`) or by a person.
+
+**Rollback** (to 0.12.33). Nothing to do: no ledger, state, catalog or configuration shape is new;
+0.12.33 reads the skip records (the code and key exist, and an outcome's `values` are kept as a map
+without a key check), the skip memory is not persisted, and a withheld wake is kept in
+`host.idle_state` as an ordinary closed row. 0.12.33 starts paused instances on daemon start and
+idle wake again, lets a watch restart or recognition claim requested before a pause start or
+bind the emulator, and counts such a claim against the bound; the bound's memory is not persisted
+either.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| PA-1 | `automatic_start_hold` (`emulator_autostart.rs`), asked by `enqueue_emulator_autostart`, `autostart_hold_ends` (the daemon start's, an idle wake's and the watch's restart and recognition claims), `watch_emulator` and the idle check (`IdleView::start_held`) | behaviour (configured start, idle wake, the watch's claims on their key) (host gate row "PAUSE-AUTO") | PAUSE-AUTO | — | the instance's own pause in any stage; the global pause and explicit controls unchanged; the seam R-7b extends |
+| PA-4 | `refund_watch_request`, `EmulatorWatch::refund_request` (`emulator_watch.rs`), called when a watch claim ends held on its key | behaviour (the watch's bound) | PAUSE-AUTO | — | the request leaves the window again, so it takes no place among `restart_attempts` within `restart_window_ms` |
+| PA-2 | `IdleStep::WakeHeld`, `IdlePlanner::wake_held`, `withhold_idle_wake` (`idle_action.rs`, `idle.rs`) | behaviour (idle planner) | PAUSE-AUTO | — | a held `stop_emulator` wake stays owed in `host.idle_state` (shape unchanged); the next check after the resume queues it |
+| PA-3 | `idle_action` (existing key) on `emulator_autostart_skipped`, with `skip_reason` | new optional value of an existing code (no shape change) | PAUSE-AUTO | the idle check, an idle wake's claim | once per pause revision and start (`SkippedStart`); the daemon start's skip carries neither `watch_kind` nor `idle_action` |
+
 ### 1.231 Slice SS-4 (0.12.34): after a successful run whose basis got no reading of another value, the pair waits for one (Alice's ruling 105 A: no count-based last line, the no-progress guard and the failure retry cap replace counts; the 10-29 ruling confirmed with no objection on 10-31 13:22, Workflow #390 comment 6539002724; design `rd-1029/design-sch-state.md` §4.7 and the SS-4 entry of §5; plan `rd-1029/plan-state-driven.md`, the SS-4 row and the notes on removing the counts; coordinator work order `rd-1031/brief-ss4.md`)
 
 [scheduling/README.md](scheduling/README.md) ("No-progress guard"),

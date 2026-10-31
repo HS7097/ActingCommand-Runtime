@@ -163,6 +163,9 @@ mod gate_emu_bind;
 // WATCH-P (0.12.32, Alice's ruling 112): the watch neither restarts nor recognizes an instance its
 // own scheduling pause holds, in any stage.
 mod gate_watch_p;
+// PAUSE-AUTO (0.12.34, Alice's ruling 117 A): neither the daemon start's configured emulator start
+// nor IDLE-1's wake starts an instance its own scheduling pause holds, also on the start's key.
+mod gate_pause_auto;
 // IDLE-1 (Alice's ruling 41): the idle planner on a manual clock.
 mod gate_idle1;
 // IDLE-1 (#419): a failed idle stop is contained to its instance and the Runtime goes on.

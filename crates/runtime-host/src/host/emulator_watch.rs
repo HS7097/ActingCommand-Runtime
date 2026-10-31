@@ -61,8 +61,13 @@
 //!   `instance_paused`; also a `device_state_observed` record), once per pause revision and
 //!   kind, not once per poll; it counts against no bound and reports no used-up bound. The resume
 //!   adds nothing: its reconnect and self-check run as before, and the first poll after the pause
-//!   is gone restarts or recognizes as for any instance. A watch claim requested before the pause
-//!   runs as before.
+//!   is gone restarts or recognizes as for any instance. PAUSE-AUTO (0.12.34): the watch asks the
+//!   one question every automatic emulator start asks (`automatic_start_hold`), and a restart or
+//!   recognition claim it requested before the pause asks it again on its key and ends skipped
+//!   there, starting, binding and preparing nothing (its `watch_kind`, the same skip memory, so
+//!   once per revision with the polls' skips); the request it counted leaves its bound again
+//!   (`refund_watch_request`). The skip memory also counts the daemon start's configured start
+//!   and IDLE-1's wake (`SkippedStart`), each apart.
 //! - **Blackouts** (Workflow #386 SR-4a3, `scheduling-blackout.md`, "Complete silence"): the
 //!   polls go on (a status read starts nothing). A configured instance found stopped inside a
 //!   blackout gets its one autostart claim as above, which the routine gate holds until the
@@ -78,12 +83,13 @@
 //!
 //! Each record is also a report line, which actingd writes as a daemon line.
 
+use super::emulator_autostart::AutomaticStartHold;
 use super::*;
 use crate::InstanceState;
 use crate::codes::{EmulatorWatchCode, EmulatorWatchLocation, HostCode};
 use actingcommand_contract::EmulatorRunningState;
 use actingcommand_contract::outcome::VocabularyToken;
-use actingcommand_runtime_config::EmulatorWatchConfig;
+use actingcommand_runtime_config::{EmulatorWatchConfig, IdleAction};
 
 /// How often the watch looks whether a poll is due and whether the Runtime stops.
 const WATCH_TICK: Duration = Duration::from_millis(250);
@@ -104,7 +110,8 @@ pub(super) struct EmulatorWatch {
     /// EMU-BIND: the instances whose used-up recognition bound was reported.
     recognitions_exhausted: BTreeSet<InstanceId>,
     /// WATCH-P (0.12.32): per instance, the revision of its own scheduling pause whose skipped
-    /// restart and recognition were recorded, and which of the two were.
+    /// restart and recognition were recorded, and which of the two were. PAUSE-AUTO (0.12.34):
+    /// also the daemon start's configured start and IDLE-1's wake (`SkippedStart`).
     paused_skips: BTreeMap<InstanceId, PausedSkips>,
     /// The instances whose last status read failed (reported once per failing streak).
     unreadable: BTreeSet<InstanceId>,
@@ -144,12 +151,55 @@ actingcommand_contract::outcome_vocabulary! {
     }
 }
 
-/// WATCH-P (0.12.32): the skips one pause revision of an instance has recorded, by kind.
+/// PAUSE-AUTO (0.12.34): the automatic emulator start a hold skipped (`automatic_start_hold`), one
+/// skip record per hold revision each: the watch's restart or recognition, before its request or
+/// on its claim's key (WATCH-P, `watch_kind`),
+/// the configured start at daemon start (no further value), and IDLE-1's wake after
+/// `stop_emulator`, at its queueing or on its claim's key (`idle_action` `stop_emulator`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum SkippedStart {
+    Watch(WatchKind),
+    DaemonStart,
+    IdleWake,
+}
+
+/// WATCH-P (0.12.32): the skips one pause revision of an instance has recorded, by kind;
+/// PAUSE-AUTO (0.12.34): by automatic start.
 #[derive(Clone, Copy)]
 struct PausedSkips {
     revision: u64,
     restart: bool,
     recognize: bool,
+    daemon_start: bool,
+    idle_wake: bool,
+}
+
+impl PausedSkips {
+    const fn new(revision: u64) -> Self {
+        Self {
+            revision,
+            restart: false,
+            recognize: false,
+            daemon_start: false,
+            idle_wake: false,
+        }
+    }
+}
+
+/// PAUSE-AUTO (0.12.34): the skip record of `start` for `alias` under `hold`:
+/// `emulator_autostart_skipped` (info; `alias`, `skip_reason`, and the value naming the start).
+pub(super) fn start_skip_outcome(
+    start: SkippedStart,
+    alias: &str,
+    hold: AutomaticStartHold,
+) -> Outcome {
+    let outcome = Outcome::new(HostCode::EmulatorAutostartSkipped).alias(alias);
+    let outcome = match start {
+        SkippedStart::Watch(kind) => outcome.watch_kind(kind),
+        SkippedStart::DaemonStart => outcome,
+        SkippedStart::IdleWake => outcome.idle_action(IdleAction::StopEmulator.as_str()),
+    };
+    outcome.skip_reason(hold.reason)
 }
 
 /// Whether the watch may start an instance's stopped emulator now (R3's bound).
@@ -203,30 +253,43 @@ impl EmulatorWatch {
         RestartBudget::Allowed { attempts }
     }
 
-    /// WATCH-P (0.12.32): whether the skip of `kind` for `instance_id`'s pause at `revision` is the
-    /// first of that revision, which marks it recorded. A new revision (the instance resumed and
-    /// paused again) starts over.
+    /// PAUSE-AUTO (0.12.34, the coordinator's ruling of 10-31): the request of `kind` the watch
+    /// counted for `instance_id` when it requested its claim did not happen (a pause ended the
+    /// claim on its key), so it leaves the window. While that claim held or waited for the key the
+    /// watch requested none of either kind (`watch_may_request`), so it is the newest one; a
+    /// person's emulator control that cleared the count meanwhile leaves nothing to give back.
+    fn refund_request(&mut self, kind: WatchKind, instance_id: InstanceId) {
+        let requests = match kind {
+            WatchKind::Restart => &mut self.restarts,
+            WatchKind::Recognize => &mut self.recognitions,
+        };
+        if let Some(window) = requests.get_mut(&instance_id) {
+            window.pop_back();
+        }
+    }
+
+    /// WATCH-P (0.12.32): whether the skip of `start` for `instance_id`'s pause at `revision` is
+    /// the first of that revision, which marks it recorded. A new revision (the instance resumed
+    /// and paused again) starts over. PAUSE-AUTO (0.12.34): the daemon start's configured start
+    /// and IDLE-1's wake are counted apart from the watch's two kinds.
     fn first_paused_skip(
         &mut self,
-        kind: WatchKind,
+        start: SkippedStart,
         instance_id: InstanceId,
         revision: u64,
     ) -> bool {
-        let skips = self.paused_skips.entry(instance_id).or_insert(PausedSkips {
-            revision,
-            restart: false,
-            recognize: false,
-        });
+        let skips = self
+            .paused_skips
+            .entry(instance_id)
+            .or_insert(PausedSkips::new(revision));
         if skips.revision != revision {
-            *skips = PausedSkips {
-                revision,
-                restart: false,
-                recognize: false,
-            };
+            *skips = PausedSkips::new(revision);
         }
-        let recorded = match kind {
-            WatchKind::Restart => &mut skips.restart,
-            WatchKind::Recognize => &mut skips.recognize,
+        let recorded = match start {
+            SkippedStart::Watch(WatchKind::Restart) => &mut skips.restart,
+            SkippedStart::Watch(WatchKind::Recognize) => &mut skips.recognize,
+            SkippedStart::DaemonStart => &mut skips.daemon_start,
+            SkippedStart::IdleWake => &mut skips.idle_wake,
         };
         !std::mem::replace(recorded, true)
     }
@@ -355,7 +418,7 @@ impl HostShared {
     /// is idle (`unprepared_on_reported_port`, `instance_key_idle`). WATCH-P (0.12.32, Alice's
     /// ruling 112): an instance its own scheduling pause holds, in any stage, is read as every
     /// instance, but gets neither; the skip is recorded once per pause revision and kind
-    /// (`skip_watch_for_pause`).
+    /// (`skip_start_for_hold`; PAUSE-AUTO, 0.12.34: asked through `automatic_start_hold`).
     fn watch_emulator(
         &self,
         instance_id: InstanceId,
@@ -367,13 +430,18 @@ impl HostShared {
         let Some(state) = self.read_watched_emulator(instance_id, alias)? else {
             return Ok(());
         };
-        let paused = self.instance_pause_revision(alias)?;
+        // PAUSE-AUTO (0.12.34): the one question of every automatic start
+        // (`automatic_start_hold`); for the watch it is WATCH-P's instance pause, in any stage.
+        let held = self.automatic_start_hold(alias, EmulatorWatchLocation::Watch)?;
         if !state.process_started {
-            return match (position, paused) {
+            return match (position, held) {
                 (None, _) => Ok(()),
-                (Some(_), Some(revision)) => {
-                    self.skip_watch_for_pause(WatchKind::Restart, instance_id, alias, revision)
-                }
+                (Some(_), Some(hold)) => self.skip_start_for_hold(
+                    SkippedStart::Watch(WatchKind::Restart),
+                    instance_id,
+                    alias,
+                    hold,
+                ),
                 (Some(position), None) => {
                     self.restart_watched_emulator(position, instance_id, alias, settings, now_ms)
                 }
@@ -383,10 +451,13 @@ impl HostShared {
             || (self.unprepared_on_reported_port(instance_id, alias, &state)?
                 && self.instance_key_idle(instance_id)?)
         {
-            return match paused {
-                Some(revision) => {
-                    self.skip_watch_for_pause(WatchKind::Recognize, instance_id, alias, revision)
-                }
+            return match held {
+                Some(hold) => self.skip_start_for_hold(
+                    SkippedStart::Watch(WatchKind::Recognize),
+                    instance_id,
+                    alias,
+                    hold,
+                ),
                 None => {
                     self.recognize_watched_emulator(position, instance_id, alias, settings, now_ms)
                 }
@@ -395,41 +466,40 @@ impl HostShared {
         Ok(())
     }
 
-    /// WATCH-P (0.12.32): the revision of the scheduling pause of the instance `alias` itself, in
-    /// any stage; `None` when none holds it (the global pause is no pause of the instance).
-    fn instance_pause_revision(&self, alias: &str) -> RuntimeHostResult<Option<u64>> {
-        Ok(lock(&self.scheduling_pause, EmulatorWatchLocation::Watch)?
-            .instance_state(alias)
-            .map(|pause| pause.revision))
-    }
-
-    /// WATCH-P (0.12.32, Alice's ruling 112): the restart or recognition (`kind`) the watch does
-    /// not request because the instance's own pause at `revision` holds it. No claim, no count
-    /// against the bound of `kind` and no used-up record; the first skip of the revision and kind
-    /// is `emulator_autostart_skipped` (`alias`, `watch_kind`, `skip_reason` `instance_paused`),
-    /// a `device_state_observed` record under the instance and its report line, and every later
-    /// one records nothing.
-    fn skip_watch_for_pause(
+    /// WATCH-P (0.12.32, Alice's ruling 112): the restart or recognition the watch does not
+    /// request because `hold` (the instance's own pause) holds it. No claim, no count against
+    /// the bound of its kind and no used-up record. PAUSE-AUTO (0.12.34, Alice's ruling 117 A):
+    /// also the configured start the daemon start does not request, and the wake after
+    /// `stop_emulator` IDLE-1 does not queue (`start`). The first skip of the revision and
+    /// `start` is `emulator_autostart_skipped` (`start_skip_outcome`), a `device_state_observed`
+    /// record under the instance and its report line, and every later one records nothing.
+    pub(super) fn skip_start_for_hold(
         &self,
-        kind: WatchKind,
+        start: SkippedStart,
         instance_id: InstanceId,
         alias: &str,
-        revision: u64,
+        hold: AutomaticStartHold,
     ) -> RuntimeHostResult<()> {
-        let first = lock(&self.emulator_watch, EmulatorWatchLocation::Watch)?.first_paused_skip(
-            kind,
-            instance_id,
-            revision,
-        );
-        if !first {
+        if !self.first_start_skip(start, instance_id, hold)? {
             return Ok(());
         }
-        self.record_emulator_watch(
-            instance_id,
-            Outcome::new(HostCode::EmulatorAutostartSkipped)
-                .alias(alias)
-                .watch_kind(kind)
-                .skip_reason(WatchSkipReason::InstancePaused),
+        self.record_emulator_watch(instance_id, start_skip_outcome(start, alias, hold))
+    }
+
+    /// PAUSE-AUTO (0.12.34): whether the skip of `start` under `hold` is the first of the hold's
+    /// revision for `instance_id`, which marks it recorded (WATCH-P's memory, never persisted).
+    pub(super) fn first_start_skip(
+        &self,
+        start: SkippedStart,
+        instance_id: InstanceId,
+        hold: AutomaticStartHold,
+    ) -> RuntimeHostResult<bool> {
+        Ok(
+            lock(&self.emulator_watch, EmulatorWatchLocation::Watch)?.first_paused_skip(
+                start,
+                instance_id,
+                hold.revision,
+            ),
         )
     }
 
@@ -689,6 +759,18 @@ impl HostShared {
                 Ok(true)
             }
         }
+    }
+
+    /// PAUSE-AUTO (0.12.34, the coordinator's ruling of 10-31): a restart or recognition (`kind`)
+    /// the watch requested for `instance_id` that a pause ended on its claim's key gives its place
+    /// in the bound back (`EmulatorWatch::refund_request`): it started and bound nothing.
+    pub(super) fn refund_watch_request(
+        &self,
+        kind: WatchKind,
+        instance_id: InstanceId,
+    ) -> RuntimeHostResult<()> {
+        lock(&self.emulator_watch, EmulatorWatchLocation::Watch)?.refund_request(kind, instance_id);
+        Ok(())
     }
 
     /// R3: a person's emulator control of `instance_id` clears the restarts the watch made there;
