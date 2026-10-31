@@ -58,6 +58,12 @@ mod gate_411_p49;
 // Test-only: Workflow #429 A.4 a (R-15a), the edges of the UI that runs after an operation.
 #[cfg(test)]
 mod gate_r15a_ui_edges;
+// Test-only: Workflow #429 R-15b, the release reader's UI side (A.4 b) and the registry of the
+// contract's codes and words.
+#[cfg(test)]
+mod gate_r15b_registry;
+#[cfg(test)]
+mod gate_r15b_release;
 
 pub(crate) use host::{Host, SystemHost};
 // Workflow #421 INST-1, watchdog row 7a″: what the watchdog and `actingctl start` read.

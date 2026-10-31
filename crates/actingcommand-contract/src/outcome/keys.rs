@@ -615,6 +615,21 @@ outcome_keys! {
     // Ruling 54 (#420 S4): the kind of `install_caveat_noted`, the one warning of the family.
     install_caveat: vocab(install_caveat),
     // ---- Workflow #421 INST-0: end ----
+    // ---- Workflow #429 R-15b (the A/B install contract, contracts/install-cli.md and
+    // contracts/stable-entry.md; since 0.12.35): begin. R-7a's `hold_phase`, `alias`,
+    // `source_*` and `ended_by_*` are referenced, not registered again. ----
+    attempt_phase: vocab(install_attempt_phase),
+    hold_reason: name,
+    s0_from: id,
+    player_hold_range: list(integer),
+    confirm_argv: list(name),
+    child_pid: integer,
+    child_state: vocab(entry_child_state),
+    child_exit_code: integer,
+    inherited_sha256: hash,
+    active_sha256: hash,
+    install_member: vocab(install_member),
+    // ---- Workflow #429 R-15b: end ----
     // ---- IDLE-1 (the idle action, Alice's ruling 41): begin ----
     idle_action: name,
     // ---- IDLE-1: end ----

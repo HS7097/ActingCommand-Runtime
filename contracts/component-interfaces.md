@@ -122,6 +122,7 @@ writes the configuration, the console edits it, and actingd reads it.
 | | | | 22 | revision 21 plus the optional member `presets` of the `performance` section (Workflow #429 R-2, Alice's rulings 98 and 99, Runtime 0.12.31): `performance.presets`, the performance presets (`standard`, `adaptive`, `light`), each preset name → `{mode, max_concurrent_runs?, heavy_dispatch_limit_normal, parallel_enabled}`; read once at assembly, not settable ([runtime-config.md](runtime-config.md), "Presets"). The same release changes two defaults of the defaults file (`performance.pacing.mode` `pace`, `scheduling.parallel.enabled` `true`) and makes `performance.pacing.mode`, `.max_concurrent_runs` and `.heavy_dispatch_limit.normal` / `.paused` settable, none of which changes the file's format. Additive: a Runtime before R-2 refuses a file that names `performance.presets`, because the section denies unknown members; a file that does not name it keeps its revision, so the Runtime still reads revisions 5 to 21 and declares [5, 22] | `crates/runtime-config/src/performance/presets.rs`, `PresetTable`; `distribution/windows/actingd.defaults.json`; `distribution/windows/component-interfaces.json` |
 | | | | 23 | revision 22 plus the optional member `no_progress` (`enabled`) of the `scheduling` section and of an `instances[]` entry's `scheduling` member (SS-4, Alice's ruling 105 A, Runtime 0.12.34): `scheduling.no_progress.enabled` (default `true`) and `instance.<instance id>.scheduling.no_progress.enabled` (default the section's), whether a pair whose latest successful run made no progress waits for a reading of another value (`policy_no_progress`; [scheduling/README.md](scheduling/README.md), "No-progress guard"); settable, read at every evaluated policy cycle ([runtime-config.md](runtime-config.md), "No-progress guard"). Additive: a Runtime before SS-4 refuses a file that names either member, because the section and the entry deny unknown members; a file that names neither keeps its revision, so the Runtime still reads revisions 5 to 22 and declares [5, 23] | `crates/runtime-config/src/scheduling.rs`, `NoProgressFile`; `crates/runtime-config/src/instance.rs`; `distribution/windows/actingd.defaults.json`; `distribution/windows/component-interfaces.json` |
 | `install-selection` | containment | acsetup writes `install/active.json`; actingd, actingctl, the Tools, acui and the fixed entries (acforward) read it | 1 | `actingcommand.install-selection.v1` | `crates/actingcommand-contract/src/installation.rs`, `INSTALL_SELECTION_SCHEMA` |
+| | | from revision 2 `actingctl install` is its one writer; actingd, actingctl (with the watchdog and MCP), the MCP entry g2, the Runtime's fixed entries ([stable-entry.md](stable-entry.md)) and acui read it | 2 | `actingcommand.install-selection.v2` with the slot document `actingcommand.install-slot.v1` (Workflow #429 R-15b, frozen, `since` 0.12.35; `contracts/v012-register.md` §1.237; [install-cli.md](install-cli.md), "The A/B layout"): one selection of a slot and its three members (the Runtime, the Tools of the same build, the UI), no configuration, no provider and no configuration generation (the one file configuration is `<root>\actingd.config.json`). The contract crate parses and checks it from 0.12.35 and nothing reads it yet. Declared from R-15c by the Runtime, the Tools and so the entries [2, 2] (`distribution/windows/component-interfaces.json`), and from UI-2e1 by the UI [2, 2] in the same UI commit as its manifest's `installation_selection_schema` v2 (Parse rules). No v1 reader is kept (test phase, Alice 10-11) | `crates/actingcommand-contract/src/installation/selection_v2.rs`, `INSTALL_SELECTION_V2_SCHEMA`, `InstallSelectionV2`, `InstallSlotDocument` |
 | `install-control` | negotiation | acsetup drives a shutdown and a start; actingd answers | 0 | cold: `actingctl request-shutdown --wait`, and a start without `--install-held` | `apps/actingctl`, `request-shutdown` |
 | | | | 1 | the Host installation transition (#352): `begin_drain`, `query`, `commit_shutdown`, `--install-held`, `release` | `crates/actingcommand-contract/src/installation.rs`, `InstallTransitionAction` |
 | `ledger` | containment | actingd writes the GlobalLedger; later and earlier Runtimes, the Tools and the console read it | 1 | GlobalLedger SQLite format 1, `actingcommand.event.v2`, and every record that Runtimes v0.11.0 to v0.11.2 write and their readers accept | `crates/ledger/src/global/sqlite.rs`, `FORMAL_FORMAT_VERSION`; `crates/actingcommand-contract/src/event.rs`, `GLOBAL_EVENT_SCHEMA_VERSION` |
@@ -141,6 +142,9 @@ writes the configuration, the console edits it, and actingd reads it.
 | | | | 1 | `actingcommand.outcome.v1` envelopes with codes from `contracts/outcome-codes.json` (Workflow #378, model-378 §10; Runtime v0.12.0): actingd's `OUTCOME actingd:` lines (A6a); the v2 reports of check-config, ledger-maintenance, unlock-owner and suspended (A6a); actingctl's one stdout line per exit, the watchdog report v2 and `state.json` v2, and the MCP tool error `{class, outcome}` (A5); every process exits by the top outcome's category, 0, 1 or 2 | `crates/actingcommand-contract/src/outcome.rs`, `OUTCOME_SCHEMA_VERSION` |
 | `player-hold` | containment | actingd writes the runtime fact `host.player_hold`; a later and an earlier Runtime read it at their start | 1 | `host.player_hold` rows (Workflow #429 R-7b; `contracts/v012-register.md` §1.233; [player-hold.md](player-hold.md), "Persistence and restart"): one per hold, restored `held`. Declared from R-7b in the `speaks` of `component-interfaces.json`; R-7a declares nothing. Only #421's `player_holds` guard checks it, while a hold exists: the Runtime/Tools build an operation switches to must hold 1 (an undeclared build counts [0, 0]); it is not part of the rollback gate's `interface_edges`, and the console does not declare it | `crates/runtime-host`, `host.player_hold` (R-7b) |
 | `tools-layout` | derived | never declared | 1, 2, 3 | the Tools manifest's `tools_payload_layout`: `platform-tools-v1` is 1, `platform-tools-v2` is 2, `platform-tools-v3` (layout 2 plus `actingwatch.exe`, #374; from Runtime v0.11.6 without the retired `actingcommand-device-test.exe`, which no reader requires) is 3 | `.github/workflows/windows-remote-build.yml` |
+| | | | 4 | layout 3 plus the two fixed entry programs `actingcommand-entry.exe` and `actingcommand-entry-gui.exe` ([stable-entry.md](stable-entry.md); Workflow #429, frozen by R-15b, shipped by R-15c). An A/B operation's T\* holds at least 4, else `interface_edge` ("A/B roots" below); a slot is the program core only, which the layout-2 rule of "new slot" no longer needs to say | same |
+| `install-cli` | containment | the installer (`actingctl install`) and the fixed entries (party F) write; the UI reads | 1 | the face the UI reads and writes (Workflow #429, frozen by R-15b, `since` 0.12.35; [install-cli.md](install-cli.md), "The A/B layout", "The read face"; design §3.12, §6.4): the command forms of `actingctl install` with the read-only `--hold`, the forms `apply_form`, `restart_form`, `start_form` and the `blocked_by` table, the answer members and registered words of background operations, the read face, the clean and `install restart`, the step-kind table, `install\installer.json` (with `recovery_ui`), the release-facts file the UI writes, the graphical entry's exit codes, its stdout line and `--entry-report`, and the UI's duty to support `acui.exe --recovery --root <root>`. `convert` (R-15e) and `install config` / `install instance` (#421 INST-3, INST-5) join revision 1 without a raise: commands an older UI never calls, which a build without them answers `actingctl_usage_invalid`. A new interface: a component that does not declare it counts [0, 0] (Parse rules). Declared by the Runtime [1, 1] from R-15d and by the UI [1, 1] from UI-2a. Raised only when the UI of revision 1 cannot read or do what changed; the installers' private files are `install-root`'s | `contracts/install-cli.md`; `distribution/windows/component-interfaces.json` (from R-15d) |
+| `install-root` | containment, private | installers write and read it; the UI and the entries never take part | 1 | the installers' private files of an A/B root (Workflow #429, frozen by R-15b; design §3.13, §6.4): `actingcommand.install-state.v2` and its `root_format`, `actingcommand.install-operation.v2` with its attempt and spawn records, `install\selections\`, `actingcommand.install-slot.v1`, the registry of `install\cleaning\` and the health files `install\health\`. Only the Runtime declares it ([1, 1] from R-15c); an undeclared build counts [0, 0]. It is raised when an older installer can no longer read what a newer one wrote; the root's `root_format` must lie in the running installer's range, which is also the entry condition of `install\installer.json`'s list | `contracts/install-cli.md`; `distribution/windows/component-interfaces.json` (from R-15c) |
 
 The console reads no package, so it is not a `package` reader. What a pack's run
 records is covered by `ledger` and `runtime-client`.
@@ -275,7 +279,10 @@ Every v1 reader applies these rules:
   interface: a component that does not declare it is taken as [0, 0].
 - A UI manifest's `installation_selection_schema` must agree with its
   `install-selection` range: `actingcommand.install-selection.v1` requires
-  revision 1 in the range.
+  revision 1 in the range, and in general `actingcommand.install-selection.v<N>` requires N in
+  it (v2 from UI-2e1). Since 0.12.35 `actingctl install release verify` and `stage` refuse a UI
+  build that breaks this, or names no schema, with the release check `selection_schema_mismatch`
+  (Workflow #429 R-15b; [install-cli.md](install-cli.md), "Release verify and stage").
 
 ## Releases without a declaration (the known table)
 
@@ -370,6 +377,40 @@ replacement for that verification.
 The fixed entries in `<root>\runtime\` and `<root>\ui\` (acforward) read
 `install/active.json`. An A/B upgrade replaces them with the release's
 acforward whenever their bytes differ, so they read what the release's UI reads.
+From R-15c the entries are the Runtime's own forwarders ([stable-entry.md](stable-entry.md)),
+refreshed only forward by `actingctl install` (party F below).
+
+### A/B roots of `actingctl install` (Workflow #429, frozen by R-15b; built by R-15c to R-15e)
+
+The A/B layout of [install-cli.md](install-cli.md) ("The A/B layout") has its writer in
+`actingctl install`; acsetup's A/B checks above remain for the roots it made. Two parties join
+I, Rp, R\*, U\*, B and C (design §2.7):
+
+| Party | Meaning |
+|---|---|
+| T\* | the Tools member that runs after the operation; it speaks what R\* speaks |
+| F | the Tools build whose forwarders are the root's fixed entries after the operation |
+
+| Interface | Check | Since |
+|---|---|---|
+| `install-selection` | containment: I.max ∈ R\*, ∈ U\* and ∈ F (they read the v2 selection I writes); a single-location root keeps no edge | new |
+| `tools-layout` | T\* is at least 4 (it carries the forwarders), else `interface_edge`; it replaces the "new slot" row's layout rule | new |
+| `pairing` | R\*.commit = T\*.commit and the same repository | new |
+| `speaks` | R\* and T\* declare the same `speaks` | as before |
+| `ledger`, `runtime-outcomes`, `install-control`, `runtime-client`, `package`, `actingd-config` | as for an update or rollback of a single-location root ([install-cli.md](install-cli.md), "Interface checks") | as before |
+| the U\* edges | as [install-cli.md](install-cli.md), "UI edges" (R-15a's rows, which R-15d adds to these plans) | R-15a |
+| `install-cli` | only for a UI that drives the installer: when U\*'s `install-cli` max is above 0, the `installers` list after the operation holds an installer whose `install-cli` max ∈ U\*, and F's `install-cli` max ∈ U\* (U\* reads the graphical entry's exit code and line); `interface_edge` otherwise, its `values` naming the `installers` and the `entry` result. A U\* that declares none ([0, 0], UI-2e1) is `not_applicable` with `values.reason` `ui_drives_no_installer`; a GUI that drives a conversion from outside the root is no U\* and picks from the list by its own range | new |
+| `install-root` | containment: the root's private revision after the operation (`state.json`'s `root_format`) ∈ I's `install-root`; the same rule admits an installer to `install\installer.json`. Only the Runtime declares it | new |
+| `player-hold` | while any player hold exists (any phase), the R\* that runs after the operation (with its T\*) declares `player-hold` holding 1; an undeclared one counts [0, 0]. R\* is the active selection's Runtime for `stop`, `start` and `restart` and the target for `update`, `rollback` (and their undo) and `convert`; an operation that changes only the UI and does not stop the Runtime is not judged; no acknowledgment passes it (Workflow #429 R-7a, [player-hold.md](player-hold.md); [install-cli.md](install-cli.md), guard `player_holds`) | new |
+
+| Operation | R\*, T\*, U\* | Rp | F |
+|---|---|---|---|
+| fresh root (`install new`) | the three new members | none | the forwarders of the new T\* |
+| conversion | the live build (R = T) and the staged UI | the live build | the forwarders of the live build's Tools |
+| update of the Runtime pair, or of all three | the candidate | the active selection's Runtime | the refreshed entries |
+| update of the UI alone | R\* = Rp, a new U\* | the active selection's Runtime | as before |
+| rollback, automatic rollback | the previous selection's members | the active selection's Runtime | the entries in place (never lowered) |
+| `install restart` | R\* = Rp = the active selection's Runtime; no member changes and only the `player-hold` row is judged | the active selection's Runtime | the entries in place |
 
 ### No Runtime rollback across `ledger` 2
 

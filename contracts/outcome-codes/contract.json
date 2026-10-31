@@ -8737,6 +8737,106 @@
       "common_causes": "A launcher that passes an empty or cut variable, or the variable set by hand.",
       "handling": "Start the program through the installation's launcher, or clear ACTINGCOMMAND_INSTALL_ROOT and ACTINGCOMMAND_INSTALL_SELECTION so that it reads install\\active.json."
     },
+    "install_selection_v2_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "An install selection v2 parses but breaks a rule of its own: schema_version is not exactly actingcommand.install-selection.v2, selection_id is not sel- and 1 to 20 digits, generation is 0 or not the baseline's plus 1, or made_by is not op- and digits (Workflow #429 R-15b, contracts/install-cli.md, \"The A/B layout\").",
+      "common_causes": "A selection written by another build, or edited by hand.",
+      "handling": "Do not edit install\\active.json; the installer writes it."
+    },
+    "install_slot_document_mismatch": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "An install selection v2's slot_document is not <slot>/SLOT.json of the slot it selects, or a slot document's slot or members differ from the selection's (Workflow #429 R-15b).",
+      "common_causes": "A selection or SLOT.json edited by hand, or put together from two roots.",
+      "handling": "Do not edit the slot or the selection; the installer prepares and commits them."
+    },
+    "install_member_identity_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "A member identity of an install selection v2 or a slot document breaks its form: a repository that is not owner/name, a commit that is not 40 lowercase hex digits, a manifest_sha256 that is not 64, a tag over 128 visible characters, or a slot member's source, files or bytes out of form (Workflow #429 R-15b).",
+      "common_causes": "A selection or SLOT.json edited by hand.",
+      "handling": "Do not edit them; the installer writes them."
+    },
+    "install_member_pairing_mismatch": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "An install selection v2's runtime and tools members name different repositories or commits: a Runtime is selected only with the Tools of its own build (Workflow #429 R-15b).",
+      "common_causes": "A selection edited by hand, or put together from two builds.",
+      "handling": "Do not edit install\\active.json; the installer pairs the members."
+    },
+    "install_slot_document_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "A slot document (<slot>\\SLOT.json, actingcommand.install-slot.v1) is empty or larger than 64 KiB, does not parse, has an unknown, missing or mistyped member, or its schema_version or prepared_by breaks its form (Workflow #429 R-15b).",
+      "common_causes": "SLOT.json damaged or edited by hand.",
+      "handling": "Do not edit a slot; prepare it again with the installer."
+    },
     "install_previous_transition_mismatch": {
       "category": "error",
       "ladder_class": "none",

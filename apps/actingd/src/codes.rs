@@ -163,6 +163,10 @@ actingcommand_contract::outcome_codes! {
         UnlockOwnerActorMissing => "unlock_owner_actor_missing": error / none,
         UnlockOwnerActorInvalid => "unlock_owner_actor_invalid": error / none,
         UnlockOwnerReportEncodeFailed => "unlock_owner_report_encode_failed": error / none,
+        // Workflow #429 R-15b (since 0.12.35; contracts/install-cli.md, "Start rules, the
+        // installer list and recovery"): unlock-owner refuses while the install root holds an
+        // unfinished installer operation. Registered here; R-15c emits it.
+        UnlockOwnerInstallUnfinished => "unlock_owner_install_unfinished": error / none,
         SuspendedUsageInvalid => "suspended_usage_invalid": error / none,
         SuspendedOptionInvalid => "suspended_option_invalid": error / none,
         SuspendedConfigMissing => "suspended_config_missing": error / none,

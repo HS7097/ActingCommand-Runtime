@@ -735,6 +735,13 @@ crate::outcome_codes! {
         InstallConfigGenerationMismatch => "install_config_generation_mismatch": error / none,
         InstallProviderGenerationMismatch => "install_provider_generation_mismatch": error / none,
         InstallSelectionSizeInvalid => "install_selection_size_invalid": error / none,
+        // Workflow #429 R-15b (since 0.12.35): the refusals of `InstallSelectionV2` and
+        // `InstallSlotDocument` (contracts/install-cli.md, "The A/B layout").
+        InstallSelectionV2Invalid => "install_selection_v2_invalid": error / none,
+        InstallSlotDocumentMismatch => "install_slot_document_mismatch": error / none,
+        InstallMemberIdentityInvalid => "install_member_identity_invalid": error / none,
+        InstallMemberPairingMismatch => "install_member_pairing_mismatch": error / none,
+        InstallSlotDocumentInvalid => "install_slot_document_invalid": error / none,
         InstallPreviousTransitionMismatch => "install_previous_transition_mismatch": error / none,
         InvalidInstallTransitionStatus => "invalid_install_transition_status": error / none,
         InvalidInstallTimeout => "invalid_install_timeout": error / none,

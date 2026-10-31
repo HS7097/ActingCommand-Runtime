@@ -1,0 +1,171 @@
+{
+  "owner": "actingcommand-entry",
+  "codes": {
+    "entry_launched": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "actingcommand-entry",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "child_pid": "required",
+        "child_state": "required",
+        "child_exit_code": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "The graphical fixed entry started its target: after at most 10 seconds the child still runs (child_state running) or exited 0 (exited, child_exit_code 0). Exit 0 (stable-entry.md).",
+      "common_causes": "The entry did its work.",
+      "handling": "None."
+    },
+    "entry_selection_unavailable": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingcommand-entry",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "A fixed entry read no usable install\\active.json: it is missing, cannot be read or breaks install-selection v2; nothing was started. Exit 1 (stable-entry.md).",
+      "common_causes": "An A/B root whose pointer is missing or damaged.",
+      "handling": "Open the recovery UI or run an installer's install status for the root."
+    },
+    "entry_selection_inherited_stale": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingcommand-entry",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "inherited_sha256": "required",
+        "active_sha256": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "A fixed entry inherited an install selection that differs from install\\active.json; it refuses for every entry rather than follow an old selection. Exit 1 (stable-entry.md).",
+      "common_causes": "A caller that did not clear ACTINGCOMMAND_INSTALL_ROOT and ACTINGCOMMAND_INSTALL_SELECTION.",
+      "handling": "Start the entry with both variables cleared."
+    },
+    "entry_target_not_in_member": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingcommand-entry",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "entry": "required",
+        "install_member": "required",
+        "commit_sha": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "The selected member's manifest does not list the entry's program name; nothing was started. Exit 1 (stable-entry.md).",
+      "common_causes": "A member without that program, or a rollback to a version without it.",
+      "handling": "Use a program the selected member carries."
+    },
+    "entry_target_modified": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingcommand-entry",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "expected_sha256": "optional",
+        "actual_sha256": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "The target program's size or SHA-256 differs from its member's manifest; nothing was started. Exit 1 (stable-entry.md).",
+      "common_causes": "A slot file changed after it was placed.",
+      "handling": "Prepare the slot again with the installer."
+    },
+    "entry_operation_unfinished": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingcommand-entry",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "install_operation_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "The actingd entry refused to start the Runtime: an installer operation that row 7a'' stands aside for is unfinished, and the start does not carry its ACTINGCOMMAND_INSTALL_OPERATION. Exit 1 (stable-entry.md).",
+      "common_causes": "An old Startup-folder launcher or a person starting the Runtime in the middle of an update.",
+      "handling": "Run actingctl install resume or install undo for the operation."
+    },
+    "entry_layout_unknown": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingcommand-entry",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "entry": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "The entry does not lie under <root>\\runtime\\ or <root>\\ui\\, or the root is no A/B root. Exit 1 (stable-entry.md).",
+      "common_causes": "A copy of the entry outside an A/B root.",
+      "handling": "Run the entry of an A/B root."
+    },
+    "entry_spawn_failed": {
+      "category": "fatal",
+      "ladder_class": "none",
+      "owner": "actingcommand-entry",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "program": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "The entry could not start its target; the OS's failure is the caused_by link. Exit 2 (stable-entry.md).",
+      "common_causes": "The target cannot be executed, or access is denied.",
+      "handling": "Check the slot and the OS's failure; prepare the slot again when it repeats."
+    },
+    "entry_child_failed_early": {
+      "category": "fatal",
+      "ladder_class": "none",
+      "owner": "actingcommand-entry",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "child_pid": "required",
+        "child_exit_code": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "The graphical entry's child exited non-zero within 10 seconds. Exit 2 (stable-entry.md).",
+      "common_causes": "The program failed at its start.",
+      "handling": "Read the program's own log and the entry's fixed log."
+    },
+    "entry_report_done": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingcommand-entry",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "--entry-report printed the entry's identity line and started nothing. Exit 0 (stable-entry.md).",
+      "common_causes": "The report was asked for.",
+      "handling": "None."
+    }
+  }
+}

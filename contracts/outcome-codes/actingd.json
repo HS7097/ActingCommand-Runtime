@@ -1572,6 +1572,22 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "unlock_owner_install_unfinished": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingd",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "install_operation_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "actingd unlock-owner refused: the install root holds an unfinished installer operation (install\\current.json, install_operation_id when it names one), whose undo and rollback gate judge whether a Runtime started since by the owner record (Workflow #429 R-15b frozen, R-15c builds it; contracts/install-cli.md).",
+      "common_causes": "An installer operation interrupted mid-way.",
+      "handling": "Finish or undo the installer operation (actingctl install resume or undo), then unlock."
+    },
     "suspended_usage_invalid": {
       "category": "error",
       "ladder_class": "none",
