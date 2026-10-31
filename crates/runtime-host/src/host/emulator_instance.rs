@@ -847,6 +847,17 @@ impl HostShared {
         configured: bool,
     ) -> Result<EmulatorControlDriven, FailedControl> {
         let control_request_id = key.request.request_id();
+        // Workflow #429 R-0b (register §1.238): the control shows while it drives, on its own
+        // claim's key; its guard drops however the drive returns.
+        let _activity = self
+            .begin_instance_activity(
+                resolved.instance_id(),
+                super::instance_activity::ActivityStart::EmulatorControl {
+                    request_id: control_request_id,
+                    key: super::instance_activity::KeyHold::Own,
+                },
+            )
+            .map_err(RequestFailure::poison_without_terminal)?;
         let instance_guard = self.instance_guard(resolved.instance_id())?;
         let admission = lock(&instance_guard, HostLocation::LockInstanceAdmission)?;
         // emu-watch: an autostart claim's configured start is no operator's: a pause does not
@@ -891,6 +902,17 @@ impl HostShared {
         let instance_id = resolved.instance_id();
         let instance_alias = resolved.instance_alias.as_str();
         let control_request_id = key.request.request_id();
+        // Workflow #429 R-0b (register §1.238): the restart shows as one control across both
+        // phases, on its own claim's key; its guard drops however the restart returns.
+        let _activity = self
+            .begin_instance_activity(
+                instance_id,
+                super::instance_activity::ActivityStart::EmulatorControl {
+                    request_id: control_request_id,
+                    key: super::instance_activity::KeyHold::Own,
+                },
+            )
+            .map_err(RequestFailure::poison_without_terminal)?;
         let instance_guard = self.instance_guard(instance_id)?;
         let admission = lock(&instance_guard, HostLocation::LockInstanceAdmission)?;
         let stop_started = Instant::now();
@@ -1058,6 +1080,17 @@ impl HostShared {
         admission: &MutexGuard<'_, ()>,
         key: &mut HostKey,
     ) -> Result<EmulatorControlDriven, RequestFailure> {
+        // Workflow #429 R-0b (register §1.238): the rung's control runs on the ladder's key, so
+        // the ladder still shows while it drives.
+        let _activity = self
+            .begin_instance_activity(
+                resolved.instance_id(),
+                super::instance_activity::ActivityStart::EmulatorControl {
+                    request_id: control_request_id,
+                    key: super::instance_activity::KeyHold::Borrowed,
+                },
+            )
+            .map_err(RequestFailure::poison_without_terminal)?;
         match self.drive_control_phase(
             resolved,
             links.clone(),

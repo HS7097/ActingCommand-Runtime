@@ -42,6 +42,7 @@ use actingcommand_contract::{
     ConfiguredSetting, FactScalar, RuntimeConfigManifest, config_parameter_section,
 };
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The `host.config_overrides` row field naming the overridden key.
@@ -958,6 +959,43 @@ impl EffectiveConfig {
             .collect()
     }
 
+    /// Workflow #429 R-4 (A.6 rule 2; register §1.239; since 0.12.36): the version token of the
+    /// configuration in effect, the `config_version` that `SettingsConfigured` and the read points
+    /// answer and the `expected_version` of the next `ConfigureSettings`. It is the first 63 bits
+    /// of the SHA-256 of every key in effect in manifest order (its key, value, source and whether
+    /// it is settable) followed by the `host.config_overrides` rows of the instruction values in
+    /// effect (every field, the stamps included), each part length-prefixed. So two
+    /// configurations have one token exactly when they hold the same values from the same sources
+    /// over the same instruction rows: a committed change gives another token (its row's stamp at
+    /// the least), and a start that restores the same rows over the same file layer gives the token
+    /// the previous start ended with. It is opaque: equal or not is all it says, never an order,
+    /// never a ledger position.
+    pub fn version(&self) -> u64 {
+        let mut digest = Sha256::new();
+        digest.update(CONFIG_VERSION_DOMAIN);
+        let parameters = self.manifest().parameters;
+        put_count(&mut digest, parameters.len());
+        for parameter in &parameters {
+            put_text(&mut digest, &parameter.key);
+            put_scalar(&mut digest, &parameter.value);
+            put_text(&mut digest, parameter.source.as_str());
+            digest.update([u8::from(parameter.settable)]);
+        }
+        let rows = self.override_rows();
+        put_count(&mut digest, rows.len());
+        for row in &rows {
+            put_count(&mut digest, row.len());
+            for (field, value) in row {
+                put_text(&mut digest, field);
+                put_scalar(&mut digest, value);
+            }
+        }
+        let bytes = digest.finalize();
+        let mut head = [0_u8; 8];
+        head.copy_from_slice(&bytes[..8]);
+        u64::from_be_bytes(head) & CONFIG_VERSION_MASK
+    }
+
     /// Restores the instruction values of a recorded `host.config_overrides` at start
     /// (§5.6, §5.7, §12 question 3: the later change wins), and returns one note per value not
     /// restored as it was:
@@ -1117,6 +1155,47 @@ impl EffectiveConfig {
     fn drop_unset_unwritten(&mut self) {
         self.settings
             .retain(|setting| setting.file_value.is_some() || setting.instruction.is_some());
+    }
+}
+
+/// Workflow #429 R-4: the first bytes of the configuration version's digest, so that no other
+/// digest of the same bytes is read as one.
+const CONFIG_VERSION_DOMAIN: &[u8] = b"actingcommand.config_version.v1\n";
+/// Workflow #429 R-4: the token keeps 63 bits, so it is a non-negative integer of every outcome
+/// value and JSON reader (`current_version` is an outcome `integer`).
+const CONFIG_VERSION_MASK: u64 = u64::MAX >> 1;
+
+/// Workflow #429 R-4: a count of the version's digest, as eight bytes.
+fn put_count(digest: &mut Sha256, count: usize) {
+    digest.update(u64::try_from(count).unwrap_or(u64::MAX).to_be_bytes());
+}
+
+/// Workflow #429 R-4: a text of the version's digest, its byte length first.
+fn put_text(digest: &mut Sha256, text: &str) {
+    put_count(digest, text.len());
+    digest.update(text.as_bytes());
+}
+
+/// Workflow #429 R-4: a scalar of the version's digest, its kind first.
+fn put_scalar(digest: &mut Sha256, value: &FactScalar) {
+    match value {
+        FactScalar::Boolean(value) => digest.update([1, u8::from(*value)]),
+        FactScalar::Integer(value) => {
+            digest.update([2]);
+            digest.update(value.to_be_bytes());
+        }
+        FactScalar::String(value) => {
+            digest.update([3]);
+            put_text(digest, value);
+        }
+        FactScalar::TimestampMs(value) => {
+            digest.update([4]);
+            digest.update(value.to_be_bytes());
+        }
+        FactScalar::DurationMs(value) => {
+            digest.update([5]);
+            digest.update(value.to_be_bytes());
+        }
     }
 }
 

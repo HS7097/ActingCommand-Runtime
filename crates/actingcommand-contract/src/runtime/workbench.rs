@@ -129,7 +129,10 @@ pub struct RoutineSummaryFailure {
 
 /// What an instance does now (`RuntimeInstanceStatus.activity`), kept in memory, never read
 /// from the ledger: the console's second progress line and its stop button. Absent while the
-/// instance does none of these, and until the slice that fills each kind.
+/// instance does none of these. Workflow #429 R-0b (register §1.238, 0.12.36) fills every kind;
+/// `policy_run` and `direct_run` always carry `request_id` and `package_id`; while an instance
+/// does several at once, the one that took its key shows, then the one that began last
+/// (`contracts/runtime-interface.md`, "What an instance does now").
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InstanceActivity {

@@ -571,6 +571,20 @@ tests = [
 ]
 incident = ["#429 R-2"]
 
+# Workflow #429 R-4 (0.12.36; brief rd-1031/brief-r4.md; register §1.239; contracts/runtime-config.md, "ConfigureSettings", "Restore at start" and "Console tiers"; design rd-1029/429-A-runtime.md A.6 rules 2, 3, 5, 7 and 8), on the fixed clock: a ConfigureSettings at the settings' current version applies and its receipt carries the new version, another one, at which the next change applies (T1); at another version it is Denied fact_observation_version_conflict with fact_key host.config_overrides and current_version the version now, which a codes-mode receipt keeps, recorded as command.rejected only, with nothing changed: value, config.parameters, host.config_overrides, version (T2); without expected_version the last writer wins after another client's change (T3); over the shipped configuration one change of each key the console shows that an instruction sets, and a clear, leaves every other key's value in effect, source and settable and every other instruction row as it was (T4); ui_tier key by key against the contract table, every other key hidden, the table's rows key-table rows, six advanced of at most eight (T5); a fixed sample of a later release's host.config_overrides, one known key and one this build does not have: the start drops the unknown into StartReport.instructions_dropped with config_override_dropped and restores the known (T6); the runtime fact snapshot answers the last receipt's version, also after a restart over the same file (T7)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_387_d1b::r4_t1_the_current_expected_version_applies_and_the_receipt_carries_the_new_version",
+    "actingcommand-runtime-host::lib::tests::gate_387_d1b::r4_t2_another_expected_version_is_refused_as_a_version_conflict_and_changes_nothing",
+    "actingcommand-runtime-host::lib::tests::gate_387_d1b::r4_t3_a_change_without_expected_version_applies_as_before_the_last_writer_wins",
+    "actingcommand-runtime-config::lib::r4_tests::r4_t4_changing_one_key_leaves_every_other_key_s_value_and_source_as_it_was",
+    "actingcommand-runtime-config::lib::r4_tests::r4_t5_ui_tier_key_by_key_and_an_unlisted_key_is_hidden",
+    "actingcommand-runtime-host::lib::tests::gate_387_d1b::r4_t6_a_key_this_runtime_does_not_know_is_dropped_at_start_into_instructions_dropped",
+    "actingcommand-runtime-host::lib::tests::gate_387_d1b::r4_t7_the_snapshot_answers_the_last_receipt_s_version_also_after_a_restart",
+]
+incident = ["#429 R-4"]
+
 # The recovery ladder by configuration: the section's whole-section check at start and through an instruction, what the default trigger items match, the record shapes, the rules that stay in code and the five that switch, direction one's count, and a routine failure that climbs by its trigger item, its rungs and the snapshot it was admitted with (Workflow #387 D1c)
 [[gate]]
 key = "53"
@@ -962,13 +976,27 @@ tests = [
 ]
 incident = ["#389 U-2"]
 
-# Workflow #429 R-0 (0.12.30; register §1.213): each workbench kind without behaviour (RunInstanceTask, StopInstanceRun, EditPackSchedule, EditResourceTarget, RoutineSummary), and a ConfigureSettings naming expected_version or an ApplyResourceTargets naming expected_version, is Denied not_implemented naming its operation, as LoadPack is before U-3, appends nothing to the ledger and changes no instance's status (no activity is filled yet)
+# Workflow #429 R-0 (0.12.30; register §1.213): each workbench kind without behaviour (RunInstanceTask, StopInstanceRun, EditPackSchedule, EditResourceTarget, RoutineSummary), and an ApplyResourceTargets naming expected_version, is Denied not_implemented naming its operation, as LoadPack is before U-3, appends nothing to the ledger and changes no instance's status (no activity is filled yet); a ConfigureSettings naming expected_version has its behaviour since Workflow #429 R-4 (0.12.36, register §1.239) and left this row
 [[gate]]
 coverage = "Y"
 tests = [
     "actingcommand-runtime-host::lib::tests::gate_429_r0::r0_each_workbench_kind_without_behaviour_answers_not_implemented_with_no_effect",
 ]
 incident = ["#429 R-0"]
+
+# Workflow #429 R-0b (0.12.36; register §1.238; contracts/runtime-interface.md, "What an instance does now"): Status carries RuntimeInstanceStatus.activity from the host's memory. Read through Status while each runs: a direct run shows direct_run with the client's request, its package_id and since_unix_ms from the fake clock at its grant, and is gone after a success, a failure and a cancel, while an instance that does nothing has no activity key; a policy run shows policy_run with the request it runs as and its package_id; its ladder shows ladder, also while the ladder's emulator restart on the ladder's key is registered beside it (the key holder first), and nothing is registered after the ladder; a self-check shows selfcheck with its request, a resume's reconnect reconnect with the resume's request, an operator's Start emulator_control with its request, each gone after it. The table on its own: each of the seven kinds with its members (policy_run and direct_run with request_id and package_id) and gone when its guard drops; a success, a failure, a cancel, an unwinding thread and the end of the threads that hold them clear it; the key holder shows before an activity on a borrowed key, then the one that began last, whatever the clock reads; the member is built from the table alone, with no ledger in existence and no ledger handle in the table
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_429_r0b::r0b_a_direct_run_shows_its_request_and_package_and_every_end_clears_it",
+    "actingcommand-runtime-host::lib::tests::gate_429_r0b::r0b_a_policy_run_shows_then_its_ladder_shows_over_the_restart_on_its_key",
+    "actingcommand-runtime-host::lib::tests::gate_429_r0b::r0b_a_self_check_a_reconnect_and_an_emulator_control_show_while_they_hold_the_key",
+    "actingcommand-runtime-host::lib::host::instance_activity::tests::r0b_each_kind_carries_its_members_and_policy_and_direct_runs_their_request_and_package",
+    "actingcommand-runtime-host::lib::host::instance_activity::tests::r0b_every_end_clears_the_activity",
+    "actingcommand-runtime-host::lib::host::instance_activity::tests::r0b_the_status_member_is_built_from_the_table_alone_without_any_ledger",
+    "actingcommand-runtime-host::lib::host::instance_activity::tests::r0b_the_key_holder_shows_then_the_activity_that_began_last",
+]
+incident = ["#429 R-0b"]
 
 # Workflow #429 R-0c (0.12.30; register §1.216): PackScheduleView, a general read without behaviour until R-8, is Denied not_implemented naming pack_schedule_view, with no result and no terminal, appends nothing to the ledger and changes no instance's status
 [[gate]]

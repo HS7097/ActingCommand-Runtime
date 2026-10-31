@@ -2,15 +2,17 @@
 
 // Workflow #429 R-0 (register §1.213; contracts/runtime-interface.md, "Workbench request
 // kinds"): the player workbench's request kinds have their wire shapes and no behaviour yet.
-// Each, and a ConfigureSettings or ApplyResourceTargets that names its new version member, is
-// refused `not_implemented` (Denied) naming its operation, as LoadPack is before U-3, and has no
-// effect: nothing is appended to the ledger and no instance's status changes.
+// Each, and an ApplyResourceTargets that names its new version member, is refused
+// `not_implemented` (Denied) naming its operation, as LoadPack is before U-3, and has no effect:
+// nothing is appended to the ledger and no instance's status changes. Workflow #429 R-4 (register
+// §1.239, since 0.12.36) gives `ConfigureSettings.expected_version` its behaviour, so that case
+// left this test (`gate_387_d1b`, `r4_t*`).
 
 use super::gate_383_ao4q::ledger_head;
 use super::*;
 use actingcommand_contract::{
-    ConfigSettingChange, FactScope, PackScheduleEditRow, ResourceTargetEdit,
-    RoutineSummaryGranularity, RuntimeInstanceStatus,
+    FactScope, PackScheduleEditRow, ResourceTargetEdit, RoutineSummaryGranularity,
+    RuntimeInstanceStatus,
 };
 use serde_json::json;
 
@@ -97,16 +99,6 @@ fn r0_each_workbench_kind_without_behaviour_answers_not_implemented_with_no_effe
                 since_revision: None,
             }),
             "routine_summary",
-        ),
-        (
-            client.request(RuntimeOperation::ConfigureSettings {
-                changes: vec![ConfigSettingChange {
-                    key: "scheduling.parallel.enabled".to_owned(),
-                    value: Some(json!(true)),
-                }],
-                expected_version: Some(1),
-            }),
-            "configure_settings",
         ),
         (
             client.agent_request(RuntimeOperation::ApplyResourceTargets {

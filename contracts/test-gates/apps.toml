@@ -306,6 +306,14 @@ tests = [
 ]
 incident = ["#387"]
 
+# Workflow #429 R-4 (0.12.36; brief rd-1031/brief-r4.md; register §1.239; contracts/runtime-config.md, "ConfigureSettings"; contracts/runtime-interface.md, the command and tool tables), test 7, the counters' read points: on an in-process Runtime with a fixed clock, ac_config_set and then actingctl config set each answer the settings' version after their change, another each time, and MCP ac_facts scope config and actingctl status --config each answer that same config_version beside their records
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_429_r4::r4_t7_each_read_point_answers_the_version_the_last_receipt_carried",
+]
+incident = ["#429 R-4"]
+
 # actingctl, MCP and the watchdog speak outcomes: one result line per exit with its exit code by category, MCP errors {class, outcome}, watchdog report v2 and state.json v2 (Workflow #378 A5)
 [[gate]]
 key = "43"
@@ -1119,6 +1127,15 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::install::gate_r15a_ui_edges::r15a_t3_a_ui_declaration_without_runtime_outcomes_counts_as_zero_zero",
 ]
 incident = ["#429 R-15a"]
+
+# Workflow #429 R-0b (0.12.36; register §1.238; contracts/component-interfaces.md, the runtime-client revision-3 row): this build's own declaration (the file its manifests carry) speaks runtime-client [3, 4]; as R*, it pairs with a console of [3, 3], [3, 4] (the UI's v0.12.0 and v0.12.1) and [4, 4] with no failed edge, and refuses a console whose max is 2 with the existing failed ui_meets_next row, both sides named with their source and range, the only failed edge
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::install::gate_429_r0b_pairing::r0b_the_build_declares_runtime_client_three_to_four",
+    "actingcommand-actingctl::bin:actingctl::install::gate_429_r0b_pairing::r0b_a_console_at_three_or_four_pairs_and_one_whose_max_is_two_is_refused",
+]
+incident = ["#429 R-0b"]
 
 # Workflow #429 R-15b (0.12.35; register §1.237; design rd-1031/design-r15b-ab-v4.1.md §1.9, §7 R-15b, test E01's source checks; contracts/install-cli.md, "Release verify and stage"): a UI release (acui-windows-<commit>.zip and SHA256SUMS) verifies and stages into install\ui-builds\<commit>\{ui, release.json} with member ui, writes no state.json, a second stage is unchanged and an interrupted one is finished by resume to the same bytes; each UI failure is listed (the facts' repository, the manifest's commit, the file set, a file's digest, a declaration that breaks the parse rules or lacks a v1 interface, an installation_selection_schema outside the install-selection range or none, the facts' digest and commit) and the folder is unchanged; a zip the reader recognises as no release zip refuses zip_set by its name (beside a Runtime pair, beside a UI zip, at stage, which writes nothing), and a UI zip beside a Runtime pair or a second UI zip refuses zip_set naming every zip; the Runtime and Tools stage answers and keeps its build as before; every code and registered word of install-cli.md's and stable-entry.md's R-15b registry is in contracts/outcome-codes and this build's enums, R-7a's keys referenced, not registered again
 [[gate]]

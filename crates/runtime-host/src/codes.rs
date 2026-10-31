@@ -1668,6 +1668,8 @@ actingcommand_contract::outcome_locations! {
         BeginDestructiveApplication => "begin_destructive_application",
         BeginDestructiveInput => "begin_destructive_input",
         BeginDestructiveResourceClose => "begin_destructive_resource_close",
+        // Workflow #429 R-0b (register §1.238): an instance's activity begins (memory only).
+        BeginInstanceActivity => "begin_instance_activity",
         BeginPolicyWork => "begin_policy_work",
         BeginPreparationAttempt => "begin_preparation_attempt",
         BindChannel => "bind_channel",
@@ -2577,6 +2579,8 @@ pub(crate) mod test_spellings {
             InstallPpocrSealTestHook => "install_ppocr_seal_test_hook",
             InstallQueueOperationTestHook => "install_queue_operation_test_hook",
             InstallScheduledPolicyCheckpointTestHook => "install_scheduled_policy_checkpoint_test_hook",
+            // Workflow #429 R-0b: a test reads every activity an instance has registered.
+            InstanceActivitiesForTest => "instance_activities_for_test",
             InstanceAdmissionForTest => "instance_admission_for_test",
             InstanceClaimsForTest => "instance_claims_for_test",
             // #411 A51: a test latches a condition in the Runtime's fatal state.
@@ -2608,6 +2612,8 @@ pub(crate) mod test_spellings {
             ReadTestLeaseExpiryToken => "read_test_lease_expiry_token",
             ReadTestPerformanceContext => "read_test_performance_context",
             ReadTestReceipt => "read_test_receipt",
+            // Workflow #429 R-4: a test records a later Runtime's `host.config_overrides`.
+            RecordConfigOverridesForTest => "record_config_overrides_for_test",
             RecordContainedTaskCheckpointTestIdentity => "record_contained_task_checkpoint_test_identity",
             RecordFailureDetailForTest => "record_failure_detail_for_test",
             RecordTestLeaseExpiryCheckpoint => "record_test_lease_expiry_checkpoint",

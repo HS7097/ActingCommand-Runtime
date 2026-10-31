@@ -618,6 +618,9 @@ mod tests {
     // Workflow #427-B: ac_schedule answers the shared run limits with their numbers; ac_diagnose
     // lists a row they blocked at placement (follow-up, review L1).
     mod gate_427b;
+    // Workflow #429 R-4: ac_config_set, actingctl config set, ac_facts and status --config answer
+    // the settings' version of the last change.
+    mod gate_429_r4;
     mod gate_mcp19b;
     mod gate_mcp8;
     // Workflow #421 MCP-ENTRY, test row E-12: `mcp-config --entry` for the four clients.
