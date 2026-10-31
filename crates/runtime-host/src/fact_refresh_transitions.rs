@@ -17,9 +17,10 @@
 //!   its `fact_refresh_resolved`.
 //! - **Numbered.** Cycles and transitions are numbered from 1 per owner epoch (one recorder per
 //!   Runtime start), one by one; the transition number is never reset (A-5).
-//! - **An instance held at the cycle's start** (the closure's positions 1-2: an operator pause, a
-//!   holder, a waiting claim, a takeover cooldown) raises no demand that cycle (D2 model §3.4
-//!   step 1): its keys are not observed, so they keep their state and their wait goes on.
+//! - **An instance held at the cycle's start** (the closure's positions 1-2: a control gate, an
+//!   operator pause or, since Workflow #429 R-7a2, a #403 fence; a holder, a waiting claim, a
+//!   takeover cooldown) raises no demand that cycle (D2 model §3.4 step 1): its keys are not
+//!   observed, so they keep their state and their wait goes on.
 
 use crate::codes::HostCode;
 use actingcommand_contract::outcome::Outcome;

@@ -986,6 +986,19 @@ tests = [
 ]
 incident = ["#429 R-7a"]
 
+# Workflow #429 R-7a2 (0.12.35; register §1.234; design R-7a §2.6, §7.1 "R-7a2"): every word of control_gate_code is the registered runtime-host code the host maps it to and each effective code is a word; with the instance pause and the global pause the evaluation's reason and the admission's refusal are dispatch_paused_instance, under the global pause alone dispatch_paused_global; a fenced instance's candidate is Deferred dispatch_resource_fenced with no wake and no dispatch intent, an intent evaluated before the fence is refused dispatch_resource_fenced naming the instance, and its due clock slot is clock_slot_deferred at first sight; the device request that met the fence and the fence's record keep instance_resources_fenced; adding and lifting the global pause over an instance pause changes neither ScheduleExplanation's why nor its since_unix_ms; the fact refresh's gate is the evaluation's reason for every combination of the four gates
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_429_r7a2::r7a2_every_control_gate_code_word_is_the_runtime_host_code_it_maps_to",
+    "actingcommand-runtime-host::lib::tests::gate_429_r7a2::r7a2_both_pauses_defer_and_refuse_with_the_instance_pause_the_global_alone_with_its_own",
+    "actingcommand-runtime-host::lib::tests::gate_429_r7a2::r7a2_a_device_request_keeps_the_fence_code_and_an_earlier_intent_is_refused_resource_fenced",
+    "actingcommand-runtime-host::lib::tests::gate_429_r7a2::r7a2_a_fenced_instance_is_deferred_resource_fenced_and_its_slot_deferred_at_first_sight",
+    "actingcommand-runtime-host::lib::tests::gate_429_r7a2::r7a2_the_global_pause_over_an_instance_pause_changes_neither_why_nor_since",
+    "actingcommand-runtime-host::lib::tests::gate_429_r7a2::r7a2_the_fact_refresh_gate_is_the_evaluation_reason_for_every_combination",
+]
+incident = ["#429 R-7a2"]
+
 # Workflow #336 PKG-S3 (option 丙): a procedure binding names no package content and a dispatch records no package digest; a failure identity (format v2) names each package by its id hash and the content hash measured at settlement; a pause lifts once a package it names changes in place, measured at most once per scheduling.suspension.lift_check_min_interval_ms, without a restart; an unmeasurable package keeps the pause with lift_check_hash_unmeasured; a restart rebuilds the recorded hashes from the failure identity; the content hash is measured only at settlement and lift checks (M-PKG v1.1 §4.4 S3-T1 to S3-T6, S3-T8, S3-T9; S3-T7 stays with key 27's interrupted settlement row; key 74 is U-2's)
 [[gate]]
 key = "75"

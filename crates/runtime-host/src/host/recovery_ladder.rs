@@ -1457,8 +1457,7 @@ impl HostShared {
         facts: &mut LadderFacts,
     ) -> RuntimeHostResult<()> {
         facts.paused = lock(&self.scheduling_pause, HostLocation::GateRecoveryPause)?
-            .deferral_code(&pending.instance_alias)
-            .is_some();
+            .pauses(&pending.instance_alias);
         if ladder_invariants(facts).is_some() {
             return Ok(());
         }
@@ -1482,8 +1481,7 @@ impl HostShared {
         let mut facts = LadderFacts {
             shutdown: self.fatal.is_shutdown_requested(),
             paused: lock(&self.scheduling_pause, HostLocation::GateRecoveryPause)?
-                .deferral_code(&pending.instance_alias)
-                .is_some(),
+                .pauses(&pending.instance_alias),
             ..LadderFacts::PASSING
         };
         if ladder_invariants(&facts).is_none() {

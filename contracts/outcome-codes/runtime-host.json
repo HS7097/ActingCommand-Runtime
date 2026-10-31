@@ -606,7 +606,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A transient gate held back a due clock slot of a policy task on an instance (task_id, alias). An operator scheduling pause is recorded at first sight; a queue wait (a held instance, a retry backoff, an activity interval or any other deferral) or an unavailable instance only at an evaluation where the pair's activity window is closed, that is once the wait outlasted the window. gate_code is the gate's own code. Recorded once per task, instance and occurrence as a goal_missed planning signal whose signal_id is signal:clock_slot:deferred:<sha256 of task, alias and occurrence>; it carries the same values as clock_slot_refused. A later refusal of the same occurrence because its window closed is not recorded.",
+      "description": "A transient gate held back a due clock slot of a policy task on an instance (task_id, alias). A control gate (an operator scheduling pause; since 0.12.35 a #403 resource fence, dispatch_resource_fenced, Workflow #429 R-7a2, register section 1.234) is recorded at first sight; a queue wait (a held instance, a retry backoff, an activity interval or any other deferral) or an unavailable instance only at an evaluation where the pair's activity window is closed, that is once the wait outlasted the window. gate_code is the gate's own code. Recorded once per task, instance and occurrence as a goal_missed planning signal whose signal_id is signal:clock_slot:deferred:<sha256 of task, alias and occurrence>; it carries the same values as clock_slot_refused. A later refusal of the same occurrence because its window closed is not recorded.",
       "common_causes": "An operator paused scheduling across the slot; another claim held the instance until the activity window closed; the instance stayed unavailable until the window closed.",
       "handling": "Nothing to repair for an operator pause. For a wait that outlasted the window, check what held the instance (actingctl status) or why it stayed unavailable."
     },
@@ -723,7 +723,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An unconfirmed close of one instance's own resources (instance_id) fenced that instance instead of ending the whole Runtime (Workflow #403). The fenced instance gets no new dispatch and its policy availability is withheld; its key goes only to the recovery ladder, and a person is needed once the ladder ended without proving the close (status resource_fence.awaiting_person). Recorded once when the instance is fenced, as a runtime.failed lifecycle record whose caused_by link is the unconfirmed failure (for example application_backend_operation_failed); the work that met the failure ends with this code, non-fatal, and a policy dispatch to the fenced instance is refused with it. Only a preparation whose self-check passes lifts the fence (instance_resources_fence_lifted). An unconfirmed failure that names no single instance still ends the whole Runtime.",
+      "description": "An unconfirmed close of one instance's own resources (instance_id) fenced that instance instead of ending the whole Runtime (Workflow #403). The fenced instance gets no new dispatch and its policy availability is withheld; its key goes only to the recovery ladder, and a person is needed once the ladder ended without proving the close (status resource_fence.awaiting_person). Recorded once when the instance is fenced, as a runtime.failed lifecycle record whose caused_by link is the unconfirmed failure (for example application_backend_operation_failed); the work that met the failure ends with this code, non-fatal. A policy dispatch to the fenced instance is deferred, and an intent evaluated before the fence refused, with dispatch_resource_fenced instead (since 0.12.35, Workflow #429 R-7a2, register section 1.234). Only a preparation whose self-check passes lifts the fence (instance_resources_fence_lifted). An unconfirmed failure that names no single instance still ends the whole Runtime.",
       "common_causes": "An application, input or capture backend of the instance did not confirm that its processes or handles ended: an adb command that hung while the emulator showed a black screen, a device that stopped answering in the middle of a close.",
       "handling": "Usually nothing: the recovery ladder restarts the application or the emulator and re-prepares the instance. When status shows the fence awaiting a person, bring the device back and run actingctl resume, an emulator restart or actingctl selfcheck for the instance; a passing self-check lifts the fence. If those are refused or keep failing, restart the Runtime: its start prepares and self-checks the instance again, and the other instances are not affected."
     },
@@ -19796,7 +19796,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An operator's global scheduling pause defers the dispatch. A control gate's effective code, in the order of R-7a section 2.6 (Workflow #429 R-7a; R-7a2 applies the order).",
+      "description": "An operator's global scheduling pause defers the dispatch. A control gate's effective code, in the order of R-7a section 2.6 (Workflow #429 R-7a; R-7a2 applies the order since 0.12.35, register section 1.234): an instance that its own pause also holds is dispatch_paused_instance.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -19816,7 +19816,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An operator's scheduling pause of the instance defers the dispatch. A control gate's effective code, in the order of R-7a section 2.6 (Workflow #429 R-7a; R-7a2 applies the order).",
+      "description": "An operator's scheduling pause of the instance defers the dispatch. A control gate's effective code, in the order of R-7a section 2.6 (Workflow #429 R-7a; R-7a2 applies the order since 0.12.35, register section 1.234): it comes before the global pause, so adding or lifting the global pause over it changes nothing.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -23025,7 +23025,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.35",
-      "description": "Control gate 4 (R-7a section 2.6): the instance's #403 resource fence defers the dispatch (R-7a2 first emits it). Device requests and the fence's own records keep instance_resources_fenced. Workflow #429 R-7a (register section 1.233, contracts/player-hold.md); R-7a registers it, R-7b first emits it.",
+      "description": "Control gate 4 (R-7a section 2.6): the instance's #403 resource fence defers the dispatch, after the pauses and before the instance's queue: the evaluation's deferral (no wake) and the admission's refusal of an intent evaluated before the fence. Device requests and the fence's own records keep instance_resources_fenced. Workflow #429 R-7a (register section 1.233, contracts/player-hold.md) registers it; R-7a2 (register section 1.234) first emits it.",
       "common_causes": "An unconfirmed close fenced the instance.",
       "handling": "The self-check or the ladder lifts the fence; dispatch then resumes."
     }
