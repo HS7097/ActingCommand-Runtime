@@ -6,12 +6,15 @@
 //! statement's SQL text, its first bound value read as a stored sequence and its
 //! virtual-machine steps, `SQLITE_STMTSTATUS_VM_STEP`), the command's processing time and the
 //! progress callbacks of the command's in-statement read bound. A command is recorded on the
-//! writer's thread, where its reads run, once it has replied: a caller reads the record after a
-//! later command of the same writer has answered. Recording changes nothing the writer reads or
-//! returns. Dropping the recorder stops recording.
+//! thread its reads run on (the writer's, or, #422 QR-1, a reader's of the pool), once it has
+//! replied: a caller reads the record after a later command of the same writer has answered.
+//! FLAKY-LNWS1: each thread's command keeps its own record, so a command on one thread that
+//! starts or ends while one on another thread runs leaves that one's statements to it. Recording
+//! changes nothing the writer reads or returns. Dropping the recorder stops recording.
 
 use crate::global::LedgerWriterCommandKind;
 use rusqlite::types::Value;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::thread::{self, ThreadId};
@@ -47,8 +50,9 @@ pub struct LedgerWriterCommandStatements {
 
 struct Recorder {
     root: PathBuf,
-    /// The command being recorded: the writer thread it runs on and its statements so far.
-    current: Mutex<Option<(ThreadId, Vec<LedgerStatementRun>)>>,
+    /// The commands being recorded, one per thread they run on (FLAKY-LNWS1: the writer's and
+    /// the pool's readers' at once): each command's statements so far.
+    current: Mutex<HashMap<ThreadId, Vec<LedgerStatementRun>>>,
     commands: Mutex<Vec<LedgerWriterCommandStatements>>,
 }
 
@@ -67,7 +71,7 @@ impl WriterStatementRecorder {
     pub fn arm(state_root: &Path) -> std::io::Result<Self> {
         let recorder = Arc::new(Recorder {
             root: state_root.canonicalize()?,
-            current: Mutex::new(None),
+            current: Mutex::new(HashMap::new()),
             commands: Mutex::new(Vec::new()),
         });
         armed()
@@ -100,13 +104,15 @@ impl Drop for WriterStatementRecorder {
     }
 }
 
-/// One read command being recorded on the writer's thread.
+/// One read command being recorded on the thread it runs on.
 pub(crate) struct Recording {
     recorder: Arc<Recorder>,
+    /// The thread it started on, whose record it is.
+    thread: ThreadId,
 }
 
-/// Called by the writer of `root` (its canonical root) when a read command starts; `None`
-/// unless a recorder is armed for that root.
+/// Called by the writer of `root` (its canonical root), or a reader of its pool, when a read
+/// command starts on the calling thread; `None` unless a recorder is armed for that root.
 pub(crate) fn start(root: &Path) -> Option<Recording> {
     let recorder = armed()
         .lock()
@@ -114,15 +120,18 @@ pub(crate) fn start(root: &Path) -> Option<Recording> {
         .iter()
         .find(|recorder| recorder.root == root)
         .cloned()?;
-    *recorder
+    let thread = thread::current().id();
+    recorder
         .current
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Some((thread::current().id(), Vec::new()));
-    Some(Recording { recorder })
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(thread, Vec::new());
+    Some(Recording { recorder, thread })
 }
 
-/// Called by the writer when the recorded command ended, with its kind, its processing time and
-/// its read bound's callbacks (all of them, and those at or after its budget point).
+/// Called by the writer, or a reader of its pool, when the recorded command ended, with its
+/// kind, its processing time and its read bound's callbacks (all of them, and those at or after
+/// its budget point). It takes only its own thread's record.
 pub(crate) fn finish(
     recording: Option<Recording>,
     command: LedgerWriterCommandKind,
@@ -137,8 +146,7 @@ pub(crate) fn finish(
         .current
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .take()
-        .map(|(_, statements)| statements)
+        .remove(&recording.thread)
         .unwrap_or_default();
     recording
         .recorder
@@ -171,9 +179,7 @@ pub(crate) fn statement_done(sql: &str, parameters: &[Value], steps: i32, rows: 
             .current
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        if let Some((owner, statements)) = current.as_mut()
-            && *owner == thread
-        {
+        if let Some(statements) = current.get_mut(&thread) {
             statements.push(LedgerStatementRun {
                 sql: sql.to_owned(),
                 after: match parameters.first() {
@@ -187,3 +193,7 @@ pub(crate) fn statement_done(sql: &str, parameters: &[Value], steps: i32, rows: 
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/writer_statements.rs"]
+mod tests;
