@@ -1114,7 +1114,7 @@ impl DeviceSideCheck for Arc<RealDevice> {
             }
             let same = scan.processes.iter().any(|process| {
                 (process.pid == identity.pid && process.start_ticks == identity.start_ticks)
-                    || process.argv.iter().any(|argument| *argument == scid)
+                    || process.argv.contains(&scid)
             });
             let forwards = self.forwards(&serial)?;
             let forwarded = identity.forward.as_ref().is_some_and(|(port, remote)| {
@@ -1146,7 +1146,7 @@ impl DeviceSideCheck for Arc<RealDevice> {
         if scan
             .processes
             .iter()
-            .any(|process| process.argv.iter().any(|argument| *argument == scid))
+            .any(|process| process.argv.contains(&scid))
         {
             return Err(CheckFailure::Residual(format!(
                 "the failed open's server {} still runs",

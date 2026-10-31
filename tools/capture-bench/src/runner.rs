@@ -719,11 +719,14 @@ impl RunShared {
         let mut cells = lock(&self.cells);
         let entry = cells.entry(cell.to_owned()).or_default();
         // A failure is kept over anything; an incomplete over a completion.
-        let keep_old = match (entry.get(&key), &result) {
-            (Some(CellResult::CellFailed(_)), _) => true,
-            (Some(CellResult::CellIncomplete(_)), CellResult::CellCompleted) => true,
-            _ => false,
-        };
+        let keep_old = matches!(
+            (entry.get(&key), &result),
+            (Some(CellResult::CellFailed(_)), _)
+                | (
+                    Some(CellResult::CellIncomplete(_)),
+                    CellResult::CellCompleted
+                )
+        );
         if !keep_old {
             entry.insert(key, result);
         }

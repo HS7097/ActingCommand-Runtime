@@ -387,8 +387,8 @@ impl Clock for VirtualClock {
             return;
         }
         let mut state = lock(&self.state);
-        if state.participants.contains_key(&id) {
-            state.participants.insert(id, ParticipantState::Blocked);
+        if let Some(participant) = state.participants.get_mut(&id) {
+            *participant = ParticipantState::Blocked;
             Self::schedule(&mut state);
         }
         drop(state);

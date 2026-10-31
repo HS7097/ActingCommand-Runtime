@@ -491,9 +491,11 @@ impl Plan {
                 if self.instance_index(&segment.instance).is_none() {
                     problems.push(format!("{label}: unknown instance {}", segment.instance));
                 }
+                // C8's static pictures are bounded by `truth.json` and `frames_per_image`.
                 if segment.duration_ms.is_none()
                     && segment.quota.is_none()
                     && segment.reps.is_none()
+                    && segment.mode != SegmentMode::StaticImages
                 {
                     problems.push(format!("{label}: needs duration_ms, quota or reps"));
                 }
@@ -550,10 +552,8 @@ impl Plan {
                             problems.push(format!("{label}: the mode needs reps"));
                         }
                     }
-                    SegmentMode::Reconnect => {
-                        if segment.reps.is_none() || segment.path.is_none() {
-                            problems.push(format!("{label}: reconnect needs reps and a path"));
-                        }
+                    SegmentMode::Reconnect if segment.reps.is_none() || segment.path.is_none() => {
+                        problems.push(format!("{label}: reconnect needs reps and a path"));
                     }
                     _ => {}
                 }
