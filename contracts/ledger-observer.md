@@ -1019,7 +1019,7 @@ CREATE TABLE ledger_frame_refs_extent (
   decides nothing (`actingd frame_retention pass skipped=frame_refs_incomplete`;
   [ledger-store.md](ledger-store.md), "Frame cleaner"). No configuration key of the index.
 
-### 11.8 The not-run history (Workflow 114-A, since 0.12.35; ledger revision 5)
+### 11.8 The not-run history (Workflow 114-A, since 0.12.36; ledger revision 5)
 
 Register §1.236; design `rd-1031/design-114-reasons-v5.md` §2 with its freeze addendum. Alice's
 114 (method 2): when a candidate's not-run reason changes, one record carries the change, and the
