@@ -3,10 +3,14 @@
 //! Workflow #403: an unconfirmed close of one instance's own resources fences that instance
 //! instead of ending the whole Runtime.
 //!
-//! The fenced instance gets no new dispatch: its policy availability is withheld, a policy
-//! admission is refused with `instance_resources_fenced`, and the routine gate holds its routine
-//! claims until the fence is handed on. The lease sweep hands every new fence to a recovery
-//! ladder admitted as every ladder is (`resource_fence` trigger), or, when none may start, to a
+//! The fenced instance gets no new dispatch: its policy availability is withheld, and the fence is
+//! control gate 1d of R-7a §2.6 (Workflow #429 R-7a2, since 0.12.35): the policy evaluation
+//! defers the instance's candidates and a policy admission refuses an intent evaluated before the
+//! fence, both with `dispatch_resource_fenced` (info), after the instance's pauses and before its
+//! queue. The routine gate holds its routine claims until the fence is handed on. The work that
+//! met the fence and the fence's own records keep `instance_resources_fenced`. The lease sweep
+//! hands every new fence to a recovery ladder admitted as every ladder is (`resource_fence`
+//! trigger), or, when none may start, to a
 //! person at once; a ladder that ends with the instance still fenced leaves it waiting for a
 //! person. A fence that manual work met (a direct task run, a client lease, an application or
 //! input command, a Lab operation: the instance's key held by a person's claim) starts no ladder
@@ -184,9 +188,9 @@ pub(super) enum UnconfirmedResources {
     Retained,
 }
 
-/// The non-fatal failure of work that met `instance_id`'s fence, and the refusal of new work
-/// while it holds: `instance_resources_fenced` with the instance, projected on a receipt as
-/// `runtime_code`.
+/// The non-fatal failure of work that met `instance_id`'s fence: `instance_resources_fenced` with
+/// the instance, projected on a receipt as `runtime_code`. A policy dispatch the fence holds is
+/// `dispatch_resource_fenced` instead (Workflow #429 R-7a2, R-7a §2.6 O-1).
 pub(super) fn resource_fence_error(
     instance_id: InstanceId,
     runtime_code: RuntimeErrorCode,
@@ -546,6 +550,30 @@ impl HostShared {
             )
         })
         .collect())
+    }
+
+    /// Workflow #429 R-7a2 (R-7a §2.6 O-4): the aliases of every fenced instance, in any stage,
+    /// read once as a policy evaluation starts, beside its pause snapshot (control gate 1d).
+    pub(super) fn resource_fenced_aliases(&self) -> RuntimeHostResult<BTreeSet<String>> {
+        let fenced = lock(
+            &self.resource_fences,
+            HostLocation::ReadInstanceResourceFence,
+        )?
+        .keys()
+        .copied()
+        .collect::<Vec<_>>();
+        let registered = lock(
+            &self.registered_instances,
+            HostLocation::ReadInstanceResourceFence,
+        )?;
+        Ok(fenced
+            .iter()
+            .filter_map(|instance_id| {
+                registered
+                    .get(instance_id)
+                    .map(|instance| instance.instance_alias.clone())
+            })
+            .collect())
     }
 
     /// The fenced instance `alias` names, if it is fenced.
