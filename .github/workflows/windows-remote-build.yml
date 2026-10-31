@@ -400,20 +400,6 @@ jobs:
             throw "executable cargo build failed with exit code $LASTEXITCODE"
           }
 
-      # #402 step 1 (experiment branch only, never merged): the capture bench, built in its own
-      # cargo call after the release binaries; build.rs embeds the same verified scrcpy server
-      # (ACTINGCOMMAND_SCRCPY_SERVER above), as it does for actingd.
-      - name: Build capture bench (experiment branch only)
-        if: ${{ !inputs.release_tag }}
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          & cargo build --locked --release --target x86_64-pc-windows-msvc `
-            -p actingcommand-capture-bench --bin ac-capture-bench
-          if ($LASTEXITCODE -ne 0) {
-            throw "capture bench cargo build failed with exit code $LASTEXITCODE"
-          }
-
       - name: Test Windows artifact tooling
         shell: pwsh
         run: |
@@ -1007,43 +993,6 @@ jobs:
           path: ${{ steps.stage.outputs.runtime_artifact_dir }}
           if-no-files-found: error
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
-
-      - name: Stage capture bench artifact (experiment branch only)
-        id: bench_stage
-        if: ${{ !inputs.release_tag }}
-        shell: pwsh
-        env:
-          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $source = Join-Path $PWD 'target\x86_64-pc-windows-msvc\release\ac-capture-bench.exe'
-          if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
-            throw "expected build output is missing: $source"
-          }
-          $name = "actingcommand-capture-bench-$env:SOURCE_SHA"
-          $dir = Join-Path $env:RUNNER_TEMP $name
-          New-Item -ItemType Directory -Path $dir | Out-Null
-          Copy-Item -LiteralPath $source -Destination (Join-Path $dir 'ac-capture-bench.exe')
-          $manifest = [ordered]@{
-            commit_sha = $env:SOURCE_SHA
-            file = 'ac-capture-bench.exe'
-            size_bytes = (Get-Item -LiteralPath (Join-Path $dir 'ac-capture-bench.exe')).Length
-            sha256 = (Get-FileHash -LiteralPath (Join-Path $dir 'ac-capture-bench.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
-            scrcpy_server_embedded_from = $env:ACTINGCOMMAND_SCRCPY_SERVER
-            never_released = $true
-          }
-          [IO.File]::WriteAllText((Join-Path $dir 'BENCH-MANIFEST.json'), ($manifest | ConvertTo-Json -Depth 4), [Text.UTF8Encoding]::new($false))
-          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "name=$name"
-          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "dir=$dir"
-
-      - name: Upload capture bench artifact (experiment branch only)
-        if: ${{ !inputs.release_tag }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: ${{ steps.bench_stage.outputs.name }}
-          path: ${{ steps.bench_stage.outputs.dir }}
-          if-no-files-found: error
-          retention-days: 7
 
       - name: Upload Tools artifact
         if: ${{ !inputs.release_tag }}
