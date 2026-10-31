@@ -61,10 +61,12 @@
 //!   `instance_paused`; also a `device_state_observed` record), once per pause revision and
 //!   kind, not once per poll; it counts against no bound and reports no used-up bound. The resume
 //!   adds nothing: its reconnect and self-check run as before, and the first poll after the pause
-//!   is gone restarts or recognizes as for any instance. A watch claim requested before the pause
-//!   runs as before. PAUSE-AUTO (0.12.34): the watch asks the one question every automatic
-//!   emulator start asks (`automatic_start_hold`), and its skip memory also counts the daemon
-//!   start's configured start and IDLE-1's wake (`SkippedStart`), each apart.
+//!   is gone restarts or recognizes as for any instance. PAUSE-AUTO (0.12.34): the watch asks the
+//!   one question every automatic emulator start asks (`automatic_start_hold`), and a restart
+//!   claim it requested before the pause asks it again on its key and ends skipped there, without
+//!   a Start (`watch_kind` `restart`, the same skip memory, so once per revision with the polls'
+//!   skips); a recognition claim requested before the pause runs as before. The skip memory also
+//!   counts the daemon start's configured start and IDLE-1's wake (`SkippedStart`), each apart.
 //! - **Blackouts** (Workflow #386 SR-4a3, `scheduling-blackout.md`, "Complete silence"): the
 //!   polls go on (a status read starts nothing). A configured instance found stopped inside a
 //!   blackout gets its one autostart claim as above, which the routine gate holds until the
@@ -149,7 +151,8 @@ actingcommand_contract::outcome_vocabulary! {
 }
 
 /// PAUSE-AUTO (0.12.34): the automatic emulator start a hold skipped (`automatic_start_hold`), one
-/// skip record per hold revision each: the watch's restart or recognition (WATCH-P, `watch_kind`),
+/// skip record per hold revision each: the watch's restart (before its request or on its claim's
+/// key) or recognition (before its request; WATCH-P, `watch_kind`),
 /// the configured start at daemon start (no further value), and IDLE-1's wake after
 /// `stop_emulator`, at its queueing or on its claim's key (`idle_action` `stop_emulator`).
 #[derive(Clone, Copy, PartialEq, Eq)]

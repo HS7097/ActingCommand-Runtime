@@ -84,14 +84,15 @@
 //! global pause does not). The configured start at daemon start asks it before it requests a
 //! claim: a held instance gets none, and its skip is `emulator_autostart_skipped` (`alias`,
 //! `skip_reason` `instance_paused`), a `device_state_observed` record under the instance and its
-//! report line. Its claim and the claim of IDLE-1's wake after `stop_emulator` ask it again on
-//! their key, at every tick of the hold and so in the last check just before the Start: a start
-//! queued before the pause began ends there, releases its key and starts nothing, its skip
+//! report line. Its claim, the claim of IDLE-1's wake after `stop_emulator` and the emulator
+//! watch's restart claim (R3, which the watch asks before it requests it, WATCH-P) ask it again
+//! on their key, at every tick of the hold and so in the last check just before the Start: a
+//! start queued before the pause began ends there, releases its key and starts nothing, its skip
 //! recorded the same way (an idle wake's with `idle_action` `stop_emulator`, and the wake stays
-//! owed, `withhold_idle_wake`). Each start records its skip once per pause revision. The pause is
-//! still no routine gate of the claim: it neither queues it nor makes it yield. The watch's own
-//! claims (a restart, a recognition) ask before they are requested (WATCH-P) and not on their key;
-//! an explicit emulator control (a person, an agent, Lab) never asks.
+//! owed, `withhold_idle_wake`; the watch's with `watch_kind` `restart`). Each start records its
+//! skip once per pause revision. The pause is still no routine gate of the claim: it neither
+//! queues it nor makes it yield. The watch's recognition claim, which starts no emulator, asks
+//! only before it is requested; an explicit emulator control (a person, an agent, Lab) never asks.
 
 use super::emulator_watch::{SkippedStart, WatchKind, WatchSkipReason, start_skip_outcome};
 use super::host_claims::{HostClaimWork, HostKey};
@@ -283,8 +284,9 @@ enum HoldEnd {
     Superseded,
     /// The instance already runs.
     Running,
-    /// PAUSE-AUTO (0.12.34): the daemon start's or an idle wake's claim met a hold on its key
-    /// (`automatic_start_hold`, the instance's own scheduling pause): it starts nothing.
+    /// PAUSE-AUTO (0.12.34): the daemon start's, an idle wake's or the watch's restart claim met
+    /// a hold on its key (`automatic_start_hold`, the instance's own scheduling pause): it starts
+    /// nothing.
     Held(AutomaticStartHold),
     /// EMU-BIND fix 1 (0.12.28, review L2): the recognition claim's read on its key found no
     /// recognition needed any more (the instance bound to the reported port and prepared, or the
@@ -726,11 +728,12 @@ impl HostShared {
 
     /// The checks of every tick, in order: a drain or a shutdown; the renewal; an operator
     /// emulator control waiting on the instance; an instance that already runs (a daemon start's
-    /// claim: its binding is no longer pending); PAUSE-AUTO (0.12.34, Alice's ruling 117 A): for a
-    /// daemon start's claim and an idle wake's, what holds an automatic start now
-    /// (`automatic_start_hold`, the instance's own scheduling pause), so a start queued before the
-    /// pause began never passes it; the last of these checks runs just before the Start. The
-    /// watch's restart and recognition claims ask before they are requested (WATCH-P), not here.
+    /// claim: its binding is no longer pending); PAUSE-AUTO (0.12.34, Alice's ruling 117 A): for
+    /// every claim that would start an emulator (a daemon start's, an idle wake's, the watch's
+    /// restart), what holds an automatic start now (`automatic_start_hold`, the instance's own
+    /// scheduling pause), so a start queued before the pause began never passes it; the last of
+    /// these checks runs just before the Start. The watch's recognition claim, which starts no
+    /// emulator, asks only before it is requested (WATCH-P).
     fn autostart_hold_ends(
         &self,
         pending: &PendingAutostart,
@@ -757,7 +760,7 @@ impl HostShared {
         if superseded {
             return Ok(Some(HoldEnd::Superseded));
         }
-        if pending.recognize || (pending.watch && !pending.idle_wake) {
+        if pending.recognize {
             return Ok(None);
         }
         if !pending.watch {
@@ -782,7 +785,8 @@ impl HostShared {
     /// before it requests its claim (`enqueue_emulator_autostart`) and on the claim's key up to
     /// just before the Start (`autostart_hold_ends`); IDLE-1's wake after `stop_emulator` before it
     /// queues its claim (`IdleView::start_held`) and on that claim's key; the emulator watch before
-    /// it requests a restart or a recognition (`watch_emulator`). Today one thing holds it: the
+    /// it requests a restart or a recognition (`watch_emulator`) and on its restart claim's key.
+    /// Today one thing holds it: the
     /// instance's own scheduling pause, in any stage (`draining`, `paused`, `released`, a restored
     /// one included), as `skip_reason` `instance_paused` at the pause's revision; the global pause
     /// is no pause of the instance. #429 R-7b extends this place with the player hold. An explicit
@@ -812,7 +816,8 @@ impl HostShared {
     /// under the instance (`record_emulator_watch`), and prepares and queues nothing. PAUSE-AUTO
     /// (0.12.34): a claim its hold met on its key is `emulator_autostart_skipped` with
     /// `skip_reason` (an idle wake's also `idle_action` `stop_emulator`, its wake owed again,
-    /// `withhold_idle_wake`), recorded as well the first time of the hold's revision and start.
+    /// `withhold_idle_wake`; the watch's restart claim's `watch_kind` `restart`), recorded as well
+    /// the first time of the hold's revision and start.
     fn end_autostart_hold(
         &self,
         pending: &PendingAutostart,
@@ -862,6 +867,9 @@ impl HostShared {
                     // is free for the next idle check.
                     self.withhold_idle_wake(pending.instance_id, alias)?;
                     SkippedStart::IdleWake
+                } else if pending.watch {
+                    // The watch's restart (R3): the same memory as its skip before a request.
+                    SkippedStart::Watch(WatchKind::Restart)
                 } else {
                     SkippedStart::DaemonStart
                 };

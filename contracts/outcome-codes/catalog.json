@@ -5299,7 +5299,7 @@
       },
       "tokens": {
         "instance_paused": {
-          "description": "The instance's own scheduling pause holds it, in any stage (draining, paused, released; Alice's ruling 112): the watch reads and records its emulator status but neither restarts nor recognizes it. Recorded once per pause revision and watch_kind. PAUSE-AUTO (since 0.12.34, Alice's ruling 117 A): neither the configured start at daemon start nor IDLE-1's wake after stop_emulator starts its emulator, also when their claim was requested before the pause began; recorded once per pause revision and start."
+          "description": "The instance's own scheduling pause holds it, in any stage (draining, paused, released; Alice's ruling 112): the watch reads and records its emulator status but neither restarts nor recognizes it. Recorded once per pause revision and watch_kind. PAUSE-AUTO (since 0.12.34, Alice's ruling 117 A): neither the configured start at daemon start nor IDLE-1's wake after stop_emulator starts its emulator, also when their claim was requested before the pause began, and neither does a restart claim the watch requested before the pause began; recorded once per pause revision and start."
         }
       }
     },

@@ -3,15 +3,16 @@
 // PAUSE-AUTO (0.12.34, Alice's ruling 117 A): while an instance carries its own scheduling pause,
 // neither the configured emulator start at daemon start nor IDLE-1's wake after `stop_emulator`
 // starts its emulator, and the pause is asked again on the start's key right up to the Start, so a
-// start queued before the pause began starts nothing either. Each skip is
-// `emulator_autostart_skipped` with `skip_reason` `instance_paused` (an idle wake's with
-// `idle_action` `stop_emulator`), once per pause revision and start. After the resume both behave
-// as before; an explicit emulator control is unchanged. On the scripted emulator (HOST-I1), a
+// start queued before the pause began starts nothing either; so does the emulator watch's restart
+// claim requested before the pause. Each skip is `emulator_autostart_skipped` with `skip_reason`
+// `instance_paused` (an idle wake's with `idle_action` `stop_emulator`, the watch's with
+// `watch_kind` `restart`), once per pause revision and start. After the resume all behave as
+// before; an explicit emulator control is unchanged. On the scripted emulator (HOST-I1), a
 // scripted connectivity status and, for IDLE-1, the Runtime's manual clock, with the S6c and
 // IDLE-1P helpers. Every wait returns as soon as what it waits for is reported or recorded;
 // `GATE_WAIT` only bounds a broken run.
 
-use super::emulator_controller::{EmulatorCall, stopped_state};
+use super::emulator_controller::{EmulatorCall, FAKE_EMULATOR_PORT, running_state, stopped_state};
 use super::gate_369_s6c::{
     GATE_WAIT, START, autostart_host, claims_after, connectivity, control, head, instance_scope,
     of_request, pause, resume, stop,
@@ -28,6 +29,8 @@ use actingcommand_host_metrics::NetworkConnectivity;
 
 const FIRST: &str = "pause_auto.first";
 const SECOND: &str = "pause_auto.second";
+/// R2: the default polling interval of the emulator watch (`emulator_control.watch_interval_ms`).
+const WATCH_INTERVAL_MS: u64 = 60_000;
 
 fn reported(lines: &[Outcome], code: &str) -> usize {
     lines
@@ -61,8 +64,9 @@ fn start_ended(lines: &[Outcome]) -> bool {
     .any(|code| reported(lines, code) > 0)
 }
 
-// The `emulator_autostart_skipped` records under `instance` that a pause made, in order.
-fn paused_skips(host: &RuntimeHost, instance: InstanceId) -> Vec<Outcome> {
+// The outcomes of the `device_state_observed` records under `instance` whose code is `code`, in
+// order.
+fn observed(host: &RuntimeHost, instance: InstanceId, code: &str) -> Vec<Outcome> {
     let events = host
         .query_persisted_events_for_test(EventQuery::default())
         .expect("ledger events");
@@ -71,13 +75,20 @@ fn paused_skips(host: &RuntimeHost, instance: InstanceId) -> Vec<Outcome> {
         .filter(|(event, _)| event.links().instance_id() == Some(&instance))
         .filter_map(|(_, phase)| match phase {
             RuntimeLifecyclePhase::DeviceStateObserved { outcome }
-                if outcome.code().as_str() == "emulator_autostart_skipped"
-                    && outcome.value("skip_reason").is_some() =>
+                if outcome.code().as_str() == code =>
             {
                 Some(outcome)
             }
             _ => None,
         })
+        .collect()
+}
+
+// The `emulator_autostart_skipped` records under `instance` that a pause made, in order.
+fn paused_skips(host: &RuntimeHost, instance: InstanceId) -> Vec<Outcome> {
+    observed(host, instance, "emulator_autostart_skipped")
+        .into_iter()
+        .filter(|outcome| outcome.value("skip_reason").is_some())
         .collect()
 }
 
@@ -457,6 +468,118 @@ fn pause_auto_5_an_emulator_control_start_of_a_paused_instance_still_runs() {
     assert_daemon_start_skip(skip, FIRST);
     let (_, paused) = host.scheduling_pauses_for_test().expect("pauses");
     assert!(paused.contains_key(FIRST), "the pause stays");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+// Re-check, emulator watch (the coordinator's ruling of 10-31 on rulings 112 and 117 A): a poll
+// finds the configured instance's emulator stopped and requests its restart claim (R3) before any
+// pause; the claim holds the key, waiting for the network, when the instance's own pause arrives.
+// On its key the claim releases the key with no command record and no failure pair, starts
+// nothing and records the skip (`watch_kind` `restart`); a poll under the same pause requests
+// nothing and records no second skip. After the resume the watch's next poll restarts it as
+// before.
+#[test]
+fn pause_auto_6_a_watch_restart_queued_before_the_pause_is_skipped_on_its_key() {
+    let root = TempDir::new().expect("tempdir");
+    let state = Arc::new(FakeState::default());
+    let instance = instance_id();
+    let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
+    // The first restart's claim waits without internet access; the one after the resume has it.
+    let (read, reads) = connectivity(
+        vec![NetworkConnectivity::NoInternet],
+        NetworkConnectivity::Internet,
+    );
+    let host = autostart_host(&root, &[(FIRST, instance, &state)], read, |config| {
+        config.with_runtime_clock(clock.clone())
+    });
+    let before = head(&host);
+    host.start_emulator_watch().expect("the watch starts");
+
+    // The first poll finds the emulator stopped behind the Runtime's back: its restart claim.
+    state.emulator.script_read(stopped_state());
+    clock.advance(WATCH_INTERVAL_MS);
+    host.await_emulator_watch_polls_for_test(1, GATE_WAIT)
+        .expect("the first poll");
+    assert_eq!(
+        reads
+            .recv_timeout(GATE_WAIT)
+            .expect("the claim's first read"),
+        NetworkConnectivity::NoInternet
+    );
+    let [claim] = claims_after(&host, instance, before)[..] else {
+        panic!("one restart claim");
+    };
+
+    // The pause's hand-back waits for the claim's key, which the claim's next check gives up.
+    completed(&pause(&host, instance_scope(FIRST), 731));
+    let paused_at = head(&host);
+    let lines = await_reports(&host, skip_reported);
+    assert_eq!(reported(&lines, "emulator_autostart_failed"), 0);
+    assert_eq!(reported(&lines, "emulator_autostart_started"), 0);
+    let claim = of_request(&host, claim);
+    assert_eq!(count(&claim, EventType::LeaseGranted), 1, "{claim:#?}");
+    assert_eq!(count(&claim, EventType::LeaseReleased), 1, "{claim:#?}");
+    for event_type in [
+        EventType::CommandReceived,
+        EventType::CommandRejected,
+        EventType::RuntimeFailed,
+    ] {
+        assert_eq!(count(&claim, event_type), 0, "{event_type:?}: {claim:#?}");
+    }
+    assert_eq!(control_starts(&state), 0, "no Start");
+    let skips = paused_skips(&host, instance);
+    let [skip] = &skips[..] else {
+        panic!("one skip on the claim's key: {skips:?}");
+    };
+    assert_eq!(skip.value("alias"), Some(&serde_json::json!(FIRST)));
+    assert_eq!(
+        skip.value("watch_kind"),
+        Some(&serde_json::json!("restart"))
+    );
+    assert_eq!(
+        skip.value("skip_reason"),
+        Some(&serde_json::json!("instance_paused"))
+    );
+    assert_eq!(skip.value("idle_action"), None);
+
+    // A poll under the same pause finds the emulator stopped again: no claim, no second skip.
+    state.emulator.script_read(stopped_state());
+    clock.advance(WATCH_INTERVAL_MS);
+    host.await_emulator_watch_polls_for_test(2, GATE_WAIT)
+        .expect("a poll under the pause");
+    assert!(
+        claims_after(&host, instance, paused_at).is_empty(),
+        "no restart claim under the pause"
+    );
+    assert_eq!(
+        paused_skips(&host, instance).len(),
+        1,
+        "one skip for the pause revision"
+    );
+    assert_eq!(control_starts(&state), 0, "no Start under the pause");
+
+    // The resume's reconnect reads the emulator running; the next poll finds it stopped and
+    // restarts it, its claim reading the status once more before the Start.
+    state
+        .emulator
+        .script_read(running_state(FAKE_EMULATOR_PORT));
+    completed(&resume(&host, instance_scope(FIRST), 732));
+    state.emulator.script_read(stopped_state());
+    state.emulator.script_read(stopped_state());
+    clock.advance(WATCH_INTERVAL_MS);
+    host.await_emulator_watch_polls_for_test(3, GATE_WAIT)
+        .expect("the first poll after the resume");
+    await_reports(&host, |lines| {
+        reported(lines, "emulator_autostart_started") == 1
+    });
+    assert_eq!(control_starts(&state), 1, "one Start after the resume");
+    assert_eq!(
+        observed(&host, instance, "emulator_autostart_queued").len(),
+        2,
+        "the restart requested before the pause and the one after the resume"
+    );
+    assert_eq!(paused_skips(&host, instance).len(), 1);
     assert!(host.fatal_error().expect("runtime health").is_none());
     host.close().expect("close host");
 }
