@@ -122,6 +122,8 @@ pub struct RunShared {
     apk_states: Vec<Mutex<ApkInstance>>,
     /// #402 C2b: the band geometry INFO reported, per instance.
     geometries: Mutex<BTreeMap<usize, BandGeometry>>,
+    /// #402 C2b: what the bench knows of each instance's display (the taps are mapped on it).
+    displays: Mutex<BTreeMap<usize, DisplayFacts>>,
     /// #402 C2b: the orientation after a C10 rotation, per instance.
     orientations: Mutex<BTreeMap<usize, crate::plan::Orientation>>,
     probes: Arc<dyn CellProbes>,
@@ -286,6 +288,7 @@ pub fn run(plan_text: &str, run_dir: &Path, env: Env) -> RunOutcome {
             .collect(),
         apk,
         geometries: Mutex::new(BTreeMap::new()),
+        displays: Mutex::new(BTreeMap::new()),
         orientations: Mutex::new(BTreeMap::new()),
         probes,
         violations_written: Mutex::new((0, 0)),
@@ -2306,6 +2309,9 @@ impl RunShared {
             if delivered {
                 segment.delivered.fetch_add(1, Ordering::AcqRel);
             }
+            if let Some(frame) = &outcome.frame {
+                self.note_frame(instance, frame.width, frame.height);
+            }
             if let Some(cost) = outcome.material {
                 segment
                     .material_bytes
@@ -2420,7 +2426,6 @@ impl RunShared {
         record_path: &str,
     ) {
         let owner = LockOwner::new(format!("formal/{}", self.instance_name(instance)));
-        let view = self.view_size(instance);
         let mut rng = Rng::new(seed ^ 0x5eed);
         let capture_kind = if formal.capture_from_scrcpy {
             BackendKind::Scrcpy
@@ -2440,6 +2445,7 @@ impl RunShared {
             segment.dispatches.fetch_add(1, Ordering::AcqRel);
             let cell_index = rng.below(u64::from(grid * grid)) as u32;
             let clock = Arc::clone(&self.clock);
+            let display = self.display_facts(instance);
             let work: crate::hub::FormalWork = Box::new(move |hub: &Hub, instance: usize| {
                 formal_work(
                     hub,
@@ -2449,7 +2455,7 @@ impl RunShared {
                     grid,
                     clock.as_ref(),
                     true,
-                    view,
+                    display,
                     None,
                 )
             });
@@ -2538,6 +2544,22 @@ impl RunShared {
                     Some(_) => self.content_of(decoded.as_ref()),
                     None => (Value::Null, json!({ "content": "no frame was admitted" })),
                 };
+                if let Some(frame) = &work.floor_frame {
+                    self.note_frame(instance, frame.width, frame.height);
+                }
+                let mut tap_record = work.tap_display.clone().unwrap_or_else(|| json!({}));
+                let rotation_missing = tap_record["rotation"].is_null();
+                if rotation_missing && let Value::Object(map) = &mut admission_reasons {
+                    map.insert(
+                        "tap.rotation".to_owned(),
+                        json!("no APK INFO gave the display rotation"),
+                    );
+                }
+                let tap_reasons = if rotation_missing {
+                    json!({ "tap.rotation": "no APK INFO gave the display rotation" })
+                } else {
+                    json!({})
+                };
                 if work.first_flip.is_none()
                     && let Value::Object(map) = &mut admission_reasons
                 {
@@ -2564,6 +2586,8 @@ impl RunShared {
                             { "dur_us": work.floor_capture_us, "ok": work.floor_frame.is_some(), "code": work.failure.as_ref().filter(|_| work.floor_frame.is_none()).map(|failure| failure.code.clone()) },
                         ],
                         "tap_us": work.tap_us,
+                        "tap": tap_record,
+                        "null_reasons": tap_reasons,
                         "stdio_wait_us": work.stdio_wait_us,
                         "register_seq": registration,
                         "formal_grant_seq": formal_grant,
@@ -2575,7 +2599,7 @@ impl RunShared {
                         "trial": trial,
                         "t_tick_us": tick,
                         "disposition": disposition,
-                        "tap": { "j": j, "t_input_done_us": work.tap_done_us },
+                        "tap": admission_tap(*j, work.tap_done_us, &tap_record),
                         "floor_check": work.floor_frame.as_ref().and_then(|frame| frame.floor_check),
                         "native_start_us": work.floor_frame.as_ref().and_then(|frame| frame.native.iter().find_map(|span| span.start_us)),
                         "t_recv_us": work.floor_frame.as_ref().and_then(|frame| frame.received_us),
@@ -2654,7 +2678,6 @@ impl RunShared {
         let mut rng = Rng::new(seed ^ 0x7a5c);
         let kind = path.backend();
         let mut check = 0u64;
-        let view = self.view_size(instance);
         let flip = self
             .apk_enabled(instance)
             .then(|| (self.band_geometry(instance), ms(self.plan.apk.flip_wait_ms)));
@@ -2666,6 +2689,7 @@ impl RunShared {
             check += 1;
             let cell_index = rng.below(u64::from(grid * grid)) as u32;
             let clock = Arc::clone(&self.clock);
+            let display = self.display_facts(instance);
             let sequence = Arc::clone(&last_sequence);
             let after_sequence = *lock(&last_sequence);
             let work: crate::hub::FormalWork = Box::new(move |hub: &Hub, instance: usize| {
@@ -2697,7 +2721,7 @@ impl RunShared {
                         grid,
                         clock.as_ref(),
                         false,
-                        view,
+                        display,
                         flip,
                     )
                 }
@@ -2879,6 +2903,70 @@ impl RunShared {
     }
 }
 
+/// #402 C2b: what the bench knows of an instance's display: the APK's view (INFO, with its
+/// offset, in frame pixels), the APK's display size and rotation, and the size of the frames the
+/// instance last delivered.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct DisplayFacts {
+    view: Option<(u32, u32, u32, u32)>,
+    display: Option<(u32, u32)>,
+    rotation: Option<u64>,
+    frame: Option<(u32, u32)>,
+}
+
+/// The rectangle `(x, y, width, height)` in frame pixels the APK's tap grid covers, and where its
+/// size came from: the APK's view when it lies inside the frames the bench sees (`apk_view`);
+/// else the frame of this dispatch (`dispatch_frame`), the last delivered frame (`last_frame`),
+/// or the APK's display size (`apk_display`).
+fn tap_rect(
+    facts: &DisplayFacts,
+    seen: Option<(u32, u32)>,
+) -> Option<((u32, u32, u32, u32), &'static str)> {
+    let frame = seen.or(facts.frame);
+    if let Some((x, y, width, height)) = facts.view
+        && width > 0
+        && height > 0
+        && frame.is_none_or(|(frame_width, frame_height)| {
+            x + width <= frame_width && y + height <= frame_height
+        })
+    {
+        return Some(((x, y, width, height), "apk_view"));
+    }
+    if let Some((width, height)) = seen {
+        return Some(((0, 0, width, height), "dispatch_frame"));
+    }
+    if let Some((width, height)) = facts.frame {
+        return Some(((0, 0, width, height), "last_frame"));
+    }
+    facts
+        .display
+        .map(|(width, height)| ((0, 0, width, height), "apk_display"))
+}
+
+/// The centre of tap-grid cell `cell_index` (column `cell % grid`, row `cell / grid`) of
+/// `rect`, in frame pixels: inside the APK's cell j of PROTOCOL §4.2 for any size.
+fn tap_point(rect: (u32, u32, u32, u32), cell_index: u32, grid: u32) -> (i32, i32) {
+    let grid = u64::from(grid.max(1));
+    let column = u64::from(cell_index) % grid;
+    let row = u64::from(cell_index) / grid;
+    let (left, top, width, height) = rect;
+    let x = u64::from(left) + (2 * column + 1) * u64::from(width) / (2 * grid);
+    let y = u64::from(top) + (2 * row + 1) * u64::from(height) / (2 * grid);
+    (
+        i32::try_from(x).unwrap_or(i32::MAX),
+        i32::try_from(y).unwrap_or(i32::MAX),
+    )
+}
+
+/// An admission record's `tap`: the grid cell, the input's end and the display it was mapped on.
+fn admission_tap(j: u32, input_done: Option<Micros>, display: &Value) -> Value {
+    let mut tap = json!({ "j": j, "t_input_done_us": input_done });
+    if let (Value::Object(map), Value::Object(extra)) = (&mut tap, display.clone()) {
+        map.extend(extra);
+    }
+    tap
+}
+
 /// The vendor stdio gate waits a frame's timing points reported.
 fn stdio_waits(frame: &crate::backend::SampledFrame) -> impl Iterator<Item = Micros> + '_ {
     frame
@@ -2917,14 +3005,19 @@ fn formal_work(
     grid: u32,
     clock: &dyn Clock,
     capture_first: bool,
-    view: (i32, i32),
+    display: DisplayFacts,
     flip: Option<(BandGeometry, Micros)>,
 ) -> FormalResult {
     let mut result = FormalResult::default();
+    // The size of a frame this dispatch took (frames are the display, unscaled).
+    let mut seen: Option<(u32, u32)> = None;
     if capture_first {
         let started = clock.now_us();
         match formal_capture(hub, instance, kind, None) {
-            Ok(frame) => result.stdio_wait_us.extend(stdio_waits(&frame)),
+            Ok(frame) => {
+                seen = Some((frame.width, frame.height));
+                result.stdio_wait_us.extend(stdio_waits(&frame));
+            }
             Err(failure) => {
                 result.failure = Some(failure);
                 return result;
@@ -2933,18 +3026,41 @@ fn formal_work(
         result.capture_us = Some(clock.now_us().saturating_sub(started));
     }
     let flip_before = flip.and_then(|(geometry, _)| {
-        formal_capture(hub, instance, kind, None)
-            .ok()
-            .and_then(|frame| flip_shown(&frame, geometry))
-            .map(|payload| payload.event)
+        let frame = formal_capture(hub, instance, kind, None).ok()?;
+        seen = Some((frame.width, frame.height));
+        flip_shown(&frame, geometry).map(|payload| payload.event)
     });
+    // The tap is mapped on the instance's actual display: the APK's view, or the frames' size;
+    // without either, one frame is taken to learn it. Never a fixed size or orientation.
+    let mut resolved = tap_rect(&display, seen);
+    if resolved.is_none()
+        && let Ok(frame) = formal_capture(hub, instance, kind, None)
+    {
+        resolved = tap_rect(&display, Some((frame.width, frame.height)));
+    }
+    let Some((rect, source)) = resolved else {
+        result.failure = Some(
+            BackendFailure::new(
+                "tap_display_unknown",
+                FailureClass::CellPath,
+                "neither the APK nor a frame told the display size",
+            )
+            .without_native_call(),
+        );
+        return result;
+    };
+    let (x, y) = tap_point(rect, cell_index, grid);
+    result.tap_display = Some(serde_json::json!({
+        "display_w": rect.2,
+        "display_h": rect.3,
+        "view_x": rect.0,
+        "view_y": rect.1,
+        "rotation": display.rotation,
+        "display_source": source,
+        "x": x,
+        "y": y,
+    }));
     // The tap goes to the Nemu backend when it is open (the instance's touch path), else to S.
-    let (width, height) = view;
-    let grid = grid.max(1) as i32;
-    let column = (cell_index as i32) % grid;
-    let row = (cell_index as i32) / grid;
-    let x = column * width / grid + width / (2 * grid);
-    let y = row * height / grid + height / (2 * grid);
     let started = clock.now_us();
     let tapped = formal_tap(hub, instance, BackendKind::Nemu, x, y)
         .or_else(|_| formal_tap(hub, instance, BackendKind::Scrcpy, x, y));
@@ -3188,16 +3304,48 @@ impl RunShared {
             })
     }
 
-    /// The view size the taps are given in: the instance's current orientation.
-    fn view_size(&self, instance: usize) -> (i32, i32) {
-        let orientation = lock(&self.orientations)
+    /// What the bench knows of the instance's display now (the taps are mapped on it).
+    fn display_facts(&self, instance: usize) -> DisplayFacts {
+        lock(&self.displays)
             .get(&instance)
             .copied()
-            .unwrap_or(self.plan.instances[instance].orientation);
-        match orientation {
-            crate::plan::Orientation::Landscape => (1280, 720),
-            crate::plan::Orientation::Portrait => (720, 1280),
+            .unwrap_or_default()
+    }
+
+    /// The size of a frame the instance delivered (frames are the display, unscaled).
+    fn note_frame(&self, instance: usize, width: u32, height: u32) {
+        if width > 0 && height > 0 {
+            lock(&self.displays).entry(instance).or_default().frame = Some((width, height));
         }
+    }
+
+    /// An APK INFO: the band geometry, the view (with its offset, in frame pixels), the display
+    /// size and its rotation.
+    fn apply_info(&self, instance: usize, info: &Value) {
+        if let Some(geometry) = crate::apk::geometry_of_info(info) {
+            lock(&self.geometries).insert(instance, geometry);
+        }
+        let number = |value: &Value| value.as_u64().and_then(|value| u32::try_from(value).ok());
+        let mut displays = lock(&self.displays);
+        let facts = displays.entry(instance).or_default();
+        if let (Some(width), Some(height)) = (
+            number(&info["view"]["width"]),
+            number(&info["view"]["height"]),
+        ) {
+            facts.view = Some((
+                number(&info["view"]["x"]).unwrap_or(0),
+                number(&info["view"]["y"]).unwrap_or(0),
+                width,
+                height,
+            ));
+        }
+        if let (Some(width), Some(height)) = (
+            number(&info["display"]["real_width"]),
+            number(&info["display"]["real_height"]),
+        ) {
+            facts.display = Some((width, height));
+        }
+        facts.rotation = info["display"]["rotation"].as_u64();
     }
 
     fn orientation_now(&self, instance: usize) -> &'static str {
@@ -3301,13 +3449,8 @@ impl RunShared {
                         let link = connector.connect(&name)?;
                         let mut client = ApkClient::new(link, Arc::clone(&self.clock));
                         let hello = client.hello()?;
-                        if let Some(geometry) = client
-                            .info()
-                            .ok()
-                            .as_ref()
-                            .and_then(crate::apk::geometry_of_info)
-                        {
-                            lock(&self.geometries).insert(instance, geometry);
+                        if let Ok(info) = client.info() {
+                            self.apply_info(instance, &info);
                         }
                         state.client = Some(client);
                         (hello, true)
@@ -3567,9 +3710,7 @@ impl RunShared {
             loop {
                 let info = client.info()?;
                 if info["mode"] == json!(mode) && info["mode_pending"].is_null() {
-                    if let Some(geometry) = crate::apk::geometry_of_info(&info) {
-                        lock(&run.geometries).insert(instance, geometry);
-                    }
+                    run.apply_info(instance, &info);
                     return Ok(response);
                 }
                 if run.now() >= deadline {
@@ -3967,8 +4108,12 @@ impl RunShared {
             if self.now() >= cell_deadline {
                 return SegmentEnd::CellLimit;
             }
-            let (_, height_before) = self.view_size(instance);
-            let target = if height_before > 720 {
+            let facts = self.display_facts(instance);
+            let portrait_now = facts.display.or(facts.frame).map_or(
+                self.plan.instances[instance].orientation == crate::plan::Orientation::Portrait,
+                |(width, height)| height > width,
+            );
+            let target = if portrait_now {
                 crate::plan::Orientation::Landscape
             } else {
                 crate::plan::Orientation::Portrait
@@ -4005,9 +4150,7 @@ impl RunShared {
                     let height = info["display"]["real_height"].as_u64().unwrap_or(0);
                     let portrait = height > width;
                     if width > 0 && portrait == (target == crate::plan::Orientation::Portrait) {
-                        if let Some(geometry) = crate::apk::geometry_of_info(&info) {
-                            lock(&run.geometries).insert(instance, geometry);
-                        }
+                        run.apply_info(instance, &info);
                         return Ok((width, height));
                     }
                     if run.now() >= deadline {
@@ -4031,6 +4174,7 @@ impl RunShared {
                 }
             };
             lock(&self.orientations).insert(instance, target);
+            lock(&self.displays).entry(instance).or_default().frame = None;
             let generation_after = self.hub.bump_generation(&owner, instance);
             let mut reopens = 0;
             let reopened = self.open_backend(instance, kind, options, &mut reopens, false);

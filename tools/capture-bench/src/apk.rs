@@ -616,6 +616,8 @@ struct FakeApkState {
     ping_one_way_us: i64,
     /// The band's cell edge INFO reports (the fake frames draw the band with it).
     cell: u32,
+    /// The display's natural size (rotation 0); ORIENT turns it.
+    natural: (u32, u32),
 }
 
 /// The fake APK (PROTOCOL §5 on an in-memory link).
@@ -641,13 +643,14 @@ impl FakeApk {
                 flip_n: 0,
                 flip_j: 0,
                 flip_level: 0,
-                orientation: "landscape".to_owned(),
+                orientation: "unspecified".to_owned(),
                 events: Vec::new(),
                 vsync: Vec::new(),
                 slots: BTreeMap::new(),
                 ping_hold_ns: 1_000,
                 ping_one_way_us: 0,
                 cell: 24,
+                natural: (1280, 720),
             }),
             frame_period_ns: 16_000_000,
         })
@@ -693,6 +696,32 @@ impl FakeApk {
         lock(&self.state).cell = cell;
     }
 
+    /// The display's natural size (the fake frames have the display's current size).
+    pub fn set_display(&self, width: u32, height: u32) {
+        lock(&self.state).natural = (width, height);
+    }
+
+    /// The display's current size and rotation (0 natural, 1 turned by a quarter): a requested
+    /// orientation that the natural size does not have turns it.
+    pub fn display(&self) -> (u32, u32, u32) {
+        let state = lock(&self.state);
+        Self::display_of(&state)
+    }
+
+    fn display_of(state: &FakeApkState) -> (u32, u32, u32) {
+        let (width, height) = state.natural;
+        let turned = match state.orientation.as_str() {
+            "portrait" | "reverse_portrait" => width > height,
+            "landscape" | "reverse_landscape" => height > width,
+            _ => false,
+        };
+        if turned {
+            (height, width, 1)
+        } else {
+            (width, height, 0)
+        }
+    }
+
     pub fn orientation(&self) -> String {
         lock(&self.state).orientation.clone()
     }
@@ -732,16 +761,23 @@ impl FakeApk {
         })
     }
 
-    /// A tap at `(x, y)` on a `width` × `height` view (flip mode: n + 1, j of the 4×4 grid).
-    pub fn tap(&self, x: i32, y: i32, width: i32, height: i32) {
+    /// A tap at `(x, y)` in display pixels (flip mode: n + 1, j of the 4 × 4 grid of the current
+    /// display, PROTOCOL §4.2: column `floor(4x / W)`, row `floor(4y / H)`).
+    pub fn tap(&self, x: i32, y: i32) {
         let now = self.clock.now_us();
         let mut state = lock(&self.state);
         if state.mode != "flip" {
             return;
         }
+        let (width, height, _) = Self::display_of(&state);
+        let (width, height) = (width.max(1) as i32, height.max(1) as i32);
+        if x < 0 || y < 0 || x >= width || y >= height {
+            // Off the screen: the view receives nothing.
+            return;
+        }
         state.flip_n += 1;
-        let column = (4 * x / width.max(1)).clamp(0, 3);
-        let row = (4 * y / height.max(1)).clamp(0, 3);
+        let column = (4 * x / width).clamp(0, 3);
+        let row = (4 * y / height).clamp(0, 3);
         state.flip_j = (row * 4 + column) as u8;
         state.flip_level ^= 1;
         let device = now as i64 * 1_000 + state.offset_ns;
@@ -802,14 +838,10 @@ impl FakeApk {
                 })
             }
             "INFO" => {
-                let (width, height) = if state.orientation == "portrait" {
-                    (720, 1280)
-                } else {
-                    (1280, 720)
-                };
+                let (width, height, rotation) = Self::display_of(&state);
                 json!({
                     "ok": true, "cmd": "INFO", "instance": state.instance,
-                    "display": { "rotation": 0, "real_width": width, "real_height": height, "refresh_hz": 60 },
+                    "display": { "rotation": rotation, "real_width": width, "real_height": height, "refresh_hz": 60 },
                     "orientation": { "requested": state.orientation, "configuration": state.orientation },
                     "mode": state.mode, "mode_seq": state.mode_seq, "mode_pending": null,
                     "view": { "width": width, "height": height, "x": 0, "y": 0 },

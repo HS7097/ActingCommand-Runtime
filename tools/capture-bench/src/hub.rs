@@ -1452,6 +1452,9 @@ pub struct FormalResult {
     pub stdio_wait_us: Vec<Micros>,
     /// #402 C2b (C6): the first frame that shows the tap's flip and when it was taken.
     pub first_flip: Option<serde_json::Value>,
+    /// #402 C2b: the display the tap was mapped on (`display_w`, `display_h`, `view_x`,
+    /// `view_y`, `rotation`, `display_source`) and the tap point (`x`, `y`).
+    pub tap_display: Option<serde_json::Value>,
 }
 
 /// What one dispatch ended with.

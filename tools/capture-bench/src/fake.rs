@@ -90,8 +90,6 @@ pub struct CloseHang {
 pub struct FakePattern {
     pub apk: Arc<FakeApk>,
     pub geometry: BandGeometry,
-    /// The view size the taps are given in (the plan's 1280 × 720 or 720 × 1280).
-    pub view: (i32, i32),
 }
 
 /// #402 C2b (D2 item 10): the stand-ins for S's host-side `adb shell` child. `run --fake` starts
@@ -544,11 +542,13 @@ impl PreviewBackend for FakeBackend {
             BackendKind::Nemu => (PixelLayout::Rgba8, 4),
             BackendKind::Scrcpy => (PixelLayout::Rgb8, 3),
         };
+        // With the pattern the frames have the fake APK's display size (it turns with ORIENT).
         let (width, height) = match &device.script.pattern {
-            Some(pattern) if pattern.apk.orientation() == "portrait" => {
-                (device.script.height, device.script.width)
+            Some(pattern) => {
+                let (width, height, _) = pattern.apk.display();
+                (width, height)
             }
-            _ => (device.script.width, device.script.height),
+            None => (device.script.width, device.script.height),
         };
         let size = (width * height) as usize * bytes_per_pixel;
         let pixels = match &device.script.pattern {
@@ -610,7 +610,7 @@ impl PreviewBackend for FakeBackend {
         });
         self.device.clock.sleep_us(2_000);
         if let Some(pattern) = &self.device.script.pattern {
-            pattern.apk.tap(x, y, pattern.view.0, pattern.view.1);
+            pattern.apk.tap(x, y);
         }
         Ok(())
     }

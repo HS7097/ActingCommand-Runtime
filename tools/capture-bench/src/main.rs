@@ -106,8 +106,7 @@ fn run_command(arguments: &[String]) -> i32 {
             })
             .collect();
         if let Some(apk) = apk_instances.first().and_then(|name| apks.get(name)) {
-            script.width = 640;
-            script.height = 360;
+            apk.set_display(640, 360);
             script.pattern = Some(FakePattern {
                 apk: Arc::clone(apk),
                 geometry: actingcommand_capture_bench::timecode::BandGeometry {
@@ -115,7 +114,6 @@ fn run_command(arguments: &[String]) -> i32 {
                     offset_x: 0,
                     offset_y: 0,
                 },
-                view: (1280, 720),
             });
         }
         if let Some(target) = options.get("fake-hang-close")

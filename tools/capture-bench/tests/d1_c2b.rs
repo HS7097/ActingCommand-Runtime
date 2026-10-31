@@ -63,10 +63,20 @@ nemu_whitelist = [5, 6]
 
 const APK_TABLE: &str = "[apk]\ncell = 8\npings = 20\n";
 
-/// A harness whose fake frames show the fake APK's band (cell 8 on 216 × 208 frames).
+/// A harness whose fake frames show the fake APK's band (cell 8 on a 216 × 208 display).
 fn apk_harness(
     name: &str,
     run_id: &str,
+    configure: impl FnOnce(&mut FakeScript, &Arc<FakeApk>),
+) -> (common::Harness, Arc<FakeApk>) {
+    apk_harness_on(name, run_id, (216, 208), configure)
+}
+
+/// The same on a display of the given natural size.
+fn apk_harness_on(
+    name: &str,
+    run_id: &str,
+    display: (u32, u32),
     configure: impl FnOnce(&mut FakeScript, &Arc<FakeApk>),
 ) -> (common::Harness, Arc<FakeApk>) {
     let h0 = harness(
@@ -77,9 +87,8 @@ fn apk_harness(
     );
     let apk = FakeApk::new(h0.dyn_clock(), 7_000_000_000);
     apk.set_cell(8);
+    apk.set_display(display.0, display.1);
     let mut script = FakeScript {
-        width: 216,
-        height: 208,
         pattern: Some(FakePattern {
             apk: Arc::clone(&apk),
             geometry: BandGeometry {
@@ -87,7 +96,6 @@ fn apk_harness(
                 offset_x: 0,
                 offset_y: 0,
             },
-            view: (1280, 720),
         }),
         ..FakeScript::default()
     };
@@ -438,6 +446,57 @@ fn an_apk_restart_starts_a_new_record_file_and_a_reboot_a_new_calibration() {
     assert_eq!(steps[0]["k"], 1);
     assert_eq!(steps[0]["apk_epoch"], 2);
     assert_eq!(steps[0]["clock_epoch"], 2);
+}
+
+/// C6 on a display of `size`: every admission decodes its flip with the tapped cell, and the tap
+/// was mapped on that display.
+fn c6_on(name: &str, size: (u32, u32)) {
+    let (h, _apk) = apk_harness_on(name, name, size, |_, _| {});
+    let cells = cell(
+        "C6",
+        600_000,
+        &["instance = \"E1\"\npath = \"N\"\nmode = \"task_floor\"\nquota = 8\napk_mode = \"flip\""],
+    );
+    let outcome = h.run(plan_with(name, APK_TABLE, E1, &cells));
+    assert_eq!(outcome.exit_code, 0, "{outcome:?}");
+    let admissions: Vec<Value> = h
+        .lines("opps-C6-N.jsonl")
+        .into_iter()
+        .filter(|line| line["kind"] == "admission")
+        .collect();
+    assert_eq!(admissions.len(), 8);
+    for (index, admission) in admissions.iter().enumerate() {
+        let tap = &admission["tap"];
+        assert_eq!(tap["display_w"], size.0, "{admission}");
+        assert_eq!(tap["display_h"], size.1);
+        assert_eq!(tap["rotation"], 0);
+        assert_eq!(tap["display_source"], "apk_view");
+        let (x, y) = (tap["x"].as_u64().expect("x"), tap["y"].as_u64().expect("y"));
+        let j = tap["j"].as_u64().expect("j");
+        assert!(x < u64::from(size.0) && y < u64::from(size.1), "{tap}");
+        // PROTOCOL §4.2: the tap's cell on this display is the cell the bench meant.
+        assert_eq!(
+            (4 * y / u64::from(size.1)) * 4 + 4 * x / u64::from(size.0),
+            j,
+            "{tap}"
+        );
+        assert_eq!(
+            admission["first_flip"]["n"],
+            index as u64 + 1,
+            "{admission}"
+        );
+        assert_eq!(admission["first_flip"]["j"], j);
+    }
+}
+
+#[test]
+fn c6_taps_land_in_their_cell_on_a_portrait_display() {
+    c6_on("c6-portrait", (208, 216));
+}
+
+#[test]
+fn c6_taps_land_in_their_cell_on_a_landscape_display() {
+    c6_on("c6-landscape", (216, 208));
 }
 
 #[test]
