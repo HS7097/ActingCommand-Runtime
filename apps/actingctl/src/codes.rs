@@ -460,6 +460,14 @@ actingcommand_contract::outcome_locations! {
         PackRemoveApply => "install_pack_remove_apply",
         PackRestore => "install_pack_restore",
         New => "install_new",
+        // Workflow #429 R-15b (since 0.12.35): the A/B commands frozen in the contract, which
+        // R-15c (prepare), R-15d (clean, restart) and R-15e (convert) build; until then an
+        // earlier slice's build refuses them as unknown commands.
+        Prepare => "install_prepare",
+        ConvertPlan => "install_convert_plan",
+        ConvertApply => "install_convert_apply",
+        Clean => "install_clean",
+        Restart => "install_restart",
     }
 }
 
@@ -510,6 +518,37 @@ actingcommand_contract::outcome_vocabulary! {
         RuntimeStopFailed => "runtime_stop_failed",
         PostCheckFailed => "post_check_failed",
         DeployRolledBack => "deploy_rolled_back",
+        // Workflow #429 R-15b (since 0.12.35; design v4.1 §2.9 to §3.15, §4.3, §5.2, §5.7 and
+        // §6.2): the refusals of the A/B layout, the operation attempts, the clean and the
+        // conversion, registered before R-15c to R-15e emit them.
+        SlotOccupied => "slot_occupied",
+        SlotIsActive => "slot_is_active",
+        SlotUnrecognised => "slot_unrecognised",
+        SlotNotClean => "slot_not_clean",
+        PreviousSlotUnconfirmed => "previous_slot_unconfirmed",
+        PlatformToolsChanged => "platform_tools_changed",
+        StateSelectionMismatch => "state_selection_mismatch",
+        SelectionChangedExternally => "selection_changed_externally",
+        SelectionCommitLost => "selection_commit_lost",
+        SelectionCommitFailed => "selection_commit_failed",
+        NotSameVolume => "not_same_volume",
+        ReparsePoint => "reparse_point",
+        RollbackMaterialUnavailable => "rollback_material_unavailable",
+        OperationAttemptRunning => "operation_attempt_running",
+        OperationIdUnavailable => "operation_id_unavailable",
+        AttemptRecordExists => "attempt_record_exists",
+        DetachSpawnFailed => "detach_spawn_failed",
+        DetachIdentityMismatch => "detach_identity_mismatch",
+        ClientRefUnknown => "client_ref_unknown",
+        UiConfirmationStale => "ui_confirmation_stale",
+        CleanIrreversible => "clean_irreversible",
+        EntryModified => "entry_modified",
+        ConfigCandidatePending => "config_candidate_pending",
+        ConvertLayoutUnrecognised => "convert_layout_unrecognised",
+        ConvertRolledBack => "convert_rolled_back",
+        StateRootMismatch => "state_root_mismatch",
+        StateRootPlaceholder => "state_root_placeholder",
+        LayoutSingleConvertFirst => "layout_single_convert_first",
     }
 }
 
@@ -546,6 +585,28 @@ actingcommand_contract::outcome_vocabulary! {
         // the `install` section, which has no effect.
         IdleWakesRederived => "idle_wakes_rederived",
         ConfigKeyRetired => "config_key_retired",
+        // Workflow #429 R-15b (since 0.12.35; design v4.1 §3.3 to §3.14, §5.3 and §6.2): the
+        // caveats of the A/B layout, the attempts and the clean, registered before R-15c to
+        // R-15e note them.
+        UiRestartRequired => "ui_restart_required",
+        RuntimeOnPreviousSlot => "runtime_on_previous_slot",
+        StateBehindSelection => "state_behind_selection",
+        ForeignPart => "foreign_part",
+        EntryModified => "entry_modified",
+        InstallerNotNewest => "installer_not_newest",
+        LegacyAutostart => "legacy_autostart",
+        SlotLeftPrepared => "slot_left_prepared",
+        OperationAttemptUnconfirmed => "operation_attempt_unconfirmed",
+        OperationAttemptLost => "operation_attempt_lost",
+        OperationAttemptMismatch => "operation_attempt_mismatch",
+        KeptHoldMismatch => "kept_hold_mismatch",
+        CleanupPending => "cleanup_pending",
+        CleanupFailed => "cleanup_failed",
+        PlayerHoldPersistenceOff => "player_hold_persistence_off",
+        CleanupWaitingHealth => "cleanup_waiting_health",
+        CleanupDeferred => "cleanup_deferred",
+        PlayerHoldOfflineReadFailed => "player_hold_offline_read_failed",
+        McpEntryGenerationStale => "mcp_entry_generation_stale",
     }
 }
 
@@ -572,6 +633,9 @@ actingcommand_contract::outcome_vocabulary! {
         FileMismatch => "file_mismatch",
         InterfacesInvalid => "interfaces_invalid",
         InterfacesDiffer => "interfaces_differ",
+        // Workflow #429 R-15b (since 0.12.35, A.4 b): a UI build's manifest whose
+        // `installation_selection_schema` disagrees with its `install-selection` range.
+        SelectionSchemaMismatch => "selection_schema_mismatch",
     }
 }
 
@@ -601,6 +665,14 @@ actingcommand_contract::outcome_vocabulary! {
         ForeignPauses => "foreign_pauses",
         LadderHolding => "ladder_holding",
         Adb => "adb",
+        // Workflow #429 R-15b (since 0.12.35; design v4.1 §3.6, §3.10, §3.12, §4.3, §5.2,
+        // §5.3): registered before R-15d and R-15e evaluate them; `install guards` and the
+        // `--ack-guard` list of this build do not take them yet.
+        Disk => "disk",
+        RootInventory => "root_inventory",
+        InstructionsDropped => "instructions_dropped",
+        SelectionExternal => "selection_external",
+        PlayerHolds => "player_holds",
     }
 }
 

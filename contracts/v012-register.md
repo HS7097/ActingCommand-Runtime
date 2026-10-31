@@ -5252,6 +5252,89 @@ contains an expected consumption, whichever task it belongs to.
 | SS2d-4 | `allocation_order`: the released candidates last in the business tier, a promotion not lifting them | behaviour (evaluation) | SS-2d | — | only when a candidate is released; otherwise the order of before |
 | SS2d-5 | the idle plan: a decision within tolerance that was not selected is neither due nor a wake | behaviour (runtime-host, IDLE-1) | SS-2d | `schedule_explanation.rs` (`IdleDraft::add`) | as SS2b-7, its own wake excluded too |
 
+### 1.237 Slice R-15b (0.12.35): the A/B install contract frozen, install selection v2 and the slot document typed, and the release reader takes a UI release (Workflow #429 §10.1 R-15b and A.4 b; Alice's rulings 131, the clean, and 132 A, the conversion, 10-31 14:08–14:18, #429 comment 6539887801; the frozen design `rd-1031/design-r15b-ab-v4.1.md`, sha256 `36ed6a98…2eaca`, frozen in #429 comment 6541651601 after the UI channel's reviews of v1 to v4.1; coordinator work order `rd-1031/brief-r15b-impl.md`)
+
+[install-cli.md](install-cli.md) ("The A/B layout", with "Release verify and stage", "Formal stop,
+start and the hold", "Locks and the watchdog" and "Kept files"),
+[component-interfaces.md](component-interfaces.md) (`install-selection` 2, `tools-layout` 4,
+`install-cli` 1, `install-root` 1, "A/B roots of `actingctl install`", the Parse rules' schema
+line), [runtime-watchdog.md](runtime-watchdog.md) (the A/B config, the entry's result line, the
+pass list of row 7a″) and the new [stable-entry.md](stable-entry.md) are the contract. The number
+1.237 is the coordinator's; R-7a2 (§1.234) and 114-A (§1.236) may be in flight in the same
+release. R-15c, R-15d and R-15e build what this slice freezes.
+
+**What.** (1) The contract texts of the design's §7 R-15b block: the A/B layout, the command
+surface with the read-only `--hold`, `--detach` and `--client-ref` everywhere, the forms
+`apply_form`, `restart_form` and `start_form` with the `blocked_by` table, the nine conditions of
+`install start`, the step-kind table, the recovery table with the general rule of `next` and who
+runs an argv, background operations with the attempt lock and the handover, the read face, the
+start rules, the installer list and recovery, the clean of ruling 131 with the health
+confirmation, `install restart` with the next step of every state and M1–M5, the conversion's
+`convert_checks` values and inventory; the two old sentences of "Formal stop, start and the hold"
+(a stopped Runtime gets `install start`, never `release-hold`); "Tools never deletes anything" kept
+for a single-location root, the clean's whitelist for an A/B root; "A/B stays acsetup's" removed.
+(2) The contract crate (`installation/selection_v2.rs`): `InstallSelectionV2`, `InstallSlotDocument`,
+`InstallMemberIdentity`, `InstallSelectionMembers`, `InstallSlotMember`, `InstallSlotMembers`, with
+`from_json`, `validate`, `validate_successor` and `matches_selection`; the constants
+`INSTALL_SELECTION_V2_SCHEMA`, `INSTALL_SLOT_SCHEMA`, `INSTALL_SLOT_DOCUMENT_FILE`,
+`MAX_INSTALL_SLOT_DOCUMENT_BYTES`, `INSTALL_OPERATION_ENV` (`ACTINGCOMMAND_INSTALL_OPERATION`) and
+`ENTRY_NO_DIALOG_ENV` (`ACTINGCOMMAND_ENTRY_NO_DIALOG`); no consumer calls them. (3) The release
+reader (`release.rs`): a folder of `acui-windows-<u>.zip` and `SHA256SUMS` is a UI release,
+verified (the facts' repository, the manifest's commit, the file set, the digests, the declaration
+by the parse rules, `installation_selection_schema` against `install-selection`) and staged into
+`install\ui-builds\<u>\{ui, release.json}` (`member: "ui"`; three steps, no `state.json`); a zip it
+recognises as none refuses `zip_set` by name instead of being passed over, and so does a UI zip
+beside another release zip. (4) The codes and words of the block, `since` 0.12.35: 28
+`install_refusal`, 19 `install_caveat`, 1 `release_check` (`selection_schema_mismatch`) and 5
+`install_guard` tokens in the vocabularies and their enums; 34 catalog vocabularies of the read
+face, the conversion and the entries (`install_needs_person`, `install_blocked_by`,
+`install_attempt_phase` …); the keys `attempt_phase`, `hold_reason`, `s0_from`,
+`player_hold_range` (`list<integer>`, with its setter), `confirm_argv`, `child_pid`, `child_state`,
+`child_exit_code`, `inherited_sha256`, `active_sha256` and `install_member`; the locations
+`install_prepare`, `install_convert_plan`, `install_convert_apply`, `install_clean`,
+`install_restart`; the contract's `install_selection_v2_invalid`, `install_slot_document_mismatch`,
+`install_member_identity_invalid`, `install_member_pairing_mismatch`,
+`install_slot_document_invalid`; actingd's `unlock_owner_install_unfinished`; the ten `entry_*`
+codes under the new owner `actingcommand-entry` (the workspace member `apps/actingcommand-entry`, a
+library of its codes until R-15c adds the two programs). R-7a's keys `hold_phase`, `alias`,
+`source_*` and `ended_by_*` are referenced, not registered again.
+
+**Deviations from the design's wording, no shape change.** (a) The refusals the design calls fatal
+(`operation_id_unavailable`, `attempt_record_exists`) are `install_refusal` tokens of
+`install_command_refused` (error) as ruling 54 folds them; where one meets an attempt after a
+change, the attempt ends `install_operation_interrupted` (fatal) with it as the link. (b) F11's
+"refused `selection_changed`" is §3.3's `plan_changed` with `selection.active_now`; no token
+`selection_changed` is registered. (c) `installer_unavailable` is what a UI shows (§3.13), no
+installer answer, so the Runtime registers no word for it. (d) The private files' words
+(`install-root`: the journal's `state`, the spawn record's `state`, `rollback_material.state`, the
+cleaning `kind`) are not catalog vocabularies; the face the UI reads is. (e) The forwarder's owner
+needs a workspace member, so `apps/actingcommand-entry` is created now as a library that only holds
+the codes; CI's `light` job runs it until it has programs.
+
+**Why.** Workflow #429 makes the A/B layout the formal layout with `actingctl install` its one
+writer; the UI's code table (UI-0b) needs every code and word before UI-2a and UI-2e2 start, and
+the UI's release must be stageable before R-15c lays slots.
+
+**What changes live.** One thing: `actingctl install release verify` and `stage` refuse a folder
+that holds a zip they recognise as no release zip (`zip_set`, the name as the failure's `file`),
+where they passed it over before; a Runtime release folder of the Release workflow holds only its
+two zips and `SHA256SUMS`, so a deploy is not affected. Staging a UI release is new. Production
+stays one single-location root; no A/B path runs.
+
+**Rollback** (to 0.12.34). Nothing persisted changes shape: `state.json`, the journals and a Runtime
+build's `release.json` are as before. A kept UI build under `install\ui-builds\` is a folder 0.12.34
+never reads. An unfinished UI stage (a `release_stage` journal of three steps) cannot be resumed by
+0.12.34, whose reader refuses the folder (`zip_set`), but its `undo` takes it as any stage; finish
+or undo it before rolling back. Roll back with the single-location `rollback` as usual.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| R15B-1 | the A/B layout, install selection v2, the slot document, the commands, the forms, the protocol, the read face, the clean, `install restart`, the conversion's checks and inventory | contract text (`install-cli` 1, `install-root` 1) | R-15b | R-15c to R-15e | frozen; later changes by the bump rules |
+| R15B-2 | `InstallSelectionV2`, `InstallSlotDocument` and the constants | contract crate types | R-15b | R-15c (the readers), R-15d (the writer) | `install-selection` 2 declared from R-15c |
+| R15B-3 | a UI release staged into `install\ui-builds\<u>\{ui, release.json}`, `member: "ui"` | installer behaviour, a new folder | R-15b | `actingctl install release stage` | no `state.json` write; `install-state` v2 lists UI builds from R-15c |
+| R15B-4 | `zip_set` for a zip recognised as none, by name | installer behaviour | R-15b | `release verify`, `release stage` | the one visible change |
+| R15B-5 | the codes, words, keys and locations of the block, the owner `actingcommand-entry` | catalog | R-15b | R-15c to R-15e | `since` 0.12.35, review pending |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

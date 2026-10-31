@@ -82,7 +82,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 15
     env:
-      CI_PACKAGES: -p actingcommand-outcome-guard -p actingcommand-actinglab-architecture -p actingcommand-contract -p actingcommand-scheduler -p actingcommand-policy -p actingcommand-selection-policy -p actingcommand-runtime-config -p actingcommand-display-adapter
+      CI_PACKAGES: -p actingcommand-outcome-guard -p actingcommand-actinglab-architecture -p actingcommand-contract -p actingcommand-scheduler -p actingcommand-policy -p actingcommand-selection-policy -p actingcommand-runtime-config -p actingcommand-display-adapter -p actingcommand-entry
       CI_SKIP: ''
     steps:
       - uses: actions/checkout@v4

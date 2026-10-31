@@ -3045,7 +3045,8 @@
         "package_id": "optional",
         "aliases": "optional",
         "alias": "optional",
-        "config_key": "optional"
+        "config_key": "optional",
+        "attempt_phase": "optional"
       },
       "review": "pending",
       "status": "active",
@@ -3352,6 +3353,46 @@
       "status": "active",
       "since": "0.12.12",
       "description": "The operation of the command actingctl install new (Workflow #421 INST-6; contracts/install-cli.md)."
+    },
+    "install_prepare": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "The operation of the command actingctl install prepare (Workflow #429 R-15b frozen, R-15c builds it; contracts/install-cli.md)."
+    },
+    "install_convert_plan": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "The operation of the command actingctl install convert plan (Workflow #429 R-15b frozen, R-15e builds it; contracts/install-cli.md)."
+    },
+    "install_convert_apply": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "The operation of the command actingctl install convert apply (Workflow #429 R-15b frozen, R-15e builds it; contracts/install-cli.md)."
+    },
+    "install_clean": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "The operation of the command actingctl install clean (Workflow #429 R-15b frozen, R-15d builds it; contracts/install-cli.md)."
+    },
+    "install_restart": {
+      "owner": "actingctl",
+      "layer": "process",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "The operation of the command actingctl install restart (Workflow #429 R-15b frozen, R-15d builds it; contracts/install-cli.md)."
     }
   }
 }

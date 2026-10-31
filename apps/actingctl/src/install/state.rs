@@ -63,6 +63,11 @@ impl Paths {
         self.builds().join(commit)
     }
 
+    /// `install\ui-builds\<commit>`, a kept UI build (Workflow #429 R-15b, A.4 b).
+    pub(crate) fn ui_build(&self, commit: &str) -> PathBuf {
+        self.install().join("ui-builds").join(commit)
+    }
+
     pub(crate) fn selection(&self) -> PathBuf {
         self.install().join(SELECTION_FILE)
     }

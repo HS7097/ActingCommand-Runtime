@@ -73,6 +73,21 @@ tests = [
 ]
 incident = ["#382 C-1"]
 
+# Workflow #429 R-15b (0.12.35; register §1.237; design rd-1031/design-r15b-ab-v4.1.md §2.3, §2.4, §7 R-15b, test E02; contracts/install-cli.md, "The A/B layout"): install selection v2 round-trips and names its slot; each of its rules refuses with its code (schema, selection id, generation, made_by: install_selection_v2_invalid; the slot document's path: install_slot_document_mismatch; its reference: invalid_install_file_reference; a member's form: install_member_identity_invalid; an unknown, missing or mistyped member, v1's config, slot C: install_selection_json_invalid); 16 KiB exactly reads and one byte more is install_selection_size_invalid; a Runtime with the Tools of another commit or repository is install_member_pairing_mismatch while the UI has its own commit; the generation is 1 for a root's first selection and the baseline's plus 1 after it; the slot document round-trips, refuses each rule and takes 64 KiB; it matches only the selection of its slot and members; the two environment names and the bounds are fixed
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::installation::selection_v2::gate_r15b_selection::r15b_a_selection_v2_round_trips_and_names_its_slot",
+    "actingcommand-contract::lib::installation::selection_v2::gate_r15b_selection::r15b_each_rule_of_the_selection_refuses_with_its_code",
+    "actingcommand-contract::lib::installation::selection_v2::gate_r15b_selection::r15b_the_selection_takes_16_kib_and_not_one_byte_more",
+    "actingcommand-contract::lib::installation::selection_v2::gate_r15b_selection::r15b_a_runtime_paired_with_the_tools_of_another_build_is_refused",
+    "actingcommand-contract::lib::installation::selection_v2::gate_r15b_selection::r15b_a_selection_follows_its_baseline_by_one_generation",
+    "actingcommand-contract::lib::installation::selection_v2::gate_r15b_selection::r15b_a_slot_document_round_trips_and_refuses_each_rule",
+    "actingcommand-contract::lib::installation::selection_v2::gate_r15b_selection::r15b_a_slot_document_matches_only_the_selection_of_its_slot_and_members",
+    "actingcommand-contract::lib::installation::selection_v2::gate_r15b_selection::r15b_the_environment_names_and_bounds_are_fixed",
+]
+incident = ["#429 R-15b"]
+
 # The prior-epoch close basis: its wire values and the import validation per basis
 [[gate]]
 key = "K9"

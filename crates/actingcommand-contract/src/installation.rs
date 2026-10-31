@@ -12,6 +12,11 @@ use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
+// Workflow #429 R-15b: the A/B selection v2 and the slot document, parsed and checked; the
+// readers below still read v1 until R-15c.
+mod selection_v2;
+pub use selection_v2::*;
+
 // Interface anchor `install-selection` (contracts/component-interfaces.md): raise its revision in
 // distribution/windows/component-interfaces.json when older peers can no longer read this.
 pub const INSTALL_SELECTION_SCHEMA: &str = "actingcommand.install-selection.v1";

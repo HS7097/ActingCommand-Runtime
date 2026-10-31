@@ -1107,6 +1107,18 @@ tests = [
 ]
 incident = ["#429 R-15a"]
 
+# Workflow #429 R-15b (0.12.35; register §1.237; design rd-1031/design-r15b-ab-v4.1.md §1.9, §7 R-15b, test E01's source checks; contracts/install-cli.md, "Release verify and stage"): a UI release (acui-windows-<commit>.zip and SHA256SUMS) verifies and stages into install\ui-builds\<commit>\{ui, release.json} with member ui, writes no state.json, a second stage is unchanged and an interrupted one is finished by resume to the same bytes; each UI failure is listed (the facts' repository, the manifest's commit, the file set, a file's digest, a declaration that breaks the parse rules or lacks a v1 interface, an installation_selection_schema outside the install-selection range or none, the facts' digest and commit) and the folder is unchanged; a zip the reader recognises as no release zip refuses zip_set by its name (beside a Runtime pair, beside a UI zip, at stage, which writes nothing), and a UI zip beside a Runtime pair or a second UI zip refuses zip_set naming every zip; the Runtime and Tools stage answers and keeps its build as before; every code and registered word of install-cli.md's and stable-entry.md's R-15b registry is in contracts/outcome-codes and this build's enums, R-7a's keys referenced, not registered again
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::install::gate_r15b_release::r15b_a_ui_release_verifies_and_stages_into_ui_builds",
+    "actingcommand-actingctl::bin:actingctl::install::gate_r15b_release::r15b_each_failure_of_a_ui_release_is_listed",
+    "actingcommand-actingctl::bin:actingctl::install::gate_r15b_release::r15b_an_unrecognised_zip_refuses_zip_set_by_its_name",
+    "actingcommand-actingctl::bin:actingctl::install::gate_r15b_release::r15b_the_runtime_and_tools_stage_answers_and_keeps_its_build_as_before",
+    "actingcommand-actingctl::bin:actingctl::install::gate_r15b_registry::r15b_every_code_and_word_of_the_contracts_is_registered",
+]
+incident = ["#429 R-15b"]
+
 # #411 P49 (v0.12.25; brief rd-1028/brief-wave1.md W1-10, board #411 6444748093 and #421 6436231390, review rd-1027/mcp-entry/review.md L4, L9, L10): the entry's status file records its process creation time beside its pid, null when the operating system did not say (E-24, L4); actingctl mcp-entry list marks an entry stale when no process runs with its pid or the one that does has another creation time (recorded) or was created after the file's started_at_unix_ms (not recorded), and lists stale ones only with --all (L4); a pid the process probe cannot judge answers only its own row, listed with or without --all with stale null and probe_failed, and the answer carries one process_probe_failed warning naming those rows (fix round 1, review rd-1028/review-w1-10.md M1); the update plan's notice asks MCP clients to reconnect only for a renamed mcp-serve image not started by an MCP entry under the root, and the process probe reads each image's parent (L9); a newer install that lands while a planned switch waits drops that plan, and once it settles the one switch goes to the newest build under its own name (E-25, L10)
 [[gate]]
 coverage = "Y"

@@ -40,7 +40,11 @@ Two layouts qualify (Workflow #390 WD-1 adds the second in v0.12.1):
 - **A/B installation**: there is a selection, the process's own
   (`process_installation()`), else `install\active.json` read by
   `InstalledProcess::read_active` for a direct run. Its config is the selected
-  generation's.
+  generation's. **From R-15c** (Workflow #429; the frozen contract of R-15b,
+  [install-cli.md](install-cli.md), "The A/B layout"): the selection is install selection v2,
+  which names the programs only, and the config of an A/B root is `<root>\actingd.config.json`,
+  read as a single-location root's is; the check of the selection under the shared writer lock
+  compares the bytes of `install\active.json`, and the report names its `selection_id`.
 - **Single-location root**: there is no selection, and
   `<root>\runtime\BUILD-MANIFEST.json` is a file (the mark of an executable root, as
   for `packs` and `mcp-serve`). Its config is `<root>\actingd.config.json`, read with
@@ -81,7 +85,9 @@ installer update or rollback (or its undo), a tick that would consider a start a
    `%LOCALAPPDATA%\ActingCommand\logs` (the task runs as the same user; actingd's
    fallback log lies there too) modified at or after J's time minus 2 s, the newest
    whose last 64 KiB hold a terminal outcome: the last `OUTCOME actingd:` or
-   `OUTCOME acforward:` line that holds an outcome envelope (Workflow #378 A6a). A
+   `OUTCOME acforward:` line that holds an outcome envelope (Workflow #378 A6a); from R-15c
+   also the fixed entry's `OUTCOME actingcommand-entry:` line
+   ([stable-entry.md](stable-entry.md); acforward's plain `FATAL acforward:` was invisible). A
    terminal outcome whose `install_root` names another installation is not this
    root's; one without `install_root` is every root's. A log without one is passed
    over for the next older log. actingd's last daemon line is its terminal outcome:
@@ -125,6 +131,15 @@ installer update or rollback (or its undo), a tick that would consider a start a
      `adopt` changes only `install\` and is no U (INST-1b-F fix round 1); one that cannot
      be read or names no operation id is `watchdog_installer_unfinished` too, without the
      id: the watchdog never starts a root whose installer state it cannot read.
+     **The pass list** (Workflow #429, frozen by R-15b, built by R-15c; design v4.1 §3.4):
+     the code lists the kinds that are *no* U, `release_stage`, `adopt`, `stop`, `start` and
+     `release_hold`, and every other kind is a U. R-15c adds `prepare` and `clean`, which
+     never touch the active slot, so an interrupted one lets the Runtime start from it;
+     `convert` and `restart` stay off the list and stand aside (a conversion changes program
+     files; between its close and its start the start belongs to `restart`, which `resume`
+     finishes). A kind this build does not know is unreadable and stands aside. The actingd
+     fixed entry's `entry_operation_unfinished` takes the same list
+     ([stable-entry.md](stable-entry.md)).
    - **P**, processes named `actingcommand-actingd.exe` whose executable path is under
      `<root>\` (case-insensitive), or whose path cannot be read, through a CIM query
      in a hidden Windows PowerShell. The same query reads the last boot time
@@ -151,7 +166,7 @@ Each decision is one registered code; its category sets the exit (Workflow #378 
 | 6 | J inactive otherwise | `watchdog_formal_close` | 0 | INFO, once per epoch |
 | 7a | W held | `watchdog_installer_busy` | 0 | INFO |
 | 7a′ | selection changed | `watchdog_selection_changed` | 0 | INFO |
-| 7a″ | U present: an unfinished installer update or rollback (Workflow #421 INST-1) | `watchdog_installer_unfinished` (warning; `install_operation_id` when U names one) | 0 | WARN |
+| 7a″ | U present: an unfinished installer update or rollback (Workflow #421 INST-1), or from R-15c any unfinished kind off the pass list (U above) | `watchdog_installer_unfinished` (warning; `install_operation_id` when U names one) | 0 | WARN |
 | 7b | P present, under 10 minutes | `watchdog_runtime_process_present` | 0 | INFO |
 | 7b′ | P present for 10 minutes or more | `watchdog_runtime_process_without_owner` | 1 | ERROR |
 | 7c | exhaustion recorded | `watchdog_budget_exhausted` or `panic_unrecovered` (see "Budget") | 1 or 2 | ERROR |
@@ -244,8 +259,10 @@ script's command line), working directory `<root>`, stdin NUL, stdout and stderr
 appended to `<root>\watchdog\actingd-<unix_ms>.log` (created before the spawn). The
 child gets no inherited installation selection. For an A/B installation the fixed
 entry reads `install\active.json`, which the shared writer lock keeps equal to the
-selection the tick read, and `--config` names that selection's config. Paths handed
-to children are plain (no `\\?\`).
+selection the tick read, and `--config` names that selection's config; from R-15c (install
+selection v2) `--config` is `<root>\actingd.config.json` and the entry is the Runtime's console
+forwarder ([stable-entry.md](stable-entry.md)), whose result line and exit code the start reads
+as the child's. Paths handed to children are plain (no `\\?\`).
 
 - **Task tick (`--from-task`)**: CreateProcess with `CREATE_NO_WINDOW |
   CREATE_BREAKAWAY_FROM_JOB | CREATE_NEW_PROCESS_GROUP | NORMAL_PRIORITY_CLASS`. The
