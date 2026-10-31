@@ -4961,12 +4961,14 @@ valuation, and all five instances are paused under ruling 116 (`alice-116-schedu
 
 **Rollback** (to 0.12.33). The ledger and the configuration need nothing: no shape or value is
 new. The catalog: a build without SS-2g refuses a consumed `expected_amount_milli`
-(`limit_exceeded` at the entry), and its start compiles the active generation and every generation
-an unsettled dispatch or a pair's latest completed policy dispatch pins (§1.225's rollback and its
-correction). So before rolling back, let 0.12.34 activate a generation without such an entry
-(take the entry, or its rule, out of the game roots), with no policy dispatch of a task that
-declares one pinned to a generation that has it; while the scheduler is stopped on every instance
-no such dispatch exists.
+(`limit_exceeded` at the entry), and its start compiles each whole generation it reads: the active
+one, every generation an unsettled dispatch pins, and every generation a decision memory names,
+each pair's latest completed policy dispatch included (§1.225's rollback and its correction). One
+such entry anywhere in a generation stops that start, whichever task the dispatch or the memory
+belongs to. So before rolling back, let 0.12.34 or later activate a generation without an expected
+consumption (take the entry, or its rule, out of the game roots), with no dispatch and no decision
+memory naming a generation that contains one. (Corrected in SS-2d, §1.235: this paragraph first
+named only the dispatches of a task that declares such an entry.)
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
@@ -4974,6 +4976,112 @@ no such dispatch exists.
 | SS2g-2 | the net benefit's consumption in thousandths (`declared_consumption_milli`) | behaviour (evaluation, score stage) | SS-2g | the policy evaluator | exact; integer catalogs unchanged |
 | SS2g-3 | `⌈C/1000⌉` (`declared_consumption`) for the reserve views and gate, the unshown consumption, the tie key and the selection fields | behaviour (evaluation) | SS-2g | the policy evaluator | rounds up |
 | SS2g-4 | SS-6 `run_cap`: absent when the task reserves a pool it consumes by expectation | behaviour (evaluation) | SS-2g | the policy evaluator | `spend_allowance` unchanged |
+
+### 1.235 Slice SS-2d (0.12.35): a judged candidate whose net benefit is within its rounding error is neither positive nor negative; a model-verified realization task may run in the last place of its tier (Alice's ruling 127, 10-31 13:19 「127我认同你的判断」, the review's version, Workflow #424 comment 6538837139 §4 and the coordinator's record 6539002371: cost discounts only where overflow or regeneration loss is verifiable; the zero reduced-value fallback only for necessary realization or conversion tasks with a real downstream use and verifiable progress, bound by eligibility, the reserve line, failure and no-progress guards, never a zero-benefit loop; design `rd-1031/design-acm-price-addendum2.1.md` §7; coordinator work order `rd-1031/brief-ss2d.md`)
+
+[scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Within tolerance"),
+[scheduling/v2/README.md](scheduling/v2/README.md) (`benefit_realization`),
+[scheduling/v2/tasks.schema.json](scheduling/v2/tasks.schema.json),
+[standard-pack-schedule.md](standard-pack-schedule.md) ("The realization mark", the rule member
+`realization` and the count) and [resource-targets.md](resource-targets.md) ("Net benefit") are
+the contract. It narrows §1.225 (2) and reads §1.232's thousandths. The number 1.235 is the
+coordinator's; §1.233 (R-7a) and §1.234 (R-7a2) are in flight in other crates. It depends on
+§1.231 (SS-4, the no-progress guard) and §1.232 (SS-2g), both merged at its base f64b3a12.
+
+**What.** (1) A judged candidate's exact sum `S` (before the floor) has the rounding bound
+`ε = Σ_produces [R/(2000·Q) + n·(2W+1)/(4000·Q)] + Σ_consumes σ·[C/(2000·Q) + m·(2W+1)/(4000·Q)]`,
+with `R` and `C` the per-run production and consumption in thousandths (`per_run_yield`,
+SS-2g's `declared_consumption_milli`), `n` and `m` the pool's `expected_amount_milli` entries in
+each direction, `W` the weight `B` reads and `σ` the regenerating share; an exact rational the
+evaluator sums as it sums `S` (`evaluator/benefit.rs`, `judge`). `|S| ≤ ε` is within tolerance:
+`benefit_within_tolerance` (info; `benefit_milli` ⌊S⌋, `tolerance_milli` ⌈ε⌉, `zero_tier`; the
+developer text adds `sum=` and `tolerance=` as exact reduced fractions). Outside the band the gate
+is §1.225's: `B = ⌊S⌋ > 0` ranks by `B ÷ E` as before, any other known `B` is
+`policy_benefit_nonpositive` as before (a `B` of 0 with `S > ε` included, so the band only carves
+out of the two old outcomes). (2) A V2 task may carry `benefit_realization: true`, composed from
+the `schedule.json` rule member `"realization": true`, which only `acmodel bindings apply` writes
+from the model's verdict. The compiler (`validation.rs`, `validate_realization` and
+`validate_realization_cycles`) requires `benefit_judged: true` (`missing_required_field` at
+`benefit_judged`), a `consumes` and a `produces` entry (`missing_required_field` at the empty
+list), a reserve on every consumed pool (`missing_required_field` at `reserves`), a fact reading
+of every consumed pool (`effect_incompatible` at the entry) and no cycle among the marked tasks
+through their pools (`realization_cycle` at each one's `benefit_realization`). The compiler binds
+no task to an instance, so the cycle check is over the marked tasks of the whole catalog by pool
+id, stricter than per instance; a composed catalog's ids are per instance already once a rule is
+copied to two. V1 refuses the member (`unknown_field`). The reader takes `realization` out of the
+rule (`ScheduleRule::realization`; only `true`, and never beside `"maintenance": true`), the
+composer refuses it on a rule whose package is maintenance-role and refuses a rule that writes
+`benefit_realization` (`schedule_invalid` at the member), maps `realization_cycle` back to the
+rule's `realization`, and counts the marked judged rules (`BenefitCoverage.realization`). (3) A
+marked candidate within tolerance whose `B` is known, that produces a pool weighed above 0 on its
+instance and whose latest run there did not fail is released (`zero_tier: released`): it takes
+part in the allocation after every unjudged and every positive judged candidate of the business
+tier, of every instance (`PlacementCandidate.zero_tier`, `allocation_order`), a promotion not
+lifting it, among such candidates by `affinity`, SS-2's key and the hash; every gate before and
+after it applies, the reserve gate, the shared run limits, every pause and hold, and SS-4's
+no-progress guard included (the guard's basis holds the readings of the pools it reserves, which
+are every pool it consumes). Any other candidate within tolerance is deferred with `zero_tier`
+`unmarked`, `no_downstream_value` or `latest_failed`, waking at a regenerating pool's next step as
+a not-positive one does. (4) The idle plan counts no decision within tolerance that was not
+selected as due or as a wake of its own (`schedule_explanation.rs`, `IdleDraft::add`).
+
+**Why.** Ruling 127 (ii), the review's version: a conversion at the margin of the modelled steady
+state has a reduced value of exactly 0, and the pools' rounding then gives `B` a sign of a few
+milli in either direction; §1.225 dispatched the positive ones and held the negative ones, so a
+necessary realization never ran and a zero-value conversion could run as if positive. The bound
+is computed from the two roundings the sum contains (the exported weight, half to even, and each
+expected quantity, half to even), not guessed; only the model knows whether a task has a real
+downstream use and whether one more run wastes anything, so the task carries the model's verdict.
+Ruling 127 (i): §1.225's discount already applies only to a regenerating projection, the
+declaration that regeneration (or a store's production) is lost at capacity; a non-regenerating
+pool costs `W` however full it is, and that is unchanged.
+
+**Unchanged.** `B`'s formula, the regenerating discount, unknown is never 0, the tiers, SS-2e's
+chain riding (a successor of a business link is not judged and never within tolerance), manual
+requests, maintenance tasks, the reserve gate's steps, SS-6's spend values, the one-way rule,
+game neutrality. A catalog in which no judged candidate falls within tolerance decides, ranks and
+records byte for byte as with §1.225 and §1.229; a catalog without `benefit_realization` keeps its
+hash. **No configuration key.**
+
+**New codes and keys.** `benefit_within_tolerance` (policy code, info), because no code says "the
+sign of this benefit is within its rounding error"; values `tolerance_milli` (integer) and
+`zero_tier` (vocabulary `zero_tier`: `released`, `unmarked`, `no_downstream_value`,
+`latest_failed`); the catalog diagnostic `realization_cycle` (policy code, error, prefix
+`realization_`), because no diagnostic says "these tasks form a cycle"; the V2 task member
+`benefit_realization`; the `schedule.json` rule member `realization`; the tools' count
+`benefit_coverage.realization`. No new ledger record kind, no interface revision.
+
+**What changes live.** Nothing now: no pool declares a valuation, no rule carries the mark, and
+all five instances are paused under ruling 116 (`alice-116-scheduler-stop`). Once values exist and
+the scheduler resumes on Alice's word, a candidate whose `S` is within `ε` is no longer dispatched
+as positive on a rounding remainder, and a marked realization runs only when its instance has
+nothing of positive benefit.
+
+**Rollback** (to 0.12.34). The ledger: the new code and its values ride only in existing reason
+chains (a released candidate's dispatch carries `benefit_within_tolerance` in its chain, and a
+deferred one may be a related candidate's `why`), which 0.12.34 reads as it reads any code, its
+values kept as a map without a key check (§1.231's rollback). The configuration and the state
+files: nothing is new. The catalog: a build without SS-2d refuses a task's `benefit_realization`
+(`unknown_field`) and a rule's `realization` (it reaches the composed task, `unknown_field`, so
+`schedule_invalid` at the rule), and its start compiles each whole generation it reads: the active
+one, every generation an unsettled dispatch pins, and every generation a decision memory names,
+each pair's latest completed policy dispatch included. So before rolling back, let 0.12.35 or
+later activate a generation without the member (take `realization` out of the game roots), with no
+dispatch and no decision memory naming a generation that carries it; while the scheduler is
+stopped on every instance no such dispatch exists. The tools' new count is output only.
+
+**Also in this slice.** §1.232's rollback paragraph is corrected to the whole-generation wording
+(the coordinator's correction of 10-31, from the 0.12.34 release check): a 0.12.33 start compiles
+each whole generation it reads, so no dispatch or decision memory may name a generation that
+contains an expected consumption, whichever task it belongs to.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SS2d-1 | the tolerance `ε` and the three bands of the benefit gate (`evaluator/benefit.rs`) | behaviour (evaluation, score stage) | SS-2d | the policy evaluator | exact rational, never a float; an overflow fails the evaluation as the sum does; the consumption term reads SS-2g's thousandths |
+| SS2d-2 | `benefit_within_tolerance` with `benefit_milli`, `tolerance_milli`, `zero_tier` | new policy code and values | SS-2d | the policy evaluator | info; on a released candidate's decision too |
+| SS2d-3 | V2 task member `benefit_realization`; `schedule.json` rule member `realization`; `BenefitCoverage.realization` | catalog format addition, tools output addition | SS-2d | `acmodel bindings apply` | absent serializes as nothing; the compiler's four requirements and `realization_cycle` |
+| SS2d-4 | `allocation_order`: the released candidates last in the business tier, a promotion not lifting them | behaviour (evaluation) | SS-2d | — | only when a candidate is released; otherwise the order of before |
+| SS2d-5 | the idle plan: a decision within tolerance that was not selected is neither due nor a wake | behaviour (runtime-host, IDLE-1) | SS-2d | `schedule_explanation.rs` (`IdleDraft::add`) | as SS2b-7, its own wake excluded too |
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

@@ -908,6 +908,47 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
   order of before and is dispatched as before SS-2b, its `priority` and every gate unchanged. A
   `schedule.json` that declares nothing composes byte for byte as with SS-2b alone. The
   evaluator reads no new member: it sees only the mark, as before.
+- **Within tolerance** (SS-2d, since 0.12.35; Alice's ruling 127, 10-31 13:19, the review's
+  version; register §1.235; design `rd-1031/design-acm-price-addendum2.1.md` §7). It narrows
+  "Not positive" above; no configuration key.
+  - *The bound.* The exact sum `S` (before the floor) differs from the model's value at the
+    exported prices by at most `ε = Σ_produces [R/(2000·Q) + n·(2W+1)/(4000·Q)] +
+    Σ_consumes σ·[C/(2000·Q) + m·(2W+1)/(4000·Q)]`: `R` and `C` the pool's per-run production and
+    consumption in thousandths (`r(k,p)` and SS-2g's `C`), `n` and `m` its `expected_amount_milli`
+    entries in each direction, `W` the weight `B` reads, `Q` the scale and `σ` the regenerating
+    share of `P`. The two roundings are the exported weight's (half to even, half a milli per
+    step) and each expected quantity's (half a thousandth). `ε` is an exact rational summed as `S`
+    is; an overflow fails the evaluation as the sum's does.
+  - *Three ways.* With `|S| ≤ ε` the candidate is *within tolerance*: its sign is the rounding's,
+    so it is neither positive nor `policy_benefit_nonpositive`, and its decision carries
+    `benefit_within_tolerance` (info; `benefit_milli` ⌊S⌋, `tolerance_milli` ⌈ε⌉, `zero_tier`; the
+    developer text gives `S` and `ε` as exact fractions). Outside the band the gate is as above:
+    `B = ⌊S⌋ > 0` is positive and ranks by `B ÷ E`, any other known `B` is not positive (so a `B` of
+    0 above `ε` is still not dispatched, as before).
+  - *The zero tier.* A candidate within tolerance whose task carries `benefit_realization: true`
+    ([v2/README.md](v2/README.md); the model's verdict that the task is a realization or
+    conversion with a real downstream use, one more run wasting nothing), whose `B` is known, that
+    produces a pool weighed above 0 on its instance (a model price or a goal's shortfall; a pool
+    verified worthless is weighed 0) and whose latest run there did not fail is *released*
+    (`zero_tier: released`). It takes part in the allocation after every unjudged and every
+    positive judged candidate of the business tier, of every instance, a promotion not lifting
+    it; among such candidates `affinity`, the tie-break and the hash decide. So it runs only when
+    its instance has nothing else chosen, and it takes no shared run slot and no reserve room
+    from a candidate before it. Every other gate still applies to it: the reserve gate, the shared
+    run limits, every pause and hold, and the no-progress guard ("No-progress guard"), which holds
+    it after a successful run that changed no reading of the pools it reserves. Any other
+    candidate within tolerance is deferred: `unmarked`, `no_downstream_value` or `latest_failed`
+    (its failure keeps its own path; the zero tier does not retry it). A deferred one wakes at a
+    regenerating pool's next step, as a not-positive one does.
+  - *No loop.* The compiler refuses a marked task that is not `benefit_judged`, that lacks a
+    `consumes` or a `produces` entry, that does not reserve or does not read by a fact every pool
+    it consumes, or whose marked tasks form a cycle through their pools (`realization_cycle`). So
+    each run lowers a pool to its reserve line and stops there, and its progress is visible.
+  - *The idle plan* counts no decision within tolerance, released or deferred, as due or as a wake
+    of its own, unless it was selected: the zero tier only fills an open game's idle time.
+  - *No candidate in the band, no change.* A catalog in which no judged candidate falls within
+    tolerance decides, ranks and records byte for byte as before; `benefit_realization` absent, a
+    catalog keeps its hash.
 
 ## Task Reserves (Workflow #411 B16 part 2)
 

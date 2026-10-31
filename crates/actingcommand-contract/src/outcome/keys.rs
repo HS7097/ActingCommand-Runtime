@@ -647,4 +647,8 @@ outcome_keys! {
     reading_digest: hash,
     basis_readings: records(fact_key; reading_value, reading_digest, observed_at_unix_ms),
     // ---- SS-4: end ----
+    // ---- SS-2d (the zero band, contracts/scheduling/README.md "Within tolerance"): begin ----
+    tolerance_milli: integer,
+    zero_tier: vocab(zero_tier),
+    // ---- SS-2d: end ----
 }

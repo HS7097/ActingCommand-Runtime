@@ -292,6 +292,8 @@ fn ss2c_t5_the_coverage_counts_a_declared_rule_as_not_judged() {
                 pending: 0,
                 undeclared: 1,
                 maintenance_declared: 2,
+                // SS-2d (register §1.235): no rule carries the realization mark.
+                realization: 0,
             }
         )]
     );

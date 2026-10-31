@@ -175,6 +175,9 @@ mod gate_idle1_host;
 mod gate_idle1p;
 // IDLE-WG (0.12.27): an idle instance is woken only for a task that could be dispatched now.
 mod gate_idle_wg;
+// SS-2d (0.12.35, register §1.235): a decision within its rounding error is neither due nor a
+// wake of the idle plan.
+mod gate_ss2d;
 // Workflow #372 K4: the occurrences lost to a `missed` grace or to a later occurrence.
 mod gate_372k4;
 // Workflow #372 K5: accounting follows the active catalog's task identity (`continues_from`).

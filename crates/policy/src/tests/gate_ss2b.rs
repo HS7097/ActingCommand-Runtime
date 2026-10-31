@@ -115,6 +115,9 @@ fn ss2b_t1_judged_candidates_rank_by_benefit_per_millisecond_within_a_tier() {
 
 // Test 2: a judged candidate whose known B is not positive is deferred with
 // `policy_benefit_nonpositive` and is not dispatched, even alone: B = 100 - 1000 = -900, and B = 0.
+// SS-2d (register §1.235): B = 0 here is S = 1000 - 1000 = 0 exactly, within its rounding bound
+// ε = 1/2 + 1/2 = 1, so it is `benefit_within_tolerance` (`zero_tier: unmarked`) instead, still
+// deferred and not dispatched.
 #[test]
 fn ss2b_t2_a_known_nonpositive_benefit_is_not_dispatched() {
     for (case, produces, consumes, expected) in [
@@ -137,14 +140,23 @@ fn ss2b_t2_a_known_nonpositive_benefit_is_not_dispatched() {
         assert_eq!(held.state, SchedulingDecisionState::Deferred, "{case}");
         assert_eq!(held.eligibility, EligibilityState::True, "{case}");
         let last = last(held);
-        assert!(
-            last.is(PolicyCode::PolicyBenefitNonpositive),
-            "{case}: {held:#?}"
-        );
         assert_eq!(
             last.value("benefit_milli"),
             Some(&json!(expected)),
             "{case}"
+        );
+        if case == "even" {
+            assert!(
+                last.is(PolicyCode::BenefitWithinTolerance),
+                "{case}: {held:#?}"
+            );
+            assert_eq!(last.value("tolerance_milli"), Some(&json!(1)), "{case}");
+            assert_eq!(last.value("zero_tier"), Some(&json!("unmarked")), "{case}");
+            continue;
+        }
+        assert!(
+            last.is(PolicyCode::PolicyBenefitNonpositive),
+            "{case}: {held:#?}"
         );
         assert_eq!(
             last.value("expected_duration_ms"),
@@ -652,6 +664,9 @@ fn ss2b_t9_the_composer_marks_the_judged_rules_and_counts_their_coverage() {
                 undeclared: 2,
                 // SS-2c (register §1.227): the count of rules declaring themselves maintenance.
                 maintenance_declared: 0,
+                // SS-2d (register §1.235): the count of judged rules carrying the realization
+                // mark.
+                realization: 0,
             }
         )]
     );

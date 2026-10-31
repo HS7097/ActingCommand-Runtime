@@ -29,6 +29,19 @@
 //!   either (`policy_benefit_nonpositive`).
 //! - **The one-way rule.** Nothing here writes a pool weight: the weights are read from the
 //!   resource layer's own term, which reads no task state.
+//! - **The zero band** (SS-2d, register §1.235; Alice's ruling 127, the review's version; design
+//!   `rd-1031/design-acm-price-addendum2.1.md` §7.2 and §7.3). The exact sum `S` (before the
+//!   floor) differs from the model's value at the exported prices by at most
+//!   `ε = Σ_produces [R/(2000·Q) + n·(2W+1)/(4000·Q)] + Σ_consumes σ·[C/(2000·Q) +
+//!   m·(2W+1)/(4000·Q)]`: `R` and `C` the per-run production and consumption in thousandths, `n`
+//!   and `m` the pool's `expected_amount_milli` entries in each direction, `W` the weight read
+//!   above, `Q` the scale and `σ` the regenerating share, summed exactly as `S` is. With `|S| ≤ ε`
+//!   the sign is the rounding's and is not trusted: the candidate is `benefit_within_tolerance`,
+//!   neither positive nor `policy_benefit_nonpositive`. A task marked `benefit_realization` whose
+//!   produced pools include one weighed above 0 and whose latest run did not fail is released
+//!   (`zero_tier: released`) into the last place of its tier ([`super::allocation_order`]); every
+//!   other is deferred (`unmarked`, `no_downstream_value`, `latest_failed`). Outside the band the
+//!   gate is SS-2b's: `B = ⌊S⌋ > 0` is positive, any other known `B` not positive.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -44,9 +57,10 @@ use super::{
     offset_rank, project_pool_value, reason_with, resource_suggestion, scope_matches_instance,
     unknown_token,
 };
-use crate::codes::{BenefitGap, PolicyCode};
+use crate::codes::{BenefitGap, PolicyCode, ZeroTier};
 use crate::{
-    ObservationRef, PoolProjection, PoolSpec, PredicateSpec, TaskSpec, ValuationDeclaration,
+    ObservationRef, PoolProjection, PoolSpec, PredicateSpec, TaskSpec, TaskTerminalState,
+    ValuationDeclaration,
 };
 
 /// The instance fact family of instructions: a person's or an agent's request is a fact of it.
@@ -115,10 +129,16 @@ enum Gap {
 /// What a judged candidate's inputs give.
 enum Judgement {
     Known {
-        benefit_milli: i128,
+        /// SS-2d: `S`, the exact sum before the floor; `B = ⌊S⌋`.
+        sum: ExactSum,
+        /// SS-2d: `ε`, the exact rounding bound of `S` (module doc).
+        tolerance: ExactSum,
         items: Vec<String>,
         /// The next step of a regenerating pool it consumes: its cost falls as the pool fills.
         wake_unix_ms: Option<u64>,
+        /// SS-2d: a pool it produces is weighed above 0 on the instance (a model price or a
+        /// goal's shortfall gives it a use).
+        downstream: bool,
     },
     Unknown {
         gap: Gap,
@@ -163,6 +183,77 @@ impl ExactSum {
     fn floor(&self) -> i128 {
         self.numerator.div_euclid(self.denominator)
     }
+
+    /// SS-2d: the ceiling of a sum that is not negative (a rounding bound).
+    fn ceil(&self) -> i128 {
+        -(-self.numerator).div_euclid(self.denominator)
+    }
+
+    /// SS-2d: `|self| ≤ bound` for a bound that is not negative, compared exactly by
+    /// [`compare_ratios`], which never multiplies; `None` for a negative bound.
+    fn within(&self, bound: &Self) -> Option<bool> {
+        let bound_numerator = u128::try_from(bound.numerator).ok()?;
+        Some(
+            compare_ratios(
+                (
+                    self.numerator.unsigned_abs(),
+                    self.denominator.unsigned_abs(),
+                ),
+                (bound_numerator, bound.denominator.unsigned_abs()),
+            ) != Ordering::Greater,
+        )
+    }
+
+    /// SS-2d: the reduced fraction `<numerator>/<denominator>`, for a record's developer text.
+    fn fraction(&self) -> String {
+        format!("{}/{}", self.numerator, self.denominator)
+    }
+}
+
+/// SS-2d: `a/b` against `c/d` (non-negative numerators, positive denominators), exactly and
+/// without a product that could overflow: equal integer parts compare their remainders' reciprocals
+/// the other way round, as the continued fractions of the two ratios do; Euclid's steps end it.
+fn compare_ratios((mut a, mut b): (u128, u128), (mut c, mut d): (u128, u128)) -> Ordering {
+    loop {
+        let (left, right) = (a / b, c / d);
+        if left != right {
+            return left.cmp(&right);
+        }
+        let (left_rest, right_rest) = (a % b, c % d);
+        match (left_rest == 0, right_rest == 0) {
+            (true, true) => return Ordering::Equal,
+            (true, false) => return Ordering::Less,
+            (false, true) => return Ordering::Greater,
+            (false, false) => {}
+        }
+        // left_rest/b against right_rest/d is d/right_rest against b/left_rest.
+        (a, b, c, d) = (d, right_rest, b, left_rest);
+    }
+}
+
+/// SS-2d: the numerator over `4000·Q` of one pool's rounding bound before its regenerating share,
+/// `2·quantity + expected·(2·W + 1)`: `quantity/(2000·Q)` for the weight's half step on what it
+/// produces or consumes, and `(2·W + 1)/(4000·Q)` for each `expected_amount_milli` entry's half
+/// thousandth (design §7.2). `None` on overflow.
+fn rounding_numerator(
+    quantity_milli: u128,
+    expected_entries: usize,
+    weight_milli: u64,
+) -> Option<u128> {
+    let per_entry = u128::from(weight_milli).checked_mul(2)?.checked_add(1)?;
+    quantity_milli.checked_mul(2)?.checked_add(
+        u128::try_from(expected_entries)
+            .ok()?
+            .checked_mul(per_entry)?,
+    )
+}
+
+/// SS-2d: how many of `effects`' entries for `pool_id` declare `expected_amount_milli`.
+fn expected_entries(effects: &[crate::ResourceEffectSpec], pool_id: &str) -> usize {
+    effects
+        .iter()
+        .filter(|effect| effect.pool_id == pool_id && effect.expected_amount_milli.is_some())
+        .count()
 }
 
 fn gcd(mut left: u128, mut right: u128) -> u128 {
@@ -243,6 +334,9 @@ fn judge(
         ))
     };
     let mut sum = ExactSum::new();
+    // SS-2d: the rounding bound `ε` of `sum`, accumulated as exactly (module doc).
+    let mut tolerance = ExactSum::new();
+    let mut downstream = false;
     let mut items = Vec::new();
     let mut seen = Vec::<&str>::new();
     for effect in &task.produces {
@@ -255,12 +349,25 @@ fn judge(
         let produced = crate::resource_targets::per_run_yield(&task.produces, &effect.pool_id);
         let weight_milli =
             weight(&effect.pool_id).unwrap_or_else(|| u64::from(valuation.base_weight_milli));
+        downstream |= weight_milli > 0;
         let (numerator, denominator) = ratio(
             &[produced, u128::from(weight_milli)],
             &[u128::from(valuation.scale), 1_000],
         )
         .ok_or_else(overflow)?;
         sum.add(numerator, denominator, false)
+            .ok_or_else(overflow)?;
+        // SS-2d: `R/(2000·Q) + n·(2W+1)/(4000·Q)`.
+        let rounding = rounding_numerator(
+            produced,
+            expected_entries(&task.produces, &effect.pool_id),
+            weight_milli,
+        )
+        .ok_or_else(overflow)?;
+        let (bound_numerator, bound_denominator) =
+            ratio(&[rounding], &[u128::from(valuation.scale), 4_000]).ok_or_else(overflow)?;
+        tolerance
+            .add(bound_numerator, bound_denominator, false)
             .ok_or_else(overflow)?;
         items.push(format!(
             "{}:+{}",
@@ -324,6 +431,21 @@ fn judge(
         )
         .ok_or_else(overflow)?;
         sum.add(numerator, denominator, true).ok_or_else(overflow)?;
+        // SS-2d: `σ·[C/(2000·Q) + m·(2W+1)/(4000·Q)]`, SS-2g's thousandths as `C`.
+        let rounding = rounding_numerator(
+            consumed_milli,
+            expected_entries(&task.consumes, &effect.pool_id),
+            weight_milli,
+        )
+        .ok_or_else(overflow)?;
+        let (bound_numerator, bound_denominator) = ratio(
+            &[rounding, share_numerator],
+            &[u128::from(valuation.scale), 4_000, share_denominator],
+        )
+        .ok_or_else(overflow)?;
+        tolerance
+            .add(bound_numerator, bound_denominator, false)
+            .ok_or_else(overflow)?;
         items.push(format!(
             "{}:-{}",
             effect.pool_id,
@@ -351,9 +473,11 @@ fn judge(
         });
     }
     Ok(Judgement::Known {
-        benefit_milli: sum.floor(),
+        sum,
+        tolerance,
         items,
         wake_unix_ms,
+        downstream,
     })
 }
 
@@ -392,6 +516,10 @@ pub(super) fn expected_duration_ms(candidate: &PlacementCandidate) -> u64 {
 /// part in the allocation. `weights` holds, by work index, the effective weight of each pool
 /// the candidate's resource term weighs. With `refreshing`, a candidate whose only gap is an
 /// unknown reading asks the fact refresh for it through `affected`.
+///
+/// SS-2d (register §1.235): three ways for a known `B`. Within its rounding error (`|S| ≤ ε`)
+/// it is `benefit_within_tolerance`: released (`zero_tier`, the allocation's last place in its
+/// tier) or deferred; outside, as before, positive with `B` or `policy_benefit_nonpositive`.
 pub(super) fn gate(
     context: &PlacementContext<'_>,
     facts: &EvaluationFacts,
@@ -435,15 +563,51 @@ pub(super) fn gate(
         let task_work = &mut work[candidate.work_index];
         match judgement {
             Judgement::Known {
-                benefit_milli,
+                sum,
+                tolerance,
                 items,
                 wake_unix_ms,
+                downstream,
             } => {
-                let benefit_milli = i64::try_from(benefit_milli).unwrap_or(if benefit_milli < 0 {
-                    i64::MIN
-                } else {
-                    i64::MAX
-                });
+                let benefit_milli = saturating_milli(sum.floor());
+                // SS-2d: within its rounding error the sign is not trusted (module doc).
+                let within = sum.within(&tolerance).ok_or_else(|| {
+                    PolicyEvaluationError::invalid(format!(
+                        "task '{}' net benefit tolerance is negative on instance '{}'",
+                        task.id, instance.instance_id
+                    ))
+                })?;
+                if within {
+                    let tier = if !task.is_benefit_realization() {
+                        ZeroTier::Unmarked
+                    } else if !downstream {
+                        ZeroTier::NoDownstreamValue
+                    } else if context.last_result(task, instance).is_some_and(|state| {
+                        state.terminal_state == Some(TaskTerminalState::Failed)
+                    }) {
+                        ZeroTier::LatestFailed
+                    } else {
+                        ZeroTier::Released
+                    };
+                    task_work.reasons.push(tolerance_reason(
+                        (benefit_milli, &sum),
+                        (saturating_milli(tolerance.ceil()), &tolerance),
+                        tier,
+                        &items,
+                    ));
+                    if matches!(tier, ZeroTier::Released) {
+                        // Every later gate applies; the allocation takes it last in its tier.
+                        candidate.zero_tier = true;
+                        kept.push(candidate);
+                        continue;
+                    }
+                    task_work.state = SchedulingDecisionState::Deferred;
+                    if let Some(wake) = wake_unix_ms.filter(|wake| *wake > context.time.unix_ms) {
+                        task_work.next_wake_unix_ms =
+                            min_wake(task_work.next_wake_unix_ms, Some(wake));
+                    }
+                    continue;
+                }
                 if benefit_milli > 0 {
                     let known = KnownBenefit {
                         benefit_milli,
@@ -494,6 +658,36 @@ pub(super) fn gate(
         }
     }
     Ok(kept)
+}
+
+/// `B` or `ε` in milli as a record value, saturated at the `i64` range.
+fn saturating_milli(value: i128) -> i64 {
+    i64::try_from(value).unwrap_or(if value < 0 { i64::MIN } else { i64::MAX })
+}
+
+/// SS-2d: `benefit_within_tolerance` (info; `benefit_milli` ⌊S⌋, `tolerance_milli` ⌈ε⌉,
+/// `zero_tier`); the developer text also gives `S` and `ε` as exact reduced fractions in milli.
+fn tolerance_reason(
+    (benefit_milli, sum): (i64, &ExactSum),
+    (tolerance_milli, tolerance): (i64, &ExactSum),
+    tier: ZeroTier,
+    items: &[String],
+) -> DecisionReason {
+    let outcome = Outcome::new(PolicyCode::BenefitWithinTolerance)
+        .benefit_milli(benefit_milli)
+        .tolerance_milli(tolerance_milli)
+        .zero_tier(tier);
+    reason_with(
+        outcome,
+        format!(
+            "benefit_milli={benefit_milli} tolerance_milli={tolerance_milli} zero_tier={} sum={} \
+             tolerance={} items={}",
+            tier.as_str(),
+            sum.fraction(),
+            tolerance.fraction(),
+            items.join(",")
+        ),
+    )
 }
 
 /// `policy_benefit_nonpositive` (info; `benefit_milli`).

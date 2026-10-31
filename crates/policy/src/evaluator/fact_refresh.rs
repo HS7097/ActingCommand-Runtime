@@ -198,6 +198,7 @@ pub fn fact_refresh_task() -> &'static TaskSpec {
         reserves: None,
         // SS-2b: the Runtime's own reading task is never judged by net benefit.
         benefit_judged: None,
+        benefit_realization: None,
     })
 }
 
@@ -728,6 +729,8 @@ fn refresh_candidate(
         business: false,
         judged: false,
         benefit: None,
+        // SS-2d: never judged, so never within tolerance.
+        zero_tier: false,
         facts_fresh_until_unix_ms: None,
         activity_profile_id: profile.id.clone(),
         daily_limit: task.daily_limit(),

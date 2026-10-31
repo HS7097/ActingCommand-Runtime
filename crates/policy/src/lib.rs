@@ -121,4 +121,7 @@ mod tests {
     // SS-2g (0.12.34; register §1.232): a V2 consumption may declare its expected amount in
     // thousandths; the net benefit reads it exactly and every integer reader rounds it up.
     mod gate_ss2g;
+    // SS-2d (0.12.35; register §1.235): a judged candidate within its rounding error is neither
+    // positive nor negative; a model-verified realization task may run last in its tier.
+    mod gate_ss2d;
 }
