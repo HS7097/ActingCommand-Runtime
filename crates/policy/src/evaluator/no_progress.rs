@@ -413,7 +413,7 @@ fn basis_keys(
         // #386 CF-5: a projection's comparand fact is read in the pool's own scope.
         for (pool_id, fact_key) in &pools.references {
             if *pool_id == pool.id {
-                add(&pool.scope, *fact_key);
+                add(&pool.scope, fact_key);
             }
         }
     }
