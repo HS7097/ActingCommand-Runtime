@@ -1571,7 +1571,7 @@
     },
     "skip_reason": {
       "type": "vocab:emulator_autostart_skip_reason",
-      "description": "Why no autostart claim was requested for an instance where one would otherwise have been (WATCH-P, since 0.12.32: the emulator watch's restart or recognition)."
+      "description": "Why no autostart claim was requested for an instance where one would otherwise have been (WATCH-P, since 0.12.32: the emulator watch's restart or recognition; PAUSE-AUTO, since 0.12.34: the configured start at daemon start and IDLE-1's wake after stop_emulator, or why such a claim ended on its key without a Start)."
     },
     "duplicate_count": {
       "type": "integer",
@@ -5292,14 +5292,14 @@
       }
     },
     "emulator_autostart_skip_reason": {
-      "description": "Why no autostart claim was requested for an instance where one would otherwise have been (WATCH-P, since 0.12.32: the emulator watch's restart or recognition).",
+      "description": "Why no autostart claim was requested for an instance where one would otherwise have been (WATCH-P, since 0.12.32: the emulator watch's restart or recognition; PAUSE-AUTO, since 0.12.34: the configured start at daemon start and IDLE-1's wake after stop_emulator, or why such a claim ended on its key without a Start).",
       "source": {
         "file": "crates/runtime-host/src/host/emulator_watch.rs",
         "enum": "WatchSkipReason"
       },
       "tokens": {
         "instance_paused": {
-          "description": "The instance's own scheduling pause holds it, in any stage (draining, paused, released; Alice's ruling 112): the watch reads and records its emulator status but neither restarts nor recognizes it. Recorded once per pause revision and watch_kind."
+          "description": "The instance's own scheduling pause holds it, in any stage (draining, paused, released; Alice's ruling 112): the watch reads and records its emulator status but neither restarts nor recognizes it. Recorded once per pause revision and watch_kind. PAUSE-AUTO (since 0.12.34, Alice's ruling 117 A): neither the configured start at daemon start nor IDLE-1's wake after stop_emulator starts its emulator, also when their claim was requested before the pause began; recorded once per pause revision and start."
         }
       }
     },

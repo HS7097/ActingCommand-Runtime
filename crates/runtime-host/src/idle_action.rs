@@ -49,7 +49,10 @@
 //!   emulator watch's status read, a keyless observe), the action's own claim, a person's run or
 //!   a pause. A wake that comes due while the instance is held is queued all the same, and its
 //!   claims wait behind the holder. `stop_emulator` wakes through the configured emulator start
-//!   and the startup package, `close_app` through the startup package.
+//!   and the startup package, `close_app` through the startup package. PAUSE-AUTO (0.12.34,
+//!   Alice's ruling 117 A): a `stop_emulator` wake is not queued while an automatic start may not
+//!   start the emulator ([`IdleView::start_held`]); it stays owed ([`IdleStep::WakeHeld`]), and so
+//!   does one whose configured start met that hold on its key ([`IdlePlanner::wake_held`]).
 //! - **Never acted on again before the wake.** An `Idle` instance is never acted on. Work in
 //!   between neither strands it (the owed wake follows at its time) nor cycles it: after the
 //!   wake, the action runs again only once a plan made after the instance's last work shows a
@@ -103,6 +106,10 @@ pub(crate) struct IdleView {
     /// The instance can be brought back after `stop_emulator` (it has a startup package and its
     /// emulator is configured to be started by the Runtime).
     pub(crate) emulator_wakeable: bool,
+    /// PAUSE-AUTO (0.12.34, Alice's ruling 117 A): an automatic emulator start may not start the
+    /// instance's emulator now (the host's `automatic_start_hold`: its own scheduling pause), so
+    /// a wake that starts the emulator is not queued and stays owed ([`IdleStep::WakeHeld`]).
+    pub(crate) start_held: bool,
 }
 
 impl IdleView {
@@ -246,6 +253,11 @@ pub(crate) enum IdleStep {
         action: IdleAction,
         work: &'static [WakeWork],
     },
+    /// PAUSE-AUTO (0.12.34): the wake is due, but its work starts the emulator (the wake after
+    /// `stop_emulator`) and an automatic start may not start it now ([`IdleView::start_held`]):
+    /// nothing is queued, the instance stays idle owing its wake, and the host records the skip
+    /// once per hold revision. The next check that finds the start no longer held queues the wake.
+    WakeHeld,
     /// Report once that `action`, the action in effect, cannot work on the instance: it lacks
     /// `missing`. The instance never acts while it does.
     Unsupported {
@@ -380,7 +392,15 @@ impl IdlePlanner {
                     // After the wake, an action waits for a plan made after this work.
                     entry.in_use_at_unix_ms = Some(now_unix_ms);
                 }
-                wake(entry, config, action, wake_at_unix_ms, plan, now_unix_ms)
+                wake(
+                    entry,
+                    config,
+                    action,
+                    wake_at_unix_ms,
+                    plan,
+                    now_unix_ms,
+                    view.start_held,
+                )
             }
         }
     }
@@ -416,6 +436,28 @@ impl IdlePlanner {
                 IdleEnd::NotPerformed => Phase::Failed,
             };
         }
+    }
+
+    /// PAUSE-AUTO (0.12.34): the configured emulator start a wake of `alias` queued met a hold on
+    /// its key (the host's `automatic_start_hold`) and started nothing: the wake was not carried
+    /// out, so the woken instance is idle again, owing its wake at the time it was woken, which
+    /// the next check queues once the start is no longer held. Whether it was woken.
+    pub(crate) fn wake_held(&mut self, alias: &str) -> bool {
+        let Some(entry) = self.instances.get_mut(alias) else {
+            return false;
+        };
+        let Phase::Woken {
+            action,
+            woken_at_unix_ms,
+        } = entry.phase
+        else {
+            return false;
+        };
+        entry.phase = Phase::Idle {
+            action,
+            wake_at_unix_ms: Some(woken_at_unix_ms),
+        };
+        true
     }
 
     /// The host did not carry the action out (on its key it met a pause or work, or no key came):
@@ -632,7 +674,8 @@ fn decide(
 /// An idle instance's check, held or not: the wake, when it is due; `current_unix_ms` is the wake
 /// in effect. Otherwise the instance stays idle with the same wake or an earlier one. IDLE-1P: only
 /// the plan's tasks count here; its fact-refresh reading neither wakes the instance nor moves the
-/// wake.
+/// wake. PAUSE-AUTO (0.12.34): a due wake whose work starts the emulator while `start_held` is
+/// not queued; the instance stays idle with its wake ([`IdleStep::WakeHeld`]).
 fn wake(
     entry: &mut InstanceIdle,
     config: &IdleConfig,
@@ -640,6 +683,7 @@ fn wake(
     current_unix_ms: Option<u64>,
     plan: Option<IdlePlan>,
     now_unix_ms: u64,
+    start_held: bool,
 ) -> Option<IdleStep> {
     let lead_ms = config.wake_lead_ms(action);
     let from_plan = plan
@@ -653,6 +697,14 @@ fn wake(
     let due_now = plan.is_some_and(|plan| plan.due_now);
     let switched = config.action != action;
     if switched || due_now || wake_at_unix_ms.is_some_and(|at| at <= now_unix_ms) {
+        // PAUSE-AUTO: a wake that would start the emulator waits, owed, for the start to be free.
+        if start_held && wake_work(action).contains(&WakeWork::EmulatorStart) {
+            entry.phase = Phase::Idle {
+                action,
+                wake_at_unix_ms,
+            };
+            return Some(IdleStep::WakeHeld);
+        }
         // #405 O-2: closed and woken until the wake's claims, its startup package's run among
         // them, have ended.
         entry.phase = Phase::Woken {
