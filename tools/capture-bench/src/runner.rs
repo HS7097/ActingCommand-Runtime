@@ -103,6 +103,8 @@ pub struct RunShared {
     started_unix_ms: u64,
     next_subscriber: AtomicU64,
     working_set: AtomicU64,
+    /// `t_stop_new` and the sequence number of the whole-run stop gate, once it is set.
+    run_stop: Mutex<Option<(Micros, u64)>>,
     /// The backends that failed fatally in the current cell: their other paths in the cell
     /// fail too (§3.11.4 "共用同一后端的路径").
     cell_fatal: Mutex<BTreeMap<(usize, BackendKind), String>>,
@@ -123,7 +125,7 @@ pub fn run(plan_text: &str, run_dir: &Path, env: Env) -> RunOutcome {
         materials,
         mut metrics,
         viewers,
-        start_checks,
+        mut start_checks,
         exit,
         limits,
         roots,
@@ -255,6 +257,7 @@ pub fn run(plan_text: &str, run_dir: &Path, env: Env) -> RunOutcome {
         started_unix_ms: clock.unix_ms(),
         next_subscriber: AtomicU64::new(1),
         working_set: AtomicU64::new(0),
+        run_stop: Mutex::new(None),
         cell_fatal: Mutex::new(BTreeMap::new()),
         next_record: AtomicU64::new(1),
     });
@@ -653,7 +656,28 @@ impl RunShared {
     }
 
     fn whole_stop_requested(&self) -> bool {
-        self.terminal.requested() || self.terminal.finished_by_supervisor()
+        let requested = self.terminal.requested() || self.terminal.finished_by_supervisor();
+        if requested {
+            self.stop_new();
+        }
+        requested
+    }
+
+    /// §3.11.2 B step 1: the whole-run stop gate, set once, before the drain and the closes.
+    fn stop_new(&self) -> (Micros, u64) {
+        let mut run_stop = lock(&self.run_stop);
+        if let Some(set) = *run_stop {
+            return set;
+        }
+        let at = self.now();
+        let seq = self.hub.set_global(&self.owner, GlobalGate::RunStop, true);
+        self.hub.views.broadcast(None, ViewMessage::Ended);
+        self.journal.event(
+            "run_stop",
+            json!({ "t_stop_new_us": at, "gate_seq": seq, "cause": self.terminal.first() }),
+        );
+        *run_stop = Some((at, seq));
+        (at, seq)
     }
 
     /// §3.11.2: the cells in order, A between them, B at the end.
@@ -1584,7 +1608,14 @@ impl RunShared {
             pause_until(self.clock.as_ref(), wake);
         };
 
-        // Stop and drain: the activities stop at their next checkpoint and are joined.
+        // §3.11.2 A/B step 1: no new grants (the cell-end gate; the whole-run stop gate is set
+        // already when the run stops), then step 2: the activities stop at their next
+        // checkpoint and are joined (the drain).
+        let segment_gate = self.hub.set_global(&self.owner, GlobalGate::CellEnd, true);
+        self.journal.event(
+            "segment_stop_new",
+            json!({ "segment": label, "gate_seq": segment_gate, "end": format!("{end:?}") }),
+        );
         shared.stop.store(true, Ordering::Release);
         for activity in activities {
             let _ = activity.join();
@@ -1622,6 +1653,7 @@ impl RunShared {
         self.hub.admission[instance].release(&self.owner);
         drop(material);
         let confirmed = self.close_segment_backends(instance, &mut identities, "segment_end");
+        self.hub.set_global(&self.owner, GlobalGate::CellEnd, false);
         if !confirmed && end != SegmentEnd::Whole {
             return SegmentEnd::Whole;
         }
@@ -2270,9 +2302,9 @@ impl RunShared {
 
     /// §3.11.2 B: the whole-run settlement.
     fn settle(&self, ran: &[String]) -> RunOutcome {
-        let t_stop_new = self.now();
-        let gate_seq = self.hub.set_global(&self.owner, GlobalGate::RunStop, true);
-        self.hub.views.broadcast(None, ViewMessage::Ended);
+        // The last cell's settlement (§3.11.2 A, "最后一格结束以后进 B"): only step 5 is left
+        // when nothing is open; the gate is set first all the same.
+        let (t_stop_new, gate_seq) = self.stop_new();
         // Cells never started are untested with the stop reason.
         let stop_reason = self.terminal.first();
         for cell in &self.plan.cells {

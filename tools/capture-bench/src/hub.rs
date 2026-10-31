@@ -1173,7 +1173,7 @@ impl Op for SampleOp {
                     Some(backend) => backend.sample(None),
                     None => Err(BackendFailure::new(
                         "backend_closed",
-                        crate::backend::FailureClass::CellPath,
+                        crate::backend::FailureClass::Measured,
                         "the path's backend is not open",
                     )
                     .without_native_call()),
@@ -1716,7 +1716,7 @@ pub fn manual_refresh(
             Some(backend) => backend.sample(None),
             None => Err(BackendFailure::new(
                 "backend_closed",
-                crate::backend::FailureClass::CellPath,
+                crate::backend::FailureClass::Measured,
                 "the path's backend is not open",
             )),
         }
@@ -1883,7 +1883,7 @@ pub fn formal_capture(
         Some(backend) => backend.sample(floor),
         None => Err(BackendFailure::new(
             "backend_closed",
-            crate::backend::FailureClass::CellPath,
+            crate::backend::FailureClass::Measured,
             "the formal capture backend is not open",
         )
         .without_native_call()),
@@ -1903,7 +1903,7 @@ pub fn formal_tap(
         Some(backend) => backend.tap(x, y),
         None => Err(BackendFailure::new(
             "backend_closed",
-            crate::backend::FailureClass::CellPath,
+            crate::backend::FailureClass::Measured,
             "the touch backend is not open",
         )
         .without_native_call()),

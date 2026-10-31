@@ -110,7 +110,10 @@ impl Terminal {
     pub fn request(&self, at: Micros, cause: StopCause) -> bool {
         let mut causes = lock(&self.causes);
         let first = causes.is_empty();
-        if !causes.iter().any(|(_, known)| *known == cause) {
+        if !causes
+            .iter()
+            .any(|(_, known)| known.label() == cause.label())
+        {
             causes.push((at, cause));
         }
         first
