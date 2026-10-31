@@ -77,7 +77,7 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 
 ![ActingCommand Runtime 分层与归属总览](docs/assets/readme/architecture-overview.zh.png)
 
-`actingcommand-contract` 是整个工作区的汇点：26 个工作区包依赖它，它不依赖任何工作区包，只用 serde、serde_json、sha2。它定义协议、设备与引擎边界的词汇，不含目标逻辑。
+`actingcommand-contract` 是整个工作区的汇点：29 个工作区包依赖它，它不依赖任何工作区包，只用 serde、serde_json、sha2。它定义协议、设备与引擎边界的词汇，不含目标逻辑。
 
 `actingcommand-runtime-client` 是唯一的客户端类型化 IPC 路径。客户端从不构造也不拥有生产设备后端，关闭一个 UI、命令行或 MCP 客户端不会停止运行时。
 
@@ -97,7 +97,7 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 
 ![一次运行时请求的完整生命周期](docs/assets/readme/request-lifecycle.zh.png)
 
-1. **组装**（`runtime-client`）：调用方从 69 个类型化 `RuntimeOperation` 变体中选一个（其中升级态与包加载 / 卸载这四种回答 `not_implemented`），客户端生成 request_id 与 correlation_id，写入 actor、source 与提交时间，构成 `actingcommand.runtime.request.v4` 请求，可选的 `detail`（`codes` 或 `full`）表示客户端要回执结果的多少细节。
+1. **组装**（`runtime-client`）：调用方从 78 个类型化 `RuntimeOperation` 变体中选一个（其中升级态与包加载 / 卸载四种、玩家工作台六种和玩家持有两种，共十二种回答 `not_implemented`），客户端生成 request_id 与 correlation_id，写入 actor、source 与提交时间，构成 `actingcommand.runtime.request.v4` 请求，可选的 `detail`（`codes` 或 `full`）表示客户端要回执结果的多少细节。
 2. **发现**（`runtime-client`）：客户端读取 `<state_root>/runtime-info.json`，校验其 host 必须是环回地址、pid/port/启动时间非零，连上 TCP 后先发 Health；若 owner epoch 与发现时不一致，会话以 `runtime_owner_epoch_changed` 拒绝。随后客户端为这条连接绑定通道（`cli`、`mcp`、`ui` 或 `lab`）；Runtime 在每个请求上记下通道，但不按通道拒绝任何请求。
 3. **成帧**（`runtime-client`）：请求以 4 字节大端长度前缀加 JSON 发出，两端默认上限 1 MiB，并按操作类别装载回执读取期限。
 4. **受理**（`runtime-host`）：接受循环为每个连接分配递增的 ConnectionId，并在独立命名线程上服务；连接被 catch_unwind 包裹，退出时按 Disconnect 或 HostShutdown 释放该连接的租约。
@@ -148,12 +148,13 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 
 ## Workspace 成员
 
-工作区声明 32 个成员，resolver `3`，工作区声明 edition 2024，全部 `publish = false`。
+工作区声明 34 个成员，resolver `3`，工作区声明 edition 2024，全部 `publish = false`。
 
-### apps（5）
+### apps（7）
 
 | 路径 | 包 | 产物 | 职责 |
 | --- | --- | --- | --- |
+| apps/actingcommand-entry | actingcommand-entry | lib | A/B 安装根固定入口的结果码（`contracts/stable-entry.md`）；两个入口程序加入之前只是放这些码的库 |
 | apps/actingctl | actingcommand-actingctl | bin `actingctl`、`actingwatch` | 面向 correlation 作用域运行时流程的精简生产命令行，以及 MCP 服务（`mcp-serve`、`mcp-config`）与看门狗；`actingwatch` 是看门狗计划任务运行的无窗口启动器 |
 | apps/actingd | actingcommand-actingd | bin `actingcommand-actingd` | 常驻运行时的精简进程适配器 |
 | apps/actinglab | actingcommand-actinglab | bin `actinglab` | 创作与调试侧命令行，50 个顶层分派臂、139 条命令 |
