@@ -48,6 +48,8 @@ pub mod standard_pack_display;
 pub mod standard_pack_schedule;
 // Workflow #357 DB-1: the shared tables of a standard-pack game root (M-357a v1.1 §2).
 pub mod standard_pack_table;
+// Workflow #429 R-11: a game root's display metadata for clients, `ui.json`.
+pub mod standard_pack_ui;
 pub mod state;
 // STORE-FG-1 (since 0.12.29): a package's `control.json` `store_update` declaration.
 pub mod store_update;
@@ -85,6 +87,7 @@ pub use standard_pack::*;
 pub use standard_pack_display::*;
 pub use standard_pack_schedule::*;
 pub use standard_pack_table::*;
+pub use standard_pack_ui::*;
 pub use state::*;
 pub use store_update::*;
 pub use task_schema::TaskSchema;

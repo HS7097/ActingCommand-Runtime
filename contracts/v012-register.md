@@ -5458,6 +5458,62 @@ or undo it before rolling back. Roll back with the single-location `rollback` as
 | R15B-4 | `zip_set` for a zip recognised as none, by name | installer behaviour | R-15b | `release verify`, `release stage` | the one visible change |
 | R15B-5 | the codes, words, keys and locations of the block, the owner `actingcommand-entry` | catalog | R-15b | R-15c to R-15e | `since` 0.12.35, review pending |
 
+### 1.240 Slice R-11 (0.12.36): a game root's optional `ui.json`, and `task_ids` and the Runtime-derived `irreversible` on the installation rows of `actingctl packs` and `ac_packs` (Workflow #429 A.7.3 and A.7.4, the R-11 rows of A.7.4 and A.8 of `rd-1029/429-A-runtime.md`; the coordinator's decisions recorded there: offline, no revision bump, `irreversible` in the package rows; coordinator work order `rd-1031/brief-r11.md`)
+
+[package-reference.md](package-reference.md) ("Standard package root", `ui.json`),
+[runtime-interface.md](runtime-interface.md) (the `packs` row) and
+[standard-pack-schedule.md](standard-pack-schedule.md) ("The readers of composer mode") are the
+contract. The number 1.240 is the coordinator's; R-0b (§1.238) and R-4 (§1.239) are in flight in
+the same release. Nothing persisted, no wire shape of the Runtime and no interface revision
+changes: `actingctl packs` and `ac_packs` read the install root offline, as before.
+
+**What.** (1) The contract crate (`standard_pack_ui.rs`): `STANDARD_PACK_UI_FILE` (`ui.json`),
+`STANDARD_PACK_UI_SCHEMA_VERSION` (`actingcommand.ui.v1`), the limits `MAX_STANDARD_PACK_UI_BYTES`,
+`MAX_STANDARD_PACK_UI_ISSUES` and `MAX_PACK_UI_*`, `StandardPackUi` (the document as written, its
+member order kept; `pack(package_id)`, `display()`), `parse_standard_pack_ui` (shape, limits and
+references only, every violation at its JSON pointer, at most 64, no string interpreted) and
+`read_standard_pack_root_with_ui` (`read_standard_pack_root`, and `ui.json` without `bundle.json`
+is `bundle_missing`). (2) `actingctl packs` / `ac_packs`: each game of `standard_packs` carries
+`ui` and `display`; each composed installation row carries `task_ids` (the composed tasks of its
+package, in id order, until SS-7), `irreversible` (an entry of the package's `control.json`
+`provides` declares `irreversible: true`, read with the contract's `ProvidedCapability` as the
+Runtime reads it) and, from its game's valid `ui.json`, `ui` (the package's entry) and `display`.
+(3) The `standard_pack_problem` tokens `ui_out_of_limits`, `ui_duplicate`, `ui_group_unknown` and
+`ui_parameter_undeclared` (`since` 0.12.36); the codes `standard_pack_root_invalid` (each
+violation of a refused `ui.json`; reused tokens `malformed`, `game_mismatch`, `package_not_listed`,
+`bundle_missing`) and `package_binding_unreadable` (a `ui.json` or composed package's control file
+that cannot be read) are reused, their descriptions extended. No code, key or location is new.
+
+**Decisions within the work order.** (a) Package-level parameter declarations (A.7.2) arrive with
+R-10; until then no package declares one, so any name under a pack's `parameters` is
+`ui_parameter_undeclared`, and a valid file has none. R-10 gives the check its declarations.
+(b) An aspect ratio is checked for the form `<w>:<h>` only, its numbers never used; every other
+string is opaque and only measured in bytes. (c) A refused `ui.json`, like a refused table, never
+breaks its game root, and `ui.json` alone makes a directory a game root for its readers only
+(`bundle_missing` there); the Runtime's root reader and check-config do not read the file.
+(d) `task_ids`, `irreversible`, `ui` and `display` are on composed rows (composer mode) only: a
+catalog-mode binding has no game root and no composition, and its rows are unchanged.
+(e) `irreversible` is absent, with `package_binding_unreadable`, when the package's control file
+cannot be read, is over 1 MiB or does not decode; the row is listed.
+
+**Why.** UI-3b needs, before SS-7, which tasks run each package and the Runtime's own risk mark,
+and a place for each pack's display names that the Runtime never interprets (A.7.3).
+
+**What changes live.** `actingctl packs` and `ac_packs` in composer mode add `task_ids` and
+`irreversible` to every composed row, and a `package_binding_unreadable` warning for a composed
+package without a readable `control.json`. A game root without `ui.json` answers as before
+otherwise; no resource repository's standard package carries one yet.
+
+**Rollback** (to 0.12.35). Nothing persisted changes; the members disappear from the answer and a
+`ui.json` is ignored again.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| R11-1 | `ui.json` (`actingcommand.ui.v1`), its rules and limits | contract text, contract crate | R-11 | the resource repositories | optional; read only by `actingctl packs` and `ac_packs` |
+| R11-2 | `standard_packs.games[].ui`, `.display` | `actingctl packs` / `ac_packs` answer | R-11 | R-11 | offline, no revision |
+| R11-3 | `installation[].task_ids`, `.irreversible`, `.ui`, `.display` (composed rows) | `actingctl packs` / `ac_packs` answer | R-11 | R-11 | offline, no revision; `task_ids` until SS-7 |
+| R11-4 | `standard_pack_problem` `ui_out_of_limits`, `ui_duplicate`, `ui_group_unknown`, `ui_parameter_undeclared` | catalog vocabulary | R-11 | R-11 | `since` 0.12.36 |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -654,6 +654,7 @@ data files beside its package directories, one directory per game below the conf
   tables/            actingcommand.table.v1: the shared tables, <table_id>.json (#357 DB-1)
   schedule.json      actingcommand.schedule.v1: the game's schedule rules (ROUT-L RL-1a)
   display-layout.json  actingcommand.display-layout.v1: the game's display declaration (#392 DA-4)
+  ui.json            actingcommand.ui.v1, optional: display metadata for clients (#429 R-11)
   <directory>/       one package directory per bundle pack
 ```
 
@@ -795,6 +796,70 @@ data files beside its package directories, one directory per game below the conf
   `bundle.json` it is `bundle_missing`. The display adapter (model 392, DA-2a and later) reads
   the declaration a run's preparation read; until then nothing uses it, and a run is as it was
   without the file. No resource repository's standard package carries one yet.
+- **`ui.json`** (Workflow #429 R-11, since 0.12.36; `v012-register.md` §1.240; design
+  `rd-1029/429-A-runtime.md` A.7.3). Optional. The display metadata a client shows for the
+  game's packages: the groups it sorts them into, per package a title, a summary, its group,
+  opaque risk words and its parameters' labels, each text per locale, and the display the game
+  supports:
+
+  ```text
+  {schema_version: "actingcommand.ui.v1", game,
+   groups: [{id, title: {<locale>: text}}],
+   packs: [{package_id, title: {..}, summary: {..}, group?, risk?: [word],
+            parameters?: {<name>: {label: {..}, options?: {<option>: {..}}}}}],
+   display?: {aspect_ratios: ["<w>:<h>"], safe_area?: word}}
+  ```
+
+  **The Runtime checks only shape, limits and references, and never interprets a string.**
+  Texts, locales, group ids, risk words, parameter and option names and the safe-area word are
+  opaque: compared only for equality and measured only in bytes. An aspect ratio is only checked
+  to be `<w>:<h>` (1–5 decimal digits per side, no leading zero); nothing computes with it. The
+  risk words decide nothing in the Runtime: a client's risk badge is the Runtime's own
+  `irreversible` (below) plus these words, and a pack that is off by default is the pack-level
+  default row's (A.7.1, R-9), never a risk word's.
+  - **Members.** The document has `schema_version`, `game`, `groups` and `packs`, and optionally
+    `display`; a group `{id, title}`; a pack `{package_id, title, summary}` and optionally
+    `group`, `risk`, `parameters`; a parameter `{label}` and optionally `options`; `display`
+    `{aspect_ratios}` and optionally `safe_area`. A member that is unknown, missing or not of its
+    type, a member repeated in one object and another `schema_version` are `malformed` at that
+    member's pointer; no JSON or no object is `malformed` for the whole document; a `game` that
+    is not the directory's is `game_mismatch`.
+  - **References.** A pack's `package_id` is a package of `bundle.json` (`package_not_listed`),
+    its `group` an id of `groups` (`ui_group_unknown`), and each name under its `parameters` a
+    parameter the package declares (`ui_parameter_undeclared`). Package-level parameter
+    declarations (A.7.2) arrive with R-10; until then no package declares a parameter, so any
+    name under `parameters` is `ui_parameter_undeclared`. Group ids, the packs' `package_id`, one
+    pack's risk words and the aspect ratios are each listed once (`ui_duplicate`). A package
+    without an entry is shown by its `package_id`; so is every package of a game root without
+    the file.
+  - **Limits** (`ui_out_of_limits`; bounds of the shape, not tunables):
+
+    | What | Limit |
+    |---|---|
+    | the file | at most 256 KiB |
+    | `groups` | 0–64 entries |
+    | `packs` | 0–1024 entries |
+    | a text (`title`, `summary`, `label`, an option's text) | 1–16 locales, each locale name 1–35 bytes |
+    | `title`, `label`, an option's text | 1–128 bytes per locale |
+    | `summary` | 1–1024 bytes per locale |
+    | a word: a group's `id`, a pack's `group`, a risk word, a parameter name, an option name, `safe_area` | 1–64 bytes |
+    | `risk` | 0–8 words |
+    | `parameters` | 0–16 names |
+    | `options` | 0–32 names |
+    | `aspect_ratios` | 1–8 entries |
+
+  - **Reporting.** Every violation is reported, each as `standard_pack_root_invalid` with
+    `game`, `path` (the file), `standard_pack_problem` and `json_pointer`, at most 64 of them in
+    document order. A refused file never breaks its game root: the root and its packages are
+    listed as without the file. A file that exists but cannot be read is
+    `package_binding_unreadable` with its OS error as the cause. The file makes a directory a game
+    root for its readers, so `ui.json` without `bundle.json` is `bundle_missing`.
+  - **Readers.** Only `actingctl packs` and `ac_packs`, offline (`parse_standard_pack_ui`,
+    `read_standard_pack_root_with_ui`), which deliver a valid file as written, its members in the
+    file's order ([runtime-interface.md](runtime-interface.md), `packs`). The Runtime's root
+    reader, its startup and run preparation, the policy crate and check-config never read it,
+    so the file never changes a run, and a directory that holds only `ui.json` is no game root
+    for them. A real standard package's `ui.json` is the resource side's to write.
 - **One check, three readers.** The contract crate's checks (`parse_standard_pack_pages`,
   `parse_standard_pack_interrupts`, `parse_standard_pack_navigation`, (Workflow #392 DA-4)
   `parse_standard_pack_display_layout`,

@@ -343,3 +343,180 @@ fn gate_packs_and_ac_packs_list_the_standard_pack_tables() {
         assert_eq!(tables[1]["expired_columns"], json!(["secondary_milli"]));
     }
 }
+
+/// Workflow #429 R-11 (register §1.240; work order `rd-1031/brief-r11.md`, test 6): with a
+/// composer-mode configuration, `actingctl packs` and `ac_packs` answer the same rows and the same
+/// warnings. A game root's valid `ui.json` is its row's `ui` as written with its `display`; each
+/// composed row carries the tasks that run its package (`task_ids`), whether the package is
+/// irreversible as its `control.json` `provides` says, and its game's `ui.json` entry (`ui`) and
+/// `display`. A refused `ui.json` adds one `standard_pack_root_invalid` warning per violation, at
+/// its pointer, and its game's rows are listed as without the file.
+#[test]
+fn gate_r11_packs_and_ac_packs_answer_the_same_ui_irreversible_and_task_ids() {
+    use crate::standard_pack_schedule::{bundle, rule, schedule, write_json};
+    const GAME_A: &str = "fixture-game-a";
+    const GAME_B: &str = "fixture-game-b";
+    const SERVER: &str = "fixture-server-a";
+    const ALPHA: &str = "fixture.alpha";
+    const BETA: &str = "fixture.beta";
+    const GAMMA: &str = "fixture.gamma";
+    let root = TempDir::new().expect("tempdir");
+    let root = root.path();
+    let packages = root.join("packages");
+    let game_root = |game: &str, packs: &[(&str, &str, Value)]| {
+        let ids = packs.iter().map(|(_, id, _)| *id).collect::<Vec<_>>();
+        write_json(
+            &packages.join(game).join("bundle.json"),
+            &bundle(game, SERVER, &ids),
+        );
+        let rules = packs
+            .iter()
+            .map(|(rule_id, id, _)| rule(rule_id, id, true))
+            .collect::<Vec<_>>();
+        write_json(
+            &packages.join(game).join("schedule.json"),
+            &schedule(&rules),
+        );
+        for (_, id, control) in packs {
+            write_json(&packages.join(game).join(id).join("control.json"), control);
+        }
+    };
+    let irreversible = json!({"package_id": ALPHA, "provides": [
+        {"capability": "cap_a", "irreversible": true, "parameters": [
+            {"name": "param_a", "options": ["opt_a", "opt_b"], "default": "opt_a"}
+        ]}
+    ]});
+    game_root(
+        GAME_A,
+        &[
+            ("fixture.one", ALPHA, irreversible),
+            ("fixture.two", BETA, json!({"package_id": BETA})),
+        ],
+    );
+    game_root(
+        GAME_B,
+        &[("fixture.three", GAMMA, json!({"package_id": GAMMA}))],
+    );
+    let ui_a = json!({
+        "schema_version": "actingcommand.ui.v1",
+        "game": GAME_A,
+        "groups": [{"id": "group_a", "title": {"en": "Group A"}}],
+        "packs": [{"package_id": ALPHA, "title": {"en": "Alpha"},
+                   "summary": {"en": "The first neutral package."},
+                   "group": "group_a", "risk": ["word_one"]}],
+        "display": {"aspect_ratios": ["16:9"], "safe_area": "declared_word"}
+    });
+    write_json(&packages.join(GAME_A).join("ui.json"), &ui_a);
+    // An unregistered package with a parameter no package declares.
+    write_json(
+        &packages.join(GAME_B).join("ui.json"),
+        &json!({
+            "schema_version": "actingcommand.ui.v1",
+            "game": GAME_B,
+            "groups": [],
+            "packs": [{"package_id": "fixture.absent", "title": {"en": "Absent"},
+                       "summary": {"en": "Not in the bundle."},
+                       "parameters": {"level": {"label": {"en": "Level"}}}}]
+        }),
+    );
+    fs::write(
+        root.join("actingd.config.json"),
+        json!({
+            "instances": [
+                {"alias": "node-a", "instance_id": "neutral-a"},
+                {"alias": "node-b", "instance_id": "neutral-b"},
+                {"alias": "node-c", "instance_id": "neutral-c"}
+            ],
+            "standard_packs": {"root": "packages"},
+            "policy": {"facts": {"instances": [
+                {"instance_id": "node-a", "game_id": GAME_A, "server_id": SERVER},
+                {"instance_id": "node-b", "game_id": GAME_B, "server_id": SERVER},
+                {"instance_id": "node-c", "game_id": GAME_B, "server_id": SERVER}
+            ]}}
+        })
+        .to_string(),
+    )
+    .expect("write configuration");
+
+    let mut mcp = McpServer::spawn_at_root(root);
+    mcp.initialize();
+    let cli = cli_packs(root, &[]);
+    let answer = mcp.call_tool(2, "ac_packs", json!({}));
+    assert_eq!(
+        cli,
+        mcp_document(&answer),
+        "actingctl packs and ac_packs answer differently: {answer}"
+    );
+
+    let place = |game: &str, package: &str| packages.join(game).join(package).display().to_string();
+    let row = |game: &str, package: &str, tasks: Value, irreversible: bool| {
+        json!({
+            "role": "procedure",
+            "package_id": package,
+            "path": place(game, package),
+            "readable": true,
+            "procedure_ref": format!("package.{package}"),
+            "operation_id": "operation.package.run",
+            "scheduled": true,
+            "task_ids": tasks,
+            "irreversible": irreversible,
+        })
+    };
+    let mut alpha = row(GAME_A, ALPHA, json!(["fixture.one"]), true);
+    alpha["ui"] = ui_a["packs"][0].clone();
+    alpha["display"] = ui_a["display"].clone();
+    let mut beta = row(GAME_A, BETA, json!(["fixture.two"]), false);
+    beta["display"] = ui_a["display"].clone();
+    let gamma = row(
+        GAME_B,
+        GAMMA,
+        json!(["fixture.three@node-b", "fixture.three@node-c"]),
+        false,
+    );
+    assert_eq!(cli["installation"], json!([alpha, beta, gamma]), "{cli}");
+    assert_eq!(
+        cli["standard_packs"]["games"],
+        json!([
+            {"game": GAME_A, "tables": [], "ui": ui_a, "display": ui_a["display"]},
+            {"game": GAME_B, "tables": []}
+        ]),
+        "{cli}"
+    );
+    let refused = packages.join(GAME_B).join("ui.json").display().to_string();
+    let warning = |problem: &str, pointer: &str| {
+        json!({
+            "game": GAME_B,
+            "path": refused,
+            "standard_pack_problem": problem,
+            "json_pointer": pointer,
+        })
+    };
+    let warnings = cli["warnings"]
+        .as_array()
+        .map(|warnings| {
+            warnings
+                .iter()
+                .map(|warning| {
+                    (
+                        warning["outcome"]["code"].clone(),
+                        warning["outcome"]["values"].clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    assert_eq!(
+        warnings,
+        vec![
+            (
+                json!("standard_pack_root_invalid"),
+                warning("package_not_listed", "/packs/0/package_id"),
+            ),
+            (
+                json!("standard_pack_root_invalid"),
+                warning("ui_parameter_undeclared", "/packs/0/parameters/level"),
+            ),
+        ],
+        "{cli}"
+    );
+}

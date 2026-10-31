@@ -13,6 +13,13 @@
 //! composer-mode configuration (a `policy` without `catalog` and `procedure_manifest`) decodes as
 //! actingd decodes it, and its installation rows are the procedures the scheduler workbench
 //! composes from the games' `schedule.json` for the configured instances, with the same composer.
+//! Workflow #429 R-11 (register §1.240): offline, with no interface revision, each sound game root
+//! of `standard_packs` also carries its `ui.json` as written (`ui`) and that file's `display`, and
+//! each composed installation row the tasks that run its package (`task_ids`, until SS-7), whether
+//! its package is irreversible as the Runtime derives it from its `control.json` `provides`
+//! (`irreversible`), and its game's `ui.json` entry for it (`ui`) and `display`. A game root
+//! without `ui.json` answers as before plus `task_ids` and `irreversible`; a refused `ui.json`
+//! adds its warnings and changes no row.
 
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem};
@@ -20,11 +27,13 @@ use crate::instance_selector::SelectorMiss;
 use actingcommand_contract::codes::{ContractCode, SharedCode};
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
 use actingcommand_contract::{
-    BundleIndex, BundleMaintenance, InstalledProcess, STANDARD_PACK_BUNDLE_FILE,
-    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
-    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE,
-    STANDARD_PACK_TABLES_DIRECTORY, StandardPackRoot, StandardPackRootBytes,
-    StandardPackTableReport, read_standard_pack_root, read_standard_pack_tables,
+    BundleIndex, BundleMaintenance, InstalledProcess, MAX_STANDARD_PACK_UI_BYTES,
+    ProvidedCapability, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE,
+    STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE,
+    STANDARD_PACK_SCHEDULE_FILE, STANDARD_PACK_TABLES_DIRECTORY, STANDARD_PACK_UI_FILE,
+    StandardPackRegistry, StandardPackRoot, StandardPackRootBytes, StandardPackRootIssue,
+    StandardPackTableReport, StandardPackUi, parse_standard_pack_ui, read_standard_pack_root,
+    read_standard_pack_root_with_ui, read_standard_pack_tables,
 };
 use actingcommand_policy::{
     STANDARD_PACK_OPERATION_ID, StandardPackBinding, StandardPackComposeInput,
@@ -147,9 +156,17 @@ struct StandardPacksRow {
 struct StandardPackGameRow {
     game: String,
     tables: Vec<StandardPackTableReport>,
+    /// R-11: the root's `ui.json` as written, when it holds one that keeps its rules.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ui: Option<StandardPackUi>,
+    /// R-11: that file's `display`, when it declares one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    display: Option<Value>,
 }
 
-/// A binding of the installation. `readable` is present exactly when `path` is.
+/// A binding of the installation. `readable` is present exactly when `path` is. R-11: a composed
+/// row (composer mode) also carries `task_ids` and, when they are known, `irreversible`, `ui` and
+/// `display`; a configured binding (catalog mode) carries none of them.
 #[derive(Serialize)]
 struct InstallationRow {
     role: Role,
@@ -164,6 +181,19 @@ struct InstallationRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     operation_id: Option<String>,
     scheduled: bool,
+    /// R-11: the composed tasks that run the package, in id order (until SS-7's schedule view).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    task_ids: Option<Vec<String>>,
+    /// R-11: whether the package is irreversible as the Runtime derives it; absent when its
+    /// `control.json` cannot be read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    irreversible: Option<bool>,
+    /// R-11: the entry of its game's `ui.json` for the package, as written.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ui: Option<Value>,
+    /// R-11: its game's `ui.json` `display`, as written.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    display: Option<Value>,
 }
 
 pub(crate) struct Answer {
@@ -317,6 +347,14 @@ struct ScheduledExecution {
 #[derive(Deserialize)]
 struct ControlFile {
     package_id: String,
+}
+
+/// R-11: a package's control file, for its `provides` (contracts/remedies.md §2.2); every other
+/// member is left unread, each entry closed as the Runtime reads it.
+#[derive(Deserialize)]
+struct ControlProvides {
+    #[serde(default)]
+    provides: Option<Vec<ProvidedCapability>>,
 }
 
 /// Reads the selected configuration `config` (through `installation`'s checked read when there
@@ -566,6 +604,10 @@ impl Rows {
                 procedure_ref: Some(binding.procedure_ref.clone()),
                 operation_id: Some(binding.operation_id.clone()),
                 scheduled: binding.scheduled_execution.is_some(),
+                task_ids: None,
+                irreversible: None,
+                ui: None,
+                display: None,
             });
         }
         rows
@@ -581,7 +623,10 @@ impl Rows {
     /// against the Runtime's). Each game root that cannot be read is `package_binding_unreadable`,
     /// each broken root and each refused `schedule.json` is `standard_pack_root_invalid`, and that
     /// game is left out while the others are composed; a composition refused as a whole lists
-    /// no row.
+    /// no row. Workflow #429 R-11: a row also carries the composed tasks that run its package
+    /// (`task_ids`, by `procedure_ref`, in id order), whether the package is irreversible
+    /// ([`Rows::irreversible`]), and, when its game root holds a `ui.json` that keeps its rules
+    /// ([`Rows::game_ui`]), the file's entry for the package (`ui`) and its `display`.
     fn composed_installation(
         &mut self,
         configured: &Path,
@@ -607,9 +652,14 @@ impl Rows {
             .map(|binding| binding.game_id.clone())
             .collect::<BTreeSet<_>>();
         let mut read = BTreeMap::new();
+        let mut uis = BTreeMap::new();
         for game in games {
-            match schedule_game(&root.join(&game), &game) {
+            let directory = root.join(&game);
+            match schedule_game(&directory, &game) {
                 Ok(Some(files)) => {
+                    if let Some(ui) = self.game_ui(&directory, &game, &files.root.registry) {
+                        uis.insert(game.clone(), ui);
+                    }
                     read.insert(game, files);
                 }
                 Ok(None) => {}
@@ -683,6 +733,17 @@ impl Rows {
                 break None;
             }
         };
+        // R-11: the composed tasks of each procedure, by `procedure_ref`, in id order.
+        let mut task_ids = BTreeMap::<&str, BTreeSet<&str>>::new();
+        for task in composition
+            .iter()
+            .flat_map(|composition| &composition.compiled().catalog().tasks.tasks)
+        {
+            task_ids
+                .entry(task.procedure_ref.as_str())
+                .or_default()
+                .insert(task.id.as_str());
+        }
         composition
             .iter()
             .flat_map(StandardPackComposition::manifest)
@@ -692,6 +753,7 @@ impl Rows {
                 if !readable {
                     self.unreadable(&path, None);
                 }
+                let ui = uis.get(&procedure.game_id);
                 InstallationRow {
                     role: Role::Procedure,
                     package_id: Some(procedure.package_id.clone()),
@@ -700,9 +762,102 @@ impl Rows {
                     procedure_ref: Some(procedure.procedure_ref.clone()),
                     operation_id: Some(STANDARD_PACK_OPERATION_ID.to_owned()),
                     scheduled: true,
+                    task_ids: Some(
+                        task_ids
+                            .get(procedure.procedure_ref.as_str())
+                            .into_iter()
+                            .flatten()
+                            .map(|task_id| (*task_id).to_owned())
+                            .collect(),
+                    ),
+                    irreversible: self.irreversible(&path, readable),
+                    ui: ui.and_then(|ui| ui.pack(&procedure.package_id)).cloned(),
+                    display: ui.and_then(StandardPackUi::display).cloned(),
                 }
             })
             .collect()
+    }
+
+    /// Workflow #429 R-11 (register §1.240): the `ui.json` of the game root `directory` of
+    /// `game`, whose registry is `registry`, when it holds one that keeps its rules, checked by
+    /// the contract's [`parse_standard_pack_ui`]. A file that cannot be read is
+    /// `package_binding_unreadable` with its path and the OS error beneath it; each violation of
+    /// a refused one is `standard_pack_root_invalid` (the game, the file's path, its
+    /// `standard_pack_problem` and `json_pointer`). Either way the root and its rows are listed
+    /// as without the file: no Runtime component reads it.
+    fn game_ui(
+        &mut self,
+        directory: &Path,
+        game: &str,
+        registry: &StandardPackRegistry,
+    ) -> Option<StandardPackUi> {
+        let path = directory.join(STANDARD_PACK_UI_FILE);
+        let bytes = match read_capped(&path, MAX_STANDARD_PACK_UI_BYTES as u64) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(error) => {
+                self.warn(
+                    Outcome::new(ActingctlCode::PackageBindingUnreadable)
+                        .path(&path)
+                        .caused_by(Outcome::from_io_error(&error, IoOp::Read)),
+                );
+                return None;
+            }
+        };
+        match parse_standard_pack_ui(&bytes, game, registry) {
+            Ok(ui) => Some(ui),
+            Err(issues) => {
+                for issue in issues {
+                    self.warn(root_invalid(game, directory, issue));
+                }
+                None
+            }
+        }
+    }
+
+    /// Workflow #429 R-11 (register §1.240; `contracts/remedies.md` §2.2, §2.3): whether the
+    /// package at `package` is irreversible as the Runtime derives it, that is an entry of its
+    /// `control.json` `provides` declares `irreversible: true`; `false` when none does or it
+    /// declares no `provides`. `None` when the package's place cannot be read (`readable` false,
+    /// already warned), and when its control file cannot be read, is larger than 1 MiB or does
+    /// not decode: `package_binding_unreadable` with the control file's path and the failure
+    /// beneath it.
+    fn irreversible(&mut self, package: &Path, readable: bool) -> Option<bool> {
+        if !readable {
+            return None;
+        }
+        let path = package.join(CONTROL_FILE);
+        let unreadable = Outcome::new(ActingctlCode::PackageBindingUnreadable).path(&path);
+        let bytes = match read_capped(&path, MAX_CONTROL_BYTES) {
+            Ok(bytes) if bytes.len() as u64 <= MAX_CONTROL_BYTES => bytes,
+            Ok(_) => {
+                self.warn(unreadable);
+                return None;
+            }
+            Err(error) => {
+                self.warn(unreadable.caused_by(Outcome::from_io_error(&error, IoOp::Read)));
+                return None;
+            }
+        };
+        match serde_json::from_slice::<ControlProvides>(&bytes) {
+            Ok(control) => Some(
+                control
+                    .provides
+                    .iter()
+                    .flatten()
+                    .any(ProvidedCapability::irreversible),
+            ),
+            Err(error) => {
+                self.warn(
+                    unreadable.caused_by(
+                        Outcome::new(ContractCode::ForeignDataError)
+                            .raw_source(RawSource::Json)
+                            .raw_text(error.to_string()),
+                    ),
+                );
+                None
+            }
+        }
     }
 
     /// Workflow #357 DB-1 (register §1.65 TB3, TB4): the tables of every sound game root below
@@ -710,16 +865,25 @@ impl Rows {
     /// them, their column expiries judged at `now_unix_ms`. A broken game root's tables are not
     /// read and the root is not listed (check-config and the Runtime's start report it); a root
     /// that cannot be listed is the warning `package_binding_unreadable`, and a `tables/` that
-    /// cannot be listed is the warning `standard_pack_table_unreadable`.
+    /// cannot be listed is the warning `standard_pack_table_unreadable`. Workflow #429 R-11: a
+    /// sound root also lists its `ui.json` as written (`ui`) and that file's `display`
+    /// ([`Rows::game_ui`]); a directory that is a game root only by its `ui.json`, which neither
+    /// check-config nor the Runtime reads, is the warning `standard_pack_root_invalid`
+    /// `bundle_missing` and is not listed.
     fn standard_packs(&mut self, configured: &Path, now_unix_ms: u64) -> StandardPacksRow {
         let root = self.resolve(configured);
         let mut games = Vec::new();
         match game_directories(&root) {
             Some(directories) => {
                 for (game, directory) in directories {
-                    if !sound_game_root(&directory, &game) {
-                        continue;
-                    }
+                    let sound = match sound_game_root(&directory, &game) {
+                        Ok(Some(sound)) => sound,
+                        Ok(None) => continue,
+                        Err(issue) => {
+                            self.warn(root_invalid(&game, &directory, issue));
+                            continue;
+                        }
+                    };
                     let tables = match read_standard_pack_tables(&directory, &game) {
                         Ok(files) => files
                             .iter()
@@ -730,7 +894,14 @@ impl Rows {
                             Vec::new()
                         }
                     };
-                    games.push(StandardPackGameRow { game, tables });
+                    let ui = self.game_ui(&directory, &game, &sound.registry);
+                    let display = ui.as_ref().and_then(StandardPackUi::display).cloned();
+                    games.push(StandardPackGameRow {
+                        game,
+                        tables,
+                        ui,
+                        display,
+                    });
                 }
             }
             None => self.unreadable(&root, None),
@@ -760,10 +931,16 @@ fn game_directories(root: &Path) -> Option<Vec<(String, PathBuf)>> {
     Some(games)
 }
 
-/// Whether `directory` is a sound game root of `game` as the Runtime reads it (the contract's
-/// [`read_standard_pack_root`] over its root files, and `tables/` making it one): a root that
-/// is broken or whose root files cannot be read is not.
-fn sound_game_root(directory: &Path, game: &str) -> bool {
+/// The sound game root of `game` at `directory` as the Runtime reads it (the contract's
+/// [`read_standard_pack_root`] over its root files, and `tables/` making it one); `None` for a
+/// root that is broken or whose root files cannot be read, and for a directory that is no game
+/// root. Workflow #429 R-11: a directory that is a game root only by its `ui.json` (no other root
+/// file, no `tables/`) is the contract's refusal of [`read_standard_pack_root_with_ui`],
+/// `bundle_missing`: neither the Runtime nor check-config reads `ui.json`, so `packs` reports it.
+fn sound_game_root(
+    directory: &Path,
+    game: &str,
+) -> Result<Option<StandardPackRoot>, StandardPackRootIssue> {
     let read = |file: &str| match fs::read(directory.join(file)) {
         Ok(bytes) => Some(Some(bytes)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(None),
@@ -777,23 +954,43 @@ fn sound_game_root(directory: &Path, game: &str) -> bool {
         read(STANDARD_PACK_NAVIGATION_FILE),
         read(STANDARD_PACK_DISPLAY_LAYOUT_FILE),
     ) else {
-        return false;
+        return Ok(None);
     };
     let tables = fs::symlink_metadata(directory.join(STANDARD_PACK_TABLES_DIRECTORY)).is_ok();
-    matches!(
-        read_standard_pack_root(
-            StandardPackRootBytes {
-                bundle: bundle.as_deref(),
-                pages: pages.as_deref(),
-                interrupts: interrupts.as_deref(),
-                navigation: navigation.as_deref(),
-                tables,
-                display_layout: display_layout.as_deref(),
-            },
-            game,
-        ),
-        Ok(Some(_))
-    )
+    let ui = fs::symlink_metadata(directory.join(STANDARD_PACK_UI_FILE)).is_ok();
+    let files = StandardPackRootBytes {
+        bundle: bundle.as_deref(),
+        pages: pages.as_deref(),
+        interrupts: interrupts.as_deref(),
+        navigation: navigation.as_deref(),
+        tables,
+        display_layout: display_layout.as_deref(),
+    };
+    match read_standard_pack_root(files, game) {
+        Ok(Some(root)) => Ok(Some(root)),
+        Ok(None) => read_standard_pack_root_with_ui(files, ui, game),
+        Err(_) => Ok(None),
+    }
+}
+
+/// A refused root file of the game root `directory` of `game` as `standard_pack_root_invalid`:
+/// the game, the refused file's path, its problem and its pointer.
+fn root_invalid(game: &str, directory: &Path, issue: StandardPackRootIssue) -> Outcome {
+    Outcome::new(SharedCode::StandardPackRootInvalid)
+        .game(game)
+        .path(directory.join(issue.file))
+        .standard_pack_problem(issue.problem)
+        .json_pointer(issue.pointer)
+}
+
+/// R-11: the bytes of the file `path`, at most `limit + 1` of them (one more than `limit` says
+/// the file is larger); a file that does not exist or cannot be read is the OS error.
+fn read_capped(path: &Path, limit: u64) -> std::io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    fs::File::open(path)?
+        .take(limit.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    Ok(bytes)
 }
 
 /// ROUT-L RL-1c: one game root as the composer reads it: the root, the bundle's maintenance
@@ -809,6 +1006,9 @@ struct ScheduleGame {
 /// bundle's maintenance entries, `schedule.json`); `None` when the directory holds no game root.
 /// A file that cannot be read is `package_binding_unreadable` with its `path`; a broken root is
 /// `standard_pack_root_invalid` with the game, the refused file, its problem and pointer.
+/// Workflow #429 R-11: a directory that is a game root only by its `ui.json` is such a broken
+/// root (`bundle_missing`, [`read_standard_pack_root_with_ui`]); the file itself is read by
+/// [`Rows::game_ui`] and never breaks the root.
 fn schedule_game(directory: &Path, game: &str) -> Result<Option<ScheduleGame>, Outcome> {
     let read = |file: &str| {
         let path = directory.join(file);
@@ -826,7 +1026,8 @@ fn schedule_game(directory: &Path, game: &str) -> Result<Option<ScheduleGame>, O
     let navigation = read(STANDARD_PACK_NAVIGATION_FILE)?;
     let display_layout = read(STANDARD_PACK_DISPLAY_LAYOUT_FILE)?;
     let tables = fs::symlink_metadata(directory.join(STANDARD_PACK_TABLES_DIRECTORY)).is_ok();
-    let root = read_standard_pack_root(
+    let ui = fs::symlink_metadata(directory.join(STANDARD_PACK_UI_FILE)).is_ok();
+    let root = read_standard_pack_root_with_ui(
         StandardPackRootBytes {
             bundle: bundle.as_deref(),
             pages: pages.as_deref(),
@@ -835,15 +1036,10 @@ fn schedule_game(directory: &Path, game: &str) -> Result<Option<ScheduleGame>, O
             tables,
             display_layout: display_layout.as_deref(),
         },
+        ui,
         game,
     )
-    .map_err(|issue| {
-        Outcome::new(SharedCode::StandardPackRootInvalid)
-            .game(game)
-            .path(directory.join(issue.file))
-            .standard_pack_problem(issue.problem)
-            .json_pointer(issue.pointer)
-    })?;
+    .map_err(|issue| root_invalid(game, directory, issue))?;
     let Some(root) = root else {
         return Ok(None);
     };
@@ -1203,7 +1399,9 @@ mod tests {
                 .display()
                 .to_string()
         };
-        let row = |package: &str, readable: bool| {
+        // R-11 (register §1.240) adds `task_ids` to each composed row; neither package has a
+        // readable control.json, so neither row has `irreversible`.
+        let row = |package: &str, readable: bool, task: &str| {
             serde_json::json!({
                 "role": "procedure",
                 "package_id": package,
@@ -1212,11 +1410,15 @@ mod tests {
                 "procedure_ref": format!("package.{package}"),
                 "operation_id": "operation.package.run",
                 "scheduled": true,
+                "task_ids": [task],
             })
         };
         assert_eq!(
             installation_rows(&answer),
-            serde_json::json!([row(FIRST, true), row(SECOND, false)])
+            serde_json::json!([
+                row(FIRST, true, "fixture.read"),
+                row(SECOND, false, "fixture.clock")
+            ])
         );
         let warnings = answer.warnings();
         let unreadable = warnings
@@ -1353,6 +1555,285 @@ mod tests {
                 "operation_id": "neutral.task",
                 "scheduled": true,
             }])
+        );
+    }
+
+    // Workflow #429 R-11 (register §1.240; work order `rd-1031/brief-r11.md`, tests 3 to 5):
+    // neutral packages whose `control.json` declares `provides` or not.
+    const IRREVERSIBLE: &str = "fixture.irreversible";
+    const REVERSIBLE: &str = "fixture.reversible";
+    const PLAIN: &str = "fixture.plain";
+
+    /// One package of a game root: its rule's id, its package id and its `control.json` (none
+    /// when `None`).
+    type R11Package = (&'static str, &'static str, Option<Value>);
+
+    /// A `control.json` of `package_id` whose `provides` names one irreversible capability.
+    fn irreversible_control(package_id: &str) -> Value {
+        serde_json::json!({
+            "package_id": package_id,
+            "provides": [
+                {"capability": "cap_a"},
+                {"capability": "cap_b", "irreversible": true, "parameters": [
+                    {"name": "param_a", "options": ["opt_a", "opt_b"], "default": "opt_a"}
+                ]}
+            ]
+        })
+    }
+
+    /// A `control.json` of `package_id` whose `provides` names no irreversible capability.
+    fn reversible_control(package_id: &str) -> Value {
+        serde_json::json!({
+            "package_id": package_id,
+            "provides": [{"capability": "cap_c", "irreversible": false}]
+        })
+    }
+
+    /// A `control.json` of `package_id` without `provides`.
+    fn plain_control(package_id: &str) -> Value {
+        serde_json::json!({"package_id": package_id})
+    }
+
+    /// R-11: below `root`, per game of `games` its game root under `packages/` (a bundle of its
+    /// packages on SERVER, a `schedule.json` of one clock rule per package, each package's
+    /// directory with its `control.json` when given), and a composer-mode configuration binding
+    /// each (instance, game) of `bound`. Answers the configuration's path.
+    fn r11_install(
+        root: &Path,
+        games: &[(&str, Vec<R11Package>)],
+        bound: &[(&str, &str)],
+    ) -> PathBuf {
+        use crate::standard_pack_schedule_fixture::{bundle, rule, schedule, write_json};
+        let packages = root.join("packages");
+        for (game, packs) in games {
+            let ids = packs
+                .iter()
+                .map(|(_, package_id, _)| *package_id)
+                .collect::<Vec<_>>();
+            write_json(
+                &packages.join(game).join("bundle.json"),
+                &bundle(game, SERVER, &ids),
+            );
+            let rules = packs
+                .iter()
+                .map(|(rule_id, package_id, _)| rule(rule_id, package_id, true))
+                .collect::<Vec<_>>();
+            write_json(
+                &packages.join(game).join("schedule.json"),
+                &schedule(&rules),
+            );
+            for (_, package_id, control) in packs {
+                let directory = packages.join(game).join(package_id);
+                fs::create_dir_all(&directory).expect("the package directory");
+                if let Some(control) = control {
+                    write_json(&directory.join(CONTROL_FILE), control);
+                }
+            }
+        }
+        let config = root.join(ROOT_CONFIG_FILE);
+        let document = serde_json::json!({
+            "instances": bound
+                .iter()
+                .map(|(alias, _)| serde_json::json!({
+                    "alias": alias, "instance_id": format!("neutral-{alias}")
+                }))
+                .collect::<Vec<_>>(),
+            "standard_packs": {"root": "packages"},
+            "policy": {"facts": {"instances": bound
+                .iter()
+                .map(|(alias, game)| serde_json::json!({
+                    "instance_id": alias, "game_id": game, "server_id": SERVER
+                }))
+                .collect::<Vec<_>>()}}
+        });
+        fs::write(&config, document.to_string()).expect("write configuration");
+        config
+    }
+
+    /// The answer of `actingctl packs` (`ac_packs`'s reader) for `config`.
+    fn r11_answer(config: &Path) -> Answer {
+        read_with_tables(None, config, &Query::default())
+            .unwrap_or_else(|error| panic!("packs reads the composer-mode configuration: {error}"))
+    }
+
+    /// Each installation row of `answer` by its `package_id`.
+    fn rows_by_package(answer: &Answer) -> BTreeMap<String, Value> {
+        installation_rows(answer)
+            .as_array()
+            .expect("the installation rows")
+            .iter()
+            .map(|row| {
+                (
+                    row["package_id"].as_str().expect("a package id").to_owned(),
+                    row.clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// R-11 test 3: a game root without `ui.json` answers its rows as before, plus `task_ids`
+    /// and `irreversible`: no `ui` or `display` on a row or on the game, and no warning.
+    #[test]
+    fn r11_t3_without_ui_json_the_rows_are_as_before_with_irreversible_and_task_ids() {
+        let root = TempDir::new().expect("tempdir");
+        let config = r11_install(
+            root.path(),
+            &[(
+                GAME,
+                vec![
+                    (
+                        "fixture.one",
+                        IRREVERSIBLE,
+                        Some(irreversible_control(IRREVERSIBLE)),
+                    ),
+                    ("fixture.two", PLAIN, Some(plain_control(PLAIN))),
+                ],
+            )],
+            &[("node-a", GAME)],
+        );
+
+        let answer = r11_answer(&config);
+
+        let base = Path::new(&answer.packs().source().config)
+            .parent()
+            .expect("the configuration's folder")
+            .to_path_buf();
+        let row = |package: &str, task: &str, irreversible: bool| {
+            serde_json::json!({
+                "role": "procedure",
+                "package_id": package,
+                "path": base.join("packages").join(GAME).join(package).display().to_string(),
+                "readable": true,
+                "procedure_ref": format!("package.{package}"),
+                "operation_id": "operation.package.run",
+                "scheduled": true,
+                "task_ids": [task],
+                "irreversible": irreversible,
+            })
+        };
+        assert_eq!(
+            installation_rows(&answer),
+            serde_json::json!([
+                row(IRREVERSIBLE, "fixture.one", true),
+                row(PLAIN, "fixture.two", false)
+            ])
+        );
+        assert_eq!(
+            serde_json::to_value(answer.packs()).expect("encode the answer")["standard_packs"]["games"],
+            serde_json::json!([{"game": GAME, "tables": []}])
+        );
+        assert!(answer.warnings().is_empty(), "{:?}", answer.warnings());
+    }
+
+    /// R-11 test 4: a package is irreversible exactly when an entry of its `control.json`
+    /// `provides` declares `irreversible: true`; one whose `provides` declares none, or that has
+    /// no `provides`, is not. A package whose control file cannot be read has no
+    /// `irreversible` and a `package_binding_unreadable` warning names the file.
+    #[test]
+    fn r11_t4_irreversible_is_derived_from_the_package_s_provides() {
+        const UNREAD: &str = "fixture.unread";
+        let root = TempDir::new().expect("tempdir");
+        let config = r11_install(
+            root.path(),
+            &[(
+                GAME,
+                vec![
+                    (
+                        "fixture.one",
+                        IRREVERSIBLE,
+                        Some(irreversible_control(IRREVERSIBLE)),
+                    ),
+                    (
+                        "fixture.two",
+                        REVERSIBLE,
+                        Some(reversible_control(REVERSIBLE)),
+                    ),
+                    ("fixture.three", PLAIN, Some(plain_control(PLAIN))),
+                    ("fixture.four", UNREAD, None),
+                ],
+            )],
+            &[("node-a", GAME)],
+        );
+
+        let answer = r11_answer(&config);
+
+        let rows = rows_by_package(&answer);
+        let irreversible = |package: &str| rows[package].get("irreversible").cloned();
+        assert_eq!(irreversible(IRREVERSIBLE), Some(Value::Bool(true)));
+        assert_eq!(irreversible(REVERSIBLE), Some(Value::Bool(false)));
+        assert_eq!(irreversible(PLAIN), Some(Value::Bool(false)));
+        assert_eq!(irreversible(UNREAD), None);
+        let control = Path::new(rows[UNREAD]["path"].as_str().expect("the package's path"))
+            .join(CONTROL_FILE)
+            .display()
+            .to_string();
+        let unreadable = answer
+            .warnings()
+            .iter()
+            .filter(|warning| warning.is(ActingctlCode::PackageBindingUnreadable))
+            .map(|warning| warning.value("path").cloned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            unreadable,
+            vec![Some(Value::from(control))],
+            "{:?}",
+            answer.warnings()
+        );
+    }
+
+    /// R-11 test 5: each row's `task_ids` are the composed tasks that run its package, in id
+    /// order: a rule composed for two instances of its game and server is the two tasks
+    /// `<rule id>@<alias>`, one composed for a single instance keeps the rule's id.
+    #[test]
+    fn r11_t5_task_ids_are_the_composed_tasks_of_each_package() {
+        let root = TempDir::new().expect("tempdir");
+        let config = r11_install(
+            root.path(),
+            &[
+                (
+                    GAME,
+                    vec![
+                        (
+                            "fixture.one",
+                            IRREVERSIBLE,
+                            Some(irreversible_control(IRREVERSIBLE)),
+                        ),
+                        ("fixture.two", PLAIN, Some(plain_control(PLAIN))),
+                    ],
+                ),
+                (
+                    GAME_B,
+                    vec![(
+                        "fixture.three",
+                        REVERSIBLE,
+                        Some(reversible_control(REVERSIBLE)),
+                    )],
+                ),
+            ],
+            &[("node-a", GAME), ("node-b", GAME), ("node-c", GAME_B)],
+        );
+
+        let answer = r11_answer(&config);
+
+        let task_ids = rows_by_package(&answer)
+            .into_iter()
+            .map(|(package, row)| (package, row["task_ids"].clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            task_ids,
+            BTreeMap::from([
+                (
+                    IRREVERSIBLE.to_owned(),
+                    serde_json::json!(["fixture.one@node-a", "fixture.one@node-b"])
+                ),
+                (
+                    PLAIN.to_owned(),
+                    serde_json::json!(["fixture.two@node-a", "fixture.two@node-b"])
+                ),
+                (REVERSIBLE.to_owned(), serde_json::json!(["fixture.three"])),
+            ]),
+            "{:?}",
+            answer.warnings()
         );
     }
 }
