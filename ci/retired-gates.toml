@@ -198,3 +198,11 @@ test = "actingcommand-actingd::bin:actingcommand-actingd::gate_427a::lanes_t8_th
 ruling = "Alice 98 (10-29: the adaptive preset, whose scheduling.parallel.enabled is true, is the default); Workflow #429 R-2"
 reason = "The default of scheduling.parallel.enabled is true now, so 'off by default' no longer holds; the test keeps its point, an instruction turns the switch on at the next round, with the file writing false explicitly."
 covered_by = "actingcommand-actingd::bin:actingcommand-actingd::gate_427a::lanes_t8_the_switch_off_in_the_file_is_turned_on_by_an_instruction_at_the_next_round, in the same apps.toml row."
+
+# Workflow #386 PAUSE-AUTO (register §1.230, PR #1461): IDLE-1's wake no longer starts a paused instance's emulator.
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_idle1p::idle1p_m1_a_stop_emulator_restart_while_the_wake_is_queued_runs_the_startup_package_after_it"
+ruling = "Alice 117 A (10-31 13:22: a paused instance's emulator is started neither by the daemon-start autostart nor by the IDLE-1 wake); Workflow #386 PAUSE-AUTO"
+reason = "Renamed with the requirement it pins: under a pause the wake is no longer queued and does not start the emulator; the test keeps its point, the startup package runs once after the resume."
+covered_by = "actingcommand-runtime-host::lib::tests::gate_idle1p::idle1p_m1_a_stop_emulator_wake_a_pause_holds_queues_the_startup_package_after_the_resume, in the same host.toml row."

@@ -8,8 +8,8 @@
 
 use super::emulator_controller::{EmulatorCall, FAKE_EMULATOR_PORT, running_state, stopped_state};
 use super::gate_369_s6c::{
-    FIRST, GATE_WAIT, START, autostart_host, claims_after, connectivity, head, instance_scope,
-    instance_status, of_request, pause, resume, send, starts, stop,
+    FIRST, GATE_WAIT, START, autostart_host, claims_after, connectivity, control, head,
+    instance_scope, instance_status, of_request, pause, resume, send, starts, stop,
 };
 use super::instance_workers::phases;
 use super::*;
@@ -142,11 +142,14 @@ fn watched_host(
     host
 }
 
-// (a) R1: an instance whose configuration names `start_emulator` and whose own scheduling pause
-// is restored at the daemon's start is started at once; the pause holds only its startup package,
-// which runs after the resume.
+// (a) R1. PAUSE-AUTO (0.12.34, Alice's ruling 117 A) adapts it: it pinned that the daemon start
+// started an instance its own restored pause holds. Now an instance whose configuration names
+// `start_emulator` and whose own scheduling pause is restored at the daemon's start gets no
+// autostart claim and no Start, and its skip is recorded once (`skip_reason` `instance_paused`,
+// no `watch_kind`). A person's start of it under the pause still runs, and the pause holds only
+// that start's startup package, which runs after the resume.
 #[test]
-fn emu_w_a_a_paused_instance_is_started_and_its_startup_package_waits_for_the_resume() {
+fn emu_w_a_a_paused_instance_is_not_started_at_the_daemon_start_and_a_persons_start_still_runs() {
     let root = TempDir::new().expect("tempdir");
     let state = Arc::new(FakeState::default());
     let instance = instance_id();
@@ -180,12 +183,41 @@ fn emu_w_a_a_paused_instance_is_started_and_its_startup_package_waits_for_the_re
     let calls = state.emulator.listen();
     let before = head(&host);
 
-    assert_eq!(host.enqueue_emulator_autostart().expect("enqueue"), 1);
+    assert_eq!(host.enqueue_emulator_autostart().expect("enqueue"), 0);
     let lines = await_reports(&host, |lines| {
-        reported(lines, "emulator_autostart_started") == 1
+        reported(lines, "emulator_autostart_skipped") == 1
     });
+    assert_eq!(reported(&lines, "emulator_autostart_started"), 0);
     assert_eq!(reported(&lines, "emulator_autostart_failed"), 0);
-    assert_eq!(starts(&calls), 1, "the Start under the pause");
+    assert_eq!(starts(&calls), 0, "no Start at the daemon start");
+    assert!(
+        claims_after(&host, instance, before).is_empty(),
+        "no autostart claim"
+    );
+    let skips = watch_records(&host, instance, "emulator_autostart_skipped");
+    let [skip] = &skips[..] else {
+        panic!("one skip of the daemon start: {skips:?}");
+    };
+    assert_eq!(skip.value("alias"), Some(&serde_json::json!(FIRST)));
+    assert_eq!(
+        skip.value("skip_reason"),
+        Some(&serde_json::json!("instance_paused"))
+    );
+    assert_eq!(skip.value("watch_kind"), None);
+    assert_eq!(
+        host.instance_claims_for_test(FIRST).expect("claims"),
+        (None, vec![]),
+        "nothing holds or waits for the instance"
+    );
+
+    // A person's start under the pause runs; the pause holds only its startup package.
+    let started = control(&host, FIRST, START, 304);
+    assert_eq!(
+        started.state(),
+        RuntimeReceiptState::Completed,
+        "{started:?}"
+    );
+    assert_eq!(starts(&calls), 1, "the person's Start under the pause");
     let claim = of_request(&host, claims_after(&host, instance, before)[0]);
     assert_eq!(
         count_of(&claim, EventType::SchedulerQueued),
