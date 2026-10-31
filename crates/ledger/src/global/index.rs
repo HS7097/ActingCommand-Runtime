@@ -15,7 +15,8 @@
 use crate::PersistedEvent;
 use actingcommand_contract::outcome::Category;
 use actingcommand_contract::{
-    AgentPayload, EventPayload, EventType, FactPayload, FactScope, PolicyPayload, RuntimeFactScope,
+    AgentPayload, EventPayload, EventType, FactPayload, FactScope, NOT_RUN_INDEX_PREFIX,
+    NOT_RUN_STREAM_INDEX_PREFIX, PolicyNotRunChangedPayload, PolicyPayload, RuntimeFactScope,
     RuntimeLifecyclePhase, RuntimePayload, RuntimeStateFact,
 };
 use serde::Serialize;
@@ -185,6 +186,7 @@ fn tagged_keys(event: &PersistedEvent, policy: &IndexPolicy) -> Vec<String> {
                 state.instance_id, state.profile_id
             )]
         }
+        EventPayload::Policy(PolicyPayload::NotRunChanged(record)) => not_run_keys(record),
         EventPayload::Agent(AgentPayload::WakeObligationRecorded(recorded)) => {
             id_text(&recorded.wake().wake_id())
                 .map(|wake| format!("wake/{wake}"))
@@ -209,6 +211,23 @@ fn tagged_keys(event: &PersistedEvent, policy: &IndexPolicy) -> Vec<String> {
             .chain(monitor_keys(event))
             .collect(),
     }
+}
+
+/// Workflow 114-A (§11.1; register §1.236): the keys of a `policy.not_run_changed` record:
+/// `not_run/<alias>/<task>` for each task the record names (a change set's changed keys; a
+/// baseline part's `rows`, `selected` and `gone`; a retirement's `gone`; a marker none) and
+/// `not_run_stream/<alias>` for every record, so the start finds each alias's latest record of
+/// any kind. A key whose latest record names it as gone has no current row.
+pub(super) fn not_run_keys(record: &PolicyNotRunChangedPayload) -> Vec<String> {
+    let alias = record.head().instance_alias.as_str();
+    record
+        .index_task_ids()
+        .into_iter()
+        .map(|task| format!("{NOT_RUN_INDEX_PREFIX}{alias}/{task}"))
+        .chain(std::iter::once(format!(
+            "{NOT_RUN_STREAM_INDEX_PREFIX}{alias}"
+        )))
+        .collect()
 }
 
 /// Workflow #422 LN-2 (§11.5 step 3): whether `key` is one of the record's tagged keys under any

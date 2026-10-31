@@ -303,7 +303,11 @@ pause over ruling 116's instance pauses keeps `dispatch_paused_instance`.
 
 **O-6.** A later control gate is added only to O-1's table and to O-3's function, as a new
 `runtime-client` revision first (`instance_gate` is closed and `control` refuses an unknown value,
-so the readers go first), and filled by the next slice.
+so the readers go first), and filled by the next slice. Since Workflow 114-A (register §1.236)
+the ledger keeps its own copies of `instance_gate` and of the hold's vocabularies (a
+`policy.not_run_changed` record's `effective` and hold members, word for word R-7a's `ALL` by
+its guard test), so a word added to any of them also raises the `ledger` revision in the same
+release ([component-interfaces.md](component-interfaces.md), `ledger` 5).
 
 **O-7. `control` is derived by the contract crate, never written.**
 

@@ -488,6 +488,15 @@ tests = [
 ]
 incident = ["#383"]
 
+# Workflow 114-A (0.12.35; register §1.236; design rd-1031/design-114-reasons-v5.md §2.6, §11.3; ledger-observer §11.1): the index keys of policy.not_run_changed: a change set names its changed keys, a baseline part its rows, selected and gone, a retirement its gone (recorder_faulted none), a marker none, and every record not_run_stream/<alias>, so every record is tagged; every kind commits with FULL sync
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_114a::n114a_tagged_keys_name_the_changed_keys_and_the_stream",
+    "actingcommand-ledger::lib::global::tests::gate_114a::n114a_the_record_is_durable",
+]
+incident = ["114-A"]
+
 # Workflow #336 PKG-S3 (option 丙): a formal root's policy dispatch intent names its procedure binding and no package digest and reads back exactly when reopened, and a stored intent that carries package_digest is refused on opening (M-PKG v1.1 §4.4 S3-T1)
 [[gate]]
 key = "47"

@@ -5178,6 +5178,129 @@ contains an expected consumption, whichever task it belongs to.
 | SS2d-4 | `allocation_order`: the released candidates last in the business tier, a promotion not lifting them | behaviour (evaluation) | SS-2d | — | only when a candidate is released; otherwise the order of before |
 | SS2d-5 | the idle plan: a decision within tolerance that was not selected is neither due nor a wake | behaviour (runtime-host, IDLE-1) | SS-2d | `schedule_explanation.rs` (`IdleDraft::add`) | as SS2b-7, its own wake excluded too |
 
+### 1.236 Slice 114-A (0.12.35): the "why it did not run" record's shapes, the ledger's own copies, the index prefixes, ledger revision 5 and every vocabulary, reader first (Alice's 114 of 10-30 23:2x–23:3x, method 2: only the changes are copied and updated incrementally; her 118 A, 119 A and 120 A of 10-31 13:22, relayed from the AC审计 window, Workflow #386 comment 6539002530; the frozen design `rd-1031/design-114-reasons-v5.md` with the coordinator's freeze addendum `rd-1031/design-114-reasons-v5-freeze-addendum.md`, which wins where they differ, after the UI channel's last review of v5; coordinator work order `rd-1031/brief-114a.md`)
+
+[ledger-observer.md](ledger-observer.md) §11.8 is the contract of the record and §11.1 names its two
+keys; [scheduling/README.md](scheduling/README.md), "Why A Candidate Does Not Run", says what it
+will hold; [component-interfaces.md](component-interfaces.md) gains the `ledger` 5 row and
+[player-hold.md](player-hold.md) O-6 the sentence that a word added to the gates' or the hold's
+vocabularies also raises the `ledger` revision. Both texts cite the one order of the control gates
+by R-7a §2.6 and do not restate it. The number 1.236 is the coordinator's; R-7a2 (§1.234) and
+R-15b (§1.237) may be in flight in the same release. 114-B (the recorder and the write side),
+114-C (the start) and 114-D (`ScheduleHistory`, `runtime-client` 5) follow.
+
+**What.** (1) The record type `policy.not_run_changed` (family `policy`, action
+`policy.not_run`, severity info; both catalog tokens added), durable, in no view's type list, and
+`PolicyPayload::NotRunChanged(PolicyNotRunChangedPayload)` (`event/payload/not_run.rs`): the
+common head (`NotRunHead`: `instance_alias`, `stream`, `prev`, `base`, `evaluated_at_unix_ms`,
+`eval_seq`, `catalog_hash`, `budget`, `prior?`, `closes?`), the four kinds' members
+(`NotRunChange`, `NotRunBaseline`, `NotRunSuppressed`, `NotRunRetired`), `NotRunPrior`,
+`NotRunCloses`, `NotRunRow`, `NotRunSummary`, `NotRunFrom`, `NotRunTo`, `NotRunGone`,
+`NotRunSelected`, and the ledger's own copies `NotRunControl` (`NotRunPlayerHold`,
+`NotRunGlobalPause`, `NotRunInstancePause`, `NotRunResourceFence`, `effective`) and
+`NotRunPlayerHoldEnd` (`NotRunHoldOperation`, `NotRunHoldSuperseded`). The record is serialized
+flat as the design writes it; the head and the kind's members decode separately, each refusing a
+member it does not know, so a member of another kind is refused too. (2) The read-side check
+(`PolicyNotRunChangedPayload::validate`, run by every read through `EventPayload::validate`): the
+shape and the ranges (`seq` ≥ 1 on `stream`, `prev`, `base`, `prev_base` and `closes.marker`;
+`part` ≤ `parts` ≤ 16; `rows` and `selected` ≤ 256 a part; `entries` ≤ 64; at most 64 KiB of
+compact JSON), the closed vocabularies (decoded), the self-consistency that depends on no code
+(design §2.1 item 3 and the freeze addendum) and the spelling of every code
+(`validate_policy_token`: `why`, a row's `from.code`, every `dispatch_code`, the fence's `cause`,
+the operation's `code` and `selfcheck_failure_code`). Shape refusals are `invalid_policy_payload`
+(`codes.rs:958` on f57f7d20; the design's `:940`); a spelling keeps `invalid_policy_token` and the
+catalog hash `invalid_catalog_hash`, the rules every policy record shares. No code is added. (3)
+The index (`global/index.rs`, `not_run_keys` in `tagged_keys`, so `row_names_record` and
+`names_key` follow): `not_run/<alias>/<task>` (`NOT_RUN_INDEX_PREFIX`) for each key a change set
+changes, a baseline part's `rows`, `selected` and `gone`, a retirement's `gone`, and
+`not_run_stream/<alias>` (`NOT_RUN_STREAM_INDEX_PREFIX`) for every record. (4) The vocabularies,
+plain enums with their frozen order (`ALL`), not outcome vocabularies: the ledger's fifteen
+(`not_run_kind`, `not_run_baseline_reason`, `not_run_gone_reason`, `not_run_dispatch`,
+`not_run_layer`, `not_run_value_gate`, `not_run_class`, `not_run_candidate_state`,
+`not_run_candidate_eligibility`, `not_run_instance_pause_stage`, `not_run_previous_close`,
+`not_run_suppressed_unknown`, `not_run_retired_reason`, `not_run_trigger`, `not_run_check`), the
+ledger's copies of R-7a's eight (`instance_gate`, `player_hold_phase`,
+`player_hold_source_actor`, `player_hold_operation_kind`, `player_hold_operation_state`,
+`player_hold_next`, `player_hold_startup_package`, `player_hold_restored_from`) with `channel`,
+`via` and `startup_package_withheld`, and the eleven of `ScheduleHistory`
+(`runtime/schedule_history.rs`: `schedule_history_scope`, `_task_kind`, `_precision`,
+`_unknown_because`, `_inconsistent_kind`, `_incomplete_because`, `_dispatch`, `_head_state`,
+`_close`, `_retired_reason`, `_segment_role`), which 114-D uses without adding a word. (5)
+`component-interfaces.json` declares `ledger` [3, 5].
+
+**The R-7a alignment** (the freeze addendum §2, six items, no shape change). (1) The value key of
+114-B's check code is `not_run_check`, named as R-7a's settlement keys are (`settlement_rule`,
+`keys.rs:662`, not `rule`); the instance alias of its values is the existing key `alias`
+(`keys.rs:15`). (2) `ControlGates::code()` returns `Option<ControlGateCode>`, not a `Code`: 114-B's
+write side compares a control row's `why` and 114-D's reader turns a written `effective` into its
+code through `InstanceGate::code()` and R-7a2's host mapping. (3) A hold or operation `source`
+without `channel` does not decode; it is not a `validate` refusal. (4) The hold copy carries every
+condition of R-7a's `PlayerHoldState::validate` (revision and since not 0; both deadlines in the
+three acquire phases and neither after, stricter than the design's "only in"; `close_started`
+only in `handing_back`; `reached_held` never while acquiring nor on a hold restored from
+`acquiring`, otherwise present; the two `restored_*` together; `via` only on `lab`) and the
+operation copy every condition of `PlayerHoldOperation::validate` on its flattened result (by
+state, by kind, the identity of an acquire with the ended hold, since not 0, R-7a §3.2's result
+self-check without the complete `selfcheck` the copy does not keep); an operation's `phase` and
+`failed_phase` are never `held`, a ledger tightening of R-7a's five words. (5) The reused
+vocabularies are the ledger's own enums; a guard test holds each word for word equal to R-7a's
+`ALL`, and `channel`, `via`, `startup_package_withheld`, `InstancePauseStage` and
+`ScheduleExplanation`'s three enums by an exhaustive match from the source. (6) The file:line
+citations here are checked on f57f7d20.
+
+**The freeze addendum's other items in this slice.** `retired{recorder_faulted}` names the failed
+write-side check as `check` (words of `not_run_check`; minor 10), which only that reason carries
+and which carries no `gone`; the precision word of ruling 118 A's class is `turn`, not `class`
+(minor 11). `head.retired`, `head.state` and the answer's `HeadPrior` are 114-D's shapes: this
+slice freezes their words only (`schedule_history_head_state` with `recorder_faulted`;
+`head.retired.reason` uses `not_run_retired_reason`); the record's `Prior` keeps
+`first_evaluated_at_unix_ms` required (§1).
+
+**Checks beyond the design's list, all shape only.** A change set carries at least one of
+`entries`, `control`, `summary` and `player_hold_end` (design §2.5: it is empty only when one of
+the others is there); a baseline part's `base` is `null` exactly on part 1 (§2.2); the pause
+copies' `pause_reason` is the existing name type `SchedulingPauseReason` (`1..=64` bytes of
+`[a-z0-9_.-]`), not a vocabulary; the alias passes `validate_instance_alias` and `catalog_hash`
+the policy records' `validate_catalog_hash`.
+
+**Why.** A reader that refuses a record stops a Runtime's start (the newest
+`open_verify_tail_records` records are authenticated) and fails a whole page online and offline
+(design §1.9 item 1), so the reader ships a release before the first writer and checks only what
+changes with the shape; codes, the golden table and the gates' order are the write side's.
+
+**Unchanged.** Every existing record, the SQLite format, `actingcommand.event.v3`, the tables, the
+indexes and every view's type list (so the view DDL), every request and answer, the
+configuration, the policy and the host's behaviour. The host's dispatch recovery refuses the new
+type as it refuses the other value records (`policy_host.rs`, `PolicyRecoveryQueryMismatch`); it
+never queries it.
+
+**What changes live.** Nothing is written. The update needs `actingctl install
+--accept-ledger-one-way` (R*.max 5 > Rp.max 4, logged), and the deploy record checks that the
+console in use declares `ledger` with max ≥ 5 (UI-0a, pinned to this slice's pull request head,
+≥ R-7a), as design §11.2 and §11.7 require: until UI-2a, no installer checks the console's edge.
+
+**Rollback** (to 0.12.34). 0.12.34 declares `ledger` [3, 4]. `actingctl install` refuses the
+rollback (Rp.max 5 is not in [3, 4]) whether or not a revision-5 record exists, as for revision 4;
+going back before 114-A is outside the guarantee (Alice 10-11, no old-version compatibility), and
+the deploy note says so. What an older Runtime would do with revision 5: 114-A writes no record,
+so a ledger of 0.12.35 holds none and a 0.12.34 Runtime put back by hand reads it; once 114-B has
+written one, a Runtime of 0.12.34 or earlier cannot decode it (`EventType` has no catch-all,
+`corrupt_ledger_record`): its start fails while such a record is among the newest
+`open_verify_tail_records` records, and an online or offline page that holds one fails whole
+(`runtime_receipt_decode_failed` on a console pinned before 114-A). From 114-A on, a rollback
+within revision 5 is free: this reader reads a later build's records with codes or golden-table
+classes it does not know.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| N114A-1 | `policy.not_run_changed`, action `policy.not_run`, `PolicyPayload::NotRunChanged` | record type (ledger 5) | 114-A | 114-B | durable; info; no view type list; catalog tokens of `event_type` and `event_action` |
+| N114A-2 | `NotRunHead` and the four kinds' members, `NotRunPrior`, `NotRunCloses`, `NotRunRow`, `NotRunSummary`, `NotRunFrom`, `NotRunTo`, `NotRunGone`, `NotRunSelected` | persisted shapes (ledger 5) | 114-A | 114-B (`prior`: 114-C) | flat serialization; unknown members refused; `prev`, `base`, `prev_base`, `from`, `suppressed`, `previous_owner_epoch`, `stream_epoch`, `stream_link` present and nullable |
+| N114A-3 | `NotRunControl` and its four members, `effective`, `NotRunPlayerHoldEnd` | the ledger's own copies (ledger 5) | 114-A | 114-B | versioned with the ledger revision; every condition of R-7a's two self-checks |
+| N114A-4 | the read-side check | reader behaviour | 114-A | — | shape, vocabularies, code-free self-consistency, spelling; never registration, golden table or gate order |
+| N114A-5 | `not_run/<alias>/<task>`, `not_run_stream/<alias>` | index keys | 114-A | 114-B | `tagged_keys`; read at the start from 114-C |
+| N114A-6 | the 15 ledger vocabularies, the copies of R-7a's 8 with `channel`, `via`, `startup_package_withheld`, and the 11 of `ScheduleHistory` | closed vocabularies | 114-A | 114-B, 114-D | guard tests; a new word is a new `ledger` (or, for `ScheduleHistory`, `runtime-client`) revision |
+| N114A-7 | `ledger` [3, 5] | interface declaration | 114-A | — | one way, as revision 4 |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -5342,7 +5465,7 @@ K27 asserts the declaration. Every moving interface rises once for the release.
 | Interface | v0.12.0 | Sources in this register |
 |---|---|---|
 | `actingd-config` | [5, 5] | §5: every key it lists as parsed (not `execution.defaults.*`, see there); the removals of PKG-S4 §1.55 P4-3 and NAV-3a §1.67 N3A-3, which no v0.12.0 reader accepts. Workflow #411 B15 R3 raises it to [5, 6] in v0.12.3 (§1.113 B15C-4): revision 6 adds the remedy keys, and a revision-5 file is still read. Workflow #406 T12 raises it to [5, 7] in #406's release (§1.136 T12-5): revision 7 adds the `touch` section, and revision-5 and revision-6 files are still read. #411 A38 raises it to [5, 8] (§1.148 A38-7): revision 8 adds `recovery_ladder.fence_recheck`, and revisions 5 to 7 are still read. #411 A51 adds `ledger_observer.read_budget_ms` and `close_timeout_ms` to the same revision 8 (§1.151 A51-4). #411 B37 (A35-S1) adds `recovery_ladder.busy` to the same revision 8 (§1.152 B37-5). The 0.12.x release after v0.12.9 raises it to [5, 9] (§1.168 A35-5): revision 9 adds that release's configuration keys (#411 A35: `recovery_ladder.busy.screen`), and revisions 5 to 8 are still read. P0-LO raises it to [5, 10] in v0.12.11: revision 10 adds `ledger_observer.open_timeout_ms` and `open_warn_ratio_milli`, and revisions 5 to 9 are still read. #411 A64, #411 A66, PERF-B1 and SCH-M ED-1 raise it to [5, 11] in v0.12.12: revision 11 adds `host_claims.run_end_grace_ms` (A64, ruling C-43), the `watchdog` section (`start_window_ms`, A66), the `execution` section (`capture.max_interval_ms`, `capture.backoff_enabled`, `capture.idle_ceiling_ms`; PERF-B1, §1.177 B1-2) and SCH-M ED-1's `scheduling.expected_runtime.*` (also per instance) and `scheduling.fact_refresh.expected_duration_ms` (§1.178 ED1-3), and revisions 5 to 10 are still read. IDLE-1 (Alice's ruling 41) raises it to [5, 12] in the release after v0.12.12: revision 12 adds the `idle` section (`action`, `min_gap_ms`, `close_app_wake_lead_ms`, `stop_emulator_wake_lead_ms`) and an instance entry's `idle` member; ROUT-L RL-1b (same release, §1.185 RL1B-1, RL1B-2) adds to revision 12 the `standard_packs` keys `check_interval_ms` and `cached_generations` and a `policy` section without `catalog` (composer mode), #422 LN-5 `ledger_observer.history_page_rows` and #422 LN-TUNE `ledger_observer.writer_reply_timeout_ms`; and revisions 5 to 11 are still read. #422 LN-8 raises it to [5, 13] in the release after v0.12.13: revision 13 adds `ledger_observer.open_verify_tail_records`, and revisions 5 to 12 are still read. #422 LN-WS raises it to [5, 14] in v0.12.15 (§1.194): revision 14 adds `ledger_observer.read_check_vm_steps` and `history_scan_rows`, and revisions 5 to 13 are still read Workflow #392 DA-4b-D (Alice's ruling 69) raises it to [5, 15] in v0.12.16 (§1.195 DA4bD-2): revision 15 adds the `display_safe_area` section (`directory`, `check_interval_ms`, `model`) and an instance entry's `display_safe_area` member (`model`), and revisions 5 to 14 are still read. #422 LN-7c Q raises it to [5, 16] in v0.12.17 (§1.196 LN7CQ-1 to LN7CQ-3): revision 16 adds the top-level `frame_retention_evidence_max_age_days` and `ledger_observer.frame_query_steps_per_second` and `frame_query_chunk_frames`, and revisions 5 to 15 are still read. Workflow #421 INST-1 raises it to [5, 17] in v0.12.18: revision 17 adds the `install` section (the tunables of `actingctl install`, [install-cli.md](install-cli.md)), and revisions 5 to 16 are still read |
-| `ledger` | [3, 3] | A3 §1.9, SH-1, SR-2a reads, D1 ladder records, L4a §1.19, AO-1 dump import §1.26, AO-2 index table §1.38, U-2's G14 members §1.46, PKG-S2 and PKG-S3 removals (§2), NAV-6 §1.12, #403 §1.13, D1b §1.14, A2-P §1.15, SH-2 §1.25, OCR-CONF §1.8 V1, M-357b DB-3s §1.66. Workflow #411 BT-LR raises it to [3, 4] once for the 0.12.x B train (§1.153, Alice 2026-10-20): revision 4 adds the train's shapes, and a revision-3 ledger is still read |
+| `ledger` | [3, 3] | A3 §1.9, SH-1, SR-2a reads, D1 ladder records, L4a §1.19, AO-1 dump import §1.26, AO-2 index table §1.38, U-2's G14 members §1.46, PKG-S2 and PKG-S3 removals (§2), NAV-6 §1.12, #403 §1.13, D1b §1.14, A2-P §1.15, SH-2 §1.25, OCR-CONF §1.8 V1, M-357b DB-3s §1.66. Workflow #411 BT-LR raises it to [3, 4] once for the 0.12.x B train (§1.153, Alice 2026-10-20): revision 4 adds the train's shapes, and a revision-3 ledger is still read. Workflow 114-A raises it to [3, 5] in 0.12.35 (§1.236): revision 5 adds `policy.not_run_changed` with its payloads and the ledger's own copies, shapes only, and revision-3 and revision-4 ledgers are still read; SS-9's own raise (§1.212) takes the next revision of a later release |
 | `runtime-client` | [2, 2] | §3 W1–W4, W8–W12, W14, W15, W17 (AO-4q, MCP-4, D1b, SH-1, A4, U-1, RD-3, MCP-2, P-m, D2-S5); A2-P's wire spellings §1.15; 九处-1's status member `emulator_state` §1.91 N1-1. `runtime-client` 3 comes with its own later release (§3 W5–W7 and W13: MCP-19, AO-4, AO-8 with MCP-9b's `startup` and `host` in W7, SR-6b's `not_running` in W13; re-check 10-14, §1.25). Runtime v0.12.x serves the read `ScheduleExplanation` (§3 W5) under revision 2: only actingctl and MCP of the same Runtime send it and every revision-2 shape is unchanged; revision 3 includes it. #411 A51's page limit `read_budget` (§1.151 A51-1) is folded into revision 2 as §1.91 N1-1 was. Workflow #429 R-0 raises it to [2, 3] in 0.12.30 (§1.213 R0-7, §3 W21): revision 3 is revision 2 plus the workbench's shapes (R-0c's `PackScheduleView` included, §1.216 R0C-3), W5 and `StartReport` (§1.216 R0C-4); W6, W7 and W13 are not built and take a later revision. Workflow #429 R-7a raises it to [2, 4] in 0.12.35 (§1.233, §3 W22): revision 4 is revision 3 plus the player hold's shapes; R-7b raises `min` to 4 |
 | `package` | [3, 3] | PKG-S1; PKG-S5 §1.64 P5-1 with M-357a TB12 §1.65; D2-S2 §1.28 DS6; D2-S3 §1.39 D34; READ-1 §1.54 RE1; the NAV-3a follow-up §1.73 N3F-1; REC-6 §1.29 R6-2; REC-8 §1.35 R8-1; OUT-1 §1.40 O1-1; EXEC-2 §1.41 EX1; OUT-2 §1.48 O2-1; REC-5 §1.50 R5-2; EXEC-1 §1.57 EC1. M-357a TB1 and TB6 (DB-1, DB-2) and M-357b MS6–MS10 (DB-3a1, DB-3a2, DB-3b) bump it once more in the 0.12.x release that carries them, once only when they share a release. Workflow #411 B15's `remedy` (a `task.json` mapping member) and `provides` (a `control.json` member) ride revision 4 (writer R1, §1.110 B15-10), raised once in their release by its first slice that needs it. Workflow #406 T3 raises it to [3, 5] in #406's release (§1.137 T3-7): revision 5 adds the click `single_touch_path_drag_v1`, and revision-3 and revision-4 packs are still read |
 | `runtime-outcomes` | [1, 1] (new) | A5 §1.16, A6a §1.37 |

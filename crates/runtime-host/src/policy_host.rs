@@ -5445,12 +5445,13 @@ fn apply_dispatch_event(
             }
         }
         // The query reads the dispatch and execution types only; the value records of
-        // the decision memory and the fact-refresh transitions (register L7, L14, D1)
-        // are never replayed here.
+        // the decision memory, the fact-refresh transitions (register L7, L14, D1) and the
+        // not-run history (Workflow 114-A, §1.236) are never replayed here.
         PolicyPayload::PlanningSignalObserved(_)
         | PolicyPayload::ControlStateRecorded(_)
         | PolicyPayload::ActivityStateRecorded(_)
-        | PolicyPayload::FactRefreshTransition(_) => {
+        | PolicyPayload::FactRefreshTransition(_)
+        | PolicyPayload::NotRunChanged(_) => {
             return Err(fatal(
                 SharedCode::PolicyRecoveryQueryMismatch,
                 HostLocation::RecoverPolicyDispatches,

@@ -1272,6 +1272,21 @@ of `decision_candidate_not_selected`, and `decision_record` counts the candidate
 list by `why` in its value `omitted_why`. Before A26, `why` was only in the developer detail,
 which is not persisted.
 
+**The change-only history** (Workflow 114-A, since 0.12.35; [`v012-register.md`](../v012-register.md)
+§1.236; ledger revision 5; Alice's 114, method 2). The record `policy.not_run_changed`
+([`ledger-observer.md`](../ledger-observer.md) §11.8) will keep, per instance, only what changed
+between evaluated rounds of this table: a change set of the rows whose change key changed, the
+instance's control block (its player hold, its own pause, the global pause and its resource
+fence, with `effective`, the first of them in the one order of the control gates, by R-7a §2.6
+([`player-hold.md`](../player-hold.md)), never restated here), the not-running row, and how a
+player hold ended; a baseline of the whole table at a start, a catalog or binding change and on
+its budget's terms; a marker when the instance's hourly budget is spent; a retirement when the
+alias goes. A row carries the same round's `why`, `state`, `eligibility`, `since_unix_ms` and
+wake as this table's, with the layer and class the writer's golden table gave the code, read as
+written. 114-A freezes the shapes, the index keys and every vocabulary of the record and of the
+read `ScheduleHistory`, and writes nothing: until 114-B, this table is still not written to the
+ledger.
+
 Besides the deferrals, one reason ends a decision after admission: a dispatch that was admitted
 but has not started is withdrawn when its task package is unloaded, and its decision record and
 reason chain end with `pack_registry_dispatch_withdrawn` (info; `package_id`, optional

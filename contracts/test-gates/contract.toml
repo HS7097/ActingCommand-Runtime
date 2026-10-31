@@ -267,6 +267,23 @@ tests = [
 ]
 incident = ["#429 R-7a"]
 
+# Workflow 114-A (0.12.35; register §1.236; design rd-1031/design-114-reasons-v5.md §11.3 with its freeze addendum): the reader of policy.not_run_changed before any writer. Every record kind (change, baseline with prior and closes, marker, retirement, recorder_faulted with its check) and every ledger copy (the four control members, the control block, a row, the summary, a selected key, PlayerHoldEnd with its operation, superseded and the hold only) reads back its golden bytes; unknown and missing members, seq 0, parts 0 / past parts / 17, 257 rows or selected keys, 65 entries, an empty change set and a record over 64 KiB are refused, a word outside any closed vocabulary does not decode; the reader carries an unregistered code of legal spelling byte for byte, reads a layer and class off the golden table and an effective gate that is present but not first, and refuses an effective gate whose member is absent and an illegal spelling; the v5 self-checks (prior's suppression_open, closes only with prev, value_gate, the hold copy's channel, via and reached_held, player_hold_end's operation or superseded and its next / pauses_at_end / withheld group, retired's gone and check) and every condition of #1466's two validates on the copies, phase and failed_phase never held; every ledger and ScheduleHistory vocabulary has its frozen words; the reused vocabularies equal R-7a's ALL word for word and the copies of channel, via, startup_package_withheld, the pause stage and ScheduleExplanation's three enums map every source word; the record type is policy, info, without an outcome and in no view's type list
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::event::payload::not_run::tests::n114a_every_record_kind_reads_back_its_golden_bytes",
+    "actingcommand-contract::lib::event::payload::not_run::tests::n114a_every_ledger_copy_and_hold_end_reads_back_its_golden_bytes",
+    "actingcommand-contract::lib::event::payload::not_run::tests::n114a_the_shape_refuses_unknown_and_missing_members_and_the_ranges",
+    "actingcommand-contract::lib::event::payload::not_run::tests::n114a_a_word_outside_a_closed_vocabulary_does_not_decode",
+    "actingcommand-contract::lib::event::payload::not_run::tests::n114a_the_reader_does_not_check_codes_golden_table_or_gate_order",
+    "actingcommand-contract::lib::event::payload::not_run::tests::n114a_the_v5_self_checks_refuse_what_they_name",
+    "actingcommand-contract::lib::event::payload::not_run::tests::n114a_the_copies_carry_over_r7a_two_validates",
+    "actingcommand-contract::lib::event::payload::not_run::tests::n114a_every_ledger_and_schedule_history_vocabulary_has_its_frozen_words",
+    "actingcommand-contract::lib::event::payload::not_run::tests::n114a_the_reused_vocabularies_equal_their_sources_word_for_word",
+    "actingcommand-contract::lib::event::payload::not_run::tests::n114a_the_record_type_is_policy_info_and_in_no_view_type_list",
+]
+incident = ["114-A"]
+
 # The selector's record shapes (S0 §1.9, §3.4): projection v2, the three scan confirmations and
 # unknown_check round-trip for every path shape, v1 keeps its bytes, each path rule refuses, and
 # the reader bounds hold at 256 viewports, 64 members and 64 unknown positions

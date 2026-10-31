@@ -351,6 +351,10 @@ pub enum EventType {
     /// Workflow #384 (register D1): one fact-refresh transition.
     #[serde(rename = "policy.fact_refresh_transition")]
     PolicyFactRefreshTransition,
+    /// Workflow 114-A (register §1.236, ledger revision 5): one record of an alias's change-only
+    /// history of why its candidates did not run. In no view's type list.
+    #[serde(rename = "policy.not_run_changed")]
+    PolicyNotRunChanged,
     #[serde(rename = "catalog.transition_intent")]
     CatalogTransitionIntent,
     #[serde(rename = "catalog.activated")]
@@ -601,7 +605,8 @@ impl EventType {
             | Self::PolicyPlanningSignalObserved
             | Self::PolicyControlStateRecorded
             | Self::PolicyActivityStateRecorded
-            | Self::PolicyFactRefreshTransition => EventFamily::Policy,
+            | Self::PolicyFactRefreshTransition
+            | Self::PolicyNotRunChanged => EventFamily::Policy,
             Self::CatalogTransitionIntent
             | Self::CatalogActivated
             | Self::CatalogRolledBack

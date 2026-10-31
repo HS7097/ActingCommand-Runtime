@@ -3014,3 +3014,6 @@ mod gate_rb1;
 // page times (P29) and the published head (P30).
 #[path = "tests/gate_w1_8.rs"]
 mod gate_w1_8;
+// Workflow 114-A (register §1.236): the index keys and the durability of `policy.not_run_changed`.
+#[path = "tests/gate_114a.rs"]
+mod gate_114a;

@@ -38,6 +38,10 @@ pub use designated_effects::*;
 // Workflow #411 B15 (contracts/remedies.md section 2): declared remedies and provided capabilities.
 mod remedies;
 pub use remedies::*;
+// Workflow 114-A (register §1.236, ledger revision 5): the change-only record of why a candidate
+// does not run, `policy.not_run_changed`, reader first.
+mod not_run;
+pub use not_run::*;
 
 use super::{
     ArtifactRedactionState, CapturePolicyReason, CapturePressureState, DiagnosticCode, EventAction,
@@ -8485,6 +8489,12 @@ fn validate_policy_payload(payload: &PolicyPayload) -> Result<(), SanitizationEr
             value.validate()?;
             None
         }
+        // Workflow 114-A (register §1.236): the shape, the closed vocabularies, the
+        // self-consistency and the spelling of the codes only.
+        PolicyPayload::NotRunChanged(value) => {
+            value.validate()?;
+            None
+        }
         PolicyPayload::PlanningSignalObserved(value)
             if value.action == EventAction::PolicyPlanning =>
         {
@@ -11576,6 +11586,8 @@ pub enum PolicyPayload {
     ControlStateRecorded(PolicyControlStatePayload),
     ActivityStateRecorded(PolicyActivityStatePayload),
     FactRefreshTransition(PolicyFactRefreshTransitionPayload),
+    /// Workflow 114-A (register §1.236): one record of an alias's not-run history.
+    NotRunChanged(PolicyNotRunChangedPayload),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -11895,6 +11907,7 @@ family_payload!(PolicyPayload, {
     ControlStateRecorded => EventType::PolicyControlStateRecorded,
     ActivityStateRecorded => EventType::PolicyActivityStateRecorded,
     FactRefreshTransition => EventType::PolicyFactRefreshTransition,
+    NotRunChanged => EventType::PolicyNotRunChanged,
 });
 family_payload!(CatalogPayload, {
     TransitionIntent => EventType::CatalogTransitionIntent,
