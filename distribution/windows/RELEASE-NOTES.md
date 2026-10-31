@@ -9,6 +9,132 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.34
+
+本版是 v0.12.33 之后合并的 3 个 PR：PAUSE-AUTO、SS-2g、SS-4。运行中会注意到的变化有三件，第一件部署后就生效，后两件要等调度恢复
+或资源侧写了新写法才看得到。
+一是暂停中的实例，模拟器不再被自动开起来（PAUSE-AUTO）：实例自己的调度暂停期间（`draining`、`paused`、`released` 任一阶段，重启后
+恢复的暂停也算），守护进程启动时按配置开模拟器（`start_emulator`，部署和看门狗拉起的守护进程启动也算）、IDLE-1 在 `stop_emulator`
+之后的唤醒都不再开它的模拟器，改记一条 `emulator_autostart_skipped`（`skip_reason` 是 `instance_paused`）；暂停开始前已经排下、还在
+等钥匙的启动，在真正开机前再查一次暂停，遇到就什么都不开。所以调度停着（每台实例都暂停）的时候，部署或守护进程启动之后，关着的
+模拟器保持关着，被空闲动作关掉的模拟器也不会被唤醒开起来。要做手动运行或 Lab，照旧先用模拟器控制（`actingctl emulator`、
+`ac_emulator`）把它开起来：人、代理和 Lab 的显式模拟器控制不看暂停，和以前一样。全局暂停不挡这些自动启动，也和以前一样。
+二是成功却没有进展的任务不再一遍遍重跑（SS-4）：调度停着的时候什么都不变（不派单，护栏也不积压）。调度重新跑起来之后，一个任务
+成功跑完，而它被派出时依据的事实（依据键）自准入以来没有一个读到不同的值，这一对（任务，实例）就以 `policy_no_progress` 等着，不再
+每个冷却期跑一次，直到某个依据键读到不同的值。失败的运行照旧走重试和升级。开关是新键 `scheduling.no_progress.enabled`，默认开。
+三是目录可以写期望消耗（SS-2g）：V2 的 `consumes` 条目可以像产出一样写 `expected_amount_milli`（千分之一单位）。资源侧写之前什么都
+不变，没有期望消耗的目录逐字节和以前一样评估。v0.12.33 已在本版之前发布。
+
+配置：`actingd-config` 从 [5, 22] 改为 [5, 23]；`runtime-client` 仍是 [2, 3]（`min` 仍是 2），账本仍是 [3, 4]，`package` 仍是 [3, 5]，
+其他接口也不变。
+
+- 新键（SS-4）：`scheduling.no_progress.enabled`，布尔，默认 `true`，可在线改（`actingctl config set|clear`、`ac_config_set`），每次
+  评估都读，下一次评估就按新值。也可以按实例设：`instance.<实例 id>.scheduling.no_progress.enabled`，在配置文件里是 `instances[]`
+  条目的 `scheduling.no_progress.enabled`，默认跟节里的值，也可在线改。某台实例关掉时，它的评估和本版之前逐字节相同，它的护栏也
+  清空，所以关了再开就放掉这台的全部护栏。`actingd-config` 升到 23 只因为这两个成员；不写它们的配置文件保持原来的修订，照常读。
+  别的键都没改，PAUSE-AUTO 和 SS-2g 没有配置键；在线可改的键只多这两个。
+- `actingd.defaults.json` 自 v0.12.33 以来只多了 `scheduling.no_progress.enabled`（`true`）一项，别的默认值都没改；部署计划的默认值
+  对比会列出它（目标有、现装没有）。程序事实 `config.parameters` 里多这个键（和每台实例的同名键）；`config.subsystems` 没有新行。
+- 新结果码 2 个，都还是待审（pending）：`policy_no_progress`（info，SS-4）和 `standard_pack_escalation_threshold_high`（warning，
+  SS-4，只由资源工具报告）。结果码目录从 3820 个码变成 3822 个，位置仍是 1725 个；没有新定稿或退役的条目，所以本版的发布文件是
+  空的。新值键 3 个：`basis_readings`（记录列表）、`reading_value`、`reading_digest`；没有新词表。已有的码 `emulator_autostart_skipped`
+  多一个可选值 `idle_action`（键已有）。
+- 账本没有新表、新索引、新事件类型或新形状，`ledger` 不升；状态文件的形状也不变（被挡下的唤醒在 `host.idle_state` 里就是普通的
+  关闭行）。护栏和跳过的记忆只在内存里。
+- 目录格式多一种写法，格式版本不变：V2 `consumes` 条目上的 `expected_amount_milli`（SS-2g）；v0.12.33 及以前的 Runtime 拒收它
+  （见下面的退回）。
+
+升级时要知道的：
+
+- 部署不改文件（按代码核过）：`actingctl install` 只换程序文件（包括程序自带的 `actingd.defaults.json`），不碰配置文件；本版读修订
+  5 到 23，不写 `scheduling.no_progress` 的配置文件保持原来的修订，目标的 `check-config` 照常通过，新键取默认值。没有账本或状态的
+  迁移。
+- 部署时的模拟器（PAUSE-AUTO）：部署、看门狗或人启动守护进程时，暂停中、模拟器关着的实例不建认领，不计入
+  `emulator_autostart_queued`，每台记一条 `emulator_autostart_skipped`（`skip_reason=instance_paused`，不带 `watch_kind`），同时是
+  实例下的一条 `device_state_observed` 记录和一行报告。IDLE-1 在 `stop_emulator` 之后的唤醒，暂停期间不排：实例保持关着、欠着这次
+  唤醒，每个暂停 revision 只记一条带 `idle_action=stop_emulator` 的跳过，不管多少次空闲检查发现它到期。暂停开始前已经排下的认领
+  （守护进程启动的、唤醒的、监视的重启和识别）在持钥等待的每一拍都再问一次暂停，最后一次就在开机之前：遇到暂停就放掉钥匙，不写
+  `command.*`、不写失败对、不开机、不绑定，记同样的跳过（监视的带 `watch_kind` `restart` 或 `recognize`）；唤醒的认领这样结束后，
+  这次唤醒又记为欠着；监视的这次请求退还它在 `emulator_control.restart_attempts` 里占的名额。每种启动、每个暂停 revision 只记一次。
+  `close_app` 的唤醒（只排启动包，不开模拟器）、全局暂停、时段黑名单、空闲关机本身、恢复阶梯（每一步前本来就查暂停）和没有暂停的
+  实例都不变。v0.12.32 一节「没变的」里写的「守护进程启动时按配置开模拟器、IDLE-1 的唤醒，以及暂停开始前已经排下的监视认领都
+  不看暂停」，从本版起不再成立。
+- 恢复之后（PAUSE-AUTO）：下一次空闲检查照常排欠着的唤醒，监视下一次轮询照常重启或识别。守护进程启动不会在恢复时重跑：它在暂停
+  期间没开的模拟器，由恢复后监视的第一次轮询开（`emulator_control.watch_enabled` 开着时），否则要人去开。
+- 怎么读 `policy_no_progress`（SS-4）：在 `actingctl schedule`、`ac_schedule` 和 `ac_overview`、`ac_diagnose` 的未运行一行里，被
+  护栏挡住的一对最后的原因是 `policy_no_progress`，带 `served_by_dispatch_unix_ms`（那次成功运行的派单时刻）和 `basis_readings`：
+  每个依据键一条，`fact_key` 加上准入时的读数（`reading_value` 是它的规范 JSON，不超过 128 字节，更长的改给 `reading_digest`，即
+  SHA-256）和 `observed_at_unix_ms`，当时没有读数的键只有 `fact_key`；最多 32 条。它不派、不设自己的唤醒，空闲计划不把它算作到期，
+  不会为它把关着的游戏叫醒。某个依据键读到和准入时不同的值（原来没读数、现在有了也算），护栏就放开，之后一直放着；同值的新读数
+  （例如读数刷新又读到同一个数）不算进展，被重置清掉的键什么都不放。派单的决策记录里，它作为相关候选
+  （`decision_candidate_not_selected`）的 `why` 出现。
+- 依据键是什么（SS-4）：按选中这次派单的那次评估重读触发条件，只取让它为真的部分（`all` 的每个子项、`any` 里第一个为真的子项、
+  `not` 下的全部事实）里的 `resource.`、`inventory.` 事实、每个 `fact_time_reached` 的键和 `resource_projection` 投影的池事实，再加
+  任务 `reserves` 的池读数和容量事实。锁、健康标志、会话事实、反馈停止条件、只出现在 `consumes` 或 `produces` 里的池都不算。只由
+  时钟、时间线、结果或依赖决定的派单没有依据，也就没有护栏；超过 32 个键的也不设。失败或取消的运行、立即重跑、补救请求和重试、
+  欠下的重跑都不受护栏影响。护栏只在内存里：Runtime 启动时清空（每一对最多多跑一次，下一次成功后再武装），新的目录代放掉它决定的
+  那些对的护栏，关掉开关也放掉这台的。
+- 资源工具的新警告（SS-4）：`actinglab standard-pack check` 和 `package bundle --schedule` 对没有日界（没有 `loop_budget`，或其中
+  没有 `daily_limit`）、`on_failure.escalation_threshold` 又大于 10 的规则报 `standard_pack_escalation_threshold_high`（warning，值
+  `game`、`task_id`、`count`、`limit_count` 10），只报不拒，规则照常编排。护栏只管成功的运行；这样的规则一直失败时，要失败这么多次
+  才暂停这一对，所以资源侧去掉 `daily_limit` 时，把 `escalation_threshold` 一起改成 2 或 3。
+- 期望消耗（SS-2g，只在 V2）：`consumes` 条目写 `expected_amount_milli`（整数 `0..=9007199254740991`，每次运行的千分之一单位）代替
+  `amount`；不能超过池的常量容量 × 1000（超过报 `effect_incompatible`）；和 `amount` 或 `"pending"` 同写、或写在 V1 里，照旧是
+  `limit_exceeded`。净收益按千分之一精确计成本（`C = Σ amount × 1000 + Σ expected_amount_milli`）；其余按整数读消耗的地方一律读
+  `⌈C/1000⌉`：保留视图和保留门、读数还没显示的消耗、SS-2 的平手键和选择字段 `task.consumes.<池>`。保留了按期望消耗的池的任务，
+  派单不带 `run_cap`（`spend_allowance` 照常）；前向投影遇到期望条目照旧以 `effect_evidence_insufficient` 停下。没有新码、新值或
+  新键。资源侧要等所有部署都在 0.12.34 或以上之后才写它（v0.12.33 的 Runtime 拒收，见下面的退回）。
+
+退回 v0.12.33 之前要做的事（按代码核对过）：
+
+- PAUSE-AUTO：不用做什么，按代码核过：没有新的账本、状态、目录或配置形状；本版写的跳过记录 v0.12.33 读得了（码和 `idle_action`
+  键都是已有的，结果读回时值按映射保留、不查键），跳过的记忆不落盘，被挡下的唤醒在 `host.idle_state` 里是普通的关闭行。退回后
+  v0.12.33 又不看暂停：暂停中、配了 `start_emulator`、模拟器关着的实例，在守护进程启动时就被开起来；被空闲动作关掉模拟器、欠着
+  唤醒的实例，在空闲检查发现唤醒到期时被开起来；暂停前排下的监视认领照样开机或绑定，也照样占监视的名额。
+- SS-4：账本和状态文件不用处理，护栏只在内存里；退回后没有护栏，被挡住的对又按写着的次数和冷却成为候选。`policy_no_progress` 在
+  账本里只作为派单决策记录里相关候选的 `why`（以及未列出候选的 `omitted_why` 计数）出现，v0.12.33 照常读：码按原拼写读回、不查码，
+  值按映射保留、不查键；`basis_readings` 不出内存。配置：v0.12.33 的 `scheduling` 节和 `instances[]` 条目的 `scheduling` 成员都拒收
+  不认识的成员，所以配置文件写了 `scheduling.no_progress`（节里，或某个 `instances[]` 条目里）时，v0.12.33 启动和 `check-config`
+  以 `config_decode_failed` 拒收整个文件。acsetup 和安装器不写它；有人手写过的，回退前先把这些成员删掉并提交
+  （`acsetup --commit-config`），再用 v0.12.33 的 `check-config` 核一遍。在线覆盖（`scheduling.no_progress.enabled` 和每实例的键）：
+  v0.12.33 没有这些键，启动恢复时逐行以 `config_override_dropped` 丢掉、列进 `instructions_dropped`，不挡启动；但部署工具回退启动后
+  的 `instructions` 检查因此不通过，回退前先 `actingctl config clear <键>` 把它们清掉，或者接受这一项不过。
+- SS-2g：账本和配置不用处理。v0.12.33 的编译器拒收 `consumes` 上的 `expected_amount_milli`（条目处 `limit_exceeded`），而它启动时
+  要重新编译启用的那一代，以及决策记忆点名的每次派单所在的那一代（每个未了结的派单、每个任务和实例这一对最近一次完成的计划派单、
+  补救任务已准入的运行），编译不过就以 `catalog_generation_invalid` 致命地停下，整个 Runtime 起不来。所以回退前先在 0.12.34 上让它
+  启用一个不带这种条目的代：把这类条目（或它的规则）从各游戏根的 `schedule.json` 里拿走，等下一次工作台检查启用了新的代（程序事实
+  `config.catalog` 换成了新的代），再确认没有未了结的计划派单（调度暂停并排空）。看的是整代，不只是写了期望消耗的那个任务：在带这种
+  条目的代下派过、完成过计划运行的每一对（任务、实例），都要先在新的代下再完成一次派单，把决策记忆点名的那一次换掉，否则 v0.12.33
+  启动照样停下；规则已经拿走、不会再派的对换不掉，这时不能退回。调度一直停着（每台实例都暂停）时没有这样的派单，只要启用的代不带
+  这种条目就能退回。
+- v0.12.33 一节的退回条件（LAB-OBS-1 要 Runtime 包和 Tools 包一起退回；SS-2e 不用做什么）是退回 v0.12.32 的条件，从本版退回
+  v0.12.33 时不适用：Lab 调试事件（`RuntimeDebugEvent`）、actinglab 和 Lab 的代码自 v0.12.33 都没改。v0.12.32 一节的条件（SS-2b 的
+  标记和代、SS-5 和 SS-2c 的成员、WATCH-P）是退回 v0.12.31 的条件，也不适用。要再往前退到 v0.12.32，先做上面 SS-4 和 SS-2g 两条
+  （v0.12.32 同样不认 `scheduling.no_progress` 和消耗上的期望值，也不看暂停），再照 v0.12.33 一节的退回条件做；本版的记录 v0.12.32
+  也读得了（它读结果的代码和 v0.12.33 相同）。
+- 客户端和 Runtime 的配对（`runtime-client` 两边都是 [2, 3]；actingctl、actinglab 和 `runtime-client` 的代码自 v0.12.33 没改）：
+  - 本版的 actingctl 和 MCP 连 v0.12.33 的 Runtime：照常。没有新命令、新请求或新工具（MCP 工具仍是 40 个）；`config set` 两个新键
+    被 v0.12.33 以 `config_key_unknown` 拒绝。
+  - v0.12.33 的 actingctl 和 MCP 连本版的 Runtime：照常，请求不变；键存不存在由 Runtime 回答，所以它的 `config set` 也能设两个新键。
+    `ac_schedule` 里会出现 `policy_no_progress`（带 `basis_readings`），`emulator_autostart_skipped` 多一个值 `idle_action`，旧客户端
+    照原样显示码和值；但它内嵌的码目录没有这 2 个新码，`actingctl codes`、`ac_outcome_code` 查它们答 `outcome_code_unknown`，个别按码
+    分类显示的地方把它们当作未登记的码（`outcome_relay_unregistered`，原拼写在 `raw_code`）。
+  - actinglab 和 Runtime 混版两个方向都照常（调试事件没变）。资源工具要留意：本版的 `actinglab standard-pack check`、
+    `package bundle --schedule` 接受消耗上的 `expected_amount_milli`，它放行的规则文件 v0.12.33 的 Runtime 不收，还有部署在 0.12.33
+    上时资源侧先别写；v0.12.33 的资源工具拒收这种条目，也不报 `standard_pack_escalation_threshold_high`。
+
+运行上的变化：
+
+- 暂停中的实例，模拟器不再被自动开起来（PAUSE-AUTO）：守护进程启动、IDLE-1 唤醒和暂停前排下的监视认领都看实例自己的暂停，改记 `emulator_autostart_skipped`。
+- 成功却没有进展的一对等着（SS-4）：调度恢复后，依据键没读到新值的成功运行之后以 `policy_no_progress` 等着；`scheduling.no_progress.enabled` 默认开。
+- 消耗可以写期望值（SS-2g）：V2 `consumes` 的 `expected_amount_milli`，净收益精确计、整数读者向上取整；资源侧写之前不变。
+
+本版合并的 PR：
+
+- #1461 PAUSE-AUTO（#386）：实例自己的调度暂停期间，守护进程启动时按配置开模拟器和 IDLE-1 在 `stop_emulator` 之后的唤醒都不开它的模拟器；暂停前已排下的启动（含监视的重启和识别）在执行前再查一次暂停；跳过记一次 `emulator_autostart_skipped`（`skip_reason=instance_paused`）。人、代理和 Lab 的显式模拟器控制不变。
+- #1463 SS-2g（#424）：V2 的消耗可以像产出一样写 `expected_amount_milli`。净收益精确读它；其余整数读者（保留视图和保留门、读数还没显示的消耗、SS-2 的平手键、`task.consumes.<池>`）向上取整。
+- #1462 SS-4（#386）：无进展护栏。一次成功运行之后，派单依据的事实自准入以来没读到不同的值，这一对就以 `policy_no_progress` 等到某个依据键读到不同的值；失败照旧走重试。新键 `scheduling.no_progress.enabled`（默认开，可按实例，可在线设），`actingd-config` 修订 23。`actinglab standard-pack check` 和 `package bundle --schedule` 的新警告 `standard_pack_escalation_threshold_high`。
+
 ## v0.12.33
 
 本版是 v0.12.32 之后合并的 2 个 PR：LAB-OBS-1、SS-2e。运行中会注意到的变化有两件，第一件要等调度恢复才看得到。
