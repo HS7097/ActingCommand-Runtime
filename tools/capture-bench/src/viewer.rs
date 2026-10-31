@@ -103,7 +103,7 @@ impl ViewerLauncher for InProcessViewers {
                 .subscribe(&owner, context.instance, context.subscriber, context.ttl_us);
         let now = context.hub.clock.now_us();
         context.journal.event(
-            "subscribe",
+            "viewer_started",
             json!({ "instance": context.instance, "viewer_id": context.subscriber, "lease": lease }),
         );
         let file = format!("viewer-{}.jsonl", context.subscriber);
@@ -286,7 +286,7 @@ impl ViewerLauncher for ChildViewers {
                 .hub
                 .subscribe(&owner, context.instance, context.subscriber, context.ttl_us);
         context.journal.event(
-            "subscribe",
+            "viewer_started",
             json!({ "instance": context.instance, "viewer_id": context.subscriber, "lease": lease, "pid": child.id() }),
         );
         let lease_id = Arc::new(Mutex::new(Some(lease.lease_id)));

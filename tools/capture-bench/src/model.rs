@@ -218,7 +218,7 @@ impl Disposition {
             Self::SkippedNoLease => "skipped_no_lease".to_owned(),
             Self::SkippedGate(gate) => format!("skipped_gate:{gate}"),
             Self::Failed(code) => format!("failed:{code}"),
-            Self::DiscardedStale(reason) => format!("discarded_stale:{reason}"),
+            Self::DiscardedStale(_) => "discarded_stale".to_owned(),
         }
     }
 

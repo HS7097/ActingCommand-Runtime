@@ -18,8 +18,8 @@ use crate::journal::{Journal, JournalRecords, TeeRecords};
 use crate::locks::LockOwner;
 use crate::metrics::{MetricsSample, MetricsSource};
 use crate::model::{
-    BackendKind, CellResult, CloseOutcome, Entry, GateKind, GlobalGate, PathKind, RunResult,
-    StopCause,
+    BackendKind, CellResult, CloseOutcome, Disposition, Entry, GateKind, GlobalGate, PathKind,
+    RunResult, StopCause,
 };
 use crate::plan::{CellPlan, Plan, SegmentMode, SegmentPlan};
 use crate::safety::{BenchLock, Roots, StartChecks};
@@ -2003,6 +2003,10 @@ impl RunShared {
                     })),
                     "content": null,
                     "null_reasons": null_reasons,
+                    "discard_reason": match &outcome.disposition {
+                        Disposition::DiscardedStale(reason) => Some(reason.clone()),
+                        _ => None,
+                    },
                     "pumped_formal_grant": outcome.pumped,
                     "material": outcome.material,
                     "known_source_us": outcome.frame.as_ref().and_then(|frame| frame.known_source_us),

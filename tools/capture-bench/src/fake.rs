@@ -331,7 +331,7 @@ impl PreviewBackend for FakeBackend {
         }
         if self.poisoned {
             return Err(BackendFailure::new(
-                "nemu_ipc_poisoned",
+                "poisoned",
                 FailureClass::Poisoned,
                 "the fake backend is poisoned after a previous timeout",
             )
@@ -374,14 +374,14 @@ impl PreviewBackend for FakeBackend {
                     self.poisoned = true;
                     self.device.clock.sleep_us(latency);
                     BackendFailure::new(
-                        "nemu_ipc_poisoned",
+                        "poisoned",
                         FailureClass::Poisoned,
                         "fake: the worker timed out; the backend is poisoned",
                     )
                     .native_not_returned()
                 }
                 SampleFault::StdioRestoreFailed => BackendFailure::new(
-                    "vendor_stdio_restore_failed",
+                    "stdio_unrestored",
                     FailureClass::StdioUnrestored,
                     "fake: the vendor stdio restore failed",
                 ),
