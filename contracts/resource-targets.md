@@ -567,6 +567,10 @@ for a pool it only consumes) as the cost of what it consumes
 ([scheduling/README.md](scheduling/README.md), "Net benefit within a tier"). It reads the weights
 the resource layer computed and writes none, so the one-way guard stands; `R` and every reason
 above are unchanged. A pool whose `valuation` is the pending marker has no valuation here.
+SS-2d (since 0.12.35; register §1.235): the same `W(k,p)` and `Q_p` bound the rounding of that
+net benefit (scheduling/README.md, "Within tolerance"), and a candidate within it is released only
+while a pool it produces has `W(k,p) > 0` on its instance, a goal's shortfall `Γ` included; a goal
+that lifts the benefit above the bound makes it positive. Nothing here changes.
 
 ## Choosing scale and importance
 

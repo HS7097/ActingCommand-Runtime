@@ -43,6 +43,8 @@ fn ss2b_t9_the_check_counts_the_judged_rules_and_warns_once_per_undeclared_rule(
             undeclared: 2,
             // SS-2c (register §1.227): the count of rules declaring themselves maintenance.
             maintenance_declared: 0,
+            // SS-2d (register §1.235): the count of judged rules carrying the realization mark.
+            realization: 0,
         }
     );
     let codes = report

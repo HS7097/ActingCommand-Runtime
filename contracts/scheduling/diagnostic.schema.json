@@ -34,7 +34,8 @@
         "effect_incompatible",
         "approval_missing",
         "priority_selection_without_document",
-        "priority_selection_percentile_invalid"
+        "priority_selection_percentile_invalid",
+        "realization_cycle"
       ]
     },
     "severity": { "enum": ["error", "warning"] },

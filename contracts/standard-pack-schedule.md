@@ -21,8 +21,8 @@ package path and no approval:
 {
   "schema_version": "actingcommand.schedule.v1",
   "requires": [ "<subsystem>", ... ],
-  "rules":    [ a V2 task without scope, entrypoint and procedure_ref, with "package_id"
-                and an optional "maintenance": true ],
+  "rules":    [ a V2 task without scope, entrypoint and procedure_ref, with "package_id",
+                an optional "maintenance": true and an optional "realization": true ],
   "pools":    [ a V2 pool without scope, with an optional "server" ],
   "activity": [ a V2 activity profile without scope, with an optional "server" ],
   "timeline": [ a V2 timeline event without scope, with an optional "server" ],
@@ -41,6 +41,7 @@ Every member but `schema_version` may be absent, which means empty. The reader
 | No member named `scope` at any depth of a rule, pool, profile or event (the item's own and those of predicate nodes such as `fact`, `record_deadline`, `fact_time_reached`) | `schedule_invalid` at the `scope` member |
 | A rule has a string `package_id` (1–128 bytes, no control character), no `entrypoint` and no `procedure_ref`; its `instance_overrides` is absent or empty | `schedule_invalid` at the member |
 | A rule's `maintenance` (SS-2c, since 0.12.32; "Judged rules" below), when written, is `true` | `schedule_invalid` at `maintenance` |
+| A rule's `realization` (SS-2d, since 0.12.35; "The realization mark" below), when written, is `true`, and a rule that declares `"maintenance": true` does not write it | `schedule_invalid` at `realization` |
 | Every rule, pool, profile and event is an object with a string `id`, unique within its list | `schedule_invalid` at `id`; a repeated id is `rule_id_conflict` |
 | A pool, profile or event names its `server`, if at all, as a game-root identifier | `schedule_invalid` at `server` |
 | `requires` lists at most 32 distinct names of 1–64 bytes of `[a-z][a-z0-9_]*` | `schedule_invalid` at the entry |
@@ -186,8 +187,35 @@ declare itself maintenance:
   because no code says "a business rule declares no value": `standard_pack_package_unclassified`
   names a package nothing schedules. SS-2c: *maintenance_declared* counts the rules, not held,
   that declare themselves maintenance, whatever their package's role; none of them is judged, so
-  none counts as complete, pending or undeclared. Only the resource tools report the coverage and
-  these warnings ("Tools"); the Runtime's workbench records neither.
+  none counts as complete, pending or undeclared. SS-2d: *realization* counts the judged rules
+  that carry the realization mark (below); each also counts as complete, pending or undeclared.
+  Only the resource tools report the coverage and these warnings ("Tools"); the Runtime's
+  workbench records neither.
+
+**The realization mark** (SS-2d, since 0.12.35; Alice's ruling 127, the review's version; register
+§1.235; design `rd-1031/design-acm-price-addendum2.1.md` §7.3). Only the model knows whether a
+business rule is a realization or conversion with a real downstream use, one more run of which
+wastes nothing; `acmodel bindings apply` writes its verdict as
+
+```json
+{"id": "<rule>", "package_id": "<package>", "realization": true, ...}
+```
+
+- The composer then writes `benefit_realization: true` on the judged rule's task
+  ([scheduling/v2/README.md](scheduling/v2/README.md)): its candidate within its rounding error
+  may run in the last place of its tier ([scheduling/README.md](scheduling/README.md), "Net
+  benefit within a tier", "Within tolerance"). The member is `schedule.json`'s, taken out of the
+  rule by the reader (`ScheduleRule::realization`), so the composed task never carries
+  `realization`; a file that does not write it composes byte for byte as before.
+- Only `true` marks; any other value, `false` included, is refused, `schedule_invalid` at
+  `/rules/<i>/realization`, as `maintenance` is. A rule that declares `"maintenance": true` is
+  never judged, so the reader refuses the mark beside it; a rule whose package is
+  maintenance-role is refused by the composer at the same pointer. A rule that writes
+  `benefit_realization` itself is refused at `/rules/<i>/benefit_realization`: the task member is
+  the composer's.
+- The compiler's requirements on the composed task (a `consumes` and a `produces` entry, a reserve
+  on and a fact reading of each consumed pool, no cycle) are mapped back to the rule as every
+  compiler diagnostic is; `realization_cycle` names the rule's `realization`.
 
 ## Composition
 
@@ -219,7 +247,9 @@ each game root that holds `schedule.json`, that file's bytes, the root as
    `entrypoint.operation_id` is `operation.package.run`, its `procedure_ref` is
    `package.<package_id>`, and its `instance_overrides` is empty; SS-2b: a rule whose package
    is not maintenance-role gains `benefit_judged: true` ("Judged rules" above), SS-2c: unless it
-   declares itself maintenance (`maintenance`, which the composed task does not carry).
+   declares itself maintenance (`maintenance`, which the composed task does not carry); SS-2d:
+   such a rule that carries `"realization": true` also gains `benefit_realization: true` ("The
+   realization mark" above; the composed task does not carry `realization`).
 4. **Ids.** An item copied to exactly one instance keeps the file's id, so one instance per
    (game, server) composes ids byte-identical to the file. An item copied to two or more
    instances gets the id `<id>@<alias>` in each copy; every reference inside that copy (an
@@ -303,7 +333,9 @@ warnings; `standard-pack compose` and the Runtime's workbench do not.
   `standard-pack compose` reports neither. SS-2c (since 0.12.32): `benefit_coverage` also
   answers `maintenance_declared`, the rules that declare themselves maintenance, and `warnings`
   ends with one `standard_pack_priority_tier_mismatch` per rule whose declaration disagrees with
-  its tier ("Two priority tiers"); a `maintenance` of another shape is refused as above.
+  its tier ("Two priority tiers"); a `maintenance` of another shape is refused as above. SS-2d
+  (since 0.12.35): `benefit_coverage` also answers `realization`, the judged rules that carry the
+  realization mark, and a `realization` refused above is refused the same way.
   SS-4 (since 0.12.34): after those, `warnings` ends with one
   `standard_pack_escalation_threshold_high` per rule ("Failure escalation without a daily bound"
   below).

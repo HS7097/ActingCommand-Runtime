@@ -168,6 +168,10 @@
           "description": "SS-2b: true marks a business task judged by its net benefit within its tier; the standard-pack composer writes it on every rule whose package is not maintenance-role. false is as without the member.",
           "type": "boolean"
         },
+        "benefit_realization": {
+          "description": "SS-2d: true marks a judged task the model verified as a realization or conversion with a real downstream use; within its rounding error it may run last in its tier. The compiler requires benefit_judged true, a consumes and a produces entry, a reserve on and a fact reading of each consumed pool, and no cycle among the marked tasks (realization_cycle). The standard-pack composer writes it from the schedule.json rule member realization. false is as without the member.",
+          "type": "boolean"
+        },
         "reserves": {
           "type": "array",
           "minItems": 1,

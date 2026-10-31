@@ -62,6 +62,12 @@ const HELD_MEMBERS: [&str; 3] = ["package_id", "reason", "reference"];
 /// takes it out of the rule ([`ScheduleRule::maintenance`]), and the composer then does not mark
 /// the rule `benefit_judged`.
 pub const SCHEDULE_RULE_MAINTENANCE_MEMBER: &str = "maintenance";
+/// SS-2d (register §1.235): the optional rule member `"realization": true`, which only `acmodel
+/// bindings apply` writes from the model's verdict (a realization or conversion with a real
+/// downstream use, one more run wasting nothing). It is `schedule.json`'s, not a V2 task member:
+/// the reader takes it out of the rule ([`ScheduleRule::realization`]), and the composer writes
+/// the task member `benefit_realization: true` on the judged rule instead.
+pub const SCHEDULE_RULE_REALIZATION_MEMBER: &str = "realization";
 
 /// The four lists of rules and items, by their member name in `schedule.json`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -95,8 +101,11 @@ pub struct ScheduleRule {
     /// SS-2c (register §1.227): the rule declares itself maintenance (`"maintenance": true`,
     /// [`SCHEDULE_RULE_MAINTENANCE_MEMBER`]); `false` when it does not write the member.
     pub maintenance: bool,
-    /// Every other member as written, in file order (without `id`, `package_id` and
-    /// `maintenance`).
+    /// SS-2d (register §1.235): the rule carries the model's realization mark (`"realization":
+    /// true`, [`SCHEDULE_RULE_REALIZATION_MEMBER`]); `false` when it does not write the member.
+    pub realization: bool,
+    /// Every other member as written, in file order (without `id`, `package_id`, `maintenance`
+    /// and `realization`).
     pub body: Map<String, Value>,
 }
 
@@ -192,6 +201,9 @@ fn segment(name: &str) -> String {
 ///   is absent or empty;
 /// - SS-2c: a rule's `maintenance`, if written, is `true` (`false` and every other value are
 ///   refused: the absent member is the one way to say "not declared");
+/// - SS-2d: a rule's `realization`, if written, is `true` (every other value is refused, as
+///   `maintenance`'s), and a rule that declares itself maintenance does not write it (a
+///   maintenance rule is never judged, so it is refused at `realization`);
 /// - a pool, profile or event names its `server`, if at all, as a game-root identifier;
 /// - `requires` lists at most 32 distinct subsystem names of 1–64 bytes of `[a-z][a-z0-9_]*`;
 /// - `held` lists at most 4096 entries `{package_id, reason, reference?}` with distinct package
@@ -258,10 +270,23 @@ pub fn parse_standard_pack_schedule(
                 )));
             }
         };
+        // SS-2d (register §1.235): the realization mark is taken out of the rule the same way;
+        // the composer writes `benefit_realization` from it. Only `true` marks, and only a rule
+        // that does not declare itself maintenance: a maintenance rule is never judged.
+        let realization = match body.shift_remove(SCHEDULE_RULE_REALIZATION_MEMBER) {
+            None => false,
+            Some(Value::Bool(true)) if !maintenance => true,
+            Some(_) => {
+                return Err(invalid(format!(
+                    "{pointer}/{SCHEDULE_RULE_REALIZATION_MEMBER}"
+                )));
+            }
+        };
         rules.push(ScheduleRule {
             id,
             package_id,
             maintenance,
+            realization,
             body,
         });
     }

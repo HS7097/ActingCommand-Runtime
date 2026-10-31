@@ -2516,18 +2516,28 @@ fn benefit_tiers(catalog: &CompiledCatalog) -> bool {
 /// ([`KnownBenefit::order`]), then `affinity` and the same tie-break. The handwritten priority no
 /// longer orders judged candidates of one tier. Without `tiers` the order is the one of before,
 /// byte for byte.
+///
+/// SS-2d (register §1.235; design `rd-1031/design-acm-price-addendum2.1.md` §7.3): a candidate
+/// the benefit gate released within its rounding error (`zero_tier`) is the last part of the
+/// business tier, after every unjudged and every positive judged candidate of every instance,
+/// and a promotion does not lift it; among them `affinity`, the tie-break and the hash decide.
+/// So it runs only where nothing else of its instance is chosen, and it takes no shared run
+/// slot and no reserve room from a candidate before it. A round with no released candidate
+/// orders as before.
 fn allocation_order(
     left: &PlacementCandidate,
     right: &PlacementCandidate,
     tiers: bool,
 ) -> std::cmp::Ordering {
-    let promoted = right.promoted.cmp(&left.promoted);
+    let promoted = (right.promoted && !right.zero_tier).cmp(&(left.promoted && !left.zero_tier));
     let value = if tiers {
         promoted
             .then_with(|| left.business.cmp(&right.business))
+            .then_with(|| left.zero_tier.cmp(&right.zero_tier))
             .then_with(|| left.benefit.is_some().cmp(&right.benefit.is_some()))
             .then_with(|| match (&left.benefit, &right.benefit) {
                 (Some(left), Some(right)) => left.order(right),
+                _ if left.zero_tier && right.zero_tier => std::cmp::Ordering::Equal,
                 _ => right.rank.total_score.cmp(&left.rank.total_score),
             })
     } else {
@@ -3063,6 +3073,10 @@ struct PlacementCandidate {
     judged: bool,
     /// SS-2b: a judged candidate's known positive net benefit, set by the benefit gate.
     benefit: Option<KnownBenefit>,
+    /// SS-2d (register §1.235): a judged candidate within its rounding error that the benefit gate
+    /// released (`zero_tier: released`): the allocation takes it after every unjudged and every
+    /// positive judged candidate of the business tier ([`allocation_order`]).
+    zero_tier: bool,
     facts_fresh_until_unix_ms: Option<u64>,
     activity_profile_id: String,
     daily_limit: Option<u32>,
@@ -3234,6 +3248,7 @@ fn build_candidate(
             && !chain.is_some_and(|walk| walk.business_link)
             && !benefit::manual_request(task),
         benefit: None,
+        zero_tier: false,
         chain_head: chain_head.map(|head| head.id.clone()),
         facts_fresh_until_unix_ms,
         activity_profile_id: terms.activity_profile_id.to_owned(),
