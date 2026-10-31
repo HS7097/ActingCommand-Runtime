@@ -15,8 +15,9 @@ use crate::codes::ArgumentProblem;
 use actingcommand_contract::{ConfigSettingChange, MAX_CONFIG_SETTING_CHANGES};
 use serde_json::{Map, Value, json};
 
-/// `ac_config_set {changes: [{key, value?}]}`: answers `{settings}`, each changed key as it is in
-/// effect afterwards.
+/// `ac_config_set {changes: [{key, value?}]}`: answers `{settings, config_version?}`, each changed
+/// key as it is in effect afterwards and (Workflow #429 R-4) the settings' version after the
+/// change, as `actingctl config set|clear` prints them.
 pub(super) fn config_set(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
     let arguments = Arguments::new(arguments, &["changes"])?;
     let changes = changes(arguments.value("changes"))?;
@@ -26,8 +27,12 @@ pub(super) fn config_set(context: &ToolContext<'_>, arguments: &Map<String, Valu
         .client
         .configure_settings(changes, None)
         .map_err(|error| client_error(&error))?;
+    let mut result = json!({ "settings": configured.settings });
+    if let (Some(version), Some(members)) = (configured.config_version, result.as_object_mut()) {
+        members.insert("config_version".to_owned(), Value::from(version));
+    }
     Ok(ToolSuccess {
-        result: json!({ "settings": configured.settings }),
+        result,
         warnings: write.warnings,
     })
 }

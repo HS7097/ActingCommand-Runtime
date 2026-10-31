@@ -323,17 +323,19 @@ impl HostShared {
             // start, a general read from memory that records nothing.
             RuntimeOperation::StartReport => self.start_report_read(),
             RuntimeOperation::RuntimeFactSnapshot => {
-                let snapshot = self.runtime_fact_snapshot().map_err(|error| {
-                    if error.is_fatal() {
-                        RequestFailure::poison_without_terminal(error)
-                    } else {
-                        RequestFailure::request(error, RuntimeReceiptState::Denied, None)
-                    }
-                })?;
-                // Workflow #429 R-0: `config_version` is R-4's; 0.12.30 answers none.
+                // Workflow #429 R-4 (register §1.239): with the settings' version now, read with
+                // the snapshot under the settings' gate.
+                let (snapshot, config_version) =
+                    self.runtime_fact_snapshot_versioned().map_err(|error| {
+                        if error.is_fatal() {
+                            RequestFailure::poison_without_terminal(error)
+                        } else {
+                            RequestFailure::request(error, RuntimeReceiptState::Denied, None)
+                        }
+                    })?;
                 let result = RuntimeResult::RuntimeFactSnapshot {
                     snapshot,
-                    config_version: None,
+                    config_version: Some(config_version),
                 };
                 // Workflow #308 5d-1: a store whose reply exceeds one IPC frame is refused
                 // here instead of failing the frame write; paged reads are a follow-up.
@@ -700,19 +702,12 @@ impl HostShared {
             RuntimeOperation::ResourceTargetView { instance_alias } => {
                 self.resource_target_view(instance_alias)
             }
-            // Workflow #429 R-0 (register §1.213): the revision check of `expected_version` is
-            // R-4's; until then a request that names it is refused and records nothing.
-            RuntimeOperation::ConfigureSettings {
-                expected_version: Some(_),
-                ..
-            } => Err(not_implemented(
-                crate::codes::ConfigHostLocation::ConfigureSettings,
-            )),
-            // Workflow #387 D1b: a general instruction of the three counters.
+            // Workflow #387 D1b: a general instruction of the three counters. Workflow #429 R-4
+            // (register §1.239): with `expected_version`, a compare-and-swap of the settings.
             RuntimeOperation::ConfigureSettings {
                 changes,
-                expected_version: None,
-            } => self.configure_settings(request, validated, changes),
+                expected_version,
+            } => self.configure_settings(request, validated, changes, *expected_version),
             // Workflow #389 U-1: the contract has these shapes and later slices add the
             // behaviour (LoadPack and UnloadPack U-3, UpgradeState and UpgradeStateStatus U-4).
             // Until then each is refused and records nothing.

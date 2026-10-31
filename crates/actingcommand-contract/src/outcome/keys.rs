@@ -702,4 +702,7 @@ outcome_keys! {
     tolerance_milli: integer,
     zero_tier: vocab(zero_tier),
     // ---- SS-2d: end ----
+    // ---- Workflow #429 R-4 (the edit-version tokens, contracts/runtime-interface.md "Workbench
+    // request kinds"): the token now, in a refused `expected_version`; kept in codes mode. ----
+    current_version: integer,
 }

@@ -3980,8 +3980,10 @@ pub enum RuntimeOperation {
     /// A change without a value returns its key to the configuration-file value. Workflow #429
     /// R-0 (register §1.213): with `expected_version` the changes apply only while the
     /// settings' version is that one (R-4): the `config_version` that `SettingsConfigured` and
-    /// `RuntimeFactSnapshot` answer, an opaque token compared only for equality. Until R-4 a
-    /// request that names it is refused `not_implemented`.
+    /// `RuntimeFactSnapshot` answer, an opaque token compared only for equality. Since R-4
+    /// (register §1.239, 0.12.36) another version is refused `fact_observation_version_conflict`
+    /// (`fact_key` `host.config_overrides`, `current_version`) and nothing changes; before it a
+    /// request that named it was refused `not_implemented`.
     ConfigureSettings {
         changes: Vec<ConfigSettingChange>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -5156,6 +5158,8 @@ const HOST_HALTED_KEY: &str = "host_halted";
 const HOLDER_ID_KEY: &str = "holder_id";
 const LEASE_ID_KEY: &str = "lease_id";
 const RETRY_AFTER_MS_KEY: &str = "retry_after_ms";
+/// Workflow #429 R-4: the edit-version token now, in a `fact_observation_version_conflict`.
+const CURRENT_VERSION_KEY: &str = "current_version";
 
 impl RuntimeErrorProjection {
     pub const fn new(code: RuntimeErrorCode, fatal: bool) -> Self {
@@ -5266,8 +5270,11 @@ impl RuntimeErrorProjection {
 /// A receipt's outcome envelope for `detail`. Codes mode withholds the data values (model section
 /// 4.3) except a denied or failed receipt's `host_halted`, which travels in every detail mode
 /// (Workflow #378 A4, coordinator ruling A-M1): the client's own fatal handling runs on it.
+/// Workflow #429 R-4 (register §1.216 R0C-4, §1.239; since 0.12.36): so does the top's
+/// `current_version`, which only `fact_observation_version_conflict` carries: the console reads
+/// the current edit-version token from the refusal itself.
 fn receipt_envelope(outcome: &Outcome, detail: Detail) -> OutcomeEnvelope {
-    OutcomeEnvelope::keeping_top_values(outcome, detail, &[HOST_HALTED_KEY])
+    OutcomeEnvelope::keeping_top_values(outcome, detail, &[HOST_HALTED_KEY, CURRENT_VERSION_KEY])
 }
 
 /// The registered Runtime error code a received spelling names, if any.
@@ -5386,7 +5393,7 @@ pub enum RuntimeResult {
         /// Workflow #429 R-0 (register §1.213, `runtime-client` 3): the settings' version now,
         /// the `expected_version` of the next `ConfigureSettings`; an opaque token compared only
         /// for equality. Beside the snapshot, never in it (the persisted snapshot keeps its
-        /// shape). R-4 fills it; absent in every answer of 0.12.30.
+        /// shape). R-4 fills it from 0.12.36 (register §1.239); absent in every answer before.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         config_version: Option<u64>,
     },
@@ -5627,7 +5634,8 @@ pub enum RuntimeResult {
         settings: Vec<ConfiguredSetting>,
         /// Workflow #429 R-0 (register §1.213, `runtime-client` 3): the settings' version after
         /// the change, the `expected_version` of the next `ConfigureSettings`; an opaque token
-        /// compared only for equality. R-4 fills it; absent in every answer of 0.12.30.
+        /// compared only for equality. R-4 fills it from 0.12.36 (register §1.239); absent in
+        /// every answer before.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         config_version: Option<u64>,
     },
