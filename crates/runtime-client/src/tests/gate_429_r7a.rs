@@ -15,6 +15,7 @@
 // 5. The receipt waits: the socket timeout is the whole formula, the deadline the formula without
 //    the IO margin.
 
+use super::unreached_deadline;
 use crate::client::{player_hold_receipt_waits, player_hold_waits_for_test};
 use crate::ipc::{ReceiptReadDeadline, exchange};
 use crate::test_support::{ScriptedAnswer, ScriptedConnection, ScriptedRuntime};
@@ -58,6 +59,14 @@ fn connect(state_root: &Path, io_timeout: Duration) -> RuntimeClient {
         .with_io_timeout(io_timeout),
     )
     .expect("runtime client")
+}
+
+/// A deadline already reached when the client first checks it: `unreached_deadline` less the
+/// hour it grants (the form of `gate_422_p32a::reached_deadline`).
+fn reached_deadline() -> Instant {
+    unreached_deadline()
+        .checked_sub(Duration::from_secs(60 * 60))
+        .expect("the deadline unreached_deadline grants, less its hour")
 }
 
 fn ids() -> IdentifierIssuer {
@@ -549,25 +558,18 @@ fn r7a_a_receipt_timeout_is_timed_out_and_settles_on_a_new_connection() {
 }
 
 // 2: a session deadline shorter than the receipt-read deadline still ends in
-// `runtime_receipt_timeout` and `timed_out`. The session is over by then, so the settlement's
-// reconnect waits 1 ms for an answer the script never gives: P1.
+// `runtime_receipt_timeout` and `timed_out`. The session's deadline is one already reached,
+// set after the handshake (the seam `set_session_deadline_for_test`, so the connect is not cut):
+// the receipt read is cut to it and the frame is still written once. The session is over, so
+// the settlement's reconnect waits 1 ms for an answer the script never gives: P1.
 #[test]
 fn r7a_a_session_deadline_shorter_than_the_deadline_is_still_timed_out() {
     let root = TempDir::new().expect("tempdir");
     let runtime = ScriptedRuntime::start(root.path(), |_| {
         vec![ScriptedConnection::new().request(|_| ScriptedAnswer::StallUntilClosed)]
     });
-    let client = RuntimeClient::connect(
-        RuntimeClientConfig::new(
-            root.path(),
-            RuntimeChannel::Cli,
-            EventActor::Cli,
-            EventSource::Cli,
-        )
-        .with_io_timeout(IO)
-        .with_deadline(Instant::now() + Duration::from_millis(500)),
-    )
-    .expect("runtime client");
+    let client = connect(root.path(), IO);
+    client.set_session_deadline_for_test(Some(reached_deadline()));
     let error = client
         .acquire_player_hold(INSTANCE, 600_000)
         .expect_err("cut by the session");
@@ -829,10 +831,10 @@ fn r7a_a_close_before_the_deadline_is_dropped_and_after_it_is_a_timeout() {
     let ids = ids();
     for (deadline, code) in [
         (
-            Instant::now() + Duration::from_secs(60),
+            unreached_deadline(),
             ClientCode::RuntimeReceiptHeaderFailed.code(),
         ),
-        (Instant::now(), ClientCode::RuntimeReceiptTimeout.code()),
+        (reached_deadline(), ClientCode::RuntimeReceiptTimeout.code()),
     ] {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind");
         let address = listener.local_addr().expect("address");

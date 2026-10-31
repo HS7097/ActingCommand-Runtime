@@ -135,26 +135,6 @@ pub(crate) fn player_hold_receipt_waits(
     )
 }
 
-/// Test seam: a receipt-read deadline shorter than the contract's, for this thread, so the
-/// timeout paths run in milliseconds. The socket timeout stays the deadline plus the IO margin.
-#[cfg(test)]
-pub(crate) mod tests_override {
-    use std::cell::Cell;
-    use std::time::Duration;
-
-    thread_local! {
-        static DEADLINE: Cell<Option<Duration>> = const { Cell::new(None) };
-    }
-
-    pub(crate) fn set(deadline: Option<Duration>) {
-        DEADLINE.with(|cell| cell.set(deadline));
-    }
-
-    pub(crate) fn deadline() -> Option<Duration> {
-        DEADLINE.with(Cell::get)
-    }
-}
-
 impl RuntimeClient {
     /// Fixes one `AcquirePlayerHold`'s request and correlation on this handle without writing
     /// anything (R-7a §3.3.2). Its `request_id` is the hold's `hold_id`.
@@ -450,5 +430,38 @@ impl RuntimeClient {
             connection.terminal_error = Some(failure.clone());
         }
         failure
+    }
+
+    /// Test seam (R-7a §3.1): replaces this handle's session deadline after its handshake, so a
+    /// gate runs a request under a session deadline already reached without reading the clock,
+    /// and the connect itself is not cut.
+    #[cfg(test)]
+    pub(crate) fn set_session_deadline_for_test(&self, deadline: Option<Instant>) {
+        self.shared
+            .connection
+            .lock()
+            .expect("the session's connection")
+            .deadline = deadline;
+    }
+}
+
+/// Test seam: a receipt-read deadline shorter than the contract's, for this thread, so the
+/// timeout paths run in milliseconds. The socket timeout stays the deadline plus the IO margin.
+/// Last in the file: no item follows a test module.
+#[cfg(test)]
+pub(crate) mod tests_override {
+    use std::cell::Cell;
+    use std::time::Duration;
+
+    thread_local! {
+        static DEADLINE: Cell<Option<Duration>> = const { Cell::new(None) };
+    }
+
+    pub(crate) fn set(deadline: Option<Duration>) {
+        DEADLINE.with(|cell| cell.set(deadline));
+    }
+
+    pub(crate) fn deadline() -> Option<Duration> {
+        DEADLINE.with(Cell::get)
     }
 }

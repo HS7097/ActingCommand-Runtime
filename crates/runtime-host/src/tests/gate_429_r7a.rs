@@ -29,6 +29,20 @@ fn status_json(reader: &mut TestClient) -> (Vec<RuntimeInstanceStatus>, Value) {
     )
 }
 
+/// The status JSON without its `source`'s sampling interval (`sampled_started_at_unix_ms`,
+/// `sampled_completed_at_unix_ms`), the time of the read itself; both must be there.
+fn without_sampling_interval(status: &Value) -> Value {
+    let mut status = status.clone();
+    let source = status
+        .get_mut("source")
+        .and_then(Value::as_object_mut)
+        .expect("the status source");
+    for sampled in ["sampled_started_at_unix_ms", "sampled_completed_at_unix_ms"] {
+        assert!(source.remove(sampled).is_some(), "{sampled}");
+    }
+    status
+}
+
 fn start_report_json(reader: &mut TestClient) -> Value {
     let request = reader.request(RuntimeOperation::StartReport);
     let receipt = reader.send(&request);
@@ -139,7 +153,17 @@ fn r7a_both_player_hold_kinds_answer_not_implemented_on_every_channel_with_no_ef
     assert_eq!(ledger_head(&mut reader), head_before);
     let (instances_after, status_after) = status_json(&mut reader);
     assert_eq!(instances_after, instances_before);
-    assert_eq!(status_after, status_before);
+    // Each Status read samples at its own time, so its sampling interval is the read's and no
+    // state. Every other member is unchanged: the owner epoch, each instance's members, the
+    // store revisions and the ledger's committed head.
+    assert_eq!(
+        status_after["source"]["ledger_committed_head"],
+        status_before["source"]["ledger_committed_head"]
+    );
+    assert_eq!(
+        without_sampling_interval(&status_after),
+        without_sampling_interval(&status_before)
+    );
     for instance in status_after["instances"].as_array().expect("instances") {
         for absent in ["player_hold", "player_hold_operation", "control"] {
             assert!(instance.get(absent).is_none(), "{absent}: {instance}");
