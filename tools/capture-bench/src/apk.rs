@@ -610,6 +610,8 @@ struct FakeApkState {
     /// One-way transport delay of a PING each way, µs (the fake advances no clock; it adds the
     /// delay to the device times it reports).
     ping_one_way_us: i64,
+    /// The band's cell edge INFO reports (the fake frames draw the band with it).
+    cell: u32,
 }
 
 /// The fake APK (PROTOCOL §5 on an in-memory link).
@@ -641,6 +643,7 @@ impl FakeApk {
                 slots: BTreeMap::new(),
                 ping_hold_ns: 1_000,
                 ping_one_way_us: 0,
+                cell: 24,
             }),
             frame_period_ns: 16_000_000,
         })
@@ -679,6 +682,11 @@ impl FakeApk {
     /// The one-way PING delay (µs) the fake reports, for the calibration tests.
     pub fn set_ping_one_way_us(&self, delay: i64) {
         lock(&self.state).ping_one_way_us = delay;
+    }
+
+    /// The cell edge INFO reports.
+    pub fn set_cell(&self, cell: u32) {
+        lock(&self.state).cell = cell;
     }
 
     pub fn orientation(&self) -> String {
@@ -801,7 +809,7 @@ impl FakeApk {
                     "orientation": { "requested": state.orientation, "configuration": state.orientation },
                     "mode": state.mode, "mode_seq": state.mode_seq, "mode_pending": null,
                     "view": { "width": width, "height": height, "x": 0, "y": 0 },
-                    "cell": 24, "layout": { "cell": 24 },
+                    "cell": state.cell, "layout": { "cell": state.cell },
                     "flip_n": state.flip_n, "step_k": state.step_k, "step_level": state.step_level,
                 })
             }
@@ -929,16 +937,34 @@ impl FakeApk {
     }
 }
 
+/// A connection to one fake APK process: when the process restarts, the connection is gone
+/// (as the real TCP connection is), and every request fails with `apk_io`.
 struct FakeApkLink {
     apk: Arc<FakeApk>,
+    process: String,
+}
+
+impl FakeApkLink {
+    fn alive(&self) -> Result<(), ApkError> {
+        if lock(&self.apk.state).instance == self.process {
+            Ok(())
+        } else {
+            Err(ApkError::new(
+                "apk_io",
+                "the APK process of this connection is gone",
+            ))
+        }
+    }
 }
 
 impl ApkLink for FakeApkLink {
     fn request(&mut self, line: &str) -> Result<Value, ApkError> {
+        self.alive()?;
         Ok(self.apk.answer(line))
     }
 
     fn put(&mut self, slot: &str, bytes: &[u8]) -> Result<Value, ApkError> {
+        self.alive()?;
         Ok(self.apk.put_slot(slot, bytes))
     }
 
@@ -959,6 +985,7 @@ impl ApkConnector for FakeApks {
             .map(|apk| {
                 Box::new(FakeApkLink {
                     apk: Arc::clone(apk),
+                    process: lock(&apk.state).instance.clone(),
                 }) as Box<dyn ApkLink>
             })
             .ok_or_else(|| ApkError::new("apk_unknown_instance", instance.to_owned()))

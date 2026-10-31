@@ -2016,6 +2016,9 @@ impl RunShared {
             if gate.is_hard() {
                 self.hub.end_grace_hard(&self.owner(), instance);
             }
+            for entry in [Entry::ScrcpyProducer, Entry::NemuSession] {
+                self.hub.note_entry(instance, entry, &[gate], false);
+            }
             for (entry, kind) in [
                 (Entry::ScrcpyProducer, BackendKind::Scrcpy),
                 (Entry::NemuSession, BackendKind::Nemu),
@@ -3267,42 +3270,61 @@ impl RunShared {
             false,
             || -> Result<T, ApkError> {
                 let mut state = lock(&self.apk_states[instance]);
-                if state.client.is_none() {
-                    let link = connector.connect(&name)?;
-                    let mut client = ApkClient::new(link, Arc::clone(&self.clock));
-                    let hello = client.hello()?;
-                    let host_us = self.now();
-                    let last = state.calibrations.last().copied();
-                    let change = state.streams.on_hello(&hello, host_us, last.as_ref());
-                    if change.apk_restarted {
-                        self.journal.event(
-                            "apk_restart",
-                            json!({ "instance": name, "apk_instance": hello.instance, "apk_epoch": state.streams.epoch }),
-                        );
+                // Every call starts with HELLO on the live connection, so a new APK process
+                // (its connection is gone) or a reset device clock is seen before any record or
+                // device time is used; a dead connection is replaced once.
+                let alive = match state.client.as_mut().map(ApkClient::hello) {
+                    Some(Ok(hello)) => Some(hello),
+                    Some(Err(_)) => {
+                        if let Some(client) = state.client.take() {
+                            let _ = client.close();
+                        }
+                        None
                     }
-                    if change.clock_reset {
-                        state.calibrations.clear();
-                        self.journal.event(
-                            "device_clock_reset",
-                            json!({ "instance": name, "clock_epoch": state.streams.clock_epoch, "t_now_dev_ns": hello.t_now_dev_ns }),
-                        );
+                    None => None,
+                };
+                let (hello, connected) = match alive {
+                    Some(hello) => (hello, false),
+                    None => {
+                        let link = connector.connect(&name)?;
+                        let mut client = ApkClient::new(link, Arc::clone(&self.clock));
+                        let hello = client.hello()?;
+                        if let Some(geometry) = client
+                            .info()
+                            .ok()
+                            .as_ref()
+                            .and_then(crate::apk::geometry_of_info)
+                        {
+                            lock(&self.geometries).insert(instance, geometry);
+                        }
+                        state.client = Some(client);
+                        (hello, true)
                     }
-                    if change.apk_restarted || change.clock_reset {
-                        state.needs_calibration = true;
-                    }
+                };
+                let host_us = self.now();
+                let last = state.calibrations.last().copied();
+                let change = state.streams.on_hello(&hello, host_us, last.as_ref());
+                if change.apk_restarted {
+                    self.journal.event(
+                        "apk_restart",
+                        json!({ "instance": name, "apk_instance": hello.instance, "apk_epoch": state.streams.epoch }),
+                    );
+                }
+                if change.clock_reset {
+                    state.calibrations.clear();
+                    self.journal.event(
+                        "device_clock_reset",
+                        json!({ "instance": name, "clock_epoch": state.streams.clock_epoch, "t_now_dev_ns": hello.t_now_dev_ns }),
+                    );
+                }
+                if change.apk_restarted || change.clock_reset {
+                    state.needs_calibration = true;
+                }
+                if connected {
                     self.journal.event(
                         "apk_hello",
                         json!({ "instance": name, "hello": hello.raw, "marks": state.streams.marks() }),
                     );
-                    if let Some(geometry) = client
-                        .info()
-                        .ok()
-                        .as_ref()
-                        .and_then(crate::apk::geometry_of_info)
-                    {
-                        lock(&self.geometries).insert(instance, geometry);
-                    }
-                    state.client = Some(client);
                 }
                 let outcome = call(self, &mut state);
                 if let Err(error) = &outcome
