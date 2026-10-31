@@ -508,7 +508,8 @@ pub struct ResourceEffectSpec {
         deserialize_with = "effect_amount"
     )]
     pub amount: Option<EffectAmount>,
-    /// Expected production per completed run, in thousandths of a real inventory unit.
+    /// Expected quantity per completed run, in thousandths of a real inventory unit: a V2
+    /// production's or (SS-2g, register §1.232) a V2 consumption's.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -578,8 +579,8 @@ fn effect_amount<'de, D: Deserializer<'de>>(
 }
 
 impl ResourceEffectSpec {
-    /// The written integer `amount`; `None` for an `expected_amount_milli` production and for a
-    /// pending quantity.
+    /// The written integer `amount`; `None` for an `expected_amount_milli` entry (a production or,
+    /// SS-2g, a consumption) and for a pending quantity.
     pub fn units(&self) -> Option<u64> {
         match self.amount {
             Some(EffectAmount::Units(amount)) => Some(amount),

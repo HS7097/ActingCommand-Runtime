@@ -866,19 +866,17 @@ fn validate_effects(
                 diagnostics.push(map.diagnostic(
                     CatalogDiagnosticCode::LimitExceeded,
                     effect_path.clone(),
-                    "effect requires exactly one positive amount or bounded v2 production expected_amount_milli; confidence must be in 0..=1000",
+                    "effect requires exactly one positive amount or bounded v2 expected_amount_milli; confidence must be in 0..=1000",
                     descriptor,
                 ));
             }
             continue;
         }
+        // SS-2g (register §1.232): a V2 effect of either direction may declare its quantity as
+        // `expected_amount_milli`, a consumption as a production may; V1 requires `amount`.
         let quantity_milli = match (effect.units(), effect.expected_amount_milli) {
             (Some(amount), None) if amount > 0 => Some(u128::from(amount) * 1_000),
-            (None, Some(amount))
-                if map.schema_version.as_deref() == Some(SCHEDULING_SCHEMA_VERSION_V2)
-                    && expected_direction == EffectDirection::Produce
-                    && u128::from(amount) <= MAX_CANONICAL_INTEGER as u128 =>
-            {
+            (None, Some(amount)) if v2 && u128::from(amount) <= MAX_CANONICAL_INTEGER as u128 => {
                 Some(u128::from(amount))
             }
             _ => None,
@@ -887,7 +885,7 @@ fn validate_effects(
             diagnostics.push(map.diagnostic(
                 CatalogDiagnosticCode::LimitExceeded,
                 effect_path.clone(),
-                "effect requires exactly one positive amount or bounded v2 production expected_amount_milli; confidence must be in 0..=1000",
+                "effect requires exactly one positive amount or bounded v2 expected_amount_milli; confidence must be in 0..=1000",
                 descriptor,
             ));
         }
