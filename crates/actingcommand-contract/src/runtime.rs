@@ -1605,8 +1605,8 @@ pub struct RuntimeInstanceStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     ladder_busy_hold: Option<InstanceLadderBusyHold>,
     /// Workflow #429 R-0 (register §1.213, `runtime-client` 3): what the instance does now,
-    /// from memory; absent while it does nothing the vocabulary names, and until the slice that
-    /// fills each kind.
+    /// from memory; absent while it does nothing the vocabulary names. R-0b (§1.238, 0.12.36)
+    /// fills every kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     activity: Option<InstanceActivity>,
     /// Workflow #429 R-7a (register §1.233, `runtime-client` 4): the instance's player hold;

@@ -1013,6 +1013,12 @@ impl HostShared {
             .instance_guard(instance_id)
             .map_err(|failure| *failure.error)?;
         let admission = lock(&instance_guard, HostLocation::LockInstanceAdmission)?;
+        // Workflow #429 R-0b (register §1.238): the start's self-check shows while it prepares
+        // the instance on its dedicated lease; no request names it.
+        let _activity = self.begin_instance_activity(
+            instance_id,
+            super::instance_activity::ActivityStart::Selfcheck { request_id: None },
+        )?;
         let prepared = self.prepare_instance_connection_with_cooldown(
             instance_alias,
             instance_id,
@@ -1049,6 +1055,16 @@ impl HostShared {
             connection_id,
             ClaimKind::SelfCheck,
         )?;
+        // Workflow #429 R-0b (register §1.238): the self-check shows from its grant, with the
+        // person's request; its guard drops however the self-check returns.
+        let _activity = self
+            .begin_instance_activity(
+                instance_id,
+                super::instance_activity::ActivityStart::Selfcheck {
+                    request_id: Some(original.request_id()),
+                },
+            )
+            .map_err(RequestFailure::poison_without_terminal)?;
         let selfcheck = self.prepare_on_operator_claim(
             request,
             original.request_id(),

@@ -2142,6 +2142,21 @@ impl HostShared {
         pending: &PendingRecoveryLadder,
         mut key: HostKey,
     ) -> RuntimeHostResult<()> {
+        // Workflow #429 R-0b (register §1.238): the ladder shows while it holds the key, over
+        // its rungs' runs and restarts, which run on that key; it ends before the key's release.
+        let activity = match self.begin_instance_activity(
+            pending.instance_id,
+            super::instance_activity::ActivityStart::Ladder {
+                request_id: key.request.request_id(),
+            },
+        ) {
+            Ok(activity) => activity,
+            // A failed begin (fatal) still releases the key once, as every end of the ladder.
+            Err(error) => {
+                let released = self.release_host_key(&key);
+                return Err::<(), _>(error).and(released);
+            }
+        };
         let marked = lock(
             &self.stability_counter,
             HostLocation::RecoveryStabilityCount,
@@ -2161,6 +2176,7 @@ impl HostShared {
             HostLocation::RecoveryStabilityCount,
         )
         .map(|mut counter| counter.set_climbing(pending.instance_id, false));
+        drop(activity);
         let released = self.release_host_key(&key);
         climbed.and(awaited).and(unmarked).and(released)
     }

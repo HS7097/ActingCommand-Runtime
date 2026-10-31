@@ -343,7 +343,7 @@ ran or may run (Alice's ruling 100). Shapes: `crates/actingcommand-contract`,
 | `RuntimeFactSnapshot.config_version?` (the result, beside `snapshot`) | (`RuntimeFactSnapshot`'s) | | the settings' version now, read with the snapshot under the settings' gate, so the snapshot's `config.*` records are that version's; beside the snapshot, never in the persisted `RuntimeFactSnapshot` | the answer's member | R-4: every answer carries it from 0.12.36 (register §1.239), and `actingctl status --config` and `ac_facts` (scope `config`) answer it beside their records; absent in every answer before | — |
 | `ResourceTargetView`: `active.rows?` | (`ResourceTargetView`'s) | | #429 A.5's read model, one row per target in document order: `{id, kind: maintain \| gain, resource, goal, baseline?, current?, remaining, progress_milli, state, reading: {observed_at_unix_ms?, fresh_until_unix_ms?, pending_reason?}, completed_at_unix_ms?, updated_at_unix_ms}`; `state` is `active`, `met`, `completed`, `paused`, `awaiting_baseline`, `unknown` or `unmapped`; `pending_reason` as `ResourceTargetObservation.pending`. The table's version is `active.version` | the answer's member | R-13e; absent in every answer of 0.12.30 | — |
 | `ResourceTargetView.stale_schema?` (top level, beside `active`) | (`ResourceTargetView`'s) | | a boolean, #429 A.5: `true` when the instance's stored policy is an `actingcommand.resource-targets.v1` or `v2` record, which the v3 reader reads as no table (no `active`, so `expected_version` `0`) instead of refusing the view | the answer's member | R-13a; absent in every answer of 0.12.30 | — |
-| `RuntimeInstanceStatus.activity?` | — | — | `{kind, request_id?, package_id?, since_unix_ms}`; `kind` is `policy_run`, `direct_run`, `host_run`, `reconnect`, `selfcheck`, `emulator_control` or `ladder`; kept in memory, never read from the ledger | absent while the instance does none of these | R-0b fills all seven kinds at once in 0.12.31 (Workflow #429 R-0c, register §1.216 R0C-4), `policy_run` and `direct_run` always with `request_id` and `package_id`, and the same release raises `runtime-client` `min` to 3; absent in every answer of 0.12.30 | — |
+| `RuntimeInstanceStatus.activity?` | — | — | `{kind, request_id?, package_id?, since_unix_ms}`; `kind` is `policy_run`, `direct_run`, `host_run`, `reconnect`, `selfcheck`, `emulator_control` or `ladder`; kept in memory, never read from the ledger | absent while the instance does none of these; while it does several at once, the one "What an instance does now" below names | R-0b fills all kinds (0.12.36, register §1.238; Workflow #429 R-0c, §1.216 R0C-4), `policy_run` and `direct_run` always with `request_id` and `package_id`, and the same release raises `runtime-client` `min` to 3 ([3, 4]); absent in every answer of 0.12.30 to 0.12.35 | — |
 | `PackScheduleView` (Workflow #429 R-0c, register §1.216 R0C-3; `below` R-0d, §1.217) | general | read (one instance's pack schedule per package; records nothing) | `{instance_alias}` | `PackScheduleViewed {view: {instance_alias, scopes: [{scope, version}], packages: [{package_id, schedulable, source, row?: {from_unix_ms, until_unix_ms?, schedulable}, next_change_unix_ms?, below?: {schedulable, source}}]}}`: `scopes` holds each scope that applies to the instance (instance, server, game) with its `session.pack.schedule` list's version, the next `EditPackSchedule.expected_version` of that scope, `0` while the scope has no list; per package, whether it is schedulable now, `source` the layer that decided (`instance`, `server`, `game`, `pack_default` or `none`), the row that decided and when the decision next changes. `none` means that no row covers now (SR-11 item 3: schedulable), and `row` is then absent; a row that takes effect later gives `next_change_unix_ms` its start. `below` is what the package would be now if the deciding layer had no row of it: SR-11 resolved again without that layer's rows of the package, so whether it would be schedulable and which layer would decide (`server`, `game`, `pack_default` or `none`, never `instance`); it is absent when `source` is already `pack_default` or `none`. With it the console sees what withdrawing the deciding layer's rows of the package would give before it edits, so turning a package on or off is one `EditPackSchedule` (withdraw the rows, or write one), never withdraw, read again, then write. Each package is resolved on its own ([instance-fact-store.md](instance-fact-store.md), "Pack schedule facts"); every level, `below` included, denies unknown members | R-8 (`pack_default` R-9), `below` included; until then refused `not_implemented` (`operation` `pack_schedule_view`) | no |
 
 The edit-version tokens (Workflow #429 R-0, review M3 and L5) have one name for the three
@@ -377,7 +377,46 @@ Revision rules for the console (review M7):
    0.12.36 (register §1.239): from it the console always names `ConfigureSettings.expected_version`.
 3. The release that first fills any answer member above (`activity`, either
    `config_version`, `active.rows`, `stale_schema`) raises `runtime-client` `min` to 3: each
-   sits in a shape that denies unknown members, which a revision-2 reader refuses.
+   sits in a shape that denies unknown members, which a revision-2 reader refuses. That release
+   is 0.12.36 (R-0b, register §1.238), which fills `activity` and declares [3, 4].
+
+#### What an instance does now (`RuntimeInstanceStatus.activity`)
+
+Workflow #429 R-0b (register §1.238, since 0.12.36). The Runtime keeps, in memory only, what
+each instance does now, and the `Status` answer carries it in the instance's row. Nothing of it is
+read from or written to the ledger, a restart starts with none, and an instance that does none of
+the kinds below has no `activity` member at all. An activity begins when the step below begins,
+`since_unix_ms` being the Runtime clock's wall reading then, and leaves the status however it ends:
+a success, a failure, a cancel, an interruption (an error that ends it early, a worker that
+panics) or the shutdown that ends the thread holding it.
+
+| `kind` | Shows while | `request_id` | `package_id` | On the key of |
+|---|---|---|---|---|
+| `policy_run` | a scheduled run executes, from its package's preparation on its dispatch's lease until its execution returns (its lease released, or handed to its ladder) | the `RunContainedTask` request the Runtime issues for the dispatch: the run's own request, which its records name and `StopInstanceRun` takes | its package's `package_id` | its own (the dispatch's lease) |
+| `direct_run` | a client's `RunContainedTask` executes, from its grant until its execution returns | the client's request, the `task_request_id` of `CancelContainedTask` | its package's `package_id` | its own |
+| `host_run` | a run the Runtime starts for itself executes: a startup package, or a ladder rung's package | the request the Runtime issues for the run | its package's `package_id` | its own (a startup package's claim), or its ladder's |
+| `reconnect` | an instance resume's reconnect prepares the instance on its claim | the `ResumeScheduling` request | — | its own |
+| `selfcheck` | a `SelfCheckInstance` runs, from its grant until it returns; or the daemon start prepares the instance | the `SelfCheckInstance` request; none for the start's | — | its own |
+| `emulator_control` | an emulator start, stop or restart drives (a person's `ControlEmulatorInstance`, the configured start, the emulator watch's restart, IDLE-1's stop; a restart is one control across its two phases); or a ladder's emulator restart rung drives | the request of the claim it runs on (the ladder's, for a rung) | — | its own, or its ladder's |
+| `ladder` | a recovery ladder holds the instance, from its claim's grant until just before it releases its key | its claim's request | — | its own |
+
+`policy_run` and `direct_run` always carry both `request_id` and `package_id`. The global pause's
+"finishing" is read from it: an instance that still shows `policy_run` is finishing.
+
+**More than one at once.** An activity that runs on another one's key (a ladder's rung run, its
+emulator restart) begins inside it, and the instance's key can pass from one activity to the next
+while the first is still ending (an emulator control hands it to its startup package). The status
+then shows one:
+
+1. an activity that took the instance's key itself (its lease or its claim, column "On the key
+   of": its own) before one that runs on another activity's key;
+2. among those that rank the same, the one that began last (the order in which they began, not
+   their `since_unix_ms`, which follows the wall clock).
+
+So a ladder shows over its rung's `host_run` and over its emulator restart, and when a control
+hands the key to its startup package the package's `host_run` shows. The rule is the key's: the
+activity that holds the instance's lease or claim is what the instance does and what decides when
+it is free again, and an activity on a borrowed key is one step of it.
 
 The runtime client's methods (Workflow #429 R-0c, register §1.216 R0C-1): `run_instance_task`,
 `stop_instance_run`, `edit_pack_schedule`, `edit_resource_target`, `routine_summary` and
