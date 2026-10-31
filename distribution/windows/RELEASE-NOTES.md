@@ -9,6 +9,149 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.35
+
+本版是 v0.12.34 之后合并的 4 个 PR：SS-2d、R-7a、R-7a2、R-15b。调度停着（每台实例都暂停）的时候，运行上只有一处变化：一台实例
+同时有自己的暂停和全局暂停时，显示的原因是实例暂停。别的变化要等调度恢复，或者有了新请求、新写法、新文件才看得到。
+一是控制门只有一个顺序（R-7a2）：评估、事实刷新、准入和时钟槽都按「玩家持有 → 实例暂停 → 全局暂停 → 资源围栏」取原因，玩家持有
+这一维在 R-7b 之前恒为假。两种暂停同时在时，候选的原因和准入的拒绝码都是 `dispatch_paused_instance`，不再是
+`dispatch_paused_global`。现在每台实例都带着自己的暂停，所以加上或撤下全局暂停，`actingctl schedule`、`ac_schedule` 和
+`ac_overview` 未运行一行的 `why` 都不变，`since_unix_ms` 也不再重新计时。
+二是净收益落在取整误差以内的候选不再按正负号派或挡（SS-2d）：调度恢复、池写了估值之后才看得到。被判候选的净收益 S（取整前）落在
+它自己的误差界 ε 以内（|S| ≤ ε）时，记 `benefit_within_tolerance`（info），不当作正收益派出，也不当作负收益一直挡住；带模型核实的
+`realization` 标记的兑现或转换任务，在业务档的最后一段放行。没有候选落进零带的目录，决定、排序和记录都逐字节和以前一样。
+三是玩家持有的两种请求有了形状（R-7a）：`AcquirePlayerHold`、`ReleasePlayerHold` 在 ui、cli、mcp、lab 四个通道上都答
+`not_implemented`，什么都不记，Status 也不变；本版的 actingctl、MCP 和 actinglab 都不发它们。持有的行为在 R-7b。
+四是安装工具认得 UI 的发布（R-15b）：生产照旧是单根，A/B 路径都不运行。`actingctl install release verify` 和 `stage` 遇到目录里
+认不出的 zip 时以 `zip_set` 拒收并列出名字，以前是跳过它；Release 工作流的发布目录只有两个 zip 和 `SHA256SUMS`，部署不受影响。
+v0.12.34 已在本版之前发布。
+
+配置：`runtime-client` 从 [2, 3] 改为 [2, 4]（R-7a，`min` 仍是 2）；`actingd-config` 仍是 [5, 23]，账本仍是 [3, 4]，`package` 仍是
+[3, 5]，`install-selection` 仍是 [1, 1]，其他接口也不变。
+
+- 没有新配置键：配置键表和 `actingd.defaults.json` 自 v0.12.34 都没改，在线可改的键不变，程序事实 `config.parameters`、
+  `config.subsystems` 都没有新行。四个 PR 都不带配置键。
+- `runtime-client` 4 是 3 加上玩家持有的形状：两种请求和它们的结果，Status 实例行的 `player_hold`、`player_hold_operation`、
+  `control`，启动报告的 `player_holds_restored`、`player_holds_dropped`、`player_hold_not_durable`。本版一个新成员都不填（空时不
+  出现），所以修订 3 的客户端读得了本版的每个回答。请求 v4、回执 v2 的 schema 字符串不变，Runtime 分不出客户端的修订，只有安装时
+  核配对；R-7b 第一次填 Status 的新成员时才把 `min` 升到 4。
+- 契约写下、本版还不声明的接口（`component-interfaces.json` 里没有它们）：R-15b 冻结的 `install-selection` 2（A/B 选择 v2 和槽
+  文档 `SLOT.json`；契约 crate 能解析、校验，没有程序读它，R-15c 起声明）、`tools-layout` 4（两个固定入口程序，R-15c 起；本版的
+  Tools 包仍是 `platform-tools-v3`）、新接口 `install-cli` 1（R-15d 起）和私有接口 `install-root` 1（R-15c 起），以及 R-7a 写下的
+  `player-hold` 1（R-7b 起）。
+- 新结果码 47 个，都还是待审（pending）：SS-2d 2 个（`benefit_within_tolerance`，info；目录诊断 `realization_cycle`，error）；
+  R-7a 29 个（runtime-host 的 16 个 `player_hold_*` 和 `dispatch_player_held`、`dispatch_resource_fenced`，契约的 8 个，
+  `runtime-client` 的 3 个）；R-15b 16 个（新 owner `actingcommand-entry` 的 10 个 `entry_*`，契约的 5 个 `install_*`，actingd 的
+  `unlock_owner_install_unfinished`）。R-7a2 不加码，它是 `dispatch_resource_fenced` 的第一个写者。新位置 7 个（R-7a 2 个、R-15b
+  5 个），新值键 47 个，新词表 49 个；已有词表加词：`emulator_autostart_skip_reason` 的 `player_held`（R-7b 才记），
+  `install_refusal` 28 个、`install_caveat` 19 个、`install_guard` 5 个、`release_check` 1 个（`selection_schema_mismatch`）。已有的码
+  `install_command_refused` 多一个可选值 `attempt_phase`，另有 7 个码只改了说明。结果码目录从 3822 个码变成 3869 个，位置从 1725 个
+  变成 1732 个；没有新定稿或退役的条目，所以本版的发布文件是空的。
+- 账本没有新表、新索引、新事件类型或新形状，`ledger` 不升；状态文件的形状也不变。控制门的顺序和零带的判断都只在内存里；Runtime 写的
+  新码（`benefit_within_tolerance`、`dispatch_resource_fenced`）只进已有的原因链、拒绝记录和时钟槽记录。
+- 目录格式多两种写法，格式版本不变（SS-2d）：V2 任务成员 `benefit_realization` 和 `schedule.json` 规则成员 `realization`；
+  v0.12.34 及以前的 Runtime 拒收它们（见下面的退回）。资源工具的 `benefit_coverage` 多一个计数 `realization`。
+- 安装（R-15b）：`state.json`、日志和 Runtime 构建的 `release.json` 都不变。新 workspace 成员 `apps/actingcommand-entry` 现在只是放
+  码的库，不出程序，所以 Runtime 包和 Tools 包的文件清单和 v0.12.34 一样。
+
+升级时要知道的：
+
+- 部署不改文件（按代码核过）：`actingctl install` 只换程序文件，不碰配置文件；配置修订不变（本版仍读 5 到 23），默认值文件没变，
+  部署计划的默认值对比没有行。没有账本或状态的迁移。配对：安装工具按 `runtime-client` 核 I ∩ Rp、I ∩ R\* 和 UI 的 U\* ∩ R\*，
+  本版的 [2, 4] 和 v0.12.34 的 [2, 3]、声明到修订 3 的 UI 都有交集，不挡部署。
+- 发布目录（R-15b）：本版的 `release verify`、`release stage` 遇到目录里任何不是 `actingcommand-runtime-<sha>.zip`、
+  `actingcommand-tools-<sha>.zip` 或 `acui-windows-<sha>.zip` 的 `.zip`，以 `zip_set` 拒收整个目录，每个这样的名字记一条失败（`file`
+  是它的名字）；UI 的 zip 和 Runtime 的 zip 放在一起也拒。下载 Release 时放进一个只有它那三个文件的新目录。不是 zip 的文件照旧不看。
+- UI 发布的暂存（R-15b，新能力）：只有 `acui-windows-<sha>.zip` 和 `SHA256SUMS` 的目录是 UI 发布。`release verify` 和 `stage` 核它
+  的来源（facts 的仓库、清单的提交、文件集和摘要、按解析规则读的声明，`installation_selection_schema` 要和 `install-selection` 的
+  范围一致，否则 `selection_schema_mismatch`），`stage` 分三步把它放进 `install\ui-builds\<sha>\`（`ui` 和 `release.json`，
+  `member: "ui"`），不写 `state.json`。R-15c 之前没有程序读它。
+- 控制门的顺序（R-7a2）：位置 1 拆成 1a 到 1d：玩家持有、实例自己的暂停（任一阶段）、全局暂停、资源围栏，之后才是实例的队列、性能门
+  和容量门。准入在准入锁下现读同一个顺序：两种暂停同时在时拒 `dispatch_paused_instance`；被围栏实例的、围栏之前评估好的意图拒
+  `dispatch_resource_fenced`（info / none，值 `instance_id`），以前是排在性能门之后的 `instance_resources_fenced`（error /
+  environment_fault），所以按错误类别数的行会少。评估时被围栏实例的候选是 `Deferred`、`dispatch_resource_fenced`，不设唤醒；但宿主
+  自检设备的实例（所有模拟器实例）被围栏时，策略可用性也一起撤下（#403），候选照旧在放置阶段以 `instance_unavailable` 挡住，到不了
+  位置 1d，和以前一样：1d 只对可用性没被撤下的实例和准入起作用。到期的时钟槽碰上围栏，第一次看到就记 `clock_slot_deferred`
+  （`gate_code` 是 `dispatch_resource_fenced`）。事实刷新的挡住和它的 `gate_code` 取同一个原因。设备请求碰上围栏、围栏自己的记录照旧
+  是 `instance_resources_fenced`；恢复阶梯只看有没有暂停，不变。
+- 零带（SS-2d）：ε 由求和里的两处取整算出（导出的权重、每个期望量），和 S 一样按精确分数累计，消耗一侧读 SS-2g 的千分之一单位。
+  |S| ≤ ε 记 `benefit_within_tolerance`，值 `benefit_milli`（⌊S⌋）、`tolerance_milli`（⌈ε⌉）和 `zero_tier`；零带以外照旧：
+  `B = ⌊S⌋ > 0` 为正，其余已知的 B 是 `policy_benefit_nonpositive`（S 大于 ε 而 B 为 0 的也算）。`zero_tier` 是 `released` 时放行：
+  任务带 `benefit_realization`、B 已知、至少一个产出池在本实例上权重大于 0、本实例最近一次运行没有失败；放行的候选排在业务档里所有
+  未判的和所有正收益的候选之后（跨实例），升档也抬不上去，保留门、共享运行位、暂停和持有、SS-4 的无进展护栏照旧在后面检查。其余的
+  延后（`unmarked`、`no_downstream_value`、`latest_failed`），像不为正的候选一样在再生池的下一步醒来。空闲计划不把没被选中的零带
+  决定算作到期，也不算它自己的唤醒，不会为它把关着的游戏叫醒。
+- `realization` 标记（SS-2d）：只由 `acmodel bindings apply` 按模型的结论写在 `schedule.json` 的规则上（`"realization": true`，只认
+  `true`，不能和 `"maintenance": true` 同写），组合器在被判的规则上写 `benefit_realization: true`；规则自己写 `benefit_realization`、
+  维护角色包的规则写 `realization` 都拒收（`schedule_invalid`）。编译器要求它在 `benefit_judged` 任务上、至少一条 `consumes` 和一条
+  `produces`、每个消耗池有保留线并由事实读数观测、带标记的任务按「消耗池 → 产出池」不成环（`realization_cycle`）；V1 写它是
+  `unknown_field`。资源侧要等所有部署都在 0.12.35 或以上之后才写它（v0.12.34 的 Runtime 拒收，见下面的退回）。
+- 玩家持有的请求（R-7a）：两种请求只做契约的检查（实例别名、`drain_timeout_ms` 1000 到 600000、`expected` 的形状、来源闸门
+  User/Ui、Cli/Cli 或 Lab/Lab），然后答 `not_implemented`（位置 `acquire_player_hold`、`release_player_hold`），不记账、不改
+  Status。`runtime-client` 多了 prepare / submit 两步的方法、回执读截止和丢了回执时按一次 Status 结算（`runtime_player_hold_settled`、
+  `runtime_player_hold_unconfirmed`、`runtime_operation_unsupported`），给以后的控制台用。
+
+退回 v0.12.34 之前要做的事（按 v0.12.34 的代码核对过）：
+
+- SS-2d：账本、配置和状态文件都不用处理。`benefit_within_tolerance` 和它的值只在已有的原因链里（放行的派单的原因链里有它，延后的
+  可能是相关候选的 `why`），v0.12.34 照常读：码按原拼写读回、不查码，值按映射保留、不查键。目录要先处理：v0.12.34 的任务结构拒收
+  不认识的成员，`benefit_realization` 是 `unknown_field`；它的 `schedule.json` 读取器不认 `realization`，把它留在规则里、原样抄进
+  组合出的任务，同样是 `unknown_field`，报成那条规则的 `schedule_invalid`。而 v0.12.34 启动时要重新编译启用的那一代、每个未了结
+  派单钉住的代，以及决策记忆点名的每次派单所在的代（每个未了结的派单、每对（任务，实例）最近一次完成的计划派单、补救任务已准入的
+  运行），编译不过就以 `catalog_generation_invalid` 致命地停下，整个 Runtime 起不来。所以回退前先在 0.12.35 上把 `realization` 从
+  各游戏根的 `schedule.json` 里拿走，等下一次工作台检查启用了不带这个成员的代（程序事实 `config.catalog` 换成了新的代），再确认没有
+  未了结的计划派单（调度暂停并排空）。看的是整代：在带这个成员的代下派过、完成过计划运行的每一对，都要先在新的代下再完成一次派单，
+  换掉决策记忆点名的那一次，否则 v0.12.34 启动照样停下；规则已经拿走、不会再派的对换不掉，这时不能退回。调度一直停着（每台实例都
+  暂停）时没有这样的派单，只要启用的代不带这个成员就能退回。
+- R-7a：不用做什么，按代码核过：什么都没落盘，也没有行为要撤（本版不填任何新成员，两种请求不记账）。已经升到 `runtime-client`
+  修订 4、会发这两种请求的控制台（本版的 actingctl、MCP 和 actinglab 都不发）连 v0.12.34 时：v0.12.34 解不开不认识的请求种类
+  （`runtime_protocol_invalid`，位置 `runtime_request_decode_failed`），断开这条连接，不回回执；本版的客户端在同一个 owner epoch
+  里重连、读一次 Status，没有实例带持有的成员，按 A7、R8 报 `runtime_operation_unsupported`，句柄照常可用，什么都没做成。v0.12.34
+  声明 [2, 3]：声明 [2, 4] 或 [3, 4] 的 UI 照常配对，只有 `min` 是 4 的 UI（R-7b 起才会有）过不了安装工具的 `ui_meets_next`。
+- R-7a2：不用做什么，按代码核过：什么都没落盘，形状也没改。退回后 v0.12.34 又是全局暂停在先（两种暂停同时在时原因是
+  `dispatch_paused_global`，加上或撤下全局暂停时 `why` 和 `since_unix_ms` 又会变），准入又在性能门之后以 `instance_resources_fenced`
+  拒被围栏的实例。本版写下的 `dispatch_resource_fenced` 只在已有的原因链、拒绝记录的结果和时钟槽记录的 `gate_code` 里，v0.12.34 照常
+  读：码按原拼写、值按映射，暂停报告把时钟槽记录的 `gate_code` 当任意收到的码（`CodeStr`）读；时钟槽门类的改名只在内存里。
+- R-15b：落盘的形状都没变：`state.json`、日志和 Runtime 构建的 `release.json` 和以前一样；`install\ui-builds\` 下暂存的 UI 构建是
+  v0.12.34 从不读的目录。只有一点：没做完的 UI 暂存（三步的 `release_stage` 日志：解包、核树、放置，目标在 `install/ui-builds/`
+  下）v0.12.34 续不了：它的 `install resume` 在目录里找不到成对的 Runtime 和 Tools zip，以 `zip_set` 拒绝；但它的 `install undo`
+  照常撤销（把解包的部分放到一边记 `abandoned`，已放置的 UI 构建放到一边记 `rolledback`，什么都不删）。没做完的操作还会挡住别的
+  安装操作，回退的 `rollback apply` 也一样，所以回退前先用本版的 `actingctl install resume` 做完它，或者用 `install undo` 撤掉它，
+  再照常用单根的 `rollback`。
+- v0.12.34 一节的退回条件（PAUSE-AUTO 不用做什么；SS-4 的配置成员和在线覆盖；SS-2g 的期望消耗和代）是退回 v0.12.33 的条件，从本版
+  退回 v0.12.34 时不适用：v0.12.34 自己不开暂停中实例的模拟器、认得 `scheduling.no_progress`、读得了消耗上的
+  `expected_amount_milli`，本版也没改这些。要再往前退到 v0.12.33，先做上面四条（v0.12.33 对它们的做法和 v0.12.34 相同：任务结构和
+  组合器、请求的解码、暂停的先后和准入的围栏、安装命令的发布读取都一样），再照 v0.12.34 一节的退回条件做；本版的记录 v0.12.33 也
+  读得了（它读结果的代码和 v0.12.34 相同）。
+- 客户端和 Runtime 的配对（`runtime-client` 本版 [2, 4]、v0.12.34 [2, 3]；`apps/actingctl` 自 v0.12.34 只改了安装命令的发布读取和
+  码表，MCP 工具仍是 40 个）：
+  - 本版的 actingctl 和 MCP 连 v0.12.34 的 Runtime：照常。没有新命令、新工具，也从不发两种持有请求；它内嵌的码目录认得 v0.12.34
+    的每个码。安装命令的发布读取在本机做，按本版的规则（认不出的 zip 拒 `zip_set`，认得 UI 发布）。
+  - v0.12.34 的 actingctl 和 MCP 连本版的 Runtime：照常，请求不变，回答里没有新成员（Status 和启动报告的新成员都不出现）。读面里
+    可能出现新码 `benefit_within_tolerance`（带 `tolerance_milli`、`zero_tier`）和 `dispatch_resource_fenced`，旧客户端照原样显示码
+    和值；但它内嵌的码目录没有本版的 47 个新码，`actingctl codes`、`ac_outcome_code` 查它们答 `outcome_code_unknown`，个别按码分类
+    显示的地方把它们当作未登记的码（`outcome_relay_unregistered`，原拼写在 `raw_code`）。v0.12.34 的安装命令照旧跳过认不出的 zip，
+    也暂存不了 UI 发布。
+  - actinglab 和 Runtime 混版两个方向都照常（调试事件没变）。资源工具要留意：本版的 `actinglab standard-pack check`、
+    `package bundle --schedule` 接受 `realization` 并报 `realization_cycle`，它放行的带标记的规则文件 v0.12.34 的 Runtime 不收；
+    v0.12.34 的资源工具拒收这个标记。
+  - 控制台（UI）：声明到修订 3 的 UI 和本版、v0.12.34 都配得上；会发修订 4 请求的控制台（R-7b 起）连 v0.12.34 得
+    `runtime_operation_unsupported`（见上面 R-7a）。
+
+运行上的变化：
+
+- 两种暂停同时在时显示实例暂停（R-7a2）：原因和拒绝码是 `dispatch_paused_instance`，加减全局暂停时 `why` 和 `since_unix_ms` 不变；被围栏实例的意图在准入拒 `dispatch_resource_fenced`。
+- 净收益在取整误差以内的候选进零带（SS-2d）：调度恢复、池有估值之后记 `benefit_within_tolerance`，带 `realization` 标记的在业务档最后放行。
+- 玩家持有的两种请求（R-7a）：形状和码都有了，Runtime 答 `not_implemented`；`runtime-client` 声明 [2, 4]。
+- 发布读取（R-15b）：`release verify`、`stage` 拒收认不出的 zip（`zip_set`），能暂存 UI 发布；生产照旧是单根。
+
+本版合并的 PR：
+
+- #1465 SS-2d（#386）：被判候选的净收益落在它自己的取整误差 ε 以内时既不为正也不为负（`benefit_within_tolerance`）；模型核实、带 `realization` 标记的兑现任务可以在业务档的最后一段放行，受保留线、最近一次成功和 SS-4 约束。不碰零带的目录逐字节和以前一样决定、排序和记录。登记簿 §1.232 的回退条件改成按整代说。
+- #1466 R-7a（#429）：玩家持有冻结的契约和形状：契约 crate 的类型和检查、`runtime-client` 的方法和结算、`contracts/player-hold.md`。Runtime 在每个通道上都答两种新请求 `not_implemented`，什么都不记。`runtime-client` 声明 [2, 4]。
+- #1467 R-7a2（#429）：派单的每一处都按同一个控制门顺序：玩家持有（R-7b 之前恒为假）、实例暂停、全局暂停、资源围栏。两种暂停同时在时原因是 `dispatch_paused_instance`；准入以 `dispatch_resource_fenced` 拒被围栏的实例。宿主自检的模拟器实例被围栏时，放置阶段照旧显示 `instance_unavailable`（#403）。
+- #1468 R-15b（#429）：A/B 安装的契约文本、`contracts/stable-entry.md` 和安装选择 v2 的契约类型，还没有程序调用它们。发布读取器认得 UI 发布的 zip，认不出的 zip 以 `zip_set` 拒绝。
+
 ## v0.12.34
 
 本版是 v0.12.33 之后合并的 3 个 PR：PAUSE-AUTO、SS-2g、SS-4。运行中会注意到的变化有三件，第一件部署后就生效，后两件要等调度恢复
