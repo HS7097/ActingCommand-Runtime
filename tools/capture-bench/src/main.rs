@@ -10,18 +10,19 @@
 //! - `view --viewer-id <n> --run-dir <dir> --ttl-ms <ms> [--slow-fps <f>]
 //!   [--stop-renew-after-ms <ms>] [--unsubscribe-after-ms <ms>] [--gdi]`: a viewer (the bench
 //!   starts it); `--gdi` draws each frame in a minimal window (`A_submit`, not presentation).
-//! - `fake-child --scid <hex> [--max-seconds <s>]`: the stand-in for S's host-side `adb shell`
-//!   child in D2 (outside the job object).
+//! - `fake-child -s <serial> shell <server arguments …> [--max-seconds <s>]`: the stand-in for
+//!   S's host-side `adb shell` child in D2 (outside the job object); its command line carries
+//!   `-s <serial> shell` and `scid=<hex>` as the real child's does (§3.11.5 checklist item 1).
 //!
 //! The bench writes nothing to its standard streams (§3.10 item 3); the result is the exit code
 //! and the run directory.
 
-use actingcommand_capture_bench::apk::{AdbApkConnector, ApkConnector, FakeApk, FakeApks};
+use actingcommand_capture_bench::apk::{AdbApkConnector, ApkConnector, FakeApks};
 use actingcommand_capture_bench::backend::{BackendFactory, DeviceSideCheck, MaterialFactory};
 use actingcommand_capture_bench::clock::{Clock, SystemClock};
 use actingcommand_capture_bench::fake::{
-    CloseHang, FakeCheckScript, FakeDevice, FakeMaterials, FakePattern, FakeScript, FaultAt, Latch,
-    ProcessChildren,
+    CloseHang, FakeApkSet, FakeCheckScript, FakeDevice, FakeMaterials, FakeScript, FaultAt, Latch,
+    ProcessChildren, fake_apks,
 };
 use actingcommand_capture_bench::metrics::{HostMetrics, HostProbes};
 use actingcommand_capture_bench::model::{BackendKind, RunResult};
@@ -104,27 +105,12 @@ fn run_command(arguments: &[String]) -> i32 {
         apk,
     } = if fake {
         let mut script = FakeScript::default();
-        // The fake APK of the first APK instance draws its timecode into the fake frames.
-        let apks: BTreeMap<String, Arc<FakeApk>> = apk_instances
-            .iter()
-            .map(|name| {
-                (
-                    name.clone(),
-                    FakeApk::new(Arc::clone(&clock), 7_000_000_000),
-                )
-            })
-            .collect();
-        if let Some(apk) = apk_instances.first().and_then(|name| apks.get(name)) {
-            apk.set_display(640, 360);
-            script.pattern = Some(FakePattern {
-                apk: Arc::clone(apk),
-                geometry: actingcommand_capture_bench::timecode::BandGeometry {
-                    cell: 24,
-                    offset_x: 0,
-                    offset_y: 0,
-                },
-            });
-        }
+        // #402 INT-1: every APK instance has its own fake APK, on its own device clock (a
+        // different boot offset each) and its own display (the plan's orientation): its frames
+        // show its own timecode and its taps flip its own APK. (C2d drew the first APK
+        // instance's timecode into every instance's frames.)
+        let FakeApkSet { apks, patterns } = fake_apks(&clock, &plan);
+        script.patterns = patterns;
         if let Some(target) = options.get("fake-hang-close")
             && let Some((instance, kind)) = target.split_once(':')
         {
@@ -147,8 +133,14 @@ fn run_command(arguments: &[String]) -> i32 {
             limits.self_exit = false;
         }
         let device = FakeDevice::new(Arc::clone(&clock), script, FakeCheckScript::default());
-        // D2 item 10: the stand-in `adb shell` children, outside the job object.
-        device.set_children(ProcessChildren::new(executable.clone()));
+        // D2 item 10: the stand-in `adb shell` children, outside the job object, with the
+        // command line of the real child (`-s <serial> shell … scid=<hex>`, §3.11.5 item 1).
+        let serials: BTreeMap<String, String> = plan
+            .instances
+            .iter()
+            .map(|instance| (instance.name.clone(), instance.serial.clone()))
+            .collect();
+        device.set_children(ProcessChildren::new(executable.clone(), serials));
         let materials = Arc::new(FakeMaterials {
             writes: AtomicU64::new(0),
         });
@@ -285,17 +277,12 @@ fn view_command(arguments: &[String]) -> i32 {
     })
 }
 
+/// #402 INT-1: `fake-child -s <serial> shell <server arguments with scid=<hex>>
+/// [--max-seconds <s>]`, the stand-in's command line shaped as the real `adb shell` child's.
 fn fake_child_command(arguments: &[String]) -> i32 {
-    let Ok(options) = options(arguments) else {
+    let Some(seconds) = actingcommand_capture_bench::fake::fake_child_lifetime(arguments) else {
         return 2;
     };
-    if !options.contains_key("scid") {
-        return 2;
-    }
-    let seconds = options
-        .get("max-seconds")
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(3_600);
     std::thread::sleep(std::time::Duration::from_secs(seconds));
     0
 }

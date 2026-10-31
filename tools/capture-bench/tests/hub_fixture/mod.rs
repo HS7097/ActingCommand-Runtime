@@ -68,6 +68,8 @@ pub fn fixture(script: FakeScript, participant: bool) -> Fixture {
         hub.backends[0].lock().expect("the slots").put(backend);
     }
     let owner = LockOwner::new("test");
+    // #402 INT-1: the open S is known to the scheduler state (the grace of §3.4 is S's).
+    hub.set_scrcpy_open(&owner, 0, true);
     let lease = hub.subscribe(&owner, 0, 1, 3_000_000).lease_id;
     Fixture {
         clock,

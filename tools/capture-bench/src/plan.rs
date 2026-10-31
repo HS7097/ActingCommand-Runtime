@@ -314,7 +314,29 @@ pub struct SegmentPlan {
     /// #402 C2b (C9 ii): N connects and disconnects around every sample.
     #[serde(default)]
     pub reconnect_each_sample: bool,
+    /// #402 INT-1 (§3.7.1, §4.4 items 8 and 12): one attempt at each listed entry at `at_ms`
+    /// into the segment, under whatever gates are in force then (the segment's `gates` put them
+    /// there), so the entries no activity of the bench drives under a gate meet every gate.
+    #[serde(default)]
+    pub entry_probes: Vec<EntryProbe>,
 }
+
+/// #402 INT-1: an entry attempt at a planned time (the `entry_probe` event and the hub's
+/// `entry_gate` notes record it).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EntryProbe {
+    /// Offset from the segment's start, ms.
+    pub at_ms: u64,
+    /// The entries by their §3.7.1 code: `E4` manual refresh (P5, one sample of the segment's
+    /// path, published), `E5` calibration (one PING of the APK's time service), `E6` APK
+    /// control (one INFO), `E8` automatic reopen (P7: N reconnects, when N is open), `E9` the
+    /// device-side check (one read-only negative-control scan).
+    pub entries: Vec<String>,
+}
+
+/// #402 INT-1: the entries an `entry_probes` item may name.
+pub const PROBE_ENTRIES: [&str; 5] = ["E4", "E5", "E6", "E8", "E9"];
 
 fn default_fps() -> f64 {
     5.0
@@ -581,6 +603,37 @@ impl Plan {
                 }
                 if segment.mode == SegmentMode::StaticImages && self.c8.is_none() {
                     problems.push(format!("{label}: static_images needs the [c8] table"));
+                }
+                for probe in &segment.entry_probes {
+                    if segment.mode != SegmentMode::Preview {
+                        problems.push(format!(
+                            "{label}: entry_probes run in the controller of a preview segment"
+                        ));
+                    }
+                    if probe.entries.is_empty() {
+                        problems.push(format!("{label}: an entry probe names no entry"));
+                    }
+                    for entry in &probe.entries {
+                        if !PROBE_ENTRIES.contains(&entry.as_str()) {
+                            problems.push(format!(
+                                "{label}: entry probe {entry} is not one of {PROBE_ENTRIES:?}"
+                            ));
+                        }
+                        if matches!(entry.as_str(), "E5" | "E6") && !apk {
+                            problems.push(format!(
+                                "{label}: entry probe {entry} needs the APK (apk = true)"
+                            ));
+                        }
+                    }
+                    if segment
+                        .duration_ms
+                        .is_some_and(|duration| probe.at_ms >= duration)
+                    {
+                        problems.push(format!(
+                            "{label}: entry probe at {} ms is past the segment's end",
+                            probe.at_ms
+                        ));
+                    }
                 }
                 if let Some(mode) = &segment.apk_mode {
                     if !apk {

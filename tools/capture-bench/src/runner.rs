@@ -1502,16 +1502,59 @@ impl RunShared {
     /// Takes the backend of `kind` out of `instance`'s slots, waiting for admission (so no call
     /// is in flight on it).
     fn take_backend(&self, instance: usize, kind: BackendKind) -> Option<Box<dyn PreviewBackend>> {
+        if kind == BackendKind::Scrcpy {
+            // #402 INT-1: S is no longer open for the grace (§3.4) once it is taken to close.
+            self.hub.set_scrcpy_open(&self.owner(), instance, false);
+        }
         self.hub.admission[instance].acquire(&self.owner());
         let taken = lock(&self.hub.backends[instance]).take(kind);
         self.hub.admission[instance].release(&self.owner());
         taken
     }
 
+    /// Puts an opened backend into the slots (S after its identity positive, `open_backend`).
     fn put_backend(&self, instance: usize, backend: Box<dyn PreviewBackend>) {
+        let kind = backend.kind();
         self.hub.admission[instance].acquire(&self.owner());
         lock(&self.hub.backends[instance]).put(backend);
         self.hub.admission[instance].release(&self.owner());
+        if kind == BackendKind::Scrcpy {
+            self.hub.set_scrcpy_open(&self.owner(), instance, true);
+        }
+    }
+
+    /// #402 INT-1: a close made outside [`Self::close_backend`] (the per-sample N reconnect of
+    /// C9 (ii), the E8 entry probe, the supervisor's emergency closes) goes into `summary.json`'s
+    /// `closes[]` like every other close. S closed this way had no device-side check: it is not
+    /// confirmed, and says why.
+    fn record_close(
+        &self,
+        instance: usize,
+        kind: BackendKind,
+        reason: &str,
+        outcome: &crate::model::CloseOutcome,
+    ) {
+        let mut record = json!({
+            "instance": self.instance_name(instance),
+            "backend": kind,
+            "reason": reason,
+            "host_side": outcome,
+            "confirmed": outcome.is_confirmed() && kind == BackendKind::Nemu,
+        });
+        if kind == BackendKind::Scrcpy
+            && let Value::Object(map) = &mut record
+        {
+            let why = "no device-side check after this close (the forced-stop checklist checks it)";
+            map.insert(
+                "device_side".to_owned(),
+                json!({ "gone": false, "checked": false, "gone_within_ms": null, "gone_after_request_ms": null }),
+            );
+            map.insert(
+                "null_reasons".to_owned(),
+                json!({ "device_side.gone_within_ms": why, "device_side.gone_after_request_ms": why }),
+            );
+        }
+        lock(&self.closes).push(record);
     }
 
     /// What a backend failure does (§3.11.4): `true` when the activity must stop.
@@ -1858,6 +1901,13 @@ impl RunShared {
             }
         }
         gate_events.sort_by_key(|(at, _, set)| (*at, !*set));
+        // #402 INT-1: the planned entry attempts (§3.7.1 coverage of E4, E5, E6, E8, E9).
+        let mut probe_events: Vec<(Micros, Vec<String>)> = segment
+            .entry_probes
+            .iter()
+            .map(|probe| (started + ms(probe.at_ms), probe.entries.clone()))
+            .collect();
+        probe_events.sort_by_key(|(at, _)| *at);
         let mut next_sweep = started + ms(segment.lease_check_ms);
         let mut set_gates: Vec<GateKind> = Vec::new();
         let mut closed_by_gate: BTreeSet<BackendKind> = BTreeSet::new();
@@ -1901,17 +1951,27 @@ impl RunShared {
             if now >= next_sweep {
                 next_sweep = now + ms(segment.lease_check_ms);
                 self.hub.sweep(&self.owner(), ms(segment.grace_ms));
-                if self.hub.grace_expired(&self.owner(), instance) == Some(true)
-                    && let Some(backend) = self.take_backend(instance, BackendKind::Scrcpy)
-                {
-                    let identity = identities.remove(&BackendKind::Scrcpy);
-                    self.journal
-                        .event("grace_expired_closed", json!({ "segment": label }));
-                    if !self.close_backend(backend, instance, "grace_expired", identity) {
-                        break SegmentEnd::Whole;
-                    }
-                    closed_by_gate.insert(BackendKind::Scrcpy);
+            }
+            // #402 INT-1 (E.grace): the grace is checked on every pass, and the controller
+            // wakes at its planned end (below), so an expired grace is seen and S closed at once
+            // (C2d checked it with the 500 ms lease sweep only: up to a check period late).
+            if self.hub.grace_expired(&self.owner(), instance) == Some(true)
+                && let Some(backend) = self.take_backend(instance, BackendKind::Scrcpy)
+            {
+                let identity = identities.remove(&BackendKind::Scrcpy);
+                self.journal
+                    .event("grace_expired_closed", json!({ "segment": label }));
+                if !self.close_backend(backend, instance, "grace_expired", identity) {
+                    break SegmentEnd::Whole;
                 }
+                closed_by_gate.insert(BackendKind::Scrcpy);
+            }
+            while let Some((at, entries)) = probe_events.first().cloned() {
+                if at > now {
+                    break;
+                }
+                probe_events.remove(0);
+                self.entry_probe(instance, segment.path, &entries, at - started, label);
             }
             for viewer in viewers.iter_mut() {
                 viewer.tick(now);
@@ -1944,8 +2004,15 @@ impl RunShared {
                 break SegmentEnd::CellLimit;
             }
             let next_gate = gate_events.first().map_or(Micros::MAX, |(at, _, _)| *at);
+            let next_probe = probe_events.first().map_or(Micros::MAX, |(at, _)| *at);
+            let grace_end = self
+                .hub
+                .grace_until(&self.owner(), instance)
+                .map_or(Micros::MAX, |until| until.max(now + 1));
             let wake = (now + self.limits.controller_period_us)
                 .min(next_gate)
+                .min(next_probe)
+                .min(grace_end)
                 .min(next_sweep)
                 .min(end_time.max(now + 1))
                 .min(cell_deadline.max(now + 1));
@@ -2121,26 +2188,43 @@ impl RunShared {
                 self.complete_hold(instance, set_gates);
             }
         } else {
+            // #402 INT-1 (E.identity): §3.7.2 step 4 with P7's lock shape (§3.3.2): the reopen
+            // holds the instance's admission from before the gate clears until every backend
+            // the gate closed is back in its slot, S with its identity positive and
+            // `sampling_start` (§3.5.1: 对得上才开始用这条流). A sample in between is
+            // `skipped_busy` (it cannot take admission), so no grant precedes the positive. In
+            // D2 the gate cleared first and S grants came before S reopened.
+            let owner = self.owner();
+            let reopen: Vec<BackendKind> = closed_by_gate.iter().copied().collect();
+            let hold = !reopen.is_empty();
+            if hold {
+                self.hub.admission[instance].acquire(&owner);
+            }
             for cleared in [gate, GateKind::Holding] {
                 if let Some(position) = set_gates.iter().position(|known| *known == cleared) {
                     set_gates.remove(position);
-                    self.hub.set_gate(&self.owner(), instance, cleared, false);
+                    self.hub.set_gate(&owner, instance, cleared, false);
                 }
             }
-            let generation = self.hub.bump_generation(&self.owner(), instance);
+            let generation = self.hub.bump_generation(&owner, instance);
             self.journal.event(
                 "gate_cleared",
                 json!({ "instance": self.instance_name(instance), "gate": gate, "generation": generation }),
             );
-            let reopen: Vec<BackendKind> = closed_by_gate.iter().copied().collect();
             for kind in reopen {
                 let mut reopens = 0;
+                // `open_backend` takes no admission (its device-side checks are P6, the
+                // scheduler lock only), so it runs under the admission held here.
                 match self.open_backend(instance, kind, options, &mut reopens, false) {
                     Ok((backend, identity)) => {
+                        lock(&self.hub.backends[instance]).put(backend);
+                        if kind == BackendKind::Scrcpy {
+                            self.hub.set_scrcpy_open(&owner, instance, true);
+                        }
                         if let Some(identity) = identity {
+                            self.sampling_start(instance, &identity);
                             identities.insert(kind, identity);
                         }
-                        self.put_backend(instance, backend);
                         closed_by_gate.remove(&kind);
                     }
                     Err(end) => {
@@ -2149,6 +2233,167 @@ impl RunShared {
                             json!({ "instance": self.instance_name(instance), "backend": kind, "end": format!("{end:?}") }),
                         );
                     }
+                }
+            }
+            if hold {
+                self.hub.admission[instance].release(&owner);
+            }
+        }
+    }
+
+    /// #402 INT-1: one planned attempt at each of `entries` (a segment's `entry_probes`), under
+    /// the gates in force now. Each entry goes through its own path, so the hub notes it in
+    /// `entry_gate` with the table's reaction and whether it went ahead (§3.7.1); the attempt and
+    /// its outcome are one `entry_probe` event each:
+    /// - `E4`: P5 manual refresh of one frame of `path` (published; the event has its
+    ///   `preview_seq`, the viewers get it with no opportunity record);
+    /// - `E5`: one PING of the APK's time service (calibration);
+    /// - `E6`: one INFO of the APK (APK control);
+    /// - `E8`: P7 automatic reopen: N closes and reopens when it is open (the close goes into
+    ///   `closes[]`), with the generation + 1; busy admission is tried again every 5 ms for 1 s;
+    /// - `E9`: one read-only negative-control scan of the device-side check (not in a close
+    ///   chain).
+    fn entry_probe(
+        &self,
+        instance: usize,
+        path: Option<PathKind>,
+        entries: &[String],
+        at_us: Micros,
+        label: &str,
+    ) {
+        let owner = self.owner();
+        let name = self.instance_name(instance).to_owned();
+        for entry in entries {
+            let gates: Vec<&'static str> = self.hub.snapshot(&owner, |state| {
+                state
+                    .active_gates(instance)
+                    .into_iter()
+                    .map(GateKind::as_str)
+                    .collect()
+            });
+            let refused = |text: &str| text.strip_prefix("skipped_gate:").map(str::to_owned);
+            let outcome = match entry.as_str() {
+                "E4" => match crate::hub::manual_refresh(
+                    &self.hub,
+                    &owner,
+                    instance,
+                    path.unwrap_or(PathKind::Nemu),
+                ) {
+                    Ok(preview_seq) => {
+                        json!({ "admitted": true, "result": "published", "preview_seq": preview_seq })
+                    }
+                    Err(Disposition::SkippedGate(gate)) => {
+                        json!({ "admitted": false, "refused_by": gate })
+                    }
+                    Err(other) => json!({ "admitted": true, "result": other.label() }),
+                },
+                "E5" | "E6" => {
+                    let entry_kind = if entry == "E5" {
+                        Entry::Calibration
+                    } else {
+                        Entry::ApkControl
+                    };
+                    let called = self.apk_call(instance, entry_kind, |_, state| {
+                        let client = state.client()?;
+                        if entry_kind == Entry::Calibration {
+                            client.ping().map(|_| "ping")
+                        } else {
+                            client.info().map(|_| "info")
+                        }
+                    });
+                    match called {
+                        Ok(result) => json!({ "admitted": true, "result": result }),
+                        Err(detail) => match refused(&detail) {
+                            Some(gate) => json!({ "admitted": false, "refused_by": gate }),
+                            None => {
+                                json!({ "admitted": true, "result": "failed", "detail": detail })
+                            }
+                        },
+                    }
+                }
+                "E8" => self.probe_reopen(instance, &owner),
+                "E9" => {
+                    let method = lock(&self.identity_methods)
+                        .get(&instance)
+                        .copied()
+                        .unwrap_or(IdentityMethod::Proc);
+                    match aux_call(
+                        &self.hub,
+                        &owner,
+                        instance,
+                        Entry::DeviceSideCheck,
+                        false,
+                        || self.device_check.negative_control(&name, method),
+                    ) {
+                        Ok(Ok(())) => json!({ "admitted": true, "result": "scanned" }),
+                        Ok(Err(failure)) => {
+                            json!({ "admitted": true, "result": "failed", "detail": failure })
+                        }
+                        Err(gate) => json!({ "admitted": false, "refused_by": gate }),
+                    }
+                }
+                other => json!({ "admitted": false, "result": format!("unknown entry {other}") }),
+            };
+            self.journal.event(
+                "entry_probe",
+                json!({
+                    "instance": name,
+                    "segment": label,
+                    "at_ms": at_us / 1_000,
+                    "entry": entry,
+                    "gates": gates,
+                    "outcome": outcome,
+                }),
+            );
+        }
+    }
+
+    /// #402 INT-1: the E8 probe: P7 (`auto_reopen`) with the current generation; the reopen
+    /// reconnects N when it is open (closed, confirmed, opened again).
+    fn probe_reopen(&self, instance: usize, owner: &Arc<LockOwner>) -> Value {
+        let name = self.instance_name(instance).to_owned();
+        let deadline = self.now() + ms(1_000);
+        loop {
+            let expected = self
+                .hub
+                .snapshot(owner, |state| state.instances[instance].generation);
+            let outcome = crate::hub::auto_reopen(&self.hub, owner, instance, expected, |slots| {
+                let Some(backend) = slots.take(BackendKind::Nemu) else {
+                    return Err("nothing to reopen: N is not open".to_owned());
+                };
+                let closed = self.closer.close(
+                    backend,
+                    CloseInfo {
+                        reason: "entry_probe_reopen".to_owned(),
+                        instance: name.clone(),
+                        generation: expected,
+                        identity: None,
+                    },
+                );
+                self.record_close(instance, BackendKind::Nemu, "entry_probe_reopen", &closed);
+                if !closed.is_confirmed() {
+                    self.unconfirmed(format!("{name} N close of the E8 probe: {closed:?}"));
+                    return Err(format!("the N close is unconfirmed: {closed:?}"));
+                }
+                let backend = self
+                    .backends
+                    .open(&name, BackendKind::Nemu, &OpenOptions::default())
+                    .map_err(|failure| format!("open_{}", failure.cause.as_str()))?;
+                slots.put(backend);
+                Ok(())
+            });
+            match outcome {
+                crate::hub::ReopenOutcome::SkippedBusy if self.now() < deadline => {
+                    pause_until(self.clock.as_ref(), self.now() + ms(5));
+                }
+                crate::hub::ReopenOutcome::Reopened { generation } => {
+                    return json!({ "admitted": true, "result": "reopened", "generation": generation });
+                }
+                crate::hub::ReopenOutcome::Refused(gate) => {
+                    return json!({ "admitted": false, "refused_by": gate });
+                }
+                other => {
+                    return json!({ "admitted": !matches!(other, crate::hub::ReopenOutcome::SkippedBusy), "result": format!("{other:?}") });
                 }
             }
         }
@@ -2655,6 +2900,24 @@ impl RunShared {
                 } else {
                     json!({})
                 };
+                // #402 INT-1 (F.n_floor): `T_native_start` of the floor capture, the earliest
+                // start of its native calls (the probe, then the pixels; never the stdio gate
+                // wait or the flip), and why it is null when it is.
+                let native_start = work.floor_frame.as_ref().and_then(first_native_start);
+                if native_start.is_none()
+                    && let Value::Object(map) = &mut admission_reasons
+                {
+                    map.insert(
+                        "native_start_us".to_owned(),
+                        json!(match (kind, &work.floor_frame) {
+                            (BackendKind::Scrcpy, _) =>
+                                "S makes no native call (its frame comes from the stream)",
+                            (BackendKind::Nemu, None) => "no frame was admitted",
+                            (BackendKind::Nemu, Some(_)) =>
+                                "the timing points reported no native call of the floor capture",
+                        }),
+                    );
+                }
                 if work.first_flip.is_none()
                     && let Value::Object(map) = &mut admission_reasons
                 {
@@ -2697,7 +2960,7 @@ impl RunShared {
                         "disposition": disposition,
                         "tap": admission_tap(*j, work.tap_done_us, &tap_record),
                         "floor_check": work.floor_frame.as_ref().and_then(|frame| frame.floor_check),
-                        "native_start_us": work.floor_frame.as_ref().and_then(|frame| frame.native.iter().find_map(|span| span.start_us)),
+                        "native_start_us": native_start,
                         "t_recv_us": work.floor_frame.as_ref().and_then(|frame| frame.received_us),
                         "stream_seq": work.floor_frame.as_ref().and_then(|frame| frame.stream_sequence),
                         "known_source_us": work.floor_frame.as_ref().and_then(|frame| frame.known_source_us),
@@ -3017,6 +3280,18 @@ struct DisplayFacts {
 /// A rectangle `(x, y, width, height)` in frame pixels.
 type PixelRect = (u32, u32, u32, u32);
 
+/// #402 INT-1: `T_native_start` of a sample (§5.1, §5.3 item 1): the earliest start of its
+/// native calls, the probe and the pixels (§3.2 item 1), not the stdio gate wait or the flip that
+/// the timing points also report.
+pub fn first_native_start(frame: &crate::backend::SampledFrame) -> Option<Micros> {
+    frame
+        .native
+        .iter()
+        .filter(|span| matches!(span.kind, "probe" | "pixels"))
+        .filter_map(|span| span.start_us)
+        .min()
+}
+
 /// The rectangle `(x, y, width, height)` in frame pixels the APK's tap grid covers, and where its
 /// size came from: the APK's view when it lies inside the frames the bench sees (`apk_view`);
 /// else the frame of this dispatch (`dispatch_frame`), the last delivered frame (`last_frame`),
@@ -3317,6 +3592,7 @@ impl Emergency for RunShared {
                         identity: None,
                     },
                 );
+                self.record_close(instance, kind, "emergency", &outcome);
                 closed.push(json!({
                     "instance": self.instance_name(instance),
                     "backend": kind,
@@ -3929,6 +4205,8 @@ impl RunShared {
                     "t_exit_us": grace.t_exit_us,
                     "planned_ms": grace.planned_ms,
                     "exit": grace.exit,
+                    "t_noticed_us": grace.t_noticed_us,
+                    "gate": grace.gate,
                 }),
             );
         }
@@ -4597,8 +4875,9 @@ impl RunShared {
                         "{actinglab} --json {verb} --package {package} --target {target_name} --scene {saved}"
                     )
                 };
+                // #402 INT-1: per instance, as the saved frames (E1 and E2 show the same images).
                 let result_json = format!(
-                    "c8/results/{stem}-{}-{path_word}-{frame}.json",
+                    "c8/results/{name}/{stem}-{}-{path_word}-{frame}.json",
                     slot_name(target_name)
                 );
                 let fields = [
@@ -4691,7 +4970,9 @@ impl RunShared {
                 } else {
                     path.as_str().to_owned()
                 };
-                let saved = format!("c8/{stem}/{path_word}-{frame_idx}.png");
+                // #402 INT-1: the instance in the path (in D2 E1's and E2's frames of the same
+                // image, path and frame had one name).
+                let saved = format!("c8/{name}/{stem}/{path_word}-{frame_idx}.png");
                 if self.journal.write_bytes(&saved, &png).is_err() {
                     return SegmentEnd::Whole;
                 }
@@ -4803,6 +5084,13 @@ impl RunShared {
                         generation: expected,
                         identity: None,
                     },
+                );
+                // #402 INT-1: summary.closes lists the per-sample reconnect closes too.
+                self.record_close(
+                    instance,
+                    BackendKind::Nemu,
+                    "reconnect_each_sample",
+                    &closed,
                 );
                 if !closed.is_confirmed() {
                     return Err(format!("the N close is unconfirmed: {closed:?}"));

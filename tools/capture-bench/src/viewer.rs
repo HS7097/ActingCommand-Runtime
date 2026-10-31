@@ -204,6 +204,30 @@ struct ChildViewer {
     lease: Arc<Mutex<Option<u64>>>,
     child: Child,
     stopped: Arc<AtomicBool>,
+    /// #402 INT-1: the bench has begun to stop this viewer (its pipe may close under a write).
+    stopping: Arc<AtomicBool>,
+}
+
+/// #402 INT-1: the `viewer_write_failed` record. A write that fails with a closed pipe
+/// (`ERROR_BROKEN_PIPE` 109, `ERROR_NO_DATA` 232) after the bench began to stop the viewer is
+/// expected: the stop closes the viewer's mailbox and ends a child that is still reading, and
+/// a slow consumer's pipe is still full of the frame being written then (D2, `multi_slow`'s
+/// end). Any other failure, or one before the stop, is not expected.
+pub fn viewer_write_failure(subscriber: u64, error: &std::io::Error, stopping: bool) -> Value {
+    let closed_pipe = error.kind() == std::io::ErrorKind::BrokenPipe
+        || matches!(error.raw_os_error(), Some(109 | 232));
+    let expected = stopping && closed_pipe;
+    json!({
+        "viewer_id": subscriber,
+        "error": error.to_string(),
+        "os_error": error.raw_os_error(),
+        "expected": expected,
+        "cause": match (stopping, closed_pipe) {
+            (true, true) => "pipe_closed_by_the_viewer_stop",
+            (true, false) => "write_failed_while_stopping",
+            (false, _) => "write_failed_during_the_segment",
+        },
+    })
 }
 
 fn write_message(
@@ -296,11 +320,13 @@ impl ViewerLauncher for ChildViewers {
         );
         let lease_id = Arc::new(Mutex::new(Some(lease.lease_id)));
         let stopped = Arc::new(AtomicBool::new(false));
+        let stopping = Arc::new(AtomicBool::new(false));
         // The writer: the subscriber's one-frame mailbox to the child's stdin.
         {
             let hub = Arc::clone(&context.hub);
             let subscriber = context.subscriber;
             let journal = Arc::clone(&context.journal);
+            let stopping = Arc::clone(&stopping);
             let _ = std::thread::Builder::new()
                 .name(format!("viewer-writer-{subscriber}"))
                 .spawn(move || {
@@ -322,7 +348,11 @@ impl ViewerLauncher for ChildViewers {
                         if let Err(error) = write_message(&mut stdin, &message, now) {
                             journal.event(
                                 "viewer_write_failed",
-                                json!({ "viewer_id": subscriber, "error": error.to_string() }),
+                                viewer_write_failure(
+                                    subscriber,
+                                    &error,
+                                    stopping.load(Ordering::Acquire),
+                                ),
                             );
                             return;
                         }
@@ -394,6 +424,7 @@ impl ViewerLauncher for ChildViewers {
             lease: lease_id,
             child,
             stopped,
+            stopping,
         }))
     }
 }
@@ -406,6 +437,7 @@ impl ViewerHandle for ChildViewer {
     fn tick(&mut self, _now: Micros) {}
 
     fn stop(&mut self, unsubscribe: bool) {
+        self.stopping.store(true, Ordering::Release);
         let owner = LockOwner::new(format!("viewer-stop/{}", self.subscriber));
         let lease = lock(&self.lease).take();
         if unsubscribe && let Some(lease) = lease {

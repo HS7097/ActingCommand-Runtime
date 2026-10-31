@@ -689,8 +689,9 @@ fn c8_saves_each_frame_and_lists_every_picture_target_path_and_frame() {
             actingcommand_capture_bench::safety::sha256_hex(&bytes)
         );
     }
-    assert!(h.run_dir.join("c8/a/N-0.png").is_file());
-    assert!(h.run_dir.join("c8/b/S-8M-1.png").is_file());
+    // #402 INT-1: the saved frames are per instance (`c8/<instance>/<image>/…`).
+    assert!(h.run_dir.join("c8/E1/a/N-0.png").is_file());
+    assert!(h.run_dir.join("c8/E1/b/S-8M-1.png").is_file());
     let csv = std::fs::read_to_string(h.run_dir.join("ocr-coverage.csv")).expect("the list");
     let mut lines = csv.lines();
     assert_eq!(
@@ -808,7 +809,7 @@ fn c8_s_first_frame_after_a_picture_switch_meets_the_switch_floor_or_falls_back_
         fell["t_recv_us"].as_u64().expect("t_recv_us") >= switched + 50_000,
         "the frame without the bound is taken only after the 50 ms bound: {fell}"
     );
-    assert!(h.run_dir.join("c8/b/S-8M-0.png").is_file());
+    assert!(h.run_dir.join("c8/E1/b/S-8M-0.png").is_file());
 
     // The later frames of a picture follow by after_sequence: no lower bound of their own.
     for later in [frame(&frames, "a.png", 1), frame(&frames, "b.png", 1)] {

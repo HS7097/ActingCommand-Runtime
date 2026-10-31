@@ -313,10 +313,20 @@ struct Demand {
 pub struct GraceNote {
     pub instance: usize,
     pub t_enter_us: Micros,
+    /// When the grace ended: the reusing subscription, the hard gate, the S close; for
+    /// `expired_closed` the planned end itself (`t_enter_us + planned`: from then on no
+    /// subscription reuses the stream, #402 INT-1).
     pub t_exit_us: Micros,
     pub planned_ms: u64,
-    /// `reused`, `expired_closed` or `hard_gate`.
+    /// `reused`, `expired_closed`, `hard_gate`, or (#402 INT-1) `closed`: S closed during the
+    /// grace for another reason (a fatal error, a reconnect), with no hard gate in force.
     pub exit: &'static str,
+    /// #402 INT-1: when the bench saw the end (µs): equal to `t_exit_us` except for an expiry,
+    /// where it is the check that found the grace over (the S close starts right after it).
+    pub t_noticed_us: Micros,
+    /// #402 INT-1: the gate that ended it (`hard_gate`: `blackout`, `fence`, `hold_request`,
+    /// `held`, `stop`, `cell_end`), else `None`.
+    pub gate: Option<&'static str>,
 }
 
 /// #402 C2b: one entry × gate decision seen while a gate was in force (the `entry_gate` event).
@@ -342,6 +352,8 @@ pub struct GraceCounts {
     pub reused: u64,
     pub expired_closed: u64,
     pub hard_closed: u64,
+    /// #402 INT-1: graces ended because S closed for another reason.
+    pub closed: u64,
 }
 
 /// The scheduler lock's state of one instance.
@@ -363,6 +375,9 @@ pub struct InstanceState {
     pub grace_planned_us: Micros,
     pub grace: GraceCounts,
     pub last_frame_bytes: u64,
+    /// #402 INT-1: an S producer of this instance is open, its identity proven (§3.5.1). The
+    /// soft-unsubscribe grace exists only then (§3.4: N has no stream and no grace).
+    pub scrcpy_open: bool,
 }
 
 /// §3.6: the five budget caps.
@@ -533,6 +548,7 @@ impl Hub {
                     grace_planned_us: 0,
                     grace: GraceCounts::default(),
                     last_frame_bytes: 0,
+                    scrcpy_open: false,
                 })
                 .collect(),
             checker: InvariantChecker::default(),
@@ -597,16 +613,98 @@ impl Hub {
         }
     }
 
-    fn note_grace(&self, entry: &mut InstanceState, instance: usize, exit: &'static str) {
+    /// Ends the running grace of `entry` and notes it. `t_exit` is when it ended (an expiry ends
+    /// at its planned end, whenever the bench sees it); the note keeps `now` as `t_noticed_us`.
+    fn note_grace(
+        &self,
+        entry: &mut InstanceState,
+        instance: usize,
+        exit: &'static str,
+        t_exit: Micros,
+        gate: Option<&'static str>,
+    ) {
         let now = self.clock.now_us();
-        let entered = entry.grace_entered_us.take().unwrap_or(now);
+        let entered = entry.grace_entered_us.take().unwrap_or(t_exit);
+        entry.grace_until = None;
         lock(&self.notes).graces.push(GraceNote {
             instance,
             t_enter_us: entered,
-            t_exit_us: now,
+            t_exit_us: t_exit,
             planned_ms: entry.grace_planned_us / 1_000,
             exit,
+            t_noticed_us: now,
+            gate,
         });
+    }
+
+    /// #402 INT-1: the hard gate in force on `instance` (an instance gate other than the pause,
+    /// or a global gate), by its record name.
+    fn hard_gate_in_force(state: &SchedulerState, instance: usize) -> Option<&'static str> {
+        if let Some(gate) = state.instances[instance]
+            .gates
+            .iter()
+            .find(|gate| gate.is_hard())
+        {
+            return Some(gate.as_str());
+        }
+        state.global.iter().next().map(|gate| match gate {
+            GlobalGate::RunStop => "stop",
+            GlobalGate::CellEnd => "cell_end",
+        })
+    }
+
+    /// #402 INT-1: ends a running grace of `instance` at `now`: an expiry when its planned end
+    /// has passed (at that end), else by `exit`.
+    fn end_grace(
+        &self,
+        state: &mut SchedulerState,
+        instance: usize,
+        exit: &'static str,
+        gate: Option<&'static str>,
+    ) -> bool {
+        let now = self.clock.now_us();
+        let entry = &mut state.instances[instance];
+        let Some(until) = entry.grace_until else {
+            return false;
+        };
+        if now >= until {
+            entry.grace.expired_closed += 1;
+            self.note_grace(entry, instance, "expired_closed", until, None);
+        } else {
+            match exit {
+                "hard_gate" => entry.grace.hard_closed += 1,
+                _ => entry.grace.closed += 1,
+            }
+            self.note_grace(entry, instance, exit, now, gate);
+        }
+        true
+    }
+
+    /// #402 INT-1: whether an S producer of `instance` is open with its identity proven. Set by
+    /// the runner when it puts an opened S into the slots, cleared before it takes S out to
+    /// close it; clearing ends a running grace (`hard_gate` under a hard gate, else `closed`).
+    pub fn set_scrcpy_open(&self, who: &LockOwner, instance: usize, open: bool) {
+        self.scheduler_lock.acquire(who);
+        {
+            let mut state = self.state(who);
+            state.instances[instance].scrcpy_open = open;
+            if !open {
+                let gate = Self::hard_gate_in_force(&state, instance);
+                let exit = if gate.is_some() {
+                    "hard_gate"
+                } else {
+                    "closed"
+                };
+                self.end_grace(&mut state, instance, exit, gate);
+            }
+        }
+        self.scheduler_lock.release(who);
+    }
+
+    /// #402 INT-1: the planned end of the running grace of `instance` (the controller wakes for
+    /// it, so an expiry is seen on time).
+    pub fn grace_until(&self, who: &LockOwner, instance: usize) -> Option<Micros> {
+        self.snapshot(who, |state| state.instances[instance].grace_until)
     }
 
     /// #402 C2b: the notes so far, taken (the runner writes them as events).
@@ -716,9 +814,15 @@ impl Hub {
             };
             state.next_lease += 1;
             let entry = &mut state.instances[instance];
-            if entry.leases.is_empty() && entry.grace_until.take().is_some() {
+            // #402 INT-1: only a subscription inside the grace reuses the stream; after its
+            // planned end the grace is over (the controller notes the expiry at that end and
+            // closes S), so no grace ever lasts longer than planned (§3.4, §6.1 E).
+            if entry.leases.is_empty()
+                && let Some(until) = entry.grace_until
+                && now < until
+            {
                 entry.grace.reused += 1;
-                self.note_grace(entry, instance, "reused");
+                self.note_grace(entry, instance, "reused", now, None);
             }
             entry.leases.insert(lease.lease_id, lease.clone());
             let active = entry.leases.len();
@@ -786,7 +890,11 @@ impl Hub {
     ) {
         let now = self.clock.now_us();
         let active = state.instances[instance].leases.len();
-        if active == 0 {
+        // #402 INT-1: the grace is S's (§3.4 N 没有流，没有宽限), and a soft event's only: no
+        // grace without an open S, none while a hard gate or the cell end is in force (硬门不走
+        // 宽限; the viewers' leases end after the segment's stop gate).
+        let hard = Self::hard_gate_in_force(state, instance).is_some();
+        if active == 0 && state.instances[instance].scrcpy_open && !hard {
             let entry = &mut state.instances[instance];
             entry.grace_until = Some(now.saturating_add(grace_us.min(ms(10_000))));
             entry.grace_entered_us = Some(now);
@@ -851,17 +959,14 @@ impl Hub {
             let now = self.clock.now_us();
             let entry = &mut state.instances[instance];
             match entry.grace_until {
-                Some(until) if entry.leases.is_empty() && now >= until => {
-                    entry.grace_until = None;
+                // #402 INT-1: the grace ends at its planned end (`t_exit_us` = that end), even
+                // when a subscription came after it (that one does not reuse the stream).
+                Some(until) if now >= until => {
                     entry.grace.expired_closed += 1;
-                    self.note_grace(entry, instance, "expired_closed");
+                    self.note_grace(entry, instance, "expired_closed", until, None);
                     Some(true)
                 }
-                Some(_) if entry.leases.is_empty() => Some(false),
-                Some(_) => {
-                    entry.grace_until = None;
-                    None
-                }
+                Some(_) => Some(false),
                 None => None,
             }
         };
@@ -874,14 +979,8 @@ impl Hub {
         self.scheduler_lock.acquire(who);
         let ended = {
             let mut state = self.state(who);
-            let entry = &mut state.instances[instance];
-            if entry.grace_until.take().is_some() {
-                entry.grace.hard_closed += 1;
-                self.note_grace(entry, instance, "hard_gate");
-                true
-            } else {
-                false
-            }
+            let gate = Self::hard_gate_in_force(&state, instance);
+            self.end_grace(&mut state, instance, "hard_gate", gate)
         };
         self.scheduler_lock.release(who);
         ended
@@ -1192,10 +1291,27 @@ impl Op for SampleOp {
                 hub.note_entry(instance, Entry::PreviewSample, &gates, false);
                 let refused = refusing_gate(Entry::PreviewSample, gates, false);
                 let entry = &state.instances[instance];
+                // #402 INT-1: no grant for a path whose backend is not open (D2's S grants
+                // after a gate cleared and before S reopened, E.identity). This sample holds
+                // admission, and every holder of the slots holds admission first, so the slots
+                // are free to read here.
+                let open = lock(&hub.backends[instance])
+                    .get(self.path.backend())
+                    .is_some();
                 let skip = if let Some(gate) = refused {
                     Some(Disposition::SkippedGate(gate.as_str().to_owned()))
                 } else if entry.leases.is_empty() {
                     Some(Disposition::SkippedNoLease)
+                } else if !open {
+                    self.outcome.failure = Some(
+                        BackendFailure::new(
+                            "backend_closed",
+                            crate::backend::FailureClass::Measured,
+                            "the path's backend is not open: no grant",
+                        )
+                        .without_native_call(),
+                    );
+                    Some(Disposition::Failed("backend_closed".to_owned()))
                 } else if entry.demand.is_some() {
                     Some(Disposition::SkippedDemand)
                 } else if entry.inflight > 0 {

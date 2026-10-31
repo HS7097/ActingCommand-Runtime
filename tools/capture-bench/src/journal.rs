@@ -4,6 +4,15 @@
 //! closes, faults), the opportunity files, `progress.jsonl`, `heartbeat.json`, `closing.json`,
 //! the cell summaries and `summary.json`. The bench writes nothing to its standard streams
 //! (§3.10 item 3); every writer here is a leaf lock.
+//!
+//! #402 INT-1, the flush rule: every appended JSONL line is handed to the operating system as
+//! soon as it is complete (a `LineWriter`: one write call per line, no `FlushFileBuffers`), so a
+//! crash of the bench leaves every line written so far in the file (the system cache writes it
+//! out). Only `closing`, `close_unconfirmed`, `self_exit` and [`Journal::append_durable`] also
+//! wait for the disk (`FlushFileBuffers`, §3.5.2). A line costs one buffered write call of a few
+//! microseconds, outside every timed span (the native calls, the publish); no line waits for
+//! the disk. Whole files (`write_json`) are written beside the target under a name of their own
+//! per call, synced and moved over it, one at a time.
 
 use crate::clock::{Clock, Micros};
 use crate::hub::{RecordSink, SeqRecord};
@@ -11,15 +20,18 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufWriter, Write};
+use std::io::{LineWriter, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// A journal write failed: the run cannot keep its evidence, so it stops (fail loud).
+/// A journal write failed. The plan does not stop the run for it (§3.11.2 B lists what stops a
+/// run, and a journal write is not among them): the failure is kept, listed in `summary.json`
+/// (`journal_failures`) and decides the settlement (see [`Journal::failures`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JournalError(pub String);
 
@@ -30,7 +42,7 @@ impl std::fmt::Display for JournalError {
 }
 
 struct Appender {
-    writer: BufWriter<File>,
+    writer: LineWriter<File>,
 }
 
 impl Appender {
@@ -41,7 +53,7 @@ impl Appender {
             .open(path)
             .map_err(|error| JournalError(format!("open {}: {error}", path.display())))?;
         Ok(Self {
-            writer: BufWriter::new(file),
+            writer: LineWriter::new(file),
         })
     }
 
@@ -80,6 +92,11 @@ pub struct Journal {
     events: Mutex<Appender>,
     files: Mutex<BTreeMap<String, Appender>>,
     failures: Mutex<Vec<String>>,
+    /// #402 INT-1: one whole-file write at a time (a leaf lock, held only while one file is
+    /// written and moved).
+    whole_files: Mutex<()>,
+    /// #402 INT-1: the staged file of every `write_json` call has a name of its own.
+    staged: AtomicU64,
 }
 
 impl Journal {
@@ -93,6 +110,8 @@ impl Journal {
             events: Mutex::new(events),
             files: Mutex::new(BTreeMap::new()),
             failures: Mutex::new(Vec::new()),
+            whole_files: Mutex::new(()),
+            staged: AtomicU64::new(1),
         }))
     }
 
@@ -121,7 +140,11 @@ impl Journal {
         lock(&self.failures).push(error.0.clone());
     }
 
-    /// The journal writes that failed; any one stops the run.
+    /// The journal writes that failed. A failed write does not stop the run (the plan has no
+    /// such stop, §3.11.2 B): the run goes on, `summary.json` lists every failure in
+    /// `journal_failures`, and the settlement adds `internal_invariant` (exit code 30) to the
+    /// results, so a run with a lost record never ends `completed` (§3.11.3 has no row of its
+    /// own for it; 30 is the bench-internal result).
     pub fn failures(&self) -> Vec<String> {
         lock(&self.failures).clone()
     }
@@ -183,17 +206,30 @@ impl Journal {
     }
 
     /// Writes a whole JSON file and puts it on disk (`heartbeat.json`, `closing.json`,
-    /// `summary*.json`, `header.json`): written beside it, synced, then moved over it.
+    /// `summary*.json`, `header.json`): written beside it under a name of its own
+    /// ([`Self::staged_name`]), synced, then moved over it. #402 INT-1: two writers of the same
+    /// file never share a staged file, and the writes are one at a time (D2's exit 30 was two
+    /// closes writing `closing.json.partial` at once).
     pub fn write_json(&self, name: &str, value: &impl Serialize) -> Result<(), JournalError> {
         let text = serde_json::to_vec_pretty(value)
             .map_err(|error| JournalError(format!("encode {name}: {error}")))?;
         let target = self.root.join(name);
-        let staged = self.root.join(format!("{name}.partial"));
-        let result = write_staged(&staged, &target, &text);
+        let staged = self.root.join(self.staged_name(name));
+        let result = {
+            let _one_at_a_time = lock(&self.whole_files);
+            write_staged(&staged, &target, &text)
+        };
         if let Err(error) = &result {
             self.note_failure(error);
         }
         result
+    }
+
+    /// #402 INT-1: the staged file of one `write_json` call: `<name>.<pid>-<n>.partial`, `n`
+    /// counting the calls of this journal.
+    pub fn staged_name(&self, name: &str) -> String {
+        let call = self.staged.fetch_add(1, Ordering::Relaxed);
+        format!("{name}.{}-{call}.partial", std::process::id())
     }
 
     /// Flushes every buffered writer.

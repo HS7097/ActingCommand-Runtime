@@ -10,8 +10,8 @@ use crate::apk::FakeApk;
 use crate::backend::{
     BackendFactory, BackendFailure, CheckFailure, DeviceSideCheck, FailureClass, Floor, FloorCheck,
     GoneResult, IdentityMethod, IdentityTuple, MaterialCost, MaterialFactory, MaterialWriter,
-    OpenFailure, OpenFailureCause, OpenOptions, PixelLayout, PreviewBackend, SampledFrame,
-    StreamFacts,
+    NativeSpan, OpenFailure, OpenFailureCause, OpenOptions, PixelLayout, PreviewBackend,
+    SampledFrame, StreamFacts,
 };
 use crate::clock::{Clock, Micros, blocking};
 use crate::model::{BackendKind, CloseOutcome};
@@ -99,33 +99,82 @@ pub struct FakePattern {
 /// #402 C2b (D2 item 10): the stand-ins for S's host-side `adb shell` child. `run --fake` starts
 /// a real `fake-child` process per S open, outside the job object; the tests record the calls.
 pub trait FakeChildren: Send + Sync {
-    /// Starts the stand-in of stream `scid`; returns its pid.
-    fn spawn(&self, scid: u32) -> Result<u32, String>;
+    /// Starts the stand-in of `instance`'s stream; returns its pid.
+    fn spawn(&self, instance: &str, stream: &StreamFacts) -> Result<u32, String>;
     /// Stops it (the S close's `adb shell` child stop); a hung close never calls this.
     fn stop(&self, scid: u32) -> Result<(), String>;
 }
 
-/// The real stand-ins: `<bench> fake-child --scid <hex>` processes, not in the job object.
+/// #402 INT-1 (D2 item 10, §3.11.5 checklist item 1): the stand-in's arguments after
+/// `fake-child`, shaped as the real child's (`adb.rs:487-502`): `-s <serial> shell` and the
+/// server's arguments with `scid=<hex>`, so the checklist's four items (parent pid, start time,
+/// `-s <E serial> shell`, `scid=<scid>`) identify it as they would the real one.
+pub fn fake_child_arguments(serial: &str, stream: &StreamFacts) -> Vec<String> {
+    let mut arguments = vec!["-s".to_owned(), serial.to_owned(), "shell".to_owned()];
+    arguments.extend(stream.arguments.iter().cloned());
+    arguments
+}
+
+/// #402 INT-1: what the `fake-child` subcommand accepts: `-s <serial> shell`, then the server's
+/// arguments with exactly one `scid=<8 hex digits>`, and an optional `--max-seconds <s>`
+/// (default 3600). Returns how long the stand-in lives, or `None` for another command line.
+pub fn fake_child_lifetime(arguments: &[String]) -> Option<u64> {
+    let [dash_s, serial, shell, rest @ ..] = arguments else {
+        return None;
+    };
+    if dash_s != "-s" || serial.is_empty() || shell != "shell" {
+        return None;
+    }
+    let mut seconds = 3_600;
+    let mut scids = 0;
+    let mut index = 0;
+    while index < rest.len() {
+        let argument = &rest[index];
+        if argument == "--max-seconds" {
+            seconds = rest.get(index + 1)?.parse::<u64>().ok()?;
+            index += 2;
+            continue;
+        }
+        if let Some(scid) = argument.strip_prefix("scid=") {
+            if scid.len() != 8 || !scid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return None;
+            }
+            scids += 1;
+        }
+        index += 1;
+    }
+    (scids == 1).then_some(seconds)
+}
+
+/// The real stand-ins: `<bench> fake-child -s <serial> shell <server arguments>` processes, not
+/// in the job object.
 pub struct ProcessChildren {
     pub executable: std::path::PathBuf,
+    /// #402 INT-1: the plan's serial of each instance (the stand-in's `-s <serial>`).
+    pub serials: BTreeMap<String, String>,
     children: Mutex<BTreeMap<u32, std::process::Child>>,
 }
 
 impl ProcessChildren {
-    pub fn new(executable: std::path::PathBuf) -> Arc<Self> {
+    pub fn new(executable: std::path::PathBuf, serials: BTreeMap<String, String>) -> Arc<Self> {
         Arc::new(Self {
             executable,
+            serials,
             children: Mutex::new(BTreeMap::new()),
         })
     }
 }
 
 impl FakeChildren for ProcessChildren {
-    fn spawn(&self, scid: u32) -> Result<u32, String> {
+    fn spawn(&self, instance: &str, stream: &StreamFacts) -> Result<u32, String> {
+        let scid = stream.scid;
+        let serial = self
+            .serials
+            .get(instance)
+            .ok_or_else(|| format!("no serial for {instance} in the plan"))?;
         let child = std::process::Command::new(&self.executable)
             .arg("fake-child")
-            .arg("--scid")
-            .arg(format!("{scid:08x}"))
+            .args(fake_child_arguments(serial, stream))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -169,7 +218,8 @@ impl RecordedChildren {
 }
 
 impl FakeChildren for RecordedChildren {
-    fn spawn(&self, scid: u32) -> Result<u32, String> {
+    fn spawn(&self, _instance: &str, stream: &StreamFacts) -> Result<u32, String> {
+        let scid = stream.scid;
         lock(&self.spawned).push(scid);
         Ok(50_000 + scid % 1_000)
     }
@@ -195,8 +245,12 @@ pub struct FakeScript {
     pub scrcpy_estimate_bias_us: i64,
     /// Actions run when a sample call starts (a test writes `STOP` or `ABORT` at a known call).
     pub on_sample: Vec<(FaultAt, Arc<dyn Fn() + Send + Sync>)>,
-    /// #402 C2b: the frames carry the fake APK's timecode.
+    /// #402 C2b: the frames carry the fake APK's timecode (every instance's frames, unless the
+    /// instance has its own in `patterns`).
     pub pattern: Option<FakePattern>,
+    /// #402 INT-1: each instance's own fake APK: its frames show that APK's timecode, at that
+    /// APK's display size, and its taps reach that APK (D2: E2's frames showed E1's APK).
+    pub patterns: BTreeMap<String, FakePattern>,
 }
 
 impl Default for FakeScript {
@@ -214,9 +268,64 @@ impl Default for FakeScript {
             scrcpy_estimate_bias_us: 0,
             on_sample: Vec::new(),
             pattern: None,
+            patterns: BTreeMap::new(),
         }
     }
 }
+
+impl FakeScript {
+    /// The fake APK whose timecode `instance`'s frames show.
+    pub fn pattern_of(&self, instance: &str) -> Option<&FakePattern> {
+        self.patterns.get(instance).or(self.pattern.as_ref())
+    }
+}
+
+/// #402 INT-1: the fake APKs of `run --fake`: one per instance with `apk = true`, each on a
+/// device clock of its own (boot offsets 7 s, 8 s, … apart by instance), with a display of the
+/// plan's orientation (640 × 360 landscape, 360 × 640 portrait) and the band of cell 24, so each
+/// instance's frames show its own timecode and its taps flip its own APK.
+pub fn fake_apks(clock: &Arc<dyn Clock>, plan: &crate::plan::Plan) -> FakeApkSet {
+    let mut apks = BTreeMap::new();
+    let mut patterns = BTreeMap::new();
+    for (index, instance) in plan
+        .instances
+        .iter()
+        .filter(|instance| instance.apk)
+        .enumerate()
+    {
+        let apk = FakeApk::new(
+            Arc::clone(clock),
+            7_000_000_000 + 1_000_000_000 * index as i64,
+        );
+        match instance.orientation {
+            crate::plan::Orientation::Portrait => apk.set_display(360, 640),
+            crate::plan::Orientation::Landscape => apk.set_display(640, 360),
+        }
+        patterns.insert(
+            instance.name.clone(),
+            FakePattern {
+                apk: Arc::clone(&apk),
+                geometry: BandGeometry {
+                    cell: 24,
+                    offset_x: 0,
+                    offset_y: 0,
+                },
+            },
+        );
+        apks.insert(instance.name.clone(), apk);
+    }
+    FakeApkSet { apks, patterns }
+}
+
+/// #402 INT-1: the fake APKs by instance (for the connector) and the frames' patterns (for
+/// [`FakeScript::patterns`]).
+pub struct FakeApkSet {
+    pub apks: BTreeMap<String, Arc<FakeApk>>,
+    pub patterns: BTreeMap<String, FakePattern>,
+}
+
+/// #402 INT-1: the fake's margin of `meets` (`fresh_margin`, 30 ms, plan §5.3).
+pub const FAKE_FRESH_MARGIN_US: i64 = 30_000;
 
 fn applies(at: &FaultAt, instance: &str, kind: BackendKind, call: u64) -> bool {
     at.instance == instance
@@ -403,7 +512,7 @@ impl BackendFactory for Arc<FakeDevice> {
         if let Some(scid) = scid {
             lock(&self.live_streams).insert(scid, (instance.to_owned(), true));
             if let Some(children) = self.children()
-                && let Err(detail) = children.spawn(scid)
+                && let Err(detail) = children.spawn(instance, &FakeDevice::stream_facts(scid))
             {
                 lock(&self.live_streams).insert(scid, (instance.to_owned(), false));
                 return Err(OpenFailure {
@@ -547,19 +656,39 @@ impl PreviewBackend for FakeBackend {
             });
         }
         let started = device.clock.now_us();
-        device.clock.sleep_us(latency);
-        let ended = device.clock.now_us();
-        self.sequence += 1;
-        let source = match floor.and_then(|floor| floor.after_us) {
-            Some(after) => after.max(started),
-            None => started,
+        let bias = device.script.scrcpy_estimate_bias_us;
+        let time_floor = floor.and_then(|floor| floor.after_us);
+        // #402 INT-1 (F.s_late): the fake's `T_est` follows `scrcpy.rs:462-488`. The fake's
+        // device clock is the host clock (PTS = T_src) and the transport takes `latency`, so the
+        // offset minimum is `latency` (+ the scripted bias) and `T_est = T_src + latency + bias
+        // − margin`. `meets` takes the first frame with `T_recv ≥ floor` and `T_est ≥ floor`:
+        // the one whose source is `floor + margin − latency − bias` (or the call's start, when
+        // later); the call returns when that frame arrives. (C2d added the margin to the offset
+        // as well, so its `T_est` was `T_src + latency`: late by the latency.)
+        let (source, ended) = match (self.kind, time_floor) {
+            (BackendKind::Scrcpy, Some(floor_us)) => {
+                let first_met = floor_us as i64 + FAKE_FRESH_MARGIN_US - latency as i64 - bias;
+                let source = first_met.max(started as i64).max(0) as Micros;
+                let arrival = source.saturating_add(latency).max(floor_us);
+                device
+                    .clock
+                    .sleep_us(arrival.saturating_sub(device.clock.now_us()));
+                (source, device.clock.now_us())
+            }
+            _ => {
+                device.clock.sleep_us(latency);
+                (started, device.clock.now_us())
+            }
         };
+        self.sequence += 1;
         let (layout, bytes_per_pixel) = match self.kind {
             BackendKind::Nemu => (PixelLayout::Rgba8, 4),
             BackendKind::Scrcpy => (PixelLayout::Rgb8, 3),
         };
+        // #402 INT-1: the instance's own fake APK (or the script's one for every instance).
+        let pattern = device.script.pattern_of(&self.instance).cloned();
         // With the pattern the frames have the fake APK's display size (it turns with ORIENT).
-        let (width, height) = match &device.script.pattern {
+        let (width, height) = match &pattern {
             Some(pattern) => {
                 let (width, height, _) = pattern.apk.display();
                 (width, height)
@@ -567,7 +696,7 @@ impl PreviewBackend for FakeBackend {
             None => (device.script.width, device.script.height),
         };
         let size = (width * height) as usize * bytes_per_pixel;
-        let pixels = match &device.script.pattern {
+        let pixels = match &pattern {
             Some(pattern) => {
                 let mut pixels = vec![128u8; size];
                 if let Some(payload) = pattern.apk.payload_at(source) {
@@ -583,13 +712,11 @@ impl PreviewBackend for FakeBackend {
             }
             None => vec![(self.sequence % 251) as u8; size],
         };
-        // S with a floor: the fake's `meets` inputs. The fake's device clock is the host clock,
-        // so the offset minimum is the transport latency and `T_est` is the source time plus
-        // the scripted bias.
-        let floor_check = match (self.kind, floor.and_then(|floor| floor.after_us)) {
+        // S with a floor: the fake's `meets` inputs, as above.
+        let floor_check = match (self.kind, time_floor) {
             (BackendKind::Scrcpy, Some(floor_us)) => {
-                let margin = 30_000_i64;
-                let offset = latency as i64 + margin + device.script.scrcpy_estimate_bias_us;
+                let margin = FAKE_FRESH_MARGIN_US;
+                let offset = latency as i64 + bias;
                 let t_est = source as i64 + offset - margin;
                 Some(FloorCheck {
                     pts_us: source,
@@ -604,6 +731,28 @@ impl PreviewBackend for FakeBackend {
             }
             _ => None,
         };
+        // #402 INT-1 (F.n_floor): N's two native calls (the probe, then the pixels), as the C1
+        // timing points report them on the real backend; S has none.
+        let native = match self.kind {
+            BackendKind::Nemu => {
+                let middle = started + ended.saturating_sub(started) / 2;
+                vec![
+                    NativeSpan {
+                        kind: "probe",
+                        start_us: Some(started),
+                        end_us: Some(middle),
+                        code: Some(0),
+                    },
+                    NativeSpan {
+                        kind: "pixels",
+                        start_us: Some(middle),
+                        end_us: Some(ended),
+                        code: Some(0),
+                    },
+                ]
+            }
+            BackendKind::Scrcpy => Vec::new(),
+        };
         Ok(SampledFrame {
             width,
             height,
@@ -614,7 +763,7 @@ impl PreviewBackend for FakeBackend {
             received_us: (self.kind == BackendKind::Scrcpy).then_some(ended),
             built_us: (self.kind == BackendKind::Nemu).then_some(ended),
             built_unix_ms: (self.kind == BackendKind::Nemu).then_some(device.clock.unix_ms()),
-            native: Vec::new(),
+            native,
             known_source_us: Some(source),
             floor_check,
         })
@@ -625,7 +774,7 @@ impl PreviewBackend for FakeBackend {
             instance: self.instance.clone(),
         });
         self.device.clock.sleep_us(2_000);
-        if let Some(pattern) = &self.device.script.pattern {
+        if let Some(pattern) = self.device.script.pattern_of(&self.instance) {
             pattern.apk.tap(x, y);
         }
         Ok(())

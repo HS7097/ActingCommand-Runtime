@@ -189,6 +189,9 @@ pub struct Closer {
     limits: FixedLimits,
     exit: Arc<dyn ExitHook>,
     entries: Mutex<BTreeMap<u64, CloseEntry>>,
+    /// #402 INT-1: one `closing.json` write at a time, each with the close table as it is then
+    /// (a leaf lock; never held while a close runs).
+    closing_file: Mutex<()>,
     next: AtomicU64,
     emergency: OnceLock<Arc<dyn Emergency>>,
     stop: AtomicBool,
@@ -210,6 +213,7 @@ impl Closer {
             limits,
             exit,
             entries: Mutex::new(BTreeMap::new()),
+            closing_file: Mutex::new(()),
             next: AtomicU64::new(1),
             emergency: OnceLock::new(),
             stop: AtomicBool::new(false),
@@ -243,7 +247,12 @@ impl Closer {
             .collect()
     }
 
+    /// `closing.json`: the closes in progress. #402 INT-1: serialised (two closes ending at once
+    /// wrote it together in D2): the table is read and the file written under `closing_file`, so
+    /// the last write always has the newest table. A failed write is a journal failure (kept in
+    /// `journal_failures`); `events.jsonl` keeps the durable `closing` record either way.
     fn write_closing_file(&self) {
+        let _one_at_a_time = lock(&self.closing_file);
         let entries: Vec<CloseEntry> = lock(&self.entries)
             .values()
             .filter(|entry| entry.state == "closing")
