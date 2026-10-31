@@ -1351,7 +1351,9 @@ the configured starts; the watch ends with the host.
   check).** For the watch, ruling 112 replaces ruling 35's "a scheduling pause holds only
   dispatches". An instance that its own scheduling pause holds, in any stage
   (`draining`, `paused` or `released`, a restored pause included; the player hold of #429 R-7 is
-  such a pause), is polled and recorded as every instance (R2: the reading,
+  not a pause but its own state, [player-hold.md](player-hold.md), and R-7b adds it at
+  `automatic_start_hold` with `skip_reason` `player_held`, first before the pause; corrected by
+  R-7a, register §1.233), is polled and recorded as every instance (R2: the reading,
   `emulator_watch_state_changed`, `emulator_state_read_failed`), but the watch requests no restart
   (R3) and no recognition for it, neither of an endpoint pending or bound to another port nor of
   an instance unprepared on the reported port (EMU-BIND fix 1). Where it would have requested

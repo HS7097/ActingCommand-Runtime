@@ -69,6 +69,9 @@ pub use query_runs::*;
 mod workbench;
 use std::net::{IpAddr, SocketAddr};
 pub use workbench::*;
+// Workflow #429 R-7a (register §1.233, since 0.12.35): the player hold's frozen contract.
+mod player_hold;
+pub use player_hold::*;
 
 // Interface anchor `runtime-client` (contracts/component-interfaces.md): raise its revision in
 // distribution/windows/component-interfaces.json when older peers can no longer use these two.
@@ -77,7 +80,10 @@ pub use workbench::*;
 // #389 section 2.3 (`BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `LoadPack`,
 // `UnloadPack`) belong to it. Declared once for v0.12.0 as [2, 2] (#378 A8). Revision 3
 // (Workflow #429 R-0, register §1.213, since 0.12.30): the workbench's request kinds and members
-// (`workbench.rs`), declared [2, 3].
+// (`workbench.rs`), declared [2, 3]. Revision 4 (Workflow #429 R-7a, register §1.233, since
+// 0.12.35): the player hold's two request kinds, their results, three status members and three
+// start report members (`player_hold.rs`), declared [2, 4]; R-7b, which first fills a status
+// member, raises `min` to 4.
 pub const RUNTIME_REQUEST_SCHEMA_VERSION: &str = "actingcommand.runtime.request.v4";
 pub const RUNTIME_RECEIPT_SCHEMA_VERSION: &str = "actingcommand.runtime.receipt.v2";
 pub const RUNTIME_INFO_SCHEMA_VERSION: &str = "actingcommand.runtime.info.v1";
@@ -1600,6 +1606,19 @@ pub struct RuntimeInstanceStatus {
     /// fills each kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     activity: Option<InstanceActivity>,
+    /// Workflow #429 R-7a (register §1.233, `runtime-client` 4): the instance's player hold;
+    /// absent without one. R-7b fills it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    player_hold: Option<PlayerHoldState>,
+    /// Workflow #429 R-7a: the instance's last accepted player hold operation of this owner
+    /// epoch, from memory; it stays after the hold is gone. R-7b fills it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    player_hold_operation: Option<PlayerHoldOperation>,
+    /// Workflow #429 R-7a (§2.6 O-7): the instance's control gates, filled only by
+    /// `RuntimeControlPlaneStatus::with_derived_control` from this status's members; absent with
+    /// no control gate. No method sets it. R-7b's host is the first to derive it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    control: Option<InstanceControl>,
 }
 
 /// Workflow #403: why and since when an instance is fenced, and whether it waits for a person.
@@ -1692,6 +1711,9 @@ impl RuntimeInstanceStatus {
             emulator_state: EmulatorRunningState::Unknown,
             ladder_busy_hold: None,
             activity: None,
+            player_hold: None,
+            player_hold_operation: None,
+            control: None,
         };
         status.validate()?;
         Ok(status)
@@ -1724,6 +1746,8 @@ impl RuntimeInstanceStatus {
                 RuntimeContractCode::InvalidRuntimeInstanceStatus,
             ));
         }
+        // Workflow #429 R-7a: the player hold and its record keep their own shapes.
+        self.validate_player_hold()?;
         Ok(())
     }
 
@@ -1859,7 +1883,7 @@ impl RuntimeInstanceStatus {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeControlPlaneStatus {
     owner_epoch: OwnerEpoch,
@@ -1871,7 +1895,24 @@ pub struct RuntimeControlPlaneStatus {
     /// revision 1 in the new owner epoch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     scheduling_pause: Option<SchedulingPauseState>,
+    /// Workflow #429 R-7a (§2.6 O-7 2): `with_derived_control` was called, so a later change of a
+    /// member derives `control` again. Not on the wire and not part of equality: a status read
+    /// back equals the one written.
+    #[serde(skip)]
+    control_derived: bool,
 }
+
+/// Equality of the wire members only (`control_derived` says how the value was built).
+impl PartialEq for RuntimeControlPlaneStatus {
+    fn eq(&self, other: &Self) -> bool {
+        self.owner_epoch == other.owner_epoch
+            && self.instances == other.instances
+            && self.source == other.source
+            && self.scheduling_pause == other.scheduling_pause
+    }
+}
+
+impl Eq for RuntimeControlPlaneStatus {}
 
 impl RuntimeControlPlaneStatus {
     pub fn with_source(mut self, source: crate::RuntimeStateSource) -> RuntimeContractResult<Self> {
@@ -1895,16 +1936,20 @@ impl RuntimeControlPlaneStatus {
             instances,
             source: None,
             scheduling_pause: None,
+            control_derived: false,
         };
         status.validate()?;
         Ok(status)
     }
 
+    /// Workflow #429 R-7a (§2.6 O-7 2): a status whose `control` was derived derives it again,
+    /// so calling this after `with_derived_control` cannot leave a stale `control`.
     pub fn with_scheduling_pause(
         mut self,
         scheduling_pause: Option<SchedulingPauseState>,
     ) -> RuntimeContractResult<Self> {
         self.scheduling_pause = scheduling_pause;
+        self.derive_control_again();
         self.validate()?;
         Ok(self)
     }
@@ -1937,6 +1982,9 @@ impl RuntimeControlPlaneStatus {
             }
             previous_alias = Some(instance.instance_alias());
         }
+        // Workflow #429 R-7a (§2.6 O-7 5): a `control` read in agrees with the members; the
+        // check sits here because the global pause is a top-level member.
+        self.validate_control()?;
         Ok(())
     }
 
@@ -4021,6 +4069,27 @@ pub enum RuntimeOperation {
     PackScheduleView {
         instance_alias: String,
     },
+    // Workflow #429 R-7a (register §1.233, since 0.12.35; `runtime-client` 4): the player hold's
+    // two request kinds (`player_hold.rs`, contracts/player-hold.md). Until R-7b the host refuses
+    // both `not_implemented` on every channel and records nothing.
+    /// Takes the instance away from the Runtime for a person (R-7a §3.1): closes its gate, drains
+    /// its in-flight runs within `drain_timeout_ms` (`1_000..=600_000`), hands the device back
+    /// and closes its session, and answers once the hold is `held`. The source gate takes
+    /// `(User, Ui)`, `(Cli, Cli)` and `(Lab, Lab)`.
+    AcquirePlayerHold {
+        instance_alias: String,
+        drain_timeout_ms: u64,
+    },
+    /// Gives the instance back to the Runtime (R-7a §3.2), only while its hold is the one
+    /// `expected` names; reconnects it when no pause holds it, else touches nothing. The source
+    /// gate is the acquire's; every channel may end any hold (Alice's ruling 135). Without
+    /// `startup_package` the release runs the startup package (`run`).
+    ReleasePlayerHold {
+        instance_alias: String,
+        expected: PlayerHoldExpectation,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        startup_package: Option<PlayerHoldStartupChoice>,
+    },
 }
 
 impl RuntimeOperation {
@@ -4186,6 +4255,29 @@ impl RuntimeOperation {
                 crate::FactScope::Instance { instance_id } => validate_instance_alias(instance_id),
                 crate::FactScope::Server { .. } | crate::FactScope::Game { .. } => Ok(()),
             },
+            // Workflow #429 R-7a (§3.1 step 1, §3.2 step 1): the shapes, before the source gate.
+            Self::AcquirePlayerHold {
+                instance_alias,
+                drain_timeout_ms,
+            } => {
+                validate_instance_alias(instance_alias)?;
+                if !(MIN_PLAYER_HOLD_DRAIN_TIMEOUT_MS..=MAX_PLAYER_HOLD_DRAIN_TIMEOUT_MS)
+                    .contains(drain_timeout_ms)
+                {
+                    return Err(RuntimeContractError::new(
+                        RuntimeContractCode::InvalidPlayerHoldDrainTimeout,
+                    ));
+                }
+                Ok(())
+            }
+            Self::ReleasePlayerHold {
+                instance_alias,
+                expected,
+                ..
+            } => {
+                validate_instance_alias(instance_alias)?;
+                expected.validate()
+            }
             Self::AcquireLease { instance_alias, .. }
             | Self::ObserveReadonly { instance_alias }
             | Self::SafeReset { instance_alias, .. }
@@ -4336,7 +4428,10 @@ impl RuntimeOperation {
             // request door contains their failures against their instance (#419 ISO-M).
             | Self::RunInstanceTask { instance_alias, .. }
             | Self::StopInstanceRun { instance_alias, .. }
-            | Self::EditResourceTarget { instance_alias, .. } => Some(instance_alias),
+            | Self::EditResourceTarget { instance_alias, .. }
+            // Workflow #429 R-7a: the player hold's two kinds, bound to one instance as R-0's.
+            | Self::AcquirePlayerHold { instance_alias, .. }
+            | Self::ReleasePlayerHold { instance_alias, .. } => Some(instance_alias),
             Self::RecordClientAction { action } => action.instance_alias(),
             _ => None,
         }
@@ -4479,6 +4574,8 @@ impl fmt::Debug for RuntimeOperation {
             Self::EditResourceTarget { .. } => "RuntimeOperation::EditResourceTarget(<redacted>)",
             Self::RoutineSummary { .. } => "RuntimeOperation::RoutineSummary(<redacted>)",
             Self::PackScheduleView { .. } => "RuntimeOperation::PackScheduleView(<redacted>)",
+            Self::AcquirePlayerHold { .. } => "RuntimeOperation::AcquirePlayerHold(<redacted>)",
+            Self::ReleasePlayerHold { .. } => "RuntimeOperation::ReleasePlayerHold(<redacted>)",
         })
     }
 }
@@ -4741,6 +4838,23 @@ impl RuntimeRequest {
             ));
         }
         self.operation.validate()?;
+        // Workflow #429 R-7a (§3.1 step 2, §3.2 step 2): after the shape (step 1), the player
+        // hold's source gate takes the envelopes of the four counters: the person (Ui), the
+        // operator and MCP (Cli), and actinglab (Lab), unlike the pause's (a hold holds the
+        // device, not dispatch). Neither request is limited by channel (Alice's ruling 135).
+        if matches!(
+            self.operation,
+            RuntimeOperation::AcquirePlayerHold { .. } | RuntimeOperation::ReleasePlayerHold { .. }
+        ) && !matches!(
+            (self.actor, self.source),
+            (EventActor::User, EventSource::Ui)
+                | (EventActor::Cli, EventSource::Cli)
+                | (EventActor::Lab, EventSource::Lab)
+        ) {
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidPlayerHoldOrigin,
+            ));
+        }
         Ok(ValidatedRuntimeRequest {
             request: self,
             channel: None,
@@ -5566,6 +5680,12 @@ pub enum RuntimeResult {
     PackScheduleViewed {
         view: Box<PackScheduleView>,
     },
+    // Workflow #429 R-7a (register §1.233; R-7b answers with them): the player hold's results,
+    // their members inline beside `kind`.
+    /// `AcquirePlayerHold`: the hold is `held`.
+    PlayerHoldAcquired(Box<PlayerHoldAcquired>),
+    /// `ReleasePlayerHold`: the hold is lifted.
+    PlayerHoldReleased(Box<PlayerHoldReleased>),
 }
 
 /// A Runtime's answer to one request (receipt v2, Workflow #378 A4). Every receipt carries
@@ -6052,6 +6172,23 @@ impl RuntimeReceipt {
                 | RuntimeResult::UpgradeStateStatus { status },
             ) => status.validate()?,
             Some(RuntimeResult::Status { status }) => status.validate()?,
+            // Workflow #429 R-7a: a completed receipt whose result keeps its own shape.
+            Some(RuntimeResult::PlayerHoldAcquired(acquired)) => {
+                acquired.validate()?;
+                if self.state != RuntimeReceiptState::Completed {
+                    return Err(RuntimeContractError::new(
+                        RuntimeContractCode::InvalidPlayerHoldReceipt,
+                    ));
+                }
+            }
+            Some(RuntimeResult::PlayerHoldReleased(released)) => {
+                released.validate()?;
+                if self.state != RuntimeReceiptState::Completed {
+                    return Err(RuntimeContractError::new(
+                        RuntimeContractCode::InvalidPlayerHoldReceipt,
+                    ));
+                }
+            }
             Some(RuntimeResult::InstancesDiscovered { discovery }) => discovery.validate()?,
             Some(RuntimeResult::SchedulingPaused {
                 scope,

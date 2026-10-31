@@ -148,6 +148,10 @@ actingcommand_contract::outcome_vocabulary! {
     pub(super) enum WatchSkipReason: "emulator_autostart_skip_reason" {
         /// The instance's own scheduling pause holds it, in any stage (Alice's ruling 112).
         InstancePaused => "instance_paused",
+        /// Workflow #429 R-7a (register §1.233): the instance's player hold holds it, in any
+        /// phase; first before its own pause (R-7a §2.6). Registered with the contract; R-7b's
+        /// `automatic_start_hold` is the first to answer it.
+        PlayerHeld => "player_held",
     }
 }
 

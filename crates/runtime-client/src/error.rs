@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use crate::codes::{ClientCode, ClientLocation};
+use actingcommand_contract::outcome::CodeStr;
 use actingcommand_contract::outcome::{
     CauseRelation, Code, IoKind, IoOp, Location, Outcome, RawSource, VocabularyToken,
 };
 use actingcommand_contract::{
-    CorrelationId, OwnerEpoch, RequestId, RuntimeErrorCode, RuntimeErrorProjection, RuntimeInfo,
-    RuntimeReceipt, RuntimeRequest,
+    CorrelationId, OwnerEpoch, PlayerHoldAttempt, PlayerHoldDecision, PlayerHoldNext,
+    PlayerHoldSettlement, PlayerHoldSource, RequestId, RuntimeChannel, RuntimeErrorCode,
+    RuntimeErrorProjection, RuntimeInfo, RuntimeReceipt, RuntimeRequest,
 };
 use serde::Serialize;
 use std::error::Error;
@@ -59,11 +61,18 @@ const UNCERTAIN_AFTER_SEND_CODES: &[ClientCode] = &[
     ClientCode::InstallTransitionReceiptUnconfirmed,
     ClientCode::MaterialReadReceiptSelectionMismatch,
     ClientCode::RuntimeSchedulingResumeUnconfirmed,
+    // Workflow #429 R-7a: a player hold request whose effect `Status` could not confirm.
+    ClientCode::RuntimePlayerHoldUnconfirmed,
 ];
 
-/// Client conclusions that settle a request whose receipt never arrived (Workflow #338 R4, R5):
-/// the same owner, reached again, shows the request was not performed.
-const SETTLED_WITHOUT_RECEIPT_CODES: &[ClientCode] = &[ClientCode::RuntimeOperationUnsupported];
+/// Client conclusions that settle a request whose receipt never arrived (Workflow #338 R4, R5;
+/// Workflow #429 R-7a): the same owner, reached again, shows the request's effect is known: it
+/// was not performed (`runtime_operation_unsupported`), or the player hold settlement read its
+/// final state (`runtime_player_hold_settled`, which may be `completed`).
+const SETTLED_WITHOUT_RECEIPT_CODES: &[ClientCode] = &[
+    ClientCode::RuntimeOperationUnsupported,
+    ClientCode::RuntimePlayerHoldSettled,
+];
 
 /// The client codes of a contained run's own cancelled receipt (`run_contained_task`).
 const CONTAINED_TASK_STOPPED_CODES: &[ClientCode] = &[
@@ -189,6 +198,10 @@ pub struct RuntimeClientError {
     committed_receipt: Option<Box<RuntimeReceipt>>,
     received_receipt: Option<Box<RuntimeReceipt>>,
     receipt_header_io: Option<Box<RuntimeReceiptHeaderIo>>,
+    /// Workflow #429 R-7a: the settlement of a player hold request whose receipt never arrived,
+    /// on the three settlement codes (`runtime_player_hold_settled`,
+    /// `runtime_player_hold_unconfirmed`, `runtime_operation_unsupported` in rows A7 and R8).
+    player_hold: Option<Box<(PlayerHoldSettlement, PlayerHoldAttempt)>>,
 }
 
 impl RuntimeClientError {
@@ -283,6 +296,21 @@ impl RuntimeClientError {
             Some(receipt) => receipt.clone(),
             None => Outcome::new(self.code).operation(self.operation),
         };
+        // Workflow #429 R-7a: a player hold settlement carries its decision as values (the
+        // typed whole is `player_hold_settlement`). `runtime_operation_unsupported` keeps its
+        // registration: in rows A7 and R8 the settlement is only typed.
+        if let Some(settled) = self.player_hold.as_deref()
+            && let Some(decision) = settled.0.decision()
+            && listed(
+                &[
+                    ClientCode::RuntimePlayerHoldSettled,
+                    ClientCode::RuntimePlayerHoldUnconfirmed,
+                ],
+                self.code,
+            )
+        {
+            outcome = settlement_values(outcome, decision, &settled.1);
+        }
         if let Some(header) = self.receipt_header_io.as_deref() {
             outcome = outcome.caused_by(header.outcome());
         }
@@ -299,6 +327,28 @@ impl RuntimeClientError {
 
     pub fn committed_receipt(&self) -> Option<&RuntimeReceipt> {
         self.committed_receipt.as_deref()
+    }
+
+    /// Workflow #429 R-7a (§3.3.2): the typed settlement of a player hold request whose receipt
+    /// never arrived; present on the three settlement codes, `None` on every other error. Read
+    /// this rather than the class's general wording: a settled `completed` is not a Runtime
+    /// failure although its `disposition()` is `runtime`.
+    pub fn player_hold_settlement(&self) -> Option<&PlayerHoldSettlement> {
+        self.player_hold.as_deref().map(|settled| &settled.0)
+    }
+
+    /// Workflow #429 R-7a: the attempt the settlement judged, beside it.
+    pub fn player_hold_attempt(&self) -> Option<&PlayerHoldAttempt> {
+        self.player_hold.as_deref().map(|settled| &settled.1)
+    }
+
+    pub(crate) fn with_player_hold(
+        mut self,
+        settlement: PlayerHoldSettlement,
+        attempt: PlayerHoldAttempt,
+    ) -> Self {
+        self.player_hold = Some(Box::new((settlement, attempt)));
+        self
     }
 
     /// A validated reply actually received from this Runtime, including refusals without a terminal.
@@ -356,6 +406,7 @@ impl RuntimeClientError {
             committed_receipt: None,
             received_receipt: None,
             receipt_header_io: None,
+            player_hold: None,
         }
     }
 
@@ -374,6 +425,7 @@ impl RuntimeClientError {
             committed_receipt: None,
             received_receipt: None,
             receipt_header_io: None,
+            player_hold: None,
         }
     }
 
@@ -392,6 +444,7 @@ impl RuntimeClientError {
             committed_receipt: Some(Box::new(receipt)),
             received_receipt: None,
             receipt_header_io: None,
+            player_hold: None,
         }
     }
 
@@ -411,6 +464,140 @@ impl RuntimeClientError {
     pub(crate) fn with_received_receipt(mut self, receipt: RuntimeReceipt) -> Self {
         self.received_receipt = Some(Box::new(receipt));
         self
+    }
+}
+
+/// Workflow #429 R-7a (§6.1): a player hold settlement's values on its code: the attempt, the
+/// row and its verdict, the status epoch, the hold now, the own record's result (rows A1-A3,
+/// R1-R3) or a summary of the record now, and who ended the hold. Codes mode keeps the
+/// vocabulary values (`settlement_outcome`, `settlement_observed`, the rule, the phases) and
+/// drops the rest, as everywhere.
+fn settlement_values(
+    mut outcome: Outcome,
+    decision: &PlayerHoldDecision,
+    attempt: &PlayerHoldAttempt,
+) -> Outcome {
+    use actingcommand_contract::PlayerHoldSettlementRule as Rule;
+    outcome = outcome
+        .operation_kind(attempt.kind)
+        .settlement_rule(decision.rule)
+        .settlement_trigger(attempt.trigger)
+        .settlement_final(decision.is_final);
+    if let Some(request_id) = id_text(&attempt.request_id) {
+        outcome = outcome.request_id(request_id);
+    }
+    if let Some(settled) = decision.settlement_outcome {
+        outcome = outcome.settlement_outcome(settled);
+    }
+    if let Some(observed) = decision.observed {
+        outcome = outcome.settlement_observed(observed);
+    }
+    if let Some(epoch) = decision.status_owner_epoch.as_ref().and_then(id_text) {
+        outcome = outcome.owner_epoch(epoch);
+    }
+    if decision.restored {
+        outcome = outcome.hold_restored(true);
+    }
+    if let Some(hold) = &decision.hold {
+        if let Some(hold_id) = id_text(&hold.hold_id) {
+            outcome = outcome.hold_id(hold_id);
+        }
+        outcome = outcome.hold_phase(hold.phase).hold_revision(hold.revision);
+        if let Some(from) = hold.restored_from_phase {
+            outcome = outcome.restored_from_phase(from);
+        }
+        outcome = source_values(outcome, &hold.source);
+    }
+    let own = matches!(
+        decision.rule,
+        Rule::A1 | Rule::A2 | Rule::A3 | Rule::R1 | Rule::R2 | Rule::R3
+    );
+    if let Some(record) = &decision.operation {
+        if own {
+            if let Some(code) = record.code.as_ref().and_then(CodeStr::registered) {
+                outcome = outcome.failure_code(code);
+            }
+            if let Some(phase) = record.failed_phase {
+                outcome = outcome.failed_phase(phase);
+            }
+            if let Some(result) = &record.result {
+                if let Some(revision) = result.revision {
+                    outcome = outcome.hold_revision(revision);
+                }
+                if let Some(drained) = result.drained {
+                    outcome = outcome
+                        .drained_finished(drained.finished)
+                        .drained_cancelled(drained.cancelled);
+                }
+                if let Some(next) = result.next {
+                    outcome = outcome.hold_next(next);
+                }
+                if let Some(startup) = result.startup_package {
+                    outcome = outcome.startup_package(startup);
+                }
+                if let Some(withheld) = result.startup_package_withheld {
+                    outcome =
+                        outcome.startup_package_withheld(PlayerHoldNext::of_withheld(withheld));
+                }
+                if let Some(pauses) = result.pauses_at_end {
+                    if let Some(revision) = pauses.instance_revision {
+                        outcome = outcome.pause_instance_revision(revision);
+                    }
+                    if let Some(revision) = pauses.global_revision {
+                        outcome = outcome.pause_global_revision(revision);
+                    }
+                }
+                if let Some(code) = result
+                    .selfcheck
+                    .as_ref()
+                    .and_then(|selfcheck| selfcheck.failure_code.clone())
+                    .and_then(|code| serde_json::from_value::<CodeStr>(code.into()).ok())
+                    .and_then(|code| code.registered())
+                {
+                    outcome = outcome.selfcheck_failure_code(code);
+                }
+            }
+        } else {
+            outcome = outcome
+                .operation_kind_now(record.kind)
+                .operation_state_now(record.state);
+        }
+    }
+    if let Some(ended_by) = &decision.ended_by {
+        outcome = outcome
+            .ended_by_actor(ended_by.source.actor)
+            .ended_by_channel(ended_by.source.channel)
+            .ended_by_state(ended_by.state);
+        if let Some(via) = ended_by.source.via {
+            outcome = outcome.ended_by_via(via_channel(via));
+        }
+    }
+    outcome
+}
+
+fn source_values(mut outcome: Outcome, source: &PlayerHoldSource) -> Outcome {
+    outcome = outcome
+        .source_actor(source.actor)
+        .source_channel(source.channel);
+    if let Some(via) = source.via {
+        outcome = outcome.source_via(via_channel(via));
+    }
+    outcome
+}
+
+/// A `via` as a token of the `channel` vocabulary (its two values are two channels).
+const fn via_channel(via: actingcommand_contract::ChannelVia) -> RuntimeChannel {
+    match via {
+        actingcommand_contract::ChannelVia::Mcp => RuntimeChannel::Mcp,
+        actingcommand_contract::ChannelVia::Ui => RuntimeChannel::Ui,
+    }
+}
+
+/// An identifier's canonical spelling, as it travels.
+fn id_text<T: Serialize>(id: &T) -> Option<String> {
+    match serde_json::to_value(id) {
+        Ok(serde_json::Value::String(text)) => Some(text),
+        _ => None,
     }
 }
 

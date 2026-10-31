@@ -4495,7 +4495,9 @@ record under the instance and its report line) once per pause revision and `watc
 once per poll. A skip takes no claim, counts against neither bound and records no
 `emulator_watch_restart_exhausted`. The resume adds nothing: its reconnect and self-check run as
 before, and the first poll after the pause is gone applies R3 and EMU-BIND as for any instance.
-The player hold of #429 R-7 is an instance pause, so this covers R-7's watch row.
+The player hold of #429 R-7 is not an instance pause but the instance's own state (corrected by
+§1.233, R-7a): R-7b adds it at `automatic_start_hold`, the place every automatic start asks
+(§1.230), with `skip_reason` `player_held`, first before the pause.
 
 **Why.** The watch's restart and recognition ran "paused or not"; only the fix-1 recognition path
 excluded the stage `released`. A person who pauses an instance to use it must not have its
@@ -4524,7 +4526,7 @@ outcome's `values` are kept as a map without a key check), and the skip memory i
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
 | WP-1 | the watch's R3 restart and EMU-BIND recognition (both paths) are not requested for an instance its own scheduling pause holds, in any stage; `skip_watch_for_pause`, `instance_pause_revision` (`emulator_watch.rs`) | behaviour (emulator watch) (host gate row "WATCH-P") | WATCH-P | — | polls and `emulator_watch_state_changed` unchanged; no claim, no bound count, no used-up record; resume adds nothing; the global pause, the daemon start's claim, IDLE-1's wake and a claim requested before the pause are unchanged |
-| WP-2 | `skip_reason` (new key, vocabulary `emulator_autostart_skip_reason`: `instance_paused`, enum `WatchSkipReason`) on `emulator_autostart_skipped`, with `watch_kind` | new optional value of an existing code, a new key and vocabulary (no shape change) | WATCH-P | the emulator watch | once per pause revision and `watch_kind`; #429 R-7's `person_takeover` for the daemon start's skip would be a second token of this vocabulary |
+| WP-2 | `skip_reason` (new key, vocabulary `emulator_autostart_skip_reason`: `instance_paused`, enum `WatchSkipReason`) on `emulator_autostart_skipped`, with `watch_kind` | new optional value of an existing code, a new key and vocabulary (no shape change) | WATCH-P | the emulator watch | once per pause revision and `watch_kind`; its second token is `player_held` (#429 R-7; registered by R-7a, §1.233, which corrects the spelling `person_takeover` of this row), answered by R-7b's `automatic_start_hold` |
 
 ### 1.227 Slice SS-2c (0.12.32): a `schedule.json` rule may declare itself maintenance, so the net-benefit gate does not judge it (Alice's ruling 104 point 1: maintenance is startup, return home, recovery, readings maintenance and store update, everything else business; the approved design does not judge maintenance tasks by net benefit, `rd-1029/design-sch-state.md` §4.10 and the research check, Workflow #386 comment 6523148251; coordinator work order `rd-1029/brief-ss2c.md`)
 
@@ -4770,7 +4772,7 @@ and the resource channel starts emulators by hand for its Lab maintenance.
 **The seam for the player hold.** `HostShared::automatic_start_hold` is the one place an automatic
 start asks; the watch now asks it too (it replaces WATCH-P's `instance_pause_revision`, same
 answer). #429 R-7b adds the player hold there (its reason a second token of
-`emulator_autostart_skip_reason`, `person_takeover` per WP-2), and every automatic start obeys it
+`emulator_autostart_skip_reason`, `player_held` per WP-2 as §1.233 corrects it, registered by R-7a), and every automatic start obeys it
 without another change.
 
 **Unchanged.** An explicit emulator control (`actingctl emulator`, `ac_emulator`, Lab) never asks
@@ -4975,6 +4977,99 @@ no such dispatch exists.
 | SS2g-3 | `⌈C/1000⌉` (`declared_consumption`) for the reserve views and gate, the unshown consumption, the tie key and the selection fields | behaviour (evaluation) | SS-2g | the policy evaluator | rounds up |
 | SS2g-4 | SS-6 `run_cap`: absent when the task reserves a pool it consumes by expectation | behaviour (evaluation) | SS-2g | the policy evaluator | `spend_allowance` unchanged |
 
+### 1.233 Slice R-7a (0.12.35): the player hold's frozen contract and wire shapes, `runtime-client` 4 (Workflow #429; Alice's rulings 134, no cancel and no reserved shape, and 135, every channel may end a hold and the channel is recorded in `source`, 10-31 14:08–14:18, #429 comment 6539887801; the frozen design `rd-1031/design-r7a-hold-v3.1.md`, frozen in #429 comment 6540633966; coordinator work order `rd-1031/brief-r7a-impl.md`)
+
+[player-hold.md](player-hold.md) is the contract (the normative parts of the design's §2 to §6:
+the requests, the phases, the identity, the one order of the control gates, the lost-receipt
+settlement with its table and H-1 to H-6, the fences, persistence, interactions, codes and the
+rollout). [runtime-interface.md](runtime-interface.md) gains "Player hold request kinds" (60
+kinds, 12 general instructions; R-14 must let the Lab channel take both kinds, ruling 135),
+[component-interfaces.md](component-interfaces.md) the `runtime-client` 4 and `player-hold` 1
+rows, [scheduling-pause.md](scheduling-pause.md) "Relation to the player hold", and
+[emulator-control.md](emulator-control.md)'s WATCH-P paragraph its correction. The number 1.233
+is the coordinator's; SS-2d (§1.235) is in flight in the same release; R-7a2 (the next pull
+request of the release: the call sites moved to the one order, `deferral_code` removed, the fence
+at position 1d, `dispatch_resource_fenced`) and R-7b (the behaviour) follow.
+
+**What.** (1) The contract crate (`runtime/player_hold.rs`): `PlayerHoldState`, `PlayerHoldPhase`,
+`PlayerHoldSource`, `PlayerHoldExpectation`, `PlayerHoldOperation` (with `phase` and
+`result.pauses_at_end`), `PlayerHoldNext`, `PlayerHoldStartupPackage`, `PlayerHoldStartupChoice`
+(`run` | `skip`), `PlayerHoldRestoredFrom`, `InstanceGate`, `ControlGateCode`, `ControlGates`,
+`InstanceControl`, `PlayerHoldAttempt` (every member public, serializable, unknown members refused;
+in R-7a, not R-7b, the coordinator's decision 1 on §8.4), `PlayerHoldSettlement`, `PlayerHoldView`,
+`PlayerHoldDecision`; the two requests and the two results (`PlayerHoldAcquired`,
+`PlayerHoldReleased`, inline beside `kind`); the status members `player_hold`,
+`player_hold_operation` and `control` and the start report members `player_holds_restored`,
+`player_holds_dropped` and `player_hold_not_durable`, all absent when empty. (2) The checks: the
+drain bounds, the expectation, the source gate `(User, Ui)`, `(Cli, Cli)`, `(Lab, Lab)` after the
+shape (the design's fixed order), the hold's and the record's self-checks, the answer's
+`next` / `pauses_at_end` group, a hold result only on a completed receipt, and O-7 in
+`RuntimeControlPlaneStatus::validate`. (3) The pure functions: `ControlGates::evaluate`,
+`instance_gates`, `hold_ended_with_pause`, `settle_player_hold` (P1, P2, A1 to A13, R1 to R11),
+`with_derived_control`; `PLAYER_HOLD_CLOSE_ALLOWANCE_MS` = 30 000 (decision 2: until R-7b
+measures it); `player_hold_acquire_receipt_wait`, `player_hold_release_receipt_wait` and the two
+receipt-read deadlines. How `with_derived_control` remembers it was called (decision 3): a flag
+off the wire and outside equality, with which `with_scheduling_pause` derives again, also when an
+instance already carries a `control`. (4) `runtime-client`: `prepare_acquire_player_hold`,
+`prepare_release_player_hold`, `submit_acquire_player_hold`, `submit_release_player_hold`,
+`acquire_player_hold`, `release_player_hold`; each request's socket read timeout (the whole
+formula) and receipt-read deadline (the formula without IO, cut to the session deadline), so a
+receipt that never comes is `runtime_receipt_timeout`; the settlement of a dropped or timed-out
+receipt from one `Status` read, with the post-conditions (same epoch: the new connection in
+place; another epoch: a temporary client reads, the handle latched `runtime_owner_epoch_changed`;
+unreadable: latched with that failure); `runtime_player_hold_unconfirmed` among the uncertain
+codes, `runtime_player_hold_settled` among the codes that settle without a receipt;
+`player_hold_settlement()` and `player_hold_attempt()`. (5) The host answers both kinds
+`not_implemented` (`operation` `acquire_player_hold`, `release_player_hold`) on every channel,
+records nothing and fills no new member, as R-0. (6) The codes, keys and vocabularies of the
+design's §6.1, `since` 0.12.35, the ones R-7a never produces included (`player_hold_fact_untagged`
+among them; `player_hold_interrupted` warning, not uncertain, decision 4), and
+`emulator_autostart_skip_reason` `player_held`. (7) `component-interfaces.json` declares
+`runtime-client` [2, 4].
+
+**Deviations from the design's wording, no shape change.** (a) The four effective codes are
+`dispatch_*` codes of runtime-host, which the contract crate cannot build, so `control.code` and
+`ControlGates::code()` are the contract's vocabulary `control_gate_code`, whose tokens are those
+four spellings; the host maps it to its code (R-7a2). (b) Value keys the design names but the key
+table cannot take: `phase` is the install phase's key (`hold_phase`), `final` is a Rust keyword
+(`settlement_final`), `outcome` names the envelope (`settlement_outcome`, also the decision's
+member), and an instance alias is `alias`; the settlement's other values take the same prefixes
+(`settlement_rule`, `settlement_trigger`, `settlement_observed`, `hold_revision`, `hold_next`,
+`hold_restored`). (c) A missing `source.channel` does not decode, rather than decoding and failing
+`invalid_player_hold_state`: the member is required. (d) In rows A7 and R8 the settlement is typed
+only, so `runtime_operation_unsupported` keeps its registration. (e) EC's and SP's "按 R-7a §2.6"
+sentences (the design's §2.6 rows 7 and 8) go with R-7a2, which changes those orders (the design's
+§7.1).
+
+**Why.** A person who plays on a device must hold it against every automatic mechanism, and the
+console, the CLI, MCP and the Lab must read one state and one code (ruling 135). Ruling 116's five
+pauses make a hold built as a pause impossible. The console pins the shapes once, before the
+behaviour (§6.2's three steps).
+
+**Unchanged.** Every existing request, answer and status member, the pause table and its fact, the
+dispatch order (`deferral_code` stays global first until R-7a2), the watch, the autostart, IDLE-1,
+the ledger and the configuration (no key; the default tag list is R-7b's). A console of
+`runtime-client` 3 reads every 0.12.35 answer, since none carries a new member.
+
+**What changes live.** Nothing: no request of the new kinds is sent, and the Runtime would refuse
+it.
+
+**Rollback** (to 0.12.34). Nothing is persisted and no behaviour is undone: roll back as usual. A
+console already on revision 4 that sends a new request to 0.12.34 has its connection dropped; its
+client reconnects in the same owner epoch and reports `runtime_operation_unsupported` (rows A7,
+R8), the handle usable. 0.12.34 declares `runtime-client` [2, 3], so an installer of [4, 4] (R-7b's)
+would not update to it; R-7a itself declares [2, 4] and rolls back freely.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| R7A-1 | `AcquirePlayerHold`, `ReleasePlayerHold` and their results `PlayerHoldAcquired`, `PlayerHoldReleased` | wire (`runtime-client` 4) | R-7a | — (R-7b answers) | general instructions, G14; answered `not_implemented` in 0.12.35 |
+| R7A-2 | `RuntimeInstanceStatus.player_hold`, `.player_hold_operation`, `.control` | wire (status members) | R-7a | R-7b | absent in 0.12.35; `control` only by `with_derived_control`; O-7 in `validate` |
+| R7A-3 | `RuntimeStartReport.player_holds_restored`, `.player_holds_dropped`, `.player_hold_not_durable` | wire (start report members) | R-7a | R-7b | absent when empty |
+| R7A-4 | `ControlGates::evaluate`, `instance_gates`, `hold_ended_with_pause`, `settle_player_hold`, `with_derived_control`, the waits and deadlines | contract functions | R-7a | the clients; R-7a2 and R-7b's host | not on the wire |
+| R7A-5 | the client's prepare / submit methods, receipt deadlines and settlement | client behaviour | R-7a | `runtime-client` | sends nothing again, reads `Status` once |
+| R7A-6 | the codes, keys and vocabularies of §6.1, `player_held` | catalog | R-7a | R-7b (host codes), R-7a (client and contract codes) | `since` 0.12.35 |
+| R7A-7 | `runtime-client` [2, 4] | interface declaration | R-7a | — | R-7b raises `min` to 4 |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -5020,6 +5115,7 @@ A v1 string is not read. The content hash is measured only at suspension and at 
 | W19 | `RuntimeEventQueryPageRequest.without_run_recovery` (a boolean, `since` 0.12.23) | runtime-client 2 | #422 QR-2 | one optional member of the `QueryEvents` page request (`deny_unknown_fields`), absent (`false`) when unused, so a request without it serializes, and its page answers, as before; `true`: the page derives no `run_recovery` group and reads no run's context for one, its rows, views, cursor and read scope its own; no outcome code; sent by `runtime-client`'s run listing and run status reads, and by every page of `actingctl diagnose` (#422 QR-2b, since 0.12.24); [global-ledger-query.md](global-ledger-query.md), [component-interfaces.md](component-interfaces.md) (`runtime-client` revision 2) |
 | W20 | `RuntimePerformanceStatus.ledger_read_pages` = `LedgerReadPagesStatus {pages, total_ms, longest_ms, last_ms}` (`since` 0.12.25) | runtime-client 2 | #422 W1-8 (P29) | one optional member of W15's status (`deny_unknown_fields`), absent when the Runtime's ledger has no reader pool: the view pages the pool read since the Runtime started (a page it answered without reading is not counted), their summed, longest and last time in milliseconds, read from the ledger's memory, no writer command; a wrong shape (times out of order, or times without a page) is `invalid_performance_status`; no outcome code; `actingctl perf-status` and `ac_overview`'s `performance` block show it as it is; on PerformanceStatus, not on Status, because a status member breaks the deployed UI (W13) |
 | W21 | the player workbench's request kinds, results and members (§1.213 R0-1 to R0-4, R0-8, R0-10; §1.216 R0C-3, `PackScheduleView`), and the read `StartReport` (§1.216 R0C-4) | runtime-client 3 | #429 R-0, R-0c | declared [2, 3] in 0.12.30; each kind answers `not_implemented` until its slice; `RuntimeInstanceStatus.activity` is the status member W13 warned about: it and R0-8's answer members stay absent until a release raises `min` to 3 with the console that reads them |
+| W22 | the player hold's request kinds `AcquirePlayerHold`, `ReleasePlayerHold`, their results, the status members `player_hold`, `player_hold_operation`, `control` and the start report members `player_holds_restored`, `player_holds_dropped`, `player_hold_not_durable` (§1.233 R7A-1 to R7A-3) | runtime-client 4 | #429 R-7a | declared [2, 4] in 0.12.35; both kinds answer `not_implemented` until R-7b; every new member is absent until R-7b, which raises `min` to 4 ([player-hold.md](player-hold.md), "Interfaces and rollout") |
 
 U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `LoadPack` and
 `UnloadPack` (W11; UIM §8.1; LoadPack and UnloadPack without any digest, M-PKG §5.1).
@@ -5139,7 +5235,7 @@ K27 asserts the declaration. Every moving interface rises once for the release.
 |---|---|---|
 | `actingd-config` | [5, 5] | §5: every key it lists as parsed (not `execution.defaults.*`, see there); the removals of PKG-S4 §1.55 P4-3 and NAV-3a §1.67 N3A-3, which no v0.12.0 reader accepts. Workflow #411 B15 R3 raises it to [5, 6] in v0.12.3 (§1.113 B15C-4): revision 6 adds the remedy keys, and a revision-5 file is still read. Workflow #406 T12 raises it to [5, 7] in #406's release (§1.136 T12-5): revision 7 adds the `touch` section, and revision-5 and revision-6 files are still read. #411 A38 raises it to [5, 8] (§1.148 A38-7): revision 8 adds `recovery_ladder.fence_recheck`, and revisions 5 to 7 are still read. #411 A51 adds `ledger_observer.read_budget_ms` and `close_timeout_ms` to the same revision 8 (§1.151 A51-4). #411 B37 (A35-S1) adds `recovery_ladder.busy` to the same revision 8 (§1.152 B37-5). The 0.12.x release after v0.12.9 raises it to [5, 9] (§1.168 A35-5): revision 9 adds that release's configuration keys (#411 A35: `recovery_ladder.busy.screen`), and revisions 5 to 8 are still read. P0-LO raises it to [5, 10] in v0.12.11: revision 10 adds `ledger_observer.open_timeout_ms` and `open_warn_ratio_milli`, and revisions 5 to 9 are still read. #411 A64, #411 A66, PERF-B1 and SCH-M ED-1 raise it to [5, 11] in v0.12.12: revision 11 adds `host_claims.run_end_grace_ms` (A64, ruling C-43), the `watchdog` section (`start_window_ms`, A66), the `execution` section (`capture.max_interval_ms`, `capture.backoff_enabled`, `capture.idle_ceiling_ms`; PERF-B1, §1.177 B1-2) and SCH-M ED-1's `scheduling.expected_runtime.*` (also per instance) and `scheduling.fact_refresh.expected_duration_ms` (§1.178 ED1-3), and revisions 5 to 10 are still read. IDLE-1 (Alice's ruling 41) raises it to [5, 12] in the release after v0.12.12: revision 12 adds the `idle` section (`action`, `min_gap_ms`, `close_app_wake_lead_ms`, `stop_emulator_wake_lead_ms`) and an instance entry's `idle` member; ROUT-L RL-1b (same release, §1.185 RL1B-1, RL1B-2) adds to revision 12 the `standard_packs` keys `check_interval_ms` and `cached_generations` and a `policy` section without `catalog` (composer mode), #422 LN-5 `ledger_observer.history_page_rows` and #422 LN-TUNE `ledger_observer.writer_reply_timeout_ms`; and revisions 5 to 11 are still read. #422 LN-8 raises it to [5, 13] in the release after v0.12.13: revision 13 adds `ledger_observer.open_verify_tail_records`, and revisions 5 to 12 are still read. #422 LN-WS raises it to [5, 14] in v0.12.15 (§1.194): revision 14 adds `ledger_observer.read_check_vm_steps` and `history_scan_rows`, and revisions 5 to 13 are still read Workflow #392 DA-4b-D (Alice's ruling 69) raises it to [5, 15] in v0.12.16 (§1.195 DA4bD-2): revision 15 adds the `display_safe_area` section (`directory`, `check_interval_ms`, `model`) and an instance entry's `display_safe_area` member (`model`), and revisions 5 to 14 are still read. #422 LN-7c Q raises it to [5, 16] in v0.12.17 (§1.196 LN7CQ-1 to LN7CQ-3): revision 16 adds the top-level `frame_retention_evidence_max_age_days` and `ledger_observer.frame_query_steps_per_second` and `frame_query_chunk_frames`, and revisions 5 to 15 are still read. Workflow #421 INST-1 raises it to [5, 17] in v0.12.18: revision 17 adds the `install` section (the tunables of `actingctl install`, [install-cli.md](install-cli.md)), and revisions 5 to 16 are still read |
 | `ledger` | [3, 3] | A3 §1.9, SH-1, SR-2a reads, D1 ladder records, L4a §1.19, AO-1 dump import §1.26, AO-2 index table §1.38, U-2's G14 members §1.46, PKG-S2 and PKG-S3 removals (§2), NAV-6 §1.12, #403 §1.13, D1b §1.14, A2-P §1.15, SH-2 §1.25, OCR-CONF §1.8 V1, M-357b DB-3s §1.66. Workflow #411 BT-LR raises it to [3, 4] once for the 0.12.x B train (§1.153, Alice 2026-10-20): revision 4 adds the train's shapes, and a revision-3 ledger is still read |
-| `runtime-client` | [2, 2] | §3 W1–W4, W8–W12, W14, W15, W17 (AO-4q, MCP-4, D1b, SH-1, A4, U-1, RD-3, MCP-2, P-m, D2-S5); A2-P's wire spellings §1.15; 九处-1's status member `emulator_state` §1.91 N1-1. `runtime-client` 3 comes with its own later release (§3 W5–W7 and W13: MCP-19, AO-4, AO-8 with MCP-9b's `startup` and `host` in W7, SR-6b's `not_running` in W13; re-check 10-14, §1.25). Runtime v0.12.x serves the read `ScheduleExplanation` (§3 W5) under revision 2: only actingctl and MCP of the same Runtime send it and every revision-2 shape is unchanged; revision 3 includes it. #411 A51's page limit `read_budget` (§1.151 A51-1) is folded into revision 2 as §1.91 N1-1 was. Workflow #429 R-0 raises it to [2, 3] in 0.12.30 (§1.213 R0-7, §3 W21): revision 3 is revision 2 plus the workbench's shapes (R-0c's `PackScheduleView` included, §1.216 R0C-3), W5 and `StartReport` (§1.216 R0C-4); W6, W7 and W13 are not built and take a later revision |
+| `runtime-client` | [2, 2] | §3 W1–W4, W8–W12, W14, W15, W17 (AO-4q, MCP-4, D1b, SH-1, A4, U-1, RD-3, MCP-2, P-m, D2-S5); A2-P's wire spellings §1.15; 九处-1's status member `emulator_state` §1.91 N1-1. `runtime-client` 3 comes with its own later release (§3 W5–W7 and W13: MCP-19, AO-4, AO-8 with MCP-9b's `startup` and `host` in W7, SR-6b's `not_running` in W13; re-check 10-14, §1.25). Runtime v0.12.x serves the read `ScheduleExplanation` (§3 W5) under revision 2: only actingctl and MCP of the same Runtime send it and every revision-2 shape is unchanged; revision 3 includes it. #411 A51's page limit `read_budget` (§1.151 A51-1) is folded into revision 2 as §1.91 N1-1 was. Workflow #429 R-0 raises it to [2, 3] in 0.12.30 (§1.213 R0-7, §3 W21): revision 3 is revision 2 plus the workbench's shapes (R-0c's `PackScheduleView` included, §1.216 R0C-3), W5 and `StartReport` (§1.216 R0C-4); W6, W7 and W13 are not built and take a later revision. Workflow #429 R-7a raises it to [2, 4] in 0.12.35 (§1.233, §3 W22): revision 4 is revision 3 plus the player hold's shapes; R-7b raises `min` to 4 |
 | `package` | [3, 3] | PKG-S1; PKG-S5 §1.64 P5-1 with M-357a TB12 §1.65; D2-S2 §1.28 DS6; D2-S3 §1.39 D34; READ-1 §1.54 RE1; the NAV-3a follow-up §1.73 N3F-1; REC-6 §1.29 R6-2; REC-8 §1.35 R8-1; OUT-1 §1.40 O1-1; EXEC-2 §1.41 EX1; OUT-2 §1.48 O2-1; REC-5 §1.50 R5-2; EXEC-1 §1.57 EC1. M-357a TB1 and TB6 (DB-1, DB-2) and M-357b MS6–MS10 (DB-3a1, DB-3a2, DB-3b) bump it once more in the 0.12.x release that carries them, once only when they share a release. Workflow #411 B15's `remedy` (a `task.json` mapping member) and `provides` (a `control.json` member) ride revision 4 (writer R1, §1.110 B15-10), raised once in their release by its first slice that needs it. Workflow #406 T3 raises it to [3, 5] in #406's release (§1.137 T3-7): revision 5 adds the click `single_touch_path_drag_v1`, and revision-3 and revision-4 packs are still read |
 | `runtime-outcomes` | [1, 1] (new) | A5 §1.16, A6a §1.37 |
 | `install-control` | [0, 1] (unchanged) | model-378 §16 A-7 dropped revision 2 (`carried`) from v0.12.0; U-4 raises it to [0, 2] in 0.12.x |

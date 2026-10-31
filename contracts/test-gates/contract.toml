@@ -218,6 +218,55 @@ tests = [
 ]
 incident = ["#429 R-0d"]
 
+# Workflow #429 R-7a (0.12.35; register §1.233; contracts/player-hold.md; design R-7a §7.1): the player hold's frozen shapes (the two requests, PlayerHoldAcquired and PlayerHoldReleased inline beside kind, the status members player_hold, player_hold_operation and control, the three StartReport members, PlayerHoldAttempt) round-trip, refuse an unknown member and leave no key when empty, and a report without the three members reads; the shapes ruling 134 removed (cancel_player_hold_acquire, cancelling, cancel) do not decode; drain 1000..=600000, revision 0 and a malformed hold_id refused; the record's and the hold's self-checks and the next / pauses_at_end group on the answer (invalid_player_hold_receipt) and on the record (invalid_player_hold_state); every channel and via, and a missing channel does not decode; the source gate takes (User, Ui), (Cli, Cli), (Lab, Lab) for both and refuses the rest invalid_player_hold_origin; ControlGates::evaluate over all 16 inputs; O-7 refuses a control read in that differs from the members, the global pause included, and accepts none; with_derived_control in either order of the calls, idempotent; instance_gates reads the members; hold_ended_with_pause's cases; settle_player_hold's every row (P1, P2, A1-A13, R1-R11) with each trigger it names, first-match pairs, final, settling again, Current; the two receipt waits and deadlines
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::runtime::player_hold::tests::r7a_every_shape_round_trips_refuses_an_unknown_member_and_leaves_no_key_when_empty",
+    "actingcommand-contract::lib::runtime::player_hold::tests::r7a_status_members_round_trip_and_an_instance_without_them_keeps_its_keys",
+    "actingcommand-contract::lib::runtime::player_hold::tests::r7a_start_report_members_are_absent_when_empty_and_an_earlier_report_reads",
+    "actingcommand-contract::lib::runtime::player_hold::tests::r7a_the_shapes_ruling_134_removed_do_not_decode",
+    "actingcommand-contract::lib::runtime::player_hold::tests::r7a_drain_bounds_revision_zero_and_a_malformed_hold_id",
+    "actingcommand-contract::lib::runtime::player_hold::tests::r7a_the_operation_record_keeps_its_shape",
+    "actingcommand-contract::lib::runtime::player_hold::tests::r7a_next_and_pauses_at_end_agree_on_the_answer_and_on_the_record",
+    "actingcommand-contract::lib::runtime::player_hold::tests::r7a_the_hold_keeps_its_own_shape",
+    "actingcommand-contract::lib::runtime::player_hold::tests::r7a_every_channel_and_via_round_trips_and_a_missing_channel_does_not_decode",
+    "actingcommand-contract::lib::runtime::player_hold::tests::r7a_a_receipt_carries_a_hold_result_only_completed",
+    "actingcommand-contract::lib::runtime::player_hold::tests::r7a_the_source_gate_takes_the_three_envelopes_for_both_requests",
+    "actingcommand-contract::lib::runtime::player_hold::tests::r7a_control_gates_evaluate_every_combination_in_one_order",
+    "actingcommand-contract::lib::runtime::player_hold::tests::r7a_validate_checks_a_control_read_in_against_the_members",
+    "actingcommand-contract::lib::runtime::player_hold::tests::r7a_with_derived_control_derives_from_the_members_in_any_order_of_the_calls",
+    "actingcommand-contract::lib::runtime::player_hold::tests::r7a_instance_gates_reads_the_members_not_control",
+    "actingcommand-contract::lib::runtime::player_hold::tests::r7a_hold_ended_with_pause_names_the_pause_it_ended_under",
+    "actingcommand-contract::lib::runtime::player_hold::tests::r7a_settle_player_hold_decides_every_row_of_the_table",
+    "actingcommand-contract::lib::runtime::player_hold::tests::r7a_settle_player_hold_reads_p_rows_first_and_describes_without_an_attempt",
+    "actingcommand-contract::lib::runtime::player_hold::tests::r7a_own_means_a_record_of_this_request",
+    "actingcommand-contract::lib::runtime::player_hold::tests::r7a_the_first_matching_row_decides",
+    "actingcommand-contract::lib::runtime::player_hold::tests::r7a_final_follows_the_vocabulary",
+    "actingcommand-contract::lib::runtime::player_hold::tests::r7a_a_final_settlement_settles_again_on_a_later_status",
+    "actingcommand-contract::lib::runtime::player_hold::tests::r7a_the_attempt_is_stored_and_settles_as_the_original",
+    "actingcommand-contract::lib::runtime::player_hold::tests::r7a_the_receipt_waits_and_deadlines_follow_their_formulas",
+]
+incident = ["#429 R-7a"]
+
+# Workflow #429 R-7a (0.12.35; register §1.233; design R-7a §3.3.2, §7.1): the runtime client's player hold methods over the scripted Runtime: prepare writes nothing and fixes the request id the attempt names, submit writes once and never again, another handle is refused runtime_player_hold_prepared_client_mismatch unsent; a frame an older Runtime drops is A7 / R8 runtime_operation_unsupported with the settlement and the handle usable; a dropped receipt of a finished acquire is A2 runtime_player_hold_settled, not uncertain, class runtime, its values on the outcome; a receipt-read deadline that passes is runtime_receipt_timeout and timed_out (A1, A9, R1, R6), the old connection closed and the handle usable, also under a shorter session deadline; another epoch settles through a temporary client (A11) and leaves the handle latched runtime_owner_epoch_changed; an unreadable status is P1, not final, the handle latched; a real receipt (player_hold_interrupted, not_implemented) is returned unsettled and the stored attempt settles A11 later; the two codes' class; the socket timeout is the whole wait formula and the deadline the formula without IO; at the IPC layer a close before the deadline is the header failure and after it the timeout
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-client::lib::tests::gate_429_r7a::r7a_prepare_writes_nothing_and_submit_writes_the_prepared_request_once",
+    "actingcommand-runtime-client::lib::tests::gate_429_r7a::r7a_a_dropped_frame_on_an_older_runtime_is_unsupported_and_the_handle_stays_usable",
+    "actingcommand-runtime-client::lib::tests::gate_429_r7a::r7a_a_dropped_receipt_of_a_finished_acquire_settles_completed",
+    "actingcommand-runtime-client::lib::tests::gate_429_r7a::r7a_a_receipt_timeout_is_timed_out_and_settles_on_a_new_connection",
+    "actingcommand-runtime-client::lib::tests::gate_429_r7a::r7a_a_session_deadline_shorter_than_the_deadline_is_still_timed_out",
+    "actingcommand-runtime-client::lib::tests::gate_429_r7a::r7a_another_epoch_settles_through_a_temporary_client_and_latches_the_handle",
+    "actingcommand-runtime-client::lib::tests::gate_429_r7a::r7a_an_unreadable_status_is_p1_and_the_handle_stays_latched",
+    "actingcommand-runtime-client::lib::tests::gate_429_r7a::r7a_a_real_receipt_is_returned_unsettled",
+    "actingcommand-runtime-client::lib::tests::gate_429_r7a::r7a_the_settlement_codes_have_their_class",
+    "actingcommand-runtime-client::lib::tests::gate_429_r7a::r7a_the_receipt_waits_are_the_contracts_formulas",
+    "actingcommand-runtime-client::lib::tests::gate_429_r7a::r7a_a_close_before_the_deadline_is_dropped_and_after_it_is_a_timeout",
+]
+incident = ["#429 R-7a"]
+
 # The selector's record shapes (S0 §1.9, §3.4): projection v2, the three scan confirmations and
 # unknown_check round-trip for every path shape, v1 keeps its bytes, each path rule refuses, and
 # the reader bounds hold at 256 viewports, 64 members and 64 unknown positions

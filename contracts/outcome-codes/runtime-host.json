@@ -19664,7 +19664,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A stuck-recovery rung ended because a scheduling pause or a capacity refusal closed the ladder's admission.",
+      "description": "A stuck-recovery rung ended because a scheduling pause or a capacity refusal closed the ladder's admission. Workflow #429 R-7a: also while a player hold holds the instance (R-7b).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -19796,7 +19796,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An operator's global scheduling pause defers the dispatch.",
+      "description": "An operator's global scheduling pause defers the dispatch. A control gate's effective code, in the order of R-7a section 2.6 (Workflow #429 R-7a; R-7a2 applies the order).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -19816,7 +19816,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "An operator's scheduling pause of the instance defers the dispatch.",
+      "description": "An operator's scheduling pause of the instance defers the dispatch. A control gate's effective code, in the order of R-7a section 2.6 (Workflow #429 R-7a; R-7a2 applies the order).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -22653,6 +22653,381 @@
       "description": "UPD-1 (contracts/instance-fact-store.md, Application update facts): a publication named health.application.update_required (fact_key), which only the Runtime writes (true when a run ends with contained_task_application_update_required, false when a store_update package's run succeeds, false as a start's seed). A client's PublishFact or PublishFacts is refused before the fact write gate and nothing is appended. Not fatal.",
       "common_causes": "A script that copies or restores an instance's facts, or tries to lift the gate by hand.",
       "handling": "Leave the key out. To lift the gate, run the instance's store update package directly (ac_run_pack): its success clears the fact."
+    },
+    "player_hold_active": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional",
+        "alias": "optional",
+        "hold_id": "optional",
+        "hold_phase": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "The instance is held by a person (a player hold, any phase). Two uses with one meaning on every counter: as a refusal, this device operation is not done while the hold lasts; as the failure_code of an instance resume's selfcheck, the pause was lifted and, because of the hold, the device was not reconnected, which is expected and no failure. Workflow #429 R-7a (register section 1.233, contracts/player-hold.md); R-7a registers it, R-7b first emits it.",
+      "common_causes": "A device operation, a lease, a self-check or an observation was asked for an instance a person holds; or an instance resume ran while the hold lasts.",
+      "handling": "Wait until the hold ends (ReleasePlayerHold), or end it. As a resume's failure_code nothing is wrong: the instance reconnects when the hold ends."
+    },
+    "player_hold_already_held": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional",
+        "hold_id": "optional",
+        "hold_phase": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "AcquirePlayerHold refused: the instance already has another player hold. Workflow #429 R-7a (register section 1.233, contracts/player-hold.md); R-7a registers it, R-7b first emits it.",
+      "common_causes": "Another counter holds the instance.",
+      "handling": "Read Status; end that hold first if it is yours to end."
+    },
+    "player_hold_acquiring": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional",
+        "hold_phase": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "The hold is still being acquired (requesting, draining or handing_back): the same acquire again, or a release, is refused. Workflow #429 R-7a (register section 1.233, contracts/player-hold.md); R-7a registers it, R-7b first emits it.",
+      "common_causes": "A second request while the acquire is under way.",
+      "handling": "Wait for the acquire to reach held or to fail, then act on what Status shows."
+    },
+    "player_hold_releasing": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "The hold is being released, or the last release is still reconnecting: a new acquire or release is refused. Workflow #429 R-7a (register section 1.233, contracts/player-hold.md); R-7a registers it, R-7b first emits it.",
+      "common_causes": "A request while a release is under way.",
+      "handling": "Wait for the release record to end, then read Status."
+    },
+    "player_hold_not_held": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "ReleasePlayerHold refused: the instance has no player hold. Workflow #429 R-7a (register section 1.233, contracts/player-hold.md); R-7a registers it, R-7b first emits it.",
+      "common_causes": "The hold already ended, or never existed.",
+      "handling": "Read Status; nothing to end."
+    },
+    "player_hold_expectation_mismatch": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional",
+        "current_owner_epoch": "optional",
+        "current_hold_id": "optional",
+        "current_revision": "optional",
+        "current_phase": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "ReleasePlayerHold refused: expected owner_epoch, hold_id or revision is not the current one; the values carry the current ones (the last three absent without a hold). Workflow #429 R-7a (register section 1.233, contracts/player-hold.md); R-7a registers it, R-7b first emits it.",
+      "common_causes": "The Runtime restarted, or the hold changed, since the caller read it.",
+      "handling": "With the same hold_id the caller may send again with the current values; with another hold or none, ask the person again."
+    },
+    "player_hold_request_reused": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "AcquirePlayerHold refused: its request_id was already accepted, in this owner epoch or an earlier one, and no hold of that id stands. Workflow #429 R-7a (register section 1.233, contracts/player-hold.md); R-7a registers it, R-7b first emits it.",
+      "common_causes": "A client resent an acquire with an old id.",
+      "handling": "Prepare a new acquire; never resend an old one."
+    },
+    "player_hold_drain_incomplete": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional",
+        "alias": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "The acquire failed: in-flight runs did not reach a checkpoint by the grace deadline (drain timeout plus 30 s); the hold is lifted, pauses and fences stay. Workflow #429 R-7a (register section 1.233, contracts/player-hold.md); R-7a registers it, R-7b first emits it.",
+      "common_causes": "A run between checkpoints for longer than the drain timeout allows.",
+      "handling": "Read Status and try again, with a longer drain timeout if the run is long."
+    },
+    "player_hold_handback_busy": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional",
+        "alias": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "The acquire failed: a lease, a worker's run, an autostart key or a ladder step did not end by the grace deadline, or the close had not started by it; the hold is lifted. Workflow #429 R-7a (register section 1.233, contracts/player-hold.md); R-7a registers it, R-7b first emits it.",
+      "common_causes": "Something kept the device busy past the grace deadline.",
+      "handling": "Read Status and try again."
+    },
+    "player_hold_interrupted": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional",
+        "alias": "optional",
+        "hold_id": "optional",
+        "hold_phase": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "The Runtime shut down during the acquire: the hold is kept and is held after the next start (restored_from_phase acquiring). The receipt is Failed with the projection runtime_unavailable; a carrier code: word it by this code, not by the class. Workflow #429 R-7a (register section 1.233, contracts/player-hold.md); R-7a registers it, R-7b first emits it.",
+      "common_causes": "A shutdown or restart while a hold was being acquired.",
+      "handling": "After the restart, settle the stored attempt (reopened) against Status: the hold is held."
+    },
+    "player_hold_persist_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional",
+        "failed_phase": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "A player hold record was refused by the ledger (LedgerFailure): during the acquire the hold is gone, during the release it is held again. Workflow #429 R-7a (register section 1.233, contracts/player-hold.md); R-7a registers it, R-7b first emits it.",
+      "common_causes": "The ledger refused the host.player_hold or host.idle_state record.",
+      "handling": "Read Status; the instance's hold is as it shows."
+    },
+    "player_hold_not_durable": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "AcquirePlayerHold refused: the effective ledger_observer.tag.workbench_patterns does not match host.player_hold, so a hold could not survive a restart. Workflow #429 R-7a (register section 1.233, contracts/player-hold.md); R-7a registers it, R-7b first emits it.",
+      "common_causes": "An explicit pattern list in the configuration file without host.player_hold.",
+      "handling": "Add host.player_hold to the patterns (or remove the explicit list) and restart."
+    },
+    "player_hold_fact_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "The Runtime refused to start: the persisted host.player_hold record is damaged. Workflow #429 R-7a (register section 1.233, contracts/player-hold.md); R-7a registers it, R-7b first emits it.",
+      "common_causes": "A damaged runtime fact.",
+      "handling": "Report it with the start log; the Runtime does not start until the record is readable."
+    },
+    "player_hold_fact_untagged": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional",
+        "fact_key": "optional",
+        "hold_count": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "The Runtime refused to start: persisted player holds of registered instances exist, but the effective tag patterns do not match host.player_hold, so they would be lost and automation would take the devices back. Both checks take the whole key; hold_count counts registered aliases only; a failed index read reports its own code instead. Workflow #429 R-7a (register section 1.233, contracts/player-hold.md); R-7a registers it, R-7b first emits it.",
+      "common_causes": "An explicit pattern list without host.player_hold while a hold was persisted.",
+      "handling": "Add host.player_hold to the patterns and start again."
+    },
+    "player_hold_restored": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "optional",
+        "hold_id": "optional",
+        "at_unix_ms": "optional",
+        "restored_from_phase": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "Daemon start line: a persisted player hold was restored, held, revision 1. Workflow #429 R-7a (register section 1.233, contracts/player-hold.md); R-7a registers it, R-7b first emits it.",
+      "common_causes": "A hold was in effect at the last stop.",
+      "handling": "Nothing to do; the hold stands until a counter ends it."
+    },
+    "player_hold_dropped": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "Daemon start line: a persisted player hold was dropped because its alias is no longer registered. Workflow #429 R-7a (register section 1.233, contracts/player-hold.md); R-7a registers it, R-7b first emits it.",
+      "common_causes": "The instance was removed from the configuration.",
+      "handling": "Nothing to do unless the alias should still exist."
+    },
+    "dispatch_player_held": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional",
+        "instance_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "Control gate 1 (R-7a section 2.6): the instance's player hold defers the dispatch; the effective code of the instance while the hold lasts. Read the four control codes as one class (vocabulary instance_gate). Workflow #429 R-7a (register section 1.233, contracts/player-hold.md); R-7a registers it, R-7b first emits it.",
+      "common_causes": "A person holds the instance.",
+      "handling": "Nothing to do; dispatch resumes when the hold ends and no pause holds the instance."
+    },
+    "dispatch_resource_fenced": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional",
+        "instance_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "Control gate 4 (R-7a section 2.6): the instance's #403 resource fence defers the dispatch (R-7a2 first emits it). Device requests and the fence's own records keep instance_resources_fenced. Workflow #429 R-7a (register section 1.233, contracts/player-hold.md); R-7a registers it, R-7b first emits it.",
+      "common_causes": "An unconfirmed close fenced the instance.",
+      "handling": "The self-check or the ladder lifts the fence; dispatch then resumes."
     }
   },
   "locations": {

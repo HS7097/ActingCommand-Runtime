@@ -47,6 +47,12 @@ actingcommand_contract::outcome_codes! {
         RuntimeOperationUnsupported => "runtime_operation_unsupported": error / none,
         RuntimeCaptureSequenceInvalid => "runtime_capture_sequence_invalid": error / none,
         RuntimeContainedTaskPreparedClientMismatch => "runtime_contained_task_prepared_client_mismatch": error / none,
+        // Workflow #429 R-7a (register §1.233, since 0.12.35): a player hold request whose
+        // receipt never arrived, settled from `Status` (contracts/player-hold.md, "Lost
+        // receipts"), and a prepared request submitted on another handle.
+        RuntimePlayerHoldSettled => "runtime_player_hold_settled": warning / none,
+        RuntimePlayerHoldUnconfirmed => "runtime_player_hold_unconfirmed": error / none,
+        RuntimePlayerHoldPreparedClientMismatch => "runtime_player_hold_prepared_client_mismatch": error / none,
         RuntimeContainedTaskCancelFailed => "runtime_contained_task_cancel_failed": error / none,
         RuntimeContainedTaskRecoveryFailed => "runtime_contained_task_recovery_failed": error / none,
         RuntimeContainedTaskRecoveryTimeoutOverflow => "runtime_contained_task_recovery_timeout_overflow": error / none,

@@ -285,6 +285,21 @@ since_unix_ms }` while the global pause holds, and each `RuntimeInstanceStatus` 
 its instance is paused. Both fields are absent otherwise (additive wire: a
 `deny_unknown_fields` reader must move to this contract before it reads a paused status).
 
+## Relation to the player hold
+
+Workflow #429 R-7a (register §1.233; [player-hold.md](player-hold.md)): a player hold is the
+instance's own state beside its pause, never a pause. It has its own table, its own runtime fact
+`host.player_hold` and its own revision; it never writes, changes or replays a
+`host.scheduling_pause` row, so ruling 116's pauses stay through every acquire, release, failure
+and restart. Pauses and holds order only under the one persistence gate they share. While a
+hold lasts (R-7b) a pause may be set, changed or lifted as usual: every pause stage completes at
+once (no run, no lease, the session closed), and an instance resume lifts the pause without a
+reconnect, its `selfcheck` both sides `ok: false` with `failure_code: player_hold_active`, which
+means the expected, not a failure. Ending a hold reads the pauses of that moment and, under one,
+touches no device (`next: instance_paused` or `scheduling_paused`). The control gates' one order
+(player hold, instance pause, global pause, resource fence; R-7a §2.6) gives an instance's
+effective code; R-7a2 moves this contract's "global pause first" to it.
+
 ## Persistence, no expiry
 
 A pause has no TTL; only `ResumeScheduling` lifts it. Since Workflow #361 B1 a pause survives a

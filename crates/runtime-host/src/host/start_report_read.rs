@@ -205,6 +205,11 @@ impl HostShared {
                         count: *count,
                     })
                     .collect(),
+                // Workflow #429 R-7a (register §1.233): the player hold members are R-7b's to
+                // fill; R-7a's Runtime restores no hold, so they are never on the wire.
+                player_holds_restored: Vec::new(),
+                player_holds_dropped: Vec::new(),
+                player_hold_not_durable: false,
             }
         };
         Ok(OperationSuccess {
