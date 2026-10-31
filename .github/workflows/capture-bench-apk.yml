@@ -1,0 +1,77 @@
+name: capture-bench APK (experiment 402)
+
+# Workflow #402 step 1, C3: the game-neutral test-pattern APK of tools/capture-bench-apk.
+# It runs the off-device unit tests on the JVM, builds the APK with the JDK and the SDK
+# command-line tools already on the runner (no Gradle, nothing downloaded), checks that the APK
+# declares no permission, and uploads it as an artifact.
+#
+# It runs only on the experiment branch exp/402-test-apk, which is never merged, so main never
+# runs it. No other workflow is changed. The coordinator installs the artifact by hand, on the
+# experiment instances only.
+
+on:
+  push:
+    branches: ['exp/402-test-apk']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    if: ${{ github.ref == 'refs/heads/exp/402-test-apk' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      ANDROID_PLATFORM: android-35
+      ANDROID_BUILD_TOOLS: 35.0.0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: JDK 17 and SDK packages on the runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${JAVA_HOME_17_X64:-}" ]; then
+            echo "::error::JAVA_HOME_17_X64 is not set on this runner image"
+            exit 1
+          fi
+          echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
+          sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [ -z "$sdk" ]; then
+            echo "::error::ANDROID_HOME is not set on this runner image"
+            exit 1
+          fi
+          echo "platforms: $(ls "$sdk/platforms" | tr '\n' ' ')"
+          echo "build-tools: $(ls "$sdk/build-tools" | tr '\n' ' ')"
+          missing=()
+          [ -f "$sdk/platforms/$ANDROID_PLATFORM/android.jar" ] || missing+=("platforms;$ANDROID_PLATFORM")
+          [ -x "$sdk/build-tools/$ANDROID_BUILD_TOOLS/aapt2" ] || missing+=("build-tools;$ANDROID_BUILD_TOOLS")
+          if [ "${#missing[@]}" -gt 0 ]; then
+            # No license is accepted here: this succeeds only where the image already accepted it.
+            echo "installing ${missing[*]}"
+            "$sdk/cmdline-tools/latest/bin/sdkmanager" --install "${missing[@]}" < /dev/null
+          fi
+
+      - name: Unit tests (off-device core)
+        shell: bash
+        run: bash tools/capture-bench-apk/build.sh test "$RUNNER_TEMP/apk-test"
+
+      - name: Build the APK
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: bash tools/capture-bench-apk/build.sh apk "$RUNNER_TEMP/apk-work" "$RUNNER_TEMP/apk-out"
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: capture-bench-pattern-apk-${{ github.sha }}
+          path: ${{ runner.temp }}/apk-out/
+          if-no-files-found: error
+          retention-days: 30
