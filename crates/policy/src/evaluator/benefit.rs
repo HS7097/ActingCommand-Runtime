@@ -16,10 +16,12 @@
 //! - **The net benefit** `B(k) = Σ_p produce(k,p)·W(k,p)/Q_p − Σ_p consume(k,p)·P(k,p)/Q_p`, in
 //!   milli, summed exactly and floored once. `produce` is the resource layer's own `r(k,p)` and
 //!   `W(k,p)` its effective weight, the base weight plus a covering goal's shortfall weight;
-//!   `consume` is the task's declared consumption, as the reserve gate reads it; `Q_p` is the
-//!   pool's `valuation.scale`. `P(k,p)`, the cost of consuming pool `p`, is `W(k,p)`, discounted
-//!   for a regenerating pool linearly between the task's reserve line on it and its capacity:
-//!   `P = W·clamp((cap − cur)/(cap − reserve), 0, 1)`, 0 at capacity, `W` at the reserve.
+//!   `consume` is the task's declared consumption in thousandths, exact (SS-2g, register
+//!   §1.232: `C = Σ amount × 1000 + Σ expected_amount_milli`; the reserve gate reads
+//!   `⌈C/1000⌉`); `Q_p` is the pool's `valuation.scale`. `P(k,p)`, the cost of consuming pool
+//!   `p`, is `W(k,p)`, discounted for a regenerating pool linearly between the task's reserve
+//!   line on it and its capacity: `P = W·clamp((cap − cur)/(cap − reserve), 0, 1)`, 0 at
+//!   capacity, `W` at the reserve.
 //! - **Unknown is never 0.** No declared effect, a pending entry, a pending or missing valuation
 //!   of a pool it touches, or a reading `P` needs that is unknown or expired makes `B` unknown:
 //!   the candidate is not dispatched (`benefit_unknown`), and the known part is never added up.
@@ -276,7 +278,10 @@ fn judge(
         seen.push(effect.pool_id.as_str());
         let (pool, valuation) = valued_pool(&effect.pool_id, instance, context)
             .map_err(|_| PolicyEvaluationError::invalid("a judged pool lost its valuation"))?;
-        let consumed = crate::resource_targets::declared_consumption(task, &effect.pool_id)?;
+        // SS-2g: in thousandths, so an expected consumption costs exactly its share; an integer
+        // catalog's numerator is the `amount × 1000` of before.
+        let consumed_milli =
+            crate::resource_targets::declared_consumption_milli(task, &effect.pool_id)?;
         let weight_milli =
             weight(&effect.pool_id).unwrap_or_else(|| u64::from(valuation.base_weight_milli));
         // The share of `W` a unit consumed costs: 1 for a pool that does not regenerate.
@@ -314,11 +319,7 @@ fn judge(
             }
         };
         let (numerator, denominator) = ratio(
-            &[
-                u128::from(consumed) * 1_000,
-                u128::from(weight_milli),
-                share_numerator,
-            ],
+            &[consumed_milli, u128::from(weight_milli), share_numerator],
             &[u128::from(valuation.scale), 1_000, share_denominator],
         )
         .ok_or_else(overflow)?;

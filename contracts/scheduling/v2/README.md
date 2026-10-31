@@ -129,9 +129,11 @@ its reading does not show yet, less the reserve, at least 0), per such
 and `session.dispatch.schedule.run_cap` (at most 1000), which reads each
 consumed pool's per-run `consumes[].amount` and, when no produced pool carries a
 base weight, each produced pool's per-run `produces[].amount` (an
-`expected_amount_milli` production with an open gap there gives no run cap).
-`<i>` and `<j>` are positions in the task's own lists, from 0. No member is
-added: a catalog serializes, and hashes, exactly as before.
+`expected_amount_milli` production with an open gap there gives no run cap, and
+so, SS-2g since 0.12.34, does an `expected_amount_milli` consumption of a
+reserved pool; the allowance is unchanged). `<i>` and `<j>` are positions in the
+task's own lists, from 0. No member is added: a catalog serializes, and hashes,
+exactly as before.
 
 A predicate may be `{"kind":"fact_time_reached","scope":…,"fact_key":…,"offset_ms":N,"max_age_ms":M}`
 (Workflow #405), V2 only: true once the `timestamp_ms` value of the fact plus N
@@ -252,3 +254,13 @@ SS-2b (since 0.12.32; register §1.225; `../README.md`, "Net benefit within a ti
   beside `expected_amount_milli` is `limit_exceeded` at the entry.
 
 A catalog without these serializes, and hashes, exactly as before.
+
+SS-2g (since 0.12.34; register §1.232; `../README.md`, "Expected quantities (v2)"): a `consumes`
+entry may declare `expected_amount_milli` instead of `amount`, as a `produces` entry may: an
+integer in `0..=9007199254740991` thousandths of a unit per run, at most a constant capacity ×
+1000 (`effect_incompatible` above it), exclusive with `amount` and with the pending marker
+(`limit_exceeded` at the entry). The `resourceEffect` schema no longer limits its second branch
+to `direction: produce`. A V1 consumption still requires `amount`. The net benefit reads the
+consumption in thousandths exactly; the reserve gate, the tie-break and the selection fields
+read it rounded up to whole units. No member is added: a catalog without an expected consumption
+serializes, and hashes, exactly as before.
