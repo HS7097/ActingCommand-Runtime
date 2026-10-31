@@ -262,7 +262,16 @@ trigger and feedback stop, its task cooldown and (SS-4, since 0.12.34) the no-pr
 order. The policy evaluation decides a candidate's deferral by the first of these that applies;
 its code is the decision's reason:
 
-1. operator scheduling pause (`dispatch_paused_global`, `dispatch_paused_instance`);
+1. a control gate, in the one order of [player-hold.md](player-hold.md), "The one order of the
+   control gates" (R-7a §2.6; Workflow #429 R-7a2, register §1.234, since 0.12.35; before it,
+   the global pause came first and a fence was refused only at admission). The first in effect
+   is the reason, with no wake:
+   - **1a.** the instance's player hold (`dispatch_player_held`; R-7b fills it);
+   - **1b.** the instance's own operator scheduling pause, any stage (`dispatch_paused_instance`);
+   - **1c.** the global operator scheduling pause (`dispatch_paused_global`);
+   - **1d.** the instance's #403 resource fence, any state (`dispatch_resource_fenced`, value
+     `instance_id`); the admission refuses with it too, for an intent evaluated before the fence.
+   Readers of not-run reasons take the four codes as one class (vocabulary `instance_gate`);
 2. the instance is held or in takeover cooldown (`dispatch_instance_held`,
    `dispatch_instance_cooldown`);
 3. the task package is suspended (`pack_admission_suspended`, `policy-suspension.md`);

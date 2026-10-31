@@ -13,6 +13,8 @@ mod application_update;
 mod approval;
 mod catalog_plan;
 pub mod codes;
+// Workflow #429 R-7a2: the host's side of the one order of the control gates (R-7a §2.6).
+mod control_gates;
 // Workflow #392 DA-4b-D (Alice's ruling 69): the declared safe areas, read from their directory.
 mod display_safe_area;
 mod emulator_control;

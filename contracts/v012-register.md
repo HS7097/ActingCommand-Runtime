@@ -5072,6 +5072,80 @@ would not update to it; R-7a itself declares [2, 4] and rolls back freely.
 | R7A-6 | the codes, keys and vocabularies of §6.1, `player_held` | catalog | R-7a | R-7b (host codes), R-7a (client and contract codes) | `since` 0.12.35 |
 | R7A-7 | `runtime-client` [2, 4] | interface declaration | R-7a | — | R-7b raises `min` to 4 |
 
+### 1.234 Slice R-7a2 (0.12.35): every dispatch site takes its code from the one order of the control gates; the fence defers at position 1d with `dispatch_resource_fenced` (Workflow #429; R-7a's second pull request; the coordinator's decision of 10-31 14:4x on the design's §8.2 item 9: the order player hold → instance pause → global pause → resource fence and its two behaviour changes are confirmed, an engineering consistency rather than a product choice, and R-7a2 ships in R-7a's release, in production before 114-B; the frozen design `rd-1031/design-r7a-hold-v3.1.md` §2.6 and §7.1 "R-7a2"; coordinator work order `rd-1031/brief-r7a2.md`)
+
+[player-hold.md](player-hold.md), "The one order of the control gates" (R-7a §2.6), is the
+contract. [scheduling-pause.md](scheduling-pause.md) ("The dispatch gate"),
+[scheduling-blackout.md](scheduling-blackout.md) ("Order of the deferrals": position 1 is split
+into 1a to 1d), [scheduling/README.md](scheduling/README.md) (the pause paragraph, the fact
+refresh's holds and the clock-slot row "control") and [emulator-control.md](emulator-control.md)
+(`startup_package_withheld` names the instance's pause by that order) follow it: the design's §2.6
+rows 7 and 8, which §1.233 (e) left to this slice. The number 1.234 is the coordinator's; it builds
+on §1.233 (R-7a, merged at its base f57f7d20). R-7b (the player hold's behaviour) follows; 114-A
+(§1.236) and R-15b (§1.237) may be in flight in the same release.
+
+**What.** (1) `SchedulingPauseTable::deferral_code` (the global pause first) is removed. The pause
+table gives `control_gates(alias, resource_fence)`: `ControlGates::evaluate` with the player hold
+false until R-7b, the instance's own pause in any stage, the global pause and the fence its caller
+read at the same step. The host maps the contract's `control_gate_code` back to its runtime-host
+code in one place (`control_gates.rs`: `host_code`, `effective_code`), and a test holds every word
+against the registered code word by word, so a rename on either side fails until both change.
+(2) Policy evaluation (§2.6 rows 4a and 5): as a cycle starts, beside the pause snapshot, the
+aliases of every fenced instance (any stage) are read once; the closure's position 1 is the
+effective code of the instance's control gates (1a to 1d), position 2 its queue as before. A fenced
+instance's candidate is `Deferred` with `dispatch_resource_fenced` (value `instance_id`, the
+alias) and no wake. The fact refresh's holds and its `gate_code` (row 4b) take the same code, so an
+instance a control gate holds raises no fact refresh demand. ScheduleExplanation follows the
+evaluation (row 5). (3) Policy admission (row 4c): under the admission lock the control gates are
+read now, in the same order, before the instance's queue, the performance and the capacity gates;
+the refusal is the effective code: `dispatch_paused_instance` with both pauses,
+`dispatch_resource_fenced` (value `instance_id`, the instance's opaque identifier, as the queue's
+refusal names it) for an intent evaluated before the fence. The fence's former check after the
+performance gate (`instance_resources_fenced`) is gone. (4) The clock slot's gate class
+`OperatorPause` is renamed `Control` and takes `dispatch_resource_fenced` (row 4e): a fenced due
+slot is `clock_slot_deferred` at first sight; `dispatch_player_held` joins it with R-7b. (5) The
+recovery ladder's A6 (row 4d) reads only whether a pause holds the instance (`pauses`), as before.
+(6) The descriptions of `dispatch_paused_global`, `dispatch_paused_instance`,
+`dispatch_resource_fenced`, `instance_resources_fenced` and `clock_slot_deferred` say so; no
+category, value, key or `since` changes. R-7a2 is the first writer of `dispatch_resource_fenced`
+(§1.233 R7A-6 names R-7b for the host codes; for this one it is R-7a2).
+
+**Unchanged.** Every wire shape and status member: no `control` is filled, `runtime-client` stays
+[2, 4]. The pause table, its fact and its revisions; the routine gate and the instance's queue; the
+fence itself, its ladder, its recheck and its lift. A device request that meets a fence, and the
+fence's own records, keep `instance_resources_fenced` (§2.6 O-1). The recovery ladder's admission;
+the watch, the daemon-start autostart and IDLE-1 (`automatic_start_hold`); the configuration, the
+ledger's shapes and the state files.
+
+**What changes live.** (a) With both pauses in effect the reason and the admission's refusal are
+`dispatch_paused_instance`, before `dispatch_paused_global`. Ruling 116's five instances keep
+`dispatch_paused_instance` whether the global pause is set or lifted, so ScheduleExplanation's
+`why` stays and its `since_unix_ms` no longer restarts; so do the fact refresh's `gate_code`, the
+rejection records and 114's history. (b) A fenced instance: the admission refuses an intent
+evaluated before the fence with `dispatch_resource_fenced` (info / none) instead of
+`instance_resources_fenced` (error / environment_fault), so counts by error category see fewer
+rows. A candidate reaches the closure only past its placement: on an instance whose device the host
+self-checks (every emulator instance), the fence also withholds its policy availability (Workflow
+#403), so its candidates stay `Blocked` with `instance_unavailable` at placement, before position 1,
+as they did before this slice; position 1d decides for an instance whose availability the fence
+does not withhold, and at admission. (c) In production all five instances carry ruling 116's pause,
+so nothing is dispatched either way.
+
+**Rollback** (to 0.12.34). Nothing is persisted and no shape changed: roll back as usual. 0.12.34
+puts the global pause first again and refuses a fenced instance at admission with
+`instance_resources_fenced`. The records 0.12.35 wrote keep their codes: `dispatch_resource_fenced`
+rides only in existing reason chains, rejection outcomes and a clock-slot record's `gate_code`,
+which 0.12.34 reads as it reads any code, its values kept as a map without a key check (§1.231's
+rollback), and whose suspension report reads a clock-slot record's `gate_code` as any received
+code (`CodeStr`). The configuration and the state files need nothing.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| R7A2-1 | the control gates' one order at every dispatch site (`SchedulingPauseTable::control_gates`, `control_gates.rs`); `deferral_code` removed | behaviour (evaluation, fact refresh, admission) | R-7a2 | the policy host | player hold false until R-7b |
+| R7A2-2 | `dispatch_paused_instance` before `dispatch_paused_global` | behaviour (reason and refusal code) | R-7a2 | the policy evaluation and admission | ruling 116's `why` and `since_unix_ms` hold under the global pause |
+| R7A2-3 | `dispatch_resource_fenced` at position 1d (value `instance_id`) | behaviour (reason and refusal code) | R-7a2 | the policy evaluation and admission | device requests and the fence's records keep `instance_resources_fenced` |
+| R7A2-4 | the clock slot's class `Control` with `dispatch_resource_fenced` | behaviour (clock-slot records) | R-7a2 | the clock-slot preview | `clock_slot_deferred` at first sight; `dispatch_player_held` joins with R-7b |
+
 ### 1.235 Slice SS-2d (0.12.35): a judged candidate whose net benefit is within its rounding error is neither positive nor negative; a model-verified realization task may run in the last place of its tier (Alice's ruling 127, 10-31 13:19 「127我认同你的判断」, the review's version, Workflow #424 comment 6538837139 §4 and the coordinator's record 6539002371: cost discounts only where overflow or regeneration loss is verifiable; the zero reduced-value fallback only for necessary realization or conversion tasks with a real downstream use and verifiable progress, bound by eligibility, the reserve line, failure and no-progress guards, never a zero-benefit loop; design `rd-1031/design-acm-price-addendum2.1.md` §7; coordinator work order `rd-1031/brief-ss2d.md`)
 
 [scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Within tolerance"),

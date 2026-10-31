@@ -196,10 +196,11 @@ actingcommand_contract::outcome_codes! {
         /// `window_end_unix_ms`, `next_eligible_unix_ms`, `next_occurrence_unix_ms` when known;
         /// Workflow #372 K2).
         ClockSlotRefused => "clock_slot_refused": warning / none,
-        /// Info. A transient gate held a due clock slot back: an operator pause at first sight,
-        /// a queue wait or an unavailable instance only once the pair's activity window has
-        /// closed; recorded once per (task, instance, occurrence) as a `goal_missed` planning
-        /// signal (same keys as `clock_slot_refused`; Workflow #372 K2).
+        /// Info. A transient gate held a due clock slot back: a control gate (an operator pause;
+        /// Workflow #429 R-7a2: a #403 fence) at first sight, a queue wait or an unavailable
+        /// instance only once the pair's activity window has closed; recorded once per (task,
+        /// instance, occurrence) as a `goal_missed` planning signal (same keys as
+        /// `clock_slot_refused`; Workflow #372 K2).
         ClockSlotDeferred => "clock_slot_deferred": info / none,
         /// Info. A selected dispatch serves a clock occurrence from before its activity window
         /// opened; recorded once at the first cycle that selects it, as a `goal_missed`
