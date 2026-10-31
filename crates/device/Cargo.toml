@@ -8,6 +8,12 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+# #402 step 1 (C1, plan v2.1 §3.2 item 1): the device layer's timing points for the experiment
+# carrier tools/capture-bench. Off by default; without it every point is a no-op. No release
+# binary enables it (tools/actinglab-architecture/tests/workspace_guards.rs).
+bench-timing = []
+
 [dependencies]
 actingcommand-contract = { path = "../actingcommand-contract" }
 image = { version = "0.25", default-features = false, features = ["png"] }

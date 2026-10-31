@@ -118,6 +118,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "actingcommand-capture-bench"
+version = "0.1.0"
+dependencies = [
+ "actingcommand-artifact-store",
+ "actingcommand-contract",
+ "actingcommand-device",
+ "actingcommand-host-metrics",
+ "serde",
+ "serde_json",
+ "sha2",
+ "toml",
+ "windows-sys",
+]
+
+[[package]]
 name = "actingcommand-contract"
 version = "0.1.0"
 dependencies = [

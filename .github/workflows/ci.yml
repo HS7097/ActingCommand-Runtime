@@ -644,10 +644,84 @@ jobs:
           path: ${{ runner.temp }}/test-results/
           if-no-files-found: warn
 
+  # #402 step 1 (experiment branch only, never merged): the capture bench's D1 rehearsal. Its
+  # own job, so `exec-core` keeps building `actingcommand-device` with its default features.
+  bench:
+    if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
+    runs-on: windows-latest
+    timeout-minutes: 35
+    env:
+      CI_PACKAGES: -p actingcommand-capture-bench
+      CI_SKIP: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/rust-setup
+        with:
+          family: exec-core
+      - name: Build tests
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $selection = "$env:CI_PACKAGES".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
+          $build = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'test-build')
+          $messages = Join-Path $build 'build.jsonl'
+          cargo test --locked --no-run --message-format=json-render-diagnostics @selection > $messages
+          if ($LASTEXITCODE -ne 0) {
+            throw "test build failed with exit code $LASTEXITCODE"
+          }
+      - name: Test
+        id: test
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          $selection = "$env:CI_PACKAGES".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
+          $skip = @("$env:CI_SKIP".Split(' ', [StringSplitOptions]::RemoveEmptyEntries) | ForEach-Object { '--skip'; $_ })
+          $results = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'test-results')
+          cargo test --locked --no-fail-fast @selection -- @skip 2>&1 |
+            ForEach-Object { '{0:HH:mm:ss.fff} {1}' -f (Get-Date), $_ } |
+            Tee-Object -FilePath (Join-Path $results "$env:GITHUB_JOB.log")
+          if ($LASTEXITCODE -ne 0) {
+            throw "$env:GITHUB_JOB tests failed with exit code $LASTEXITCODE"
+          }
+      - name: Attribute test results
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          python --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "python --version failed with exit code $LASTEXITCODE"
+          }
+          $builds = @(Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP 'test-build') -Filter '*.jsonl' | ForEach-Object { '--build'; $_.FullName })
+          $configuration = "$env:CI_FEATURES" -replace '^--features\s+', ''
+          python ci/gate_check.py attribute --job $env:GITHUB_JOB @builds --log (Join-Path $env:RUNNER_TEMP "test-results/$env:GITHUB_JOB.log") "--configuration=$configuration"
+          if ($LASTEXITCODE -ne 0) {
+            throw "attributing the $env:GITHUB_JOB test log failed with exit code $LASTEXITCODE"
+          }
+      - name: Upload test results
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: test-results-${{ github.job }}
+          path: ${{ runner.temp }}/test-results/
+          if-no-files-found: error
+      # §6.2 D1 item 1 asks for the number of enumerated interleavings: printed here (the gating
+      # run above captures test output).
+      - name: Interleaving counts (report only)
+        if: ${{ !cancelled() && steps.test.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          cargo test --locked -p actingcommand-capture-bench --test d1_interleavings -- --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) {
+            throw "the interleaving report run failed with exit code $LASTEXITCODE"
+          }
+
   # The summary check. Its check name stays `rust`, the required check of `runtime-main-quality`.
   gate:
     name: rust
-    needs: [lint, light, exec-core, exec-tooling, ledger, host-lab, runtime-client, apps]
+    needs: [lint, light, exec-core, exec-tooling, ledger, host-lab, runtime-client, apps, bench]
     if: ${{ always() && github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 35

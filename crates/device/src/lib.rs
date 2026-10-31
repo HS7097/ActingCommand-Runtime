@@ -27,6 +27,8 @@ mod tests {
 pub mod adb;
 mod adb_bounds_diagnostic;
 mod backend_open;
+// #402 step 1 (C1): the experiment carrier's timing points; no-ops unless `bench-timing` is on.
+pub mod bench_timing;
 pub mod capture;
 pub mod codes;
 mod device_serial;

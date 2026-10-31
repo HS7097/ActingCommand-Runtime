@@ -1,0 +1,243 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
+//! `ac-capture-bench` (#402 step 1, C2). Subcommands:
+//!
+//! - `run --plan <plan.toml> --run-dir <D:\.Claude\exp402\runs\<run_id>>`: one bench run on the
+//!   real backends. `--fake` uses the fake backend (D2, no device), with `--fake-hang-close
+//!   <instance>:<N|S>` and `--fake-no-self-exit` for the close-never-returns rehearsal.
+//! - `view --viewer-id <n> --run-dir <dir> --ttl-ms <ms> [--slow-fps <f>]
+//!   [--stop-renew-after-ms <ms>] [--unsubscribe-after-ms <ms>]`: a viewer (the bench starts it).
+//! - `fake-child --scid <hex> [--max-seconds <s>]`: the stand-in for S's host-side `adb shell`
+//!   child in D2 (outside the job object).
+//!
+//! The bench writes nothing to its standard streams (§3.10 item 3); the result is the exit code
+//! and the run directory.
+
+use actingcommand_capture_bench::backend::{BackendFactory, DeviceSideCheck, MaterialFactory};
+use actingcommand_capture_bench::clock::{Clock, SystemClock};
+use actingcommand_capture_bench::fake::{
+    CloseHang, FakeCheckScript, FakeDevice, FakeMaterials, FakeScript, FaultAt, Latch,
+};
+use actingcommand_capture_bench::metrics::HostMetrics;
+use actingcommand_capture_bench::model::{BackendKind, RunResult};
+use actingcommand_capture_bench::plan::Plan;
+use actingcommand_capture_bench::real::{RealDevice, TimingSink};
+use actingcommand_capture_bench::runner::{Env, run};
+use actingcommand_capture_bench::safety::{HostStartChecks, Roots};
+use actingcommand_capture_bench::supervisor::{FixedLimits, ProcessExit};
+use actingcommand_capture_bench::viewer::{ChildViewers, ViewArgs, view_main};
+use actingcommand_capture_bench::winproc::Job;
+use serde_json::json;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+
+fn options(arguments: &[String]) -> Result<BTreeMap<String, String>, String> {
+    let mut map = BTreeMap::new();
+    let mut index = 0;
+    while index < arguments.len() {
+        let name = arguments[index]
+            .strip_prefix("--")
+            .ok_or_else(|| format!("unexpected argument {}", arguments[index]))?;
+        let flag = matches!(name, "fake" | "fake-no-self-exit");
+        if flag {
+            map.insert(name.to_owned(), String::new());
+            index += 1;
+        } else {
+            let value = arguments
+                .get(index + 1)
+                .ok_or_else(|| format!("--{name} needs a value"))?;
+            map.insert(name.to_owned(), value.clone());
+            index += 2;
+        }
+    }
+    Ok(map)
+}
+
+fn run_command(arguments: &[String]) -> i32 {
+    let refused = RunResult::RefusedStart.exit_code();
+    let Ok(options) = options(arguments) else {
+        return refused;
+    };
+    let (Some(plan_path), Some(run_dir)) = (options.get("plan"), options.get("run-dir")) else {
+        return refused;
+    };
+    let run_dir = PathBuf::from(run_dir);
+    let Ok(plan_text) = std::fs::read_to_string(plan_path) else {
+        return refused;
+    };
+    let Ok(plan) = Plan::parse(&plan_text) else {
+        return refused;
+    };
+    let clock: Arc<dyn Clock> = Arc::new(SystemClock::new());
+    let job = Job::create().ok().map(Arc::new);
+    let executable =
+        std::env::current_exe().unwrap_or_else(|_| PathBuf::from("ac-capture-bench.exe"));
+    let fake = options.contains_key("fake");
+    let mut limits = FixedLimits::production();
+    let (backends, device_check, materials, backend_label): (
+        Arc<dyn BackendFactory>,
+        Arc<dyn DeviceSideCheck>,
+        Arc<dyn MaterialFactory>,
+        &str,
+    ) = if fake {
+        let mut script = FakeScript::default();
+        if let Some(target) = options.get("fake-hang-close")
+            && let Some((instance, kind)) = target.split_once(':')
+        {
+            script.close_hangs.push(CloseHang {
+                at: FaultAt {
+                    instance: instance.to_owned(),
+                    kind: if kind == "S" {
+                        BackendKind::Scrcpy
+                    } else {
+                        BackendKind::Nemu
+                    },
+                    from_call: 1,
+                    count: 1,
+                },
+                latch: Latch::new(),
+                on_entry: None,
+            });
+        }
+        if options.contains_key("fake-no-self-exit") {
+            limits.self_exit = false;
+        }
+        let device = FakeDevice::new(Arc::clone(&clock), script, FakeCheckScript::default());
+        let materials = Arc::new(FakeMaterials {
+            writes: AtomicU64::new(0),
+        });
+        (
+            Arc::new(Arc::clone(&device)),
+            Arc::new(device),
+            Arc::new(materials),
+            "fake",
+        )
+    } else {
+        let sink = TimingSink::install();
+        let device = RealDevice::new(&plan, Arc::clone(&clock), sink);
+        (
+            Arc::new(Arc::clone(&device)),
+            Arc::new(device),
+            Arc::new(actingcommand_capture_bench::bmodel::PipelineMaterials {
+                root: run_dir.join("bmodel"),
+            }),
+            "real",
+        )
+    };
+    // §5.5: the bounded per-process GPU counters, in the job object.
+    let mut typeperf = None;
+    if plan.metrics.typeperf {
+        let samples = (plan.total_duration_ms / 1_000).max(1).to_string();
+        let output = run_dir.join("gpu-run.csv");
+        if std::fs::create_dir_all(&run_dir).is_ok()
+            && let Ok(child) = std::process::Command::new("typeperf")
+                .args([
+                    r"\GPU Engine(*)\Utilization Percentage",
+                    r"\GPU Process Memory(*)\Dedicated Usage",
+                    "-si",
+                    "1",
+                    "-sc",
+                    samples.as_str(),
+                    "-f",
+                    "CSV",
+                    "-y",
+                    "-o",
+                ])
+                .arg(&output)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+        {
+            if let Some(job) = &job {
+                let _ = job.assign(&child);
+            }
+            typeperf = Some(child);
+        }
+    }
+    let env = Env {
+        clock: Arc::clone(&clock),
+        backends,
+        device_check,
+        materials,
+        metrics: Box::new(HostMetrics::new(run_dir.clone())),
+        viewers: Arc::new(ChildViewers {
+            executable,
+            run_dir: run_dir.clone(),
+            job: job.clone(),
+        }),
+        start_checks: Box::new(HostStartChecks::default()),
+        exit: Arc::new(ProcessExit),
+        limits,
+        roots: Roots::fixed(),
+        header_facts: json!({
+            "backend": backend_label,
+            "bench_timing": actingcommand_device::bench_timing::ENABLED,
+            "job_object": job.is_some(),
+            "typeperf": typeperf.as_ref().map(std::process::Child::id),
+        }),
+    };
+    let outcome = run(&plan_text, &run_dir, env);
+    if let Some(mut child) = typeperf {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    drop(job);
+    outcome.exit_code
+}
+
+fn view_command(arguments: &[String]) -> i32 {
+    let Ok(options) = options(arguments) else {
+        return 2;
+    };
+    let number = |name: &str| {
+        options
+            .get(name)
+            .and_then(|value| value.parse::<u64>().ok())
+    };
+    let (Some(viewer_id), Some(run_dir), Some(ttl_ms)) = (
+        number("viewer-id"),
+        options.get("run-dir"),
+        number("ttl-ms"),
+    ) else {
+        return 2;
+    };
+    view_main(ViewArgs {
+        viewer_id,
+        run_dir: PathBuf::from(run_dir),
+        ttl_ms,
+        slow_fps: options
+            .get("slow-fps")
+            .and_then(|value| value.parse::<f64>().ok()),
+        stop_renew_after_ms: number("stop-renew-after-ms"),
+        unsubscribe_after_ms: number("unsubscribe-after-ms"),
+    })
+}
+
+fn fake_child_command(arguments: &[String]) -> i32 {
+    let Ok(options) = options(arguments) else {
+        return 2;
+    };
+    if options.get("scid").is_none() {
+        return 2;
+    }
+    let seconds = options
+        .get("max-seconds")
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(3_600);
+    std::thread::sleep(std::time::Duration::from_secs(seconds));
+    0
+}
+
+fn main() {
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    let code = match arguments.first().map(String::as_str) {
+        Some("run") => run_command(&arguments[1..]),
+        Some("view") => view_command(&arguments[1..]),
+        Some("fake-child") => fake_child_command(&arguments[1..]),
+        _ => 2,
+    };
+    std::process::exit(code);
+}
