@@ -170,7 +170,7 @@ fn check_registry(document: &str, catalog: &Value) -> Vec<String> {
             for name in &listed {
                 if !registered.contains(name) {
                     violations.push(format!("{document}: {name} is not in {owner}'s {kind}"));
-                } else if fragment[kind][name.as_str()]["since"] != Value::from("0.12.35") {
+                } else if fragment[kind][name.as_str()]["since"] != "0.12.35" {
                     violations.push(format!("{document}: {name} is not since 0.12.35"));
                 }
             }
@@ -213,7 +213,7 @@ fn r15b_every_code_and_word_of_the_contracts_is_registered() {
         }
     }
     for (name, code) in entry["codes"].as_object().expect("codes") {
-        if code["owner"] != Value::from("actingcommand-entry") {
+        if code["owner"] != "actingcommand-entry" {
             violations.push(format!("{name} is not owned by actingcommand-entry"));
         }
     }
