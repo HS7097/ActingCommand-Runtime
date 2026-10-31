@@ -284,6 +284,9 @@ pub struct FakeCheckScript {
     pub gone_residual: Vec<String>,
     /// Instances whose E restarts before the disappearance check.
     pub rebooted: Vec<String>,
+    /// #402 C2d: how long the disappearance check of an instance takes on the clock (the
+    /// queries until one sees the server gone).
+    pub gone_after_us: BTreeMap<String, Micros>,
 }
 
 impl FakeDevice {
@@ -731,6 +734,9 @@ impl DeviceSideCheck for Arc<FakeDevice> {
 
     fn gone(&self, instance: &str, identity: &IdentityTuple) -> Result<GoneResult, CheckFailure> {
         lock(&self.check_calls).push(format!("gone:{instance}:{:08x}", identity.scid));
+        if let Some(delay) = self.device_script.gone_after_us.get(instance) {
+            self.clock.sleep_us(*delay);
+        }
         if self
             .device_script
             .gone_unconfirmed

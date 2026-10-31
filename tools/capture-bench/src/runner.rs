@@ -12,8 +12,8 @@ use crate::backend::{
 };
 use crate::clock::{Clock, Micros, Participant, blocking, ms, pause_until, spawn_participant};
 use crate::hub::{
-    BudgetConfig, DispatchOp, DispatchOutcome, FormalResult, Hub, MemorySink, SampleOp, aux_call,
-    formal_capture, formal_tap, run_blocking,
+    BudgetConfig, DispatchOp, DispatchOutcome, FormalResult, Hub, MemorySink, NativeEnd, SampleOp,
+    aux_call, formal_capture, formal_tap, run_blocking,
 };
 use crate::journal::{Journal, JournalRecords, TeeRecords};
 use crate::locks::LockOwner;
@@ -428,25 +428,42 @@ impl SegmentShared {
         (at > 0).then_some(at)
     }
 
-    /// A call that was in flight when the segment stopped new work (§3.5 四个时刻).
+    /// A call that was in flight when the segment stopped new work (§3.5 四个时刻). #402 C2d:
+    /// `t_native_return_us` is null when the native return is unconfirmed (then `unconfirmed`
+    /// is true) or when the call made no native call, each with its reason in `null_reasons`.
     fn note_drained(
         &self,
         k: u64,
         start: Option<Micros>,
         caller_return: Option<Micros>,
-        native_return: Option<Micros>,
-        unconfirmed: bool,
+        native: NativeEnd,
     ) {
         if let Some(stop_at) = self.stop_at()
             && start.is_some_and(|start| start < stop_at)
             && caller_return.is_none_or(|end| end >= stop_at)
         {
-            lock(&self.drained).push(json!({
+            let (native_return, unconfirmed, reason) = match native {
+                NativeEnd::Returned(at) => (Some(at), false, None),
+                NativeEnd::Unconfirmed => (
+                    None,
+                    true,
+                    Some("a native call started and its return is not confirmed"),
+                ),
+                NativeEnd::NoCall => (None, false, Some("the call made no native call")),
+            };
+            let mut call = json!({
                 "k": k,
                 "t_caller_return_us": caller_return,
                 "t_native_return_us": native_return,
                 "unconfirmed": unconfirmed,
-            }));
+            });
+            if let (Some(reason), Value::Object(map)) = (reason, &mut call) {
+                map.insert(
+                    "null_reasons".to_owned(),
+                    json!({ "t_native_return_us": reason }),
+                );
+            }
+            lock(&self.drained).push(call);
         }
     }
 }
@@ -472,6 +489,9 @@ enum RecordShape {
     Dispatch {
         preview_state: String,
         record_path: String,
+        /// #402 C2d: the C7 variant (formal captures read the S slot, Nemu only taps), from
+        /// the plan's `formal.capture_from_scrcpy`.
+        variant: bool,
     },
     Admission {
         j: u32,
@@ -1349,6 +1369,7 @@ impl RunShared {
         let generation = self
             .hub
             .snapshot(&self.owner(), |state| state.instances[instance].generation);
+        let t_close_request = self.now();
         let outcome = self.closer.close(
             backend,
             CloseInfo {
@@ -1358,6 +1379,7 @@ impl RunShared {
                 identity: identity.clone(),
             },
         );
+        let t_close_return = self.now();
         if self.terminal.finished_by_supervisor() {
             return false;
         }
@@ -1380,9 +1402,16 @@ impl RunShared {
                 true,
                 || self.device_check.gone(&name, &identity),
             );
-            let device_side = match checked {
+            // #402 C2d (E.s_close "2 s 内"): the check returns right after the query that saw
+            // the server gone, so this is when the device side was seen gone.
+            let t_seen_gone = self.now();
+            let mut gone_null_reason = None;
+            let mut device_side = match checked {
                 Ok(Ok(GoneResult::Gone)) => json!({ "gone": true, "forward_removed": true }),
                 Ok(Ok(GoneResult::Rebooted)) => {
+                    gone_null_reason = Some(
+                        "the device restarted (boot_id changed); no query saw the server gone",
+                    );
                     self.journal
                         .event("device_rebooted", json!({ "instance": name }));
                     lock(&self.rebooted).insert(instance);
@@ -1409,6 +1438,14 @@ impl RunShared {
                         CheckFailure::Unconfirmed(_) => "device_side_unconfirmed",
                         CheckFailure::Residual(_) => "device_side_residual",
                     };
+                    gone_null_reason = Some(match &failure {
+                        CheckFailure::Unconfirmed(_) => {
+                            "device_side_unconfirmed: the disappearance could not be confirmed"
+                        }
+                        CheckFailure::Residual(_) => {
+                            "device_side_residual: the same identity still matched after 2 s"
+                        }
+                    });
                     self.unconfirmed(format!(
                         "{name} scrcpy {:08x}: {label}: {}",
                         identity.scid,
@@ -1418,6 +1455,7 @@ impl RunShared {
                 }
                 Err(gate) => {
                     confirmed = false;
+                    gone_null_reason = Some("the device-side check was refused by a gate");
                     self.unconfirmed(format!(
                         "{name} scrcpy {:08x}: the device-side check was refused by {}",
                         identity.scid,
@@ -1426,8 +1464,32 @@ impl RunShared {
                     json!({ "gone": false, "refused_by": gate })
                 }
             };
+            // `gone_within_ms` from the host-side close's return (where §3.5.1's 2 s of
+            // disappearance queries start), `gone_after_request_ms` from the close request;
+            // whole milliseconds rounded up.
+            let elapsed_ms = |from: Micros| t_seen_gone.saturating_sub(from).div_ceil(1_000);
+            if let Value::Object(map) = &mut device_side {
+                let (within, after_request) = match gone_null_reason {
+                    None => (
+                        json!(elapsed_ms(t_close_return)),
+                        json!(elapsed_ms(t_close_request)),
+                    ),
+                    Some(_) => (Value::Null, Value::Null),
+                };
+                map.insert("gone_within_ms".to_owned(), within);
+                map.insert("gone_after_request_ms".to_owned(), after_request);
+            }
             if let Value::Object(map) = &mut record {
                 map.insert("device_side".to_owned(), device_side);
+                if let Some(reason) = gone_null_reason {
+                    map.insert(
+                        "null_reasons".to_owned(),
+                        json!({
+                            "device_side.gone_within_ms": reason,
+                            "device_side.gone_after_request_ms": reason,
+                        }),
+                    );
+                }
             }
         }
         if let Value::Object(map) = &mut record {
@@ -2323,20 +2385,17 @@ impl RunShared {
                     .material_events
                     .fetch_add(cost.events, Ordering::AcqRel);
             }
-            let native_return = outcome
-                .frame
-                .as_ref()
-                .and_then(|frame| frame.native.iter().filter_map(|span| span.end_us).max())
-                .or(outcome.call_end_us);
+            let native = match (&outcome.failure, &outcome.frame, outcome.call_end_us) {
+                (Some(failure), _, Some(end)) => NativeEnd::of_failure(failure, end),
+                (None, Some(frame), Some(end)) => NativeEnd::of_frame(frame, end),
+                (Some(failure), _, None) if failure.native_unconfirmed() => NativeEnd::Unconfirmed,
+                _ => NativeEnd::NoCall,
+            };
             segment.note_drained(
                 opportunity,
                 outcome.call_start_us,
                 outcome.call_end_us,
-                native_return,
-                outcome
-                    .failure
-                    .as_ref()
-                    .is_some_and(|failure| !failure.native_returned),
+                native,
             );
             let decoded = if delivered {
                 self.hub
@@ -2366,6 +2425,29 @@ impl RunShared {
                     json!(outcome.disposition.label()),
                 );
             }
+            // #402 C2d (A.static_label): the time the path labels the delivered frame with, on
+            // the bench clock: S's `T_recv` (its `captured_at` is the packet's arrival), N's and
+            // B_model's `T_built` (`captured_at` is the frame's construction) (§3.8 时间口径).
+            let labelled = if delivered {
+                outcome
+                    .frame
+                    .as_ref()
+                    .and_then(|frame| frame.received_us.or(frame.built_us))
+            } else {
+                None
+            };
+            if labelled.is_none()
+                && let Value::Object(map) = &mut null_reasons
+            {
+                map.insert(
+                    "labelled_content_time_us".to_owned(),
+                    json!(if delivered {
+                        "the frame carries neither T_recv nor T_built"
+                    } else {
+                        "not delivered"
+                    }),
+                );
+            }
             let line = info.record(
                 "preview",
                 path.as_str(),
@@ -2388,6 +2470,7 @@ impl RunShared {
                             .map(|(end, start)| end.saturating_sub(start))),
                     })),
                     "content": content,
+                    "labelled_content_time_us": labelled,
                     "null_reasons": null_reasons,
                     "reconnect": reconnected,
                     "discard_reason": match &outcome.disposition {
@@ -2473,8 +2556,17 @@ impl RunShared {
             let record = RecordShape::Dispatch {
                 preview_state: preview_state.to_owned(),
                 record_path: record_path.to_owned(),
+                variant: formal.capture_from_scrcpy,
             };
-            segment.note_drained(dispatch, Some(tick), Some(self.now()), None, false);
+            // #402 C2d (E.drain): the native return of the dispatch's device calls, or
+            // unconfirmed; a contended or refused dispatch made no device call.
+            let native = match &outcome {
+                DispatchOutcome::Granted { work, .. } => work.native_end(),
+                DispatchOutcome::Contended { .. } | DispatchOutcome::Refused { .. } => {
+                    NativeEnd::NoCall
+                }
+            };
+            segment.note_drained(dispatch, Some(tick), Some(self.now()), native);
             let stop = self.record_dispatch(
                 segment,
                 instance,
@@ -2517,7 +2609,7 @@ impl RunShared {
                 BackendKind::Scrcpy => "S".to_owned(),
             },
         };
-        let extra = match outcome {
+        let mut extra = match outcome {
             DispatchOutcome::Granted {
                 registration,
                 formal_grant,
@@ -2566,10 +2658,11 @@ impl RunShared {
                 if work.first_flip.is_none()
                     && let Value::Object(map) = &mut admission_reasons
                 {
+                    // #402 C2d: the two reasons apart (analysis schema §3.3).
                     map.insert(
                         "first_flip".to_owned(),
                         json!(if self.apk_enabled(instance) {
-                            "no frame showed the tap's flip within the wait"
+                            work.first_flip_reason.unwrap_or(FLIP_NOT_SEEN)
                         } else {
                             "no test-pattern APK on this instance"
                         }),
@@ -2643,6 +2736,10 @@ impl RunShared {
                 "preview_state": match shape { RecordShape::Dispatch { preview_state, .. } => Some(preview_state.clone()), _ => None },
             }),
         };
+        // #402 C2d: every dispatch record says whether it is the C7 variant.
+        if let (RecordShape::Dispatch { variant, .. }, Value::Object(map)) = (shape, &mut extra) {
+            map.insert("variant".to_owned(), json!(variant));
+        }
         let kind_name = match shape {
             RecordShape::Dispatch { .. } => "dispatch",
             RecordShape::Admission { .. } => "admission",
@@ -2996,6 +3093,48 @@ fn flip_shown(
     .filter(|payload| payload.mode == 2)
 }
 
+/// #402 C2d: `first_flip`'s two reasons when the APK is on the instance (analysis schema §3.3):
+/// the flip was looked for and no frame showed it within the wait; or no frame before the tap
+/// gave a decodable flip number, so n + 1 was not known.
+const FLIP_NOT_SEEN: &str = "no frame showed the tap's flip within the wait";
+const FLIP_BEFORE_UNDECODED: &str = "no frame before the tap gave a decodable flip number";
+
+/// #402 C2d: a formal capture whose native end is folded into `result` (§3.5).
+fn noted_capture(
+    hub: &Hub,
+    instance: usize,
+    kind: BackendKind,
+    floor: Option<Floor>,
+    clock: &dyn Clock,
+    result: &mut FormalResult,
+) -> Result<crate::backend::SampledFrame, BackendFailure> {
+    let captured = formal_capture(hub, instance, kind, floor);
+    let returned = clock.now_us();
+    result.note_native(match &captured {
+        Ok(frame) => NativeEnd::of_frame(frame, returned),
+        Err(failure) => NativeEnd::of_failure(failure, returned),
+    });
+    captured
+}
+
+/// #402 C2d: a formal tap whose native end is folded into `result` (§3.5).
+fn noted_tap(
+    hub: &Hub,
+    instance: usize,
+    kind: BackendKind,
+    (x, y): (i32, i32),
+    clock: &dyn Clock,
+    result: &mut FormalResult,
+) -> Result<(), BackendFailure> {
+    let tapped = formal_tap(hub, instance, kind, x, y);
+    let returned = clock.now_us();
+    result.note_native(match &tapped {
+        Ok(()) => NativeEnd::Returned(returned),
+        Err(failure) => NativeEnd::of_failure(failure, returned),
+    });
+    tapped
+}
+
 /// P4's formal step: capture, tap a grid cell, capture with a floor after the tap. With `flip`
 /// (C6 on the test pattern: the band geometry and the wait) a frame before the tap gives the
 /// flip number n, and the first frame showing n + 1 is the tap's `first_flip`.
@@ -3016,7 +3155,7 @@ fn formal_work(
     let mut seen: Option<(u32, u32)> = None;
     if capture_first {
         let started = clock.now_us();
-        match formal_capture(hub, instance, kind, None) {
+        match noted_capture(hub, instance, kind, None, clock, &mut result) {
             Ok(frame) => {
                 seen = Some((frame.width, frame.height));
                 result.stdio_wait_us.extend(stdio_waits(&frame));
@@ -3029,15 +3168,18 @@ fn formal_work(
         result.capture_us = Some(clock.now_us().saturating_sub(started));
     }
     let flip_before = flip.and_then(|(geometry, _)| {
-        let frame = formal_capture(hub, instance, kind, None).ok()?;
+        let frame = noted_capture(hub, instance, kind, None, clock, &mut result).ok()?;
         seen = Some((frame.width, frame.height));
         flip_shown(&frame, geometry).map(|payload| payload.event)
     });
+    if flip.is_some() && flip_before.is_none() {
+        result.first_flip_reason = Some(FLIP_BEFORE_UNDECODED);
+    }
     // The tap is mapped on the instance's actual display: the APK's view, or the frames' size;
     // without either, one frame is taken to learn it. Never a fixed size or orientation.
     let mut resolved = tap_rect(&display, seen);
     if resolved.is_none()
-        && let Ok(frame) = formal_capture(hub, instance, kind, None)
+        && let Ok(frame) = noted_capture(hub, instance, kind, None, clock, &mut result)
     {
         resolved = tap_rect(&display, Some((frame.width, frame.height)));
     }
@@ -3065,8 +3207,17 @@ fn formal_work(
     }));
     // The tap goes to the Nemu backend when it is open (the instance's touch path), else to S.
     let started = clock.now_us();
-    let tapped = formal_tap(hub, instance, BackendKind::Nemu, x, y)
-        .or_else(|_| formal_tap(hub, instance, BackendKind::Scrcpy, x, y));
+    let tapped =
+        noted_tap(hub, instance, BackendKind::Nemu, (x, y), clock, &mut result).or_else(|_| {
+            noted_tap(
+                hub,
+                instance,
+                BackendKind::Scrcpy,
+                (x, y),
+                clock,
+                &mut result,
+            )
+        });
     if let Err(failure) = tapped {
         result.failure = Some(failure);
         return result;
@@ -3079,7 +3230,7 @@ fn formal_work(
         after_us: Some(done),
         after_sequence: None,
     };
-    match formal_capture(hub, instance, kind, Some(floor)) {
+    match noted_capture(hub, instance, kind, Some(floor), clock, &mut result) {
         Ok(frame) => {
             result.floor_capture_us = Some(clock.now_us().saturating_sub(started));
             result.stdio_wait_us.extend(stdio_waits(&frame));
@@ -3106,7 +3257,7 @@ fn formal_work(
                     let deadline = clock.now_us().saturating_add(wait);
                     let mut after = frame.stream_sequence;
                     while clock.now_us() < deadline {
-                        let next = formal_capture(
+                        let next = noted_capture(
                             hub,
                             instance,
                             kind,
@@ -3114,6 +3265,8 @@ fn formal_work(
                                 after_us: None,
                                 after_sequence: Some(sequence),
                             }),
+                            clock,
+                            &mut result,
                         );
                         let Ok(next) = next else { break };
                         after = next.stream_sequence.or(after);

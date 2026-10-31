@@ -122,6 +122,17 @@ impl BackendFailure {
         self.native_returned = false;
         self
     }
+
+    /// #402 C2d: whether this failure leaves a native call unconfirmed (§3.5 rule 1): the call
+    /// did not return, or the caller timed out (poisoned) and cannot tell. A request refused
+    /// before any native call ([`Self::without_native_call`]) leaves none.
+    pub fn native_unconfirmed(&self) -> bool {
+        if !self.native_started && !self.native_returned {
+            // Refused before any native call.
+            return false;
+        }
+        !self.native_returned || self.class == FailureClass::Poisoned
+    }
 }
 
 /// S open failures by cause (§3.11.4 table B).

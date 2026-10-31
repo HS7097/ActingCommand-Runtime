@@ -1455,6 +1455,74 @@ pub struct FormalResult {
     /// #402 C2b: the display the tap was mapped on (`display_w`, `display_h`, `view_x`,
     /// `view_y`, `rotation`, `display_source`) and the tap point (`x`, `y`).
     pub tap_display: Option<serde_json::Value>,
+    /// #402 C2d: when the last native call of this work returned (`T_native_return`, §3.5):
+    /// [`NativeEnd`] folded over every device call.
+    pub native_return_us: Option<Micros>,
+    /// #402 C2d: a device call of this work started and its native return is not confirmed.
+    pub native_unconfirmed: bool,
+    /// #402 C2d (C6): why `first_flip` stays `None` when it is not "not seen within the wait".
+    pub first_flip_reason: Option<&'static str>,
+}
+
+/// #402 C2d: the native side of one device call, or of a call that made none (§3.5 四个时刻).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeEnd {
+    /// The native call returned at this time (the last of the call's native spans, else the
+    /// time the device call returned to its caller).
+    Returned(Micros),
+    /// A native call started and its return is not confirmed (`t_native_return` is null).
+    Unconfirmed,
+    /// No native call was made (refused before the call, or no device call at all).
+    NoCall,
+}
+
+impl NativeEnd {
+    /// A delivered frame that returned to its caller at `returned_at`.
+    pub fn of_frame(frame: &SampledFrame, returned_at: Micros) -> Self {
+        Self::Returned(
+            frame
+                .native
+                .iter()
+                .filter_map(|span| span.end_us)
+                .max()
+                .unwrap_or(returned_at),
+        )
+    }
+
+    /// A failed device call that returned to its caller at `returned_at`.
+    pub fn of_failure(failure: &BackendFailure, returned_at: Micros) -> Self {
+        if failure.native_unconfirmed() {
+            Self::Unconfirmed
+        } else if failure.native_started {
+            Self::Returned(returned_at)
+        } else {
+            Self::NoCall
+        }
+    }
+}
+
+impl FormalResult {
+    /// #402 C2d: folds one device call's native end into the work's.
+    pub fn note_native(&mut self, end: NativeEnd) {
+        match end {
+            NativeEnd::Returned(at) => {
+                self.native_return_us =
+                    Some(self.native_return_us.map_or(at, |latest| latest.max(at)));
+            }
+            NativeEnd::Unconfirmed => self.native_unconfirmed = true,
+            NativeEnd::NoCall => {}
+        }
+    }
+
+    /// #402 C2d: the work's native end for the `drain` record: unconfirmed when any call is.
+    pub fn native_end(&self) -> NativeEnd {
+        if self.native_unconfirmed {
+            NativeEnd::Unconfirmed
+        } else {
+            self.native_return_us
+                .map_or(NativeEnd::NoCall, NativeEnd::Returned)
+        }
+    }
 }
 
 /// What one dispatch ended with.
