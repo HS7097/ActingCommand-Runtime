@@ -18,7 +18,7 @@ use actingcommand_device::bench_timing::{BenchDetail, BenchEvent, BenchPoint, Be
 use actingcommand_device::{
     Adb, AdbConfig, CaptureBackend, CaptureBackendChoice, CaptureBackendConfig, CaptureFloor,
     DeviceCloseAuthority, DeviceError, DeviceResourceQuiescence, DeviceResult, DeviceTarget,
-    InputBackend, InputCheckPhase, InputExecutionContext, InputOperationCheck, NemuAppIndex,
+    InputCheckPhase, InputExecutionContext, InputOperationCheck, NemuAppIndex,
     NemuApplicationTarget, NemuFrameGeometry, NemuInputConfig, NemuIpcBackend, NemuIpcConfig,
     NemuIpcSession, NemuSessionBackends, ScrcpyBackend, ScrcpyConfig,
 };
@@ -429,13 +429,42 @@ fn bench_witness() -> Result<actingcommand_contract::FencedWrite, String> {
 
 /// The Nemu session of an instance: a capture-only backend, or (`touch = "nemu_ipc"`) the
 /// paired session whose captures and taps share one worker thread.
+#[allow(clippy::large_enum_variant)]
 enum NemuSession {
     Capture(NemuIpcBackend),
     Paired {
-        session: NemuSessionBackends,
+        session: PairedViews,
         geometry: Option<Arc<NemuFrameGeometry>>,
         witness: actingcommand_contract::FencedWrite,
     },
+}
+
+/// The paired session's owner and its two views. The device crate hands the views out as
+/// `Box<dyn InputBackend>` and `Box<dyn CaptureBackend>` without a `Send` bound; the bench moves
+/// them, with the backend, into the instance's slot and calls them from the activity that holds
+/// the instance's admission lock, one thread at a time.
+struct PairedViews(NemuSessionBackends);
+
+// SAFETY: the two boxes are the device crate's `NemuCaptureView` and `NemuInputView` built by
+// `NemuIpcSession::open` (`crates/device/src/capture/nemu_input.rs`): their fields are an
+// `Arc<NemuIpcSession>` (a `Mutex` over the backend whose worker thread does every native call),
+// an `Arc` of plain selection data, a `Vec` of captured vendor output, a `String` and a `bool`,
+// all `Send`. The bench never shares a `&PairedViews` between threads (the slot's `Mutex` and the
+// admission lock serialize every call), so moving it to another thread is sound.
+unsafe impl Send for PairedViews {}
+
+impl std::ops::Deref for PairedViews {
+    type Target = NemuSessionBackends;
+
+    fn deref(&self) -> &NemuSessionBackends {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for PairedViews {
+    fn deref_mut(&mut self) -> &mut NemuSessionBackends {
+        &mut self.0
+    }
 }
 
 struct RealNemu {
@@ -756,7 +785,7 @@ impl BackendFactory for Arc<RealDevice> {
                     )
                     .map_err(nemu_failure)?;
                     NemuSession::Paired {
-                        session: opened.backend,
+                        session: PairedViews(opened.backend),
                         geometry: None,
                         witness,
                     }

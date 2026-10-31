@@ -251,7 +251,11 @@ fn mean_luma(
             count += 1;
         }
     }
-    (count > 0).then(|| sum / count as f64)
+    if count > 0 {
+        Some(sum / count as f64)
+    } else {
+        None
+    }
 }
 
 /// Decodes the band of a `width` × `height` frame (§4.3 "Decoding").
@@ -390,7 +394,7 @@ pub fn content_json(decoded: &Decoded) -> serde_json::Value {
             "t_vsync_next_dev_ns": null,
             "event": payload.event,
             "aux": payload.aux,
-            "flip_j": (payload.mode == 2).then(|| payload.flip_j()),
+            "flip_j": (payload.mode == 2).then_some(payload.flip_j()),
             "level": payload.level(),
             "margin": decoded.margin,
         }),

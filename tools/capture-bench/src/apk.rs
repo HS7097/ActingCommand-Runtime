@@ -176,7 +176,11 @@ pub fn calibrate(samples: &[PingSample]) -> Option<Calibration> {
 pub fn residual_and_drift(previous: &[Calibration], current: &Calibration) -> (f64, Option<f64>) {
     let drift = previous.last().and_then(|last| {
         let span = current.t_dev_us - last.t_dev_us;
-        (span.abs() > 0.0).then(|| (current.theta_us - last.theta_us) / span * 1_000_000.0)
+        if span.abs() > 0.0 {
+            Some((current.theta_us - last.theta_us) / span * 1_000_000.0)
+        } else {
+            None
+        }
     });
     let residual = match previous {
         [.., a, b] => {

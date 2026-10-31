@@ -540,6 +540,11 @@ impl SegmentInfo {
             SegmentMode::TaskFloor => "floor",
             SegmentMode::PollSequence => "static_poll",
             SegmentMode::ColdStart => "cold_start",
+            SegmentMode::Calibrate => "calibrate",
+            SegmentMode::StepTrials => "step_trials",
+            SegmentMode::Rotate => "rotate",
+            SegmentMode::Reconnect => "reconnect",
+            SegmentMode::StaticImages => "static_images",
         };
         let name = segment
             .name
@@ -1505,6 +1510,7 @@ impl RunShared {
     }
 
     /// One segment: open what it needs, run its activities under the controller, close.
+    #[allow(clippy::too_many_arguments)]
     fn run_segment(
         self: &Arc<Self>,
         cell: &CellPlan,
@@ -1849,7 +1855,13 @@ impl RunShared {
                 SegmentMode::TaskFloor | SegmentMode::PollSequence => segment
                     .quota
                     .is_some_and(|quota| shared.floor_checks.load(Ordering::Acquire) >= quota),
-                SegmentMode::ColdStart => false,
+                // These modes end in their own procedures and never reach the controller.
+                SegmentMode::ColdStart
+                | SegmentMode::Calibrate
+                | SegmentMode::StepTrials
+                | SegmentMode::Rotate
+                | SegmentMode::Reconnect
+                | SegmentMode::StaticImages => false,
             } || segment
                 .formal
                 .as_ref()
