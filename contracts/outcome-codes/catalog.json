@@ -1571,7 +1571,7 @@
     },
     "skip_reason": {
       "type": "vocab:emulator_autostart_skip_reason",
-      "description": "Why no autostart claim was requested for an instance where one would otherwise have been (WATCH-P, since 0.12.32: the emulator watch's restart or recognition; PAUSE-AUTO, since 0.12.34: the configured start at daemon start and IDLE-1's wake after stop_emulator, or why such a claim ended on its key without a Start)."
+      "description": "Why no autostart claim was requested for an instance where one would otherwise have been (WATCH-P, since 0.12.32: the emulator watch's restart or recognition; PAUSE-AUTO, since 0.12.34: the configured start at daemon start and IDLE-1's wake after stop_emulator, or why such a claim ended on its key without a Start; Workflow #429 R-7a registers player_held, R-7b first records it)."
     },
     "duplicate_count": {
       "type": "integer",
@@ -2300,6 +2300,142 @@
         "observed_at_unix_ms": "optional"
       },
       "description": "The basis of a held pair's latest dispatch, one record per fact its admission read, ordered by scope and key, at most 32: the key and the reading the admission read (reading_value or reading_digest, and observed_at_unix_ms when it was observed), none when the key had no reading (SS-4)."
+    },
+    "hold_id": {
+      "type": "id",
+      "description": "A player hold's identity: the request_id of the AcquirePlayerHold that set it (Workflow #429 R-7a)."
+    },
+    "hold_phase": {
+      "type": "vocab:player_hold_phase",
+      "description": "A player hold's phase: the hold now, or the one a refusal names (R-7a)."
+    },
+    "failed_phase": {
+      "type": "vocab:player_hold_phase",
+      "description": "The phase a player hold operation failed in (R-7a)."
+    },
+    "hold_revision": {
+      "type": "integer",
+      "description": "An instance's player hold slot revision: the hold's, or the slot's after a release (R-7a)."
+    },
+    "current_owner_epoch": {
+      "type": "id",
+      "description": "The owner epoch now, in a refused player hold expectation (R-7a)."
+    },
+    "current_hold_id": {
+      "type": "id",
+      "description": "The hold now, in a refused player hold expectation (R-7a)."
+    },
+    "current_revision": {
+      "type": "integer",
+      "description": "The hold slot revision now, in a refused player hold expectation (R-7a)."
+    },
+    "current_phase": {
+      "type": "vocab:player_hold_phase",
+      "description": "The hold's phase now, in a refused player hold expectation (R-7a)."
+    },
+    "hold_count": {
+      "type": "integer",
+      "description": "How many persisted player holds of registered instances a start found (R-7a)."
+    },
+    "restored_from_phase": {
+      "type": "vocab:player_hold_restored_from",
+      "description": "Whether a restored player hold had finished its hand-back before the stop (R-7a)."
+    },
+    "operation_kind": {
+      "type": "vocab:player_hold_operation_kind",
+      "description": "The kind of the player hold request a settlement judged (R-7a)."
+    },
+    "settlement_rule": {
+      "type": "vocab:player_hold_settlement_rule",
+      "description": "The row of the player hold settlement table that decided (R-7a)."
+    },
+    "settlement_trigger": {
+      "type": "vocab:player_hold_settlement_trigger",
+      "description": "Why the client settled a player hold request from Status: dropped, timed_out or reopened (R-7a)."
+    },
+    "settlement_final": {
+      "type": "boolean",
+      "description": "Whether reading Status again can no longer change a player hold settlement (R-7a)."
+    },
+    "settlement_outcome": {
+      "type": "vocab:player_hold_settlement_outcome",
+      "description": "What a settled player hold request did (R-7a; the design's outcome, renamed because outcome names the envelope)."
+    },
+    "settlement_observed": {
+      "type": "vocab:player_hold_unconfirmed_observed",
+      "description": "What an unconfirmed player hold settlement saw (R-7a)."
+    },
+    "hold_next": {
+      "type": "vocab:player_hold_next",
+      "description": "What a release of a player hold did next (R-7a)."
+    },
+    "startup_package": {
+      "type": "vocab:player_hold_startup_package",
+      "description": "What a release of a player hold did with the startup package (R-7a)."
+    },
+    "startup_package_withheld": {
+      "type": "vocab:player_hold_next",
+      "description": "The pause that holds the startup package a release queued (R-7a; its two values are the two pauses of player_hold_next)."
+    },
+    "pause_instance_revision": {
+      "type": "integer",
+      "description": "The revision of the instance pause in effect when a player hold ended (R-7a)."
+    },
+    "pause_global_revision": {
+      "type": "integer",
+      "description": "The revision of the global pause in effect when a player hold ended (R-7a)."
+    },
+    "drained_finished": {
+      "type": "integer",
+      "description": "The in-flight runs a player hold's drain let finish (R-7a)."
+    },
+    "drained_cancelled": {
+      "type": "integer",
+      "description": "The in-flight runs a player hold's drain stopped at a checkpoint (R-7a)."
+    },
+    "selfcheck_failure_code": {
+      "type": "code",
+      "description": "The failure_code of a release's reconnect self-check (R-7a)."
+    },
+    "hold_restored": {
+      "type": "boolean",
+      "description": "A settlement found the player hold restored from its persisted row (R-7a, rows A11 and A12)."
+    },
+    "source_actor": {
+      "type": "vocab:player_hold_source_actor",
+      "description": "Who set the player hold: the envelope's actor (R-7a)."
+    },
+    "source_channel": {
+      "type": "vocab:channel",
+      "description": "The channel the player hold was set on (R-7a)."
+    },
+    "source_via": {
+      "type": "vocab:channel",
+      "description": "The counter that forwarded the Lab request that set the player hold (R-7a; a ChannelVia value)."
+    },
+    "ended_by_actor": {
+      "type": "vocab:player_hold_source_actor",
+      "description": "Who ended, or is ending, the player hold (R-7a)."
+    },
+    "ended_by_channel": {
+      "type": "vocab:channel",
+      "description": "The channel the player hold was ended on (R-7a)."
+    },
+    "ended_by_via": {
+      "type": "vocab:channel",
+      "description": "The counter that forwarded the Lab request that ended the player hold (R-7a)."
+    },
+    "ended_by_state": {
+      "type": "vocab:player_hold_operation_state",
+      "description": "The state of the release that ended the player hold (R-7a)."
+    },
+    "operation_kind_now": {
+      "type": "vocab:player_hold_operation_kind",
+      "description": "The kind of the instance's player hold record now (R-7a)."
+    },
+    "operation_state_now": {
+      "type": "vocab:player_hold_operation_state",
+      "description": "The state of the instance's player hold record now (R-7a)."
     },
     "tolerance_milli": {
       "type": "integer",
@@ -5344,6 +5480,9 @@
       "tokens": {
         "instance_paused": {
           "description": "The instance's own scheduling pause holds it, in any stage (draining, paused, released; Alice's ruling 112): the watch reads and records its emulator status but neither restarts nor recognizes it. Recorded once per pause revision and watch_kind. PAUSE-AUTO (since 0.12.34, Alice's ruling 117 A): neither the configured start at daemon start nor IDLE-1's wake after stop_emulator starts its emulator, also when their claim was requested before the pause began, and neither does a restart or recognition claim the watch requested before the pause began (nor does it take a place in the watch's bound); recorded once per pause revision and start."
+        },
+        "player_held": {
+          "description": "The instance's player hold holds it, in any phase (Workflow #429 R-7a; R-7b first answers it): first before the instance's own pause (R-7a section 2.6). Recorded once per reason and revision."
         }
       }
     },
@@ -7041,6 +7180,312 @@
         },
         "safe_area_form_undeclared": {
           "description": "Workflow #392 DA-4b-D: the declaration file of the instance's device model (path) covers no display size and rotation the frame shows."
+        }
+      }
+    },
+    "player_hold_phase": {
+      "description": "Where a player hold stands (Workflow #429 R-7a, contracts/player-hold.md).",
+      "review": "pending",
+      "tokens": {
+        "requesting": {
+          "description": "The gate is closed; queued operator and client entries end."
+        },
+        "draining": {
+          "description": "The instance's in-flight runs drain to a checkpoint."
+        },
+        "handing_back": {
+          "description": "The device is handed back and its session closed."
+        },
+        "held": {
+          "description": "The Runtime touches the device not at all."
+        },
+        "releasing": {
+          "description": "The release takes its reconnect claim and lifts the hold."
+        }
+      }
+    },
+    "player_hold_next": {
+      "description": "What a release of a player hold did next (Workflow #429 R-7a, contracts/player-hold.md).",
+      "review": "pending",
+      "tokens": {
+        "reconnected": {
+          "description": "No pause held the instance: it was reconnected and self-checked."
+        },
+        "instance_paused": {
+          "description": "The instance's own pause holds it: nothing was touched. First when both pauses are in effect (R-7a section 2.6)."
+        },
+        "scheduling_paused": {
+          "description": "Only the global pause holds it: nothing was touched."
+        }
+      }
+    },
+    "instance_gate": {
+      "description": "One control gate of an instance, in the one order of R-7a section 2.6 (registered in that order) (Workflow #429 R-7a, contracts/player-hold.md).",
+      "review": "pending",
+      "tokens": {
+        "player_hold": {
+          "description": "1: the instance's player hold, any phase."
+        },
+        "instance_pause": {
+          "description": "2: the instance's own scheduling pause, any stage."
+        },
+        "global_pause": {
+          "description": "3: the global scheduling pause."
+        },
+        "resource_fence": {
+          "description": "4: the instance's #403 resource fence, any state."
+        }
+      }
+    },
+    "control_gate_code": {
+      "description": "The effective code of a control gate: each token is the spelling of the runtime-host code the gate defers a dispatch with; the contract derives it, the host emits the code (Workflow #429 R-7a, contracts/player-hold.md).",
+      "review": "pending",
+      "tokens": {
+        "dispatch_player_held": {
+          "description": "Gate player_hold."
+        },
+        "dispatch_paused_instance": {
+          "description": "Gate instance_pause."
+        },
+        "dispatch_paused_global": {
+          "description": "Gate global_pause."
+        },
+        "dispatch_resource_fenced": {
+          "description": "Gate resource_fence."
+        }
+      }
+    },
+    "player_hold_operation_kind": {
+      "description": "The kind of a player hold operation (Workflow #429 R-7a, contracts/player-hold.md).",
+      "review": "pending",
+      "tokens": {
+        "acquire": {
+          "description": "AcquirePlayerHold."
+        },
+        "release": {
+          "description": "ReleasePlayerHold."
+        }
+      }
+    },
+    "player_hold_operation_state": {
+      "description": "The state of a player hold operation record (Workflow #429 R-7a, contracts/player-hold.md).",
+      "review": "pending",
+      "tokens": {
+        "running": {
+          "description": "Accepted and under way."
+        },
+        "completed": {
+          "description": "Ended as asked."
+        },
+        "failed": {
+          "description": "Ended in a failure after it was accepted."
+        }
+      }
+    },
+    "player_hold_restored_from": {
+      "description": "Whether a restored player hold had finished its hand-back before the stop (Workflow #429 R-7a, contracts/player-hold.md).",
+      "review": "pending",
+      "tokens": {
+        "acquiring": {
+          "description": "The Runtime stopped during the acquire: the device was not confirmed reset."
+        },
+        "held": {
+          "description": "The hand-back had finished."
+        }
+      }
+    },
+    "player_hold_startup_package": {
+      "description": "What a release of a player hold did with the startup package (Workflow #429 R-7a, contracts/player-hold.md).",
+      "review": "pending",
+      "tokens": {
+        "scheduled": {
+          "description": "A new startup package claim was queued (behind the pause when one holds it)."
+        },
+        "cancelled": {
+          "description": "skip cancelled a queued startup package claim and ended its W2-B row."
+        },
+        "none": {
+          "description": "Nothing was queued or cancelled."
+        }
+      }
+    },
+    "player_hold_source_actor": {
+      "description": "Who asked for a player hold operation: the envelope, one of the source gate's three (Workflow #429 R-7a, contracts/player-hold.md).",
+      "review": "pending",
+      "tokens": {
+        "user": {
+          "description": "(User, Ui)."
+        },
+        "cli": {
+          "description": "(Cli, Cli): actingctl, and MCP on the channel mcp."
+        },
+        "lab": {
+          "description": "(Lab, Lab)."
+        }
+      }
+    },
+    "player_hold_settlement_trigger": {
+      "description": "Why a client settles a player hold request from Status (Workflow #429 R-7a, contracts/player-hold.md).",
+      "review": "pending",
+      "tokens": {
+        "dropped": {
+          "description": "The connection ended before the receipt header of the frame the call wrote."
+        },
+        "timed_out": {
+          "description": "The receipt-read deadline passed (runtime_receipt_timeout)."
+        },
+        "reopened": {
+          "description": "Any other failure after sending, or the sending process is gone; the trigger a stored attempt carries."
+        }
+      }
+    },
+    "player_hold_settlement_verdict": {
+      "description": "A player hold settlement's verdict (Workflow #429 R-7a, contracts/player-hold.md).",
+      "review": "pending",
+      "tokens": {
+        "settled": {
+          "description": "Status confirmed the request's final state or that it was not performed."
+        },
+        "unconfirmed": {
+          "description": "Status could not confirm it."
+        },
+        "unsupported": {
+          "description": "An older Runtime dropped the frame (rows A7, R8)."
+        }
+      }
+    },
+    "player_hold_settlement_outcome": {
+      "description": "What a settled player hold request did (Workflow #429 R-7a, contracts/player-hold.md).",
+      "review": "pending",
+      "tokens": {
+        "completed": {
+          "description": "It did what it asked."
+        },
+        "failed": {
+          "description": "It failed after it was accepted."
+        },
+        "not_performed": {
+          "description": "It was not performed and will not be."
+        },
+        "ended_by_other": {
+          "description": "Another counter ended the hold."
+        },
+        "hold_ended": {
+          "description": "The hold is gone; who ended it is not known."
+        }
+      }
+    },
+    "player_hold_unconfirmed_observed": {
+      "description": "What an unconfirmed player hold settlement saw; the first three are not final (Workflow #429 R-7a, contracts/player-hold.md).",
+      "review": "pending",
+      "tokens": {
+        "in_progress": {
+          "description": "Its own record is running. Not final."
+        },
+        "in_progress_other": {
+          "description": "Another counter's release is under way. Not final."
+        },
+        "status_unreadable": {
+          "description": "Status could not be read. Not final."
+        },
+        "superseded": {
+          "description": "Another operation's record stands. Final."
+        },
+        "epoch_changed": {
+          "description": "The Runtime restarted and nothing shows the request. Final."
+        },
+        "instance_not_listed": {
+          "description": "Status does not list the instance. Final."
+        },
+        "inconsistent": {
+          "description": "The hold is the request's own but in its acquire without its record. Final."
+        },
+        "not_registered": {
+          "description": "No record: refused at entry or not yet read. Final, though a later Status may still show it."
+        }
+      }
+    },
+    "player_hold_settlement_rule": {
+      "description": "The row of the player hold settlement table that decided, for tests and diagnosis (Workflow #429 R-7a, contracts/player-hold.md).",
+      "review": "pending",
+      "tokens": {
+        "P1": {
+          "description": "Status unreadable."
+        },
+        "P2": {
+          "description": "The instance is not listed."
+        },
+        "A1": {
+          "description": "Acquire row A1."
+        },
+        "A2": {
+          "description": "Acquire row A2."
+        },
+        "A3": {
+          "description": "Acquire row A3."
+        },
+        "A4": {
+          "description": "Acquire row A4."
+        },
+        "A5": {
+          "description": "Acquire row A5."
+        },
+        "A6": {
+          "description": "Acquire row A6."
+        },
+        "A7": {
+          "description": "Acquire row A7."
+        },
+        "A8": {
+          "description": "Acquire row A8."
+        },
+        "A9": {
+          "description": "Acquire row A9."
+        },
+        "A10": {
+          "description": "Acquire row A10."
+        },
+        "A11": {
+          "description": "Acquire row A11."
+        },
+        "A12": {
+          "description": "Acquire row A12."
+        },
+        "A13": {
+          "description": "Acquire row A13."
+        },
+        "R1": {
+          "description": "Release row R1."
+        },
+        "R2": {
+          "description": "Release row R2."
+        },
+        "R3": {
+          "description": "Release row R3."
+        },
+        "R4": {
+          "description": "Release row R4."
+        },
+        "R5": {
+          "description": "Release row R5."
+        },
+        "R6": {
+          "description": "Release row R6."
+        },
+        "R7": {
+          "description": "Release row R7."
+        },
+        "R8": {
+          "description": "Release row R8."
+        },
+        "R9": {
+          "description": "Release row R9."
+        },
+        "R10": {
+          "description": "Release row R10."
+        },
+        "R11": {
+          "description": "Release row R11."
         }
       }
     }
@@ -8767,6 +9212,9 @@
     ],
     "player_": [
       "device"
+    ],
+    "player_hold_": [
+      "runtime-host"
     ],
     "png_": [
       "execution-kernel"

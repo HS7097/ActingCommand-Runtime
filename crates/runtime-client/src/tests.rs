@@ -36,6 +36,8 @@ mod gate_c4;
 mod gate_412_b3_s2;
 // Workflow #429 R-0c (register §1.216): the workbench's client methods over the scripted Runtime.
 mod gate_429_r0c;
+// Workflow #429 R-7a (register §1.233): the player hold's client methods and their settlement.
+mod gate_429_r7a;
 use crate::client::{
     MAX_OFFICIAL_OCR_ARTIFACT_BYTES, OCR_COMPARISON_ENVELOPE_SCHEMA, OCR_COMPARISON_SCHEMA_V2,
     OCR_OBSERVATION_SCHEMA, canonical_sha256, resolve_official_ocr_projection,

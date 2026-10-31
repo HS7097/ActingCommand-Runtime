@@ -280,6 +280,9 @@ runtime_operation_kinds! {
     RoutineSummary,
     // Workflow #429 R-0c (register §1.216): the pack schedule's read view.
     PackScheduleView,
+    // Workflow #429 R-7a (register §1.233): the player hold's two kinds.
+    AcquirePlayerHold,
+    ReleasePlayerHold,
 }
 
 impl RuntimeOperationKind {
@@ -331,6 +334,11 @@ impl RuntimeOperationKind {
             // only on what is bound to the instance; emulator control, the self-check and the
             // assigned application's start and stop already do (moved from option two; the
             // origin gates of `RuntimeRequest::validate` stay until U-6).
+            // Workflow #429 R-7a (register §1.233, R-7a §6.2): the player hold's two kinds, which
+            // every counter and the Lab channel send (Alice's ruling 135; R-14 must keep the Lab
+            // channel taking them from U-6).
+            | Self::AcquirePlayerHold
+            | Self::ReleasePlayerHold
             | Self::RunInstanceTask
             | Self::StopInstanceRun
             | Self::EditPackSchedule
@@ -496,6 +504,9 @@ impl RuntimeOperationKind {
             | Self::RoutineSummary => None,
             // Workflow #429 R-0c: its success code comes with R-8.
             Self::PackScheduleView => None,
+            // Workflow #429 R-7a: registered with the shapes; R-7b first answers completed.
+            Self::AcquirePlayerHold => Some(ReceiptCode::AcquirePlayerHoldCompleted.code()),
+            Self::ReleasePlayerHold => Some(ReceiptCode::ReleasePlayerHoldCompleted.code()),
         }
     }
 }
@@ -593,6 +604,8 @@ impl RuntimeOperation {
             Self::EditResourceTarget { .. } => Kind::EditResourceTarget,
             Self::RoutineSummary { .. } => Kind::RoutineSummary,
             Self::PackScheduleView { .. } => Kind::PackScheduleView,
+            Self::AcquirePlayerHold { .. } => Kind::AcquirePlayerHold,
+            Self::ReleasePlayerHold { .. } => Kind::ReleasePlayerHold,
         }
     }
 
@@ -747,6 +760,10 @@ mod tests {
             // Workflow #429 R-0c: the pack schedule's read view, a general read that records
             // nothing.
             K::PackScheduleView => (General, Some(Read), false),
+            // Workflow #429 R-7a (register §1.233, R-7a §6.2): the player hold's two kinds are
+            // general instructions recorded through G14.
+            K::AcquirePlayerHold => (General, Some(Instruction), true),
+            K::ReleasePlayerHold => (General, Some(Instruction), true),
         }
     }
 

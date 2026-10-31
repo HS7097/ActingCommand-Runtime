@@ -1946,6 +1946,20 @@ const RUNTIME_REQUEST_ORIGIN_BRANCHES: &[(&[&str], &[&str], &[&str])] = &[
         &["invalid_agent_dispatcher_origin"],
         &["EventActor::Agent", "EventSource::Adapter"],
     ),
+    // Workflow #429 R-7a (register §1.233, R-7a §3.1 step 2): the player hold's source gate takes
+    // the four counters' three envelopes, the Lab's included (Alice's ruling 135).
+    (
+        &["AcquirePlayerHold", "ReleasePlayerHold"],
+        &["invalid_player_hold_origin"],
+        &[
+            "EventActor::Cli",
+            "EventActor::Lab",
+            "EventActor::User",
+            "EventSource::Cli",
+            "EventSource::Lab",
+            "EventSource::Ui",
+        ],
+    ),
 ];
 
 /// Operations `RuntimeRequest::validate` admits from every origin `valid_client_origin`

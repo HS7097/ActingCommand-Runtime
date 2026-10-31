@@ -290,6 +290,8 @@ mod gate_389_mcp9a;
 mod gate_389_u2;
 // Workflow #429 R-0: the workbench's kinds have their shapes and answer `not_implemented`.
 mod gate_429_r0;
+// Workflow #429 R-7a: the player hold's two kinds answer `not_implemented` on every channel.
+mod gate_429_r7a;
 // Workflow #390 OUT-1 (forced compromises O-03, O-04, O-05): outcome subsets, unproduced
 // outcomes and zero-input packages with several outcomes.
 mod gate_390_out1;

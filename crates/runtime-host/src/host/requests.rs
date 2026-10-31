@@ -755,6 +755,16 @@ impl HostShared {
             RuntimeOperation::PackScheduleView { .. } => {
                 Err(not_implemented(HostLocation::PackScheduleView))
             }
+            // Workflow #429 R-7a (register §1.233): the player hold's two kinds have their wire
+            // shapes; R-7b adds the behaviour. Until then each is refused on every channel,
+            // records nothing and checks only what the contract checks (the instance alias, the
+            // drain bounds or the expectation, the source gate), as R-0's kinds.
+            RuntimeOperation::AcquirePlayerHold { .. } => Err(not_implemented(
+                actingcommand_contract::codes::ContractLocation::AcquirePlayerHold,
+            )),
+            RuntimeOperation::ReleasePlayerHold { .. } => Err(not_implemented(
+                actingcommand_contract::codes::ContractLocation::ReleasePlayerHold,
+            )),
         }
     }
 }

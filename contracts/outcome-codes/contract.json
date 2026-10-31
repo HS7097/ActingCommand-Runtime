@@ -1138,7 +1138,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime's wire error code (receipt projection `code`): contained task paused.",
+      "description": "The Runtime's wire error code (receipt projection `code`): contained task paused. Workflow #429 R-7a: also the end of a run a player hold's drain stopped.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -17710,6 +17710,154 @@
       "description": "A code several owners emit with one meaning (contract-owned, A2a D3; moved from actingctl by #378 A8b): actingctl codes, ac_outcome_code or actingledger codes could not read the outcome catalog this build embeds: it does not parse, has no codes table, or an entry lacks a member the answer reads (a build defect). The decoder's failure is its cause when there is one.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "invalid_player_hold_origin": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "Runtime contract validation refused a value: a player hold request from an envelope other than (User, Ui), (Cli, Cli) or (Lab, Lab). Workflow #429 R-7a (register section 1.233, contracts/player-hold.md).",
+      "common_causes": "A client or Runtime defect, or a peer of another build.",
+      "handling": "Send it from one of the four counters' envelopes."
+    },
+    "invalid_player_hold_drain_timeout": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "Runtime contract validation refused a value: an AcquirePlayerHold.drain_timeout_ms outside 1000..=600000. Workflow #429 R-7a (register section 1.233, contracts/player-hold.md).",
+      "common_causes": "A client defect.",
+      "handling": "Send a drain timeout within the bounds."
+    },
+    "invalid_player_hold_expectation": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "Runtime contract validation refused a value: a ReleasePlayerHold.expected with revision 0 (a hold_id of the wrong form does not decode). Workflow #429 R-7a (register section 1.233, contracts/player-hold.md).",
+      "common_causes": "A client defect.",
+      "handling": "Send the expectation Status shows."
+    },
+    "invalid_player_hold_state": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "Runtime contract validation refused a value: a player hold or a player hold operation record of the wrong shape (the deadlines, close_started_unix_ms and reached_held_unix_ms by phase; the two restored members together; via only on the Lab channel; a record's members by state; a completed release's next with its selfcheck, pauses_at_end and startup_package_withheld). Workflow #429 R-7a (register section 1.233, contracts/player-hold.md).",
+      "common_causes": "A Runtime defect, or a peer of another build.",
+      "handling": "Report the defect with the receipt; the Runtime goes on."
+    },
+    "invalid_player_hold_receipt": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "Runtime contract validation refused a value: a PlayerHoldAcquired or PlayerHoldReleased answer of the wrong shape (a hold not held; a next without the members it asks for), or a receipt carrying it that is not completed. Workflow #429 R-7a (register section 1.233, contracts/player-hold.md).",
+      "common_causes": "A Runtime defect, or a peer of another build.",
+      "handling": "Report the defect with the receipt; the Runtime goes on."
+    },
+    "invalid_runtime_instance_control": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "Runtime contract validation refused a value: a Status whose instance control disagrees with the same status's player hold, instance pause, global pause and resource fence, or holds no dispatch gate (R-7a section 2.6 O-7). Workflow #429 R-7a (register section 1.233, contracts/player-hold.md).",
+      "common_causes": "A Runtime defect, or a peer of another build.",
+      "handling": "Report the defect with the status; the Runtime goes on."
+    },
+    "request_acquire_player_hold_completed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "A completed receipt of an AcquirePlayerHold request: the hold is held. Workflow #378 A4: one success code per request kind (Workflow #429 R-7a adds the kind; R-7b first completes it).",
+      "common_causes": "The request succeeded.",
+      "handling": "Nothing to do; the result carries the hold."
+    },
+    "request_release_player_hold_completed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "A completed receipt of a ReleasePlayerHold request: the hold is lifted. Workflow #378 A4: one success code per request kind (Workflow #429 R-7a adds the kind; R-7b first completes it).",
+      "common_causes": "The request succeeded.",
+      "handling": "Nothing to do; the result says what came next."
     }
   },
   "locations": {
@@ -18224,6 +18372,22 @@
       "status": "active",
       "since": "0.12.0",
       "description": "An operation and a stage several owners name with one meaning (contract-owned, Workflow #387 D1c): an instance's connection preparation, the client's operation that waits for it and the stage a recovery ladder trigger names."
+    },
+    "acquire_player_hold": {
+      "owner": "contract",
+      "layer": "contract",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "An operation several owners name with one meaning (contract-owned, A2a D3): acquire player hold (Workflow #429 R-7a)."
+    },
+    "release_player_hold": {
+      "owner": "contract",
+      "layer": "contract",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "An operation several owners name with one meaning (contract-owned, A2a D3): release player hold (Workflow #429 R-7a)."
     }
   }
 }

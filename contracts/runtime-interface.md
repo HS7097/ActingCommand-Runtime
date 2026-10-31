@@ -208,7 +208,7 @@ static and exhaustive over `RuntimeOperation`: no content, no heuristics.
   reads on every channel. From a counter they pin `Explicit`; from the Lab channel they
   pin `Lab` and attach to the debug run, as today. That is retention, not permission.
 
-### The 58 request kinds
+### The 60 request kinds
 
 Column G14: whether #383's request boundary copies the request (after AO-4). "no" means
 a pure query that writes nothing. A refused request is copied exactly when an accepted
@@ -229,7 +229,7 @@ one would be (section Records).
 | ObserveReadonly, CaptureSequence | general | read (frames) | cli `observe`, `stream`; mcp `ac_observe`, `ac_stream` (new); both pin `Explicit`. Lab channel: actinglab's capture commands and `runtime observe`, pinned `Lab` | yes |
 | DiscoverInstances | general | read (instance discovery) | cli `emulator discover` (and acsetup's instance step); mcp `ac_emulator_discover` (new); ui instance discovery | yes (the request only; a successful discovery appends no observation record, Workflow #383 AO-4q) |
 
-**General instructions (10)**
+**General instructions (12)**
 
 | Kind | Block | Class | Sent by | G14 |
 |---|---|---|---|---|
@@ -241,6 +241,7 @@ one would be (section Records).
 | RequestShutdown | general | instruction (the Runtime closes itself) | cli `request-shutdown` (stays); ui "request shutdown", sent directly as today; mcp `ac_request_shutdown` (new) | yes |
 | RecordClientAction | general | instruction (trace of an action outside the Runtime) | ui (for example starting the daemon) | yes |
 | ApplyResourceTargets | general (§14.2) | instruction (write resource targets) | cli `agent-apply-resource-targets` (stays); mcp `ac_targets_set` (general tool) | yes |
+| AcquirePlayerHold, ReleasePlayerHold | general (Workflow #429 R-7a, register §1.233) | instruction (a person takes the instance from the Runtime, and gives it back; section Player hold request kinds) | ui (UI-3d); cli `hold`, `hold-release` and mcp `ac_hold`, `ac_hold_release` (R-7b); the Lab channel too (Alice's ruling 135). Source gate (User, Ui), (Cli, Cli), (Lab, Lab) | yes |
 
 **General by key family (2)**
 
@@ -284,10 +285,10 @@ one would be (section Records).
 |---|---|---|---|---|
 | InstallTransition | compat: general on `cli`, only for an old acsetup speaking install-control revision 1; superseded by the upgrade state from U-4; retires when the install-control minimum becomes 2 | instruction | an old acsetup through the installed slot's `actingctl install-transition` | yes |
 
-Counts: handshake 2, general reads 11, general instructions 10, general by key family 2,
-option one 16, option two 15, retired 1, compat 1; 58 in total (Workflow #429 R-0 moved
-three kinds from option two to the general instructions). Tests assert each kind, never a
-total.
+Counts: handshake 2, general reads 11, general instructions 12, general by key family 2,
+option one 16, option two 15, retired 1, compat 1; 60 in total (Workflow #429 R-0 moved
+three kinds from option two to the general instructions; Workflow #429 R-7a added the two
+player hold kinds). Tests assert each kind, never a total.
 
 Two consequences of §14.2 for U-3 (the model's body predates it): `actingctl
 agent-apply-resource-targets` and `agent-publish-facts` stay in actingctl and do not
@@ -409,6 +410,37 @@ read so, this section would supersede it.
 `SafeReset`, `Input`, the leases, `RunContainedLabOperation`, `LoadPack`, `UnloadPack`,
 the signatures and `ReleaseLabPin` stay in option two.
 
+### Player hold request kinds
+
+Workflow #429 R-7a (register §1.233, since 0.12.35; `runtime-client` revision 4;
+[player-hold.md](player-hold.md)): a person takes one instance away from the Runtime and gives
+it back. Like R-0's kinds this is the wire shape first: Runtime 0.12.35 refuses both kinds
+`not_implemented` (Denied, recording nothing, `operation` `acquire_player_hold` or
+`release_player_hold`) on all four channels, after the contract's checks only (the instance
+alias, the drain bounds or the expectation, the source gate); R-7b adds the behaviour. Shapes:
+`crates/actingcommand-contract`, `runtime/player_hold.rs`.
+
+| Kind or member | Block | Class | Shape | Answer | Behaviour | G14 |
+|---|---|---|---|---|---|---|
+| `AcquirePlayerHold` | general | instruction (close the instance's gate, drain its runs, hand the device back) | `{instance_alias, drain_timeout_ms}`, `1_000..=600_000` (`invalid_player_hold_drain_timeout`); source gate `(User, Ui)`, `(Cli, Cli)`, `(Lab, Lab)` (`invalid_player_hold_origin`) | `PlayerHoldAcquired {hold, drained}`, inline beside `kind`, once the hold is `held`; success `request_acquire_player_hold_completed` | R-7b | yes |
+| `ReleasePlayerHold` | general | instruction (give the instance back; reconnect it when no pause holds it) | `{instance_alias, expected: {owner_epoch, hold_id, revision}, startup_package?: run \| skip}` (revision 0: `invalid_player_hold_expectation`); the same source gate; no channel limit (Alice's ruling 135) | `PlayerHoldReleased {instance_alias, hold_id, revision, next, selfcheck?, startup_package, startup_package_withheld?, pauses_at_end?}`, inline beside `kind`; success `request_release_player_hold_completed` | R-7b | yes |
+| `RuntimeInstanceStatus.player_hold?`, `.player_hold_operation?`, `.control?` | — | — | the hold, the last accepted operation of the epoch, and the control gates `{code, dispatch, device}` that only `RuntimeControlPlaneStatus::with_derived_control()` fills from the same status's members; `validate` refuses a `control` that disagrees (`invalid_runtime_instance_control`) | absent in every answer of 0.12.35 | R-7b fills them and raises `runtime-client` `min` to 4 | — |
+| `RuntimeStartReport.player_holds_restored?`, `.player_holds_dropped?`, `.player_hold_not_durable?` | — | — | the aliases restored and dropped at the start, and whether the tag patterns keep `host.player_hold`; absent when empty or `false` | absent in every answer of 0.12.35 | R-7b | — |
+
+The client (`runtime-client` 4): `prepare_acquire_player_hold` and
+`prepare_release_player_hold` fix a request without writing anything;
+`submit_acquire_player_hold` and `submit_release_player_hold` write it once on the handle that
+prepared it; `acquire_player_hold` and `release_player_hold` do both. The socket read timeout of
+the acquire is `drain_timeout_ms + 30 000 + 30 000 + IO`, of the release `33 000 + IO`; each has
+a receipt-read deadline of its formula without the IO margin, cut to the session's deadline, so a
+receipt that never comes is `runtime_receipt_timeout`. A receipt lost after the frame was written
+(the connection ended before the receipt header, or the deadline passed) is settled once from
+`Status` by the contract's `settle_player_hold`: `runtime_player_hold_settled`,
+`runtime_player_hold_unconfirmed`, or `runtime_operation_unsupported` (an older Runtime dropped
+the frame), each with `player_hold_settlement()` and `player_hold_attempt()`; nothing is ever sent
+again. A Runtime that declares at most 3 drops either request: the client reconnects in the same
+epoch and reports `runtime_operation_unsupported` with the handle usable.
+
 ### Instance fact key families
 
 `fact_key_family(key)` in the contract looks only at a key's spelling and returns one
@@ -506,7 +538,9 @@ Since Workflow #429 R-0, actinglab's `session app` and `emulator start`, `stop`,
 and `selfcheck` send general instructions (ApplicationLifecycle, ControlEmulatorInstance,
 SelfCheckInstance) on the Lab channel, which step 5 would refuse from U-6
 (`channel_request_refused`), so R-14, which closes this gate, must settle the rule "the Lab
-channel takes no general instruction" for them.
+channel takes no general instruction" for them. Workflow #429 R-7a (register §1.233): the same
+holds for `AcquirePlayerHold` and `ReleasePlayerHold`, and by Alice's ruling 135 (every formal
+channel may begin and end a hold) R-14 must let the Lab channel take these two.
 
 ### Before U-6
 

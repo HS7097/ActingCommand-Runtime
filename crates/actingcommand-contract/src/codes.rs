@@ -190,6 +190,10 @@ crate::outcome_codes! {
         ScheduleExplanationCompleted => "request_schedule_explanation_completed": success / none,
         // Workflow #421 INST-2 (#421 deploy design §4): the Runtime's report of its own start.
         StartReportCompleted => "request_start_report_completed": success / none,
+        // Workflow #429 R-7a (register §1.233): the player hold's two kinds; R-7b first answers
+        // completed.
+        AcquirePlayerHoldCompleted => "request_acquire_player_hold_completed": success / none,
+        ReleasePlayerHoldCompleted => "request_release_player_hold_completed": success / none,
     }
 }
 
@@ -753,6 +757,20 @@ crate::outcome_codes! {
         InvalidStartReport => "invalid_start_report": error / none,
         // #422 P32 B-1 (since 0.12.27): a `QueryRuns` request or answer of the wrong shape.
         InvalidQueryRuns => "invalid_query_runs": error / none,
+        // Workflow #429 R-7a (register §1.233, since 0.12.35): the player hold's contract
+        // checks (contracts/player-hold.md).
+        // A player hold request from an envelope other than (User, Ui), (Cli, Cli), (Lab, Lab).
+        InvalidPlayerHoldOrigin => "invalid_player_hold_origin": error / none,
+        // An `AcquirePlayerHold.drain_timeout_ms` outside 1 000..=600 000.
+        InvalidPlayerHoldDrainTimeout => "invalid_player_hold_drain_timeout": error / none,
+        // A `ReleasePlayerHold.expected` with revision 0.
+        InvalidPlayerHoldExpectation => "invalid_player_hold_expectation": error / none,
+        // A player hold or a player hold operation record of the wrong shape.
+        InvalidPlayerHoldState => "invalid_player_hold_state": error / none,
+        // A `PlayerHoldAcquired` or `PlayerHoldReleased` answer of the wrong shape.
+        InvalidPlayerHoldReceipt => "invalid_player_hold_receipt": error / none,
+        // A status `control` that disagrees with the same status's members (R-7a §2.6 O-7).
+        InvalidRuntimeInstanceControl => "invalid_runtime_instance_control": error / none,
     }
 }
 
@@ -1246,5 +1264,9 @@ crate::outcome_locations! {
         /// An instance's connection preparation: the client's operation that waits for it and
         /// the stage a recovery ladder's trigger names (Workflow #387 D1c).
         ConnectionPreparation => "connection_preparation",
+        /// Workflow #429 R-7a (register §1.233): the player hold's two requests, as the client
+        /// sends them and the host answers them.
+        AcquirePlayerHold => "acquire_player_hold",
+        ReleasePlayerHold => "release_player_hold",
     }
 }

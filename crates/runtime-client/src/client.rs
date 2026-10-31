@@ -70,6 +70,12 @@ pub use run_status::{
     RecentContainedRuns, RunDispatch, RunKey, RunListFilter, RunListPosition, RunOrigin,
     RunStatusMode, WindowRun, WindowRunListing, WindowRunStatus,
 };
+// Workflow #429 R-7a (register §1.233): the player hold's methods and their settlement.
+mod player_hold;
+pub(crate) use player_hold::player_hold_receipt_waits;
+#[cfg(test)]
+pub(crate) use player_hold::tests_override as player_hold_waits_for_test;
+pub use player_hold::{PreparedPlayerHoldAcquire, PreparedPlayerHoldRelease};
 
 #[cfg(feature = "test-observation")]
 use crate::test_observation::{
@@ -3819,6 +3825,21 @@ impl RuntimeClient {
                     Duration::from_millis(run_instance_task_deadline_ms(*response_deadline_ms)),
                     ClientCode::RuntimeReceiptTimeout,
                 )),
+                // Workflow #429 R-7a (§3.1, §3.2): the player hold's two requests read their
+                // receipt until the formula without the IO margin, and never past the session's
+                // deadline. The socket timeout comes after it, so a timeout is always
+                // `runtime_receipt_timeout`, and the method settles.
+                RuntimeOperation::AcquirePlayerHold { .. }
+                | RuntimeOperation::ReleasePlayerHold { .. } => {
+                    match player_hold_receipt_waits(&operation, connection.io_timeout) {
+                        Some(waits) => Some(ReceiptReadDeadline::within(
+                            waits?.deadline,
+                            connection.deadline,
+                            ClientCode::RuntimeReceiptTimeout,
+                        )),
+                        None => None,
+                    }
+                }
                 _ => None,
             };
             if connection
@@ -6713,6 +6734,14 @@ pub(super) fn receipt_response_timeout(
             backend_open_timeout,
             ClientLocation::RuntimeStopInstanceRun.location(),
         ),
+        // Workflow #429 R-7a (§3.1, §3.2): the player hold's two requests wait their whole
+        // formula (the receipt-read deadline plus the IO margin).
+        RuntimeOperation::AcquirePlayerHold { .. } | RuntimeOperation::ReleasePlayerHold { .. } => {
+            match player_hold_receipt_waits(operation, io_timeout) {
+                Some(waits) => waits.map(|waits| waits.socket),
+                None => Ok(io_timeout),
+            }
+        }
         _ => Ok(io_timeout),
     }
 }

@@ -32,6 +32,20 @@ impl ReceiptReadDeadline {
         }
     }
 
+    /// Workflow #429 R-7a (§3.1): `timeout` from now, cut to the session's deadline when it
+    /// comes first (`within_deadline`'s rule for the socket timeout, applied to the deadline).
+    pub(crate) fn within(
+        timeout: Duration,
+        session_deadline: Option<Instant>,
+        timeout_code: impl Into<Code>,
+    ) -> Self {
+        let deadline = Instant::now() + timeout;
+        Self {
+            deadline: session_deadline.map_or(deadline, |session| session.min(deadline)),
+            timeout_code: timeout_code.into(),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn at(deadline: Instant, timeout_code: impl Into<Code>) -> Self {
         Self {

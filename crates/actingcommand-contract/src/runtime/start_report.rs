@@ -16,6 +16,10 @@
 //! named in `instructions_base_changed`, never in `instructions_dropped`, which names only the
 //! keys not restored (`config_override_dropped`, `config_override_superseded`). The new list is
 //! additive and absent when empty, so a report of an earlier build reads as one without it.
+//!
+//! Workflow #429 R-7a (register §1.233, `runtime-client` 4): `player_holds_restored`,
+//! `player_holds_dropped` and `player_hold_not_durable` follow the same rule: absent when empty
+//! (or `false`), so this build reads a report of an earlier build. R-7b fills them.
 
 use super::{RuntimeContractError, RuntimeContractResult};
 use crate::OwnerEpoch;
@@ -134,6 +138,19 @@ pub struct RuntimeStartReport {
     pub standard_packs: Vec<StartReportPacks>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dispatches_since_start: Vec<StartReportDispatches>,
+    /// Workflow #429 R-7a (register §1.233, R-7a §2.5; R-7b fills it): the aliases whose
+    /// persisted player hold this start restored, `held`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub player_holds_restored: Vec<String>,
+    /// Workflow #429 R-7a (R-7b fills it): the aliases of persisted player holds this start
+    /// dropped because the alias is no longer registered.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub player_holds_dropped: Vec<String>,
+    /// Workflow #429 R-7a (R-7b fills it): the effective `ledger_observer.tag.workbench_patterns`
+    /// does not match `host.player_hold`, so no hold can persist and every acquire is refused
+    /// `player_hold_not_durable`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub player_hold_not_durable: bool,
 }
 
 impl RuntimeStartReport {
@@ -165,7 +182,9 @@ impl RuntimeStartReport {
                     .iter()
                     .map(|row| row.instance_alias.as_str()),
                 true,
-            );
+            )
+            && names_once(self.player_holds_restored.iter().map(String::as_str), true)
+            && names_once(self.player_holds_dropped.iter().map(String::as_str), true);
         if !lists_hold {
             return Err(invalid());
         }
