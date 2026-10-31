@@ -119,7 +119,8 @@ fn r0b_a_direct_run_shows_its_request_and_package_and_every_end_clears_it() {
 
     // `end` runs in the hook after the status read: nothing (a success), captures that stay
     // unknown (a failure), or a cancel of the run on another connection.
-    let cases: [(&str, fn(&FakeState, SocketAddr, RequestId)); 3] = [
+    type EndCase = (&'static str, fn(&FakeState, SocketAddr, RequestId));
+    let cases: [EndCase; 3] = [
         ("a success", |_, _, _| {}),
         ("a failure", |state, _, _| {
             state.unknown_capture.store(true, Ordering::Release);
