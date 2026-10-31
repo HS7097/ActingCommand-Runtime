@@ -2343,12 +2343,17 @@ pub enum RuntimeDebugPhase {
     Failed,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// LAB-OBS-1 (register §1.228, since 0.12.33): a failed `observe`, `do`, `ensure` or `wait`
+/// names its reason, `failure_code`: the registered code the Lab failed with. The Runtime records
+/// it on that operation's `command.rejected` ([`Self::outcome`]). No other event carries it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeDebugEvent {
     operation: RuntimeDebugOperation,
     phase: RuntimeDebugPhase,
     effect_disposition: EffectDisposition,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    failure_code: Option<crate::outcome::CodeStr>,
 }
 
 impl RuntimeDebugEvent {
@@ -2357,6 +2362,7 @@ impl RuntimeDebugEvent {
             operation,
             phase: RuntimeDebugPhase::Requested,
             effect_disposition: EffectDisposition::NotPerformed,
+            failure_code: None,
         }
     }
 
@@ -2365,6 +2371,7 @@ impl RuntimeDebugEvent {
             operation,
             phase: RuntimeDebugPhase::Progress,
             effect_disposition: EffectDisposition::NotPerformed,
+            failure_code: None,
         }
     }
 
@@ -2376,14 +2383,33 @@ impl RuntimeDebugEvent {
             operation,
             phase: RuntimeDebugPhase::Completed,
             effect_disposition,
+            failure_code: None,
         }
     }
 
+    /// A failed Lab run (`lab_run`), recorded as `task.failed`. A failed `observe`, `do`,
+    /// `ensure` or `wait` names its reason instead ([`Self::rejected`]).
     pub fn failed(operation: RuntimeDebugOperation, effect_disposition: EffectDisposition) -> Self {
         Self {
             operation,
             phase: RuntimeDebugPhase::Failed,
             effect_disposition,
+            failure_code: None,
+        }
+    }
+
+    /// LAB-OBS-1 (register §1.228): a failed `observe`, `do`, `ensure` or `wait` with its
+    /// reason, the code the Lab failed with; the Runtime records it as `command.rejected`.
+    pub fn rejected(
+        operation: RuntimeDebugOperation,
+        effect_disposition: EffectDisposition,
+        failure_code: crate::outcome::CodeStr,
+    ) -> Self {
+        Self {
+            operation,
+            phase: RuntimeDebugPhase::Failed,
+            effect_disposition,
+            failure_code: Some(failure_code),
         }
     }
 
@@ -2404,7 +2430,27 @@ impl RuntimeDebugEvent {
                 RuntimeContractCode::InvalidRuntimeDebugEvent,
             ));
         }
+        // LAB-OBS-1: a failed command names a registered reason, and nothing else names one.
+        let names_reason = self.phase == RuntimeDebugPhase::Failed
+            && self.operation != RuntimeDebugOperation::LabRun;
+        let valid = match &self.failure_code {
+            Some(code) => names_reason && code.registered().is_some(),
+            None => !names_reason,
+        };
+        if !valid {
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidRuntimeDebugEvent,
+            ));
+        }
         Ok(())
+    }
+
+    /// LAB-OBS-1 (register §1.228): the outcome a failed command's `command.rejected` carries,
+    /// `command_rejected` with the Lab's code as `failure_code`. `None` for an event that names
+    /// no reason.
+    pub fn outcome(&self) -> Option<Outcome> {
+        let code = self.failure_code.as_ref()?.registered()?;
+        Some(Outcome::new(crate::codes::DiagnosticEventCode::CommandRejected).failure_code(code))
     }
 
     pub const fn operation(&self) -> RuntimeDebugOperation {

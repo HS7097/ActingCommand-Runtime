@@ -248,6 +248,108 @@ fn runtime_rejects_forged_non_lab_resource_authoring_ingress_without_ledger_effe
     host.close().expect("close host");
 }
 
+// LAB-OBS-1 (register §1.228, since 0.12.33; production v0.12.32 on 10-31 recorded a failed
+// debug observe as `command.rejected` with `values: {}`): the record of a rejected debug observe
+// names its reason, outcome `command_rejected` with the code the Lab failed with as
+// `failure_code`; a failed observe that names none does not validate, so it is never recorded.
+#[test]
+fn lab_obs_1_a_rejected_debug_observe_records_its_reason() {
+    use actingcommand_contract::codes::{LabErrorCode, RuntimeContractCode};
+    use actingcommand_contract::{
+        DiagnosticCode, EventAction, RuntimeDebugEvent, RuntimeDebugOperation,
+    };
+    let root = TempDir::new().expect("tempdir");
+    let host = host_with_state(&root, "node.a", Arc::new(FakeState::default()));
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let correlation = ids.mint_correlation_id().expect("correlation id");
+    let correlation_transport = *correlation.transport();
+    let connection = ConnectionId::new(123).expect("connection");
+    let reason = actingcommand_contract::outcome::CodeStr::from(LabErrorCode::DeviceError.code());
+    for event in [
+        RuntimeDebugEvent::requested(RuntimeDebugOperation::Observe),
+        RuntimeDebugEvent::rejected(
+            RuntimeDebugOperation::Observe,
+            EffectDisposition::NotPerformed,
+            reason.clone(),
+        ),
+    ] {
+        let request = RuntimeRequest::new(
+            ids.mint_request_id().expect("request id"),
+            correlation,
+            None,
+            EventActor::Lab,
+            EventSource::Lab,
+            unix_ms_now().expect("wall clock"),
+            RuntimeOperation::RecordDebugEvent { event },
+        )
+        .expect("debug event request");
+        let receipt = host
+            .process_request_for_test(&request, connection)
+            .expect("debug event receipt");
+        assert_eq!(receipt.state(), RuntimeReceiptState::Completed);
+    }
+
+    let query = runtime_request(
+        &ids,
+        RuntimeOperation::QueryEvents {
+            query: EventQuery {
+                correlation_id: Some(correlation_transport),
+                ..EventQuery::default()
+            },
+            profile: ProjectionProfile::Forensic,
+            page: RuntimeEventQueryPageRequest::default(),
+        },
+    );
+    let receipt = host
+        .process_request_for_test(&query, connection)
+        .expect("event query");
+    let RuntimeResult::EventPage { page } = receipt.result().expect("events result") else {
+        panic!("expected events");
+    };
+    let rejected = page
+        .events()
+        .iter()
+        .filter(|event| event.event_type == EventType::CommandRejected)
+        .collect::<Vec<_>>();
+    assert_eq!(rejected.len(), 1, "{:?}", page.events());
+    let ProjectionPayload::Full(payload) = &rejected[0].payload else {
+        panic!("expected the full payload");
+    };
+    assert_eq!(payload.action(), EventAction::RuntimeDebugObserve);
+    let outcome = payload.outcome().expect("the rejection's outcome");
+    assert_eq!(
+        outcome.code().as_str(),
+        DiagnosticCode::CommandRejected.code().as_str()
+    );
+    assert_eq!(
+        outcome.value("failure_code"),
+        Some(&serde_json::json!(reason.as_str())),
+        "{outcome:?}"
+    );
+
+    let mut silent = serde_json::to_value(RuntimeDebugEvent::rejected(
+        RuntimeDebugOperation::Observe,
+        EffectDisposition::NotPerformed,
+        reason,
+    ))
+    .expect("debug event JSON");
+    silent
+        .as_object_mut()
+        .expect("debug event object")
+        .remove("failure_code")
+        .expect("the reason member");
+    let silent: RuntimeDebugEvent = serde_json::from_value(silent).expect("debug event wire");
+    assert_eq!(
+        silent
+            .validate()
+            .expect_err("a failed observe names its reason")
+            .code()
+            .as_str(),
+        RuntimeContractCode::InvalidRuntimeDebugEvent.as_str()
+    );
+    host.close().expect("close host");
+}
+
 #[test]
 fn typed_client_action_is_idempotent_and_public_projection_hides_the_value() {
     let root = TempDir::new().expect("tempdir");

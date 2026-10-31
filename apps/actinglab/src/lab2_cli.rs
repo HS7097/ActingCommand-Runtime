@@ -430,11 +430,13 @@ fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<V
                     )
                 };
                 // A ledger/artifact fatal is already terminal; do not append recursively.
+                // LAB-OBS-1 (register §1.228): the terminal names the Runtime's code.
                 if !error.is_fatal() {
                     session
-                        .record_event(RuntimeDebugEvent::failed(
+                        .record_event(RuntimeDebugEvent::rejected(
                             RuntimeDebugOperation::Observe,
                             EffectDisposition::NotPerformed,
+                            error.outcome().code().clone(),
                         ))
                         .map_err(|ledger| {
                             failed(format!(
@@ -477,20 +479,15 @@ fn run_runtime_observe(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<V
         if flags.bool("--preview") {
             payload["preview"] = frame::preview(verified.png());
         }
-        let terminal =
-            if observed.status == actingcommand_contract::PageObservationStatus::Recognized {
-                RuntimeDebugEvent::completed(
-                    RuntimeDebugOperation::Observe,
-                    EffectDisposition::NotPerformed,
-                )
-            } else {
-                RuntimeDebugEvent::failed(
-                    RuntimeDebugOperation::Observe,
-                    EffectDisposition::NotPerformed,
-                )
-            };
+        // LAB-OBS-1 (register §1.228): the observation stands whatever page it matched, so its
+        // terminal is `completed`, as do, ensure and wait close an answer that stands
+        // (`finish_runtime_debug_result`); `no_match`, `conflict` and `partial` are the answer's
+        // `state` and the observation's own record, not a failed command.
         session
-            .record_event(terminal)
+            .record_event(RuntimeDebugEvent::completed(
+                RuntimeDebugOperation::Observe,
+                EffectDisposition::NotPerformed,
+            ))
             .map_err(|error| CliError::device(error.to_string()))?;
         let recorded = match &record_lock {
             Some(lock) => Some(record_attach_frame(
@@ -1408,7 +1405,8 @@ fn finish_runtime_debug_result(
                 EffectDisposition::NotPerformed
             },
         ),
-        Err(_) => RuntimeDebugEvent::failed(
+        // LAB-OBS-1 (register §1.228): the terminal names the code the command failed with.
+        Err(error) => RuntimeDebugEvent::rejected(
             operation,
             match operation {
                 RuntimeDebugOperation::Do | RuntimeDebugOperation::Ensure => {
@@ -1416,6 +1414,9 @@ fn finish_runtime_debug_result(
                 }
                 _ => EffectDisposition::NotPerformed,
             },
+            actingcommand_contract::outcome::Outcome::relayed(&error.code)
+                .code()
+                .clone(),
         ),
     };
     if let Err(ledger_error) = session.record_event(terminal) {

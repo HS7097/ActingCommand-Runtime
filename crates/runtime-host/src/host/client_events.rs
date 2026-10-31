@@ -168,19 +168,36 @@ impl HostShared {
                     AuditInput::new(),
                 ),
             )?,
-            (_, RuntimeDebugPhase::Failed) => self.append_event(
-                EventSeverity::Error,
-                EventSource::Runtime,
-                OriginModule::Runtime,
-                EventActor::Runtime,
-                links,
-                CommandPayloadDraft::rejected(
-                    action,
-                    DiagnosticCode::CommandRejected,
-                    event.effect_disposition(),
-                    AuditInput::new(),
-                ),
-            )?,
+            // LAB-OBS-1 (register §1.228): a failed command's record carries its reason, the
+            // code the Lab failed with (`RuntimeDebugEvent::outcome`); a validated event always
+            // names one, so a missing reason is refused, never recorded empty.
+            (_, RuntimeDebugPhase::Failed) => {
+                let reason = event.outcome().ok_or_else(|| {
+                    RequestFailure::request(
+                        RuntimeHostError::request(
+                            SharedCode::RuntimeDebugEventInvalid,
+                            ContractLocation::RecordRuntimeDebugEvent,
+                            RuntimeErrorCode::InvalidRequest,
+                        ),
+                        RuntimeReceiptState::Denied,
+                        None,
+                    )
+                })?;
+                self.append_event(
+                    EventSeverity::Error,
+                    EventSource::Runtime,
+                    OriginModule::Runtime,
+                    EventActor::Runtime,
+                    links,
+                    CommandPayloadDraft::rejected_with_outcome(
+                        action,
+                        DiagnosticCode::CommandRejected,
+                        event.effect_disposition(),
+                        reason,
+                        AuditInput::new(),
+                    ),
+                )?
+            }
             (_, RuntimeDebugPhase::Progress) => {
                 return Err(RequestFailure::request(
                     RuntimeHostError::request(

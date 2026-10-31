@@ -1510,6 +1510,135 @@ fn l4_observe_capture_record_stores_the_runtime_frames_capture_backend() {
     assert_eq!(stored["capture_backend"], "adb_screencap", "{recording}");
 }
 
+// LAB-OBS-1 (register §1.228, since 0.12.33; production v0.12.32 on 10-31: each `ac_lab_observe`
+// with `capture=true` whose frame matched none of its package's pages answered `ok:true`, and
+// its `runtime.debug_observe` was then recorded as `command.rejected`, error, with no reason).
+// One `observe --capture` of a neutral package whose one page wants the colour `expected` on the
+// fake's red 1x1 frame: its answer, and the type of every `runtime.debug_observe` record the
+// Runtime's ledger then holds, oldest first. `label` seeds the state key: 16 to 1024 bytes.
+fn lab_obs_1_observe(expected: &str, label: &[u8]) -> (Value, Vec<EventType>) {
+    let root = TempDir::new().unwrap();
+    let runtime_root = root.path().join("runtime");
+    let local = root.path().join("local");
+    let config = root.path().join("actinglab.json");
+    fs::write(&config, "{}").unwrap();
+    let package = root.path().join("observe.zip");
+    let pack = format!(
+        r#"{{"schema_version":"0.3","coordinate_space":{{"width":1,"height":1}},"targets":[{{"type":"color","id":"anchor","region":{{"x":0,"y":0,"width":1,"height":1}},"expected":{expected}}}]}}"#
+    );
+    write_zip(&package, &[
+        ("control.json", br#"{"game":"neutral","server":"test","package_id":"neutral.observation","entry_task_id":"task"}"#),
+        ("resources/manifest.json", br#"{"entry_task_id":"task"}"#),
+        ("resources/operations/task/task.json", br#"{}"#),
+        ("resources/recognition/neutral.test.pack.json", pack.as_bytes()),
+        ("resources/recognition/neutral.test.pages.json", br#"{"schema_version":"0.3","pages":[{"id":"page","required":["anchor"]}]}"#),
+        ("resources/navigation/neutral.test.navigation.json", br#"{"schema_version":"0.3","navigation":[]}"#),
+    ]);
+    let instance_id = *IdentifierIssuer::new()
+        .unwrap()
+        .mint_instance_id()
+        .unwrap()
+        .transport();
+    let host = RuntimeHost::start(
+        RuntimeHostConfig::new(&runtime_root, label),
+        Arc::new(FakeProvider {
+            instance_alias: "node.a",
+            instance_id,
+            state: Arc::new(FakeState::default()),
+            frame_size: 1,
+        }),
+    )
+    .unwrap();
+    let answer = run_actinglab_json(
+        &config,
+        &runtime_root,
+        &local,
+        [
+            "--json",
+            "--instance",
+            "node.a",
+            "observe",
+            "--capture",
+            "--zip",
+            package.to_str().unwrap(),
+            "--verbose",
+        ],
+    );
+    let client = RuntimeClient::connect(RuntimeClientConfig::new(
+        &runtime_root,
+        actingcommand_runtime_client::RuntimeChannel::Lab,
+        EventActor::Lab,
+        EventSource::Lab,
+    ))
+    .unwrap();
+    let records = client
+        .query_events(EventQuery::default(), ProjectionProfile::Forensic)
+        .unwrap()
+        .into_iter()
+        .filter(|event| {
+            matches!(&event.payload, ProjectionPayload::Full(payload)
+                if payload.as_ref().action() == EventAction::RuntimeDebugObserve)
+        })
+        .map(|event| event.event_type)
+        .collect();
+    drop(client);
+    host.close().unwrap();
+    (answer, records)
+}
+
+// LAB-OBS-1: an observe whose frame matches no page answers `no_match` and closes its debug
+// request as an accepted command: one `command.validated`, its last record, and no
+// `command.rejected`.
+#[test]
+fn lab_obs_1_an_unmatched_capture_observe_records_no_rejected_debug_observe() {
+    let (answer, records) = lab_obs_1_observe("[0,255,0]", b"lab-obs-1-no-match");
+    assert_eq!(answer["ok"], true, "{answer}");
+    assert_eq!(answer["data"]["state"], "no_match", "{answer}");
+    assert!(
+        !records.contains(&EventType::CommandRejected),
+        "{records:?}"
+    );
+    assert_eq!(
+        records
+            .iter()
+            .filter(|event_type| **event_type == EventType::CommandValidated)
+            .count(),
+        1,
+        "{records:?}"
+    );
+    assert_eq!(
+        records.last(),
+        Some(&EventType::CommandValidated),
+        "{records:?}"
+    );
+}
+
+// LAB-OBS-1: an observe whose frame matches its page is unchanged: `recognized`, and the same
+// one `command.validated` at the end with no `command.rejected`.
+#[test]
+fn lab_obs_1_a_matching_capture_observe_is_unchanged() {
+    let (answer, records) = lab_obs_1_observe("[255,0,0]", b"lab-obs-1-page-match");
+    assert_eq!(answer["ok"], true, "{answer}");
+    assert_eq!(answer["data"]["state"], "recognized", "{answer}");
+    assert!(
+        !records.contains(&EventType::CommandRejected),
+        "{records:?}"
+    );
+    assert_eq!(
+        records
+            .iter()
+            .filter(|event_type| **event_type == EventType::CommandValidated)
+            .count(),
+        1,
+        "{records:?}"
+    );
+    assert_eq!(
+        records.last(),
+        Some(&EventType::CommandValidated),
+        "{records:?}"
+    );
+}
+
 // #411 Lab L3 (exec key 97): a neutral navigation package on the fake's 1x1 frames: `neutral/home`
 // (a red frame) and `neutral/page_a` (a blue one), and one edge from home to page_a that presses
 // `click`.

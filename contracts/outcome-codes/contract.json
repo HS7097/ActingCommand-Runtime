@@ -1499,12 +1499,13 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "failure_code": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The diagnostic code of a ledger diagnostic record: command rejected.",
+      "description": "The diagnostic code of a ledger diagnostic record: command rejected. On the record of a failed Lab observe, do, ensure or wait, failure_code names the code the Lab failed with (LAB-OBS-1, since 0.12.33).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
