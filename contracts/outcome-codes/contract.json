@@ -17313,6 +17313,25 @@
       "common_causes": "A maintenance task whose rule lacks \"maintenance\": true (its candidates then wait for values that a maintenance task never declares), or a rule declared maintenance by mistake, or a priority value not yet moved to its tier.",
       "handling": "Declare \"maintenance\": true on every maintenance rule and give it the higher value; give every business rule the lower value and no declaration."
     },
+    "standard_pack_escalation_threshold_high": {
+      "category": "warning",
+      "ladder_class": "declaration_error",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "game": "required",
+        "task_id": "required",
+        "count": "required",
+        "limit_count": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.34",
+      "description": "A rule of a standard-pack game root's schedule.json (task_id) writes no daily bound (no loop_budget, or one without daily_limit) and an on_failure.escalation_threshold (count) above limit_count, 10 (SS-4, the plan's notes on removing the counts; contracts/standard-pack-schedule.md \"Failure escalation without a daily bound\"). Without a daily limit a run that keeps failing is retried until that many failures pause the pair, and the no-progress guard covers successful runs only. A hint only: the root is composed and scheduled as before. The policy composer finds it, once per rule; actinglab standard-pack check and package bundle --schedule report it.",
+      "common_causes": "The rule's daily_limit was removed and its escalation_threshold kept at the old 1000.",
+      "handling": "Lower the rule's on_failure.escalation_threshold to 2 or 3 in the same change that removes its daily_limit."
+    },
     "standard_pack_root_invalid": {
       "category": "error",
       "ladder_class": "declaration_error",

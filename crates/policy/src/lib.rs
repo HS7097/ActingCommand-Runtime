@@ -115,6 +115,9 @@ mod tests {
     // SS-2c (0.12.32; register §1.227): a `schedule.json` rule that declares itself maintenance is
     // not judged by net benefit.
     mod gate_ss2c;
+    // SS-4 (0.12.34; register §1.231): after a successful run whose basis got no reading of
+    // another value the pair waits with `policy_no_progress`; failures keep their retry path.
+    mod gate_ss4;
     // SS-2g (0.12.34; register §1.232): a V2 consumption may declare its expected amount in
     // thousandths; the net benefit reads it exactly and every integer reader rounds it up.
     mod gate_ss2g;

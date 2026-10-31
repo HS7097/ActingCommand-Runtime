@@ -43,6 +43,9 @@ mod tie_break;
 // SS-2b (register §1.225; Alice's ruling 104 point 3 and ruling 116): the net benefit of a judged
 // candidate within its tier.
 mod benefit;
+// SS-4 (register §1.231; design rd-1029/design-sch-state.md §4.7; Alice's ruling 105 A): the
+// no-progress guard.
+mod no_progress;
 
 use benefit::KnownBenefit;
 pub use blackout::{
@@ -60,6 +63,10 @@ pub use fact_refresh::{
     FACT_REFRESH_EXPECTED_DURATION_MS, FACT_REFRESH_OPERATION_ID, FACT_REFRESH_PROCEDURE_REF,
     FACT_REFRESH_TASK_ID, FactRefreshInputs, FactRefreshReader, FactRefreshSettings, IdleClosed,
     InstanceHold, fact_refresh_task,
+};
+pub use no_progress::{
+    BasisReading, MAX_NO_PROGRESS_BASIS_KEYS, NoProgressBasis, NoProgressGuard, NoProgressGuards,
+    NoProgressMemory,
 };
 pub use rerun::{OwedRerun, OwedReruns};
 use tie_break::TieKey;
@@ -1087,6 +1094,7 @@ pub fn evaluate_with_immediate_retries<E: From<PolicyEvaluationError>>(
         &RunSlots::default(),
         &OwedReruns::default(),
         &InstanceHolds::default(),
+        &NoProgressGuards::default(),
         eligibility,
     )
 }
@@ -1121,6 +1129,7 @@ pub fn evaluate_with_fact_refresh<E: From<PolicyEvaluationError>>(
         &RunSlots::default(),
         &OwedReruns::default(),
         &InstanceHolds::default(),
+        &NoProgressGuards::default(),
         eligibility,
     )
 }
@@ -1161,6 +1170,7 @@ pub fn evaluate_with_remedies<E: From<PolicyEvaluationError>>(
         &RunSlots::default(),
         &OwedReruns::default(),
         &InstanceHolds::default(),
+        &NoProgressGuards::default(),
         eligibility,
     )
 }
@@ -1308,6 +1318,52 @@ pub fn evaluate_with_instance_holds<E: From<PolicyEvaluationError>>(
     run_slots: &RunSlots,
     owed_reruns: &OwedReruns,
     instance_holds: &InstanceHolds,
+    entry_holds: impl FnMut(&TaskSpec, &str, &str) -> Result<bool, E>,
+    eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
+) -> Result<PolicyEvaluation, E> {
+    evaluate_with_no_progress(
+        catalog,
+        facts,
+        resources,
+        time,
+        seed,
+        immediate_retries,
+        fact_refresh,
+        remedies,
+        chain_handover,
+        run_slots,
+        owed_reruns,
+        instance_holds,
+        &NoProgressGuards::default(),
+        entry_holds,
+        eligibility,
+    )
+}
+
+/// SS-4 (register §1.231; `contracts/scheduling/README.md`, "No-progress guard"):
+/// `evaluate_with_instance_holds` with the no-progress guards the Runtime armed
+/// ([`NoProgressGuards`], kept by its [`NoProgressMemory`]). A pair whose trigger is true, whose
+/// feedback stop did not fire and whose cooldown has passed, whose latest run is its guard's
+/// dispatch and succeeded, and none of whose basis keys reads a value other than at that
+/// dispatch's admission, is deferred with `policy_no_progress` and no wake before it is placed: it
+/// is not a candidate, so neither the net-benefit gate nor the Runtime's gates see it. An
+/// immediate rerun, a remedy request or retry and an owed rerun are never held, as they are past
+/// the cooldown. With no guard the evaluation is the one `evaluate_with_instance_holds` gives.
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_with_no_progress<E: From<PolicyEvaluationError>>(
+    catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
+    resources: &EvaluationResources,
+    time: EvaluationTime,
+    seed: u64,
+    immediate_retries: &BTreeSet<(String, String)>,
+    fact_refresh: &FactRefreshInputs,
+    remedies: &RemedyPlan,
+    chain_handover: &ChainHandoverInputs,
+    run_slots: &RunSlots,
+    owed_reruns: &OwedReruns,
+    instance_holds: &InstanceHolds,
+    no_progress: &NoProgressGuards,
     mut entry_holds: impl FnMut(&TaskSpec, &str, &str) -> Result<bool, E>,
     eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
 ) -> Result<PolicyEvaluation, E> {
@@ -1325,6 +1381,7 @@ pub fn evaluate_with_instance_holds<E: From<PolicyEvaluationError>>(
         run_slots,
         owed_reruns,
         instance_holds,
+        no_progress,
         eligibility,
     )
 }
@@ -1343,6 +1400,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
     run_slots: &RunSlots,
     owed_reruns: &OwedReruns,
     instance_holds: &InstanceHolds,
+    no_progress: &NoProgressGuards,
     mut eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
 ) -> Result<PolicyEvaluation, E> {
     validate_inputs(catalog, facts, resources, time)?;
@@ -1713,6 +1771,23 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
                                     })
                                 })
                                 .transpose()?;
+                            // SS-4: a pair whose latest successful run made no progress waits for a
+                            // reading of another value, past its cooldown and before placement;
+                            // the Runtime's own reruns and requests are never held.
+                            let no_progress_hold = if immediate_retry
+                                || remedy_override.is_some()
+                                || owed_rerun.is_some()
+                            {
+                                None
+                            } else {
+                                no_progress.hold(
+                                    &task.id,
+                                    &instance.instance_id,
+                                    last_result,
+                                    facts,
+                                    catalog.catalog_hash(),
+                                )
+                            };
                             if cooldown_until.is_some_and(|until| time.unix_ms < until) {
                                 task_work.state = SchedulingDecisionState::Deferred;
                                 task_work.reasons.push(reason(
@@ -1721,6 +1796,10 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
                                 ));
                                 task_work.next_wake_unix_ms =
                                     min_wake(task_work.next_wake_unix_ms, cooldown_until);
+                            } else if let Some(held) = no_progress_hold {
+                                // No wake: a reading of the basis wakes the scheduler.
+                                task_work.state = SchedulingDecisionState::Deferred;
+                                task_work.reasons.push(held);
                             } else {
                                 match build_candidate(
                                     work.len(),

@@ -1284,6 +1284,10 @@ impl HostShared {
         // Workflow #405 D1: each instance's random delay in effect as this cycle starts.
         let random_delay_context =
             self.random_delay_context(&remedy_aliases, HostLocation::EvaluatePolicyCycle)?;
+        // SS-4 (register §1.231): each instance's no-progress switch in effect as this cycle
+        // starts.
+        let no_progress_context =
+            self.no_progress_context(&remedy_aliases, HostLocation::EvaluatePolicyCycle)?;
         // Workflow #411 B41: the page each instance rests on as this cycle starts.
         let chain_handover = self.chain_handover_inputs(&facts.instances)?;
         // Workflow #386 SR-4a2: the blackout keys in effect as this cycle starts.
@@ -1342,6 +1346,7 @@ impl HostShared {
                         stages: &rerun_stages,
                     },
                     max_concurrent_runs: run_limits.max_concurrent_runs,
+                    no_progress_enabled: &no_progress_context,
                 },
             )?;
             let unknown = if cycle.evaluation.is_some() {

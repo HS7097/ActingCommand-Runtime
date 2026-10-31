@@ -256,8 +256,11 @@ rules 1 and 5 of "Gradual quiet" still keep policy runs out of blackouts.
 
 ## Order of the deferrals
 
-The policy evaluation decides a candidate's deferral by the first of these that applies; its
-code is the decision's reason:
+A pair the evaluator settles on its own before it is a candidate never reaches this list: its
+trigger and feedback stop, its task cooldown and (SS-4, since 0.12.34) the no-progress guard
+(`policy_no_progress`, [scheduling/README.md](scheduling/README.md), "No-progress guard"), in that
+order. The policy evaluation decides a candidate's deferral by the first of these that applies;
+its code is the decision's reason:
 
 1. operator scheduling pause (`dispatch_paused_global`, `dispatch_paused_instance`);
 2. the instance is held or in takeover cooldown (`dispatch_instance_held`,

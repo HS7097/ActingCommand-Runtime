@@ -2231,6 +2231,28 @@
       "common_causes": "The task's package has not read the fact since the last reset or since its last reading expired (admitted); or its run in this period read nothing usable for the key, for example the page with the reading mark was not reached (served).",
       "handling": "None when admitted. When served, the task waits for the next reset of the key; check that the package's reading mark is on a page its run reaches and that the key is the mark's fact_key."
     },
+    "policy_no_progress": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "basis_readings": "required",
+        "served_by_dispatch_unix_ms": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.34",
+      "description": "Scheduling decision reason (SS-4, Alice's ruling 105 A; contracts/scheduling/README.md \"No-progress guard\"): the no-progress guard holds the pair. Its latest run, dispatched at served_by_dispatch_unix_ms, succeeded, and since its admission none of the facts that admission was decided on (its basis: of the parts that made its trigger true, the resource. and inventory. facts they name, every completion time a fact_time_reached names and the facts of the pools they project; and the readings and capacity facts of the pools the task reserves) has a reading whose value differs from the one the admission read; a newer reading of the same value is no progress, and a key a reset cleared reads nothing. basis_readings names every basis key (fact_key), at most 32, with the admission's reading: reading_value its canonical JSON, or reading_digest its SHA-256 when that is longer than 128 bytes, and observed_at_unix_ms; neither when the key had no reading. The pair is not dispatched, with no wake of its own, until a basis key reads another value; a failed or cancelled run is never held, nor an immediate rerun, a remedy request or an owed rerun. The guard is memory only: a Runtime start, a new catalog generation and turning scheduling.no_progress.enabled off for the instance release it.",
+      "common_causes": "The task's package succeeded without changing anything it is admitted on: it spent nothing, its reading is broken, or the game did not respond; or the facts it is admitted on are not the ones its run changes and no reading of them came since.",
+      "handling": "None when a reading of another value is expected (the package's own publication, the fact refresh, a regenerating pool). Otherwise check that the package publishes the readings its rule is admitted on; scheduling.no_progress.enabled false for the instance turns the guard off there, and turning it on again starts without a guard."
+    },
     "policy_benefit_nonpositive": {
       "category": "info",
       "ladder_class": "none",

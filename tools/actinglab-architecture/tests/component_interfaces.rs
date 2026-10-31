@@ -65,7 +65,9 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   STORE-FG-2 (0.12.29, Alice's ruling of 2026-10-29): revision 21 adds the `store_foreground`
 ///   section (`store_foreground.allowed_application_ids`); revisions 5 to 20 are still read, so
 ///   [5, 21]. Workflow #429 R-2 (0.12.31, Alice's rulings 98 and 99): revision 22 adds
-///   `performance.presets`; revisions 5 to 21 are still read, so [5, 22].
+///   `performance.presets`; revisions 5 to 21 are still read, so [5, 22]. SS-4 (0.12.34, Alice's
+///   ruling 105 A, register §1.231): revision 23 adds `scheduling.no_progress.enabled` and an
+///   instance entry's `scheduling.no_progress`; revisions 5 to 22 are still read, so [5, 23].
 /// - `install-control` stays [0, 1] (model-378 §16 A-7; U-4 raises it in 0.12.x).
 /// - `install-selection` is unchanged (model-378 §10).
 /// - `ledger` [3, 3]: SQLite format 2, `actingcommand.event.v3`; format 1 is refused. Workflow
@@ -81,7 +83,7 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   members; every revision-2 request is still answered as before, so [2, 3].
 /// - `runtime-outcomes` [1, 1]: the new interface of model-378 §10.
 const V0120: &[(&str, [u64; 2])] = &[
-    ("actingd-config", [5, 22]),
+    ("actingd-config", [5, 23]),
     ("install-control", [0, 1]),
     ("install-selection", [1, 1]),
     ("ledger", [3, 4]),

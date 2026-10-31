@@ -304,6 +304,19 @@ warnings; `standard-pack compose` and the Runtime's workbench do not.
   answers `maintenance_declared`, the rules that declare themselves maintenance, and `warnings`
   ends with one `standard_pack_priority_tier_mismatch` per rule whose declaration disagrees with
   its tier ("Two priority tiers"); a `maintenance` of another shape is refused as above.
+  SS-4 (since 0.12.34): after those, `warnings` ends with one
+  `standard_pack_escalation_threshold_high` per rule ("Failure escalation without a daily bound"
+  below).
+- **Failure escalation without a daily bound** (SS-4, register §1.231; plan
+  `rd-1029/plan-state-driven.md`, the notes on removing the counts). A rule that writes no daily
+  bound (no `loop_budget`, or one without `daily_limit`) and an `on_failure.escalation_threshold`
+  above 10 is one `standard_pack_escalation_threshold_high` warning {`game`, `task_id` the rule,
+  `count` its threshold, `limit_count` 10}, once per rule, in file order. Without the daily limit
+  a run that keeps failing is retried until that many failures pause the pair; the no-progress
+  guard ([scheduling/README.md](scheduling/README.md), "No-progress guard") covers successful runs
+  only. A hint, never a refusal: the rule composes and runs as written. The resource side lowers the
+  threshold to 2 or 3 in the same change that removes a rule's `daily_limit`. `standard-pack
+  compose` and the Runtime's workbench do not report it.
 - `actinglab standard-pack compose --root <standard_packs.root> --instance
   <alias>=<game>/<server>... --out <new directory>` composes the game roots below `--root` for
   the given bindings (`--instance` once per bound instance; given after the command's words it is

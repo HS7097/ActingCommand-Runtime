@@ -2170,6 +2170,14 @@ tests = [
 ]
 incident = ["#405 ED-1"]
 
+# SS-4 (rd-1029 design-sch-state §4.7 "形态"; rd-1031 brief-ss4 test 5; contracts/runtime-config.md, "No-progress guard"; register §1.231; since 0.12.34): scheduling.no_progress.enabled defaults to true and is settable; each instance's own key defaults to the section's and overrides it for that instance only, from the file (off for one instance, or off for the section with one instance's own on) and through an instruction
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::gate_ss4::ss4_t5_the_no_progress_switch_defaults_on_and_an_instance_overrides_it",
+]
+incident = ["#386 SS-4"]
+
 # LN-3 (Workflow #422, LEAN-L model v1.0 §3.6, §5.1 row LN-3; contracts/ledger-observer.md §11.1, §11.3; register L7, L8, L14): each change of a dispatch pair's control state, an activity state and the monitor registry's alias state, and each wake obligation, writes exactly one value record with the key's complete state, and its `state` row names it (`decision_memory/`, `activity_memory/`, `wake/`, `monitor/`); a change that changes nothing writes none; a restart from the records alone keeps the runtime budgets and the activity interval
 [[gate]]
 coverage = "Y"

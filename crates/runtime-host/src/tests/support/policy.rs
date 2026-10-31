@@ -331,6 +331,30 @@ fn day_boundary_off_manifest(
     }
 }
 
+/// SS-4 (register §1.231): a configuration whose only setting is
+/// `instance.<instance>.scheduling.no_progress.enabled = false`. A fixture whose test is not about
+/// the no-progress guard, and whose pair succeeds and is evaluated again on unchanged basis facts,
+/// sets it, so that evaluation is the one before SS-4.
+fn no_progress_off_manifest(
+    instance: &InstanceId,
+) -> actingcommand_contract::RuntimeConfigManifest {
+    let mut parameters = vec![actingcommand_contract::ConfigParameter {
+        key: actingcommand_runtime_config::instance_key(
+            &crate::failure_identity::identifier_text(instance),
+            actingcommand_runtime_config::scheduling::NO_PROGRESS_ENABLED,
+        ),
+        value: actingcommand_contract::FactScalar::Boolean(false),
+        source: actingcommand_contract::ConfigParameterSource::Explicit,
+        settable: false,
+    }];
+    actingcommand_runtime_config::annotate_settable(&mut parameters)
+        .expect("the no-progress key is in the key table");
+    actingcommand_contract::RuntimeConfigManifest {
+        subsystems: Vec::new(),
+        parameters,
+    }
+}
+
 fn evaluated_policy_dispatch(
     host: &RuntimeHost,
     trigger: PolicyTrigger,

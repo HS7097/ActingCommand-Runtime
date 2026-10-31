@@ -473,6 +473,7 @@ both checks ([policy-suspension.md](policy-suspension.md), "Task package suspens
 | `scheduling.parallel.enabled` (Workflow #427-A) | boolean | `true` (since 0.12.31, Workflow #429 R-2 and Alice's ruling 98; `false` before) |
 | `scheduling.evaluation.retry_ms` (ISO-PE, #419) | milliseconds `1..=3600000` | `15000` |
 | `scheduling.evaluation.escalate_after` (ISO-PE, #419) | integer `1..=4294967295` | `3` |
+| `scheduling.no_progress.enabled` (SS-4, since 0.12.34) | boolean | `true` |
 
 The section is checked whole at start, in `check-config` and after every instruction: a code
 list entry the catalog does not list is `config_value_invalid` with `code_unknown`, a retired
@@ -525,6 +526,19 @@ projection of the evaluation inputs ([instance-fact-store.md](instance-fact-stor
 facts"), and `scheduling.fact_refresh.expected_duration_ms` at every evaluation and admission of a
 fact refresh read, whose intent record carries a value other than the spec's nominal 60 000, so
 recovery reserves it again. ED-2 adds no key.
+
+**No-progress guard (SS-4, Alice's ruling 105 A; `actingd-config` revision 23; since 0.12.34).**
+`scheduling.no_progress.enabled` (default `true`, settable) turns the no-progress guard on
+([scheduling/README.md](scheduling/README.md), "No-progress guard"): a (task, instance) pair whose
+latest run succeeded and none of whose basis facts has read a value other than at its admission
+since waits, `policy_no_progress`, until one has. It is also per instance,
+`instance.<instance id>.scheduling.no_progress.enabled`, in the file the entry's
+`scheduling.no_progress.enabled` member, settable, default `section:scheduling.no_progress.enabled`;
+`EffectiveConfig::no_progress_enabled(instance_id)` returns the value in effect, the instance's own
+or the section's. The host reads it for every instance of the snapshot at every evaluated policy
+cycle, so an instruction takes effect at the next one. `false` on an instance: the evaluation of
+its pairs is the one before SS-4, the guard captures nothing for it and forgets what it kept for
+it, so turning the key off and on again releases every guard of the instance.
 
 **Per-instance lanes (Workflow #427-A; `actingd-config` revision 19).**
 `scheduling.parallel.enabled` (default `true` since 0.12.31, Workflow #429 R-2 and Alice's ruling

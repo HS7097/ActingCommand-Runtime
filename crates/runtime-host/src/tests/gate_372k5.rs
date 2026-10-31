@@ -334,7 +334,8 @@ fn k5_t1_a_task_renamed_mid_day_is_not_due_again_that_day() {
 #[test]
 fn k5_t2_the_receipt_counts_the_group_and_replays_without_a_mismatch() {
     let first = generation(1, &[task(TASK_A, unclocked(), 2)], &[]);
-    let mut slots = Slots::start(&first, at(1, 6, 0));
+    // SS-4 (§1.231): guard off, as the basis never changes and this test is about the receipt.
+    let mut slots = Slots::start_without_no_progress_guard(&first, at(1, 6, 0));
     let admission = run(&mut slots, at(1, 6, 10), TASK_A, None);
     assert_eq!(admission.budget.task_daily_used, Some(1));
     let second = generation(

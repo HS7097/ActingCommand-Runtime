@@ -4807,6 +4807,113 @@ either.
 | PA-2 | `IdleStep::WakeHeld`, `IdlePlanner::wake_held`, `withhold_idle_wake` (`idle_action.rs`, `idle.rs`) | behaviour (idle planner) | PAUSE-AUTO | — | a held `stop_emulator` wake stays owed in `host.idle_state` (shape unchanged); the next check after the resume queues it |
 | PA-3 | `idle_action` (existing key) on `emulator_autostart_skipped`, with `skip_reason` | new optional value of an existing code (no shape change) | PAUSE-AUTO | the idle check, an idle wake's claim | once per pause revision and start (`SkippedStart`); the daemon start's skip carries neither `watch_kind` nor `idle_action` |
 
+### 1.231 Slice SS-4 (0.12.34): after a successful run whose basis got no reading of another value, the pair waits for one (Alice's ruling 105 A: no count-based last line, the no-progress guard and the failure retry cap replace counts; the 10-29 ruling confirmed with no objection on 10-31 13:22, Workflow #390 comment 6539002724; design `rd-1029/design-sch-state.md` §4.7 and the SS-4 entry of §5; plan `rd-1029/plan-state-driven.md`, the SS-4 row and the notes on removing the counts; coordinator work order `rd-1031/brief-ss4.md`)
+
+[scheduling/README.md](scheduling/README.md) ("No-progress guard"),
+[scheduling-blackout.md](scheduling-blackout.md) ("Order of the deferrals"),
+[runtime-config.md](runtime-config.md) ("No-progress guard"),
+[standard-pack-schedule.md](standard-pack-schedule.md) ("Tools", "Failure escalation without a
+daily bound") and [component-interfaces.md](component-interfaces.md) (`actingd-config` 23) are the
+contract. The number 1.231 is the coordinator's; §1.230 (PAUSE-AUTO) ships in the same release.
+
+**What.** Each new dispatch intent's **basis** is captured as the evaluation that chose it read its
+facts: of the parts that made its trigger true (every child of a true `all`, the first true child
+of an `any`, every fact below a `not`), the `resource.` and `inventory.` facts they name, every
+completion time a `fact_time_reached` names and the facts of the pools they project; and the
+reading and capacity facts of the pools the task reserves; each with its reading (the value above
+confidence 0, or none). Its admission arms the pair's guard. Before every evaluated cycle a guard one of whose basis
+keys reads a value other than its admission's (a reading where there was none counts) is released
+for good. While a guard is armed and the pair's own latest run is the guarded dispatch, succeeded,
+under the same catalog generation, the pair is deferred after its trigger, feedback stop and
+cooldown with the new info reason `policy_no_progress` {`basis_readings`, `served_by_dispatch_unix_ms`},
+no wake, and is not a candidate. A newer reading of the same value is no progress; a key a reset
+cleared reads nothing and releases nothing. A failed or cancelled run, an immediate rerun, a remedy
+request or retry and an owed rerun are never held. `scheduling.no_progress.enabled` (default `true`,
+settable, also per instance) turns it off; off, the evaluation is the one before. A dispatch with
+no basis key (decided by a clock alone, or by a clock beside a lock) and one with more than 32 has
+no guard. The standard-pack
+composer adds the plan's hint `standard_pack_escalation_threshold_high` (warning) for a rule
+without a daily bound whose `on_failure.escalation_threshold` is above 10; only `standard-pack
+check` and `package bundle --schedule` report it.
+
+**Why.** With SS-3's optional run counts, nothing but `daily_limit` stopped a task that keeps
+succeeding without changing anything (a package that spends nothing, a broken reading, a game that
+does not respond): it would run every cooldown. Ruling 105 A puts a state edge there, not a count:
+the task runs at most once more and waits for a changed reading. The plan's warning covers the
+other half, the failure path, which the guard leaves to `on_failure`: four repositories write
+`escalation_threshold` 1000 beside their daily limits, and without the limit a failing task would
+be retried about 1000 times before its pair is paused.
+
+**Choices made here, and why.**
+- *Which facts.* Design §4.7 names pools, stocks, remaining counts and completion-time keys "the
+  admission read for that decision"; the game-neutral reading of that is the realistic families
+  (`resource.`, `inventory.`, the keys recognition writes and a probe may name), every
+  `fact_time_reached` key, and the catalog's pool readings, taken from the parts of the trigger
+  that decided it and from the reserve gate. Left out: a lock, a health flag or a session fact
+  (beside a clock it would arm a guard no run can release, and the daily task would stop after
+  its first success); a branch of an `any` that did not decide it (`any` of a due clock and a
+  stock gate is the clock's edge, and a stock the run does not change must not stop the hourly
+  run); the feedback stop (it stops a pair, it does not admit one); and a pool the task only
+  consumes or produces (no gate reads it, so no fact refresh is ever asked for it, and a guard on
+  it could wait for ever).
+- *A latch, not a comparison of states.* A probe run's `remaining = 0` and a later reset that clears
+  it again (none → 0 → none) is progress; a comparison at the next reset alone would see none and
+  hold the probe for ever. So the release is decided at every evaluated cycle and kept.
+- *Memory only, no persistence.* The design does not require it. Persisting would put a new record
+  or state member in the ledger and make the rollback refuse it; the guard bounds idle runs to one
+  per pair, so losing it at a start costs at most one more run per pair, after which the guard is
+  armed again. A new catalog generation likewise releases the guards of the pairs it decides (the
+  basis was taken from the old rule), and turning the key off forgets an instance's guards, which
+  gives the operator a release.
+- *The warning in the composer.* The resource side meets it where it removes a daily limit
+  (`standard-pack check`, `package bundle --schedule`), as SS-2's tier warning; the catalog
+  compiler's own warnings stay empty, so no dry-run report and no compiled catalog changes.
+
+**Interplay.**
+- *SS-2b, SS-2e.* The guard sits before placement, so judged and unjudged candidates alike are
+  held before the net-benefit gate and before every Runtime deferral of "Order of the deferrals"; a
+  held decision ends with `policy_no_progress`, which `ac_schedule`, the not-run explanation and
+  the dispatch decision records (as `why`) show, and the idle plan counts it neither due nor as a
+  wake of its own.
+- *SS-5 probes.* A probe run's reading releases the guard, and the known value decides; a probe run
+  that publishes nothing is spent for its period by the probe, and after the next reset the guard
+  holds it until a reading comes (the key named with no admission reading).
+- *The fact refresh.* A trigger made Unknown by an expired basis reading still asks the maintenance
+  package for it; a refresh that reads the same value releases nothing. A held pair asks for no
+  reading of its own.
+- *Chains.* A held head is not dispatched, so its edge successors are not triggered; a successor
+  whose trigger reads no basis key has no guard.
+- *116.* The guard queues and counts nothing, so a pause holds as before and leaves no backlog;
+  under `alice-116-scheduler-stop` nothing is dispatched, so no guard is armed.
+
+**What changes live.** Nothing now: every instance is paused under ruling 116. Once the scheduler
+resumes, a rule with a basis that succeeds without any of it reading another value is dispatched
+once and then waits (`policy_no_progress`), on top of the daily limits the repositories still
+write. A rule without a basis key (a clock rule that reads no pool, stock, remaining count or
+completion time) is unchanged.
+
+**Rollback** (to 0.12.33). 0.12.33 has no guard: nothing is in the ledger or a state file to undo,
+since the guard was memory only, and every pair it held is a candidate again under its written
+counts. The reasons: `policy_no_progress` appears in the ledger only as the `why` of a related
+candidate in a dispatch decision record, a code value 0.12.33 reads as it reads any (the reason
+chain keeps its values as a map without a key check); the `basis_readings` values never leave
+memory. The configuration: 0.12.33 refuses at start and in `check-config` a file that names
+`scheduling.no_progress` or an `instances[]` entry's `scheduling.no_progress` (unknown members of
+the section and the entry), and acsetup and the installers never write either; **so the operator
+first removes those members from the configuration file**, if a person wrote them, and checks
+with 0.12.33's `check-config`. Online overrides of `scheduling.no_progress.enabled` or
+`instance.<id>.scheduling.no_progress.enabled` need nothing: 0.12.33 has no such key and drops
+each row (`config_override_dropped`, listed in `StartReport.instructions_dropped`) without
+refusing the record. The resource tools' new warning changes no file.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SS4-1 | `policy_no_progress` (info / none; `basis_readings` records `{fact_key; reading_value, reading_digest, observed_at_unix_ms}`, at most 32; `served_by_dispatch_unix_ms`) | new outcome code (policy) | SS-4 | the policy evaluator | a pair's decision ends with it, state `deferred`, eligibility true, no wake; `reading_value` is the reading's canonical JSON up to 128 bytes, else `reading_digest`, its SHA-256 |
+| SS4-2 | keys `reading_value` (name), `reading_digest` (hash), `basis_readings` (records) | new key-table entries | SS-4 | the policy evaluator | record fields only, but `basis_readings` |
+| SS4-3 | `evaluate_with_no_progress`, `NoProgressGuards`, `NoProgressMemory` (`capture`, `admit`, `observe`, `guards`), `NoProgressBasis`, `NoProgressGuard`, `BasisReading`, `MAX_NO_PROGRESS_BASIS_KEYS` (32) | policy API (memory only) | SS-4 | policy crate; runtime-host's `PolicyHost` | `evaluate_with_instance_holds` is `evaluate_with_no_progress` with no guard, so every other entry point evaluates as before |
+| SS4-4 | `scheduling.no_progress.enabled` (boolean, default `true`, settable) and `instance.<id>.scheduling.no_progress.enabled` (default `section:scheduling.no_progress.enabled`, settable) | new configuration keys (**`actingd-config` revision 23**) | SS-4 | the operator, `ac_config_set`, the configuration file | read by the host for every instance of the snapshot at every evaluated cycle; a Runtime before SS-4 refuses a file that names either member |
+| SS4-5 | `standard_pack_escalation_threshold_high` (warning / declaration_error; `game`, `task_id`, `count`, `limit_count` 10) | new outcome code (contract) | SS-4 | the policy composer (`StandardPackComposition::escalation_warnings`) | reported by `actinglab standard-pack check` and `package bundle --schedule` after the tier hints; a hint, never a refusal |
+
 ### 1.232 Slice SS-2g (0.12.34): a V2 consumption may declare its expected amount in thousandths, as a production may (ACM-PRICE addendum 2.1 §3.5 and §7.8, design `rd-1031/design-acm-price-addendum2.1.md`; Alice's rulings 127–129 of 10-31 13:19 and 13:22, Workflow #424 comment 6539002371; the research channel's review of addendum 2, point 2, and the coordinator's choice: the expectation is the model's, not the package's last spend; coordinator work order `rd-1031/brief-ss2g.md`)
 
 [scheduling/README.md](scheduling/README.md) ("Expected production (v2)" becomes "Expected

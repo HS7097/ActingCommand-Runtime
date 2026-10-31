@@ -372,6 +372,9 @@
     "evaluation": {
       "retry_ms": 15000,
       "escalate_after": 3
+    },
+    "no_progress": {
+      "enabled": true
     }
   },
   "ledger_observer": {

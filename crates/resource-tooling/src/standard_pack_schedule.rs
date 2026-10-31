@@ -102,7 +102,9 @@ pub(crate) fn check_schedule(
 /// `schedule.json`: the composition's warnings followed by, SS-2b (register §1.225), one
 /// `standard_pack_benefit_undeclared` per judged rule that declares no value, then, SS-2c
 /// (register §1.227), one `standard_pack_priority_tier_mismatch` per rule whose declaration
-/// disagrees with its tier, and the game's judged rules' coverage (complete, pending, undeclared;
+/// disagrees with its tier, then, SS-4 (register §1.231), one
+/// `standard_pack_escalation_threshold_high` per rule without a daily bound whose escalation
+/// threshold is above 10, and the game's judged rules' coverage (complete, pending, undeclared;
 /// SS-2c: and the rules declared maintenance).
 pub(crate) struct ScheduleReport {
     pub(crate) warnings: Vec<Outcome>,
@@ -124,6 +126,9 @@ pub(crate) fn report_schedule(
     warnings.extend(composition.benefit_warnings());
     // SS-2c (register §1.227): the hint of a rule whose declaration disagrees with its tier.
     warnings.extend(composition.tier_warnings());
+    // SS-4 (register §1.231): the hint of a rule without a daily bound whose failures escalate
+    // only after more than ten.
+    warnings.extend(composition.escalation_warnings());
     let benefit_coverage = composition
         .benefit_coverage()
         .into_iter()

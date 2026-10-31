@@ -451,6 +451,13 @@ crate::outcome_codes! {
         // only; the root is composed as before. The policy composer finds it; the resource tools
         // report it.
         StandardPackPriorityTierMismatch => "standard_pack_priority_tier_mismatch": warning / declaration_error,
+        // SS-4 (register §1.231; plan `rd-1029/plan-state-driven.md`, the notes on removing the
+        // counts): a rule writes no daily bound (`loop_budget.daily_limit`) and its
+        // `on_failure.escalation_threshold` is above 10, so a run that keeps failing is retried
+        // that many times before the pair is paused (keys `game`, `task_id` the rule, `count` the
+        // threshold written, `limit_count` 10). A hint only; the root is composed as before. The
+        // policy composer finds it; the resource tools report it.
+        StandardPackEscalationThresholdHigh => "standard_pack_escalation_threshold_high": warning / declaration_error,
         // Workflow #373 NAV-6: a standard-pack root file breaks its shape, a limit or a
         // reference (keys `game`, `path`, `standard_pack_problem`, `json_pointer`). The Runtime's
         // root reader and check-config report it; the resource tools share the same check.

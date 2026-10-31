@@ -642,4 +642,9 @@ outcome_keys! {
     benefit_milli: integer,
     expected_duration_ms: duration_ms,
     // ---- SS-2b: end ----
+    // ---- SS-4 (the no-progress guard, contracts/scheduling/README.md): begin ----
+    reading_value: name,
+    reading_digest: hash,
+    basis_readings: records(fact_key; reading_value, reading_digest, observed_at_unix_ms),
+    // ---- SS-4: end ----
 }

@@ -215,9 +215,16 @@ fn open_slot_host(
     registered: InstanceId,
     clock: &Arc<ManualRuntimeClock>,
     backend: Backend,
+    no_progress_off: bool,
 ) -> RuntimeHost {
     let mut facts = policy_facts();
     facts.outcomes.clear();
+    let mut host_config = config(root)
+        .with_policy_inputs(PolicyInputSnapshot::new(facts, policy_resources()))
+        .with_runtime_clock(clock.clone());
+    if no_progress_off {
+        host_config = host_config.with_config_manifest(no_progress_off_manifest(&registered));
+    }
     let provider = FakeProvider::one(
         POLICY_INSTANCE_ALIAS,
         registered,
@@ -227,13 +234,7 @@ fn open_slot_host(
         Backend::Device => provider,
         Backend::Fixture => provider.fixture_simulation(),
     };
-    RuntimeHost::start(
-        config(root)
-            .with_policy_inputs(PolicyInputSnapshot::new(facts, policy_resources()))
-            .with_runtime_clock(clock.clone()),
-        Arc::new(provider),
-    )
-    .expect("start the clock-slot host")
+    RuntimeHost::start(host_config, Arc::new(provider)).expect("start the clock-slot host")
 }
 
 /// One host on a manual Runtime clock, and the records read from it so far.
@@ -243,6 +244,9 @@ pub(super) struct Slots {
     root: TempDir,
     registered: InstanceId,
     backend: Backend,
+    /// SS-4 (register §1.231): the no-progress guard is off on the fixture instance
+    /// ([`no_progress_off_manifest`]), at the start and at every restart.
+    no_progress_off: bool,
     available: bool,
     approved: BTreeSet<String>,
     read: usize,
@@ -253,11 +257,26 @@ impl Slots {
         Self::start_on(Backend::Device, sources, unix_ms)
     }
 
+    /// SS-4 (register §1.231): [`Slots::start`] with the no-progress guard off on the fixture
+    /// instance, for a test that is not about the guard.
+    pub(super) fn start_without_no_progress_guard(sources: &CatalogSources, unix_ms: u64) -> Self {
+        Self::open(Backend::Device, sources, unix_ms, true)
+    }
+
     fn start_on(backend: Backend, sources: &CatalogSources, unix_ms: u64) -> Self {
+        Self::open(backend, sources, unix_ms, false)
+    }
+
+    fn open(
+        backend: Backend,
+        sources: &CatalogSources,
+        unix_ms: u64,
+        no_progress_off: bool,
+    ) -> Self {
         let root = TempDir::new().expect("tempdir");
         let registered = instance_id();
         let clock = Arc::new(ManualRuntimeClock::new(unix_ms, 0));
-        let host = open_slot_host(&root, registered, &clock, backend);
+        let host = open_slot_host(&root, registered, &clock, backend, no_progress_off);
         host.activate_policy_catalog(sources)
             .expect("activate the clock-slot catalog");
         Self {
@@ -266,6 +285,7 @@ impl Slots {
             root,
             registered,
             backend,
+            no_progress_off,
             available: true,
             approved: BTreeSet::new(),
             read: 0,
@@ -406,6 +426,7 @@ impl Slots {
             root,
             registered,
             backend,
+            no_progress_off,
             available,
             approved,
             read,
@@ -413,13 +434,14 @@ impl Slots {
         } = self;
         host.close().expect("close the clock-slot host");
         let clock = Arc::new(ManualRuntimeClock::new(unix_ms, 0));
-        let host = open_slot_host(&root, registered, &clock, backend);
+        let host = open_slot_host(&root, registered, &clock, backend, no_progress_off);
         Self {
             host,
             clock,
             root,
             registered,
             backend,
+            no_progress_off,
             available,
             approved,
             read,

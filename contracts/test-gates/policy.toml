@@ -674,6 +674,19 @@ tests = [
     "actingcommand-policy::lib::tests::gate_ss5::ss5_t6_a_non_probe_unknown_still_requests_the_maintenance_package",
 ]
 incident = ["#386 SS-5"]
+# SS-4 (Alice's ruling 105 A, the no-progress guard and the failure retry cap replace counts; rd-1029 design-sch-state §4.7 and §5 SS-4 tests 1 to 5; rd-1031 brief-ss4 tests 1 to 5 and 7; contracts/scheduling/README.md, "No-progress guard"; register §1.231; since 0.12.34): after a successful run with no newer reading of its basis the pair is deferred policy_no_progress {basis_readings with the admission's reading, served_by_dispatch_unix_ms}, no wake, and not dispatched; a reading of another value makes it a candidate again and stays released when the old value comes back; a newer reading of the same value is no progress; a failed run takes its retry path, an immediate rerun with failure_retry_immediate; with the guard off the evaluation equals evaluate_with_instance_holds's byte for byte; a probe run's reading of 0 releases the guard and the reset admits the probe again, while a probe run that published nothing is held after the reset; an expired basis reading still asks the maintenance package, and its refresh of the same value does not release the guard
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_ss4::ss4_t1_a_successful_run_without_a_newer_reading_holds_the_pair",
+    "actingcommand-policy::lib::tests::gate_ss4::ss4_t2_a_reading_of_another_value_makes_the_pair_a_candidate_again",
+    "actingcommand-policy::lib::tests::gate_ss4::ss4_t3_a_newer_reading_of_the_same_value_is_no_progress",
+    "actingcommand-policy::lib::tests::gate_ss4::ss4_t4_a_failed_run_takes_the_retry_path",
+    "actingcommand-policy::lib::tests::gate_ss4::ss4_t5_with_the_guard_off_the_evaluation_is_as_before",
+    "actingcommand-policy::lib::tests::gate_ss4::ss4_t7a_a_probe_run_that_publishes_zero_releases_the_guard",
+    "actingcommand-policy::lib::tests::gate_ss4::ss4_t7b_a_refresh_that_publishes_the_same_value_does_not_release_the_guard",
+]
+incident = ["#386 SS-4"]
 # Workflow #386 SR-3 (frozen scheduling model v1.4.2 §2.4 items 3-4, rows T10 and T11; M-PKG v1.1 §3.4, §5.2): the first preparation that refuses a task package with a suspend code suspends it by its package_id, with its content hash; every task bound to it, on every instance, is deferred with pack_admission_suspended and not prepared again, while another task package dispatches; a changed content hash or another build lifts it and the package is tried once, and the same refusal suspends it again
 [[gate]]
 key = "48"
@@ -1039,6 +1052,13 @@ tests = [
     "actingcommand-resource-tooling::lib::gate_ss2c::ss2c_t5_t6_the_check_counts_declared_rules_apart_and_warns_of_a_tier_mismatch",
 ]
 incident = ["#386 SS-2c"]
+# SS-4 (rd-1029 plan-state-driven, the notes on removing the counts; rd-1031 brief-ss4 test 6; contracts/standard-pack-schedule.md, "Tools", "Failure escalation without a daily bound"; register §1.231; since 0.12.34): a rule without a daily bound (loop_budget without daily_limit, or no loop_budget) whose escalation_threshold is above 10 is one standard_pack_escalation_threshold_high {game, task_id, count, limit_count 10} in file order, outside the composition's own warnings; a rule with a daily limit, or at the threshold 10, gives none; the file composes all the same
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_ss4::ss4_t6_no_daily_bound_and_a_high_escalation_threshold_is_warned_about",
+]
+incident = ["#386 SS-4"]
 
 # ROUT-L RL-1a (frozen model v1.0 §3.6 "No rules at all is a valid state", §3.5, §6.1 row RL-1a; contracts/standard-pack-schedule.md): no rules, no schedule.json or no bound instance compose a valid empty V2 catalog with no approval
 [[gate]]

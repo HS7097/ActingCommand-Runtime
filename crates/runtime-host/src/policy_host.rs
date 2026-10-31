@@ -54,11 +54,11 @@ use actingcommand_policy::{
     CompletedActivityWindow, DecisionReason, DecisionReasonChain, DetectionSuggestion,
     DispatchIntent, DispatchPrerequisites, EligibilityState, EvaluationFacts, EvaluationResources,
     EvaluationTime, FACT_REFRESH_TASK_ID, FactRefreshInputs, FactRefreshReader, InstanceSnapshot,
-    MAX_EVALUATION_INSTANCES, MAX_TASK_FAILURE_STREAK, MAX_TASK_LAST_DURATION_MS, PolicyEvaluation,
-    REMEDY_JOURNAL_MAX_RUNS, RemedyInputs, RemedyJournal, RemedyPlan, RemedyRun, RemedySettlement,
-    RunSlots, SchedulingDecisionState, ScopeSelector, TaskDecision, TaskRuntimeSnapshot,
-    TaskTerminalState, activity_window_at, compile_catalog, evaluate_with_instance_holds,
-    plan_remedies,
+    MAX_EVALUATION_INSTANCES, MAX_TASK_FAILURE_STREAK, MAX_TASK_LAST_DURATION_MS, NoProgressMemory,
+    PolicyEvaluation, REMEDY_JOURNAL_MAX_RUNS, RemedyInputs, RemedyJournal, RemedyPlan, RemedyRun,
+    RemedySettlement, RunSlots, SchedulingDecisionState, ScopeSelector, TaskDecision,
+    TaskRuntimeSnapshot, TaskTerminalState, activity_window_at, compile_catalog,
+    evaluate_with_no_progress, plan_remedies,
 };
 use actingcommand_runtime_state::{PlanningQuotaUsage as DetectionQuotaUsage, RuntimeStateStore};
 use serde::{Deserialize, Serialize};
@@ -299,6 +299,9 @@ pub(crate) struct PolicyEvaluationContext<'a> {
     /// cycle starts; `None` when the configuration does not carry the key, and the limit the host
     /// was started with holds ([`PolicyHost::set_max_concurrent_runs`]).
     pub(crate) max_concurrent_runs: Option<u16>,
+    /// SS-4 (register §1.231): `scheduling.no_progress.enabled` in effect for each instance of the
+    /// snapshot, by alias, as the cycle starts; an instance it does not name is off.
+    pub(crate) no_progress_enabled: &'a BTreeMap<String, bool>,
 }
 
 /// Workflow #384 D2-S4 (D2 model §3.1, §3.4): the `scheduling.fact_refresh.*` settings in effect
@@ -1242,6 +1245,9 @@ pub(crate) struct PolicyHost {
     /// Workflow #386 SR-2b-2: the owed reruns' exhaustions, stage watches and recorded
     /// `policy_rerun_*` records. Memory only.
     reruns: rerun::RerunState,
+    /// SS-4 (register §1.231): the no-progress guard's captured bases and armed guards, per
+    /// (task, instance). Memory only; a host starts with none.
+    no_progress: NoProgressMemory,
 }
 
 /// Workflow #422 LN-4: the dispatch journal while it is rebuilt.
@@ -1664,6 +1670,7 @@ impl PolicyHost {
             pruned_pairs: BTreeSet::new(),
             rerun_signals: Vec::new(),
             reruns: rerun::RerunState::default(),
+            no_progress: NoProgressMemory::default(),
         };
         match tagged {
             // Workflow #422 LN-4 (§11.6): no record counts as written, so the start's
@@ -2754,6 +2761,7 @@ impl PolicyHost {
             blackout_holds,
             rerun,
             max_concurrent_runs,
+            no_progress_enabled,
         } = context;
         let directive = self.cadence.observe(trigger, time.unix_ms)?;
         if directive.kind == PolicyRecomputeKind::Deferred {
@@ -2862,9 +2870,16 @@ impl PolicyHost {
         // is left eligible and unselected.
         let instance_holds =
             crate::application_update::instance_holds(&update_pending, &store_tasks);
+        // SS-4 (register §1.231; `scheduling/README.md`, "No-progress guard"): an instance with
+        // the guard off keeps none, and every guard a basis reading of another value released is
+        // gone; the armed ones hold their pairs in this evaluation.
+        let no_progress_on = |alias: &str| no_progress_enabled.get(alias).copied().unwrap_or(false);
+        self.no_progress
+            .observe(&active.compiled, facts, time, no_progress_on)?;
+        let no_progress_guards = self.no_progress.guards();
         let deferrals = clock_slot::Deferrals::default();
         let started = Instant::now();
-        let mut evaluation = evaluate_with_instance_holds::<RuntimeHostError>(
+        let mut evaluation = evaluate_with_no_progress::<RuntimeHostError>(
             &active.compiled,
             facts,
             resources,
@@ -2879,6 +2894,7 @@ impl PolicyHost {
             &run_slots,
             &rerun_plan.owed,
             &instance_holds,
+            &no_progress_guards,
             |task, _instance_id, page_id| {
                 Ok(crate::host::chain_entry_holds_page(
                     procedure_manifest,
@@ -3060,6 +3076,16 @@ impl PolicyHost {
             .filter(|intent| !self.seen_dispatches.contains_key(&intent.decision_id))
             .cloned()
             .collect();
+        // SS-4: the basis of each new intent, as this evaluation read its facts; its admission
+        // arms the pair's guard (`commit_admission`).
+        self.no_progress.capture(
+            &active.compiled,
+            facts,
+            resources,
+            time,
+            &pending_dispatch_intents,
+            no_progress_on,
+        )?;
         let detection_planning_signals = preview_detection_planning_signals(
             &self.store,
             &self.detection_quota,
@@ -4059,6 +4085,14 @@ impl PolicyHost {
         // An admitted dispatch ends its pair's eligibility age (Workflow #308 slice 5b).
         self.eligibility
             .forget(&intent.task_id, &intent.instance_id);
+        // SS-4 (register §1.231): the admitted dispatch's basis arms its pair's no-progress
+        // guard, at the dispatch time its task state will carry.
+        self.no_progress.admit(
+            &intent.task_id,
+            &intent.instance_id,
+            &intent.decision_id,
+            admission.activity.admitted_at_unix_ms,
+        );
         Ok(())
     }
 

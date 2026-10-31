@@ -183,6 +183,13 @@ impl Error for StandardPackComposeFailure {}
 /// priority values is warned about, never refused.
 pub const STANDARD_PACK_PRIORITY_TIERS: usize = 2;
 
+/// SS-4 (register §1.231; plan `rd-1029/plan-state-driven.md`, the notes on removing the counts):
+/// the failure escalation threshold above which a rule that writes no daily bound is warned
+/// about, never refused. Without the daily limit a run that keeps failing is retried until this
+/// many failures pause the pair, and the no-progress guard covers successful runs only. A hint's
+/// bound, not a tunable: it decides nothing.
+pub const STANDARD_PACK_ESCALATION_WARNING_THRESHOLD: u64 = 10;
+
 /// SS-2b (register §1.225): the task member the composer writes, `true`, on every rule whose
 /// package is not maintenance-role; SS-2c (register §1.227): and that does not declare itself
 /// maintenance (`"maintenance": true`). A rule never writes it itself.
@@ -233,6 +240,10 @@ pub struct StandardPackComposition {
     /// include one in the other tier than its declaration says, by game id, with those rules' ids
     /// in file order.
     tier_mismatches: Vec<(String, Vec<String>)>,
+    /// SS-4: each game with a rule that writes no daily bound and an escalation threshold above
+    /// [`STANDARD_PACK_ESCALATION_WARNING_THRESHOLD`], by game id, with those rules' ids and
+    /// thresholds in file order.
+    escalations: Vec<(String, Vec<(String, u64)>)>,
 }
 
 impl StandardPackComposition {
@@ -329,6 +340,53 @@ impl StandardPackComposition {
             })
             .collect()
     }
+
+    /// SS-4 (register §1.231): one `standard_pack_escalation_threshold_high` per rule that writes
+    /// no `loop_budget.daily_limit` and whose `on_failure.escalation_threshold` is above
+    /// [`STANDARD_PACK_ESCALATION_WARNING_THRESHOLD`] (keys `game`, `task_id` the rule's id, `count`
+    /// its threshold, `limit_count` 10), by game id, then in file order. A hint, never a refusal:
+    /// only the resource tools report them, after [`StandardPackComposition::tier_warnings`]; the
+    /// Runtime's workbench records none.
+    pub fn escalation_warnings(&self) -> Vec<Outcome> {
+        self.escalations
+            .iter()
+            .flat_map(|(game_id, rules)| {
+                rules.iter().map(move |(rule_id, threshold)| {
+                    Outcome::new(SharedCode::StandardPackEscalationThresholdHigh)
+                        .game(game_id.as_str())
+                        .task_id(rule_id.as_str())
+                        .count(*threshold)
+                        .limit_count(STANDARD_PACK_ESCALATION_WARNING_THRESHOLD)
+                })
+            })
+            .collect()
+    }
+}
+
+/// SS-4 (register §1.231): the rules of one game, among its composed rules `tasks` (each once, in
+/// file order), that write no daily bound (no `loop_budget`, or one without `daily_limit`) and an
+/// `on_failure.escalation_threshold` above [`STANDARD_PACK_ESCALATION_WARNING_THRESHOLD`], with
+/// that threshold. The compiler has checked the shapes.
+fn high_escalations(game: &ReadGame<'_>, tasks: &[(Value, Origin)]) -> Vec<(String, u64)> {
+    let mut composed = BTreeMap::<usize, &Value>::new();
+    for (task, origin) in tasks {
+        composed.entry(origin.index).or_insert(task);
+    }
+    composed
+        .into_iter()
+        .filter_map(|(index, task)| {
+            let daily = task
+                .get("loop_budget")
+                .and_then(|budget| budget.get("daily_limit"));
+            let threshold = task
+                .get("on_failure")
+                .and_then(|policy| policy.get("escalation_threshold"))
+                .and_then(Value::as_u64)?;
+            let rule = game.schedule.rules.get(index)?;
+            (daily.is_none() && threshold > STANDARD_PACK_ESCALATION_WARNING_THRESHOLD)
+                .then(|| (rule.id.clone(), threshold))
+        })
+        .collect()
 }
 
 /// Whether the composer judges `rule` by its net benefit: SS-2b, its package is not
@@ -594,6 +652,7 @@ pub fn compose_standard_pack_rules(
     let mut priority_tiers = Vec::new();
     let mut benefit = Vec::new();
     let mut mismatches = Vec::new();
+    let mut escalations = Vec::new();
     for game in &read {
         let before = composed.tasks.len();
         instantiate(game, &mut composed, &mut manifest, &mut issues);
@@ -609,6 +668,11 @@ pub fn compose_standard_pack_rules(
         let rules = tier_mismatches(game, &composed.tasks[before..]);
         if !rules.is_empty() {
             mismatches.push((game.game_id.to_owned(), rules));
+        }
+        // SS-4: the rules without a daily bound whose failures escalate late.
+        let rules = high_escalations(game, &composed.tasks[before..]);
+        if !rules.is_empty() {
+            escalations.push((game.game_id.to_owned(), rules));
         }
         games.push(ComposedGame {
             game_id: game.game_id.to_owned(),
@@ -666,6 +730,7 @@ pub fn compose_standard_pack_rules(
     priority_tiers.sort();
     benefit.sort_by(|left, right| left.0.cmp(&right.0));
     mismatches.sort_by(|left, right| left.0.cmp(&right.0));
+    escalations.sort_by(|left, right| left.0.cmp(&right.0));
     Ok(StandardPackComposition {
         sources,
         compiled,
@@ -675,6 +740,7 @@ pub fn compose_standard_pack_rules(
         priority_tiers,
         benefit,
         tier_mismatches: mismatches,
+        escalations,
     })
 }
 
