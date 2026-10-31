@@ -6,8 +6,13 @@
 //!
 //! - **Who is judged.** A candidate whose task the catalog marks `benefit_judged` (the
 //!   standard-pack composer marks every rule whose package is not maintenance-role), unless it
-//!   ranks with a chain head (SS-2, register §1.222 (2)) or is a manual request
-//!   ([`manual_request`]). Every other candidate ranks as before.
+//!   continues a business chain or is a manual request ([`manual_request`]). SS-2e (register
+//!   §1.229, design `rd-1029/design-sch-state.md` §4.10): a candidate in a chain head's run
+//!   window (SS-2, register §1.222 (2)) continues a business chain when at least one link walked
+//!   from it up to that head, the head included, is marked; it then rides with that chain. One
+//!   whose walked links are all unmarked (a business task after a maintenance task such as a
+//!   return home) is a business decision of its own and is judged, like a candidate in no chain
+//!   window; it still ranks with the head SS-2 finds. Every other candidate ranks as before.
 //! - **The net benefit** `B(k) = Σ_p produce(k,p)·W(k,p)/Q_p − Σ_p consume(k,p)·P(k,p)/Q_p`, in
 //!   milli, summed exactly and floored once. `produce` is the resource layer's own `r(k,p)` and
 //!   `W(k,p)` its effective weight, the base weight plus a covering goal's shortfall weight;

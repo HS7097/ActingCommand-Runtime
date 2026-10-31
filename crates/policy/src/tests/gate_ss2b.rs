@@ -3,9 +3,13 @@
 // SS-2b (register §1.225; Alice's ruling 104 point 3 and ruling 116, 2026-10-30; brief
 // `rd-1029/brief-116-112-114.md` SS-2b tests 1 to 9; contracts/scheduling/README.md, "Net benefit
 // within a tier"):
-// - a judged candidate (a task the catalog marks `benefit_judged`, neither in a chain head's run
-//   window nor a manual request) ranks within its tier by its net benefit per expected
+// - a judged candidate (a task the catalog marks `benefit_judged`, neither continuing a business
+//   chain nor a manual request) ranks within its tier by its net benefit per expected
 //   millisecond `B ÷ E`, the handwritten priority aside;
+// - SS-2e (register §1.229; brief `rd-1031/brief-ss2e.md`; design `rd-1029/design-sch-state.md`
+//   §4.10): a candidate in its chain head's run window continues a business chain only when a
+//   link walked up to the head, the head included, is marked; a business task whose walked links
+//   are all maintenance tasks is judged on its own, its rank still the head's;
 // - a known `B ≤ 0` is `policy_benefit_nonpositive`, any unknown input `benefit_unknown`; neither
 //   is dispatched, and the known part of a partly known candidate is never added up;
 // - unjudged candidates rank as before; a catalog without a mark decides as before;
@@ -267,9 +271,10 @@ fn ss2b_t3_every_unknown_input_is_benefit_unknown_and_never_dispatched() {
 
 // Test 4: unjudged candidates rank as before. Maintenance-role tasks (no mark) come first and keep
 // their order and their decisions; a manual request (its trigger requires a `session.`
-// instruction) and a chain successor in its head's run window are business tasks that are not
-// judged: no `benefit_unknown` though they declare nothing, and they rank before the judged
-// candidates of their tier.
+// instruction) and a chain successor in its (marked, business) head's run window are business
+// tasks that are not judged: no `benefit_unknown` though they declare nothing, and they rank
+// before the judged candidates of their tier. (SS-2e: a successor of a maintenance head alone is
+// judged; the `ss2e_` tests below.)
 #[test]
 fn ss2b_t4_unjudged_candidates_rank_as_before() {
     let maintenance = |judged: bool| {
@@ -323,7 +328,7 @@ fn ss2b_t4_unjudged_candidates_rank_as_before() {
     assert_eq!(asked, ["task_request", "task_judged"], "{evaluation:#?}");
     assert!(no_benefit_reason(decision(&evaluation, "task_request")));
 
-    // A chain successor in its head's run window ranks with its head and is not judged.
+    // A chain successor in its business head's run window ranks with its head and is not judged.
     let successor = all(vec![hourly(), dependency("task_head")]);
     let catalog_chain = catalog(vec![
         task("task_head", 300, vec![produce(LOW, 1)], Vec::new(), true),
@@ -681,6 +686,227 @@ fn ss2b_t9_the_composer_marks_the_judged_rules_and_counts_their_coverage() {
     assert_eq!(issue.pointer, "/rules/0/benefit_judged");
 }
 
+// ---- SS-2e (register §1.229): who rides with a chain ----
+//
+// The chains run on the hourly clock, whose occurrence is at NOW - 1 minute. A task that ran
+// after it has served it and is no candidate, so each round below holds only the candidates it
+// names. `MAINT_TASK` is a maintenance task (unmarked, priority 300, nothing declared), such as a
+// return home.
+
+/// The maintenance task the SS-2e chains start at.
+const MAINT_TASK: &str = "task_maint";
+
+// SS-2e test 1, the production shape: the maintenance task's latest run succeeded (half a minute
+// ago), and a marked business task with no declared effect requires that success. It is in the
+// maintenance task's run window, but no link it continues is a business task: it is judged on its
+// own, `benefit_unknown` (`no_effects`), and not dispatched; the admission is never asked. Its rank
+// still carries the head's priority 300 (SS-2's inheritance is unchanged). Before SS-2e it was not
+// judged and was dispatched: the commit that adds this test alone, before the fix, has it fail on
+// its first assertion.
+#[test]
+fn ss2e_t1_a_business_task_after_a_maintenance_task_is_judged_and_waits_for_its_values() {
+    let catalog = catalog(vec![
+        task(MAINT_TASK, 300, Vec::new(), Vec::new(), false),
+        with(
+            task("task_business", 100, Vec::new(), Vec::new(), true),
+            "trigger",
+            after(MAINT_TASK),
+        ),
+    ]);
+    let (evaluation, asked) = round(
+        &catalog,
+        vec![succeeded(MAINT_TASK, NOW - 30_000)],
+        Vec::new(),
+        true,
+    );
+    assert!(dispatched(&evaluation).is_empty(), "{evaluation:#?}");
+    assert!(asked.is_empty(), "the admission is never asked");
+    let held = decision(&evaluation, "task_business");
+    assert_eq!(held.state, SchedulingDecisionState::Deferred);
+    assert_eq!(held.eligibility, EligibilityState::True);
+    let last = last(held);
+    assert!(last.is(PolicyCode::BenefitUnknown), "{held:#?}");
+    assert_eq!(last.value("benefit_gap"), Some(&json!("no_effects")));
+    assert_eq!(last.value("pool_id"), None);
+    assert_eq!(held.rank.as_ref().map(|rank| rank.priority), Some(300));
+}
+
+// SS-2e test 2: the same business task after the maintenance task, with a known loss: it produces
+// one low unit and consumes one valued unit, B = 100 - 1000 = -900. It is judged,
+// `policy_benefit_nonpositive`, and not dispatched.
+#[test]
+fn ss2e_t2_a_business_task_after_a_maintenance_task_with_a_known_loss_is_not_dispatched() {
+    let catalog = catalog(vec![
+        task(MAINT_TASK, 300, Vec::new(), Vec::new(), false),
+        with(
+            task(
+                "task_business",
+                100,
+                vec![produce(LOW, 1)],
+                vec![consume(VALUED, 1)],
+                true,
+            ),
+            "trigger",
+            after(MAINT_TASK),
+        ),
+    ]);
+    let (evaluation, _) = round(
+        &catalog,
+        vec![succeeded(MAINT_TASK, NOW - 30_000)],
+        Vec::new(),
+        true,
+    );
+    assert!(dispatched(&evaluation).is_empty(), "{evaluation:#?}");
+    let held = decision(&evaluation, "task_business");
+    assert_eq!(held.state, SchedulingDecisionState::Deferred);
+    let last = last(held);
+    assert!(last.is(PolicyCode::PolicyBenefitNonpositive), "{held:#?}");
+    assert_eq!(last.value("benefit_milli"), Some(&json!(-900)));
+    assert_eq!(last.value("expected_duration_ms"), Some(&json!(60_000)));
+}
+
+// SS-2e test 3, a business chain: a marked head with a known positive B (one valued unit) ran half
+// a minute ago and succeeded, and a marked successor that declares nothing requires that success.
+// The successor rides as before: it is not judged (no benefit reason, no B in its breakdown),
+// ranks with the head's priority 300, names the head, and is dispatched.
+#[test]
+fn ss2e_t3_a_successor_of_a_business_head_rides_with_its_chain() {
+    let catalog = catalog(vec![
+        task("task_head", 300, vec![produce(VALUED, 1)], Vec::new(), true),
+        with(
+            task("task_next", 100, Vec::new(), Vec::new(), true),
+            "trigger",
+            after("task_head"),
+        ),
+    ]);
+    let (evaluation, _) = round(
+        &catalog,
+        vec![succeeded("task_head", NOW - 30_000)],
+        Vec::new(),
+        true,
+    );
+    assert_eq!(dispatched(&evaluation), ["task_next"], "{evaluation:#?}");
+    let next = decision(&evaluation, "task_next");
+    assert!(no_benefit_reason(next), "{next:#?}");
+    assert_eq!(next.rank.as_ref().map(|rank| rank.priority), Some(300));
+    let breakdown = reason(next, "rank_breakdown");
+    assert!(
+        breakdown.detail.contains(" chain_head=task_head"),
+        "{}",
+        breakdown.detail
+    );
+    assert_eq!(breakdown.outcome.value("benefit_milli"), None, "not judged");
+}
+
+// SS-2e test 4, mixed: maintenance task → first (marked, one valued unit) → then (marked, nothing
+// declared).
+// - The maintenance task ran: the first business task walks only the maintenance link, so it is
+//   judged; B = 1000 is positive, it is dispatched and its breakdown carries B beside the head it
+//   ranks with. The next one is not eligible yet.
+// - The first ran after the maintenance task: the next one walks the first (marked) and then the
+//   maintenance task, so it rides with the chain: not judged, dispatched though it declares
+//   nothing, ranking with the head SS-2 finds, the maintenance task, at 300.
+#[test]
+fn ss2e_t4_after_a_maintenance_task_the_first_business_link_is_judged_and_the_next_rides() {
+    let catalog = catalog(vec![
+        task(MAINT_TASK, 300, Vec::new(), Vec::new(), false),
+        with(
+            task(
+                "task_first",
+                200,
+                vec![produce(VALUED, 1)],
+                Vec::new(),
+                true,
+            ),
+            "trigger",
+            after(MAINT_TASK),
+        ),
+        with(
+            task("task_then", 100, Vec::new(), Vec::new(), true),
+            "trigger",
+            after("task_first"),
+        ),
+    ]);
+
+    let (first, _) = round(
+        &catalog,
+        vec![succeeded(MAINT_TASK, NOW - 30_000)],
+        Vec::new(),
+        true,
+    );
+    assert_eq!(dispatched(&first), ["task_first"], "{first:#?}");
+    let breakdown = reason(decision(&first, "task_first"), "rank_breakdown");
+    assert_eq!(
+        breakdown.outcome.value("benefit_milli"),
+        Some(&json!(1000)),
+        "judged: {breakdown:#?}"
+    );
+    assert!(
+        breakdown.detail.contains(" chain_head=task_maint"),
+        "{}",
+        breakdown.detail
+    );
+
+    let (then, _) = round(
+        &catalog,
+        vec![
+            succeeded(MAINT_TASK, NOW - 50_000),
+            succeeded("task_first", NOW - 40_000),
+        ],
+        Vec::new(),
+        true,
+    );
+    assert_eq!(dispatched(&then), ["task_then"], "{then:#?}");
+    let next = decision(&then, "task_then");
+    assert!(no_benefit_reason(next), "{next:#?}");
+    assert_eq!(next.rank.as_ref().map(|rank| rank.priority), Some(300));
+    let breakdown = reason(next, "rank_breakdown");
+    assert!(
+        breakdown.detail.contains(" chain_head=task_maint"),
+        "{}",
+        breakdown.detail
+    );
+    assert_eq!(breakdown.outcome.value("benefit_milli"), None, "not judged");
+}
+
+// SS-2e test 5, unchanged: an unmarked successor of the maintenance task ranks as before. Beside a
+// business task of priority 200 (marked, or in a catalog without a mark not), it ranks with the
+// maintenance task's 300 and is asked first either way, carries no benefit reason, and decides
+// as in the catalog without a mark.
+#[test]
+fn ss2e_t5_a_maintenance_successor_of_a_maintenance_task_ranks_as_before() {
+    let tasks = |judged: bool| {
+        catalog(vec![
+            task(MAINT_TASK, 300, Vec::new(), Vec::new(), false),
+            with(
+                task("task_maint_next", 100, Vec::new(), Vec::new(), false),
+                "trigger",
+                after(MAINT_TASK),
+            ),
+            task(
+                "task_judged",
+                200,
+                vec![produce(VALUED, 1)],
+                Vec::new(),
+                judged,
+            ),
+        ])
+    };
+    let ran = vec![succeeded(MAINT_TASK, NOW - 30_000)];
+    let (marked, asked) = round(&tasks(true), ran.clone(), Vec::new(), false);
+    assert_eq!(asked, ["task_maint_next", "task_judged"], "{marked:#?}");
+    let (unmarked, asked) = round(&tasks(false), ran, Vec::new(), false);
+    assert_eq!(asked, ["task_maint_next", "task_judged"], "{unmarked:#?}");
+    let next = decision(&marked, "task_maint_next");
+    assert_eq!(
+        next,
+        decision(&unmarked, "task_maint_next"),
+        "decides as in a catalog without a mark"
+    );
+    assert!(no_benefit_reason(next), "{next:#?}");
+    assert_eq!(next.rank.as_ref().map(|rank| rank.priority), Some(300));
+}
+
 // ---- Fixtures ----
 
 fn hourly() -> Value {
@@ -713,6 +939,11 @@ fn at_least(fact_key: &str, threshold: i64) -> Value {
 /// True once `task_id`'s latest run on the instance succeeded.
 fn dependency(task_id: &str) -> Value {
     json!({"kind": "dependency_completed", "task_id": task_id, "terminal_states": ["succeeded"]})
+}
+
+/// SS-2e: the hourly clock and `task_id`'s success, both required: a chain link to `task_id`.
+fn after(task_id: &str) -> Value {
+    all(vec![hourly(), dependency(task_id)])
 }
 
 fn effect(pool: &str, direction: &str, amount: Value) -> Value {
@@ -954,6 +1185,11 @@ fn state(task_id: &str, at: u64, terminal: TaskTerminalState) -> TaskRuntimeSnap
         expected_runtime_ms: None,
         expected_runtime_runs: None,
     }
+}
+
+/// SS-2e: a run of `task_id`, dispatched at `at`, that succeeded.
+fn succeeded(task_id: &str, at: u64) -> TaskRuntimeSnapshot {
+    state(task_id, at, TaskTerminalState::Succeeded)
 }
 
 /// One round at NOW. With `admit` every candidate is admitted; without it the admission holds

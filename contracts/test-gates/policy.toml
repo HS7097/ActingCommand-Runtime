@@ -332,6 +332,17 @@ tests = [
     "actingcommand-policy::lib::tests::gate_ss2c::ss2c_t2_a_declaration_on_a_maintenance_role_rule_changes_nothing",
 ]
 incident = ["#386 SS-2c"]
+# SS-2e (design rd-1029/design-sch-state.md §4.10: a chain's value is recorded on its head, a business package; rd-1031 brief-ss2e tests; contracts/scheduling/README.md, "Net benefit within a tier"; register §1.229; since 0.12.33): a marked task in its chain head's run window is exempt from the net-benefit gate only when a link walked up to the head, the head included, is marked; a business task after a maintenance task alone is judged, benefit_unknown (no_effects) without values and policy_benefit_nonpositive at a known loss, never dispatched, its rank still the head's; a successor of a business head rides, not judged and dispatched without values; in maintenance, business, business the first is judged and the next rides with the maintenance head's rank; a maintenance successor of a maintenance task ranks and decides as in a catalog without a mark
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_ss2b::ss2e_t1_a_business_task_after_a_maintenance_task_is_judged_and_waits_for_its_values",
+    "actingcommand-policy::lib::tests::gate_ss2b::ss2e_t2_a_business_task_after_a_maintenance_task_with_a_known_loss_is_not_dispatched",
+    "actingcommand-policy::lib::tests::gate_ss2b::ss2e_t3_a_successor_of_a_business_head_rides_with_its_chain",
+    "actingcommand-policy::lib::tests::gate_ss2b::ss2e_t4_after_a_maintenance_task_the_first_business_link_is_judged_and_the_next_rides",
+    "actingcommand-policy::lib::tests::gate_ss2b::ss2e_t5_a_maintenance_successor_of_a_maintenance_task_ranks_as_before",
+]
+incident = ["#386 SS-2e"]
 
 # The intent pins freshness, limits, catalog hash and ledger position
 [[gate]]
