@@ -33,6 +33,8 @@
 //! the Runtime starts (`start_emulator`). Workflow #392 DA-4b-D adds
 //! `display_safe_area.model`, the device model the instance declares (the entry's
 //! `display_safe_area.model` member), default the `display_safe_area` section's key, settable.
+//! SS-4 (register §1.231) adds `scheduling.no_progress.enabled`, in the entry's `scheduling`
+//! member, default the `scheduling` section's key of the same name, settable.
 
 use crate::codes::ConfigValueProblem;
 use crate::display_safe_area;
@@ -42,8 +44,8 @@ use crate::recovery_ladder;
 use crate::scheduling::{
     self, DAY_BOUNDARY_QUIET, DELAY, EXPECTED_RUNTIME_ENABLED, EXPECTED_RUNTIME_MARGIN_MS,
     EXPECTED_RUNTIME_MARGIN_RANGE, EXPECTED_RUNTIME_RUNS, EXPECTED_RUNTIME_RUNS_RANGE,
-    INSTANCE_BLACKOUT, RANDOM_DELAY_ENABLED, RANDOM_DELAY_MAX_MS, RANDOM_DELAY_MIN_MS,
-    REMEDY_CHOICES,
+    INSTANCE_BLACKOUT, NO_PROGRESS_ENABLED, RANDOM_DELAY_ENABLED, RANDOM_DELAY_MAX_MS,
+    RANDOM_DELAY_MIN_MS, REMEDY_CHOICES,
 };
 use crate::table::{
     DefaultSource, FilePath, KeyName, KeyRange, KeyRow, NotSettable, Settable, ValueType,
@@ -201,6 +203,18 @@ pub(crate) static ROWS: &[KeyRow] = &[
     // Workflow #392 DA-4b-D: the device model the instance declares; the section's value in
     // effect is its default.
     display_safe_area::INSTANCE_ROW,
+    // SS-4 (register §1.231): the instance's own no-progress switch; the section's value in
+    // effect is its default.
+    KeyRow {
+        name: KeyName::PerInstance(NO_PROGRESS_ENABLED),
+        file_path: FilePath::InstanceMember,
+        value_type: ValueType::Boolean,
+        range: KeyRange::Any,
+        default: DefaultSource::Section(NO_PROGRESS_ENABLED),
+        settable: Settable::Yes,
+        reader: "SS-4",
+        since: "0.12.34",
+    },
 ];
 
 /// SCH-M ED-1: one instance's expected-duration member, named as the section-level key whose

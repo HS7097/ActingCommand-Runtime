@@ -2282,6 +2282,24 @@
     "expected_duration_ms": {
       "type": "duration_ms",
       "description": "The expected duration E a judged candidate's net benefit is divided by to rank it: the pair's expected duration, else its last settled run's, else the declared one, in milliseconds (SS-2b)."
+    },
+    "reading_value": {
+      "type": "name",
+      "description": "A fact reading as the admission of a dispatch read it, its canonical JSON ({\"type\": <kind>, \"value\": <value>}), at most 128 bytes (SS-4, contracts/scheduling/README.md \"No-progress guard\")."
+    },
+    "reading_digest": {
+      "type": "hash",
+      "description": "The SHA-256 of a fact reading's canonical JSON, in place of reading_value when that is longer than 128 bytes (SS-4)."
+    },
+    "basis_readings": {
+      "type": "records",
+      "fields": {
+        "fact_key": "required",
+        "reading_value": "optional",
+        "reading_digest": "optional",
+        "observed_at_unix_ms": "optional"
+      },
+      "description": "The basis of a held pair's latest dispatch, one record per fact its admission read, ordered by scope and key, at most 32: the key and the reading the admission read (reading_value or reading_digest, and observed_at_unix_ms when it was observed), none when the key had no reading (SS-4)."
     }
   },
   "vocabularies": {

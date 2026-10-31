@@ -253,6 +253,15 @@ actingcommand_contract::outcome_codes! {
         /// `served_by_dispatch_unix_ms`).
         FactProbe => "fact_probe": info / none,
         // ---- SS-5: end ----
+        // ---- SS-4 (the no-progress guard, `contracts/scheduling/README.md`, "No-progress
+        // guard"): begin ----
+        /// Info. The pair's latest run succeeded, and since its admission none of the facts the
+        /// admission read for it (its basis) has a reading whose value differs from the one the
+        /// admission read: the pair is not dispatched, no wake, until one has (keys
+        /// `basis_readings` one record per basis key with the admission's reading, at most 32;
+        /// `served_by_dispatch_unix_ms` the run's dispatch).
+        PolicyNoProgress => "policy_no_progress": info / none,
+        // ---- SS-4: end ----
         // ---- SS-2b (net benefit within a tier, `contracts/scheduling/README.md`, "Net benefit
         // within a tier"): begin ----
         /// Info. A judged candidate's net benefit is known and not positive: it is not dispatched

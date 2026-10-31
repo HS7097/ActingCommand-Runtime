@@ -674,6 +674,16 @@ impl EffectiveConfig {
         scheduling::instance_expected_runtime(&|key: &str| self.value_or_shipped(key), instance_id)
     }
 
+    /// SS-4 (register §1.231): whether the no-progress guard is on for the instance whose registry
+    /// id is `instance_id`: its own `instance.<instance_id>.scheduling.no_progress.enabled` when
+    /// the configuration carries it, otherwise the section's `scheduling.no_progress.enabled`.
+    pub fn no_progress_enabled(&self, instance_id: &str) -> Result<bool, ConfigFailure> {
+        scheduling::instance_no_progress_enabled(
+            &|key: &str| self.value_or_shipped(key),
+            instance_id,
+        )
+    }
+
     /// IDLE-1: the `idle` section in effect, checked whole.
     pub fn idle_section(&self) -> Result<IdleConfig, ConfigFailure> {
         idle::section(&|key: &str| self.value_or_shipped(key))

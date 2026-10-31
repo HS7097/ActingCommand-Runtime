@@ -40,6 +40,10 @@
 //! #429 R-2 and Alice's ruling 98; `false` before), whether the policy driver hands each admitted
 //! scheduled run to its instance's worker instead of running it on its own thread; read by
 //! actingd at the start of every policy round.
+//! SS-4 (register §1.231; `actingd-config` revision 23): `no_progress.enabled` (default `true`),
+//! also per instance (`instance.<instance id>.scheduling.no_progress.enabled`, defaulting to the
+//! section's), whether the no-progress guard holds a pair whose latest successful run made no
+//! progress; read by the host at every evaluated policy cycle.
 //!
 //! The section is read whole and checked whole (M387 §5.3). At start and in `check-config` a
 //! blackout entry that breaks a rule is `blackout_config_invalid` (with `field`, `blackout_source`
@@ -184,6 +188,12 @@ pub const EVALUATION_RETRY_MS: &str = "scheduling.evaluation.retry_ms";
 /// ISO-PE (#419; revision 20): the skipped evaluations in a row after which the Runtime records
 /// that the policy evaluation waits for a person (`policy_evaluation_awaiting_person`).
 pub const EVALUATION_ESCALATE_AFTER: &str = "scheduling.evaluation.escalate_after";
+/// SS-4 (register §1.231; `actingd-config` revision 23; design `rd-1029/design-sch-state.md`
+/// §4.7): whether a pair whose latest successful run made no progress (none of the facts its
+/// admission read has a reading of another value since) waits for one (`policy_no_progress`);
+/// `false`: the evaluation is the one before SS-4. Also the member of an instance's own value
+/// (`instance.<instance id>.scheduling.no_progress.enabled`).
+pub const NO_PROGRESS_ENABLED: &str = "scheduling.no_progress.enabled";
 
 /// The longest random delay any key may name: one day (the coordinator's order for Workflow
 /// #405, 2026-10-14). Schema, not a threshold.
@@ -297,6 +307,11 @@ pub struct SchedulingFile {
     // unknown fields; a file that does not name it keeps its revision.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     evaluation: Option<EvaluationFile>,
+    // Interface anchor `actingd-config` revision 23 (contracts/component-interfaces.md; SS-4): a
+    // Runtime before SS-4 refuses a file that names it, because the section denies unknown
+    // fields; a file that does not name it keeps its revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    no_progress: Option<NoProgressFile>,
 }
 
 /// Workflow #405: the `scheduling` member of an `instances[]` entry, which holds that instance's
@@ -323,6 +338,11 @@ pub struct InstanceSchedulingFile {
     // names them, because the entry denies unknown fields.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     expected_runtime: Option<ExpectedRuntimeFile>,
+    // Interface anchor `actingd-config` revision 23 (contracts/component-interfaces.md; SS-4): the
+    // instance's own no-progress switch. A Runtime before SS-4 refuses a file that names it,
+    // because the entry denies unknown fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    no_progress: Option<NoProgressFile>,
 }
 
 file_struct!(RecognitionFile {
@@ -426,6 +446,10 @@ file_struct!(
         retry_ms,
         escalate_after
     }
+);
+file_struct!(
+    /// SS-4 (register §1.231): the no-progress switch, section-level or one instance's.
+    NoProgressFile { enabled }
 );
 
 const fn row(
@@ -716,6 +740,17 @@ pub(crate) static ROWS: &[KeyRow] = &[
         ValueType::Integer,
         EVALUATION_ESCALATE,
     ),
+    // SS-4 (register §1.231): read by the host at every evaluated policy cycle, so an instruction
+    // takes effect at the next one; `false` also forgets the guards it kept.
+    KeyRow {
+        since: "0.12.34",
+        ..row(
+            NO_PROGRESS_ENABLED,
+            ValueType::Boolean,
+            KeyRange::Any,
+            "SS-4",
+        )
+    },
 ];
 
 /// A pacing stage a stage key names (the vocabulary `pacing_stage`).
@@ -923,6 +958,8 @@ pub struct SchedulingConfig {
     pub parallel_enabled: bool,
     /// ISO-PE (#419): the retry and the escalation of a skipped policy evaluation.
     pub evaluation: EvaluationRetryConfig,
+    /// SS-4 (register §1.231): the section's no-progress switch.
+    pub no_progress_enabled: bool,
 }
 
 fn invalid(key: &str, problem: ConfigValueProblem) -> ConfigFailure {
@@ -1362,8 +1399,25 @@ impl SchedulingConfig {
                 retry_ms: reader.duration(EVALUATION_RETRY_MS)?,
                 escalate_after: reader.count(EVALUATION_ESCALATE_AFTER)?,
             },
+            no_progress_enabled: reader.boolean(NO_PROGRESS_ENABLED)?,
         })
     }
+}
+
+/// SS-4 (register §1.231): `scheduling.no_progress.enabled` in effect for the instance whose
+/// registry id is `instance_id`: the instance's own `instance.<instance_id>.scheduling.no_progress.
+/// enabled` when the configuration carries it, otherwise the section's.
+pub(crate) fn instance_no_progress_enabled(
+    value: &dyn Fn(&str) -> Option<FactScalar>,
+    instance_id: &str,
+) -> Result<bool, ConfigFailure> {
+    let own = instance_key(instance_id, NO_PROGRESS_ENABLED);
+    let key = if value(&own).is_some() {
+        own
+    } else {
+        NO_PROGRESS_ENABLED.to_owned()
+    };
+    Reader { value }.boolean(&key)
 }
 
 /// Workflow #427-A: `scheduling.parallel.enabled` in effect.

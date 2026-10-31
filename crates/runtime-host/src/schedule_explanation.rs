@@ -174,9 +174,12 @@ impl IdleDraft {
         // unknown or not positive) cannot be dispatched now, so it is never due; only a wake of
         // its own counts. Without it every business task waiting for its values would keep a
         // closed game awake.
+        // SS-4 (register §1.231): so is a pair the no-progress guard holds, which waits for a
+        // reading of another value and has no wake of its own.
         let benefit_held = decision.reasons.last().is_some_and(|reason| {
             reason.outcome.is(PolicyCode::BenefitUnknown)
                 || reason.outcome.is(PolicyCode::PolicyBenefitNonpositive)
+                || reason.outcome.is(PolicyCode::PolicyNoProgress)
         });
         let due = decision.state == SchedulingDecisionState::Selected
             || (eligible

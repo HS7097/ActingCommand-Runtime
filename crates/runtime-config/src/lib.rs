@@ -194,3 +194,7 @@ mod gate_ln7c_q;
 // STORE-FG-2 (T10): the `store_foreground` section's key.
 #[cfg(test)]
 mod gate_store_fg2;
+
+// SS-4 (register §1.231, test 5): the no-progress switch, on by default and per instance.
+#[cfg(test)]
+mod gate_ss4;

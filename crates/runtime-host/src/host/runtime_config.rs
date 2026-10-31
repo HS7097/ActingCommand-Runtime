@@ -817,6 +817,38 @@ impl HostShared {
         Ok(delays)
     }
 
+    /// SS-4 (register §1.231): `scheduling.no_progress.enabled` in effect for each instance
+    /// `aliases` name (`EffectiveConfig::no_progress_enabled` by its registry id; an alias the
+    /// registry does not hold takes the section's key), by alias, read at every authoritative
+    /// policy cycle.
+    pub(super) fn no_progress_context(
+        &self,
+        aliases: &[&str],
+        operation: HostLocation,
+    ) -> RuntimeHostResult<BTreeMap<String, bool>> {
+        let ids = lock(&self.registered_instances, operation)?
+            .values()
+            .map(|instance| {
+                (
+                    instance.instance_alias.clone(),
+                    crate::failure_identity::identifier_text(&instance.instance_id),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let config = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?;
+        let mut enabled = BTreeMap::new();
+        for alias in aliases {
+            let id = ids.get(*alias).map_or(*alias, String::as_str);
+            // The key is checked whenever the configuration is loaded or changed, so a value
+            // that cannot be read here is a halt, as a random delay key's is.
+            let on = config
+                .no_progress_enabled(id)
+                .map_err(remedy_config_failure)?;
+            enabled.insert((*alias).to_owned(), on);
+        }
+        Ok(enabled)
+    }
+
     /// Workflow #386 SR-4a2 (SCH-M §3.2 D-1, D-4, D-6): the blackout keys in effect for the
     /// instances `aliases` name, read at every authoritative policy cycle and at every policy
     /// admission: the host list, each instance's own list (`EffectiveConfig::instance_blackouts`
