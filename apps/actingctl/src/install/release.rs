@@ -5,11 +5,17 @@
 //! the Tools zip and `SHA256SUMS`, with an optional release-facts file) checked as the release
 //! workflow wrote it, every failure listed; `stage` keeps the verified build under
 //! `install\builds\<commit>` with its `release.json` and records it in `state.json`.
+//!
+//! Workflow #429 R-15b (A.4 b, since 0.12.35): a folder that holds one UI zip
+//! `acui-windows-<commit>.zip` and `SHA256SUMS` instead is a UI release; `stage` keeps it
+//! under `install\ui-builds\<commit>\{ui, release.json}` and writes no `state.json` (its v1 has
+//! no UI builds; `install-state` v2 lists them from R-15c). A zip the reader recognises as
+//! neither is refused `zip_set` with its name, no longer passed over.
 
 use super::files::{self, join_relative};
 use super::journal::{self, Opening, Operation, PlannedStep, Previous, StepKind, StepState};
-use super::manifest::{self, Half, Speaks};
-use super::state::{self, BuildOrigin, KeptBuild, OperationKind};
+use super::manifest::{self, Half, Speaks, UiDeclaration};
+use super::state::{self, BuildOrigin, KeptBuild, OperationKind, Paths};
 use super::{Answer, Flags, Host};
 use crate::cli_line;
 use crate::codes::{
@@ -25,7 +31,11 @@ use std::path::{Path, PathBuf};
 
 const RUNTIME_ZIP_PREFIX: &str = "actingcommand-runtime-";
 const TOOLS_ZIP_PREFIX: &str = "actingcommand-tools-";
+/// Workflow #429 R-15b: the UI release's one zip, `acui-windows-<commit>.zip`.
+const UI_ZIP_PREFIX: &str = "acui-windows-";
 const ZIP_SUFFIX: &str = ".zip";
+/// The member a UI release's results and `release.json` name.
+const UI_MEMBER: &str = "ui";
 const SUMS_FILE: &str = "SHA256SUMS";
 const FACTS_SCHEMA: &str = "actingcommand.release-facts.v1";
 const RELEASE_RECORD_SCHEMA: &str = "actingcommand.install-release.v1";
@@ -146,22 +156,49 @@ fn refused(operation: InstallLocation, failures: &[Failure]) -> Result<Answer, O
     Answer::new(outcome).with("failures", rows)
 }
 
-/// The release folder's two zips, found by name.
+/// The release folder's zips, found by name: the Runtime pair or one UI zip.
 #[derive(Debug, Clone)]
 struct Located {
     commit: String,
-    runtime_zip: PathBuf,
-    tools_zip: PathBuf,
+    zips: Zips,
     facts: Option<ReleaseFacts>,
 }
 
+/// What a release folder holds.
+#[derive(Debug, Clone)]
+enum Zips {
+    /// The Runtime zip and the Tools zip of one commit.
+    Pair { runtime: PathBuf, tools: PathBuf },
+    /// One UI zip (Workflow #429 R-15b, A.4 b).
+    Ui(PathBuf),
+}
+
 impl Located {
+    /// The zip of `half` of a Runtime pair; a UI release's one zip for either half (never asked).
     fn zip(&self, half: Half) -> &Path {
-        match half {
-            Half::Runtime => &self.runtime_zip,
-            Half::Tools => &self.tools_zip,
+        match (&self.zips, half) {
+            (Zips::Pair { runtime, .. }, Half::Runtime) => runtime,
+            (Zips::Pair { tools, .. }, Half::Tools) => tools,
+            (Zips::Ui(ui), _) => ui,
         }
     }
+
+    /// Every zip, in the order `SHA256SUMS` and the digests are checked.
+    fn zip_paths(&self) -> Vec<&Path> {
+        match &self.zips {
+            Zips::Pair { runtime, tools } => vec![runtime.as_path(), tools.as_path()],
+            Zips::Ui(ui) => vec![ui.as_path()],
+        }
+    }
+
+    fn is_ui(&self) -> bool {
+        matches!(self.zips, Zips::Ui(_))
+    }
+}
+
+/// Whether `name` is a zip by its extension, in any case.
+fn is_zip_name(name: &str) -> bool {
+    name.to_ascii_lowercase().ends_with(ZIP_SUFFIX)
 }
 
 /// The checks that need no extraction: the zip set, `SHA256SUMS`, the facts and the expected
@@ -210,6 +247,10 @@ fn precheck(inputs: &ReleaseInputs) -> Result<Prechecked, Outcome> {
     })?;
     let mut runtime = Vec::new();
     let mut tools = Vec::new();
+    let mut ui = Vec::new();
+    // Workflow #429 R-15b: every recognised zip's name, and the zips recognised as none.
+    let mut recognised = Vec::new();
+    let mut unrecognised = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|error| {
             super::unusable("--dir").caused_by(files::os_failure(&dir, &error, IoOp::ReadDir))
@@ -217,8 +258,15 @@ fn precheck(inputs: &ReleaseInputs) -> Result<Prechecked, Outcome> {
         let name = entry.file_name().to_string_lossy().into_owned();
         if let Some(commit) = zip_commit(&name, RUNTIME_ZIP_PREFIX) {
             runtime.push(commit.to_owned());
+            recognised.push(name);
         } else if let Some(commit) = zip_commit(&name, TOOLS_ZIP_PREFIX) {
             tools.push(commit.to_owned());
+            recognised.push(name);
+        } else if let Some(commit) = zip_commit(&name, UI_ZIP_PREFIX) {
+            ui.push(commit.to_owned());
+            recognised.push(name);
+        } else if is_zip_name(&name) {
+            unrecognised.push(name);
         }
     }
     let mut failures = Vec::new();
@@ -232,10 +280,44 @@ fn precheck(inputs: &ReleaseInputs) -> Result<Prechecked, Outcome> {
             facts
         }
     };
-    let commit = match (runtime.as_slice(), tools.as_slice()) {
-        ([runtime], [tools]) if runtime == tools => runtime.clone(),
-        _ => {
+    // Workflow #429 R-15b: a zip the reader recognises as no release zip refuses the set, each
+    // one named, instead of being passed over.
+    if !unrecognised.is_empty() {
+        unrecognised.sort();
+        for name in unrecognised {
+            failures.push(Failure::new(ReleaseCheck::ZipSet).file(name));
+        }
+        return Ok(Prechecked {
+            located: None,
+            failures,
+        });
+    }
+    let (commit, zips) = match (runtime.as_slice(), tools.as_slice(), ui.as_slice()) {
+        ([runtime], [tools], []) if runtime == tools => (
+            runtime.clone(),
+            Zips::Pair {
+                runtime: dir.join(format!("{RUNTIME_ZIP_PREFIX}{runtime}{ZIP_SUFFIX}")),
+                tools: dir.join(format!("{TOOLS_ZIP_PREFIX}{runtime}{ZIP_SUFFIX}")),
+            },
+        ),
+        ([], [], [ui]) => (
+            ui.clone(),
+            Zips::Ui(dir.join(format!("{UI_ZIP_PREFIX}{ui}{ZIP_SUFFIX}"))),
+        ),
+        (_, _, []) => {
             failures.push(Failure::new(ReleaseCheck::ZipSet));
+            return Ok(Prechecked {
+                located: None,
+                failures,
+            });
+        }
+        // A UI zip beside another release zip: a folder is the Runtime pair or one UI release,
+        // and every zip is named.
+        _ => {
+            recognised.sort();
+            for name in recognised {
+                failures.push(Failure::new(ReleaseCheck::ZipSet).file(name));
+            }
             return Ok(Prechecked {
                 located: None,
                 failures,
@@ -243,12 +325,11 @@ fn precheck(inputs: &ReleaseInputs) -> Result<Prechecked, Outcome> {
         }
     };
     let located = Located {
-        runtime_zip: dir.join(format!("{RUNTIME_ZIP_PREFIX}{commit}{ZIP_SUFFIX}")),
-        tools_zip: dir.join(format!("{TOOLS_ZIP_PREFIX}{commit}{ZIP_SUFFIX}")),
         commit,
+        zips,
         facts,
     };
-    // SHA256SUMS lists both zips with their SHA-256.
+    // SHA256SUMS lists every zip with its SHA-256.
     let sums_path = dir.join(SUMS_FILE);
     let sums = fs::read(&sums_path)
         .ok()
@@ -257,7 +338,7 @@ fn precheck(inputs: &ReleaseInputs) -> Result<Prechecked, Outcome> {
         failures.push(Failure::new(ReleaseCheck::SumsMissing).file(SUMS_FILE));
     }
     let mut digests = Vec::new();
-    for zip in [&located.runtime_zip, &located.tools_zip] {
+    for zip in located.zip_paths() {
         let name = file_name(zip);
         let actual = files::sha256_file(zip).ok().map(|(sha, _)| sha);
         match (&sums, &actual) {
@@ -454,6 +535,87 @@ fn check_extracted(
     })
 }
 
+/// Workflow #429 R-15b (A.4 b): the checks of an extracted UI build below `base` (`ui\`), every
+/// failure listed: its manifest, the facts' repository, the commit, the file set and digests,
+/// the declaration by the parse rules and its `installation_selection_schema`.
+fn check_extracted_ui(
+    base: &Path,
+    located: &Located,
+    failures: &mut Vec<Failure>,
+) -> Option<Verified> {
+    let dir = base.join(manifest::UI_DIR);
+    let label = |path: &str| format!("{}/{path}", manifest::UI_DIR);
+    let manifest = match manifest::read_manifest(&dir) {
+        Ok(manifest) if manifest.paths_valid() => manifest,
+        _ => {
+            failures.push(
+                Failure::new(ReleaseCheck::ManifestInvalid).file(label(manifest::MANIFEST_FILE)),
+            );
+            return None;
+        }
+    };
+    if let Some(facts) = &located.facts
+        && manifest.repository != facts.repository
+    {
+        failures.push(
+            Failure::new(ReleaseCheck::ManifestRepository).file(label(manifest::MANIFEST_FILE)),
+        );
+    }
+    if manifest.commit_sha != located.commit {
+        failures
+            .push(Failure::new(ReleaseCheck::ManifestCommit).file(label(manifest::MANIFEST_FILE)));
+    }
+    match manifest::unlisted_files(&dir, &manifest) {
+        Ok(unlisted) => {
+            let missing = manifest
+                .files
+                .iter()
+                .any(|file| !join_relative(&dir, &file.path).is_file());
+            if !unlisted.is_empty() || missing {
+                failures.push(Failure::new(ReleaseCheck::FileSet).file(manifest::UI_DIR));
+            }
+        }
+        Err(_) => failures.push(Failure::new(ReleaseCheck::FileSet).file(manifest::UI_DIR)),
+    }
+    for problem in manifest::file_problems(&dir, &manifest) {
+        failures.push(
+            Failure::new(ReleaseCheck::FileMismatch)
+                .file(label(&problem.listed))
+                .digests(Some(problem.expected_sha256), problem.actual_sha256),
+        );
+    }
+    let declaration = UiDeclaration::of_manifest(&manifest);
+    match &declaration {
+        None => failures.push(
+            Failure::new(ReleaseCheck::InterfacesInvalid).file(label(manifest::MANIFEST_FILE)),
+        ),
+        Some(declaration)
+            if !declaration
+                .agrees_with_schema(manifest.installation_selection_schema.as_deref()) =>
+        {
+            failures.push(
+                Failure::new(ReleaseCheck::SelectionSchemaMismatch)
+                    .file(label(manifest::MANIFEST_FILE)),
+            );
+        }
+        Some(_) => {}
+    }
+    failures.is_empty().then(|| Verified {
+        tree: manifest.tree_sha.clone(),
+        speaks: declaration.map(|declaration| declaration.speaks),
+        files: manifest.files.len(),
+    })
+}
+
+/// The checks of the extracted files of `located`: a Runtime pair or a UI build.
+fn check_located(base: &Path, located: &Located, failures: &mut Vec<Failure>) -> Option<Verified> {
+    if located.is_ui() {
+        check_extracted_ui(base, located, failures)
+    } else {
+        check_extracted(base, located, failures)
+    }
+}
+
 /// What a verified release folder answers with.
 #[derive(Serialize)]
 struct VerifiedRelease<'a> {
@@ -487,6 +649,10 @@ struct ReleaseRecord<'a> {
     verified: VerifiedRelease<'a>,
     local_build: bool,
     facts: Option<&'a ReleaseFacts>,
+    /// Workflow #429 R-15b: `ui` in a kept UI build's record; absent in a Runtime/Tools build's,
+    /// which keeps its bytes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    member: Option<&'static str>,
 }
 
 /// The parsed flags of verify and stage.
@@ -550,14 +716,14 @@ pub(crate) fn verify(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome>
         ms += 1;
     };
     let mut extracted = true;
-    for half in [Half::Runtime, Half::Tools] {
-        match extract(located.zip(half), &work.join(half.dir())) {
+    for (zip, into) in extraction_targets(&located, &work) {
+        match extract(zip, &into) {
             Ok(()) => {}
             Err(Extracted::Unreadable(cause)) => {
                 extracted = false;
                 failures.push(
                     Failure::new(ReleaseCheck::ZipUnreadable)
-                        .file(file_name(located.zip(half)))
+                        .file(file_name(zip))
                         .cause(cause),
                 );
             }
@@ -566,7 +732,7 @@ pub(crate) fn verify(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome>
     }
     // Every failure is listed: the extracted files are checked whatever the checks before found.
     let verified = if extracted {
-        check_extracted(&work, &located, &mut failures)
+        check_located(&work, &located, &mut failures)
     } else {
         None
     };
@@ -584,14 +750,31 @@ pub(crate) fn verify(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome>
             .commit_sha(located.commit.clone()),
     };
     let release = VerifiedRelease::of(&located, &verified);
-    Answer::new(outcome)
+    let answer = Answer::new(outcome)
         .with("commit", release.commit)?
         .with("tree", release.tree)?
         .with("tag", release.tag)?
         .with("prerelease", release.prerelease)?
         .with("interfaces", release.interfaces)?
         .with("files", release.files)?
-        .with("work_dir", files::plain(&work))
+        .with("work_dir", files::plain(&work))?;
+    if located.is_ui() {
+        answer.with("member", UI_MEMBER)
+    } else {
+        Ok(answer)
+    }
+}
+
+/// Each zip of `located` and the folder below `base` it is extracted into: `runtime\` and
+/// `tools\` of a Runtime pair, `ui\` of a UI release.
+fn extraction_targets<'a>(located: &'a Located, base: &Path) -> Vec<(&'a Path, PathBuf)> {
+    match &located.zips {
+        Zips::Pair { .. } => [Half::Runtime, Half::Tools]
+            .into_iter()
+            .map(|half| (located.zip(half), base.join(half.dir())))
+            .collect(),
+        Zips::Ui(ui) => vec![(ui.as_path(), base.join(manifest::UI_DIR))],
+    }
 }
 
 /// The intent of a stage's steps: the build and its part folder.
@@ -652,6 +835,9 @@ pub(crate) fn stage(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> 
         return refused(InstallLocation::ReleaseStage, &failures);
     }
     journal::refuse_unfinished(InstallLocation::ReleaseStage, &paths)?;
+    if located.is_ui() {
+        return stage_ui(host, &paths, &located, &inputs);
+    }
     let build = paths.build(&located.commit);
     if build.exists() {
         match manifest::verify_build(&build) {
@@ -721,7 +907,26 @@ pub(crate) fn resume(operation: Operation<'_>) -> Result<Answer, Outcome> {
             return Err(operation.interrupted(refusal.outcome));
         }
     };
-    run(operation, &located, &inputs)
+    // Workflow #429 R-15b: the journal says which kind of release it stages (a UI build's
+    // steps place it under `install\ui-builds\`); a folder that now holds the other kind is no
+    // longer this stage's release.
+    let journal_ui = operation
+        .journal()
+        .steps
+        .first()
+        .is_some_and(|step| step.target.starts_with(UI_BUILDS_PREFIX));
+    if journal_ui != located.is_ui() {
+        let refusal = refused(
+            InstallLocation::ReleaseStage,
+            &[Failure::new(ReleaseCheck::ZipSet)],
+        )?;
+        return Err(operation.interrupted(refusal.outcome));
+    }
+    if located.is_ui() {
+        run_ui(operation, &located, &inputs)
+    } else {
+        run(operation, &located, &inputs)
+    }
 }
 
 /// The stage's steps, each skipped when its postcondition already holds on disk.
@@ -797,6 +1002,7 @@ fn run(
                 verified: VerifiedRelease::of(located, &verified),
                 local_build: inputs.local_build,
                 facts: located.facts.as_ref(),
+                member: None,
             };
             files::write_json_atomic(&part.join(RELEASE_RECORD_FILE), &record)
                 .and_then(|()| files::rename(&part, &build))
@@ -839,6 +1045,173 @@ fn run(
         .with("commit", located.commit.as_str())?
         .with("unchanged", false)?
         .with("operation_id", operation_id)?
+        .with("build", files::plain(&build))
+}
+
+/// The prefix of a UI stage's steps' targets.
+const UI_BUILDS_PREFIX: &str = "install/ui-builds/";
+
+/// The steps of a UI build's stage (Workflow #429 R-15b): `extract` and `verify_tree` into
+/// `install\ui-builds\<commit>.new-<ms>.part\ui`, then `place_build`; no `record_state`, since
+/// `state.json` v1 lists no UI build.
+fn ui_stage_steps(commit: &str, ms: u64) -> Vec<PlannedStep> {
+    let part = format!("{UI_BUILDS_PREFIX}{commit}.new-{ms}.part");
+    let build = format!("{UI_BUILDS_PREFIX}{commit}");
+    let intent = serde_json::json!({"commit": commit, "part": part, "build": build});
+    vec![
+        (StepKind::Extract, part.clone(), intent.clone()),
+        (StepKind::VerifyTree, part.clone(), intent.clone()),
+        (StepKind::PlaceBuild, build, intent),
+    ]
+}
+
+/// `release stage` of a UI release (Workflow #429 R-15b, A.4 b): a UI build already kept and
+/// verified is `unchanged`; one kept that does not verify refuses `build_invalid`; otherwise one
+/// journalled operation keeps it under `install\ui-builds\<commit>`.
+fn stage_ui(
+    host: &dyn Host,
+    paths: &Paths,
+    located: &Located,
+    inputs: &ReleaseInputs,
+) -> Result<Answer, Outcome> {
+    let build = paths.ui_build(&located.commit);
+    if build.exists() {
+        return match manifest::verify_ui_build(&build) {
+            Some(kept) if kept.commit == located.commit => Answer::new(
+                super::done(InstallLocation::ReleaseStage)
+                    .commit_sha(located.commit.clone())
+                    .installation_changed(false),
+            )
+            .with("commit", located.commit.as_str())?
+            .with("unchanged", true)?
+            .with("member", UI_MEMBER)?
+            .with("build", files::plain(&build)),
+            _ => Err(
+                super::refusal(InstallLocation::ReleaseStage, InstallRefusal::BuildInvalid)
+                    .commit_sha(located.commit.clone())
+                    .path(&build),
+            ),
+        };
+    }
+    let previous = state::load_state_or_default(paths).map_err(|cause| {
+        journal::state_invalid(InstallLocation::ReleaseStage, paths.state(), Some(cause))
+    })?;
+    let opening = Opening {
+        kind: OperationKind::ReleaseStage,
+        inputs: serde_json::to_value(inputs).map_err(|error| files::json_failure(&error))?,
+        plan_id: None,
+        plan: None,
+        acknowledged: if inputs.local_build {
+            vec!["local_build".to_owned()]
+        } else {
+            Vec::new()
+        },
+        s0: None,
+        previous: Previous {
+            live: previous.live.as_ref().map(|live| live.commit.clone()),
+            state: Some(previous),
+        },
+    };
+    let commit = located.commit.clone();
+    let operation = Operation::open(host, paths, opening, |ms| ui_stage_steps(&commit, ms))?;
+    run_ui(operation, located, inputs)
+}
+
+/// A UI stage's steps, each skipped when its postcondition already holds on disk.
+fn run_ui(
+    mut operation: Operation<'_>,
+    located: &Located,
+    inputs: &ReleaseInputs,
+) -> Result<Answer, Outcome> {
+    let intent: StageIntent = operation
+        .intent(1)
+        .map_err(|cause| operation.interrupted(cause))?;
+    let paths = operation.paths().clone();
+    let part = paths.at(&intent.part);
+    let build = paths.at(&intent.build);
+    let placed =
+        || manifest::verify_ui_build(&build).is_some_and(|kept| kept.commit == located.commit);
+    let mut failures = Vec::new();
+    // 1. extract
+    if operation.journal().steps[0].state != StepState::Done {
+        if !placed() {
+            operation
+                .start(1)
+                .map_err(|cause| operation.interrupted(cause))?;
+            for (zip, into) in extraction_targets(located, &part) {
+                match extract(zip, &into) {
+                    Ok(()) => {}
+                    Err(Extracted::Unreadable(cause)) => failures.push(
+                        Failure::new(ReleaseCheck::ZipUnreadable)
+                            .file(file_name(zip))
+                            .cause(cause),
+                    ),
+                    Err(Extracted::Failed(cause)) => return Err(operation.interrupted(cause)),
+                }
+            }
+            if !failures.is_empty() {
+                return abandon(operation, &part, &failures);
+            }
+        }
+        operation
+            .done(1, None)
+            .map_err(|cause| operation.interrupted(cause))?;
+    }
+    // 2. verify_tree
+    let mut verified = None;
+    if operation.journal().steps[1].state != StepState::Done {
+        if !placed() {
+            operation
+                .start(2)
+                .map_err(|cause| operation.interrupted(cause))?;
+            match check_extracted_ui(&part, located, &mut failures) {
+                Some(found) => verified = Some(found),
+                None => return abandon(operation, &part, &failures),
+            }
+        }
+        operation
+            .done(2, None)
+            .map_err(|cause| operation.interrupted(cause))?;
+    }
+    // 3. place_build: release.json written into the part, the part renamed.
+    if operation.journal().steps[2].state != StepState::Done {
+        if !placed() {
+            operation
+                .start(3)
+                .map_err(|cause| operation.interrupted(cause))?;
+            let verified = match verified.take() {
+                Some(verified) => verified,
+                None => match check_extracted_ui(&part, located, &mut failures) {
+                    Some(verified) => verified,
+                    None => return abandon(operation, &part, &failures),
+                },
+            };
+            let record = ReleaseRecord {
+                schema_version: RELEASE_RECORD_SCHEMA,
+                verified: VerifiedRelease::of(located, &verified),
+                local_build: inputs.local_build,
+                facts: located.facts.as_ref(),
+                member: Some(UI_MEMBER),
+            };
+            files::write_json_atomic(&part.join(RELEASE_RECORD_FILE), &record)
+                .and_then(|()| files::rename(&part, &build))
+                .map_err(|cause| operation.interrupted(cause))?;
+        }
+        operation
+            .done(3, None)
+            .map_err(|cause| operation.interrupted(cause))?;
+    }
+    let operation_id = operation.id().to_owned();
+    let outcome = super::done(InstallLocation::ReleaseStage)
+        .commit_sha(located.commit.clone())
+        .install_operation_id(operation_id.clone())
+        .installation_changed(true);
+    operation.finish(&outcome)?;
+    Answer::new(outcome)
+        .with("commit", located.commit.as_str())?
+        .with("unchanged", false)?
+        .with("operation_id", operation_id)?
+        .with("member", UI_MEMBER)?
         .with("build", files::plain(&build))
 }
 

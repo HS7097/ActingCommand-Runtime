@@ -3,10 +3,10 @@
 //! Workflow #372 K2: a due clock slot that the policy does not dispatch leaves one trace, a
 //! `goal_missed` planning signal whose outcome is its record's code (a refusal records at
 //! `warning`, a deferral or an owed slot at `info`). A persistent gate refuses the slot
-//! (`clock_slot_refused`); a transient gate defers it (`clock_slot_deferred`): an operator pause
-//! at first sight, a queue wait or an unavailable instance only once the pair's activity window
-//! has closed. A selected dispatch that serves an occurrence from before its window opened is
-//! owed (`clock_slot_owed`). Nothing is kept beyond one evaluation: a record's identity is its
+//! (`clock_slot_refused`); a transient gate defers it (`clock_slot_deferred`): a control gate (an
+//! operator pause; Workflow #429 R-7a2: a #403 fence) at first sight, a queue wait or an
+//! unavailable instance only once the pair's activity window has closed. A selected dispatch
+//! that serves an occurrence from before its window opened is owed (`clock_slot_owed`). Nothing is kept beyond one evaluation: a record's identity is its
 //! `signal_id`, checked against the planning-signal projection before it is written.
 //!
 //! Workflow #372 K4 adds the slot losses no gate shows: an unserved occurrence whose `missed`
@@ -245,8 +245,10 @@ const fn dimension_token(dimension: PolicyBudgetDimension) -> &'static str {
 enum GateClass {
     /// Refused at first sight.
     Persistent,
-    /// Deferred at first sight.
-    OperatorPause,
+    /// Deferred at first sight: a control gate of R-7a §2.6 (Workflow #429 R-7a2; the class was
+    /// the operator pause's): the two pauses and, since R-7a2, the #403 fence. The player hold's
+    /// code joins with R-7b.
+    Control,
     /// Deferred only at an evaluation where the pair's activity window is closed.
     QueueWait,
 }
@@ -312,9 +314,9 @@ fn closure_gate(reason: &Outcome) -> Option<(Code, GateClass)> {
         HostCode::PolicyBudgetExhausted
         | HostCode::PolicyActivityWindowClosed
         | HostCode::PolicyTaskPaused => GateClass::Persistent,
-        HostCode::DispatchPausedGlobal | HostCode::DispatchPausedInstance => {
-            GateClass::OperatorPause
-        }
+        HostCode::DispatchPausedGlobal
+        | HostCode::DispatchPausedInstance
+        | HostCode::DispatchResourceFenced => GateClass::Control,
         _ => GateClass::QueueWait,
     };
     Some((code.code(), class))
@@ -545,7 +547,7 @@ impl<'a> Preview<'a> {
         };
         let kind = match gate.class {
             GateClass::Persistent => SlotRecord::Refused,
-            GateClass::OperatorPause | GateClass::QueueWait => SlotRecord::Deferred,
+            GateClass::Control | GateClass::QueueWait => SlotRecord::Deferred,
         };
         if self.known_for_group(kind, task_id, alias, occurrence)? {
             return Ok(());

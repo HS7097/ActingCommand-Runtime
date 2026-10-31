@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+
+# Workflow #429 R-15b: the fixed entries of an A/B root (contracts/stable-entry.md), the owner
+# `actingcommand-entry` of their outcome codes. R-15b freezes the contract and registers the
+# codes here; R-15c adds the two programs, the console `actingcommand-entry.exe` and the
+# graphical `actingcommand-entry-gui.exe`, shipped in the Tools half (`tools-layout` 4). Until
+# then the package is a lib only, so CI's `light` job runs it (the `apps` job selects bins).
+
+[package]
+name = "actingcommand-entry"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+actingcommand-contract = { workspace = true }

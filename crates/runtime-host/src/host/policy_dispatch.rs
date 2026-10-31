@@ -658,15 +658,28 @@ impl SchedulingPauseTable {
             .is_some_and(|connections| connections.contains(&connection))
     }
 
-    /// The pause that defers a dispatch on `instance_alias`.
-    pub(super) fn deferral_code(&self, instance_alias: &str) -> Option<HostCode> {
-        if self.global.is_some() {
-            Some(HostCode::DispatchPausedGlobal)
-        } else if self.instances.contains_key(instance_alias) {
-            Some(HostCode::DispatchPausedInstance)
-        } else {
-            None
-        }
+    /// Workflow #429 R-7a2 (R-7a §2.6 O-3, O-4): the control gates of `instance_alias`, in the
+    /// one order: its pauses from this table (its own in any stage, the global one) and
+    /// `resource_fence`, its #403 fence in any stage, read at the same moment by the caller. The
+    /// player hold's dimension is false until R-7b. Its effective code is
+    /// `control_gates::effective_code`'s.
+    pub(super) fn control_gates(
+        &self,
+        instance_alias: &str,
+        resource_fence: bool,
+    ) -> actingcommand_contract::ControlGates {
+        actingcommand_contract::ControlGates::evaluate(actingcommand_contract::ControlInputs {
+            player_hold: false,
+            instance_pause: self.instances.contains_key(instance_alias),
+            global_pause: self.global.is_some(),
+            resource_fence,
+        })
+    }
+
+    /// Whether a pause holds `instance_alias`: its own, in any stage, or the global one. The
+    /// recovery ladder's A6 reads only this (R-7a §2.6, row 4d: it tells the two apart nowhere).
+    pub(super) fn pauses(&self, instance_alias: &str) -> bool {
+        self.global.is_some() || self.instances.contains_key(instance_alias)
     }
 
     pub(super) fn global_state(&self) -> Option<SchedulingPauseState> {
@@ -1259,12 +1272,18 @@ impl HostShared {
             None => runtime_policy_seed(&facts.fact_snapshot_id, time, self.owner_epoch)?,
         };
         // Workflow #191 ps1: the scheduling pauses as this cycle starts; a paused candidate is
-        // deferred exactly as admission would refuse it.
+        // deferred exactly as admission would refuse it. Workflow #429 R-7a2 (R-7a §2.6 O-4):
+        // with them, at the same step, the instances a #403 fence holds; the control gates of an
+        // instance are judged from both, in the one order (position 1, its 1a to 1d).
         let scheduling_pause = lock(
             &self.scheduling_pause,
             HostLocation::ReadPolicySchedulingPause,
         )?
         .clone();
+        let fenced_aliases = self.resource_fenced_aliases()?;
+        let control_gates = |instance_alias: &str| {
+            scheduling_pause.control_gates(instance_alias, fenced_aliases.contains(instance_alias))
+        };
         // Workflow #369 W-1: every instance's one queue as this cycle starts; a held instance's
         // candidates are deferred, and nothing is written for them.
         let occupancy = self.policy_instance_occupancy(time.unix_ms)?;
@@ -1324,9 +1343,7 @@ impl HostShared {
                     seed,
                     trigger,
                     sampled_at_monotonic_ms: observed_monotonic_ms,
-                    scheduling_pause: &|instance_alias| {
-                        scheduling_pause.deferral_code(instance_alias)
-                    },
+                    control_gates: &control_gates,
                     instance_occupancy: &|instance_alias| occupancy.get(instance_alias).copied(),
                     suspension_lift: &suspension_lift,
                     pack_admission: &self.pack_admission,
@@ -1405,14 +1422,15 @@ impl HostShared {
         // its waiting candidates to the fact refresh's transition recorder, which only produces
         // transitions: they stay in memory (the cycle's report), no decision reads them and
         // nothing is written to the ledger. An instance the closure's positions 1-2 held as the
-        // cycle started raised no demand, so its keys are not observed; Workflow #386 SR-4a2:
-        // nor did one a blackout covered (position 4).
+        // cycle started (Workflow #429 R-7a2: a control gate, then its queue) raised no demand,
+        // so its keys are not observed; Workflow #386 SR-4a2: nor did one a blackout covered
+        // (position 4).
         if let Some(evaluation) = &cycle.evaluation {
             let overdue_ms = self.fact_refresh_overdue_ms()?;
             let held = |instance_alias: &str| {
                 crate::fact_refresh::instance_hold(
                     instance_alias,
-                    scheduling_pause.deferral_code(instance_alias),
+                    &control_gates(instance_alias),
                     occupancy.get(instance_alias).copied(),
                 )
                 .is_some()
@@ -2145,25 +2163,41 @@ impl HostShared {
                 now_unix_ms,
             };
             let context = &authoritative_context;
-            // Workflow #191 ps1: an operator scheduling pause (global, then this instance)
-            // defers the dispatch before the performance and capacity gates are consulted.
-            let pause_deferral = lock(
+            // Workflow #191 ps1, #403, Workflow #429 R-7a2 (R-7a §2.6 O-1, O-4): the control
+            // gates read now, under the admission lock, in the one order (the player hold from
+            // R-7b, this instance's pause, the global pause, this instance's #403 fence, whatever
+            // an intent evaluated before it says); the first refuses the dispatch with its
+            // effective code before the instance's queue, the performance and the capacity gates
+            // are consulted.
+            let fenced = self.resource_fenced_alias(&intent.instance_id)?;
+            let control = lock(
                 &self.scheduling_pause,
                 HostLocation::GatePolicySchedulingPause,
             )?
-            .deferral_code(&intent.instance_id);
-            // Workflow #369 W-1: a holder or an eligible waiting claim, read under the scheduler
-            // lock, rejects the dispatch at Info after its intent.
-            let held = match pause_deferral {
-                Some(_) => None,
-                None => self.dispatch_held_error(&intent.instance_id, context.now_unix_ms)?,
-            };
-            let mut gate_error = match (pause_deferral, held) {
-                (Some(code), _) => Some(RuntimeHostError::request(
+            .control_gates(&intent.instance_id, fenced.is_some());
+            let control_error = crate::control_gates::effective_code(&control).map(|code| {
+                let error = RuntimeHostError::request(
                     code,
                     HostLocation::AdmitPolicyDispatch,
                     RuntimeErrorCode::InvalidRequest,
-                )),
+                );
+                // The fence's refusal names the fenced instance by its opaque identifier, as the
+                // instance's queue does (Workflow #378 A4, part B L3).
+                match fenced.filter(|_| code == HostCode::DispatchResourceFenced) {
+                    Some(instance_id) => error.with_outcome_values(|outcome| {
+                        outcome.instance_id(crate::failure_identity::identifier_text(&instance_id))
+                    }),
+                    None => error,
+                }
+            });
+            // Workflow #369 W-1: a holder or an eligible waiting claim, read under the scheduler
+            // lock, rejects the dispatch at Info after its intent.
+            let held = match control_error {
+                Some(_) => None,
+                None => self.dispatch_held_error(&intent.instance_id, context.now_unix_ms)?,
+            };
+            let mut gate_error = match (control_error, held) {
+                (Some(control_error), _) => Some(control_error),
                 (None, Some(held)) => Some(held),
                 (None, None) => match lock(
                     &self.performance_control,
@@ -2224,16 +2258,6 @@ impl HostShared {
                     }
                 },
             };
-            // Workflow #403: a fenced instance gets no new dispatch, whatever an intent
-            // evaluated before its fence says (a ladder holding it already refuses at Info).
-            if gate_error.is_none()
-                && let Some(fenced) = self.resource_fenced_alias(&intent.instance_id)?
-            {
-                gate_error = Some(super::resource_fence::resource_fence_error(
-                    fenced,
-                    RuntimeErrorCode::InvalidRequest,
-                ));
-            }
             if gate_error.is_none()
                 && let Err(error) = self.admit_capacity()
             {

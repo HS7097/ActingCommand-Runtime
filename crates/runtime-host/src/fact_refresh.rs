@@ -15,7 +15,7 @@
 use crate::codes::HostCode;
 use crate::policy_host::{InstanceOccupancy, PolicyRunContext};
 use actingcommand_contract::outcome::{Code, Outcome};
-use actingcommand_contract::{FactValue, PolicyBudgetDimension};
+use actingcommand_contract::{ControlGateCode, ControlGates, FactValue, PolicyBudgetDimension};
 use actingcommand_execution_kernel::PreparedContainedTask;
 use actingcommand_policy::{
     CandidateEligibility, DecisionReason, FACT_REFRESH_TASK_ID, InstanceHold, PolicyCode,
@@ -193,9 +193,10 @@ pub(crate) fn dispatch_schedule_values(outcome: &Outcome) -> Vec<(String, FactVa
     schedule
 }
 
-/// What the closure's positions 1-2 hold an instance with: an operator scheduling pause (no
-/// wake: only `ResumeScheduling` lifts it), a holder or an eligible waiting claim (no wake: the
-/// driver wakes when a key returns), or a takeover cooldown (a wake at its end).
+/// What the closure's positions 1-2 hold an instance with: a control gate (Workflow #429 R-7a2:
+/// the first of R-7a §2.6, an operator scheduling pause or a #403 fence; no wake: only
+/// `ResumeScheduling`, a self-check or the ladder lifts it), a holder or an eligible waiting claim
+/// (no wake: the driver wakes when a key returns), or a takeover cooldown (a wake at its end).
 pub(crate) struct Hold {
     gate: HostCode,
     reason: DecisionReason,
@@ -230,23 +231,44 @@ impl Hold {
     }
 }
 
-/// The closure's positions 1-2 for `instance_id` as the cycle starts, if they hold it.
+/// The closure's positions 1-2 for `instance_id` as the cycle starts, if they hold it: its
+/// control gates' effective code first (Workflow #429 R-7a2, R-7a §2.6 positions 1a to 1d; the
+/// same code the fact refresh names as its gate), then its queue.
 pub(crate) fn instance_hold(
     instance_id: &str,
-    pause: Option<HostCode>,
+    control: &ControlGates,
     occupancy: Option<InstanceOccupancy>,
 ) -> Option<Hold> {
-    match (pause, occupancy) {
-        (Some(code), _) => Some(Hold {
+    if let Some(gate) = control.code() {
+        let code = crate::control_gates::host_code(gate);
+        let (outcome, detail) = match gate {
+            ControlGateCode::DispatchPausedInstance | ControlGateCode::DispatchPausedGlobal => (
+                Outcome::new(code),
+                "Runtime scheduling paused by the operator",
+            ),
+            // R-7a2: the #403 fence names its instance, as the instance's queue does.
+            ControlGateCode::DispatchResourceFenced => (
+                Outcome::new(code).instance_id(instance_id),
+                "the instance's resources are fenced until a self-check proves their close",
+            ),
+            // R-7b fills the player hold's dimension.
+            ControlGateCode::DispatchPlayerHeld => (
+                Outcome::new(code).instance_id(instance_id),
+                "a person holds the instance",
+            ),
+        };
+        return Some(Hold {
             gate: code,
             reason: DecisionReason {
-                outcome: Outcome::new(code),
-                detail: "Runtime scheduling paused by the operator".to_owned(),
+                outcome,
+                detail: detail.to_owned(),
             },
             next_wake_unix_ms: None,
-        }),
+        });
+    }
+    match occupancy {
         // Workflow #369 W-1: a held instance defers its candidates with no wake.
-        (None, Some(InstanceOccupancy::Held { holder_kind, count })) => Some(Hold {
+        Some(InstanceOccupancy::Held { holder_kind, count }) => Some(Hold {
             gate: HostCode::DispatchInstanceHeld,
             reason: DecisionReason {
                 outcome: Outcome::new(HostCode::DispatchInstanceHeld)
@@ -258,7 +280,7 @@ pub(crate) fn instance_hold(
             next_wake_unix_ms: None,
         }),
         // A takeover cooldown defers with a wake at its end.
-        (None, Some(InstanceOccupancy::Cooldown { until_unix_ms })) => Some(Hold {
+        Some(InstanceOccupancy::Cooldown { until_unix_ms }) => Some(Hold {
             gate: HostCode::DispatchInstanceCooldown,
             reason: DecisionReason {
                 outcome: Outcome::new(HostCode::DispatchInstanceCooldown)
@@ -268,7 +290,7 @@ pub(crate) fn instance_hold(
             },
             next_wake_unix_ms: Some(until_unix_ms),
         }),
-        (None, None) => None,
+        None => None,
     }
 }
 

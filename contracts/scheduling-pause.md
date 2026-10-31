@@ -33,17 +33,24 @@ expected = { "owner_epoch": "<epoch>", "revision": <u64 >= 1> }
 ## The dispatch gate
 
 `admit_policy_dispatch` checks the pauses right after `replay_admission` (a replayed decision
-is still suppressed as before) and before the performance and capacity gates: the global
-pause first (`dispatch_paused_global`), then the pause of the intent's instance
-(`dispatch_paused_instance`). A hit only sets the admission's gate error; the performance and
-capacity gates are not consulted. The trace is the existing one of a refused admission:
+is still suppressed as before) and before the instance's queue, the performance and the
+capacity gates, as control gates in the one order of
+[player-hold.md](player-hold.md), "The one order of the control gates" (R-7a §2.6; Workflow
+#429 R-7a2, register §1.234, since 0.12.35): the player hold (R-7b), the pause of the intent's
+instance (`dispatch_paused_instance`), the global pause (`dispatch_paused_global`), then the
+instance's #403 fence (`dispatch_resource_fenced`). The first in effect is the refusal's code:
+with both pauses in effect it is `dispatch_paused_instance`. Before 0.12.35 the global pause
+came first. A hit only sets the admission's gate error; the instance's queue, the performance
+and capacity gates are not consulted. The trace is the existing one of a refused admission:
 `policy.dispatch_intent`, then `policy.dispatch_rejected` (`Denied`, `NotPerformed`) with the
 code in its `rejection`.
 
-Every policy evaluation reads the same pauses as it starts: a candidate on a paused instance
-is `CandidateEligibility::Deferred` with reason code `dispatch_paused_global` /
-`dispatch_paused_instance` and no next wake time, so a paused cycle emits no dispatch intent
-for it.
+Every policy evaluation reads the same pauses, and the fences, as it starts: a candidate on a
+paused instance is `CandidateEligibility::Deferred` with the effective code by the same order
+(`dispatch_paused_instance` when the instance's own pause holds it, whether or not the global
+pause does too; `dispatch_paused_global` under the global pause alone) and no next wake time,
+so a paused cycle emits no dispatch intent for it. Adding or lifting the global pause over an
+instance pause changes neither the reason nor ScheduleExplanation's `since_unix_ms`.
 
 The gate covers policy dispatch and, in the instance's one queue (Workflow #369 Q-3 (4)), its
 routine claims. Client and operator requests (`task-run`, leases, observation, emulator control,
@@ -298,7 +305,8 @@ reconnect, its `selfcheck` both sides `ok: false` with `failure_code: player_hol
 means the expected, not a failure. Ending a hold reads the pauses of that moment and, under one,
 touches no device (`next: instance_paused` or `scheduling_paused`). The control gates' one order
 (player hold, instance pause, global pause, resource fence; R-7a §2.6) gives an instance's
-effective code; R-7a2 moves this contract's "global pause first" to it.
+effective code; since R-7a2 (register §1.234, 0.12.35) this contract's dispatch gate follows it
+("The dispatch gate" above), in place of its former "global pause first".
 
 ## Persistence, no expiry
 

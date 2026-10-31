@@ -466,9 +466,11 @@ that belongs to emulator control:
   runs once after the resume, and the operator's answer says which pause holds it
   (`startup_package_withheld`). The claim waits until every pause that holds it is lifted: when
   both the instance's own pause and the global pause hold it, the answer names the instance's
-  (`instance_paused`), and an instance resume alone leaves the claim waiting for the global
-  resume (the sweep's pump grants it then). Since 0.12.26 (W2-B; review W1-6 M1) the package
-  survives a restart before the resume: the Runtime stop disconnects the claim
+  (`instance_paused`), by the one order of the control gates ([player-hold.md](player-hold.md),
+  R-7a §2.6; Workflow #429 R-7a2, register §1.234), and an instance resume alone leaves the claim
+  waiting for the global resume (the sweep's pump grants it then). The answer never names a
+  player hold: a hold refuses the control itself (R-7b). Since 0.12.26 (W2-B; review W1-6 M1)
+  the package survives a restart before the resume: the Runtime stop disconnects the claim
   (`lease.queue_disconnected`), but `host.idle_state` keeps the package as queued
   ([runtime-fact-store.md](runtime-fact-store.md)) from the hand-off until its claim is granted
   or a control cancels it (below), and the next start, once its daemon-start preparation is

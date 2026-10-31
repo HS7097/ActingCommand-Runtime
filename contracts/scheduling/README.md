@@ -365,9 +365,12 @@ activity windows and sampled intervals. Unavailable candidates leave the instanc
 and host capacity available to the next ranked task. The same predicate supplies
 the next possible admission time at bounded weekly window/cadence boundaries.
 Final admission still checks and commits the actual counters under the original lock.
-An operator scheduling pause (`contracts/scheduling-pause.md`) presents the same way: a
-candidate on a paused instance is deferred with reason `dispatch_paused_global` or
-`dispatch_paused_instance` and no next wake time, until `ResumeScheduling` lifts the pause.
+An operator scheduling pause (`contracts/scheduling-pause.md`) presents the same way, as do the
+other control gates of the one order (`contracts/player-hold.md`, "The one order of the control
+gates", R-7a §2.6; Workflow #429 R-7a2, since 0.12.35): a candidate on a held instance is
+deferred with the first gate's code and no next wake time, `dispatch_player_held` (R-7b),
+`dispatch_paused_instance`, `dispatch_paused_global` or `dispatch_resource_fenced`, until the
+hold ends, `ResumeScheduling` lifts the pause or a passing self-check lifts the fence.
 
 `policy.dispatch_rejected` retains its immutable ranking reasons and optionally
 carries `rejection`: the original Runtime error code, operation and fatal flag,
@@ -579,11 +582,12 @@ read it, and the candidate waits.
   instance cannot run whatever is read (the instance does not provide its
   operation, or its instance override disables it) raises none.
   Only candidates past the closure's positions 1-2 raise demand: on an instance
-  an operator pause, a holder, a waiting claim or a takeover cooldown holds as
+  a control gate (an operator pause or, since 0.12.35, Workflow #429 R-7a2, a
+  #403 fence), a holder, a waiting claim or a takeover cooldown holds as
   the cycle starts, a candidate the selection document deferred carries that
-  hold's reason alone (`dispatch_paused_*`, `dispatch_instance_held`,
-  `dispatch_instance_cooldown`) and no fact refresh reason, and nothing is
-  dispatched there. Workflow #411 ruling 77 A (Alice 10-28; since 0.12.25): a
+  hold's reason alone (`dispatch_paused_*`, `dispatch_resource_fenced`,
+  `dispatch_instance_held`, `dispatch_instance_cooldown`) and no fact refresh
+  reason, and nothing is dispatched there. Workflow #411 ruling 77 A (Alice 10-28; since 0.12.25): a
   task whose undecided trigger or feedback stop read such a key there carries
   the same hold's reason after its `trigger_unknown` or
   `feedback_stop_unknown`, as its last reason and with the hold's wake, and no
@@ -1596,7 +1600,7 @@ A due clock occurrence that is not dispatched leaves one trace (Workflow #372). 
 | gate | codes | recorded as | when |
 |---|---|---|---|
 | persistent | `policy_budget_exhausted` (with its `budget_dimension`), `policy_activity_window_closed`, `policy_task_paused`; at placement `instance_override_disabled`, `capability_missing`, `activity_profile_missing` | `clock_slot_refused` | first sight |
-| operator pause | `dispatch_paused_global`, `dispatch_paused_instance` | `clock_slot_deferred` | first sight |
+| control | the control gates of R-7a §2.6 (`contracts/player-hold.md`): `dispatch_player_held` (R-7b), `dispatch_paused_instance`, `dispatch_paused_global`, `dispatch_resource_fenced` (Workflow #429 R-7a2, since 0.12.35; before it this row was "operator pause", the two pause codes, and a fenced pair was selected and refused at admission) | `clock_slot_deferred` | first sight |
 | queue wait | `dispatch_instance_held`, `policy_retry_backoff_active`, `policy_activity_interval_active` and any other eligibility deferral; at placement `instance_unavailable` | `clock_slot_deferred` | only at an evaluation where the pair's activity window is closed: the wait outlasted the window |
 | waiting in the round | the evaluator's own deferrals (another candidate selected, host or scene budgets, capacity, score, cooldown) | nothing | once the window closes, such a candidate meets `policy_activity_window_closed` |
 

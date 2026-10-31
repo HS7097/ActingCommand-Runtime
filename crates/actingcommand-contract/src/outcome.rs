@@ -446,6 +446,25 @@ macro_rules! outcome_keys {
             self
         }
     };
+    // Workflow #429 R-15b: a list of integers (`player_hold_range`, `[min, max]`) keeps each
+    // item a JSON integer.
+    (@set $key:ident : list(integer)) => {
+        pub fn $key<I>(mut self, items: I) -> Self
+        where
+            I: ::core::iter::IntoIterator,
+            I::Item: $crate::outcome::IntegerValue,
+        {
+            $crate::outcome::put_list(
+                self.values_mut(),
+                ::core::stringify!($key),
+                ::core::concat!(::core::stringify!($key), "_total"),
+                items
+                    .into_iter()
+                    .map($crate::outcome::IntegerValue::into_json),
+            );
+            self
+        }
+    };
     (@set $key:ident : list($item:ident)) => {
         pub fn $key<I>(mut self, items: I) -> Self
         where

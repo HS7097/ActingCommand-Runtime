@@ -267,9 +267,10 @@ pub(crate) struct PolicyEvaluationContext<'a> {
     pub(crate) seed: u64,
     pub(crate) trigger: PolicyTrigger,
     pub(crate) sampled_at_monotonic_ms: u64,
-    /// Workflow #191 ps1: the deferral code of an operator scheduling pause covering the
-    /// instance alias, if any.
-    pub(crate) scheduling_pause: &'a dyn Fn(&str) -> Option<HostCode>,
+    /// Workflow #191 ps1, Workflow #429 R-7a2 (R-7a §2.6): the control gates of the instance
+    /// alias as the cycle starts (its pauses and its #403 fence, in the one order); the first is
+    /// position 1 of the closure (its 1a to 1d).
+    pub(crate) control_gates: &'a dyn Fn(&str) -> actingcommand_contract::ControlGates,
     /// Workflow #369 W-1: what the instance's one queue shows as the cycle starts, if anything
     /// keeps a dispatch from it.
     pub(crate) instance_occupancy: &'a dyn Fn(&str) -> Option<InstanceOccupancy>,
@@ -2749,7 +2750,7 @@ impl PolicyHost {
             seed,
             trigger,
             sampled_at_monotonic_ms,
-            scheduling_pause,
+            control_gates,
             instance_occupancy,
             suspension_lift,
             pack_admission,
@@ -2825,7 +2826,7 @@ impl PolicyHost {
             &active.compiled,
             facts,
             &fact_refresh,
-            scheduling_pause,
+            control_gates,
             instance_occupancy,
             blackout_holds,
             time.unix_ms,
@@ -2905,11 +2906,12 @@ impl PolicyHost {
             deferrals.capture(|intent| {
                 // Workflow #384 D2-S4: a fact refresh's deferrals name their gate and class.
                 let refresh = intent.task_id == FACT_REFRESH_TASK_ID;
-                // An operator scheduling pause, then a held instance or a takeover cooldown
-                // (Workflow #191 ps1, #369 W-1).
+                // A control gate (`scheduling-blackout.md`, "Order of the deferrals", positions
+                // 1a to 1d: Workflow #191 ps1, #403, #429 R-7a2, in the one order of R-7a §2.6),
+                // then a held instance or a takeover cooldown (position 2, #369 W-1).
                 if let Some(hold) = crate::fact_refresh::instance_hold(
                     &intent.instance_id,
-                    scheduling_pause(&intent.instance_id),
+                    &control_gates(&intent.instance_id),
                     instance_occupancy(&intent.instance_id),
                 ) {
                     return Ok(hold.eligibility(refresh));
@@ -3228,7 +3230,7 @@ impl PolicyHost {
         catalog: &CompiledCatalog,
         facts: &EvaluationFacts,
         context: &FactRefreshContext<'_>,
-        scheduling_pause: &dyn Fn(&str) -> Option<HostCode>,
+        control_gates: &dyn Fn(&str) -> actingcommand_contract::ControlGates,
         instance_occupancy: &dyn Fn(&str) -> Option<InstanceOccupancy>,
         blackout_holds: &BTreeMap<String, actingcommand_policy::Blackout>,
         now_unix_ms: u64,
@@ -3239,7 +3241,7 @@ impl PolicyHost {
         for instance in &facts.instances {
             if let Some(hold) = crate::fact_refresh::instance_hold(
                 &instance.instance_id,
-                scheduling_pause(&instance.instance_id),
+                &control_gates(&instance.instance_id),
                 instance_occupancy(&instance.instance_id),
             ) {
                 instance_holds.insert(instance.instance_id.clone(), hold.policy_hold());

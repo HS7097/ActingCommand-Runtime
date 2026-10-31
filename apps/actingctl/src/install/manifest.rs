@@ -79,6 +79,10 @@ pub(crate) struct BuildManifest {
     pub(crate) tools_payload_layout: Option<String>,
     #[serde(default)]
     pub(crate) interfaces: Option<Value>,
+    /// A UI build's `installation_selection_schema` (Workflow #429 R-15b, A.4 b); a Runtime or
+    /// Tools manifest has none.
+    #[serde(default)]
+    pub(crate) installation_selection_schema: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -158,8 +162,8 @@ pub(crate) fn parse_declaration(value: &Value) -> Option<Speaks> {
 /// repository's `crates/acui-setup/component-interfaces.json`, which the UI build copies
 /// unchanged into its manifest's `interfaces` (`contracts/component-interfaces.md`,
 /// "Declaration"), read by the same parse rules as a Runtime declaration: all six v1 interfaces
-/// named, `runtime-outcomes` taken as [0, 0] when absent. The release reader (R-15b) and the
-/// layout (R-15c) bring a UI build to the installer; until then only the gate tests read one.
+/// named, `runtime-outcomes` taken as [0, 0] when absent. The release reader checks it when it
+/// stages a UI build (R-15b); the layout (R-15c) and the edges (R-15d) read it next.
 #[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct UiDeclaration {
@@ -189,6 +193,50 @@ impl UiDeclaration {
     pub(crate) fn of_manifest(manifest: &BuildManifest) -> Option<Self> {
         Self::parse(manifest.interfaces.as_ref()?)
     }
+
+    /// Workflow #429 R-15b (A.4 b; `component-interfaces.md`, Parse rules): whether the UI
+    /// manifest's `installation_selection_schema` agrees with this declaration, that is it is
+    /// `actingcommand.install-selection.v<N>` with N in the declared `install-selection` range.
+    pub(crate) fn agrees_with_schema(&self, schema: Option<&str>) -> bool {
+        let revision = schema
+            .and_then(|schema| schema.strip_prefix(SELECTION_SCHEMA_PREFIX))
+            .filter(|digits| {
+                !digits.is_empty()
+                    && digits.len() <= 9
+                    && digits.bytes().all(|byte| byte.is_ascii_digit())
+                    && !digits.starts_with('0')
+            })
+            .and_then(|digits| digits.parse::<u64>().ok());
+        match (revision, self.speaks.get("install-selection")) {
+            (Some(revision), Some([min, max])) => *min <= revision && revision <= *max,
+            _ => false,
+        }
+    }
+}
+
+/// The prefix of a UI manifest's `installation_selection_schema`, before its revision.
+const SELECTION_SCHEMA_PREFIX: &str = "actingcommand.install-selection.v";
+
+/// The UI member's folder in a UI build and in a slot.
+pub(crate) const UI_DIR: &str = "ui";
+
+/// A kept UI build (`install\ui-builds\<commit>\ui\` checked against its own manifest).
+pub(crate) struct UiBuild {
+    pub(crate) commit: String,
+}
+
+/// Reads the UI manifest of the UI build below `base` and checks every listed file (Workflow
+/// #429 R-15b, A.4 b): `None` when the manifest cannot be read, lists a path that leaves its
+/// folder or repeats, names no 40-hex commit, or a listed file differs.
+pub(crate) fn verify_ui_build(base: &Path) -> Option<UiBuild> {
+    let dir = base.join(UI_DIR);
+    let manifest = read_manifest(&dir).ok()?;
+    let valid = manifest.paths_valid()
+        && files::is_commit(&manifest.commit_sha)
+        && file_problems(&dir, &manifest).is_empty();
+    valid.then_some(UiBuild {
+        commit: manifest.commit_sha,
+    })
 }
 
 /// One listed file that is not as its manifest says.

@@ -2215,6 +2215,50 @@
       "type": "vocab:install_caveat",
       "description": "What an installer command noted while its work went on: something left unchecked, pending or on the previous build."
     },
+    "attempt_phase": {
+      "type": "vocab:install_attempt_phase",
+      "description": "Why another attempt of an installer operation cannot run now: running or handover (install-cli.md; design 3.11, v4.1; the install phase keeps the key phase)."
+    },
+    "hold_reason": {
+      "type": "name",
+      "description": "The deployment pause reason a form was computed for (install-cli.md, \"Forms\"; design 3.1, v4.1)."
+    },
+    "s0_from": {
+      "type": "id",
+      "description": "The installer operation whose S0 a start's post-start checks will judge against, null when none counts (design 3.15, v4.1)."
+    },
+    "player_hold_range": {
+      "type": "list<integer>",
+      "description": "The player-hold range [min, max] of the Runtime a player_holds guard judged (design 3.10)."
+    },
+    "confirm_argv": {
+      "type": "list<name>",
+      "description": "The argv after the program name that confirms the UI half (design 3.15, confirm_ui_running)."
+    },
+    "child_pid": {
+      "type": "integer",
+      "description": "The process id of a fixed entry's child (stable-entry.md)."
+    },
+    "child_state": {
+      "type": "vocab:entry_child_state",
+      "description": "Whether a graphical entry's child still ran when the entry exited (stable-entry.md)."
+    },
+    "child_exit_code": {
+      "type": "integer",
+      "description": "The exit code of a fixed entry's child that exited (stable-entry.md)."
+    },
+    "inherited_sha256": {
+      "type": "hash",
+      "description": "The SHA-256 of an inherited install selection (stable-entry.md)."
+    },
+    "active_sha256": {
+      "type": "hash",
+      "description": "The SHA-256 of install\\active.json as read (stable-entry.md; install-cli.md)."
+    },
+    "install_member": {
+      "type": "vocab:install_member",
+      "description": "A member of an install selection: runtime, tools or ui (design 2.3)."
+    },
     "idle_action": {
       "type": "name",
       "description": "An instance's idle action (IDLE-1): close_app or stop_emulator, as idle.action spells it."
@@ -6989,6 +7033,90 @@
         },
         "deploy_rolled_back": {
           "description": "A composite update rolled back by itself, between the new start and the resume (Alice's decision 74 A): a fail-class post-start check failed or the new start ended (count the failed checks; the result's failed_checks names them), the rollback gate toward the previous build passed, the operation's file steps were reversed and the previous build started (commit_sha). When the previous build's checks passed its hold was released and scheduling resumed; the command still reports this refusal."
+        },
+        "slot_occupied": {
+          "description": "A/B (design 2.9): the slot to prepare or replace is in use (an exclusive slot lock refused, a process imaged under it, or its rename refused with OS error 5 or 32); the refusal lists the occupants {pid, image, kind, pinned_selection?}, needs_person close_slot_occupants. Nothing changed. (R-15b, since 0.12.35)"
+        },
+        "slot_is_active": {
+          "description": "A/B (design 2.9): the slot named for preparation is the active one, which is never prepared. (R-15b, since 0.12.35)"
+        },
+        "slot_unrecognised": {
+          "description": "A/B (design 2.9): the target or active slot has no SLOT.json, or it cannot be read or does not match; needs_person inspect_slot. (R-15b, since 0.12.35)"
+        },
+        "slot_not_clean": {
+          "description": "A/B (design 2.9): the target slot is cleanup_failed with its folder still present; needs_person remove_unlisted_files, next clean. (R-15b, since 0.12.35)"
+        },
+        "previous_slot_unconfirmed": {
+          "description": "A/B (design 2.9, Alice's ruling 131): the target slot still holds the previous selection and the active selection's health confirmation is not complete; values missing name the half; next follows design 3.15. Nothing changed. (R-15b, since 0.12.35)"
+        },
+        "platform_tools_changed": {
+          "description": "A/B (design 2.2): the candidate Tools carry platform-tools whose bytes differ from the root's tools\\platform-tools; changing adb is a planned event and Tools never stops the adb server. (R-15b, since 0.12.35)"
+        },
+        "state_selection_mismatch": {
+          "description": "A/B (design 2.10): install\\state.json mirrors another selection than install\\active.json; plan refuses, resume rewrites the mirror. (R-15b, since 0.12.35)"
+        },
+        "selection_changed_externally": {
+          "description": "A/B (design 3.3): at commit_selection the pointer was neither the baseline nor the candidate: another writer replaced it. The operation ends refused after its changes (outcome_kind refused_after_change), the deployment pause kept; next names only start and undo --ack-guard selection_external. (R-15b, since 0.12.35)"
+        },
+        "selection_commit_lost": {
+          "description": "A/B (design 3.6): the journal records the commit but install\\active.json is the baseline again after the start began; needs_person selection_commit_lost. (R-15b, since 0.12.35)"
+        },
+        "selection_commit_failed": {
+          "description": "A/B (design 3.5): the pointer rename kept failing with OS error 5 or 32 until install.lock_wait_ms; the cause link of install_operation_interrupted, the pointer still the baseline. (R-15b, since 0.12.35)"
+        },
+        "not_same_volume": {
+          "description": "A/B (design 3.5): a part folder, install\\selections\\ or the pointer's part is not on the volume of the slots and install\\active.json (a rename would fail with OS error 17). (R-15b, since 0.12.35)"
+        },
+        "reparse_point": {
+          "description": "A/B (design 3.5): the path to a slot, a part or the pointer passes a reparse point or link. (R-15b, since 0.12.35)"
+        },
+        "rollback_material_unavailable": {
+          "description": "A/B (design 3.1, 3.8, 3.14 constraint 4): the slot of state.previous is cleaned or does not verify; values are status rollback.material; next prepare --to-selection while the builds are kept, else needs_person restage_previous_build. (R-15b, since 0.12.35)"
+        },
+        "operation_attempt_running": {
+          "description": "Design 3.11: another process runs an attempt of this operation (its attempt lock is held), or a background attempt is being handed over; values attempt_phase running or handover. (R-15b, since 0.12.35)"
+        },
+        "operation_id_unavailable": {
+          "description": "Design 3.11: no operation id could be minted: the attempt lock file of every millisecond tried (up to 1000) already exists. Nothing opened. (R-15b, since 0.12.35)"
+        },
+        "attempt_record_exists": {
+          "description": "Design 3.11: an attempt or spawn record's final name already exists when its first write is renamed in; the record is not overwritten. After a change on disk the attempt ends install_operation_interrupted with this refusal as its link. (R-15b, since 0.12.35)"
+        },
+        "detach_spawn_failed": {
+          "description": "Design 3.11: the background child could not be spawned; the parent ends the journal with this refusal and retires install\\current.json. (R-15b, since 0.12.35)"
+        },
+        "detach_identity_mismatch": {
+          "description": "Design 3.11 step 5: a background child does not match its attempt (current.json, the attempt lock, the latest attempt, attempts[n].argv and verb, an unfinished journal); only its attempt record says so, unless it is the first attempt of an operation with no change yet, whose journal ends refused with it. (R-15b, since 0.12.35)"
+        },
+        "client_ref_unknown": {
+          "description": "Design 3.11: install status --client-ref names no operation; the person sees the result as unconfirmed, never as a success. (R-15b, since 0.12.35)"
+        },
+        "ui_confirmation_stale": {
+          "description": "Design 3.14: install clean --ui-confirmed names a selection that is not the active one; nothing is written. (R-15b, since 0.12.35)"
+        },
+        "clean_irreversible": {
+          "description": "Design 3.14: an undo of a clean operation; a clean is never undone, resume finishes it. (R-15b, since 0.12.35)"
+        },
+        "entry_modified": {
+          "description": "Design 6.2: a fixed entry's bytes differ from state.entries; plan refuses. (R-15b, since 0.12.35)"
+        },
+        "config_candidate_pending": {
+          "description": "Design 4.3: an update or rollback while install\\candidate\\ holds an uncommitted configuration candidate; commit or discard it first. (R-15b, since 0.12.35)"
+        },
+        "convert_layout_unrecognised": {
+          "description": "Design 5.7: a convert_check failed; the refusal carries convert_checks with each check's values and nothing changed. (R-15b, since 0.12.35)"
+        },
+        "convert_rolled_back": {
+          "description": "Design 5.6: a conversion with --start undid itself after a fail-class post-start check, before any health confirmation (outcome_kind rolled_back); loud, never a success. (R-15b, since 0.12.35)"
+        },
+        "state_root_mismatch": {
+          "description": "Design 5.2 state_root_consistent: the configured state root is missing or differs from the running Runtime's, or S0's ledger head cannot be read. (R-15b, since 0.12.35)"
+        },
+        "state_root_placeholder": {
+          "description": "Design 5.2 state_root_consistent: the configured state root's last name matches *.placeholder-*. (R-15b, since 0.12.35)"
+        },
+        "layout_single_convert_first": {
+          "description": "Design 5.8 step 6: after the single-location update and rollback code is removed, a single-location root answers this: convert it first. (R-15b, since 0.12.35)"
         }
       }
     },
@@ -7039,6 +7167,63 @@
         },
         "config_key_retired": {
           "description": "The configuration names a retired key of the install section (config_key): it is accepted and has no effect (actingd-config revision 18; install.guard.blocked_windows, Alice's decision 75 of 10-27)."
+        },
+        "ui_restart_required": {
+          "description": "Design 3.12: a process imaged under <root>\\<Y>\\ui\\ runs while Y is not the active slot (values slot, pids). (R-15b, since 0.12.35)"
+        },
+        "runtime_on_previous_slot": {
+          "description": "Design 3.12: the Runtime runs from the slot that is not active (values slot, selection_id); next restart. (R-15b, since 0.12.35)"
+        },
+        "state_behind_selection": {
+          "description": "Design 2.10: install\\state.json mirrors an older selection than install\\active.json; resume rewrites it. (R-15b, since 0.12.35)"
+        },
+        "foreign_part": {
+          "description": "Design 3.5: an install\\active.json.*.part lies in the root without an unfinished operation of it. (R-15b, since 0.12.35)"
+        },
+        "entry_modified": {
+          "description": "Design 6.2: a fixed entry's bytes differ from state.entries. (R-15b, since 0.12.35)"
+        },
+        "installer_not_newest": {
+          "description": "Design 3.13: the running installer is not the first of install\\installer.json (values first, running); a hint only. (R-15b, since 0.12.35)"
+        },
+        "legacy_autostart": {
+          "description": "Design 5.3: a Startup-folder ActingCommand.cmd of the old acsetup starts the Runtime past the installer (values path, starts_runtime, starts_console); needs_person stop_legacy_autostart. (R-15b, since 0.12.35)"
+        },
+        "slot_left_prepared": {
+          "description": "Design 3.6: an undo left the verified candidate slot in place because it is occupied (values slot, occupants); a later place_slot moves it aside. (R-15b, since 0.12.35)"
+        },
+        "operation_attempt_unconfirmed": {
+          "description": "Design 3.11: the latest attempt is being handed over (values attempt, spawned_pid?, since_unix_ms). (R-15b, since 0.12.35)"
+        },
+        "operation_attempt_lost": {
+          "description": "Design 3.11: the latest attempt's process is gone before its end (values attempt, pid?, log?); resume or undo may be sent again. (R-15b, since 0.12.35)"
+        },
+        "operation_attempt_mismatch": {
+          "description": "Design 3.11 step 5 (v4.1): the latest attempt ended detach_identity_mismatch and the journal stays unfinished (values attempt, verb). (R-15b, since 0.12.35)"
+        },
+        "kept_hold_mismatch": {
+          "description": "Design 3.10: a deployment pause the journals record differs from the Runtime's Status. (R-15b, since 0.12.35)"
+        },
+        "cleanup_pending": {
+          "description": "Design 3.14 constraint 2: the replaced slot is still occupied; the new version is in effect and the slot is cleaned once the occupants leave (values slot, occupants). (R-15b, since 0.12.35)"
+        },
+        "cleanup_failed": {
+          "description": "Design 3.14 constraint 2: the clean could not delete everything it listed (values items [{path, remaining, reason}]); the new version stays in effect. (R-15b, since 0.12.35)"
+        },
+        "player_hold_persistence_off": {
+          "description": "Design 3.10: StartReport.player_hold_not_durable is true: the start succeeded, but the Runtime refuses new player holds until host.player_hold is in the configured tag list (values start_report_member). (R-15b, since 0.12.35)"
+        },
+        "cleanup_waiting_health": {
+          "description": "Design 3.14: the clean waits for the health confirmation's missing half (values missing). (R-15b, since 0.12.35)"
+        },
+        "cleanup_deferred": {
+          "description": "Design 3.14 step 3: the UI half was written while another operation is unfinished (values operation_id); that operation's chained check takes it. (R-15b, since 0.12.35)"
+        },
+        "player_hold_offline_read_failed": {
+          "description": "Design 3.10: the offline read of host.player_hold after the close failed while the target Runtime declares player-hold 1; the operation went on. (R-15b, since 0.12.35)"
+        },
+        "mcp_entry_generation_stale": {
+          "description": "Design 5.3: the MCP entry g1 follows a conversion once and no later switch; clients move to g2. (R-15b, since 0.12.35)"
         }
       }
     },
@@ -7098,6 +7283,9 @@
         },
         "interfaces_differ": {
           "description": "The Runtime and Tools manifests declare different interfaces."
+        },
+        "selection_schema_mismatch": {
+          "description": "A UI build's manifest names no installation_selection_schema of the form actingcommand.install-selection.v<N>, or N is not in its declared install-selection range (component-interfaces.md, Parse rules). (R-15b, since 0.12.35)"
         }
       }
     },
@@ -7138,6 +7326,813 @@
         },
         "adb": {
           "description": "Each configured instance with a known port answers through the root's running adb server."
+        },
+        "disk": {
+          "description": "Design 5.3: the bytes of the slot to place plus 10 percent fit the volume's free space. (R-15b, since 0.12.35)"
+        },
+        "root_inventory": {
+          "description": "Design 5.2: the conversion's inventory holds entries a person must confirm; not_evaluated and ackable until --ack-guard root_inventory. (R-15b, since 0.12.35)"
+        },
+        "instructions_dropped": {
+          "description": "Design 4.3: S0's run-time instructions that the target's defaults do not know (instructions_at_risk); acknowledged with --ack-guard instructions_dropped. (R-15b, since 0.12.35)"
+        },
+        "selection_external": {
+          "description": "Design 3.6: undo of an operation whose pointer is a foreign selection F; acknowledged with --ack-guard selection_external (values the SHA-256 of F). (R-15b, since 0.12.35)"
+        },
+        "player_holds": {
+          "description": "Design 3.10, Workflow #429 R-7a section 5.3: while any player hold exists the Runtime that runs after the operation declares player-hold 1; a range that does not hold it is not ackable; not_evaluated only in the third case without S0. (R-15b, since 0.12.35)"
+        }
+      }
+    },
+    "install_blocked_by": {
+      "description": "A guard of a form's blocked_by: the apply cannot pass it by an acknowledgment or a named pause (install-cli.md, \"Forms\"; design 3.1). Each kind registers its needs_person. (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "foreign_pauses": {
+          "description": "A global pause (values.global): needs_person global_pause_blocks."
+        },
+        "player_holds": {
+          "description": "A player hold while the Runtime that runs after the operation does not declare player-hold 1: needs_person player_hold_blocks_target."
+        },
+        "check_config": {
+          "description": "The root configuration fails the active Runtime's check-config (start_form, restart_form): needs_person fix_configuration."
+        },
+        "target_slot": {
+          "description": "The target slot is previous, cleanup_failed with its folder present, or unrecognised (apply_form): the form's unblock says what comes first."
+        }
+      }
+    },
+    "install_needs_person": {
+      "description": "What a person must do that the installer cannot, the code of a needs_person entry {code, values} (install-cli.md, \"Next and needs_person\"; design 3.6). (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "close_slot_occupants": {
+          "description": "Close the programs that occupy the slot (values occupants); nothing is ended by the installer."
+        },
+        "inspect_slot": {
+          "description": "Inspect a slot without a valid SLOT.json (values slot)."
+        },
+        "remove_unlisted_files": {
+          "description": "Remove the files the clean found outside its list (values paths); then clean."
+        },
+        "remove_reparse_point": {
+          "description": "Remove the links the clean found, only the links, not what they point to (values paths); then clean."
+        },
+        "inspect_modified_file": {
+          "description": "Look at a listed file whose size or SHA-256 differs (values path, expected_sha256, actual_sha256); then clean."
+        },
+        "restage_previous_build": {
+          "description": "Stage again the builds of the rollback target that were cleaned (values the missing members)."
+        },
+        "selection_commit_lost": {
+          "description": "Look at which slot the Runtime runs from (values active_sha256, candidate_sha256, runtime_slot)."
+        },
+        "inspect_selection_external": {
+          "description": "Look at the foreign selection (values active_sha256, baseline_sha256, candidate_sha256)."
+        },
+        "player_hold_unverified": {
+          "description": "Verify one held instance and release its deployment pause with --player-hold-verified (values alias, hold_id)."
+        },
+        "confirm_ui_running": {
+          "description": "Confirm the new UI runs, then run confirm_argv (values selection_id, ui {commit, tag}, confirm_argv)."
+        },
+        "inspect_runtime_image": {
+          "description": "A Runtime runs from outside both slots (values image)."
+        },
+        "runtime_not_answering": {
+          "description": "A Runtime process or owner lock is present but Status does not answer (values pid?, image?, slot?, since_unix_ms?, cause); wait for it, or decide yourself whether to end it."
+        },
+        "fix_configuration": {
+          "description": "Change the root configuration until the active Runtime's check-config accepts it (values code, commit, received)."
+        },
+        "player_hold_blocks_target": {
+          "description": "Wait for the player holds to end, or use a build that declares player-hold (values player_holds, player_hold_range)."
+        },
+        "global_pause_blocks": {
+          "description": "The party that set the global pause lifts it (values reason, revision); the installer never touches it."
+        },
+        "stop_legacy_autostart": {
+          "description": "Remove or change the old Startup-folder ActingCommand.cmd (values path)."
+        },
+        "inspect_live_modified": {
+          "description": "Conversion: the live single-location program files were changed (values paths and SHA-256 values)."
+        },
+        "remove_ab_traces": {
+          "description": "Conversion: remove the A/B traces the root holds (values paths)."
+        },
+        "remove_foreign_ui_files": {
+          "description": "Conversion: move the files outside the U0 rule out of ui\\ (values paths)."
+        },
+        "check_state_root": {
+          "description": "Conversion: check the configured state_root against the running Runtime's and the placeholder rule."
+        }
+      }
+    },
+    "install_operation_state": {
+      "description": "The state of one installer operation as install status judges it (design 3.11). (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "pending": {
+          "description": "Being handed over, or minted and being spawned."
+        },
+        "refused": {
+          "description": "Ended before it opened: nothing changed."
+        },
+        "running": {
+          "description": "Unfinished, its attempt lock held, the latest attempt reported."
+        },
+        "interrupted": {
+          "description": "Unfinished, no attempt runs and none is being handed over: resume or undo."
+        },
+        "ended": {
+          "description": "Ended, outcome_kind not refused."
+        }
+      }
+    },
+    "install_outcome_kind": {
+      "description": "How an installer operation ended (design 3.11). (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "done": {
+          "description": "Success without a caveat."
+        },
+        "done_with_caveats": {
+          "description": "Success with caveats."
+        },
+        "refused": {
+          "description": "Refused before it opened: nothing changed."
+        },
+        "refused_after_change": {
+          "description": "Ended refused after changes, which changed lists."
+        },
+        "rolled_back": {
+          "description": "An automatic rollback or automatic undo completed."
+        },
+        "undone": {
+          "description": "Undone by install undo."
+        },
+        "abandoned": {
+          "description": "Undone before any step began."
+        }
+      }
+    },
+    "install_commit_state": {
+      "description": "Where an operation's pointer stands (design 3.12). (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "none": {
+          "description": "The operation does not change the pointer."
+        },
+        "uncommitted": {
+          "description": "The pointer is the baseline; the commit has not happened."
+        },
+        "committed": {
+          "description": "The pointer is the candidate."
+        },
+        "reverted": {
+          "description": "An automatic rollback or an undo wrote the baseline back."
+        },
+        "commit_lost": {
+          "description": "The journal records the commit, the pointer is the baseline."
+        },
+        "external": {
+          "description": "The pointer is neither the baseline nor the candidate."
+        }
+      }
+    },
+    "install_runtime_state": {
+      "description": "Where the Runtime runs, as install status reads it (design 3.12). (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "stopped": {
+          "description": "No Runtime runs under the root."
+        },
+        "on_active_slot": {
+          "description": "It answers Status and its image is in the active slot."
+        },
+        "on_previous_slot": {
+          "description": "It answers Status and its image is in the other slot."
+        },
+        "on_unknown_image": {
+          "description": "It answers Status and its image is outside both slots."
+        },
+        "unknown": {
+          "description": "The process probe failed (the failure attached)."
+        },
+        "not_answering": {
+          "description": "A process or the owner lock is present, Status does not answer."
+        }
+      }
+    },
+    "install_attempt_phase": {
+      "description": "Why another attempt of an operation cannot run now, the value attempt_phase of operation_attempt_running (design 3.11, v4.1). (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "running": {
+          "description": "An attempt holds the operation's attempt lock."
+        },
+        "handover": {
+          "description": "A background attempt is between the parent's release and the child's take of the lock."
+        }
+      }
+    },
+    "install_attempt_verb": {
+      "description": "Which command an attempt of an operation runs (design 3.4, 3.11). (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "apply": {
+          "description": "The attempt that opened the operation."
+        },
+        "resume": {
+          "description": "An install resume."
+        },
+        "undo": {
+          "description": "An install undo."
+        }
+      }
+    },
+    "install_action_reason": {
+      "description": "Why a status action (resume, undo) is not usable (design 3.12). (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "operation_finished": {
+          "description": "The operation ended."
+        },
+        "not_last_operation": {
+          "description": "Another changing operation followed it."
+        },
+        "rollback_gate_failed": {
+          "description": "The rollback gate fails."
+        },
+        "operation_attempt_running": {
+          "description": "An attempt runs or is handed over (values attempt_phase)."
+        },
+        "rollback_material_unavailable": {
+          "description": "The material of the rollback is cleaned."
+        },
+        "clean_irreversible": {
+          "description": "A clean is never undone."
+        }
+      }
+    },
+    "install_slot_state": {
+      "description": "The state of a program slot (design 2.9). (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "active": {
+          "description": "The slot of install\\active.json."
+        },
+        "empty": {
+          "description": "No slot folder: the usual state after a clean."
+        },
+        "previous": {
+          "description": "Holds state.previous while the health confirmation is incomplete."
+        },
+        "cleanup_pending": {
+          "description": "Confirmed and waiting for its occupants to leave."
+        },
+        "prepared_left": {
+          "description": "A verified candidate an undo left in place."
+        },
+        "cleanup_failed": {
+          "description": "The clean could not empty it."
+        },
+        "unrecognised": {
+          "description": "No SLOT.json, or one that cannot be read or does not match."
+        }
+      }
+    },
+    "install_cleanup_state": {
+      "description": "The state of the clean, phase 7 (design 3.14). (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "not_needed": {
+          "description": "Nothing to clean."
+        },
+        "waiting_health": {
+          "description": "The health confirmation is incomplete."
+        },
+        "waiting_occupants": {
+          "description": "The replaced slot is occupied."
+        },
+        "ready": {
+          "description": "Nothing occupies it any more: next clean."
+        },
+        "running": {
+          "description": "A clean runs."
+        },
+        "done": {
+          "description": "Cleaned."
+        },
+        "failed": {
+          "description": "Something listed could not be deleted."
+        }
+      }
+    },
+    "install_cleanup_blocker": {
+      "description": "What the clean waits for, the code of a cleanup.blockers entry (design 3.14). (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "runtime_unconfirmed": {
+          "description": "The Runtime has not started from the active slot and passed the post-start checks."
+        },
+        "ui_unconfirmed": {
+          "description": "The UI half is not confirmed."
+        }
+      }
+    },
+    "install_cleanup_failure": {
+      "description": "Why the clean left a listed item (design 3.14). (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "delete_failed": {
+          "description": "The OS refused a deletion."
+        },
+        "unlisted": {
+          "description": "A file outside the list stays in the item."
+        },
+        "reparse_point": {
+          "description": "The item holds a link, which is never followed or deleted."
+        },
+        "modified_listed_file": {
+          "description": "A listed file's size or SHA-256 differs from the list."
+        }
+      }
+    },
+    "install_occupant_kind": {
+      "description": "What occupies a slot (design 2.9). (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "runtime": {
+          "description": "The Runtime."
+        },
+        "ui": {
+          "description": "A UI program."
+        },
+        "mcp_serve": {
+          "description": "An actingctl mcp-serve."
+        },
+        "tool": {
+          "description": "Another program of the slot's Tools."
+        },
+        "other": {
+          "description": "Any other process."
+        }
+      }
+    },
+    "install_kept_hold_why": {
+      "description": "Why a deployment pause stays, kept_holds[].why (design 3.10). (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "hold_after_start": {
+          "description": "install.hold_after_start keeps it."
+        },
+        "step_failed": {
+          "description": "A step failed and kept it."
+        },
+        "player_hold_unverified": {
+          "description": "The instance's player hold was not verified."
+        },
+        "operation_unfinished": {
+          "description": "An unfinished operation set it."
+        }
+      }
+    },
+    "install_health_state": {
+      "description": "A half of the active selection's health confirmation (design 3.12, 3.14). (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "confirmed": {
+          "description": "Confirmed."
+        },
+        "unconfirmed": {
+          "description": "Not confirmed yet; the first selection's UI half always starts so."
+        },
+        "not_required": {
+          "description": "UI half only: the UI member is the one replaced."
+        }
+      }
+    },
+    "install_health_half": {
+      "description": "The two halves of the health confirmation (design 3.14). (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "runtime": {
+          "description": "The Runtime half."
+        },
+        "ui": {
+          "description": "The UI half."
+        }
+      }
+    },
+    "install_health_via": {
+      "description": "Who confirmed the UI half, the required --via (design 3.14). (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "ui": {
+          "description": "The new UI itself."
+        },
+        "cli": {
+          "description": "A person on the command line."
+        }
+      }
+    },
+    "install_rollback_slot_material": {
+      "description": "The rollback target's slot, status rollback.material.slot (design 3.12). (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "intact": {
+          "description": "Verified."
+        },
+        "cleaned": {
+          "description": "Cleaned."
+        },
+        "not_intact": {
+          "description": "Present but does not verify."
+        }
+      }
+    },
+    "install_rollback_build_material": {
+      "description": "A rollback target's kept build, status rollback.material.builds (design 3.12). (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "kept": {
+          "description": "Kept."
+        },
+        "cleaned": {
+          "description": "Cleaned."
+        }
+      }
+    },
+    "install_operation_kind": {
+      "description": "The kind of an installer operation, install\\current.json and recent_operations (design 3.4). (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "release_stage": {
+          "description": "release stage."
+        },
+        "adopt": {
+          "description": "adopt."
+        },
+        "update": {
+          "description": "update apply."
+        },
+        "rollback": {
+          "description": "rollback apply."
+        },
+        "stop": {
+          "description": "stop."
+        },
+        "start": {
+          "description": "start."
+        },
+        "release_hold": {
+          "description": "release-hold."
+        },
+        "prepare": {
+          "description": "prepare (A/B)."
+        },
+        "convert": {
+          "description": "convert apply."
+        },
+        "clean": {
+          "description": "clean, phase 7."
+        },
+        "restart": {
+          "description": "restart."
+        }
+      }
+    },
+    "install_step_kind": {
+      "description": "A step of an installer operation by phase; the UI draws progress by this table only (design 3.4). (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "extract": {
+          "description": "Phase 1."
+        },
+        "copy_build": {
+          "description": "Phase 1."
+        },
+        "verify_tree": {
+          "description": "Phase 1."
+        },
+        "place_build": {
+          "description": "Phase 1."
+        },
+        "materialize_part": {
+          "description": "Phase 1."
+        },
+        "verify_part": {
+          "description": "Phase 1."
+        },
+        "pause": {
+          "description": "Phase 3."
+        },
+        "close": {
+          "description": "Phase 3."
+        },
+        "ledger_verify": {
+          "description": "Phase 3."
+        },
+        "place_slot": {
+          "description": "Phase 3."
+        },
+        "stage_file": {
+          "description": "Phase 3."
+        },
+        "swap_file": {
+          "description": "Phase 3."
+        },
+        "retire_live_files": {
+          "description": "Phase 3."
+        },
+        "place_entries": {
+          "description": "Phase 3."
+        },
+        "refresh_entries": {
+          "description": "Phase 3."
+        },
+        "refresh_root_fixed": {
+          "description": "Phase 3."
+        },
+        "init_slot_locks": {
+          "description": "Phase 3."
+        },
+        "write_selection": {
+          "description": "Phase 4."
+        },
+        "commit_selection": {
+          "description": "Phase 4."
+        },
+        "record_state": {
+          "description": "Phase 5."
+        },
+        "start": {
+          "description": "Phase 5."
+        },
+        "post_check": {
+          "description": "Phase 5."
+        },
+        "record_health": {
+          "description": "Phase 5."
+        },
+        "release_hold": {
+          "description": "Phase 5."
+        },
+        "reverse_files": {
+          "description": "Phase 6."
+        },
+        "revert_selection": {
+          "description": "Phase 6."
+        },
+        "clean_check": {
+          "description": "Phase 7."
+        },
+        "clean_slot": {
+          "description": "Phase 7."
+        },
+        "clean_builds": {
+          "description": "Phase 7."
+        },
+        "clean_converted": {
+          "description": "Phase 7."
+        },
+        "delete_cleaning": {
+          "description": "Phase 7."
+        },
+        "record_cleanup": {
+          "description": "Phase 7."
+        }
+      }
+    },
+    "install_member": {
+      "description": "A member of a selection (design 2.3). (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "runtime": {
+          "description": "The Runtime member."
+        },
+        "tools": {
+          "description": "The Tools member."
+        },
+        "ui": {
+          "description": "The UI member."
+        }
+      }
+    },
+    "install_row_reason": {
+      "description": "The values.reason of a guard or edge row that passes or does not apply without a check (design 2.7, 3.10). (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "target_restores_player_holds": {
+          "description": "player_holds without S0: the target declares player-hold 1 and restores every persisted hold."
+        },
+        "no_player_hold_support": {
+          "description": "player_holds without S0: the active Runtime declares no player-hold, so it cannot have left a hold."
+        },
+        "ui_drives_no_installer": {
+          "description": "install-cli edge not_applicable: U* declares no install-cli."
+        }
+      }
+    },
+    "install_default_hold_reason": {
+      "description": "A deployment pause reason the installer itself names (design 3.15). (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "install_restart": {
+          "description": "The default --hold of install restart."
+        }
+      }
+    },
+    "install_player_hold_seen_by": {
+      "description": "How S0 learned of a player hold (design 3.10). (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "offline_after_close": {
+          "description": "The offline read of host.player_hold after the close."
+        }
+      }
+    },
+    "convert_check": {
+      "description": "A recognition condition of convert plan (design 5.2). (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "single_location": {
+          "description": "runtime\\BUILD-MANIFEST.json is a file."
+        },
+        "no_ab_traces": {
+          "description": "No entry that conflicts with A/B."
+        },
+        "state_v1": {
+          "description": "install\\state.json is install-state.v1 of the live commit."
+        },
+        "live_verified": {
+          "description": "runtime\\ and tools\\ match their manifests."
+        },
+        "live_kept": {
+          "description": "install\\builds\\<live> exists and verifies."
+        },
+        "live_supports_ab": {
+          "description": "The live build declares install-selection with 2 and tools-layout 4 or more."
+        },
+        "ui_recognised": {
+          "description": "No ui\\, or one by the U0 rule."
+        },
+        "no_unfinished": {
+          "description": "No unfinished operation but this one by its five identity checks."
+        },
+        "no_foreign_part": {
+          "description": "No part of another operation."
+        },
+        "config_readable": {
+          "description": "The root configuration reads; state_root is absolute and outside both slots."
+        },
+        "state_root_consistent": {
+          "description": "The state root three-way check."
+        },
+        "inventory_classified": {
+          "description": "Every root entry has its class."
+        },
+        "same_volume_plain": {
+          "description": "One volume, no reparse point."
+        },
+        "ui_build_kept": {
+          "description": "--ui-build is kept, verifies and declares install-selection with 2."
+        }
+      }
+    },
+    "convert_inventory_class": {
+      "description": "The class of a root entry in a conversion's inventory (design 5.1, 5.3). (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "program_live": {
+          "description": "The live programs, renamed aside (design class 1)."
+        },
+        "root_fixed": {
+          "description": "The root-fixed items, kept in place (class 2)."
+        },
+        "installer_own": {
+          "description": "The installer's own files, kept (class 3)."
+        },
+        "config_named": {
+          "description": "The configuration and the folders it names, untouched (class 4)."
+        },
+        "legacy": {
+          "description": "Legacy copies and records, untouched, with legacy_kind (class 5)."
+        },
+        "foreign": {
+          "description": "Logs and foreign entries, untouched (class 6)."
+        }
+      }
+    },
+    "convert_legacy_kind": {
+      "description": "The kind of a legacy entry (design 5.1). (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "legacy_program_copy": {
+          "description": "A program copy that verifies against its own manifests."
+        },
+        "legacy_program_file": {
+          "description": "A <f>.old-<ms> whose SHA-256 equals a kept or live file of its name."
+        },
+        "legacy_state_root": {
+          "description": "A state root that is not the configured one."
+        },
+        "legacy_config_backup": {
+          "description": "A backup of the root configuration."
+        },
+        "legacy_download": {
+          "description": "The old acsetup's download folder."
+        },
+        "legacy_record": {
+          "description": "An old record."
+        }
+      }
+    },
+    "convert_after_health": {
+      "description": "Whether the clean after the health confirmation deletes an inventory entry (design 5.3). (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "clean": {
+          "description": "Deleted by the clean."
+        },
+        "keep": {
+          "description": "Kept; leftovers lists it."
+        }
+      }
+    },
+    "convert_inventory_action": {
+      "description": "What a conversion does with an inventory entry (design 5.3). (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "rename_aside": {
+          "description": "Renamed <f>.old-<ms>."
+        },
+        "place_entry": {
+          "description": "A forwarder copy placed at its name."
+        },
+        "rename_aside_and_place_entry": {
+          "description": "Both."
+        },
+        "compare_keep": {
+          "description": "Compared, kept when equal."
+        },
+        "refresh": {
+          "description": "Refreshed as an entry."
+        },
+        "create": {
+          "description": "Created."
+        },
+        "rewrite_state": {
+          "description": "state.json renamed and v2 written."
+        },
+        "keep": {
+          "description": "Kept."
+        }
+      }
+    },
+    "convert_confirmation_reason": {
+      "description": "Why an inventory entry needs a person's confirmation (design 5.3). (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "u0_identity": {
+          "description": "The identity of an old program in ui\\."
+        },
+        "config_named_dir": {
+          "description": "A folder the configuration names."
+        },
+        "legacy_item": {
+          "description": "A legacy entry."
+        },
+        "foreign_item": {
+          "description": "A foreign entry."
+        },
+        "state_root_three_way": {
+          "description": "The state root three-way check."
+        }
+      }
+    },
+    "install_entry_variant": {
+      "description": "The variant of a fixed entry (stable-entry.md). (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "console": {
+          "description": "actingcommand-entry.exe under runtime\\."
+        },
+        "gui": {
+          "description": "actingcommand-entry-gui.exe under ui\\."
+        }
+      }
+    },
+    "entry_child_state": {
+      "description": "Whether the child of a graphical entry still ran when the entry exited (stable-entry.md). (Workflow #429 R-15b, since 0.12.35)",
+      "review": "pending",
+      "tokens": {
+        "running": {
+          "description": "Still running after the entry's 10 seconds."
+        },
+        "exited": {
+          "description": "Exited 0 within the 10 seconds."
         }
       }
     },
@@ -8334,6 +9329,7 @@
       "device"
     ],
     "entry_": [
+      "actingcommand-entry",
       "actingctl",
       "execution-kernel",
       "lab",
@@ -10424,6 +11420,7 @@
     "actinglab-architecture": "tools/actinglab-architecture",
     "outcome-guard": "tools/outcome-guard",
     "display-adapter": "crates/display-adapter",
-    "mcp-entry": "apps/mcp-entry"
+    "mcp-entry": "apps/mcp-entry",
+    "actingcommand-entry": "apps/actingcommand-entry"
   }
 }

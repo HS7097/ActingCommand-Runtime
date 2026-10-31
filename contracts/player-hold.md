@@ -330,11 +330,14 @@ release ([component-interfaces.md](component-interfaces.md), `ledger` 5).
    `control` is not checked. The check is at the top level because the global pause is a
    top-level member.
 
-**Two behaviour changes R-7a2 makes.** `deferral_code` puts the global pause first today; the
-order puts the instance pause first, so with both pauses the deferral and the admission refusal
-become `dispatch_paused_instance`. The fence enters the evaluation at position 1d
-(`dispatch_resource_fenced`, no wake) instead of being selected and refused at admission; the
-admission's check stays for intents evaluated before the fence, with that code. Readers that read
+**Two behaviour changes R-7a2 makes** (register §1.234, since 0.12.35). `deferral_code` put the
+global pause first before it (R-7a2 removes it); the order puts the instance pause first, so with
+both pauses the deferral and the admission refusal become `dispatch_paused_instance`. The fence
+enters the evaluation at position 1d (`dispatch_resource_fenced`, no wake) instead of being
+selected and refused at admission; the admission's check stays for intents evaluated before the
+fence, with that code. A candidate reaches position 1 only past its placement: on an instance
+whose device the host self-checks, the fence also withholds its policy availability (#403), so
+its candidates stop at placement with `instance_unavailable`, as before R-7a2. Readers that read
 not-run reasons treat the four control codes as one class by `instance_gate`, never by one code.
 
 **"The hold ended, automatic scheduling stays paused".**

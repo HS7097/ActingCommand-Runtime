@@ -77,7 +77,7 @@ v0.12.10 declares the interfaces `actingd-config` [5, 9], `install-selection` [1
 
 ![ActingCommand Runtime layering and ownership overview](docs/assets/readme/architecture-overview.en.png)
 
-`actingcommand-contract` is where the whole workspace converges: 26 workspace packages depend on it, it depends on no workspace package, and it uses only serde, serde_json and sha2. It defines the vocabulary of the protocol, device and engine boundaries, and contains no target logic.
+`actingcommand-contract` is where the whole workspace converges: 29 workspace packages depend on it, it depends on no workspace package, and it uses only serde, serde_json and sha2. It defines the vocabulary of the protocol, device and engine boundaries, and contains no target logic.
 
 `actingcommand-runtime-client` is the only typed IPC path available to clients. A client never constructs and never owns a production device backend, and closing a UI, CLI or MCP client does not stop the runtime.
 
@@ -97,7 +97,7 @@ The authoring side is removable: `crates/lab` has exactly one consumer, `apps/ac
 
 ![The complete lifecycle of one runtime request](docs/assets/readme/request-lifecycle.en.png)
 
-1. **Assemble** (`runtime-client`): the caller picks one of 69 typed `RuntimeOperation` variants (four of them, the upgrade-state and pack load / unload kinds, are answered `not_implemented`); the client mints a request_id and a correlation_id and writes the actor, source and submission time, forming an `actingcommand.runtime.request.v4` request, whose optional `detail` (`codes` or `full`) says how much of the receipt's outcome the client wants.
+1. **Assemble** (`runtime-client`): the caller picks one of 78 typed `RuntimeOperation` variants (twelve of them, the upgrade-state and pack load / unload kinds, the six player-workbench kinds and the two player-hold kinds, are answered `not_implemented`); the client mints a request_id and a correlation_id and writes the actor, source and submission time, forming an `actingcommand.runtime.request.v4` request, whose optional `detail` (`codes` or `full`) says how much of the receipt's outcome the client wants.
 2. **Discover** (`runtime-client`): the client reads `<state_root>/runtime-info.json` and requires its host to be a loopback address and pid/port/start time to be nonzero; after connecting over TCP it sends Health first, and if the owner epoch no longer matches the one seen at discovery the session is refused with `runtime_owner_epoch_changed`. It then binds the connection's channel (`cli`, `mcp`, `ui` or `lab`); the Runtime records the channel with every request and refuses nothing by it.
 3. **Frame** (`runtime-client`): a request goes out as a 4-byte big-endian length prefix plus JSON, with a 1 MiB default cap on both ends, and the receipt read deadline is loaded according to the operation category.
 4. **Accept** (`runtime-host`): the accept loop assigns each connection an increasing ConnectionId and serves it on its own named thread; the connection is wrapped in catch_unwind and, on exit, releases that connection's leases under either Disconnect or HostShutdown.
@@ -148,12 +148,13 @@ There are four workflows in total: three CI workflows and the on-demand `release
 
 ## Workspace members
 
-The workspace declares 32 members, resolver `3`, a workspace-level edition of 2024, all `publish = false`.
+The workspace declares 34 members, resolver `3`, a workspace-level edition of 2024, all `publish = false`.
 
-### apps (5)
+### apps (7)
 
 | Path | Package | Output | Responsibility |
 | --- | --- | --- | --- |
+| apps/actingcommand-entry | actingcommand-entry | lib | The outcome codes of an A/B install root's fixed entries (`contracts/stable-entry.md`); a library of its codes until the two entry programs are added |
 | apps/actingctl | actingcommand-actingctl | bins `actingctl`, `actingwatch` | Lean production CLI for correlation-scoped runtime flows, the MCP server (`mcp-serve`, `mcp-config`) and the watchdog; `actingwatch` is the windowless launcher the watchdog's scheduled task runs |
 | apps/actingd | actingcommand-actingd | bin `actingcommand-actingd` | Lean process adapter for the resident runtime |
 | apps/actinglab | actingcommand-actinglab | bin `actinglab` | Authoring and debugging CLI, 50 top-level dispatch arms, 139 commands |
