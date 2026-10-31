@@ -9,6 +9,82 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.33
+
+本版是 v0.12.32 之后合并的 2 个 PR：LAB-OBS-1、SS-2e。运行中会注意到的变化有两件，第一件要等调度恢复才看得到。
+一是接在维护任务后面的业务规则也按净收益评判（SS-2e）：调度停着（每台实例都暂停）的时候，运行上什么都不变。调度重新跑起来之后，
+一条业务规则如果从它沿链条往上走到链头，经过的链节（链头也算）全是维护规则，例如接在回主界面（`return_home`）后面的业务规则，
+就按它自己声明的 `produces` 和 `consumes` 评判：这两项写上之前，它和别的没写数值的业务规则一样是 `benefit_unknown`（`benefit_gap`
+是 `no_effects`），不派；数值都有、净收益不大于 0 的是 `policy_benefit_nonpositive`，也不派。在 v0.12.32 上，这样的规则每次维护任务
+成功后都不经评判就派出去，还排在评判过的业务候选前面。业务任务的后继照旧跟着那个业务任务走、不评判：`M → A → B`（`M` 是维护
+规则，`A`、`B` 是业务规则）里，`A` 自己评判，`B` 跟着 `A`。
+二是没认出页面的 Lab 观察不再留下 error 级的 `command.rejected`（LAB-OBS-1）：`ac_lab_observe`（`capture=true`）或
+`actinglab observe --capture` 的帧不匹配包里任何页面时，回答照旧是 `ok`、`state: no_match`，收尾的 `runtime.debug_observe` 改记 info 级的 `command.validated`，错误计数
+和诊断不再显示它。失败的 Lab 命令（observe、do、ensure、wait）在它的 `command.rejected` 上写明原因 `failure_code`，不再是空的
+`values`。v0.12.32 已在本版之前发布。
+
+配置：没有改。`actingd-config` 仍是 [5, 22]，`runtime-client` 仍是 [2, 3]（`min` 仍是 2），账本仍是 [3, 4]，`package` 仍是 [3, 5]，
+其他接口也不变；`actingd.defaults.json` 自 v0.12.32 没有改动，没有新键，在线可改的键也不变，程序事实 `config.subsystems` 也没有新行。
+
+- 没有新结果码：结果码目录仍是 3820 个码、1725 个位置，没有新定稿或退役的条目，所以本版的发布文件是空的。`command_rejected`
+  （待审）多声明一个可选值 `failure_code`（键表里已有，类型 `code`）；`policy_benefit_nonpositive` 只改了说明。
+- 账本没有新表、新索引、新事件类型或新形状，`ledger` 不升：`command.rejected` 从账本修订 3 起就可以带结果。
+- 目录和规则文件的格式不变：编排器和目录读取器都没改，SS-2e 只改评估时谁被评判。
+- Lab 调试事件（`RecordDebugEvent` 请求里的 `RuntimeDebugEvent`）多一个可选成员 `failure_code`，接口修订不升：这个请求只有同一构建的
+  actinglab 发，所以 actinglab 要和 Runtime 同版（见下面的配对）。
+
+升级时要知道的：
+
+- `command_rejected` 上的 `failure_code`（LAB-OBS-1）：Lab 调试命令 observe、do、ensure、wait 失败时记一条 error 级的
+  `command.rejected`，它的结果是 `command_rejected`，值 `failure_code` 是这次失败的码：observe 请求本身失败时是 Runtime 回答的码，
+  do、ensure、wait 失败时是回答的码（转述时目录里没有的拼写变成 `outcome_relay_unregistered`）。observe 遇到账本或材料的致命错误时
+  本身已是终态，照旧不追加收尾记录。`lab_run` 失败照旧记 `task.failed`，不带 `failure_code`。失败的命令事件必须带一个已登记的码，
+  别的事件都不能带：违反的，客户端发送前报 `runtime_debug_event_invalid`，Runtime 收到时以 `invalid_runtime_debug_event` 拒绝，都不
+  落记录，所以不会再有 `values` 为空的 `command.rejected`。
+- 观察的收尾（LAB-OBS-1）：观察成立时，不管页面状态是 `no_match`、`conflict` 还是 `partial`，`runtime.debug_observe` 都以
+  `completed` 收尾（记 `command.validated`），和 do、ensure、wait 一样；页面状态只在回答的 `state` 和观察自己的记录里。认出页面的
+  观察不变。
+- 谁被评判（SS-2e）：v0.12.32 不评判链头运行窗口里的任何链条后继；本版只在后继往上走到链头、经过的链节（每一节都在自己的窗口里，
+  链头也算）里至少有一条带 `benefit_judged` 标记的业务规则时才不评判。经过的全是维护规则（没有标记）的业务候选，和不在任何窗口里的
+  候选一样评判，原因、值和档内排序都是 SS-2b 的；它仍带着链头的 `priority` 和 `strategic_weight_milli`（SS-2），但在业务档里不再按
+  它们排。维护规则的后继、手动请求、维护档候选和没有标记的目录（逐字节不变）都照旧。资源侧要让这类规则派出去，就给它写上
+  `produces`、`consumes` 和所碰池的估值。没有新码、新值或新键。
+
+退回 v0.12.32 之前要做的事（按代码核对过）：
+
+- LAB-OBS-1：配置和状态文件都没动，不用先改什么，但 Runtime 包和 Tools 包要一起退回（actinglab 在 Tools 包里，MCP 的 Lab 工具跑的
+  是根下 `tools` 目录里的 actinglab）。v0.12.32 的 `RuntimeDebugEvent` 是 `deny_unknown_fields`，本版 actinglab 在失败命令的收尾上写的
+  `failure_code` 让它解不开整个请求，以 `runtime_protocol_invalid`（`runtime_request_decode_failed`）拒绝，不落记录。本版写下的记录
+  v0.12.32 读得了：带结果的 `command.rejected` 是账本修订 3 就有的形状（`rejected_with_outcome`），结果读回时码按原拼写、值按映射
+  保留，不查码也不查键（读回的结果不按发出的结果核），`failure_code` 也在它的键表里；没认出页面的观察留下的 `command.validated`
+  是已有的记录。退回后，没认出页面的观察又会留下一条没有原因的 error 级 `command.rejected`，失败命令的记录又不带原因。
+- SS-2e：不用做什么，按代码核过：没有新的账本、状态、目录、配置或线上形状，新被评判的候选给的原因（`benefit_unknown`、
+  `policy_benefit_nonpositive`）是 v0.12.32 自己的码。v0.12.32 的条件是「有标记、不在任何链头窗口里、不是手动请求」，退回后链头窗口
+  里的后继又全都不评判，接在维护规则后面的业务规则又会在每次维护成功后不经评判派出去（调度恢复后才会发生）。
+- v0.12.32 一节的退回条件（SS-2b 的标记和代、SS-5 和 SS-2c 的成员、WATCH-P 的监视）是退回 v0.12.31 的条件，从本版退回 v0.12.32
+  时不适用：本版没改编排器、目录格式和读取器（自 v0.12.32 起只改了评估器、Lab 调试事件和它的记录），本版启用和钉住的代、规则文件
+  里的 `benefit_judged`、`"pending"`、`on_unknown`、`maintenance` 都是 v0.12.32 自己写、自己认的，监视对暂停实例的做法两版一样。要再
+  往前退到 v0.12.31，照 v0.12.32 一节的退回条件全部做；本版的记录 v0.12.31 也读得了（它读结果的代码和 v0.12.32 相同，键表里也有
+  `failure_code`）。
+- 客户端和 Runtime 的配对（`runtime-client` 两边都是 [2, 3]；`apps/actingctl` 和 `crates/runtime-client` 自 v0.12.32 没改）：
+  - 本版的 actingctl 和 MCP 连 v0.12.32 的 Runtime：照常。没有新命令、新请求或新工具（MCP 工具仍是 40 个），也没有新码。
+  - v0.12.32 的 actingctl 和 MCP 连本版的 Runtime：照常，请求不变。本版没有新码，它内嵌的码目录认得本版发出的每个码；
+    `command_rejected` 上的 `failure_code` 照原样显示。
+  - actinglab 要和 Runtime 同版。本版的 actinglab 连 v0.12.32 的 Runtime：观察照常（成立的观察收尾不带 `failure_code`），但失败的
+    observe、do、ensure、wait 的收尾被拒（`runtime_protocol_invalid`），命令照样失败，回答里多一句收尾没写进账本，这次调试命令没有
+    终态记录。v0.12.32 的 actinglab 连本版的 Runtime：没认出页面（以及 `conflict`、`partial`）的观察仍发不带原因的失败收尾，被拒
+    （`invalid_runtime_debug_event`），旧 actinglab 把这次观察答成设备错误，尽管观察本身成立；失败的 do、ensure、wait 的收尾也被拒。
+
+运行上的变化：
+
+- 接在维护任务后面的业务规则也按净收益评判（SS-2e）：调度恢复后，没写数值的停在 `benefit_unknown`；业务任务的后继照旧跟着走。
+- 没认出页面的 Lab 观察记 `command.validated`（LAB-OBS-1）：不再留下 error 级的 `command.rejected`；失败的 Lab 命令写明 `failure_code`。
+
+本版合并的 PR：
+
+- #1458 LAB-OBS-1（#428）：帧不匹配任何页面的 `observe --capture` 以已完成（`command.validated`）收尾它的 `runtime.debug_observe`，不再记成没有原因的 `command.rejected`。失败的 Lab observe、do、ensure、wait 在它的 `command.rejected` 上写明原因 `failure_code`；不带原因的失败事件被拒收。
+- #1459 SS-2e（#386）：链头运行窗口里的业务任务，只有往上走到链头经过的链节里有业务任务时才免于净收益评判；只接在维护链节（例如 `return_home`）后面的业务任务按它自己的净收益评判。
+
 ## v0.12.32
 
 本版是 v0.12.31 之后合并的 6 个 PR：SS-2、WATCH-P、SS-5、LN-OFF-1、SS-2b、SS-2c。运行中会注意到的变化有三件，第一件会让业务任务
