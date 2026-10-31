@@ -1233,14 +1233,16 @@ its run starts, and each of its store taps is sent, only while this list names t
 | `host.config_overrides` | one per instruction value: `config_key`, `value_json`, `base_json`, `base_source` (`explicit` or `default`), `set_unix_ms`, `set_in_owner_epoch`, `request_id`; `channel` from U-2 on | at every `ConfigureSettings`, and at start when it held rows (tagged, `tag.workbench_patterns`) |
 
 `actingctl status --config` returns `config.subsystems`, `config.selection` when recorded and
-every `config.parameters.<section>` in key order. `check-config` reads only the files: its
+every `config.parameters.<section>` in key order, and (Workflow #429 R-4, since 0.12.36) the
+settings' version `config_version` read with them. `check-config` reads only the files: its
 report carries `config_selection` and names `instruction_values` in `not_checked`.
 
 ## `ConfigureSettings`
 
 A general instruction (Workflow #389: the three counters send it; no origin gate beyond the
-client sources). Request `{changes: [{key, value?}]}`: 1 to 64 changes, each key named once;
-a change without `value` (or `null`) returns the key to its file value. Malformed shape:
+client sources). Request `{changes: [{key, value?}], expected_version?}`: 1 to 64 changes, each
+key named once; a change without `value` (or `null`) returns the key to its file value;
+`expected_version` (Workflow #429 R-4, since 0.12.36) below. Malformed shape:
 `invalid_configure_settings`.
 
 All changes or none:
@@ -1266,6 +1268,45 @@ The receipt of a refusal in the table above, or of that failure, carries the out
 `runtime_code` `invalid_request`.
 Once it is recorded, a refused section record stops the Runtime; the next start restores the
 recorded values, so the ledger and the values in effect never part.
+
+**The settings' version and compare-and-swap** (Workflow #429 R-4, design `429-A-runtime.md` A.6
+rules 2, 3 and 7; [v012-register.md](v012-register.md) §1.239; since 0.12.36).
+
+- **The version.** One token of the configuration in effect: the first 63 bits (a non-negative
+  integer) of the SHA-256 of every key in effect in manifest order (its key, value, source and
+  `settable`) followed by the `host.config_overrides` rows of the instruction values in effect
+  (every field, the stamps included), each part length-prefixed (`EffectiveConfig::version`). Two
+  configurations have one token exactly when they hold the same values from the same sources over
+  the same rows: every committed change gives another token (its row's stamp at the least), and
+  a start that restores the same rows over the same file layer gives the token the previous start
+  ended with. It is opaque: a client compares two tokens for equality only, never orders them,
+  never computes with one and never relates one to a ledger sequence. No column is added:
+  `host.config_overrides` keeps its row shape.
+- **`expected_version`.** With it the changes apply only while the version is that one. The
+  Runtime compares it under the gate every commit of the settings holds, before any check of the
+  changes. Another version refuses the request, Denied `fact_observation_version_conflict` with
+  `fact_key` `host.config_overrides` and `current_version` the version now (with `operation`,
+  `runtime_code` `invalid_request` and `host_halted`), recorded as the command's
+  `command.rejected` and nothing else: no value, no record of `host.config_overrides` or of a
+  section, the version unchanged. A codes-mode receipt (the console's default) keeps
+  `current_version`, as it keeps `host_halted`. Without `expected_version` nothing is compared
+  and the last writer wins, as before 0.12.36.
+- **The receipt and the read points.** A Completed receipt carries `config_version`, the version
+  after the change, the next `expected_version`. The current version is read from
+  `RuntimeFactSnapshot`'s `config_version` (beside the snapshot, read with it under the same
+  gate, so the snapshot's `config.*` records are those of that version), which
+  `actingctl status --config` and MCP `ac_facts` (scope `config`) answer beside their records;
+  `actingctl config set|clear` prints the receipt's beside `settings` and `ac_config_set`
+  answers it. There is no `actingctl config get`: `status --config` is the CLI's read point.
+- **Failure and an uncertain result** (rule 3). A refusal changes nothing; a
+  `host.config_overrides` the ledger refuses changes nothing (`host_config_overrides_persist_failed`,
+  Failed). A client whose receipt was lost reads the current `config_version` and the values in
+  effect before it does anything else, and never sends the same write again unread.
+- **One key at a time** (rule 7). A commit changes only the keys it names: every other key keeps
+  its value in effect, its source and `settable`, and every other `host.config_overrides` row
+  stays as it was. The only keys that follow a changed one are those whose default is
+  `section:<that key>` (the merge rule above). The console sends one change per key the player
+  changed, a preset only its members, never the whole configuration.
 
 **Keys the file does not write** (Workflow #429 R-1, design `429-A-runtime.md` A.6 rule 4, since
 0.12.31). A key whose default is `none` has no value while the file does not write it, and no
@@ -1322,11 +1363,56 @@ that names `performance.presets` is refused by 0.12.30 at start and in `check-co
 member of the section), so the operator removes that member before rolling back; nothing else
 needs clearing.
 
+**Rollback** (Workflow #429 R-4, design A.6 rule 5; [v012-register.md](v012-register.md) §1.239;
+since 0.12.36). A row of a key the starting Runtime does not have in its key table (a later
+release's key) or may not set is dropped, `config_override_dropped`, named in `StartReport`'s
+`instructions_dropped`, and its next record of `host.config_overrides` no longer holds it; the
+other rows are restored and counted in `instructions_restored`, and the record is never refused.
+The console shows the keys of `instructions_dropped` as reset by the rollback. No dropped row is
+kept anywhere (no old-version compatibility, Alice 10-11). The version of the settings after such
+a start differs from the one before it, so a console's token from before is refused and the
+console reads the settings again.
+
 The restored values then pass the whole-section check of their sections with this start's file
 layer; a section that fails it drops every value restored into it (`config_override_dropped`).
 Each note is a `runtime.failed` record whose outcome is the code with `config_key`, its severity
 the code's category. A row not of the shape this build writes fails the start, and every later
 start until the ledger is repaired (`host_config_overrides_fact_invalid`).
+
+## Console tiers (`ui_tier`)
+
+Workflow #429 R-4 (design `429-A-runtime.md` A.6 rule 8; [v012-register.md](v012-register.md)
+§1.239; since 0.12.36). `actingcommand_runtime_config::ui_tier(key) -> UiTier` (`hidden`,
+`daily`, `advanced`) gives the console's tier of a key as `config.parameters` names it; the table
+is `UI_TIERS`, by key-table row, so a per-instance row stands for that member of every instance.
+A key the table does not list is `hidden`, a key the key table does not have included. The
+console reads the tiers through the crate it pins; no wire shape changes. `advanced` holds at
+most eight keys (`MAX_ADVANCED_KEYS`).
+
+| Key | Tier | Settable | Note |
+|---|---|---|---|
+| `performance.pacing.mode` | daily | yes | shown through the performance preset, not on its own |
+| `performance.pacing.max_concurrent_runs` | daily | yes | through the preset |
+| `performance.pacing.heavy_dispatch_limit.normal` | daily | yes | through the preset |
+| `scheduling.parallel.enabled` | daily | yes | through the preset |
+| `scheduling.blackout.host` | daily | yes | the host's quiet times |
+| `instance.<instance id>.scheduling.blackout` | daily | yes | the instance's own quiet times |
+| `instance.<instance id>.start_emulator` | daily | no (read once at assembly until it is made settable) | whether the daemon starts the instance's emulator |
+| `instance.<instance id>.idle.action` | daily | yes | what an idle instance does |
+| `mumu_root` | advanced | no | the MuMu root; the file changes it |
+| `frame_retention_evidence_max_age_days` | advanced | yes | the age of unconfirmed evidence frames |
+| `host.process_memory_priority` | advanced | no (applied before the ledger opens) | the file changes it at the next start |
+| `host.process_io_priority` | advanced | no (applied before the ledger opens) | the file changes it at the next start |
+| `lab_module_authoring` | advanced | no | shown read-only; `actingctl install` changes it |
+| `lab_module_debugging` | advanced | no | shown read-only; `actingctl install` changes it |
+
+Not in the table, because none is a key of the key table: the diagnostics export (a command),
+the vision device (the configuration file's `vision` section) and an instance's
+ADB path (its `instances[]` entry's `adb_path`), which actingd reads at assembly and reports no
+`config.parameters` row of. The second tier's other groups are not keys either: task switches
+and parameters, cultivation targets, updates, and the console's own language and font size.
+Start at log-on is the watchdog's scheduled task ([runtime-watchdog.md](runtime-watchdog.md)),
+not a key.
 
 ## Codes
 
@@ -1337,7 +1423,9 @@ Owner `runtime-config`: `config_key_unknown`, `config_key_not_settable`, `config
 so the code moved here; SR-1 emits it at start and in `check-config`) and `perf_config_invalid`
 (Workflow #385 P-c; domain `perf_`). Owner `runtime-host`:
 `host_config_overrides_fact_invalid`, `host_config_overrides_persist_failed`,
-`host_config_overrides_fact_clock_overflow`, `host_config_value_type_invalid`. Owner `contract`:
+`host_config_overrides_fact_clock_overflow`, `host_config_value_type_invalid`, and (Workflow
+#429 R-4, reused, since 0.12.36) the shared `fact_observation_version_conflict` with `fact_key`
+and `current_version` for a `ConfigureSettings` at another version. Owner `contract`:
 `invalid_configure_settings`. Vocabulary `config_value_problem` (source
 `crates/runtime-config/src/codes.rs`).
 Every one is ladder class `none` (the Runtime's own configuration, decision-table row 7).

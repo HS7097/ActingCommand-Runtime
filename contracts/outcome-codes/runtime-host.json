@@ -6783,14 +6783,16 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "fact_key": "optional",
+        "current_version": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports fact observation version conflict.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "The Runtime host refused a write made against another version of what it changes: a fact record other than the one it was based on, or (Workflow #429 R-4, since 0.12.36) a ConfigureSettings whose expected_version is not the settings' version now, fact_key host.config_overrides and current_version the version now, kept in codes mode. Nothing changed.",
+      "common_causes": "Another client changed the settings after this one read their version.",
+      "handling": "Read the values in effect again (status --config, the runtime fact snapshot), or take current_version from the refusal, and send the change again with that expected_version if it still applies; never retry the same request unchanged."
     },
     "fact_projection_source_missing": {
       "category": "error",

@@ -306,6 +306,14 @@ tests = [
 ]
 incident = ["#387"]
 
+# Workflow #429 R-4 (0.12.36; brief rd-1031/brief-r4.md; register §1.239; contracts/runtime-config.md, "ConfigureSettings"; contracts/runtime-interface.md, the command and tool tables), test 7, the counters' read points: on an in-process Runtime with a fixed clock, ac_config_set and then actingctl config set each answer the settings' version after their change, another each time, and MCP ac_facts scope config and actingctl status --config each answer that same config_version beside their records
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_429_r4::r4_t7_each_read_point_answers_the_version_the_last_receipt_carried",
+]
+incident = ["#429 R-4"]
+
 # actingctl, MCP and the watchdog speak outcomes: one result line per exit with its exit code by category, MCP errors {class, outcome}, watchdog report v2 and state.json v2 (Workflow #378 A5)
 [[gate]]
 key = "43"

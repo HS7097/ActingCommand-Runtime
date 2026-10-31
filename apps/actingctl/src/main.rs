@@ -418,12 +418,16 @@ fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError>
             ))
         }
         // Workflow #387 D1b: `config set|clear` (MCP `ac_config_set`); a refused change prints
-        // the Runtime's receipt beside its outcome and exits non-zero.
+        // the Runtime's receipt beside its outcome and exits non-zero. Workflow #429 R-4: the
+        // settings' version after the change beside them, when the Runtime answers one.
         Command::ConfigureSettings { changes } => match client.configure_settings(changes, None) {
-            Ok(configured) => Ok(Done::new(
-                members([member("settings", &configured.settings)?]),
-                Outcome::new(success),
-            )),
+            Ok(configured) => {
+                let mut line = members([member("settings", &configured.settings)?]);
+                if let Some(version) = configured.config_version {
+                    line.insert("config_version".to_owned(), Value::from(version));
+                }
+                Ok(Done::new(line, Outcome::new(success)))
+            }
             Err(error) => refused(error),
         },
         // A refused policy prints the Runtime's receipt beside its outcome and exits non-zero.

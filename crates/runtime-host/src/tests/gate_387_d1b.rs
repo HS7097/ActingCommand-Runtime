@@ -17,13 +17,21 @@
 //! Workflow #429 R-2 (A.1 契约 2; register §1.220; since 0.12.31), test 4: applying a preset is one
 //! `ConfigureSettings` of its members, every key at once and one `host.config_overrides` record,
 //! or none of them.
+//!
+//! Workflow #429 R-4 (A.6 rules 2, 3 and 5; register §1.239; since 0.12.36), tests 1 to 3, 6 and
+//! 7: `ConfigureSettings.expected_version` is a compare-and-swap of the settings' version, the
+//! receipt and the snapshot answer it, and a key the start does not know is dropped into
+//! `StartReport.instructions_dropped`. The receipts of D1-M3, D1-M7, R-1 test 1 and R-1 test 2
+//! carry that version from R-4 on (before, none).
 
 use super::*;
+use actingcommand_contract::outcome::Detail;
 use actingcommand_contract::{
     CONFIG_OVERRIDES_FACT_KEY, ConfigParameter, ConfigParameterSource, ConfigSettingChange,
     ConfiguredSetting, FactScalar, RuntimeConfigManifest, RuntimeOperationKind, RuntimePayload,
     config_parameters_fact_key,
 };
+use actingcommand_runtime_config::frame_retention::EVIDENCE_MAX_AGE_DAYS;
 use actingcommand_runtime_config::performance::pacing::{
     HEAVY_DISPATCH_LIMIT_PAUSED, MAX_CONCURRENT_RUNS,
 };
@@ -126,6 +134,21 @@ fn fact_rows(client: &mut TestClient, key: &str) -> Option<Vec<BTreeMap<String, 
             ContractFactValue::RecordList(rows) => rows.clone(),
             other => panic!("{key} is a record list: {other:?}"),
         })
+}
+
+/// Workflow #429 R-4: the settings' version the Runtime's fact snapshot answers now (its
+/// `config_version`, beside the snapshot).
+fn snapshot_version(client: &mut TestClient) -> u64 {
+    let request = client.request(RuntimeOperation::RuntimeFactSnapshot);
+    let receipt = client.send(&request);
+    let Some(RuntimeResult::RuntimeFactSnapshot {
+        config_version: Some(version),
+        ..
+    }) = receipt.result()
+    else {
+        panic!("expected the runtime fact snapshot with its config_version: {receipt:?}");
+    };
+    *version
 }
 
 /// One key's `config.parameters.<section>` row: `(value, source, settable)`.
@@ -253,7 +276,8 @@ fn d1_m3_a_settable_key_changes_at_once_with_its_command_and_two_value_records()
                 value: FactScalar::Integer(120),
                 source: ConfigParameterSource::Instruction,
             }],
-            config_version: None,
+            // Workflow #429 R-4: the settings' version after the change, the snapshot's now.
+            config_version: Some(snapshot_version(&mut client)),
         })
     );
     // The value in effect: what the ladder reads now, and what `config.parameters` reports.
@@ -668,7 +692,8 @@ fn d1_m7_clear_returns_a_key_to_its_file_value_and_source() {
                     source: ConfigParameterSource::Default,
                 },
             ],
-            config_version: None,
+            // Workflow #429 R-4: the settings' version after the change, the snapshot's now.
+            config_version: Some(snapshot_version(&mut client)),
         })
     );
     assert_eq!(
@@ -873,7 +898,8 @@ fn r1_t1_an_instance_without_a_blackout_list_in_the_file_gets_one_online_that_su
                 value: FactScalar::String(canonical_json(&list)),
                 source: ConfigParameterSource::Instruction,
             }],
-            config_version: None,
+            // Workflow #429 R-4: the settings' version after the change, the snapshot's now.
+            config_version: Some(snapshot_version(&mut client)),
         })
     );
     let in_effect = (
@@ -962,7 +988,8 @@ fn r1_t2_clearing_it_returns_the_instance_to_no_blackout_list() {
                 value: FactScalar::String("null".to_owned()),
                 source: ConfigParameterSource::Default,
             }],
-            config_version: None,
+            // Workflow #429 R-4: the settings' version after the change, the snapshot's now.
+            config_version: Some(snapshot_version(&mut client)),
         })
     );
     assert!(!has_row(&mut client, &blackout));
@@ -1189,6 +1216,356 @@ fn r2_t4_one_member_that_cannot_be_applied_applies_none() {
     assert!(recorded_facts(&mut client, CONFIG_OVERRIDES_FACT_KEY).is_empty());
     assert_eq!(r2_in_effect(&mut client), before);
     assert_eq!(r2_current(&mut client), "adaptive");
+    drop(client);
+    host.close().expect("close host");
+}
+
+// ---- Workflow #429 R-4 (A.6 rules 2, 3 and 5; register §1.239; since 0.12.36): the settings'
+// version, `ConfigureSettings` as a compare-and-swap of it, and the keys a rollback drops. Tests 4
+// and 5 are `runtime-config`'s `r4_tests`, the CLI and MCP read points `actingctl`'s
+// `gate_429_r4`. Every host here runs on the fixed clock of `start_at`.
+
+/// `ConfigureSettings` of `changes`, at `expected_version` when one is given.
+fn configure_at(
+    client: &mut TestClient,
+    changes: Vec<ConfigSettingChange>,
+    expected_version: Option<u64>,
+) -> (RuntimeRequest, RuntimeReceipt) {
+    let request = client.request(RuntimeOperation::ConfigureSettings {
+        changes,
+        expected_version,
+    });
+    let receipt = client.send(&request);
+    (request, receipt)
+}
+
+/// The settings' version a completed `ConfigureSettings` receipt carries.
+fn receipt_version(receipt: &RuntimeReceipt) -> u64 {
+    let Some(RuntimeResult::SettingsConfigured {
+        config_version: Some(version),
+        ..
+    }) = receipt.result()
+    else {
+        panic!("expected the settings configured with their config_version: {receipt:?}");
+    };
+    *version
+}
+
+// R-4 test 1: a change at the settings' current version applies, as one without the member does:
+// the value is in effect from `instruction`, and the receipt carries the version after the change,
+// another one, which is the next `expected_version`: a change at it applies too.
+#[test]
+fn r4_t1_the_current_expected_version_applies_and_the_receipt_carries_the_new_version() {
+    let root = TempDir::new().expect("tempdir");
+    let instance = instance_id();
+    let id = instance_text(instance);
+    let cooldown = instance_key(&id, STUCK_RECOVERY_COOLDOWN_SECS);
+    let host = start_at(&root, instance, r1_file(&id, None), R1_START_MS);
+    let mut client = TestClient::connect(&host);
+    let before = snapshot_version(&mut client);
+
+    let (_, receipt) = configure_at(&mut client, vec![set(&cooldown, json!(120))], Some(before));
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{receipt:?}"
+    );
+    let Some(RuntimeResult::SettingsConfigured { settings, .. }) = receipt.result() else {
+        panic!("the settings configured: {receipt:?}");
+    };
+    assert_eq!(
+        *settings,
+        vec![ConfiguredSetting {
+            key: cooldown.clone(),
+            value: FactScalar::Integer(120),
+            source: ConfigParameterSource::Instruction,
+        }]
+    );
+    let after = receipt_version(&receipt);
+    assert_ne!(after, before, "a committed change has another version");
+    assert_eq!(
+        reported(&mut client, &cooldown),
+        (FactScalar::Integer(120), "instruction".to_owned(), true)
+    );
+    assert_eq!(
+        host.stuck_recovery_for_test(instance)
+            .expect("stuck recovery")
+            .cooldown_secs,
+        120
+    );
+
+    let (_, receipt) = configure_at(&mut client, vec![set(&cooldown, json!(90))], Some(after));
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{receipt:?}"
+    );
+    assert_eq!(
+        reported(&mut client, &cooldown),
+        (FactScalar::Integer(90), "instruction".to_owned(), true)
+    );
+    drop(client);
+    host.close().expect("close host");
+}
+
+// R-4 test 2: a change at another version is refused, Denied
+// `fact_observation_version_conflict` with `fact_key` `host.config_overrides` and the
+// `current_version` now, which a codes-mode receipt (the console's default) keeps too, as it keeps
+// `host_halted`. The refusal is the command's `command.rejected`, and nothing changes: the value
+// in effect, `config.parameters`, `host.config_overrides` (no record) and the version.
+#[test]
+fn r4_t2_another_expected_version_is_refused_as_a_version_conflict_and_changes_nothing() {
+    let root = TempDir::new().expect("tempdir");
+    let instance = instance_id();
+    let id = instance_text(instance);
+    let cooldown = instance_key(&id, STUCK_RECOVERY_COOLDOWN_SECS);
+    let host = start_at(&root, instance, r1_file(&id, None), R1_START_MS);
+    let mut client = TestClient::connect(&host);
+    let current = snapshot_version(&mut client);
+    // Any other token: the version is compared for equality only.
+    let other = current ^ 1;
+    let reported_before = reported(&mut client, &cooldown);
+    let rows_before = fact_rows(&mut client, CONFIG_OVERRIDES_FACT_KEY);
+    let records_before = recorded_facts(&mut client, CONFIG_OVERRIDES_FACT_KEY).len();
+
+    for detail in [Detail::Full, Detail::Codes] {
+        let request = client
+            .request(RuntimeOperation::ConfigureSettings {
+                changes: vec![set(&cooldown, json!(120))],
+                expected_version: Some(other),
+            })
+            .with_detail(detail);
+        let receipt = client.send(&request);
+        assert_eq!(
+            receipt.state(),
+            RuntimeReceiptState::Denied,
+            "{detail:?} {receipt:?}"
+        );
+        assert_eq!(receipt.outcome_envelope().detail(), detail);
+        let outcome = receipt.outcome();
+        assert_eq!(
+            outcome.code().as_str(),
+            "fact_observation_version_conflict",
+            "{detail:?}"
+        );
+        assert_eq!(
+            outcome.value("current_version"),
+            Some(&json!(current)),
+            "{detail:?}: the refusal names the version now"
+        );
+        assert_eq!(
+            outcome.value("operation"),
+            Some(&json!("configure_settings")),
+            "{detail:?}"
+        );
+        assert_eq!(
+            outcome.value("runtime_code"),
+            Some(&json!("invalid_request")),
+            "{detail:?}"
+        );
+        if detail == Detail::Full {
+            assert_eq!(
+                outcome.value("fact_key"),
+                Some(&json!(CONFIG_OVERRIDES_FACT_KEY))
+            );
+        }
+        assert!(receipt.result().is_none(), "{detail:?}");
+        let commands = command_records(projected_events(
+            &mut client,
+            EventQuery {
+                correlation_id: Some(request.correlation_id()),
+                ..EventQuery::default()
+            },
+        ))
+        .into_iter()
+        .map(|event| event.event_type)
+        .collect::<Vec<_>>();
+        assert_eq!(
+            commands,
+            vec![EventType::CommandReceived, EventType::CommandRejected],
+            "{detail:?}"
+        );
+    }
+
+    assert_eq!(snapshot_version(&mut client), current);
+    assert_eq!(reported(&mut client, &cooldown), reported_before);
+    assert_eq!(
+        fact_rows(&mut client, CONFIG_OVERRIDES_FACT_KEY),
+        rows_before
+    );
+    assert_eq!(
+        recorded_facts(&mut client, CONFIG_OVERRIDES_FACT_KEY).len(),
+        records_before
+    );
+    assert_eq!(
+        host.stuck_recovery_for_test(instance)
+            .expect("stuck recovery")
+            .cooldown_secs,
+        600
+    );
+    drop(client);
+    host.close().expect("close host");
+}
+
+// R-4 test 3: without `expected_version` nothing is compared, as before R-4: after another client
+// changed the key at the version both read, this client's change still applies, the last writer
+// wins, and its receipt carries the version after it.
+#[test]
+fn r4_t3_a_change_without_expected_version_applies_as_before_the_last_writer_wins() {
+    let root = TempDir::new().expect("tempdir");
+    let instance = instance_id();
+    let id = instance_text(instance);
+    let cooldown = instance_key(&id, STUCK_RECOVERY_COOLDOWN_SECS);
+    let host = start_at(&root, instance, r1_file(&id, None), R1_START_MS);
+    let mut client = TestClient::connect(&host);
+    let mut other = TestClient::connect(&host);
+    let read = snapshot_version(&mut client);
+
+    let (_, receipt) = configure_at(&mut other, vec![set(&cooldown, json!(120))], Some(read));
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{receipt:?}"
+    );
+    let (_, receipt) = configure(&mut client, vec![set(&cooldown, json!(90))]);
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{receipt:?}"
+    );
+    assert_eq!(
+        reported(&mut client, &cooldown),
+        (FactScalar::Integer(90), "instruction".to_owned(), true)
+    );
+    assert_eq!(receipt_version(&receipt), snapshot_version(&mut client));
+    drop(other);
+    drop(client);
+    host.close().expect("close host");
+}
+
+/// The fixed sample of R-4 test 6: a `host.config_overrides` value as a later Runtime records it
+/// (`FactValue`, rows in manifest order, fields in key order), with one row of a key this build
+/// knows (`frame_retention_evidence_max_age_days`, 30 over its default 15) and one of a key no
+/// row of this build's key table has (`neutral_later_release.switch`).
+const LATER_RELEASE_ROWS: &str = concat!(
+    r#"{"type":"record_list","value":["#,
+    r#"{"base_json":{"type":"string","value":"15"},"#,
+    r#""base_source":{"type":"string","value":"default"},"#,
+    r#""config_key":{"type":"string","value":"frame_retention_evidence_max_age_days"},"#,
+    r#""request_id":{"type":"string","value":"request_later"},"#,
+    r#""set_in_owner_epoch":{"type":"string","value":"epoch_later"},"#,
+    r#""set_unix_ms":{"type":"timestamp_ms","value":1700000000000},"#,
+    r#""value_json":{"type":"string","value":"30"}},"#,
+    r#"{"base_json":{"type":"string","value":"false"},"#,
+    r#""base_source":{"type":"string","value":"default"},"#,
+    r#""config_key":{"type":"string","value":"neutral_later_release.switch"},"#,
+    r#""request_id":{"type":"string","value":"request_later"},"#,
+    r#""set_in_owner_epoch":{"type":"string","value":"epoch_later"},"#,
+    r#""set_unix_ms":{"type":"timestamp_ms","value":1700000000000},"#,
+    r#""value_json":{"type":"string","value":"true"}}"#,
+    r#"]}"#,
+);
+
+/// The Runtime's report of its own start.
+fn start_report(client: &mut TestClient) -> actingcommand_contract::RuntimeStartReport {
+    let request = client.request(RuntimeOperation::StartReport);
+    let receipt = client.send(&request);
+    let Some(RuntimeResult::StartReport { report }) = receipt.result() else {
+        panic!("expected the start report: {receipt:?}");
+    };
+    (**report).clone()
+}
+
+// R-4 test 6 (rollback, A.6 rule 5): the start of a Runtime that does not know a key a later one
+// set restores the record by its own key table. The unknown key is dropped
+// (`config_override_dropped`), named in `StartReport.instructions_dropped` and gone from the
+// recorded `host.config_overrides`; the known key is restored and counted; the record is never
+// refused.
+#[test]
+fn r4_t6_a_key_this_runtime_does_not_know_is_dropped_at_start_into_instructions_dropped() {
+    let root = TempDir::new().expect("tempdir");
+    let instance = instance_id();
+    let id = instance_text(instance);
+    // The exact key first, then the instance's, as the start-up manifest orders them.
+    let file = manifest(vec![
+        parameter(
+            EVIDENCE_MAX_AGE_DAYS,
+            FactScalar::Integer(15),
+            ConfigParameterSource::Default,
+        ),
+        parameter(
+            &instance_key(&id, STUCK_RECOVERY_COOLDOWN_SECS),
+            FactScalar::Integer(600),
+            ConfigParameterSource::Default,
+        ),
+    ]);
+    let ContractFactValue::RecordList(rows) =
+        serde_json::from_str::<ContractFactValue>(LATER_RELEASE_ROWS).expect("the sample decodes")
+    else {
+        panic!("the sample is a record list");
+    };
+    let host = start_at(&root, instance, file.clone(), R1_START_MS);
+    host.record_config_overrides_for_test(rows)
+        .expect("record the later Runtime's rows");
+    host.close().expect("close host");
+
+    let host = start_at(&root, instance, file, R1_START_MS + 60_000);
+    let mut client = TestClient::connect(&host);
+    let report = start_report(&mut client);
+    assert_eq!(
+        report.instructions_dropped,
+        vec!["neutral_later_release.switch".to_owned()],
+        "{report:?}"
+    );
+    assert_eq!(report.instructions_restored, 1, "{report:?}");
+    assert_eq!(
+        report.instructions_base_changed,
+        Vec::<String>::new(),
+        "{report:?}"
+    );
+    assert_eq!(
+        configuration_notes(&mut client),
+        vec![(
+            ConfigCode::ConfigOverrideDropped.as_str().to_owned(),
+            "neutral_later_release.switch".to_owned()
+        )]
+    );
+    assert_eq!(
+        reported(&mut client, EVIDENCE_MAX_AGE_DAYS),
+        (FactScalar::Integer(30), "instruction".to_owned(), true)
+    );
+    assert_eq!(
+        fact_rows(&mut client, CONFIG_OVERRIDES_FACT_KEY)
+            .expect("overrides")
+            .iter()
+            .map(|row| row.get(OVERRIDE_CONFIG_KEY).cloned())
+            .collect::<Vec<_>>(),
+        vec![Some(FactScalar::String(EVIDENCE_MAX_AGE_DAYS.to_owned()))]
+    );
+    drop(client);
+    host.close().expect("close host");
+}
+
+// R-4 test 7, the host's read point: the runtime fact snapshot answers the version the last
+// receipt carried, beside the snapshot, never in it; after a restart over the same file it still
+// does, the start having restored the same rows.
+#[test]
+fn r4_t7_the_snapshot_answers_the_last_receipt_s_version_also_after_a_restart() {
+    let root = TempDir::new().expect("tempdir");
+    let instance = instance_id();
+    let id = instance_text(instance);
+    let cooldown = instance_key(&id, STUCK_RECOVERY_COOLDOWN_SECS);
+    let host = start_at(&root, instance, r1_file(&id, None), R1_START_MS);
+    let mut client = TestClient::connect(&host);
+    let (_, receipt) = configure(&mut client, vec![set(&cooldown, json!(120))]);
+    let last = receipt_version(&receipt);
+    assert_eq!(snapshot_version(&mut client), last);
+    drop(client);
+    host.close().expect("close host");
+
+    let host = start_at(&root, instance, r1_file(&id, None), R1_START_MS + 60_000);
+    let mut client = TestClient::connect(&host);
+    assert_eq!(snapshot_version(&mut client), last);
     drop(client);
     host.close().expect("close host");
 }

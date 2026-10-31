@@ -138,12 +138,19 @@ impl HostShared {
         Ok(())
     }
 
-    /// `ConfigureSettings` (Workflow #387 D1b, model v1.2 §5.6, §5.7).
+    /// `ConfigureSettings` (Workflow #387 D1b, model v1.2 §5.6, §5.7). Workflow #429 R-4 (A.6
+    /// rule 2; register §1.239; since 0.12.36): with `expected_version` the changes apply only
+    /// while the settings' version ([`EffectiveConfig::version`]) is that one, compared under the
+    /// gate every commit holds; another version refuses the request (Denied,
+    /// `fact_observation_version_conflict` with `fact_key` `host.config_overrides` and the
+    /// `current_version`) and changes nothing. Without it the last writer wins, as before. A
+    /// completed receipt carries the version after the change.
     pub(super) fn configure_settings(
         &self,
         original: &RuntimeRequest,
         validated: &ValidatedRuntimeRequest<'_>,
         changes: &[ConfigSettingChange],
+        expected_version: Option<u64>,
     ) -> Result<OperationSuccess, RequestFailure> {
         let links = self.append_scoped_client_command_intent(
             original,
@@ -158,6 +165,40 @@ impl HostShared {
             ConfigHostLocation::ConfigureSettings,
         )?;
         let current = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?.clone();
+        if let Some(expected) = expected_version {
+            let current_version = current.version();
+            if expected != current_version {
+                let error = RuntimeHostError::request(
+                    HostCode::FactObservationVersionConflict,
+                    ConfigHostLocation::ConfigureSettings,
+                    RuntimeErrorCode::InvalidRequest,
+                )
+                .with_outcome_values(|outcome| {
+                    outcome
+                        .fact_key(CONFIG_OVERRIDES_FACT_KEY)
+                        .current_version(current_version)
+                });
+                let rejected = self.append_event(
+                    EventSeverity::Error,
+                    EventSource::Runtime,
+                    OriginModule::Runtime,
+                    EventActor::Runtime,
+                    links,
+                    CommandPayloadDraft::rejected_with_outcome(
+                        EventAction::RuntimeAction,
+                        DiagnosticCode::CommandRejected,
+                        EffectDisposition::NotPerformed,
+                        error.outcome(),
+                        AuditInput::new(),
+                    ),
+                )?;
+                return Err(RequestFailure::request(
+                    error,
+                    RuntimeReceiptState::Denied,
+                    Some(terminal(&rejected)),
+                ));
+            }
+        }
         let stamp = InstructionStamp {
             set_unix_ms: self
                 .runtime_clock_sample()
@@ -266,6 +307,7 @@ impl HostShared {
         let AppliedSettings {
             config, settings, ..
         } = applied;
+        let config_version = config.version();
         *lock(&self.runtime_config, ConfigHostLocation::ConfigureSettings)? = config;
         // Workflow #387 D1c (§5.8): the next trigger, admission and renewal read the new values;
         // a ladder already admitted keeps its snapshot (§4.7).
@@ -277,13 +319,41 @@ impl HostShared {
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: Some(terminal(&event)),
-            // Workflow #429 R-0: `config_version` is R-4's; 0.12.30 answers none.
+            // Workflow #429 R-4: the settings' version after the change.
             result: RuntimeResult::SettingsConfigured {
                 settings,
-                config_version: None,
+                config_version: Some(config_version),
             },
             failure_outcome: None,
         })
+    }
+
+    /// Workflow #429 R-4 (register §1.239): the runtime fact snapshot with the settings' version
+    /// now, both read under the gate every commit of the settings holds, so the snapshot's
+    /// `config.*` records are those of that version.
+    pub(super) fn runtime_fact_snapshot_versioned(
+        &self,
+    ) -> RuntimeHostResult<(RuntimeFactSnapshot, u64)> {
+        let _gate = lock(
+            &self.config_override_gate,
+            ConfigHostLocation::ReadRuntimeConfig,
+        )?;
+        let version = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?.version();
+        Ok((self.runtime_fact_snapshot()?, version))
+    }
+
+    /// Workflow #429 R-4 (rollback test): records `rows` as `host.config_overrides`, as a later
+    /// Runtime recorded them; the configuration in effect does not change.
+    #[cfg(test)]
+    pub(super) fn record_config_overrides_for_test(
+        &self,
+        rows: Vec<BTreeMap<String, FactScalar>>,
+    ) -> RuntimeHostResult<()> {
+        let _gate = lock(
+            &self.config_override_gate,
+            ConfigHostLocation::PersistConfigOverrides,
+        )?;
+        self.record_config_fact(overrides_record(rows))
     }
 
     /// The stuck-recovery settings the ladder reads for one instance now: the values in effect

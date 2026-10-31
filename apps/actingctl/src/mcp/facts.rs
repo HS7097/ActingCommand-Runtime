@@ -16,10 +16,17 @@ use actingcommand_contract::outcome::Outcome;
 use serde_json::{Map, Value, json};
 
 const ARGUMENTS: [&str; 3] = ["scope", "instance", "key_prefix"];
-/// The members an exported answer keeps beside `export`.
-const EXPORTED_HEADER: [&str; 4] = ["scope", "read_at_unix_ms", "records_total", "records_kept"];
+/// The members an exported answer keeps beside `export` (Workflow #429 R-4: the config read's
+/// `config_version` too).
+const EXPORTED_HEADER: [&str; 5] = [
+    "scope",
+    "read_at_unix_ms",
+    "records_total",
+    "records_kept",
+    "config_version",
+];
 
-pub(super) const DESCRIPTION: &str = "Reads facts, as actingctl facts and status --config print them; nothing is recorded in the ledger. scope program: the Runtime's own fact store as snapshot (its records in snapshot.records). scope config: only its config.* records as records (config.subsystems, config.selection when recorded, every config.parameters.<section> in key order); config_facts_missing when the Runtime recorded none. scope instance: one instance's facts; instance (alias, instance_id or ADB port, resolved with one status read) is required, and refused with the other scopes. Its snapshot is {instance_alias, server_id, game_id, records}: the instance's own records and those of the server and game its configuration binds it to (server_id and game_id are absent when the configuration binds none). Each record carries scope, key, content, observed_at_unix_ms and expires_at_unix_ms. key_prefix (scope program or instance) keeps only records whose key starts with it. Every answer is {scope, read_at_unix_ms, snapshot or records, records_total (records read), records_kept (records answered)}; read_at_unix_ms is the Runtime's clock at the read, to compare each record's observed_at_unix_ms and expires_at_unix_ms with. An answer larger than the output budget is written whole to %TEMP%\\actingcommand-mcp\\materials\\<sha256>.json and answered as {scope, read_at_unix_ms, records_total, records_kept, export {path, sha256, size}} with the warning answer_exported; narrow it with key_prefix.";
+pub(super) const DESCRIPTION: &str = "Reads facts, as actingctl facts and status --config print them; nothing is recorded in the ledger. scope program: the Runtime's own fact store as snapshot (its records in snapshot.records). scope config: only its config.* records as records (config.subsystems, config.selection when recorded, every config.parameters.<section> in key order) and config_version, the settings' version read with them (an opaque token compared only for equality, the expected_version of the next settings change); config_facts_missing when the Runtime recorded none. scope instance: one instance's facts; instance (alias, instance_id or ADB port, resolved with one status read) is required, and refused with the other scopes. Its snapshot is {instance_alias, server_id, game_id, records}: the instance's own records and those of the server and game its configuration binds it to (server_id and game_id are absent when the configuration binds none). Each record carries scope, key, content, observed_at_unix_ms and expires_at_unix_ms. key_prefix (scope program or instance) keeps only records whose key starts with it. Every answer is {scope, read_at_unix_ms, snapshot or records, records_total (records read), records_kept (records answered)}, with config_version for scope config; read_at_unix_ms is the Runtime's clock at the read, to compare each record's observed_at_unix_ms and expires_at_unix_ms with. An answer larger than the output budget is written whole to %TEMP%\\actingcommand-mcp\\materials\\<sha256>.json and answered as {scope, read_at_unix_ms, records_total, records_kept, config_version (scope config), export {path, sha256, size}} with the warning answer_exported; narrow it with key_prefix.";
 
 pub(super) fn run(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
     let arguments = Arguments::new(arguments, &ARGUMENTS)?;
@@ -111,6 +118,7 @@ pub(super) fn result() -> Value {
             "records": {"type": "array", "items": {"type": "object"}},
             "records_total": {"type": "integer"},
             "records_kept": {"type": "integer"},
+            "config_version": {"type": "integer"},
             "export": {
                 "type": "object",
                 "properties": {
