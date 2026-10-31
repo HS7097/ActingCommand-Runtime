@@ -2126,16 +2126,17 @@ enum NemuIpcCommand {
 }
 
 impl NemuIpcCommand {
-    /// #402 C1: the command's name in a timing point.
+    /// #402 C1: the command's name in a timing point. The `bench.` prefix keeps these labels
+    /// apart from registered outcome names (outcome-guard G5); nothing reads them back.
     fn bench_name(&self) -> &'static str {
         match self {
-            Self::Probe(_) => "probe",
-            Self::ObserveGeometry { .. } => "observe_geometry",
-            Self::Capture(_) => "capture",
-            Self::InputTap { .. } => "input_tap",
-            Self::InputSegmented { .. } => "input_segmented",
-            Self::InvalidateDisplay(_) => "invalidate_display",
-            Self::Shutdown { .. } => "shutdown",
+            Self::Probe(_) => "bench.probe",
+            Self::ObserveGeometry { .. } => "bench.observe_geometry",
+            Self::Capture(_) => "bench.capture",
+            Self::InputTap { .. } => "bench.input_tap",
+            Self::InputSegmented { .. } => "bench.input_segmented",
+            Self::InvalidateDisplay(_) => "bench.invalidate_display",
+            Self::Shutdown { .. } => "bench.shutdown",
         }
     }
 }

@@ -60,6 +60,15 @@ fn options(arguments: &[String]) -> Result<BTreeMap<String, String>, String> {
     Ok(map)
 }
 
+/// The device side of one run, real or fake: what `run` gets from it.
+struct Backends {
+    backends: Arc<dyn BackendFactory>,
+    device_check: Arc<dyn DeviceSideCheck>,
+    materials: Arc<dyn MaterialFactory>,
+    label: &'static str,
+    apk: Option<Arc<dyn ApkConnector>>,
+}
+
 fn run_command(arguments: &[String]) -> i32 {
     let refused = RunResult::RefusedStart.exit_code();
     let Ok(options) = options(arguments) else {
@@ -87,13 +96,13 @@ fn run_command(arguments: &[String]) -> i32 {
         .filter(|instance| instance.apk)
         .map(|instance| instance.name.clone())
         .collect();
-    let (backends, device_check, materials, backend_label, apk): (
-        Arc<dyn BackendFactory>,
-        Arc<dyn DeviceSideCheck>,
-        Arc<dyn MaterialFactory>,
-        &str,
-        Option<Arc<dyn ApkConnector>>,
-    ) = if fake {
+    let Backends {
+        backends,
+        device_check,
+        materials,
+        label: backend_label,
+        apk,
+    } = if fake {
         let mut script = FakeScript::default();
         // The fake APK of the first APK instance draws its timecode into the fake frames.
         let apks: BTreeMap<String, Arc<FakeApk>> = apk_instances
@@ -145,13 +154,13 @@ fn run_command(arguments: &[String]) -> i32 {
         });
         let apk: Option<Arc<dyn ApkConnector>> =
             (!apks.is_empty()).then(|| Arc::new(FakeApks { apks }) as Arc<dyn ApkConnector>);
-        (
-            Arc::new(Arc::clone(&device)),
-            Arc::new(device),
-            Arc::new(materials),
-            "fake",
+        Backends {
+            backends: Arc::new(Arc::clone(&device)),
+            device_check: Arc::new(device),
+            materials: Arc::new(materials),
+            label: "fake",
             apk,
-        )
+        }
     } else {
         let sink = TimingSink::install();
         let device = RealDevice::new(&plan, Arc::clone(&clock), sink);
@@ -169,15 +178,15 @@ fn run_command(arguments: &[String]) -> i32 {
                 timeout: std::time::Duration::from_secs(5),
             }) as Arc<dyn ApkConnector>
         });
-        (
-            Arc::new(Arc::clone(&device)),
-            Arc::new(device),
-            Arc::new(actingcommand_capture_bench::bmodel::PipelineMaterials {
+        Backends {
+            backends: Arc::new(Arc::clone(&device)),
+            device_check: Arc::new(device),
+            materials: Arc::new(actingcommand_capture_bench::bmodel::PipelineMaterials {
                 root: run_dir.join("bmodel"),
             }),
-            "real",
+            label: "real",
             apk,
-        )
+        }
     };
     // §5.5: the bounded per-process GPU counters, in the job object.
     let mut typeperf = None;
@@ -280,7 +289,7 @@ fn fake_child_command(arguments: &[String]) -> i32 {
     let Ok(options) = options(arguments) else {
         return 2;
     };
-    if options.get("scid").is_none() {
+    if !options.contains_key("scid") {
         return 2;
     }
     let seconds = options
