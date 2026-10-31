@@ -9,6 +9,135 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.36
+
+本版是 v0.12.35 之后合并的 5 个 PR：114-A、R-4、R-0b、R-11、FLAKY-LNWS1。先说部署：账本的声明从 [3, 4] 改为 [3, 5]（114-A），
+这一步是单向的。部署（`actingctl install update plan`、`update apply`）要带 `--accept-ledger-one-way`；装上本版以后，安装工具拒绝退回
+v0.12.35 或更早的版本，部署自己的自动回退也一样被拒（见下面的退回）。本版一条修订 5 的记录都不写，单向的只是声明。
+运行中会注意到的变化有三件：
+一是 `actingctl status` 显示每台实例现在在做什么（R-0b）：实例行的 `activity`（`{kind, request_id?, package_id?, since_unix_ms}`，
+`kind` 是 `policy_run`、`direct_run`、`host_run`、`reconnect`、`selfcheck`、`emulator_control`、`ladder` 之一），什么都不做的实例没有这个
+成员。MCP 这一版还看不到它：`ac_overview` 的实例行是逐个成员拼出来的，R-0b 没有给它加 `activity`，也没有别的工具原样转发 Status。
+二是设置的读写都带 `config_version`（R-4）：`actingctl config set|clear` 和 `ac_config_set` 在 `settings` 旁边答改完后的版本，
+`actingctl status --config` 和 `ac_facts`（scope `config`）在记录旁边答现在的版本。带着过期 `expected_version` 的 `ConfigureSettings`
+以 `fact_observation_version_conflict` 拒绝（`fact_key` 是 `host.config_overrides`，`current_version` 是现在的版本），什么都不改，只记一条
+`command.rejected`。本版的 actingctl 和 MCP 都不发 `expected_version`，所以照旧是后写者赢，只有发它的控制台才会碰到这种拒绝。
+三是包列表多了几个成员（R-11）：`actingctl packs` 和 `ac_packs` 在组合模式下给每个组合出的安装行加 `task_ids` 和 `irreversible`，游戏根
+带 `ui.json` 时游戏行和安装行再加 `ui`、`display`；现在没有资源仓的标准包带 `ui.json`。
+调度停着（每台实例都暂停）的时候，运行上别的都不变：114-A 不写记录，FLAKY-LNWS1 只改测试。v0.12.35 已在本版之前发布。
+
+配置：`ledger` 从 [3, 4] 改为 [3, 5]（114-A）；`runtime-client` 从 [2, 4] 改为 [3, 4]（R-0b，`min` 升到 3）；`actingd-config` 仍是
+[5, 23]，`package` 仍是 [3, 5]，`install-selection` 仍是 [1, 1]，`install-control` 仍是 [0, 1]，`runtime-outcomes` 仍是 [1, 1]。
+
+- 没有新配置键：配置键表和 `actingd.defaults.json` 自 v0.12.35 都没改，在线可改的键不变，程序事实 `config.parameters`、
+  `config.subsystems` 都没有新行。R-4 的 `ui_tier`（`actingcommand-runtime-config`，契约的「Console tiers」一节）只给已有的键分档：
+  daily 8 个（性能预设的 `performance.pacing.mode`、`performance.pacing.max_concurrent_runs`、
+  `performance.pacing.heavy_dispatch_limit.normal`、`scheduling.parallel.enabled`，`scheduling.blackout.host`，每实例的
+  `scheduling.blackout`、`start_emulator`、`idle.action`），advanced 6 个（`mumu_root`、`frame_retention_evidence_max_age_days`、
+  `host.process_memory_priority`、`host.process_io_priority`、`lab_module_authoring`、`lab_module_debugging`，上限 8 个），其余都是
+  `hidden`。分档不改哪个键能不能在线改（`start_emulator` 在 R-3 之前仍不能在线改）。
+- `ledger` 5 是 4 加上记录类型 `policy.not_run_changed`（policy 族，动作 `policy.not_run`，info）和它的全部形状：公共头、变动集、基线
+  分片、预算标记、退役、`prior` 和 `closes`，账本自己的 Status 和 ScheduleExplanation 副本（四个控制成员、`effective`、`PlayerHoldEnd`、
+  行的 `state` 和 `eligibility`、汇总、派单状态）和它们的闭合词表，以及两条索引前缀 `not_run/<alias>/<task>`、
+  `not_run_stream/<alias>`。只有形状，本版的 Runtime 一条都不写（写侧是 114-B）：SQLite 格式 2、`actingcommand.event.v3`、表、索引和
+  每个视图的类型表都不变，没有迁移，也不用新的状态根，修订 3、4 的账本照常读。读侧只查形状、闭合词表、不靠码的自洽和码的拼写，不查码
+  有没有登记；以后加码不升修订，往闭合词表里加词、增删成员才升。
+- `runtime-client` 3、4 的形状都没变，本版第一次填修订 3 的回答成员：Status 实例行的 `activity`（R-0b），`SettingsConfigured` 和
+  `RuntimeFactSnapshot` 的 `config_version`（R-4）。这些成员所在的形状都拒收不认识的成员，修订 2 的读者解不开，所以 `min` 升到 3。
+  请求 v4、回执 v2 的 schema 字符串不变；玩家持有的两种请求照旧答 `not_implemented`，Status 照旧不带持有的成员。
+- 结果码：没有新码。新位置 1 个（`begin_instance_activity`，R-0b：登记一项活动失败时用，和每个中毒的宿主锁一样致命）；新值键 1 个
+  （`current_version`，integer，R-4）；`fact_observation_version_conflict` 多两个可选值 `fact_key`、`current_version`，说明、常见原因和
+  处理都写了；`package_binding_unreadable`、`standard_pack_root_invalid` 只改说明。已有词表加词：`standard_pack_problem` 的
+  `ui_out_of_limits`、`ui_duplicate`、`ui_group_unknown`、`ui_parameter_undeclared`（R-11），`event_type` 的 `policy.not_run_changed`
+  和 `event_action` 的 `policy.not_run`（114-A）；`bundle_missing` 的说明多了 `ui.json`。结果码目录仍是 3869 个码，位置从 1732 个变成
+  1733 个；没有新定稿或退役的条目，所以本版的发布文件是空的。
+- 只在内存里或本机读的：R-4 的设置版本是内存里算的令牌（生效中的每个键和生效中的 `host.config_overrides` 行，做 SHA-256 取前 63 位，
+  只比相等），不落库，`host.config_overrides` 的行形状不变；R-0b 的 `activity` 只在内存里，重启后为空；R-11 只在本机读包根。状态文件的
+  形状也不变。
+- 包根多一个可选文件 `ui.json`（`actingcommand.ui.v1`，R-11）：只查形状、上限和引用（文件 256 KiB、组 64、包 1024 等，见
+  `package-reference.md` 的上限表），每处违规是一条带 JSON 指针的 `standard_pack_root_invalid` 警告，不坏游戏根，也不改行。只有
+  `actingctl packs` 和 `ac_packs` 读它，Runtime 的根读取器、check-config 和 `actinglab standard-pack check` 都不读；`package` 不升。
+- 程序文件：没有新程序、新 workspace 成员，Runtime 包和 Tools 包的文件清单和 v0.12.35 一样。
+
+升级时要知道的：
+
+- 账本单向（114-A，按安装工具的代码核过）：`update plan`、`update apply` 不带 `--accept-ledger-one-way` 时，`ledger` 的 `one_way` 边
+  不过（R\*.max 5 大于 Rp.max 4），以 `interface_edge` 拒绝，什么都不改；带上以后 `previous_max_in_next`（4 在 [3, 5] 里）和 `one_way`
+  都过，计划的 `notice.rollback_window_bounded` 是 true，操作的 `acknowledged` 记下 `accept_ledger_one_way`。部署前还要确认在用的控制台
+  声明的 `ledger` 上限到 5（UI 的 v0.12.0、v0.12.1 声明 [3, 5]）：单一位置根上 `actingctl install` 还不核控制台的边，UI 的边要到
+  R-15c、R-15d 才进计划。
+- 账本校验：现行和目标的 `ledger` 范围不同，所以 apply 多一步 `ledger_verify`：`--stop` 停下 Runtime 之后、换任何文件之前，用本版的
+  `actingcommand-actingd.exe ledger-maintenance verify --config <root>\actingd.config.json` 冷读整份账本并核链。它要在
+  `ledger-maintenance` 自己的 120 秒期限里读完，外面还有 `install.child.ledger_verify_timeout_ms`（默认 1800000）。不过时以
+  `ledger_verify_failed` 结束，什么文件都没换，现行仍是 v0.12.35，但 Runtime 已经停了，hold 的暂停也还在：要自己把 Runtime 起来
+  （`install start`），再撤掉 hold（`install release-hold`）。到期限还在跑的，操作以 `install_operation_interrupted` 留着，等它结束后
+  `install resume`（再核一遍）或 `install undo`。停机时间要多算这一次整份账本的读取。
+- 没有自动回退：部署的新 Runtime 起来以后检查不过时，部署自己的自动回退先按回退算一次计划，计划的 `ledger` 边不过（见下面的退回），
+  所以以 `rollback_gate_failed`（`rollback_gate_parts` 是 `interface_edges`）结束，新构建和 hold 都留着。出了问题只能往前修。
+- 别的部署不改文件（按代码核过）：配置修订不变（本版仍读 5 到 23），默认值文件没变，部署计划的默认值对比没有行，没有账本或状态的迁移。
+  安装命令的代码自 v0.12.35 没改（只加了一个配对测试），所以 v0.12.35 和本版的安装工具判的边一样，只是自己的声明不同（见下面的配对）。
+  本版作为安装工具，不再接受 `runtime-client` `max` 是 2 的现行构建（`installer_meets_previous`），也就是只能从 0.12.30 或更新的版本
+  升级上来；生产是 0.12.35，不受影响。
+
+退回 v0.12.35（按安装工具的代码核过）：
+
+- 安装工具拒绝退回。本版声明 `ledger` [3, 5]，v0.12.35 声明 [3, 4]。`rollback plan`、`rollback apply` 的 `ledger` 边
+  `previous_max_in_next` 要求现行构建的 Rp.max 落在目标的 R\* 里：5 不在 [3, 4] 里，这条边不过，两条命令都在算回退门之前就以
+  `interface_edge` 拒绝，什么都不改。`--accept-ledger-one-way` 只放行升级方向的 `one_way` 边，管不了这一条。这只看两边的声明，和账本里
+  有没有修订 5 的记录无关；v0.12.34 及更早的版本声明的 `ledger` 上限都是 4，一样被拒。
+- 同一条边也挡住部署的自动回退（上面的 `rollback_gate_failed`），以及做完的这次部署之后又起过 Runtime 时的 `install undo`（同样是
+  `interface_edge`）。不经这条边的只有两种 `install undo`：撤销没做完的操作；撤销做完的那次操作，而它结束之后没有再起过 Runtime（看
+  owner 记录的启动时刻是否晚于操作的结束，组合部署自己在操作里起的那个 Runtime 不算）。本版不写修订 5 的记录，所以这样换回去的
+  v0.12.35 读得了账本，但这绕过了单向的声明：部署做完以后，不要绕过安装命令停下 Runtime 再 `install undo` 这次部署。
+- 114-B 以后：安装工具的拒绝不变，它只看声明。变的只是绕过安装工具（手工放回旧程序）的情形：114-B 写出第一条修订 5 的记录以后，
+  v0.12.35 及更早的 Runtime 解不出它（`EventType` 没有兜底，`corrupt_ledger_record`）：这样的记录在最新的
+  `ledger_observer.open_verify_tail_records` 条里时启动失败，含它的在线或离线页整页失败。在那之前账本里没有修订 5 的记录，手工放回的
+  v0.12.35 读得了它，但手工放回不在保证内（测试阶段不做旧版兼容）。
+- 如果没有这道边，各片要做的（只作记录）：114-A 什么都没写，不用做什么。R-4 的版本令牌只在内存里：v0.12.35 不答 `config_version`，对
+  `expected_version` 答 `not_implemented`，控制台按修订规则 2 不带它再发；`host.config_overrides` 的行照常恢复（本版没有新键，不会有行
+  落进 `instructions_dropped`）。R-0b 的 `activity` 只在内存里：v0.12.35 不答它，它声明的 [2, 4] 仍和 [3, 4] 的控制台配得上。R-11 只在
+  本机读：行里的新成员消失，`ui.json` 又被忽略。FLAKY-LNWS1 只改测试。
+- v0.12.35 一节的退回条件（SS-2d 的 `realization` 和代、R-7a、R-7a2、R-15b 没做完的 UI 暂存）是退回 v0.12.34 的条件；本版连 v0.12.35
+  都退不回去，它们不适用。
+- 客户端和 Runtime 的配对（`runtime-client` 本版 [3, 4]、v0.12.35 [2, 4]；`apps/actingctl` 自 v0.12.35 只改了设置读写处的
+  `config_version` 和 `packs`、`ac_packs` 的行，MCP 工具仍是 40 个）：
+  - v0.12.35 的安装工具装本版：照常，带 `--accept-ledger-one-way`。它的声明 I 是 `runtime-client` [2, 4]，和 Rp [2, 4]、R\* [3, 4]
+    都有交集（`installer_meets_previous`、`installer_meets_next`），`runtime-outcomes` 1 在它的 [1, 1] 里，本版没有它不认识的配置键
+    （`installer_knows_keys`）；账本的两条边和本版的安装工具一样（见上面）。从本版的构建目录跑本版的安装工具（I 是 [3, 4]）结果相同。
+  - 本版的 actingctl 和 MCP 连 v0.12.35 的 Runtime（部署切换的几秒里，或 MCP 前端还没换子进程时）：照常。v0.12.35 不答
+    `config_version`，读写处就不显示它；Status 里没有 `activity`；请求都不变（本版不发 `expected_version`）。`packs` 的新成员在本机读出，
+    和 Runtime 无关。
+  - v0.12.35 的 actingctl 和 MCP 连本版的 Runtime：照常。它的契约 crate 从 0.12.30 起就有 `activity` 和两个 `config_version` 的形状，读得了
+    本版的回答（`actingctl status` 照样打出 `activity`，`config set` 的回答不显示版本）；它内嵌的码目录没有新位置
+    `begin_instance_activity` 和新值键 `current_version`，可它们只出现在致命故障和发了 `expected_version` 的拒绝里。
+  - 修订 2 的客户端（v0.12.29 及更早的 actingctl、MCP 和 actinglab，或声明 `max` 2 的控制台）连本版：每个完成的设置写入的回执、每个
+    RuntimeFactSnapshot 的回答（都带 `config_version`）和带 `activity` 的 Status 它都解不开（`RuntimeResult`、`RuntimeInstanceStatus`
+    拒收不认识的成员），报 `runtime_receipt_decode_failed`；按声明，没有实例在做事时的 Status 和别的请求照常。安装时：本版作为安装工具
+    不接受这样的现行构建，v0.12.29 及更早的安装工具（I 的 `runtime-client` [2, 2]）也装不了本版（`installer_meets_next`），声明 `max` 2
+    的控制台过不了 `ui_meets_next`。生产里没有这样的客户端。
+  - actinglab 和 Runtime 混版两个方向都照常（actinglab 本版没改，调试事件没变）。资源工具要留意：`actinglab standard-pack check` 还不查
+    `ui.json`，资源侧可以用本版的 `actingctl packs` 查。
+  - 控制台（UI）：UI 的 v0.12.0、v0.12.1 声明 `actingd-config` [5, 23]、`ledger` [3, 5]、`runtime-client` [3, 4]、`runtime-outcomes`
+    [1, 1]，和本版每条 UI 边都配得上（三方共同的 `actingd-config` 5 到 23；Rp.max 4、R\*.max 5 都在 [3, 5] 里；[3, 4] 和 [3, 4] 有交集；
+    `runtime-outcomes` 1 在 [1, 1] 里），和 v0.12.35 也配得上；它读得了 `activity` 和 `config_version`。按修订规则 2，从本版起控制台写设置时
+    总带 `expected_version`，过期的被拒、什么都不改，它从拒绝里的 `current_version` 拿到现在的版本再发。
+
+运行上的变化：
+
+- 账本声明 [3, 5]（114-A）：部署要带 `--accept-ledger-one-way`，计划多一步 `ledger_verify`，装上后退不回 v0.12.35；本版不写修订 5 的记录。
+- 实例现在在做什么（R-0b）：`actingctl status` 的实例行带 `activity`（七种，只在内存里），MCP 这一版还不显示；`runtime-client` 声明 [3, 4]。
+- 设置的版本（R-4）：设置的读写处都答 `config_version`；带过期 `expected_version` 的写入被拒、什么都不改；`ui_tier` 给控制台分档。
+- 包列表（R-11）：组合出的安装行多 `task_ids`、`irreversible`，游戏根带 `ui.json` 时多 `ui`、`display`；只在本机读，不升修订。
+- 测试（FLAKY-LNWS1）：账本语句记录器按线程各记各的，`ln_ws_t1` 偶发的空记录修好了；生产代码不变。
+
+本版合并的 PR：
+
+- #1469 114-A（#386）：「为什么没跑」的记录 `policy.not_run_changed` 的形状、账本自己的副本、两条索引前缀和全部词表，读侧先行；声明 `ledger` [3, 5]，单向。本版不写任何记录，写侧在 114-B。
+- #1475 R-4（#429）：`ConfigureSettings.expected_version` 是比较交换（不一致时 `fact_observation_version_conflict` 带 `current_version`，codes 模式也保留）。回执和各读取处带 `config_version`。一次提交只改它点名的键。`ui_tier` 定下 daily 8 项、advanced 6 项。
+- #1474 R-0b（#429）：Status 的 `activity` 七种一次填全，只在内存里。`runtime-client` 声明 [3, 4]；作为安装工具，不再接受 `runtime-client` `max` 是 2 的现行构建。
+- #1473 R-11（#429）：包根可选的 `ui.json`（只查形状、上限和引用）；`actingctl packs` 和 `ac_packs` 离线给出 `ui`、`display`、`irreversible` 和安装行的 `task_ids`，不升修订。
+- #1476 FLAKY-LNWS1（#422）：只改测试设施：账本的语句记录器按线程各留一份；生产代码不变。
+
 ## v0.12.35
 
 本版是 v0.12.34 之后合并的 4 个 PR：SS-2d、R-7a、R-7a2、R-15b。调度停着（每台实例都暂停）的时候，运行上只有一处变化：一台实例

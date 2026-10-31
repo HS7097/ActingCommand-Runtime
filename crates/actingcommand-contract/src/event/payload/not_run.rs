@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Workflow 114-A (register `contracts/v012-register.md` §1.236, since 0.12.35; ledger revision
+//! Workflow 114-A (register `contracts/v012-register.md` §1.236, since 0.12.36; ledger revision
 //! 5; design `rd-1031/design-114-reasons-v5.md` §2 with its freeze addendum): the record
 //! `policy.not_run_changed`, the change-only history of why a candidate did not run, reader
 //! first. This module holds every shape of the record, the ledger's own copies of the

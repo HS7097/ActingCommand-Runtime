@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Workflow 114-A (register `contracts/v012-register.md` §1.236, since 0.12.35): the eleven
+//! Workflow 114-A (register `contracts/v012-register.md` §1.236, since 0.12.36): the eleven
 //! closed vocabularies of the read `ScheduleHistory` (design `rd-1031/design-114-reasons-v5.md`
 //! §7.2 and §11.3, with its freeze addendum). They are frozen here, before the read: 114-D adds
 //! the request, the answer, the segments, the cursor, the constants and the codes with

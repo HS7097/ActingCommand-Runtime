@@ -1276,7 +1276,7 @@ of `decision_candidate_not_selected`, and `decision_record` counts the candidate
 list by `why` in its value `omitted_why`. Before A26, `why` was only in the developer detail,
 which is not persisted.
 
-**The change-only history** (Workflow 114-A, since 0.12.35; [`v012-register.md`](../v012-register.md)
+**The change-only history** (Workflow 114-A, since 0.12.36; [`v012-register.md`](../v012-register.md)
 §1.236; ledger revision 5; Alice's 114, method 2). The record `policy.not_run_changed`
 ([`ledger-observer.md`](../ledger-observer.md) §11.8) will keep, per instance, only what changed
 between evaluated rounds of this table: a change set of the rows whose change key changed, the
