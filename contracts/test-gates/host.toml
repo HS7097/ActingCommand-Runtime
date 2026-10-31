@@ -2745,6 +2745,14 @@ tests = [
 ]
 incident = ["#421 IDLE-WG"]
 
+# SS-2d (Alice's ruling 127, 2026-10-31; ACM-PRICE addendum 2.1 §7.3 and §7.6 test 17; rd-1031 brief-ss2d; contracts/scheduling/README.md, "Within tolerance"; register §1.235 SS2d-5; since 0.12.35): the idle plan counts no decision within tolerance (benefit_within_tolerance among its reasons, deferred or released and held later) as due or as a wake of its own, while SS-2b's not-positive decision keeps its own wake beside it and a released decision that was selected is due
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_ss2d::ss2d_t17_a_decision_within_tolerance_is_neither_due_nor_a_wake",
+]
+incident = ["#424 SS-2d"]
+
 # #421 S2-IF (v0.12.21; brief rd-1028/brief-s2-instr-fix.md; production 10-28 10:11: S2 rolled a good update back because StartReport listed three instructions kept over a changed default as dropped): through the host, StartReport names an instruction kept over a default that changed in instructions_base_changed, counts it restored and never lists it in instructions_dropped, its value still in effect (T-1), and again on the rollback's start with the default changed back (T-4); an instruction whose key is gone (T-2) or that the file superseded, an explicit value changed or a default now named (T-3), is listed in instructions_dropped and not counted restored
 [[gate]]
 coverage = "Y"

@@ -310,7 +310,7 @@ tests = [
     "actingcommand-policy::lib::tests::gate_ss2::ss2_t6_without_ties_the_decisions_are_those_of_before",
 ]
 incident = ["#386 SS-2"]
-# SS-2b (Alice's ruling 104 point 3 and ruling 116, 2026-10-30; rd-1029 brief-116-112-114 SS-2b tests 1 to 8; contracts/scheduling/README.md, "Net benefit within a tier"; register §1.225; since 0.12.32): judged candidates of one tier rank by net benefit per expected millisecond, a higher benefit beating a higher handwritten priority; a known benefit at or below 0 is policy_benefit_nonpositive and an unknown input (no declaration, a pending entry or valuation, a missing valuation, an unknown or expired reading) benefit_unknown, neither dispatched and never the sum of a known part; maintenance-role tasks, manual requests and chain successors in their head's window are not judged and rank as before; a catalog without a mark decides as before; consumption costs its weight, a regenerating pool's discounted between the reserve line and the capacity; 350 expected milli count as 0.35; the pending markers validate in V2 and bad shapes are refused with named codes
+# SS-2b (Alice's ruling 104 point 3 and ruling 116, 2026-10-30; rd-1029 brief-116-112-114 SS-2b tests 1 to 8; contracts/scheduling/README.md, "Net benefit within a tier"; register §1.225; since 0.12.32): judged candidates of one tier rank by net benefit per expected millisecond, a higher benefit beating a higher handwritten priority; a known benefit at or below 0 is policy_benefit_nonpositive (SS-2d, register §1.235: one exactly 0 within its rounding bound is benefit_within_tolerance, still not dispatched) and an unknown input (no declaration, a pending entry or valuation, a missing valuation, an unknown or expired reading) benefit_unknown, neither dispatched and never the sum of a known part; maintenance-role tasks, manual requests and chain successors in their head's window are not judged and rank as before; a catalog without a mark decides as before; consumption costs its weight, a regenerating pool's discounted between the reserve line and the capacity; 350 expected milli count as 0.35; the pending markers validate in V2 and bad shapes are refused with named codes
 [[gate]]
 coverage = "Y"
 tests = [
@@ -356,6 +356,31 @@ tests = [
     "actingcommand-policy::lib::tests::gate_ss2g::ss2g_t7_forward_projection_stops_at_an_expected_consumption",
 ]
 incident = ["#424 SS-2g"]
+# SS-2d (Alice's ruling 127, 2026-10-31, the review's version; ACM-PRICE addendum 2.1 §7.6 tests 1 to 16 and 18 to 20; rd-1031 brief-ss2d; contracts/scheduling/README.md, "Within tolerance"; contracts/standard-pack-schedule.md, "The realization mark"; register §1.235; since 0.12.35): a judged candidate whose exact net benefit S is within ε = Σ_produces [R/(2000Q) + n(2W+1)/(4000Q)] + Σ_consumes σ[C/(2000Q) + m(2W+1)/(4000Q)] is benefit_within_tolerance {benefit_milli ⌊S⌋, tolerance_milli ⌈ε⌉, zero_tier}, neither dispatched as positive (S = +1, ε = 2, unmarked) nor policy_benefit_nonpositive, the band closed at its bound (S = −2 in, −2.001 out with ε exactly 2); outside it the gate is as before (S = 3 dispatched, −3 not positive, B = 0 above ε not positive); a marked candidate with a known B, a produced pool weighed above 0 and no failed latest run is released, dispatched when alone, after a positive candidate of its instance and of another instance on the shared run limit, still held by the reserve gate and after a successful run without a new reading by policy_no_progress; otherwise deferred no_downstream_value, latest_failed or unmarked (the 10/2/10 example: B = 8 runs first, the marked realization in idle time, the unmarked one never); unknown stays benefit_unknown; a goal gap lifts it out of the band; two consumed pools add exactly; the cost formula is unchanged; ε carries the production cross term (9/4000 for 2 milli at W 2, not 1/500) and an expected consumption's term (26 milli at W 2000: 4053/4000); the compiler refuses the mark without benefit_judged, a consumes or produces entry, a reserve or a fact reading of a consumed pool, and on a cycle (realization_cycle), V1 names it unknown_field; the composer writes it from the rule member realization, counts it, and refuses it on a maintenance-role or declared maintenance rule, of another value and written as the task member; a catalog with nothing in the band decides byte for byte as before
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_ss2d::ss2d_t1_the_zero_band_holds_an_unmarked_candidate",
+    "actingcommand-policy::lib::tests::gate_ss2d::ss2d_t2_outside_the_band_the_gate_is_unchanged",
+    "actingcommand-policy::lib::tests::gate_ss2d::ss2d_t3_a_marked_candidate_within_tolerance_is_released",
+    "actingcommand-policy::lib::tests::gate_ss2d::ss2d_t4_the_band_is_closed_at_its_bound",
+    "actingcommand-policy::lib::tests::gate_ss2d::ss2d_t5_a_positive_candidate_goes_before_the_zero_tier",
+    "actingcommand-policy::lib::tests::gate_ss2d::ss2d_t6_the_zero_tier_takes_no_shared_run_slot_before_a_positive_candidate",
+    "actingcommand-policy::lib::tests::gate_ss2d::ss2d_t7_the_reserve_gate_still_holds_a_released_candidate",
+    "actingcommand-policy::lib::tests::gate_ss2d::ss2d_t8_a_candidate_whose_produce_is_worth_nothing_is_not_released",
+    "actingcommand-policy::lib::tests::gate_ss2d::ss2d_t9_a_failed_latest_run_is_not_released",
+    "actingcommand-policy::lib::tests::gate_ss2d::ss2d_t10_an_unknown_value_is_never_the_zero_tier",
+    "actingcommand-policy::lib::tests::gate_ss2d::ss2d_t11_a_goal_gap_lifts_the_candidate_out_of_the_band",
+    "actingcommand-policy::lib::tests::gate_ss2d::ss2d_t12_two_consumed_pools_add_their_terms_exactly",
+    "actingcommand-policy::lib::tests::gate_ss2d::ss2d_t13_a_marked_realization_runs_in_idle_time_and_an_unmarked_one_never",
+    "actingcommand-policy::lib::tests::gate_ss2d::ss2d_t14_the_compiler_holds_the_mark_to_its_conditions",
+    "actingcommand-policy::lib::tests::gate_ss2d::ss2d_t15_the_cost_of_a_pool_is_as_before",
+    "actingcommand-policy::lib::tests::gate_ss2d::ss2d_t16_a_released_run_without_progress_waits_for_a_new_reading",
+    "actingcommand-policy::lib::tests::gate_ss2d::ss2d_t18_a_catalog_with_nothing_in_the_band_decides_as_before",
+    "actingcommand-policy::lib::tests::gate_ss2d::ss2d_t19_an_expected_production_carries_its_cross_term",
+    "actingcommand-policy::lib::tests::gate_ss2d::ss2d_t20_an_expected_consumption_enters_the_bound",
+]
+incident = ["#424 SS-2d"]
 
 # The intent pins freshness, limits, catalog hash and ledger position
 [[gate]]

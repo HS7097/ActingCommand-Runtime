@@ -2298,6 +2298,49 @@
       "description": "Scheduling decision reason (SS-2b, Alice's rulings 104 point 3 and 116; contracts/scheduling/README.md \"Net benefit within a tier\"): a judged candidate's net benefit is unknown, so it is not dispatched; unknown is never 0 and the known part is never added up. benefit_gap says why: the task declares no produces or consumes entry, an entry's amount or a pool valuation it touches is the pending marker or missing (pool_id), or the cost of a regenerating pool it consumes needs a reading that is unknown or expired (pool_id, and fact_key with unknown_reason when the pool reads a fact; the fact refresh is asked for that reading).",
       "common_causes": "The resource side has not written the task's produces and consumes, or the pools' valuation, yet (Alice's ruling 116: business dispatch waits until values exist); or a pool reading has expired.",
       "handling": "Write the task's produces and consumes and each touched pool's valuation in the game's schedule.json; actinglab standard-pack check reports how many judged rules are complete, pending and undeclared. A reading is refreshed by the fact refresh."
+    },
+    "benefit_within_tolerance": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "benefit_milli": "required",
+        "tolerance_milli": "required",
+        "zero_tier": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "Scheduling decision reason (SS-2d, Alice's ruling 127; contracts/scheduling/README.md \"Net benefit within a tier\", \"Within tolerance\"): a judged candidate's exact net benefit S (before the floor) is within its rounding bound ε, |S| ≤ ε, so its sign is decided by the rounding of the exported weights and the expected quantities and is not trusted: it is neither positive nor policy_benefit_nonpositive. benefit_milli is ⌊S⌋, tolerance_milli ⌈ε⌉. zero_tier released: its task is marked benefit_realization (the model verified a realization or conversion with a real downstream use), its B is known, a pool it produces is weighed above 0 on its instance and its latest run there did not fail; it takes part in the allocation after every unjudged and every positive judged candidate of the business tier, by affinity, the tie-break and the hash, and every later gate (the reserve gate, the shared run limits, pauses and holds) still applies; the reason stays on its decision when it is dispatched. Otherwise it is deferred: unmarked, no_downstream_value or latest_failed. The idle plan counts no such decision as due or as a wake of its own.",
+      "common_causes": "The task's run converts value at the margin of the modelled steady state (its value is 0 at the exported prices), or the pools' valuation scale is too coarse for its quantities.",
+      "handling": "None when the model gives the task a value of 0: a marked realization runs when its instance has nothing of positive benefit, an unmarked one waits. If the model's value is not 0, raise the pools' valuation scale (acmodel bindings check reports precision_low with a suggested scale)."
+    },
+    "realization_cycle": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.35",
+      "description": "Catalog compile diagnostic (SS-2d; contracts/scheduling/v2/README.md, benefit_realization): the tasks marked benefit_realization form a cycle through the pools they consume and produce (each marked task links every pool it consumes to every pool it produces, over the whole catalog, a task that consumes and produces one pool included); one diagnostic at the benefit_realization member of each marked task on such a cycle. The catalog is refused, so no zero-benefit loop can run.",
+      "common_causes": "Two realization or conversion rules convert into each other's inputs, or one rule produces a pool it consumes.",
+      "handling": "Remove the realization mark from the rule the model does not verify, or break the conversion cycle in the model and bind the rules again."
     }
   }
 }

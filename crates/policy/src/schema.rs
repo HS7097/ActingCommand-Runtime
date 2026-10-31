@@ -125,6 +125,9 @@ pub enum CatalogDiagnosticCode {
     ApprovalMissing,
     PrioritySelectionWithoutDocument,
     PrioritySelectionPercentileInvalid,
+    /// SS-2d (register §1.235): the tasks marked `benefit_realization` form a cycle through the
+    /// pools they consume and produce.
+    RealizationCycle,
 }
 
 impl CatalogDiagnosticCode {
@@ -156,6 +159,7 @@ impl CatalogDiagnosticCode {
             Self::PrioritySelectionPercentileInvalid => {
                 PolicyCode::PrioritySelectionPercentileInvalid.code()
             }
+            Self::RealizationCycle => PolicyCode::RealizationCycle.code(),
         }
     }
 }
@@ -359,12 +363,29 @@ pub struct TaskSpec {
     /// without marks keeps its hash.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub benefit_judged: Option<bool>,
+    /// SS-2d (register §1.235, `actingcommand.scheduling.v2` only): `true` marks a judged task
+    /// the model verified as a realization or conversion with a real downstream use, for which
+    /// one more run wastes nothing (`contracts/scheduling/README.md`, "Within tolerance"). Its
+    /// candidate whose net benefit is within its rounding error may run in the last place of its
+    /// tier. The standard-pack composer writes it from the `schedule.json` rule member
+    /// `"realization": true`; a V2 catalog may write it directly. The compiler requires it on a
+    /// `benefit_judged` task with a `consumes` and a `produces` entry, a reserve on and a fact
+    /// reading of every pool it consumes, and no cycle among the marked tasks. `false` is as
+    /// without the member. Absent, the member serializes as nothing at all, so a catalog without
+    /// it keeps its hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub benefit_realization: Option<bool>,
 }
 
 impl TaskSpec {
     /// SS-2b: whether the catalog marks the task as judged by its net benefit.
     pub fn is_benefit_judged(&self) -> bool {
         self.benefit_judged == Some(true)
+    }
+
+    /// SS-2d: whether the catalog marks the task as a model-verified realization.
+    pub fn is_benefit_realization(&self) -> bool {
+        self.benefit_realization == Some(true)
     }
 }
 

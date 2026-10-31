@@ -390,8 +390,171 @@ fn validate_tasks(
             descriptor,
             diagnostics,
         );
+        validate_realization(
+            task,
+            &path,
+            map,
+            &bundle.pools.pools,
+            descriptor,
+            diagnostics,
+        );
     }
     validate_continuations(bundle, map, task_ids, descriptor, diagnostics);
+    validate_realization_cycles(bundle, map, descriptor, diagnostics);
+}
+
+/// SS-2d (register §1.235; design `rd-1031/design-acm-price-addendum2.1.md` §7.3): a task's
+/// `benefit_realization`. It is a V2 member (a V1 document that names it is refused as an
+/// unknown member). `true` requires, each refused at its own member:
+/// 1. `benefit_judged: true` (`missing_required_field` at `benefit_judged`): only a judged
+///    candidate can be within its rounding error;
+/// 2. at least one `consumes` and one `produces` entry (`missing_required_field` at the empty
+///    list);
+/// 3. a reserve on every pool it consumes (`missing_required_field` at `reserves`), so each run
+///    lowers a pool with a reserve line and stops there;
+/// 4. a fact reading of every pool it consumes (`effect_incompatible` at the entry), so its
+///    progress is visible to the no-progress guard and the reserve gate reads it.
+///
+/// `false` is as without the member and requires nothing.
+fn validate_realization(
+    task: &TaskSpec,
+    path: &str,
+    map: &SourceMap,
+    pools: &[PoolSpec],
+    descriptor: Option<(&str, u64)>,
+    diagnostics: &mut Vec<CatalogDiagnostic>,
+) {
+    if task.benefit_realization.is_none() {
+        return;
+    }
+    if map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2) {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::UnknownField,
+            format!("{path}/benefit_realization"),
+            "benefit_realization requires actingcommand.scheduling.v2",
+            descriptor,
+        ));
+        return;
+    }
+    if !task.is_benefit_realization() {
+        return;
+    }
+    if !task.is_benefit_judged() {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::MissingRequiredField,
+            format!("{path}/benefit_judged"),
+            "benefit_realization requires benefit_judged: true",
+            descriptor,
+        ));
+    }
+    for (member, effects) in [("consumes", &task.consumes), ("produces", &task.produces)] {
+        if effects.is_empty() {
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::MissingRequiredField,
+                format!("{path}/{member}"),
+                format!("benefit_realization requires at least one {member} entry"),
+                descriptor,
+            ));
+        }
+    }
+    let mut reported = HashSet::new();
+    for (index, effect) in task.consumes.iter().enumerate() {
+        let reserved = task
+            .reserves
+            .iter()
+            .flatten()
+            .any(|reserve| reserve.pool_id == effect.pool_id);
+        if !reserved && reported.insert(effect.pool_id.as_str()) {
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::MissingRequiredField,
+                format!("{path}/reserves"),
+                format!(
+                    "benefit_realization requires a reserve on the consumed pool `{}`",
+                    effect.pool_id
+                ),
+                descriptor,
+            ));
+        }
+        let read_from_fact = pools
+            .iter()
+            .find(|pool| pool.id == effect.pool_id)
+            .is_none_or(|pool| matches!(pool.observation, ObservationRef::Fact { .. }));
+        if !read_from_fact {
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::EffectIncompatible,
+                format!("{path}/consumes/{index}"),
+                format!(
+                    "benefit_realization requires the consumed pool `{}` to be observed by a fact reading",
+                    effect.pool_id
+                ),
+                descriptor,
+            ));
+        }
+    }
+}
+
+/// SS-2d (register §1.235; design §7.3 check 5): the tasks marked `benefit_realization` link
+/// every pool each consumes to every pool it produces, and that graph has no cycle (a task that
+/// consumes and produces one pool is a cycle of its own), so no zero-benefit loop can run. The
+/// compiler binds no task to an instance, so the marked tasks of the whole catalog form one graph
+/// by pool id: a composed catalog's pool ids are per instance already once a rule is copied to
+/// two instances. Each marked task with a link on a cycle is one `realization_cycle` at its
+/// `benefit_realization`, in task order.
+fn validate_realization_cycles(
+    bundle: &CatalogBundle,
+    map: &SourceMap,
+    descriptor: Option<(&str, u64)>,
+    diagnostics: &mut Vec<CatalogDiagnostic>,
+) {
+    if map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2) {
+        return;
+    }
+    let marked = bundle
+        .tasks
+        .tasks
+        .iter()
+        .enumerate()
+        .filter(|(_, task)| task.is_benefit_realization())
+        .collect::<Vec<_>>();
+    if marked.is_empty() {
+        return;
+    }
+    let mut links = HashMap::<&str, HashSet<&str>>::new();
+    for (_, task) in &marked {
+        for consumed in &task.consumes {
+            let next = links.entry(consumed.pool_id.as_str()).or_default();
+            next.extend(task.produces.iter().map(|effect| effect.pool_id.as_str()));
+        }
+    }
+    for (index, task) in marked.iter().copied() {
+        // The pools reachable from what the task produces; a cycle reaches what it consumes.
+        let mut reached = HashSet::new();
+        let mut frontier = task
+            .produces
+            .iter()
+            .map(|effect| effect.pool_id.as_str())
+            .collect::<Vec<_>>();
+        while let Some(pool) = frontier.pop() {
+            if reached.insert(pool) {
+                frontier.extend(links.get(pool).into_iter().flatten().copied());
+            }
+        }
+        if let Some(consumed) = task
+            .consumes
+            .iter()
+            .find(|effect| reached.contains(effect.pool_id.as_str()))
+        {
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::RealizationCycle,
+                format!("/tasks/{index}/benefit_realization"),
+                format!(
+                    "the realization tasks form a cycle: task `{}` consumes `{}`, which its own production reaches again",
+                    task.id, consumed.pool_id
+                ),
+                descriptor,
+            ));
+        }
+    }
 }
 
 /// Workflow #411 B16 part 2: a task's `reserves`. It is a V2 member (a V1 document that names it

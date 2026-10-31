@@ -683,4 +683,8 @@ outcome_keys! {
     operation_kind_now: vocab(player_hold_operation_kind),
     operation_state_now: vocab(player_hold_operation_state),
     // ---- Workflow #429 R-7a: end ----
+    // ---- SS-2d (the zero band, contracts/scheduling/README.md "Within tolerance"): begin ----
+    tolerance_milli: integer,
+    zero_tier: vocab(zero_tier),
+    // ---- SS-2d: end ----
 }

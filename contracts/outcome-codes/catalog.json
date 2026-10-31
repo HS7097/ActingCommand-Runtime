@@ -2436,6 +2436,14 @@
     "operation_state_now": {
       "type": "vocab:player_hold_operation_state",
       "description": "The state of the instance's player hold record now (R-7a)."
+    },
+    "tolerance_milli": {
+      "type": "integer",
+      "description": "The rounding bound ε of a judged candidate's exact net benefit S, rounded up to a whole milli: the sum over the pools it produces of R/(2000·Q) + n·(2W+1)/(4000·Q) and over the pools it consumes of σ·(C/(2000·Q) + m·(2W+1)/(4000·Q)), with R and C its per-run production and consumption in thousandths, n and m the pool's expected_amount_milli entries, W the pool's weight, Q its valuation scale and σ its regenerating share (SS-2d, contracts/scheduling/README.md \"Within tolerance\")."
+    },
+    "zero_tier": {
+      "type": "vocab:zero_tier",
+      "description": "What became of a judged candidate whose exact net benefit is within its rounding bound (|S| ≤ ε): released into the last place of its tier, or deferred because its task is not marked benefit_realization, no pool it produces is weighed above 0 on its instance, or its latest run there failed (SS-2d)."
     }
   },
   "vocabularies": {
@@ -3583,6 +3591,24 @@
         },
         "reading_unknown": {
           "description": "The cost of a regenerating pool the task consumes needs the pool's reading, which is unknown or expired; pool_id names the pool, fact_key and unknown_reason its reading when it reads a fact, and the fact refresh is asked for it."
+        }
+      }
+    },
+    "zero_tier": {
+      "description": "What became of a judged candidate within its rounding bound, the value of benefit_within_tolerance (SS-2d, contracts/scheduling/README.md \"Within tolerance\"). Its sign is not trusted: only a model-verified realization task may run, last in its tier.",
+      "review": "pending",
+      "tokens": {
+        "released": {
+          "description": "Its task is marked benefit_realization, its B is known, a pool it produces is weighed above 0 on its instance and its latest run there did not fail: it takes part in the allocation after every unjudged and every positive judged candidate of the business tier, every later gate applying."
+        },
+        "unmarked": {
+          "description": "Its task is not marked benefit_realization: deferred."
+        },
+        "no_downstream_value": {
+          "description": "No pool it produces is weighed above 0 on its instance (neither a model price nor a goal gives it a use): deferred."
+        },
+        "latest_failed": {
+          "description": "Its latest run on the instance failed: deferred; the failure keeps its own retry and escalation path, the zero tier does not retry it."
         }
       }
     },
@@ -9390,6 +9416,9 @@
     "readonly_": [
       "contract",
       "runtime-host"
+    ],
+    "realization_": [
+      "policy"
     ],
     "rebind_": [
       "contract",

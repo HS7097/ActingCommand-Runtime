@@ -255,6 +255,26 @@ SS-2b (since 0.12.32; register §1.225; `../README.md`, "Net benefit within a ti
 
 A catalog without these serializes, and hashes, exactly as before.
 
+SS-2d (since 0.12.35; register §1.235; `../README.md`, "Net benefit within a tier", "Within
+tolerance"), V2 only: a task may carry `benefit_realization`, a boolean. With `true` it is the
+model's verdict that the task is a realization or conversion with a real downstream use, one
+more run wasting nothing: its candidate within its rounding error may be released into the last
+place of its tier. The standard-pack composer writes it from the `schedule.json` rule member
+`"realization": true` (which only `acmodel bindings apply` writes, and which is no V2 task
+member), and refuses a rule that writes `benefit_realization` itself. With `true` the compiler
+requires, each refused at its member:
+- `benefit_judged: true` (`missing_required_field` at `benefit_judged`);
+- at least one `consumes` and one `produces` entry (`missing_required_field` at the empty list);
+- a `reserves` entry for every pool it consumes (`missing_required_field` at `reserves`);
+- a fact observation (`observation.kind` `fact`) of every pool it consumes (`effect_incompatible`
+  at the entry);
+- no cycle among the marked tasks through their pools, each linking every pool it consumes to
+  every pool it produces, over the whole catalog, a task that produces a pool it consumes
+  included (`realization_cycle` at each marked task's `benefit_realization` on such a cycle).
+
+With `false` it is as without the member. A V1 document that names it is refused as an unknown
+field at the member. A catalog without it serializes, and hashes, exactly as before.
+
 SS-2g (since 0.12.34; register §1.232; `../README.md`, "Expected quantities (v2)"): a `consumes`
 entry may declare `expected_amount_milli` instead of `amount`, as a `produces` entry may: an
 integer in `0..=9007199254740991` thousandths of a unit per run, at most a constant capacity ×

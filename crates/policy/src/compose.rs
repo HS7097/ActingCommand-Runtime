@@ -47,11 +47,11 @@ use std::fmt;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
-    APPLICATION_UPDATE_REQUIRED_FACT_KEY, BundleMaintenance, STANDARD_PACK_SCHEDULE_FILE,
-    ScheduleItem, ScheduleMember, ScheduleRule, StandardPackClassification, StandardPackProblem,
-    StandardPackRoot, StandardPackRootIssue, StandardPackSchedule, classify_standard_pack_packages,
-    parse_standard_pack_schedule, standard_pack_maintenance_packages,
-    validate_standard_pack_schedule_references,
+    APPLICATION_UPDATE_REQUIRED_FACT_KEY, BundleMaintenance, SCHEDULE_RULE_REALIZATION_MEMBER,
+    STANDARD_PACK_SCHEDULE_FILE, ScheduleItem, ScheduleMember, ScheduleRule,
+    StandardPackClassification, StandardPackProblem, StandardPackRoot, StandardPackRootIssue,
+    StandardPackSchedule, classify_standard_pack_packages, parse_standard_pack_schedule,
+    standard_pack_maintenance_packages, validate_standard_pack_schedule_references,
 };
 use serde::Serialize;
 use serde_json::{Map, Value, json};
@@ -195,6 +195,11 @@ pub const STANDARD_PACK_ESCALATION_WARNING_THRESHOLD: u64 = 10;
 /// maintenance (`"maintenance": true`). A rule never writes it itself.
 pub const BENEFIT_JUDGED_MEMBER: &str = "benefit_judged";
 
+/// SS-2d (register §1.235): the task member the composer writes, `true`, on a judged rule that
+/// carries the model's realization mark (the `schedule.json` rule member `"realization": true`,
+/// [`SCHEDULE_RULE_REALIZATION_MEMBER`]). A rule never writes it itself.
+pub const BENEFIT_REALIZATION_MEMBER: &str = "benefit_realization";
+
 /// SS-2b (register §1.225; Alice's ruling 116, 「业务覆盖完整」): how far one game's judged rules
 /// (those whose package is not maintenance-role and that do not declare themselves maintenance,
 /// not held) declare their values, as the resource tools report it. Each rule counts once,
@@ -212,6 +217,9 @@ pub struct BenefitCoverage {
     /// (`"maintenance": true`), whatever their package's role. They are not judged, so none of
     /// them counts in the three above.
     pub maintenance_declared: usize,
+    /// SS-2d (register §1.235): the judged rules that carry the model's realization mark
+    /// (`"realization": true`); each also counts in one of the first three.
+    pub realization: usize,
 }
 
 /// One judged rule that declares no value: its id and the touched pool without a valuation
@@ -421,6 +429,9 @@ fn benefit_coverage(
         if !judged(rule, classification) {
             continue;
         }
+        if rule.realization {
+            coverage.realization += 1;
+        }
         let entries = ["produces", "consumes"]
             .into_iter()
             .filter_map(|member| rule.body.get(member).and_then(Value::as_array))
@@ -554,6 +565,16 @@ impl Composed {
         let (index, tail) = match rest.find('/') {
             Some(at) => (&rest[..at], &rest[at..]),
             None => (rest, ""),
+        };
+        // SS-2d: the composed task's realization member comes from the rule's `realization`.
+        let realization_tail;
+        let tail = if document == SchedulingDocumentKind::Tasks
+            && tail.strip_prefix('/') == Some(BENEFIT_REALIZATION_MEMBER)
+        {
+            realization_tail = format!("/{SCHEDULE_RULE_REALIZATION_MEMBER}");
+            realization_tail.as_str()
+        } else {
+            tail
         };
         match index
             .parse::<usize>()
@@ -848,6 +869,24 @@ fn read_game(
             ),
         ));
     }
+    // SS-2d (register §1.235): likewise the realization task member is the composer's, written
+    // from the rule member `realization`.
+    if let Some(index) = schedule
+        .rules
+        .iter()
+        .position(|rule| rule.body.contains_key(BENEFIT_REALIZATION_MEMBER))
+    {
+        return Err(refused(
+            schedule_issue(
+                StandardPackProblem::ScheduleInvalid,
+                format!("/rules/{index}/{BENEFIT_REALIZATION_MEMBER}"),
+            ),
+            format!(
+                "{BENEFIT_REALIZATION_MEMBER} is the composer's: a rule carries the model's mark as \
+                 {SCHEDULE_RULE_REALIZATION_MEMBER}"
+            ),
+        ));
+    }
     if let Some(subsystems) = subsystems
         && let Some((index, name)) = schedule
             .requires
@@ -874,6 +913,25 @@ fn read_game(
     let maintenance = standard_pack_maintenance_packages(files.maintenance, files.root);
     let classification =
         classify_standard_pack_packages(&files.root.registry, &maintenance, &schedule);
+    // SS-2d (register §1.235; design §7.3 check 1): the realization mark belongs on a judged rule
+    // only; a rule whose package is maintenance-role is refused as SS-2c refuses a bad
+    // declaration (the reader already refuses it beside `"maintenance": true`).
+    if let Some(index) = schedule
+        .rules
+        .iter()
+        .position(|rule| rule.realization && !judged(rule, &classification))
+    {
+        return Err(refused(
+            schedule_issue(
+                StandardPackProblem::ScheduleInvalid,
+                format!("/rules/{index}/{SCHEDULE_RULE_REALIZATION_MEMBER}"),
+            ),
+            format!(
+                "{SCHEDULE_RULE_REALIZATION_MEMBER} marks a judged rule only, and this rule's \
+                 package is maintenance-role"
+            ),
+        ));
+    }
     Ok((schedule, classification))
 }
 
@@ -1242,6 +1300,11 @@ fn compose_task(rule: &ScheduleRule, alias: &str, copies: &Copies<'_>, judged: b
         .or_insert_with(|| Value::Array(Vec::new()));
     if judged {
         task.insert(BENEFIT_JUDGED_MEMBER.to_owned(), Value::Bool(true));
+        // SS-2d: the model's realization mark rides on the judged task only (the reader and
+        // `read_game` refuse it elsewhere).
+        if rule.realization {
+            task.insert(BENEFIT_REALIZATION_MEMBER.to_owned(), Value::Bool(true));
+        }
     }
     if copies
         .tasks

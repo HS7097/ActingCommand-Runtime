@@ -168,6 +168,18 @@ impl IdleDraft {
         if update_held {
             return;
         }
+        // SS-2d (register §1.235): a decision within its rounding error (released or deferred,
+        // `benefit_within_tolerance` among its reasons) is neither due nor a wake of its own
+        // unless it was selected: a zero tier only fills an open game's idle time, and never wakes
+        // a closed one for work worth 0.
+        if decision.state != SchedulingDecisionState::Selected
+            && decision
+                .reasons
+                .iter()
+                .any(|reason| reason.outcome.is(PolicyCode::BenefitWithinTolerance))
+        {
+            return;
+        }
         let eligible = decision.state == SchedulingDecisionState::Selected
             || decision.eligibility == EligibilityState::True;
         // SS-2b (register §1.225): a judged candidate the benefit gate holds (its net benefit

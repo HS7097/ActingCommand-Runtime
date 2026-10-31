@@ -273,6 +273,16 @@ actingcommand_contract::outcome_codes! {
         /// optional `pool_id`, `fact_key`, `unknown_reason`).
         BenefitUnknown => "benefit_unknown": info / none,
         // ---- SS-2b: end ----
+        // ---- SS-2d (the zero band, `contracts/scheduling/README.md`, "Net benefit within a
+        // tier", "Within tolerance"): begin ----
+        /// Info. A judged candidate's exact net benefit `S` is within its rounding error,
+        /// `|S| ≤ ε`: its sign is not trusted. Released into the last place of its tier, or
+        /// deferred (keys `benefit_milli` ⌊S⌋, `tolerance_milli` ⌈ε⌉, `zero_tier`).
+        BenefitWithinTolerance => "benefit_within_tolerance": info / none,
+        /// Error (catalog compile diagnostic). The tasks marked `benefit_realization` form a
+        /// cycle through the pools they consume and produce.
+        RealizationCycle => "realization_cycle": error / none,
+        // ---- SS-2d: end ----
     }
 }
 
@@ -295,6 +305,25 @@ actingcommand_contract::outcome_vocabulary! {
     }
 }
 // ---- SS-2b: end ----
+
+// ---- SS-2d: begin ----
+actingcommand_contract::outcome_vocabulary! {
+    /// What became of a judged candidate within its rounding error (the vocabulary `zero_tier`),
+    /// a value of `benefit_within_tolerance`.
+    pub enum ZeroTier: "zero_tier" {
+        /// Marked `benefit_realization`, its `B` known, a pool it produces weighed above 0 on its
+        /// instance and its latest run there not failed: it takes part in the allocation, last in
+        /// its tier.
+        Released => "released",
+        /// Its task is not marked `benefit_realization`: deferred.
+        Unmarked => "unmarked",
+        /// No pool it produces is weighed above 0 on its instance: deferred.
+        NoDownstreamValue => "no_downstream_value",
+        /// Its latest run on the instance failed: deferred; the failure keeps its own path.
+        LatestFailed => "latest_failed",
+    }
+}
+// ---- SS-2d: end ----
 
 // ---- Workflow #386 SR-0 (scheduling rules): registered ahead of their slices; begin ----
 actingcommand_contract::outcome_codes! {
