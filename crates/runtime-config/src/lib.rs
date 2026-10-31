@@ -31,6 +31,10 @@
 //!   priority actingd gives its own process at start); `store_foreground` (STORE-FG-2: the store
 //!   applications a store update package may tap in, only from the configuration file).
 //!
+//! - Workflow #429 R-4 (since 0.12.36): the settings' version ([`EffectiveConfig::version`]), the
+//!   token `ConfigureSettings.expected_version` compares, and the console's three tiers of the
+//!   keys ([`ui_tier()`]).
+//!
 //! actingd reads the files and hands the assembled manifest to the host; the host applies
 //! instructions through this crate. It depends on the contract only (§5.1).
 
@@ -65,6 +69,8 @@ pub mod startup_discovery;
 pub mod store_foreground;
 mod table;
 pub mod touch;
+// Workflow #429 R-4: the console's three tiers of the keys.
+mod ui_tier;
 mod value;
 pub mod watchdog;
 
@@ -123,6 +129,7 @@ pub use table::{
     ValueType, assembly_rows, find_row, instance_key, mechanism_rows, rows,
 };
 pub use touch::{TouchConfig, TouchFile};
+pub use ui_tier::{MAX_ADVANCED_KEYS, UI_TIERS, UiTier, ui_tier};
 pub use value::{canonical_json, parse_value, scalar_json};
 
 /// Annotates the rows the start-up assembly built with whether an instruction may change them
@@ -165,6 +172,9 @@ mod r1_tests;
 // Workflow #429 R-2.
 #[cfg(test)]
 mod r2_tests;
+// Workflow #429 R-4.
+#[cfg(test)]
+mod r4_tests;
 // Workflow #398 RD-4.
 #[cfg(test)]
 mod rd4_tests;

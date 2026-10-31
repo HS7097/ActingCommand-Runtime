@@ -5518,6 +5518,41 @@ declares [2, 4], which still meets a console of [3, 4].
 | R0B-3 | `begin_instance_activity` | location | R-0b | the host | `since` 0.12.36, review pending |
 | R0B-4 | `runtime-client` [2, 4] → [3, 4] | interface declaration | R-0b | — | R-7b raises `min` to 4 |
 
+### 1.239 Slice R-4 (0.12.36): the settings' version and `ConfigureSettings` as a compare-and-swap of it, one key at a time, and the console's three tiers (Workflow #429 A.6 rules 2, 3, 5, 7 and 8 and the R-4 entry of `rd-1029/429-A-runtime.md`; the wire shapes of R-0 and R-0c, §1.213 R0-3, R0-8, R0-9 and §1.216 R0C-4; coordinator work order `rd-1031/brief-r4.md`)
+
+[runtime-config.md](runtime-config.md) ("`ConfigureSettings`", "Restore at start", "Console tiers
+(`ui_tier`)", "Codes"), [runtime-interface.md](runtime-interface.md) ("Workbench request kinds",
+the command and tool tables) and the runtime-host fragment of the outcome catalog are the
+contract. **No persisted ledger shape**: `host.config_overrides` keeps its row shape, and the
+version is computed from the configuration in effect, never stored. **No new outcome code**: the
+conflict reuses `fact_observation_version_conflict`, whose `values` gain `fact_key` and
+`current_version` (optional); one outcome key is new, `current_version` (integer), `since`
+0.12.36. No configuration key, no `actingd-config`, `ledger` or `runtime-outcomes` revision; the
+wire shapes are revision 3's (R-0), and the release that fills them raises `runtime-client` `min`
+to 3, which R-0b (§1.238) does in the same release. The number 1.239 is the coordinator's (R-0b
+takes §1.238 and R-11 §1.240 in parallel).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| R4-1 | the settings' version: the first 63 bits of the SHA-256 of every key in effect in manifest order (key, value, source, `settable`) and the `host.config_overrides` rows in effect (every field, the stamps included), each part length-prefixed (`EffectiveConfig::version`) | behaviour (a token computed in memory) | R-4 | runtime-config | opaque, compared for equality only, never a ledger sequence; equal exactly when the values, sources and rows are; every committed change gives another (its row's stamp at the least); a start that restores the same rows over the same file gives the previous one |
+| R4-2 | `ConfigureSettings.expected_version` is a compare-and-swap: the changes apply only at that version, compared under `config_override_gate` before any check of the changes; another is Denied `fact_observation_version_conflict` (`fact_key` `host.config_overrides`, `current_version`; `operation` `configure_settings`, `runtime_code` `invalid_request`), recorded as `command.rejected` only, nothing changed; without the member nothing is compared (the last writer wins) | behaviour | R-4 | runtime-host | replaces R-0's `not_implemented` for `ConfigureSettings` (§1.213 R0-3); `ApplyResourceTargets.expected_version` stays `not_implemented` until R-13c |
+| R4-3 | `SettingsConfigured.config_version` filled on every completed receipt; `RuntimeFactSnapshot.config_version` filled on every answer, read with the snapshot under the same gate | answer members of revision 3 (§1.213 R0-8), first filled | R-4 | runtime-host | the read points: `actingctl status --config` and `ac_facts` (scope `config`) answer it beside their records (and keep it beside an export); `actingctl config set\|clear` and `ac_config_set` answer the receipt's beside `settings`; there is no `actingctl config get`, `status --config` is the CLI's read point |
+| R4-4 | a denied or failed receipt keeps its top's `current_version` in codes mode, as it keeps `host_halted` (`receipt_envelope`) | contract behaviour (§1.216 R0C-4) | R-4 | contract crate | only `fact_observation_version_conflict` carries the key; R-8 and R-13c reuse it |
+| R4-5 | one commit changes only the keys it names: every other key keeps its value in effect, source and `settable`, and every other row stays (rule 7); the keys whose default is `section:<key>` follow that key as before | behaviour locked by a test | R-4 | runtime-config | no code change: `apply` already works key by key |
+| R4-6 | `ui_tier(key) -> UiTier {hidden, daily, advanced}`, `UI_TIERS`, `MAX_ADVANCED_KEYS` (8) in `actingcommand-runtime-config`; daily: `performance.pacing.mode`, `.max_concurrent_runs`, `.heavy_dispatch_limit.normal`, `scheduling.parallel.enabled` (the four of the preset), `scheduling.blackout.host`, the per-instance `scheduling.blackout`, `start_emulator` and `idle.action`; advanced (6): `mumu_root`, `frame_retention_evidence_max_age_days`, `host.process_memory_priority`, `host.process_io_priority`, `lab_module_authoring`, `lab_module_debugging`; every other key hidden | crate API and contract table | R-4 | the console (pins the crate) | A.6 rule 8's candidates kept as keys; left out because no key of the key table: the diagnostics export (a command), the vision device (the file's `vision` section) and an instance's `adb_path` (actingd reads both at assembly and reports no row); `start_emulator` is daily though not settable until R-3 |
+| R4-7 | rollback: a row of a key the starting Runtime does not have (or may not set) is dropped into `StartReport.instructions_dropped`, `config_override_dropped`, the others restored; locked with a fixed sample of a later release's record | behaviour locked by a test | R-4 | runtime-host | unchanged since #421 INST-2; the version after such a start differs, so a console's earlier token is refused and it reads again |
+| R4-8 | `current_version` (integer) | new outcome key | R-4 | runtime-host | `since` 0.12.36; `fact_observation_version_conflict`'s `values` gain `fact_key` and `current_version` (optional) |
+
+**Tests changed** (the approved behaviour changes): `gate_429_r0`'s
+`r0_each_workbench_kind_without_behaviour_answers_not_implemented_with_no_effect` no longer sends a
+`ConfigureSettings` naming `expected_version` (it now has behaviour); `gate_387_d1b`'s D1-M3, D1-M7,
+R-1 test 1 and R-1 test 2 expect the receipt's `config_version` to be the snapshot's version after
+the change instead of absent.
+
+**Rollback** (to 0.12.35). Nothing persisted changes shape. A 0.12.35 Runtime answers no
+`config_version` and refuses `expected_version` `not_implemented`, which a console handles by
+revision rule 2 ([runtime-interface.md](runtime-interface.md)).
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -2488,6 +2488,10 @@
     "zero_tier": {
       "type": "vocab:zero_tier",
       "description": "What became of a judged candidate whose exact net benefit is within its rounding bound (|S| ≤ ε): released into the last place of its tier, or deferred because its task is not marked benefit_realization, no pool it produces is weighed above 0 on its instance, or its latest run there failed (SS-2d)."
+    },
+    "current_version": {
+      "type": "integer",
+      "description": "The edit-version token now of what a refused request's expected_version named (fact_observation_version_conflict; Workflow #429 R-4, since 0.12.36): opaque and compared only for equality, the expected_version to send next; a denied receipt keeps it in codes mode."
     }
   },
   "vocabularies": {

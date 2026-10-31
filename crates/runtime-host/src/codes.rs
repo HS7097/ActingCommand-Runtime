@@ -2612,6 +2612,8 @@ pub(crate) mod test_spellings {
             ReadTestLeaseExpiryToken => "read_test_lease_expiry_token",
             ReadTestPerformanceContext => "read_test_performance_context",
             ReadTestReceipt => "read_test_receipt",
+            // Workflow #429 R-4: a test records a later Runtime's `host.config_overrides`.
+            RecordConfigOverridesForTest => "record_config_overrides_for_test",
             RecordContainedTaskCheckpointTestIdentity => "record_contained_task_checkpoint_test_identity",
             RecordFailureDetailForTest => "record_failure_detail_for_test",
             RecordTestLeaseExpiryCheckpoint => "record_test_lease_expiry_checkpoint",

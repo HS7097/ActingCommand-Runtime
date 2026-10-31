@@ -2051,7 +2051,13 @@ fn config_set_input() -> Value {
 fn config_set_result() -> Value {
     json!({
         "type": "object",
-        "properties": {"settings": {"type": "array", "items": {"type": "object"}}},
+        "properties": {
+            "settings": {"type": "array", "items": {"type": "object"}},
+            "config_version": {
+                "type": "integer",
+                "description": "The settings' version after the change (Workflow #429 R-4): an opaque token compared only for equality.",
+            },
+        },
         "required": ["settings"],
     })
 }

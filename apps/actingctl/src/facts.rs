@@ -88,10 +88,14 @@ pub(crate) enum Failure {
 /// records_kept}`. `read_at_unix_ms` is the Runtime's clock at the read (the snapshot's
 /// `taken_at_unix_ms`, the instance read's sampled interval end), against which each record's
 /// `observed_at_unix_ms` and `expires_at_unix_ms` tell its freshness. `records_total` counts
-/// the records the read returned, `records_kept` those the answer holds.
+/// the records the read returned, `records_kept` those the answer holds. Workflow #429 R-4
+/// (register §1.239): the config read also answers `config_version`, the settings' version the
+/// Runtime read with its records, when it answers one (the next `expected_version`).
 pub(crate) fn read(client: &RuntimeClient, request: &FactsRequest) -> Result<Value, Failure> {
     let kept =
         |prefix: Option<&str>, key: &str| prefix.is_none_or(|prefix| key.starts_with(prefix));
+    // Workflow #429 R-4: the settings' version the config read answers beside its records.
+    let mut config_version = None;
     let (read_at_unix_ms, member, body, records_total, records_kept) = match request {
         FactsRequest::Program { key_prefix } => {
             let mut snapshot = client.runtime_fact_snapshot().map_err(Failure::Runtime)?;
@@ -109,7 +113,10 @@ pub(crate) fn read(client: &RuntimeClient, request: &FactsRequest) -> Result<Val
             )
         }
         FactsRequest::Config => {
-            let snapshot = client.runtime_fact_snapshot().map_err(Failure::Runtime)?;
+            let (snapshot, version) = client
+                .runtime_fact_snapshot_versioned()
+                .map_err(Failure::Runtime)?;
+            config_version = version;
             let records = config_records(&snapshot)?;
             (
                 snapshot.taken_at_unix_ms,
@@ -154,6 +161,9 @@ pub(crate) fn read(client: &RuntimeClient, request: &FactsRequest) -> Result<Val
     answer.insert(member.to_owned(), body);
     answer.insert("records_total".to_owned(), json!(records_total));
     answer.insert("records_kept".to_owned(), json!(records_kept));
+    if let Some(version) = config_version {
+        answer.insert("config_version".to_owned(), json!(version));
+    }
     Ok(Value::Object(answer))
 }
 

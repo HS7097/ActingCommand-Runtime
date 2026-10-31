@@ -2902,6 +2902,18 @@ impl RuntimeHost {
             .map_or(0, Vec::len))
     }
 
+    /// Workflow #429 R-4 (rollback test): records `rows` as the `host.config_overrides` fact, as
+    /// a later Runtime recorded them, so the next start restores them by its own key table. The
+    /// configuration in effect of this host does not change.
+    #[cfg(test)]
+    pub(crate) fn record_config_overrides_for_test(
+        &self,
+        rows: Vec<BTreeMap<String, actingcommand_contract::FactScalar>>,
+    ) -> RuntimeHostResult<()> {
+        self.shared_ref(crate::codes::test_spellings::TestLocation::RecordConfigOverridesForTest)?
+            .record_config_overrides_for_test(rows)
+    }
+
     /// Workflow #387 D1c (§3.7): holds every instance back from performance release, or lets
     /// it go, as performance control's suspension would.
     #[cfg(test)]
