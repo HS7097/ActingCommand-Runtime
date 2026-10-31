@@ -2167,7 +2167,9 @@ impl NemuIpcWorker {
         timeout: Duration,
         input: Option<nemu_input::NemuInputState>,
     ) -> Self {
-        let (tx, rx) = mpsc::channel();
+        // #402 C1: the timing point names the command before the `match` below fixes its type,
+        // so the channel's type is stated here.
+        let (tx, rx) = mpsc::channel::<NemuIpcCommand>();
         let poisoned = Arc::new(AtomicBool::new(false));
         let worker_poisoned = Arc::clone(&poisoned);
         let handle = thread::spawn(move || {
