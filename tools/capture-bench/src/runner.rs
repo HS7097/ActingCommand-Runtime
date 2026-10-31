@@ -2550,7 +2550,7 @@ impl RunShared {
                 if let Some(frame) = &work.floor_frame {
                     self.note_frame(instance, frame.width, frame.height);
                 }
-                let mut tap_record = work.tap_display.clone().unwrap_or_else(|| json!({}));
+                let tap_record = work.tap_display.clone().unwrap_or_else(|| json!({}));
                 let rotation_missing = tap_record["rotation"].is_null();
                 if rotation_missing && let Value::Object(map) = &mut admission_reasons {
                     map.insert(
@@ -2917,14 +2917,14 @@ struct DisplayFacts {
     frame: Option<(u32, u32)>,
 }
 
+/// A rectangle `(x, y, width, height)` in frame pixels.
+type PixelRect = (u32, u32, u32, u32);
+
 /// The rectangle `(x, y, width, height)` in frame pixels the APK's tap grid covers, and where its
 /// size came from: the APK's view when it lies inside the frames the bench sees (`apk_view`);
 /// else the frame of this dispatch (`dispatch_frame`), the last delivered frame (`last_frame`),
 /// or the APK's display size (`apk_display`).
-fn tap_rect(
-    facts: &DisplayFacts,
-    seen: Option<(u32, u32)>,
-) -> Option<((u32, u32, u32, u32), &'static str)> {
+fn tap_rect(facts: &DisplayFacts, seen: Option<(u32, u32)>) -> Option<(PixelRect, &'static str)> {
     let frame = seen.or(facts.frame);
     if let Some((x, y, width, height)) = facts.view
         && width > 0
@@ -4425,6 +4425,9 @@ impl RunShared {
                 );
                 return SegmentEnd::Fatal("c8_image_not_shown".to_owned());
             }
+            // #402 C2c: INFO says the APK shows the picture from here on; S's first frame of it
+            // must be received after this time (the lower bound, `c8_switch_floor_sample`).
+            let switched_us = self.now();
             let stem = slot.trim_end_matches(".png").to_owned();
             let row = |path_word: &str, frame: &str, saved: &str, target: &Value| {
                 let class = target["class"].as_str().unwrap_or("template");
@@ -4489,14 +4492,19 @@ impl RunShared {
             }
             let mut last_sequence = None;
             for frame_idx in 0..c8.frames_per_image {
-                let floor = last_sequence.map(|after| Floor {
-                    after_us: None,
-                    after_sequence: Some(after),
-                });
-                let sampled =
-                    self.with_backend(instance, path.backend(), |backend| backend.sample(floor));
-                let frame = match sampled {
-                    Ok(frame) => frame,
+                let sampled = if frame_idx == 0 && path == PathKind::Scrcpy {
+                    self.c8_switch_floor_sample(instance, switched_us, c8.switch_floor_wait_ms)
+                        .map(|(frame, floor)| (frame, Some(floor)))
+                } else {
+                    let floor = last_sequence.map(|after| Floor {
+                        after_us: None,
+                        after_sequence: Some(after),
+                    });
+                    self.with_backend(instance, path.backend(), |backend| backend.sample(floor))
+                        .map(|frame| (frame, None))
+                };
+                let (frame, switch_floor) = match sampled {
+                    Ok(sampled) => sampled,
                     Err(failure) => {
                         self.journal.event(
                             "c8_capture_failed",
@@ -4534,25 +4542,26 @@ impl RunShared {
                 if self.journal.write_bytes(&saved, &png).is_err() {
                     return SegmentEnd::Whole;
                 }
-                let line = info.record(
-                    "c8_frame",
-                    path.as_str(),
-                    self.next_seq(),
-                    json!({
-                        "t_tick_us": self.now(),
-                        "disposition": "delivered",
-                        "image": image_name,
-                        "image_kind": image_kind,
-                        "frame_idx": frame_idx,
-                        "frame_sha256": crate::safety::sha256_hex(&png),
-                        "pixels_sha256": crate::safety::sha256_hex(&frame.pixels),
-                        "saved_path": saved,
-                        "bitrate": if path == PathKind::Scrcpy { Some(bitrate.clone()) } else { None },
-                        "width": frame.width,
-                        "height": frame.height,
-                        "null_reasons": {},
-                    }),
-                );
+                let (floor_fields, null_reasons) =
+                    c8_floor_fields(path, switched_us, frame.received_us, switch_floor.as_ref());
+                let mut body = json!({
+                    "t_tick_us": self.now(),
+                    "disposition": "delivered",
+                    "image": image_name,
+                    "image_kind": image_kind,
+                    "frame_idx": frame_idx,
+                    "frame_sha256": crate::safety::sha256_hex(&png),
+                    "pixels_sha256": crate::safety::sha256_hex(&frame.pixels),
+                    "saved_path": saved,
+                    "bitrate": if path == PathKind::Scrcpy { Some(bitrate.clone()) } else { None },
+                    "width": frame.width,
+                    "height": frame.height,
+                    "null_reasons": null_reasons,
+                });
+                if let (Value::Object(map), Value::Object(extra)) = (&mut body, floor_fields) {
+                    map.extend(extra);
+                }
+                let line = info.record("c8_frame", path.as_str(), self.next_seq(), body);
                 self.journal.append(&file, &line);
                 let saved_path = self.journal.path(&saved).display().to_string();
                 for target in &targets {
@@ -4561,6 +4570,66 @@ impl RunShared {
             }
         }
         SegmentEnd::Finished
+    }
+
+    /// #402 C2c (C8): S's first frame of a picture, asked for with the lower bound
+    /// `switched_us` (when INFO showed the picture), so it is a frame received after the switch.
+    /// A floored attempt that ends `capture_frame_stale` is repeated until `wait_ms` after the
+    /// switch has passed (each real attempt itself waits up to the device crate's floor wait).
+    /// Then the bound has run out: the frame is taken without it, and the reason is kept so the
+    /// analysis can drop or flag the frame. Any other failure is returned as it is.
+    fn c8_switch_floor_sample(
+        &self,
+        instance: usize,
+        switched_us: Micros,
+        wait_ms: u64,
+    ) -> Result<(crate::backend::SampledFrame, SwitchFloor), BackendFailure> {
+        let deadline = switched_us.saturating_add(ms(wait_ms));
+        let floor = Floor {
+            after_us: Some(switched_us),
+            after_sequence: None,
+        };
+        let mut attempts = 0u32;
+        loop {
+            attempts += 1;
+            let sampled = self.with_backend(instance, BackendKind::Scrcpy, |backend| {
+                backend.sample(Some(floor))
+            });
+            match sampled {
+                Ok(frame) => {
+                    return Ok((
+                        frame,
+                        SwitchFloor {
+                            after_us: switched_us,
+                            attempts,
+                            fallback_reason: None,
+                        },
+                    ));
+                }
+                Err(failure) if failure.class == FailureClass::Measured => {
+                    if self.now() >= deadline {
+                        let reason = format!(
+                            "{}: no S frame received after the picture switch met the lower bound within switch_floor_wait_ms ({wait_ms} ms, {attempts} attempts); the frame was taken without the bound",
+                            failure.code
+                        );
+                        let frame =
+                            self.with_backend(instance, BackendKind::Scrcpy, |backend| {
+                                backend.sample(None)
+                            })?;
+                        return Ok((
+                            frame,
+                            SwitchFloor {
+                                after_us: switched_us,
+                                attempts,
+                                fallback_reason: Some(reason),
+                            },
+                        ));
+                    }
+                }
+                Err(failure) => return Err(failure),
+            }
+            pause_until(self.clock.as_ref(), self.now() + ms(5));
+        }
     }
 
     /// C9 (ii): N connects and disconnects around a sample, through P7 (the automatic reopen,
@@ -4604,6 +4673,79 @@ impl RunShared {
             other => Err(format!("{other:?}")),
         }
     }
+}
+
+/// #402 C2c: how S's first frame of a C8 picture met its lower bound.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SwitchFloor {
+    /// The lower bound: when INFO showed the picture (bench QPC µs).
+    after_us: Micros,
+    /// The floored samples tried.
+    attempts: u32,
+    /// `None`: a frame met the bound. `Some`: the bound ran out and the frame was taken
+    /// without it, for this reason.
+    fallback_reason: Option<String>,
+}
+
+/// #402 C2c: a `c8_frame` record's switch and lower-bound fields, and the reasons of those that
+/// are null.
+fn c8_floor_fields(
+    path: PathKind,
+    switched_us: Micros,
+    received_us: Option<Micros>,
+    floor: Option<&SwitchFloor>,
+) -> (Value, Value) {
+    let mut reasons = serde_json::Map::new();
+    if received_us.is_none() {
+        let reason = if path == PathKind::Scrcpy {
+            "the S frame carried no arrival time"
+        } else {
+            "N and B_model frames have no arrival time (they carry T_built)"
+        };
+        reasons.insert("t_recv_us".to_owned(), json!(reason));
+    }
+    let fields = match floor {
+        Some(floor) => {
+            if floor.fallback_reason.is_none() {
+                reasons.insert(
+                    "floor_fallback_reason".to_owned(),
+                    json!("the frame met the lower bound"),
+                );
+            }
+            json!({
+                "t_switch_us": switched_us,
+                "t_recv_us": received_us,
+                "floor_after_us": floor.after_us,
+                "floor_outcome": if floor.fallback_reason.is_some() { "fell_back" } else { "met" },
+                "floor_attempts": floor.attempts,
+                "floor_fallback_reason": floor.fallback_reason,
+            })
+        }
+        None => {
+            let reason = if path == PathKind::Scrcpy {
+                "S frames after the first of a picture follow it by after_sequence; frame_idx 0 carries the picture's lower bound"
+            } else {
+                "N and B_model take each frame by a call after the switch; only S's first frame of a picture has the lower bound"
+            };
+            for key in [
+                "floor_after_us",
+                "floor_outcome",
+                "floor_attempts",
+                "floor_fallback_reason",
+            ] {
+                reasons.insert(key.to_owned(), json!(reason));
+            }
+            json!({
+                "t_switch_us": switched_us,
+                "t_recv_us": received_us,
+                "floor_after_us": null,
+                "floor_outcome": null,
+                "floor_attempts": null,
+                "floor_fallback_reason": null,
+            })
+        }
+    };
+    (fields, Value::Object(reasons))
 }
 
 /// The first path a cell's segments plan on `instance` (C8 writes the source rows once).

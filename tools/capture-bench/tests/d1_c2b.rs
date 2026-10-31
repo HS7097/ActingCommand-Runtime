@@ -15,7 +15,7 @@ use actingcommand_capture_bench::apk::{
     calibrate, residual_and_drift,
 };
 use actingcommand_capture_bench::fake::{
-    FakeCheckScript, FakeDevice, FakePattern, FakeScript, RecordedChildren,
+    FakeCheckScript, FakeDevice, FakePattern, FakeScript, RecordedChildren, SampleFault,
 };
 use actingcommand_capture_bench::metrics::ScriptedProbes;
 use actingcommand_capture_bench::model::BackendKind;
@@ -711,6 +711,114 @@ fn c8_saves_each_frame_and_lists_every_picture_target_path_and_frame() {
             .all(|row| row.ends_with(",not_evaluated,pending_offline_actinglab"))
     );
     assert!(rows.iter().any(|row| row.contains(",S,8M,")));
+}
+
+/// #402 C2c: S's first frame of a C8 picture is asked for with the lower bound of the picture
+/// switch. Picture a: the first floored sample meets it. Picture b: from S's third sample on,
+/// every sample with a time floor is stale (the slot holds only older frames), so the bound of
+/// 50 ms on the virtual clock runs out and the frame is taken without it, with the reason.
+#[test]
+fn c8_s_first_frame_after_a_picture_switch_meets_the_switch_floor_or_falls_back_with_a_reason() {
+    let (h, _apk) = apk_harness("c8floor", "c8floor", |script, _| {
+        script.sample_faults.push((
+            at(BackendKind::Scrcpy, 3, u64::MAX),
+            SampleFault::TimeFloorUnmet,
+        ));
+    });
+    let source = h.root.join("c8src");
+    std::fs::create_dir_all(&source).expect("the picture folder");
+    std::fs::write(source.join("a.png"), b"picture a").expect("picture a");
+    std::fs::write(source.join("b.png"), b"picture b").expect("picture b");
+    let truth = json!({
+        "package": "packs/neutral",
+        "package_sha256": "00",
+        "facts": null,
+        "images": [
+            { "image": "a.png", "kind": "truth", "targets": [
+                { "target": "t1", "class": "template", "hit": true },
+            ] },
+            { "image": "b.png", "kind": "truth", "targets": [
+                { "target": "t1", "class": "template", "hit": true },
+            ] },
+        ],
+    });
+    std::fs::write(source.join("truth.json"), truth.to_string()).expect("truth.json");
+    let table = format!(
+        "{APK_TABLE}\n[c8]\nimages_dir = '{}'\ntruth = '{}'\nframes_per_image = 2\nswitch_floor_wait_ms = 50\n",
+        source.display(),
+        source.join("truth.json").display()
+    );
+    let cells = cell(
+        "C8",
+        600_000,
+        &["instance = \"E1\"\npath = \"S\"\nmode = \"static_images\""],
+    );
+    let outcome = h.run(plan_with("c8floor", &table, E1, &cells));
+    assert_eq!(outcome.exit_code, 0, "{outcome:?}");
+    let frames: Vec<Value> = h
+        .lines("opps-C8-S.jsonl")
+        .into_iter()
+        .filter(|line| line["kind"] == "c8_frame")
+        .collect();
+    assert_eq!(frames.len(), 4, "{frames:?}");
+    fn frame<'a>(frames: &'a [Value], image: &str, index: u64) -> &'a Value {
+        frames
+            .iter()
+            .find(|frame| frame["image"] == image && frame["frame_idx"] == index)
+            .unwrap_or_else(|| panic!("the c8_frame of {image} {index}"))
+    }
+    for line in &frames {
+        assert!(
+            line["t_switch_us"].is_u64(),
+            "every frame has its switch time: {line}"
+        );
+        assert!(line["t_recv_us"].is_u64(), "{line}");
+    }
+
+    // Picture a: received after the switch, at the first attempt.
+    let met = frame(&frames, "a.png", 0);
+    let switched = met["t_switch_us"].as_u64().expect("t_switch_us");
+    assert_eq!(met["floor_after_us"], switched, "{met}");
+    assert_eq!(met["floor_outcome"], "met", "{met}");
+    assert_eq!(met["floor_attempts"], 1, "{met}");
+    assert!(met["floor_fallback_reason"].is_null(), "{met}");
+    assert!(
+        met["null_reasons"]["floor_fallback_reason"].is_string(),
+        "{met}"
+    );
+    assert!(
+        met["t_recv_us"].as_u64().expect("t_recv_us") > switched,
+        "{met}"
+    );
+
+    // Picture b: the bound runs out on the virtual clock, then the frame without it.
+    let fell = frame(&frames, "b.png", 0);
+    let switched = fell["t_switch_us"].as_u64().expect("t_switch_us");
+    assert_eq!(fell["floor_after_us"], switched, "{fell}");
+    assert_eq!(fell["floor_outcome"], "fell_back", "{fell}");
+    assert!(
+        fell["floor_attempts"].as_u64().expect("floor_attempts") > 1,
+        "{fell}"
+    );
+    let reason = fell["floor_fallback_reason"]
+        .as_str()
+        .expect("the fallback reason");
+    assert!(reason.starts_with("capture_frame_stale"), "{reason}");
+    assert!(
+        fell["t_recv_us"].as_u64().expect("t_recv_us") >= switched + 50_000,
+        "the frame without the bound is taken only after the 50 ms bound: {fell}"
+    );
+    assert!(h.run_dir.join("c8/b/S-8M-0.png").is_file());
+
+    // The later frames of a picture follow by after_sequence: no lower bound of their own.
+    for later in [frame(&frames, "a.png", 1), frame(&frames, "b.png", 1)] {
+        assert!(later["floor_after_us"].is_null(), "{later}");
+        assert!(later["floor_outcome"].is_null(), "{later}");
+        assert!(
+            later["null_reasons"]["floor_after_us"].is_string(),
+            "{later}"
+        );
+    }
 }
 
 #[test]

@@ -37,6 +37,10 @@ pub enum SampleFault {
     StdioRestoreFailed,
     StreamEnded,
     FrameStale,
+    /// #402 C2c: `capture_frame_stale` only for a sample with a time floor (`after_us`); a
+    /// sample without one, or with only `after_sequence`, delivers as usual (no frame arrived
+    /// after the floor time, while the slot still holds older frames).
+    TimeFloorUnmet,
 }
 
 /// Where a fault applies: an instance, a backend and the 1-based call number from which on
@@ -470,11 +474,15 @@ impl PreviewBackend for FakeBackend {
             )
             .without_native_call());
         }
+        let time_floor = floor.is_some_and(|floor| floor.after_us.is_some());
         let fault = device
             .script
             .sample_faults
             .iter()
-            .find(|(at, _)| applies(at, &self.instance, self.kind, call))
+            .find(|(at, fault)| {
+                applies(at, &self.instance, self.kind, call)
+                    && (*fault != SampleFault::TimeFloorUnmet || time_floor)
+            })
             .map(|(_, fault)| *fault);
         let latency = match self.kind {
             BackendKind::Nemu => device.script.nemu_latency_us,
@@ -527,6 +535,11 @@ impl PreviewBackend for FakeBackend {
                     "capture_frame_stale",
                     FailureClass::Measured,
                     "fake: no frame after the floor within the fresh wait",
+                ),
+                SampleFault::TimeFloorUnmet => BackendFailure::new(
+                    "capture_frame_stale",
+                    FailureClass::Measured,
+                    "fake: no frame after the time floor within the fresh wait",
                 ),
             });
         }

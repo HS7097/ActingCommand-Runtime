@@ -122,10 +122,20 @@ pub struct C8Plan {
     /// bench does not run it (the coordinator does, offline).
     #[serde(default)]
     pub actinglab: Option<String>,
+    /// #402 C2c: S's first frame of a picture must be received after the picture switch (the
+    /// lower bound, the time the APK showed it). Floored attempts repeat until this long after
+    /// the switch has passed; then the frame is taken without the bound and its `c8_frame`
+    /// record says so (`floor_outcome` `fell_back`, `floor_fallback_reason`).
+    #[serde(default = "default_switch_floor_wait")]
+    pub switch_floor_wait_ms: u64,
 }
 
 fn default_frames_per_image() -> u32 {
     5
+}
+
+fn default_switch_floor_wait() -> u64 {
+    2_000
 }
 
 fn default_seed() -> u64 {
