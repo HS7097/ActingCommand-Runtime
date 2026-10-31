@@ -23599,6 +23599,14 @@
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: begin destructive resource close."
     },
+    "begin_instance_activity": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.36",
+      "description": "A Runtime host operation or stage: begin instance activity."
+    },
     "begin_policy_work": {
       "owner": "runtime-host",
       "layer": "host",

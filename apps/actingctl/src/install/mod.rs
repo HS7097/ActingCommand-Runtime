@@ -58,6 +58,9 @@ mod gate_411_p49;
 // Test-only: Workflow #429 A.4 a (R-15a), the edges of the UI that runs after an operation.
 #[cfg(test)]
 mod gate_r15a_ui_edges;
+// Test-only: Workflow #429 R-0b, this build's `runtime-client` [3, 4] against consoles at 2, 3, 4.
+#[cfg(test)]
+mod gate_429_r0b_pairing;
 // Test-only: Workflow #429 R-15b, the release reader's UI side (A.4 b) and the registry of the
 // contract's codes and words.
 #[cfg(test)]

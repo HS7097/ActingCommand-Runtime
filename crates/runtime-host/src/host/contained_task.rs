@@ -1077,6 +1077,9 @@ pub(super) struct PreparedPackageRun<'a> {
     execution_provenance: ExecutionBackendProvenance,
     active_run: ActiveContainedRun<'a>,
     control_request_id: RequestId,
+    /// Workflow #429 R-0b: whether the run holds its own claim's key (a startup package) or the
+    /// ladder's (a rung's run), for the instance's `activity`.
+    activity_key: super::instance_activity::KeyHold,
 }
 
 impl ActiveContainedRun<'_> {
@@ -6673,6 +6676,18 @@ impl HostShared {
             .control
             .set_deadline(deadline_monotonic_ms)
             .map_err(RequestFailure::poison_without_terminal)?;
+        // Workflow #429 R-0b (register §1.238): the direct run shows from its grant while it
+        // executes, with the client's request and its package; its guard drops however the run
+        // returns.
+        let activity = self
+            .begin_instance_activity(
+                resolved.instance_id(),
+                super::instance_activity::ActivityStart::DirectRun {
+                    request_id: original.request_id(),
+                    package_id: prepared.package_label().to_owned(),
+                },
+            )
+            .map_err(RequestFailure::poison_without_terminal)?;
         // Workflow #387 D1c-H (B1): the run's records count for direction ① only under
         // `rules.direct_runs = trigger`; the counter sees its key held by the run's
         // `DirectTaskRun` claim, the fence's manual set.
@@ -6695,6 +6710,8 @@ impl HostShared {
             None,
             None,
         );
+        // R-0b: the run's execution ended and its lease is released.
+        drop(activity);
         // Workflow #191 ps2: the client of a cancelled run resets the instance next
         // (`SafeReset` on this connection); an instance pause hands the device back only after
         // that. Noted while the run is still registered, so a draining pause sees it.
@@ -7035,6 +7052,11 @@ impl HostShared {
             execution_provenance,
             active_run,
             control_request_id: pending.control_request_id,
+            activity_key: if pending.recovery_rung {
+                super::instance_activity::KeyHold::Borrowed
+            } else {
+                super::instance_activity::KeyHold::Own
+            },
         })
     }
 
@@ -7067,6 +7089,7 @@ impl HostShared {
             execution_provenance,
             active_run,
             control_request_id,
+            activity_key,
         } = run;
         let HeldPackageLease {
             token,
@@ -7103,6 +7126,18 @@ impl HostShared {
         active_run
             .control
             .set_deadline(deadline_monotonic_ms)
+            .map_err(RequestFailure::poison_without_terminal)?;
+        // Workflow #429 R-0b (register §1.238): the host's run shows while it executes, on its
+        // claim's key or on the ladder's; its guard drops however the run returns.
+        let _activity = self
+            .begin_instance_activity(
+                instance_id,
+                super::instance_activity::ActivityStart::HostRun {
+                    request_id: task_request_message.request_id(),
+                    package_id: prepared.package_label().to_owned(),
+                    key: activity_key,
+                },
+            )
             .map_err(RequestFailure::poison_without_terminal)?;
         self.execute_contained_task_with_lease(
             &task_request_message,
@@ -7401,6 +7436,18 @@ impl HostShared {
             .control
             .set_deadline(deadline_monotonic_ms)
             .map_err(RequestFailure::poison_without_terminal)?;
+        // Workflow #429 R-0b (register §1.238): the policy run shows while it executes, with the
+        // request it runs as (the one `contained_runs` tracks) and its package; its guard drops
+        // however the run returns.
+        let activity = self
+            .begin_instance_activity(
+                resolved.instance_id(),
+                super::instance_activity::ActivityStart::PolicyRun {
+                    request_id: task_request_message.request_id(),
+                    package_id: prepared.package_label().to_owned(),
+                },
+            )
+            .map_err(RequestFailure::poison_without_terminal)?;
         let executed = self.execute_contained_task_with_lease(
             &task_request_message,
             &validated,
@@ -7420,6 +7467,8 @@ impl HostShared {
             reading_keys,
             crate::fact_refresh::dispatch_parameters(context),
         );
+        // R-0b: the run's execution ended (its lease is released, or handed to its ladder).
+        drop(activity);
         // #385 P-k (Tk-10): a run with a factor segment above 1000 is settled on its budget
         // time; the time its budget clock did not count stays with its dispatch's clock.
         if let Some(reduction) = active_run.control.paced_reduction() {

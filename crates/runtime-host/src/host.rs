@@ -192,6 +192,8 @@ mod governance;
 mod host_claims;
 mod input;
 mod installation;
+// Workflow #429 R-0b: what each instance does now (`RuntimeInstanceStatus.activity`, memory only).
+mod instance_activity;
 mod instance_discovery;
 // Workflow #389 MCP-4: the instance fact read (register W2).
 mod instance_fact_read;
@@ -1887,6 +1889,7 @@ impl RuntimeHost {
                 config.state_root.clone(),
             )),
             contained_runs: Mutex::new(BTreeMap::new()),
+            instance_activities: instance_activity::InstanceActivities::default(),
             scheduling_pause: Mutex::new(SchedulingPauseTable::default()),
             scheduling_pause_persist_gate: Mutex::new(()),
             startup_packages: OnceLock::new(),
@@ -4176,6 +4179,22 @@ impl RuntimeHost {
         Ok(())
     }
 
+    /// Workflow #429 R-0b: every activity `instance_alias` has registered now, in the order they
+    /// began, each with whether it took the instance's key itself; the status shows one of them.
+    #[cfg(test)]
+    pub(crate) fn instance_activities_for_test(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<Vec<(actingcommand_contract::InstanceActivityKind, bool)>> {
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::InstanceActivitiesForTest)?;
+        let instance_id = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        shared.instance_activities.registered_for_test(instance_id)
+    }
+
     /// Workflow #369: the instance's holder kind and its waiting claims' kinds, in grant order.
     /// Read under the instance's queue-order lock, as `holds_key` reads a key: a lease
     /// transition changes the scheduler before its outcome record is durable (a release's
@@ -5561,6 +5580,9 @@ struct HostShared {
     /// their directory (memory only). A leaf lock: nothing else is taken while it is held.
     display_safe_area: Mutex<crate::display_safe_area::SafeAreaDeclarations>,
     contained_runs: Mutex<BTreeMap<RequestId, Arc<ContainedRunControl>>>,
+    // Workflow #429 R-0b (register §1.238): what each instance does now, as the status shows it
+    // (memory only; never read from the ledger). A leaf lock.
+    instance_activities: instance_activity::InstanceActivities,
     // Workflow #191 ps1: the operator's scheduling pauses (no expiry; since Workflow #361 B1
     // persisted as `host.scheduling_pause`).
     scheduling_pause: Mutex<SchedulingPauseTable>,

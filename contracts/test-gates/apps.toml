@@ -1107,6 +1107,15 @@ tests = [
 ]
 incident = ["#429 R-15a"]
 
+# Workflow #429 R-0b (0.12.36; register §1.238; contracts/component-interfaces.md, the runtime-client revision-3 row): this build's own declaration (the file its manifests carry) speaks runtime-client [3, 4]; as R*, it pairs with a console of [3, 3], [3, 4] (the UI's v0.12.0 and v0.12.1) and [4, 4] with no failed edge, and refuses a console whose max is 2 with the existing failed ui_meets_next row, both sides named with their source and range, the only failed edge
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::install::gate_429_r0b_pairing::r0b_the_build_declares_runtime_client_three_to_four",
+    "actingcommand-actingctl::bin:actingctl::install::gate_429_r0b_pairing::r0b_a_console_at_three_or_four_pairs_and_one_whose_max_is_two_is_refused",
+]
+incident = ["#429 R-0b"]
+
 # Workflow #429 R-15b (0.12.35; register §1.237; design rd-1031/design-r15b-ab-v4.1.md §1.9, §7 R-15b, test E01's source checks; contracts/install-cli.md, "Release verify and stage"): a UI release (acui-windows-<commit>.zip and SHA256SUMS) verifies and stages into install\ui-builds\<commit>\{ui, release.json} with member ui, writes no state.json, a second stage is unchanged and an interrupted one is finished by resume to the same bytes; each UI failure is listed (the facts' repository, the manifest's commit, the file set, a file's digest, a declaration that breaks the parse rules or lacks a v1 interface, an installation_selection_schema outside the install-selection range or none, the facts' digest and commit) and the folder is unchanged; a zip the reader recognises as no release zip refuses zip_set by its name (beside a Runtime pair, beside a UI zip, at stage, which writes nothing), and a UI zip beside a Runtime pair or a second UI zip refuses zip_set naming every zip; the Runtime and Tools stage answers and keeps its build as before; every code and registered word of install-cli.md's and stable-entry.md's R-15b registry is in contracts/outcome-codes and this build's enums, R-7a's keys referenced, not registered again
 [[gate]]
 coverage = "Y"

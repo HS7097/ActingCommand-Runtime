@@ -506,6 +506,11 @@ impl HostShared {
         let ladder_busy_holds = self
             .ladder_busy_hold_statuses(now)
             .map_err(RequestFailure::poison_without_terminal)?;
+        // Workflow #429 R-0b (register §1.238): what each instance does now, from memory only (no
+        // ledger read), read and released before the registry lock.
+        let mut activities = self
+            .instance_activities_shown()
+            .map_err(RequestFailure::poison_without_terminal)?;
         // Resolve only metadata before taking the scheduler lock. Identity checks and the
         // registered instance set are shared with device-facing admission; they run under
         // the registry lock so an endpoint rebinding is never observed half-applied.
@@ -549,6 +554,7 @@ impl HostShared {
             // Workflow #390 九处-1: the emulator as the Runtime last read it.
             let emulator_state = instance.emulator_state;
             let ladder_busy_hold = ladder_busy_holds.get(&instance_id).copied();
+            let activity = activities.remove(&instance_id);
             projected.push(
                 RuntimeInstanceStatus::new(
                     instance.instance_alias,
@@ -580,6 +586,7 @@ impl HostShared {
                         .with_resource_fence(resource_fence)
                         .with_emulator_state(emulator_state)
                         .with_ladder_busy_hold(ladder_busy_hold)
+                        .with_activity(activity)
                 })
                 .map_err(|_| {
                     RequestFailure::poison_without_terminal(RuntimeHostError::fatal(

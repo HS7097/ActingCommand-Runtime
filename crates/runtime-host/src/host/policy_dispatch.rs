@@ -3400,6 +3400,14 @@ impl HostShared {
         token: &LeaseToken,
         connection_id: ConnectionId,
     ) -> Result<SchedulingResumeSelfCheck, RequestFailure> {
+        // Workflow #429 R-0b (register §1.238): the reconnect shows while it holds its claim's
+        // key, with the resume's request; its guard drops however the reconnect returns.
+        let _activity = self
+            .begin_instance_activity(
+                instance_id,
+                super::instance_activity::ActivityStart::Reconnect { request_id },
+            )
+            .map_err(RequestFailure::poison_without_terminal)?;
         self.prepare_on_operator_claim(
             request,
             request_id,
