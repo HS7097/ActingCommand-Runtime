@@ -2125,6 +2125,22 @@ enum NemuIpcCommand {
     },
 }
 
+impl NemuIpcCommand {
+    /// #402 C1: the command's name in a timing point. The `bench.` prefix keeps these labels
+    /// apart from registered outcome names (outcome-guard G5); nothing reads them back.
+    fn bench_name(&self) -> &'static str {
+        match self {
+            Self::Probe(_) => "bench.probe",
+            Self::ObserveGeometry { .. } => "bench.observe_geometry",
+            Self::Capture(_) => "bench.capture",
+            Self::InputTap { .. } => "bench.input_tap",
+            Self::InputSegmented { .. } => "bench.input_segmented",
+            Self::InvalidateDisplay(_) => "bench.invalidate_display",
+            Self::Shutdown { .. } => "bench.shutdown",
+        }
+    }
+}
+
 struct NemuCapturedFrame {
     width: u32,
     height: u32,
@@ -2152,7 +2168,9 @@ impl NemuIpcWorker {
         timeout: Duration,
         input: Option<nemu_input::NemuInputState>,
     ) -> Self {
-        let (tx, rx) = mpsc::channel();
+        // #402 C1: the timing point names the command before the `match` below fixes its type,
+        // so the channel's type is stated here.
+        let (tx, rx) = mpsc::channel::<NemuIpcCommand>();
         let poisoned = Arc::new(AtomicBool::new(false));
         let worker_poisoned = Arc::clone(&poisoned);
         let handle = thread::spawn(move || {
@@ -2162,6 +2180,13 @@ impl NemuIpcWorker {
             let mut geometry_owner_retained = false;
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 while let Ok(command) = rx.recv() {
+                    crate::bench_timing::emit(|| {
+                        crate::bench_timing::BenchEvent::now(
+                            crate::bench_timing::BenchPoint::NemuCommandReceived,
+                            crate::bench_timing::BenchDetail::NemuCommand(command.bench_name()),
+                        )
+                        .for_nemu(instance_id)
+                    });
                     match command {
                         NemuIpcCommand::ObserveGeometry { deadline, response } => {
                             let result = worker_state_result(&mut state, |state| {
@@ -2757,10 +2782,27 @@ impl NemuIpcWorkerState {
     /// call's `record_vendor_stdio_snapshot` restores it. The stdio session starts redirected
     /// (the library load is the first call), so a redirected session resumes nothing.
     fn resume_vendor_stdio(&mut self) -> DeviceResult<()> {
-        self.stdio_session
+        let instance = self.instance_id;
+        crate::bench_timing::emit(|| {
+            crate::bench_timing::BenchEvent::now(
+                crate::bench_timing::BenchPoint::NemuStdioResumeStart,
+                crate::bench_timing::BenchDetail::None,
+            )
+            .for_nemu(instance)
+        });
+        let resumed = self
+            .stdio_session
             .as_mut()
-            .ok_or_else(|| DeviceError::fatal("Nemu vendor stdio session is closed"))?
-            .resume()
+            .ok_or_else(|| DeviceError::fatal("Nemu vendor stdio session is closed"))
+            .and_then(|session| session.resume());
+        crate::bench_timing::emit(|| {
+            crate::bench_timing::BenchEvent::now(
+                crate::bench_timing::BenchPoint::NemuStdioResumeEnd,
+                crate::bench_timing::BenchDetail::Succeeded(resumed.is_ok()),
+            )
+            .for_nemu(instance)
+        });
+        resumed
     }
 
     /// Reads the vendor output of the native call that just returned, then (Workflow #191 H)
@@ -2773,6 +2815,14 @@ impl NemuIpcWorkerState {
             .ok_or_else(|| DeviceError::fatal("Nemu vendor stdio session is closed"))?;
         let captured = stdio.snapshot();
         let suspended = stdio.suspend();
+        let instance = self.instance_id;
+        crate::bench_timing::emit(|| {
+            crate::bench_timing::BenchEvent::now(
+                crate::bench_timing::BenchPoint::NemuStdioRestoreEnd,
+                crate::bench_timing::BenchDetail::Succeeded(captured.is_ok() && suspended.is_ok()),
+            )
+            .for_nemu(instance)
+        });
         match captured {
             Ok(capture) => {
                 self.record_vendor_stdio(capture);
@@ -2848,6 +2898,14 @@ impl NemuIpcWorkerState {
             nemu_input::input_check(context.check.as_ref(), InputCheckPhase::Continue, stopped)?;
         }
         self.resume_vendor_stdio()?;
+        let instance = self.instance_id;
+        crate::bench_timing::emit(|| {
+            crate::bench_timing::BenchEvent::now(
+                crate::bench_timing::BenchPoint::NemuNativeProbeStart,
+                crate::bench_timing::BenchDetail::None,
+            )
+            .for_nemu(instance)
+        });
         let ret = unsafe {
             capture_display(
                 connect_id,
@@ -2858,6 +2916,17 @@ impl NemuIpcWorkerState {
                 std::ptr::null_mut(),
             )
         };
+        crate::bench_timing::emit(|| {
+            crate::bench_timing::BenchEvent::now(
+                crate::bench_timing::BenchPoint::NemuNativeProbeEnd,
+                crate::bench_timing::BenchDetail::NativeReturn {
+                    code: ret,
+                    width,
+                    height,
+                },
+            )
+            .for_nemu(instance)
+        });
         self.record_vendor_stdio_snapshot()?;
         if ret != 0 {
             let error =
@@ -2956,11 +3025,30 @@ impl NemuIpcWorkerState {
         let height_ptr = &mut height_i32 as *mut i32;
         let buffer_ptr = self.raw_buffer.as_mut_ptr();
         self.resume_vendor_stdio()?;
+        let instance = self.instance_id;
+        crate::bench_timing::emit(|| {
+            crate::bench_timing::BenchEvent::now(
+                crate::bench_timing::BenchPoint::NemuNativeCaptureStart,
+                crate::bench_timing::BenchDetail::None,
+            )
+            .for_nemu(instance)
+        });
         let ret = unsafe {
             capture_display(
                 connect_id, display_id, length, width_ptr, height_ptr, buffer_ptr,
             )
         };
+        crate::bench_timing::emit(|| {
+            crate::bench_timing::BenchEvent::now(
+                crate::bench_timing::BenchPoint::NemuNativeCaptureEnd,
+                crate::bench_timing::BenchDetail::NativeReturn {
+                    code: ret,
+                    width: width_i32,
+                    height: height_i32,
+                },
+            )
+            .for_nemu(instance)
+        });
         self.record_vendor_stdio_snapshot()?;
         if ret != 0 {
             return Err(DeviceError::fatal(format!(
@@ -2979,7 +3067,22 @@ impl NemuIpcWorkerState {
                 "Nemu IPC frame dimensions changed during capture from probed {width}x{height} to {captured_width}x{captured_height}"
             )));
         }
-        let pixels = rgba_bottom_up_to_rgba(&self.raw_buffer, width, height)?;
+        crate::bench_timing::emit(|| {
+            crate::bench_timing::BenchEvent::now(
+                crate::bench_timing::BenchPoint::NemuFlipStart,
+                crate::bench_timing::BenchDetail::None,
+            )
+            .for_nemu(instance)
+        });
+        let pixels = rgba_bottom_up_to_rgba(&self.raw_buffer, width, height);
+        crate::bench_timing::emit(|| {
+            crate::bench_timing::BenchEvent::now(
+                crate::bench_timing::BenchPoint::NemuFlipEnd,
+                crate::bench_timing::BenchDetail::Succeeded(pixels.is_ok()),
+            )
+            .for_nemu(instance)
+        });
+        let pixels = pixels?;
         let input_geometry = self.input_geometry(width, height)?;
         let geometry = self.geometry_observation(
             width,
@@ -3160,6 +3263,13 @@ impl CaptureBackend for NemuIpcBackend {
             PixelFormat::Rgba8,
             CaptureBackendName::NemuIpc,
         )?;
+        let captured_at = captured.captured_at;
+        crate::bench_timing::emit(|| {
+            crate::bench_timing::BenchEvent::now(
+                crate::bench_timing::BenchPoint::NemuFrameBuilt,
+                crate::bench_timing::BenchDetail::FrameBuilt { captured_at },
+            )
+        });
         captured.geometry = frame.geometry;
         if let Some(geometry) = frame.input_geometry {
             captured.selection = Some(Arc::new(CaptureSelectionContext {

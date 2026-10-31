@@ -93,6 +93,14 @@ pub struct ScrcpyConfig {
     pub fresh_margin: Duration,
     /// The window of arrivals the device-to-host clock offset is estimated from.
     pub offset_window: Duration,
+    /// #402 step 1 (C1): the server's `max_fps=`; `None` (the default) passes none, so the
+    /// encoder's own rate applies.
+    pub max_fps: Option<u32>,
+    /// #402 step 1 (C1): the server's `video_encoder=`; `None` (the default) passes none, so the
+    /// server picks the device's default H.264 encoder.
+    pub video_encoder: Option<String>,
+    /// #402 step 1 (C1): the server's `log_level=`; the default is `warn`, as before.
+    pub log_level: String,
 }
 
 impl Default for ScrcpyConfig {
@@ -105,6 +113,9 @@ impl Default for ScrcpyConfig {
             fresh_wait: Duration::from_secs(2),
             fresh_margin: Duration::from_millis(30),
             offset_window: Duration::from_secs(10),
+            max_fps: None,
+            video_encoder: None,
+            log_level: "warn".to_owned(),
         }
     }
 }
@@ -118,7 +129,16 @@ impl ScrcpyConfig {
             && !self.remote_path.chars().any(char::is_whitespace)
             && !self.start_timeout.is_zero()
             && !self.fresh_wait.is_zero()
-            && !self.offset_window.is_zero();
+            && !self.offset_window.is_zero()
+            && self.max_fps.is_none_or(|fps| fps > 0)
+            && self
+                .video_encoder
+                .as_deref()
+                .is_none_or(server_token_is_plain)
+            && matches!(
+                self.log_level.as_str(),
+                "verbose" | "debug" | "info" | "warn" | "error"
+            );
         if valid {
             Ok(())
         } else {
@@ -128,6 +148,16 @@ impl ScrcpyConfig {
             ))
         }
     }
+}
+
+/// #402 step 1 (C1): a value the server's command line carries as one shell word: not empty and
+/// only letters, digits, `.`, `_` and `-` (an encoder name such as `OMX.google.h264.encoder` or
+/// `c2.android.avc.encoder`).
+fn server_token_is_plain(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
 /// The region of the display, in its natural orientation, that the server encodes (`crop=`).
@@ -206,7 +236,7 @@ pub(crate) fn server_arguments(
         SERVER_CLASS.to_owned(),
         SCRCPY_SERVER_VERSION.to_owned(),
         format!("scid={scid:08x}"),
-        "log_level=warn".to_owned(),
+        format!("log_level={}", config.log_level),
         "video=true".to_owned(),
         "audio=false".to_owned(),
         "control=false".to_owned(),
@@ -234,7 +264,34 @@ pub(crate) fn server_arguments(
             crop.width, crop.height, crop.x, crop.y
         ));
     }
+    // #402 step 1 (C1): only set fields add arguments, so the default list is unchanged.
+    if let Some(max_fps) = config.max_fps {
+        arguments.push(format!("max_fps={max_fps}"));
+    }
+    if let Some(encoder) = &config.video_encoder {
+        arguments.push(format!("video_encoder={encoder}"));
+    }
     arguments
+}
+
+/// #402 step 1 (C1): the server's command line that lists the device's encoders and exits
+/// (`list_encoders=true`): the pinned server, the configured log level (the list is printed at
+/// `info`, so a level above it prints nothing) and no video, audio or control.
+pub(crate) fn list_encoders_arguments(config: &ScrcpyConfig, scid: u32) -> Vec<String> {
+    vec![
+        format!("CLASSPATH={}", config.remote_path),
+        "app_process".to_owned(),
+        "/".to_owned(),
+        SERVER_CLASS.to_owned(),
+        SCRCPY_SERVER_VERSION.to_owned(),
+        format!("scid={scid:08x}"),
+        format!("log_level={}", config.log_level),
+        "list_encoders=true".to_owned(),
+        "video=false".to_owned(),
+        "audio=false".to_owned(),
+        "control=false".to_owned(),
+        "cleanup=false".to_owned(),
+    ]
 }
 
 /// Why a stream stopped delivering. Every end is `scrcpy_stream_ended` except the size refusal,
@@ -379,10 +436,26 @@ impl SlotFrame {
 
     fn into_frame(self) -> DeviceResult<Frame> {
         let (width, height) = self.picture.dimensions();
+        let scid = crate::bench_timing::stream();
+        crate::bench_timing::emit(|| {
+            crate::bench_timing::BenchEvent::now(
+                crate::bench_timing::BenchPoint::ScrcpyToRgbStart,
+                crate::bench_timing::BenchDetail::None,
+            )
+            .for_stream(scid)
+        });
+        let rgb = self.picture.to_rgb8();
+        crate::bench_timing::emit(|| {
+            crate::bench_timing::BenchEvent::now(
+                crate::bench_timing::BenchPoint::ScrcpyToRgbEnd,
+                crate::bench_timing::BenchDetail::None,
+            )
+            .for_stream(scid)
+        });
         let mut frame = Frame::from_pixels(
             width,
             height,
-            self.picture.to_rgb8(),
+            rgb,
             PixelFormat::Rgb8,
             CaptureBackendName::Scrcpy,
         )?;
@@ -465,6 +538,29 @@ impl SlotState {
     /// arrival-minus-presentation difference in the window (no frame arrives before it is
     /// encoded), less `margin` for the transport latency that smallest difference still holds.
     fn meets(&self, frame: &SlotFrame, floor: &CaptureFloor, margin: Duration) -> bool {
+        let met = self.meets_floor(frame, floor, margin);
+        crate::bench_timing::emit(|| {
+            crate::bench_timing::BenchEvent::now(
+                crate::bench_timing::BenchPoint::ScrcpyMeets,
+                crate::bench_timing::BenchDetail::Meets(crate::bench_timing::MeetsInputs {
+                    sequence: frame.stamp.sequence,
+                    device_pts_us: frame.stamp.device_pts_us,
+                    received_at: frame.stamp.received_at,
+                    epoch: self.epoch,
+                    offset_min_us: self.offsets.iter().map(|(_, offset)| *offset).min(),
+                    margin_us: margin.as_micros(),
+                    floor_after: floor.after,
+                    floor_after_sequence: floor.after_sequence,
+                    met,
+                }),
+            )
+            .for_stream(crate::bench_timing::stream())
+        });
+        met
+    }
+
+    /// The decision [`Self::meets`] reports (unchanged by #402 C1).
+    fn meets_floor(&self, frame: &SlotFrame, floor: &CaptureFloor, margin: Duration) -> bool {
         if floor
             .after_sequence
             .is_some_and(|sequence| frame.stamp.sequence <= sequence)
@@ -565,6 +661,35 @@ impl FrameSlot {
         margin: Duration,
         clock: &dyn SlotClock,
     ) -> Result<SlotFrame, FreshWaitFailure> {
+        let scid = crate::bench_timing::stream();
+        crate::bench_timing::emit(|| {
+            crate::bench_timing::BenchEvent::now(
+                crate::bench_timing::BenchPoint::ScrcpyWaitFreshStart,
+                crate::bench_timing::BenchDetail::None,
+            )
+            .for_stream(scid)
+        });
+        let waited = self.wait_fresh_inner(floor, wait, margin, clock);
+        crate::bench_timing::emit(|| {
+            crate::bench_timing::BenchEvent::now(
+                crate::bench_timing::BenchPoint::ScrcpyWaitFreshEnd,
+                crate::bench_timing::BenchDetail::WaitFresh {
+                    delivered_sequence: waited.as_ref().ok().map(|frame| frame.stamp.sequence),
+                },
+            )
+            .for_stream(scid)
+        });
+        waited
+    }
+
+    /// The wait [`Self::wait_fresh`] reports (unchanged by #402 C1).
+    fn wait_fresh_inner(
+        &self,
+        floor: Option<CaptureFloor>,
+        wait: Duration,
+        margin: Duration,
+        clock: &dyn SlotClock,
+    ) -> Result<SlotFrame, FreshWaitFailure> {
         let deadline = clock.now() + wait;
         let mut state = self.state.lock().map_err(|_| FreshWaitFailure::Poisoned)?;
         loop {
@@ -654,7 +779,39 @@ impl StreamPump {
         let mut payload = vec![0u8; last as usize];
         read_stream(reader, &mut payload)?;
         let received_at = arrival();
-        let picture = decoder.decode(&payload)?;
+        let scid = crate::bench_timing::stream();
+        crate::bench_timing::emit(|| crate::bench_timing::BenchEvent {
+            point: crate::bench_timing::BenchPoint::ScrcpyPacketReceived,
+            at: received_at,
+            nemu_instance: None,
+            stream_scid: scid,
+            detail: crate::bench_timing::BenchDetail::Packet {
+                device_pts_us: flags_and_pts & PTS_MASK,
+                bytes: payload.len(),
+                config: flags_and_pts & CONFIG_PACKET_FLAG != 0,
+            },
+        });
+        crate::bench_timing::emit(|| {
+            crate::bench_timing::BenchEvent::now(
+                crate::bench_timing::BenchPoint::ScrcpyDecodeStart,
+                crate::bench_timing::BenchDetail::None,
+            )
+            .for_stream(scid)
+        });
+        let decoded = decoder.decode(&payload);
+        crate::bench_timing::emit(|| {
+            crate::bench_timing::BenchEvent::now(
+                crate::bench_timing::BenchPoint::ScrcpyDecodeEnd,
+                crate::bench_timing::BenchDetail::Decoded {
+                    picture: decoded
+                        .as_ref()
+                        .ok()
+                        .and_then(|picture| picture.as_ref().map(StreamPicture::dimensions)),
+                },
+            )
+            .for_stream(scid)
+        });
+        let picture = decoded?;
         if flags_and_pts & CONFIG_PACKET_FLAG != 0 {
             return Ok(());
         }
@@ -696,7 +853,8 @@ fn read_stream(reader: &mut dyn Read, buffer: &mut [u8]) -> Result<(), StreamEnd
         .map_err(|_| StreamEnd::SocketClosed)
 }
 
-fn run_stream(mut socket: TcpStream, slot: Arc<FrameSlot>, expected: ExpectedVideo) {
+fn run_stream(mut socket: TcpStream, slot: Arc<FrameSlot>, expected: ExpectedVideo, scid: u32) {
+    crate::bench_timing::set_stream(Some(scid));
     match h264::OpenH264Decoder::open() {
         Err(end) => slot.update(|state| state.end(end)),
         Ok(mut decoder) => {
@@ -758,6 +916,16 @@ impl ScrcpyBackend {
                 )
             })?;
         let port = parse_forward_port(&forwarded.stdout)?;
+        crate::bench_timing::emit(|| {
+            crate::bench_timing::BenchEvent::now(
+                crate::bench_timing::BenchPoint::ScrcpyForwarded,
+                crate::bench_timing::BenchDetail::Forwarded {
+                    scid,
+                    local_port: port,
+                },
+            )
+            .for_stream(Some(scid))
+        });
         let mut backend = Self {
             adb_config,
             config,
@@ -779,6 +947,16 @@ impl ScrcpyBackend {
 
     fn start(&mut self, adb: &Adb, scid: u32, port: u16, natural: (u32, u32)) -> DeviceResult<()> {
         let arguments = server_arguments(&self.config, scid, self.crop);
+        crate::bench_timing::emit(|| {
+            crate::bench_timing::BenchEvent::now(
+                crate::bench_timing::BenchPoint::ScrcpyServerArguments,
+                crate::bench_timing::BenchDetail::ServerArguments {
+                    scid,
+                    arguments: arguments.clone(),
+                },
+            )
+            .for_stream(Some(scid))
+        });
         let arguments = arguments.iter().map(String::as_str).collect::<Vec<_>>();
         let child = adb
             .shell_spawn(&self.target.adb_arg(), &arguments)
@@ -809,7 +987,7 @@ impl ScrcpyBackend {
         let expected = ExpectedVideo::of(self.crop, natural);
         let reader = thread::Builder::new()
             .name("scrcpy-stream".to_owned())
-            .spawn(move || run_stream(socket, reader_slot, expected))
+            .spawn(move || run_stream(socket, reader_slot, expected, scid))
             .map_err(|error| {
                 start_failure(
                     crate::codes::DeviceStage::CaptureScrcpyStreamSpawn.location(),
@@ -959,6 +1137,30 @@ impl ScrcpyBackend {
             None => Ok(outcome),
             Some(error) => Err(error.with_close_outcome(&outcome)),
         }
+    }
+}
+
+impl ScrcpyBackend {
+    /// #402 step 1 (C1): the `list_encoders` probe. Pushes the verified server to the configured
+    /// path, runs it with `list_encoders=true` through `adb shell` within the adb command timeout
+    /// and returns what it printed. It forwards nothing and starts no stream; the server lists the
+    /// encoders and exits.
+    pub fn list_encoders(
+        adb_config: AdbConfig,
+        target: DeviceTarget,
+        config: ScrcpyConfig,
+    ) -> DeviceResult<String> {
+        config.validate()?;
+        let server = checked_server(EMBEDDED_SERVER)?;
+        let serial = target.adb_arg();
+        let adb = Adb::new(adb_config);
+        verify_adb_device(&adb, &target, &serial, CaptureBackendName::Scrcpy)?;
+        push_server(&adb, &serial, server, &config.remote_path)?;
+        let arguments = list_encoders_arguments(&config, next_scid());
+        let mut command = vec!["-s", serial.as_str(), "shell"];
+        command.extend(arguments.iter().map(String::as_str));
+        let output = adb.run(&command)?;
+        Ok(format!("{}{}", output.stdout, output.stderr))
     }
 }
 

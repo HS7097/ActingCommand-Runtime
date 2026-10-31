@@ -592,6 +592,13 @@ fn ledger_ingress_accepts_only_sanitized_event_v2() {
 #[test]
 fn fenced_close_requires_scheduler_witness() {
     let sources = workspace_sources(&["crates", "apps", "providers", "tools"]);
+    // Workflow #402 experiment, branch never merged: the capture bench mints its own witness
+    // for the formal loop's `nemu_ipc` taps (plan v2.1 §5.6). This narrow exception exists only
+    // on the experiment branch `exp/402-capture-bench` and never reaches main.
+    let sources: Vec<(String, String)> = sources
+        .into_iter()
+        .filter(|(path, _)| !path.starts_with("tools/capture-bench/"))
+        .collect();
     let violations = actingcommand_actinglab_architecture::inspect_fenced_write_issuers(&sources)
         .expect("parse fenced-write issuer source inventory");
     assert!(
@@ -2758,6 +2765,158 @@ fn d2_t32_the_fact_refresh_code_never_calls_the_ledger_write_interface() {
         violations.is_empty(),
         "the fact refresh's code calls the ledger's write interface; D2 has no row in the \
          direct-write exception table:\n{}",
+        violations.join("\n")
+    );
+}
+
+/// #402 step 1 (C1, plan v2.1 §3.2 item 1): the device layer's `bench-timing` feature is for the
+/// experiment carrier `tools/capture-bench` only. No release binary turns it on:
+/// - `actingcommand-device` keeps it out of its default features;
+/// - no package a release binary reaches (normal and build dependencies, every feature on)
+///   requests it, through a dependency declaration or a feature of its own, and none of them is
+///   the carrier;
+/// - the release build step builds the seven release binaries in a cargo call of their own, so
+///   the carrier's request never joins their feature resolution, and no workflow passes
+///   `--all-features` or names the feature.
+#[test]
+fn release_binaries_never_enable_bench_timing() {
+    const FEATURE: &str = "bench-timing";
+    const DEVICE: &str = "actingcommand-device";
+    const CARRIER: &str = "actingcommand-capture-bench";
+    const RELEASE_PACKAGES: [&str; 6] = [
+        "actingcommand-actingd",
+        "actingcommand-actingctl",
+        "actingcommand-mcp-entry",
+        "actingcommand-actinglab",
+        "actingledger",
+        "actingcommand-vision-provider-check",
+    ];
+    let metadata: serde_json::Value =
+        serde_json::from_str(&workspace_metadata()).expect("parse cargo metadata");
+    let packages = metadata["packages"].as_array().expect("metadata packages");
+    let by_id = packages
+        .iter()
+        .map(|package| (package["id"].as_str().expect("package id"), package))
+        .collect::<BTreeMap<_, _>>();
+    let nodes = metadata["resolve"]["nodes"]
+        .as_array()
+        .expect("metadata resolve nodes")
+        .iter()
+        .map(|node| (node["id"].as_str().expect("node id"), node))
+        .collect::<BTreeMap<_, _>>();
+    let mut violations = Vec::new();
+
+    let device = packages
+        .iter()
+        .find(|package| package["name"] == DEVICE)
+        .expect("the device package");
+    if device["features"]["default"]
+        .as_array()
+        .is_some_and(|default| default.iter().any(|feature| feature == FEATURE))
+    {
+        violations.push(format!("{DEVICE} enables `{FEATURE}` by default"));
+    }
+
+    for release in RELEASE_PACKAGES {
+        let start = packages
+            .iter()
+            .find(|package| package["name"] == release)
+            .and_then(|package| package["id"].as_str())
+            .unwrap_or_else(|| panic!("missing release package {release}"));
+        let mut seen = BTreeSet::from([start]);
+        let mut queue = vec![start];
+        while let Some(id) = queue.pop() {
+            let package = by_id[id];
+            let name = package["name"].as_str().expect("package name");
+            if name == CARRIER {
+                violations.push(format!(
+                    "{release} reaches the experiment carrier {CARRIER}"
+                ));
+            }
+            for dependency in package["dependencies"].as_array().into_iter().flatten() {
+                if dependency["kind"] == "dev" || dependency["name"] != DEVICE {
+                    continue;
+                }
+                if dependency["features"]
+                    .as_array()
+                    .is_some_and(|features| features.iter().any(|feature| feature == FEATURE))
+                {
+                    violations.push(format!(
+                        "{release} reaches {name}, whose dependency on {DEVICE} requests `{FEATURE}`"
+                    ));
+                }
+            }
+            for (feature, enables) in package["features"].as_object().into_iter().flatten() {
+                for enabled in enables.as_array().into_iter().flatten() {
+                    if enabled
+                        .as_str()
+                        .is_some_and(|value| value.ends_with(&format!("/{FEATURE}")))
+                    {
+                        violations.push(format!(
+                            "{release} reaches {name}, whose feature `{feature}` enables {enabled}"
+                        ));
+                    }
+                }
+            }
+            let Some(node) = nodes.get(id) else {
+                continue;
+            };
+            for edge in node["deps"].as_array().into_iter().flatten() {
+                let normal_or_build = edge["dep_kinds"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|kind| kind["kind"] != "dev");
+                let next = edge["pkg"].as_str().expect("dependency package id");
+                if normal_or_build && seen.insert(next) {
+                    queue.push(next);
+                }
+            }
+        }
+    }
+
+    let root = workspace_root();
+    let workflows = root.join(".github/workflows");
+    for entry in fs::read_dir(&workflows).expect("read workflows") {
+        let path = entry.expect("workflow entry").path();
+        let text = fs::read_to_string(&path).expect("read workflow");
+        let display = path.file_name().expect("workflow name").to_string_lossy();
+        for (number, line) in text.lines().enumerate() {
+            if line.contains("--all-features") || line.contains(FEATURE) {
+                violations.push(format!(
+                    "{display}:{}: a workflow names `--all-features` or `{FEATURE}`",
+                    number + 1
+                ));
+            }
+        }
+    }
+    let build = fs::read_to_string(workflows.join("windows-remote-build.yml"))
+        .expect("read the Windows build workflow");
+    let lines = build.lines().collect::<Vec<_>>();
+    let release_line = lines
+        .iter()
+        .position(|line| line.contains("--bin actingcommand-actingd"))
+        .expect("the release build step builds actingcommand-actingd");
+    let step_start = lines[..release_line]
+        .iter()
+        .rposition(|line| line.trim_start().starts_with("- name:"))
+        .expect("the release build step has a name");
+    let step_end = lines[release_line..]
+        .iter()
+        .position(|line| line.trim_start().starts_with("- name:"))
+        .map_or(lines.len(), |offset| release_line + offset);
+    for line in &lines[step_start..step_end] {
+        if line.contains("capture-bench") || line.contains("--workspace") {
+            violations.push(format!(
+                "the release build step builds more than the release binaries: {}",
+                line.trim()
+            ));
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "#402 bench-timing violations:\n{}",
         violations.join("\n")
     );
 }
