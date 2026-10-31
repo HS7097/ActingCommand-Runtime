@@ -115,4 +115,7 @@ mod tests {
     // SS-2c (0.12.32; register §1.227): a `schedule.json` rule that declares itself maintenance is
     // not judged by net benefit.
     mod gate_ss2c;
+    // SS-2g (0.12.34; register §1.232): a V2 consumption may declare its expected amount in
+    // thousandths; the net benefit reads it exactly and every integer reader rounds it up.
+    mod gate_ss2g;
 }

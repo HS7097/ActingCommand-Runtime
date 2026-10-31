@@ -4807,6 +4807,67 @@ either.
 | PA-2 | `IdleStep::WakeHeld`, `IdlePlanner::wake_held`, `withhold_idle_wake` (`idle_action.rs`, `idle.rs`) | behaviour (idle planner) | PAUSE-AUTO | — | a held `stop_emulator` wake stays owed in `host.idle_state` (shape unchanged); the next check after the resume queues it |
 | PA-3 | `idle_action` (existing key) on `emulator_autostart_skipped`, with `skip_reason` | new optional value of an existing code (no shape change) | PAUSE-AUTO | the idle check, an idle wake's claim | once per pause revision and start (`SkippedStart`); the daemon start's skip carries neither `watch_kind` nor `idle_action` |
 
+### 1.232 Slice SS-2g (0.12.34): a V2 consumption may declare its expected amount in thousandths, as a production may (ACM-PRICE addendum 2.1 §3.5 and §7.8, design `rd-1031/design-acm-price-addendum2.1.md`; Alice's rulings 127–129 of 10-31 13:19 and 13:22, Workflow #424 comment 6539002371; the research channel's review of addendum 2, point 2, and the coordinator's choice: the expectation is the model's, not the package's last spend; coordinator work order `rd-1031/brief-ss2g.md`)
+
+[scheduling/README.md](scheduling/README.md) ("Expected production (v2)" becomes "Expected
+quantities (v2)"; "Net benefit within a tier"; "Task Reserves"),
+[scheduling/v2/README.md](scheduling/v2/README.md),
+[scheduling/v2/common.schema.json](scheduling/v2/common.schema.json) (`resourceEffect`) and
+[remedies.md](remedies.md) (`run_cap`) are the contract. It widens §1.225's consumption to
+thousandths. The number 1.232 is the coordinator's; §1.230 (PAUSE-AUTO) and §1.231 (SS-4) are in
+flight in the same release.
+
+**What.** (1) A V2 `consumes` entry may carry `expected_amount_milli` (an integer in
+`0..=2^53−1`, at most a constant capacity × 1000, `effect_incompatible` above it) instead of
+`amount`; V1, the pending marker and their exclusivity are unchanged (`limit_exceeded` at the
+entry). The compiler (`validation.rs`, `validate_effects`) no longer requires the production
+direction for the expected quantity, and the schema's second `resourceEffect` branch no longer
+fixes `direction: produce`. (2) The net benefit's consumption of a pool is `C = Σ amount × 1000 +
+Σ expected_amount_milli` thousandths (`resource_targets.rs`, `declared_consumption_milli`) and its
+cost `C·W·σ/(1000·Q)`, exact (`evaluator/benefit.rs`). (3) Every reader of an integer consumption
+(the reserve views and the reserve gate, the unshown consumption, SS-2's tie key, the selection
+fields `task.consumes.<pool>`) reads `⌈C/1000⌉`: `declared_consumption` now returns it. Before,
+its `units().unwrap_or(0)` read an expected entry as 0, and the reserve gate would have left it
+out. (4) SS-6's `run_cap` is absent for a task that reserves a pool it consumes by expectation, as
+it is for a goal-driven production declared by expectation: `declared_amount` already answers
+`None` for an entry without an integer `amount`. `spend_allowance` is unchanged. (5) Forward
+projection already answers `effect_evidence_insufficient` for an expected entry in either
+direction (`forward.rs`, `uncertain_effect_gap`), unchanged.
+
+**Why.** A task the package decides at run time (which project to start, which item to buy)
+spends a different amount on each run. The model gives the expectation, in general a fraction of
+a unit per run, and an integer would have to be wrong. The reserve readers
+round up, so a reserve is never read as safer than the expectation says, and the package's
+`spend_allowance` still stops the spend. Until this slice a rule group whose effect binding gives
+an expected consumption composes no catalog, so the resource side's RS-6 waits for it (addendum
+2.1 §3.5).
+
+**Unchanged.** A catalog without an expected consumption decides byte for byte as before: the net
+benefit's numerator is the `amount × 1000` of before, and `⌈C/1000⌉` of whole amounts is their
+sum. `B`'s formula, unknown is never 0, the regenerating discount, the gates and their order, the
+one-way rule, game neutrality. A production's expected quantity reads as before. **No
+configuration key, no new code, no new value, no record kind, no interface revision.**
+
+**What changes live.** Nothing now. No production rule declares a consumption by expectation (the
+resource side writes those two kinds of rule only once this slice is deployed), no pool declares a
+valuation, and all five instances are paused under ruling 116 (`alice-116-scheduler-stop`).
+
+**Rollback** (to 0.12.33). The ledger and the configuration need nothing: no shape or value is
+new. The catalog: a build without SS-2g refuses a consumed `expected_amount_milli`
+(`limit_exceeded` at the entry), and its start compiles the active generation and every generation
+an unsettled dispatch or a pair's latest completed policy dispatch pins (§1.225's rollback and its
+correction). So before rolling back, let 0.12.34 activate a generation without such an entry
+(take the entry, or its rule, out of the game roots), with no policy dispatch of a task that
+declares one pinned to a generation that has it; while the scheduler is stopped on every instance
+no such dispatch exists.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SS2g-1 | `expected_amount_milli` on a V2 `consumes` entry | catalog format addition | SS-2g | `acmodel bindings apply` | absent serializes as nothing |
+| SS2g-2 | the net benefit's consumption in thousandths (`declared_consumption_milli`) | behaviour (evaluation, score stage) | SS-2g | the policy evaluator | exact; integer catalogs unchanged |
+| SS2g-3 | `⌈C/1000⌉` (`declared_consumption`) for the reserve views and gate, the unshown consumption, the tie key and the selection fields | behaviour (evaluation) | SS-2g | the policy evaluator | rounds up |
+| SS2g-4 | SS-6 `run_cap`: absent when the task reserves a pool it consumes by expectation | behaviour (evaluation) | SS-2g | the policy evaluator | `spend_allowance` unchanged |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

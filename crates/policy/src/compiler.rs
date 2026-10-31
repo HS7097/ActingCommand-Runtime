@@ -806,9 +806,21 @@ mod tests {
             sources.tasks.bytes = serde_json::to_vec(&document).unwrap();
             assert_eq!(compile_catalog(&sources).is_ok(), accepted, "{quantity}");
         }
-        for (version, member, direction) in [
-            (crate::SCHEDULING_SCHEMA_VERSION, "produces", "produce"),
-            (crate::SCHEDULING_SCHEMA_VERSION_V2, "consumes", "consume"),
+        // SS-2g (register §1.232): a V2 consumption may declare its expected amount, as a
+        // production may; V1 still requires `amount`.
+        for (version, member, direction, accepted) in [
+            (
+                crate::SCHEDULING_SCHEMA_VERSION,
+                "produces",
+                "produce",
+                false,
+            ),
+            (
+                crate::SCHEDULING_SCHEMA_VERSION_V2,
+                "consumes",
+                "consume",
+                true,
+            ),
         ] {
             let mut sources = if version == crate::SCHEDULING_SCHEMA_VERSION {
                 v1.clone()
@@ -822,7 +834,11 @@ mod tests {
                 "expected_amount_milli": 400, "observation_source": "self_reported", "confidence_milli": 1000
             }]);
             sources.tasks.bytes = serde_json::to_vec(&document).unwrap();
-            assert!(compile_catalog(&sources).is_err(), "{version} {member}");
+            assert_eq!(
+                compile_catalog(&sources).is_ok(),
+                accepted,
+                "{version} {member}"
+            );
         }
         for version in [
             crate::SCHEDULING_SCHEMA_VERSION,

@@ -3309,8 +3309,8 @@ fn rejected(
 pub(crate) struct ReserveView {
     pub(crate) pool_id: String,
     pub(crate) at_least: u64,
-    /// The task's declared consumption of the pool: the sum of its `consumes` amounts for it, 0
-    /// when it declares none.
+    /// The task's declared consumption of the pool: the sum of its `consumes` amounts for it, an
+    /// expected consumption rounded up (SS-2g, [`declared_consumption`]), 0 when it declares none.
     pub(crate) consumes: u64,
     /// The pool's projected amount less `consumes`; `None` while the projected amount is
     /// unknown.
@@ -3351,22 +3351,41 @@ impl ReserveView {
     }
 }
 
-/// A task's declared consumption of one pool in real units: the sum of its `consumes` amounts
-/// for the pool (the compiler admits only `amount` on a consumption). SS-2b: a pending `amount`
+/// A task's declared consumption of one pool per run in thousandths of a real unit, `C`: the sum
+/// over its `consumes` entries for the pool of `amount × 1000` and (SS-2g, register §1.232) a V2
+/// `expected_amount_milli` as written. The net benefit reads it exactly. SS-2b: a pending `amount`
 /// declares no consumption here, as an entry without the pool would.
-pub(crate) fn declared_consumption(task: &TaskSpec, pool_id: &str) -> PolicyEvaluationResult<u64> {
+pub(crate) fn declared_consumption_milli(
+    task: &TaskSpec,
+    pool_id: &str,
+) -> PolicyEvaluationResult<u128> {
     task.consumes
         .iter()
-        .filter(|effect| effect.pool_id == pool_id)
-        .try_fold(0_u64, |sum, effect| {
-            sum.checked_add(effect.units().unwrap_or(0))
+        .filter(|effect| effect.pool_id == pool_id && !effect.is_pending())
+        .try_fold(0_u128, |sum, effect| {
+            let amount = u128::from(effect.units().unwrap_or(0)).checked_mul(1_000)?;
+            sum.checked_add(amount)?
+                .checked_add(u128::from(effect.expected_amount_milli.unwrap_or(0)))
         })
-        .ok_or_else(|| {
-            PolicyEvaluationError::overflow(format!(
-                "task '{}' declares a consumption of pool '{pool_id}' beyond the integer range",
-                task.id
-            ))
-        })
+        .ok_or_else(|| consumption_overflow(task, pool_id))
+}
+
+/// A task's declared consumption of one pool in real units, `⌈C/1000⌉` of
+/// [`declared_consumption_milli`]: the sum of its `consumes` amounts for the pool, an expected
+/// consumption (SS-2g) rounded up, so a reserve is never read as safer than the expectation says.
+/// Every reader of an integer consumption reads this one: the reserve views and the reserve gate,
+/// the consumption a reading does not show yet, SS-2's tie key and the selection fields
+/// `task.consumes.<pool>`. A catalog without an expected consumption reads the sum of before.
+pub(crate) fn declared_consumption(task: &TaskSpec, pool_id: &str) -> PolicyEvaluationResult<u64> {
+    let milli = declared_consumption_milli(task, pool_id)?;
+    u64::try_from(milli.div_ceil(1_000)).map_err(|_| consumption_overflow(task, pool_id))
+}
+
+fn consumption_overflow(task: &TaskSpec, pool_id: &str) -> PolicyEvaluationError {
+    PolicyEvaluationError::overflow(format!(
+        "task '{}' declares a consumption of pool '{pool_id}' beyond the integer range",
+        task.id
+    ))
 }
 
 /// The reserve views of a task, in the order it declares its reserves; `None` when it declares
@@ -3745,8 +3764,8 @@ fn spend_allowance(view: &ReserveView, pending: u64) -> Option<u64> {
 }
 
 /// The sum of the declared integer per-run `amount`s of `effects` on `pool_id`; `None` when one
-/// of them declares none (an `expected_amount_milli` production or, SS-2b, a pending amount) or
-/// the sum is 0. The sum saturates.
+/// of them declares none (an `expected_amount_milli` entry, a production or, SS-2g, a
+/// consumption; or, SS-2b, a pending amount) or the sum is 0. The sum saturates.
 fn declared_amount(effects: &[ResourceEffectSpec], pool_id: &str) -> Option<u64> {
     effects
         .iter()
@@ -3764,7 +3783,9 @@ fn declared_amount(effects: &[ResourceEffectSpec], pool_id: &str) -> Option<u64>
 /// cap never ends on that cap's range check. `None` when the task reserves none of the pools it
 /// consumes, when one such pool's projected amount is unknown, or when a declaration it needs is
 /// incomplete: a consumed pool, or a goal-driven produced pool with an open gap, without an
-/// integer per-run `amount` on every entry.
+/// integer per-run `amount` on every entry. SS-2g (register §1.232): so a task that reserves a
+/// pool it consumes by `expected_amount_milli` gets no `run_cap`, as a goal-driven production
+/// declared by expectation gives none; its `spend_allowance` is unchanged and stops the spend.
 fn run_cap(
     task: &TaskSpec,
     views: Option<&[ReserveView]>,

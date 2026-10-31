@@ -343,6 +343,19 @@ tests = [
     "actingcommand-policy::lib::tests::gate_ss2b::ss2e_t5_a_maintenance_successor_of_a_maintenance_task_ranks_as_before",
 ]
 incident = ["#386 SS-2e"]
+# SS-2g (ACM-PRICE addendum 2.1 §3.5 and §7.8 tests 1 to 7; rd-1031 brief-ss2g; contracts/scheduling/README.md, "Expected quantities (v2)"; register §1.232; since 0.12.34): a V2 consumes entry may declare expected_amount_milli instead of amount, at most a constant capacity × 1000 (above it effect_incompatible), refused beside amount or the pending marker and in V1 (limit_exceeded at the entry); the net benefit costs it exactly C·W/(1000·Q), 26 milli at W 2000 costing 52 milli, an integer catalog unchanged; the reserve gate, the consumption a reading does not show yet, SS-2's tie key and the selection field task.consumes.<pool> read ⌈C/1000⌉; SS-6 gives no run_cap for a reserved pool consumed by expectation and keeps spend_allowance; forward projection stops at it with effect_evidence_insufficient
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_ss2g::ss2g_t1_a_v2_consumption_may_declare_its_expected_amount_and_bad_shapes_are_refused",
+    "actingcommand-policy::lib::tests::gate_ss2g::ss2g_t2_the_net_benefit_reads_an_expected_consumption_exactly",
+    "actingcommand-policy::lib::tests::gate_ss2g::ss2g_t3_the_reserve_gate_reads_an_expected_consumption_rounded_up",
+    "actingcommand-policy::lib::tests::gate_ss2g::ss2g_t4_an_unshown_expected_consumption_counts_rounded_up",
+    "actingcommand-policy::lib::tests::gate_ss2g::ss2g_t5_a_reserved_expected_consumption_gives_no_run_cap",
+    "actingcommand-policy::lib::tests::gate_ss2g::ss2g_t6_the_tie_key_and_the_selection_field_read_the_rounded_up_consumption",
+    "actingcommand-policy::lib::tests::gate_ss2g::ss2g_t7_forward_projection_stops_at_an_expected_consumption",
+]
+incident = ["#424 SS-2g"]
 
 # The intent pins freshness, limits, catalog hash and ledger position
 [[gate]]

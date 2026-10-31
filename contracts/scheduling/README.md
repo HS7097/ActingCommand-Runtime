@@ -187,14 +187,15 @@ that declares it (`unknown_field`) and cannot reopen a state root on which such
 a catalog was activated or dispatched, even after its configuration returns to
 an older catalog.
 
-## Expected production (v2)
+## Expected quantities (v2)
 
 Each effect has exactly one quantity. `amount` is a positive integer in real inventory
-units and keeps its existing semantics. Only v2 `produces` may instead declare
+units and keeps its existing semantics. A v2 effect may instead declare
 `expected_amount_milli`, an integer in `0..=9007199254740991` measured in thousandths of
-a real unit per completed task run. It has no default, cannot exceed `pool.capacity * 1000`
+a real unit per completed task run: a `produces` entry, and (SS-2g, since 0.12.34, register
+§1.232) a `consumes` entry. It has no default, cannot exceed `pool.capacity * 1000`
 (a constant capacity; #386 CF-5), and is mutually exclusive with `amount`. Explicit null, missing quantities and unknown
-fields are invalid. V1 effects and all `consumes` require `amount`.
+fields are invalid. V1 effects require `amount` (`limit_exceeded` at the entry otherwise).
 
 ```json
 {"pool_id":"material","direction":"produce","expected_amount_milli":400,"observation_source":"self_reported","confidence_milli":1000}
@@ -224,6 +225,33 @@ entry, forward projection as `effect_evidence_insufficient`, and the strategy pl
 unavailable rate. With `expected_amount_milli` beside it the effect is `limit_exceeded`, as two
 quantities are; any other string is `type_mismatch`, and so is the marker in a V1 document (at
 the entry's `amount`). A catalog without the marker keeps its hash.
+
+SS-2g (since 0.12.34; register §1.232; ACM-PRICE addendum 2.1 §3.5 and §7.8): a task the package
+decides at run time (which project, which item) spends a different amount on each run, and the
+model gives its expectation, so a V2 consumption may be declared the same way:
+
+```json
+{"pool_id":"material","direction":"consume","expected_amount_milli":2500,"observation_source":"self_reported","confidence_milli":1000}
+```
+
+A task's consumption of a pool per run is then `C = Σ amount × 1000 + Σ expected_amount_milli`
+thousandths over its `consumes` entries for the pool (a pending `amount` adds nothing).
+- **The net benefit** reads `C` exactly: its cost is `C·P/(1000·Q)` ("Net benefit within a
+  tier"). A catalog without an expected consumption has the numerator `amount × 1000` of before.
+- **Every reader of an integer consumption** reads `⌈C/1000⌉`, rounded up so that a reserve is
+  never read as safer than the expectation says: the reserve views and the reserve gate ("Task
+  Reserves"), the consumption a pool's reading does not show yet (the gate's step 3 and SS-6's
+  allowance), SS-2's tie key ("Ties and chain heads") and the selection fields
+  `task.consumes.<pool>`. The example above reads 3.
+- **SS-6.** A task that reserves a pool it consumes by expectation gets no `run_cap`, as a
+  goal-driven production declared by expectation gives none; its `spend_allowance` is unchanged
+  and is what stops the spend, since one run may spend more than the expectation
+  ([../remedies.md](../remedies.md), section 4, "Spend values").
+- **Forward projection** stops before applying it with `effect_evidence_insufficient`, as for an
+  expected production.
+
+No configuration key and no new code. A catalog without an expected consumption keeps its hash
+and decides byte for byte as before.
 
 The compiler enforces quantity exclusivity, version, direction and capacity together;
 the declaration-only parser checks wire types. Existing integer declarations serialize
@@ -833,9 +861,11 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
   intermediates. `produce(k,p)` is the resource layer's own `r(k,p)` (`amount` or v2
   `expected_amount_milli`; [resource-targets.md](../resource-targets.md), "Resource weights (v2)"),
   `W(k,p)` its effective weight `B_p + Γ` (the base weight plus a covering goal's shortfall
-  weight), `consume(k,p)` the task's declared consumption of the pool (its `consumes` amounts, as
-  the reserve gate reads them) and `Q_p` the pool's `valuation.scale`. `P(k,p)`, the cost of
-  consuming pool `p`, is `W(k,p)`, discounted for a regenerating pool between the task's reserve
+  weight), `consume(k,p)` the task's declared consumption of the pool (its `consumes` amounts;
+  SS-2g, since 0.12.34: in thousandths, `C/1000` exactly, an expected consumption included,
+  "Expected quantities (v2)"; the reserve gate reads `⌈C/1000⌉`) and `Q_p` the pool's
+  `valuation.scale`. `P(k,p)`, the cost of consuming pool `p`, is `W(k,p)`, discounted for a
+  regenerating pool between the task's reserve
   line on it (its `reserves` `at_least`, 0 without one) and its capacity: `P =
   W·clamp((cap − cur)/(cap − reserve), 0, 1)`, `cur` the pool's projected amount as
   `resource_projection` reads it: 0 at capacity, `W` at the reserve. A pool that does not
@@ -888,9 +918,11 @@ gives the member's rules). The reserve is a hard gate, never a score penalty (re
 - **What a run leaves.** In the score stage ("Score-Assisted Priority" above) each candidate of
   such a task gets, per reserved pool, `after = projected − consumes`: the pool's projected
   amount at the evaluation (as the `resource_projection` predicate reads it) less the task's
-  declared consumption of the pool (the sum of its `consumes` amounts for it; 0 when it declares
-  none). The selection document reads them as the integer fields `task.consumes.<pool>`,
-  `task.after.<pool>` and `task.reserve_gap.<pool>` (`after − at_least`); the last two only
+  declared consumption of the pool (the sum of its `consumes` amounts for it, an expected
+  consumption rounded up, SS-2g, "Expected quantities (v2)"; 0 when it declares none). Every
+  "declared consumption" below reads the same integer. The selection document reads them as the
+  integer fields `task.consumes.<pool>`, `task.after.<pool>` and `task.reserve_gap.<pool>`
+  (`after − at_least`); the last two only
   while the pool's amount is known. A catalog with reserves runs the score stage even without a
   selection document, value, offset or resource target; every candidate without reserves keeps
   its rank, its reasons and its fields.
@@ -1578,7 +1610,7 @@ An account's cap is read, never written as a constant (Alice 10-26). Two more V2
 - **No capacity, no value: the projection defers.** While B gives no capacity the pool has no value, and no constant stands in for it. Its `resource_projection` is Unknown with the detection suggestion of B in the pool's scope and B's unknown reason: `fact_missing`, `fact_low_confidence`, `fact_expired`, or `type_mismatch` (no integer, or no positive capacity). So the task is deferred with `trigger_unknown` (or `feedback_stop_unknown`), and the fact refresh is asked for B ("Fact Refresh"), as for an unknown `fact` predicate. The pool's own reading is checked first: a pool whose reading is unusable asks for its own key, as before. A reserve on the pool is case 1 of "Task Reserves", a task that consumes it gets no fullness urgency from it, and a resource target on a live pool awaits observation with the matching reason ([resource-targets.md](../resource-targets.md)).
 - **A reading above the capacity stays as read.** Against a capacity read from its fact, a pool's reading or snapshot above it is the pool's value (an amount can exceed its cap, for example through items): it is neither refused nor clamped, and it does not regenerate. Below the capacity each complete period adds `amount` up to the capacity, as before: regeneration stops at the capacity. Against a constant capacity a reading above it still leaves the pool without a value ("Pool Projection").
 - **Freshness and wake.** The projection's freshness ends at the earlier end of the pool reading's and B's, and the evaluation wakes one millisecond after B's expiry, as after the reading's.
-- **Bounds against a constant only.** The compiler checks a reserve's `at_least` ("Task Reserves") and an effect's quantity ("Expected production (v2)") against a constant capacity only. Against a capacity read from a fact nothing is checked at compilation: a reserve above the read capacity holds its task until the pool holds it.
+- **Bounds against a constant only.** The compiler checks a reserve's `at_least` ("Task Reserves") and an effect's quantity ("Expected quantities (v2)") against a constant capacity only. Against a capacity read from a fact nothing is checked at compilation: a reserve above the read capacity holds its task until the pool holds it.
 - **A comparand read from a fact.** `"value": {"type": "fact", "fact_key": B, "offset": N}` on a `resource_projection` compares the pool's projected amount with the integer B holds in the pool's scope plus N, by its `comparison` (`contains` is refused as before); the sum never overflows. B obeys its own expiry and needs a confidence above 0, as a reference of a `fact` predicate without `max_age_ms` (a projection has none). A B that gives no integer makes the predicate **false**, with the info reason `fact_reference_unavailable` {`fact_key` B, `unknown_reason`}, no wake and no fact refresh, then `trigger_false` when it decides the trigger, as for a `fact` predicate ("Fact references"). The pool is read first: a pool without a value leaves the predicate Unknown, as above.
 - **Forward projection** ("Forward Planning And Maintenance") reads B once, at its start, and holds that capacity across its horizon. A pool whose B gives no capacity there is left out, as a pool without a snapshot is, and reported as the evidence gap {`code` B's unknown reason, `fact_key` B}.
 - **Refusals**, each at its pointer, as for a reference of a `fact` predicate: in a V1 document, `unknown_field` at `capacity/type` or `value/type`; a key that is no identifier, `type_mismatch` at `…/fact_key`; N outside -9007199254740991..=9007199254740991, `limit_exceeded` at `…/offset`; a reference that names a `scope`, `unknown_field` at `…/scope`. A `type` other than `fact`, or an N that is no integer, is refused by the reader (`type_mismatch`).

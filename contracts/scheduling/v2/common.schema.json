@@ -493,18 +493,19 @@
             { "const": "pending" }
           ]
         },
-        "expected_amount_milli": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "expected_amount_milli": {
+          "description": "The expected quantity per completed run in thousandths of a real unit, instead of amount: a production's, or (SS-2g, since 0.12.34) a consumption's. At most a constant pool capacity times 1000.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
         "observation_source": { "enum": ["self_reported", "scan_verified", "inferred"] },
         "confidence_milli": { "type": "integer", "minimum": 0, "maximum": 1000 }
       },
       "additionalProperties": false,
       "oneOf": [
         { "required": ["amount"], "not": { "required": ["expected_amount_milli"] } },
-        {
-          "required": ["expected_amount_milli"],
-          "not": { "required": ["amount"] },
-          "properties": { "direction": { "const": "produce" } }
-        }
+        { "required": ["expected_amount_milli"], "not": { "required": ["amount"] } }
       ]
     },
     "metric": {

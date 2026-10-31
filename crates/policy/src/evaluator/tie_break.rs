@@ -490,7 +490,8 @@ fn measure_reserve(
     }
 }
 
-/// The task's declared consumption of the pool, when its runs consume some.
+/// The task's declared consumption of the pool, when its runs consume some: an expected
+/// consumption rounded up to whole units (SS-2g), as the reserve gate reads it.
 fn consumed(task: &TaskSpec, pool_id: &str, bounds: &mut Bounds) -> Option<u64> {
     match crate::resource_targets::declared_consumption(task, pool_id) {
         Ok(0) => None,
