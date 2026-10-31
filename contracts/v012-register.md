@@ -4462,6 +4462,13 @@ Every generation 0.12.32 composes carries the marks (`benefit_judged`, and `"pen
 instance. After one has run, each such pair must first complete a dispatch under an unmarked
 generation; a pair whose rule is gone cannot, and 0.12.31 then cannot start on that state root.
 
+**Narrowed** (release 0.12.33, §1.229). The chain exemption of (2) ("neither in a chain head's
+run window") and of "Unchanged" ("a chain successor in its head's window") holds only while the
+successor continues a business chain: a link walked from it up to its chain head, the head
+included, is marked. A marked candidate whose walked links are all unmarked (a business task
+after a maintenance task, such as a return home) is judged as in no window. Rollback to 0.12.32:
+§1.229.
+
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
 | SS2b-1 | V2 task member `benefit_judged` (boolean; `false` as absent) | catalog format addition (no ledger shape) | SS-2b | the standard-pack composer (`true` on every rule whose package is not maintenance-role) | V1: `unknown_field` at the member; a `schedule.json` rule that writes it is `standard_pack_root_invalid`, `schedule_invalid` at `/rules/<i>/benefit_judged`; absent serializes as nothing, so an unmarked catalog keeps its hash |
@@ -4651,6 +4658,60 @@ a key its table holds. After the rollback an unmatched observe again leaves a re
 | LOB-1 | the terminal `RecordDebugEvent` of `observe --capture` | behaviour (no shape change) | LAB-OBS-1 | actinglab | `completed` for every status of an observation that stands; `failed` only when the command fails |
 | LOB-2 | `RuntimeDebugEvent.failure_code` (a registered code; `RuntimeDebugEvent::rejected`, `::outcome`) | wire member addition (optional, absent when unused) | LAB-OBS-1 | actinglab's debug session | required on a failed `observe`, `do`, `ensure`, `wait`; refused elsewhere; `invalid_runtime_debug_event` |
 | LOB-3 | `command.rejected` of a failed Lab debug command: outcome `command_rejected` with `failure_code` | rule of an existing record (shape unchanged) | LAB-OBS-1 | the Runtime (`record_debug_event`) | was the bare diagnostic code, `values: {}`; `command_rejected` declares `failure_code` optional |
+
+### 1.229 Slice SS-2e (0.12.33): a business task that continues only maintenance links is judged by its net benefit (design `rd-1029/design-sch-state.md` §4.10: maintenance packages, the intermediate navigation steps of a chain and manual requests are not judged, 「链条整体的价值记在链头（业务包）上」; the resource side's RS-8 report of 10-31: many business chains of all four games start at a return home; coordinator work order `rd-1031/brief-ss2e.md`)
+
+[scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Who is judged") and
+[scheduling/v2/README.md](scheduling/v2/README.md) (the SS-2b `benefit_judged` item) are the
+contract. It narrows §1.225 (2). The number 1.229 is the coordinator's.
+
+**What.** A candidate whose task the catalog marks `benefit_judged` and that is in its chain
+head's run window (SS-2, §1.222 (2)) is exempt from the net-benefit judgment only when the chain it
+continues has a business link: at least one of the links walked from it up to its head, every one
+of them in its window, the head included, is marked. A marked candidate whose walked links are all
+unmarked (maintenance tasks) is judged on its own, like a candidate in no window: the existing
+`benefit_unknown` (with its `benefit_gap`) or `policy_benefit_nonpositive`, or its place in the
+business tier by `B ÷ E`. In `M → A → B`, `M` unmarked and `A`, `B` marked, `A` is judged and `B`
+rides with `A`. The walk (`evaluator/tie_break.rs`, `chain_head`) returns, beside the head, whether
+it passed a marked link (`ChainWalk`); `build_candidate` reads that for `judged` alone.
+
+**Why.** `judged` was `marked && chain_head.is_none() && !manual_request`, and `chain_head` is set
+whenever the task continues a predecessor's latest successful run, whatever that predecessor's
+tier. So a business task whose trigger requires the success of a return home under `all` was not
+judged after every successful return home: it skipped `benefit_unknown` and
+`policy_benefit_nonpositive`, and ranked with the head's priority among the unjudged business
+candidates, which go before the judged ones. Design §4.10 exempts the steps of a chain whose value
+is recorded on its head, a business package; a business task after a maintenance task is no such
+step but a business decision of its own. The resource side found such chains in all four game
+roots, and keeps two chain heads of one game in the business tier on purpose to avoid this.
+
+**Why this change.** It is the smallest that gives the rule: the walk already visits exactly the
+links in their windows, so it records one more bit as it goes. No second walk, no new input, and
+the head stays the one SS-2 finds.
+
+**Unchanged.** The tier (the task's own mark). SS-2's rank inheritance: every candidate in a window
+ranks with the head the walk finds, so a judged successor of a maintenance task still carries its
+head's `priority` and `strategic_weight_milli` (within the business tier they no longer order it,
+§1.225 (3)), the fact refresh lends that rank as before, and the ` chain_head=` detail is as
+before. Manual requests; unmarked candidates, a maintenance successor of a maintenance task
+included; a successor of a business link; a candidate in no window; a catalog with no mark, byte
+for byte (it judges no candidate). The gate, its reasons and values, the ranking and the records
+are SS-2b's. Game neutrality. **No new code, value, key, configuration key, record kind, catalog
+member or interface revision.**
+
+**What changes live.** Nothing now: under ruling 116 all five instances are paused
+(`alice-116-scheduler-stop`). Once the scheduler resumes, a business rule whose links up to its
+chain head are all maintenance rules, such as one that follows a return home, waits for its values
+(`benefit_unknown`, `no_effects`) like every business rule without them, instead of being
+dispatched after each return home. A successor of a business rule still rides with it.
+
+**Rollback** (to 0.12.32). Nothing to do: no ledger, state, catalog or configuration shape is new,
+and the reasons the newly judged candidates answer are SS-2b's, which 0.12.32 reads. 0.12.32 again
+exempts every candidate in a chain head's run window, successors of maintenance links included.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SS2e-1 | `judged` of `build_candidate` (`evaluator.rs`) reads `ChainWalk.business_link` of `tie_break::chain_head` | behaviour (evaluation) | SS-2e | — | a marked candidate in a window is not judged only when a walked link, the head included, is marked; the rank reads `ChainWalk.head`, as SS-2's `chain_head` did; the fact refresh's lent rank is unchanged |
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

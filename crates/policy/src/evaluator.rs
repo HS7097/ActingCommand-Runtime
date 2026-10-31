@@ -2977,8 +2977,10 @@ struct PlacementCandidate {
     /// SS-2b: the catalog marks its task `benefit_judged`: a business task, of the business tier
     /// (Alice's ruling 104 point 1), which ranks after the maintenance tier.
     business: bool,
-    /// SS-2b: a business task that is neither in a chain head's run window nor a manual request:
-    /// its net benefit decides whether and where it ranks.
+    /// SS-2b: a business task that is no manual request and, SS-2e (register §1.229), does not
+    /// continue a chain through a business link (no link walked up to its chain head, the head
+    /// included, is marked; a candidate in no chain window has none): its net benefit decides
+    /// whether and where it ranks. A successor of maintenance links alone is judged.
     judged: bool,
     /// SS-2b: a judged candidate's known positive net benefit, set by the benefit gate.
     benefit: Option<KnownBenefit>,
@@ -3026,8 +3028,12 @@ impl PlacementContext<'_> {
     }
 
     /// SS-2: the chain head `task` ranks with on `instance`, while it is in that head's run
-    /// window.
-    fn chain_head(&self, task: &TaskSpec, instance: &InstanceSnapshot) -> Option<&TaskSpec> {
+    /// window; SS-2e: and whether a link walked up to it is a business task.
+    fn chain_head(
+        &self,
+        task: &TaskSpec,
+        instance: &InstanceSnapshot,
+    ) -> Option<tie_break::ChainWalk<'_>> {
         tie_break::chain_head(
             task,
             &instance.instance_id,
@@ -3093,7 +3099,8 @@ fn build_candidate(
     }
 
     // SS-2: a successor in its chain head's run window ranks with the head's priority and weight.
-    let chain_head = context.chain_head(task, instance);
+    let chain = context.chain_head(task, instance);
+    let chain_head = chain.map(|walk| walk.head);
     let rank = placed_rank(
         task,
         task_override,
@@ -3139,10 +3146,14 @@ fn build_candidate(
         expected_runtime_ms: snapshot_expected_runtime(task, task_state),
         tie_breaker: deterministic_tie_breaker(context.seed, &task.id, &instance.instance_id),
         tie,
-        // SS-2b: a business task's candidate ranks in the business tier; a chain successor in its
-        // head's window and a manual request are not judged.
+        // SS-2b: a business task's candidate ranks in the business tier; a manual request is not
+        // judged. SS-2e (register §1.229): nor is a chain successor in its head's window whose
+        // walked links include a business task (it rides with that chain, design §4.10); one
+        // whose links are all maintenance tasks is a business decision of its own and is judged.
         business: task.is_benefit_judged(),
-        judged: task.is_benefit_judged() && chain_head.is_none() && !benefit::manual_request(task),
+        judged: task.is_benefit_judged()
+            && !chain.is_some_and(|walk| walk.business_link)
+            && !benefit::manual_request(task),
         benefit: None,
         chain_head: chain_head.map(|head| head.id.clone()),
         facts_fresh_until_unix_ms,
@@ -4600,7 +4611,7 @@ fn predicate_refresh(
         return Ok(None);
     }
     let (_, load, host) = placed_load(task, task_override, instance, context)?;
-    let chain_head = context.chain_head(task, instance);
+    let chain_head = context.chain_head(task, instance).map(|walk| walk.head);
     let rank = placed_rank(
         task,
         task_override,

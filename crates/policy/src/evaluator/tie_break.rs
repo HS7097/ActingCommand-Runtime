@@ -18,7 +18,10 @@
 //!   a predecessor whose own latest dispatch is not before the latest successful run of one of its
 //!   links continued that one, and so on. In that window the successor ranks with the head's
 //!   priority and strategic weight (the head's instance override applied); outside it, with its
-//!   own. Only the task layer reads this; no resource layer function takes task state.
+//!   own. Only the task layer reads this; no resource layer function takes task state. SS-2e
+//!   (register §1.229): the walk also says whether a link it passed, the head included, is
+//!   marked `benefit_judged`; a marked candidate is exempt from the net-benefit gate only then
+//!   (`benefit.rs`, "Who is judged").
 //! - **The tie-break** ([`TieKey`]): among candidates equal in promotion, total and affinity, a
 //!   candidate whose measure is bounded goes first, the fewer chances first (the fewer of the runs
 //!   its thresholds still allow and the runs that can still start before a window it requires
@@ -75,16 +78,28 @@ pub(super) fn required_predecessors(trigger: &PredicateSpec) -> Vec<&str> {
         .collect()
 }
 
+/// What the walk up a candidate's chain links found ([`chain_head`]).
+#[derive(Debug, Clone, Copy)]
+pub(super) struct ChainWalk<'a> {
+    /// The head the candidate ranks with.
+    pub(super) head: &'a TaskSpec,
+    /// SS-2e (register §1.229): a link the walk passed, the head included, is marked
+    /// `benefit_judged`, so the candidate continues a business chain. Only the benefit gate's
+    /// choice of who is judged reads it; the rank reads `head` alone.
+    pub(super) business_link: bool,
+}
+
 /// The head `task` ranks with on `instance_id`, while it is in that head's run window (module
-/// doc); `None` outside every window. `own` is the task's own last result, as its own gates read
-/// it; every other task is read from `task_states`, as the gates read another task.
+/// doc), and whether a link walked up to it is a business task; `None` outside every window.
+/// `own` is the task's own last result, as its own gates read it; every other task is read from
+/// `task_states`, as the gates read another task.
 pub(super) fn chain_head<'a>(
     task: &TaskSpec,
     instance_id: &str,
     own: Option<&TaskRuntimeSnapshot>,
     tasks: &BTreeMap<&str, (usize, &'a TaskSpec)>,
     task_states: &BTreeMap<(&str, &str), &TaskRuntimeSnapshot>,
-) -> Option<&'a TaskSpec> {
+) -> Option<ChainWalk<'a>> {
     let mut visited = BTreeSet::from([task.id.clone()]);
     // The predecessor whose latest successful run the task has not served yet.
     let (mut head, mut head_at) = latest_success(
@@ -95,6 +110,7 @@ pub(super) fn chain_head<'a>(
         task_states,
         |state, _| own.is_none_or(|own| !dependency_served(own, state)),
     )?;
+    let mut business_link = head.is_benefit_judged();
     loop {
         visited.insert(head.id.clone());
         let limit = head_at;
@@ -110,8 +126,14 @@ pub(super) fn chain_head<'a>(
             Some((next, next_at)) => {
                 head = next;
                 head_at = next_at;
+                business_link |= head.is_benefit_judged();
             }
-            None => return Some(head),
+            None => {
+                return Some(ChainWalk {
+                    head,
+                    business_link,
+                });
+            }
         }
     }
 }

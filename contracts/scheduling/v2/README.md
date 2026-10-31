@@ -236,7 +236,8 @@ goes first, then the one with more required conditions, then the one earlier in
 
 SS-2b (since 0.12.32; register §1.225; `../README.md`, "Net benefit within a tier"), V2 only:
 - A task may carry `benefit_judged`, a boolean. With `true` it is a business task: its
-  candidate (unless it ranks with a chain head or is a manual request) is judged by its net
+  candidate (unless it continues a business chain, a link walked up to its chain head being
+  marked too, SS-2e since 0.12.33, register §1.229; or is a manual request) is judged by its net
   benefit within its tier and is not dispatched while that benefit is unknown or not positive.
   With `false` it is as without the member. The standard-pack composer writes `true` on every
   rule whose package is not maintenance-role and that does not declare itself maintenance

@@ -271,9 +271,10 @@ fn ss2b_t3_every_unknown_input_is_benefit_unknown_and_never_dispatched() {
 
 // Test 4: unjudged candidates rank as before. Maintenance-role tasks (no mark) come first and keep
 // their order and their decisions; a manual request (its trigger requires a `session.`
-// instruction) and a chain successor in its head's run window are business tasks that are not
-// judged: no `benefit_unknown` though they declare nothing, and they rank before the judged
-// candidates of their tier.
+// instruction) and a chain successor in its (marked, business) head's run window are business
+// tasks that are not judged: no `benefit_unknown` though they declare nothing, and they rank
+// before the judged candidates of their tier. (SS-2e: a successor of a maintenance head alone is
+// judged; the `ss2e_` tests below.)
 #[test]
 fn ss2b_t4_unjudged_candidates_rank_as_before() {
     let maintenance = |judged: bool| {
@@ -327,7 +328,7 @@ fn ss2b_t4_unjudged_candidates_rank_as_before() {
     assert_eq!(asked, ["task_request", "task_judged"], "{evaluation:#?}");
     assert!(no_benefit_reason(decision(&evaluation, "task_request")));
 
-    // A chain successor in its head's run window ranks with its head and is not judged.
+    // A chain successor in its business head's run window ranks with its head and is not judged.
     let successor = all(vec![hourly(), dependency("task_head")]);
     let catalog_chain = catalog(vec![
         task("task_head", 300, vec![produce(LOW, 1)], Vec::new(), true),

@@ -816,10 +816,18 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
   member `"maintenance": true`, "The maintenance declaration" there; maintenance tasks are not
   judged by net benefit, Alice's ruling 104 point 1 and design §4.10). A raw V2 catalog sets the
   mark itself; `maintenance` is no V2 task member. Such a task is a
-  *business* task. Its candidate is *judged* unless it ranks with a chain head ("Ties and chain
-  heads") or is a manual request: a task whose trigger requires an instruction, a `fact` or
-  `fact_time_reached` predicate on a key of the `session.` family reached from the root only
-  through `all` (design `rd-1029/design-sch-state.md` §4.9). Every other candidate is unjudged.
+  *business* task. Its candidate is *judged* unless it continues a business chain or is a manual
+  request: a task whose trigger requires an instruction, a `fact` or `fact_time_reached`
+  predicate on a key of the `session.` family reached from the root only through `all` (design
+  `rd-1029/design-sch-state.md` §4.9). SS-2e (since 0.12.33, register §1.229; design §4.10: a
+  chain's value is recorded on its head, a business package): a candidate in its chain head's run
+  window ("Ties and chain heads") continues a business chain when at least one of the links walked
+  from it up to that head, the head included, is a marked task; it then rides with that chain and
+  is not judged. A candidate whose walked links are all unmarked, such as a business task that
+  follows a return home, is a business decision of its own: it is judged like a candidate in no
+  chain window, while its rank still carries its chain head's `priority` and
+  `strategic_weight_milli` as SS-2 gives them. So in `M → A → B`, `M` unmarked and `A`, `B`
+  marked, `A` is judged and `B` rides with `A`. Every other candidate is unjudged.
 - **The net benefit** of a judged candidate `k`, in milli, the exact sum floored once:
   `B(k) = Σ_p produce(k,p)·W(k,p)/Q_p − Σ_p consume(k,p)·P(k,p)/Q_p`, with checked 128-bit
   intermediates. `produce(k,p)` is the resource layer's own `r(k,p)` (`amount` or v2
