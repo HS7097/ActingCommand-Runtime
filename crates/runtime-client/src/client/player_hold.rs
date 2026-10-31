@@ -125,10 +125,9 @@ pub(crate) fn player_hold_receipt_waits(
     Some(
         deadline
             .and_then(|deadline| {
-                Some(PlayerHoldReceiptWaits {
-                    socket: deadline.checked_add(io_timeout)?,
-                    deadline,
-                })
+                deadline
+                    .checked_add(io_timeout)
+                    .map(|socket| PlayerHoldReceiptWaits { socket, deadline })
             })
             .ok_or_else(|| {
                 RuntimeClientError::fatal(ClientCode::RuntimeReceiptTimeoutOverflow, location)
