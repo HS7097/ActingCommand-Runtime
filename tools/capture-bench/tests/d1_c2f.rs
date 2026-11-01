@@ -404,9 +404,11 @@ fn write_failure(
     failures[0].clone()
 }
 
+type StopGate = (&'static str, fn(&Fixture));
+
 #[test]
 fn a_closed_pipe_after_any_stop_gate_is_expected_with_or_without_the_viewers_own_stop() {
-    let gates: [(&str, fn(&Fixture)); 3] = [
+    let gates: [StopGate; 3] = [
         ("run-stop", |fx: &Fixture| {
             fx.hub.set_global(&fx.owner, GlobalGate::RunStop, true);
         }),
