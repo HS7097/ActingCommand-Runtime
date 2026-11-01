@@ -48,6 +48,8 @@
 // - N2: a pause refused for a queued request is tried again once the queue is empty, though a
 //   run holds the lease;
 // - N3: a refused hold reports the runs the drains of the instances that paused cut.
+// Register §1.242 (INST-UNDO-EDGE, 0.12.36) adds `inst_undo_edge_*`: `install undo` of a composite
+// whose start spawned meets the interface edges a rollback to the previous build would.
 // The machine is the fake host of `fixture.rs` with its fake Runtime and fake clock: no device,
 // no sleep; every root is a temporary folder with neutral files.
 
@@ -86,6 +88,17 @@ fn assert_refused(answer: &super::Answer, operation: &str, why: &str) {
 /// adopt (the previous build's own open for the rollback gate), and `config` merged into its
 /// configuration.
 fn prepared(base: &Path, name: &str, host: &FakeHost, config: Value) -> PathBuf {
+    prepared_with(base, name, host, config, &BuildSpec::new(C2))
+}
+
+/// [`prepared`] with `target` as the kept `C2`.
+fn prepared_with(
+    base: &Path,
+    name: &str,
+    host: &FakeHost,
+    config: Value,
+    target: &BuildSpec,
+) -> PathBuf {
     let root = live_root(base, name, &BuildSpec::new(C1));
     if let Value::Object(members) = config {
         let path = root.join("actingd.config.json");
@@ -101,7 +114,7 @@ fn prepared(base: &Path, name: &str, host: &FakeHost, config: Value) -> PathBuf 
         "install_adopt",
     );
     let release = base.join(format!("{name}-release"));
-    BuildSpec::new(C2).write_release(&release);
+    target.write_release(&release);
     assert_done(
         &run(
             host,
@@ -169,21 +182,22 @@ fn calls(host: &FakeHost) -> Vec<String> {
     host.runtime.calls.borrow().clone()
 }
 
-/// A composite update to `C2`: planned with `--preview` (the Runtime runs), applied with
-/// `--stop --hold <reason> --start` and `extra`.
+/// A composite update to `C2`: planned with `--preview` (the Runtime runs) and the
+/// `--accept-ledger-one-way` of `extra`, applied with `--stop --hold <reason> --start` and `extra`.
 fn composite(host: &FakeHost, root: &Path, reason: &str, extra: &[&str]) -> super::Answer {
-    let planned = run(
-        host,
-        &[
-            "update",
-            "plan",
-            "--root",
-            word(root),
-            "--build",
-            C2,
-            "--preview",
-        ],
-    );
+    let mut plan_words = vec![
+        "update",
+        "plan",
+        "--root",
+        word(root),
+        "--build",
+        C2,
+        "--preview",
+    ];
+    if extra.contains(&"--accept-ledger-one-way") {
+        plan_words.push("--accept-ledger-one-way");
+    }
+    let planned = run(host, &plan_words);
     assert_done(&planned, "install_update_plan");
     let plan_id = planned.members["plan_id"]
         .as_str()
@@ -1999,4 +2013,256 @@ fn s2if_t4_the_rollback_start_with_the_default_changed_back_passes_the_check() {
     assert_eq!(row["values"]["base_changed"], json!([S2IF_KEY]), "{row}");
     assert_eq!(row["values"]["dropped"], json!([]), "{row}");
     assert_rolled_back_to_c1(&root, &host, &operation_id(&answer), "changed-back");
+}
+
+// Register §1.242 (INST-UNDO-EDGE, 0.12.36; brief rd-1031/brief-inst-undo-edge.md;
+// contracts/install-cli.md, "Undo and resume"): `install undo` applies the interface edges of a
+// rollback to the build before the operation whenever the operation started a Runtime of its own
+// build; the composite's own start counts. The target raises `ledger` to [3, 5] over C1's [3, 4],
+// so a rollback to C1 fails `previous_max_in_next`.
+
+const ACCEPT_ONE_WAY: &[&str] = &["--accept-ledger-one-way"];
+
+fn one_way_target() -> BuildSpec {
+    let mut target = BuildSpec::new(C2);
+    target.runtime.speaks["ledger"] = json!([3, 5]);
+    target.tools.speaks["ledger"] = json!([3, 5]);
+    target
+}
+
+/// A fake host of its own (a hold's pauses persist on the fake Runtime) and a root whose running
+/// `C1` a composite can update to `target`.
+fn undo_edge_root(
+    temp: &TempDir,
+    name: &str,
+    config: Value,
+    target: &BuildSpec,
+) -> (FakeHost, PathBuf) {
+    let host = FakeHost::new(&temp.path().join(format!("work-{name}")));
+    let root = prepared_with(temp.path(), name, &host, config, target);
+    host.runtime.boot(&["node.a"]);
+    (host, root)
+}
+
+fn undo(host: &FakeHost, root: &Path, operation: &str) -> super::Answer {
+    run(
+        host,
+        &["undo", "--root", word(root), "--operation", operation],
+    )
+}
+
+/// The undo refused by the failed ledger edge, its values in `edges`.
+fn assert_refused_by_the_ledger_edge(answer: &super::Answer) {
+    assert_refused(answer, "install_undo", "interface_edge");
+    assert_eq!(text(answer, "commit_sha"), Some(C1), "{answer:?}");
+    assert_eq!(answer.outcome.value("count"), Some(&json!(1)), "{answer:?}");
+    let expected = json!({
+        "interface": "ledger",
+        "check": "previous_max_in_next",
+        "result": "fail",
+        "parties": [
+            {"party": "Rp", "source": "manifest", "range": [3, 5]},
+            {"party": "R*", "source": "manifest", "range": [3, 4]},
+        ],
+    });
+    let failed = answer.members["edges"]
+        .as_array()
+        .expect("the edges")
+        .iter()
+        .filter(|edge| edge["result"] == "fail")
+        .collect::<Vec<_>>();
+    assert_eq!(failed, [&expected], "{answer:?}");
+}
+
+/// The undo reversed the update: the previous build is back and no operation stays unfinished.
+fn assert_undone(answer: &super::Answer, root: &Path) {
+    assert_done(answer, "install_undo");
+    assert!(holds_build(root, &BuildSpec::new(C1)), "{answer:?}");
+    assert_eq!(state_of(root)["live"]["commit"], C1);
+    assert!(!root.join("install").join("current.json").exists());
+}
+
+/// Refused by the edge with nothing below the root changed, the new build still live.
+fn assert_undo_refused_unchanged(host: &FakeHost, root: &Path, operation: &str) {
+    let before = tree(root);
+    assert_refused_by_the_ledger_edge(&undo(host, root, operation));
+    assert_eq!(tree(root), before, "nothing changed");
+    assert!(holds_build(root, &one_way_target()));
+    assert_eq!(state_of(root)["live"]["commit"], C2);
+    assert!(journal_of(root, operation)["undo"].is_null());
+}
+
+// Test 1: a finished composite across a one-way ledger, its Runtime stopped outside the install
+// commands: no Runtime started after the operation ended, and the undo is still refused.
+#[test]
+fn inst_undo_edge_1_a_finished_composite_across_a_one_way_ledger_refuses_and_changes_nothing() {
+    let temp = TempDir::new().expect("tempdir");
+    let (host, root) = undo_edge_root(&temp, "finished", json!({}), &one_way_target());
+    let answer = composite(&host, &root, "deploy-edge", ACCEPT_ONE_WAY);
+    assert_done(&answer, "install_update_apply");
+    let id = operation_id(&answer);
+    assert_refused(&undo(&host, &root, &id), "install_undo", "runtime_running");
+
+    host.runtime.running.set(false);
+    assert_undo_refused_unchanged(&host, &root, &id);
+}
+
+// Test 2: the same without a ledger change: the edges pass and the undo works as it did, with no
+// part of the rollback gate evaluated.
+#[test]
+fn inst_undo_edge_2_without_a_ledger_change_a_finished_composite_is_undone() {
+    let temp = TempDir::new().expect("tempdir");
+    let (host, root) = undo_edge_root(&temp, "same", json!({}), &BuildSpec::new(C2));
+    let answer = composite(&host, &root, "deploy-edge", &[]);
+    assert_done(&answer, "install_update_apply");
+    host.runtime.running.set(false);
+    host.log.borrow_mut().clear();
+
+    assert_undone(&undo(&host, &root, &operation_id(&answer)), &root);
+    assert!(
+        !host
+            .log
+            .borrow()
+            .iter()
+            .any(|line| line.contains(" events ") || line.contains("check-config")),
+        "no gate: {:?}",
+        host.log.borrow()
+    );
+}
+
+// Test 3: an unfinished composite before its start undoes as it did. From its start on it is
+// judged: a start done, and a start begun whose journal cannot say whether it spawned (the crash
+// before its first progress).
+#[test]
+fn inst_undo_edge_3_an_unfinished_composite_is_judged_once_its_start_may_have_spawned() {
+    let temp = TempDir::new().expect("tempdir");
+    let interrupted = |name: &str, step: Option<usize>| {
+        let (host, root) = undo_edge_root(&temp, name, json!({}), &one_way_target());
+        host.crash_after.set(step);
+        let answer = composite(&host, &root, "deploy-edge", ACCEPT_ONE_WAY);
+        (host, root, answer)
+    };
+    let (_host, root, whole) = interrupted("whole", None);
+    assert_done(&whole, "install_update_apply");
+    let start = journal_of(&root, &operation_id(&whole))["steps"]
+        .as_array()
+        .and_then(|steps| steps.iter().find(|step| step["kind"] == "start"))
+        .and_then(|step| step["n"].as_u64())
+        .and_then(|n| usize::try_from(n).ok())
+        .expect("the start step");
+
+    // Before the start.
+    let (host, root, stopped) = interrupted("before", Some(start - 1));
+    assert_eq!(
+        code(&stopped),
+        "install_operation_interrupted",
+        "{stopped:?}"
+    );
+    assert!(!host.runtime.running.get());
+    assert_undone(&undo(&host, &root, &operation_id(&stopped)), &root);
+
+    // The start begun, no evidence journalled.
+    let (host, root, stopped) = interrupted("begun", Some(start - 1));
+    let id = operation_id(&stopped);
+    let mut journal = journal_of(&root, &id);
+    journal["steps"][start - 1]["state"] = json!("started");
+    write_json(
+        &root
+            .join("install")
+            .join("operations")
+            .join(format!("{id}.json")),
+        &journal,
+    );
+    assert_undo_refused_unchanged(&host, &root, &id);
+    assert!(root.join("install").join("current.json").is_file());
+
+    // The start done, its Runtime stopped outside the install commands.
+    let (host, root, stopped) = interrupted("started", Some(start));
+    let id = operation_id(&stopped);
+    host.runtime.running.set(false);
+    assert_undo_refused_unchanged(&host, &root, &id);
+    assert!(root.join("install").join("current.json").is_file());
+}
+
+// Test 4: a failed post-start check. Across the edge the automatic rollback is refused and the
+// new build stays; the undo, once that Runtime is stopped, meets the same edge. Without a ledger
+// change the rollback runs, and the operation no longer holds the live build to undo.
+#[test]
+fn inst_undo_edge_4_after_a_failed_post_check_the_undo_meets_the_edge_the_rollback_met() {
+    let temp = TempDir::new().expect("tempdir");
+    let (host, root) = undo_edge_root(&temp, "gate", json!({}), &one_way_target());
+    host.runtime
+        .report_patch
+        .borrow_mut()
+        .insert(C2.to_owned(), json!({"tagged_state": "seed"}));
+    let answer = composite(&host, &root, "deploy-edge", ACCEPT_ONE_WAY);
+    assert_refused(&answer, "install_update_apply", "rollback_gate_failed");
+    assert_eq!(
+        answer.outcome.value("rollback_gate_parts"),
+        Some(&json!(["interface_edges"]))
+    );
+    assert!(host.runtime.running.get(), "the new Runtime keeps running");
+    host.runtime.running.set(false);
+    assert_undo_refused_unchanged(&host, &root, &operation_id(&answer));
+
+    let (host, root) = undo_edge_root(&temp, "rolled", json!({}), &BuildSpec::new(C2));
+    host.runtime
+        .report_patch
+        .borrow_mut()
+        .insert(C2.to_owned(), json!({"tagged_state": "seed"}));
+    let answer = composite(&host, &root, "deploy-edge", &[]);
+    assert_refused(&answer, "install_update_apply", "deploy_rolled_back");
+    host.runtime.running.set(false);
+    let before = tree(&root);
+    let refused = undo(&host, &root, &operation_id(&answer));
+    assert_eq!(code(&refused), "actingctl_usage_invalid", "{refused:?}");
+    assert_eq!(tree(&root), before, "nothing changed");
+}
+
+// A deploy that failed at its start (the brief's second failure case). A process that spawned counts, whether it exited
+// (the automatic rollback then refused by the edge) or was left running at its deadline and has
+// gone since; a start refused before any spawn started nothing, and the undo works as it did.
+#[test]
+fn inst_undo_edge_5_a_failed_start_counts_only_when_a_process_spawned() {
+    let temp = TempDir::new().expect("tempdir");
+
+    let (host, root) = undo_edge_root(&temp, "exits", json!({}), &one_way_target());
+    {
+        let mut starts = host.runtime.starts.borrow_mut();
+        starts.push_back(FakeStart::Exits { code: 3 });
+        starts.push_back(FakeStart::Exits { code: 3 });
+    }
+    let answer = composite(&host, &root, "deploy-edge", ACCEPT_ONE_WAY);
+    assert_refused(&answer, "install_update_apply", "rollback_gate_failed");
+    assert!(!host.runtime.running.get());
+    assert_undo_refused_unchanged(&host, &root, &operation_id(&answer));
+
+    let (host, root) = undo_edge_root(
+        &temp,
+        "hangs",
+        json!({"install": {"start": {"ready_timeout_ms": 60_000}}}),
+        &one_way_target(),
+    );
+    host.runtime.starts.borrow_mut().push_back(FakeStart::Hangs);
+    let answer = composite(&host, &root, "deploy-edge", ACCEPT_ONE_WAY);
+    assert_refused(&answer, "install_update_apply", "runtime_start_failed");
+    assert_eq!(answer.members["start"]["left_running"], true, "{answer:?}");
+    assert!(!host.runtime.running.get());
+    assert_undo_refused_unchanged(&host, &root, &operation_id(&answer));
+
+    let (host, root) = undo_edge_root(&temp, "memory", json!({}), &one_way_target());
+    host.memory_mb.set(5_000);
+    let answer = composite(
+        &host,
+        &root,
+        "deploy-edge",
+        &["--accept-ledger-one-way", "--ack-guard", "memory"],
+    );
+    assert_refused(&answer, "install_update_apply", "guard_failed");
+    assert!(
+        !calls(&host).iter().any(|call| call.starts_with("spawn")),
+        "{:?}",
+        calls(&host)
+    );
+    assert_undone(&undo(&host, &root, &operation_id(&answer)), &root);
 }

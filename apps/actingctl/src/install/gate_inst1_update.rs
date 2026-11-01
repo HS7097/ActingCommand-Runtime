@@ -1666,6 +1666,39 @@ fn inst1_fix1_9_the_undo_of_a_completed_update() {
     assert_eq!(program_tree(&root), before, "nothing changed");
 }
 
+// Register §1.242 (INST-UNDO-EDGE, 0.12.36): an owner record that began inside the operation
+// counts as a Runtime of the undone build, though the journal names no start and none began after
+// the operation ended. Without one, the same one-way update is undone as before.
+#[test]
+fn inst_undo_edge_6_an_owner_that_started_inside_the_operation_counts() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let live = BuildSpec::new(C1);
+    let mut one_way = BuildSpec::new(C2);
+    set_speaks(&mut one_way, "ledger", json!([3, 5]));
+    let flag: &[&str] = &["--accept-ledger-one-way"];
+    let updated_one_way = |name: &str| {
+        let root = prepared(temp.path(), name, &live, &one_way, &host);
+        let planned = plan_id(&plan_update(&host, &root, C2, flag));
+        let applied = apply_update(&host, &root, C2, &planned, flag);
+        assert_done(&applied, "install_update_apply");
+        (root, operation_id(&applied))
+    };
+
+    let (root, applied) = updated_one_way("inside");
+    owner_started_at(&temp.path().join("inside-state"), ms_of(&applied) + 1);
+    let before = program_tree(&root);
+    let refused = on_operation(&host, "undo", &root, &applied);
+    assert_refused(&refused, "install_undo", "interface_edge");
+    assert_eq!(text(&refused, "commit_sha"), Some(C1), "{refused:?}");
+    assert_eq!(program_tree(&root), before, "nothing changed");
+
+    let (root, applied) = updated_one_way("none");
+    let undone = on_operation(&host, "undo", &root, &applied);
+    assert_done(&undone, "install_undo");
+    assert_tree_of(&root, &live, "undone");
+}
+
 // fix1-9s (brief item 9; review S1 §8.4): `status --check-rollback` evaluates the whole gate
 // toward the build the live one replaced, also while a Runtime runs, and names the first record
 // the target's reader refuses.

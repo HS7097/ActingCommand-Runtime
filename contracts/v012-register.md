@@ -5609,6 +5609,48 @@ otherwise; no resource repository's standard package carries one yet.
 | R11-3 | `installation[].task_ids`, `.irreversible`, `.ui`, `.display` (composed rows) | `actingctl packs` / `ac_packs` answer | R-11 | R-11 | offline, no revision; `task_ids` until SS-7 |
 | R11-4 | `standard_pack_problem` `ui_out_of_limits`, `ui_duplicate`, `ui_group_unknown`, `ui_parameter_undeclared` | catalog vocabulary | R-11 | R-11 | `since` 0.12.36 |
 
+### 1.242 Slice INST-UNDO-EDGE (0.12.36): `install undo` cannot go around the interface edge that refuses a rollback (found by the v0.12.36 release agent reading the installer; it lands before 114-B's first record; coordinator work order `rd-1031/brief-inst-undo-edge.md`)
+
+[install-cli.md](install-cli.md) ("Undo and resume", "The interface edges of an undo") is the
+contract. The number 1.242 is the coordinator's; §1.241 and §1.243 are in flight in the same
+release. No code, key, vocabulary, journal member or interface revision is new.
+
+**What.** `install undo` of an update or rollback, finished or not, applies the interface edges a
+rollback to the build before it would whenever a Runtime of the undone build has been started,
+including the one a composite started inside its own operation. Failed edges refuse
+`interface_edge` (`commit_sha`, `count`, the result's `edges`) with nothing changed. The ranges are
+those of the operation's journalled plan, so nothing but the edges can refuse and the live tree
+need not verify. The gate's other parts stay as they were: only for an owner started since the
+operation ended. An unfinished operation in which no Runtime of the target started, a plain update
+and a start refused before its spawn undo as before.
+
+**Before.** The edge was judged only through the rollback gate, and the gate only for a finished
+operation whose owner record began after the operation's end. The composite's own start is before
+that end, so stopping its Runtime with `request-shutdown` let `undo` swap back with no check. An
+unfinished operation was never judged. The same held after an automatic rollback that the edge had
+refused (`rollback_gate_failed`).
+
+**Decisions within the work order.** (a) A finished rollback counts as an update does: the existing
+gate path treats both as one, and its undo is a rollback toward the build it replaced, so going back
+up a ledger with no acknowledgment fails `one_way` and takes the forward path. (b) A start step begun
+with no evidence counts while the operation is unfinished, since the journal cannot tell it from no
+spawn and `resume` remains; a finished one is a start refused before its spawn. (c) An owner record
+of a finished operation that began after the operation did also counts, for a start whose evidence a
+resumed start replaced. (d) The edges only, not the gate's `ledger_readability`, `open_time` and
+`config`, are judged for a start inside the operation, as the work order says.
+
+**Why.** Once 114-B writes a record, a build whose `ledger` range ends below it cannot decode it and
+its start fails: the undo would swap back to a Runtime that cannot start.
+
+**What changes live.** Only the answer of `install undo` after a composite across a failed edge: it
+was done, it is refused. Nothing persisted changes.
+
+**Rollback** (to 0.12.35). Nothing persisted changes; `undo` judges a composite's own start no more.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| UE-1 | `install undo`: `interface_edge` when a Runtime of the undone build has started; result member `edges` | install command | INST-UNDO-EDGE | INST-UNDO-EDGE | `since` 0.12.36; reused code and refusal word |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

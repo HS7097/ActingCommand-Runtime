@@ -4,10 +4,13 @@
 //! `contracts/install-cli.md`, "Undo and resume", "Steps"): reverses an unfinished operation, or
 //! the last finished one when no operation followed it. A finished update or rollback is undone
 //! only when the rollback gate passes, trivially when no Runtime owner started since it ended.
-//! Each started or done step is reversed from the last: a part renamed
+//! An update or rollback, finished or not, that started a Runtime of its own build is undone only
+//! when the interface edges of a rollback to the build before it pass (register §1.242). Each
+//! started or done step is reversed from the last: a part renamed
 //! `<name>.abandoned-<ms2>`, a swapped file renamed `<dst>.rolledback-<ms2>` and its `.old-<ms>`
 //! put back, a placed build renamed aside, the previous state rewritten. Nothing is deleted.
 
+use super::deploy::of_rollback;
 use super::files;
 use super::host::Host;
 use super::journal::{self, Operation, StepKind, StepState};
@@ -22,7 +25,7 @@ use crate::watchdog::decide::{Journal as OwnerJournal, OwnerLock};
 use crate::watchdog::observe;
 use actingcommand_contract::outcome::Outcome;
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::path::Path;
 
 /// The command of every outcome here.
@@ -60,11 +63,11 @@ fn set_aside(path: &Path, marker: &str, ms: u64) -> Result<Option<String>, Outco
     Ok(Some(files::plain(&aside)))
 }
 
-/// Whether an owner of the state root started after `since_unix_ms` (an epoch since the
-/// operation ended). An owner journal that cannot be read, or whose record this installer does
-/// not recognise, refuses `processes_unreadable`, and one a running owner holds locked refuses
-/// `owner_lock_held` (review S1 F6): neither is taken for "no owner started".
-fn owner_started_since(state_root: &Path, since_unix_ms: u64) -> Result<bool, Outcome> {
+/// When the last owner of the state root started; `None` when its journal names none. An owner
+/// journal that cannot be read, or whose record this installer does not recognise, refuses
+/// `processes_unreadable`, and one a running owner holds locked refuses `owner_lock_held` (review
+/// S1 F6): neither is taken for "no owner started".
+fn owner_started_at(state_root: &Path) -> Result<Option<u64>, Outcome> {
     let unreadable = || super::refusal(UNDO, InstallRefusal::ProcessesUnreadable).path(state_root);
     let (lock, journal) =
         observe::owner_journal(state_root).map_err(|cause| unreadable().caused_by(cause))?;
@@ -72,10 +75,42 @@ fn owner_started_since(state_root: &Path, since_unix_ms: u64) -> Result<bool, Ou
         return Err(super::refusal(UNDO, InstallRefusal::OwnerLockHeld).path(state_root));
     }
     match journal {
-        OwnerJournal::Record { record, .. } => Ok(record.started_at_unix_ms > since_unix_ms),
-        OwnerJournal::Absent => Ok(false),
+        OwnerJournal::Record { record, .. } => Ok(Some(record.started_at_unix_ms)),
+        OwnerJournal::Absent => Ok(None),
         OwnerJournal::Unrecognised { failure } => Err(unreadable().caused_by(failure)),
     }
+}
+
+/// Whether a start step's evidence shows a process spawned: an attempt that came ready or ended,
+/// a progress sample of a process under way, or an owner a resumed start found. An attempt whose
+/// spawn failed, one the memory guard stopped and a step skipped for a rollback show none.
+fn spawned(evidence: &Value) -> bool {
+    !evidence["ready"].is_null()
+        || evidence["samples"]
+            .as_array()
+            .is_some_and(|samples| !samples.is_empty())
+        || evidence["attempts"].as_array().is_some_and(|attempts| {
+            attempts
+                .iter()
+                .any(|attempt| attempt.get("ready").is_some() || attempt.get("ended").is_some())
+        })
+}
+
+/// Register §1.242: whether this operation started a Runtime of the build it installed (an
+/// automatic rollback's start of the previous build does not count). A start step with no evidence
+/// is one refused before its spawn when the operation ended (`launch::start`'s error), and one
+/// that may have spawned when it did not (a crash before its first progress): that is not taken
+/// for "none started".
+fn started_inside(journal: &journal::Journal) -> bool {
+    journal
+        .steps
+        .iter()
+        .filter(|step| step.kind == StepKind::Start && !of_rollback(&step.intent))
+        .any(|step| match (step.state, &step.evidence) {
+            (StepState::Started, None) => !journal.finished(),
+            (StepState::Started | StepState::Done, Some(evidence)) => spawned(evidence),
+            _ => false,
+        })
 }
 
 /// `install undo`.
@@ -113,27 +148,45 @@ pub(crate) fn undo(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
                 .pid(image.pid));
         }
     }
-    if operation.journal().finished() && operation.journal().undo.is_none() {
-        // The last finished operation only.
-        let ids = journal::operation_ids(&paths)?;
-        if ids.last().map(String::as_str) != Some(operation_id) {
-            return Err(super::unusable("--operation"));
-        }
-        if changes_program {
-            let loaded = plan::load(&paths, UNDO)?;
-            let installed_here = loaded
-                .state
-                .live
-                .as_ref()
-                .and_then(|live| live.operation_id.as_deref())
-                == Some(operation_id);
-            if !installed_here {
+    let mut notes = Vec::new();
+    // An undo already under way goes on from where it stopped: nothing here judges it again.
+    if operation.journal().undo.is_none() {
+        // A Runtime owner since the operation ended, and since it began.
+        let (mut owner_after_end, mut owner_inside) = (false, false);
+        if operation.journal().finished() {
+            // The last finished operation only.
+            let ids = journal::operation_ids(&paths)?;
+            if ids.last().map(String::as_str) != Some(operation_id) {
                 return Err(super::unusable("--operation"));
             }
-            let ended = operation.journal().finished_at_unix_ms.unwrap_or(0);
-            if owner_started_since(&loaded.state_root, ended)? {
-                refuse_by_gate(host, &paths, operation.journal())?;
+            if changes_program {
+                let loaded = plan::load(&paths, UNDO)?;
+                let installed_here = loaded
+                    .state
+                    .live
+                    .as_ref()
+                    .and_then(|live| live.operation_id.as_deref())
+                    == Some(operation_id);
+                if !installed_here {
+                    return Err(super::unusable("--operation"));
+                }
+                if let Some(started) = owner_started_at(&loaded.state_root)? {
+                    let ended = operation.journal().finished_at_unix_ms.unwrap_or(0);
+                    owner_after_end = started > ended;
+                    owner_inside = started > operation.ms();
+                }
             }
+        }
+        // Register §1.242: a Runtime of the undone build started, also inside the operation.
+        if changes_program && (owner_inside || started_inside(operation.journal())) {
+            let loaded = plan::load(&paths, UNDO)?;
+            match refuse_by_edges(host, &paths, &loaded, operation.journal())? {
+                Ok(warnings) => notes = warnings,
+                Err(refused) => return Ok(refused),
+            }
+        }
+        if owner_after_end {
+            refuse_by_gate(host, &paths, operation.journal())?;
         }
     }
     let _lock = if changes_program {
@@ -175,9 +228,12 @@ pub(crate) fn undo(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
         }
     }
     let operation_id = operation.id().to_owned();
-    let outcome = super::done(UNDO)
-        .install_operation_id(operation_id.clone())
-        .installation_changed(true);
+    let outcome = plan::with_notes(
+        super::done(UNDO)
+            .install_operation_id(operation_id.clone())
+            .installation_changed(true),
+        &notes,
+    );
     operation.finish_undo(&outcome)?;
     Answer::new(outcome)
         .with("operation_id", operation_id)?
@@ -258,6 +314,46 @@ pub(crate) fn reverse_step(
         | StepKind::ReleaseHold
         | StepKind::ReverseFiles => Vec::new(),
     })
+}
+
+/// Register §1.242: the interface edges of a rollback to the build before the operation, for the
+/// undo of an update or rollback whose build has started. The two builds' ranges are those the
+/// operation's journalled plan read from their manifests, so an edge is judged whatever the live
+/// tree holds at this point, and nothing else refuses. Failed edges are the answer `interface_edge`
+/// with `commit_sha`, `count` and every row in `edges`; otherwise the caveats of the rows.
+fn refuse_by_edges(
+    host: &dyn Host,
+    paths: &Paths,
+    loaded: &plan::Loaded,
+    journal: &journal::Journal,
+) -> Result<Result<Vec<Outcome>, Answer>, Outcome> {
+    let invalid = || journal::state_invalid(UNDO, paths.journal(&journal.operation_id), None);
+    let document = journal.plan.as_ref().ok_or_else(invalid)?;
+    let (previous, previous_speaks) = plan::planned_side(document, "live").ok_or_else(invalid)?;
+    let (_, undone_speaks) = plan::planned_side(document, "target").ok_or_else(invalid)?;
+    let mut warnings = Vec::new();
+    let edges = plan::rollback_edges(
+        host,
+        loaded,
+        &undone_speaks,
+        &previous_speaks,
+        UNDO,
+        &mut warnings,
+    );
+    let failed = edges
+        .iter()
+        .filter(|edge| edge.result == plan::EdgeResult::Fail)
+        .count();
+    if failed == 0 {
+        return Ok(Ok(warnings));
+    }
+    let refusal = plan::with_notes(
+        super::refusal(UNDO, InstallRefusal::InterfaceEdge)
+            .commit_sha(previous)
+            .count(failed),
+        &warnings,
+    );
+    Ok(Err(Answer::new(refusal).with("edges", &edges)?))
 }
 
 /// The rollback gate toward the build before the operation, for the undo of a finished update

@@ -337,14 +337,18 @@ failure as its link: the root cannot run normally until `resume` or `undo`.
 **Rollback** `--to <commit>` is an update to a kept build, with the rollback gate (below) in its
 plan and evaluated again under the writer lock immediately before the first change. A failed
 gate refuses `rollback_gate_failed` (`rollback_gate_parts`, and `ledger_sequence` when the
-target's reader refused a page): forward fix only. Success answers done, as an update does.
+target's reader refused a page): forward fix only. Success answers done, as an update does. A
+failed interface edge refuses `interface_edge` whatever the ledger holds; `--accept-ledger-one-way`
+governs only the upgrade direction, and `undo` cannot go around it ("Undo and resume", below).
 
 **Undo and resume.**
 
 - `undo` reverses an unfinished operation, or the last finished one when no operation followed
   it; for a finished update or rollback the rollback gate must pass (it passes trivially when no
-  Runtime owner started since the operation, read from the owner journal). Every step is reversed
-  as the step table says; every displaced file is kept. Result: done (`install_operation_id`).
+  Runtime owner started since the operation, read from the owner journal), and an update or
+  rollback that started a Runtime of its own build passes the interface edges first (below). Every
+  step is reversed as the step table says; every displaced file is kept. Result: done
+  (`install_operation_id`).
 - `resume` continues an unfinished operation: each step's postcondition is checked on disk, a
   step already true is done, a missing half is finished. Result: done (`install_operation_id`)
   with the operation's own result members, and the operation's own result as its `related`
@@ -359,6 +363,37 @@ target's reader refused a page): forward fix only. Success answers done, as an u
   cannot be read or whose last record this installer does not recognise refuses
   `processes_unreadable`, and one a running owner holds locked refuses `owner_lock_held`;
   neither counts as "no owner started" (review S1 F6).
+- **The interface edges of an undo** (`since` 0.12.36; register §1.242). `undo` of an update or
+  rollback, finished or not, applies the interface edges a rollback to the build before it would
+  whenever a Runtime of the undone build has been started; a composite's own start counts, so
+  stopping that Runtime by any means but an install command does not get around the edges. The
+  edges are the rows of "The rollback gate" part 1 that the declared ranges, the packs and the
+  configuration's keys decide (`--accept-ledger-one-way` is never given): an undo across
+  `previous_max_in_next` is refused whatever the ledger holds. The two builds' ranges are those
+  the operation's journalled plan read from their manifests; a journal without them refuses
+  `state_invalid`. Failed edges refuse `interface_edge` (`commit_sha` the build before the
+  operation, `count` the failed rows; the result's `edges`, each row as a plan's, with the parties'
+  ranges), before the writer lock and with nothing changed, and leave a forward fix or, for an
+  unfinished operation, `resume`. A running actingd still refuses first (`runtime_running`). The
+  edges alone are judged here; the gate's other parts follow only as above, for an owner started
+  since the operation ended. An undo already under way goes on unjudged.
+  - **What counts as started.** A `start` step of the operation, not an automatic rollback's, whose
+    evidence shows a process spawned (an attempt ready or ended, a progress sample, an owner a
+    resumed start found), including one that exited during startup or was left running at its
+    deadline; a `start` step begun with no evidence while the operation is unfinished, which a crash
+    before its first progress leaves and the journal cannot tell from no spawn; or an owner record
+    of a finished operation that began after the operation did.
+  - **What does not.** A plain update or rollback, a composite interrupted before its `start`, a
+    `start` refused before any spawn (`guard_failed`, `runtime_running`, `owner_lock_held`, a run
+    lock not taken: the operation ended with no evidence on the step), and a spawn that failed on
+    every attempt. These undo as they did.
+  - **The composite's failures.** A failed post-start check or a new start that exited begins the
+    automatic rollback. When the edges refuse it (`rollback_gate_failed`, the new build and the
+    hold kept), the undo of that operation is refused the same way once its Runtime has stopped,
+    and the undo no longer offers the swap the gate refused. A rollback that ran
+    (`deploy_rolled_back`) leaves the previous build live: the operation has nothing to undo
+    (`actingctl_usage_invalid`). One interrupted past its gate has passed these edges already and
+    passes them again.
 - An operation id that names no journal, an operation `resume` cannot continue (finished) or one
   `undo` may not reverse (not the last) is `actingctl_usage_invalid` (`argument` `--operation`,
   `argument_problem` `unusable`).

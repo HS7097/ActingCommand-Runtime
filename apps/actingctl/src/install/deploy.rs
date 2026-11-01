@@ -152,7 +152,7 @@ fn composite_update(journal: &journal::Journal) -> bool {
 }
 
 /// Whether step `n`'s intent marks it as one of an automatic rollback's.
-fn of_rollback(intent: &Value) -> bool {
+pub(crate) fn of_rollback(intent: &Value) -> bool {
     intent
         .get("rollback")
         .and_then(Value::as_bool)

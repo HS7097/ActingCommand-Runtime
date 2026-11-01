@@ -349,6 +349,61 @@ fn interface_edges(
     edges
 }
 
+/// The edge of the configuration's keys: `C` names no key the installer does not know.
+fn known_keys_edge(installer: &Speaks, config: &Value) -> Edge {
+    let unknown = unknown_keys(config);
+    Edge {
+        interface: "actingd-config",
+        check: "installer_knows_keys",
+        result: if unknown.is_empty() {
+            EdgeResult::Pass
+        } else {
+            EdgeResult::Fail
+        },
+        parties: vec![
+            party("C", "file", None),
+            party("I", "declaration", installer.get("actingd-config").copied()),
+        ],
+        keys: unknown,
+    }
+}
+
+/// Register §1.242 (INST-UNDO-EDGE, since 0.12.36): the interface edges of a rollback from `live`
+/// to `target` as `install undo` judges them, alone: the rows [`plan`] computes from the declared
+/// ranges, the packs and the configuration's keys, with no acknowledgment of a one-way ledger. The
+/// ranges are the caller's; nothing runs and no file is verified, so nothing but the edges can
+/// refuse. The caveats of unknown pack declarations go to `warnings`.
+pub(crate) fn rollback_edges(
+    host: &dyn Host,
+    loaded: &Loaded,
+    live: &Speaks,
+    target: &Speaks,
+    operation: InstallLocation,
+    warnings: &mut Vec<Outcome>,
+) -> Vec<Edge> {
+    let installer = host.installer_speaks().unwrap_or_default();
+    let mut edges = interface_edges(
+        &installer,
+        live,
+        target,
+        &loaded.state.packs,
+        false,
+        operation,
+        warnings,
+    );
+    edges.push(known_keys_edge(&installer, &loaded.config));
+    edges
+}
+
+/// The commit and the declared ranges of one side (`live`, `target`) of a plan document, as an
+/// operation's journal keeps it; `None` when the document does not hold them.
+pub(crate) fn planned_side(document: &Value, side: &str) -> Option<(String, Speaks)> {
+    let side = document.get(side)?;
+    let commit = side.get("commit")?.as_str()?.to_owned();
+    let speaks = serde_json::from_value(side.get("speaks")?.clone()).ok()?;
+    Some((commit, speaks))
+}
+
 /// Workflow #429 A.4 a (R-15a, since 0.12.30): the edges of party U*, the UI that runs after the
 /// operation (`contracts/component-interfaces.md`, "Checks per operation";
 /// `contracts/install-cli.md`, "Interface checks", "UI edges"), beside the update edges of I, Rp
@@ -699,21 +754,7 @@ pub(crate) fn plan(host: &dyn Host, paths: &Paths, inputs: PlanInputs) -> Result
             vec![party(name, "manifest", None)],
         ));
     }
-    let unknown = unknown_keys(&config);
-    edges.push(Edge {
-        interface: "actingd-config",
-        check: "installer_knows_keys",
-        result: if unknown.is_empty() {
-            EdgeResult::Pass
-        } else {
-            EdgeResult::Fail
-        },
-        parties: vec![
-            party("C", "file", None),
-            party("I", "declaration", installer.get("actingd-config").copied()),
-        ],
-        keys: unknown,
-    });
+    edges.push(known_keys_edge(&installer, &config));
     // The file plan: every listed file of the target and both manifests, Tools first.
     let mut files_planned = Vec::new();
     let mut extra = Vec::new();
