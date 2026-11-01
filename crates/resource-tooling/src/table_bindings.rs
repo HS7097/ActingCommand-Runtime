@@ -6,11 +6,38 @@
 //! the coverage check lists the identities of the document's layout that a table has no row for.
 
 use std::collections::BTreeSet;
+use std::fmt;
 use std::sync::Arc;
 
-use actingcommand_contract::parse_standard_pack_table;
-use actingcommand_selection_policy::{LoadedTable, SelectionPolicy, SelectionTables, ValueRef};
+use actingcommand_contract::{StandardPackTableIssue, parse_standard_pack_table};
+use actingcommand_selection_policy::{
+    LoadedTable, SelectionPolicy, SelectionTables, TableBindRefusal, ValueRef,
+};
 use serde_json::Value;
+
+/// Why a document could not be measured against the tables of its repository.
+#[derive(Debug)]
+pub enum PolicyTablesRefusal {
+    /// The bytes are no selection document.
+    Document(serde_json::Error),
+    /// The table file `name` is refused.
+    Table {
+        name: String,
+        issue: StandardPackTableIssue,
+    },
+    /// K2: a table differs from the document's declaration.
+    Binding(TableBindRefusal),
+}
+
+impl fmt::Display for PolicyTablesRefusal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Document(error) => write!(formatter, "{error}"),
+            Self::Table { name, issue } => write!(formatter, "{name}: {issue}"),
+            Self::Binding(refusal) => write!(formatter, "{refusal}"),
+        }
+    }
+}
 
 /// A table of a document with identities of its layout that no row holds: a warning, or an error
 /// when the document reads the table under `abort_evaluation` (`aborts`), because then one such
@@ -40,22 +67,26 @@ pub fn declared_policy_tables(policy_bytes: &[u8]) -> Vec<String> {
 
 /// Binds `tables` (each `(file name, bytes)`, for `tables/<file name>`) to the document and
 /// measures their coverage of the identities its layout declares in `task` (the task document
-/// that declares the select step). A refused table or a binding refusal is the `Err`, in words.
+/// that declares the select step). A refused table or a binding refusal is the `Err`.
 pub fn check_policy_tables(
     policy_bytes: &[u8],
     task: &Value,
     tables: &[(String, Vec<u8>)],
-) -> Result<Vec<TableCoverageGap>, String> {
+) -> Result<Vec<TableCoverageGap>, PolicyTablesRefusal> {
     let policy: SelectionPolicy =
-        serde_json::from_slice(policy_bytes).map_err(|error| error.to_string())?;
+        serde_json::from_slice(policy_bytes).map_err(PolicyTablesRefusal::Document)?;
     let mut loaded = Vec::with_capacity(tables.len());
     for (name, bytes) in tables {
-        let table = parse_standard_pack_table(bytes, None, name)
-            .map_err(|issue| format!("{name}: {issue}"))?;
+        let table = parse_standard_pack_table(bytes, None, name).map_err(|issue| {
+            PolicyTablesRefusal::Table {
+                name: name.clone(),
+                issue,
+            }
+        })?;
         // The instant 0 expires no column: the coverage check reads keys, not cells.
         loaded.push(Arc::new(LoadedTable::load(table, 0)));
     }
-    SelectionTables::bind(&policy, &loaded).map_err(|refusal| refusal.to_string())?;
+    SelectionTables::bind(&policy, &loaded).map_err(PolicyTablesRefusal::Binding)?;
     let mut gaps = Vec::new();
     for table in &loaded {
         let table_id = table.table_id();
@@ -222,7 +253,9 @@ mod tests {
             .aborts
         );
         let mistyped = document("drop_candidate", json!({"type": "boolean"}));
-        let refusal = check_policy_tables(&mistyped, &task(), &[partial]).expect_err("column type");
+        let refusal = check_policy_tables(&mistyped, &task(), &[partial])
+            .expect_err("column type")
+            .to_string();
         assert!(refusal.contains("table_mismatch=column_type"), "{refusal}");
     }
 }

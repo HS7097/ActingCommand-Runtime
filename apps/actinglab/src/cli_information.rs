@@ -39,6 +39,13 @@ pub(super) fn help_data() -> Value {
             "resource catalog": ["--repo <repository root>", "--catalog <static catalog JSON>", "--catalog-server <server>", "--field <identity feature name>"],
             "package preflight": ["--package <directory | .zip | .json container>", "--zip <published .zip package>"],
             "package check": ["--package <directory | .zip | .json container>"],
+            "package dry-run": [
+                "--package <directory | .zip | .json container> | --zip <published .zip package>",
+                "--fixture <recorded.png> (repeatable, one per frame)",
+                "--out <the result file>",
+                "--seed <unsigned 64-bit integer: the run's draws, 0 without it>",
+                "--standard-pack-root <the root of the game directories: the shared tables a select step reads>"
+            ],
             "operation validate": ["--repo <repository root>", "--operation-dir <repository-relative operation directory>"],
             "lab watch": crate::runtime_debug::watch_options(),
             "lab unpin": ["--artifact-id <artifact-id>", "--pin-sequence <sequence>", "--pin-event-id <event-id>"],

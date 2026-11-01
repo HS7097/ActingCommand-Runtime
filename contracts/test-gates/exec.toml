@@ -1348,6 +1348,7 @@ tests = [
     "actingcommand-execution-kernel::lib::contained_task::selection::tests::db2_a_table_document_needs_a_rejecting_layout_its_identity_key_and_one_candidate",
     "actingcommand-pack-containment::lib::source::declarations::tests::db2_a_table_document_needs_a_rejecting_layout_and_its_identity_field_as_the_key",
     "actingcommand-resource-tooling::lib::table_bindings::tests::db2_a_document_is_bound_and_its_identity_coverage_measured",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4b::db2_sixty_four_candidates_on_the_fallback_stay_in_the_record_budget_or_fail_loud",
 ]
 incident = ["#357 DB-2"]
 

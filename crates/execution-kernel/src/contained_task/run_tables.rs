@@ -23,6 +23,15 @@ pub struct RunTables {
     tables: BTreeMap<String, Arc<LoadedTable>>,
 }
 
+/// A table a package's binding read for the run: what the run's record names (register §1.244).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunTableRead {
+    /// The path the documents declare, `tables/<table_id>.json`.
+    pub path: String,
+    /// `sha256:<lowercase hex>` of the file as it was read.
+    pub sha256: String,
+}
+
 /// Why a package's tables could not be bound: the run is refused (§2.4).
 #[derive(Debug)]
 pub enum RunTableFailure {
@@ -43,13 +52,15 @@ impl RunTables {
     /// K1 and K2 for every select step of `package`, whose game root is `game_root`: a path this
     /// run has not read is read once and fixed at `now_unix_ms`, and every document that declares
     /// a table is bound against what the run holds. A package that declares no table reads
-    /// nothing.
+    /// nothing. The answer is the tables this call read, each once: a path the run holds already
+    /// is not among them, and a failure answers none.
     pub fn bind_package(
         &mut self,
         game_root: &Path,
         package: &PreparedContainedTask,
         now_unix_ms: u64,
-    ) -> Result<(), RunTableFailure> {
+    ) -> Result<Vec<RunTableRead>, RunTableFailure> {
+        let mut reads = Vec::new();
         for policy in package.selection_policies() {
             let mut loaded = Vec::with_capacity(policy.tables.len());
             for declaration in &policy.tables {
@@ -67,9 +78,13 @@ impl RunTables {
                                 path: declaration.path.clone(),
                             });
                         };
-                        let table = Arc::new(LoadedTable::load(read, now_unix_ms));
+                        let table = Arc::new(LoadedTable::load(read.table, now_unix_ms));
                         self.tables
                             .insert(declaration.path.clone(), Arc::clone(&table));
+                        reads.push(RunTableRead {
+                            path: declaration.path.clone(),
+                            sha256: read.sha256,
+                        });
                         table
                     }
                 };
@@ -77,7 +92,7 @@ impl RunTables {
             }
             SelectionTables::bind(policy, &loaded).map_err(RunTableFailure::Mismatch)?;
         }
-        Ok(())
+        Ok(reads)
     }
 }
 

@@ -277,7 +277,7 @@ pub use remedies::{
     GivenParameterProblem, GivenParameterRefusal, RUN_PARAMETERS_KEY_PREFIX, RemedyDeclarations,
     RunParameters,
 };
-pub use run_tables::{RunTableFailure, RunTables};
+pub use run_tables::{RunTableFailure, RunTableRead, RunTables};
 pub use scan::{
     ScanDeclaration, ScanDryRun, ScanDryRunMember, ScanDryRunUnknown, ScanDryRunViewport,
     dry_run_scan, dry_run_scan_with_tables, replay_scan, replay_scan_with_tables,

@@ -871,7 +871,8 @@ impl HostShared {
     /// read once for the run and checked against its documents. Any failure refuses this one run,
     /// before any lease and any task record: the receipt is `denied` with `package_invalid` and
     /// the failure's own code, and nothing else stops: not the root, not the Runtime, not another
-    /// instance. A package that declares no table reads nothing here.
+    /// instance. A package that declares no table reads nothing here. Register §1.244: each table
+    /// read for the run is recorded once, `standard_pack_table_read`, with its file's digest.
     pub(super) fn bind_run_tables(
         &self,
         package: &PreparedContainedTask,
@@ -906,11 +907,11 @@ impl HostShared {
             .sample()
             .map_err(RequestFailure::poison_without_terminal)?
             .unix_ms;
-        tables
+        let reads = tables
             .bind_package(&directory, package, now_unix_ms)
             .map_err(|failure| match failure {
                 RunTableFailure::Missing { path } => {
-                    missing(&directory.join(&path).display().to_string())
+                    missing(&directory.join(path).display().to_string())
                 }
                 RunTableFailure::Read(StandardPackTableReadFailure::Invalid { path, issue }) => {
                     table_refusal(SharedCode::StandardPackTableInvalid.code(), |outcome| {
@@ -945,7 +946,18 @@ impl HostShared {
                         }
                     })
                 }
-            })
+            })?;
+        for read in reads {
+            self.record_standard_pack_read(
+                Outcome::new(HostCode::StandardPackTableRead)
+                    .operation(HostLocation::StandardPackRead)
+                    .game(game)
+                    .path(directory.join(read.path))
+                    .actual_sha256(read.sha256),
+            )
+            .map_err(RequestFailure::poison_without_terminal)?;
+        }
+        Ok(())
     }
 }
 
@@ -1292,7 +1304,14 @@ impl RuntimeContainedTask<'_> {
     ) -> Result<(), ContainedTaskRunError<RequestFailure>> {
         self.host
             .bind_run_tables(admitted, &mut self.tables)
-            .map_err(|failure| interrupt_failure(failure.error))
+            .map_err(|failure| {
+                // The clock or the ledger failed, not the table: that failure keeps its own path.
+                if failure.poison_runtime || failure.error.is_fatal() {
+                    ContainedTaskRunError::Boundary(failure)
+                } else {
+                    interrupt_failure(*failure.error)
+                }
+            })
     }
 
     /// A handler or `then.run` package of the run, admitted once (§7) and checked for its part

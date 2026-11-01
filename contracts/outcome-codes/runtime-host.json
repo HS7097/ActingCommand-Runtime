@@ -20807,6 +20807,29 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "standard_pack_table_read": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "game": "required",
+        "path": "required",
+        "actual_sha256": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.37",
+      "description": "A run read this standard-pack table for its select steps and bound it (Workflow #357 DB-2, register section 1.244): one standard_pack_read record per table per run, written in the run's preparation, or at its admission for a layer the run admits later. actual_sha256 is the digest of the file as it was read; with the game root's release it locates the table the run's selection records used. A failed bind writes none and keeps its refusal.",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "standard_pack_table_column_expired": {
       "category": "warning",
       "ladder_class": "none",

@@ -490,8 +490,6 @@ fn frame_paths(directory: &Path) -> CliOutcome<Vec<PathBuf>> {
     Ok(paths)
 }
 
-/// The package at `package`, read by its path (Workflow #336 option 丙: no reference is given
-/// or compared) with the Runtime's OCR provider when actinglab has one.
 /// The instant a replay fixes a table's expired columns at: the one its select steps evaluate at.
 fn replay_instant(facts: &OfflineReplayFacts) -> u64 {
     match facts {
@@ -502,6 +500,8 @@ fn replay_instant(facts: &OfflineReplayFacts) -> u64 {
     }
 }
 
+/// The package at `package`, read by its path (Workflow #336 option 丙: no reference is given
+/// or compared) with the Runtime's OCR provider when actinglab has one.
 fn admit(package: &Path) -> CliOutcome<PreparedContainedTask> {
     let package = if package.is_absolute() {
         package.to_path_buf()

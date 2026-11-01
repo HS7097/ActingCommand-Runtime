@@ -1167,3 +1167,146 @@ fn l4b_an_abort_in_a_viewport_is_recorded_as_incomplete() {
     let check = record.unknown_check.expect("unknown_check");
     assert_eq!(check.unknown_instances, 12);
 }
+
+// Workflow #357 DB-2 (M-357a v1.1 §4.2, the record budget): the largest record a table read adds
+// to: 64 candidates, two terms each on the fallback column, so each verdict carries two
+// `term_fallback_used` reasons. Within the 64 KiB write bound the record is appended; beyond it
+// the writer refuses it as `selection_record_too_large`, loudly and whole. Every score ties and
+// the document has no tie-break key, so the decision is ambiguous and no return is scripted.
+#[test]
+fn db2_sixty_four_candidates_on_the_fallback_stay_in_the_record_budget_or_fail_loud() {
+    use actingcommand_contract::{TASK_SELECTION_RECORD_MAX_BYTES, parse_standard_pack_table};
+    use actingcommand_selection_policy::{LoadedTable, SelectionOutcome, SelectionTables};
+    use std::sync::Arc;
+
+    let open = (0..64).collect::<Vec<usize>>();
+    let list = open_only(cards(22), &open);
+    let identities = domain(&list);
+    let rows = identities
+        .iter()
+        .map(|identity| json!([identity, null, null, 500]))
+        .collect::<Vec<_>>();
+    let score = |name: &str| json!({"name": name, "type": "integer", "min": 0, "max": 100_000, "nullable": true});
+    let table = serde_json::to_vec(&json!({
+        "schema_version": "actingcommand.table.v1",
+        "game": "neutral",
+        "table_id": "unit_scores",
+        "row_key": ["unit"],
+        "columns": [{"name": "unit", "type": "key"}, score("first_milli"), score("second_milli"),
+                    score("third_milli")],
+        "rows": rows,
+    }))
+    .expect("table bytes");
+    let table = parse_standard_pack_table(&table, None, "unit_scores.json").expect("a valid table");
+    let term = |term_id: &str, column: &str| {
+        json!({"term_id": term_id,
+               "value": {"source": "table", "table_id": "unit_scores", "key_field": "member",
+                         "pins": [], "value_column": column, "fallback_column": "third_milli"},
+               "transform": {"kind": "identity"}, "weight_milli": 500,
+               "on_unknown": {"kind": "drop_candidate"}})
+    };
+    let integer = json!({"type": "integer"});
+    let policy: SelectionPolicy = serde_json::from_value(json!({
+        "schema_version": "actingcommand.selection-policy.v1",
+        "policy_id": "cards-by-table",
+        "applies_to": {
+            "candidate_layout_id": "layout/cards",
+            "outcome_keys": {"selected": "card_selected", "empty": "card_empty",
+                             "insufficient": "card_insufficient",
+                             "ambiguous": "card_ambiguous", "unknown": "card_unknown"}
+        },
+        "fields": [
+            {"name": "member", "value_type": {"type": "enum_string", "allowed": identities}},
+            {"name": "open", "value_type": {"type": "boolean"}},
+            {"name": "level", "value_type": {"type": "integer"}}
+        ],
+        "facts": [],
+        "tables": [{"table_id": "unit_scores", "path": "tables/unit_scores.json",
+                    "row_key": ["unit"],
+                    "columns": {"first_milli": integer, "second_milli": integer,
+                                "third_milli": integer}}],
+        "gates": [{"gate_id": "open",
+                   "predicate": {"kind": "boolean_equals",
+                                 "value": {"source": "field", "field": "open"},
+                                 "expected": true},
+                   "on_unknown": {"kind": "drop_candidate"}}],
+        "scoring": [term("first", "first_milli"), term("second", "second_milli")],
+        "selection": {"mode": "exactly_one", "required_count": 1},
+        "tie_break": []
+    }))
+    .expect("policy");
+    policy.validate().expect("valid policy");
+    let tables = SelectionTables::bind(&policy, &[Arc::new(LoadedTable::load(table, 1_000))])
+        .expect("the table binds");
+
+    let mut script = Script::starting_with(view(&list, 0, true, false));
+    for offset in [400, 800, 1200, 1600] {
+        script = script.then(view(&list, offset, false, false));
+    }
+    let script = script.then(view(&list, 1800, false, true));
+    let layout = layout(&identities);
+    let facts = no_facts();
+    let scan = declaration(|_| {});
+    let mut session = ScanSession::with_tables(
+        &scan,
+        &layout,
+        &policy,
+        &tables,
+        &facts,
+        1_000,
+        FRAME,
+        Duration::from_secs(1_800),
+    )
+    .expect("session");
+    let mut fake = Fake {
+        script,
+        current: None,
+        captures: 0,
+        clock: Duration::ZERO,
+        drags: Vec::new(),
+    };
+    let selection = session.select(&mut fake, false).expect("a decision");
+
+    assert!(
+        matches!(
+            selection.decision.outcome,
+            SelectionOutcome::Ambiguous { .. }
+        ),
+        "{:?}",
+        selection.decision.outcome
+    );
+    assert_eq!(selection.decision.candidates.len(), 64);
+    for verdict in &selection.decision.candidates {
+        let fallbacks = verdict
+            .reasons
+            .iter()
+            .filter(|reason| reason.outcome.code().as_str() == "term_fallback_used")
+            .count();
+        assert_eq!(fallbacks, 2, "{}", verdict.candidate_id);
+    }
+
+    let projection = session
+        .projection(selection.coverage)
+        .expect("the scan's projection");
+    let record = scan_selection_record(
+        POLICY_PATH,
+        (1, 1_000),
+        &selection.decision,
+        projection,
+        selection.unknown_check,
+        selection.confirmation.clone(),
+    )
+    .expect("the record");
+    let bytes = serde_json::to_vec(&record).expect("encoded").len();
+    println!("64 candidates, two fallback terms each: {bytes} bytes");
+    match record.validate_for_append() {
+        Ok(()) => assert!(bytes <= TASK_SELECTION_RECORD_MAX_BYTES, "{bytes}"),
+        Err(error) => {
+            assert!(
+                bytes > TASK_SELECTION_RECORD_MAX_BYTES,
+                "{bytes}: {error:?}"
+            );
+            assert_eq!(error.code().as_str(), "selection_record_too_large");
+        }
+    }
+}

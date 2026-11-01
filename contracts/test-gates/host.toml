@@ -1448,6 +1448,11 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_357_db2::db2_an_unreadable_table_no_root_and_a_broken_root_deny_the_run",
     "actingcommand-runtime-host::lib::tests::gate_357_db2::db2_a_scan_lists_static_table_drops_as_candidates_and_never_as_unknown",
     "actingcommand-runtime-host::lib::tests::gate_357_db2::db2_a_scan_gates_out_another_class_and_keeps_a_missing_pinned_fact_unknown",
+    "actingcommand-runtime-host::lib::tests::gate_357_db2::db2_a_run_records_the_table_it_reads_with_its_digest_and_a_run_that_reads_none_records_none",
+    "actingcommand-runtime-host::lib::tests::gate_357_db2::db2_a_single_frame_select_chooses_by_the_bound_table",
+    "actingcommand-runtime-host::lib::tests::gate_357_db2::db2_a_single_frame_select_drops_what_the_table_lacks_without_an_unknown_instance",
+    "actingcommand-runtime-host::lib::tests::gate_357_db2::db2_a_table_failure_on_one_instance_leaves_the_other_instance_running",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav6::db2_a_layer_package_with_a_broken_table_ends_the_run_that_admits_it",
 ]
 incident = ["#357 DB-2"]
 

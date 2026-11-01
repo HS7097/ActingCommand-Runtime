@@ -1477,6 +1477,9 @@ actingcommand_contract::outcome_codes! {
         StandardPackTableMissing => "standard_pack_table_missing": error / declaration_error,
         /// Workflow #357 DB-2 (K2): a table differs from its document's declaration.
         StandardPackTableMismatch => "standard_pack_table_mismatch": error / declaration_error,
+        /// Info. Workflow #357 DB-2 (register §1.244): a run read this table for its select steps
+        /// (keys `game`, `path`, `actual_sha256`).
+        StandardPackTableRead => "standard_pack_table_read": info / none,
         // ---- Workflow #357 DB-1: end
         // ---- Workflow #373 NAV-5 (full-match entry routing, M-373 §5, §9.1): begin
         /// Info. A locate of the entry gate matched exactly one page of `pages.json` (keys

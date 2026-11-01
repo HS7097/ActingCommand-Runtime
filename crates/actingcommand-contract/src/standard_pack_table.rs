@@ -23,6 +23,7 @@ use crate::outcome::{IoOp, Outcome};
 use crate::{StandardPackProblem, standard_pack_page_id};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::{self, Read};
@@ -591,6 +592,15 @@ pub enum StandardPackTableReadFailure {
     },
 }
 
+/// One table as a run read it: the table, and the digest of the file's bytes as they were read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StandardPackTableRead {
+    pub table: StandardPackTable,
+    /// `sha256:<lowercase hex>` of the file. Nothing compares it: it is what a run's record names,
+    /// so a reader can tell which table of the game root's release the run used (register §1.244).
+    pub sha256: String,
+}
+
 /// Workflow #357 DB-2 (M-357a v1.1 §2.4, K1): the one table `table_id` of the game root
 /// `game_root`, as a run's preparation reads it: read once and parsed with
 /// [`parse_standard_pack_table`], its place among the directory's files judged as
@@ -600,7 +610,7 @@ pub fn read_standard_pack_table(
     game_root: &Path,
     game: &str,
     table_id: &str,
-) -> Result<Option<StandardPackTable>, StandardPackTableReadFailure> {
+) -> Result<Option<StandardPackTableRead>, StandardPackTableReadFailure> {
     let directory = game_root.join(STANDARD_PACK_TABLES_DIRECTORY);
     let name = format!("{table_id}{STANDARD_PACK_TABLE_SUFFIX}");
     let path = directory.join(&name);
@@ -638,7 +648,10 @@ pub fn read_standard_pack_table(
         Err((error, op)) => return Err(unreadable(&path, error, op)),
     };
     match parse_standard_pack_table(&bytes, Some(game), &name) {
-        Ok(table) => Ok(Some(table)),
+        Ok(table) => Ok(Some(StandardPackTableRead {
+            table,
+            sha256: format!("sha256:{:x}", Sha256::digest(bytes)),
+        })),
         Err(issue) => Err(StandardPackTableReadFailure::Invalid { path, issue }),
     }
 }

@@ -626,6 +626,15 @@ never chosen and is not in `unknown[]`, and it counts toward the 64 candidates. 
 `empty`. A candidate not of the class is gated out. A pinned fact unavailable stays an unknown
 instance, with rules 2 and 3 of the scan. `task.selection_evaluated` gains no member.
 
+**What a run's records add.** Tables are outside every content hash, so a run that binds a table
+says which file it read: one more `runtime.lifecycle_observed` record of phase `standard_pack_read`
+per table per run, `standard_pack_table_read` (info), with `game`, `path` and `actual_sha256`, the
+digest of the file as it was read. It is written once, on the success path, in the run's preparation,
+or at the admission of a layer the run admits later; a failed bind keeps its refusal and writes none,
+and a run that reads no table writes none. Like every `standard_pack_read` record it has system
+links, so a reader finds it by `game` and `path` at or before the run's start. That digest, with the
+game root's release, is how a reader locates the table a selection record's `input_sha256` read.
+
 ### Execution
 
 One attempt of a single-frame select runs, before any input:

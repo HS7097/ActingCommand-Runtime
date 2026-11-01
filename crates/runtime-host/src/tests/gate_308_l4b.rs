@@ -231,6 +231,15 @@ pub(super) fn table_read_identities() -> Vec<String> {
 
 /// The package with the document `policy`, its select step declaring `on_empty` or not.
 pub(super) fn scan_select_package_with(policy: serde_json::Value, on_empty: bool) -> Vec<u8> {
+    select_package(policy, on_empty, true)
+}
+
+/// [`scan_select_package_with`] whose select step declares no scan: it decides on one frame.
+pub(super) fn single_frame_select_package(policy: serde_json::Value, on_empty: bool) -> Vec<u8> {
+    select_package(policy, on_empty, false)
+}
+
+fn select_package(policy: serde_json::Value, on_empty: bool, with_scan: bool) -> Vec<u8> {
     let identities = table_read_identities();
     let space = serde_json::json!({"width": WIDTH, "height": HEIGHT});
     let layout = serde_json::json!({
@@ -264,8 +273,10 @@ pub(super) fn scan_select_package_with(policy: serde_json::Value, on_empty: bool
         "max_steps": 2
     });
     let mut select = serde_json::json!({"layout_id": "layout/cards",
-                                        "policy": {"path": "policies/listed.json"},
-                                        "scan": scan()});
+                                        "policy": {"path": "policies/listed.json"}});
+    if with_scan {
+        select["scan"] = scan();
+    }
     if on_empty {
         select["on_empty"] = serde_json::json!({"outcome_key": ON_EMPTY_KEY});
     }

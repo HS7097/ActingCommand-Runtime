@@ -209,7 +209,13 @@ pub fn simulate_contained_task(
     task: &PreparedContainedTask,
     frames: Vec<Frame>,
 ) -> Result<OfflineSimulationResult, OfflineSimulationError> {
-    simulate(task, frames, None, OfflineDraw::default())
+    simulate(
+        task,
+        frames,
+        None,
+        OfflineDraw::default(),
+        RunTables::default(),
+    )
 }
 
 /// [`simulate_contained_task`] with the caller's instant for a select step (Workflow #308): the
@@ -220,7 +226,13 @@ pub fn simulate_contained_task_at(
     frames: Vec<Frame>,
     now_unix_ms: u64,
 ) -> Result<OfflineSimulationResult, OfflineSimulationError> {
-    simulate(task, frames, Some(now_unix_ms), OfflineDraw::default())
+    simulate(
+        task,
+        frames,
+        Some(now_unix_ms),
+        OfflineDraw::default(),
+        RunTables::default(),
+    )
 }
 
 /// Workflow #406 T4: [`simulate_contained_task`] (with the caller's instant for a select step
