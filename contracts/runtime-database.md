@@ -24,8 +24,10 @@ read-only, with the same path, key and connection checks as
 State view, and the range opening of the offline `actingledger events` and
 `export --performance` (`GlobalLedger::open_range`, Workflow #411 A4), and the
 bounded offline snapshot of an SQLite root (`GlobalLedger::open_metadata`, #422
-LN-OFF-1, since 0.12.32): every row they read is authenticated on its own.
-`ledger-maintenance` and the other forensic readers open through
+LN-OFF-1, since 0.12.32), and `ledger-maintenance verify` without flags (#422
+LN-VERIFY, since 0.12.36): every row they read is authenticated on its own.
+Every other `ledger-maintenance` pass, `verify --full` and a root that is not formal
+among them, and the other forensic readers open through
 `open_existing` and keep the whole-file check.
 
 `RuntimeDatabase::open_existing_for_start(root)` (#422 LN-8, LEAN-L §3.2 step 1) is
@@ -34,7 +36,7 @@ connection, journal and synchronous checks as `open_existing(root, false)`, but
 without `quick_check(1)`, whose time grows with the file. The start reads only the
 ledger's keyed meta row, the end of its rows, its newest records and its indexes,
 each authenticated ([ledger-store.md](ledger-store.md#open-ownership-and-append-durability));
-`ledger-maintenance verify` and the background re-check (LN-9) keep the whole-file
+`ledger-maintenance verify --full` and the background re-check (LN-9) keep the whole-file
 check. A fresh root's construction below still runs it, over the database it has
 just created.
 

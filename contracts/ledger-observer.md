@@ -990,8 +990,8 @@ CREATE TABLE ledger_frame_refs_extent (
   (estimate: 5–10 s); a gap after a day's rollback, about 11 000 (about 1 s).
 - **Checked** by the scrub (§15, LN-9): for every row a chunk authenticates inside the extent read
   with the pass's head, the chunk's frame index rows must be those the record gives, read in the
-  chunk's transaction through `ledger_frame_refs_sequence`. `ledger-maintenance verify` does the
-  same over the whole root, within the extent its snapshot holds; a root without the extent is not
+  chunk's transaction through `ledger_frame_refs_sequence`. `ledger-maintenance verify --full` does
+  the same over the whole root, within the extent its snapshot holds; a root without the extent is not
   checked. A difference, or an extent that is not `1 <= from <= through + 1 <= head + 1`, is
   `ledger_index_mismatch` of `verify_ledger_frame_refs` (`table=ledger_frame_refs` and the sequence
   in its detail; the scrub adds `phase=scrub`). No new code (#420 S4).
@@ -1009,7 +1009,7 @@ CREATE TABLE ledger_frame_refs_extent (
     (one statement on the shared connection, the scrub's only write; `extent=untrusted` in the
     finding's detail). Later batches extend it from there. The next writer open removes every row
     below it and rebuilds them by its backfill, and a later query never trusts a row outside it.
-  - **`ledger-maintenance verify`**, a tool run, still fails on the same difference with a non-zero
+  - **`ledger-maintenance verify --full`**, a tool run, still fails on the same difference with a non-zero
     exit. It marks the extent untrusted in the same way before it returns.
 - **Compatibility** (`final-query.md` §8): no name starts with `ledger_view_`, and `table_count`
   counts only the four ledger tables, so an older build opens, writes and scrubs the database
@@ -1232,7 +1232,7 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
 | `open_warn_ratio_milli` | 500 | integer | an open whose measured time exceeds `open_timeout_ms` × it / 1000 writes `ledger_open_slow`; `100..=1000` (P0-LO) | P0-LO, 0.12.11 |
 | `history_page_rows` | 256 | integer | rows of one page of a history read: the writer reads its history from SQLite a page at a time, and the Runtime's paged reads take as many events per page (at most a query page's 1 024); `1..=4096` (#422 LN-5) | LN-5, 0.12.13 |
 | `writer_reply_timeout_ms` | 10 000 | ms | how long a caller waits for one reply of the ledger writer (was a fixed 10 s); one that runs out is `writer_response_timeout`; `1000..=600000`, above `read_budget_ms` (#422 LN-TUNE) | LN-TUNE, 0.12.13 |
-| `open_verify_tail_records` | 4 096 | integer | how many of the newest records the start's ledger open reads and authenticates; older records are authenticated when they are read, by `ledger-maintenance verify` and by the background re-check; `1..=1000000` (#422 LN-8, LEAN-L §3.7) | LN-8, 0.12.14 |
+| `open_verify_tail_records` | 4 096 | integer | how many of the newest records the start's ledger open and `ledger-maintenance verify` without flags read and authenticate; older records are authenticated when they are read, by `ledger-maintenance verify --full` and by the background re-check; `1..=1000000` (#422 LN-8, LEAN-L §3.7) | LN-8, 0.12.14 |
 | `scrub_rows_per_second` | 625 | integer | rows a second the background scrub reads and authenticates: a chunk starts no earlier than the one before plus its rows at this rate, about 40 minutes a pass at 1.5 million records (Alice's ruling 57); `1..=100000`, settable, read after each chunk (#422 LN-9) | LN-9, 0.12.14 |
 | `scrub_chunk_rows` | 256 | integer | rows of one scrub chunk, each chunk in a read transaction of its own; `1..=4096` (#422 LN-9) | LN-9, 0.12.14 |
 | `scrub_pass_interval_ms` | 2 400 000 | ms | the least time from the start of one scrub pass to the start of the next; the first starts when the writer opens; `60000..=86400000` (#422 LN-9) | LN-9, 0.12.14 |
@@ -1324,15 +1324,21 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
   predecessor's stored hash and ending at the meta row's head hash; then the views and indexes a
   database lacks and the retention state by type and by index (LN-7). Damage in that tail fails
   the open with the code a complete read gives for it; an older record is authenticated when a
-  reader reads it, by `ledger-maintenance verify` (every row, the migrated prefix and the
+  reader reads it, by `ledger-maintenance verify --full` (every row, the migrated prefix and the
   whole-file `quick_check(1)`) and by the background re-check of LN-9. The Runtime's start no
   longer runs the whole-file `quick_check(1)` when it opens the state database
   ([runtime-database.md](runtime-database.md)). `ledger_opened` reports the open's phases as the
   values `meta_ms`, `tail_ms`, `index_ms` and `import_ms` and the tail records it authenticated as
   `event_count`; `sql_read_ms`, `verify_ms` and `restore_ms` remain the phases of
-  `ledger-maintenance verify`'s complete read and are 0 for the start, and `ledger_open_slow`'s
+  `ledger-maintenance verify --full`'s complete read and are 0 for the start, and `ledger_open_slow`'s
   `elapsed_ms` is the sum of all of them. `open_verify_tail_records` is read when the ledger
   opens (`false`).
+- #422 LN-VERIFY (since 0.12.36): `ledger-maintenance verify` without flags runs that same check of
+  the format, the marker, the keyed meta row, `MAX(sequence)` and the tail, with the contiguity of
+  the stored sequences, and none of the writer's steps after it; it reads
+  `open_verify_tail_records` from the configuration file. A failed one's `ledger_open_measured`
+  reports `meta_ms`, `tail_ms` and `event_count` ([ledger-maintenance.md](ledger-maintenance.md),
+  "`verify` of a formal root").
 - #422 LN-8d (the v0.12.14 start on the production ledger, 10-26): `open_timeout_ms` bounds the
   open's retention reads as well, checked before each page (`ledger_read_budget_exceeded`), and
   `history_page_rows` is the rows of their pages too. A link-set page picks its rows in each link
@@ -1359,7 +1365,7 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
   starts no earlier than the one before plus its rows at `scrub_rows_per_second`, whose value in
   effect it reads after each chunk (an instruction changes it); a pass starts at most once every
   `scrub_pass_interval_ms`, the first when the writer opens. A finding is the failure the full
-  verification (`ledger-maintenance verify`, and the start's open before LN-8) gives for the same
+  verification (`ledger-maintenance verify --full`, and the start's open before LN-8) gives for the same
   damage, with its code and operation (`ledger_record_mismatch`, `ledger_index_mismatch`,
   `sequence_discontinuity`, `ledger_meta_mismatch`, `corrupt_ledger_record`, ...;
   `state_database_corrupt` from `quick_check`, of the location `ledger_scrub`) and `phase=scrub` in

@@ -31,11 +31,12 @@
 //!   progress rolls back, so the extent stops short of the record and never covers the whole
 //!   history, and the next open tries again. The open itself never fails for the index; it
 //!   reports one warning ([`LedgerFrameRefsNote`], a `note` link of `ledger_opened`).
-//! - **The checks.** The scrub (LN-9) and `ledger-maintenance verify` compare, for every record they
+//! - **The checks.** The scrub (LN-9) and `ledger-maintenance verify --full` compare, for every record they
 //!   authenticate inside the extent, its rows with [`frame_refs`]; a difference is
 //!   `ledger_index_mismatch` of `verify_ledger_frame_refs` (`table=ledger_frame_refs`). Either marks
 //!   the extent untrusted ([`mark_untrusted`]), so the next writer open rebuilds the index. The
-//!   scrub's finding is non-fatal and never stops the Runtime; `verify`, a tool run, still fails.
+//!   scrub's finding is non-fatal and never stops the Runtime; `verify --full`, a tool run, still
+//!   fails.
 //!
 //! Nothing decides on the rows yet (slice Q will). No name starts with `ledger_view_`, so an older
 //! build opens, writes and scrubs the database unchanged (§8).
@@ -912,7 +913,7 @@ pub(super) fn check_chunk(
     compare(expected, &stored)
 }
 
-/// What `ledger-maintenance verify` read of the frame index in its snapshot: the extent and every
+/// What `ledger-maintenance verify --full` read of the frame index in its snapshot: the extent and every
 /// row.
 pub(super) struct StoredFrameRefs {
     extent: (u64, u64),
@@ -942,7 +943,7 @@ pub(super) fn read_stored(connection: &Connection) -> GlobalLedgerResult<Option<
     }))
 }
 
-/// `ledger-maintenance verify`: the extent ends at or before the head of `events` (the whole
+/// `ledger-maintenance verify --full`: the extent ends at or before the head of `events` (the whole
 /// verified ledger), and the rows inside it are those [`frame_refs`] gives its records.
 pub(super) fn verify_stored(
     events: &[PersistedEvent],
@@ -1040,7 +1041,7 @@ fn omitted(target_id: &str) -> bool {
 /// Tests (#422 LN-7c V): while armed for a target id (a frame's or an artifact's, unique to its
 /// test), [`frame_refs`] gives no row naming it, as a pointer reader that misses it would: a root
 /// whose index lacks such a row is then consistent with every check of the index, the writer's
-/// rows, the scrub's and `ledger-maintenance verify`'s, and wrong.
+/// rows, the scrub's and `ledger-maintenance verify --full`'s, and wrong.
 #[cfg(test)]
 pub(crate) struct LedgerFrameRefsOmitGate {
     target_id: String,

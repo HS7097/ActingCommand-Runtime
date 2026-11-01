@@ -480,6 +480,9 @@ mod gate_427a_m1;
 mod gate_ln_tune;
 // #422 LN-9: a finding of the ledger's scrub stops the Runtime as a Global failure.
 mod gate_ln9;
+// #422 LN-VERIFY: `ledger-maintenance verify` without flags is the start's bounded check; the
+// complete read moved behind `--full`.
+mod gate_ln_verify;
 // #422 LN-WS: the incident's reads answer while an append commits behind them, and an append the
 // writer does not answer in time fails naming the ledger's code.
 mod gate_ln_ws;

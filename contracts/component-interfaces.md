@@ -373,7 +373,11 @@ command line, and exit code 1 for `--rollback`, which reports through its own
 entry. The existing gates stay: the selected slot's `check-config`, and
 `ledger-maintenance verify` of the new Runtime against the real state root
 before a switch. A declared `ledger` check is an early, explicit refusal, not a
-replacement for that verification.
+replacement for that verification. From Runtime 0.12.36 that verification is the
+new Runtime's bounded check, what its start's ledger open does to authenticate the
+ledger (#422 LN-VERIFY, [ledger-maintenance.md](ledger-maintenance.md), "`verify` of
+a formal root"); it does not read an older record, and the complete read is `--full`,
+which no gate passes.
 
 The fixed entries in `<root>\runtime\` and `<root>\ui\` (acforward) read
 `install/active.json`. An A/B upgrade replaces them with the release's
@@ -426,7 +430,8 @@ nothing. This is intended:
 
 - The refusal does not depend on what the ledger holds. It applies even when no
   `replace` was ever made, because nothing can tell beforehand: a v0.11.2
-  Runtime's `ledger-maintenance verify` passes a revision-2 ledger.
+  Runtime's `ledger-maintenance verify`, a complete read, passes a revision-2 ledger
+  (from 0.12.36 the default reads only the newest records and says less still).
 - Once the ledger holds a cross-id catalog transition, a v0.11.2 Runtime stops
   at its first start with `catalog_generation_source_conflict`. Without one it
   starts, but it ignores a persisted scheduling pause (#642) and runs unpaused.

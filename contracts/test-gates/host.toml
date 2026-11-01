@@ -2387,6 +2387,17 @@ tests = [
 ]
 incident = ["#422 LN-9"]
 
+# LN-VERIFY (#422; brief rd-1031/brief-ln-verify.md tests 2 to 5; register §1.241; since 0.12.36): on a real closed root whose tail (ledger_observer.open_verify_tail_records from the manifest) is shorter than its history, through RuntimeHost::maintain_ledger: ledger-maintenance verify without flags refuses a damaged keyed meta row, head record, head row and tail record with the code, operation and category --full gives, and a gap in the sequences older than the tail as sequence_discontinuity, a failure of the read with its ledger_open_measured note link; it passes a damaged old record, which --full and --frame-query refuse (ledger_record_mismatch), and a damaged page no statement of it reads, which --full refuses (state_database_corrupt); on a sound root it answers verified-sqlite-bounded, changes no file but the owner journal and reports the ledger --full reports (verified-sqlite); --full with another operation is maintenance_arguments_invalid before the root is touched
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_ln_verify::ln_verify_t2_the_default_refuses_a_damaged_head_a_damaged_tail_record_and_a_gap",
+    "actingcommand-runtime-host::lib::tests::gate_ln_verify::ln_verify_t3_the_default_passes_old_damage_that_full_and_frame_query_refuse",
+    "actingcommand-runtime-host::lib::tests::gate_ln_verify::ln_verify_t4_the_default_changes_nothing_and_reports_the_ledger_of_the_complete_read",
+    "actingcommand-runtime-host::lib::tests::gate_ln_verify::ln_verify_t5_full_with_another_operation_is_refused_before_the_root_is_touched",
+]
+incident = ["#422 LN-VERIFY"]
+
 # Workflow #386 SR-4a3 (SCH-M frozen model v1.0 §3.2 D-3, §6 row SR-4a3; frozen scheduling model v1.4.2 §5.2a, §5.3 rule 3, C-3, rows T17, T17b, T17c, T46; contracts/scheduling-blackout.md, "Complete silence"; register §1.189): inside a blackout the ladders of a task failure, a daemon-start preparation and a person's self-check are dropped, never queued (recovery_ladder_suppressed blackout until the end), and so is a ladder claim waiting for the key when it starts; the self-check itself runs; a climbing ladder starts no rung whose time limit plus quiet_margin_ms reaches the next blackout and ends with the same suppression, its key released; the startup package waits queued inside a blackout or when its deadline would reach the next one, and runs at the end; the monitor probe takes no frame and records nothing; an autostart claim inside a blackout gets no key and no Start, the same configuration outside one starts at once, and the first round after the end starts it once; a direct run and a Lab operation pass
 [[gate]]
 coverage = "Y"

@@ -5609,6 +5609,125 @@ otherwise; no resource repository's standard package carries one yet.
 | R11-3 | `installation[].task_ids`, `.irreversible`, `.ui`, `.display` (composed rows) | `actingctl packs` / `ac_packs` answer | R-11 | R-11 | offline, no revision; `task_ids` until SS-7 |
 | R11-4 | `standard_pack_problem` `ui_out_of_limits`, `ui_duplicate`, `ui_group_unknown`, `ui_parameter_undeclared` | catalog vocabulary | R-11 | R-11 | `since` 0.12.36 |
 
+### 1.241 Slice LN-VERIFY (0.12.36): `ledger-maintenance verify` is the start's bounded check by default, and the complete read moves behind `--full` (#422; brief rd-1031/brief-ln-verify.md)
+
+[ledger-maintenance.md](ledger-maintenance.md) ("`verify` of a formal root"),
+[install-cli.md](install-cli.md) ("Ledger verify"),
+[component-interfaces.md](component-interfaces.md),
+[ledger-observer.md](ledger-observer.md) (§15), [ledger-store.md](ledger-store.md),
+[runtime-database.md](runtime-database.md), [runtime-config.md](runtime-config.md) and
+[actingd-check-config.md](actingd-check-config.md) are the contract. The number 1.241 is the
+coordinator's. No code, key, location, schema or interface revision is new; `ledger_observer.open_verify_tail_records`
+gains a reader.
+
+**What.** (1) `actingd ledger-maintenance verify --config <config>` on a formal root, without flags,
+reports the new `status` word `verified-sqlite-bounded`: `LedgerMaintenance::verify_formal_bounded`
+runs `verify_open_tail`, the start's own check (`TailOpen::Maintenance`: the format and the views,
+the keyed meta row and head, `MAX(sequence)`, the newest `open_verify_tail_records` records, each
+authenticated with this binary's decoder), plus the contiguity of the stored sequences
+(`verify_sequence_extent`), on `open_existing_unchecked`. It reads no older record and no State
+table, runs no whole-file `quick_check(1)` and no `maintenance_digest`, does not look at the
+retention state (the next start completes an unsettled eviction, as it always does) and takes none
+of the writer's steps. (2) `--full` (`LedgerMaintenanceRequest::full`) is the complete read as it
+was, `verified-sqlite`; `--frame-query` implies it; another operation refuses it
+(`maintenance_arguments_invalid`). (3) A Segment or candidate root behaves as before. (4) Exit codes
+and the failure shape do not change: the same code and operation as the complete read for the same
+damage, with the `ledger_open_measured` note link once the read is under way.
+
+**Decisions within the work order.** (a) The tail is `ledger_observer.open_verify_tail_records` from
+the file (`ActingdConfigFile::maintenance_manifest`), so that the check authenticates as many records
+as the start; only that member reaches the manifest, only for `verify` without flags, and a value the
+key does not take is `maintenance_config_invalid`. (b) `RuntimeStateStore::from_database`'s validation
+does not run in the bounded mode either: it does not authenticate the ledger, and the next start runs
+it. (c) `verify_sequence_extent` walks one whole index: its memory does not grow with the history, its
+time follows that index's size. It is the statement the installer's head read and the offline open
+already run on production.
+
+**Why.** v0.12.36 moves `ledger` from [3, 4] to [3, 5], so the deploy has a `LedgerVerify` step: with
+the Runtime stopped, before anything is swapped, the live v0.12.35 installer runs the target's
+`ledger-maintenance verify --config <config>`. The complete read keeps every event in memory with no
+budget (10.07 GB and about 2.43 million events on the production ledger; the same kind of read reached
+12 GB in 60 s, #422 6503130154; v0.11.3's cold verify failed at 120.76 s), and a timeout leaves the
+operation unfinished with the Runtime stopped. Alice's standing ruling (10-08): skip the cold gate and
+let the new version verify on its own start. The live installer passes exactly those arguments, so the
+fix is the target's default.
+
+**What changes live.** An update whose `ledger` range changes gets the bounded check. A damaged older
+record is no longer found by that gate: it is found when it is read, by the background re-check or by
+`--full`. `acsetup` in the UI repository passes the same arguments, so its gate runs the bounded check
+too; it reads the report itself, and that reading, which this slice leaves as it is, accepts only the
+report `actingcommand.ledger-maintenance.v1` with `verified-sqlite` or `verified-segment` (the report
+has been v2 since #378 A6a).
+
+### 1.243 Slice R-0b2 (0.12.36): `activity` on the instance rows of `actingctl overview` and `ac_overview` (R-0b, §1.238, fills `Status.activity`, and `actingctl status` prints it, but the overview's rows are built member by member and did not carry it, so the agents that run the devices could not see what an instance does now; coordinator work order `rd-1031/brief-r0b2.md`)
+
+[runtime-interface.md](runtime-interface.md) (the `overview` command row, the `ac_overview` tool row
+and the output budget's "never cut" list) is the contract. The number 1.243 is the coordinator's;
+§1.241 and §1.242 are in flight in the same release. Nothing persisted, no wire shape of the
+Runtime, no configuration key, no outcome code and no interface revision changes.
+
+**What.** (1) Each instance row carries the optional member `activity`, `{kind, request_id?,
+package_id?, since_unix_ms}`, the `RuntimeInstanceStatus.activity` of the overview's one Status read
+as the Runtime answered it, and no member while the instance has none. No Runtime request is added
+and nothing is read from the ledger for it. A row has it whichever other reads fail, since the
+Status read is the one the overview cannot do without. (2) MCP's output budget never cuts it; the
+members cut and their order are unchanged. (3) The tool's description and result schema say so.
+
+**What changes live.** The rows of a busy instance grow by the member (about 150 bytes for a run), so
+an overview near the budget starts cutting a little earlier, in the order it already has.
+
+**Rollback** (to 0.12.35). Nothing persisted: the member disappears from the rows.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| R0B2-1 | `instances[].activity?` | `actingctl overview` / `ac_overview` answer | R-0b2 | R-0b2 | `since` 0.12.36; from the one Status read; never cut |
+
+### 1.242 Slice INST-UNDO-EDGE (0.12.36): `install undo` cannot go around the interface edge or the gate that refuse a rollback (found by the v0.12.36 release agent reading the installer; it lands before 114-B's first record; coordinator work order `rd-1031/brief-inst-undo-edge.md`; the coordinator's decisions of 11-01 on the first report: the whole gate once started, `next.undo` left out when certain to be refused)
+
+[install-cli.md](install-cli.md) ("Undo and resume", "An undo once the build has started") is the
+contract. The number 1.242 is the coordinator's; §1.241 and §1.243 are in flight in the same
+release. No code, key, vocabulary, journal member or interface revision is new.
+
+**What.** (1) Once a Runtime of the undone build has started, including the one a composite started
+inside its own operation, `install undo` of an update or rollback, finished or not, is a rollback:
+the interface edges first, then the whole rollback gate (`ledger_readability`, `open_time`,
+`config`). Failed edges refuse `interface_edge` (`commit_sha`, `count`, the result's `edges`), their
+ranges those of the operation's journalled plan; a failed part refuses `rollback_gate_failed`; both
+with nothing changed. An unfinished operation in which no Runtime of the target started, a plain
+update and a start refused before its spawn undo as before, unjudged. (2) A composite's success
+leaves `next.undo` out when the edges would refuse that undo.
+
+**Before.** The edge and the gate were judged only for a finished operation whose owner record began
+after the operation's end. The composite's own start is before that end, so stopping its Runtime
+with `request-shutdown` let `undo` swap back with no check. An unfinished operation was never
+judged. The same held after an automatic rollback its gate had refused (`rollback_gate_failed`).
+
+**Decisions within the work order.** (a) A start step begun with no evidence counts while the
+operation is unfinished, since the journal cannot tell it from no spawn and `resume` remains; a
+finished one is a start refused before its spawn. (b) An owner record of a finished operation that
+began after the operation did also counts. (c) An automatic rollback that recorded itself has passed
+its gate and its files may be reversed already: its undo goes on unjudged. (d) A gate that passes
+adds its caveats (`open_time_from_other_build`) as `note` links of the undo's result.
+
+**Accepted by the coordinator (11-01).**
+- A finished composite rollback across `ledger` is refused by `one_way` on undo, since the undo cannot acknowledge it; the forward path is an update with `--accept-ledger-one-way`.
+- A narrow gap stays: a start that spawned, crashed and whose resumed start failed to spawn loses its evidence, and only an owner record then counts it.
+
+**Why.** Once 114-B writes a record, a build whose `ledger` range ends below it cannot decode it and
+its start fails: the undo would swap back to a Runtime that cannot start. Once a build has started,
+an undo is a rollback, and a refused automatic rollback can only be fixed forward.
+
+**What changes live.** `install undo` after a composite: the gate now runs, reading the ledger with
+the previous build's reader, and a failed edge or part refuses what used to be done. A one-way
+composite's success no longer names `next.undo`. Nothing persisted changes.
+
+**Rollback** (to 0.12.35). Nothing persisted changes; `undo` judges a composite's own start no more.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| UE-1 | `install undo`: `interface_edge`, then `rollback_gate_failed`, when a Runtime of the undone build has started; result member `edges` | install command | INST-UNDO-EDGE | INST-UNDO-EDGE | `since` 0.12.36; reused code and refusal words |
+| UE-2 | `next.undo` of a composite's success left out when the edges would refuse it | install command | INST-UNDO-EDGE | INST-UNDO-EDGE | `since` 0.12.36 |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -22,25 +22,38 @@
 // `actingctl_usage_invalid` naming `--sections`, by MCP as `arguments_invalid` naming `sections`,
 // both with `argument_problem` `not_recognised`.
 //
-// The foreground test (Workflow #389 MCP-5b) is described at its function.
+// The foreground test (Workflow #389 MCP-5b) and the activity test (Workflow #429 R-0b2) are
+// described at their functions.
 
 use crate::c4_runtime::{RuntimeChild, neutral_foreground, write_sealed_frame};
 use crate::mcp_harness::{McpServer, accepted};
 use actingcommand_contract::{
-    APPLICATION_FOREGROUND_FACT_KEY, EventActor, EventSource, FactValue, InputAction,
-    RuntimeFactScope,
+    APPLICATION_FOREGROUND_FACT_KEY, EventActor, EventSource, FactValue, IdentifierIssuer,
+    InputAction, InstanceActivity, InstanceActivityKind, OwnerEpoch, RUNTIME_FACT_SCHEMA_VERSION,
+    RUNTIME_INFO_FILE, RuntimeControlPlaneStatus, RuntimeEventQueryPage, RuntimeFactScope,
+    RuntimeFactSnapshot, RuntimeInfo, RuntimeInstanceStatus, RuntimeMonitorRegistryStatus,
+    RuntimeOperation, RuntimeReceipt, RuntimeReceiptState, RuntimeRequest, RuntimeResult,
+    RuntimeScheduleExplanation,
 };
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
+use std::fs;
+use std::io::{ErrorKind, Read, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::Path;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::thread::{self, JoinHandle};
 use tempfile::TempDir;
 
 const CHILD_ENTRY: &str = "c4_runtime_child_process";
 const ALIAS: &str = "neutral.overview";
 // A block name §4.9 does not have.
 const UNKNOWN_SECTION: &str = "neutral_block";
+// The largest request the scripted Runtime reads.
+const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 
 #[test]
 fn gate_actingctl_overview_and_ac_overview_answer_the_same_overview_for_the_same_arguments() {
@@ -395,6 +408,285 @@ fn nine1_status_and_overview_show_unknown_while_the_runtime_holds_no_reading() {
     );
 
     runtime.stop_clean();
+}
+
+// Workflow #429 R-0b2 (register §1.243): on a scripted Runtime whose Status answers one running
+// instance and one idle one, and whose ledger is empty, the CLI's stdout JSON and the ac_overview
+// result are the same rows: the running one carries the status' activity, the idle one no member.
+// Each overview asked for one Status, and for nothing but the reads the rows had before.
+#[test]
+fn r0b2_cli_and_mcp_rows_carry_the_same_activity_from_one_status_read() {
+    const RUNNING: &str = "neutral.running";
+    const IDLE: &str = "neutral.idle";
+    let issuer = IdentifierIssuer::new().expect("identifier issuer");
+    let instance = |alias: &str| {
+        RuntimeInstanceStatus::new(
+            alias,
+            *issuer.mint_instance_id().expect("instance id").transport(),
+            false,
+            0,
+            false,
+            false,
+            false,
+        )
+        .expect("instance status")
+    };
+    let request_id = *issuer.mint_request_id().expect("request id").transport();
+    let root = TempDir::new().expect("tempdir");
+    let runtime = ScriptedRuntime::start(
+        root.path(),
+        vec![
+            instance(RUNNING).with_activity(Some(InstanceActivity {
+                kind: InstanceActivityKind::PolicyRun,
+                request_id: Some(request_id),
+                package_id: Some("neutral.package".to_owned()),
+                since_unix_ms: 1_700_000_000_000,
+            })),
+            instance(IDLE),
+        ],
+    );
+    let mut mcp = McpServer::spawn_with_tier(root.path(), None);
+    mcp.initialize();
+    let mut id = 1;
+    let asked_before = runtime.asked().len();
+
+    let (cli, tool) = parity(
+        &mut mcp,
+        &mut id,
+        root.path(),
+        &["overview", "--sections", "instances"],
+        json!({"sections": ["instances"]}),
+    );
+    for (side, answer) in [("CLI", &cli), ("ac_overview", &tool)] {
+        let row = |alias: &str| {
+            answer["instances"]
+                .as_array()
+                .and_then(|rows| rows.iter().find(|row| row["alias"] == json!(alias)))
+                .unwrap_or_else(|| panic!("{side}: no row {alias}: {answer}"))
+        };
+        assert_eq!(
+            row(RUNNING)["activity"],
+            json!({
+                "kind": "policy_run",
+                "request_id": request_id,
+                "package_id": "neutral.package",
+                "since_unix_ms": 1_700_000_000_000_u64,
+            }),
+            "{side}: {answer}"
+        );
+        assert_eq!(row(IDLE).get("activity"), None, "{side}: {answer}");
+    }
+
+    // The CLI's reads, then the server's; the rows' run listings aside, whose pages are the same
+    // with or without an activity.
+    let one_overview = [
+        "status",
+        "runtime_fact_snapshot",
+        "monitor_status",
+        "schedule_explanation",
+    ];
+    assert_eq!(
+        runtime.asked()[asked_before..]
+            .iter()
+            .copied()
+            .filter(|read| *read != "query_events")
+            .collect::<Vec<_>>(),
+        [one_overview, one_overview].concat()
+    );
+
+    mcp.close_input();
+    drop(mcp);
+    drop(runtime);
+}
+
+// A Runtime on loopback that answers the reads of an overview's `instances` block with `instances`
+// and otherwise nothing (an empty ledger, no monitor, no fact, no evaluation), lists those reads,
+// and refuses every other request by panicking on its connection.
+struct ScriptedRuntime {
+    address: SocketAddr,
+    stopping: Arc<AtomicBool>,
+    asked: Arc<Mutex<Vec<&'static str>>>,
+    acceptor: Option<JoinHandle<()>>,
+}
+
+impl ScriptedRuntime {
+    // Listens on loopback and writes `runtime-info.json` under `root` naming it.
+    fn start(root: &Path, instances: Vec<RuntimeInstanceStatus>) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind the scripted Runtime");
+        let address = listener.local_addr().expect("scripted Runtime address");
+        let owner_epoch = *IdentifierIssuer::new()
+            .expect("identifier issuer")
+            .mint_owner_epoch()
+            .expect("owner epoch")
+            .transport();
+        let info = RuntimeInfo::new(
+            std::process::id(),
+            address.ip().to_string(),
+            address.port(),
+            owner_epoch,
+            1,
+        )
+        .expect("scripted Runtime info");
+        fs::write(
+            root.join(RUNTIME_INFO_FILE),
+            serde_json::to_vec(&info).expect("encode the Runtime info"),
+        )
+        .expect("write the Runtime info");
+        let status = Arc::new(
+            RuntimeControlPlaneStatus::new(owner_epoch, instances).expect("scripted status"),
+        );
+        let stopping = Arc::new(AtomicBool::new(false));
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let acceptor = {
+            let stopping = Arc::clone(&stopping);
+            let asked = Arc::clone(&asked);
+            thread::spawn(move || {
+                for stream in listener.incoming() {
+                    if stopping.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    let stream = stream.expect("accept a client");
+                    let status = Arc::clone(&status);
+                    let asked = Arc::clone(&asked);
+                    thread::spawn(move || serve(stream, owner_epoch, &status, &asked));
+                }
+            })
+        };
+        Self {
+            address,
+            stopping,
+            asked,
+            acceptor: Some(acceptor),
+        }
+    }
+
+    // The reads asked for so far, in order (the handshake and health checks not counted).
+    fn asked(&self) -> Vec<&'static str> {
+        self.asked
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl Drop for ScriptedRuntime {
+    fn drop(&mut self) {
+        self.stopping.store(true, Ordering::SeqCst);
+        // Wakes the acceptor, which then sees `stopping`.
+        let _ = TcpStream::connect(self.address);
+        if let Some(acceptor) = self.acceptor.take() {
+            let _ = acceptor.join();
+        }
+    }
+}
+
+// Answers one client's requests until it hangs up.
+fn serve(
+    mut stream: TcpStream,
+    owner_epoch: OwnerEpoch,
+    status: &RuntimeControlPlaneStatus,
+    asked: &Mutex<Vec<&'static str>>,
+) {
+    let record = |read: &'static str| {
+        asked
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(read);
+    };
+    while let Some(request) = next_request(&mut stream) {
+        let result = match request.operation() {
+            RuntimeOperation::Health => RuntimeResult::Health { owner_epoch },
+            RuntimeOperation::BindChannel { channel, via } => RuntimeResult::ChannelBound {
+                channel: *channel,
+                via: *via,
+            },
+            RuntimeOperation::Status => {
+                record("status");
+                RuntimeResult::Status {
+                    status: status.clone(),
+                }
+            }
+            RuntimeOperation::RuntimeFactSnapshot => {
+                record("runtime_fact_snapshot");
+                RuntimeResult::RuntimeFactSnapshot {
+                    snapshot: RuntimeFactSnapshot {
+                        schema_version: RUNTIME_FACT_SCHEMA_VERSION.to_owned(),
+                        ledger_position: 1,
+                        taken_at_unix_ms: 1,
+                        snapshot_id: 1,
+                        part: 1,
+                        parts: 1,
+                        records: Vec::new(),
+                    },
+                    config_version: None,
+                }
+            }
+            RuntimeOperation::MonitorStatus => {
+                record("monitor_status");
+                RuntimeResult::MonitorStatus {
+                    status: RuntimeMonitorRegistryStatus::new(owner_epoch, Vec::new())
+                        .expect("scripted monitor status"),
+                }
+            }
+            RuntimeOperation::ScheduleExplanation { .. } => {
+                record("schedule_explanation");
+                RuntimeResult::ScheduleExplanation {
+                    explanation: Box::new(RuntimeScheduleExplanation {
+                        evaluated_at_unix_ms: None,
+                        catalog_hash: None,
+                        instances: Vec::new(),
+                    }),
+                }
+            }
+            RuntimeOperation::QueryEvents { page, .. } => {
+                record("query_events");
+                RuntimeResult::EventPage {
+                    page: RuntimeEventQueryPage::new(Vec::new(), 1, page.limit(), false, None)
+                        .expect("scripted event page"),
+                }
+            }
+            other => panic!("the scripted Runtime answers no {other:?}"),
+        };
+        let receipt =
+            RuntimeReceipt::success(&request, RuntimeReceiptState::Completed, None, result)
+                .expect("scripted receipt");
+        let body = serde_json::to_vec(&receipt).expect("encode the receipt");
+        let length = u32::try_from(body.len()).expect("receipt length");
+        stream
+            .write_all(&length.to_be_bytes())
+            .and_then(|()| stream.write_all(&body))
+            .and_then(|()| stream.flush())
+            .expect("write the receipt");
+    }
+}
+
+// The next request, or `None` once the client hung up.
+fn next_request(stream: &mut TcpStream) -> Option<RuntimeRequest> {
+    let mut header = [0_u8; 4];
+    match stream.read_exact(&mut header) {
+        Ok(()) => {}
+        Err(error)
+            if matches!(
+                error.kind(),
+                ErrorKind::UnexpectedEof
+                    | ErrorKind::ConnectionReset
+                    | ErrorKind::ConnectionAborted
+            ) =>
+        {
+            return None;
+        }
+        Err(error) => panic!("scripted Runtime request header: {error}"),
+    }
+    let length = u32::from_be_bytes(header) as usize;
+    assert!(
+        length > 0 && length <= MAX_REQUEST_BYTES,
+        "scripted Runtime request length {length}"
+    );
+    let mut body = vec![0_u8; length];
+    stream
+        .read_exact(&mut body)
+        .expect("scripted Runtime request body");
+    Some(serde_json::from_slice(&body).expect("decode a request"))
 }
 
 // The CLI's answer and the ac_overview result for the same arguments, each accepted without

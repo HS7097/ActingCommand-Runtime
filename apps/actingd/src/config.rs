@@ -1255,6 +1255,40 @@ impl ActingdConfigFile {
         )
     }
 
+    /// #422 LN-VERIFY: what `ledger-maintenance verify` without `--full` reads through the
+    /// configuration mechanism, so that it authenticates as many of the newest records as the start
+    /// does: `ledger_observer.open_verify_tail_records` as the file names it, over the shipped
+    /// defaults. No other member of the file reaches the manifest. A value the mechanism does not
+    /// take is `maintenance_config_invalid`.
+    pub(super) fn maintenance_manifest(&self) -> Result<RuntimeConfigManifest, Code> {
+        let invalid = || ActingdCode::MaintenanceConfigInvalid.code();
+        let named = serde_json::to_value(&self.ledger_observer)
+            .map_err(|_| invalid())?
+            .get("open_verify_tail_records")
+            .cloned();
+        let file_layer = match named {
+            Some(tail) => {
+                serde_json::json!({"ledger_observer": {"open_verify_tail_records": tail}})
+            }
+            None => serde_json::json!({}),
+        };
+        let (_, defaults) =
+            actingcommand_runtime_config::DefaultsFile::shipped().map_err(|_| invalid())?;
+        let mut parameters = actingcommand_runtime_config::render_parameters(
+            &actingcommand_runtime_config::mechanism_rows(),
+            &[],
+            &defaults,
+            &file_layer,
+            &|_| None,
+        )
+        .map_err(|_| invalid())?;
+        actingcommand_runtime_config::annotate_settable(&mut parameters).map_err(|_| invalid())?;
+        Ok(RuntimeConfigManifest {
+            subsystems: Vec::new(),
+            parameters,
+        })
+    }
+
     /// Workflow #378 A6a: [`Self::assemble`] with its refusal as an outcome: the code, with the
     /// values that name what was refused when the refusing check gives them (a runtime-config
     /// key's `config_key` and why, Workflow #385 P-c and #387 D1c). A start and `check-config`

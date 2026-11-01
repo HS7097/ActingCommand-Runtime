@@ -22,7 +22,8 @@ use std::time::Instant;
 /// material, so `artifacts`, `artifact_bytes`, `workers` and `material_ms` are always 0; they
 /// stay in the line so that its format is unchanged. LN-8 (#422, LEAN-L §3.2 step 2): the writer
 /// open runs the phases `meta_ms`, `tail_ms`, `index_ms` and `import_ms`; the complete read of
-/// `ledger-maintenance verify` runs `sql_read_ms`, `verify_ms` and `restore_ms`.
+/// `ledger-maintenance verify --full` runs `sql_read_ms`, `verify_ms` and `restore_ms`, and
+/// (#422 LN-VERIFY) `verify` without flags the writer open's `meta_ms` and `tail_ms`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LedgerOpenTiming {
     /// Records authenticated (and, for a complete read, restored): the writer open's tail.

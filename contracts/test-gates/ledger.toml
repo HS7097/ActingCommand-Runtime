@@ -778,6 +778,15 @@ tests = [
 ]
 incident = ["#422 LN-7c V"]
 
+# LN-VERIFY (#422; brief rd-1031/brief-ln-verify.md tests 1 and 4; register §1.241; since 0.12.36): ledger-maintenance verify without flags on a formal root reads what the start's open reads to authenticate the ledger: on 3 000 and on 12 000 synthetic records, under the read counter, the same rows, the event and link rows of the newest open_verify_tail_records records and no older one, and no material file; through RuntimeHost::maintain_ledger a root with an eviction intent without its outcome passes as verified-sqlite-bounded, no file changes but the owner journal (the eviction is left to the next start), and --full still refuses that root with the count (the damage, the failure shape and --frame-query: host gate LN-VERIFY)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_ln_verify::ln_verify_t1_the_default_reads_the_same_rows_at_both_scales_and_no_record_older_than_its_tail",
+    "actingcommand-ledger::lib::global::tests::gate_ln_verify::ln_verify_t4_the_default_passes_a_pending_eviction_and_does_not_complete_it",
+]
+incident = ["#422 LN-VERIFY"]
+
 # ROUT-L RL-1c fix round 3 (#411; work order rd-1027/brief-rl1c-fix3.md, re-review rd-1027/v01220-review/rl1c-fix2.md M1): the suspended report's latest time reads through the time index: MAX(timestamp_unix_ms) is one entry of ledger_view_index_time_v1 and the newest row at that time is read through the same index (timestamp_unix_ms=?), both passing the plan rule with no sort; the newest-first read of a type walks ledger_view_index_type_v1 (event_type=? AND sequence<?) with no sort and no scan, automatic or history-wide index
 [[gate]]
 coverage = "Y"

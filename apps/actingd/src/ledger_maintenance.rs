@@ -31,11 +31,18 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
     // #422 LN-7c V: `--frame-query`, a flag without a value, at most once; the host refuses it
     // for an operation other than `verify` and on a root that is not formal.
     let mut frame_query = false;
+    // #422 LN-VERIFY: `--full`, a flag without a value, at most once: `verify` of a formal root is
+    // the complete read; the host refuses it for an operation other than `verify`.
+    let mut full = false;
     let mut options = arguments[2..].iter();
     while let Some(option) = options.next() {
         let slot = match option.to_str() {
             Some("--frame-query") if !frame_query => {
                 frame_query = true;
+                continue;
+            }
+            Some("--full") if !full => {
+                full = true;
                 continue;
             }
             Some("--config") => &mut config,
@@ -58,9 +65,18 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
     } else {
         actingcommand_contract::InstallConfigPurpose::Running
     };
-    let config = config::load_for(&config, purpose)
-        .and_then(config::ActingdConfigFile::maintenance_config)
-        .map_err(ActingdError::config)?;
+    let file = config::load_for(&config, purpose).map_err(ActingdError::config)?;
+    // #422 LN-VERIFY: the bounded `verify` reads how many records the start authenticates; every
+    // other pass reads no key through the configuration mechanism, as before.
+    let bounded_manifest =
+        (matches!(operation, LedgerMaintenanceOperation::Verify) && !full && !frame_query)
+            .then(|| file.maintenance_manifest())
+            .transpose()
+            .map_err(ActingdError::config)?;
+    let mut config = file.maintenance_config().map_err(ActingdError::config)?;
+    if let Some(manifest) = bounded_manifest {
+        config = config.with_config_manifest(manifest);
+    }
     let request = LedgerMaintenanceRequest {
         operation,
         backup,
@@ -68,6 +84,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
         artifact_root,
         limits: Default::default(),
         frame_query,
+        full,
     };
     let receipt = RuntimeHost::maintain_ledger(config, request).map_err(|error| {
         ActingdError::maintenance(error).with_report("activated", serde_json::Value::Bool(false))
