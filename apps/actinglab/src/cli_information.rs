@@ -65,7 +65,8 @@ pub(super) fn help_data() -> Value {
                 "--facts <the instance answer of actingctl facts --instance or ac_facts, read without a key prefix>",
                 "--select <operation id of a select step: replays its scan over the frames, with --scan>",
                 "--scan <the step's scan declaration, a JSON file, with --select>",
-                "--parameter <name>=<value> (with --select; repeatable, once per parameter the package declares; replaces that parameter's declared default)"
+                "--parameter <name>=<value> (with --select; repeatable, once per parameter the package declares; replaces that parameter's declared default)",
+                "--standard-pack-root <the root of the game directories: the shared tables a select step reads>"
             ],
             "package bundle": [
                 "--applications <applications.json>", "--packs-root <directory of pack directories>",

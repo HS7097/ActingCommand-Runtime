@@ -340,6 +340,24 @@
       "common_causes": "The pool was made live (ledger_fact) before a package declared a reading of its key; the reading's fact_key is spelled differently from the pool's; the package with the reading was removed or moved into archived material; the pool was declared with a server or game scope.",
       "handling": "Add a reading mark or an adjustment of the key to a package of the repository, correct the key or the pool's scope, or keep the pool a static snapshot."
     },
+    "resource_table_identity_uncovered": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "path": "required",
+        "table_id": "required",
+        "count": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.37",
+      "description": "actinglab resource validate read a selection document whose standard-pack table holds no row for count identities of its candidate layout (Workflow #357 DB-2, M-357a v1.1 TB5). Those candidates are dropped and recorded at run time; a document that reads the table under abort_evaluation is refused instead, because one such candidate would end every evaluation.",
+      "common_causes": "A new identity joined the layout before its table was updated.",
+      "handling": "Add the identity's rows to the table, or accept that it is dropped until they are written."
+    },
     "resource_verify_passed": {
       "category": "success",
       "ladder_class": "none",

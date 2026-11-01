@@ -52,6 +52,9 @@ actingcommand_contract::outcome_codes! {
         TermUnknownSubstituted => "term_unknown_substituted": info / none,
         /// Info. Workflow #378 A2-P (keys `rule_id`).
         TermUnknownDropped => "term_unknown_dropped": info / none,
+        /// Info. Workflow #357 DB-2 (keys `rule_id`, optional `table_column`): a `table` read
+        /// used its `fallback_column` or a pin's `otherwise`.
+        TermFallbackUsed => "term_fallback_used": info / none,
         /// Info. Workflow #378 A2-P.
         CandidateScored => "candidate_scored": info / none,
         /// Info. Workflow #378 A2-P.

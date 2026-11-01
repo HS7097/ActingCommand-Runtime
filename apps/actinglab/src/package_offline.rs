@@ -8,7 +8,7 @@ use actingcommand_contract::{
 use actingcommand_device::{CaptureBackendName, Frame, parse_png_dimensions};
 use actingcommand_lab::{
     OfflineDecision, OfflineSimulationError, OfflineSimulationResult, PreparedContainedTask,
-    simulate_contained_task_drawn, validate_lab_package_path,
+    simulate_contained_task_with_tables, validate_lab_package_path,
 };
 use actingcommand_pack_containment::DEFAULT_MAX_COMPRESSED_BYTES;
 use serde::Serialize;
@@ -107,9 +107,16 @@ pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
     // Workflow #406 T4: the run draws its points as the Runtime draws a run's, from the seed
     // (`--seed`, else 0) with the touch keys of the root configuration.
     let draw = crate::lab_draw::offline_draw(args.seed)?;
-    let simulation =
-        simulate_contained_task_drawn(&prepared, fixture.frames, Some(now_unix_ms), draw)
-            .map_err(map_simulation_error)?;
+    let tables =
+        crate::lab_tables::run_tables(args.standard_pack_root.as_deref(), &prepared, now_unix_ms)?;
+    let simulation = simulate_contained_task_with_tables(
+        &prepared,
+        fixture.frames,
+        Some(now_unix_ms),
+        draw,
+        tables,
+    )
+    .map_err(map_simulation_error)?;
     let refusal = match &simulation.decision {
         OfflineDecision::Refused { code, detail } => Some((*code, detail.clone())),
         _ => None,
@@ -179,6 +186,8 @@ struct PackageDryRunArgs {
     out: PathBuf,
     /// Workflow #406 T4: the run's seed (`--seed`), 0 without it.
     seed: Option<u64>,
+    /// Workflow #357 DB-2: the standard-pack root a select step's shared tables are read from.
+    standard_pack_root: Option<PathBuf>,
 }
 
 impl PackageDryRunArgs {
@@ -215,7 +224,12 @@ impl PackageDryRunArgs {
             .filter(|name| {
                 !matches!(
                     name.as_str(),
-                    "--package" | "--zip" | "--out" | "--fixture" | "--seed"
+                    "--package"
+                        | "--zip"
+                        | "--out"
+                        | "--fixture"
+                        | "--seed"
+                        | crate::lab_tables::STANDARD_PACK_ROOT_FLAG
                 )
             })
             .cloned()
@@ -277,6 +291,7 @@ impl PackageDryRunArgs {
         }
         let fixtures = fixture_values.into_iter().map(PathBuf::from).collect();
         Ok(Self {
+            standard_pack_root: flags.optional_path(crate::lab_tables::STANDARD_PACK_ROOT_FLAG),
             package,
             fixtures,
             out,

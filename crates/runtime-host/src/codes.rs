@@ -1473,6 +1473,10 @@ actingcommand_contract::outcome_codes! {
         /// second has passed: every cell of the column reads `null` (keys `game`, `path`,
         /// `table_column`). A note of check-config.
         StandardPackTableColumnExpired => "standard_pack_table_column_expired": warning / none,
+        /// Workflow #357 DB-2 (K1): a run's select step declares a table its game root lacks.
+        StandardPackTableMissing => "standard_pack_table_missing": error / declaration_error,
+        /// Workflow #357 DB-2 (K2): a table differs from its document's declaration.
+        StandardPackTableMismatch => "standard_pack_table_mismatch": error / declaration_error,
         // ---- Workflow #357 DB-1: end
         // ---- Workflow #373 NAV-5 (full-match entry routing, M-373 §5, §9.1): begin
         /// Info. A locate of the entry gate matched exactly one page of `pages.json` (keys

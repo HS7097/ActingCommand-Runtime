@@ -2962,7 +2962,8 @@ pub fn validate_bundle_declarations(bundle: &Bundle, files: &ParseFiles) -> CliO
 /// apply to that layout, read only features the layout declares with their type (`passed` as
 /// boolean, `measure_milli` as integer), and require exactly one candidate. A document that
 /// declares a record list, which `keyed_fact` reads by the candidate's identity, needs a layout
-/// whose `unknown_identity` is `reject`.
+/// whose `unknown_identity` is `reject`. Workflow #357 DB-2 (K3): so does a document that
+/// declares a shared table, and each `table` read keys its rows by the layout's identity field.
 /// The parser's declaration gate and contained task admission
 /// both run this check, so an author sees the refusal before a package is built.
 fn select_policy(
@@ -3153,6 +3154,32 @@ fn select_policy(
                 &format!("/facts/{list_index}/value_type"),
                 format!("layout={layout_id} unknown_identity={handling} record_list=declared"),
             ));
+        }
+        if policy.uses_tables() {
+            if let Some(handling) = layout
+                .get("unknown_identity")
+                .and_then(Value::as_str)
+                .filter(|handling| *handling != "reject")
+            {
+                return Err(refuse(
+                    "/tables",
+                    format!("layout={layout_id} unknown_identity={handling} tables=declared"),
+                ));
+            }
+            for key_field in policy.table_key_fields() {
+                let identity = super::array_field(layout, "features")
+                    .iter()
+                    .any(|feature| {
+                        feature.get("name").and_then(Value::as_str) == Some(key_field)
+                            && feature.get("identity").is_some()
+                    });
+                if !identity {
+                    return Err(refuse(
+                        "/tables",
+                        format!("layout={layout_id} key_field={key_field} identity=undeclared"),
+                    ));
+                }
+            }
         }
         if policy.selection.required_count != 1 {
             return Err(refuse(
@@ -4483,6 +4510,86 @@ mod tests {
             "{}",
             error.message
         );
+    }
+
+    /// A document that reads a shared table through its one field `key_field`.
+    fn table_policy_bytes(key_field: &str) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "actingcommand.selection-policy.v1",
+            "policy_id": "policy-table",
+            "applies_to": {"candidate_layout_id": "layout-list", "outcome_keys": {
+                "selected": "list-selected", "empty": "list-empty",
+                "insufficient": "list-insufficient", "ambiguous": "list-ambiguous",
+                "unknown": "list-unknown"}},
+            "fields": [{"name": key_field, "value_type": {
+                "type": "enum_string", "allowed": ["member-a", "member-b"]}}],
+            "facts": [],
+            "tables": [{"table_id": "unit_scores", "path": "tables/unit_scores.json",
+                        "row_key": ["unit"], "columns": {"score_milli": {"type": "integer"}}}],
+            "gates": [],
+            "scoring": [{"term_id": "term-score",
+                         "value": {"source": "table", "table_id": "unit_scores",
+                                   "key_field": key_field, "pins": [],
+                                   "value_column": "score_milli"},
+                         "transform": {"kind": "identity"}, "weight_milli": 1_000,
+                         "on_unknown": {"kind": "drop_candidate"}}],
+            "selection": {"mode": "exactly_one", "required_count": 1},
+            "tie_break": [{"kind": "candidate_id", "direction": "lowest_first"}]
+        }))
+        .expect("policy bytes")
+    }
+
+    /// Workflow #357 DB-2 (K3; register §1.65 TB6): a document that declares a table needs a
+    /// layout that rejects unknown identities, and its key field is the layout's identity field.
+    /// The table itself is not read here.
+    #[test]
+    fn db2_a_table_document_needs_a_rejecting_layout_and_its_identity_field_as_the_key() {
+        let task = Declaration {
+            file: Path::new("tasks/list-task/task.json"),
+            schema: Some("0.9"),
+        };
+        let requested = PathBuf::from("tasks/list-task").join("policies/list.json");
+        let bytes = table_policy_bytes("member");
+        select_policy(
+            &task,
+            &task_bundle("reject"),
+            &requested,
+            &requested,
+            &bytes,
+        )
+        .expect("a rejecting layout with the key as its identity admits the document");
+
+        let error = select_policy(
+            &task,
+            &task_bundle("readable_attributes"),
+            &requested,
+            &requested,
+            &bytes,
+        )
+        .expect_err("readable attributes would hand the table an unknown key");
+        assert_eq!(error.code, "resource_declaration_invalid");
+        assert!(
+            error
+                .message
+                .contains("unknown_identity=readable_attributes tables=declared"),
+            "{}",
+            error.message
+        );
+
+        let mut other_key = task_bundle("reject");
+        other_key.data["candidate_layouts"][0]["features"]
+            .as_array_mut()
+            .expect("features")
+            .push(serde_json::json!({"name": "tier", "value": "passed"}));
+        let error = select_policy(
+            &task,
+            &other_key,
+            &requested,
+            &requested,
+            &table_policy_bytes("tier"),
+        )
+        .expect_err("a key field that is not the layout's identity field");
+        assert_eq!(error.code, "resource_declaration_invalid");
     }
 
     /// Coordinator ruling 5 on Workflow #378 A2-P: a gate or term id becomes a selection

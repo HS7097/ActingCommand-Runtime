@@ -40,7 +40,7 @@ mod select;
 pub(super) use online::RuntimeScanSource;
 #[cfg(test)]
 pub(super) use online::run_scan;
-pub use online::{dry_run_scan, replay_scan};
+pub use online::{dry_run_scan, dry_run_scan_with_tables, replay_scan, replay_scan_with_tables};
 pub(super) use select::{
     IdentityState, ScanSelectEnd, ScanSelection, bound_inputs, decision_blocking, record_bound,
     result_blocked,
@@ -56,8 +56,8 @@ use actingcommand_recognition::color_digest::{self, ColorDigest};
 use actingcommand_recognition_pack::CandidateLayout;
 use actingcommand_selection_policy::{
     Candidate, CandidateStatus, FieldDomain, ScalarValue, SelectionDecision, SelectionFactSnapshot,
-    SelectionOutcome, SelectionPolicy, SortDirection, TieBreakKey, UpperBound, evaluate,
-    upper_bound,
+    SelectionOutcome, SelectionPolicy, SelectionTables, SortDirection, TieBreakKey, UpperBound,
+    evaluate_with_tables, upper_bound_with_tables,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -749,9 +749,14 @@ struct AlignmentRejected {
 /// What the evaluator said about a fixed position in the viewport that fixed it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Verdict {
-    Member { score_milli: Option<i64> },
+    Member {
+        score_milli: Option<i64>,
+    },
     GatedOut,
     UnknownDropped,
+    /// Workflow #357 DB-2 (M-357a v1.1 §4.3): dropped only by the table's own static data. It is
+    /// listed among the candidates with its verdict, never chosen, and is no unknown instance.
+    StaticTableDrop,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -991,6 +996,8 @@ pub(super) struct ScanSession<'a> {
     /// The dispatched frame's size.
     frame: (u32, u32),
     policy: &'a SelectionPolicy,
+    /// Workflow #357 DB-2: the shared tables `policy` declares, fixed for the attempt.
+    tables: &'a SelectionTables,
     facts: &'a SelectionFactSnapshot,
     now_unix_ms: u64,
     /// The features the policy reads.
@@ -1031,6 +1038,7 @@ fn early_stop_inputs(
     scan: &ScanDeclaration,
     layout: &CandidateLayout,
     policy: &SelectionPolicy,
+    tables: &SelectionTables,
     facts: &SelectionFactSnapshot,
     now_unix_ms: u64,
 ) -> Result<EarlyStop, ContainedTaskError> {
@@ -1044,8 +1052,15 @@ fn early_stop_inputs(
     let (field_domains, identities) =
         select::bound_inputs(layout, policy, Some(&scan.identity_feature))
             .map_err(|detail| invalid(format!("scan early_stop {detail}")))?;
-    let unseen = upper_bound(policy, facts, now_unix_ms, &identities, &field_domains)
-        .map_err(|error| invalid(format!("scan early_stop bound={error}")))?;
+    let unseen = upper_bound_with_tables(
+        policy,
+        tables,
+        facts,
+        now_unix_ms,
+        &identities,
+        &field_domains,
+    )
+    .map_err(|error| invalid(format!("scan early_stop bound={error}")))?;
     Ok(EarlyStop {
         field_domains,
         identities,
@@ -1060,15 +1075,40 @@ fn early_stop_inputs(
 }
 
 impl<'a> ScanSession<'a> {
-    /// A session over `layout` (the step's `repeated_anchor` layout) with the step's admitted
-    /// `scan`, its sealed `policy`, and the facts and instant pinned for the whole attempt.
-    /// `frame` is the dispatched frame's size; `task_remaining`, the task's time left when the
-    /// step started, caps `max_ms`.
+    /// [`Self::with_tables`] for a document that declares no shared table.
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         scan: &'a ScanDeclaration,
         layout: &'a CandidateLayout,
         policy: &'a SelectionPolicy,
+        facts: &'a SelectionFactSnapshot,
+        now_unix_ms: u64,
+        frame: (u32, u32),
+        task_remaining: Duration,
+    ) -> Result<Self, ContainedTaskError> {
+        Self::with_tables(
+            scan,
+            layout,
+            policy,
+            SelectionTables::none(),
+            facts,
+            now_unix_ms,
+            frame,
+            task_remaining,
+        )
+    }
+
+    /// A session over `layout` (the step's `repeated_anchor` layout) with the step's admitted
+    /// `scan`, its sealed `policy` and the shared tables it declares, and the facts and instant
+    /// pinned for the whole attempt. `frame` is the dispatched frame's size; `task_remaining`, the
+    /// task's time left when the step started, caps `max_ms`.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn with_tables(
+        scan: &'a ScanDeclaration,
+        layout: &'a CandidateLayout,
+        policy: &'a SelectionPolicy,
+        tables: &'a SelectionTables,
         facts: &'a SelectionFactSnapshot,
         now_unix_ms: u64,
         frame: (u32, u32),
@@ -1125,9 +1165,14 @@ impl<'a> ScanSession<'a> {
             return Err(invalid("scan identity_feature=undeclared"));
         }
         let early_stop = match scan.early_stop {
-            Some(DeclaredEarlyStop::UpperBound) => {
-                Some(early_stop_inputs(scan, layout, policy, facts, now_unix_ms)?)
-            }
+            Some(DeclaredEarlyStop::UpperBound) => Some(early_stop_inputs(
+                scan,
+                layout,
+                policy,
+                tables,
+                facts,
+                now_unix_ms,
+            )?),
             None => None,
         };
         let moves = Moves::of(scan).map_err(|refused| invalid(refused.detail()))?;
@@ -1139,6 +1184,7 @@ impl<'a> ScanSession<'a> {
             layout,
             frame,
             policy,
+            tables,
             facts,
             now_unix_ms,
             read_fields: policy
@@ -1773,7 +1819,9 @@ impl<'a> ScanSession<'a> {
                 !matches!(
                     self.positions[position].state,
                     PositionState::Fixed {
-                        verdict: Some(Verdict::Member { .. } | Verdict::GatedOut),
+                        verdict: Some(
+                            Verdict::Member { .. } | Verdict::GatedOut | Verdict::StaticTableDrop
+                        ),
                         ..
                     }
                 )
@@ -1931,7 +1979,14 @@ impl<'a> ScanSession<'a> {
         &self,
         candidates: &[Candidate],
     ) -> Result<SelectionDecision, ContainedTaskError> {
-        evaluate(self.policy, candidates, self.facts, self.now_unix_ms).map_err(|error| {
+        evaluate_with_tables(
+            self.policy,
+            self.tables,
+            candidates,
+            self.facts,
+            self.now_unix_ms,
+        )
+        .map_err(|error| {
             ContainedTaskError::with_detail(
                 ExecutionKernelCode::SelectionEvaluationFailed.code(),
                 error.to_string(),
@@ -1981,6 +2036,9 @@ impl<'a> ScanSession<'a> {
                     score_milli: verdict.score_milli,
                 },
                 CandidateStatus::GateRejected => Verdict::GatedOut,
+                CandidateStatus::UnknownDropped if verdict.static_table_drop => {
+                    Verdict::StaticTableDrop
+                }
                 CandidateStatus::UnknownDropped => Verdict::UnknownDropped,
             };
             if let PositionState::Fixed { verdict, .. } = &mut self.positions[index].state {
@@ -2192,9 +2250,10 @@ impl<'a> ScanSession<'a> {
             let is_unknown = match &position.state {
                 PositionState::Unread => false,
                 PositionState::Incomplete | PositionState::Contradicted => true,
-                PositionState::Fixed { verdict, .. } => {
-                    !matches!(verdict, Some(Verdict::Member { .. } | Verdict::GatedOut))
-                }
+                PositionState::Fixed { verdict, .. } => !matches!(
+                    verdict,
+                    Some(Verdict::Member { .. } | Verdict::GatedOut | Verdict::StaticTableDrop)
+                ),
             };
             if !is_unknown {
                 continue;
@@ -2203,8 +2262,9 @@ impl<'a> ScanSession<'a> {
                 || stop.identities.clone(),
                 |identity| vec![identity.clone()],
             );
-            let bound = upper_bound(
+            let bound = upper_bound_with_tables(
                 self.policy,
+                self.tables,
                 self.facts,
                 self.now_unix_ms,
                 &identities,
@@ -2247,6 +2307,19 @@ impl<'a> ScanSession<'a> {
                     fixed_viewport: *viewport,
                     identity: position.identity.clone().unwrap_or_default(),
                     score_milli: *score_milli,
+                }),
+                // Workflow #357 DB-2: as the record lists it, a candidate without a score.
+                PositionState::Fixed {
+                    viewport,
+                    verdict: Some(Verdict::StaticTableDrop),
+                    ..
+                } => members.push(ScanDryRunMember {
+                    position_index: position.index,
+                    content_axis_px: content_rect.axis,
+                    cross_px: content_rect.cross,
+                    fixed_viewport: *viewport,
+                    identity: position.identity.clone().unwrap_or_default(),
+                    score_milli: None,
                 }),
                 PositionState::Fixed {
                     verdict: Some(Verdict::GatedOut),

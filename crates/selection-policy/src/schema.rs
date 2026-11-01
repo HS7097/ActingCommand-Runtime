@@ -11,9 +11,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use actingcommand_contract::ValueTestOp;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Code;
+use actingcommand_contract::{
+    MAX_STANDARD_PACK_TABLE_COLUMNS, MAX_STANDARD_PACK_TABLE_ROW_KEY,
+    STANDARD_PACK_TABLES_DIRECTORY, ValueTestOp, standard_pack_table_id,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::codes::SelectionPolicyCode;
@@ -48,6 +51,10 @@ pub const MAX_ENUM_VALUES: usize = 1_024;
 /// Upper bound on the declared value columns of one record list: the fact contract's 64 fields
 /// per row, less the key column.
 pub const MAX_RECORD_LIST_COLUMNS: usize = 63;
+/// Workflow #357 DB-2 (M-357a v1.1 §2.2): the most shared tables one document declares.
+pub const MAX_TABLES: usize = 8;
+/// Workflow #357 DB-2 (§3.2): the most pins of one `table` read, the row key's other columns.
+pub const MAX_TABLE_PINS: usize = 7;
 /// The largest `mul` of an `integer_compare` predicate, as a value test's (Workflow #411 B2).
 pub const MAX_INTEGER_COMPARE_MUL: u64 = 1_000_000;
 /// The largest `add` magnitude of an `integer_compare` predicate, 2^53 - 1, as a value test's
@@ -242,6 +249,64 @@ pub enum ValueRef {
         row_filter: Option<RowFilter>,
         absent: ScalarValue,
     },
+    /// Workflow #357 DB-2 (M-357a v1.1 §3.2; register §1.65 TB6): the `value_column` of the row
+    /// of the shared table `table_id` whose key equals the candidate's `key_field` and whose
+    /// other row-key columns hold `pins`. A key no row holds, or a null cell, is unknown
+    /// (`lookup_miss`); a key with rows but none of this class reads the declared `absent`, a
+    /// known value, on a gate. A structure later members can extend (§9): a member added here
+    /// leaves every written document as it is.
+    Table {
+        table_id: String,
+        key_field: String,
+        pins: Vec<TablePin>,
+        value_column: String,
+        /// In a scoring term only: the same row's column to read when `value_column` is null.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fallback_column: Option<String>,
+        /// On a gate only: the value read for a key that has rows, none of this class.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        absent: Option<ScalarValue>,
+    },
+}
+
+/// One pin of a `table` read (M-357a v1.1 §3.2): the row-key column `column` holds the literal
+/// `equals` or the scalar fact `equals_fact`, which may name one `otherwise`. The members are
+/// separate so the document's refusal can name a pin that holds neither or both.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TablePin {
+    pub column: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equals: Option<ScalarValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equals_fact: Option<String>,
+    /// Used when `equals_fact` is unavailable. One level: it has no `otherwise` of its own, so a
+    /// nested one does not decode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub otherwise: Option<TablePinOtherwise>,
+}
+
+/// A pin's `otherwise`: a literal or another scalar fact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TablePinOtherwise {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equals: Option<ScalarValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equals_fact: Option<String>,
+}
+
+/// One shared table the document reads (M-357a v1.1 §3.1). `path` is exactly
+/// `tables/<table_id>.json`, relative to the game root of the package that declares the step;
+/// `table_id` equals the file's. `row_key` copies the file's; `columns` holds every column the
+/// document reads and every row-key column but the key, each with its type.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TableDeclaration {
+    pub table_id: String,
+    pub path: String,
+    pub row_key: Vec<String>,
+    pub columns: BTreeMap<String, ValueType>,
 }
 
 /// Selects the rows of one kind: those whose enumerated `column` equals `equals`.
@@ -255,6 +320,36 @@ pub struct RowFilter {
 impl ValueRef {
     pub(crate) fn is_keyed_fact(&self) -> bool {
         matches!(self, Self::KeyedFact { .. })
+    }
+
+    pub(crate) fn is_table(&self) -> bool {
+        matches!(self, Self::Table { .. })
+    }
+
+    /// Whether two `table` reads read one row of one table: the same table, key field and pins.
+    fn same_table_row(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Table {
+                    table_id: left_table,
+                    key_field: left_key,
+                    pins: left_pins,
+                    ..
+                },
+                Self::Table {
+                    table_id: right_table,
+                    key_field: right_key,
+                    pins: right_pins,
+                    ..
+                },
+            ) => {
+                left_table == right_table
+                    && left_key == right_key
+                    && left_pins.len() == right_pins.len()
+                    && left_pins.iter().all(|pin| right_pins.contains(pin))
+            }
+            _ => false,
+        }
     }
 }
 
@@ -427,6 +522,13 @@ impl Predicate {
         self.collect_values(&mut values);
         values.into_iter().any(ValueRef::is_keyed_fact)
     }
+
+    /// Whether the predicate reads a shared table (Workflow #357 DB-2).
+    pub(crate) fn reads_table(&self) -> bool {
+        let mut values = Vec::new();
+        self.collect_values(&mut values);
+        values.into_iter().any(ValueRef::is_table)
+    }
 }
 
 /// One hard gate: a candidate whose predicate does not hold is rejected.
@@ -501,6 +603,10 @@ pub struct SelectionPolicy {
     pub applies_to: AppliesTo,
     pub fields: Vec<FieldDeclaration>,
     pub facts: Vec<FactDeclaration>,
+    /// Workflow #357 DB-2 (register §1.65 TB6): the shared tables the document reads. Empty is
+    /// not written, so a document without tables keeps its canonical bytes and `policy_sha256`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tables: Vec<TableDeclaration>,
     pub gates: Vec<HardGate>,
     pub scoring: Vec<ScoringTerm>,
     pub selection: SelectionRequirement,
@@ -580,10 +686,28 @@ impl SelectionPolicy {
                 ));
             }
         }
-        let scope = Scope { fields, facts };
+        check_limit(self.tables.len(), MAX_TABLES, "tables")?;
+        let mut tables = BTreeMap::new();
+        for declaration in &self.tables {
+            check_table_declaration(declaration)?;
+            if tables
+                .insert(declaration.table_id.as_str(), declaration)
+                .is_some()
+            {
+                return Err(SelectionError::new(
+                    SelectionErrorCode::DuplicateId,
+                    format!("table `{}` is declared twice", declaration.table_id),
+                ));
+            }
+        }
+        let scope = Scope {
+            fields,
+            facts,
+            tables,
+        };
 
         let mut gate_ids = BTreeSet::new();
-        for gate in &self.gates {
+        for (gate_index, gate) in self.gates.iter().enumerate() {
             check_id(&gate.gate_id, "gate_id")?;
             if !gate_ids.insert(gate.gate_id.as_str()) {
                 return Err(SelectionError::new(
@@ -601,6 +725,36 @@ impl SelectionPolicy {
                     SelectionErrorCode::TypeMismatch,
                     format!("gate={} reads=keyed_fact on_unknown", gate.gate_id),
                 ));
+            }
+            // Workflow #357 DB-2 (§3.4): missing table data never stands in for a verdict; a
+            // gate has no `fallback_column`, and a pinned read follows a class gate.
+            if gate.predicate.reads_table()
+                && matches!(
+                    gate.on_unknown,
+                    GateUnknownHandling::SubstituteVerdict { .. }
+                )
+            {
+                return Err(SelectionError::new(
+                    SelectionErrorCode::TypeMismatch,
+                    format!("gate={} reads=table on_unknown", gate.gate_id),
+                ));
+            }
+            let mut values = Vec::new();
+            gate.predicate.collect_values(&mut values);
+            for value in values {
+                if matches!(
+                    value,
+                    ValueRef::Table {
+                        fallback_column: Some(_),
+                        ..
+                    }
+                ) {
+                    return Err(SelectionError::new(
+                        SelectionErrorCode::TypeMismatch,
+                        format!("gate={} table_read=fallback_column", gate.gate_id),
+                    ));
+                }
+                check_class_gate(value, &self.gates[..gate_index], &gate.gate_id)?;
             }
         }
 
@@ -622,10 +776,37 @@ impl SelectionPolicy {
                     format!("term={} reads=keyed_fact on_unknown", term.term_id),
                 ));
             }
+            // Workflow #357 DB-2 (§3.4): as for a gate; a term has no `absent`.
+            if term.value.is_table() {
+                if matches!(term.on_unknown, TermUnknownHandling::SubstituteMilli { .. }) {
+                    return Err(SelectionError::new(
+                        SelectionErrorCode::TypeMismatch,
+                        format!("term={} reads=table on_unknown", term.term_id),
+                    ));
+                }
+                if matches!(
+                    term.value,
+                    ValueRef::Table {
+                        absent: Some(_),
+                        ..
+                    }
+                ) {
+                    return Err(SelectionError::new(
+                        SelectionErrorCode::TypeMismatch,
+                        format!("term={} table_read=absent", term.term_id),
+                    ));
+                }
+                check_class_gate(&term.value, &self.gates, &term.term_id)?;
+            }
         }
 
         for key in &self.tie_break {
             if let TieBreakKey::Value { value, .. } = key {
+                // Workflow #357 DB-2 (§3.4): a tie-break may read a table only where a gate or a
+                // term reads the same row, so every ranked candidate has that row.
+                if value.is_table() {
+                    self.check_table_tie_break(value)?;
+                }
                 // An enumerated string has no declared order, only a declared member list, so
                 // ordering one would fall back to its bytes. Score it through a lookup instead.
                 if let ValueType::EnumString { .. } = scope.resolve(value, "tie_break")? {
@@ -680,6 +861,75 @@ impl SelectionPolicy {
         !self.record_list_keys().is_empty()
     }
 
+    /// Whether this document declares a shared table (Workflow #357 DB-2). Only an in-task
+    /// consumer reads one; the scheduling consumer refuses such a document (register §1.65 TB10).
+    pub fn uses_tables(&self) -> bool {
+        !self.tables.is_empty()
+    }
+
+    /// The candidate fields the document's `table` reads key their rows by (K3: each must be the
+    /// layout's identity field).
+    pub fn table_key_fields(&self) -> BTreeSet<&str> {
+        self.value_refs()
+            .into_iter()
+            .filter_map(|value| match value {
+                ValueRef::Table { key_field, .. } => Some(key_field.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Whether some gate or term reads `table` under `abort_evaluation` (the resource tools'
+    /// coverage check: then one missing identity is an error, not a warning, §3.4).
+    pub fn table_read_aborts(&self, table_id: &str) -> bool {
+        let reads = |value: &ValueRef| matches!(value, ValueRef::Table { table_id: read, .. } if read == table_id);
+        self.gates.iter().any(|gate| {
+            let mut values = Vec::new();
+            gate.predicate.collect_values(&mut values);
+            gate.on_unknown == GateUnknownHandling::AbortEvaluation
+                && values.into_iter().any(&reads)
+        }) || self.scoring.iter().any(|term| {
+            term.on_unknown == TermUnknownHandling::AbortEvaluation && reads(&term.value)
+        })
+    }
+
+    fn check_table_tie_break(&self, value: &ValueRef) -> Result<(), SelectionError> {
+        if matches!(
+            value,
+            ValueRef::Table {
+                absent: Some(_),
+                ..
+            } | ValueRef::Table {
+                fallback_column: Some(_),
+                ..
+            }
+        ) {
+            return Err(SelectionError::new(
+                SelectionErrorCode::TypeMismatch,
+                "tie_break table_read=absent_or_fallback".to_owned(),
+            ));
+        }
+        check_class_gate(value, &self.gates, "tie_break")?;
+        let read_by_gate = self.gates.iter().any(|gate| {
+            let mut values = Vec::new();
+            gate.predicate.collect_values(&mut values);
+            values.into_iter().any(|read| read.same_table_row(value))
+        });
+        if read_by_gate
+            || self
+                .scoring
+                .iter()
+                .any(|term| term.value.same_table_row(value))
+        {
+            Ok(())
+        } else {
+            Err(SelectionError::new(
+                SelectionErrorCode::TypeMismatch,
+                "tie_break table_read=row_unread".to_owned(),
+            ))
+        }
+    }
+
     /// Every value the gates, the terms and the tie-break keys read, in document order.
     pub(crate) fn value_refs(&self) -> Vec<&ValueRef> {
         let mut values = Vec::new();
@@ -698,6 +948,7 @@ impl SelectionPolicy {
 pub(crate) struct Scope<'a> {
     pub(crate) fields: BTreeMap<&'a str, &'a ValueType>,
     pub(crate) facts: BTreeMap<&'a str, &'a ValueType>,
+    pub(crate) tables: BTreeMap<&'a str, &'a TableDeclaration>,
 }
 
 impl<'a> Scope<'a> {
@@ -758,6 +1009,145 @@ impl<'a> Scope<'a> {
                 }
                 Ok(column)
             }
+            ValueRef::Table {
+                table_id,
+                key_field,
+                pins,
+                value_column,
+                fallback_column,
+                absent,
+            } => {
+                let mismatch = |member: &str| {
+                    SelectionError::new(
+                        SelectionErrorCode::TypeMismatch,
+                        format!("owner={owner} table={table_id} table_read={member}"),
+                    )
+                };
+                let dangling = |member: &str| {
+                    SelectionError::new(
+                        SelectionErrorCode::DanglingReference,
+                        format!("owner={owner} table={table_id} table_read={member}"),
+                    )
+                };
+                let table = self
+                    .tables
+                    .get(table_id.as_str())
+                    .copied()
+                    .ok_or_else(|| dangling("table_id"))?;
+                if !matches!(self.field(key_field, owner)?, ValueType::EnumString { .. }) {
+                    return Err(mismatch("key_field"));
+                }
+                self.check_pins(table, pins, owner)?;
+                let column = table
+                    .columns
+                    .get(value_column)
+                    .ok_or_else(|| dangling("value_column"))?;
+                if let Some(fallback) = fallback_column {
+                    let other = table
+                        .columns
+                        .get(fallback)
+                        .ok_or_else(|| dangling("fallback_column"))?;
+                    if fallback == value_column || !same_scalar_kind(other, column) {
+                        return Err(mismatch("fallback_column"));
+                    }
+                }
+                if let Some(absent) = absent
+                    && !absent.matches(column)
+                {
+                    return Err(mismatch("absent"));
+                }
+                Ok(column)
+            }
+        }
+    }
+
+    /// A read's pins (§3.2): at most 7, each a literal of its column's type or a scalar fact of
+    /// that type with its `allowed` inside the column's, and together exactly the row key's
+    /// columns but the key, so a key names at most one row.
+    fn check_pins(
+        &self,
+        table: &TableDeclaration,
+        pins: &[TablePin],
+        owner: &str,
+    ) -> Result<(), SelectionError> {
+        check_limit(pins.len(), MAX_TABLE_PINS, owner)?;
+        let refuse = |code: SelectionErrorCode, member: &str| {
+            SelectionError::new(
+                code,
+                format!("owner={owner} table={} table_read={member}", table.table_id),
+            )
+        };
+        let wanted: BTreeSet<&str> = table.row_key.iter().skip(1).map(String::as_str).collect();
+        let mut seen = BTreeSet::new();
+        for pin in pins {
+            if !wanted.contains(pin.column.as_str()) {
+                return Err(refuse(SelectionErrorCode::TypeMismatch, "pin_column"));
+            }
+            if !seen.insert(pin.column.as_str()) {
+                return Err(refuse(SelectionErrorCode::DuplicateId, "pin_column"));
+            }
+            let column = table
+                .columns
+                .get(&pin.column)
+                .ok_or_else(|| refuse(SelectionErrorCode::DanglingReference, "pin_column"))?;
+            match (&pin.equals, &pin.equals_fact, &pin.otherwise) {
+                (Some(literal), None, None) => {
+                    if !literal.matches(column) {
+                        return Err(refuse(SelectionErrorCode::TypeMismatch, "pin_equals"));
+                    }
+                }
+                (None, Some(fact_key), otherwise) => {
+                    self.check_pin_fact(fact_key, column, owner)?;
+                    match otherwise {
+                        None => {}
+                        Some(TablePinOtherwise {
+                            equals: Some(literal),
+                            equals_fact: None,
+                        }) => {
+                            if !literal.matches(column) {
+                                return Err(refuse(SelectionErrorCode::TypeMismatch, "otherwise"));
+                            }
+                        }
+                        Some(TablePinOtherwise {
+                            equals: None,
+                            equals_fact: Some(fact_key),
+                        }) => self.check_pin_fact(fact_key, column, owner)?,
+                        Some(_) => {
+                            return Err(refuse(SelectionErrorCode::InvalidArguments, "otherwise"));
+                        }
+                    }
+                }
+                _ => return Err(refuse(SelectionErrorCode::InvalidArguments, "pin")),
+            }
+        }
+        if seen.len() != wanted.len() {
+            return Err(refuse(SelectionErrorCode::TypeMismatch, "pins_incomplete"));
+        }
+        Ok(())
+    }
+
+    fn check_pin_fact(
+        &self,
+        fact_key: &str,
+        column: &ValueType,
+        owner: &str,
+    ) -> Result<(), SelectionError> {
+        let holds = match (self.fact(fact_key, owner)?, column) {
+            (ValueType::Integer, ValueType::Integer) | (ValueType::Boolean, ValueType::Boolean) => {
+                true
+            }
+            (ValueType::EnumString { allowed: fact }, ValueType::EnumString { allowed }) => {
+                fact.iter().all(|member| allowed.contains(member))
+            }
+            _ => false,
+        };
+        if holds {
+            Ok(())
+        } else {
+            Err(SelectionError::new(
+                SelectionErrorCode::TypeMismatch,
+                format!("owner={owner} fact={fact_key} table_read=pin_fact"),
+            ))
         }
     }
 
@@ -794,6 +1184,113 @@ fn check_id(value: &str, label: &str) -> Result<(), SelectionError> {
         ));
     }
     Ok(())
+}
+
+/// Whether two value types are the same scalar kind: enumerated types need not list one set.
+fn same_scalar_kind(left: &ValueType, right: &ValueType) -> bool {
+    matches!(
+        (left, right),
+        (ValueType::Integer, ValueType::Integer)
+            | (ValueType::Boolean, ValueType::Boolean)
+            | (ValueType::EnumString { .. }, ValueType::EnumString { .. })
+    )
+}
+
+/// A `tables[]` entry on its own (§3.1): the table id's grammar, the exact path, the row key and
+/// the columns. What the file holds is K2's, at the run's preparation.
+fn check_table_declaration(declaration: &TableDeclaration) -> Result<(), SelectionError> {
+    let table_id = &declaration.table_id;
+    let refuse = |code: SelectionErrorCode, member: &str| {
+        SelectionError::new(code, format!("table={table_id} declaration={member}"))
+    };
+    if !standard_pack_table_id(table_id) {
+        return Err(refuse(SelectionErrorCode::InvalidArguments, "table_id"));
+    }
+    if declaration.path != format!("{STANDARD_PACK_TABLES_DIRECTORY}/{table_id}.json") {
+        return Err(refuse(SelectionErrorCode::InvalidArguments, "path"));
+    }
+    if declaration.row_key.is_empty() {
+        return Err(refuse(SelectionErrorCode::InvalidArguments, "row_key"));
+    }
+    check_limit(
+        declaration.row_key.len(),
+        MAX_STANDARD_PACK_TABLE_ROW_KEY,
+        "row_key",
+    )?;
+    check_limit(
+        declaration.columns.len(),
+        MAX_STANDARD_PACK_TABLE_COLUMNS,
+        "columns",
+    )?;
+    let mut row_key = BTreeSet::new();
+    for column in &declaration.row_key {
+        if !standard_pack_table_id(column) {
+            return Err(refuse(SelectionErrorCode::InvalidArguments, "row_key"));
+        }
+        if !row_key.insert(column.as_str()) {
+            return Err(refuse(SelectionErrorCode::DuplicateId, "row_key"));
+        }
+    }
+    for (column, value_type) in &declaration.columns {
+        if !standard_pack_table_id(column) {
+            return Err(refuse(SelectionErrorCode::InvalidArguments, "column"));
+        }
+        // The key is the candidate's identity; no read takes it as a value.
+        if declaration.row_key.first() == Some(column) {
+            return Err(refuse(SelectionErrorCode::DuplicateId, "key_column"));
+        }
+        if let ValueType::RecordList { .. } = value_type {
+            return Err(refuse(SelectionErrorCode::TypeMismatch, "column"));
+        }
+        check_value_type(value_type, table_id)?;
+    }
+    if declaration
+        .row_key
+        .iter()
+        .skip(1)
+        .any(|column| !declaration.columns.contains_key(column))
+    {
+        return Err(refuse(SelectionErrorCode::DanglingReference, "row_key"));
+    }
+    Ok(())
+}
+
+/// The class gate (§3.4): a pinned `table` read is itself a gate's read that declares `absent`,
+/// or follows a gate of `earlier` that reads the same row with one. The evaluator ends a
+/// candidate at its first failed gate, so a candidate not of this class never reaches the read.
+fn check_class_gate(
+    value: &ValueRef,
+    earlier: &[HardGate],
+    owner: &str,
+) -> Result<(), SelectionError> {
+    let ValueRef::Table { pins, absent, .. } = value else {
+        return Ok(());
+    };
+    if pins.is_empty() || absent.is_some() {
+        return Ok(());
+    }
+    let guarded = earlier.iter().any(|gate| {
+        let mut values = Vec::new();
+        gate.predicate.collect_values(&mut values);
+        values.into_iter().any(|read| {
+            read.same_table_row(value)
+                && matches!(
+                    read,
+                    ValueRef::Table {
+                        absent: Some(_),
+                        ..
+                    }
+                )
+        })
+    });
+    if guarded {
+        Ok(())
+    } else {
+        Err(SelectionError::new(
+            SelectionErrorCode::TypeMismatch,
+            format!("owner={owner} table_read=class_gate"),
+        ))
+    }
 }
 
 fn check_limit(actual: usize, limit: usize, label: &str) -> Result<(), SelectionError> {

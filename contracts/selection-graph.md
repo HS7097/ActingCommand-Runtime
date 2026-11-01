@@ -592,6 +592,40 @@ with the detail token shown.
   canonicalized as for every guard); no click is inferred.
 - The operation index is unchanged.
 
+### Tables
+
+Workflow #357 DB-2 (Runtime 0.12.37; [selection-policy.md](selection-policy.md), "Tables and `table`";
+register §1.244). **Admission reads the document, never a table**: a document that declares one needs
+a layout whose `unknown_identity` is `reject`, and each `table` read's `key_field` is the layout's
+identity field (`contained_task_select_policy_mismatch`; the declaration gate refuses the same with
+`resource_declaration_invalid`). So admission depends only on the package and the kernel, and a
+suspension or its lift never meets a table.
+
+**The run's preparation reads them.** For each package of the run that declares a table, its game's
+root is read (a broken root refuses with the root's own code), each table once, each document bound.
+Any failure refuses this one run, before any lease and any task record: the receipt is `denied` with
+`runtime_code` `package_invalid` and one of `standard_pack_table_missing` (no root, no game root, no
+file), `standard_pack_table_unreadable`, `standard_pack_table_invalid`,
+`standard_pack_table_mismatch`, with its `table_mismatch`. Nothing else stops: not the root, not the
+Runtime, not another instance. A refusal in preparation is not a failure of the task and never
+suspends it. A layer the run admits later (a shared interrupt's handler, `then.run`, a navigation
+package, an entry recovery package) binds its tables at its admission, and a table failure ends that
+run with the same code.
+
+**Fixed for the run.** `ContainedTaskRuntime::standard_pack_table` answers from what was bound and
+reads no file, so a single frame, each viewport of a scan and a confirmation by decision read one
+table; a file replaced in place is the next run's. A runtime without tables answers none, and the step
+fails `selection_evaluation_failed`. The limits are the format's (`tables/` in
+[package-reference.md](package-reference.md)), not configuration keys.
+
+**Dropped by the table.** A static table drop is no unknown instance. In a single-frame step it is
+left out of `unknown_check`. In a scan it is listed in `candidates[]`, numbered in first-seen order
+with the members, with its `unknown_dropped` verdict; it has no score, never counts toward *S*, is
+never chosen and is not in `unknown[]`, and it counts toward the 64 candidates. Nobody left to rank,
+`exactly_one` is `insufficient` (`selection_not_selected`), and `none_allowed` with `on_empty` is
+`empty`. A candidate not of the class is gated out. A pinned fact unavailable stays an unknown
+instance, with rules 2 and 3 of the scan. `task.selection_evaluated` gains no member.
+
 ### Execution
 
 One attempt of a single-frame select runs, before any input:

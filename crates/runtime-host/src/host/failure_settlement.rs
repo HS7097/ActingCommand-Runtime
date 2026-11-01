@@ -150,7 +150,7 @@ impl HostShared {
         self.pack_admission
             .learn_prepared(task_request.package_path(), prepared.package_label())?;
         // A broken game root refuses the run as before, after its main package is recorded.
-        let standard_pack = self.prepare_run_interrupts(&prepared);
+        let standard_pack = self.prepare_run_standard_pack(&prepared);
         let navigated = standard_pack.as_ref().is_ok_and(|standard_pack| {
             super::navigation::navigation_applies(standard_pack.interrupts.as_deref())
         });
@@ -180,8 +180,13 @@ impl HostShared {
         .entry(decision_id.to_owned())
         .or_default()
         .main = Some(main);
-        let standard_pack = standard_pack?;
-        Ok((prepared, chain?, package_load, standard_pack))
+        let mut standard_pack = standard_pack?;
+        let chain = chain?;
+        // Workflow #357 DB-2: the prerequisite layers' tables, as a direct run binds them.
+        for layer in &chain {
+            self.bind_run_tables(layer, &mut standard_pack.tables)?;
+        }
+        Ok((prepared, chain, package_load, standard_pack))
     }
 
     /// Workflow #386 SR-3 (§2.4 item 2): suspends the task package a scheduled run's preparation

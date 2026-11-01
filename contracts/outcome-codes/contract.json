@@ -17468,12 +17468,17 @@
         "path": "required",
         "standard_pack_problem": "required",
         "json_pointer": "required",
-        "operation": "optional"
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional",
+        "step": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "A table file of a standard-pack game root's tables directory (actingcommand.table.v1) breaks its shape or a limit, or is the root's 65th table or later by file name (Workflow #357 DB-1, M-357a v1.1). The Runtime records it at startup, check-config and actingctl packs list it with the table, and actinglab resource validate shares the same check. A refused table never breaks its game root or stops the Runtime.",
+      "description": "A table file of a standard-pack game root's tables directory (actingcommand.table.v1) breaks its shape or a limit, or is the root's 65th table or later by file name (Workflow #357 DB-1, M-357a v1.1). The Runtime records it at startup, check-config and actingctl packs list it with the table, and actinglab resource validate shares the same check. A refused table never breaks its game root or stops the Runtime. Workflow #357 DB-2 (since 0.12.37): a run that reads the table is refused in its preparation, before any lease and any task record, and a layer package's table ends the run that admits it; nothing else is affected.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -17486,12 +17491,17 @@
       "values": {
         "path": "required",
         "game": "optional",
-        "operation": "optional"
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional",
+        "step": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "A table file of a standard-pack game root's tables directory, or that directory itself, could not be read; the OS error is the cause (Workflow #357 DB-1, M-357a v1.1). The Runtime records it at startup, check-config and actingctl packs report it. Shared because actingctl packs reports it beside the Runtime.",
+      "description": "A table file of a standard-pack game root's tables directory, or that directory itself, could not be read; the OS error is the cause (Workflow #357 DB-1, M-357a v1.1). The Runtime records it at startup, check-config and actingctl packs report it. Shared because actingctl packs reports it beside the Runtime. Workflow #357 DB-2 (since 0.12.37): a run that reads the table is refused in its preparation, before any lease and any task record.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

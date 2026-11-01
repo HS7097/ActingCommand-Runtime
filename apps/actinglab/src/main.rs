@@ -186,6 +186,7 @@ mod lab2_cli;
 mod lab_draw;
 mod lab_package_control;
 mod lab_run;
+mod lab_tables;
 mod maa_task_graph;
 mod monitor_stream;
 mod offline_ocr;

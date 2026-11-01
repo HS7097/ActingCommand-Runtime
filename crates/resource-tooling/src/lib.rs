@@ -10,6 +10,8 @@
 mod api;
 mod authoring;
 mod business_catalog;
+mod table_bindings;
+pub use table_bindings::{TableCoverageGap, check_policy_tables, declared_policy_tables};
 mod codes;
 mod declaration_exclusions;
 // Workflow #336 PKG-S5 (exec key 66): package bundle writes bundle v4 by `package_id`.

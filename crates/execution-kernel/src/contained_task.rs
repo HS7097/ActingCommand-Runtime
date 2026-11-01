@@ -94,6 +94,7 @@ mod still_wait;
 // STORE-FG-1: the admission cross-checks of a control declaration's `store_update`.
 mod store_steps;
 // Workflow #308 SEL-L3: the scan session engine.
+mod run_tables;
 mod scan;
 mod selection;
 // Workflow #396 REC-1.
@@ -263,6 +264,8 @@ mod display_gate;
 // test): the gate at the six capture entries.
 #[cfg(test)]
 mod gate_392_da2a;
+pub use actingcommand_selection_policy::LoadedTable;
+use actingcommand_selection_policy::SelectionPolicy;
 pub use capture_cadence::CaptureCadence;
 pub use declared_operation::{DeclaredOperation, DeclaredOperationOutcome};
 pub use linear::linear_main_interface;
@@ -274,9 +277,10 @@ pub use remedies::{
     GivenParameterProblem, GivenParameterRefusal, RUN_PARAMETERS_KEY_PREFIX, RemedyDeclarations,
     RunParameters,
 };
+pub use run_tables::{RunTableFailure, RunTables};
 pub use scan::{
     ScanDeclaration, ScanDryRun, ScanDryRunMember, ScanDryRunUnknown, ScanDryRunViewport,
-    dry_run_scan, replay_scan,
+    dry_run_scan, dry_run_scan_with_tables, replay_scan, replay_scan_with_tables,
 };
 pub use selection::{SelectionDryRun, SelectionState, SelectionStateRequest, dry_run_select};
 pub use timing::{
@@ -2686,6 +2690,14 @@ pub trait ContainedTaskRuntime {
     ) -> Result<SharedInterruptVerdict, ContainedTaskRunError<Self::Error>> {
         Ok(SharedInterruptVerdict::NotHandled)
     }
+
+    /// Workflow #357 DB-2 (M-357a v1.1 §2.4; register §1.65 TB7): the shared table at `path`
+    /// (`tables/<table_id>.json`) as the run's preparation bound it. A runtime reads no file here
+    /// and answers the same table for the whole run. A runtime without tables answers `None`,
+    /// and a select step whose document declares that table fails `selection_evaluation_failed`.
+    fn standard_pack_table(&mut self, _path: &str) -> Option<Arc<LoadedTable>> {
+        None
+    }
 }
 
 /// Test plan E-3 (EXEC-I3): the time since `started` on the runtime's clock
@@ -3295,6 +3307,21 @@ impl PreparedContainedTask {
             .operations
             .iter()
             .any(|operation| operation.select.is_some())
+    }
+
+    /// Workflow #357 DB-2: the sealed documents of the package's select steps.
+    pub fn selection_policies(&self) -> impl Iterator<Item = &SelectionPolicy> {
+        self.program
+            .operations
+            .iter()
+            .filter_map(|operation| operation.prepared_select.as_deref())
+            .map(selection::PreparedSelect::policy)
+    }
+
+    /// Workflow #357 DB-2: whether a select step's document declares a shared table, so a run of
+    /// the package binds tables in its preparation.
+    pub fn declares_tables(&self) -> bool {
+        self.selection_policies().any(SelectionPolicy::uses_tables)
     }
 
     /// Workflow #308 SEL-L6a (FCM T-03): the pages operation `operation_label` declares it

@@ -131,6 +131,11 @@ pub use actingcommand_execution_kernel::{
     DriveDraw, OfflineDraw, TouchSampling, offline_action_seed, path_drag_bounds_hold,
     replay_contained_task_drawn, sampling_algorithm_name, simulate_contained_task_drawn,
 };
+// Workflow #357 DB-2: the dry runs' shared tables, bound from the root they are given.
+pub use actingcommand_execution_kernel::{
+    RunTableFailure, RunTables, replay_contained_task_with_tables, replay_scan_with_tables,
+    simulate_contained_task_with_tables,
+};
 
 pub struct Lab<P: LabPorts> {
     ports: P,

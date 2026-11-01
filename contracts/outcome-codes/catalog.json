@@ -2183,6 +2183,14 @@
       "type": "token",
       "description": "The name of a column of a standard-pack table (Workflow #357 DB-1, M-357a v1.1 section 6.1)."
     },
+    "table_id": {
+      "type": "token",
+      "description": "The id of a standard-pack table, its file name without .json (Workflow #357 DB-2, M-357a v1.1 section 6.1)."
+    },
+    "table_mismatch": {
+      "type": "vocab:table_mismatch",
+      "description": "How a standard-pack table differs from the selection document's declaration of it (Workflow #357 DB-2, M-357a v1.1 section 6.1)."
+    },
     "install_operation_id": {
       "type": "id",
       "description": "An installer operation's id, op-<unix_ms> (contracts/install-cli.md)."
@@ -5939,6 +5947,23 @@
         },
         "shutdown": {
           "description": "Status 6: the device shuts down at once."
+        }
+      }
+    },
+    "table_mismatch": {
+      "description": "How a standard-pack table differs from the selection document's declaration of it (Workflow #357 DB-2, K2).",
+      "tokens": {
+        "row_key": {
+          "description": "The file's row_key differs from the declared one."
+        },
+        "column_absent": {
+          "description": "A declared column is not in the file."
+        },
+        "column_type": {
+          "description": "A declared column has another type in the file."
+        },
+        "allowed_not_subset": {
+          "description": "A value the document declares for an enum_string column is not allowed by the file."
         }
       }
     },

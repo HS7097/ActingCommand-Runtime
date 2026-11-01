@@ -31,7 +31,8 @@ use actingcommand_contract::{
 };
 use actingcommand_recognition_pack::{CandidateFeatureValue, CandidateLayout};
 use actingcommand_selection_policy::{
-    Candidate, FieldDomain, SelectionDecision, SelectionOutcome, SelectionPolicy, upper_bound,
+    Candidate, FieldDomain, SelectionDecision, SelectionOutcome, SelectionPolicy,
+    upper_bound_with_tables,
 };
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -465,7 +466,10 @@ impl ScanSession<'_> {
 
     /// The members' positions in first-seen order (S0 §2.6): by the viewport that fixed them,
     /// then by axis start, then by cross-axis start. More than 64 fail
-    /// `candidate_projection_budget_exceeded` (item `scan_candidates`).
+    /// `candidate_projection_budget_exceeded` (item `scan_candidates`). Workflow #357 DB-2 (S0
+    /// v2.2 §2.6): a static table drop is numbered among them and counts toward the 64; the
+    /// evaluator gives it its `unknown_dropped` verdict again, so it has no score and is never
+    /// chosen.
     fn numbered_members(&self) -> Result<Vec<usize>, ContainedTaskError> {
         let mut members = self
             .positions
@@ -474,7 +478,7 @@ impl ScanSession<'_> {
             .filter_map(|(index, position)| match &position.state {
                 PositionState::Fixed {
                     viewport,
-                    verdict: Some(Verdict::Member { .. }),
+                    verdict: Some(Verdict::Member { .. } | Verdict::StaticTableDrop),
                     ..
                 } => Some((*viewport, position.rect.axis, position.rect.cross, index)),
                 _ => None,
@@ -504,9 +508,10 @@ impl ScanSession<'_> {
             .filter(|(_, position)| match &position.state {
                 PositionState::Unread => false,
                 PositionState::Incomplete | PositionState::Contradicted => true,
-                PositionState::Fixed { verdict, .. } => {
-                    !matches!(verdict, Some(Verdict::Member { .. } | Verdict::GatedOut))
-                }
+                PositionState::Fixed { verdict, .. } => !matches!(
+                    verdict,
+                    Some(Verdict::Member { .. } | Verdict::GatedOut | Verdict::StaticTableDrop)
+                ),
             })
             .map(|(index, _)| index)
             .collect()
@@ -533,8 +538,9 @@ impl ScanSession<'_> {
                 .identity
                 .as_ref()
                 .map_or_else(|| domain.clone(), |identity| vec![identity.clone()]);
-            let bound = upper_bound(
+            let bound = upper_bound_with_tables(
                 self.policy,
+                self.tables,
                 self.facts,
                 self.now_unix_ms,
                 &identities,

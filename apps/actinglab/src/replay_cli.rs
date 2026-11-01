@@ -32,8 +32,8 @@ use actingcommand_contract::outcome::Detail;
 use actingcommand_contract::{ContainedTaskRequest, InstanceFactSnapshot, ScanCoverageState};
 use actingcommand_lab::{
     ExternallyVerifiedBundle, GivenParameterProblem, OfflineReplayEnd, OfflineReplayError,
-    OfflineReplayFacts, PreparedContainedTask, ScanDeclaration, replay_contained_task_drawn,
-    replay_scan,
+    OfflineReplayFacts, PreparedContainedTask, ScanDeclaration, replay_contained_task_with_tables,
+    replay_scan_with_tables,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -68,6 +68,7 @@ pub(super) fn run_replay(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome
             &paths,
             (&facts, facts_used),
             &args.parameters,
+            args.standard_pack_root.as_deref(),
         );
     }
     let task = admit(&args.package)?;
@@ -78,15 +79,22 @@ pub(super) fn run_replay(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome
     let frames = paths
         .iter()
         .map(|path| crate::package_cli::offline::read_fixture_frame(path.as_path()));
+    let tables = crate::lab_tables::run_tables(
+        args.standard_pack_root.as_deref(),
+        &task,
+        replay_instant(&facts),
+    )?;
     let result =
-        replay_contained_task_drawn(&task, frames, facts, draw).map_err(|error| match error {
-            OfflineReplayError::Frames(error) => error,
-            OfflineReplayError::Invariant(error) => CliError::new(
-                ErrorKind::UsageValidation,
-                error.code().as_str(),
-                error.to_string(),
-                &[],
-            ),
+        replay_contained_task_with_tables(&task, frames, facts, draw, tables).map_err(|error| {
+            match error {
+                OfflineReplayError::Frames(error) => error,
+                OfflineReplayError::Invariant(error) => CliError::new(
+                    ErrorKind::UsageValidation,
+                    error.code().as_str(),
+                    error.to_string(),
+                    &[],
+                ),
+            }
         })?;
     let mut payload = serde_json::to_value(&result)
         .map_err(|error| CliError::device(format!("failed to encode the replay: {error}")))?;
@@ -122,6 +130,8 @@ struct ReplayArgs {
     /// Workflow #406 T4: the whole replay's seed (`--seed`), 0 without it; read only without
     /// `select`.
     seed: Option<u64>,
+    /// Workflow #357 DB-2: the standard-pack root a select step's shared tables are read from.
+    standard_pack_root: Option<PathBuf>,
 }
 
 /// `--select <operation> --scan <file>`.
@@ -176,6 +186,7 @@ impl ReplayArgs {
                     | "--scan"
                     | "--parameter"
                     | "--seed"
+                    | crate::lab_tables::STANDARD_PACK_ROOT_FLAG
             )
         }) {
             return Err(CliError::usage(format!("replay does not accept {name}")));
@@ -211,6 +222,7 @@ impl ReplayArgs {
             ));
         }
         Ok(Self {
+            standard_pack_root: single_path(flags, crate::lab_tables::STANDARD_PACK_ROOT_FLAG)?,
             package: single_path(flags, "--package")?
                 .ok_or_else(|| CliError::usage("replay requires --package <path>"))?,
             frames: single_path(flags, "--frames")?
@@ -300,9 +312,11 @@ fn run_scan_replay(
     paths: &[PathBuf],
     (facts, facts_used): (&OfflineReplayFacts, Value),
     parameters: &[(String, String)],
+    standard_pack_root: Option<&Path>,
 ) -> CliOutcome<Value> {
     let declaration = read_scan(&select.declaration)?;
     let task = admit(package)?;
+    let tables = crate::lab_tables::run_tables(standard_pack_root, &task, replay_instant(facts))?;
     let run_parameters = task.given_run_parameters(parameters).map_err(|refusal| {
         let name = &refusal.name;
         match refusal.problem {
@@ -323,13 +337,14 @@ fn run_scan_replay(
         .iter()
         .map(|path| crate::package_cli::offline::read_fixture_frame(path.as_path()))
         .collect::<CliOutcome<Vec<_>>>()?;
-    let result = replay_scan(
+    let result = replay_scan_with_tables(
         &task,
         &select.operation,
         &declaration,
         frames,
         facts,
         &run_parameters,
+        tables,
     );
     let mut payload = json!({
         "mode": "offline_scan_replay",
@@ -477,6 +492,16 @@ fn frame_paths(directory: &Path) -> CliOutcome<Vec<PathBuf>> {
 
 /// The package at `package`, read by its path (Workflow #336 option 丙: no reference is given
 /// or compared) with the Runtime's OCR provider when actinglab has one.
+/// The instant a replay fixes a table's expired columns at: the one its select steps evaluate at.
+fn replay_instant(facts: &OfflineReplayFacts) -> u64 {
+    match facts {
+        OfflineReplayFacts::Empty { now_unix_ms } => *now_unix_ms,
+        OfflineReplayFacts::Snapshot {
+            read_at_unix_ms, ..
+        } => *read_at_unix_ms,
+    }
+}
+
 fn admit(package: &Path) -> CliOutcome<PreparedContainedTask> {
     let package = if package.is_absolute() {
         package.to_path_buf()

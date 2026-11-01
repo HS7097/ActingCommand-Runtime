@@ -81,6 +81,9 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   Workflow #411 B15 R1 (register §1.111) raises `max` to 4 in v0.12.3: a pack's `remedy` and
 ///   `provides`; a revision-3 pack is still read. Workflow #406 T3 (register §1.137) raises it to
 ///   5: the click `single_touch_path_drag_v1`; a revision-3 or revision-4 pack is still read.
+///   Workflow #357 DB-2 (0.12.37, register §1.244) raises it to 6: a selection document's `tables`
+///   and the value source `table`; a document without them keeps its bytes, so earlier packs are
+///   still read.
 /// - `runtime-client` [2, 2]: request v4, receipt v2; requests v1 to v3 are refused. Workflow
 ///   #429 R-0 (0.12.30, register §1.213) raises `max` to 3: the workbench's request kinds and
 ///   members; every revision-2 request is still answered as before, so [2, 3]. Workflow #429
@@ -95,7 +98,7 @@ const V0120: &[(&str, [u64; 2])] = &[
     ("install-control", [0, 1]),
     ("install-selection", [1, 1]),
     ("ledger", [3, 5]),
-    ("package", [3, 5]),
+    ("package", [3, 6]),
     ("runtime-client", [3, 4]),
     ("runtime-outcomes", [1, 1]),
 ];

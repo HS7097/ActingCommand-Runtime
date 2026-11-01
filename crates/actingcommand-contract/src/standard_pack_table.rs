@@ -50,6 +50,21 @@ pub const MAX_STANDARD_PACK_TABLE_ENUM_VALUE_BYTES: usize = 128;
 /// `table_too_large` (§2.2).
 pub const MAX_STANDARD_PACK_TABLES: usize = 64;
 
+crate::outcome_vocabulary! {
+    /// How a table differs from a selection document's declaration of it (vocabulary
+    /// `table_mismatch`, Workflow #357 DB-2, M-357a v1.1 §3.5 K2).
+    pub enum TableMismatch: "table_mismatch" {
+        /// The file's `row_key` differs from the declared one.
+        RowKey => "row_key",
+        /// A declared column is not in the file.
+        ColumnAbsent => "column_absent",
+        /// A declared column has another type in the file.
+        ColumnType => "column_type",
+        /// A value the document declares for an `enum_string` column is not allowed by the file.
+        AllowedNotSubset => "allowed_not_subset",
+    }
+}
+
 /// The one table file version this build reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StandardPackTableVersion {
@@ -558,6 +573,74 @@ pub fn read_standard_pack_tables(
             }
         })
         .collect())
+}
+
+/// Why [`read_standard_pack_table`] gave no table: a refused file, or one that cannot be read.
+#[derive(Debug)]
+pub enum StandardPackTableReadFailure {
+    /// `standard_pack_table_invalid`.
+    Invalid {
+        path: PathBuf,
+        issue: StandardPackTableIssue,
+    },
+    /// `standard_pack_table_unreadable`, with the OS error as its cause.
+    Unreadable {
+        path: PathBuf,
+        error: io::Error,
+        op: IoOp,
+    },
+}
+
+/// Workflow #357 DB-2 (M-357a v1.1 §2.4, K1): the one table `table_id` of the game root
+/// `game_root`, as a run's preparation reads it: read once and parsed with
+/// [`parse_standard_pack_table`], its place among the directory's files judged as
+/// [`read_standard_pack_tables`] judges it (by file name, the 65th or later is `table_too_large`).
+/// `None` when the directory or the file is not there.
+pub fn read_standard_pack_table(
+    game_root: &Path,
+    game: &str,
+    table_id: &str,
+) -> Result<Option<StandardPackTable>, StandardPackTableReadFailure> {
+    let directory = game_root.join(STANDARD_PACK_TABLES_DIRECTORY);
+    let name = format!("{table_id}{STANDARD_PACK_TABLE_SUFFIX}");
+    let path = directory.join(&name);
+    let unreadable =
+        |path: &Path, error: io::Error, op: IoOp| StandardPackTableReadFailure::Unreadable {
+            path: path.to_owned(),
+            error,
+            op,
+        };
+    let entries = match fs::read_dir(&directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(unreadable(&directory, error, IoOp::ReadDir)),
+    };
+    let mut names = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| unreadable(&directory, error, IoOp::ReadDir))?;
+        names.push(entry.file_name());
+    }
+    names.sort();
+    let Some(rank) = names
+        .iter()
+        .position(|entry| entry.to_str() == Some(name.as_str()))
+    else {
+        return Ok(None);
+    };
+    if rank >= MAX_STANDARD_PACK_TABLES {
+        return Err(StandardPackTableReadFailure::Invalid {
+            path,
+            issue: StandardPackTableIssue::new(StandardPackProblem::TableTooLarge, ""),
+        });
+    }
+    let bytes = match read_table_file(&path) {
+        Ok(bytes) => bytes,
+        Err((error, op)) => return Err(unreadable(&path, error, op)),
+    };
+    match parse_standard_pack_table(&bytes, Some(game), &name) {
+        Ok(table) => Ok(Some(table)),
+        Err(issue) => Err(StandardPackTableReadFailure::Invalid { path, issue }),
+    }
 }
 
 /// A table file's bytes, at most one byte past the size limit (the parser refuses a larger

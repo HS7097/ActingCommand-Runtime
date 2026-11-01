@@ -22,9 +22,9 @@ use actingcommand_contract::{
     TaskSelectionUnknownCheck, TaskSelectionUpperBound,
 };
 
-const ALIAS: &str = "neutral.instance";
-const WIDTH: u32 = 64;
-const HEIGHT: u32 = 96;
+pub(super) const ALIAS: &str = "neutral.instance";
+pub(super) const WIDTH: u32 = 64;
+pub(super) const HEIGHT: u32 = 96;
 // The anchor template's size.
 const MARKER: (u32, u32) = (8, 6);
 // The cards on the screen, and the one more identity the layout knows.
@@ -56,7 +56,7 @@ fn level(card: u32) -> u8 {
 }
 
 // The business ID every identity of the layout reads as, card k's `member-0k`.
-fn member(card: u32) -> String {
+pub(super) fn member(card: u32) -> String {
     format!("member-{card:02}")
 }
 
@@ -83,7 +83,7 @@ fn list_pixel(x: u32, y: u32) -> [u8; 3] {
 }
 
 // Every pixel of the list screen, by its row-major index, as the fake device paints it.
-fn list_screen() -> Vec<(usize, [u8; 3])> {
+pub(super) fn list_screen() -> Vec<(usize, [u8; 3])> {
     (0..HEIGHT)
         .flat_map(|y| (0..WIDTH).map(move |x| list_pixel(x, y)))
         .enumerate()
@@ -93,7 +93,7 @@ fn list_screen() -> Vec<(usize, [u8; 3])> {
 // Reads a card's name from the colour of its patch: the name region starts at the card's
 // anchor, and the patch lies 8 px to its right.
 #[derive(Debug)]
-struct CardNames;
+pub(super) struct CardNames;
 
 impl VisionProvider for CardNames {
     fn require_ocr_model(
@@ -220,8 +220,18 @@ fn policy(identities: &[String]) -> serde_json::Value {
 // designated effect to the `on_empty` key, and the target page to another key. The task
 // declares the card layout, against which admission checks the step's policy, and the
 // recognition pack holds it for the run.
-fn scan_select_package() -> Vec<u8> {
-    let identities = (0..=CARDS).map(member).collect::<Vec<_>>();
+pub(super) fn scan_select_package() -> Vec<u8> {
+    scan_select_package_with(policy(&table_read_identities()), true)
+}
+
+/// Workflow #357 DB-2: the identity domain of the card layout, which a document's field declares.
+pub(super) fn table_read_identities() -> Vec<String> {
+    (0..=CARDS).map(member).collect()
+}
+
+/// The package with the document `policy`, its select step declaring `on_empty` or not.
+pub(super) fn scan_select_package_with(policy: serde_json::Value, on_empty: bool) -> Vec<u8> {
+    let identities = table_read_identities();
     let space = serde_json::json!({"width": WIDTH, "height": HEIGHT});
     let layout = serde_json::json!({
         "id": "layout/cards", "page_id": "neutral/list", "kind": "repeated_anchor",
@@ -253,6 +263,12 @@ fn scan_select_package() -> Vec<u8> {
         "timeout_ms": 40_000,
         "max_steps": 2
     });
+    let mut select = serde_json::json!({"layout_id": "layout/cards",
+                                        "policy": {"path": "policies/listed.json"},
+                                        "scan": scan()});
+    if on_empty {
+        select["on_empty"] = serde_json::json!({"outcome_key": ON_EMPTY_KEY});
+    }
     let task = serde_json::json!({
         "schema_version": "0.9",
         "task_id": "task",
@@ -278,10 +294,7 @@ fn scan_select_package() -> Vec<u8> {
                 "expected_rect": {"x": 3, "y": 0, "width": 1, "height": 1},
                 "color_probe": "guard/list"
             },
-            "select": {"layout_id": "layout/cards",
-                       "policy": {"path": "policies/listed.json"},
-                       "scan": scan(),
-                       "on_empty": {"outcome_key": ON_EMPTY_KEY}},
+            "select": select,
             "retryable": false
         }]
     });
@@ -342,7 +355,7 @@ fn scan_select_package() -> Vec<u8> {
         ("resources/operations/task/task.json", json(task)),
         (
             "resources/operations/task/policies/listed.json",
-            json(policy(&identities)),
+            json(policy),
         ),
         ("resources/recognition/neutral.test.pack.json", json(pack)),
         ("resources/recognition/assets/card.png", marker),

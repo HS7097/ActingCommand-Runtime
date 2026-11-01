@@ -196,6 +196,9 @@ mod gate_373_nav6;
 // Workflow #357 DB-1: the shared tables of a standard-pack game root at startup and in
 // check-config's report.
 mod gate_357_db1;
+// Workflow #357 DB-2 (#430 S4a-1): a selection document that reads a shared table, through the
+// host's run preparation.
+mod gate_357_db2;
 mod gate_375_r3;
 mod gate_381a;
 mod gate_381b;

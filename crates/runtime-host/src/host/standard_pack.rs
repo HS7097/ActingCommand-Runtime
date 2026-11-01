@@ -60,11 +60,12 @@ use actingcommand_contract::{
     STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE,
     STANDARD_PACK_TABLES_DIRECTORY, StandardPackDisplayLayout, StandardPackInterrupts,
     StandardPackNavigation, StandardPackPages, StandardPackRegistry, StandardPackRootBytes,
-    StandardPackRootIssue, StandardPackTableReport, TaskEntryRecoveryRole, TaskInterruptThen,
-    read_standard_pack_root, read_standard_pack_tables,
+    StandardPackRootIssue, StandardPackTableReadFailure, StandardPackTableReport,
+    TaskEntryRecoveryRole, TaskInterruptThen, read_standard_pack_root, read_standard_pack_tables,
 };
 use actingcommand_execution_kernel::{
-    MAX_GATED_STEPS, SharedInterruptFrame, SharedInterruptVerdict, canonical_page_anchor,
+    MAX_GATED_STEPS, RunTableFailure, RunTables, SharedInterruptFrame, SharedInterruptVerdict,
+    canonical_page_anchor,
 };
 use serde::Serialize;
 use std::io;
@@ -561,6 +562,9 @@ struct RunInterrupt {
 pub(super) struct RunStandardPack {
     pub(super) interrupts: Option<Box<RunInterrupts>>,
     pub(super) display_layout: Option<StandardPackDisplayLayout>,
+    /// Workflow #357 DB-2 (M-357a v1.1 §2.4, K4): the shared tables of the run's packages, read
+    /// once in its preparation and kept to its end.
+    pub(super) tables: RunTables,
 }
 
 /// Workflow #373 NAV-6: a run's shared interrupt pages, fixed at its preparation (§7), and what
@@ -780,6 +784,7 @@ impl HostShared {
         let declared = |interrupts: Option<Box<RunInterrupts>>| RunStandardPack {
             interrupts,
             display_layout: read.display_layout.clone(),
+            tables: RunTables::default(),
         };
         let Some(pages) = &read.pages else {
             return Ok(declared(None));
@@ -850,6 +855,110 @@ impl HostShared {
             navigation,
         }))))
     }
+
+    /// [`Self::prepare_run_interrupts`] with the tables of the run's own package (Workflow #357
+    /// DB-2): what a run's preparation reads of its standard-pack root, its tables included.
+    pub(super) fn prepare_run_standard_pack(
+        &self,
+        prepared: &PreparedContainedTask,
+    ) -> Result<RunStandardPack, RequestFailure> {
+        let mut standard_pack = self.prepare_run_interrupts(prepared)?;
+        self.bind_run_tables(prepared, &mut standard_pack.tables)?;
+        Ok(standard_pack)
+    }
+
+    /// Workflow #357 DB-2 (M-357a v1.1 §2.4, §3.5 K1, K2; #419): the tables `package` declares,
+    /// read once for the run and checked against its documents. Any failure refuses this one run,
+    /// before any lease and any task record: the receipt is `denied` with `package_invalid` and
+    /// the failure's own code, and nothing else stops: not the root, not the Runtime, not another
+    /// instance. A package that declares no table reads nothing here.
+    pub(super) fn bind_run_tables(
+        &self,
+        package: &PreparedContainedTask,
+        tables: &mut RunTables,
+    ) -> Result<(), RequestFailure> {
+        if !package.declares_tables() {
+            return Ok(());
+        }
+        let game = package.game();
+        let missing = |path: &str| {
+            table_refusal(HostCode::StandardPackTableMissing.code(), |outcome| {
+                outcome.game(game).path(Path::new(path))
+            })
+        };
+        let first_path = package
+            .selection_policies()
+            .flat_map(|policy| policy.tables.first())
+            .map(|declaration| declaration.path.clone())
+            .next()
+            .unwrap_or_default();
+        let Some(root) = &self.standard_packs.root else {
+            return Err(missing(&first_path));
+        };
+        let directory = root.join(game);
+        match read_game_root(&directory, game) {
+            Ok(Some(_)) => {}
+            Ok(None) => return Err(missing(&first_path)),
+            Err(failure) => return Err(failure.refusal(game)),
+        }
+        let now_unix_ms = self
+            .clock
+            .sample()
+            .map_err(RequestFailure::poison_without_terminal)?
+            .unix_ms;
+        tables
+            .bind_package(&directory, package, now_unix_ms)
+            .map_err(|failure| match failure {
+                RunTableFailure::Missing { path } => {
+                    missing(&directory.join(&path).display().to_string())
+                }
+                RunTableFailure::Read(StandardPackTableReadFailure::Invalid { path, issue }) => {
+                    table_refusal(SharedCode::StandardPackTableInvalid.code(), |outcome| {
+                        outcome
+                            .game(game)
+                            .path(&path)
+                            .standard_pack_problem(issue.problem)
+                            .json_pointer(issue.pointer.clone())
+                    })
+                }
+                RunTableFailure::Read(StandardPackTableReadFailure::Unreadable {
+                    path,
+                    error,
+                    op,
+                }) => table_refusal(SharedCode::StandardPackTableUnreadable.code(), |outcome| {
+                    outcome
+                        .game(game)
+                        .path(&path)
+                        .caused_by(Outcome::from_io_error(&error, op))
+                }),
+                RunTableFailure::Mismatch(refusal) => {
+                    let path = directory.join(&refusal.path);
+                    table_refusal(HostCode::StandardPackTableMismatch.code(), |outcome| {
+                        let outcome = outcome
+                            .game(game)
+                            .path(&path)
+                            .table_id(refusal.table_id.as_str())
+                            .table_mismatch(refusal.mismatch);
+                        match &refusal.column {
+                            Some(column) => outcome.table_column(column.as_str()),
+                            None => outcome,
+                        }
+                    })
+                }
+            })
+    }
+}
+
+/// A run refused in its preparation for a shared table of its package (§2.4): `denied`,
+/// `package_invalid`, with `code` and its values.
+fn table_refusal(code: Code, values: impl FnOnce(Outcome) -> Outcome) -> RequestFailure {
+    let error = RuntimeHostError::request(
+        code,
+        HostLocation::StandardPackRead,
+        RuntimeErrorCode::PackageInvalid,
+    )
+    .with_outcome_values(values);
+    RequestFailure::request(error, RuntimeReceiptState::Denied, None)
 }
 
 /// A run-ending failure the interrupt handling (Workflow #373 NAV-5: or the navigation) decides
@@ -1144,7 +1253,7 @@ impl RuntimeContainedTask<'_> {
     /// Admits a registry package by its path (Workflow #336 PKG-S1: structurally); a refusal is
     /// `contained_task_navigation_package_invalid` with the loader's code as its cause.
     pub(super) fn admit_layer_package(
-        &self,
+        &mut self,
         pack: &RegisteredPack,
         role: NavigationRole,
     ) -> Result<PreparedContainedTask, ContainedTaskRunError<RequestFailure>> {
@@ -1157,15 +1266,33 @@ impl RuntimeContainedTask<'_> {
             .host
             .package_material_deadline(self.control.deadline())
             .map_err(ContainedTaskRunError::Boundary)?;
-        PreparedContainedTask::load_path(self.instance_alias, &pack.path, vision_provider, deadline)
-            .map_err(|error| {
-                package_invalid(
-                    &pack.package_id,
-                    role,
-                    NavigationProblem::AdmissionFailed,
-                    Some(error.outcome()),
-                )
-            })
+        let admitted = PreparedContainedTask::load_path(
+            self.instance_alias,
+            &pack.path,
+            vision_provider,
+            deadline,
+        )
+        .map_err(|error| {
+            package_invalid(
+                &pack.package_id,
+                role,
+                NavigationProblem::AdmissionFailed,
+                Some(error.outcome()),
+            )
+        })?;
+        self.bind_layer_tables(&admitted)?;
+        Ok(admitted)
+    }
+
+    /// Workflow #357 DB-2 (M-357a v1.1 §2.4): a layer admitted during the run binds its tables at
+    /// its admission, and a table failure ends this run with the table's own code.
+    pub(super) fn bind_layer_tables(
+        &mut self,
+        admitted: &PreparedContainedTask,
+    ) -> Result<(), ContainedTaskRunError<RequestFailure>> {
+        self.host
+            .bind_run_tables(admitted, &mut self.tables)
+            .map_err(|failure| interrupt_failure(failure.error))
     }
 
     /// A handler or `then.run` package of the run, admitted once (§7) and checked for its part
