@@ -138,7 +138,7 @@ fn ln_verify_t6_the_tail_is_the_files_and_a_value_out_of_range_refuses() {
         &state_root,
         json!({"ledger_observer": {"open_verify_tail_records": 0}}),
     );
-    let refused = verify(&path, &[]).err().expect("the value is refused");
+    let refused = verify(&path, &[]).expect_err("the value is refused");
     assert_eq!(refused.to_string(), "maintenance_config_invalid");
     assert!(
         !state_root.join("owner.lock").exists(),
