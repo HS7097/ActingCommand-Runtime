@@ -596,6 +596,8 @@ impl ApkConnector for AdbApkConnector {
 /// with an offset (`device_ns = host_us × 1000 + offset_ns`).
 struct FakeApkState {
     instance: String,
+    /// #402 C2f: which fake APK this is; two APKs never report the same HELLO `instance`.
+    unit: u8,
     restarts: u64,
     offset_ns: i64,
     mode: String,
@@ -630,10 +632,17 @@ pub struct FakeApk {
 
 impl FakeApk {
     pub fn new(clock: Arc<dyn Clock>, offset_ns: i64) -> Arc<Self> {
+        Self::numbered(clock, offset_ns, 0)
+    }
+
+    /// #402 C2f: a fake APK of its own number: its HELLO `instance` differs from every other
+    /// number's, as two real APKs' do (D2b: E1's and E2's calib records had the same one).
+    pub fn numbered(clock: Arc<dyn Clock>, offset_ns: i64, unit: u8) -> Arc<Self> {
         Arc::new(Self {
             clock,
             state: Mutex::new(FakeApkState {
-                instance: "fa00000000000001".to_owned(),
+                instance: Self::process_name(unit, 0),
+                unit,
                 restarts: 0,
                 offset_ns,
                 mode: "pattern".to_owned(),
@@ -656,6 +665,12 @@ impl FakeApk {
         })
     }
 
+    /// The HELLO `instance` of an APK process: 16 hex digits (PROTOCOL §5.2), from the APK's
+    /// number and how many times it restarted.
+    fn process_name(unit: u8, restarts: u64) -> String {
+        format!("fa{unit:02x}{:012x}", restarts + 1)
+    }
+
     /// The device time now.
     pub fn device_now_ns(&self) -> i64 {
         let state = lock(&self.state);
@@ -672,7 +687,7 @@ impl FakeApk {
     pub fn restart(&self, reboot: bool) {
         let mut state = lock(&self.state);
         state.restarts += 1;
-        state.instance = format!("fa{:014x}", state.restarts + 1);
+        state.instance = Self::process_name(state.unit, state.restarts);
         if reboot {
             // The device clock starts again: 5 s after the instance's new boot.
             let now_ns = self.clock.now_us() as i64 * 1_000;

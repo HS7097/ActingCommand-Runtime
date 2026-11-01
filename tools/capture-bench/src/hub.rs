@@ -772,6 +772,15 @@ impl Hub {
         run_blocking(self, &mut op)
     }
 
+    /// #402 C2f: whether a stop has begun on `instance`: the whole-run stop or the cell end (a
+    /// global gate), or the instance's stop-class gate. Every close at a segment's, cell's or
+    /// run's end runs under one of these.
+    pub fn stop_in_force(&self, who: &LockOwner, instance: usize) -> bool {
+        self.snapshot(who, |state| {
+            state.active_gates(instance).contains(&GateKind::StopClass)
+        })
+    }
+
     /// Moves the instance's generation (§3.8 代际推进) and returns the new one.
     pub fn bump_generation(&self, who: &LockOwner, instance: usize) -> u64 {
         self.scheduler_lock.acquire(who);

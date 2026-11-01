@@ -104,6 +104,8 @@ pub struct RunShared {
     stdio_unrestored: AtomicBool,
     safety_failed: AtomicBool,
     summary_written: AtomicBool,
+    /// #402 C2f: the supervisor's end has been written into the summary's lists.
+    supervisor_end_noted: AtomicBool,
     /// #402 C2b: one lock owner per thread (concurrent segments).
     owners: Mutex<std::collections::HashMap<std::thread::ThreadId, Arc<LockOwner>>>,
     started_us: Micros,
@@ -274,6 +276,7 @@ pub fn run(plan_text: &str, run_dir: &Path, env: Env) -> RunOutcome {
         stdio_unrestored: AtomicBool::new(false),
         safety_failed: AtomicBool::new(false),
         summary_written: AtomicBool::new(false),
+        supervisor_end_noted: AtomicBool::new(false),
         owners: Mutex::new(std::collections::HashMap::new()),
         started_us: clock.now_us(),
         started_unix_ms: clock.unix_ms(),
@@ -316,7 +319,15 @@ pub fn run(plan_text: &str, run_dir: &Path, env: Env) -> RunOutcome {
             limits.heartbeat_period_us,
             Arc::clone(&stop),
             move || {
-                let dynamic = lock(&heartbeat.status).clone();
+                let mut dynamic = lock(&heartbeat.status).clone();
+                // #402 C2f: the newest sample. `status` is written only when a cell or segment
+                // starts, so a small run's heartbeat kept the 0 of before its first sample.
+                if let Value::Object(map) = &mut dynamic {
+                    map.insert(
+                        "working_set_bytes".to_owned(),
+                        json!(heartbeat.working_set.load(Ordering::Relaxed)),
+                    );
+                }
                 heartbeat_tick(
                     &heartbeat.journal,
                     &heartbeat.closer,
@@ -1555,6 +1566,59 @@ impl RunShared {
             );
         }
         lock(&self.closes).push(record);
+    }
+
+    /// #402 C2f (§3.5.2 item 5.4, §3.11.2 B item 5): what the supervisor knows when it ends the
+    /// run goes into `summary.json`: each close that did not return (in `closes[]` and
+    /// `unconfirmed`), and a result for each cell result still missing: the cell in progress is
+    /// incomplete (or failed, when its backend had a fatal error), the cells after it were not
+    /// started. The cell's `ends` belong to the stuck runner thread and stay unread.
+    ///
+    /// It is safe in that path: it takes only the run's own short-held tables, which no close and
+    /// no rank 1-3 lock holder waits under, and nothing here waits for a close. Once only.
+    fn note_supervisor_end(&self, reason: &str) {
+        if self.supervisor_end_noted.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        for entry in self.closer.declared_unconfirmed() {
+            lock(&self.unconfirmed).push(format!(
+                "{} {} close {}: {reason}; the close thread is still running",
+                entry.instance,
+                entry.backend.as_str(),
+                entry.close_id
+            ));
+            if let Some(instance) = self.plan.instance_index(&entry.instance) {
+                self.record_close(
+                    instance,
+                    entry.backend,
+                    &entry.reason,
+                    &crate::model::CloseOutcome::Unconfirmed(reason.to_owned()),
+                );
+            }
+        }
+        let current = lock(&self.status)
+            .get("cell")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let cell_fatal = lock(&self.cell_fatal).clone();
+        for cell in &self.plan.cells {
+            for (instance, path) in Self::planned_paths(cell, &self.plan) {
+                let listed = lock(&self.cells)
+                    .get(&cell.id)
+                    .is_some_and(|results| results.contains_key(&key(&self.plan, instance, path)));
+                if listed {
+                    continue;
+                }
+                let result = if current.as_deref() != Some(cell.id.as_str()) {
+                    CellResult::Untested(format!("not started: {reason}"))
+                } else if let Some(code) = cell_fatal.get(&(instance, path.backend())) {
+                    CellResult::CellFailed(code.clone())
+                } else {
+                    CellResult::CellIncomplete(reason.to_owned())
+                };
+                self.record_cell(&cell.id, instance, path, result);
+            }
+        }
     }
 
     /// What a backend failure does (§3.11.4): `true` when the activity must stop.
@@ -3571,6 +3635,11 @@ impl Emergency for RunShared {
                     "instance": self.instance_name(instance),
                     "skipped": "admission held by a call in flight",
                 }));
+                // #402 C2f: what it leaves open is unconfirmed, and `summary.json` says so.
+                lock(&self.unconfirmed).push(format!(
+                    "{}: admission held by a call in flight; its backends stay open",
+                    self.instance_name(instance)
+                ));
                 continue;
             }
             let (scrcpy, nemu) = {
@@ -3593,6 +3662,19 @@ impl Emergency for RunShared {
                     },
                 );
                 self.record_close(instance, kind, "emergency", &outcome);
+                // #402 C2f: as closes[] records it: S has had no device-side check.
+                if !outcome.is_confirmed() || kind == BackendKind::Scrcpy {
+                    lock(&self.unconfirmed).push(format!(
+                        "{} {} emergency close: {outcome:?}{}",
+                        self.instance_name(instance),
+                        kind.as_str(),
+                        if kind == BackendKind::Scrcpy {
+                            " (no device-side check)"
+                        } else {
+                            ""
+                        }
+                    ));
+                }
                 closed.push(json!({
                     "instance": self.instance_name(instance),
                     "backend": kind,
@@ -3605,11 +3687,18 @@ impl Emergency for RunShared {
     }
 
     fn write_summary(&self, result: RunResult, reason: &str) {
+        self.note_supervisor_end(reason);
         let mut results = self.results();
         if !results.contains(&result) {
             results.push(result);
         }
-        self.write_summary_inner(result, &results, self.now(), None, Some(reason));
+        // #402 C2f: the whole-run stop gate's time and number, when one was set before this.
+        let run_stop = *lock(&self.run_stop);
+        let (t_stop_new, gate_seq) = match run_stop {
+            Some((at, seq)) => (at, Some(seq)),
+            None => (self.now(), None),
+        };
+        self.write_summary_inner(result, &results, t_stop_new, gate_seq, Some(reason));
     }
 }
 

@@ -596,8 +596,8 @@ fn run_fake_gives_every_apk_instance_its_own_fake_apk_clock_and_display() {
         vec!["E1".to_owned(), "E2".to_owned()]
     );
     let (e1, e2) = (&set.apks["E1"], &set.apks["E2"]);
-    assert_eq!(e1.display(), (640, 360, 0));
-    assert_eq!(e2.display(), (360, 640, 0));
+    assert_eq!(e1.display(), (1280, 720, 0));
+    assert_eq!(e2.display(), (720, 1280, 0));
     assert_ne!(e1.device_now_ns(), e2.device_now_ns(), "two device clocks");
     assert!(Arc::ptr_eq(&set.patterns["E2"].apk, e2));
 }

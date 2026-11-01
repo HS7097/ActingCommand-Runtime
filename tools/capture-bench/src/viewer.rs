@@ -20,7 +20,7 @@ use crate::views::ViewMessage;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -213,6 +213,9 @@ struct ChildViewer {
 /// expected: the stop closes the viewer's mailbox and ends a child that is still reading, and
 /// a slow consumer's pipe is still full of the frame being written then (D2, `multi_slow`'s
 /// end). Any other failure, or one before the stop, is not expected.
+///
+/// #402 C2f: `stopping` is whether the stop has begun for this viewer in any way
+/// ([`feed_viewer`]): its own stop, or a stop gate.
 pub fn viewer_write_failure(subscriber: u64, error: &std::io::Error, stopping: bool) -> Value {
     let closed_pipe = error.kind() == std::io::ErrorKind::BrokenPipe
         || matches!(error.raw_os_error(), Some(109 | 232));
@@ -230,8 +233,8 @@ pub fn viewer_write_failure(subscriber: u64, error: &std::io::Error, stopping: b
     })
 }
 
-fn write_message(
-    stdin: &mut ChildStdin,
+fn write_message<W: Write>(
+    stdin: &mut W,
     message: &ViewMessage,
     now: Micros,
 ) -> std::io::Result<()> {
@@ -264,6 +267,54 @@ fn write_message(
         ViewMessage::Ended => stdin.write_all(b"{\"op\":\"ended\"}\n")?,
     }
     stdin.flush()
+}
+
+/// The hello, then the mailbox, until the mailbox closes or a write fails.
+fn write_messages<W: Write>(
+    stdin: &mut W,
+    hub: &Hub,
+    subscriber: u64,
+    hello: &Value,
+) -> std::io::Result<()> {
+    stdin.write_all(format!("{hello}\n").as_bytes())?;
+    // §5.1: a QPC handshake when the viewer starts and then every minute.
+    let mut next_ping = 0;
+    while let Some(message) = hub.views.wait_take(subscriber) {
+        let now = hub.clock.now_us();
+        if now >= next_ping {
+            next_ping = now + 60_000_000;
+            let ping = json!({ "op": "ping", "bench_us": now });
+            stdin.write_all(format!("{ping}\n").as_bytes())?;
+        }
+        write_message(stdin, &message, now)?;
+    }
+    Ok(())
+}
+
+/// The writer thread's body: the subscriber's one-frame mailbox to the child's stdin.
+///
+/// #402 C2f: a failed write is expected once a stop has begun, not only once this viewer's own
+/// [`ViewerHandle::stop`] has. The stop gate comes first and then `ended` ends the child; the
+/// `cell_ended` another viewer's stop broadcasts can then meet its closed pipe before its own
+/// stop begins (D2b, STOP and hang-N: os error 232 recorded `expected: false`, the same error
+/// `expected: true` on ABORT). The gate is read after the failure, so a gate set before it counts.
+pub fn feed_viewer<W: Write>(
+    stdin: &mut W,
+    hub: &Hub,
+    journal: &Journal,
+    instance: usize,
+    subscriber: u64,
+    hello: &Value,
+    stopping: &AtomicBool,
+) {
+    if let Err(error) = write_messages(stdin, hub, subscriber, hello) {
+        let owner = LockOwner::new(format!("viewer-writer/{subscriber}"));
+        let stop_begun = stopping.load(Ordering::Acquire) || hub.stop_in_force(&owner, instance);
+        journal.event(
+            "viewer_write_failed",
+            viewer_write_failure(subscriber, &error, stop_begun),
+        );
+    }
 }
 
 impl ViewerLauncher for ChildViewers {
@@ -327,36 +378,14 @@ impl ViewerLauncher for ChildViewers {
             let subscriber = context.subscriber;
             let journal = Arc::clone(&context.journal);
             let stopping = Arc::clone(&stopping);
+            let instance = context.instance;
+            let hello = json!({ "op": "lease", "lease_id": lease.lease_id, "ttl_ms": lease.ttl_us / 1_000 });
             let _ = std::thread::Builder::new()
                 .name(format!("viewer-writer-{subscriber}"))
                 .spawn(move || {
-                    let hello = json!({ "op": "lease", "lease_id": lease.lease_id, "ttl_ms": lease.ttl_us / 1_000 });
-                    if stdin.write_all(format!("{hello}\n").as_bytes()).is_err() {
-                        return;
-                    }
-                    // §5.1: a QPC handshake when the viewer starts and then every minute.
-                    let mut next_ping = 0;
-                    while let Some(message) = hub.views.wait_take(subscriber) {
-                        let now = hub.clock.now_us();
-                        if now >= next_ping {
-                            next_ping = now + 60_000_000;
-                            let ping = json!({ "op": "ping", "bench_us": now });
-                            if stdin.write_all(format!("{ping}\n").as_bytes()).is_err() {
-                                return;
-                            }
-                        }
-                        if let Err(error) = write_message(&mut stdin, &message, now) {
-                            journal.event(
-                                "viewer_write_failed",
-                                viewer_write_failure(
-                                    subscriber,
-                                    &error,
-                                    stopping.load(Ordering::Acquire),
-                                ),
-                            );
-                            return;
-                        }
-                    }
+                    feed_viewer(
+                        &mut stdin, &hub, &journal, instance, subscriber, &hello, &stopping,
+                    );
                 });
         }
         // The reader: renewals, unsubscribes and handshakes from the child.

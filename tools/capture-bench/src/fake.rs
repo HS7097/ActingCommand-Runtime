@@ -281,9 +281,14 @@ impl FakeScript {
 }
 
 /// #402 INT-1: the fake APKs of `run --fake`: one per instance with `apk = true`, each on a
-/// device clock of its own (boot offsets 7 s, 8 s, … apart by instance), with a display of the
-/// plan's orientation (640 × 360 landscape, 360 × 640 portrait) and the band of cell 24, so each
-/// instance's frames show its own timecode and its taps flip its own APK.
+/// device clock of its own (boot offsets 7 s, 8 s, … apart by instance) and with a HELLO
+/// `instance` of its own, so each instance's frames show its own timecode and its taps flip its
+/// own APK.
+///
+/// #402 C2f: the displays are the plan's real sizes (§2.2: E1 1280 × 720, E2 720 × 1280) and the
+/// band is what the real APK draws at them: cell 24 (PROTOCOL §4.2; the bench never sends
+/// `SET cell`), `[24, 24, 600, 216)` in both orientations. D2 had 360 × 640, where the band of
+/// 600 px does not fit, so E2's frames were all `out_of_frame`.
 pub fn fake_apks(clock: &Arc<dyn Clock>, plan: &crate::plan::Plan) -> FakeApkSet {
     let mut apks = BTreeMap::new();
     let mut patterns = BTreeMap::new();
@@ -293,23 +298,20 @@ pub fn fake_apks(clock: &Arc<dyn Clock>, plan: &crate::plan::Plan) -> FakeApkSet
         .filter(|instance| instance.apk)
         .enumerate()
     {
-        let apk = FakeApk::new(
+        let apk = FakeApk::numbered(
             Arc::clone(clock),
             7_000_000_000 + 1_000_000_000 * index as i64,
+            u8::try_from(index + 1).unwrap_or(u8::MAX),
         );
         match instance.orientation {
-            crate::plan::Orientation::Portrait => apk.set_display(360, 640),
-            crate::plan::Orientation::Landscape => apk.set_display(640, 360),
+            crate::plan::Orientation::Portrait => apk.set_display(720, 1280),
+            crate::plan::Orientation::Landscape => apk.set_display(1280, 720),
         }
         patterns.insert(
             instance.name.clone(),
             FakePattern {
                 apk: Arc::clone(&apk),
-                geometry: BandGeometry {
-                    cell: 24,
-                    offset_x: 0,
-                    offset_y: 0,
-                },
+                geometry: BandGeometry::default(),
             },
         );
         apks.insert(instance.name.clone(), apk);

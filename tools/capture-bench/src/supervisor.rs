@@ -247,15 +247,27 @@ impl Closer {
             .collect()
     }
 
+    /// #402 C2f: the closes the supervisor declared not returned, for `summary.json`.
+    pub fn declared_unconfirmed(&self) -> Vec<CloseEntry> {
+        lock(&self.entries)
+            .values()
+            .filter(|entry| entry.state == "declared_unconfirmed")
+            .cloned()
+            .collect()
+    }
+
     /// `closing.json`: the closes in progress. #402 INT-1: serialised (two closes ending at once
     /// wrote it together in D2): the table is read and the file written under `closing_file`, so
     /// the last write always has the newest table. A failed write is a journal failure (kept in
     /// `journal_failures`); `events.jsonl` keeps the durable `closing` record either way.
+    ///
+    /// #402 C2f: a close declared not returned stays listed, with its `state`: it never ended
+    /// (D2b: the supervisor's write left `[]` at exit, the opposite of what the file is for).
     fn write_closing_file(&self) {
         let _one_at_a_time = lock(&self.closing_file);
         let entries: Vec<CloseEntry> = lock(&self.entries)
             .values()
-            .filter(|entry| entry.state == "closing")
+            .filter(|entry| entry.state == "closing" || entry.state == "declared_unconfirmed")
             .cloned()
             .collect();
         let _ = self.journal.write_json("closing.json", &entries);
@@ -422,6 +434,9 @@ impl Closer {
     fn finish_unconfirmed(&self) {
         let emergency = self.emergency.get().cloned();
         if let Some(emergency) = &emergency {
+            // #402 C2f: what is known goes on disk first; an emergency close can hang in its
+            // turn, and this thread waits for it.
+            emergency.write_summary(RunResult::Unconfirmed, "close_not_returned");
             let closed = emergency.close_remaining();
             self.journal
                 .event("emergency_closes", json!({ "closes": closed }));
