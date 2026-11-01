@@ -5659,29 +5659,6 @@ too; it reads the report itself, and that reading, which this slice leaves as it
 report `actingcommand.ledger-maintenance.v1` with `verified-sqlite` or `verified-segment` (the report
 has been v2 since #378 A6a).
 
-### 1.243 Slice R-0b2 (0.12.36): `activity` on the instance rows of `actingctl overview` and `ac_overview` (R-0b, §1.238, fills `Status.activity`, and `actingctl status` prints it, but the overview's rows are built member by member and did not carry it, so the agents that run the devices could not see what an instance does now; coordinator work order `rd-1031/brief-r0b2.md`)
-
-[runtime-interface.md](runtime-interface.md) (the `overview` command row, the `ac_overview` tool row
-and the output budget's "never cut" list) is the contract. The number 1.243 is the coordinator's;
-§1.241 and §1.242 are in flight in the same release. Nothing persisted, no wire shape of the
-Runtime, no configuration key, no outcome code and no interface revision changes.
-
-**What.** (1) Each instance row carries the optional member `activity`, `{kind, request_id?,
-package_id?, since_unix_ms}`, the `RuntimeInstanceStatus.activity` of the overview's one Status read
-as the Runtime answered it, and no member while the instance has none. No Runtime request is added
-and nothing is read from the ledger for it. A row has it whichever other reads fail, since the
-Status read is the one the overview cannot do without. (2) MCP's output budget never cuts it; the
-members cut and their order are unchanged. (3) The tool's description and result schema say so.
-
-**What changes live.** The rows of a busy instance grow by the member (about 150 bytes for a run), so
-an overview near the budget starts cutting a little earlier, in the order it already has.
-
-**Rollback** (to 0.12.35). Nothing persisted: the member disappears from the rows.
-
-| # | Shape | Kind | Code slice | First writer | Notes |
-|---|---|---|---|---|---|
-| R0B2-1 | `instances[].activity?` | `actingctl overview` / `ac_overview` answer | R-0b2 | R-0b2 | `since` 0.12.36; from the one Status read; never cut |
-
 ### 1.242 Slice INST-UNDO-EDGE (0.12.36): `install undo` cannot go around the interface edge or the gate that refuse a rollback (found by the v0.12.36 release agent reading the installer; it lands before 114-B's first record; coordinator work order `rd-1031/brief-inst-undo-edge.md`; the coordinator's decisions of 11-01 on the first report: the whole gate once started, `next.undo` left out when certain to be refused)
 
 [install-cli.md](install-cli.md) ("Undo and resume", "An undo once the build has started") is the
@@ -5861,6 +5838,29 @@ when it takes effect.
   and `return_home_packages` (§1.67 N3A-3); the standard-pack registry replaces them.
 - `governance.allowed_clients` is still accepted in v0.12.0; U-6 retires it.
 - Keys designed after v0.12.0 (#367 D1 decisions and later) bump the revision in their own release.
+
+### 1.243 Slice R-0b2 (0.12.36): `activity` on the instance rows of `actingctl overview` and `ac_overview` (R-0b, §1.238, fills `Status.activity`, and `actingctl status` prints it, but the overview's rows are built member by member and did not carry it, so the agents that run the devices could not see what an instance does now; coordinator work order `rd-1031/brief-r0b2.md`)
+
+[runtime-interface.md](runtime-interface.md) (the `overview` command row, the `ac_overview` tool row
+and the output budget's "never cut" list) is the contract. The number 1.243 is the coordinator's;
+§1.241 and §1.242 are in flight in the same release. Nothing persisted, no wire shape of the
+Runtime, no configuration key, no outcome code and no interface revision changes.
+
+**What.** (1) Each instance row carries the optional member `activity`, `{kind, request_id?,
+package_id?, since_unix_ms}`, the `RuntimeInstanceStatus.activity` of the overview's one Status read
+as the Runtime answered it, and no member while the instance has none. No Runtime request is added
+and nothing is read from the ledger for it. A row has it whichever other reads fail, since the
+Status read is the one the overview cannot do without. (2) MCP's output budget never cuts it; the
+members cut and their order are unchanged. (3) The tool's description and result schema say so.
+
+**What changes live.** The rows of a busy instance grow by the member (about 150 bytes for a run), so
+an overview near the budget starts cutting a little earlier, in the order it already has.
+
+**Rollback** (to 0.12.35). Nothing persisted: the member disappears from the rows.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| R0B2-1 | `instances[].activity?` | `actingctl overview` / `ac_overview` answer | R-0b2 | R-0b2 | `since` 0.12.36; from the one Status read; never cut |
 
 ### 5.1 Capacity of `config.parameters`
 
