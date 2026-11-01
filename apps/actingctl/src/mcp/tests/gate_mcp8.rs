@@ -7,8 +7,8 @@
 // install.build, and fact_refresh last (#422 OV-24K: its rows are the warnings an operator needs,
 // so it outlasts every less urgent block). Each cut block is marked `<block>_truncated: true`,
 // and `truncated` lists the JSON pointer of each cut block in the order it was cut (#422
-// OV-24K). The daemon, the global pause, each row's identity, pause, lease_active and queued, and
-// incomplete are never cut. Cutting stops as soon as the answer fits; when nothing is left to cut
+// OV-24K). The daemon, the global pause, each row's identity, activity (Workflow #429 R-0b2),
+// pause, lease_active and queued, and incomplete are never cut. Cutting stops as soon as the answer fits; when nothing is left to cut
 // the answer stays as it is, and the call answers output_budget_exceeded (MCP-T1 gate 30). The
 // overview below holds every block of §4.9, those later slices add included, so that the whole
 // order is seen.
@@ -266,5 +266,39 @@ fn gate_mcp5b_ac_overview_cuts_each_row_s_foreground_after_the_monitors_and_befo
                 "row {index} lost {kept}: {overview}"
             );
         }
+    }
+}
+
+// Workflow #429 R-0b2 (register §1.243): cut to nothing, each row keeps its activity as it was,
+// with no marker, and `truncated` does not name it.
+#[test]
+fn r0b2_ac_overview_never_cuts_a_row_s_activity() {
+    let mut overview = full_overview();
+    for index in 0..ROWS {
+        overview["instances"][index]["activity"] = json!({
+            "kind": "policy_run",
+            "request_id": format!("request_{index}"),
+            "package_id": "neutral.package",
+            "since_unix_ms": 1_700_000_000_000_u64,
+        });
+    }
+    let start = overview.clone();
+    cut_to_fit(&mut overview, |_| false);
+    let cut = overview["truncated"].to_string();
+    assert!(
+        cut.contains("/fact_refresh") && !cut.contains("activity"),
+        "cut: {cut}"
+    );
+    for index in 0..ROWS {
+        let row = &overview["instances"][index];
+        assert_eq!(
+            row["activity"], start["instances"][index]["activity"],
+            "row {index}: {overview}"
+        );
+        assert_eq!(
+            row.get("activity_truncated"),
+            None,
+            "row {index}: {overview}"
+        );
     }
 }

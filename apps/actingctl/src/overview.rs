@@ -54,6 +54,10 @@
 //! spent (`<block>_incomplete`, `call_budget_exhausted`), as a run is not; and
 //! `config_generation_mismatch` also warns when the selected configuration file's sha256 is not
 //! the one actingd runs (`config.selection`), so on an install without generations too.
+//!
+//! Workflow #429 R-0b2 (register §1.243): each instance row carries `activity`, what the instance
+//! does now, the member of the block's one Status read; no other read gives it, and MCP never
+//! cuts it.
 
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem};
@@ -902,6 +906,11 @@ fn instance_row(
     if let Some(hold) = instance.ladder_busy_hold() {
         row.insert("ladder_busy_hold".to_owned(), json!(hold));
     }
+    // Workflow #429 R-0b2 (register §1.243): what the instance does now, the status member as the
+    // Runtime answers it; absent while it does none. No other read gives it, and it is never cut.
+    if let Some(activity) = instance.activity() {
+        row.insert("activity".to_owned(), json!(activity));
+    }
     // Workflow #390 九处-1 (board #390 comment 6095942731, item 1; corrected ruling 4): whether the
     // instance's emulator runs, as the Runtime last read it, with the time of that reading;
     // `{state: unknown}` without one. Always answered and never cut.
@@ -1256,8 +1265,9 @@ mod tests {
     use actingcommand_contract::codes::SanitizationCode;
     use actingcommand_contract::outcome::Category;
     use actingcommand_contract::{
-        ApprovalDisposition, ConfigSelection, EmulatorRunningState, IdentifierIssuer, OriginModule,
-        RuntimeFactRecord, ScheduleExplanationInstance, ScheduleExplanationNotRunning,
+        ApprovalDisposition, ConfigSelection, EmulatorRunningState, IdentifierIssuer,
+        InstanceActivity, InstanceActivityKind, OriginModule, RuntimeFactRecord,
+        ScheduleExplanationInstance, ScheduleExplanationNotRunning,
     };
     use tempfile::TempDir;
 
@@ -1527,6 +1537,52 @@ mod tests {
             let row = instance_row(&instance, None);
             assert_eq!(row["emulator_state"], shown, "{row}");
         }
+    }
+
+    // Workflow #429 R-0b2 (register §1.243): a row shows the activity its status answered, a run
+    // with its request and package, a kind without them with neither; an idle row has no member.
+    #[test]
+    fn r0b2_an_overview_row_shows_the_status_activity_and_an_idle_row_has_no_member() {
+        let issuer = IdentifierIssuer::new().expect("identifier issuer");
+        let instance = || {
+            RuntimeInstanceStatus::new(
+                "neutral.instance",
+                mint_instance(&issuer),
+                false,
+                0,
+                false,
+                false,
+                false,
+            )
+            .expect("instance status")
+        };
+        let request_id = *issuer.mint_request_id().expect("request id").transport();
+        let running = instance().with_activity(Some(InstanceActivity {
+            kind: InstanceActivityKind::DirectRun,
+            request_id: Some(request_id),
+            package_id: Some("neutral.package".to_owned()),
+            since_unix_ms: 1_000,
+        }));
+        assert_eq!(
+            instance_row(&running, None)["activity"],
+            json!({
+                "kind": "direct_run",
+                "request_id": request_id,
+                "package_id": "neutral.package",
+                "since_unix_ms": 1_000,
+            })
+        );
+        let reconnecting = instance().with_activity(Some(InstanceActivity {
+            kind: InstanceActivityKind::Reconnect,
+            request_id: None,
+            package_id: None,
+            since_unix_ms: 2_000,
+        }));
+        assert_eq!(
+            instance_row(&reconnecting, None)["activity"],
+            json!({"kind": "reconnect", "since_unix_ms": 2_000})
+        );
+        assert_eq!(instance_row(&instance(), None).get("activity"), None);
     }
 
     /// The four self-check facts one recorded open of `entry` leaves for its instance, as the
