@@ -2,11 +2,11 @@
 
 //! `actingctl install undo --root <root> --operation <id>` (Workflow #421 INST-1;
 //! `contracts/install-cli.md`, "Undo and resume", "Steps"): reverses an unfinished operation, or
-//! the last finished one when no operation followed it. A finished update or rollback is undone
-//! only when the rollback gate passes, trivially when no Runtime owner started since it ended.
-//! An update or rollback, finished or not, that started a Runtime of its own build is undone only
-//! when the interface edges of a rollback to the build before it pass (register §1.242). Each
-//! started or done step is reversed from the last: a part renamed
+//! the last finished one when no operation followed it. An update or rollback, finished or not,
+//! in which a Runtime of its own build has started, or after which an owner started, is undone
+//! only when a rollback to the build before it would pass: the interface edges, then the whole
+//! rollback gate (register §1.242). Each started or done step is reversed from the last: a part
+//! renamed
 //! `<name>.abandoned-<ms2>`, a swapped file renamed `<dst>.rolledback-<ms2>` and its `.old-<ms>`
 //! put back, a placed build renamed aside, the previous state rewritten. Nothing is deleted.
 
@@ -151,8 +151,8 @@ pub(crate) fn undo(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
     let mut notes = Vec::new();
     // An undo already under way goes on from where it stopped: nothing here judges it again.
     if operation.journal().undo.is_none() {
-        // A Runtime owner since the operation ended, and since it began.
-        let (mut owner_after_end, mut owner_inside) = (false, false);
+        // A Runtime owner started since the operation began, inside it or after its end.
+        let mut owner_started = false;
         if operation.journal().finished() {
             // The last finished operation only.
             let ids = journal::operation_ids(&paths)?;
@@ -170,23 +170,23 @@ pub(crate) fn undo(words: &[&str], host: &dyn Host) -> Result<Answer, Outcome> {
                 if !installed_here {
                     return Err(super::unusable("--operation"));
                 }
-                if let Some(started) = owner_started_at(&loaded.state_root)? {
-                    let ended = operation.journal().finished_at_unix_ms.unwrap_or(0);
-                    owner_after_end = started > ended;
-                    owner_inside = started > operation.ms();
-                }
+                owner_started = owner_started_at(&loaded.state_root)?
+                    .is_some_and(|started| started > operation.ms());
             }
         }
-        // Register §1.242: a Runtime of the undone build started, also inside the operation.
-        if changes_program && (owner_inside || started_inside(operation.journal())) {
+        // Register §1.242: once a Runtime of the undone build has started, also inside the
+        // operation, the undo is a rollback: the edges, then the whole gate. An automatic rollback
+        // records itself only once its gate passed, and its files may be reversed by now.
+        if changes_program
+            && (owner_started || started_inside(operation.journal()))
+            && operation.journal().rollback.is_none()
+        {
             let loaded = plan::load(&paths, UNDO)?;
             match refuse_by_edges(host, &paths, &loaded, operation.journal())? {
                 Ok(warnings) => notes = warnings,
                 Err(refused) => return Ok(refused),
             }
-        }
-        if owner_after_end {
-            refuse_by_gate(host, &paths, operation.journal())?;
+            notes.extend(refuse_by_gate(host, &paths, operation.journal())?);
         }
     }
     let _lock = if changes_program {
@@ -356,14 +356,25 @@ fn refuse_by_edges(
     Ok(Err(Answer::new(refusal).with("edges", &edges)?))
 }
 
-/// The rollback gate toward the build before the operation, for the undo of a finished update
-/// or rollback after a Runtime owner started: its refusal (`rollback_gate_failed` of `install
-/// undo`), or `Ok` when it passes.
+/// Register §1.242: whether `install undo` of this update or rollback, as it just ended, is certain
+/// to be refused by the interface edges: what a composite's success leaves out of its `next`.
+pub(crate) fn edges_refuse_undo(
+    host: &dyn Host,
+    paths: &Paths,
+    loaded: &plan::Loaded,
+    journal: &journal::Journal,
+) -> bool {
+    started_inside(journal) && !matches!(refuse_by_edges(host, paths, loaded, journal), Ok(Ok(_)))
+}
+
+/// The rollback gate toward the build before the operation, for the undo of an update or rollback
+/// once a Runtime of its build has started: its refusal (`rollback_gate_failed` of `install undo`),
+/// or the gate's caveats when it passes.
 fn refuse_by_gate(
     host: &dyn Host,
     paths: &Paths,
     journal: &journal::Journal,
-) -> Result<(), Outcome> {
+) -> Result<Vec<Outcome>, Outcome> {
     let Some(previous) = journal.previous.live.clone() else {
         return Err(super::refusal(UNDO, InstallRefusal::RollbackGateFailed)
             .rollback_gate_parts([RollbackGatePart::InterfaceEdges]));
@@ -382,6 +393,11 @@ fn refuse_by_gate(
     let gate = update::gate(host, paths, &planned);
     match gate.refusal(&planned) {
         Some(refusal) => Err(refusal),
-        None => Ok(()),
+        None => Ok(gate
+            .with_notes(super::done(UNDO))
+            .causes()
+            .iter()
+            .map(|link| link.outcome().clone())
+            .collect()),
     }
 }

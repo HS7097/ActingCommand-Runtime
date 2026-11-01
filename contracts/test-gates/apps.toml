@@ -1118,7 +1118,7 @@ tests = [
 ]
 incident = ["#421 P12"]
 
-# Register §1.242 (INST-UNDO-EDGE, 0.12.36; brief rd-1031/brief-inst-undo-edge.md; contracts/install-cli.md, "Undo and resume"): on the fake host, install undo applies the interface edges of a rollback to the build before the operation whenever the operation started a Runtime of its own build, the composite's own start included. A finished composite across a one-way ledger, stopped outside the install commands, refuses interface_edge with the edge's values and changes nothing (T1); without a ledger change it is undone as before, no gate part run (T2); an unfinished composite before its start is undone as before, one whose start is done or begun with no evidence refuses (T3); after a failed post-start check whose automatic rollback the edge refused, the undo meets the same edge, and a rollback that ran leaves no build to undo (T4); a failed start counts when a process spawned, exited or left running, and not when refused before any spawn (T5); an owner record that began inside the operation counts though the journal names no start (T6)
+# Register §1.242 (INST-UNDO-EDGE, 0.12.36; brief rd-1031/brief-inst-undo-edge.md; contracts/install-cli.md, "Undo and resume"): on the fake host, install undo applies the interface edges, then the whole rollback gate, toward the build before the operation whenever the operation started a Runtime of its own build, the composite's own start included. A finished composite across a one-way ledger, stopped outside the install commands, refuses interface_edge with the edge's values and changes nothing (T1); without a ledger change the gate runs, passes and the update is undone (T2); an unfinished composite before its start is undone as before, one whose start is done or begun with no evidence refuses (T3); after a failed post-start check whose automatic rollback the edge refused, the undo meets the same edge, a rollback that ran leaves no build to undo, and one interrupted past its gate is undone unjudged (T4); a failed start counts when a process spawned, exited or left running, and not when refused before any spawn (T5); an owner record that began inside the operation counts though the journal names no start (T6); after an automatic rollback refused by ledger_readability alone the undo is refused the same way until the part passes (T7); a composite's success names next.undo only when the edges would pass (T8)
 [[gate]]
 coverage = "Y"
 tests = [
@@ -1128,6 +1128,8 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst_undo_edge_4_after_a_failed_post_check_the_undo_meets_the_edge_the_rollback_met",
     "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst_undo_edge_5_a_failed_start_counts_only_when_a_process_spawned",
     "actingcommand-actingctl::bin:actingctl::install::gate_inst1_update::inst_undo_edge_6_an_owner_that_started_inside_the_operation_counts",
+    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst_undo_edge_7_after_a_rollback_the_reader_refused_the_undo_meets_the_same_part",
+    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst_undo_edge_8_a_composites_next_names_undo_only_when_the_edges_would_pass",
 ]
 incident = ["INST-UNDO-EDGE"]
 

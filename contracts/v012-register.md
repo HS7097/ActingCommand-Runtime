@@ -5609,47 +5609,51 @@ otherwise; no resource repository's standard package carries one yet.
 | R11-3 | `installation[].task_ids`, `.irreversible`, `.ui`, `.display` (composed rows) | `actingctl packs` / `ac_packs` answer | R-11 | R-11 | offline, no revision; `task_ids` until SS-7 |
 | R11-4 | `standard_pack_problem` `ui_out_of_limits`, `ui_duplicate`, `ui_group_unknown`, `ui_parameter_undeclared` | catalog vocabulary | R-11 | R-11 | `since` 0.12.36 |
 
-### 1.242 Slice INST-UNDO-EDGE (0.12.36): `install undo` cannot go around the interface edge that refuses a rollback (found by the v0.12.36 release agent reading the installer; it lands before 114-B's first record; coordinator work order `rd-1031/brief-inst-undo-edge.md`)
+### 1.242 Slice INST-UNDO-EDGE (0.12.36): `install undo` cannot go around the interface edge or the gate that refuse a rollback (found by the v0.12.36 release agent reading the installer; it lands before 114-B's first record; coordinator work order `rd-1031/brief-inst-undo-edge.md`; the coordinator's decisions of 11-01 on the first report: the whole gate once started, `next.undo` left out when certain to be refused)
 
-[install-cli.md](install-cli.md) ("Undo and resume", "The interface edges of an undo") is the
+[install-cli.md](install-cli.md) ("Undo and resume", "An undo once the build has started") is the
 contract. The number 1.242 is the coordinator's; §1.241 and §1.243 are in flight in the same
 release. No code, key, vocabulary, journal member or interface revision is new.
 
-**What.** `install undo` of an update or rollback, finished or not, applies the interface edges a
-rollback to the build before it would whenever a Runtime of the undone build has been started,
-including the one a composite started inside its own operation. Failed edges refuse
-`interface_edge` (`commit_sha`, `count`, the result's `edges`) with nothing changed. The ranges are
-those of the operation's journalled plan, so nothing but the edges can refuse and the live tree
-need not verify. The gate's other parts stay as they were: only for an owner started since the
-operation ended. An unfinished operation in which no Runtime of the target started, a plain update
-and a start refused before its spawn undo as before.
+**What.** (1) Once a Runtime of the undone build has started, including the one a composite started
+inside its own operation, `install undo` of an update or rollback, finished or not, is a rollback:
+the interface edges first, then the whole rollback gate (`ledger_readability`, `open_time`,
+`config`). Failed edges refuse `interface_edge` (`commit_sha`, `count`, the result's `edges`), their
+ranges those of the operation's journalled plan; a failed part refuses `rollback_gate_failed`; both
+with nothing changed. An unfinished operation in which no Runtime of the target started, a plain
+update and a start refused before its spawn undo as before, unjudged. (2) A composite's success
+leaves `next.undo` out when the edges would refuse that undo.
 
-**Before.** The edge was judged only through the rollback gate, and the gate only for a finished
-operation whose owner record began after the operation's end. The composite's own start is before
-that end, so stopping its Runtime with `request-shutdown` let `undo` swap back with no check. An
-unfinished operation was never judged. The same held after an automatic rollback that the edge had
-refused (`rollback_gate_failed`).
+**Before.** The edge and the gate were judged only for a finished operation whose owner record began
+after the operation's end. The composite's own start is before that end, so stopping its Runtime
+with `request-shutdown` let `undo` swap back with no check. An unfinished operation was never
+judged. The same held after an automatic rollback its gate had refused (`rollback_gate_failed`).
 
-**Decisions within the work order.** (a) A finished rollback counts as an update does: the existing
-gate path treats both as one, and its undo is a rollback toward the build it replaced, so going back
-up a ledger with no acknowledgment fails `one_way` and takes the forward path. (b) A start step begun
-with no evidence counts while the operation is unfinished, since the journal cannot tell it from no
-spawn and `resume` remains; a finished one is a start refused before its spawn. (c) An owner record
-of a finished operation that began after the operation did also counts, for a start whose evidence a
-resumed start replaced. (d) The edges only, not the gate's `ledger_readability`, `open_time` and
-`config`, are judged for a start inside the operation, as the work order says.
+**Decisions within the work order.** (a) A start step begun with no evidence counts while the
+operation is unfinished, since the journal cannot tell it from no spawn and `resume` remains; a
+finished one is a start refused before its spawn. (b) An owner record of a finished operation that
+began after the operation did also counts. (c) An automatic rollback that recorded itself has passed
+its gate and its files may be reversed already: its undo goes on unjudged. (d) A gate that passes
+adds its caveats (`open_time_from_other_build`) as `note` links of the undo's result.
+
+**Accepted by the coordinator (11-01).**
+- A finished composite rollback across `ledger` is refused by `one_way` on undo, since the undo cannot acknowledge it; the forward path is an update with `--accept-ledger-one-way`.
+- A narrow gap stays: a start that spawned, crashed and whose resumed start failed to spawn loses its evidence, and only an owner record then counts it.
 
 **Why.** Once 114-B writes a record, a build whose `ledger` range ends below it cannot decode it and
-its start fails: the undo would swap back to a Runtime that cannot start.
+its start fails: the undo would swap back to a Runtime that cannot start. Once a build has started,
+an undo is a rollback, and a refused automatic rollback can only be fixed forward.
 
-**What changes live.** Only the answer of `install undo` after a composite across a failed edge: it
-was done, it is refused. Nothing persisted changes.
+**What changes live.** `install undo` after a composite: the gate now runs, reading the ledger with
+the previous build's reader, and a failed edge or part refuses what used to be done. A one-way
+composite's success no longer names `next.undo`. Nothing persisted changes.
 
 **Rollback** (to 0.12.35). Nothing persisted changes; `undo` judges a composite's own start no more.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
-| UE-1 | `install undo`: `interface_edge` when a Runtime of the undone build has started; result member `edges` | install command | INST-UNDO-EDGE | INST-UNDO-EDGE | `since` 0.12.36; reused code and refusal word |
+| UE-1 | `install undo`: `interface_edge`, then `rollback_gate_failed`, when a Runtime of the undone build has started; result member `edges` | install command | INST-UNDO-EDGE | INST-UNDO-EDGE | `since` 0.12.36; reused code and refusal words |
+| UE-2 | `next.undo` of a composite's success left out when the edges would refuse it | install command | INST-UNDO-EDGE | INST-UNDO-EDGE | `since` 0.12.36 |
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
