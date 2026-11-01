@@ -95,8 +95,10 @@ for it (`ledger_record_mismatch`, `corrupt_ledger_record`, `sequence_discontinui
 indexes a database lacks, checking only that the metadata still names the head it
 verified, and reads its retention state by type and by index (LN-7, below). It reads
 no other history row and does not check the migrated prefix: every reader
-authenticates each row it reads, `ledger-maintenance verify` reads every row with the
-prefix, and the background re-check (LN-9, the same release) reads every row once per
+authenticates each row it reads, `ledger-maintenance verify --full` reads every row with the
+prefix (#422 LN-VERIFY: `verify` without flags makes this check of the tail, through the same
+code, with the contiguity of the stored sequences, and reads no older row:
+[ledger-maintenance.md](ledger-maintenance.md), "`verify` of a formal root"), and the background re-check (LN-9, the same release) reads every row once per
 pass (LEAN-L model §6; Alice's ruling 57). Its deadline bounds both reads; passing it returns
 `ledger_read_budget_exceeded`, which RuntimeHost treats as fatal. Open time and memory
 no longer grow with the committed history (model §7.1 A1, A2). The start reports the
@@ -176,10 +178,10 @@ records read by the event type index, each authenticated on its own and each pag
 within the open's deadline. The derived index never fails the open or an append: a fill that
 stops (a damaged record, the deadline) leaves the extent short and the next open tries again, and
 the open reports one warning as a `note` of `ledger_opened`. The background scrub and
-`ledger-maintenance verify` compare the rows inside the extent with the records
+`ledger-maintenance verify --full` compare the rows inside the extent with the records
 (`ledger_index_mismatch`, `verify_ledger_frame_refs`). A difference marks the extent untrusted, so
 that the next writer open rebuilds the index. The scrub's finding there is non-fatal and never stops
-the Runtime; `verify` still fails.
+the Runtime; `verify --full` still fails.
 #422 LN-7c O (rd-1026/ln7c/final-query.md §2, §7): the open reads the owner records of
 the two latest owner epochs, not of the whole history. It reads the starts first, then
 the owner records after the start before the latest one by the type index. A start writes
@@ -551,7 +553,7 @@ one pinned point, never a whole read:
   as the eviction proof set the writer keeps resident, and pins the point
   (head, head hash, marker, proofs). It reads no other record and does not
   check the migrated prefix: an older record is authenticated when a read
-  reads it, and the whole-ledger check is `ledger-maintenance verify` (an
+  reads it, and the whole-ledger check is `ledger-maintenance verify --full` (an
   explicit offline mode is LN-OFF-3). `event_count()` is the head (`1..=head`
   contiguous), `latest_sequence()` the head, `read_complete()` true,
   `corrupt_tail()` and `repair_count()` none.
@@ -1133,7 +1135,7 @@ writer keeps no frame facts and answers no frame view.
   differences in its developer text), and the pass fails with a non-zero exit. A frame
   index that does not cover the ledger, or the deadline, fails it too
   (`ledger_index_mismatch` with `frame_refs_incomplete`, `ledger_read_budget_exceeded`).
-  Without the flag `verify` runs none of this and answers as its complete read alone; on a
+  Without the flag `verify` runs none of this, and `verify --full` answers as its complete read alone; on a
   root that is not formal the flag is refused (`maintenance_arguments_invalid`), never
   ignored ([ledger-maintenance.md](ledger-maintenance.md)).
 - **Done set.** The process remembers the live frames it removed, moved or found absent,
@@ -1364,7 +1366,7 @@ original records, each authenticated on its own (canonical record and hash, keye
 predecessor link, indexed columns, links and ordered artifacts); duplicate boundaries are
 reported with both original locators. The read does not grow with the history: a record it
 does not select is not read here, and its damage is found by the open's verification, by
-`ledger-maintenance verify` and, once the open verifies only its tail, by the scrub. It runs
+`ledger-maintenance verify --full` and, once the open verifies only its tail, by the scrub. It runs
 in the start's `runtime_state` step and inside the boundary's joint append, where the whole
 chain read it replaced took about 87 s each at a million records. No new fact is written. A standalone State database can
 return absence only with format zero and no Ledger tables or other Ledger schema objects;

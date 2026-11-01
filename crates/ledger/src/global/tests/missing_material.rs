@@ -116,6 +116,8 @@ fn maintain(
     RuntimeHost::maintain_ledger(
         RuntimeHostConfig::new(root, STATE_KEY),
         LedgerMaintenanceRequest {
+            // #422 LN-VERIFY: the `verify` these tests pin is the complete read (`--full`).
+            full: operation == LedgerMaintenanceOperation::Verify,
             operation,
             backup,
             target,
@@ -327,7 +329,7 @@ fn observe(
     )
 }
 
-fn admit(
+pub(super) fn admit(
     ledger: &GlobalLedger,
     artifacts: &ArtifactStore,
     capture: &Capture,

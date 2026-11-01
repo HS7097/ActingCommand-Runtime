@@ -32,7 +32,7 @@
 //!   untrusted (`frame_refs::mark_untrusted`, one statement on the shared connection, the scrub's
 //!   only write), stops checking the index for the rest of the pass and goes on with the chain;
 //!   the next writer open rebuilds the index by its backfill.
-//! - **A finding** is the failure a full verification (`ledger-maintenance verify`, and the open
+//! - **A finding** is the failure a full verification (`ledger-maintenance verify --full`, and the open
 //!   before LN-8) gives for the same damage, with its code and operation (`ledger_record_mismatch`,
 //!   `ledger_index_mismatch`, `sequence_discontinuity`, `ledger_meta_mismatch`, ...;
 //!   `state_database_corrupt` from `quick_check`), and `phase=scrub` in its detail. The scrub

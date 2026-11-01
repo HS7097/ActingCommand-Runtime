@@ -251,8 +251,31 @@ impl LedgerMaintenance {
         sqlite::SqliteLedgerReadOnly::open_formal_unread(database, self.budget())
     }
 
+    /// #422 LN-VERIFY: the bounded verification of a formal root for `ledger-maintenance verify`
+    /// without flags: what the start's open does to authenticate the ledger, through the same code
+    /// (`verify_open_tail`), plus the contiguity of the stored sequences: the newest `tail_records`
+    /// records and no other, within the held deadline. It writes nothing and takes no writer step;
+    /// an older record is authenticated when it is read, by the background re-check and by
+    /// [`Self::verify_formal`]. It returns the root's storage status at the head. `timing` keeps
+    /// the phases that ran (`meta_ms`, `tail_ms` and the tail's `events`), also when an error is
+    /// returned.
+    pub fn verify_formal_bounded(
+        &self,
+        database: &RuntimeDatabase,
+        tail_records: usize,
+        timing: &mut LedgerOpenTiming,
+    ) -> GlobalLedgerResult<LedgerStorageStatus> {
+        self.validate_database(database)?;
+        sqlite::SqliteLedgerReadOnly::verify_formal_bounded(
+            database,
+            self.deadline,
+            tail_records,
+            timing,
+        )
+    }
+
     /// Workflow #375 H2: the single complete verification of a formal root for
-    /// `ledger-maintenance verify`. It reads no further than the authenticated head and
+    /// `ledger-maintenance verify --full`. It reads no further than the authenticated head and
     /// finishes within the held operation deadline, with no event or byte cap, like
     /// `open_writer`; it returns the restored events with the root's storage status.
     /// Workflow #375 R5a: it reads no artifact material. `timing` keeps the phases that ran,
@@ -347,8 +370,8 @@ impl LedgerMaintenance {
     /// authenticates the keyed meta row, the end of the stored rows at its head and the newest
     /// `ledger_observer.open_verify_tail_records` records (4096 unless the plan names another
     /// number), within the held operation deadline; an older record is authenticated when it is
-    /// read, and by `verify_formal`. Workflow #375 R5a: it reads no artifact material; a reference
-    /// without an eviction proof is `Unrecorded`, so a missing or damaged artifact file
+    /// read, and by `verify_formal` (`--full`). Workflow #375 R5a: it reads no artifact material; a
+    /// reference without an eviction proof is `Unrecorded`, so a missing or damaged artifact file
     /// never stops the open.
     pub fn open_writer(
         self,

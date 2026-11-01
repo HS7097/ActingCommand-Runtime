@@ -3,7 +3,7 @@
 //! Workflow #375 R375-3 v1.2, test plan A-4 G8 (the `quick_check` line): the `check-config`
 //! catalog preview opens the state database without the whole-file `PRAGMA quick_check(1)`.
 //! One page that no preview statement reads is damaged: the preview still returns the plan of
-//! the undamaged root, while the open `ledger-maintenance verify` uses refuses the file.
+//! the undamaged root, while the open `ledger-maintenance verify --full` uses refuses the file.
 
 use super::*;
 use actingcommand_runtime_database::RuntimeDatabase;
@@ -11,7 +11,7 @@ use std::io::{Seek, SeekFrom};
 
 /// A secondary index of `ledger_links`. The preview reads that table only by its `sequence`
 /// primary key, so no preview statement reads a page of this index.
-const UNREAD_INDEX: &str = "ledger_links_recognition";
+pub(super) const UNREAD_INDEX: &str = "ledger_links_recognition";
 
 fn preview(root: &Path, catalog: &CatalogSources) -> RuntimeHostResult<CatalogPreview> {
     preview_policy_catalog_transition(&CatalogPreviewRequest {
@@ -24,7 +24,7 @@ fn preview(root: &Path, catalog: &CatalogSources) -> RuntimeHostResult<CatalogPr
 
 /// Overwrites byte 0 of `index`'s root page (the b-tree page type) with `0x00`, after the WAL
 /// is checkpointed into the main file. The page number and size are read from the file.
-fn damage_index_root_page(root: &Path, index: &str) {
+pub(super) fn damage_index_root_page(root: &Path, index: &str) {
     let database =
         RuntimeDatabase::open_existing(root, false).expect("open the state database read-write");
     let (database_path, offset) = {
@@ -81,7 +81,7 @@ fn gate_check_config_preview_runs_no_whole_file_quick_check() {
     let undamaged = preview(root.path(), &catalog).expect("preview of the undamaged root");
     damage_index_root_page(root.path(), UNREAD_INDEX);
 
-    // (b) The control: the open `ledger-maintenance verify` uses runs the whole-file check and
+    // (b) The control: the open `ledger-maintenance verify --full` uses runs the whole-file check and
     // refuses the damaged file.
     match RuntimeDatabase::open_existing(root.path(), true) {
         Ok(_) => panic!("the checked open must refuse a file with a damaged page"),

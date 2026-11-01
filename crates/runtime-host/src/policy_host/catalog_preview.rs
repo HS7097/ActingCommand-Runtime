@@ -4,14 +4,15 @@
 //! touching the state root. The ledger is read selectively (Workflow #375 R375-3; SQLite
 //! read-only, no owner lock, no referenced material): the authenticated head, the contiguity of
 //! the stored sequences and only the records the plan uses, each authenticated on its own, so
-//! the preview does not establish the integrity of other records (startup and
-//! `ledger-maintenance verify` check every record). The State documents are read through a
+//! the preview does not establish the integrity of other records (the background re-check and
+//! `ledger-maintenance verify --full` check every record). The State documents are read through a
 //! read-only view of the same database and the catalog generations from their immutable
 //! directories, so the preview runs beside a running daemon: it takes no lock, never writes the
 //! database and stages nothing (SQLite may leave the `-wal` / `-shm` sidecars of a cleanly
 //! stopped root). The ledger and the State documents are both read without the whole-file
 //! `PRAGMA quick_check(1)` (R375-3 v1.2): page-level damage in parts of the file the preview
-//! does not read is left to startup and `ledger-maintenance verify`. The decision and the
+//! does not read is left to the background re-check and `ledger-maintenance verify --full`. The
+//! decision and the
 //! approval plan are the functions startup uses.
 
 use super::catalog_transaction::{CATALOG_PROJECTION_TYPES, catalog_projection_events};

@@ -3,9 +3,9 @@
 // LN-8 (#422, LEAN-L model §3.2 step 2, §6; brief rd-1026/brief-ln8.md "Tests"): the writer open
 // reads the keyed meta row, `MAX(sequence)` and the newest `ledger_observer.open_verify_tail_records`
 // records only, each authenticated on its own. Damage in that tail is refused at open, with the
-// code and operation `ledger-maintenance verify` gives for it. Damage in an older row is not read
-// at open; a read of that row refuses it, fatally, and so does `ledger-maintenance verify`, which
-// reads every row.
+// code and operation `ledger-maintenance verify --full` gives for it. Damage in an older row is not
+// read at open; a read of that row refuses it, fatally, and so does `ledger-maintenance verify
+// --full`, which reads every row.
 //
 // The roots are real formal SQLite roots (the fixture of `missing_material.rs`) holding plain
 // records only, so the open's retention reads by type select none of them. Each open is the
@@ -117,7 +117,7 @@ fn open(root: &Root, timing: &mut LedgerOpenTiming) -> Result<GlobalLedger, Glob
     .open_writer_timed(Arc::clone(&root.database), OWNER.into(), Some(plan), timing)
 }
 
-// `ledger-maintenance verify` of `root`: its failure's code and operation.
+// `ledger-maintenance verify --full` of `root`: its failure's code and operation.
 fn verify(root: &Root) -> Result<(), (String, Option<String>)> {
     RuntimeHost::maintain_ledger(
         RuntimeHostConfig::new(root.dir.path(), STATE_KEY),
@@ -128,6 +128,7 @@ fn verify(root: &Root) -> Result<(), (String, Option<String>)> {
             artifact_root: None,
             limits: MaintenanceLimits::default(),
             frame_query: false,
+            full: true,
         },
     )
     .map(|_| ())
@@ -234,7 +235,7 @@ fn ln8_damage_in_the_tail_is_refused_at_open_as_verify_refuses_it() {
     {
         let root = build();
         damage(&root, &sql(root.head));
-        // `ledger-maintenance verify` reads every row and refuses the damage.
+        // `ledger-maintenance verify --full` reads every row and refuses the damage.
         let verified = verify(&root).expect_err(label);
         assert_eq!(
             verified,
@@ -269,7 +270,7 @@ fn ln8_damage_in_an_old_row_is_not_read_at_open_and_is_found_by_its_read_and_by_
             stored(OLD)
         ),
     );
-    // `ledger-maintenance verify` reads every row and refuses the old row.
+    // `ledger-maintenance verify --full` reads every row and refuses the old row.
     assert_eq!(
         verify(&root),
         Err((

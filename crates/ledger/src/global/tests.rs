@@ -2953,7 +2953,7 @@ mod gate_ln_tune;
 mod gate_ln7;
 // LN-8 (#422, LEAN-L §3.2 step 2, §6): the writer open authenticates the meta row, the end of the
 // rows and the newest records only; damage in that tail is refused at open, damage in an older row
-// by its read and by `ledger-maintenance verify`.
+// by its read and by `ledger-maintenance verify --full`.
 #[path = "tests/gate_ln8.rs"]
 mod gate_ln8;
 // #422 LN-8d: on a history whose live frames span it, the open's SQLite work per record it reads
@@ -3004,6 +3004,10 @@ mod gate_qr2;
 // at most their limit with a cursor to the rest.
 #[path = "tests/gate_ln_off1.rs"]
 mod gate_ln_off1;
+// #422 LN-VERIFY: `ledger-maintenance verify` without flags reads what the start's open reads, the
+// same rows however long the history, and does not complete a pending eviction.
+#[path = "tests/gate_ln_verify.rs"]
+mod gate_ln_verify;
 // #422 RB-1: the reader pool builds its Lab relations once in the background and its pages read
 // only the records after the build: the same pages with and without it, no full-history read on
 // a linked page, a failed build said as a warning, a new anchor naming an old request.

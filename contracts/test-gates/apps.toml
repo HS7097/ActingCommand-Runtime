@@ -399,6 +399,15 @@ tests = [
 ]
 incident = ["#382 A-1 G9"]
 
+# LN-VERIFY (#422; brief rd-1031/brief-ln-verify.md test 6; register §1.241; since 0.12.36): exactly the arguments the live v0.12.35 installer and acsetup pass, ledger-maintenance verify --config <config>, give the bounded check on a real closed root (verified-sqlite-bounded, exit 0, activated false), and --full gives verified-sqlite; the tail is the file's ledger_observer.open_verify_tail_records (the default without one), and a value out of range is maintenance_config_invalid before the root is touched. The installer's step on its fixture is IT-11 (those arguments and no other, before every swap)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_ln_verify::ln_verify_t6_the_arguments_of_the_installer_give_the_bounded_check",
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_ln_verify::ln_verify_t6_the_tail_is_the_files_and_a_value_out_of_range_refuses",
+]
+incident = ["#422 LN-VERIFY"]
+
 # actingctl's closed grammar: the documented forms of pause/resume, emulator, selfcheck, install-transition and monitor-set parse to their commands, and a usage error is actingctl_usage_invalid with exit 1 before any connection (Workflow #382 A-1 G10)
 [[gate]]
 key = "13"

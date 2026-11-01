@@ -3,9 +3,9 @@
 RuntimeHost owns one `Arc<RuntimeDatabase>` for State and GlobalLedger. Startup
 acquires OwnerGuard, validates State/ArtifactStore, classifies the formal Ledger
 by its keyed metadata row alone without reading history, then opens the one
-SQLite writer, which performs the single complete verification. That pass reads
-no further than the authenticated head sequence and must finish within the held
-maintenance operation deadline. It reads no artifact material (Workflow #375 R5a). Startup then assembles Provider and the
+SQLite writer, which authenticates the keyed metadata, the end of the stored rows
+and the newest `ledger_observer.open_verify_tail_records` records (#422 LN-8). That
+open must finish within the held maintenance operation deadline. It reads no artifact material (Workflow #375 R5a). Startup then assembles Provider and the
 remaining Runtime.
 Existing roots without a formal marker require explicit maintenance. An empty
 root initializes formal schema and metadata atomically. Candidate, partial,
@@ -20,9 +20,11 @@ writer; retiring Segment writes does not remove those files or read capabilities
 ## Offline entry
 
 `actingd ledger-maintenance` reads the normal configuration only for state root,
-fingerprint salt and (#422 LN-7c V, used only by `verify --frame-query`) the two frame
-retention dedup switches, at their defaults when the file names neither. It does not
-assemble Provider, policy, IPC or devices.
+fingerprint salt, (#422 LN-7c V, used only by `verify --frame-query`) the two frame
+retention dedup switches, at their defaults when the file names neither, and (#422
+LN-VERIFY, used only by `verify` without flags) `ledger_observer.open_verify_tail_records`,
+at its default when the file does not name it; a value that key does not take is
+`maintenance_config_invalid`. It does not assemble Provider, policy, IPC or devices.
 All operations acquire the existing OwnerGuard and Ledger OS locks; unresolved
 resource ownership refuses maintenance. The canonical Ledger lock remains
 `ledger/writer.lock`; a present candidate `writer.lock` is also held and must
@@ -32,15 +34,21 @@ have a provably closed owner.
 actingd ledger-maintenance backup --config runtime.json --backup frozen-backup
 actingd ledger-maintenance dry-run --config runtime.json --backup frozen-backup
 actingd ledger-maintenance import --config runtime.json --backup frozen-backup
-actingd ledger-maintenance verify --config runtime.json [--frame-query]
+actingd ledger-maintenance verify --config runtime.json [--full] [--frame-query]
 actingd ledger-maintenance restore --config runtime.json --backup frozen-backup --target restored-root
 ```
 
-`--frame-query` (#422 LN-7c V, a flag without a value) adds the frame query check described
-under the limits below. It is never ignored: any operation other than `verify` refuses it
-with `maintenance_arguments_invalid` before the root is touched, and `verify` refuses it the
-same way on a root that is not formal (a Segment or candidate root), where the check cannot
-run. Without it `verify` is exactly the complete read it was before the check existed.
+`--full` (#422 LN-VERIFY, since 0.12.36, a flag without a value) makes `verify` of a formal
+root the complete read of every record ("`verify` of a formal root" below). It is never
+ignored: any operation other than `verify` refuses it with `maintenance_arguments_invalid`
+before the root is touched; a root that is not formal has one read, with or without it.
+
+`--frame-query` (#422 LN-7c V, a flag without a value) implies `--full` and adds the frame
+query check described under the limits below. It is never ignored: any operation other than
+`verify` refuses it with `maintenance_arguments_invalid` before the root is touched, and
+`verify` refuses it the same way on a root that is not formal (a Segment or candidate root),
+where the check cannot run. Without it `verify --full` is exactly the complete read it was
+before the check existed. `actingctl install` and `acsetup` pass neither flag.
 
 Relative destinations resolve against the process working directory before
 validation, creation and sync. Backup paths must be disjoint from the source and
@@ -54,8 +62,9 @@ Every exit prints one stdout line, the v2 report
 outcome, …}`, where `outcome` is the full `actingcommand.outcome.v1` envelope
 (only its registered names with `ACTINGCOMMAND_DETAIL=codes`). A completed pass
 is `ledger_maintenance_completed` (success) with the receipt's members: `status`,
-its precise operation result (`verified-sqlite`, `verified-segment`,
-`backed-up`, `dry-run`, `imported`, `already-imported` or `restored`), `ledger`,
+its precise operation result (`verified-sqlite-bounded`, `verified-sqlite`,
+`verified-segment`, `backed-up`, `dry-run`, `imported`, `already-imported` or
+`restored`), `ledger`,
 `backup_id`, `warnings` and `activated: false`. A failed pass is
 `{schema_version, outcome, activated: false}`: the outcome keeps the failure's
 original code with its `operation` when that is a registered location, an OS error of a
@@ -69,6 +78,57 @@ alone. A failure also writes its developer line `<LEVEL> actingd: <code> <text>`
 on stderr, whose text keeps the English cause (SQL detail included), and the
 process exits by the outcome's category: `0` on success, `1` for an error, `2`
 for a fatal failure.
+
+## `verify` of a formal root (#422 LN-VERIFY, since 0.12.36)
+
+**The default**, `verify --config <config>`, reports `verified-sqlite-bounded`. It does what the
+start's ledger open does to authenticate the ledger, through the same code
+(`verify_open_tail`, [ledger-store.md](ledger-store.md#open-ownership-and-append-durability)), so
+the two cannot drift, on a read-only connection without the whole-file `quick_check(1)`, within
+the pass's 120 s:
+
+- the database format and the stored views' definitions;
+- the keyed meta row and its head, and that the stored rows end at that head (`MAX(sequence)`);
+- that the stored sequences are exactly `1..=head` (`COUNT`, `MIN` and `MAX` through an index;
+  the start's open itself does not make this check, the installer's head read and the offline
+  open do): one statement that returns one row, whose time follows the size of that index under
+  SQLite's page cache and whose memory does not;
+- the newest `ledger_observer.open_verify_tail_records` records (the file's, else 4 096), read in
+  chunks, each authenticated on its own with this binary's decoder (record schema, stored
+  sequence, hash, keyed tag, predecessor, index columns, its link and artifact rows), contiguous
+  through the head, the oldest chained to its predecessor's stored hash and the newest's hash the
+  meta row's.
+
+Its memory is in the class of the Runtime's open: one chunk of rows, and no read that keeps the
+history. Damage in what it reads fails it with the code and operation the complete read gives for
+the same damage, the same exit code and the same failure shape, with the `ledger_open_measured`
+note link once the read is under way (phases `meta_ms` and `tail_ms`, `event_count` the tail's
+records).
+
+**What the default does not check.** A damaged older record, its link and artifact rows, the
+migrated prefix, the frame index rows and page damage in the rest of the file: they are found when
+a reader reads them, by the Runtime's background re-check ([ledger-observer.md
+§15](ledger-observer.md#15-configuration-keys-ledger_observer), LN-9) or by `--full`, not by the
+default. It reads no State table: neither their validation (`RuntimeStateStore::from_database`)
+nor their digest (`maintenance_digest`, nine whole tables sorted by every column, whose value
+only backup, import and restore use) authenticates the ledger, and the next start validates them.
+It reads no retention state: an eviction intent without its outcome does not fail it, and the next
+start completes that eviction, as it always does.
+
+**The default writes nothing.** It takes none of the writer's steps after that check: no view or
+index build, no frame index fill or mark, no retention completion, no dump import and no record.
+The root stays as it was but for the owner journal's records that every maintenance pass appends.
+Its receipt's `ledger` is the authenticated head, head hash and migration record.
+
+**`--full`** reports `verified-sqlite` and is the complete read described under the limits below:
+the checked open's whole-file `quick_check(1)`, the State validation and digest, every record with
+the migrated prefix, the frame index rows, and the refusal of an unsettled eviction. `--frame-query`
+is `--full` with its check. `actingctl install` and `acsetup` never pass them: on a production
+ledger the complete read keeps every event in memory and may not finish in the pass's deadline.
+
+A Missing (Segment) or candidate root behaves as before, with or without `--full`: the checked
+open, the State validation and digest, and the full status read under the limits (a Segment root
+reports `verified-segment`; a candidate root is `candidate_requires_explicit_disposition`).
 
 ## Frozen source and one transaction
 
@@ -100,8 +160,8 @@ migration ID binds the source and original frozen backup. A matching committed
 marker verifies and returns without inserting again; conflicts fail closed.
 An uncertain COMMIT reports the original error and a readback classification;
 it never retries the import. Writer startup consumes the same held lock handle
-without an unlock/relock interval. This writer open is the only complete
-verification in startup and in `actingd unlock-owner`. Subsequent SQLite appends
+without an unlock/relock interval. This writer open is the only verification in
+startup and in `actingd unlock-owner`, of the newest records (#422 LN-8). Subsequent SQLite appends
 preserve the marker and revalidate its original prefix and completion.
 
 ## Backup and restore
@@ -143,8 +203,8 @@ State validation and database mutex acquisition retain their owner semantics.
 The defaults bound one maintenance operation. Startup, `actingd unlock-owner` and
 `verify` of a formal root use only their deadline; their material bound is the
 authenticated Ledger extent (Workflow #375). `verify` classifies a formal root by
-its keyed meta row, as startup does, and verifies it in one complete read that
-reads no further than the authenticated head; its receipt's `ledger` comes from
+its keyed meta row, as startup does. `verify --full` then verifies it in one complete
+read that reads no further than the authenticated head; its receipt's `ledger` comes from
 that read. #422 LN-7c V (`rd-1026/ln7c/final-query.md` §7 row V), opt-in: only with
 `--frame-query`, after that read passes, `verify` runs the frame cleaner's statements
 W, L and K, as the cleaner runs them, against the full frame view of the same records,
@@ -162,8 +222,8 @@ index of every record on top of the complete read and runs the statements unpace
 inside `verify`'s deadline, so on a large ledger it may fail with
 `ledger_read_budget_exceeded` where the read alone passes; that is why it is opt-in.
 Without the flag `verify` builds no retention index, runs no statement, lists no
-frame store, resolves none of the check's keys and prints no extra line: its read, its
-findings and its answer are those of the complete read alone. The Runtime never runs
+frame store, resolves none of the check's keys and prints no extra line: the read, the
+findings and the answer of `verify --full` are those of the complete read alone. The Runtime never runs
 this check. A Missing (Segment) or candidate root keeps the full status read under
 the limits without the flag. With the flag such a root is refused with
 `maintenance_arguments_invalid` (Fail Loud, fix round 1b) right after `verify` classifies
@@ -180,14 +240,15 @@ referenced file. A reference with an authenticated eviction proof takes the proo
 state (`Evicted`, `PendingEviction`, or `FailedEviction` for a `Failed` outcome, which
 no longer stops an opening); any other reference is `Unrecorded`, so a missing or
 damaged artifact never stops startup or `verify`. Row authentication, the hash chain,
-the keyed head and the retention replay are unchanged. A formal `verify` refuses only
+the keyed head and the retention replay are unchanged. A formal `verify --full` refuses only
 the retention state the ledger itself leaves unsettled: an eviction intent without its
 outcome, which only the next actingd start completes. It fails with
 `maintenance_artifact_material_unavailable`, whose value `count` is the number of
 distinct pending artifacts (the developer text says `pending_evictions=<n>`;
 start actingd once so that it finishes the eviction, then run
-`verify` again); `Unrecorded`, `Evicted` and
-`FailedEviction` pass. A Segment root still refuses any eviction. After the writer
+`verify --full` again); `Unrecorded`, `Evicted` and
+`FailedEviction` pass. `verify` without `--full` does not look: it reads no retention state.
+A Segment root still refuses any eviction. After the writer
 open, the started daemon writes the daemon lines of `ledger_opened` (info) on
 stderr, never as a Ledger event (Workflow #378 A6a; it replaced the stdout line
 `actingd ledger_open …`), with the values `event_count`, `artifact_count`,
