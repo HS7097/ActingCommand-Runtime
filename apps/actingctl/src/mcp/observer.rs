@@ -162,11 +162,11 @@ fn runtime_failure(
 /// outlast every less urgent block). Each cut block leaves `<block>_truncated: true` where it
 /// was, and `truncated` lists the JSON pointer of every cut block in the order it was cut (#422
 /// OV-24K). The daemon, the global pause, each row's identity, `emulator_state` (Workflow #390
-/// 九处-1), `backend_selfcheck` (#411 A7), `not_running` (Workflow #386 SR-6b, MCP-19b), `pause`,
-/// `lease_active` and `queued`, `incomplete` and each `<block>_incomplete` are never cut: an
-/// answer that still does not fit when nothing is left to cut is returned as it is, and the call
-/// sends it with as many warnings in the summary text as fit, or answers
-/// `output_budget_exceeded` (`tools::tool_call_result`).
+/// 九处-1), `backend_selfcheck` (#411 A7), `not_running` (Workflow #386 SR-6b, MCP-19b),
+/// `activity` (Workflow #429 R-0b2), `pause`, `lease_active` and `queued`, `incomplete` and each
+/// `<block>_incomplete` are never cut: an answer that still does not fit when nothing is left to
+/// cut is returned as it is, and the call sends it with as many warnings in the summary text as
+/// fit, or answers `output_budget_exceeded` (`tools::tool_call_result`).
 pub(super) fn cut_to_fit(result: &mut Value, fits: impl Fn(&Value) -> bool) {
     let mut cut = Vec::new();
     while !fits(result) {

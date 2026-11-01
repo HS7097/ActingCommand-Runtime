@@ -5659,6 +5659,29 @@ too; it reads the report itself, and that reading, which this slice leaves as it
 report `actingcommand.ledger-maintenance.v1` with `verified-sqlite` or `verified-segment` (the report
 has been v2 since #378 A6a).
 
+### 1.243 Slice R-0b2 (0.12.36): `activity` on the instance rows of `actingctl overview` and `ac_overview` (R-0b, §1.238, fills `Status.activity`, and `actingctl status` prints it, but the overview's rows are built member by member and did not carry it, so the agents that run the devices could not see what an instance does now; coordinator work order `rd-1031/brief-r0b2.md`)
+
+[runtime-interface.md](runtime-interface.md) (the `overview` command row, the `ac_overview` tool row
+and the output budget's "never cut" list) is the contract. The number 1.243 is the coordinator's;
+§1.241 and §1.242 are in flight in the same release. Nothing persisted, no wire shape of the
+Runtime, no configuration key, no outcome code and no interface revision changes.
+
+**What.** (1) Each instance row carries the optional member `activity`, `{kind, request_id?,
+package_id?, since_unix_ms}`, the `RuntimeInstanceStatus.activity` of the overview's one Status read
+as the Runtime answered it, and no member while the instance has none. No Runtime request is added
+and nothing is read from the ledger for it. A row has it whichever other reads fail, since the
+Status read is the one the overview cannot do without. (2) MCP's output budget never cuts it; the
+members cut and their order are unchanged. (3) The tool's description and result schema say so.
+
+**What changes live.** The rows of a busy instance grow by the member (about 150 bytes for a run), so
+an overview near the budget starts cutting a little earlier, in the order it already has.
+
+**Rollback** (to 0.12.35). Nothing persisted: the member disappears from the rows.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| R0B2-1 | `instances[].activity?` | `actingctl overview` / `ac_overview` answer | R-0b2 | R-0b2 | `since` 0.12.36; from the one Status read; never cut |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
