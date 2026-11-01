@@ -152,7 +152,7 @@ fn composite_update(journal: &journal::Journal) -> bool {
 }
 
 /// Whether step `n`'s intent marks it as one of an automatic rollback's.
-fn of_rollback(intent: &Value) -> bool {
+pub(crate) fn of_rollback(intent: &Value) -> bool {
     intent
         .get("rollback")
         .and_then(Value::as_bool)
@@ -1109,10 +1109,13 @@ pub(crate) fn finish(
                         .install_operation_id(operation_id.clone())
                 }
                 None => {
-                    insert(
-                        "next",
-                        json!({"undo": ["install", "undo", "--root", paths.plain, "--operation", operation_id]}),
-                    );
+                    // Register §1.242: never a command certain to be refused.
+                    if !super::undo::edges_refuse_undo(operation.host(), &paths, loaded, &journal) {
+                        insert(
+                            "next",
+                            json!({"undo": ["install", "undo", "--root", paths.plain, "--operation", operation_id]}),
+                        );
+                    }
                     super::done(command)
                         .install_operation_id(operation_id.clone())
                         .commit_sha(target.clone().unwrap_or_default())

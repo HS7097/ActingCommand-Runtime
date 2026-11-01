@@ -1137,6 +1137,21 @@ tests = [
 ]
 incident = ["#421 P12"]
 
+# Register §1.242 (INST-UNDO-EDGE, 0.12.36; brief rd-1031/brief-inst-undo-edge.md; contracts/install-cli.md, "Undo and resume"): on the fake host, install undo applies the interface edges, then the whole rollback gate, toward the build before the operation whenever the operation started a Runtime of its own build, the composite's own start included. A finished composite across a one-way ledger, stopped outside the install commands, refuses interface_edge with the edge's values and changes nothing (T1); without a ledger change the gate runs, passes and the update is undone (T2); an unfinished composite before its start is undone as before, one whose start is done or begun with no evidence refuses (T3); after a failed post-start check whose automatic rollback the edge refused, the undo meets the same edge, a rollback that ran leaves no build to undo, and one interrupted past its gate is undone unjudged (T4); a failed start counts when a process spawned, exited or left running, and not when refused before any spawn (T5); an owner record that began inside the operation counts though the journal names no start (T6); after an automatic rollback refused by ledger_readability alone the undo is refused the same way until the part passes (T7); a composite's success names next.undo only when the edges would pass (T8)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst_undo_edge_1_a_finished_composite_across_a_one_way_ledger_refuses_and_changes_nothing",
+    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst_undo_edge_2_without_a_ledger_change_a_finished_composite_is_undone",
+    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst_undo_edge_3_an_unfinished_composite_is_judged_once_its_start_may_have_spawned",
+    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst_undo_edge_4_after_a_failed_post_check_the_undo_meets_the_edge_the_rollback_met",
+    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst_undo_edge_5_a_failed_start_counts_only_when_a_process_spawned",
+    "actingcommand-actingctl::bin:actingctl::install::gate_inst1_update::inst_undo_edge_6_an_owner_that_started_inside_the_operation_counts",
+    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst_undo_edge_7_after_a_rollback_the_reader_refused_the_undo_meets_the_same_part",
+    "actingcommand-actingctl::bin:actingctl::install::gate_inst2_deploy::inst_undo_edge_8_a_composites_next_names_undo_only_when_the_edges_would_pass",
+]
+incident = ["INST-UNDO-EDGE"]
+
 # Workflow #429 A.4 a (R-15a, 0.12.30; brief rd-1029/brief-wave3a.md R-15a; register §1.214; contracts/install-cli.md, "UI edges"): the installer's edges of the UI that runs after an operation (U*), on Speaks tables of neutral ranges: actingd-config one revision common to I, U* and R* (failing where I ∩ R* and U* ∩ R* hold one and I ∩ U* does not), ledger Rp.max ∈ U* and R*.max ∈ U*, runtime-client U* ∩ R*, runtime-outcomes R*.max ∈ U*, each passing on one table and the only U* edge failing on another (T1); a failed row names every side with the source and the range of its own (T2); a UI declaration read from a UI build manifest without runtime-outcomes counts as [0, 0] with the source default, failing R*.max 1 and passing R*.max 0 (T3)
 [[gate]]
 coverage = "Y"

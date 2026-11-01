@@ -5682,6 +5682,52 @@ an overview near the budget starts cutting a little earlier, in the order it alr
 |---|---|---|---|---|---|
 | R0B2-1 | `instances[].activity?` | `actingctl overview` / `ac_overview` answer | R-0b2 | R-0b2 | `since` 0.12.36; from the one Status read; never cut |
 
+### 1.242 Slice INST-UNDO-EDGE (0.12.36): `install undo` cannot go around the interface edge or the gate that refuse a rollback (found by the v0.12.36 release agent reading the installer; it lands before 114-B's first record; coordinator work order `rd-1031/brief-inst-undo-edge.md`; the coordinator's decisions of 11-01 on the first report: the whole gate once started, `next.undo` left out when certain to be refused)
+
+[install-cli.md](install-cli.md) ("Undo and resume", "An undo once the build has started") is the
+contract. The number 1.242 is the coordinator's; §1.241 and §1.243 are in flight in the same
+release. No code, key, vocabulary, journal member or interface revision is new.
+
+**What.** (1) Once a Runtime of the undone build has started, including the one a composite started
+inside its own operation, `install undo` of an update or rollback, finished or not, is a rollback:
+the interface edges first, then the whole rollback gate (`ledger_readability`, `open_time`,
+`config`). Failed edges refuse `interface_edge` (`commit_sha`, `count`, the result's `edges`), their
+ranges those of the operation's journalled plan; a failed part refuses `rollback_gate_failed`; both
+with nothing changed. An unfinished operation in which no Runtime of the target started, a plain
+update and a start refused before its spawn undo as before, unjudged. (2) A composite's success
+leaves `next.undo` out when the edges would refuse that undo.
+
+**Before.** The edge and the gate were judged only for a finished operation whose owner record began
+after the operation's end. The composite's own start is before that end, so stopping its Runtime
+with `request-shutdown` let `undo` swap back with no check. An unfinished operation was never
+judged. The same held after an automatic rollback its gate had refused (`rollback_gate_failed`).
+
+**Decisions within the work order.** (a) A start step begun with no evidence counts while the
+operation is unfinished, since the journal cannot tell it from no spawn and `resume` remains; a
+finished one is a start refused before its spawn. (b) An owner record of a finished operation that
+began after the operation did also counts. (c) An automatic rollback that recorded itself has passed
+its gate and its files may be reversed already: its undo goes on unjudged. (d) A gate that passes
+adds its caveats (`open_time_from_other_build`) as `note` links of the undo's result.
+
+**Accepted by the coordinator (11-01).**
+- A finished composite rollback across `ledger` is refused by `one_way` on undo, since the undo cannot acknowledge it; the forward path is an update with `--accept-ledger-one-way`.
+- A narrow gap stays: a start that spawned, crashed and whose resumed start failed to spawn loses its evidence, and only an owner record then counts it.
+
+**Why.** Once 114-B writes a record, a build whose `ledger` range ends below it cannot decode it and
+its start fails: the undo would swap back to a Runtime that cannot start. Once a build has started,
+an undo is a rollback, and a refused automatic rollback can only be fixed forward.
+
+**What changes live.** `install undo` after a composite: the gate now runs, reading the ledger with
+the previous build's reader, and a failed edge or part refuses what used to be done. A one-way
+composite's success no longer names `next.undo`. Nothing persisted changes.
+
+**Rollback** (to 0.12.35). Nothing persisted changes; `undo` judges a composite's own start no more.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| UE-1 | `install undo`: `interface_edge`, then `rollback_gate_failed`, when a Runtime of the undone build has started; result member `edges` | install command | INST-UNDO-EDGE | INST-UNDO-EDGE | `since` 0.12.36; reused code and refusal words |
+| UE-2 | `next.undo` of a composite's success left out when the edges would refuse it | install command | INST-UNDO-EDGE | INST-UNDO-EDGE | `since` 0.12.36 |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
