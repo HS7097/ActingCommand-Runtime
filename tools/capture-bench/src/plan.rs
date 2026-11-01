@@ -303,6 +303,10 @@ pub struct SegmentPlan {
     /// Viewers that unsubscribe at this offset (§4.4 item 3).
     #[serde(default)]
     pub viewer_unsubscribe_ms: Option<u64>,
+    /// #402 C2g: how long a stopped viewer child may take to end by itself (write its last
+    /// record) before it is killed. A 1 fps viewer needs up to two frame periods.
+    #[serde(default = "default_viewer_exit_wait")]
+    pub viewer_exit_wait_ms: u64,
     /// #402 C2b: the APK mode the segment sets first (`pattern`, `flip`, `step`, `static`,
     /// `replay`); `None` leaves it.
     #[serde(default)]
@@ -356,6 +360,10 @@ fn default_ttl() -> u64 {
 
 fn default_check() -> u64 {
     500
+}
+
+fn default_viewer_exit_wait() -> u64 {
+    3_000
 }
 
 fn default_grid() -> u32 {

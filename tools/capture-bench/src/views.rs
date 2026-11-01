@@ -72,6 +72,8 @@ struct Mailbox {
     dropped: u64,
     delivered: u64,
     closed: bool,
+    /// #402 C2g: the viewer is being stopped; no lease of its comes back.
+    retired: bool,
 }
 
 #[derive(Default)]
@@ -93,18 +95,22 @@ impl ViewHub {
         Self::default()
     }
 
-    /// Opens subscriber `subscriber`'s mailbox for `instance`.
+    /// Opens subscriber `subscriber`'s mailbox for `instance`. #402 C2g: a subscriber that
+    /// subscribes again gets its mailbox back, with its counts, and its writer wakes.
     pub fn open_mailbox(&self, subscriber: u64, instance: usize) {
-        lock(&self.state).mailboxes.insert(
-            subscriber,
-            Mailbox {
-                instance,
-                pending: None,
-                dropped: 0,
-                delivered: 0,
-                closed: false,
-            },
-        );
+        let mut state = lock(&self.state);
+        let mailbox = state.mailboxes.entry(subscriber).or_insert(Mailbox {
+            instance,
+            pending: None,
+            dropped: 0,
+            delivered: 0,
+            closed: false,
+            retired: false,
+        });
+        mailbox.instance = instance;
+        mailbox.closed = false;
+        drop(state);
+        self.changed.notify_all();
     }
 
     pub fn close_mailbox(&self, subscriber: u64) {
@@ -112,6 +118,36 @@ impl ViewHub {
             mailbox.closed = true;
         }
         self.changed.notify_all();
+    }
+
+    /// #402 C2g: closes the mailbox for good: the viewer is being stopped, its writer ends.
+    pub fn retire_mailbox(&self, subscriber: u64) {
+        if let Some(mailbox) = lock(&self.state).mailboxes.get_mut(&subscriber) {
+            mailbox.closed = true;
+            mailbox.retired = true;
+        }
+        self.changed.notify_all();
+    }
+
+    /// #402 C2g: waits (a production thread) while the closed mailbox of `subscriber` may still
+    /// come back: true once it is open again, false once it is retired or unknown.
+    pub fn wait_reopened(&self, subscriber: u64) -> bool {
+        let mut state = lock(&self.state);
+        loop {
+            let Some(mailbox) = state.mailboxes.get(&subscriber) else {
+                return false;
+            };
+            if mailbox.retired {
+                return false;
+            }
+            if !mailbox.closed {
+                return true;
+            }
+            state = self
+                .changed
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
     }
 
     /// Publishes a frame: the instance's slot keeps only it and every subscriber of the

@@ -392,6 +392,7 @@ fn write_failure(
         SUBSCRIBER,
         &json!({ "op": "lease" }),
         &AtomicBool::new(stopping),
+        false,
     );
     journal.flush();
     let text = std::fs::read_to_string(root.join("events.jsonl")).expect("events.jsonl");

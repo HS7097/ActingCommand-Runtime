@@ -11,6 +11,19 @@
 //! `{"op":"cell_ended"}`, `{"op":"ended"}`, `{"op":"ping","bench_us":…}`.
 //! Viewer → bench: `{"op":"renew"}`, `{"op":"unsubscribe"}`,
 //! `{"op":"pong","bench_us":…,"viewer_us":…}`.
+//!
+//! #402 C2g, the viewer's record (`viewer-<id>.jsonl`): every record is written whole as it
+//! happens (a `LineWriter`, as the journal does), and a viewer that ends normally writes a last
+//! record `viewer_end`. A log without that record is incomplete, and the analysis says so: the
+//! child was killed, or crashed, at that point. D2c lost up to 8 KiB of tail with no error in 10
+//! of 36 viewers: the log was a `BufWriter` flushed only at the end of `view_main`, and
+//! `ChildViewer`'s stop killed the child right after closing its mailbox, so a child that had
+//! not yet seen the end of its standard input never reached that flush. The stop now gives it
+//! time to end by itself, and `events.jsonl` records how each viewer ended (`viewer_ended`).
+//!
+//! #402 C2g, a lost lease: a viewer learns its lease has gone when a renewal is refused, and
+//! subscribes again ([`lease_lost`]) unless a stop gate is in force. A viewer scripted to stop
+//! renewing (plan §4.4 item 5, TTL 到期) never does: its expiry is what the case tests.
 
 use crate::clock::Micros;
 use crate::hub::Hub;
@@ -18,8 +31,9 @@ use crate::journal::Journal;
 use crate::locks::LockOwner;
 use crate::views::ViewMessage;
 use serde_json::{Value, json};
-use std::io::{BufRead, BufReader, Read, Write};
-use std::path::PathBuf;
+use std::fs::File;
+use std::io::{BufRead, BufReader, LineWriter, Write};
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -41,6 +55,10 @@ pub struct ViewerContext {
     pub grace_us: Micros,
     /// #402 C2b: this viewer draws each frame in the minimal GDI window (`A_submit`).
     pub gdi: bool,
+    /// #402 C2g: the cell, segment, round, path and orientation it serves, for its events.
+    pub place: Value,
+    /// #402 C2g: how long a stopped child may take to end by itself (`viewer_exit_wait_ms`).
+    pub exit_wait_us: Micros,
 }
 
 pub trait ViewerHandle: Send {
@@ -82,6 +100,46 @@ fn message_line(subscriber: u64, message: &ViewMessage, now: Micros) -> Value {
     }
 }
 
+/// `body` with the viewer's place in the plan (#402 C2g).
+fn with_place(place: &Value, mut body: Value) -> Value {
+    if let (Value::Object(body), Value::Object(place)) = (&mut body, place) {
+        for (key, value) in place {
+            body.insert(key.clone(), value.clone());
+        }
+    }
+    body
+}
+
+/// What a viewer does when it learns its lease has gone: subscribes again and records it, or,
+/// scripted to stop renewing or under a stop gate, stays without a lease. The new lease's id.
+pub struct LostLease<'a> {
+    pub hub: &'a Hub,
+    pub journal: &'a Journal,
+    pub owner: &'a LockOwner,
+    pub instance: usize,
+    pub subscriber: u64,
+    pub ttl_us: Micros,
+    pub place: &'a Value,
+    pub may_resubscribe: bool,
+}
+
+pub fn lease_lost(lost: &LostLease<'_>) -> Option<u64> {
+    if !lost.may_resubscribe {
+        return None;
+    }
+    let lease = lost
+        .hub
+        .resubscribe(lost.owner, lost.instance, lost.subscriber, lost.ttl_us)?;
+    lost.journal.event(
+        "lease_resubscribed",
+        with_place(
+            lost.place,
+            json!({ "instance": lost.instance, "viewer_id": lost.subscriber, "lease": lease.lease_id }),
+        ),
+    );
+    Some(lease.lease_id)
+}
+
 // ---- in-process viewers (D1) ----
 
 /// Starts in-process viewers that the controller drives.
@@ -94,6 +152,7 @@ struct InProcessViewer {
     last_renew: Micros,
     last_read: Micros,
     file: String,
+    frames: u64,
 }
 
 impl ViewerLauncher for InProcessViewers {
@@ -106,7 +165,10 @@ impl ViewerLauncher for InProcessViewers {
         let now = context.hub.clock.now_us();
         context.journal.event(
             "viewer_started",
-            json!({ "instance": context.instance, "viewer_id": context.subscriber, "lease": lease }),
+            with_place(
+                &context.place,
+                json!({ "instance": context.instance, "viewer_id": context.subscriber, "lease": lease }),
+            ),
         );
         let file = format!("viewer-{}.jsonl", context.subscriber);
         Ok(Box::new(InProcessViewer {
@@ -116,6 +178,7 @@ impl ViewerLauncher for InProcessViewers {
             last_renew: now,
             last_read: 0,
             file,
+            frames: 0,
         }))
     }
 }
@@ -152,7 +215,17 @@ impl ViewerHandle for InProcessViewer {
             {
                 self.last_renew = now;
             } else {
-                self.lease = None;
+                self.lease = lease_lost(&LostLease {
+                    hub: &self.context.hub,
+                    journal: &self.context.journal,
+                    owner: &self.owner,
+                    instance: self.context.instance,
+                    subscriber: self.context.subscriber,
+                    ttl_us: self.context.ttl_us,
+                    place: &self.context.place,
+                    may_resubscribe: self.context.stop_renew_at_us.is_none(),
+                });
+                self.last_renew = now;
             }
         }
         let period = self
@@ -164,6 +237,7 @@ impl ViewerHandle for InProcessViewer {
         }
         self.last_read = now;
         if let Some(message) = self.context.hub.views.take(self.context.subscriber) {
+            self.frames += u64::from(matches!(message, ViewMessage::Frame(_)));
             self.context.journal.append(
                 &self.file,
                 &message_line(self.context.subscriber, &message, now),
@@ -183,7 +257,31 @@ impl ViewerHandle for InProcessViewer {
         self.context
             .hub
             .views
-            .close_mailbox(self.context.subscriber);
+            .retire_mailbox(self.context.subscriber);
+        let now = self.context.hub.clock.now_us();
+        self.context.journal.append(
+            &self.file,
+            &json!({
+                "kind": "viewer_end",
+                "viewer_id": self.context.subscriber,
+                "t_us": now,
+                "reason": "stopped",
+                "frames": self.frames,
+            }),
+        );
+        self.context.journal.event(
+            "viewer_ended",
+            with_place(
+                &self.context.place,
+                json!({
+                    "instance": self.context.instance,
+                    "viewer_id": self.context.subscriber,
+                    "how": "in_process",
+                    "exit_code": null,
+                    "ended_before_stop": false,
+                }),
+            ),
+        );
     }
 }
 
@@ -206,6 +304,9 @@ struct ChildViewer {
     stopped: Arc<AtomicBool>,
     /// #402 INT-1: the bench has begun to stop this viewer (its pipe may close under a write).
     stopping: Arc<AtomicBool>,
+    journal: Arc<Journal>,
+    place: Value,
+    exit_wait_us: Micros,
 }
 
 /// #402 INT-1: the `viewer_write_failed` record. A write that fails with a closed pipe
@@ -269,17 +370,26 @@ fn write_message<W: Write>(
     stdin.flush()
 }
 
-/// The hello, then the mailbox, until the mailbox closes or a write fails.
+/// The hello, then the mailbox, until the mailbox closes or a write fails. #402 C2g: with
+/// `may_resubscribe` a closed mailbox (a lease that expired) does not end the viewer: the writer
+/// waits for the new lease, or for the stop that retires the mailbox.
 fn write_messages<W: Write>(
     stdin: &mut W,
     hub: &Hub,
     subscriber: u64,
     hello: &Value,
+    may_resubscribe: bool,
 ) -> std::io::Result<()> {
     stdin.write_all(format!("{hello}\n").as_bytes())?;
     // §5.1: a QPC handshake when the viewer starts and then every minute.
     let mut next_ping = 0;
-    while let Some(message) = hub.views.wait_take(subscriber) {
+    loop {
+        let Some(message) = hub.views.wait_take(subscriber) else {
+            if may_resubscribe && hub.views.wait_reopened(subscriber) {
+                continue;
+            }
+            return Ok(());
+        };
         let now = hub.clock.now_us();
         if now >= next_ping {
             next_ping = now + 60_000_000;
@@ -288,7 +398,6 @@ fn write_messages<W: Write>(
         }
         write_message(stdin, &message, now)?;
     }
-    Ok(())
 }
 
 /// The writer thread's body: the subscriber's one-frame mailbox to the child's stdin.
@@ -298,6 +407,7 @@ fn write_messages<W: Write>(
 /// `cell_ended` another viewer's stop broadcasts can then meet its closed pipe before its own
 /// stop begins (D2b, STOP and hang-N: os error 232 recorded `expected: false`, the same error
 /// `expected: true` on ABORT). The gate is read after the failure, so a gate set before it counts.
+#[allow(clippy::too_many_arguments)]
 pub fn feed_viewer<W: Write>(
     stdin: &mut W,
     hub: &Hub,
@@ -306,8 +416,9 @@ pub fn feed_viewer<W: Write>(
     subscriber: u64,
     hello: &Value,
     stopping: &AtomicBool,
+    may_resubscribe: bool,
 ) {
-    if let Err(error) = write_messages(stdin, hub, subscriber, hello) {
+    if let Err(error) = write_messages(stdin, hub, subscriber, hello, may_resubscribe) {
         let owner = LockOwner::new(format!("viewer-writer/{subscriber}"));
         let stop_begun = stopping.load(Ordering::Acquire) || hub.stop_in_force(&owner, instance);
         journal.event(
@@ -367,11 +478,15 @@ impl ViewerLauncher for ChildViewers {
                 .subscribe(&owner, context.instance, context.subscriber, context.ttl_us);
         context.journal.event(
             "viewer_started",
-            json!({ "instance": context.instance, "viewer_id": context.subscriber, "lease": lease, "pid": child.id() }),
+            with_place(
+                &context.place,
+                json!({ "instance": context.instance, "viewer_id": context.subscriber, "lease": lease, "pid": child.id() }),
+            ),
         );
         let lease_id = Arc::new(Mutex::new(Some(lease.lease_id)));
         let stopped = Arc::new(AtomicBool::new(false));
         let stopping = Arc::new(AtomicBool::new(false));
+        let may_resubscribe = context.stop_renew_at_us.is_none();
         // The writer: the subscriber's one-frame mailbox to the child's stdin.
         {
             let hub = Arc::clone(&context.hub);
@@ -384,7 +499,14 @@ impl ViewerLauncher for ChildViewers {
                 .name(format!("viewer-writer-{subscriber}"))
                 .spawn(move || {
                     feed_viewer(
-                        &mut stdin, &hub, &journal, instance, subscriber, &hello, &stopping,
+                        &mut stdin,
+                        &hub,
+                        &journal,
+                        instance,
+                        subscriber,
+                        &hello,
+                        &stopping,
+                        may_resubscribe,
                     );
                 });
         }
@@ -397,6 +519,9 @@ impl ViewerLauncher for ChildViewers {
             let subscriber = context.subscriber;
             let grace_us = context.grace_us;
             let stopped = Arc::clone(&stopped);
+            let stopping = Arc::clone(&stopping);
+            let ttl_us = context.ttl_us;
+            let place = context.place.clone();
             let _ = std::thread::Builder::new()
                 .name(format!("viewer-reader-{subscriber}"))
                 .spawn(move || {
@@ -411,12 +536,33 @@ impl ViewerLauncher for ChildViewers {
                         match (message["op"].as_str(), current) {
                             (Some("renew"), Some(lease)) => {
                                 if !hub.renew(&owner, instance, lease) {
-                                    *lock(&lease_id) = None;
+                                    // #402 C2g: under the lease's lock, so that a stop either
+                                    // comes first (and no lease is taken) or sees the new lease
+                                    // and ends it.
+                                    let mut current = lock(&lease_id);
+                                    *current = if stopping.load(Ordering::Acquire) {
+                                        None
+                                    } else {
+                                        lease_lost(&LostLease {
+                                            hub: &hub,
+                                            journal: &journal,
+                                            owner: &owner,
+                                            instance,
+                                            subscriber,
+                                            ttl_us,
+                                            place: &place,
+                                            may_resubscribe,
+                                        })
+                                    };
                                 }
                             }
-                            (Some("unsubscribe"), Some(lease)) => {
-                                hub.unsubscribe(&owner, instance, lease, grace_us);
+                            (Some("unsubscribe"), current) => {
+                                if let Some(lease) = current {
+                                    hub.unsubscribe(&owner, instance, lease, grace_us);
+                                }
                                 *lock(&lease_id) = None;
+                                // No lease of this viewer comes back: its writer ends.
+                                hub.views.retire_mailbox(subscriber);
                                 journal.event(
                                     "unsubscribe",
                                     json!({ "instance": instance, "viewer_id": subscriber, "t_us": hub.clock.now_us() }),
@@ -454,6 +600,9 @@ impl ViewerLauncher for ChildViewers {
             child,
             stopped,
             stopping,
+            journal: Arc::clone(&context.journal),
+            place: context.place.clone(),
+            exit_wait_us: context.exit_wait_us,
         }))
     }
 }
@@ -476,13 +625,59 @@ impl ViewerHandle for ChildViewer {
         self.context_hub
             .views
             .broadcast(Some(self.instance), ViewMessage::CellEnded);
-        self.context_hub.views.close_mailbox(self.subscriber);
-        // The child ends when its stdin closes; a child still there after that is stopped (it
-        // is ours, in our job object).
-        if !self.stopped.load(Ordering::Acquire) && matches!(self.child.try_wait(), Ok(None)) {
-            let _ = self.child.kill();
-        }
-        let _ = self.child.wait();
+        let ended_before_stop = self.stopped.load(Ordering::Acquire);
+        self.context_hub.views.retire_mailbox(self.subscriber);
+        // #402 C2g: the writer ends now, so the child sees its stdin close, writes its last
+        // record and ends. It gets the plan's time for that; only a child still there after it
+        // is killed (it is ours, in our job object), and its log then has no last record. Real
+        // time: this is a real process (the D1 rehearsal's viewers are in-process).
+        let started = std::time::Instant::now();
+        let wait = std::time::Duration::from_micros(self.exit_wait_us);
+        let mut wait_error = None;
+        let ended = loop {
+            match self.child.try_wait() {
+                Ok(Some(status)) => break Some(status),
+                Ok(None) if started.elapsed() < wait => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Ok(None) => break None,
+                Err(error) => {
+                    wait_error = Some(error.to_string());
+                    break None;
+                }
+            }
+        };
+        let waited_ms = started.elapsed().as_millis() as u64;
+        let (how, status) = match ended {
+            Some(status) => ("exited", Ok(status)),
+            None => {
+                let killed = self.child.kill();
+                let status = self.child.wait();
+                (
+                    "killed",
+                    killed.and(status).map_err(|error| error.to_string()),
+                )
+            }
+        };
+        let (exit_code, status_error) = match status {
+            Ok(status) => (status.code(), None),
+            Err(error) => (None, Some(error)),
+        };
+        self.journal.event(
+            "viewer_ended",
+            with_place(
+                &self.place,
+                json!({
+                    "instance": self.instance,
+                    "viewer_id": self.subscriber,
+                    "how": how,
+                    "exit_code": exit_code,
+                    "waited_ms": waited_ms,
+                    "ended_before_stop": ended_before_stop,
+                    "error": wait_error.or(status_error),
+                }),
+            ),
+        );
     }
 }
 
@@ -502,18 +697,34 @@ fn host_micros() -> u64 {
     crate::winproc::qpc_micros().unwrap_or(0)
 }
 
+/// `view_main`'s exit codes: 2, the log did not open; 3, a record could not be written; 4, the
+/// bench's stream failed or stopped inside a frame. `viewer_ended` carries them.
+pub const VIEW_EXIT_NO_LOG: i32 = 2;
+pub const VIEW_EXIT_LOG_WRITE_FAILED: i32 = 3;
+pub const VIEW_EXIT_INPUT_FAILED: i32 = 4;
+
+/// #402 C2g: the viewer's log: each record reaches the file as a whole when it is written, as in
+/// the journal (`journal.rs`, `LineWriter`), so a child killed later loses nothing before it.
+pub fn open_view_log(path: &Path) -> std::io::Result<LineWriter<File>> {
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    Ok(LineWriter::new(log))
+}
+
+fn write_view_record<L: Write>(log: &mut L, record: &Value) -> std::io::Result<()> {
+    log.write_all(format!("{record}\n").as_bytes())?;
+    log.flush()
+}
+
 pub fn view_main(args: ViewArgs) -> i32 {
     let log_path = args
         .run_dir
         .join(format!("viewer-{}.jsonl", args.viewer_id));
-    let Ok(log) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-    else {
-        return 2;
+    let Ok(mut log) = open_view_log(&log_path) else {
+        return VIEW_EXIT_NO_LOG;
     };
-    let log = Arc::new(Mutex::new(std::io::BufWriter::new(log)));
     let out = Arc::new(Mutex::new(std::io::stdout()));
     let started = std::time::Instant::now();
     let done = Arc::new(AtomicBool::new(false));
@@ -549,16 +760,31 @@ pub fn view_main(args: ViewArgs) -> i32 {
                 }
             });
     }
-    let mut input = BufReader::new(std::io::stdin().lock());
+    let input = BufReader::new(std::io::stdin().lock());
+    let code = view_records(&args, input, &*out, &mut log);
+    done.store(true, Ordering::Release);
+    code
+}
+
+/// The viewer's loop: reads the bench's stream, writes each record as it happens and, when the
+/// stream ends, the last record `viewer_end` (#402 C2g). Returns the exit code.
+pub fn view_records<I: BufRead, O: Write, L: Write>(
+    args: &ViewArgs,
+    mut input: I,
+    out: &Mutex<O>,
+    log: &mut L,
+) -> i32 {
     let mut last_read = std::time::Instant::now();
     // #402 C2b (§5.1): the minimal window; created at the first frame, at its size.
     let mut window: Option<crate::winproc::GdiWindow> = None;
     let mut window_error: Option<String> = None;
     let mut line = String::new();
-    loop {
+    let mut frames = 0_u64;
+    let reason = loop {
         line.clear();
         match input.read_line(&mut line) {
-            Ok(0) | Err(_) => break,
+            Ok(0) => break "stdin_closed",
+            Err(_) => break "input_failed",
             Ok(_) => {}
         }
         let Ok(message) = serde_json::from_str::<Value>(line.trim()) else {
@@ -570,7 +796,7 @@ pub fn view_main(args: ViewArgs) -> i32 {
                 let bytes = message["bytes"].as_u64().unwrap_or(0) as usize;
                 let mut pixels = vec![0u8; bytes];
                 if input.read_exact(&mut pixels).is_err() {
-                    break;
+                    break "input_cut_inside_a_frame";
                 }
                 if let Some(fps) = args.slow_fps {
                     let period = std::time::Duration::from_secs_f64(1.0 / fps.max(0.01));
@@ -598,6 +824,7 @@ pub fn view_main(args: ViewArgs) -> i32 {
                         }
                     }
                 }
+                frames += 1;
                 json!({
                     "kind": "frame",
                     "viewer_id": args.viewer_id,
@@ -619,7 +846,7 @@ pub fn view_main(args: ViewArgs) -> i32 {
             Some("ping") => {
                 let pong =
                     json!({ "op": "pong", "bench_us": message["bench_us"], "viewer_us": now });
-                let mut out = lock(&out);
+                let mut out = lock(out);
                 let _ = out
                     .write_all(format!("{pong}\n").as_bytes())
                     .and_then(|()| out.flush());
@@ -633,18 +860,29 @@ pub fn view_main(args: ViewArgs) -> i32 {
             }
             Some("ended") => {
                 let record = json!({ "kind": "ended", "viewer_id": args.viewer_id, "t_us": now });
-                let mut log = lock(&log);
-                let _ = log.write_all(format!("{record}\n").as_bytes());
-                break;
+                if write_view_record(log, &record).is_err() {
+                    return VIEW_EXIT_LOG_WRITE_FAILED;
+                }
+                break "ended";
             }
             _ => continue,
         };
-        let mut log = lock(&log);
-        if log.write_all(format!("{record}\n").as_bytes()).is_err() {
-            break;
+        if write_view_record(log, &record).is_err() {
+            return VIEW_EXIT_LOG_WRITE_FAILED;
         }
+    };
+    let end = json!({
+        "kind": "viewer_end",
+        "viewer_id": args.viewer_id,
+        "t_us": host_micros(),
+        "reason": reason,
+        "frames": frames,
+    });
+    if write_view_record(log, &end).is_err() {
+        return VIEW_EXIT_LOG_WRITE_FAILED;
     }
-    done.store(true, Ordering::Release);
-    let _ = lock(&log).flush();
-    0
+    match reason {
+        "stdin_closed" | "ended" => 0,
+        _ => VIEW_EXIT_INPUT_FAILED,
+    }
 }

@@ -17,6 +17,7 @@ use crate::model::{BackendKind, CallOwner, Disposition, Entry, GateKind, GlobalG
 use crate::views::{PreviewFrame, Validity, ViewHub, ViewMessage};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -486,6 +487,8 @@ pub struct Hub {
     pub views: Arc<ViewHub>,
     sink: Arc<dyn RecordSink>,
     notes: Mutex<HubNotes>,
+    /// #402 C2g: how many leases viewers took again after losing one ([`Hub::resubscribe`]).
+    resubscribed: AtomicU64,
 }
 
 impl Hub {
@@ -576,6 +579,7 @@ impl Hub {
             views: Arc::new(ViewHub::new()),
             sink,
             notes: Mutex::new(HubNotes::default()),
+            resubscribed: AtomicU64::new(0),
         }
     }
 
@@ -852,6 +856,29 @@ impl Hub {
         self.views.open_mailbox(subscriber, instance);
         self.scheduler_lock.release(who);
         lease
+    }
+
+    /// #402 C2g: a viewer learned its lease is gone (D2c: a host stall of 34 s let two leases
+    /// expire and the rest of the round was `skipped_no_lease`): it takes a new one, unless a
+    /// stop gate is in force (the segment is ending). `None` then, and no lease.
+    pub fn resubscribe(
+        &self,
+        who: &LockOwner,
+        instance: usize,
+        subscriber: u64,
+        ttl_us: Micros,
+    ) -> Option<Lease> {
+        if self.stop_in_force(who, instance) {
+            return None;
+        }
+        let lease = self.subscribe(who, instance, subscriber, ttl_us);
+        self.resubscribed.fetch_add(1, Ordering::Relaxed);
+        Some(lease)
+    }
+
+    /// #402 C2g: the leases taken again so far (`summary.json`'s `lease_resubscribed`).
+    pub fn lease_resubscribed(&self) -> u64 {
+        self.resubscribed.load(Ordering::Relaxed)
     }
 
     /// Renews a lease; false when it is gone (expired or ended).

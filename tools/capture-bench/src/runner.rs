@@ -1834,6 +1834,14 @@ impl RunShared {
                         .map(|offset| self.now() + ms(offset)),
                     grace_us: ms(segment.grace_ms),
                     gdi: index == 0 && segment.gdi_viewer,
+                    place: json!({
+                        "cell": cell.id,
+                        "segment": label,
+                        "round": info.round,
+                        "path": segment.path,
+                        "orientation": info.orientation,
+                    }),
+                    exit_wait_us: ms(segment.viewer_exit_wait_ms),
                 };
                 match self.viewers.start(context) {
                     Ok(viewer) => viewers.push(viewer),
@@ -3319,6 +3327,7 @@ impl RunShared {
                 "inflight_before_register": checker.inflight_before_register,
             },
             "journal_failures": self.journal.failures(),
+            "lease_resubscribed": self.hub.lease_resubscribed(),
         });
         let _ = self.journal.write_json("summary.json", &summary);
         self.journal.flush();
