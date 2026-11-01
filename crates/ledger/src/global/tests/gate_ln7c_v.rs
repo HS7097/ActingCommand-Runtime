@@ -13,8 +13,9 @@
 //!   own pointer reader made to miss it, so `verify`'s check of the index rows passes: a valid root
 //!   with a wrong row) is reported, on the ledger's call that the flag runs: `ledger_index_mismatch`
 //!   of `verify_frame_query`, R1's `artifact_id`, `field` `/class`.
-//! - Without the flag, `verify` of the same matching root answers as before the check existed: the
-//!   receipt of the complete read alone, and no count for actingd's stderr line.
+//! - Without the flag, `verify --full` (#422 LN-VERIFY) of the same matching root answers as before
+//!   the check existed: the receipt of the complete read alone, and no count for actingd's stderr
+//!   line.
 //! - Fix round 1b (Fail Loud): the flag is never ignored. With an operation other than `verify`,
 //!   or on a root that is not formal (a Segment root), it is refused with
 //!   `maintenance_arguments_invalid`, and nothing is written.
@@ -141,6 +142,7 @@ fn host_maintain(
             artifact_root: None,
             limits: MaintenanceLimits::default(),
             frame_query,
+            full: false,
         },
     )
 }
@@ -153,6 +155,22 @@ fn host_verify(root: &Path, frame_query: bool) -> HostAnswer {
         None,
         None,
         frame_query,
+    )
+}
+
+/// `ledger-maintenance verify --full` of `root` through the host (#422 LN-VERIFY).
+fn host_verify_full(root: &Path) -> HostAnswer {
+    RuntimeHost::maintain_ledger(
+        RuntimeHostConfig::new(root, SALT),
+        LedgerMaintenanceRequest {
+            operation: LedgerMaintenanceOperation::Verify,
+            backup: None,
+            target: None,
+            artifact_root: None,
+            limits: MaintenanceLimits::default(),
+            frame_query: false,
+            full: true,
+        },
     )
 }
 
@@ -288,9 +306,10 @@ fn ln7c_v_without_the_flag_verify_answers_the_complete_read_alone() {
     let ledger = complete_read_status(root.path(), &database);
     drop(database);
 
-    // `verify` without `--frame-query`: the receipt of the complete read alone, and no count, so
-    // actingd prints no frame query line.
-    let receipt = host_verify(root.path(), false).expect("verify passes a matching root");
+    // `verify --full` without `--frame-query` (#422 LN-VERIFY: the complete read moved behind
+    // `--full`): the receipt of the complete read alone, and no count, so actingd prints no frame
+    // query line.
+    let receipt = host_verify_full(root.path()).expect("verify passes a matching root");
     assert!(
         receipt.frame_query.is_none(),
         "no frame query count without the flag: {:?}",
@@ -408,6 +427,9 @@ fn ln7c_v_frame_query_on_a_non_formal_root_is_refused() {
     let verified = host_verify(root.path(), false).expect("verify passes the Segment root");
     assert_eq!(verified.status, "verified-segment");
     assert!(verified.frame_query.is_none());
+    // #422 LN-VERIFY: a Segment root has one read, with or without `--full`.
+    let full = host_verify_full(root.path()).expect("verify --full passes the Segment root");
+    assert_eq!(full.status, "verified-segment");
 
     let mut before = files(root.path());
     assert_eq!(refusal(host_verify(root.path(), true)), arguments_invalid());

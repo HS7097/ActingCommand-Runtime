@@ -896,6 +896,17 @@ fn inst1_it_11_the_ledger_verification_runs_before_any_swap() {
         .iter()
         .position(|line| line.contains("ledger-maintenance verify"))
         .expect("the verification ran");
+    // #422 LN-VERIFY: exactly these arguments, which select the target's bounded check: the
+    // installer never passes `--full` or `--frame-query`.
+    let config_word = log[verify]
+        .split_once("actingcommand-actingd.exe ledger-maintenance verify --config ")
+        .map(|(_, config_word)| config_word)
+        .unwrap_or_else(|| panic!("the target's actingd, verify and --config: {}", log[verify]));
+    assert!(
+        config_word.ends_with("actingd.config.json") && !config_word.contains(" --"),
+        "the configuration and no other argument: {}",
+        log[verify]
+    );
     let swap = log
         .iter()
         .position(|line| *line == format!("step {first_swap}"))

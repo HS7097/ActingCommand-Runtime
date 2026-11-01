@@ -5609,6 +5609,56 @@ otherwise; no resource repository's standard package carries one yet.
 | R11-3 | `installation[].task_ids`, `.irreversible`, `.ui`, `.display` (composed rows) | `actingctl packs` / `ac_packs` answer | R-11 | R-11 | offline, no revision; `task_ids` until SS-7 |
 | R11-4 | `standard_pack_problem` `ui_out_of_limits`, `ui_duplicate`, `ui_group_unknown`, `ui_parameter_undeclared` | catalog vocabulary | R-11 | R-11 | `since` 0.12.36 |
 
+### 1.241 Slice LN-VERIFY (0.12.36): `ledger-maintenance verify` is the start's bounded check by default, and the complete read moves behind `--full` (#422; brief rd-1031/brief-ln-verify.md)
+
+[ledger-maintenance.md](ledger-maintenance.md) ("`verify` of a formal root"),
+[install-cli.md](install-cli.md) ("Ledger verify"),
+[component-interfaces.md](component-interfaces.md),
+[ledger-observer.md](ledger-observer.md) (§15), [ledger-store.md](ledger-store.md),
+[runtime-database.md](runtime-database.md), [runtime-config.md](runtime-config.md) and
+[actingd-check-config.md](actingd-check-config.md) are the contract. The number 1.241 is the
+coordinator's. No code, key, location, schema or interface revision is new; `ledger_observer.open_verify_tail_records`
+gains a reader.
+
+**What.** (1) `actingd ledger-maintenance verify --config <config>` on a formal root, without flags,
+reports the new `status` word `verified-sqlite-bounded`: `LedgerMaintenance::verify_formal_bounded`
+runs `verify_open_tail`, the start's own check (`TailOpen::Maintenance`: the format and the views,
+the keyed meta row and head, `MAX(sequence)`, the newest `open_verify_tail_records` records, each
+authenticated with this binary's decoder), plus the contiguity of the stored sequences
+(`verify_sequence_extent`), on `open_existing_unchecked`. It reads no older record and no State
+table, runs no whole-file `quick_check(1)` and no `maintenance_digest`, does not look at the
+retention state (the next start completes an unsettled eviction, as it always does) and takes none
+of the writer's steps. (2) `--full` (`LedgerMaintenanceRequest::full`) is the complete read as it
+was, `verified-sqlite`; `--frame-query` implies it; another operation refuses it
+(`maintenance_arguments_invalid`). (3) A Segment or candidate root behaves as before. (4) Exit codes
+and the failure shape do not change: the same code and operation as the complete read for the same
+damage, with the `ledger_open_measured` note link once the read is under way.
+
+**Decisions within the work order.** (a) The tail is `ledger_observer.open_verify_tail_records` from
+the file (`ActingdConfigFile::maintenance_manifest`), so that the check authenticates as many records
+as the start; only that member reaches the manifest, only for `verify` without flags, and a value the
+key does not take is `maintenance_config_invalid`. (b) `RuntimeStateStore::from_database`'s validation
+does not run in the bounded mode either: it does not authenticate the ledger, and the next start runs
+it. (c) `verify_sequence_extent` walks one whole index: its memory does not grow with the history, its
+time follows that index's size. It is the statement the installer's head read and the offline open
+already run on production.
+
+**Why.** v0.12.36 moves `ledger` from [3, 4] to [3, 5], so the deploy has a `LedgerVerify` step: with
+the Runtime stopped, before anything is swapped, the live v0.12.35 installer runs the target's
+`ledger-maintenance verify --config <config>`. The complete read keeps every event in memory with no
+budget (10.07 GB and about 2.43 million events on the production ledger; the same kind of read reached
+12 GB in 60 s, #422 6503130154; v0.11.3's cold verify failed at 120.76 s), and a timeout leaves the
+operation unfinished with the Runtime stopped. Alice's standing ruling (10-08): skip the cold gate and
+let the new version verify on its own start. The live installer passes exactly those arguments, so the
+fix is the target's default.
+
+**What changes live.** An update whose `ledger` range changes gets the bounded check. A damaged older
+record is no longer found by that gate: it is found when it is read, by the background re-check or by
+`--full`. `acsetup` in the UI repository passes the same arguments, so its gate runs the bounded check
+too; it reads the report itself, and that reading, which this slice leaves as it is, accepts only the
+report `actingcommand.ledger-maintenance.v1` with `verified-sqlite` or `verified-segment` (the report
+has been v2 since #378 A6a).
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -197,7 +197,7 @@ pub fn verify_release_source_reference(
 /// on its own (record and hash, keyed tag, predecessor link, indexed columns, links and
 /// artifacts). Duplicate boundaries fail with both original locators, never a first-row win.
 /// The read does not grow with the history: a record it does not select is not read here, and its
-/// damage is found by the open's verification, by `ledger-maintenance verify` and, once the open
+/// damage is found by the open's verification, by `ledger-maintenance verify --full` and, once the open
 /// verifies only its tail, by the scrub.
 pub fn read_release_baseline_source(
     database: &RuntimeDatabase,

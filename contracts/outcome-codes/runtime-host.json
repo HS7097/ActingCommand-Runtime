@@ -174,7 +174,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.11.5",
-      "description": "ledger-maintenance refused a root whose artifact retention is not settled: on a formal root an eviction intent without its outcome (pending_evictions counts the artifacts), on a Segment root any recorded eviction.",
+      "description": "ledger-maintenance refused a root whose artifact retention is not settled: on a formal root (verify --full, backup and the like; verify without flags does not look) an eviction intent without its outcome (pending_evictions counts the artifacts), on a Segment root any recorded eviction.",
       "common_causes": "A hard stop (power loss, forced reboot) between an eviction intent and its outcome; a Segment root that already records evictions.",
       "handling": "Start actingd once on the root so that startup recovery finishes the pending eviction, then run the maintenance operation again."
     },
@@ -10105,7 +10105,7 @@
       "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "What a ledger open, or a ledger-maintenance verify read, measured before it failed: the values of ledger_opened, as a note link of the failure. A verify read's phases are sql_read_ms, verify_ms and restore_ms; a start's open's are meta_ms, tail_ms, index_ms and import_ms (#422 LN-8).",
+      "description": "What a ledger open, or a ledger-maintenance verify read, measured before it failed: the values of ledger_opened, as a note link of the failure. A verify --full read's phases are sql_read_ms, verify_ms and restore_ms; a start's open's are meta_ms, tail_ms, index_ms and import_ms (#422 LN-8), and a verify without flags reads meta_ms and tail_ms (#422 LN-VERIFY).",
       "common_causes": "A ledger open or verify that failed partway.",
       "handling": "None by itself; handle the failure it is attached to."
     },

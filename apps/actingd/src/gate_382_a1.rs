@@ -195,6 +195,31 @@ fn gate_each_subcommand_refuses_its_malformed_arguments_with_its_code_and_exit_1
             &["ledger-maintenance", "verify", "--backup", "b.sqlite"],
             ActingdCode::MaintenanceConfigMissing,
         ),
+        // #422 LN-VERIFY: `--full`, a flag without a value, at most once, as `--frame-query`.
+        (
+            maintenance,
+            &[
+                "ledger-maintenance",
+                "verify",
+                "--config",
+                "a.json",
+                "--full",
+                "--full",
+            ],
+            ActingdCode::MaintenanceOptionInvalid,
+        ),
+        (
+            maintenance,
+            &[
+                "ledger-maintenance",
+                "verify",
+                "--config",
+                "a.json",
+                "--frame-query",
+                "--frame-query",
+            ],
+            ActingdCode::MaintenanceOptionInvalid,
+        ),
     ];
     for (run, values, code) in rows {
         let outcome = refusal(*run, values).outcome();

@@ -408,11 +408,15 @@ impl SqliteMarker {
         events: &[PersistedEvent],
         hash: Option<String>,
     ) -> super::LedgerStorageStatus {
+        self.status_at(events.last().map_or(0, PersistedEvent::sequence), hash)
+    }
+    /// The storage status at an authenticated head, without its records (#422 LN-VERIFY).
+    fn status_at(&self, head: u64, hash: Option<String>) -> super::LedgerStorageStatus {
         if self.state == "candidate" {
             super::LedgerStorageStatus::Candidate
         } else {
             super::LedgerStorageStatus::Ready {
-                head_sequence: events.last().map_or(0, PersistedEvent::sequence),
+                head_sequence: head,
                 head_sha256: hash,
                 migration: self.migration.clone(),
             }
@@ -562,8 +566,8 @@ fn authenticated_extent(
 }
 
 /// Classifies the formal medium from its keyed meta row without reading history.
-/// True does not mean the history is verified; the writer open verifies its newest records
-/// (LN-8), `ledger-maintenance verify` all of them.
+/// True does not mean the history is verified; the writer open and `ledger-maintenance verify`
+/// verify its newest records (LN-8, #422 LN-VERIFY), `ledger-maintenance verify --full` all of them.
 pub(super) fn formal_ready(database: &RuntimeDatabase) -> GlobalLedgerResult<bool> {
     let mut connection = database.connection(LedgerLocation::InspectRuntimeLedger.location())?;
     let transaction = connection
@@ -642,7 +646,8 @@ pub(super) const MAX_OPEN_VERIFY_TAIL_RECORDS: usize = 1_000_000;
 /// `tail`), creates the views and indexes a database lacks and reads the retention state by type
 /// and by index (`index`), then imports a dump and writes the start's own records (`import`).
 /// It reads no other history row: a reader authenticates each row it reads, and
-/// `ledger-maintenance verify` reads them all.
+/// `ledger-maintenance verify --full` reads them all. #422 LN-VERIFY: `ledger-maintenance verify`
+/// without flags runs this same `verify_open_tail` and none of the writer's steps after it.
 pub(super) fn open_formal(
     config: GlobalLedgerConfig,
     database: Arc<RuntimeDatabase>,
@@ -658,7 +663,7 @@ pub(super) fn open_formal(
     let (marker, head, head_hash) = verify_open_tail(
         &database,
         (started, deadline),
-        config.open_verify_tail_records,
+        (config.open_verify_tail_records, TailOpen::Writer),
         timing,
     )?;
     // #422 LN-OFF-1: the offline open (`offline.rs`) verifies the same tail through `verify_tail`.
@@ -738,11 +743,13 @@ pub(super) fn open_formal(
 /// Phase `tail`: the newest `tail` rows, read in chunks, each authenticated on its own
 /// (`RowReader`) with its link and artifact rows, contiguous through the head, the oldest chained
 /// to its predecessor's stored hash and the newest's hash the meta row's. `timing.events` counts
-/// the rows the tail authenticated. Both phases are bounded by `deadline`.
+/// the rows the tail authenticated. Both phases are bounded by `deadline`. #422 LN-VERIFY:
+/// `ledger-maintenance verify` without flags runs it too (`TailOpen::Maintenance`), so the two
+/// cannot drift.
 fn verify_open_tail(
     database: &RuntimeDatabase,
     (started, deadline): (Instant, Instant),
-    tail: usize,
+    (tail, open): (usize, TailOpen),
     timing: &mut LedgerOpenTiming,
 ) -> GlobalLedgerResult<(SqliteMarker, u64, Option<String>)> {
     let budget = Some((u64::MAX, usize::MAX, deadline));
@@ -758,7 +765,7 @@ fn verify_open_tail(
             database,
             &transaction,
             budget,
-            (tail, TailOpen::Writer),
+            (tail, open),
             (&mut tail_started, &mut events),
         )?;
         transaction
@@ -788,6 +795,8 @@ enum TailOpen {
     Writer,
     /// An offline reader's open (`GlobalLedger::open_metadata`, `offline.rs`).
     Offline,
+    /// #422 LN-VERIFY: `ledger-maintenance verify` without flags (`verify_formal_bounded`).
+    Maintenance,
 }
 
 /// LN-8 (#422, LEAN-L §3.2 step 2, §6.2): the body of an open's verification, in the caller's
@@ -802,7 +811,8 @@ enum TailOpen {
 /// sequences are exactly `1..=head` (`verify_sequence_extent`, `COUNT`, `MIN`, `MAX` through an
 /// index), so its `event_count` is the head; a medium whose marker is not `ready` is
 /// `ledger_candidate_not_production`, as the offline open always refused it, where the writer
-/// says `ledger_migration_required`.
+/// says `ledger_migration_required`. #422 LN-VERIFY: `ledger-maintenance verify` without flags
+/// checks those sequences too (a gap older than the tail), and says what the writer says.
 fn verify_tail(
     database: &RuntimeDatabase,
     transaction: &Connection,
@@ -818,7 +828,7 @@ fn verify_tail(
         Some((marker, head)) if marker.state == "ready" => (marker, head),
         _ => {
             return Err(match open {
-                TailOpen::Writer => failure(
+                TailOpen::Writer | TailOpen::Maintenance => failure(
                     SharedCode::LedgerMigrationRequired.code(),
                     LedgerLocation::OpenRuntimeLedger.location(),
                 ),
@@ -837,7 +847,7 @@ fn verify_tail(
             LedgerLocation::VerifySqliteHead.location(),
         ));
     }
-    if open == TailOpen::Offline {
+    if open != TailOpen::Writer {
         verify_sequence_extent(transaction, head, budget, &mut 0)?;
     }
     *tail_started = Some(Instant::now());
@@ -3215,7 +3225,29 @@ impl SqliteLedgerReadOnly {
         })
     }
 
-    /// Workflow #375 H2: the single complete read of `ledger-maintenance verify` on a formal
+    /// #422 LN-VERIFY: `ledger-maintenance verify` without flags on a formal root: the start's
+    /// verification of its ledger (`verify_open_tail`: the format and the views, the keyed meta row
+    /// and head, the stored rows ending at that head, their contiguity, and the newest `tail` rows
+    /// authenticated with this binary's decoder), in one read transaction, holding one chunk of
+    /// rows at a time. It takes none of the writer's steps after that (no view or index build, no
+    /// frame index fill, no retention read, no dump import, no record) and reads no other row.
+    /// Returns the root's storage status at that head.
+    pub(super) fn verify_formal_bounded(
+        database: &RuntimeDatabase,
+        deadline: Instant,
+        tail: usize,
+        timing: &mut LedgerOpenTiming,
+    ) -> GlobalLedgerResult<super::LedgerStorageStatus> {
+        let (marker, head, head_hash) = verify_open_tail(
+            database,
+            (Instant::now(), deadline),
+            (tail, TailOpen::Maintenance),
+            timing,
+        )?;
+        Ok(marker.status_at(head, head_hash))
+    }
+
+    /// Workflow #375 H2: the single complete read of `ledger-maintenance verify --full` on a formal
     /// root. Like the writer open it is bounded by the head of the keyed meta row,
     /// authenticated first in the same read transaction, and by the deadline; it has no
     /// event or byte cap. Returns the restored events and the root's storage status (the
@@ -3396,8 +3428,9 @@ fn read_snapshot(
     Ok(raw)
 }
 
-/// `read_snapshot` for `ledger-maintenance verify` (LN-8: the writer open reads only the tail,
-/// `verify_open_tail`): the keyed meta row is authenticated first in the same read transaction,
+/// `read_snapshot` for `ledger-maintenance verify --full` (LN-8: the writer open reads only the
+/// tail, `verify_open_tail`; #422 LN-VERIFY: so does `verify` without flags): the keyed meta row
+/// is authenticated first in the same read transaction,
 /// and the read is bounded by its head sequence and the caller's deadline rather than by
 /// maintenance material limits. #422 LN-7c R: the frame index's extent and rows are read in the
 /// same transaction.

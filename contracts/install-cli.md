@@ -274,7 +274,12 @@ stopped, and until INST-3 it leaves the configuration alone.
 - **Ledger verify.** When the target's `ledger` range differs from the live one, apply first
   runs the target's `actingd ledger-maintenance verify --config <root>\actingd.config.json`
   (cold) and refuses `ledger_verify_failed` unless it exits 0 (the acsetup gate of
-  [component-interfaces.md](component-interfaces.md), "Checks per operation").
+  [component-interfaces.md](component-interfaces.md), "Checks per operation"). A target from
+  0.12.36 on answers these arguments with its bounded check (#422 LN-VERIFY,
+  [ledger-maintenance.md](ledger-maintenance.md), "`verify` of a formal root"): what its start's
+  ledger open does to authenticate the ledger, with its own decoder, in memory that does not grow
+  with the history, changing nothing. It does not read an older record: a damaged one is found
+  when it is read, by the background re-check or by `--full`, which the installer never passes.
 - **Children and their deadlines** (INST-1b-F fix round 1, review S1 F4). Every program the
   installer runs has a deadline, a key of the `install` section: each check-config
   `install.child.check_config_timeout_ms`, each actingledger read (S0, each page of the rollback

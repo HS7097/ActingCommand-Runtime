@@ -25,7 +25,7 @@
 //!   that point and the point's leaf code ([`FrameQuery::folder`]).
 //!
 //! A statement that fails is not fatal: it is the cleaner's error of the round (the scrub and
-//! `ledger-maintenance verify` check the index). Only a record that fails its authentication is.
+//! `ledger-maintenance verify --full` check the index). Only a record that fails its authentication is.
 
 use super::{
     ARTIFACT_COLUMNS, EVENT_COLUMNS, LINK_COLUMNS, RowReader, SqlRow, decode, encode, failure,

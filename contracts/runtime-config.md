@@ -678,9 +678,10 @@ when the ledger opens (not settable); a value outside `1000..=600000` is `config
 
 #422 LN-8 (`actingd-config` revision 13): `open_verify_tail_records` is how many of the newest
 records the start's ledger open reads and authenticates; the open reads no older record, which a
-reader authenticates when it reads it and `ledger-maintenance verify` and the background re-check
+reader authenticates when it reads it and `ledger-maintenance verify --full` and the background re-check
 read in full ([ledger-observer.md §15](ledger-observer.md#15-configuration-keys-ledger_observer);
-[ledger-store.md](ledger-store.md#open-ownership-and-append-durability)). It is read when the
+[ledger-store.md](ledger-store.md#open-ownership-and-append-durability)). #422 LN-VERIFY:
+`ledger-maintenance verify` without flags reads the same number from the file. It is read when the
 ledger opens (not settable); a value outside `1..=1000000` is `config_value_invalid`
 (`out_of_range`).
 

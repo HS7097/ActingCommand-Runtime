@@ -1340,12 +1340,22 @@ impl RuntimeHost {
             }
             _ => None,
         };
+        // #422 LN-VERIFY: `verify` without `--full` authenticates the newest records of a formal
+        // root, as many as this host's start would (`ledger_observer.open_verify_tail_records`).
+        let bounded_tail = match request.operation {
+            crate::LedgerMaintenanceOperation::Verify if !request.full && !request.frame_query => {
+                let section = ledger_observer_section(&config)?;
+                Some(usize::try_from(section.open_verify_tail_records).unwrap_or(usize::MAX))
+            }
+            _ => None,
+        };
         crate::ledger_maintenance::run(
             &config.state_root,
             &config.secret_fingerprint_salt,
             config.clock,
             request,
             frame_query,
+            bounded_tail,
         )
     }
 
@@ -1443,7 +1453,7 @@ impl RuntimeHost {
             .map_err(|error| RuntimeHostError::scheduler(HostLocation::StartRuntimeHost, &error))?;
         let ledger_owner = format!("actingd-{}-{started_at_unix_ms}", std::process::id());
         // LN-8 (#422, LEAN-L §3.2 step 1): the existing storage opens without the whole-file
-        // `quick_check(1)`; `ledger-maintenance verify` keeps it.
+        // `quick_check(1)`; `ledger-maintenance verify --full` keeps it.
         let database = Arc::new(if fresh_storage {
             RuntimeStateStore::open_database(&config.state_root, &config.secret_fingerprint_salt)
                 .map_err(|error| RuntimeHostError::state(&error))?
@@ -6704,7 +6714,8 @@ pub(crate) fn around_read_for_test(
 /// failed open, `ledger_open_measured`) with the phases of a ledger open and its deadline. LN-8
 /// (#422): the writer open's phases are `meta_ms`, `tail_ms`, `index_ms` and `import_ms`, and
 /// `event_count` the records its tail authenticated; `sql_read_ms`, `verify_ms` and `restore_ms`
-/// are the phases of `ledger-maintenance verify`'s complete read, 0 for the writer open.
+/// are the phases of `ledger-maintenance verify --full`'s complete read, 0 for the writer open.
+/// #422 LN-VERIFY: `verify` without flags has the writer open's `meta_ms` and `tail_ms`.
 pub(crate) fn ledger_open_outcome(
     code: HostCode,
     timing: &actingcommand_ledger::LedgerOpenTiming,

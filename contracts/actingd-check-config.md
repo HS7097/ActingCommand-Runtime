@@ -631,14 +631,15 @@ authenticates the keyed head, checks that the stored sequences are exactly 1 to
 the head, and reads and authenticates only the head record and the records the
 plan uses: `state.migrated`, the four `catalog.*` transition types and
 `approval.decision`, with their link and artifact rows. Other records are not
-read, so the preview does not establish their integrity; startup and
-`actingd ledger-maintenance verify` check every record. A segment ledger is read
+read, so the preview does not establish their integrity; the Runtime's background
+re-check and `actingd ledger-maintenance verify --full` check every record (the start's
+open and `verify` without flags, the newest records). A segment ledger is read
 whole. The command then reads the State documents through a read-only view of
 the same database, opened the same way, and the catalog generations from their
 immutable directories; the configured catalog is compiled in memory, nothing is
 staged. Page-level damage in parts of the file the preview does not read is
-found by startup and `actingd ledger-maintenance verify`, which run
-`PRAGMA quick_check(1)` when they open the database. The ledger read is bounded to
+found by the Runtime's background re-check and `actingd ledger-maintenance verify
+--full`, which run `PRAGMA quick_check(1)`. The ledger read is bounded to
 60 seconds, well under the 90 seconds `acsetup` gives this command, so a slow
 read fails with the reader's own `ledger_read_budget_exceeded` at stage
 `policy_state`. A missing state root is previewed as a fresh one; an existing root

@@ -237,8 +237,9 @@ impl RuntimeDatabase {
     /// `export --performance` range opening (Workflow #411 A4) and the bounded offline snapshot
     /// of `GlobalLedger::open_metadata` (#422 LN-OFF-1), which authenticate every row
     /// they read, and the start's ledger format probe, which reads only the format
-    /// (`user_version` and the ledger table count, Workflow #378 A3); `ledger-maintenance
-    /// verify` opens through `open_existing`, which still runs the check, and the start through
+    /// (`user_version` and the ledger table count, Workflow #378 A3), and `ledger-maintenance
+    /// verify` without flags of a formal root (#422 LN-VERIFY); `ledger-maintenance verify --full`
+    /// opens through `open_existing`, which still runs the check, and the start through
     /// `open_existing_for_start` (LN-8).
     pub fn open_existing_unchecked(root: &Path) -> RuntimeDatabaseResult<Self> {
         Self::open_existing_storage(root, true, false)
@@ -248,7 +249,7 @@ impl RuntimeDatabase {
     /// read-write, with every check of `open_existing(root, false)` except the whole-file
     /// `PRAGMA quick_check(1)`, whose time grows with the file. The start reads and authenticates
     /// only what it uses (the ledger's keyed meta row, its newest records and its indexes);
-    /// `ledger-maintenance verify` keeps the whole-file check.
+    /// `ledger-maintenance verify --full` keeps the whole-file check.
     pub fn open_existing_for_start(root: &Path) -> RuntimeDatabaseResult<Self> {
         Self::open_existing_storage(root, false, false)
     }

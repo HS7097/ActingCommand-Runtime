@@ -45,11 +45,18 @@ pub struct LedgerMaintenanceRequest {
     #[serde(default)]
     pub limits: MaintenanceLimits,
     /// #422 LN-7c V (`--frame-query`): after the complete read of a formal root, also check the
-    /// frame cleaner's statements against the full view. Another operation, or a root that is
-    /// not formal, refuses it (`maintenance_arguments_invalid`). Off, `verify` is the complete
-    /// read alone: no retention index, no statement, no count.
+    /// frame cleaner's statements against the full view; it implies `full`. Another operation, or
+    /// a root that is not formal, refuses it (`maintenance_arguments_invalid`). Off, `verify` runs
+    /// no retention index, no statement and no count.
     #[serde(default)]
     pub frame_query: bool,
+    /// #422 LN-VERIFY (`--full`, since 0.12.36): `verify` of a formal root is the complete read
+    /// of every record, with the whole-file check. Off (and without `frame_query`) it is the
+    /// bounded check, what the start's open does to authenticate the ledger
+    /// (`verified-sqlite-bounded`). Another operation refuses it
+    /// (`maintenance_arguments_invalid`); a root that is not formal has one read either way.
+    #[serde(default)]
+    pub full: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -183,12 +190,16 @@ struct BackupBinding {
 
 /// `frame_query`: #422 LN-7c V, what `verify` of a formal root runs the frame cleaner's statements
 /// with (`RuntimeHost::maintain_ledger` gives it for `verify` with `frame_query` only).
+/// `bounded_tail`: #422 LN-VERIFY, the newest records `verify` of a formal root authenticates
+/// (`ledger_observer.open_verify_tail_records`; `RuntimeHost::maintain_ledger` gives it for `verify`
+/// without `full` and without `frame_query` only).
 pub(crate) fn run(
     root: &Path,
     salt: &[u8],
     clock: Arc<dyn RuntimeClock>,
     mut request: LedgerMaintenanceRequest,
     frame_query: Option<actingcommand_ledger::FrameQueryCheckSettings>,
+    bounded_tail: Option<usize>,
 ) -> Result<LedgerMaintenanceReceipt> {
     validate_request(&request)?;
     for path in [&mut request.backup, &mut request.target]
@@ -204,7 +215,11 @@ pub(crate) fn run(
     } = OwnerGuard::acquire(root, events.issuer(), clock.sample()?.unix_ms)?;
     let result = (|| {
         let maintenance = LedgerMaintenance::acquire(root, false, request.limits, deadline)?;
-        let result = run_locked(root, &events, &maintenance, &request, deadline, frame_query);
+        let result = match verify_bounded(root, &maintenance, &request, bounded_tail) {
+            Ok(Some(receipt)) => Ok(receipt),
+            Ok(None) => run_locked(root, &events, &maintenance, &request, deadline, frame_query),
+            Err(error) => Err(error),
+        };
         finish(result, maintenance.close().map_err(Into::into))
     })();
     let closed = clock
@@ -220,7 +235,8 @@ fn validate_request(request: &LedgerMaintenanceRequest) -> Result<()> {
         || (request.operation == LedgerMaintenanceOperation::Restore) != request.target.is_some()
         || request.artifact_root.is_some()
             && request.operation != LedgerMaintenanceOperation::Restore
-        || request.frame_query && request.operation != LedgerMaintenanceOperation::Verify
+        || (request.frame_query || request.full)
+            && request.operation != LedgerMaintenanceOperation::Verify
     {
         return Err(failure(
             HostCode::MaintenanceArgumentsInvalid,
@@ -228,6 +244,37 @@ fn validate_request(request: &LedgerMaintenanceRequest) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+/// #422 LN-VERIFY: `verify` without `--full` and `--frame-query` (`tail` is given) of a formal
+/// root: the bounded check, on a read-only connection without the whole-file `quick_check(1)`. It
+/// classifies the root by its keyed meta row, as the start does, and reads nothing of the State
+/// tables: neither their validation (`RuntimeStateStore::from_database`) nor their digest
+/// (`maintenance_digest`, nine whole tables sorted by every column) authenticates the ledger,
+/// and the next start validates them. `None`: not this case; a root that is not formal goes on to
+/// `run_locked`'s checked open and full status read, as it always did.
+fn verify_bounded(
+    root: &Path,
+    maintenance: &LedgerMaintenance,
+    request: &LedgerMaintenanceRequest,
+    tail: Option<usize>,
+) -> Result<Option<LedgerMaintenanceReceipt>> {
+    let Some(tail) = tail else {
+        return Ok(None);
+    };
+    let database = RuntimeDatabase::open_existing_unchecked(root)?;
+    if !maintenance.formal_ready(&database)? {
+        return Ok(None);
+    }
+    let mut timing = actingcommand_ledger::LedgerOpenTiming::default();
+    match maintenance.verify_formal_bounded(&database, tail, &mut timing) {
+        Ok(ledger) => Ok(Some(receipt("verified-sqlite-bounded", ledger, None))),
+        Err(error) => Err(measured_failure(
+            LedgerMaintenanceFailure::from(error),
+            &timing,
+            request.limits,
+        )),
+    }
 }
 
 fn run_locked(
@@ -260,7 +307,9 @@ fn run_locked(
     let state = RuntimeStateStore::from_database(Arc::clone(&database))?;
     let state_sha256 = state.maintenance_digest(request.limits, deadline)?;
     // Workflow #375 H2: a formal root is classified by its keyed meta row, as startup does,
-    // and verified by one complete read bounded by its authenticated head and the deadline.
+    // and `--full` verifies it by one complete read bounded by its authenticated head and the
+    // deadline (#422 LN-VERIFY: without `--full` and `--frame-query`, `verify_bounded` answered
+    // before this function).
     // Workflow #375 R5a: no maintenance pass reads, hashes or stats artifact material.
     if request.operation == LedgerMaintenanceOperation::Verify
         && maintenance.formal_ready(&database)?
@@ -398,8 +447,8 @@ fn run_locked(
     }
 }
 
-/// Workflow #375 H2: `verify` of a formal root in one pass. A failure's cause also names the
-/// read's phase timings (`ledger_open …`, as the startup line prints them). Workflow #375
+/// Workflow #375 H2: `verify --full` of a formal root in one pass. A failure's cause also names
+/// the read's phase timings (`ledger_open …`, as the startup line prints them). Workflow #375
 /// R5a: the pass reads no artifact material, so its material fields are 0. #422 LN-8: the
 /// start's open authenticates only the newest records; this pass stays the complete read of
 /// every row, with the migrated prefix, after the whole-file check of `open_existing`. #422
@@ -429,25 +478,33 @@ fn verify_formal_root(
             passed.frame_query = checked;
             Ok(passed)
         }
-        // Workflow #378 A6a (model section 7.4, N1): the read's phases are the failure's
-        // `ledger_open_measured` note link; the developer text names them as before.
-        Err(mut error) => {
-            let timeout_ms = limits.timeout_seconds.saturating_mul(1000);
-            error
-                .cause
-                .push_str(&format!("; ledger_open {timing} deadline_ms={timeout_ms}"));
-            Err(error.linked(
-                CauseRelation::Note,
-                crate::host::ledger_open_outcome(HostCode::LedgerOpenMeasured, &timing, timeout_ms),
-            ))
-        }
+        Err(error) => Err(measured_failure(error, &timing, limits)),
     }
 }
 
-/// Workflow #375 R5a: maintenance reads no artifact material, so it refuses only an artifact
-/// retention state that the ledger itself leaves unsettled: an eviction intent without its
-/// outcome (`PendingEviction`), which only the next actingd start completes. `Unrecorded`,
-/// `Evicted` and `FailedEviction` pass. The detail counts the distinct pending artifacts.
+/// Workflow #378 A6a (model section 7.4, N1): the read's phases are a failed formal `verify`'s
+/// `ledger_open_measured` note link; the developer text names them as before.
+fn measured_failure(
+    mut error: LedgerMaintenanceFailure,
+    timing: &actingcommand_ledger::LedgerOpenTiming,
+    limits: MaintenanceLimits,
+) -> LedgerMaintenanceFailure {
+    let timeout_ms = limits.timeout_seconds.saturating_mul(1000);
+    error
+        .cause
+        .push_str(&format!("; ledger_open {timing} deadline_ms={timeout_ms}"));
+    error.linked(
+        CauseRelation::Note,
+        crate::host::ledger_open_outcome(HostCode::LedgerOpenMeasured, timing, timeout_ms),
+    )
+}
+
+/// Workflow #375 R5a: maintenance reads no artifact material, so `verify --full` refuses only an
+/// artifact retention state that the ledger itself leaves unsettled: an eviction intent without
+/// its outcome (`PendingEviction`), which only the next actingd start completes. `Unrecorded`,
+/// `Evicted` and `FailedEviction` pass. The detail counts the distinct pending artifacts. #422
+/// LN-VERIFY: `verify` without `--full` reads no history for this: as at the start, the next
+/// start completes an unsettled eviction.
 fn require_settled_retention(events: &[actingcommand_ledger::PersistedEvent]) -> Result<()> {
     let pending = events
         .iter()

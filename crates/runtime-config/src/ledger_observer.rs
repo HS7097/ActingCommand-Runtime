@@ -98,8 +98,8 @@ pub const HISTORY_PAGE_ROWS: &str = "ledger_observer.history_page_rows";
 /// a read stops before its caller stops waiting for it.
 pub const WRITER_REPLY_TIMEOUT_MS: &str = "ledger_observer.writer_reply_timeout_ms";
 /// LN-8 (#422, LEAN-L §3.2 step 2, §3.7): how many of the newest records the start's ledger open
-/// reads and authenticates; older records are authenticated when they are read, and by
-/// `ledger-maintenance verify`.
+/// and `ledger-maintenance verify` without flags read and authenticate; older records are
+/// authenticated when they are read, and by `ledger-maintenance verify --full`.
 pub const OPEN_VERIFY_TAIL_RECORDS: &str = "ledger_observer.open_verify_tail_records";
 /// #422 LN-9 (LEAN-L §3.7, §6; Alice's ruling 57): the rows per second the ledger's background
 /// scrub reads and authenticates (625 by default: about 40 minutes a pass at 1.5 million records).
