@@ -146,11 +146,12 @@ fn to_hex(bytes: &[u8]) -> String {
 
 fn from_hex(text: &str) -> Option<Vec<u8>> {
     let digit = |byte: u8| char::from(byte).to_digit(16).map(|value| value as u8);
-    let pairs = text.as_bytes().chunks_exact(2);
-    if !pairs.remainder().is_empty() {
+    let (pairs, rest) = text.as_bytes().as_chunks::<2>();
+    if !rest.is_empty() {
         return None;
     }
     pairs
+        .iter()
         .map(|pair| Some((digit(pair[0])? << 4) | digit(pair[1])?))
         .collect()
 }
