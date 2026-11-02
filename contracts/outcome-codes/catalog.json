@@ -11566,6 +11566,7 @@
     "actingledger": "apps/ledger-forensics",
     "vision-provider-check": "apps/vision-provider-check",
     "contract": "crates/actingcommand-contract",
+    "agent-forward": "crates/agent-forward",
     "artifact-store": "crates/artifact-store",
     "device": "crates/device",
     "execution-kernel": "crates/execution-kernel",
