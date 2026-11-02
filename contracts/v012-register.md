@@ -5901,6 +5901,29 @@ dropped with its record; a file that does not name them is read as before.
 
 **Rollback** (to 0.12.36). Nothing to do; the members decode as before.
 
+### 1.255 Slice AGT-T2 (0.12.37): the Codex transport (Workflow #432; design `rd-1031/agt/model-agt-v2.md` §5.2, §6.1, §6.4, §6.7, §7.2, §10, §11; coordinator work order `rd-1031/agt/brief-agt-t2.md`)
+
+[agent-forward.md](agent-forward.md) ("Codex") is the contract, and the one place with client words. The number 1.255 is the coordinator's. **No new persisted shape, no outcome code, no configuration key, no interface revision.**
+
+**What changes live.** A registered Codex channel, which waited as `deferred` (`ipc_unavailable`), now gets one submission to its task's owner through the desktop's IPC when the desktop runs and the task is loaded; the row's `proof` is `accepted`. Claude Code's channels, DSH's and Antigravity's are as before. `agent-channel add --client codex --native-id <id>` already took a task's id and is unchanged.
+
+**Rollback.** Nothing persisted changes; an older build answers `deferred` for a Codex channel again.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| AGTT2-1 | the Codex arm of `RealForward` (`crates/agent-forward/src/codex/`) | transport | AGT-T2 | the worker | `delivered` with `accepted`; `deferred` with `ipc_unavailable`, `target_not_loaded`, `target_awaiting_input` or `target_unresponsive`; `failed` and `unknown` with the existing problems; no new word |
+| AGTT2-2 | `PipeClient::read_exact` (`pipe.rs`) | Runtime-internal interface | AGT-T2 | — | the overlapped read under the write's rule: deadline and stop in the calling thread, cancel, then wait for the operation; no new `unsafe` module |
+| AGTT2-3 | `NOTICE.md`, section "Source code adapted from other projects" | licence notice | AGT-T2 | — | adds `desktop.rs`, `relay.rs` and the three `codex/` files |
+
+**Departures from the design and the source** (each is in the contract):
+- Before the intent, a pipe that opens and then breaks or closes is `deferred` (`ipc_unavailable`), and the deadline or a stop is `deferred` (`target_unresponsive`): nothing was submitted. The source fails both.
+- The fallback's idle is the snapshot's (no turn in progress, nothing waiting): the source's rollout evidence reads the client's home, which this transport never reads.
+- The source persists its warning before the fallback to its own log; here it goes into the outcome's `detail`.
+- One owner discovery per state read, where the source asks twice.
+- `add` keeps a Codex channel's id as typed; the send refuses one that is not a non-nil hyphenated UUID (`failed`, `channel_unknown`).
+
+**Tests:** the seven of §10 AGT-T2, in the crate's own test module on a scripted frame source (host gate row "AGT-T2"). No test opens a pipe.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
