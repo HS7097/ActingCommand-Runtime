@@ -716,6 +716,27 @@ and authenticates each row it uses on its own, the related-run recovery context
 included (by the run's link, at most 1 025 rows). Artifact resolution reads the
 selected record by one authenticated point read; its eviction proof comes from the
 writer's resident proof set.
+#422 RA-1 (since 0.12.38, register §1.266): the Runtime's artifact resolution
+(`GlobalLedger::resolve_artifact`, both lookups of a material read) runs on the
+writer's reader pool, never on the writer thread, as its view pages do (#422 QR-1).
+It only reads: the keyed meta row and the end of the stored rows, the selected
+record with its link and artifact rows, each authenticated, and the eviction proof
+of its artifact. It opens no artifact file and writes nothing: no pin, lease, read
+mark or access time. A reader answers it in one short read transaction on its own
+read-only connection at the point the writer last published (its committed head,
+head hash, marker and eviction proofs): the medium is checked against that point,
+the proof comes from the published proofs, and the availability is that head, so
+its answers and refusals are the writer's at that head. It carries its caller's
+reply limit as a page does and is refused the same way, naming
+`resolve_ledger_artifact`: `writer_response_timeout` past that limit or with the
+pool's queue full, `writer_panicked` when its reader ended in it, `writer_unavailable`
+of `shutdown_writer` while the pool closes; none of them is fatal. A record the
+published point holds whose file retention removed meanwhile resolves without an
+eviction, as of that point, and the material read then finds no file: `missing`
+(`material_read_missing`), as for every missing file ([material-read.md](material-read.md));
+a later resolution sees the eviction. Without a pool (a ledger without a failure
+plan, or a pool whose connections did not open) or once every reader ended, the
+writer resolves on its queue as before, and its failures stay what they were.
 Metadata opening uses the same authenticated result; recovery and schema upgrade
 continue to consume the original records. These representations belong only to
 the current call and confer no artifact availability capability.

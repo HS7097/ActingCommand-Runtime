@@ -45,6 +45,16 @@
 //!   (`sqlite::lab_relations`). Before it ends, and when it failed, the pages read the whole
 //!   history's relations, as before; a failure is said once, as the readers' ends are
 //!   (`take_findings`), and is never fatal. The close stops it within one look of its bound.
+//! - **Artifact resolutions** (#422 RA-1, 0.12.38). The readers also answer
+//!   `GlobalLedger::resolve_artifact` from the same queue, as they answer a page: one
+//!   authenticated point read at the point the writer published, on the reader's own connection
+//!   (`sqlite::resolve_artifact_at_point`), with the writer's answers and refusals at that head.
+//!   A resolution carries its caller's deadline as a page does and is refused the same way (the
+//!   pool closing, its caller's reply limit passed, the queue full, its reader ended), each refusal
+//!   naming `resolve_ledger_artifact` where a page's names `project_ledger_view_page`; none is
+//!   fatal. It is recorded in the writer's commit statistics as a `ResolveArtifact`, where the
+//!   writer recorded its own, and not among the pool's pages. Once no reader is left, the writer
+//!   resolves again, as it reads the pages.
 
 use super::read_work::ReadWork;
 use super::retention::PublishedProofs;
@@ -53,10 +63,12 @@ use super::sqlite::lab_relations::{self, LabRelationCell};
 use super::store::LedgerStore;
 use super::write_failure::LedgerMonotonicClock;
 use super::{
-    CommitStatistics, GlobalLedgerError, GlobalLedgerResult, LedgerProjectViewObservation,
-    LedgerReaderPoolPages, LedgerWriterCommandKind, ProjectViewReply,
+    CommitStatistics, GlobalLedgerError, GlobalLedgerResult, LedgerArtifactSelection,
+    LedgerProjectViewObservation, LedgerReaderPoolPages, LedgerWriterCommandKind, ProjectViewReply,
+    ResolvedLedgerArtifact,
 };
 use crate::codes::{LedgerCode, LedgerLocation};
+use actingcommand_contract::outcome::Location;
 use actingcommand_contract::{EventQuery, ProjectionProfile, RuntimeEventQueryPageRequest};
 use actingcommand_runtime_database::RuntimeDatabase;
 use rusqlite::{Connection, InterruptHandle};
@@ -123,14 +135,62 @@ pub(super) struct ReaderSettings {
     pub(super) lab_relations_timeout: Option<Duration>,
 }
 
+/// One job of the pool's queue: what to read, where its answer goes, and when its caller stops
+/// waiting.
 struct ReadJob {
-    query: EventQuery,
-    profile: ProjectionProfile,
-    request: RuntimeEventQueryPageRequest,
+    read: Read,
+    reply: Reply,
     /// Fix 1 (review M-1): when the caller stops waiting, on the writer's clock: the submit time
     /// plus the caller's reply limit.
     deadline_ms: u64,
-    response: SyncSender<ProjectViewReply>,
+}
+
+/// What a job reads: a view page, or (#422 RA-1) an artifact resolution.
+enum Read {
+    Page(Box<PageRead>),
+    Resolve(Box<ResolveRead>),
+}
+
+/// A view page: what the writer's `ProjectViewPage` command carries.
+struct PageRead {
+    query: EventQuery,
+    profile: ProjectionProfile,
+    request: RuntimeEventQueryPageRequest,
+}
+
+/// #422 RA-1: an artifact resolution: what the writer's `ResolveArtifact` command carries.
+struct ResolveRead {
+    selection: LedgerArtifactSelection,
+    deadline: Instant,
+}
+
+/// Where a job's answer goes, of the job's own kind.
+enum Reply {
+    Page(SyncSender<ProjectViewReply>),
+    Resolve(SyncSender<GlobalLedgerResult<ResolvedLedgerArtifact>>),
+}
+
+impl Reply {
+    /// The operation the job's own refusals name: `project_ledger_view_page` for a page,
+    /// `resolve_ledger_artifact` for a resolution (#422 RA-1).
+    fn operation(&self) -> Location {
+        match self {
+            Self::Page(_) => LedgerLocation::ProjectLedgerViewPage.location(),
+            Self::Resolve(_) => LedgerLocation::ResolveLedgerArtifact.location(),
+        }
+    }
+
+    /// Answers the job with `error`, nothing read.
+    fn refuse(self, error: GlobalLedgerError) {
+        match self {
+            Self::Page(response) => {
+                let _ = response.send((Err(error), None));
+            }
+            Self::Resolve(response) => {
+                let _ = response.send(Err(error));
+            }
+        }
+    }
 }
 
 /// #422 QR-1 fix 1: what the readers and the close share.
@@ -257,21 +317,56 @@ impl ReaderPool {
         request: RuntimeEventQueryPageRequest,
         reply_timeout: Duration,
     ) -> GlobalLedgerResult<Receiver<ProjectViewReply>> {
-        let operation = LedgerLocation::ProjectLedgerViewPage.location();
+        let (response, receiver) = mpsc::sync_channel(1);
+        self.enqueue(
+            Read::Page(Box::new(PageRead {
+                query,
+                profile,
+                request,
+            })),
+            Reply::Page(response),
+            reply_timeout,
+        )?;
+        Ok(receiver)
+    }
+
+    /// #422 RA-1: queues one artifact resolution for a caller that waits `reply_timeout` for
+    /// it, resolved within `deadline` as the writer resolves; the reply comes on the returned
+    /// channel. Refused as `submit` refuses a page, naming `resolve_ledger_artifact`.
+    pub(super) fn submit_resolution(
+        &self,
+        selection: LedgerArtifactSelection,
+        deadline: Instant,
+        reply_timeout: Duration,
+    ) -> GlobalLedgerResult<Receiver<GlobalLedgerResult<ResolvedLedgerArtifact>>> {
+        let (response, receiver) = mpsc::sync_channel(1);
+        self.enqueue(
+            Read::Resolve(Box::new(ResolveRead {
+                selection,
+                deadline,
+            })),
+            Reply::Resolve(response),
+            reply_timeout,
+        )?;
+        Ok(receiver)
+    }
+
+    /// Queues one job, its caller's deadline the writer's clock now plus `reply_timeout`. A full
+    /// queue is `writer_response_timeout` (not fatal: the caller reads again); a closed pool is
+    /// the fatal `writer_unavailable`; both of the job's own operation.
+    fn enqueue(&self, read: Read, reply: Reply, reply_timeout: Duration) -> GlobalLedgerResult<()> {
+        let operation = reply.operation();
         let sender = self.sender.as_ref().ok_or_else(|| {
             GlobalLedgerError::fatal(LedgerCode::WriterUnavailable.code(), operation)
         })?;
-        let (response, receiver) = mpsc::sync_channel(1);
         let deadline_ms = (self.reader.settings.clock)()
             .saturating_add(u64::try_from(reply_timeout.as_millis()).unwrap_or(u64::MAX));
         match sender.try_send(ReadJob {
-            query,
-            profile,
-            request,
+            read,
+            reply,
             deadline_ms,
-            response,
         }) {
-            Ok(()) => Ok(receiver),
+            Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => Err(GlobalLedgerError::request(
                 LedgerCode::WriterResponseTimeout.code(),
                 operation,
@@ -291,18 +386,24 @@ impl ReaderPool {
         receiver: &Receiver<ProjectViewReply>,
         reply_timeout: Duration,
     ) -> GlobalLedgerResult<ProjectViewReply> {
-        let operation = LedgerLocation::ProjectLedgerViewPage.location();
-        match receiver.recv_timeout(reply_timeout) {
-            Ok(reply) => Ok(reply),
-            Err(RecvTimeoutError::Timeout) => Err(GlobalLedgerError::request(
-                LedgerCode::WriterResponseTimeout.code(),
-                operation,
-            )),
-            Err(RecvTimeoutError::Disconnected) => Err(GlobalLedgerError::request(
-                LedgerCode::WriterPanicked.code(),
-                operation,
-            )),
-        }
+        receive_within(
+            receiver,
+            reply_timeout,
+            LedgerLocation::ProjectLedgerViewPage.location(),
+        )
+    }
+
+    /// #422 RA-1: the reply to a resolution `submit_resolution` queued, waited for as `receive`
+    /// waits for a page's, its refusals naming `resolve_ledger_artifact`; none is fatal.
+    pub(super) fn receive_resolution(
+        receiver: &Receiver<GlobalLedgerResult<ResolvedLedgerArtifact>>,
+        reply_timeout: Duration,
+    ) -> GlobalLedgerResult<GlobalLedgerResult<ResolvedLedgerArtifact>> {
+        receive_within(
+            receiver,
+            reply_timeout,
+            LedgerLocation::ResolveLedgerArtifact.location(),
+        )
     }
 
     /// Fix 1 (review L-6): whether a reader is left to read the pages; once none is, the writer
@@ -371,6 +472,27 @@ impl ReaderPool {
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// A job's reply, waited for at most `reply_timeout`: not in time is `writer_response_timeout`
+/// of `operation`, a reader that ended with the job unanswered `writer_panicked` of it; neither
+/// is fatal.
+fn receive_within<T>(
+    receiver: &Receiver<T>,
+    reply_timeout: Duration,
+    operation: Location,
+) -> GlobalLedgerResult<T> {
+    match receiver.recv_timeout(reply_timeout) {
+        Ok(reply) => Ok(reply),
+        Err(RecvTimeoutError::Timeout) => Err(GlobalLedgerError::request(
+            LedgerCode::WriterResponseTimeout.code(),
+            operation,
+        )),
+        Err(RecvTimeoutError::Disconnected) => Err(GlobalLedgerError::request(
+            LedgerCode::WriterPanicked.code(),
+            operation,
+        )),
+    }
 }
 
 impl Drop for ReaderPool {
@@ -476,9 +598,10 @@ impl Reader {
         ));
     }
 
-    /// One reader: takes pages until the pool closes. A page taken once the pool is closing, or
+    /// One reader: takes jobs until the pool closes. A job taken once the pool is closing, or
     /// past its caller's deadline, is answered and not read (review M-1). The page read is
-    /// recorded in the writer's statistics as a `ProjectViewPage` before it is answered (L-4).
+    /// recorded in the writer's statistics as a `ProjectViewPage` before it is answered (L-4);
+    /// #422 RA-1: a resolution as a `ResolveArtifact`, and not among the pool's pages.
     fn serve(&self, mut connection: Connection, receiver: &Mutex<Receiver<ReadJob>>) {
         let mut end = ReaderEnd {
             state: &self.state,
@@ -492,16 +615,15 @@ impl Reader {
         loop {
             let job = lock(receiver).recv();
             let Ok(ReadJob {
-                query,
-                profile,
-                request,
+                read,
+                reply,
                 deadline_ms,
-                response,
             }) = job
             else {
                 return;
             };
-            end.answering = Some(response);
+            let operation = reply.operation();
+            end.answering = Some(reply);
             #[cfg(test)]
             if self
                 .state
@@ -513,30 +635,51 @@ impl Reader {
             {
                 return;
             }
-            if let Some(refusal) = self.refusal(deadline_ms) {
-                end.answer((Err(refusal), None));
+            if let Some(refusal) = self.refusal(deadline_ms, operation) {
+                end.refuse(refusal);
                 continue;
             }
             let started = Instant::now();
-            let reply = self.page(&mut connection, &query, profile, &request, &mut memo);
-            let elapsed = started.elapsed();
-            self.statistics.record_writer_command(
-                LedgerWriterCommandKind::ProjectViewPage,
-                elapsed,
-                0,
-                false,
-            );
-            // #422 W1-8 (P29): and in the pool's own pages, which the Runtime shows while it
-            // runs (`GlobalLedger::reader_pool_pages`).
-            lock(&self.state.pages).record(elapsed);
-            end.answer(reply);
+            match read {
+                Read::Page(page) => {
+                    let PageRead {
+                        query,
+                        profile,
+                        request,
+                    } = *page;
+                    let reply = self.page(&mut connection, &query, profile, &request, &mut memo);
+                    let elapsed = started.elapsed();
+                    self.statistics.record_writer_command(
+                        LedgerWriterCommandKind::ProjectViewPage,
+                        elapsed,
+                        0,
+                        false,
+                    );
+                    // #422 W1-8 (P29): and in the pool's own pages, which the Runtime shows
+                    // while it runs (`GlobalLedger::reader_pool_pages`).
+                    lock(&self.state.pages).record(elapsed);
+                    end.answer_page(reply);
+                }
+                Read::Resolve(resolve) => {
+                    let resolved =
+                        self.resolve(&mut connection, &resolve.selection, resolve.deadline);
+                    self.statistics.record_writer_command(
+                        LedgerWriterCommandKind::ResolveArtifact,
+                        started.elapsed(),
+                        0,
+                        false,
+                    );
+                    end.answer_resolution(resolved);
+                }
+            }
         }
     }
 
-    /// Why a page taken now is not read: the pool is closing (`writer_unavailable` of
+    /// Why a job taken now is not read: the pool is closing (`writer_unavailable` of
     /// `shutdown_writer`), or its caller's deadline passed and the caller already has its
-    /// `writer_response_timeout`, which the page is answered with too. Neither is fatal.
-    fn refusal(&self, deadline_ms: u64) -> Option<GlobalLedgerError> {
+    /// `writer_response_timeout` of the job's `operation`, which the job is answered with too.
+    /// Neither is fatal.
+    fn refusal(&self, deadline_ms: u64, operation: Location) -> Option<GlobalLedgerError> {
         if self.state.closing.load(Ordering::Acquire) {
             return Some(GlobalLedgerError::request(
                 LedgerCode::WriterUnavailable.code(),
@@ -544,11 +687,50 @@ impl Reader {
             ));
         }
         ((self.settings.clock)() >= deadline_ms).then(|| {
-            GlobalLedgerError::request(
-                LedgerCode::WriterResponseTimeout.code(),
-                LedgerLocation::ProjectLedgerViewPage.location(),
-            )
+            GlobalLedgerError::request(LedgerCode::WriterResponseTimeout.code(), operation)
         })
+    }
+
+    /// #422 RA-1: one artifact resolution at the writer's latest point, within the caller's
+    /// `deadline`, as the writer resolves at that head (`sqlite::resolve_artifact_at_point`).
+    fn resolve(
+        &self,
+        connection: &mut Connection,
+        selection: &LedgerArtifactSelection,
+        deadline: Instant,
+    ) -> GlobalLedgerResult<ResolvedLedgerArtifact> {
+        let point = self.settings.points.current();
+        // #411 A51, tests: a read hold of this root holds the pool's resolutions too, once they
+        // took their point, so that the writer commits meanwhile (an eviction among them) while
+        // the held resolution reads at the point it took.
+        #[cfg(any(test, feature = "test-hooks"))]
+        crate::read_hold::hold_reads_of(&self.hook_root);
+        #[cfg(any(test, feature = "test-hooks"))]
+        let recording = crate::writer_statements::start(&self.hook_root);
+        #[cfg(any(test, feature = "test-hooks"))]
+        let started = std::time::Instant::now();
+        let resolved = match point {
+            Some(point) => super::sqlite::resolve_artifact_at_point(
+                &self.settings.database,
+                connection,
+                &point,
+                selection,
+                deadline,
+            ),
+            // The open publishes the first point before the pool starts.
+            None => Err(GlobalLedgerError::fatal(
+                LedgerCode::WriterUnavailable.code(),
+                LedgerLocation::ResolveLedgerArtifact.location(),
+            )),
+        };
+        #[cfg(any(test, feature = "test-hooks"))]
+        crate::writer_statements::finish(
+            recording,
+            LedgerWriterCommandKind::ResolveArtifact,
+            started.elapsed(),
+            (0, 0),
+        );
+        resolved
     }
 
     /// One page at the writer's latest point, within the read budget counted from now. #422
@@ -632,19 +814,34 @@ impl Drop for BuildEnd<'_> {
 /// (`writer_panicked` of `query_ledger_view`), and the end that leaves no reader as the pages'
 /// fallback to the writer (`writer_panicked` of `project_ledger_view_page`). The pages still
 /// queued then are answered `writer_response_timeout` (not fatal) and not read; every later page
-/// is read by the writer.
+/// is read by the writer. #422 RA-1: a resolution is answered the same way, each answer naming
+/// `resolve_ledger_artifact`, and once no reader is left the writer resolves again.
 struct ReaderEnd<'a> {
     state: &'a PoolState,
     receiver: &'a Mutex<Receiver<ReadJob>>,
-    /// The reply channel of the page the reader took and has not answered yet.
-    answering: Option<SyncSender<ProjectViewReply>>,
+    /// The reply channel of the job the reader took and has not answered yet.
+    answering: Option<Reply>,
 }
 
 impl ReaderEnd<'_> {
     /// Answers the page the reader took.
-    fn answer(&mut self, reply: ProjectViewReply) {
-        if let Some(response) = self.answering.take() {
+    fn answer_page(&mut self, reply: ProjectViewReply) {
+        if let Some(Reply::Page(response)) = self.answering.take() {
             let _ = response.send(reply);
+        }
+    }
+
+    /// #422 RA-1: answers the resolution the reader took.
+    fn answer_resolution(&mut self, reply: GlobalLedgerResult<ResolvedLedgerArtifact>) {
+        if let Some(Reply::Resolve(response)) = self.answering.take() {
+            let _ = response.send(reply);
+        }
+    }
+
+    /// Answers the job the reader took with `error`, nothing read.
+    fn refuse(&mut self, error: GlobalLedgerError) {
+        if let Some(reply) = self.answering.take() {
+            reply.refuse(error);
         }
     }
 }
@@ -678,24 +875,22 @@ impl Drop for ReaderEnd<'_> {
                 );
             }
         }
-        self.answer((
-            Err(GlobalLedgerError::request(
+        if let Some(reply) = self.answering.take() {
+            let operation = reply.operation();
+            reply.refuse(GlobalLedgerError::request(
                 LedgerCode::WriterPanicked.code(),
-                LedgerLocation::ProjectLedgerViewPage.location(),
-            )),
-            None,
-        ));
+                operation,
+            ));
+        }
         if !unexpected || live > 0 {
             return;
         }
         let receiver = lock(self.receiver);
         while let Ok(job) = receiver.try_recv() {
-            let _ = job.response.send((
-                Err(GlobalLedgerError::request(
-                    LedgerCode::WriterResponseTimeout.code(),
-                    LedgerLocation::ProjectLedgerViewPage.location(),
-                )),
-                None,
+            let operation = job.reply.operation();
+            job.reply.refuse(GlobalLedgerError::request(
+                LedgerCode::WriterResponseTimeout.code(),
+                operation,
             ));
         }
     }

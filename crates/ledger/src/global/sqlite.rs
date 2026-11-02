@@ -2061,61 +2061,32 @@ impl SqliteStorage {
 
     /// The selected record by one authenticated point read; its eviction proof from the
     /// writer's proof set (`retention`), as of the head.
+    ///
+    /// #422 RA-1: the writer resolves this way only when the Runtime has no reader pool (a
+    /// ledger without a failure plan, a pool that could not open, or whose readers all ended);
+    /// otherwise [`resolve_artifact_at_point`] resolves on a reader's own connection.
     fn resolve_artifact_on_disk(
         &self,
         selection: &super::LedgerArtifactSelection,
         deadline: Instant,
         retention: &RetentionIndex,
     ) -> GlobalLedgerResult<super::ResolvedLedgerArtifact> {
-        selection.validate()?;
-        let budget = Some(super::evidence::artifact_read_budget(None, deadline));
-        check_read_budget(budget, 0, 0)?;
-        let sequence = selection.event.sequence;
-        let events = if sequence > self.head {
-            Vec::new()
-        } else {
-            let mut connection = self
-                .database
-                .connection(LedgerLocation::ResolveLedgerArtifact.location())?;
-            let transaction = connection
-                .transaction_with_behavior(TransactionBehavior::Deferred)
-                .map_err(|error| {
-                    sql_error(error, LedgerLocation::BeginSqliteSnapshot.location())
-                })?;
-            let query = EventQuery::default();
-            let read = self.verify_extent(&transaction).and_then(|()| {
-                read_history_rows(
-                    &self.database,
-                    &transaction,
-                    (&HistorySelection::of(&query), None),
-                    (sequence - 1, sequence),
-                    1,
-                )
-            });
-            match read {
-                Ok(events) => {
-                    transaction.commit().map_err(|error| {
-                        sql_error(error, LedgerLocation::CloseSqliteSnapshot.location())
-                    })?;
-                    events
-                }
-                Err(error) => {
-                    return Err(
-                        error.with_close_result(transaction.rollback().map_err(|error| {
-                            sql_error(error, LedgerLocation::CloseSqliteSnapshot.location())
-                        })),
-                    );
-                }
-            }
-        };
-        check_read_budget(budget, 0, events.len())?;
-        super::evidence::resolve_artifact_from_events(
-            &events,
+        ViewReader {
+            database: &self.database,
+            head: self.head,
+            extent: ViewExtent::Writer(self),
+            proofs: PageProofs::Index(retention),
+            source: LedgerReadSource::Runtime,
+            time_index: true,
+        }
+        .resolve(
+            || {
+                self.database
+                    .connection(LedgerLocation::ResolveLedgerArtifact.location())
+                    .map_err(GlobalLedgerError::from)
+            },
             selection,
-            self.head,
-            true,
             deadline,
-            Some(retention),
         )
     }
 
@@ -2195,6 +2166,35 @@ pub(super) fn view_page_at_point(
         time_index: true,
     }
     .page(|| Ok(connection), page, observation, read, Some(memo))
+}
+
+/// #422 RA-1: an artifact resolution on a reader-pool thread's own read-only `connection`, at the
+/// point the writer published: the writer's resolution at that head (one authenticated point
+/// read, the medium checked against the point instead of the writer's memory,
+/// [`verify_published_extent`]), its eviction proof from the point's published proofs. Nothing
+/// is written: no pin, lease, read mark or access time.
+pub(super) fn resolve_artifact_at_point(
+    database: &RuntimeDatabase,
+    connection: &mut Connection,
+    point: &super::reader_pool::ReadPoint,
+    selection: &super::LedgerArtifactSelection,
+    deadline: Instant,
+) -> GlobalLedgerResult<super::ResolvedLedgerArtifact> {
+    ViewReader {
+        database,
+        head: point.head,
+        extent: ViewExtent::Published {
+            head_hash: point.head_hash.as_deref(),
+            marker_state: point.marker_state,
+        },
+        proofs: PageProofs::Published {
+            proofs: point.proofs.as_ref(),
+            through_sequence: point.head,
+        },
+        source: LedgerReadSource::Runtime,
+        time_index: true,
+    }
+    .resolve(|| Ok(connection), selection, deadline)
 }
 
 /// #422 QR-1: a reader-pool page's check of the medium, the writer's `verify_extent` at a
@@ -2286,6 +2286,66 @@ impl ViewReader<'_> {
                 marker_state,
             ),
         }
+    }
+
+    /// LN-6's artifact resolution, the writer's and (#422 RA-1) the reader pool's alike: the
+    /// selected record by one authenticated point read, in one read transaction on the connection
+    /// `acquire` gives (taken only when the record is at or before the head), the medium checked
+    /// as this reader checks it, and its eviction proof from this reader's proofs, as of its head.
+    fn resolve<C: std::ops::DerefMut<Target = Connection>>(
+        &self,
+        acquire: impl FnOnce() -> GlobalLedgerResult<C>,
+        selection: &super::LedgerArtifactSelection,
+        deadline: Instant,
+    ) -> GlobalLedgerResult<super::ResolvedLedgerArtifact> {
+        selection.validate()?;
+        let budget = Some(super::evidence::artifact_read_budget(None, deadline));
+        check_read_budget(budget, 0, 0)?;
+        let sequence = selection.event.sequence;
+        let events = if sequence > self.head {
+            Vec::new()
+        } else {
+            let mut connection = acquire()?;
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Deferred)
+                .map_err(|error| {
+                    sql_error(error, LedgerLocation::BeginSqliteSnapshot.location())
+                })?;
+            let query = EventQuery::default();
+            let read = self.verify(&transaction).and_then(|()| {
+                read_history_rows(
+                    self.database,
+                    &transaction,
+                    (&HistorySelection::of(&query), None),
+                    (sequence - 1, sequence),
+                    1,
+                )
+            });
+            match read {
+                Ok(events) => {
+                    transaction.commit().map_err(|error| {
+                        sql_error(error, LedgerLocation::CloseSqliteSnapshot.location())
+                    })?;
+                    events
+                }
+                Err(error) => {
+                    return Err(
+                        error.with_close_result(transaction.rollback().map_err(|error| {
+                            sql_error(error, LedgerLocation::CloseSqliteSnapshot.location())
+                        })),
+                    );
+                }
+            }
+        };
+        check_read_budget(budget, 0, events.len())?;
+        super::evidence::resolve_artifact_from_events(
+            &events,
+            selection,
+            self.head,
+            true,
+            deadline,
+            Some(self.proofs),
+        )
     }
 
     /// One view page in one read transaction on the connection `acquire` gives (see

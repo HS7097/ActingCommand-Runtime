@@ -163,6 +163,31 @@ impl PageProofs<'_> {
             }
         }
     }
+
+    /// #422 RA-1: the eviction proof of `reference`'s artifact, as of the writer's head (its
+    /// index, [`RetentionIndex::proof`]) or of the published head (the published proofs). The
+    /// published proofs hold every proven object, as the index does (a pass start never drops
+    /// one), so both give an artifact the same proof; the identity of a proven object is checked
+    /// against the reference by the resolution (`evidence::resolve_artifact_from_events`).
+    pub(in crate::global) fn proof(
+        &self,
+        reference: &ProjectedArtifactReference,
+    ) -> GlobalLedgerResult<Option<ArtifactEvictionProof>> {
+        match self {
+            Self::Index(index) => index.proof(reference),
+            Self::Published {
+                proofs,
+                through_sequence,
+            } => Ok(proofs
+                .proofs
+                .get(&reference.artifact_id)
+                .cloned()
+                .map(|mut proof| {
+                    proof.through_sequence = *through_sequence;
+                    proof
+                })),
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

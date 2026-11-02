@@ -491,14 +491,17 @@ pub(super) fn phase_read_budget(
     (bytes, events, deadline)
 }
 
-/// All events and retention proofs must come from the same fully authenticated source.
+/// All events and retention proofs must come from the same fully authenticated source. #422
+/// RA-1: `proofs` are the writer's index (the writer's resolution, an offline snapshot's proof
+/// set) or the proofs the writer published with the point a reader-pool resolution reads at;
+/// `None`, the events' own eviction annotations.
 pub(super) fn resolve_artifact_from_events<E: LedgerEventRead>(
     events: &[E],
     selection: &LedgerArtifactSelection,
     through_sequence: u64,
     read_complete: bool,
     deadline: Instant,
-    retention: Option<&retention::RetentionIndex>,
+    proofs: Option<retention::PageProofs<'_>>,
 ) -> GlobalLedgerResult<ResolvedLedgerArtifact> {
     let budget = Some(artifact_read_budget(None, deadline));
     read_only::check_read_budget(budget, 0, 0)?;
@@ -542,8 +545,8 @@ pub(super) fn resolve_artifact_from_events<E: LedgerEventRead>(
     {
         return Err(denied(LedgerCode::ArtifactEventLinksMismatch.code()));
     }
-    let proof = match retention {
-        Some(retention) => retention.proof(&reference)?,
+    let proof = match proofs {
+        Some(proofs) => proofs.proof(&reference)?,
         None => event
             .artifact_evictions()
             .iter()
@@ -687,8 +690,16 @@ impl GlobalLedgerMetadata {
 }
 
 impl GlobalLedger {
-    /// Resolves a reference and current retention on the original writer queue.
-    /// Queue/system waits retain their existing limits; the deadline is cooperative.
+    /// Resolves a reference and current retention. Queue/system waits retain their existing
+    /// limits; the deadline is cooperative.
+    ///
+    /// #422 RA-1: the reader pool answers it, off the writer thread, as it answers the view pages
+    /// (QR-1): one authenticated point read at the point the writer last published (its committed
+    /// head, head hash, marker and eviction proofs), on a reader's own read-only connection, so a
+    /// resolution never waits behind the writer's work and never holds it. Its answers and
+    /// refusals are the writer's at that head. A ledger without a reader pool, or whose readers
+    /// all ended, resolves on the writer queue as before; a writer that ended answers no
+    /// resolution, as when it resolved them itself.
     pub fn resolve_artifact(
         &self,
         selection: LedgerArtifactSelection,
@@ -697,6 +708,42 @@ impl GlobalLedger {
         selection.validate()?;
         let budget = Some(artifact_read_budget(None, deadline));
         read_only::check_read_budget(budget, 0, 0)?;
+        let resolved = match self.reader_pool.as_ref().filter(|pool| pool.serving()) {
+            Some(pool) => {
+                if self.writer.as_ref().is_none_or(JoinHandle::is_finished) {
+                    return Err(GlobalLedgerError::fatal(
+                        LedgerCode::WriterUnavailable.code(),
+                        LedgerLocation::ResolveLedgerArtifact.location(),
+                    ));
+                }
+                let receiver = pool.submit_resolution(selection, deadline, self.reply_timeout)?;
+                reader_pool::ReaderPool::receive_resolution(&receiver, self.reply_timeout)??
+            }
+            None => self.resolve_artifact_on_writer(selection, deadline)?,
+        };
+        read_only::check_read_budget(budget, 0, 0)?;
+        Ok(resolved)
+    }
+
+    /// #422 RA-1, tests: the resolution on the writer thread even when the reader pool runs, the
+    /// answer a pool's resolution is compared with.
+    #[cfg(test)]
+    pub(crate) fn resolve_artifact_on_writer_for_test(
+        &self,
+        selection: LedgerArtifactSelection,
+        deadline: Instant,
+    ) -> GlobalLedgerResult<ResolvedLedgerArtifact> {
+        selection.validate()?;
+        self.resolve_artifact_on_writer(selection, deadline)
+    }
+
+    /// The resolution on the original writer queue: a ledger without a reader pool or (#422
+    /// RA-1) whose readers all ended, and tests comparing the pool's answers with the writer's.
+    fn resolve_artifact_on_writer(
+        &self,
+        selection: LedgerArtifactSelection,
+        deadline: Instant,
+    ) -> GlobalLedgerResult<ResolvedLedgerArtifact> {
         let (response, receiver) = mpsc::sync_channel(1);
         let sender = self.sender.as_ref().ok_or_else(|| {
             GlobalLedgerError::fatal(
@@ -713,13 +760,11 @@ impl GlobalLedger {
             },
             LedgerLocation::ResolveLedgerArtifact.location(),
         )?;
-        let resolved = receive_response(
+        receive_response(
             receiver,
             LedgerLocation::ResolveLedgerArtifact.location(),
             self.reply_timeout,
-        )??;
-        read_only::check_read_budget(budget, 0, 0)?;
-        Ok(resolved)
+        )?
     }
 
     /// Reads ledger records and their integrity data without opening referenced artifacts.

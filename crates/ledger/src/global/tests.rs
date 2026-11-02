@@ -3023,6 +3023,10 @@ mod gate_rb1;
 // page times (P29) and the published head (P30).
 #[path = "tests/gate_w1_8.rs"]
 mod gate_w1_8;
+// #422 RA-1: the Runtime's artifact resolution is answered by the reader pool, off the writer
+// thread, with the writer's answers; the writer resolves only when no reader serves.
+#[path = "tests/gate_ra1.rs"]
+mod gate_ra1;
 // Workflow 114-A (register §1.236): the index keys and the durability of `policy.not_run_changed`.
 #[path = "tests/gate_114a.rs"]
 mod gate_114a;

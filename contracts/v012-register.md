@@ -6420,6 +6420,56 @@ waits run loading pages only from 0.12.38, under `on`.
 **Rollback** (to 0.12.37). Nothing persisted changes. 0.12.37 admits such a step and does not run
 its loading pages.
 
+### 1.266 Slice RA-1 (0.12.38): an artifact resolution is answered by the ledger's reader pool, not the writer thread (#422; the console reads one frame of a watched account at most every 10 s, UI-3c-1, UI PR #114, on production since 11-03; coordinator work order `rd-1031/brief-ra-1.md`)
+
+[ledger-store.md](ledger-store.md) ("Recovery, artifacts and forensic consumers", the RA-1
+paragraph) and [material-read.md](material-read.md) ("Verification and lifecycle") are the
+contract. The number 1.266 is the coordinator's. No persisted ledger shape, wire shape,
+configuration key or outcome code is new or changed.
+
+**What the resolution reads and writes** (found before the change). `GlobalLedger::resolve_artifact`
+read, in one read transaction, the keyed meta row and the end of the stored rows (against the
+writer's head and head hash), the selected record with its link and artifact rows, each
+authenticated, and the artifact's eviction proof from the writer's proof set; it opened no
+artifact file (the host's material read opens it afterwards, outside the ledger) and wrote
+nothing: no pin, lease, read confirmation or access time, and its read transaction commits
+nothing. So it only reads, and needs the writer for nothing but its point.
+
+**What changed.** The writer's reader pool (#422 QR-1) answers it, as it answers a view page: a
+reader takes it from the same queue and reads it on its own read-only connection at the point
+the writer last published (`sqlite::resolve_artifact_at_point`: `verify_published_extent`, the
+point read, the proof from the published proofs, availability through that head). The writer's
+own resolution and the reader's share one reader (`ViewReader::resolve`), so their answers and
+refusals at one head are the same; the published proofs hold every proven object, as the
+writer's index does, and an unproven object's identity was checked at every append that named
+it, so no answer moves. A resolution is recorded in the writer's commit statistics as a
+`ResolveArtifact`, where the writer recorded its own, and is not one of the pool's pages
+(`ledger_read_pages` counts view pages only).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| RA1-1 | `resolve_artifact` on the reader pool, at the writer's last published point; the writer resolves only without a pool or once every reader ended | behaviour | RA-1 | ledger | `since` 0.12.38; `an_artifact_resolution_is_answered_by_the_reader_pool`, `a_resolution_does_not_wait_for_a_busy_writer` (`gate_ra1`) |
+| RA1-2 | the pool's refusals of a resolution: `writer_response_timeout` (its caller's reply limit passed, or the queue full), `writer_panicked` (its reader ended in it), `writer_unavailable` of `shutdown_writer` (the pool closing), each of `resolve_ledger_artifact` where a page's is of `project_ledger_view_page`, none fatal | behaviour of existing codes | RA-1 | ledger | `without_the_reader_pool_a_resolution_falls_back_to_the_writer`; a ledger whose readers all ended says so as before (`take_reader_pool_findings`) and the writer resolves |
+| RA1-3 | a record the published point holds whose file retention removed resolves without an eviction as of that point; the material read then answers `missing` (`material_read_missing`) | behaviour (no new failure kind) | RA-1 | ledger | `a_resolution_racing_retention_answers_missing`; a later resolution sees the eviction |
+| RA1-4 | [read-session-resource-close.md](read-session-resource-close.md) "Device session lifetime": a frame captured without a lease is kept by its class (a default frame 1 day after its ingestion time), not until the instance's next disconnect | contract text agrees with the code | RA-1 | — | the UI's question QO2: the two files disagreed; the code is [ledger-store.md](ledger-store.md)'s ("Frame classes", "Frame cleaner", statement L): the owner journal's disposition gates no frame since the cleaner stopped calling eviction admission (Workflow #375 R5d); no behaviour changes |
+
+**Failures.** A reader's own failure is never fatal: a refusal above fails that resolution only,
+and a reader that ends leaves the resolutions to the readers left, then to the writer, said as a
+warning, as for pages. What a reader finds in the ledger (a medium that does not match the
+published point, a record that does not authenticate, an identity conflict, a failed statement)
+keeps the code, operation and fatal flag the writer's resolution gave it, as a view page on the
+pool does; a writer failure stays as it was.
+
+**Interface.** `ledger` stays [3, 5] ([component-interfaces.md](component-interfaces.md)): nothing
+persisted or written changes. `runtime-client`, `runtime-outcomes` and `actingd-config` do not
+change either: the material read's request, receipt, codes and keys are the same.
+
+**What changes live.** The console's frame reads, and every other material read, no longer wait
+behind the writer's commits, and the writer no longer stops for them.
+
+**Rollback** (to 0.12.37). Nothing persisted changes. 0.12.37 resolves on the writer thread
+again.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

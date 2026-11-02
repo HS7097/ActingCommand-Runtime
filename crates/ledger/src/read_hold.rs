@@ -8,6 +8,7 @@
 //!
 //! #422 QR-1: a view page of a writer with a reader pool is read by the pool, off the writer; the
 //! gate holds it there, at the start of its read, and the writer goes on with its other commands.
+//! #422 RA-1: so is an artifact resolution, held once it took the point it reads at.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
@@ -100,8 +101,8 @@ impl Drop for WriterReadHoldGate {
 }
 
 /// Called by the writer of `root` (its canonical root) at the start of each read command, and by
-/// its reader pool at the start of each page (#422 QR-1); returns at once unless a gate is armed
-/// for that root.
+/// its reader pool at the start of each page (#422 QR-1) and of each resolution (#422 RA-1);
+/// returns at once unless a gate is armed for that root.
 pub(crate) fn hold_reads_of(root: &Path) {
     let hold = armed()
         .lock()
