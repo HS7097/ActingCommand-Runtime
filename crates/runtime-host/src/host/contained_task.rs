@@ -5214,7 +5214,20 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         .links()
                         .with_frame_id(frame_id)
                         .with_recognition_id(recognition_id);
-                    self.host.append_event(
+                    // #407 PF-2 (register §1.252): the same two commits, observed stage by stage
+                    // in the families of `RecognitionCompleted`'s two commits. The recognition is
+                    // not current until both are in, so its id is named here.
+                    let identity = task_timing::BoundaryIdentity {
+                        recognition_id: Some(*recognition_id.transport()),
+                        ..self.timing_identity(
+                            actingcommand_contract::TaskTimingBoundary::RecognitionStartedRecord,
+                        )
+                    };
+                    let append_started = self.task_timing.begin_append_stages_only(
+                        task_timing::TaskAppend::RecognitionPayload,
+                        identity,
+                    );
+                    let (appended, observation) = self.host.append_event_observed(
                         EventSeverity::Info,
                         EventSource::Runtime,
                         OriginModule::Recognition,
@@ -5224,9 +5237,19 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                             EventAction::RecognitionObserve,
                             AuditInput::new(),
                         ),
-                    )?;
-                    self.append_task(
+                    );
+                    self.task_timing
+                        .finish_append(append_started, appended.is_ok(), observation);
+                    appended?;
+                    let append_started = self.task_timing.begin_append_stages_only(
+                        task_timing::TaskAppend::RecognitionTask,
+                        identity,
+                    );
+                    let (appended, observation) = self.host.append_event_observed(
                         EventSeverity::Info,
+                        EventSource::Runtime,
+                        OriginModule::Runtime,
+                        EventActor::Runtime,
                         links,
                         TaskPayloadDraft::semantic(
                             TaskSemanticFact::RecognitionStarted {
@@ -5236,7 +5259,10 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                             },
                             AuditInput::new(),
                         ),
-                    )?;
+                    );
+                    self.task_timing
+                        .finish_append(append_started, appended.is_ok(), observation);
+                    appended?;
                     self.current_recognition_id = Some(recognition_id);
                     Ok(())
                 })();

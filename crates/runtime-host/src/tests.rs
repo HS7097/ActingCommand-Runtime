@@ -124,6 +124,9 @@ mod gate_0122_a7t;
 mod gate_0122_pk1b;
 // ACT-1, ACT-2 (Workflow #407, register §1.250): the settled path and the gap a step is handed.
 mod gate_act1;
+// #407 PF-2 (0.12.37), register §1.252: `RecognitionStarted`'s two commits are observed stage by
+// stage.
+mod gate_407_pf2;
 // #411 A15 (v0.12.1-rc.2, host key 106): an unconfirmed step's terminal and receipt name the
 // page of its last frame and that frame.
 mod gate_rc2_a15;
