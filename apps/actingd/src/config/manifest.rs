@@ -19,7 +19,11 @@ use actingcommand_contract::{
 use actingcommand_device::{
     MUMU_MANAGER_CONTROL_TIMEOUT, MUMU_MANAGER_STATE_WAIT_START, MUMU_MANAGER_STATE_WAIT_STOP,
 };
+use actingcommand_runtime_config::{
+    ConfigFailure, ConfigValueProblem, EffectiveConfig, agent_wake,
+};
 use actingcommand_runtime_host::{CatalogTransitionRequest, RuntimeHostConfig};
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::Duration;
 
@@ -536,6 +540,63 @@ pub(super) fn recognition_packages_subsystem(kept: bool, ignored: Vec<Outcome>) 
         |outcome, warning| outcome.link(CauseRelation::Note, warning),
     );
     subsystem("recognition_packages", kept, outcome)
+}
+
+/// Workflow #432 AGT-1a: `agent_wake`, added only for a file that names the section, so a Runtime
+/// without it reports nothing new. It first makes the checks only the assembly can make: the
+/// section is there at all, each alias a rule lists is configured, and every registered channel's
+/// message fits. A registry that is missing or unreadable, a rule's channel it does not list and a
+/// program a channel names that is not there are `note` links and never a refusal (#419).
+pub(super) fn agent_wake_subsystem(
+    effective: &EffectiveConfig,
+    state_root: &Path,
+    aliases: &BTreeSet<String>,
+) -> Result<ConfigSubsystem, ConfigFailure> {
+    let section = effective.agent_wake()?.ok_or_else(|| {
+        agent_wake::invalid(agent_wake::ENABLED, ConfigValueProblem::RequiredMissing)
+    })?;
+    section.refuse_unknown_instances(aliases.iter().map(String::as_str))?;
+    let note = |problem| agent_wake::invalid(agent_wake::RULES, problem).outcome();
+    let mut notes = Vec::new();
+    match actingcommand_agent_forward::channels::read_registry(state_root) {
+        Ok(Some(registry)) => {
+            agent_wake::refuse_channels_that_cannot_fit(
+                section.summary_max_chars,
+                state_root,
+                &section.body.dir,
+                registry
+                    .channels
+                    .iter()
+                    .map(|channel| channel.name.as_str()),
+            )?;
+            if section
+                .rules
+                .iter()
+                .any(|rule| registry.channel(&rule.to).is_none())
+            {
+                notes.push(note(ConfigValueProblem::ChannelUnknown));
+            }
+            if registry.program_missing() {
+                notes.push(note(ConfigValueProblem::ChannelProgramMissing));
+            }
+        }
+        Ok(None) | Err(_) => notes.push(note(ConfigValueProblem::RegistryUnreadable)),
+    }
+    let outcome = notes.into_iter().fold(
+        Outcome::new(flag_state(Some(section.enabled))),
+        |outcome, note| outcome.link(CauseRelation::Note, note),
+    );
+    Ok(subsystem("agent_wake", section.enabled, outcome))
+}
+
+/// Workflow #432 AGT-1a: the `agent_wake` row goes right after `agent_dispatcher`.
+pub(super) fn insert_agent_wake(manifest: &mut RuntimeConfigManifest, row: ConfigSubsystem) {
+    let at = manifest
+        .subsystems
+        .iter()
+        .position(|subsystem| subsystem.name == "agent_dispatcher")
+        .map_or(0, |at| at + 1);
+    manifest.subsystems.insert(at, row);
 }
 
 /// The registry id's canonical text (`instance_<32 hex>`), its only public spelling.

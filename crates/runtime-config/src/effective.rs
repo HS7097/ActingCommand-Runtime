@@ -12,6 +12,7 @@
 //! value and lives only while an instruction value is set; a start keeps that value while the
 //! file still does not write the key, and voids it (`config_override_superseded`) once it does.
 
+use crate::agent_wake::AgentWakeConfig;
 use crate::codes::{ConfigCode, ConfigValueProblem};
 use crate::defaults::shipped_scalar;
 use crate::device_link::DeviceLinkConfig;
@@ -32,9 +33,9 @@ use crate::table::{DefaultSource, INSTANCE_SECTION, KeyName, KeyRange, KeyRow, f
 use crate::touch::TouchConfig;
 use crate::value::{canonical_json, parse_value, scalar_json};
 use crate::{
-    device_link, device_state, display_safe_area, emulator_control, execution, host, host_claims,
-    idle, instance, ledger_observer, performance, recovery_ladder, scheduling, startup_discovery,
-    store_foreground, touch,
+    agent_wake, device_link, device_state, display_safe_area, emulator_control, execution, host,
+    host_claims, idle, instance, ledger_observer, performance, recovery_ladder, scheduling,
+    startup_discovery, store_foreground, touch,
 };
 use actingcommand_contract::outcome::{BlackoutSource, Outcome};
 use actingcommand_contract::{
@@ -185,6 +186,7 @@ impl ConfigFailure {
         match self.code {
             ConfigCode::RecoveryLadderConfigInvalid
             | ConfigCode::PerfConfigInvalid
+            | ConfigCode::AgentWakeConfigInvalid
             | ConfigCode::BlackoutConfigInvalid => Self {
                 code: ConfigCode::ConfigValueInvalid,
                 problem: self.problem.or(Some(ConfigValueProblem::SectionCheck)),
@@ -560,6 +562,19 @@ impl EffectiveConfig {
         StoreForegroundConfig::parse(&|key: &str| self.value_or_shipped(key))
     }
 
+    /// Workflow #432 AGT-1a: the `agent_wake` section in effect, checked whole; `None` for a
+    /// configuration that does not carry the section.
+    pub fn agent_wake(&self) -> Result<Option<AgentWakeConfig>, ConfigFailure> {
+        if !self
+            .settings
+            .iter()
+            .any(|setting| config_parameter_section(&setting.key) == agent_wake::SECTION)
+        {
+            return Ok(None);
+        }
+        AgentWakeConfig::parse(&|key: &str| self.value(key).cloned()).map(Some)
+    }
+
     /// PERF-B1 (Workflow #407 B1): the `execution.capture` keys in effect, the kernel's capture
     /// cadence, which the host hands the kernel with each step's pacing.
     pub fn capture_cadence(&self) -> Result<CaptureCadenceConfig, ConfigFailure> {
@@ -903,6 +918,9 @@ impl EffectiveConfig {
         }
         if sections.contains(store_foreground::SECTION) {
             self.store_foreground()?;
+        }
+        if sections.contains(agent_wake::SECTION) {
+            self.agent_wake()?;
         }
         if !sections.contains(INSTANCE_SECTION) {
             return Ok(());

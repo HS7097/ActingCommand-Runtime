@@ -8,6 +8,9 @@
 #![forbid(unsafe_code)]
 
 mod agent_dispatcher;
+// Workflow #432 AGT-1a: the message to a registered channel and its body, pure.
+#[allow(dead_code, reason = "AGT-1b calls it")]
+mod agent_wake;
 // UPD-1: the instance fact `health.application.update_required` and the gate it holds.
 mod application_update;
 mod approval;
