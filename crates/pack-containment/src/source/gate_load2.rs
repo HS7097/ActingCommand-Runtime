@@ -15,11 +15,11 @@
 // told by a colour probe each. The copy declares the template `loading/spinner` (a checkerboard of
 // 8 x 8), the colour target `loading/backdrop` and the page `transition` that reads both.
 
+use super::tests::admission_deadline;
 use crate::{Containment, ContainmentError, InstanceId, LoadedBundle};
 use actingcommand_contract::outcome::Outcome;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::{Duration, Instant};
 
 const WIDTH: u32 = 16;
 const HEIGHT: u32 = 8;
@@ -177,7 +177,7 @@ fn admit(
         &InstanceId::new("neutral-load2").expect("instance"),
         entries,
         false,
-        Instant::now() + Duration::from_secs(60),
+        admission_deadline(),
     )
 }
 
