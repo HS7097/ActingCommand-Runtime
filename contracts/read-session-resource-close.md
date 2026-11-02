@@ -200,10 +200,15 @@ instance's own capture with confirmed disposal fails only its run, nonfatal, a n
 backend and a later capture included (`application-lifecycle.md`).
 
 A kept session keeps the owner journal's `InUse` disposition across leases;
-`ConfirmedClosed` is written when every instance is closed. The retention of frames
-captured without a lease (read-only observe, capture sequence, monitor) therefore
-waits for the instance's next disconnect or reconnect command, or for a clean
-restart's proven import.
+`ConfirmedClosed` is written when every instance is closed. That disposition gates no
+frame retention: the frame cleaner calls no eviction admission (Workflow #375 R5d;
+[ledger-store.md](ledger-store.md), "Frame cleaner"). A frame captured without a lease
+(read-only observe, capture sequence, monitor) has no run; its entry closes when its
+capture completes, and it is kept by its class like every frame
+([ledger-store.md](ledger-store.md), "Frame classes"): a default frame until 1 day
+after its ingestion time, a duplicate until it settles, a Lab or error frame moved
+to its kept folder. It does not wait for the instance's next disconnect or
+reconnect command.
 
 ## Input and application-lifecycle writes take a FencedWrite
 

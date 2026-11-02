@@ -1629,8 +1629,9 @@ pub struct GlobalLedger {
     /// (`ledger_observer.read_check_vm_steps`).
     frame_query_database: Option<Arc<actingcommand_runtime_database::RuntimeDatabase>>,
     read_check_vm_steps: u32,
-    /// #422 QR-1: the reader pool that reads the view pages off the writer thread; only the
-    /// Runtime's writer (a failure plan and its database) has one.
+    /// #422 QR-1: the reader pool that reads the view pages (#422 RA-1: and resolves the
+    /// artifacts) off the writer thread; only the Runtime's writer (a failure plan and its
+    /// database) has one.
     reader_pool: Option<reader_pool::ReaderPool>,
     /// #422 QR-1: why the Runtime's writer has no reader pool (its connections did not open);
     /// the writer reads the pages then, and the Runtime says so as a warning.
@@ -2281,8 +2282,8 @@ impl GlobalLedger {
         self.reader_pool_finding.as_ref()
     }
 
-    /// #422 QR-1: whether the view pages are read by the reader pool, off the writer thread; not
-    /// once every reader of the pool ended (fix 1).
+    /// #422 QR-1: whether the view pages (#422 RA-1: and the artifact resolutions) are read by the
+    /// reader pool, off the writer thread; not once every reader of the pool ended (fix 1).
     pub fn reads_off_writer(&self) -> bool {
         self.reader_pool
             .as_ref()

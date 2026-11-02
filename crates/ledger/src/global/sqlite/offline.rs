@@ -326,7 +326,7 @@ impl SqliteViewSnapshot {
             self.point.head,
             true,
             deadline,
-            Some(&self.retention),
+            Some(PageProofs::Index(&self.retention)),
         )
         .map_err(|error| in_phase(error, PHASE))
     }

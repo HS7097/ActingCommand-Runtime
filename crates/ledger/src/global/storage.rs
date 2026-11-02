@@ -2019,7 +2019,7 @@ impl DurableStorage for SegmentStorage {
             self.head(),
             true,
             deadline,
-            Some(retention),
+            Some(super::retention::PageProofs::Index(retention)),
         )
     }
 

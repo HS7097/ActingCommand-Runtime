@@ -75,9 +75,13 @@ A deadline that runs out gives `not_provided` with `budget_exceeded`; the failur
 keeps the bound's own code (`ledger_read_budget_exceeded`,
 `artifact_read_budget_exceeded` or `material_read_budget_exceeded`) and its
 `operation` names the phase, in the report and in the tool's error.
-Synchronous file I/O and the original writer queue are not forcibly cancelled;
-checks observe budget expiry when control returns. Existing client I/O settings
-and every other operation's deadlines/profile are unchanged.
+Synchronous file I/O and the Ledger lookups are not forcibly cancelled; checks
+observe budget expiry when control returns. In the resident Runtime both lookups
+are answered by the Ledger's reader pool, off the writer thread (#422 RA-1, since
+0.12.38), and by the original writer queue only when no reader serves
+([ledger-store.md](ledger-store.md), "Recovery, artifacts and forensic consumers").
+Existing client I/O settings and every other operation's deadlines/profile are
+unchanged.
 
 The response separates the requested snapshot from `availability_through`, and
 retains each native eviction observation's own through position. It does not claim

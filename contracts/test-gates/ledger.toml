@@ -841,6 +841,17 @@ tests = [
 ]
 incident = ["#422 QR-1"]
 
+# RA-1 (#422; since 0.12.38; work order rd-1031/brief-ra-1.md, register §1.266; the console reads one frame of a watched account at most every 10 s, UI-3c-1): the Runtime's artifact resolution is answered by the writer's reader pool, off the writer thread, as its view pages are. For a frame without an eviction, one with a pending and one with a completed eviction, and each refusal a selection meets (another record at the position, a snapshot or a record past the head, another hash, another run, an artifact the record does not carry, no bytes), the pool's answer is the writer's at the same head, and the writer did not resolve it; while the writer is held inside an append's write transaction a resolution is answered at the committed head and refused past it; a resolution that took its point before retention removed the frame answers it without an eviction as of that point and the material read finds no file (artifact_read_failed, NotFound: what a missing artifact answers), while a later resolution sees the eviction; a ledger without a pool, and one whose readers all ended (each such resolution writer_panicked of resolve_ledger_artifact, not fatal, and the ends said), resolve on the writer with the same answer
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_ra1::an_artifact_resolution_is_answered_by_the_reader_pool",
+    "actingcommand-ledger::lib::global::tests::gate_ra1::a_resolution_does_not_wait_for_a_busy_writer",
+    "actingcommand-ledger::lib::global::tests::gate_ra1::a_resolution_racing_retention_answers_missing",
+    "actingcommand-ledger::lib::global::tests::gate_ra1::without_the_reader_pool_a_resolution_falls_back_to_the_writer",
+]
+incident = ["#422 RA-1"]
+
 # QR-2 (#422; v0.12.23; brief rd-1028/brief-qr2-overview-pages.md, investigation rd-1028/qr2-investigation.md §2.1 and §4): the run listing's and the run status's pages stop deriving what no caller reads. A page asked without run recovery, on a history whose runs hold more records than a recovery context, runs no statement of a run's context and has no group, with the default page's rows, views, cursor and read scope; the writer's page asked so is the pool's byte for byte and the in-memory page asked so has no group either, while the default page still reads every run's context and derives a limited group per long run (T1). A reader-pool thread reads the Lab relations once per snapshot and a window's first record once: later pages at that snapshot read neither, the first page after the snapshot moved reads the relations again and keeps the first record found; on a history with a Lab anchor and a run that names its request, a page served from the kept relations names the Lab view among that run's row's views and no other's, and each pool page is the writer's own page at its snapshot byte for byte (T2; fix 1, review M2). Pages of two snapshots in turn on one reader, as two callers' pages interleave, read neither again after each snapshot's first page and are the writer's pages at their snapshots (T4; fix 1, review M1)
 [[gate]]
 coverage = "Y"
