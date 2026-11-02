@@ -26,9 +26,12 @@
 //!   and unrecognised screen is counted unpaced) does not hold across it.
 //! - **Admission.** A broken rule is `contained_task_program_invalid` with its rule
 //!   (`program_problem`), the task declaration's `path` and the refused member (`json_pointer`),
-//!   checked before the common operation checks; a `linear_steps` task refuses both with
-//!   `contained_task_linear_invalid`, `reason=wait`. The `on_timeout` end is a keyed end of the
-//!   static checks (`TaskOperation::keyed_ends`).
+//!   checked before the common operation checks; a `linear_steps` task refuses a wait step with
+//!   `contained_task_linear_invalid`, `reason=wait`, and (Workflow #407 LOAD-2) admits a wait
+//!   page. The `on_timeout` end is a keyed end of the static checks (`TaskOperation::keyed_ends`).
+//! - **`expect_after.loading`** (Workflow #407 LOAD-2): `off`, or the package's loading pages less
+//!   `except`, with `add`, and `max_ms`; admitted in both execution modes
+//!   ([`TaskProgram::validate_loading`]), run by LOAD-3.
 
 use super::{
     ContainedTaskError, ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTimingContext,
@@ -36,13 +39,14 @@ use super::{
     PreparedContainedTask, STEP_UNCONFIRMED, StepPacing, TaskControl, TaskOperation, TaskProgram,
     confirmation_failure_detail, linear, program_refusal, resolve_page_reference,
 };
-use crate::codes::ProgramProblem;
+use crate::codes::{ExecutionKernelCode, ProgramProblem};
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
-    SchedulingOutcomeDeclaration, TaskTimingFailure, TaskTimingScope, TaskTimingStage,
+    SchedulingOutcomeDeclaration, TaskSchema, TaskTimingFailure, TaskTimingScope, TaskTimingStage,
 };
 use actingcommand_page_detector::PageDetector;
 use serde::Deserialize;
+use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 /// The most a wait step or a wait page waits: the bound of `expect_after.timeout_ms`.
@@ -65,6 +69,62 @@ pub(super) struct TaskWaitPage {
     max_ms: u64,
 }
 
+/// Workflow #407 LOAD-2: the one word of `expect_after.loading` that takes no loading page.
+const LOADING_OFF: &str = "off";
+
+/// Workflow #407 LOAD-2 (register §1.258; design `rd-1031/check-speed/model-loading.md` §2.4): a
+/// confirmation's `expect_after.loading`, as the package writes it: `"off"`, or
+/// `{"except"?, "add"?, "max_ms"?}`. The confirmation's loading pages are the package's (its
+/// compiled loading copy) less `except`, with `add` and the wait page; its allowance is `max_ms`,
+/// else the wait page's, else the package's. Admitted only: LOAD-3 runs it.
+#[derive(Debug, Clone, Default)]
+pub(super) struct TaskLoading {
+    off: bool,
+    except: Vec<String>,
+    add: Vec<String>,
+    max_ms: Option<u64>,
+}
+
+impl<'de> Deserialize<'de> for TaskLoading {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Adjusted {
+            #[serde(default)]
+            except: Vec<String>,
+            #[serde(default)]
+            add: Vec<String>,
+            #[serde(default)]
+            max_ms: Option<u64>,
+        }
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Declared {
+            Word(String),
+            Adjusted(Adjusted),
+        }
+        match Declared::deserialize(deserializer)? {
+            Declared::Word(word) if word == LOADING_OFF => Ok(Self {
+                off: true,
+                ..Self::default()
+            }),
+            Declared::Word(word) => Err(serde::de::Error::custom(format!(
+                "expect_after.loading is {word:?}, not \"{LOADING_OFF}\""
+            ))),
+            Declared::Adjusted(Adjusted {
+                except,
+                add,
+                max_ms,
+            }) => Ok(Self {
+                off: false,
+                except,
+                add,
+                max_ms,
+            }),
+        }
+    }
+}
+
 impl TaskOperation {
     /// The outcome key of a wait step's `on_timeout`, when it declares one.
     pub(super) fn wait_on_timeout_key(&self) -> Option<&str> {
@@ -80,10 +140,26 @@ impl TaskOperation {
             .and_then(|expectation| expectation.wait_page.as_ref())
     }
 
-    /// Whether the operation is a wait step or its confirmation declares a wait page, which a
-    /// `linear_steps` task refuses.
+    /// Whether the operation is a wait step, which a `linear_steps` task refuses. Workflow #407
+    /// LOAD-2: a confirmation's wait page no longer counts; a step plan admits it.
     pub(super) fn declares_wait(&self) -> bool {
-        self.wait.is_some() || self.wait_page().is_some()
+        self.wait.is_some()
+    }
+
+    /// Workflow #407 LOAD-2: the confirmation's `expect_after.loading`, when it declares one.
+    pub(super) fn loading(&self) -> Option<&TaskLoading> {
+        self.expect_after
+            .as_ref()
+            .and_then(|expectation| expectation.loading.as_ref())
+    }
+
+    /// Workflow #407 LOAD-2: the pages the confirmation adds to the package's loading pages, as
+    /// the package declares them: `loading.add`, then the wait page.
+    pub(super) fn loading_added_pages(&self) -> impl Iterator<Item = &str> {
+        self.loading()
+            .into_iter()
+            .flat_map(|loading| loading.add.iter().map(String::as_str))
+            .chain(self.wait_page().map(|wait_page| wait_page.page_id.as_str()))
     }
 
     /// The first member, as its JSON pointer below the operation, that a wait step never takes.
@@ -225,6 +301,116 @@ impl TaskProgram {
         }
         Ok(())
     }
+
+    /// Workflow #407 LOAD-2 (register §1.258; design `model-loading.md` §2.4, §5): the admission of
+    /// every operation's `expect_after.loading`, in a page graph and in a step plan. Each refusal
+    /// is `contained_task_program_invalid` naming its rule, the task declaration's path `path`
+    /// and the refused member below the operation's `expect_after`:
+    ///
+    /// - `off` beside a wait page, and a `max_ms` beside a wait page's (`loading_conflict`);
+    /// - a `max_ms` outside 1..=1800000 (`wait_max_invalid`);
+    /// - an `except` entry that names no loading page the package inherits (its compiled loading
+    ///   copy), or repeats one (`loading_except_unknown`);
+    /// - an `add` entry that is not one page of the package or repeats one, and in a page graph
+    ///   one that is the operation's `from` page, one of its destinations or an error page
+    ///   (`loading_page_invalid`): a click with no effect would read as loading. A step plan
+    ///   refuses its own pages there with `contained_task_linear_invalid`, `reason=loading_page`
+    ///   ([`TaskProgram::validate_linear`]);
+    /// - in a step plan, which takes a wait page from LOAD-2 on, the wait page's rules of a page
+    ///   graph: one page of the package (`wait_page_invalid`), its `max_ms` 1..=1800000
+    ///   (`wait_max_invalid`).
+    ///
+    /// An older task schema refuses `loading` with `contained_task_operation_invalid`, as the
+    /// declaration gate refuses it with `UnconsumedField`. A wait step may declare it.
+    pub(super) fn validate_loading(
+        &self,
+        control: &TaskControl,
+        detector: &PageDetector,
+        path: &str,
+    ) -> Result<(), ContainedTaskError> {
+        let game = control.game.as_str();
+        let step_plan = control.execution_mode == linear::LINEAR_STEPS;
+        for (index, operation) in self.operations.iter().enumerate() {
+            let refuse = |problem: ProgramProblem, member: &str| {
+                program_refusal(
+                    problem,
+                    path,
+                    &format!("/operations/{index}/expect_after/{member}"),
+                )
+            };
+            if step_plan && let Some(wait_page) = operation.wait_page() {
+                resolve_page_reference(game, &wait_page.page_id, detector)
+                    .map_err(|_| refuse(ProgramProblem::WaitPageInvalid, "wait_page/page_id"))?;
+                if !(1..=MAX_WAIT_MS).contains(&wait_page.max_ms) {
+                    return Err(refuse(ProgramProblem::WaitMaxInvalid, "wait_page/max_ms"));
+                }
+            }
+            let Some(loading) = operation.loading() else {
+                continue;
+            };
+            if !self.schema_at_least(TaskSchema::V0_9) {
+                return Err(ContainedTaskError::with_detail(
+                    ExecutionKernelCode::ContainedTaskOperationInvalid.code(),
+                    format!("operation={} field=expect_after", operation.id),
+                ));
+            }
+            let wait_page = operation.wait_page().is_some();
+            if loading.off {
+                if wait_page {
+                    return Err(refuse(ProgramProblem::LoadingConflict, "loading"));
+                }
+                continue;
+            }
+            if let Some(max_ms) = loading.max_ms {
+                if wait_page {
+                    return Err(refuse(ProgramProblem::LoadingConflict, "loading/max_ms"));
+                }
+                if !(1..=MAX_WAIT_MS).contains(&max_ms) {
+                    return Err(refuse(ProgramProblem::WaitMaxInvalid, "loading/max_ms"));
+                }
+            }
+            let mut excepted = BTreeSet::new();
+            for (entry, page) in loading.except.iter().enumerate() {
+                let inherited = detector
+                    .loading_page_ids()
+                    .filter(|candidate| crate::page_anchor_matches(game, candidate, page))
+                    .count()
+                    == 1;
+                if !inherited || !excepted.insert(page.as_str()) {
+                    return Err(refuse(
+                        ProgramProblem::LoadingExceptUnknown,
+                        &format!("loading/except/{entry}"),
+                    ));
+                }
+            }
+            let destinations = operation.destination_pages()?;
+            let from = if operation.from == linear::ANY_PAGE {
+                None
+            } else {
+                resolve_page_reference(game, &operation.from, detector).ok()
+            };
+            let mut added = BTreeSet::new();
+            for (entry, page) in loading.add.iter().enumerate() {
+                let refused = || {
+                    refuse(
+                        ProgramProblem::LoadingPageInvalid,
+                        &format!("loading/add/{entry}"),
+                    )
+                };
+                let resolved =
+                    resolve_page_reference(game, page, detector).map_err(|_| refused())?;
+                let own_page = from.as_deref() == Some(resolved.as_str())
+                    || destinations.iter().any(|destination| {
+                        crate::page_anchor_matches(game, &resolved, destination)
+                    })
+                    || self.is_error_page(control, &resolved);
+                if (!step_plan && own_page) || !added.insert(resolved) {
+                    return Err(refused());
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// The page one confirmation wait holds on, when its operation declares one, and the clock that
@@ -330,6 +516,23 @@ impl<'o> HeldPage<'o> {
         if let Hold::Step { since } = &mut self.hold {
             *since += paused;
         }
+    }
+}
+
+impl PreparedContainedTask {
+    /// Workflow #407 LOAD-2: the package's loading set (`crate::PackageLoadingSet`), `None`
+    /// without a loading copy.
+    pub fn loading_set(&self) -> Option<crate::PackageLoadingSet> {
+        let max_ms = self.detector.loading_max_ms()?;
+        let game = self.control.game.as_str();
+        Some(crate::PackageLoadingSet {
+            pages: self
+                .detector
+                .loading_page_ids()
+                .map(|page| crate::canonical_page_anchor(game, page))
+                .collect(),
+            max_ms,
+        })
     }
 }
 

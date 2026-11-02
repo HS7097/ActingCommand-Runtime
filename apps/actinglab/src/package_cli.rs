@@ -30,6 +30,10 @@ struct PackageCheckResponse {
     /// declared box is one point, in declaration order; empty when there is none. The package
     /// still passes.
     warnings: Vec<OutcomeEnvelope>,
+    /// Workflow #407 LOAD-2 (register §1.258): the loading set the package compiled from its
+    /// loading copy, `{pages, max_ms}`; absent for a package without one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    loading: Option<actingcommand_lab::PackageLoadingSet>,
 }
 
 /// Workflow #411 A5 (M-PKG §3.2, S5-T4: "`package check` 只做结构准入"): `package check
@@ -56,7 +60,7 @@ pub(super) fn run_check(flags: &FlagArgs) -> CliOutcome<Value> {
     let deadline = Instant::now()
         .checked_add(CHECK_BUDGET)
         .ok_or_else(|| CliError::package_invalid("package admission deadline overflow"))?;
-    let (descriptor, single_point_clicks) =
+    let (descriptor, single_point_clicks, loading) =
         actingcommand_lab::PreparedContainedTask::describe_path_with_single_point_clicks(
             CHECK_LABEL,
             &package,
@@ -104,6 +108,7 @@ pub(super) fn run_check(flags: &FlagArgs) -> CliOutcome<Value> {
         package_id: descriptor.package_id().to_owned(),
         entry_task_id: descriptor.entry_task_id().to_owned(),
         warnings,
+        loading,
     })
 }
 

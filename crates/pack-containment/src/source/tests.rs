@@ -3,6 +3,14 @@
 use super::*;
 use actingcommand_contract::{ResourceDeclarationIssue, ResourceDeclarationReason};
 
+// Workflow #407 LOAD-2: the deadline a gate test hands an admission of a source pack. A gate file
+// reads no clock (test plan v2.2 §2.1 guard 3); this deadline only bounds the admission, which
+// never takes this long, so it decides nothing (the CD-27 D2 (a) form of
+// `execution-kernel`'s `contained_task/tests.rs`).
+pub(super) fn admission_deadline() -> std::time::Instant {
+    std::time::Instant::now() + std::time::Duration::from_secs(60)
+}
+
 #[test]
 fn derives_target_ids_like_python_converter() {
     assert_eq!(anchor_target_id("home"), "page/home");

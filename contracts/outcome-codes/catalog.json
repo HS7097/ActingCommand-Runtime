@@ -6210,19 +6210,19 @@
           "description": "max_ms of loading.json or of a pack's loading copy is outside 1 to 1800000 (Workflow #407 LOAD-1, since 0.12.37)."
         },
         "loading_template_invalid": {
-          "description": "A template loading.json declares is missing, cannot be read, is no PNG or is of one colour throughout (Workflow #407 LOAD-1, since 0.12.37)."
+          "description": "A template loading.json declares is missing, cannot be read, is no PNG or is of one colour throughout (Workflow #407 LOAD-1, since 0.12.37); LOAD-2: or so is a template a pack's loading copy reads, when the pack loader compiles it."
         },
         "loading_coordinate_mismatch": {
-          "description": "A pack that takes loading pages declares another coordinate_space than loading.json (Workflow #407 LOAD-1, since 0.12.37)."
+          "description": "A pack that takes loading pages declares another coordinate_space than loading.json (Workflow #407 LOAD-1, since 0.12.37); LOAD-2: or than its loading copy, when the pack loader compiles it."
         },
         "loading_page_collision": {
-          "description": "A pack that takes a loading page declares a page of the same id itself (Workflow #407 LOAD-1, since 0.12.37)."
+          "description": "A pack that takes a loading page declares a page of the same id itself (Workflow #407 LOAD-1, since 0.12.37), checked by the tools and (LOAD-2) by the pack loader."
         },
         "loading_target_collision": {
-          "description": "A pack that takes a loading target declares a target of the same id itself (Workflow #407 LOAD-1, since 0.12.37)."
+          "description": "A pack that takes a loading target declares a target of the same id itself (Workflow #407 LOAD-1, since 0.12.37), checked by the tools and (LOAD-2) by the pack loader."
         },
         "loading_pack_stale": {
-          "description": "A pack's loading copy (resources/loading.json, resources/loading/) is not the one loading.json makes for it, or the pack carries one with no loading.json (Workflow #407 LOAD-1, since 0.12.37)."
+          "description": "A pack's loading copy (resources/loading.json, resources/loading/) is not the one loading.json makes for it, or the pack carries one with no loading.json (Workflow #407 LOAD-1, since 0.12.37); LOAD-2: the pack loader also refuses a file below resources/loading/ that the copy does not read, or one without the copy, and resource validate names a stale copy with it."
         }
       }
     },
@@ -7026,7 +7026,7 @@
           "description": "A wait step declares no destination (to or expect_after)."
         },
         "wait_max_invalid": {
-          "description": "A wait step's max_ms or a wait page's max_ms is outside 1..=1800000."
+          "description": "A wait step's max_ms or a wait page's max_ms is outside 1..=1800000; Workflow #407 LOAD-2 (since 0.12.37): or an expect_after.loading.max_ms."
         },
         "wait_designated": {
           "description": "A wait step is a designated operation or a member of a designated effect set."
@@ -7038,7 +7038,7 @@
           "description": "The mapping a wait step's on_timeout names does not declare busy (#411 B37)."
         },
         "wait_page_invalid": {
-          "description": "A confirmation's wait page (expect_after.wait_page.page_id) is not one page of the package, or is a destination of its operation or an error page."
+          "description": "A confirmation's wait page (expect_after.wait_page.page_id) is not one page of the package, or is a destination of its operation or an error page. Workflow #407 LOAD-2 (since 0.12.37): a step plan, which admits a wait page, refuses one that is not one page of the package with it."
         },
         "store_operation_invalid": {
           "description": "STORE-FG-1 (since 0.12.29): a store operation of control.json store_update names no operation of the task, one whose effect is no click that draws a tap (point, rect, specific_rect, target, target_center, offset), one whose from is not one page of the package, or one without a guard on its from page (no guard, or unguarded_trusted_coordinate), whose tap could land on a frame where the page and its proof were not checked; json_pointer /store_update/store_operations/<i>/operation."
@@ -7060,6 +7060,15 @@
         },
         "expect_target_unreachable": {
           "description": "ACT-4 (since 0.12.37): an entry of an operation's expect_after.target_present or target_gone names a target that stands in the rules (required, any_of, optional, forbidden) of neither the operation's from page nor one of its destinations, directly or as a member of a check there; json_pointer /operations/<i>/expect_after/<list>/<j>."
+        },
+        "loading_conflict": {
+          "description": "Workflow #407 LOAD-2 (since 0.12.37): an operation's expect_after.loading is \"off\" beside a wait page (json_pointer /operations/<i>/expect_after/loading), or names max_ms beside a wait page's max_ms, which is the confirmation's allowance already (json_pointer /operations/<i>/expect_after/loading/max_ms)."
+        },
+        "loading_except_unknown": {
+          "description": "Workflow #407 LOAD-2 (since 0.12.37): an entry of an operation's expect_after.loading.except names no loading page the package compiled from its loading copy, or one an earlier entry names; json_pointer /operations/<i>/expect_after/loading/except/<j>."
+        },
+        "loading_page_invalid": {
+          "description": "Workflow #407 LOAD-2 (since 0.12.37): an entry of an operation's expect_after.loading.add is not one page of the package or repeats an earlier one, or, in a page graph, is the operation's from page, one of its destinations or an error page (a step plan refuses its own pages with contained_task_linear_invalid, reason=loading_page); json_pointer /operations/<i>/expect_after/loading/add/<j>."
         }
       }
     },

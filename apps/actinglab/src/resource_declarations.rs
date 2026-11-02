@@ -4,13 +4,15 @@
 
 use crate::codes::ActinglabCode;
 use crate::{CliError, CliOutcome, FlagArgs};
+use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     BundleMaintenance, LabErrorClass, MAX_STANDARD_PACK_TABLES, ResourceAdjustmentDeclaration,
     ResourceDeclarationIssue, ResourceReadingDeclaration, STANDARD_PACK_INTERRUPTS_FILE,
-    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE,
-    STANDARD_PACK_TABLES_DIRECTORY, StandardPackProblem, StandardPackTableIssue,
-    page_projection::ProjectionMetadata, parse_standard_pack_interrupts,
+    STANDARD_PACK_LOADING_FILE, STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE,
+    STANDARD_PACK_SCHEDULE_FILE, STANDARD_PACK_TABLES_DIRECTORY, StandardPackProblem,
+    StandardPackRootIssue, StandardPackTableIssue, page_projection::ProjectionMetadata,
+    parse_pack_loading, parse_standard_pack_interrupts, parse_standard_pack_loading,
     parse_standard_pack_navigation, parse_standard_pack_pages, parse_standard_pack_schedule,
     parse_standard_pack_table, resource_declaration::ProcedureBindingConfigFile,
     validate_bundle_maintenance_declarations,
@@ -26,7 +28,8 @@ use actingcommand_policy::{
     ScopeSelector, validate_catalog_declaration,
 };
 use actingcommand_resource_tooling::{
-    DECLARATION_EXCLUSIONS_FILE, DeclarationExclusions, check_policy_tables, declared_policy_tables,
+    DECLARATION_EXCLUSIONS_FILE, DeclarationExclusions, check_loading_root_file,
+    check_pack_loading_copy, check_policy_tables, declared_policy_tables,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -590,6 +593,33 @@ impl DeclarationReader {
         {
             self.maa_declarations(parent.parent().unwrap_or(Path::new("")))?;
             "maa_semantic_declarations"
+        } else if path == Path::new(STANDARD_PACK_LOADING_FILE) {
+            // Workflow #407 LOAD-2: a game root's loading pages, by the contract's check, then
+            // every template it declares, as `package loading` reads them.
+            let loading = parse_standard_pack_loading(&bytes, None)
+                .map_err(|issues| loading_refusal(path, &issues))?;
+            check_loading_root_file(&self.checked_path(path)?, &loading.game)
+                .map_err(|error| loading_tool_refusal(path, error))?;
+            "standard_pack_loading"
+        } else if name == "loading.json" && parent.file_name().is_some_and(|p| p == "resources") {
+            // Workflow #407 LOAD-2: a pack's loading copy (`<pack>/resources/loading.json`), by
+            // the contract's check, then against the repository's `loading.json`: the copy that
+            // file makes for the pack, as `package loading --check` decides it; without the file,
+            // a copy is stale.
+            parse_pack_loading(&bytes).map_err(|issues| loading_refusal(path, &issues))?;
+            let pack = self
+                .root
+                .join(parent.parent().unwrap_or_else(|| Path::new("")));
+            let root_file = Path::new(STANDARD_PACK_LOADING_FILE);
+            let root_file = if self.existing_file(root_file)? {
+                self.read(root_file, MAX_DOCUMENT_BYTES)?;
+                Some(self.checked_path(root_file)?)
+            } else {
+                None
+            };
+            check_pack_loading_copy(root_file.as_deref(), &pack)
+                .map_err(|error| loading_tool_refusal(path, error))?;
+            "pack_loading"
         } else if let Some(family) = self.validate_task_dependency(path)? {
             family
         } else {
@@ -1548,6 +1578,43 @@ fn declaration_parser_error(
     } else {
         failure
     }
+}
+
+/// Workflow #407 LOAD-2: `loading.json` or a pack's loading copy refused by the contract's check:
+/// `resource_declaration_invalid` naming the file, every issue in the message and the first one's
+/// `standard_pack_problem` and `json_pointer` in the details.
+fn loading_refusal(path: &Path, issues: &[StandardPackRootIssue]) -> CliError {
+    let first = issues.first();
+    let reason = issues
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("; ");
+    invalid(path, &reason).with_details(json!({
+        "declaration_file": path_text(path),
+        "standard_pack_problem": first.map(|issue| issue.problem.as_str()),
+        "json_pointer": first.map(|issue| issue.pointer.as_str()),
+    }))
+}
+
+/// Workflow #407 LOAD-2: `loading.json` or a pack's loading copy refused by the tools' check
+/// (`standard_pack_root_invalid`, the first issue in `details.outcome`):
+/// `resource_declaration_invalid` naming the file, with the first issue's
+/// `standard_pack_problem`, `json_pointer` and `package_id` (a stale copy names its pack) and
+/// every issue. Any other refusal is passed on as it is.
+fn loading_tool_refusal(path: &Path, error: CliError) -> CliError {
+    if error.code != SharedCode::StandardPackRootInvalid.as_str() {
+        return error;
+    }
+    let details = error.details.clone().unwrap_or(Value::Null);
+    let value = |key: &str| details.pointer(&format!("/outcome/values/{key}")).cloned();
+    invalid(path, &error.message).with_details(json!({
+        "declaration_file": path_text(path),
+        "standard_pack_problem": value("standard_pack_problem"),
+        "json_pointer": value("json_pointer"),
+        "package_id": value("package_id"),
+        "issues": details.get("issues"),
+    }))
 }
 
 fn invalid(path: &Path, reason: &str) -> CliError {

@@ -126,9 +126,11 @@ pub(super) fn compile(
     parser
         .validate_bundles(&files)
         .map_err(|error| declaration_error("resources/operations", error))?;
-    let outputs = parser
+    let mut outputs = parser
         .build_all(&files)
         .map_err(|error| declaration_error("resources/operations", error))?;
+    // Workflow #407 LOAD-2: the pack's loading copy joins its derived recognition outputs.
+    compile_loading(&control, &parser, &mut outputs, &entries)?;
     let operation = parser
         .canonical_task(&control.entry_task_id)
         .map_err(|error| ContainmentError::PackParse {
@@ -216,6 +218,57 @@ pub(super) fn compile(
         },
         operation,
     ))
+}
+
+/// Workflow #407 LOAD-2 (register §1.258): the pack's loading copy, when it carries one, read
+/// and compiled into `outputs` (`source::compile_pack_loading`). A copy that breaks a rule is
+/// `standard_pack_root_invalid` with its `game`, `path` (the file inside the pack), problem,
+/// `json_pointer` and `package_id`, the first issue of a copy that does not read; a member the
+/// declaration gate refuses is `resource_declaration_invalid` in the copy. A file below
+/// `resources/loading/` without the copy is a stale copy. A pack without either compiles as before.
+fn compile_loading(
+    control: &LabControl,
+    parser: &source::OperationParser,
+    outputs: &mut source::ParseOutputs,
+    entries: &BTreeMap<String, Vec<u8>>,
+) -> ContainmentResult<()> {
+    use actingcommand_contract::{PACK_LOADING_FILE, StandardPackProblem, parse_pack_loading};
+    let refused = |problem: StandardPackProblem, file: &str, pointer: &str| {
+        let code = SharedCode::StandardPackRootInvalid;
+        let outcome = Outcome::new(code)
+            .game(control.game.as_str())
+            .path(file)
+            .standard_pack_problem(problem)
+            .json_pointer(pointer);
+        ContainmentError::LocatedSourceTree {
+            code: code.code(),
+            outcome: match control.package_id.as_deref() {
+                Some(package_id) => outcome.package_id(package_id),
+                None => outcome,
+            },
+        }
+    };
+    let Some(bytes) = entries.get(PACK_LOADING_FILE) else {
+        return match entries
+            .keys()
+            .find(|path| actingcommand_contract::pack_loading_entry(path))
+        {
+            Some(stray) => Err(refused(StandardPackProblem::LoadingPackStale, stray, "")),
+            None => Ok(()),
+        };
+    };
+    let copy = parse_pack_loading(bytes).map_err(|issues| match issues.first() {
+        Some(issue) => refused(issue.problem, issue.file, &issue.pointer),
+        None => refused(StandardPackProblem::Malformed, PACK_LOADING_FILE, ""),
+    })?;
+    source::compile_pack_loading(parser, &copy, outputs, entries).map_err(|refusal| match refusal {
+        source::LoadingRefusal::Problem {
+            problem,
+            file,
+            pointer,
+        } => refused(problem, &file, &pointer),
+        source::LoadingRefusal::Declaration(error) => declaration_error(PACK_LOADING_FILE, error),
+    })
 }
 
 /// Workflow #411 A41: `source_operation_invalid` for a task declaration that is no JSON document,
