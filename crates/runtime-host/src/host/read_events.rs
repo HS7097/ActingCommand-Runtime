@@ -251,6 +251,9 @@ impl HostShared {
         let mut subscription = self.ledger.subscribe(request.cursor()).map_err(|error| {
             ledger_read_failure(&error, ContractLocation::SubscribeRuntimeEvents)
         })?;
+        // #419 SUB-LAG-1, tests: the subscription is registered and has received nothing yet.
+        #[cfg(test)]
+        let _after_subscribe = super::around_read_for_test(&AFTER_SUBSCRIBE_FOR_TEST);
         let deadline = Instant::now()
             .checked_add(Duration::from_millis(request.wait_ms()))
             .ok_or_else(|| {
@@ -346,6 +349,17 @@ impl HostShared {
                         == actingcommand_ledger::LedgerCode::SubscriptionTimeout.as_str() =>
                 {
                     break events.is_empty();
+                }
+                // #419 SUB-LAG-1: this subscriber fell behind. Only its subscription and this
+                // request end; the events it gathered are not answered, so it resumes before the
+                // first of them, or where its subscription had read to when it gathered none.
+                Err(error) if lagged_subscription(&error) => {
+                    let resume_after_sequence = events
+                        .first()
+                        .map_or(subscription.resume_cursor().after_sequence, |first| {
+                            first.sequence.saturating_sub(1)
+                        });
+                    return Err(lagged_subscription_failure(&error, resume_after_sequence));
                 }
                 Err(error) => {
                     return Err(ledger_read_failure(
@@ -645,4 +659,47 @@ fn project_interface_failure(error: RuntimeHostError) -> RequestFailure {
     } else {
         RequestFailure::request(error, RuntimeReceiptState::Denied, None)
     }
+}
+
+/// #419 SUB-LAG-1: whether `error` ended a subscription because its subscriber fell behind
+/// (`subscription_lagged`, which the ledger never makes fatal). Every other end of a subscription
+/// is handled as before: a writer failure stays fatal.
+fn lagged_subscription(error: &actingcommand_ledger::GlobalLedgerError) -> bool {
+    !error.is_fatal()
+        && error.code() == actingcommand_ledger::LedgerCode::SubscriptionLagged.as_str()
+}
+
+/// #419 SUB-LAG-1 (register §1.261): a subscription whose subscriber fell behind ends only its
+/// request. It is answered `failed`, not fatal, with `subscription_lagged` on top
+/// (`runtime_unavailable` its Runtime code), the ledger's values (`ledger_sequence`, the event its
+/// live queue could not take), this request's operation and `resume_after_sequence`, the cursor to
+/// subscribe again from. Nothing latches: the writer, the other subscribers and the Runtime go on.
+fn lagged_subscription_failure(
+    error: &actingcommand_ledger::GlobalLedgerError,
+    resume_after_sequence: u64,
+) -> RequestFailure {
+    let lagged = RuntimeHostError::relayed_request(
+        error.code(),
+        HostLocation::ReceiveRuntimeSubscription.as_str(),
+        RuntimeErrorCode::RuntimeUnavailable,
+    )
+    .with_outcome_values(|outcome| {
+        error
+            .outcome_values()
+            .cloned()
+            .map_or(outcome, |ledger| {
+                ledger.operation(HostLocation::ReceiveRuntimeSubscription)
+            })
+            .resume_after_sequence(resume_after_sequence)
+    });
+    RequestFailure::request(lagged, RuntimeReceiptState::Failed, None)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// #419 SUB-LAG-1, tests: the hook run on this thread right after the next event subscription
+    /// registered and before it receives anything (a test commits more events in it than the
+    /// subscriber's live queue holds, so the subscriber falls behind).
+    pub(crate) static AFTER_SUBSCRIBE_FOR_TEST: super::AroundReadForTest =
+        const { std::cell::RefCell::new(None) };
 }

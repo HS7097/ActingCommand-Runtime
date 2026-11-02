@@ -877,6 +877,23 @@ impl GlobalLedgerError {
         }
     }
 
+    /// #419 SUB-LAG-1 (register §1.261): `subscription_lagged`. A subscriber's live queue was full
+    /// when the writer delivered the event at `sequence` (its `ledger_sequence` value): that
+    /// subscription ends, and only it. The lag is not a ledger fault, so it is not terminal: the
+    /// writer, every other subscriber and the Runtime go on, and the subscriber subscribes again
+    /// from its resume cursor ([`LedgerSubscription::resume_cursor`]).
+    fn subscription_lagged(sequence: u64) -> Self {
+        Self::request(
+            LedgerCode::SubscriptionLagged.code(),
+            LedgerLocation::DeliverSubscription.location(),
+        )
+        .with_outcome(
+            actingcommand_contract::outcome::Outcome::new(LedgerCode::SubscriptionLagged)
+                .operation(LedgerLocation::DeliverSubscription)
+                .ledger_sequence(sequence),
+        )
+    }
+
     fn io(code: Code, operation: Location, error: &std::io::Error) -> Self {
         Self {
             code: code.as_str(),
@@ -4425,10 +4442,9 @@ fn deliver_live_event(subscribers: &mut Vec<ActiveSubscription>, event: &Persist
         match subscriber.live.try_send(event.clone()) {
             Ok(()) => true,
             Err(TrySendError::Full(_)) => {
-                let _ = subscriber.terminal.try_send(GlobalLedgerError::fatal(
-                    LedgerCode::SubscriptionLagged.code(),
-                    LedgerLocation::DeliverSubscription.location(),
-                ));
+                let _ = subscriber
+                    .terminal
+                    .try_send(GlobalLedgerError::subscription_lagged(event.sequence()));
                 false
             }
             Err(TrySendError::Disconnected(_)) => false,

@@ -229,6 +229,31 @@ one would be (section Records).
 | ObserveReadonly, CaptureSequence | general | read (frames) | cli `observe`, `stream`; mcp `ac_observe`, `ac_stream` (new); both pin `Explicit`. Lab channel: actinglab's capture commands and `runtime observe`, pinned `Lab` | yes |
 | DiscoverInstances | general | read (instance discovery) | cli `emulator discover` (and acsetup's instance step); mcp `ac_emulator_discover` (new); ui instance discovery | yes (the request only; a successful discovery appends no observation record, Workflow #383 AO-4q) |
 
+**A subscriber that falls behind** (#419 SUB-LAG-1, register §1.261, since 0.12.37). A
+`SubscribeEvents` request reads one bounded batch through a ledger subscription whose live
+queue is bounded ([ledger-store](ledger-store.md), "Reads, projections and subscriptions").
+When more events are committed than that queue holds before the request has read them, the
+subscription ends and the request is answered `failed`, not fatal:
+
+- the top code is `subscription_lagged` (operation `receive_runtime_subscription`), with
+  `runtime_code` `runtime_unavailable`, `host_halted` false, `ledger_sequence` (the event
+  the queue could not take) and `resume_after_sequence`;
+- `resume_after_sequence` is the cursor to subscribe again from: the sequence before the
+  first event the request had gathered, which it does not answer, or, when it had gathered
+  none, the last sequence its subscription had read (events its query filtered out count as
+  read). Every event after it comes again; none is lost. A failed receipt keeps
+  `resume_after_sequence` in codes mode, as it keeps `host_halted`, so the console reads it
+  too;
+- nothing latches: the ledger writer, every other subscription, every other request and the
+  Runtime go on, and the client sends `SubscribeEvents` again with
+  `after_sequence = resume_after_sequence`.
+
+Any other end of a subscription keeps its handling: a timeout answers the batch with what it
+gathered, and a writer failure is still fatal and stops the Runtime. The typed client (`runtime-client`)
+returns the failure without latching its connection; `actinglab lab watch` reports it and
+ends that call; actingctl and MCP read events by `QueryEvents` pages and hold no
+subscription.
+
 **General instructions (12)**
 
 | Kind | Block | Class | Sent by | G14 |

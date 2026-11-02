@@ -322,6 +322,9 @@ use policy_outcome::{
     completed_run_matches_outcome, reconcile_policy_dispatches,
     recover_authoritative_policy_outcomes, validate_completed_run_admission_request,
 };
+// #419 SUB-LAG-1, tests: the hook right after an event subscription registered.
+#[cfg(test)]
+pub(crate) use read_events::AFTER_SUBSCRIBE_FOR_TEST;
 // Workflow #383 AO-7.
 pub(crate) use policy_wake::PolicyWakeSignal;
 pub use policy_wake::{PolicyWakes, policy_trigger_for_event, policy_trigger_for_family};

@@ -897,6 +897,16 @@ tests = [
 ]
 incident = ["#382 H-5 G4"]
 
+# SUB-LAG-1 (#419; brief rd-1031/brief-sub-lag-1.md; register §1.261; since 0.12.37): a SubscribeEvents request whose subscriber falls behind (more client actions committed right after its subscription registered than its live queue holds) is answered `failed`, not fatal: `subscription_lagged` over `runtime_unavailable` with `operation` receive_runtime_subscription, `host_halted` false, `ledger_sequence` and `resume_after_sequence` (the request's cursor when nothing was delivered); nothing latches and no stop is requested; the writer keeps committing, a status is answered and another subscription reads the next event; asked in codes mode the failure keeps `resume_after_sequence`, and subscribing again from it reads on right after it with every action recorded during the lag, in order
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_sub_lag_1::a_lagged_subscription_ends_only_its_request",
+    "actingcommand-runtime-host::lib::tests::gate_sub_lag_1::the_runtime_keeps_serving_after_a_subscriber_lags",
+    "actingcommand-runtime-host::lib::tests::gate_sub_lag_1::a_lagged_subscriber_can_resume_from_its_cursor",
+]
+incident = ["#419 SUB-LAG-1"]
+
 # The failed run's lease goes to its ladder with no window for a dispatch: the held instance's candidate is deferred dispatch_instance_held, nothing is dispatched, rejected or granted until the ladder's own release, and the next dispatch follows it (#369 §6; Workflow #382 H-4 G8)
 [[gate]]
 key = "17"

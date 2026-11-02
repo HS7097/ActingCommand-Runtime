@@ -510,6 +510,9 @@ mod gate_diag_run;
 // one the writer does not answer in time fails only its own settlement step or request; a live
 // settlement's read after its commit stays fatal (fix round 1).
 mod gate_ln_ws_f;
+// #419 SUB-LAG-1: a subscriber that falls behind ends only its subscription and its request,
+// `failed` with the cursor to subscribe again from; nothing latches.
+mod gate_sub_lag_1;
 // #422 IDLE-OV: a QueryEvents page whose read its budget stopped answers `ledger_read_failure`
 // (`runtime_unavailable`, failed), not `protocol_invalid`.
 mod gate_422_idle_ov;
