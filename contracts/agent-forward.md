@@ -4,16 +4,18 @@ Workflow #432. [agent-wake.md](agent-wake.md) says what a wake is and in which s
 neutral words. This contract says how a message reaches a session of each client, so **client words
 are allowed here and in `crates/agent-forward`, and nowhere else in the Runtime's sources.**
 
-**State of this contract (AGT-T1, AGT-T2 and AGT-T3, 0.12.37).** Claude Code (AGT-T1), Codex
-(AGT-T2) and DSH (AGT-T3) have transports. Antigravity channels can be registered and wait as
-`Deferred` (`ipc_unavailable`). The Runtime's assembly uses `RealForward::new(state_root)`. Nothing
-here starts a stopped session or opens a task that is not loaded: its message waits and fails loudly
-at give-up ([agent-wake.md](agent-wake.md), "Delivery states").
+**State of this contract (AGT-T1, AGT-T1b, AGT-T2 and AGT-T3, 0.12.37).** Claude Code (AGT-T1),
+Codex (AGT-T2) and DSH (AGT-T3) have transports. Antigravity channels can be registered and wait as
+`Deferred` (`ipc_unavailable`). The Runtime's assembly uses `RealForward::new(state_root)`. **A Claude
+Code channel restores its stopped session through Claude Desktop before a send** (AGT-T1b, since
+0.12.37), unless its switch is off or a quiet time covers now: see "Restoring a stopped session".
+Nothing else here starts a stopped session or opens a task that is not loaded: its message waits and
+fails loudly at give-up ([agent-wake.md](agent-wake.md), "Delivery states").
 
 ## `actingctl agent-channel`
 
 ```text
-actingctl agent-channel add --state-root <path> --name <name> --client <claude|codex|dsh|antigravity> --native-id <id> [--dsh-app-root <path> --dsh-home <path> --dsh-node <path>]
+actingctl agent-channel add --state-root <path> --name <name> --client <claude|codex|dsh|antigravity> --native-id <id> [--dsh-app-root <path> --dsh-home <path> --dsh-node <path>] [--restore <on|off>]
 actingctl agent-channel remove --state-root <path> --name <name>
 actingctl agent-channel list --state-root <path>
 actingctl agent-channel claude-hook <start|end> --state-root <path>
@@ -34,6 +36,13 @@ actingctl agent-channel notice
   and the send is refused loudly below it.
 - **A Codex channel** is `add --client codex --native-id <task UUID>` and nothing more. `add` keeps the
   id as typed; the send refuses one that is not a task's UUID (see "Codex").
+- **`--restore on|off`** (since 0.12.37) is a Claude channel's switch, **on when not given**. `add`
+  writes it into the channel's line as `"restore": true|false`, and `list` shows it. Another client's
+  channel refuses the flag (`agent_channel_failed`), and the registry refuses the member on one
+  (unreadable as a whole, as for any broken rule); a word other than `on` or `off` is
+  `actingctl_usage_invalid`. A Claude line written without the member reads as on. To change the
+  switch of a registered channel, `remove` it and `add` it again: `remove` clears the session's live
+  record, so the session's next start (or `claude-register`) stores it again.
 - **`remove`** also rewrites a removed Claude channel's live record with no pipe and no token.
 - **`notice`** prints the MIT text of the adapted source, as plain text. See "Licence".
 
@@ -43,7 +52,9 @@ actingctl agent-channel notice
 
 `<state_root>\agent-forward\claude-sessions\<native id>.json`, schema
 `actingcommand.agent-claude-session.v1`: the owner's process id and creation time, `online`, the pipe's
-name, and the token as a DPAPI blob for the current Windows user.
+name, and the token as a DPAPI blob for the current Windows user; and, since 0.12.37, the optional
+`restore_unanswered_at_unix_ms`, which a registration's new record never carries (see "Restoring a
+stopped session").
 
 **The token** is in that blob and briefly in memory, and nowhere else: not in a `detail`, a log, an
 error, a ledger field, a configuration key or a test snapshot. The frame is zeroed after the write.
@@ -88,8 +99,9 @@ the token change, and nothing marks it ended; the owner check then finds it gone
 |---|---|
 | The id is a session's UUID | `Failed`, `channel_unknown` |
 | Not stopped, not out of time | `Deferred`, `target_unresponsive` |
-| The record exists, is readable, and is `online` with a pipe and a token | `Deferred`, `target_offline`; a record of another shape is `Failed`, `protocol_changed` |
-| The owner runs with the same creation time | `Deferred`, `target_offline`; it cannot be checked: `Failed`, `owner_mismatch` |
+| The record exists, is readable, and is `online` with a pipe and a token | none, or an ended one: the session is stopped, see below; a record that cannot be read now: `Deferred`, `target_offline`; a record of another shape: `Failed`, `protocol_changed` |
+| The owner runs with the same creation time | it has gone: the session is stopped, see below; it cannot be checked: `Failed`, `owner_mismatch` |
+| A stopped session: the channel's switch is on and no quiet time covers now | switch off: `Deferred`, `target_offline`, as before 0.12.37; otherwise "Restoring a stopped session", which goes on with the next row once the session's live record is there |
 | The pipe's name is `\\.\pipe\cc-msg-…` or `\\.\pipe\LOCAL\cc-msg-…` | `Failed`, `protocol_changed` |
 | The owner is the same Windows user | `Failed`, `owner_mismatch` |
 | The pipe opens | errors 2 and 231: `Deferred`, `target_offline`; another error: `Failed`, `write_failed` |
@@ -104,6 +116,126 @@ the token change, and nothing marks it ended; the owner check then finds it gone
   message is ready: Claude Code closes a connection with no complete line after 30 seconds.
 - **There is no flush.** `FlushFileBuffers` waits for the reader and cannot be cancelled, so it would
   break the deadline. A finished write is in the pipe, and closing the client leaves it there.
+
+### Restoring a stopped session (AGT-T1b, since 0.12.37)
+
+Alice, 2026-11-02: the adapted source's wake is ported, and **only the wake**. Nothing is typed into a
+window: the message itself still goes over the session's inbox, by the steps above, once the session
+has started and its SessionStart hook has stored its live record.
+
+**What it does on her screen.** A restore **switches the conversation Claude Desktop shows** to the
+channel's, and **restores a minimized Claude Desktop window**, without taking the focus. It **waits
+while the window's prompt holds an unsent draft**, so a draft is never hidden. The restored session
+starts a turn with the message like any typed prompt, and counts toward usage.
+
+**When.** Only on Windows, only for a Claude channel whose `restore` switch is on (the default), only
+when the session is stopped (no live record, an ended one, or one whose process has gone), and
+**never while a quiet window or `agent_wake.quiet.hold_until_unix_ms` covers now**. The worker asks
+its quiet judgement at that moment (`SendLimits::quiet`), so a quiet time that begins during a pass
+also stops it ([agent-wake.md](agent-wake.md), "Quiet and off").
+
+**Time.** One deadline: the send's, at most 25 seconds for the restore, as the adapted source bounds
+it. The rest of the send's deadline is left for the write; with none left the message waits.
+
+| Step | Result when it fails |
+|---|---|
+| The switch is on | `Deferred`, `target_offline` |
+| The session's record holds no unanswered mark | `Deferred`, `target_not_loaded`, detail `(restore_unanswered)`; the helper does not run |
+| No quiet window and no hold covers now | `Deferred`, `target_offline`, detail `(quiet)`; the helper does not run |
+| Time is left | `Deferred`, `target_unresponsive` |
+| The message has not had its one restore; it is recorded now, before anything else | it has: `Deferred`, `target_offline`, detail `(wake_spent)`; the record cannot be read or written: `Failed`, `helper_failed` |
+| `%APPDATA%\Claude\config.json` names the active account (`lastKnownAccountUuid`, a UUID) | no file: `Failed`, `channel_unknown`; another shape: `Failed`, `protocol_changed` |
+| A bounded walk (depth 8, 20 000 files, 4 MiB each, no links) over `claude-code-sessions\<account>\` finds exactly one unarchived pointer whose `cliSessionId` is the session's id; its `sessionId` is `local_<uuid>` and its file name | none or several: `Failed`, `channel_unknown`; a pointer of another shape: `Failed`, `protocol_changed` |
+| The active account reads the same after the walk | `Failed`, `owner_mismatch` |
+| The helper is there, or compiles | `Failed`, `helper_failed`; out of time: `Deferred`, `target_unresponsive` |
+| The helper answers within the deadline and its bounds | the deadline: `Deferred`, `target_unresponsive`, it is killed and **the session is marked**; a stop: the same, unmarked; otherwise `Failed`, `helper_failed` |
+| It answers `loaded` | `queued`: `Deferred` with its word (below); `not_submitted`: `Failed`, `helper_failed`, or `owner_mismatch` when its own account check failed |
+| The route reads the same again | `Failed`, `owner_mismatch` |
+| The session's live record appears, looked at every 100 ms until the restore's deadline | `Deferred`, `target_not_loaded`, detail `(not_registered)`, and **the session is marked**. Never `unknown`: nothing was written. A mark that cannot be written: `Failed`, `helper_failed` |
+| Time is still left for the message | `Deferred`, `target_unresponsive` |
+| | the preflight, the intent and the one write above; the detail starts "the stopped session was restored through Claude Desktop" |
+
+**The words a waiting restore names** (the detail reads `the session is stopped and the message waits
+(<word>): …`; the row keeps the neutral reason):
+
+| Word | Means | Reason |
+|---|---|---|
+| `quiet` | a quiet window or the hold covers now | `target_offline` |
+| `draft_present` | the prompt the window shows holds an unsent draft | `target_awaiting_input` |
+| `input_busy` | another native input holds the window (the adapted source's lock, by its name) | `target_awaiting_input` |
+| `no_window` | Claude Desktop shows no main window | `ipc_unavailable` |
+| `window_not_unique` | Claude Desktop shows more than one main window | `ipc_unavailable` |
+| `not_registered` | the conversation is up, and no live record came by the deadline | `target_not_loaded` |
+| `wake_spent` | this message already had its one restore | `target_offline` |
+| `restore_unanswered` | an earlier restore of this session got no registration, and none has come since | `target_not_loaded` |
+
+**At most one restore per message, and none for a session that did not answer.** Every waiting
+message is tried again at `delivery.retry_interval_ms`, as any deferred row, and ends loudly
+(`expired`) at give-up. But:
+
+- **One restore per message.** Before the helper runs, the message's wake id is recorded in
+  `<state_root>\agent-forward\claude-woken.json` (schema `actingcommand.agent-claude-woken.v1`, the
+  newest 256 ids, no text, no secret), under the folder's lock. A retry of that message never runs
+  the helper again, whatever the first run answered, a queued draft included, and the record survives
+  a restart. The message waits `wake_spent` until its session comes back by itself, or give-up.
+- **No restore of a session that did not answer.** A restore whose helper was cut off at its deadline,
+  or whose conversation came up with no live record by the deadline, marks the session:
+  `restore_unanswered_at_unix_ms` in its record
+  (`<state_root>\agent-forward\claude-sessions\<native id>.json`; with no record yet, a record that
+  holds only the mark, offline, no pipe, no token). While the mark is there, **no message of any rule
+  restores that session**: each waits `restore_unanswered`. The mark lives in the record because the
+  record is what a registration rewrites: the SessionStart hook and `claude-register` write a new
+  record without it, so **a registration clears the mark**, with no step of its own; it survives a
+  restart and a deploy, and a session's end keeps it cleared. A record that turned live in the
+  meantime is not marked.
+
+**The helper.** `crates/agent-forward/src/claude/ClaudeDesktopWake.cs`, embedded in the binaries and
+compiled on first use, as the adapted source does: the .NET Framework's
+`%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe` with `System.Web.Extensions.dll`, into
+`<state_root>\agent-forward\claude-input\input-<sha256 of the source>.exe` (beside it the `.cs`; the
+compiler writes `.build.exe` first, renamed into place when it succeeds), at most 30 s, no window, no
+network. A new build's source has a new name; older programs stay on disk.
+
+- **Input:** `{"local_session": "local_<uuid>", "account_id": "<uuid>", "wake_only": true}`, and
+  nothing else: never the message, never text. It refuses any other member.
+- **What it does:** takes the named mutex `Local\CGL-ClaudeDesktopInput` (the adapted source's, so
+  the two never use the window at once), checks the account in `config.json`, requires exactly one
+  `claude` process with a main window from the `AnthropicClaude` installation, restores it if
+  minimized without activating it, checks through UI Automation that the window's `Prompt` edit holds
+  no draft, starts that executable with `claude://code/continue?session=<local>&source=desktop_action`,
+  waits at most 10 s for the document `https://claude.ai/epitaxy/<local>`, checks the account again.
+- **Answer:** one JSON line: `{"state":"loaded","process_id":…}` (exit 0), `{"state":"queued",
+  "reason":"<word>","detail":"…"}` (exit 0, nothing done), `{"state":"not_submitted","error":"…",
+  "problem"?:"account_changed"}` (exit 12). At most 64 KiB on each stream; its stderr warning goes
+  into the note.
+- **Left out of the adapted source:** everything that writes into the prompt or presses its button,
+  and the `text`, `allow_switch` and `prepare_only` members. Its value pattern keeps the setter's slot
+  for the interface's order and never calls it.
+
+**Costs of a restore** (beside "What this costs"):
+
+- **It acts on her screen, at most once per message and once per silent session.** The conversation
+  changes under her eyes when a message restores it. A session that does not register (no hook, a
+  wrong id, a failing hook) is brought up once, then marked, and stays untouched until it registers:
+  its messages wait and end loudly at give-up. A message whose one restore found a draft waits for
+  its session to come back by itself. Turn the switch off for a channel whose session is not to be
+  opened.
+- **It needs Claude Desktop running in her desktop session,** and the Runtime in the same session and
+  Windows user; a CLI-only session has no pointer and fails `channel_unknown` at once, so its switch
+  must be off.
+- **It depends on Claude Desktop's private layout:** the pointer files and their members, the
+  `config.json` key, the deep link, the document's URL, the `Prompt` edit's name and the main
+  window's image name. A change ends as `channel_unknown`, `protocol_changed` or `helper_failed`
+  (loud), or as a waiting word until give-up (loud late).
+- **It runs a program compiled on her machine** from the embedded source, under the state root's
+  access rules: the folder gets no ACL of its own.
+- **The helper's lock is the adapted source's:** its own input and a restore exclude each other, and
+  a held lock answers `input_busy`.
+
+**Not verified without a live Claude Desktop:** that the deep link opens a stopped session's
+conversation and starts its session; how long that takes; that the hook's record arrives within the
+restore's time; the window, document and prompt names on the installed version; and the helper
+itself, which was compiled once and never run.
 
 ## Codex
 
@@ -304,8 +436,10 @@ is one JSON object on stdin; its answer is one JSON object on stdout, of schema
 ## Licence
 
 The method and parts of the code come from `HS7097/codex-goal-lifecycle` at `c9538cc5`, MIT, copyright
-2026 HS7097: Claude Code's from `bridge/claude.rs` and `bridge/security.rs`, Codex's from `desktop.rs`
-and `relay.rs`, DSH's from `dsh_notify.rs`, `dsh_notify.mjs` and `bridge/dsh.rs`.
+2026 HS7097: Claude Code's from `bridge/claude.rs` and `bridge/security.rs`, its restore from
+`bridge/claude.rs`, `bridge/user_input/claude_desktop.rs` and `bridge/user_input/ClaudeDesktopInput.cs`
+(the wake path only), Codex's from `desktop.rs` and `relay.rs`, DSH's from `dsh_notify.rs`,
+`dsh_notify.mjs` and `bridge/dsh.rs`.
 `crates/agent-forward/LICENSE-codex-goal-lifecycle.txt` holds the text verbatim, each adapted file
-says so at its top (the embedded DSH helper too, so the line travels with it), `NOTICE.md` lists it,
-and `actingctl agent-channel notice` prints it, since binaries carry the code.
+says so at its top (the embedded DSH and Claude Desktop helpers too, so the line travels with them),
+`NOTICE.md` lists it, and `actingctl agent-channel notice` prints it, since binaries carry the code.

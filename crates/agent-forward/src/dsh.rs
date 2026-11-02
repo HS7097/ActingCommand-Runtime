@@ -642,6 +642,7 @@ mod tests {
                 home_root: format!(r"{root}\home"),
                 node_executable: format!(r"{root}\node.exe"),
             }),
+            restore: false,
         };
         let forward = DshForward {
             system: Box::new(FakeSystem {
@@ -674,7 +675,11 @@ mod tests {
 
     /// Sends once and answers the outcome and how often the intent was asked.
     fn send(setup: &Setup, deadline: Instant, stopped: &dyn Fn() -> bool) -> (ForwardOutcome, u32) {
-        let limits = SendLimits { deadline, stopped };
+        let limits = SendLimits {
+            deadline,
+            stopped,
+            quiet: &never,
+        };
         let mut intents = 0;
         let outcome = setup
             .forward
@@ -852,6 +857,7 @@ mod tests {
         let limits = SendLimits {
             deadline: long(),
             stopped: &never,
+            quiet: &never,
         };
         let outcome = setup
             .forward

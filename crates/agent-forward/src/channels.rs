@@ -3,7 +3,8 @@
 //! The channel registry (Workflow #432; `contracts/agent-wake.md`): the registered channels'
 //! names and addresses, `<state_root>\agent-forward\channels.json`. It is program state and not
 //! configuration, and it holds no secret. AGT-1a gives its shape, its validation and its read; the
-//! command that writes it comes with the first transport.
+//! command that writes it comes with the first transport. AGT-T1b adds a Claude Code channel's
+//! `restore` switch.
 
 use serde::Deserialize;
 use std::io::ErrorKind;
@@ -44,6 +45,9 @@ pub struct Channel {
     pub native_id: String,
     /// `Some` exactly for a DSH channel.
     pub dsh: Option<DshPaths>,
+    /// Whether a stopped session of the channel may be restored before a send (AGT-T1b): a Claude
+    /// Code channel's switch, on unless its line says `false`. Always false for another client.
+    pub restore: bool,
 }
 
 /// The registry, checked whole.
@@ -67,6 +71,8 @@ pub enum RegistryProblem {
     NativeIdInvalid,
     /// A DSH channel without its three absolute paths, or another client's channel with any.
     PathsInvalid,
+    /// `restore` on a channel of another client than Claude Code.
+    RestoreInvalid,
 }
 
 /// A registry refused, with the channel it stopped at when there is one.
@@ -97,6 +103,8 @@ struct ChannelFile {
     home_root: Option<String>,
     #[serde(default)]
     node_executable: Option<String>,
+    #[serde(default)]
+    restore: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -163,11 +171,17 @@ fn channel(file: ChannelFile) -> Result<Channel, RegistryInvalid> {
         }
         (_, None, None, None) => None,
     };
+    let restore = match (file.client, file.restore) {
+        (ChannelClient::Claude, restore) => restore.unwrap_or(true),
+        (_, None) => false,
+        (_, Some(_)) => return Err(refused(RegistryProblem::RestoreInvalid)),
+    };
     Ok(Channel {
         name: file.name,
         client: file.client,
         native_id: file.native_id,
         dsh,
+        restore,
     })
 }
 

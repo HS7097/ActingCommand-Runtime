@@ -3111,3 +3111,22 @@ tests = [
     "actingcommand-agent-forward::lib::dsh::tests::session_ids_outside_the_shape_are_refused",
 ]
 incident = ["#432 AGT-T3"]
+
+# AGT-T1b (Workflow #432, 0.12.37; Alice's ruling of 2026-11-02 on pending item 159; register section 1.259; contracts/agent-forward.md, "Restoring a stopped session"): a live session is sent to with no restore; a channel whose switch is off, and any channel during a quiet time, never runs the helper; a route that is not exactly one conversation, and an account that changes during the route or the wake, fail with no intent; a queued answer waits with its named word; loaded then the session's record delivers over the inbox, and loaded with no record by the deadline waits, never unknown; the helper's request carries wake_only and no text, and its source has no path that writes into the window; a retry of a message never restores again, also after a restart; a session whose restore got no registration is marked and restored by no message until a registration, which clears the mark. The profile is an invented folder, the helper a fake, the wait's clock moves only when it pauses; nothing reaches Claude Desktop.
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-agent-forward::lib::claude::tests::a_live_session_is_not_woken",
+    "actingcommand-agent-forward::lib::claude::tests::restore_off_never_wakes",
+    "actingcommand-agent-forward::lib::claude::tests::quiet_window_defers_without_waking",
+    "actingcommand-agent-forward::lib::claude::tests::a_pointer_set_that_is_not_exactly_one_conversation_fails",
+    "actingcommand-agent-forward::lib::claude::tests::an_account_change_during_route_fails",
+    "actingcommand-agent-forward::lib::claude::tests::queued_draft_is_deferred_with_its_reason",
+    "actingcommand-agent-forward::lib::claude::tests::loaded_then_registration_delivers_over_the_pipe",
+    "actingcommand-agent-forward::lib::claude::tests::loaded_without_registration_by_the_deadline_is_deferred",
+    "actingcommand-agent-forward::lib::claude::tests::the_wake_never_sends_text",
+    "actingcommand-agent-forward::lib::claude::tests::a_retry_of_the_same_message_never_wakes_again",
+    "actingcommand-agent-forward::lib::claude::tests::a_channel_whose_wake_got_no_registration_is_not_woken_again_until_it_registers",
+    "actingcommand-agent-forward::lib::claude::tests::a_registration_clears_the_unanswered_mark",
+]
+incident = ["#432 AGT-T1b"]
