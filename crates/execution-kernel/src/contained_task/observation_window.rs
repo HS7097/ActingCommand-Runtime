@@ -106,6 +106,14 @@ impl StillScreen {
         max_milli: FRAME_CHANGE_MAX_MILLI,
     };
 
+    /// ACT-1: the whole frame at a threshold of its own (`settle_change_max_milli`).
+    pub(super) const fn whole_frame_within(max_milli: u32) -> Self {
+        Self {
+            region: None,
+            max_milli,
+        }
+    }
+
     /// The frame-change digest of `scene`'s region; a region the frame does not hold (admission
     /// keeps it in the coordinate space) is `contained_task_recognition_failed`, caused by the
     /// digest's refusal.

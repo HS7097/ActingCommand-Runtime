@@ -136,6 +136,46 @@ impl EffectivePacing {
     }
 }
 
+/// ACT-1, ACT-2 (Workflow #407, register §1.250; `contracts/performance-control.md`, "Step
+/// pacing"): `pacing` with the instance's `execution.action_gap` keys `gap` at the pacing stage
+/// `stage`: the settled path when the stage allows it, and the step's gap added to its pre-input
+/// wait, which the kernel waits as it is, so the gap is never multiplied by the factor; the pacing
+/// term stays under every kind. `seed` is the draw's. The second value is the gap when it was
+/// drawn, for the run's diagnostics. `declared` returns `pacing` as it came.
+pub(crate) fn apply_action_gap(
+    pacing: actingcommand_execution_kernel::StepPacing,
+    gap: &actingcommand_runtime_config::ActionGapConfig,
+    stage: PerformancePacingStage,
+    seed: u64,
+) -> (actingcommand_execution_kernel::StepPacing, Option<u64>) {
+    let gap_ms = gap.gap_ms(seed);
+    let settled_path = gap.settled_at(stage).then(|| {
+        actingcommand_execution_kernel::SettledPath::new(
+            std::time::Duration::from_millis(gap.poll_ms),
+            gap.settle_frames,
+            gap.settle_change_max_milli,
+        )
+    });
+    (
+        pacing
+            .with_pre_input_wait(pacing.pre_input_wait + std::time::Duration::from_millis(gap_ms))
+            .with_settled_path(settled_path),
+        gap.draws().then_some(gap_ms),
+    )
+}
+
+/// ACT-2: the record of a step's drawn gap.
+pub(crate) fn action_gap_drawn(gap_ms: u64) -> Outcome {
+    Outcome::new(crate::codes::ActionGapCode::Recorded).action_gap_ms(gap_ms)
+}
+
+/// ACT-1: the record of an operation's fall-back from the settled path.
+pub(crate) fn action_gap_fell_back(package_id: &str, operation_label: &str) -> Outcome {
+    Outcome::new(crate::codes::ActionGapCode::Recorded)
+        .package_id(package_id)
+        .pack_operation_id(operation_label)
+}
+
 /// One view of a row: its stage and its share.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RowView {

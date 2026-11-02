@@ -62,6 +62,9 @@ pub const CAPTURE_IDLE_CEILING_RANGE: KeyRange = KeyRange::Integer {
 pub struct ExecutionFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     capture: Option<ExecutionCaptureFile>,
+    // ACT-1, ACT-2 (register §1.250; `action_gap.rs`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    action_gap: Option<crate::action_gap::ActionGapFile>,
 }
 
 /// The `execution.capture` member.

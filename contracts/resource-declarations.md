@@ -1398,6 +1398,11 @@ while a step waits for a page. No new member, code or record; any task schema.
   its own limit or the task's deadline; a page that appears during a long pause is seen at the
   next frame. `execution.capture.backoff_enabled` (default `true`) switches it off. Entry
   checks, observation windows, input rechecks, samples and a scan's settle keep their interval.
+- **`post_delay_ms` under the settled path (ACT-1, since 0.12.37).** Where the instance runs
+  `execution.action_gap.mode` `settled` ([performance-control.md](performance-control.md), "Step
+  pacing"), a tap's `post_delay_ms` is the longest it reads frames for its destination, not a wait
+  that must pass. Nothing changes for a package: it declares what it declared. A destination that
+  names the operation's own page proves nothing on its first frame, so that step keeps the wait.
 
 ### Store update packages
 

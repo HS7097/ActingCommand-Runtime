@@ -40,6 +40,8 @@
 
 #![forbid(unsafe_code)]
 
+// ACT-1, ACT-2 (Workflow #407): `execution.action_gap.*`, how a step goes on after its input.
+pub mod action_gap;
 mod codes;
 mod defaults;
 pub mod device_link;
@@ -74,6 +76,9 @@ mod ui_tier;
 mod value;
 pub mod watchdog;
 
+pub use action_gap::{
+    ActionGapConfig, ActionGapFile, ActionGapKind, ActionGapMode, InstanceExecutionFile,
+};
 pub use codes::{ConfigCode, ConfigValueProblem};
 pub use defaults::{
     DefaultsFile, DefaultsInvalid, SHIPPED_DEFAULTS, sha256_text, shipped_defaults_sha256,
@@ -196,6 +201,10 @@ mod gate_411_b37;
 // PERF-B1 (Workflow #407 B1): the `execution.capture` keys.
 #[cfg(test)]
 mod gate_407_b1;
+
+// ACT-1, ACT-2 (Workflow #407, register §1.250): the `execution.action_gap` keys.
+#[cfg(test)]
+mod gate_act2;
 
 // #422 LN-7c Q: the evidence-frame rule's age and the frame queries' pace and chunk.
 #[cfg(test)]

@@ -91,7 +91,7 @@ fn b1_d_the_capture_keys_default_from_the_file_and_their_bounds_are_checked() {
     assert_eq!(
         parameters
             .iter()
-            .filter(|parameter| parameter.key.starts_with("execution."))
+            .filter(|parameter| parameter.key.starts_with("execution.capture."))
             .count(),
         defaults.len()
     );

@@ -1972,6 +1972,7 @@ impl RuntimeHost {
             fact_refresh_recorder: Mutex::new(
                 crate::fact_refresh_transitions::FactRefreshRecorder::default(),
             ),
+            settled_holds: Mutex::new(actingcommand_execution_kernel::SettledHolds::default()),
             standard_packs: standard_pack::StandardPackRoots::new(
                 config.standard_packs_root,
                 config.standard_pack_schedule.then(|| {
@@ -5741,6 +5742,9 @@ struct HostShared {
     // Workflow #384 D2-S5 (D2 model §5.1 MP-3): the fact refresh's transition recorder of this
     // owner epoch (memory only; no decision reads it).
     fact_refresh_recorder: Mutex<crate::fact_refresh_transitions::FactRefreshRecorder>,
+    // ACT-1 (Workflow #407, register §1.250): the operations that fell back from the settled path,
+    // across runs (memory only).
+    settled_holds: Mutex<actingcommand_execution_kernel::SettledHolds>,
     // Workflow #373 NAV-6: the standard-pack root and the registry each game root held when it
     // was last read (memory only).
     standard_packs: standard_pack::StandardPackRoots,

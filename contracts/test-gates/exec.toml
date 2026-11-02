@@ -2301,6 +2301,24 @@ tests = [
 ]
 incident = ["#407 B1"]
 
+# ACT-1 (Workflow #407, register §1.250): off, a step's order is the one before the settled path; on, a tap reads frames from the first frame after its input and goes on the first destination frame, post_delay_ms the limit of that reading and never added, a declared wait page held with no fixed time, the confirmation running its whole timeout from the limit; a destination that names the source page, a designated effect and an observation window keep post_delay_ms; a failure holds the operation on it across runs; settle_frames 2 needs an unchanged frame; no input is added
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_act1::declared_mode_is_byte_for_byte_todays_order",
+    "actingcommand-execution-kernel::lib::contained_task::gate_act1::settled_goes_on_the_first_destination_frame",
+    "actingcommand-execution-kernel::lib::contained_task::gate_act1::settled_reads_from_the_first_frame_after_the_input",
+    "actingcommand-execution-kernel::lib::contained_task::gate_act1::wait_page_holds_until_the_destination_with_no_fixed_time",
+    "actingcommand-execution-kernel::lib::contained_task::gate_act1::missing_destination_falls_through_to_the_confirmation_loop_at_post_delay",
+    "actingcommand-execution-kernel::lib::contained_task::gate_act1::same_page_destination_without_target_gone_keeps_post_delay",
+    "actingcommand-execution-kernel::lib::contained_task::gate_act1::designated_effect_keeps_post_delay",
+    "actingcommand-execution-kernel::lib::contained_task::gate_act1::observation_window_step_keeps_post_delay",
+    "actingcommand-execution-kernel::lib::contained_task::gate_act1::failure_in_settled_holds_the_operation_on_declared",
+    "actingcommand-execution-kernel::lib::contained_task::gate_act1::settle_frames_two_requires_an_unchanged_frame",
+    "actingcommand-execution-kernel::lib::contained_task::gate_act1::settled_never_adds_an_input",
+]
+incident = ["#407"]
+
 # ROUT-L RL-T (#386; contracts/standard-pack-schedule.md "Tools"): standard-pack compose receives every --instance <alias>=<game>/<server> given after its words (the command's own, not the global --instance), so two bound instances of one game and server compose one <id>@<alias> copy of the rule and of each item per instance, each in its instance's scope
 [[gate]]
 coverage = "Y"

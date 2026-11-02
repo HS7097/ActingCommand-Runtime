@@ -1091,6 +1091,67 @@ impl HostShared {
         ))
     }
 
+    /// ACT-1, ACT-2 (Workflow #407, register §1.250): the `execution.action_gap` keys in effect
+    /// for the instance `instance_alias` (`EffectiveConfig::action_gap` by its registry id; an
+    /// alias the registry does not hold takes the section's), read at each step of a contained run.
+    pub(super) fn action_gap(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<actingcommand_runtime_config::ActionGapConfig> {
+        let instance_id = lock(
+            &self.registered_instances,
+            ConfigHostLocation::ReadRuntimeConfig,
+        )?
+        .values()
+        .find(|instance| instance.instance_alias == instance_alias)
+        .map(|instance| crate::failure_identity::identifier_text(&instance.instance_id));
+        let config = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?;
+        config
+            .action_gap(instance_id.as_deref().unwrap_or(instance_alias))
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })
+    }
+
+    /// ACT-1: whether `operation_label` of `package_id` is held off the settled path at `now`.
+    pub(super) fn settled_path_held(
+        &self,
+        package_id: &str,
+        operation_label: &str,
+        now: Instant,
+    ) -> RuntimeHostResult<bool> {
+        Ok(
+            lock(&self.settled_holds, ConfigHostLocation::ReadRuntimeConfig)?.held(
+                package_id,
+                operation_label,
+                now,
+            ),
+        )
+    }
+
+    /// ACT-1: `operation_label` of `package_id` fell back from the settled path at `now`, held for
+    /// `span`.
+    pub(super) fn hold_settled_path(
+        &self,
+        package_id: &str,
+        operation_label: &str,
+        now: Instant,
+        span: Duration,
+    ) -> RuntimeHostResult<()> {
+        lock(&self.settled_holds, ConfigHostLocation::ReadRuntimeConfig)?.hold(
+            package_id,
+            operation_label,
+            now,
+            span,
+        );
+        Ok(())
+    }
+
     /// Records one configuration fact, observed now and strictly after the stored record of its
     /// key, ledger-first through [`Self::record_runtime_fact`].
     /// Workflow #389 MCP-9a (register A5): records `config.catalog`, the active policy catalog

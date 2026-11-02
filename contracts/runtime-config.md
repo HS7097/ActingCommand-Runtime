@@ -927,6 +927,30 @@ intervals stay where they were recorded (`EffectiveTaskTiming.capture_interval`,
 `interval`); a pause the back-off lengthened is the span of its wait boundary
 (`page_recognition_wait`, `postcondition_wait`).
 
+**How a step goes on after its input (ACT-1, ACT-2, Workflow #407; register §1.250; `actingd-config`
+revision 24; since 0.12.37).** The `execution.action_gap` keys. `mode` `declared`, the default, is
+the order before these keys, byte for byte: nothing below happens. `mode` `settled` gives a step the
+settled path and its gap ([performance-control.md](performance-control.md), "Step pacing").
+
+| Key | Type | Default (`actingd.defaults.json`) | Settable |
+|---|---|---|---|
+| `execution.action_gap.mode` | `declared` or `settled` | `declared` | yes |
+| `execution.action_gap.kind` | `fixed`, `random` or `performance`, what a `settled` step adds before its input | `fixed` | yes |
+| `execution.action_gap.fixed_ms` | milliseconds `0..=60000`, the gap of `fixed` | `0` | yes |
+| `execution.action_gap.random_min_ms`, `random_max_ms` | milliseconds `0..=60000`, the range of `random`; `random_min_ms` at most `random_max_ms`, each as it is in effect (`section_check`) | `0`, `0` | yes |
+| `execution.action_gap.poll_ms` | milliseconds `0..=1000`, the pause between two frames of the settled path | `50` | yes |
+| `execution.action_gap.settle_frames` | integer `1..=8`, how many consecutive destination frames the settled path takes; 1 goes on the first | `1` | yes |
+| `execution.action_gap.settle_change_max_milli` | integer `0..=1000000`, the largest frame change between two of them; read only from 2 frames | `500` | yes |
+| `execution.action_gap.settled_max_stage` | `s0` to `s4`, the highest pacing stage at which a step takes the settled path | `s1` | yes |
+| `execution.action_gap.fallback_hold_ms` | milliseconds `0..=86400000`, how long an operation that failed while the path was handed keeps its `post_delay_ms`; 0 holds it for its run only | `3600000` | yes |
+
+Each key is also per instance, `instance.<instance id>.execution.action_gap.<member>`, in the file
+the entry's `execution.action_gap` member; its default is `none`: an instance that names it reports a
+row and an instruction may set it (clearing that instruction leaves the section's), and every other
+instance reads the section's key. `EffectiveConfig::action_gap(instance_id)` returns the keys in
+effect; the host reads them at each step, so an instruction takes effect at the next step. The
+shipped example configuration writes `kind` `performance`: no gap beyond the pacing curve's term.
+
 ## The `install` section (Workflow #421 INST-1)
 
 Workflow #421 ([install-cli.md](install-cli.md)): the tunables of `actingctl install`, the
