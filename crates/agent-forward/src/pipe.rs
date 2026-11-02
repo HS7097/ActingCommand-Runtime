@@ -2,7 +2,7 @@
 
 //! An overlapped client of a local named pipe, for the transports of this crate (Workflow #432;
 //! `contracts/agent-forward.md`). The deadline and the stop are enforced here, in the calling
-//! thread, with no extra thread and no process.
+//! thread, with no extra thread and no process. A client writes and reads one operation at a time.
 //!
 //! There is no flush. `FlushFileBuffers` waits for the reader and has no form that can be cancelled,
 //! so it would hold the calling thread past any deadline. A finished write is in the pipe, and
@@ -13,12 +13,13 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::ptr::{null, null_mut};
 use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{
-    ERROR_FILE_NOT_FOUND, ERROR_IO_PENDING, ERROR_PIPE_BUSY, GENERIC_READ, GENERIC_WRITE,
-    INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    ERROR_BROKEN_PIPE, ERROR_FILE_NOT_FOUND, ERROR_IO_PENDING, ERROR_PIPE_BUSY,
+    ERROR_PIPE_NOT_CONNECTED, GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
+    WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_FLAG_OVERLAPPED, FILE_SHARE_NONE, OPEN_EXISTING, SECURITY_IDENTIFICATION,
-    SECURITY_SQOS_PRESENT, WriteFile,
+    CreateFileW, FILE_FLAG_OVERLAPPED, FILE_SHARE_NONE, OPEN_EXISTING, ReadFile,
+    SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT, WriteFile,
 };
 use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
 use windows_sys::Win32::System::Pipes::GetNamedPipeServerProcessId;
@@ -45,6 +46,29 @@ pub(crate) enum WriteFailure {
     Stopped,
     /// The operating system refused the write.
     Failed(io::Error),
+}
+
+/// Why a read did not finish. Part of the bytes may have been read.
+#[derive(Debug)]
+pub(crate) enum ReadFailure {
+    /// The deadline passed and the read was cancelled.
+    TimedOut,
+    /// The caller asked to stop and the read was cancelled.
+    Stopped,
+    /// The server closed its end of the pipe.
+    Closed,
+    /// The operating system refused the read.
+    Failed(io::Error),
+}
+
+/// A failed read's error, with the server's close told apart.
+fn read_error(error: io::Error) -> ReadFailure {
+    let code = error.raw_os_error();
+    if code == Some(ERROR_BROKEN_PIPE as i32) || code == Some(ERROR_PIPE_NOT_CONNECTED as i32) {
+        ReadFailure::Closed
+    } else {
+        ReadFailure::Failed(error)
+    }
 }
 
 /// One open connection to a named pipe's server.
@@ -190,15 +214,115 @@ impl PipeClient {
         let error = io::Error::last_os_error();
         Err(interrupted.unwrap_or(WriteFailure::Failed(error)))
     }
+
+    /// Fills all of `buffer`, until `deadline` or until `stopped` answers true.
+    pub(crate) fn read_exact(
+        &self,
+        buffer: &mut [u8],
+        deadline: Instant,
+        stopped: &dyn Fn() -> bool,
+    ) -> Result<(), ReadFailure> {
+        let mut filled = 0;
+        while filled < buffer.len() {
+            let read = self.read_once(&mut buffer[filled..], deadline, stopped)?;
+            if read == 0 {
+                // A server's empty write reads as nothing; the pipe's close is an error instead.
+                if stopped() {
+                    return Err(ReadFailure::Stopped);
+                }
+                if Instant::now() >= deadline {
+                    return Err(ReadFailure::TimedOut);
+                }
+            }
+            filled += read;
+        }
+        Ok(())
+    }
+
+    /// One overlapped read, under the same rule as [`Self::write_once`]: `overlapped` and `buffer`
+    /// belong to the kernel from `ReadFile` until `GetOverlappedResult` says the operation has
+    /// finished, so an interrupted read is cancelled and then waited for.
+    fn read_once(
+        &self,
+        buffer: &mut [u8],
+        deadline: Instant,
+        stopped: &dyn Fn() -> bool,
+    ) -> Result<usize, ReadFailure> {
+        let handle = self.handle.as_raw_handle();
+        let event = self.event.as_raw_handle();
+        let length = u32::try_from(buffer.len()).unwrap_or(u32::MAX);
+        let mut overlapped = OVERLAPPED {
+            hEvent: event,
+            ..Default::default()
+        };
+        // SAFETY: the handle is valid; `buffer` holds at least `length` writable bytes and, like
+        // `overlapped`, outlives the operation (see above). The count pointer is null, as an
+        // overlapped read allows.
+        if unsafe {
+            ReadFile(
+                handle,
+                buffer.as_mut_ptr(),
+                length,
+                null_mut(),
+                &mut overlapped,
+            )
+        } == 0
+        {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() != Some(ERROR_IO_PENDING as i32) {
+                // Nothing was queued, so nothing holds `overlapped` or `buffer`.
+                return Err(read_error(error));
+            }
+        }
+        let interrupted = loop {
+            let slice = deadline
+                .saturating_duration_since(Instant::now())
+                .min(WAIT_SLICE);
+            let milliseconds = u32::try_from(slice.as_millis()).unwrap_or(u32::MAX);
+            // SAFETY: the event lives as long as `self`.
+            match unsafe { WaitForSingleObject(event, milliseconds) } {
+                WAIT_OBJECT_0 => break None,
+                WAIT_TIMEOUT => {
+                    if stopped() {
+                        break Some(ReadFailure::Stopped);
+                    }
+                    if Instant::now() >= deadline {
+                        break Some(ReadFailure::TimedOut);
+                    }
+                }
+                _ => break Some(ReadFailure::Failed(io::Error::last_os_error())),
+            }
+        };
+        if interrupted.is_some() {
+            // SAFETY: the handle and `overlapped` are valid. Its one expected failure says the
+            // operation has already finished, which the wait below sees as well.
+            unsafe { CancelIoEx(handle, &overlapped) };
+        }
+        let mut transferred = 0_u32;
+        // SAFETY: the handle, `overlapped` and the out pointer are valid. After a cancel this
+        // waits, so the operation is over before `overlapped` and `buffer` go out of use.
+        let finished = unsafe {
+            GetOverlappedResult(
+                handle,
+                &overlapped,
+                &mut transferred,
+                i32::from(interrupted.is_some()),
+            )
+        };
+        if finished != 0 {
+            return Ok(transferred as usize);
+        }
+        let error = io::Error::last_os_error();
+        Err(interrupted.unwrap_or_else(|| read_error(error)))
+    }
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
-    use windows_sys::Win32::Foundation::ERROR_BROKEN_PIPE;
     use windows_sys::Win32::Storage::FileSystem::{
-        FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX, ReadFile,
+        FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX,
     };
     use windows_sys::Win32::System::Pipes::{
         CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT,

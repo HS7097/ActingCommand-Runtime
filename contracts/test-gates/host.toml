@@ -3083,3 +3083,17 @@ tests = [
     "actingcommand-agent-forward::lib::cli::tests::notice_prints_the_mit_text",
 ]
 incident = ["#432 AGT-T1"]
+
+# AGT-T2 (Workflow #432, 0.12.37; design rd-1031/agt/model-agt-v2.md section 10; register section 1.255; contracts/agent-forward.md): an idle task gets a start and a running one a steer, with the wake's id; an absent pipe, a task not loaded and a task still loading wait before the intent, as does a task waiting for input; a steer refused because its turn ended gets one start with the same id; other refusals fail and a missing answer is unknown; another state stream version is a changed protocol; and every discovery question is answered that this client cannot handle it. The tests run on a scripted frame source and open no pipe.
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-agent-forward::lib::codex::client::tests::idle_starts_a_turn_and_running_steers",
+    "actingcommand-agent-forward::lib::codex::client::tests::not_loaded_absent_pipe_and_loading_are_deferred",
+    "actingcommand-agent-forward::lib::codex::client::tests::awaiting_input_is_deferred",
+    "actingcommand-agent-forward::lib::codex::client::tests::an_ended_turn_rejection_gets_one_start_with_the_same_id",
+    "actingcommand-agent-forward::lib::codex::client::tests::other_rejections_fail_and_no_answer_is_unknown",
+    "actingcommand-agent-forward::lib::codex::client::tests::an_unsupported_stream_version_is_protocol_changed",
+    "actingcommand-agent-forward::lib::codex::client::tests::discovery_requests_are_answered_cannot_handle",
+]
+incident = ["#432 AGT-T2"]
