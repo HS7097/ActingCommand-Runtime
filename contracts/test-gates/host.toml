@@ -2999,3 +2999,37 @@ tests = [
     "actingcommand-agent-forward::lib::channels::tests::channels_dsh_requires_three_absolute_paths",
 ]
 incident = ["#432 AGT-1a"]
+
+# AGT-1b (Workflow #432, 0.12.37; design rd-1031/agt/model-agt-v2.md section 10; register section 1.246; contracts/agent-wake.md; runtime-client revision 5): with no section no worker, file or row; a test wake writes its body, then its row, then sends once; the intent is durable before the write and a refused one writes nothing; after a restart sending is unknown and never resent while prepared and deferred are tried; a deferred row retries and expires loudly, a definite failure and unknown are loud and not retried, and a row takes at most four records of names, a digest and counts; failures pass the key table with the longest channel, count nothing toward direction one and never become candidates; an unreadable row shape is loud and the start goes on; a panic backs off bounded; quiet, hold and off keep their rows and give-up is read only when a send is due; one channel goes oldest first with its gap; an unknown channel fails at once and an unreadable registry never stops a start; retention keeps open rows; shutdown after the intent is unknown and before it stays; and only a person's origins may ask.
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_agt_1b::no_section_starts_no_worker_and_writes_no_file_or_row",
+    "actingcommand-runtime-host::lib::tests::gate_agt_1b::test_wake_writes_body_then_row_then_sends_once",
+    "actingcommand-runtime-host::lib::tests::gate_agt_1b::intent_is_committed_before_the_forward_writes",
+    "actingcommand-runtime-host::lib::tests::gate_agt_1b::a_refused_intent_means_no_write",
+    "actingcommand-runtime-host::lib::tests::gate_agt_1b::restart_turns_sending_into_unknown_and_never_resends",
+    "actingcommand-runtime-host::lib::tests::gate_agt_1b::restart_keeps_prepared_and_deferred_and_tries_them",
+    "actingcommand-runtime-host::lib::tests::gate_agt_1b::deferred_retries_then_expires_loudly",
+    "actingcommand-runtime-host::lib::tests::gate_agt_1b::a_definite_failure_is_loud_and_not_retried",
+    "actingcommand-runtime-host::lib::tests::gate_agt_1b::unknown_is_loud_and_not_retried",
+    "actingcommand-runtime-host::lib::tests::gate_agt_1b::a_row_writes_at_most_four_records",
+    "actingcommand-runtime-host::lib::tests::gate_agt_1b::the_ledger_holds_names_digest_and_counts_never_the_text",
+    "actingcommand-runtime-host::lib::tests::gate_agt_1b::failure_values_pass_the_key_table_with_a_longest_chinese_channel",
+    "actingcommand-runtime-host::lib::tests::gate_agt_1b::a_delivery_failure_counts_nothing_toward_direction_one",
+    "actingcommand-runtime-host::lib::tests::gate_agt_1b::a_delivery_failure_never_becomes_a_candidate",
+    "actingcommand-runtime-host::lib::tests::gate_agt_1b::unreadable_row_shape_is_loud_and_the_start_goes_on",
+    "actingcommand-runtime-host::lib::tests::gate_agt_1b::a_worker_panic_backs_off_and_stays_bounded",
+    "actingcommand-runtime-host::lib::tests::gate_agt_1b::quiet_window_holds_sends_and_keeps_rows",
+    "actingcommand-runtime-host::lib::tests::gate_agt_1b::hold_until_holds_sends_until_its_time",
+    "actingcommand-runtime-host::lib::tests::gate_agt_1b::disabled_drops_candidates_and_holds_open_rows",
+    "actingcommand-runtime-host::lib::tests::gate_agt_1b::give_up_is_read_only_when_a_send_is_due",
+    "actingcommand-runtime-host::lib::tests::gate_agt_1b::rows_for_one_channel_go_oldest_first_with_the_gap",
+    "actingcommand-runtime-host::lib::tests::gate_agt_1b::an_unknown_channel_fails_at_once",
+    "actingcommand-runtime-host::lib::tests::gate_agt_1b::an_unreadable_registry_never_stops_a_start",
+    "actingcommand-runtime-host::lib::tests::gate_agt_1b::retention_removes_by_age_and_count_and_keeps_open_rows",
+    "actingcommand-runtime-host::lib::tests::gate_agt_1b::shutdown_after_intent_is_unknown_and_before_intent_stays",
+    "actingcommand-runtime-host::lib::tests::gate_agt_1b::a_rule_naming_an_unknown_alias_is_refused_while_running",
+    "actingcommand-runtime-host::lib::tests::gate_agt_1b::agent_wake_test_takes_only_person_origins",
+]
+incident = ["#432 AGT-1b"]

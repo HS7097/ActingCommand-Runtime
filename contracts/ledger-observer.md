@@ -1465,8 +1465,8 @@ sizes `false` — the queue exists before the ledger opens; probe periods `true`
   of the same revision is the evidence-frame rule's age ([runtime-config.md](runtime-config.md)).
 - `host.config_overrides` joins `tag.workbench_patterns` (Workflow #387 §5.7, handed to AO-0);
   `host.contained_settlement` joins it in #411 A65 (0.12.12; see
-  [runtime-fact-store.md](runtime-fact-store.md)), `host.agent_wake` in #432 AGT-1a (0.12.37; the
-  entry only, its writer comes in AGT-1b, [agent-wake.md](agent-wake.md)), and `host.idle_state` in
+  [runtime-fact-store.md](runtime-fact-store.md)), `host.agent_wake` in #432 AGT-1a (0.12.37; its
+  writer is AGT-1b's worker, [agent-wake.md](agent-wake.md)), and `host.idle_state` in
   #405 IDLE-1P (0.12.20;
   the idle planner's closed instances, [runtime-config.md](runtime-config.md), "The `idle`
   section");

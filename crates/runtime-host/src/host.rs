@@ -157,6 +157,8 @@ const STARTUP_PACKAGE_CONNECTION_VALUE: u64 = u64::MAX - 2;
 const CONNECTION_PREPARATION_CONNECTION_VALUE: u64 = u64::MAX - 3;
 
 mod agent_control;
+// Workflow #432 AGT-1b: the worker of the Runtime's messages to registered channels.
+mod agent_wake;
 // UPD-1: the host's writes of `health.application.update_required`.
 mod application_update;
 mod backend_open;
@@ -642,6 +644,9 @@ pub struct RuntimeHostConfig {
     /// `host.idle_state`, as a build before IDLE-1P did; its idle planner starts empty.
     #[cfg(test)]
     idle_state_unkept_for_test: bool,
+    /// Workflow #432 AGT-1b, test only: see [`RuntimeHostConfig::with_agent_forward_for_test`].
+    #[cfg(test)]
+    agent_forward_for_test: Option<Arc<dyn actingcommand_agent_forward::AgentForward>>,
     /// #411 A67-R, test only: the memory sample every capture frame store reads in place of the
     /// host's physical memory.
     #[cfg(test)]
@@ -714,6 +719,8 @@ impl RuntimeHostConfig {
             #[cfg(test)]
             idle_state_unkept_for_test: false,
             #[cfg(test)]
+            agent_forward_for_test: None,
+            #[cfg(test)]
             capture_memory_sample_for_test: None,
         }
     }
@@ -772,6 +779,17 @@ impl RuntimeHostConfig {
     #[cfg(test)]
     pub(crate) fn with_idle_state_unkept_for_test(mut self) -> Self {
         self.idle_state_unkept_for_test = true;
+        self
+    }
+
+    /// Workflow #432 AGT-1b, test only: the messages go through `forward`, and no worker thread
+    /// starts: the test runs each iteration itself (`agent_wake_step_for_test`).
+    #[cfg(test)]
+    pub(crate) fn with_agent_forward_for_test(
+        mut self,
+        forward: Arc<dyn actingcommand_agent_forward::AgentForward>,
+    ) -> Self {
+        self.agent_forward_for_test = Some(forward);
         self
     }
 
@@ -1813,6 +1831,26 @@ impl RuntimeHost {
         // Workflow #390 DISC-1: read the `startup_discovery` section while `config` is whole;
         // `HostShared` below moves some of its fields, and the provider startup uses this.
         let startup_discovery = startup_discovery_config(&config);
+        // Workflow #432 AGT-1b (design section 2): built with the shared state, before the start's
+        // settlement writes records. `Unavailable` answers until a transport exists (AGT-T1).
+        let agent_forward: Arc<dyn actingcommand_agent_forward::AgentForward> =
+            Arc::new(actingcommand_agent_forward::Unavailable);
+        #[cfg(test)]
+        let agent_forward_held = config.agent_forward_for_test.is_some();
+        #[cfg(test)]
+        let agent_forward = config
+            .agent_forward_for_test
+            .clone()
+            .unwrap_or(agent_forward);
+        let agent_wake_shared = agent_wake::AgentWakeShared::new(
+            config.config_manifest.as_ref(),
+            &config.state_root,
+            agent_forward,
+        );
+        #[cfg(test)]
+        agent_wake_shared
+            .worker_held_for_test
+            .store(agent_forward_held, Ordering::Release);
         let shared = Arc::new(HostShared {
             owner_epoch,
             shutdown_target: info.shutdown_target(),
@@ -1910,6 +1948,7 @@ impl RuntimeHost {
             #[cfg(test)]
             emulator_watch_polled: Condvar::new(),
             idle: Mutex::new(crate::idle_action::IdlePlanner::default()),
+            agent_wake: agent_wake_shared,
             #[cfg(test)]
             idle_action_ended: Condvar::new(),
             #[cfg(test)]
@@ -2421,6 +2460,10 @@ impl RuntimeHost {
             // that start's anchor, not to the latest owner), every instance with an idle action
             // counts as closed, never as open.
             shared.restore_idle_state(previous_owner_epoch, start_anchors)?;
+            // Workflow #432 AGT-1b: the rows of `host.agent_wake`; one left in `sending` is
+            // `unknown` and is never sent again. A record this build cannot read never stops a
+            // start.
+            shared.restore_agent_wake()?;
             // Workflow #369 E3 (coordinator ruling on #670, safety net): each dispatch the start
             // could not settle is recorded and its instance paused, after the persisted pauses
             // are restored and before any instance is prepared.
@@ -2525,6 +2568,9 @@ impl RuntimeHost {
                         )
                     })?,
             );
+            // Workflow #432 AGT-1b: the worker, only with an `agent_wake` section. A thread that
+            // cannot start turns the feature off and says so; it never stops the start.
+            agent_wake::start(&shared)?;
             // Workflow #421 INST-2: the start is ready from here on, for `StartReport`.
             shared.note_start_ready(shared.clock.sample()?.unix_ms)?;
             shared.finish_install_preparation()?;
@@ -5102,6 +5148,13 @@ impl RuntimeHost {
             &mut failure,
             join_runtime_thread(self.monitor_thread.take(), HostLocation::JoinRuntimeMonitor),
         );
+        // Workflow #432 AGT-1b: the worker ends with the shutdown request and is joined: a send
+        // under way stops through `SendLimits::stopped` and its deadline.
+        shared.record_lifecycle_result(
+            RuntimeLifecycleFailureStage::ShutdownJoin,
+            &mut failure,
+            agent_wake::stop(&shared),
+        );
         // Workflow #398 RD-2: the device-link watch stops (its process ends) and its reader is
         // joined, after the sweep that restarts it.
         shared.record_lifecycle_result(
@@ -5629,6 +5682,8 @@ struct HostShared {
     // IDLE-1: every instance's idle state (memory only). Taken by the idle check across its
     // instances, and alone by an action's worker and by the emulator watch.
     idle: Mutex<crate::idle_action::IdlePlanner>,
+    // Workflow #432 AGT-1b: the bounded queue, the worker's memory and the forwarder.
+    agent_wake: agent_wake::AgentWakeShared,
     // IDLE-1, test only: notified when an idle action's worker ends.
     #[cfg(test)]
     idle_action_ended: Condvar,

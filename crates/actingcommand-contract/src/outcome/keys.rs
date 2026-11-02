@@ -203,6 +203,10 @@ outcome_keys! {
     selection_blocking: vocab(selection_blocking),
     identity_state: vocab(identity_state),
     pause_reason: name,
+    // Workflow #432 AGT-1b: a delivery failure of the Runtime's message to a registered channel.
+    agent_channel: name,
+    agent_delivery_state: vocab(agent_delivery_state),
+    agent_delivery_problem: vocab(agent_delivery_problem),
     expected_sha256: hash,
     actual_sha256: hash,
     state: vocab(file_state),

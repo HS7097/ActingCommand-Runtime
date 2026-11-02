@@ -206,6 +206,8 @@ mod gate_375_r3;
 mod gate_381a;
 mod gate_381b;
 mod gate_agt_1a;
+// Workflow #432 AGT-1b: the worker of the Runtime's messages, over a real ledger and a fake clock.
+mod gate_agt_1b;
 // CAP-IDX (since 0.12.27): capture takes the MuMu index from the discovery binding; a shifted
 // port is checked against MuMu's report before capture opens.
 mod gate_cap_idx;

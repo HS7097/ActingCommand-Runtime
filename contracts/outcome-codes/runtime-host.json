@@ -22229,6 +22229,101 @@
       "common_causes": "instances[].stuck_recovery or recovery_ladder.enabled is false for the instance.",
       "handling": "Turn stuck recovery on for the instance (actingctl config set) if the drill should run, then ask again."
     },
+    "agent_wake_delivery_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "optional",
+        "file": "optional",
+        "agent_channel": "optional",
+        "agent_delivery_state": "optional",
+        "agent_delivery_problem": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.37",
+      "description": "A message of the Runtime to a registered channel failed, or the worker's own iteration did (Workflow #432 AGT-1b; contracts/agent-wake.md): agent_delivery_state says how the wake ended (failed, unknown, expired, body_failed) and agent_delivery_problem why. A runtime.failed record with system links and no instance link, at most one per wake and one per backoff, so it reaches no ladder, fence or pause; only its operation fails. The client's own words are in the wake's delivery detail file.",
+      "common_causes": "The channel's session refused the message or could not be reached for delivery.give_up_ms; a Runtime stop while a write was under way (unknown); a body folder that cannot be written.",
+      "handling": "Read the wake's row in host.agent_wake and its <body file>.delivery.json. An unknown wake may have arrived and is never sent again; send anew only if it did not."
+    },
+    "agent_wake_message_too_long": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "optional",
+        "file": "optional",
+        "agent_channel": "optional",
+        "agent_delivery_state": "optional",
+        "agent_delivery_problem": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.37",
+      "description": "A message does not fit agent_wake.summary.max_chars with its header, kind word and path, none of which is ever cut (Workflow #432 AGT-1b). The section check cannot see the registry, so a limit set below a channel's floor while the Runtime runs ends here: the row is failed and nothing is sent.",
+      "common_causes": "agent_wake.summary.max_chars was set below the floor of a registered channel.",
+      "handling": "Raise agent_wake.summary.max_chars; actingd check-config names a channel that does not fit."
+    },
+    "agent_wake_channel_unknown": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "optional",
+        "file": "optional",
+        "agent_channel": "optional",
+        "agent_delivery_state": "optional",
+        "agent_delivery_problem": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.37",
+      "description": "A channel the readable channel registry does not list (Workflow #432 AGT-1b): an AgentWakeTest is refused, and a row that names it ends failed at once. A name of no channel's shape carries no agent_channel.",
+      "common_causes": "A misspelt channel name, or a channel removed from the registry after its wake was made.",
+      "handling": "Name a registered channel; the registry is the file agent-forward\\channels.json under the state root."
+    },
+    "agent_wake_disabled": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.37",
+      "description": "AgentWakeTest was refused: the agent_wake section is absent or agent_wake.enabled is false (Workflow #432 AGT-1b).",
+      "common_causes": "The section has not been added to actingd's configuration, or the feature was turned off.",
+      "handling": "Add the section (a file edit and a restart) or set agent_wake.enabled to true, then ask again."
+    },
     "recovery_ladder_drill_already_running": {
       "category": "error",
       "ladder_class": "none",
@@ -30036,6 +30131,38 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: a person's drill of an instance's stuck-recovery ladder (DrillRecoveryLadder, Workflow #390 DRILL-1)."
+    },
+    "agent_wake_worker": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.37",
+      "description": "A Runtime host operation or stage: an iteration of the worker of the Runtime's messages to registered channels (Workflow #432 AGT-1b)."
+    },
+    "agent_wake_restore": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.37",
+      "description": "A Runtime host operation: the start's read of the runtime fact host.agent_wake (Workflow #432 AGT-1b)."
+    },
+    "agent_wake_test": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.37",
+      "description": "A Runtime host operation: a person's test of the delivery to a registered channel (AgentWakeTest, Workflow #432 AGT-1b)."
+    },
+    "join_agent_wake_worker": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.37",
+      "description": "A Runtime host operation: joining the worker of the Runtime's messages at shutdown (Workflow #432 AGT-1b)."
     },
     "check_pack_admission": {
       "owner": "runtime-host",

@@ -1924,6 +1924,18 @@ const RUNTIME_REQUEST_ORIGIN_BRANCHES: &[(&[&str], &[&str], &[&str])] = &[
             "EventSource::Ui",
         ],
     ),
+    // Workflow #432 AGT-1b (register §1.246): a person's test of the delivery, the same gate as a
+    // pause; no MCP tool sends it.
+    (
+        &["AgentWakeTest"],
+        &["invalid_agent_wake_test_origin"],
+        &[
+            "EventActor::Cli",
+            "EventActor::User",
+            "EventSource::Cli",
+            "EventSource::Ui",
+        ],
+    ),
     (
         &["PublishFact", "PublishFacts"],
         &["fact_origin_mixed", "invalid_agent_dispatcher_origin"],

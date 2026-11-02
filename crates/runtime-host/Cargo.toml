@@ -19,6 +19,8 @@ test-observation = []
 test-hooks = ["actingcommand-ledger/test-hooks"]
 
 [dependencies]
+# Workflow #432 AGT-1b: the Runtime's own forwarding; every word of a client stays in that crate.
+actingcommand-agent-forward = { workspace = true }
 actingcommand-artifact-store = { workspace = true }
 actingcommand-contract = { workspace = true }
 actingcommand-device = { workspace = true }
@@ -39,6 +41,8 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 
 [dev-dependencies]
+# Workflow #432 AGT-1b: `FakeForward`, for the worker's logic tests.
+actingcommand-agent-forward = { workspace = true, features = ["test-support"] }
 # Workflow #369 E3 (#670 safety net): the ledger's settlement refusal hook in host tests.
 actingcommand-ledger = { workspace = true, features = ["test-hooks"] }
 actingcommand-runtime-client = { workspace = true }

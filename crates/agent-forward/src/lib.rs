@@ -17,7 +17,7 @@ pub mod channels;
 mod fake;
 
 #[cfg(any(test, feature = "test-support"))]
-pub use fake::{FakeForward, FakeSend};
+pub use fake::{FakeForward, FakeSend, fake_registry_text};
 
 use std::time::Instant;
 

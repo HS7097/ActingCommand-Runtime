@@ -511,6 +511,11 @@ impl HostShared {
         let mut activities = self
             .instance_activities_shown()
             .map_err(RequestFailure::poison_without_terminal)?;
+        // Workflow #432 AGT-1b: the delivery of the Runtime's messages, from memory only; absent
+        // with no `agent_wake` section.
+        let agent_wake = self
+            .agent_wake_status()
+            .map_err(RequestFailure::poison_without_terminal)?;
         // Resolve only metadata before taking the scheduler lock. Identity checks and the
         // registered instance set are shared with device-facing admission; they run under
         // the registry lock so an endpoint rebinding is never observed half-applied.
@@ -599,6 +604,7 @@ impl HostShared {
         }
         let status = RuntimeControlPlaneStatus::new(self.owner_epoch, projected)
             .and_then(|status| status.with_scheduling_pause(scheduling_pause.global_state()))
+            .map(|status| status.with_agent_wake(agent_wake))
             .map_err(|_| {
                 RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
                     HostCode::RuntimeStatusProjectionInvalid,

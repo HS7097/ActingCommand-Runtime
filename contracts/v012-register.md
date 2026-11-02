@@ -5793,6 +5793,28 @@ members), **so the operator first removes them**. An online override of either k
 
 **Rollback** (to 0.12.36). A pack that declares it is refused at the older build's declaration gate; `package` [3, 6] above its range refuses the combination earlier. Nothing persisted changes.
 
+### 1.246 Slice AGT-1b (0.12.37): the worker, the record, the read face and the test command of the Runtime's messages (Workflow #432; design `rd-1031/agt/model-agt-v2.md` §10; coordinator work order `rd-1031/agt/brief-agt-1b.md`)
+
+[agent-wake.md](agent-wake.md) is the contract. **Nothing wakes automatically yet** (AGT-2 brings the tap and the rules) and **no transport exists yet** (AGT-T1): the production forwarder `Unavailable` answers `deferred`, so a person's test ends `deferred`, then `expired`.
+
+**What changes live.** With no `agent_wake` section, nothing: no thread, no file, no row, no status member. With a section: one thread `actingcommand-runtime-agent-wake`, the fact `host.agent_wake`, the folder `<state_root>\<body.dir>\`, `Status.agent_wake`, the overview block `agent_wake`, and the request `AgentWakeTest`. Failures of the worker are `Operation` at `contain_failure` and carry no instance link (#419).
+
+**Rollback** (to 0.12.36). Remove the section first, as §1.245 says. A 0.12.36 reader accepts the unknown runtime-fact key, and `ledger` does not move. `runtime-client` [3, 5] pairs with every console 0.12.36 pairs with.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| AGT1B-1 | `RuntimeOperation::AgentWakeTest{to, instance_alias?}`, `RuntimeResult::AgentWakeTestQueued{queued: {wake_id, channel, quiet?}}`, `RuntimeControlPlaneStatus.agent_wake?`, **`runtime-client` [3, 5]** | wire | AGT-1b | AGT-1b | general instruction, recorded through G14; origins (User, Ui) and (Cli, Cli) only; not an MCP tool. **A console whose `max` is below 5 refuses a status that carries the member:** update it before adding the section |
+| AGT1B-2 | `host.agent_wake`, a record list: `wake_id, kind, rule?, test, instance_alias?, code?, channel, created_at_unix_ms, updated_at_unix_ms, state, reason?, proof?, problem?, body_file?, body_sha256?, body_chars?, message_chars?, alias_cut, trigger_event_id?, correlation_id?` | runtime fact | AGT-1b | the worker | at most four records per wake; names, a digest and counts, never text; a shape this build cannot read is `invalid_runtime_state_fact` and the start goes on |
+| AGT1B-3 | `<state_root>\<body.dir>\w<unix_ms>[-n].json`, `.delivery.json` (schema `actingcommand.agent-wake-delivery.v1`) | program state | AGT-1b | the worker | swept by age and count, never an open row's files |
+| AGT1B-4 | `agent_wake_delivery_failed`, `agent_wake_message_too_long`, `agent_wake_channel_unknown`, `agent_wake_disabled` (runtime-host); `invalid_agent_wake_test_origin`, `request_agent_wake_test_completed` (contract); `agent_wake_test_queued` (actingctl) | outcome codes | AGT-1b | the worker, the door, `agent-wake-test` | `agent_budget_exhausted` comes with AGT-2 |
+| AGT1B-5 | keys `agent_channel` (name), `agent_delivery_state`, `agent_delivery_problem` (vocabularies of those names); locations `agent_wake_worker`, `agent_wake_restore`, `agent_wake_test`, `join_agent_wake_worker`, `runtime_agent_wake_test` | key table | AGT-1b | the worker | typed setters, so a value cannot make `append_lifecycle_failure` fail |
+| AGT1B-6 | `actingctl agent-wake-test --to <channel> [--instance <alias>] [--wait-s <seconds>]`; overview block `agent_wake` (never cut by MCP) | CLI, read face | AGT-1b | — | from the one Status read |
+| AGT1B-7 | an instruction that changes `agent_wake.rules` with an alias no instance is registered under: `config_value_invalid`, `instance_unknown` | refusal | AGT-1b | `ConfigureSettings` | left by AGT-1a: the section check has no instance list |
+
+**Where it differs from the design's letter.** `agent_wake_test_queued` is actingctl's, as `recovery_ladder_drill_queued` is: the receipt's success code is `request_agent_wake_test_completed`, one per kind. A new contract code `invalid_agent_wake_test_origin` carries the gate: none fits by name. A test during quiet stays `prepared`, not `deferred`: §2's pipeline and "no record per tick". A day in `failed_today` and `suppressed_today` is a UTC day until AGT-2 brings the host's local day.
+
+**Tests changed** (the approved behaviour change): `component_interfaces.rs`' `V0120` and `gate_429_r0b_pairing` say `runtime-client` [3, 5]; the fake Runtime of `gate_422_ov24k` can answer the new status member.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -5857,7 +5879,7 @@ U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `Loa
 | `host.config_overrides` | workbench | yes (added to `tag.workbench_patterns` by M387 §5.7) | D1b |
 | `host.contained_settlement` (an integer: the start event of the last start that completed the settlement of open direct runs; [runtime-fact-store.md](runtime-fact-store.md)) | workbench | yes (added to `tag.workbench_patterns` by #411 A65) | #411 A65 |
 | `host.idle_state` (a record list: the instances the idle action closed or is closing, with their action and wake; since 0.12.25 its writer row names the start anchor, not the owner epoch (#405 N-2), and a woken instance stays in it, `woken`, until its startup package has run (#405 O-2); [runtime-fact-store.md](runtime-fact-store.md)) | workbench | yes (added to `tag.workbench_patterns` by #405 IDLE-1P) | #405 IDLE-1P |
-| `host.agent_wake` (a record list: the newest `agent_wake.delivery.history_rows` wakes and their delivery states; [agent-wake.md](agent-wake.md); AGT-1a adds the tag entry, AGT-1b the writer; §1.245 AGT1A-5) | workbench | yes (added to `tag.workbench_patterns`) | #432 AGT-1b |
+| `host.agent_wake` (a record list: the newest `agent_wake.delivery.history_rows` wakes and their delivery states; [agent-wake.md](agent-wake.md); AGT-1a adds the tag entry, AGT-1b the writer; §1.245 AGT1A-5, §1.246 AGT1B-2) | workbench | yes (added to `tag.workbench_patterns`) | #432 AGT-1b |
 | `config.selection`, `config.catalog` | workbench | no (`config.` is re-observed) | D1b, MCP-9a |
 | `config.parameters.touch` (a section fact of the `config.parameters.<section>` family, five rows; §1.136 T12-4) | workbench | no (`config.` is re-observed) | #406 T12 |
 | `config.parameters.emulator_control` (a section fact of the `config.parameters.<section>` family, one row; §1.158 A50-5) | workbench | no (`config.` is re-observed) | #411 A50 |

@@ -2896,6 +2896,20 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "agent_wake_test_queued": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.37",
+      "description": "actingctl agent-wake-test: the test wake is queued for the worker; the line carries {wake_id, channel, quiet?} and, with --wait-s, the wake's row (Workflow #432 AGT-1b).",
+      "common_causes": "The request succeeded.",
+      "handling": "Read the row in host.agent_wake: delivered, or deferred with its reason. A build with no transport answers deferred."
+    },
     "runtime_fact_refresh_reported": {
       "category": "success",
       "ladder_class": "none",

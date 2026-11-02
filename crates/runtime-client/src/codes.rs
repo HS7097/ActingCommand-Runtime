@@ -273,6 +273,8 @@ actingcommand_contract::outcome_locations! {
         SelfCheckInstance => "self_check_instance",
         // Workflow #390 DRILL-1: a person's drill of an instance's ladder.
         RuntimeRecoveryLadderDrill => "runtime_recovery_ladder_drill",
+        // Workflow #432 AGT-1b: a person's test of the delivery to a registered channel.
+        RuntimeAgentWakeTest => "runtime_agent_wake_test",
         IssueLeaseHolder => "issue_lease_holder",
         IssueQueuedLeaseHolder => "issue_queued_lease_holder",
         SafeReset => "safe_reset",
