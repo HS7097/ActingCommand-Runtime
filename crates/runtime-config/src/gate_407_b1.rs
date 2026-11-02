@@ -13,7 +13,10 @@
 // `wrong_type`. The kernel's refusal of a package above the ceiling is exec key 184.
 
 use super::*;
-use crate::execution::{CAPTURE_BACKOFF_ENABLED, CAPTURE_IDLE_CEILING_MS, CAPTURE_MAX_INTERVAL_MS};
+use crate::execution::{
+    CAPTURE_BACKOFF_ENABLED, CAPTURE_IDLE_CEILING_MS, CAPTURE_MAX_INTERVAL_MS,
+    CAPTURE_STILL_LIMIT_MS,
+};
 use actingcommand_contract::{
     ConfigParameter, ConfigParameterSource, ConfigSettingChange, FactScalar, RuntimeConfigManifest,
 };
@@ -78,6 +81,8 @@ fn b1_d_the_capture_keys_default_from_the_file_and_their_bounds_are_checked() {
         (CAPTURE_MAX_INTERVAL_MS, FactScalar::DurationMs(60_000)),
         (CAPTURE_BACKOFF_ENABLED, FactScalar::Boolean(true)),
         (CAPTURE_IDLE_CEILING_MS, FactScalar::DurationMs(5_000)),
+        // STILL-1: the section's fourth key, off by default (its own gate is `gate_still1`).
+        (CAPTURE_STILL_LIMIT_MS, FactScalar::DurationMs(0)),
     ];
     for (key, value) in &defaults {
         let parameter = parameters

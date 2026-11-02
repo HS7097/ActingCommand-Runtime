@@ -365,7 +365,7 @@ impl PreparedContainedTask {
             timing,
             pacing,
         )?;
-        let (observation, last_frame_page, timing_failure) = match resolution {
+        let (observation, last_frame_page, timing_failure, still_limit) = match resolution {
             PostconditionResolution::Reached(reached) => {
                 return Ok(WaitStepEnd::Reached(Box::new(reached)));
             }
@@ -380,7 +380,7 @@ impl PreparedContainedTask {
                     });
                 }
                 let page = observation.page_label.clone();
-                (Some(observation), Some(page), Some(timing_failure))
+                (Some(observation), Some(page), Some(timing_failure), None)
             }
             PostconditionResolution::Failed {
                 observation,
@@ -403,8 +403,9 @@ impl PreparedContainedTask {
                 observation,
                 last_frame_page,
                 timing_failure,
+                still_limit,
                 ..
-            } => (observation, last_frame_page, timing_failure),
+            } => (observation, last_frame_page, timing_failure, still_limit),
         };
         Self::finish_effect_attempt(runtime, step_index, &operation.id, observation.as_ref())?;
         // #411 A15: the operation, its destination pages, its one attempt and the page of the
@@ -428,6 +429,7 @@ impl PreparedContainedTask {
         )
         .with_values(values)
         .with_timing(timing_failure)
+        .with_still_limit(still_limit)
         .into())
     }
 }
