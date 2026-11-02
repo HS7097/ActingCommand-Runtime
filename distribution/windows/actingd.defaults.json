@@ -501,7 +501,8 @@
     "capture": {
       "max_interval_ms": 60000,
       "backoff_enabled": true,
-      "idle_ceiling_ms": 5000
+      "idle_ceiling_ms": 5000,
+      "still_limit_ms": 0
     }
   },
   "idle": {

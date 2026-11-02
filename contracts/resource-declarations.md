@@ -1398,6 +1398,21 @@ while a step waits for a page. No new member, code or record; any task schema.
   its own limit or the task's deadline; a page that appears during a long pause is seen at the
   next frame. `execution.capture.backoff_enabled` (default `true`) switches it off. Entry
   checks, observation windows, input rechecks, samples and a scan's settle keep their interval.
+- **The still limit** (STILL-1, since 0.12.37, [v012-register.md](v012-register.md) §1.249). With
+  `execution.capture.still_limit_ms` not 0 (default 0, off; [runtime-config.md](runtime-config.md),
+  "The `execution` section"), a page wait or a confirmation (a wait step's wait included) whose
+  frames stay unchanged by the same measure for that long, in wall time, ends at the first frame
+  at or past it, without its remaining time or extra rounds. Each counted frame is one the wait
+  does not accept: a page wait's frame of no page, a confirmation's frame of no page or of a page
+  that is no destination. A frame of the page the wait holds on (a wait step's own page, a wait
+  page within its `max_ms`) never counts; it, a changed frame, a handled shared interrupt page and
+  a failed observation restart the clock. The wait fails as its own limit fails it, with no new
+  code: `contained_task_page_unknown` for a page wait, and for a confirmation the operation's
+  failure decision (`contained_task_step_unconfirmed`, or `page_confirmation_failed` for an
+  operation without a retry policy), its other values unchanged, and `held_ms` (how long the frames
+  had stayed unchanged) and `limit_ms` (the limit in effect) on the outcome. A declared retry still
+  applies, and its confirmation starts a new clock. The waits of a `linear_steps` step, observation
+  windows and input rechecks have no still limit.
 
 ### Store update packages
 

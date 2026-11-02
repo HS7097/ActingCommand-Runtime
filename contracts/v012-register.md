@@ -5705,6 +5705,30 @@ composite's success no longer names `next.undo`. Nothing persisted changes.
 | UE-1 | `install undo`: `interface_edge`, then `rollback_gate_failed`, when a Runtime of the undone build has started; result member `edges` | install command | INST-UNDO-EDGE | INST-UNDO-EDGE | `since` 0.12.36; reused code and refusal words |
 | UE-2 | `next.undo` of a composite's success left out when the edges would refuse it | install command | INST-UNDO-EDGE | INST-UNDO-EDGE | `since` 0.12.36 |
 
+### 1.249 Slice STILL-1 (0.12.37): a wait on a still screen it does not accept ends at a configured limit (Workflow #407; Alice's 11-02 report of the 15–20 minute runs; design `rd-1031/check-speed/model-check.md` §2, §6, §7; coordinator work order `rd-1031/check-speed/brief-slices.md`)
+
+**Why.** Four failed manual runs measured in the design ended on a screen that neither moved nor
+was recognised, and each waited out its limit: three spent 654 to 896 s there, the fourth at least
+204 s. Neither a recognition filter nor proactive capture shortens that wall time. Off by default:
+with `still_limit_ms` 0 no clock is read, no frame is compared for it, and every wait runs as
+before. [resource-declarations.md](resource-declarations.md) ("Capture cadence") and
+[runtime-config.md](runtime-config.md) ("The `execution` section") are the contract. **No persisted
+ledger shape and no new code:** the existing keys `held_ms` and `limit_ms` become optional values
+of three existing codes. The threshold comes from design §8: stay off, or on per instance only,
+until the ledger's longest legitimate still stretch is known.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| ST1-1 | `execution.capture.still_limit_ms` (`0` or `30000..=1800000`, 0), and per instance `instance.<id>.execution.capture.still_limit_ms` (default the section's) | configuration keys (§5 row; `config.parameters.execution` row; **`actingd-config` revision 24**, shared with AGT-1a §1.245; no second bump) (`still_limit_key_range_and_default`) | STILL-1 | STILL-1 | `since` 0.12.37; settable, read at each step; a value between 1 and 29 999 is `out_of_range` in the whole-section check |
+| ST1-2 | the still limit of a page wait and of a page-graph confirmation, a wait step's wait included | rule (no shape change) (the other five `gate_still1` tests) | STILL-1 | STILL-1 | counted on the wall clock from the back-off's frames, independent of the back-off's switch and of the factor (#411 A43b's rule tracks nothing at the factor 1000); frames of a held page never count; `linear_steps` waits, observation windows and input rechecks take none |
+| ST1-3 | `held_ms`, `limit_ms` optional on `contained_task_step_unconfirmed`, `contained_task_page_unknown`, `page_confirmation_failed` | optional values of existing codes, present only when a wait ended on the limit | STILL-1 | STILL-1 | `since` 0.12.37; `task_timing`'s `elapsed_ms` and `limit_ms` stay the wait's own, so `elapsed_ms` may be below `limit_ms`; a confirmation that goes on to a retry or to `on_error` carries the values only on a failure that ends the run |
+| ST1-4 | `CaptureCadence.still_limit_ms` (`execution-kernel`) | Runtime-internal interface (memory only) | STILL-1 | STILL-1 | the host hands the value for the run's instance with each step's pacing; `CaptureCadence::UNCONFIGURED` is 0 |
+
+**Rollback** (to 0.12.36). Nothing persisted changes. 0.12.36 refuses at start and in `check-config`
+a configuration file that names the section's member or an entry's (the members deny unknown
+members), **so the operator first removes them**. An online override of either key needs nothing:
+0.12.36 has no such key and drops the row (`config_override_dropped`) without refusing the record.
+
 ### 1.244 Slice S4a-1, which is #357 DB-2 (0.12.37): a selection document reads a standard pack's shared table (Workflow #430 §8.2, §9 row S4a; model M-357a v1.1, §1.65 TB5–TB10; coordinator work order `rd-1031/brief-s4a-db2.md`)
 
 **What landed against §1.65.** The rows below; no ledger shape, no wire shape, no configuration key.
@@ -5838,7 +5862,7 @@ U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `Loa
 | `config.selection`, `config.catalog` | workbench | no (`config.` is re-observed) | D1b, MCP-9a |
 | `config.parameters.touch` (a section fact of the `config.parameters.<section>` family, five rows; §1.136 T12-4) | workbench | no (`config.` is re-observed) | #406 T12 |
 | `config.parameters.emulator_control` (a section fact of the `config.parameters.<section>` family, one row; §1.158 A50-5) | workbench | no (`config.` is re-observed) | #411 A50 |
-| `config.parameters.execution` (a section fact of the `config.parameters.<section>` family, three rows; §1.177 B1-2, B1-3) | workbench | no (`config.` is re-observed) | PERF-B1 |
+| `config.parameters.execution` (a section fact of the `config.parameters.<section>` family, four rows since STILL-1; §1.177 B1-2, B1-3; §1.249 ST1-1) | workbench | no (`config.` is re-observed) | PERF-B1 |
 | `host.pack_registry.*` | workbench | no (added to `tag.reobserve_prefixes`, UIM §6.5) | U-3 |
 | `display.frame_extent`, `display.rotation`, `display.orientation`, `display.aspect` (per instance, only for an instance bound to a device; [instance-fact-store.md](instance-fact-store.md#display-facts)) | instance | yes (every instance key) | DA-A |
 | `display.logical_extent` (one row `{width, height}`), `display.safe_area.reported` (one row `{left, top, right, bottom}`, device-frame pixels), `display.safe_area.declared` (the same row), `display.map` (one row, model 392 §8.1) (per instance; §1.25 X10) | instance | yes (every instance key) | DA-4 (`display.safe_area.declared`: a person or an agent) |
@@ -5873,6 +5897,7 @@ when it takes effect.
 | `performance.calibration.*` | PERF §10.4 (19 keys) | PERF §10.4 | P-c (built, §1.24) | P-a (0.12.x) |
 | `execution.defaults.*` | the kernel's fallback defaults (PERF §10.4 last notes) | today's constants | **not built:** P-c left it out (PR #748 deviation 5, "after SR-1"), and no later slice parses it, so it is not part of revision 5 (open for the coordinator, A8 report) | — (the kernel's fallbacks stay code constants in v0.12.0) |
 | `execution.capture.*` | `max_interval_ms`, `backoff_enabled`, `idle_ceiling_ms` (**`actingd-config` revision 11**) | 60 000 (`5000..=1800000`), `true`, 5 000 (`50..=60000`), settable (§1.177 B1-2, B1-3) | PERF-B1 | PERF-B1 (0.12.x) |
+| `execution.capture.still_limit_ms`, and per instance `instance.<id>.execution.capture.still_limit_ms` (**`actingd-config` revision 24**; §1.249) | the key itself | 0, off (`0` or `30000..=1800000`); an instance's default is the section's; settable | STILL-1 | STILL-1 (0.12.37) |
 | `scheduling.recognition.*` | `sample_timeout_retries` | 2 | SR-1 (built, §1.23) | SR-1 (v0.12.0) |
 | `scheduling.rerun.*`, `scheduling.cost_commit.*`, `scheduling.blackout.*`, `scheduling.feature_lock.*`, `scheduling.not_run.*` | SCHED §9 (17 keys) | SCHED §9 | SR-1 (built, §1.23) | SR-2b, SR-4a, SR-5a, SR-10 (0.12.x); `not_run.diagnose_rows` MCP-19b |
 | `scheduling.expected_runtime.*` and per instance `instance.<id>.scheduling.expected_runtime.*`; `scheduling.fact_refresh.expected_duration_ms` (`actingd-config` revision 11) | `enabled`, `runs`, `margin_ms`; the declared duration of a fact refresh read | `true`, 5 (`1..=16`), 300 000 (`0..=3600000`); 60 000 (`1..=1800000`); an instance's default is the section's (SCH-M §3.4) | ED-1 (built, §1.178) | ED-2 |

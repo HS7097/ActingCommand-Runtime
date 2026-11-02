@@ -99,7 +99,10 @@ pub use emulator_control::{
     RESTART_EXIT_WAIT_MAX_MS as EMULATOR_RESTART_EXIT_WAIT_MAX_MS,
     RESTART_EXIT_WAIT_MS as EMULATOR_RESTART_EXIT_WAIT_MS,
 };
-pub use execution::{CaptureCadenceConfig, ExecutionCaptureFile, ExecutionFile};
+pub use execution::{
+    CaptureCadenceConfig, ExecutionCaptureFile, ExecutionFile, InstanceExecutionCaptureFile,
+    InstanceExecutionFile,
+};
 pub use host::{HostFile, HostProcessConfig, ProcessPriorityLevel};
 pub use host_claims::{HostClaimsFile, RENEWAL_SLACK_MS, RUN_END_GRACE_MS};
 pub use idle::{IdleAction, IdleConfig, IdleFile};
@@ -201,6 +204,10 @@ mod gate_411_b37;
 // PERF-B1 (Workflow #407 B1): the `execution.capture` keys.
 #[cfg(test)]
 mod gate_407_b1;
+
+// STILL-1 (Workflow #407, register §1.249): the still limit's key, off by default and per instance.
+#[cfg(test)]
+mod gate_still1;
 
 // #422 LN-7c Q: the evidence-frame rule's age and the frame queries' pace and chunk.
 #[cfg(test)]

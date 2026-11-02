@@ -921,6 +921,7 @@ keeps its revision.
 | `execution.capture.max_interval_ms` | milliseconds `5000..=1800000`, the largest capture interval a package may declare (at least the bound every package was held to before PERF-B1; at most the longest wait a step may declare) | `60000` | yes |
 | `execution.capture.backoff_enabled` | boolean, whether a step's wait for a page lengthens its pause over unchanged frames | `true` | yes |
 | `execution.capture.idle_ceiling_ms` | milliseconds `50..=60000`, the longest pause the back-off reaches unless the declared interval is longer | `5000` | yes |
+| `execution.capture.still_limit_ms` (STILL-1, since 0.12.37) | milliseconds, `0` or `30000..=1800000`: how long a wait may see unchanged frames it does not accept before it ends; `0` is off | `0` | yes |
 
 A value outside its range is `config_value_invalid` (`out_of_range`, with `range_min` and
 `range_max`) at start, in `check-config` and in `ConfigureSettings`; a value of another type is
@@ -928,6 +929,19 @@ A value outside its range is `config_value_invalid` (`out_of_range`, with `range
 intervals stay where they were recorded (`EffectiveTaskTiming.capture_interval`, each operation's
 `interval`); a pause the back-off lengthened is the span of its wait boundary
 (`page_recognition_wait`, `postcondition_wait`).
+
+**The still limit** (STILL-1, Workflow #407, [v012-register.md](v012-register.md) §1.249;
+[resource-declarations.md](resource-declarations.md), "Capture cadence"). It is also per instance,
+`instance.<instance id>.execution.capture.still_limit_ms`, in the file the entry's
+`execution.capture.still_limit_ms` member, settable, default
+`section:execution.capture.still_limit_ms`. `EffectiveConfig::still_limit_ms(instance_id)` returns
+the value in effect, the instance's own or else the section's, and the host hands it to the kernel
+with each step's pacing, so an instruction takes effect at the next step. The key table holds
+`0..=1800000`; a value between `1` and `29999` is refused by the whole-section check as
+`config_value_invalid` (`out_of_range`, with `range_min` `30000` and `range_max` `1800000`), at
+start, in `check-config` and in `ConfigureSettings`. It holds in wall time, whatever the step's
+pacing factor is and whether the back-off is on. `actingd-config` revision 24 adds the section's
+member and the entry's; a file that names neither keeps its revision.
 
 ## The `install` section (Workflow #421 INST-1)
 

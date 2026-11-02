@@ -882,6 +882,12 @@ struct InstanceConfig {
     // that names it, because the entry denies unknown members.
     #[serde(default)]
     display_safe_area: Option<actingcommand_runtime_config::InstanceDisplaySafeAreaFile>,
+    /// STILL-1: the instance's own still limit (`instance.<id>.execution.capture.still_limit_ms`);
+    /// left out, the `execution` section's.
+    // Interface anchor `actingd-config` revision 24: a Runtime before STILL-1 refuses an entry
+    // that names it, because the entry denies unknown members.
+    #[serde(default)]
+    execution: Option<actingcommand_runtime_config::InstanceExecutionFile>,
     #[serde(default)]
     fixture_backend: Option<FixtureBackendConfigFile>,
     /// Workflow #398 RD-1b (model-398 v1.1 §3.1): the kind of device the instance drives,
@@ -1485,6 +1491,13 @@ impl ActingdConfigFile {
             members.insert(
                 actingcommand_runtime_config::display_safe_area::SECTION.to_owned(),
                 serde_json::to_value(&instance.display_safe_area)
+                    .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            );
+            // STILL-1: reported as `instance.<id>.execution.capture.still_limit_ms`; left out,
+            // the section's.
+            members.insert(
+                actingcommand_runtime_config::execution::SECTION.to_owned(),
+                serde_json::to_value(&instance.execution)
                     .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
             );
             // Workflow #398 RD-1b: `device.kind` is reported as `instance.<id>.device_kind`.

@@ -15550,6 +15550,8 @@
       "layer": "contract",
       "uncertain": false,
       "values": {
+        "held_ms": "optional",
+        "limit_ms": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -15559,7 +15561,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): contained task page unknown.",
+      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): contained task page unknown. STILL-1: held_ms and limit_ms are present when a page wait ended early on execution.capture.still_limit_ms: how long its frames had stayed unchanged, and the limit in effect.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
