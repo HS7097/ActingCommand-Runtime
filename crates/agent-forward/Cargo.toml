@@ -9,9 +9,9 @@ repository.workspace = true
 publish = false
 
 # Workflow #432: the Runtime's own forwarding to agent sessions. This is the only crate that names a
-# client. AGT-T1 adds the first transport (Claude Code) and the `actingctl agent-channel` commands;
-# its files adapted from HS7097/codex-goal-lifecycle keep that project's notice,
-# LICENSE-codex-goal-lifecycle.txt.
+# client. AGT-T1 adds the first transport (Claude Code) and the `actingctl agent-channel` commands,
+# AGT-T3 the DSH transport; their files adapted from HS7097/codex-goal-lifecycle keep that project's
+# notice, LICENSE-codex-goal-lifecycle.txt.
 [features]
 # `FakeForward`, for the tests of the crates that use this one.
 test-support = []
@@ -23,6 +23,8 @@ serde_json = { workspace = true }
 [target.'cfg(windows)'.dependencies]
 # AGT-T1: `probe_process`, a session owner's id and creation time.
 actingcommand-host-metrics = { workspace = true }
+# AGT-T3: a DSH message's two request ids, derived from its id.
+sha2 = { workspace = true }
 # AGT-T1: the overlapped pipe client, DPAPI, and the process ancestry and user checks.
 windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Pipes", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp"] }
 

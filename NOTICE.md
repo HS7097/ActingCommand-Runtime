@@ -10,11 +10,12 @@ No upstream automation source code has been copied into this repository as part 
 
 ### codex-goal-lifecycle
 
-- Source project: `HS7097/codex-goal-lifecycle`, commit `c9538cc5`, `scripts/runtime/src/bridge/claude.rs` and `scripts/runtime/src/bridge/security.rs`.
+- Source project: `HS7097/codex-goal-lifecycle`, commit `c9538cc5`, `scripts/runtime/src/bridge/claude.rs` and `scripts/runtime/src/bridge/security.rs` (AGT-T1); `scripts/runtime/src/dsh_notify.rs`, `scripts/runtime/src/dsh_notify.mjs` and `scripts/runtime/src/bridge/dsh.rs` (AGT-T3).
 - License: MIT, `Copyright (c) 2026 HS7097`.
 - License text: `crates/agent-forward/LICENSE-codex-goal-lifecycle.txt`; each adapted file says so at its top. Windows binaries print it with `actingctl agent-channel notice`.
-- Local destination: `crates/agent-forward/src/claude.rs`, `dpapi.rs`, `ancestor.rs`.
-- Purpose: the method of writing a short message to a Claude Code session's local inbox, the DPAPI protection of that session's token and the process ancestry and user checks (Workflow #432 AGT-T1; `contracts/agent-forward.md`). The sentence above about the split stays true: this was copied later, under this notice.
+- Local destination: `crates/agent-forward/src/claude.rs`, `dpapi.rs`, `ancestor.rs` (AGT-T1); `crates/agent-forward/src/dsh.rs` and `dsh_notify.mjs` (AGT-T3).
+- Modifications: the Rust is rewritten without async; `dsh_notify.mjs` is copied without its `observe` mode and is embedded in the binaries as the DSH helper they run with Node.
+- Purpose: the method of writing a short message to a Claude Code session's local inbox, the DPAPI protection of that session's token and the process ancestry and user checks (Workflow #432 AGT-T1); the method of submitting one prompt to a DSH session and reading it back from its durable log (AGT-T3; both in `contracts/agent-forward.md`). The sentence above about the split stays true: this was copied later, under this notice.
 
 ## Included external tool binaries
 
