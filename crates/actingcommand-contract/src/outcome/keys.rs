@@ -716,4 +716,7 @@ outcome_keys! {
     // ---- Workflow #429 R-4 (the edit-version tokens, contracts/runtime-interface.md "Workbench
     // request kinds"): the token now, in a refused `expected_version`; kept in codes mode. ----
     current_version: integer,
+    // ---- #419 SUB-LAG-1 (a lagged event subscription, contracts/runtime-interface.md "A
+    // subscriber that falls behind"): the cursor to subscribe again from; kept in codes mode. ----
+    resume_after_sequence: integer,
 }

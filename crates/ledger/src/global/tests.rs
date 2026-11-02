@@ -2247,12 +2247,13 @@ fn slow_subscription_receives_bounded_lag_failure() {
 
     let first = subscription
         .recv_timeout(Duration::from_secs(1))
-        .expect_err("lagged subscriber must receive fatal status");
+        .expect_err("lagged subscriber must receive its lag");
     let second = subscription
         .recv_timeout(Duration::from_secs(1))
         .expect_err("lag failure must remain terminal");
     assert_eq!(first.code(), "subscription_lagged");
-    assert!(first.is_fatal());
+    // #419 SUB-LAG-1: the lag ends only this subscription; it is not a ledger fault.
+    assert!(!first.is_fatal());
     assert_eq!(second, first);
 }
 
@@ -2920,6 +2921,10 @@ mod gate_l3_g5;
 // Workflow #382 L-3 G8 (LED-I3, LED-I8): the subscription contracts on the SQLite store.
 #[path = "tests/gate_l3_g8.rs"]
 mod gate_l3_g8;
+// #419 SUB-LAG-1: a lag ends only that subscription, never fatal; a writer failure is still
+// fatal to every subscriber.
+#[path = "tests/gate_sub_lag_1.rs"]
+mod gate_sub_lag_1;
 // Workflow #382 L-3 G9 (LED-I5): the formal open reads each row once and no material.
 #[path = "tests/gate_l3_g9.rs"]
 mod gate_l3_g9;

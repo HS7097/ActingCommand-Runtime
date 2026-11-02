@@ -2516,6 +2516,10 @@
     "current_version": {
       "type": "integer",
       "description": "The edit-version token now of what a refused request's expected_version named (fact_observation_version_conflict; Workflow #429 R-4, since 0.12.36): opaque and compared only for equality, the expected_version to send next; a denied receipt keeps it in codes mode."
+    },
+    "resume_after_sequence": {
+      "type": "integer",
+      "description": "The ledger sequence after which an event subscription that ended resumes: the after_sequence of the cursor to subscribe again with, every event at or before it having reached its client or been filtered out (subscription_lagged; #419 SUB-LAG-1, since 0.12.37); a failed receipt keeps it in codes mode."
     }
   },
   "vocabularies": {

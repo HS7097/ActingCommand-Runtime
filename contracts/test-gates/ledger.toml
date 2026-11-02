@@ -100,6 +100,14 @@ tests = [
 ]
 incident = ["#382 L-3"]
 
+# SUB-LAG-1 (#419; brief rd-1031/brief-sub-lag-1.md; register §1.261; since 0.12.37), on the SQLite and the Segment store: a lag ends only that subscription, `subscription_lagged` not fatal with `ledger_sequence` the event its live queue could not take, its resume cursor where it stood; the writer keeps committing and the other subscriber keeps receiving; a writer failure then reaches the other subscriber as fatal, and the lagged one keeps its lag
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_sub_lag_1::a_writer_failure_is_still_fatal_to_subscribers",
+]
+incident = ["#419 SUB-LAG-1"]
+
 # Query contracts on SQLite
 [[gate]]
 key = "8"

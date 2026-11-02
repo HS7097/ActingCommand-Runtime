@@ -5628,14 +5628,16 @@
         "runtime_code": "optional",
         "host_halted": "optional",
         "receipt_state": "optional",
-        "request_id": "optional"
+        "request_id": "optional",
+        "ledger_sequence": "optional",
+        "resume_after_sequence": "optional"
       },
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The ledger reports subscription lagged.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "An event subscription fell behind: its live queue was full when the writer delivered the event at ledger_sequence, so that subscription ended, and only it. Not fatal (#419 SUB-LAG-1, since 0.12.37): the ledger writer, every other subscriber and the Runtime go on. A SubscribeEvents request whose subscription lagged is answered failed with this code on top (runtime_code runtime_unavailable, host_halted false) and resume_after_sequence, the cursor to subscribe again from; the events the request had gathered are not answered and come again after that cursor.",
+      "common_causes": "The client read its subscription more slowly than the Runtime committed events, or a request's replay or Lab-view projection took long while many events were committed (more than the live queue holds, 64 by default).",
+      "handling": "Subscribe again with after_sequence = resume_after_sequence; nothing is lost. If it recurs, ask for fewer events per request."
     },
     "subscription_replay_invalid": {
       "category": "error",

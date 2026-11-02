@@ -509,6 +509,15 @@ exits between commit and notification. Live queues are bounded (default 64);
 lag reports `subscription_lagged` and removes that subscriber. Timeout, clean
 closure, dropped receivers and writer failure retain distinct existing behavior.
 
+A lag ends only that subscription (#419 SUB-LAG-1, register §1.261, since
+0.12.37). `subscription_lagged` is an error, never fatal (`is_fatal()` is false),
+with the value `ledger_sequence`, the event the subscriber's live queue could not
+take; it preempts any replay or buffered event and stays latched on that
+subscription. The writer keeps committing and every other subscriber keeps
+receiving. The subscriber subscribes again from its `resume_cursor()`, the last
+sequence it was delivered, and replays everything after it. A writer failure is
+still fatal to every subscriber, as before.
+
 All seven existing `ProjectionProfile` values retain their current redaction:
 Cli/Concise omit payload; Ui/Normal expose public payload; Lab/Verbose normally
 expose sanitized full payload, with Runtime lifecycle/provider startup using

@@ -5210,6 +5210,8 @@ const LEASE_ID_KEY: &str = "lease_id";
 const RETRY_AFTER_MS_KEY: &str = "retry_after_ms";
 /// Workflow #429 R-4: the edit-version token now, in a `fact_observation_version_conflict`.
 const CURRENT_VERSION_KEY: &str = "current_version";
+/// #419 SUB-LAG-1: the cursor to subscribe again from, in a `subscription_lagged`.
+const RESUME_AFTER_SEQUENCE_KEY: &str = "resume_after_sequence";
 
 impl RuntimeErrorProjection {
     pub const fn new(code: RuntimeErrorCode, fatal: bool) -> Self {
@@ -5322,9 +5324,19 @@ impl RuntimeErrorProjection {
 /// (Workflow #378 A4, coordinator ruling A-M1): the client's own fatal handling runs on it.
 /// Workflow #429 R-4 (register §1.216 R0C-4, §1.239; since 0.12.36): so does the top's
 /// `current_version`, which only `fact_observation_version_conflict` carries: the console reads
-/// the current edit-version token from the refusal itself.
+/// the current edit-version token from the refusal itself. #419 SUB-LAG-1 (register §1.261;
+/// since 0.12.37): so does the top's `resume_after_sequence`, which only `subscription_lagged`
+/// carries: the console subscribes again from it.
 fn receipt_envelope(outcome: &Outcome, detail: Detail) -> OutcomeEnvelope {
-    OutcomeEnvelope::keeping_top_values(outcome, detail, &[HOST_HALTED_KEY, CURRENT_VERSION_KEY])
+    OutcomeEnvelope::keeping_top_values(
+        outcome,
+        detail,
+        &[
+            HOST_HALTED_KEY,
+            CURRENT_VERSION_KEY,
+            RESUME_AFTER_SEQUENCE_KEY,
+        ],
+    )
 }
 
 /// The registered Runtime error code a received spelling names, if any.
