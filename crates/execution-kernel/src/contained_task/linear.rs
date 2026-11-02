@@ -754,7 +754,8 @@ impl TaskProgram {
             };
             // Workflow #407 LOAD-2 (design `model-loading.md` §5): a page the step's loading adds,
             // or its wait page, is none of its own pages: a frame of it never proves the input.
-            // LOAD-4: the step's waits evaluate them by these ids.
+            // LOAD-4: the step's waits evaluate them by these ids. LOAD-4b: nor a page of its run,
+            // checked once the runs are known.
             let mut loading_added = Vec::new();
             for page in operation.loading_added_pages() {
                 let page = resolve(page)?;
@@ -852,6 +853,27 @@ impl TaskProgram {
         }
         let runs = optional_runs(&mut steps)
             .map_err(|(reason, index)| invalid(reason, Some(&self.operations[index])))?;
+        let plan = LinearPlan {
+            target,
+            steps,
+            runs,
+        };
+        // Workflow #407 LOAD-4b (register §1.265): nor any other page the step's waits await, an
+        // optional page of its run (Workflow #339) or the run's skip target, in the largest
+        // candidate set of each step. Under `execution.loading.mode` `on` such a page is a
+        // transition frame on every frame it shows, never a candidate, so the wait could only
+        // spend its allowance and fail.
+        let none_handled = BTreeSet::new();
+        for (index, step) in plan.steps.iter().enumerate() {
+            let awaited = plan.candidates(index, &none_handled).pages;
+            if step
+                .loading_added
+                .iter()
+                .any(|page| awaited.contains(&page.as_str()))
+            {
+                return Err(invalid("loading_page", Some(&self.operations[index])));
+            }
+        }
         if let Some(declaration) = &self.scheduling_outcome {
             declaration.validate().map_err(|_| {
                 ContainedTaskError::new(
@@ -867,16 +889,12 @@ impl TaskProgram {
                 .iter()
                 .flat_map(|mapping| mapping.terminal_pages())
             {
-                if resolve(page.as_str())? != target {
+                if resolve(page.as_str())? != plan.target {
                     return Err(invalid("terminal_page", None));
                 }
             }
         }
-        Ok(LinearPlan {
-            target,
-            steps,
-            runs,
-        })
+        Ok(plan)
     }
 }
 

@@ -2445,6 +2445,16 @@ tests = [
 ]
 incident = ["#407 LOAD-4"]
 
+# LOAD-4b (Workflow #407, 0.12.38; register §1.265; contracts/linear-steps.md "Loading pages"): in a step plan a page loading.add names, or the wait page, that is any page the step's waits await is refused at admission with contained_task_linear_invalid, reason=loading_page and the operation: beside its from, destination and transition page (LOAD-2), an optional page its input may reach (the operation before a run of optional operations and the run's members) and the run's skip target; a page outside the step's waits is admitted, even one another step's waits await
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_load4::a_linear_loading_page_that_is_an_optional_candidate_is_refused",
+    "actingcommand-execution-kernel::lib::contained_task::gate_load4::a_linear_loading_page_that_is_the_skip_target_is_refused",
+    "actingcommand-execution-kernel::lib::contained_task::gate_load4::a_linear_loading_page_outside_the_waits_is_still_admitted",
+]
+incident = ["#407 LOAD-4b"]
+
 # ROUT-L RL-T (#386; contracts/standard-pack-schedule.md "Tools"): standard-pack compose receives every --instance <alias>=<game>/<server> given after its words (the command's own, not the global --instance), so two bound instances of one game and server compose one <id>@<alias> copy of the rule and of each item per instance, each in its instance's scope
 [[gate]]
 coverage = "Y"

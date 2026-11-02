@@ -321,8 +321,8 @@ impl TaskProgram {
     /// - an `add` entry that is not one page of the package or repeats one, and in a page graph
     ///   one that is the operation's `from` page, one of its destinations or an error page
     ///   (`loading_page_invalid`): a click with no effect would read as loading. A step plan
-    ///   refuses its own pages there with `contained_task_linear_invalid`, `reason=loading_page`
-    ///   ([`TaskProgram::validate_linear`]);
+    ///   refuses its own pages there, and (LOAD-4b) every page its waits await, with
+    ///   `contained_task_linear_invalid`, `reason=loading_page` ([`TaskProgram::validate_linear`]);
     /// - in a step plan, which takes a wait page from LOAD-2 on, the wait page's rules of a page
     ///   graph: one page of the package (`wait_page_invalid`), its `max_ms` 1..=1800000
     ///   (`wait_max_invalid`);
