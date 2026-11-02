@@ -561,6 +561,7 @@ impl PreparedContainedTask {
                                 limit_ms: observed_ms(limit),
                                 required_delay_ms: None,
                             }),
+                            still_limit: None,
                         });
                     }
                     limit
@@ -635,6 +636,7 @@ impl PreparedContainedTask {
                             last_frame_page,
                             hit_error_page: true,
                             timing_failure: None,
+                            still_limit: None,
                         });
                     }
                     if destinations == 1 {

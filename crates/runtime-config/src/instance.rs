@@ -34,11 +34,14 @@
 //! `display_safe_area.model`, the device model the instance declares (the entry's
 //! `display_safe_area.model` member), default the `display_safe_area` section's key, settable.
 //! SS-4 (register §1.231) adds `scheduling.no_progress.enabled`, in the entry's `scheduling`
-//! member, default the `scheduling` section's key of the same name, settable.
+//! member, default the `scheduling` section's key of the same name, settable. STILL-1 (register
+//! §1.249) adds `execution.capture.still_limit_ms`, in the entry's `execution` member, default the
+//! `execution` section's key of the same name, settable.
 
 use crate::codes::ConfigValueProblem;
 use crate::display_safe_area;
 use crate::effective::ConfigFailure;
+use crate::execution;
 use crate::idle;
 use crate::recovery_ladder;
 use crate::scheduling::{
@@ -215,6 +218,9 @@ pub(crate) static ROWS: &[KeyRow] = &[
         reader: "SS-4",
         since: "0.12.34",
     },
+    // STILL-1 (register §1.249): the instance's own still limit; the section's value in effect is
+    // its default.
+    execution::INSTANCE_STILL_LIMIT_ROW,
 ];
 
 /// SCH-M ED-1: one instance's expected-duration member, named as the section-level key whose
@@ -264,6 +270,11 @@ pub(crate) fn check_instance(
 ) -> Result<(), ConfigFailure> {
     let read = |key: &str| value(key);
     scheduling::instance_blackouts(&read, instance, index)?;
+    // STILL-1: the instance's own still limit is 0 or within the on range.
+    let still_limit_key = instance_key(instance, execution::CAPTURE_STILL_LIMIT_MS);
+    if value(&still_limit_key).is_some() {
+        execution::still_limit_ms(&read, &still_limit_key)?;
+    }
     // IDLE-1: the instance's idle keys in effect, checked whole; an instance whose action in
     // effect is `stop_emulator` is one whose emulator the Runtime starts (`start_emulator`), since
     // its wake starts the emulator through that configured start.

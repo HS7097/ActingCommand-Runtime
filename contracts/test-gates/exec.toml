@@ -2301,6 +2301,18 @@ tests = [
 ]
 incident = ["#407 B1"]
 
+# STILL-1 (Workflow #407, 0.12.37; register §1.249 ST1-2, ST1-3; design rd-1031/check-speed/model-check.md §2, §6, §7): with execution.capture.still_limit_ms not 0, a page wait or a confirmation whose frames stay unchanged for it, none of them what the wait accepts, ends there with its own code and failure path, held_ms and limit_ms on the outcome. 0 keeps today's wait; a moved frame restarts the clock; a frame of the page the wait holds on never counts; the clock holds at the factor 1000, at another factor and with the back-off off.
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_still1::still_limit_off_keeps_todays_wait",
+    "actingcommand-execution-kernel::lib::contained_task::gate_still1::still_limit_ends_a_confirmation_on_a_still_unknown_screen",
+    "actingcommand-execution-kernel::lib::contained_task::gate_still1::moved_frame_restarts_the_still_clock",
+    "actingcommand-execution-kernel::lib::contained_task::gate_still1::held_page_is_never_counted_as_still",
+    "actingcommand-execution-kernel::lib::contained_task::gate_still1::still_limit_applies_at_factor_1000",
+]
+incident = ["#407 STILL-1"]
+
 # ROUT-L RL-T (#386; contracts/standard-pack-schedule.md "Tools"): standard-pack compose receives every --instance <alias>=<game>/<server> given after its words (the command's own, not the global --instance), so two bound instances of one game and server compose one <id>@<alias> copy of the rule and of each item per instance, each in its instance's scope
 [[gate]]
 coverage = "Y"
