@@ -18008,6 +18008,20 @@
       "description": "A completed receipt of a ReleasePlayerHold request: the hold is lifted. Workflow #378 A4: one success code per request kind (Workflow #429 R-7a adds the kind; R-7b first completes it).",
       "common_causes": "The request succeeded.",
       "handling": "Nothing to do; the result says what came next."
+    },
+    "request_routine_summary_completed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.38",
+      "description": "A completed receipt of a RoutineSummary request: the page of the routine summary's health statistics, from the Runtime's memory. Workflow #378 A4: one success code per request kind (Workflow #429 R-0 adds the kind; R-12 first completes it).",
+      "common_causes": "The request succeeded.",
+      "handling": "Nothing to do; the result carries the page."
     }
   },
   "locations": {

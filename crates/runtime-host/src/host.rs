@@ -246,6 +246,9 @@ mod resource_close;
 // Workflow #403: an unconfirmed close of one instance's resources fences only that instance.
 mod resource_fence;
 mod resource_targets;
+// Workflow #429 R-12: the routine summary, counted as each policy run and direct run settles
+// (memory only).
+mod routine_summary;
 // SCH-M ED-2: the run-duration samples at settlement and the expected duration E in the
 // evaluation's task states.
 mod run_duration;
@@ -1945,6 +1948,7 @@ impl RuntimeHost {
             )),
             contained_runs: Mutex::new(BTreeMap::new()),
             instance_activities: instance_activity::InstanceActivities::default(),
+            routine_summary: routine_summary::RoutineSummaryShared::new(started_at_unix_ms),
             scheduling_pause: Mutex::new(SchedulingPauseTable::default()),
             scheduling_pause_persist_gate: Mutex::new(()),
             startup_packages: OnceLock::new(),
@@ -5668,6 +5672,9 @@ struct HostShared {
     // Workflow #429 R-0b (register §1.238): what each instance does now, as the status shows it
     // (memory only; never read from the ledger). A leaf lock.
     instance_activities: instance_activity::InstanceActivities,
+    // Workflow #429 R-12 (register §1.264): the routine summary's health statistics of this
+    // owner epoch (memory only; never read from or written to the ledger). A leaf lock.
+    routine_summary: routine_summary::RoutineSummaryShared,
     // Workflow #191 ps1: the operator's scheduling pauses (no expiry; since Workflow #361 B1
     // persisted as `host.scheduling_pause`).
     scheduling_pause: Mutex<SchedulingPauseTable>,

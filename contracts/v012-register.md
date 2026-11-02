@@ -6327,6 +6327,69 @@ with no limit, giving it an allowance of zero in a page graph.
 
 **Tests** (gate rows in `host.toml`, "AGT-2b"): the six of the work order. Adapted, as the requirement changes: `agent_wake_refuses_bad_kinds_codes_and_unknown_aliases` (`apps/actingd/src/config/gate_agt_1a.rs`) passed one rule naming every kind of the closed list with `daily_cap` 8, a shape a `daily_summary` rule may no longer take; it now passes the other kinds in that rule and a `daily_summary` rule of its own shape. `body.rs`' test input gains `summary: None`; `component_interfaces.rs`' `V0120` says `actingd-config` [5, 25].
 
+### 1.264 Slice R-12 (0.12.38): `RoutineSummary`, the routine summary's health statistics, and their CLI and MCP reads (Workflow #429 A.2 R-12, board row 「有界统计、覆盖起点、epoch、取消分类、增量读取」; the shapes are R-0's, §1.213 R0-1, R0-2; coordinator work order `rd-1031/agt/brief-r12.md`)
+
+[runtime-interface.md](runtime-interface.md) ("Workbench request kinds", the row `RoutineSummary`;
+the actingctl and MCP tables) and [agent-wake.md](agent-wake.md) ("The daily summary") are the
+contract. The number 1.264 is the coordinator's. No wire shape, configuration key or ledger shape
+is new; one outcome code is (R12-2).
+
+**What.** The host keeps, in memory only and per owner epoch, the health statistics of each policy
+run and direct run of an instance as it settles it: by the task its run record names
+(`PackageAdmitted.task_label`), a success, a failure under its terminal's outcome code, or an
+interruption for `contained_task_cancelled` (a direct run's client cancel, and a scheduled run's
+failure terminal that carries that code), in the hour and the calendar day of the host's local
+clock that hold its settle time. Each bucket opens from the host's local offset then; a day bucket
+runs from local midnight to the next, so a day across a daylight saving change lasts 23 or 25 hours.
+Per instance the last 48 hour buckets and 14 day buckets are kept; an older one is dropped and the
+instance's coverage of that width then starts at the oldest kept bucket (before, at the Runtime's
+start). One revision counter per epoch, raised by every counted run; a bucket carries the revision
+of its last change; `since_revision` answers only the buckets changed after it. `RoutineSummary`
+answers from this memory, nothing read from or written to the ledger; the daily summary's function
+(AGT-2b, §1.263) now returns the real page and keeps only the buckets that overlap the summary's own
+local day.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| R12-1 | `RoutineSummary {instance?, granularity, since_revision?}` → `RoutineSummary {summary}` | behaviour of an R-0 kind (no shape change; `runtime-client` stays [3, 5]) | R-12 | the host, as it settles a policy run or a direct run | memory only (`crates/runtime-host/src/routine_summary.rs`, a leaf lock in the host); host runs (a startup package, a ladder's rung) are not counted; a run whose end wrote no terminal (refused before it, or a failure the Runtime does not survive) is not counted; `instance` names a bound instance, an unknown alias is Denied `instance_unknown` at `resolve_runtime_instance`, as `ResourceTargetView` refuses it; without it every bound instance, by alias, each listed with its coverage also when no bucket changed after the cursor; a restart begins the memory, its revisions and every coverage again; UTC for an instant the system cannot convert |
+| R12-2 | `request_routine_summary_completed` | new success code (contract, `ReceiptCode`) | R-12 | the host | `since` 0.12.38; Workflow #378 A4's one success code per completing kind (R-0: "each gets its success code with its behaviour") |
+| R12-3 | `actingctl routine-summary (--hour \| --day) [--instance <selector>] [--since <revision>]` | new CLI read | R-12 | — | the line is the page's members with `request_routine_summary_completed`, as `perf-preset` and `remedy` print the completed receipt's code; no new actingctl code |
+| R12-4 | MCP `ac_routine_summary {granularity, instance?, since?}` | new observer tool (general read until U-3) | R-12 | — | `apps/actingctl/src/mcp/observer.rs`; the CLI's read; an answer past the output budget is exported with `answer_exported`, as `ac_remedy_get` |
+| R12-5 | the daily summary's `routine_summary_page` | program state (body file), AGT2B-3 unchanged in shape | R-12 | the worker | only the buckets of the page by day that overlap the rule's local day `[midnight, next midnight)` of its own offset; `owner_epoch`, `revision` and each coverage as the read answered them |
+
+**Decisions within the work order.** (a) The task a run counts under is `PackageAdmitted.task_label`
+(the package's entry task id), which every policy run and direct run records; a policy run's
+`catalog_task_id` is not on a direct run's record. (b) The code of a failure is the terminal's: the
+task failure a cleanup failure replaced keeps its own code. (c) A direct run's cancel carries its
+reason's code (`contained_task_cancelled`, `contained_task_deadline_exceeded`,
+`contained_task_paused`), so by the decided rule a deadline and a pause's drain timeout count as
+failures under their codes, as do a scheduled run's blackout stop and pacing yield
+(`blackout_run_stopped`, `perf_run_yielded`, `perf_hold_expired`); only `contained_task_cancelled`
+is an interruption. (d) The 48 and 14 are the contract's bounds, not configuration keys. (e) The
+CLI and MCP names follow `perf-preset`/`ac_perf_preset` and `schedule`/`ac_schedule`:
+`routine-summary`, `ac_routine_summary`; MCP's `granularity` stands for `--hour | --day` and
+`since` for `--since`.
+
+**Interface.** `runtime-client` stays [3, 5], `actingd-config` [5, 25] (AGT-2b), `ledger` and
+`runtime-outcomes` [1, 1] do not move: the read's shapes are R-0's, and a success code joins the
+catalog within its revision. The MCP tool list is not versioned in
+[component-interfaces.md](component-interfaces.md); the build's observer tier gains one tool.
+
+**What changes live.** `RoutineSummary` answers its page, from empty at the start; a daily summary
+rule's body carries real numbers. Nothing is recorded or persisted; no run is changed.
+
+**Rollback** (to 0.12.37). Nothing persisted changes. 0.12.37 refuses the read `not_implemented`
+again, and a daily summary's entries carry that refusal; `actingctl routine-summary` and
+`ac_routine_summary` are not in 0.12.37.
+
+**Tests** (gate rows in `host.toml` and `apps.toml`, "R-12"): the nine of the work order, and
+`the_summary_body_counts_the_routine_runs_of_its_own_day` (`gate_agt_2b`, the AGT-2b body with real
+numbers; added beside `the_summary_body_holds_the_routine_summary_and_the_days_wakes`, which is
+unchanged). Adapted, as the requirement changes: `r0_each_workbench_kind_without_behaviour_answers_not_implemented_with_no_effect`
+(`gate_429_r0`) no longer sends `RoutineSummary`, which has its behaviour; and
+`a4_each_request_kind_that_completes_has_its_own_success_code` (`actingcommand-contract`) no longer
+lists `RoutineSummary` among the kinds that never complete.
+
 ### 1.265 Slice LOAD-4b (0.12.38): a step plan's loading page may not be a page its waits await (Workflow #407; the gap LOAD-4 found, §1.262; coordinator work order `rd-1031/check-speed/brief-load-4b.md`)
 
 [linear-steps.md](linear-steps.md) (the admission row `loading_page`, "Loading pages") and

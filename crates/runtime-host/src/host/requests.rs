@@ -736,8 +736,8 @@ impl HostShared {
                 Err(not_implemented(HostLocation::UpgradeStateStatus))
             }
             // Workflow #429 R-0 (register §1.213): the player workbench's kinds have their wire
-            // shapes; R-5, R-6, R-8, R-13c and R-12 add the behaviour. Until then each is refused
-            // and records nothing.
+            // shapes; R-5, R-6, R-8 and R-13c add the behaviour. Until then each is refused and
+            // records nothing.
             RuntimeOperation::RunInstanceTask { .. } => {
                 Err(not_implemented(HostLocation::RunInstanceTask))
             }
@@ -750,8 +750,10 @@ impl HostShared {
             RuntimeOperation::EditResourceTarget { .. } => {
                 Err(not_implemented(HostLocation::EditResourceTarget))
             }
-            // Workflow #432 AGT-2b: the daily summary reads each instance through the same
-            // function, so its body holds what this read answers.
+            // Workflow #429 R-12 (register §1.264): the routine summary from the host's memory;
+            // an unknown instance is Denied `instance_unknown` and records nothing. Workflow #432
+            // AGT-2b: the daily summary reads each instance through the same function, so its body
+            // holds what this read answers.
             RuntimeOperation::RoutineSummary {
                 instance,
                 granularity,
@@ -802,21 +804,6 @@ fn not_implemented_error(operation: impl Into<Location>) -> RuntimeHostError {
         operation,
         RuntimeErrorCode::InvalidRequest,
     )
-}
-
-impl HostShared {
-    /// What `RoutineSummary` answers (Workflow #429 R-12): health statistics from the host's
-    /// memory, nothing read from or written to the ledger. Until R-12 it is refused
-    /// `not_implemented` (`operation` `routine_summary`) and records nothing. The read and the
-    /// daily summary of the Runtime's messages (Workflow #432 AGT-2b) both answer from here.
-    pub(super) fn routine_summary(
-        &self,
-        _instance: Option<&str>,
-        _granularity: actingcommand_contract::RoutineSummaryGranularity,
-        _since_revision: Option<u64>,
-    ) -> RuntimeHostResult<actingcommand_contract::RoutineSummaryPage> {
-        Err(not_implemented_error(HostLocation::RoutineSummary))
-    }
 }
 
 pub(super) struct RequestFailure {

@@ -196,6 +196,9 @@ crate::outcome_codes! {
         // completed.
         AcquirePlayerHoldCompleted => "request_acquire_player_hold_completed": success / none,
         ReleasePlayerHoldCompleted => "request_release_player_hold_completed": success / none,
+        // Workflow #429 R-12 (register §1.264): the routine summary's read first answers
+        // completed.
+        RoutineSummaryCompleted => "request_routine_summary_completed": success / none,
     }
 }
 

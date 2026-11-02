@@ -504,8 +504,9 @@ impl RuntimeOperationKind {
             Self::RunInstanceTask
             | Self::StopInstanceRun
             | Self::EditPackSchedule
-            | Self::EditResourceTarget
-            | Self::RoutineSummary => None,
+            | Self::EditResourceTarget => None,
+            // Workflow #429 R-12 (register §1.264).
+            Self::RoutineSummary => Some(ReceiptCode::RoutineSummaryCompleted.code()),
             // Workflow #429 R-0c: its success code comes with R-8.
             Self::PackScheduleView => None,
             // Workflow #429 R-7a: registered with the shapes; R-7b first answers completed.

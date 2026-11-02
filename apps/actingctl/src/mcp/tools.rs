@@ -712,6 +712,21 @@ pub(super) static TOOLS: &[ToolDef] = &[
         run: super::schedule::schedule,
     },
     // ---- Workflow #386 SR-6b, MCP-19b (end) ----
+    // ---- Workflow #429 R-12 (begin): `ac_routine_summary` ↔ `actingctl routine-summary`; a
+    // general read (observer until U-3) from the Runtime's memory that records nothing. ----
+    ToolDef {
+        name: "ac_routine_summary",
+        title: "Routine health statistics",
+        tier: Tier::Observer,
+        description: observer::ROUTINE_SUMMARY_DESCRIPTION,
+        read_only: true,
+        destructive: false,
+        idempotent: true,
+        input_schema: observer::routine_summary_input,
+        result_schema: observer::routine_summary_result,
+        run: observer::routine_summary,
+    },
+    // ---- Workflow #429 R-12 (end) ----
     ToolDef {
         name: "ac_pack_check",
         title: "Check a task package",
