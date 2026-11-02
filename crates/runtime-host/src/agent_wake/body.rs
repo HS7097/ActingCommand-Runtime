@@ -27,8 +27,6 @@ pub(crate) struct BodyTrigger<'a> {
     pub(crate) correlation_id: Option<&'a str>,
     pub(crate) request_id: Option<&'a str>,
     pub(crate) run_id: Option<&'a str>,
-    pub(crate) code: &'a str,
-    pub(crate) category: &'a str,
     pub(crate) outcome: &'a Outcome,
 }
 
@@ -80,13 +78,15 @@ fn trigger_value(trigger: &BodyTrigger<'_>) -> Value {
     optional(&mut members, "correlation_id", trigger.correlation_id);
     optional(&mut members, "request_id", trigger.request_id);
     optional(&mut members, "run_id", trigger.run_id);
-    members.insert("code".to_owned(), Value::from(trigger.code));
-    members.insert("category".to_owned(), Value::from(trigger.category));
     // An envelope that does not serialize is written as no value at all, never as its full form.
-    members.insert(
-        "outcome".to_owned(),
-        serde_json::to_value(trigger.outcome.envelope(Detail::Codes)).unwrap_or(Value::Null),
-    );
+    let outcome =
+        serde_json::to_value(trigger.outcome.envelope(Detail::Codes)).unwrap_or(Value::Null);
+    // The code and category a reader looks at first are the envelope's own.
+    for name in ["code", "category"] {
+        let value = outcome.get(name).cloned().unwrap_or(Value::Null);
+        members.insert(name.to_owned(), value);
+    }
+    members.insert("outcome".to_owned(), outcome);
     Value::Object(members)
 }
 
@@ -195,8 +195,6 @@ mod tests {
                 correlation_id: Some("correlation-neutral"),
                 request_id: None,
                 run_id: None,
-                code: "config_value_invalid",
-                category: "error",
                 outcome,
             }),
             related: vec![json!({"kind": "run_failed", "event_id": "event-1", "code": "x"}); 8],
@@ -263,6 +261,8 @@ mod tests {
         let written = &value["trigger"]["outcome"];
         assert_eq!(written["code"], json!("config_value_invalid"));
         assert_eq!(written["detail"], json!("codes"));
+        assert_eq!(value["trigger"]["code"], json!("config_value_invalid"));
+        assert_eq!(value["trigger"]["category"], json!("error"));
         for held_back in [
             "adb_host",
             "adb_port",
