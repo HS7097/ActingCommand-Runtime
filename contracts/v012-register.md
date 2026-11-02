@@ -6307,6 +6307,36 @@ pack without a copy is refused from 0.12.38; no pack declares `loading` today.
 their shape. 0.12.37 runs a step plan's waits as without loading pages and admits a loading set
 with no limit, giving it an allowance of zero in a page graph.
 
+### 1.265 Slice LOAD-4b (0.12.38): a step plan's loading page may not be a page its waits await (Workflow #407; the gap LOAD-4 found, §1.262; coordinator work order `rd-1031/check-speed/brief-load-4b.md`)
+
+[linear-steps.md](linear-steps.md) (the admission row `loading_page`, "Loading pages") and
+[resource-declarations.md](resource-declarations.md) (the `loading.add[]` row of "Operation-level
+loading") are the contract. The number 1.265 is the coordinator's. No configuration key, ledger
+shape, wire shape or outcome code is new.
+
+**What.** LOAD-2 refuses a page a step's `loading.add` names, or its wait page, when it is the
+step's `from`, destination or `page` transition's page. It did not refuse one that is an optional
+page the step's input may reach (Workflow #339) or the run's skip target, though the step's waits
+await those too. Under `execution.loading.mode` `on` such a page is a transition frame on every
+frame it shows and never a candidate (§1.262), so its wait could only spend the allowance and fail.
+`TaskProgram::validate_linear` now refuses every added page and wait page that is in the step's
+largest candidate set (`LinearPlan::candidates` with no member of the run handled, the set its
+waits and its retry decision evaluate), once the runs are known, with LOAD-2's refusal.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| LD4B-1 | `contained_task_linear_invalid`, `reason=loading_page`, `operation=<id>`: an added page or the wait page that is an optional page the step's input may reach or its run's skip target | stricter admission rule (existing code and reason) | LOAD-4b | LOAD-4b | `since` 0.12.38; for the operation before a run and the run's members; `a_linear_loading_page_that_is_an_optional_candidate_is_refused`, `a_linear_loading_page_that_is_the_skip_target_is_refused`, `a_linear_loading_page_outside_the_waits_is_still_admitted` (`gate_load4`); a page graph is unchanged, LOAD-2 already refusing its `from`, destinations and error pages |
+
+**Interface.** `package` stays [3, 6], no step for 0.12.38 ([component-interfaces.md](component-interfaces.md)):
+a stricter refusal of an admitted shape that no released pack uses. `actingd-config` and `ledger`
+do not change.
+
+**What changes live.** Nothing: no released pack uses the refused shape (above), and a step plan's
+waits run loading pages only from 0.12.38, under `on`.
+
+**Rollback** (to 0.12.37). Nothing persisted changes. 0.12.37 admits such a step and does not run
+its loading pages.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

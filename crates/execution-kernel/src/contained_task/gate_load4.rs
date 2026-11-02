@@ -17,6 +17,13 @@
 // - An operation whose loading set is not empty while no limit is named for it (no
 //   `loading.max_ms`, no wait page, no loading copy in the package) is refused at admission,
 //   `contained_task_program_invalid` with `loading_max_missing`, in a page graph and a step plan.
+// - LOAD-4b (register §1.265; coordinator brief `brief-load-4b.md`): in a step plan a page
+//   `loading.add` names, or the wait page, is no page the step's waits await. Beside its `from`,
+//   destination and transition page (LOAD-2), with a run of optional operations (Workflow #339)
+//   that is every optional page its input may reach and the run's skip target: under `on` such a
+//   page would be a transition frame on every frame it shows, never a candidate. It is refused at
+//   admission, `contained_task_linear_invalid` with `reason=loading_page` and the operation; a page
+//   outside the step's waits is admitted.
 //
 // Every expected value comes from those lines and the package values below, never from the code.
 // The runs play scripted frames on the scripted clock (EXEC-I4) at the factor 1000: the device
@@ -46,6 +53,7 @@ const CONFIRMATION_FAILED: &str = ExecutionKernelCode::PageConfirmationFailed.as
 const ENTRY_UNMATCHED: &str = ExecutionKernelCode::ContainedTaskLinearEntryUnmatched.as_str();
 const INTERMEDIATE_UNOBSERVED: &str =
     ExecutionKernelCode::ContainedTaskLinearIntermediateUnobserved.as_str();
+const LINEAR_INVALID: &str = ExecutionKernelCode::ContainedTaskLinearInvalid.as_str();
 const PROGRAM_INVALID: &str = ExecutionKernelCode::ContainedTaskProgramInvalid.as_str();
 
 const CONFIRMATION_MS: u64 = 1_000;
@@ -877,6 +885,149 @@ fn a_linear_loading_set_without_any_limit_is_refused_at_admission() {
     admitted(
         "the copy's max_ms",
         &step_plan(json!({"loading": {"add": ["page_d"]}}), json!({})),
+        mode,
+        true,
+    );
+}
+
+// LOAD-4b: `operation` marked optional, with a settle of 500 ms.
+fn optional(mut operation: Value) -> Value {
+    operation["optional"] = json!({"settle_ms": 500});
+    operation
+}
+
+// The step plan `page_a` -> `page_b` -> `page_c` with `op_2` optional, its two taps' `expect_after`
+// with `first` and `second`: after `op_1` the candidates are the optional page `page_b` and the
+// skip target `page_c`.
+fn optional_step_plan(first: Value, second: Value) -> Value {
+    let mut plan = step_plan(first, second);
+    plan["operations"][1] = optional(plan["operations"][1].clone());
+    plan
+}
+
+// The step plan `page_a` -> `page_b` -> `page_c` -> `page_d`: `op_1`, then the run of the optional
+// `op_2` and `op_3`, whose skip target is `page_d`; the taps' `expect_after` with `first`, `second`
+// and `third`. The candidates after `op_1` are `page_b`, `page_c` and `page_d`; after `op_2`,
+// `page_c` and `page_d`; after `op_3`, reached with `op_2` skipped, `page_b` and `page_d`.
+fn run_plan(first: Value, second: Value, third: Value) -> Value {
+    let mut plan = admitted_task(
+        vec![
+            admitted_tap("op_1", "page_a", "page_b", first),
+            optional(admitted_tap("op_2", "page_b", "page_c", second)),
+            optional(admitted_tap("op_3", "page_c", "page_d", third)),
+        ],
+        "page_d",
+    );
+    plan["max_steps"] = json!(3);
+    plan
+}
+
+// `task`, a step plan in a package with a loading copy, is refused `contained_task_linear_invalid`
+// with `reason=loading_page` naming `operation`.
+fn refused_as_loading_page(case: &str, task: &Value, operation: &str) {
+    let error = match admit(task, "linear_steps", true) {
+        Ok(_) => panic!("{case}: admitted"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code().as_str(), LINEAR_INVALID, "{case}: {error}");
+    let operation = format!("operation={operation}");
+    let tokens = error
+        .detail()
+        .map(|detail| detail.split(' ').collect::<Vec<_>>())
+        .unwrap_or_default();
+    assert!(
+        tokens.contains(&"reason=loading_page") && tokens.contains(&operation.as_str()),
+        "{case}: {error}"
+    );
+}
+
+// An optional page a step's input may reach, other than its destination, added or as the wait page:
+// `page_c` and `page_d` after `op_1` of the run plan, and `page_b`, `op_2`'s page, after `op_3`.
+#[test]
+fn a_linear_loading_page_that_is_an_optional_candidate_is_refused() {
+    refused_as_loading_page(
+        "the run's second optional page added on the step before the run",
+        &run_plan(
+            json!({"loading": {"add": ["page_c"]}}),
+            json!({}),
+            json!({}),
+        ),
+        "op_1",
+    );
+    refused_as_loading_page(
+        "the run's second optional page as the wait page of the step before the run",
+        &run_plan(
+            json!({"wait_page": wait_page("page_c")}),
+            json!({}),
+            json!({}),
+        ),
+        "op_1",
+    );
+    refused_as_loading_page(
+        "the skipped member's page added on the run's last member",
+        &run_plan(
+            json!({}),
+            json!({}),
+            json!({"loading": {"add": ["page_b"]}}),
+        ),
+        "op_3",
+    );
+}
+
+// A run's skip target on a step whose input may reach it and whose destination it is not: `page_c`
+// on `op_1` of the optional step plan, added or as the wait page, and `page_d` on `op_2` of the run
+// plan.
+#[test]
+fn a_linear_loading_page_that_is_the_skip_target_is_refused() {
+    refused_as_loading_page(
+        "the skip target added on the step before the run",
+        &optional_step_plan(json!({"loading": {"add": ["page_c"]}}), json!({})),
+        "op_1",
+    );
+    refused_as_loading_page(
+        "the skip target as the wait page of the step before the run",
+        &optional_step_plan(json!({"wait_page": wait_page("page_c")}), json!({})),
+        "op_1",
+    );
+    refused_as_loading_page(
+        "the skip target added on the run's first member",
+        &run_plan(
+            json!({}),
+            json!({"loading": {"add": ["page_d"]}}),
+            json!({}),
+        ),
+        "op_2",
+    );
+}
+
+// A page no wait of its step awaits is admitted, though another step's waits await it: `page_d` on
+// `op_1` and `page_a` on `op_2` of the optional step plan; `page_a` on `op_2` and `op_3` of the run
+// plan; and without a run, `op_2`'s destination `page_c` on `op_1` of the step plan.
+#[test]
+fn a_linear_loading_page_outside_the_waits_is_still_admitted() {
+    let mode = "linear_steps";
+    admitted(
+        "pages outside the waits of a step plan with one optional step",
+        &optional_step_plan(
+            json!({"loading": {"add": ["page_d"]}}),
+            json!({"wait_page": wait_page("page_a")}),
+        ),
+        mode,
+        true,
+    );
+    admitted(
+        "pages outside the waits of the run's members",
+        &run_plan(
+            json!({}),
+            json!({"loading": {"add": ["page_a"]}}),
+            json!({"wait_page": wait_page("page_a")}),
+        ),
+        mode,
+        true,
+    );
+    admitted(
+        "the next step's destination without a run",
+        &step_plan(json!({"loading": {"add": ["page_c"]}}), json!({})),
         mode,
         true,
     );

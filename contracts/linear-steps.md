@@ -72,7 +72,7 @@ one operation is at fault; an existing check keeps its existing code.
 | no operation declares a `when` or an `on_guard_refused`, page-graph candidate operations (Workflow #390 EXEC-1, `resource-declarations.md`) | the field name |
 | no operation declares `max_runs` or `on_max_runs`, a page-graph per-run cap (Workflow #411 B16 part 1, `resource-declarations.md`) | `max_runs` |
 | no operation is a `wait` step, a page-graph declaration (Workflow #411 B36, B19, `resource-declarations.md`, "Wait steps and wait pages"); checked before the operation's other checks. Workflow #407 LOAD-2 (since 0.12.37): an `expect_after.wait_page` and an `expect_after.loading` are admitted, checked before these rules as a page graph checks them (`contained_task_program_invalid` with `program_problem`, `resource-declarations.md`, "Loading pages"; LOAD-4, since 0.12.38: a step whose loading pages have no limit named anywhere is `loading_max_missing`); LOAD-4 runs them ("Loading pages" below) | `wait` |
-| a page the operation's `expect_after.loading.add` names, and its wait page, is none of its own pages: not its `from`, its destination or its `page` transition's page (Workflow #407 LOAD-2, since 0.12.37) | `loading_page` |
+| a page the operation's `expect_after.loading.add` names, and its wait page, is none of its own pages: not its `from`, its destination or its `page` transition's page (Workflow #407 LOAD-2, since 0.12.37); nor (LOAD-4b, since 0.12.38) any other page its waits await, an optional page its input may reach or its run's skip target ("Loading pages" below) | `loading_page` |
 | no operation declares an `expect_after.target_present` or `target_gone`, judged by the page-graph confirmation (ACT-4, since 0.12.37, `resource-declarations.md`, "Final-state targets"); checked right after `wait` | `expect_targets` |
 | each operation's `to` / `expect_after` names exactly one page | `destination` |
 | each operation's destination differs from its `from` | `to_equals_from` |
@@ -330,6 +330,17 @@ decision ends on its first transition frame. The transitions are recorded as in 
 (`contained_task_loading_recorded`, the run's diagnostics). The fresh frame of the step's page
 before its input (ACT-2's gap, an observe-only retry) is one observation, not a wait, and evaluates
 no loading page.
+
+**A page a step adds is no page its waits await** (Workflow #407 LOAD-4b, since 0.12.38,
+[v012-register.md](v012-register.md) §1.265). Under `on` a page the step's `loading.add` names, or
+its wait page, is a transition frame on every frame it shows, so a wait that awaits it could never
+pass on it: it would spend the allowance and fail. Admission therefore refuses such a page when it is
+any page the step's waits await: its `from` (the retry decision), its destination and its `page`
+transition's page (LOAD-2), and for the operation before a run of optional operations and the run's
+members ("Optional steps") every optional page its input may reach and the run's skip target. The
+refusal is LOAD-2's, `contained_task_linear_invalid` with `reason=loading_page` and
+`operation=<id>`. A page no wait of the step awaits is admitted, even one another step's waits
+await.
 
 ## Application steps
 
