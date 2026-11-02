@@ -5901,6 +5901,26 @@ dropped with its record; a file that does not name them is read as before.
 
 **Rollback** (to 0.12.36). Nothing to do; the members decode as before.
 
+### 1.253 Slice AGT-2 (0.12.37): the tap, the first triggers, the rules and the guards of the Runtime's messages (Workflow #432; design `rd-1031/agt/model-agt-v2.md` §4, §5.3, §7.3, §10; coordinator work order `rd-1031/agt/brief-agt-2.md`)
+
+[agent-wake.md](agent-wake.md), "Triggers, rules and guards", is the contract. The number 1.253 is the coordinator's.
+
+**What changes live.** Nothing in production, where no `agent_wake` section is configured: without one there is no queue and the tap returns at once. With a section that has rules, three committed records wake a channel automatically: the exhausted end of a ladder a trigger started (`ladder_exhausted`), `instance_resources_fence_awaiting_person` (`instance_fenced`), and a run's failed terminal with a code a rule lists (`run_failed`). No ledger shape, no wire shape, no configuration key and no interface revision changes: the rows, the body and the section are AGT-1a's and AGT-1b's. A wake touches no pause, lease, queue or fence.
+
+**Rollback** (to 0.12.36). As §1.245 says: remove the section first. Nothing else persisted changes.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| AGT2-1 | the tap: one call beside direction ①'s count on the append path (`host/facts.rs`) | Runtime-internal (memory only) | AGT-2 | AGT-2 | leaf lock, drop and count when full, no record; interrupted, drilled and planned ladders, `instance_resources_fenced` and other writers of `task.failed` are never candidates, nor the worker's own codes |
+| AGT2-2 | rules, coalescing and guards (`crates/runtime-host/src/agent_wake/{rules,guards}.rs`) | rule (no shape change) | AGT-2 | AGT-2 | one wake per instance and channel within `delivery.coalesce_ms`, the strongest kind, the rest `related`; cool-down per rule, instance and code; caps per rule and over all rules by the **host's local day**, all read from `host.agent_wake` |
+| AGT2-3 | `agent_budget_exhausted` (warning, ladder class `none`; `config_key`, `limit_count`, `label?`, `agent_channel?`, `alias?`; owner `runtime-host`, domain `agent_`) | new outcome code | AGT-2 | the worker | said by the wake that fills a cap, so once a day per rule and once for the budget; never a candidate; the design's name |
+| AGT2-4 | `agent_delivery_problem` + `local_time_unknown` | vocabulary word | AGT-2 | the worker | the host's local day could not be read; the iteration fails before it takes a candidate |
+| AGT2-5 | `Status.agent_wake`: `failed_today` and `suppressed_today` count the host's local day; `suppressed_today` also counts cool-downs, caps and a full burst; `attention` also for a cap used up today | meaning of existing members | AGT-2 | — | **AGT-1b counted a UTC day as a stopgap; this slice changes it to the host's local day** |
+
+**Where it differs from the design's letter.** The design says "one per instance in a burst"; with rules to more than one channel each channel gets its own wake, the strongest of what its rules match, so a second channel's rule is never lost to the first's (with one channel the two readings agree). `codes` filters only `run_failed`. A person's test skips the guards and counts toward no cap. `agent_budget_exhausted` names the rule with `label` (a rule id may hold capitals, which `rule_id`, a token, refuses), so no key is added.
+
+**Tests** (gate rows in `host.toml`, "AGT-2"): the twelve of the design's §10 and `the_daily_cap_rolls_over_at_the_local_day`. No existing assertion changed.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
