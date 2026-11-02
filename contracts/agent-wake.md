@@ -4,13 +4,15 @@ Workflow #432. The Runtime tells an agent session that something needs it by sen
 one short message. The forwarding is the Runtime's own function, it has no sender identity, and the
 message's first line is fixed. Client words live only in `crates/agent-forward`.
 
-**State of this contract (AGT-2, 0.12.37).** The configuration, the registry's shape, the worker, the
-rows, the read faces, a person's test and the first triggers exist. **Wakes happen automatically once a
-section with rules exists** ("Triggers, rules and guards" below); nothing is configured in production,
-so nothing wakes there until a person adds the section. **One transport exists:** a Claude Code channel
-([agent-forward.md](agent-forward.md), AGT-T1). A channel of any other client is registered but answers
-`deferred` until that client's own transport lands, so its message waits and ends `expired` at give-up.
-With no `agent_wake` section the only difference a Runtime shows is the one
+**State of this contract (AGT-2b, 0.12.38).** The configuration, the registry's shape, the worker, the
+rows, the read faces, a person's test, the first triggers and the daily summary exist. **Wakes happen
+automatically once a section with rules exists** ("Triggers, rules and guards" below), and **a
+`daily_summary` rule sends one summary a day at its minute** ("The daily summary" below); nothing is
+configured in production, so nothing wakes there until a person adds the section. **Three transports
+exist** ([agent-forward.md](agent-forward.md)): Claude Code (AGT-T1), Codex (AGT-T2) and DSH (AGT-T3)
+channels are forwarded to. An Antigravity channel can be registered and answers `deferred` until its
+own transport lands (AGT-T4), so its message waits and ends `expired` at give-up. With no
+`agent_wake` section the only difference a Runtime shows is the one
 `ledger_observer.tag.workbench_patterns` entry: no thread, no file, no row and no status member.
 
 ## The `agent_wake` section
@@ -20,7 +22,8 @@ the defaults file holds a value, and a section that leaves out a key is refused 
 (`required_missing`). An empty section is refused too, naming `agent_wake.enabled`. With no section
 there are no keys and no rows, and `ConfigureSettings` answers `config_key_unknown`; turning it on
 the first time is a file edit and a restart, a person's step. `actingd-config` revision 24
-([component-interfaces.md](component-interfaces.md)) adds the section.
+([component-interfaces.md](component-interfaces.md)) adds the section, and revision 25 (0.12.38) a
+rule's `on.at_minute_of_day` and `on.utc_offset_minutes`.
 
 **Turning it on, in this order: first update the console, then add the section.** `runtime-client`
 stays [3, 5], so the pairing check passes for a console whose `max` is 3 or 4, but the status denies
@@ -46,7 +49,10 @@ An example with the shipped values:
     { "id": "fence", "on": { "kinds": ["instance_fenced"] }, "instances": "*",
       "to": "<channel>", "cooldown_ms": 1800000, "daily_cap": 8 },
     { "id": "runs", "on": { "kinds": ["run_failed"], "codes": ["<registered code>"] },
-      "instances": ["<alias>"], "to": "<channel>", "cooldown_ms": 1800000, "daily_cap": 8 }
+      "instances": ["<alias>"], "to": "<channel>", "cooldown_ms": 1800000, "daily_cap": 8 },
+    { "id": "daily", "on": { "kinds": ["daily_summary"], "at_minute_of_day": 1260,
+      "utc_offset_minutes": 540 }, "instances": "*", "to": "<channel>", "cooldown_ms": 0,
+      "daily_cap": 1 }
   ]
 }
 ```
@@ -73,14 +79,17 @@ An example with the shipped values:
 | `budget.daily_cap` | integer, 1 to 256: the most wakes of one local day over all rules | yes |
 | `rules` | list of at most 64 rules | yes |
 
-A rule is `{id, on: {kinds, codes?}, instances, to, cooldown_ms, daily_cap}`. `id` is 1 to 64 bytes
-of letters, digits, `_` and `-`. `kinds` come from the closed list `ladder_exhausted`,
-`instance_fenced`, `run_failed`, `daily_summary`, `delivery_test`; these are configuration words,
-not the ledger's `AgentWakeKind`. `codes` applies to `run_failed` only, which needs it. `instances`
-is `"*"` or a list of aliases. `to` is a channel name: 1 to 16 Unicode scalars with no control
-character, opaque to the section. `cooldown_ms` is at most a week, and `daily_cap` is at least 1. An
-instruction may point a rule at another registered channel; it can never add a channel. What the
-rules do is in "Triggers, rules and guards".
+A rule is `{id, on: {kinds, codes?, at_minute_of_day?, utc_offset_minutes?}, instances, to,
+cooldown_ms, daily_cap}`. `id` is 1 to 64 bytes of letters, digits, `_` and `-`. `kinds` come from
+the closed list `ladder_exhausted`, `instance_fenced`, `run_failed`, `daily_summary`,
+`delivery_test`; these are configuration words, not the ledger's `AgentWakeKind`. `codes` applies to
+`run_failed` only, which needs it. `instances` is `"*"` or a list of aliases. `to` is a channel name:
+1 to 16 Unicode scalars with no control character, opaque to the section. `cooldown_ms` is at most a
+week, and `daily_cap` is at least 1. **A `daily_summary` rule** (AGT-2b) names that kind alone, no
+`codes`, `at_minute_of_day` (0 to 1439) and `utc_offset_minutes` (−720 to 840, minutes east of UTC,
+the form of a quiet window), and `daily_cap` 1; its `cooldown_ms` is not read. A rule of another kind
+names neither member. An instruction may point a rule at another registered channel; it can never
+add a channel. What the rules do is in "Triggers, rules and guards" and "The daily summary".
 
 ### Refusals
 
@@ -95,6 +104,7 @@ rendered, as in every section. A broken rule below is `agent_wake_config_invalid
 | Two rules with one id | `duplicate_id` |
 | A kind outside the closed list | `kind_unknown` |
 | A rule with no kind; `run_failed` with no `codes` | `match_missing` |
+| A `daily_summary` rule with another kind or `codes`, without its minute or offset or with one out of range, or a `daily_cap` other than 1; another kind's rule that names a minute or an offset | `daily_summary_shape` |
 | A code the catalog does not list, or has retired | `code_unknown`, `code_retired` |
 | `instances` neither `"*"` nor a non-empty list of configured aliases | `instance_unknown` |
 | `rule.daily_cap` above `budget.daily_cap`, or `budget.daily_cap` above `delivery.history_rows` | `caps_exceed` |
@@ -135,7 +145,8 @@ waits for it. Candidates live in memory: a crash loses those not yet made rows.
 | `run_failed` | a run's failed terminal (`task.failed`, `terminal_committed`), by the run's failure code (a relayed spelling the catalog does not register is its `raw_code`) | 运行失败 | a code no rule lists; another writer's `task.failed`, which is no terminal |
 
 The worker's own codes (`agent_wake_*`) and `agent_budget_exhausted` are never candidates, so a
-delivery failure or a used-up budget cannot make a wake. `daily_summary` has no emitter yet.
+delivery failure or a used-up budget cannot make a wake. `daily_summary` is no record's kind: its
+rule's clock makes it ("The daily summary").
 
 **Rules.** A rule matches a candidate of one of its `kinds` on an instance its `instances` covers;
 `run_failed` also needs the candidate's code in the rule's `codes`: no list, no wake. A candidate no
@@ -176,6 +187,53 @@ sequence and links, its outcome codes only) and `related`, and `next_reads`: for
 `ac_get_run` with the run's request id, then `ac_events` with the instance and `after_sequence` just
 before the burst's first record.
 
+## The daily summary
+
+Workflow #432 AGT-2b (Alice 11-02: the timed report goes through this channel). A `daily_summary`
+rule's clock makes the wake; no record does. Its day is the **local day of the rule's own
+`utc_offset_minutes`**, not the host's.
+
+- **Once a local day, at its minute.** From that day's `at_minute_of_day` to its end the day's summary
+  is due; the worker looks at least once a second and makes it once, for the rule's `instances`, to
+  its `to`. The rows of `host.agent_wake` say whether the day has one, so a restart makes no second.
+- **Missed.** If the Runtime was not running at that minute, it makes the summary once after the
+  start, the same local day, if the day has none. Never one for an earlier day.
+- **Quiet and off.** While a quiet window or the hold covers now, or the section is off, no summary
+  is made: it waits for the end and is made then, once. If the day ends first, that day has none,
+  and the next summary names it (`skipped`).
+- **Guards.** Once a day replaces the cool-down and the rule's cap; its `daily_cap` 1 is never a cap
+  used up. The budget holds it and counts it like every wake: a used-up budget holds that day's
+  summary, counted once in `suppressed_today`.
+- **The message:** `今日汇总 <date> 正文 <path>`, the rule's local date `YYYY-MM-DD` where an alias
+  stands. The limit holds as for every wake: only the date is ever cut, never the kind word or the
+  path. The row has no `instance_alias` and no `code`; `alias_cut` says whether the date was cut.
+- **The body** (`actingcommand.agent-wake-body.v1`, kind `daily_summary`, `rule`, no
+  `instance_alias`, no `trigger`, empty `related` and `next_reads`) carries `summary`:
+
+  ```json
+  "summary": {
+    "date": "2026-11-03", "at_minute_of_day": 1260, "utc_offset_minutes": 540,
+    "runtime": { "owner_epoch": "epoch_…", "started_at_unix_ms": 0 },
+    "instances": [ { "instance_alias": "…", "routine_summary_refused": { "…": "codes only" } } ],
+    "wakes": [ { "kind": "instance_fenced", "state": "delivered", "count": 1 } ],
+    "previous": { "date": "2026-11-01", "state": "delivered" },
+    "skipped": { "from": "2026-11-02", "through": "2026-11-02", "days": 1 } }
+  ```
+
+  - `instances`: one entry per instance of the rule (every registered alias, sorted, for `"*"`), each
+    with what `RoutineSummary` ([runtime-interface.md](runtime-interface.md), `granularity` `day`)
+    answers for it from the host's memory, through the read's own function: its page as
+    `routine_summary_page`, or its refusal, codes only, as `routine_summary_refused`. No ledger read
+    beyond what that read does. **Until R-12 (Workflow #429) the read answers `not_implemented`**, so
+    each entry carries that refusal.
+  - `wakes`: the rows of that local day before this summary, by `kind` and the `state` each is in now
+    (tests and other summaries included), as `host.agent_wake` holds them (`delivery.history_rows`).
+  - `runtime`: the Runtime's owner epoch and when this start began, as `StartReport` says them.
+  - `previous`: the rule's newest earlier summary the rows hold, with its state now; `null` when they
+    hold none. `skipped`: the days after it with no summary, `null` when there are none or there is no
+    `previous` to count from.
+- A summary never touches a pause, a lease, a queue or a fence, as every wake.
+
 ## The message
 
 ```text
@@ -187,10 +245,10 @@ ActingCommand to <channel>
   character. There is one `\n`, no blank line, no footer.
 - Kind words: `ladder_exhausted` 阶梯用尽, `instance_fenced` 实例隔离, `run_failed` 运行失败,
   `daily_summary` 今日汇总, `delivery_test` 发送测试. A wake with no instance omits the alias:
-  `发送测试 正文 <path>`.
+  `发送测试 正文 <path>`. A daily summary names its date there: `今日汇总 2026-11-03 正文 <path>`.
 - **The limit counts the whole message in Unicode scalars,** header included.
-- **Only the alias is ever cut,** ending in `…`; the body holds it whole. With no room for a space and
-  the mark it goes altogether. The kind word and the path are never cut.
+- **Only the alias (a summary's date) is ever cut,** ending in `…`; the body holds it whole. With no
+  room for a space and the mark it goes altogether. The kind word and the path are never cut.
 - **The floor of a channel** is `17 + channel + 1 + 8 + len(<state root>\<dir>\) + 22`: its message
   with no alias and the longest file name. `check-config` guarantees it for every registered channel.
 - The code, digest, notice and next reads are in the body and only there.
@@ -218,7 +276,8 @@ SHA-256 and the counts, never the body's or the message's text.
 ```
 
 - `instance_alias`, `rule`, `trigger` and the trigger's three ids are absent when a wake has none. A
-  test wake has `test: true` and no `trigger`.
+  test wake has `test: true` and no `trigger`. Only a daily summary has `summary` ("The daily
+  summary"); the bound keeps it, as it keeps `trigger`.
 - **The outcome is codes only:** an outcome can hold raw text, an adb host and port and a device
   label, and none of these reaches the file.
 - **Bound:** at most `body.max_bytes`. Over it, `related` then `next_reads` are emptied and named in
@@ -324,9 +383,10 @@ yet made rows; the crash itself is loud.
 - **`Status.agent_wake`** (`runtime-client` revision 5), from memory, absent with no section: `{enabled,
   worker: running|backing_off|unavailable, quiet?: window|hold, open, last_wake_at_unix_ms?, failed_today,
   suppressed_today, attention}`. `suppressed_today` counts the candidates dropped with the feature off, a
-  full queue or burst, a cool-down or a cap. `attention` is true only for a row that failed today, a cap
-  used up today, or an unreadable registry. A day is the host's local day (AGT-2; until then it was a
-  UTC day).
+  full queue or burst, a cool-down or a cap, and a daily summary the budget held. `attention` is true
+  only for a row that failed today, a cap used up today (a daily summary rule's cap of 1 never counts as
+  used up), or an unreadable registry. A day is the host's local day (AGT-2; until then it was a UTC
+  day).
 - **`actingctl overview`, `ac_overview`:** the block `agent_wake`, that member of the one Status read; MCP
   never cuts it.
 - **Rows:** `actingctl facts`, `ac_facts`, key `host.agent_wake`. **History:** `ac_events` by type, always

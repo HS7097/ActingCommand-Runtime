@@ -41,6 +41,9 @@ pub(crate) struct BodyInput<'a> {
     pub(crate) channel: &'a str,
     pub(crate) test: bool,
     pub(crate) trigger: Option<BodyTrigger<'a>>,
+    /// A daily summary's own member (Workflow #432 AGT-2b; `agent_wake::daily`). It stays under
+    /// the bound, as the trigger does.
+    pub(crate) summary: Option<Value>,
     pub(crate) related: Vec<Value>,
     pub(crate) next_reads: Vec<Value>,
 }
@@ -117,6 +120,9 @@ fn body_text(
     );
     if let Some(trigger) = trigger {
         members.insert("trigger".to_owned(), trigger.clone());
+    }
+    if let Some(summary) = &input.summary {
+        members.insert("summary".to_owned(), summary.clone());
     }
     members.insert("related".to_owned(), Value::from(related.to_vec()));
     members.insert("next_reads".to_owned(), Value::from(next_reads.to_vec()));
@@ -197,6 +203,7 @@ mod tests {
                 run_id: None,
                 outcome,
             }),
+            summary: None,
             related: vec![json!({"kind": "run_failed", "event_id": "event-1", "code": "x"}); 8],
             next_reads: vec![json!({"tool": "ac_events", "args": {"after_sequence": 0}}); 8],
         }

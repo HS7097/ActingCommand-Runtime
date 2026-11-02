@@ -1233,6 +1233,9 @@ Workflow #432 AGT-1a ([agent-wake.md](agent-wake.md)). With an `agent_wake` sect
 - a key left out, or an empty section: the section is whole or absent;
 - rule ids are unique, `kinds` come from the closed list, `run_failed` needs `codes`, and codes are
   catalog codes not retired;
+- a `daily_summary` rule names that kind alone, no `codes`, `at_minute_of_day` (0 to 1439) and
+  `utc_offset_minutes` (−720 to 840), and `daily_cap` 1, and a rule of another kind names neither
+  member (`daily_summary_shape`; Workflow #432 AGT-2b);
 - `instances` are `"*"` or configured aliases;
 - `rule.daily_cap` ≤ `budget.daily_cap` ≤ `delivery.history_rows` (at most 256, the key's range);
 - `body.dir` is a relative folder outside `ledger`, `artifacts`, `release-blobs` and `kept`;

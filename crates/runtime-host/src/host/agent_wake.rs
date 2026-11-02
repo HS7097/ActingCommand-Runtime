@@ -20,6 +20,10 @@
 //!   per rule, instance and code and the day caps, per rule and over all rules, hold the rest:
 //!   counted from the rows by the host's local day, so a restart forgets none. A used-up cap is
 //!   said once a day (`agent_budget_exhausted`).
+//! - **The daily summary** (AGT-2b) is no record's: a `daily_summary` rule's summary of its own
+//!   local day is made once that day's minute has come, the feature is on and nothing quiet covers
+//!   now, unless the rows hold it already or the budget is used up. Its body holds what
+//!   `RoutineSummary` answers for each of the rule's instances and the day's wakes.
 //! - **The rows** are the runtime fact `host.agent_wake`, recorded through `record_runtime_fact`,
 //!   which commits FULL for Runtime scope. So a recorded `sending` is durable before the write. A
 //!   row records at most `prepared`, the first `deferred`, `sending` and its result; a later reason
@@ -36,6 +40,7 @@
 use super::failure_scope::Contained;
 use super::*;
 use crate::agent_wake::body::{BodyInput, BodyTrigger, render_body};
+use crate::agent_wake::daily::{self, SummaryInput};
 use crate::agent_wake::guards::{self, DAY_MS, Prospect};
 use crate::agent_wake::rows::{
     WAKE_FACT_KEY, WaitReason, WakeRow, kept_rows, never_a_candidate, wake_id_bytes,
@@ -49,14 +54,14 @@ use actingcommand_agent_forward::{
     SendLimits,
 };
 use actingcommand_contract::codes::SanitizationCode;
-use actingcommand_contract::outcome::{CodeStr, Outcome};
+use actingcommand_contract::outcome::{CodeStr, Detail, Outcome};
 use actingcommand_contract::{
     AgentDeliveryProblem, AgentDeliveryState, AgentWakeQuiet, AgentWakeStatus, AgentWakeTestQueued,
-    AgentWakeWorkerState,
+    AgentWakeWorkerState, RoutineSummaryGranularity,
 };
 use actingcommand_runtime_config::agent_wake::{
-    BUDGET_DAILY_CAP, KIND_DELIVERY_TEST, KIND_INSTANCE_FENCED, KIND_LADDER_EXHAUSTED,
-    KIND_RUN_FAILED, RULES, WakeRule, body_folder_text,
+    BUDGET_DAILY_CAP, KIND_DAILY_SUMMARY, KIND_DELIVERY_TEST, KIND_INSTANCE_FENCED,
+    KIND_LADDER_EXHAUSTED, KIND_RUN_FAILED, RULES, WakeInstances, WakeRule, body_folder_text,
 };
 use actingcommand_runtime_config::{AgentWakeConfig, EffectiveConfig};
 use serde_json::{Map, Value, json};
@@ -150,6 +155,8 @@ struct WakeDraft {
     instance_alias: Option<String>,
     channel: String,
     trigger: Option<TriggerCandidate>,
+    /// A daily summary's own member (AGT-2b).
+    summary: Option<Value>,
     related: Vec<Value>,
     next_reads: Vec<Value>,
 }
@@ -316,6 +323,10 @@ struct WakeMemory {
     /// The host's local day `suppressed_today` counts, and its count.
     suppressed_day: u64,
     suppressed_today: u32,
+    /// The daily summaries this run made or a used-up budget held, by rule id and the rule's local
+    /// day (AGT-2b): one a day even when the rows no longer hold it, and a held one counted once.
+    /// The rows carry the made ones over a restart.
+    summary_days: BTreeSet<(String, u64)>,
     last_sweep_unix_ms: Option<u64>,
     sweep_requested: bool,
     last_idle_pass_unix_ms: u64,
@@ -805,6 +816,7 @@ impl HostShared {
             instance_alias,
             channel,
             trigger,
+            summary,
             related,
             next_reads,
         } = draft;
@@ -842,6 +854,7 @@ impl HostShared {
                 channel: &row.channel,
                 test: row.test,
                 trigger: trigger.as_ref().map(TriggerCandidate::body_trigger),
+                summary,
                 related,
                 next_reads,
             },
@@ -890,6 +903,7 @@ impl HostShared {
                 instance_alias: wake.instance_alias,
                 channel: wake.channel,
                 trigger: None,
+                summary: None,
                 related: Vec::new(),
                 next_reads: Vec::new(),
             },
@@ -1065,6 +1079,7 @@ impl HostShared {
                     instance_alias: burst.instance_alias.clone(),
                     channel: rule.to.clone(),
                     trigger: Some(trigger.clone()),
+                    summary: None,
                     related,
                     next_reads: wake_next_reads(trigger, burst),
                 },
@@ -1114,6 +1129,127 @@ impl HostShared {
         })
         .with_failure_stage(HostLocation::AgentWakeWorker);
         self.report_wake_failure(&error)
+    }
+
+    /// The daily summaries due now (AGT-2b; `contracts/agent-wake.md`, "The daily summary"). Called
+    /// only with the feature on and nothing quiet covering now. A `daily_summary` rule's summary of
+    /// its local day is due from that day's minute to its end: one the Runtime was not running for,
+    /// or that a quiet time held, is made now, the same day only, and a day that ends first has
+    /// none, which the next one names. The rows say whether the day has one, so a restart makes no
+    /// second. A used-up budget holds it like every wake, counted once.
+    fn make_due_summaries(
+        &self,
+        config: &AgentWakeConfig,
+        now_unix_ms: u64,
+        today: u64,
+    ) -> RuntimeHostResult<()> {
+        let day_of = |unix_ms: u64| self.agent_wake.local_day(unix_ms);
+        for rule in &config.rules {
+            let Some(at) = rule.summary_at else {
+                continue;
+            };
+            let day = daily::day_of(at, now_unix_ms);
+            if now_unix_ms < daily::due_at(at, day) {
+                continue;
+            }
+            let key = (rule.id.clone(), day);
+            let (rows, settled) = {
+                let mut memory = self.agent_wake.memory();
+                memory
+                    .summary_days
+                    .retain(|(_, settled_day)| settled_day.saturating_add(1) >= day);
+                (memory.rows.clone(), memory.summary_days.contains(&key))
+            };
+            if settled || daily::made_on(&rows, &rule.id, at, day) {
+                continue;
+            }
+            if guards::day_usage(&rows, &rule.id, today, &day_of).all >= config.budget_daily_cap {
+                self.agent_wake.memory().summary_days.insert(key);
+                self.count_suppressed(1, now_unix_ms);
+                continue;
+            }
+            let instances = self.summary_instances(rule)?;
+            let started_at_unix_ms =
+                lock(&self.start_facts, HostLocation::AgentWakeWorker)?.started_at_unix_ms();
+            let summary = daily::summary_member(SummaryInput {
+                rule_id: &rule.id,
+                at,
+                day,
+                owner_epoch: identifier_text(&self.owner_epoch),
+                started_at_unix_ms,
+                instances,
+                rows: &rows,
+            });
+            let wake_id = self.mint_wake_id()?;
+            self.prepare_wake(
+                WakeDraft {
+                    wake_id,
+                    kind: KIND_DAILY_SUMMARY.to_owned(),
+                    rule: Some(rule.id.clone()),
+                    test: false,
+                    instance_alias: None,
+                    channel: rule.to.clone(),
+                    trigger: None,
+                    summary: Some(summary),
+                    related: Vec::new(),
+                    next_reads: Vec::new(),
+                },
+                config,
+                now_unix_ms,
+            )?;
+            let rows = {
+                let mut memory = self.agent_wake.memory();
+                memory.summary_days.insert(key);
+                memory.rows.clone()
+            };
+            if guards::day_usage(&rows, &rule.id, today, &day_of).all == config.budget_daily_cap {
+                self.report_budget_exhausted(None, None, config.budget_daily_cap)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// What `RoutineSummary` answers for each of `rule`'s instances, from the host's memory and
+    /// through the read's own function: its page, or its refusal in codes only. Only a failure the
+    /// Runtime does not survive comes back.
+    fn summary_instances(&self, rule: &WakeRule) -> RuntimeHostResult<Vec<Value>> {
+        let aliases = match &rule.instances {
+            WakeInstances::Listed(aliases) => aliases.clone(),
+            WakeInstances::All => {
+                let mut aliases = lock(&self.registered_instances, HostLocation::AgentWakeWorker)?
+                    .values()
+                    .map(|instance| instance.instance_alias.clone())
+                    .collect::<Vec<_>>();
+                aliases.sort();
+                aliases.dedup();
+                aliases
+            }
+        };
+        let mut instances = Vec::with_capacity(aliases.len());
+        for alias in aliases {
+            let answer = self.routine_summary(Some(&alias), RoutineSummaryGranularity::Day, None);
+            let mut entry = Map::new();
+            entry.insert("instance_alias".to_owned(), Value::from(alias));
+            // A page or an envelope that does not serialize is written as no value at all.
+            match answer {
+                Ok(page) => {
+                    entry.insert(
+                        "routine_summary_page".to_owned(),
+                        serde_json::to_value(page).unwrap_or(Value::Null),
+                    );
+                }
+                Err(error) if error.is_fatal() => return Err(error),
+                Err(error) => {
+                    entry.insert(
+                        "routine_summary_refused".to_owned(),
+                        serde_json::to_value(error.outcome().envelope(Detail::Codes))
+                            .unwrap_or(Value::Null),
+                    );
+                }
+            }
+            instances.push(Value::Object(entry));
+        }
+        Ok(instances)
     }
 
     /// `row` waits. The first `deferred` is recorded; a later reason goes only to the detail file
@@ -1211,27 +1347,29 @@ impl HostShared {
             body_folder_text(&self.agent_wake.state_root, &config.body.dir)
         );
         let max_chars = usize::try_from(config.summary_max_chars).unwrap_or(usize::MAX);
-        let message = match render_message(
-            &row.channel,
-            word,
-            row.instance_alias.as_deref(),
-            &body_path,
-            max_chars,
-        ) {
-            Ok(message) => message,
-            Err(_) => {
-                // A limit set below the channel's floor while the Runtime runs: never a cut path.
-                row.state = AgentDeliveryState::Failed;
-                row.problem = Some(AgentDeliveryProblem::MessageTooLong.as_str().to_owned());
-                row.updated_at_unix_ms = now_unix_ms;
-                return self.close_wake_row(
-                    row,
-                    HostCode::AgentWakeMessageTooLong,
-                    Some(AgentDeliveryProblem::MessageTooLong),
-                    config,
-                );
-            }
+        // A daily summary names its date where an alias stands, and only that part is ever cut
+        // (AGT-2b); the body holds it whole.
+        let slot = if row.kind == KIND_DAILY_SUMMARY {
+            daily::row_date(&row, &config.rules)
+        } else {
+            row.instance_alias.clone()
         };
+        let message =
+            match render_message(&row.channel, word, slot.as_deref(), &body_path, max_chars) {
+                Ok(message) => message,
+                Err(_) => {
+                    // A limit set below the channel's floor while the Runtime runs: never a cut path.
+                    row.state = AgentDeliveryState::Failed;
+                    row.problem = Some(AgentDeliveryProblem::MessageTooLong.as_str().to_owned());
+                    row.updated_at_unix_ms = now_unix_ms;
+                    return self.close_wake_row(
+                        row,
+                        HostCode::AgentWakeMessageTooLong,
+                        Some(AgentDeliveryProblem::MessageTooLong),
+                        config,
+                    );
+                }
+            };
         row.message_chars = u64::try_from(message.chars).ok();
         row.alias_cut = message.alias_cut;
         let forward_message = ForwardMessage {
@@ -1583,6 +1721,7 @@ impl HostShared {
         if !config.enabled {
             self.hold_wakes_while_disabled(&config, now_unix_ms)?;
         } else if quiet.is_none() {
+            self.make_due_summaries(&config, now_unix_ms, today)?;
             self.send_due_wakes(&config)?;
         }
         self.sweep_wake_files(&config, now_unix_ms)

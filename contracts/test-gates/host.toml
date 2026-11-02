@@ -3082,6 +3082,19 @@ tests = [
 ]
 incident = ["#432 AGT-2"]
 
+# AGT-2b (Workflow #432, 0.12.38; design rd-1031/agt/model-agt-v2.md sections 4, 5.3 and 10; register section 1.263; contracts/agent-wake.md, "The daily summary"; actingd-config revision 25): a daily_summary rule's summary is made once a local day of its own offset at its minute; one missed while no Runtime ran is made once after the start the same day and never for an earlier day; one inside a quiet window waits for its end; a day that ended without one is named in the next; the body holds what RoutineSummary answers for each instance, the day's wakes by kind and state, and the Runtime's epoch and start; and a daily_summary rule of another shape is refused with daily_summary_shape.
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_agt_2b::daily_summary_fires_once_at_its_local_minute",
+    "actingcommand-runtime-host::lib::tests::gate_agt_2b::a_missed_summary_is_sent_once_after_start_the_same_day",
+    "actingcommand-runtime-host::lib::tests::gate_agt_2b::a_summary_inside_a_quiet_window_waits_for_its_end",
+    "actingcommand-runtime-host::lib::tests::gate_agt_2b::a_day_whose_summary_could_not_be_sent_is_named_in_the_next",
+    "actingcommand-runtime-host::lib::tests::gate_agt_2b::the_summary_body_holds_the_routine_summary_and_the_days_wakes",
+    "actingcommand-runtime-config::lib::gate_agt_2b::a_daily_summary_rule_of_another_shape_is_refused",
+]
+incident = ["#432 AGT-2b"]
+
 # AGT-T1 (Workflow #432, 0.12.37; design rd-1031/agt/model-agt-v2.md section 10; register section 1.247; contracts/agent-forward.md): a write past its deadline or asked to stop is cancelled in the calling thread; the frame is the auth line then the user line and is in no detail; a bad pipe name, a missing record, a dead owner and another server all end before the intent, and a write error after it is unknown; the hook stores nothing for a session that is no channel, fails loud for a channel, and its end clears the blob only for the owner. The real-pipe tests use a local server with an invented name and an invented token.
 [[gate]]
 coverage = "Y"

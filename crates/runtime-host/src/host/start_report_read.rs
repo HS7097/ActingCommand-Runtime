@@ -34,6 +34,12 @@ pub(super) struct StartFacts {
 }
 
 impl StartFacts {
+    /// When this start began: the daily summary of the Runtime's messages names it (Workflow #432
+    /// AGT-2b), as the start report does.
+    pub(super) fn started_at_unix_ms(&self) -> u64 {
+        self.started_at_unix_ms
+    }
+
     /// The facts of a start that began at `started_at_unix_ms` and opened its ledger as `timing`
     /// says, within `deadline_ms`; `slow` when the open passed its warning line.
     pub(super) fn new(
