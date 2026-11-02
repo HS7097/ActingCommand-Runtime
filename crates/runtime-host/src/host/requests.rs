@@ -750,9 +750,23 @@ impl HostShared {
             RuntimeOperation::EditResourceTarget { .. } => {
                 Err(not_implemented(HostLocation::EditResourceTarget))
             }
-            RuntimeOperation::RoutineSummary { .. } => {
-                Err(not_implemented(HostLocation::RoutineSummary))
-            }
+            // Workflow #432 AGT-2b: the daily summary reads each instance through the same
+            // function, so its body holds what this read answers.
+            RuntimeOperation::RoutineSummary {
+                instance,
+                granularity,
+                since_revision,
+            } => self
+                .routine_summary(instance.as_deref(), *granularity, *since_revision)
+                .map(|summary| OperationSuccess {
+                    state: RuntimeReceiptState::Completed,
+                    terminal: None,
+                    result: RuntimeResult::RoutineSummary {
+                        summary: Box::new(summary),
+                    },
+                    failure_outcome: None,
+                })
+                .map_err(|error| RequestFailure::request(error, RuntimeReceiptState::Denied, None)),
             // Workflow #429 R-0c (register §1.216): the pack schedule's read view has its wire
             // shape; R-8 adds the behaviour. Until then it is refused and records nothing.
             RuntimeOperation::PackScheduleView { .. } => {
@@ -776,14 +790,33 @@ impl HostShared {
 /// `not_implemented` (Workflow #389 U-1; Workflow #429 R-0).
 fn not_implemented(operation: impl Into<Location>) -> RequestFailure {
     RequestFailure::request(
-        RuntimeHostError::request(
-            actingcommand_contract::codes::SharedCode::NotImplemented,
-            operation,
-            RuntimeErrorCode::InvalidRequest,
-        ),
+        not_implemented_error(operation),
         RuntimeReceiptState::Denied,
         None,
     )
+}
+
+fn not_implemented_error(operation: impl Into<Location>) -> RuntimeHostError {
+    RuntimeHostError::request(
+        actingcommand_contract::codes::SharedCode::NotImplemented,
+        operation,
+        RuntimeErrorCode::InvalidRequest,
+    )
+}
+
+impl HostShared {
+    /// What `RoutineSummary` answers (Workflow #429 R-12): health statistics from the host's
+    /// memory, nothing read from or written to the ledger. Until R-12 it is refused
+    /// `not_implemented` (`operation` `routine_summary`) and records nothing. The read and the
+    /// daily summary of the Runtime's messages (Workflow #432 AGT-2b) both answer from here.
+    pub(super) fn routine_summary(
+        &self,
+        _instance: Option<&str>,
+        _granularity: actingcommand_contract::RoutineSummaryGranularity,
+        _since_revision: Option<u64>,
+    ) -> RuntimeHostResult<actingcommand_contract::RoutineSummaryPage> {
+        Err(not_implemented_error(HostLocation::RoutineSummary))
+    }
 }
 
 pub(super) struct RequestFailure {

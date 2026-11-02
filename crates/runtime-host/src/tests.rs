@@ -216,6 +216,8 @@ mod gate_agt_1a;
 mod gate_agt_1b;
 // Workflow #432 AGT-2: the tap, the first triggers, the rules and the guards of the wakes.
 mod gate_agt_2;
+// Workflow #432 AGT-2b: the daily summary, a timer rule's wake.
+mod gate_agt_2b;
 // CAP-IDX (since 0.12.27): capture takes the MuMu index from the discovery binding; a shifted
 // port is checked against MuMu's report before capture opens.
 mod gate_cap_idx;

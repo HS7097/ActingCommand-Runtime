@@ -1314,6 +1314,9 @@ answers `config_key_unknown`. Settable, read at the next use: every key but `bod
 `agent_wake_config_invalid` (`config_key`, `config_value_problem`) at start and in `check-config`,
 and `config_value_invalid` with the same key and problem through an instruction. The rows are
 reported in `config.parameters.agent_wake`, and the keys are `hidden` in the console's tiers.
+`actingd-config` revision 25 (Workflow #432 AGT-2b, 0.12.38) adds a rule's `on.at_minute_of_day` and
+`on.utc_offset_minutes`, the time of a `daily_summary` rule, inside the list `agent_wake.rules`; no
+key is added.
 - The Runtime compares package ids for equality only; no store is named in code, defaults or
   tests. The operator adds the official store's package id once Alice confirmed it (question 95).
 

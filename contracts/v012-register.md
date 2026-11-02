@@ -6307,6 +6307,26 @@ pack without a copy is refused from 0.12.38; no pack declares `loading` today.
 their shape. 0.12.37 runs a step plan's waits as without loading pages and admits a loading set
 with no limit, giving it an allowance of zero in a page graph.
 
+### 1.263 Slice AGT-2b (0.12.38): the daily summary, a timer rule's wake (Workflow #432; Alice's words of 2026-11-02 19:4x on pending item 158, 「定时汇报以及别的希望提醒的，都可以走这个通道」; design `rd-1031/agt/model-agt-v2.md` §4, §5.3, §10; coordinator work order `rd-1031/agt/brief-agt-2b.md`)
+
+[agent-wake.md](agent-wake.md), "The daily summary", is the contract. The number 1.263 is the coordinator's. This is the first step of 0.12.38's `actingd-config` revision; later slices of the release join it.
+
+**What changes live.** Nothing in production, where no `agent_wake` section is configured. With a section that has a `daily_summary` rule, the worker makes that rule's summary once a local day of the rule's own offset, at its minute, or after a start or after a quiet time the same day; never one for an earlier day. Its body holds what `RoutineSummary` answers for each of the rule's instances, the day's wakes by kind and state, the Runtime's epoch and start, and the rule's previous summary with the days after it that had none. No ledger shape, no wire shape, no configuration key, no outcome code and no `runtime-client` revision: the rows, the body schema and the section are AGT-1a's and AGT-1b's.
+
+**Rollback** (to 0.12.37). A configuration whose rule names `on.at_minute_of_day` or `on.utc_offset_minutes` is refused by the older build (`agent_wake_config_invalid`, `wrong_type`), so **remove the `daily_summary` rule first**. Summary rows in `host.agent_wake` have the row shape 0.12.37 reads; nothing else persisted changes, and `ledger` does not move.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| AGT2B-1 | a rule's `on.at_minute_of_day` (0 to 1439) and `on.utc_offset_minutes` (−720 to 840) in `agent_wake.rules` | rule members inside a list key, **`actingd-config` [5, 25]** | AGT-2b | the person | a `daily_summary` rule names its kind alone, both members, no `codes` and `daily_cap` 1; another kind's rule names neither; `since` 0.12.38; no key added |
+| AGT2B-2 | `config_value_problem` + `daily_summary_shape` | vocabulary word | AGT-2b | start, `check-config`, `ConfigureSettings` | `agent_wake_config_invalid` at start and in `check-config`, `config_value_invalid` through an instruction; key `agent_wake.rules` |
+| AGT2B-3 | the body's `summary` member (`date`, `at_minute_of_day`, `utc_offset_minutes`, `runtime {owner_epoch, started_at_unix_ms}`, `instances [{instance_alias, routine_summary_page \| routine_summary_refused}]`, `wakes [{kind, state, count}]`, `previous?`, `skipped?`) of `actingcommand.agent-wake-body.v1`, kind `daily_summary` | program state (body file) | AGT-2b | the worker | the bound keeps it as it keeps `trigger`; codes only; no ledger read beyond `RoutineSummary`'s |
+| AGT2B-4 | message line `今日汇总 <date> 正文 <path>` | message | AGT-2b | the worker | the rule's local date stands where an alias does and is the only part ever cut; within `summary.max_chars` |
+| AGT2B-5 | guards of a summary: once a local day of its rule replaces the cool-down and the rule's cap; the budget holds and counts it; `Status.agent_wake.attention` never counts a summary rule's cap of 1 as used up | rule | AGT-2b | the worker | a summary the budget holds is counted once in `suppressed_today` |
+
+**Where it differs from the brief's letter.** `RoutineSummary` is not served yet (Workflow #429 R-12): the read answers `not_implemented`. The summary reads each instance through the read's own function (`HostShared::routine_summary`, which the request now answers from, with the same refusal), so each instance entry carries that refusal, codes only, until R-12 fills the function; the summary then carries its page with no change here. A day "whose summary could not be sent" is named as the days after the rule's previous summary that the rows of `host.agent_wake` hold; with none held (a new rule, or rows trimmed by `delivery.history_rows`) none is named, and `previous` is `null`. A summary is made only when nothing quiet covers now and the section is on, rather than becoming a row during the quiet time: a row left `prepared` past the day's end would have no state that is skipped without being loud. "None was sent that day" reads as "the rows hold none of that day": a summary made that day and then `failed`, `unknown` or `expired` is loud on its own and is not made again (an `unknown` one may have arrived).
+
+**Tests** (gate rows in `host.toml`, "AGT-2b"): the six of the work order. Adapted, as the requirement changes: `agent_wake_refuses_bad_kinds_codes_and_unknown_aliases` (`apps/actingd/src/config/gate_agt_1a.rs`) passed one rule naming every kind of the closed list with `daily_cap` 8, a shape a `daily_summary` rule may no longer take; it now passes the other kinds in that rule and a `daily_summary` rule of its own shape. `body.rs`' test input gains `summary: None`; `component_interfaces.rs`' `V0120` says `actingd-config` [5, 25].
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

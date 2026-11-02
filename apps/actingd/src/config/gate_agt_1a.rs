@@ -176,13 +176,19 @@ fn agent_wake_section_absent_keys_are_unknown_and_no_subsystem_row() {
 fn agent_wake_refuses_bad_kinds_codes_and_unknown_aliases() {
     let root = TempDir::new().expect("tempdir");
     let code = "config_value_invalid";
-    // What passes: every word of the closed list, a listed code, `*` and a known alias.
+    // What passes: every word of the closed list, a listed code, `*` and a known alias. A
+    // `daily_summary` rule names that kind alone, with its time and a day cap of 1 (AGT-2b).
     for on in [
-        json!({"kinds": ["ladder_exhausted", "instance_fenced", "daily_summary", "delivery_test"]}),
+        json!({"kinds": ["ladder_exhausted", "instance_fenced", "delivery_test"]}),
+        json!({"kinds": ["daily_summary"], "at_minute_of_day": 1260, "utc_offset_minutes": 540}),
         json!({"kinds": ["run_failed"], "codes": [code]}),
     ] {
         for instances in [json!("*"), json!([ALIAS])] {
-            let rules = json!([rule(on.clone(), instances)]);
+            let mut one = rule(on.clone(), instances);
+            if on["kinds"] == json!(["daily_summary"]) {
+                one["daily_cap"] = json!(1);
+            }
+            let rules = json!([one]);
             assert!(
                 configuration(&root, Some(whole(rules.clone())))
                     .assemble()
