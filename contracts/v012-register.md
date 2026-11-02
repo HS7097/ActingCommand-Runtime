@@ -5705,30 +5705,6 @@ composite's success no longer names `next.undo`. Nothing persisted changes.
 | UE-1 | `install undo`: `interface_edge`, then `rollback_gate_failed`, when a Runtime of the undone build has started; result member `edges` | install command | INST-UNDO-EDGE | INST-UNDO-EDGE | `since` 0.12.36; reused code and refusal words |
 | UE-2 | `next.undo` of a composite's success left out when the edges would refuse it | install command | INST-UNDO-EDGE | INST-UNDO-EDGE | `since` 0.12.36 |
 
-### 1.249 Slice STILL-1 (0.12.37): a wait on a still screen it does not accept ends at a configured limit (Workflow #407; Alice's 11-02 report of the 15–20 minute runs; design `rd-1031/check-speed/model-check.md` §2, §6, §7; coordinator work order `rd-1031/check-speed/brief-slices.md`)
-
-**Why.** Four failed manual runs measured in the design ended on a screen that neither moved nor
-was recognised, and each waited out its limit: three spent 654 to 896 s there, the fourth at least
-204 s. Neither a recognition filter nor proactive capture shortens that wall time. Off by default:
-with `still_limit_ms` 0 no clock is read, no frame is compared for it, and every wait runs as
-before. [resource-declarations.md](resource-declarations.md) ("Capture cadence") and
-[runtime-config.md](runtime-config.md) ("The `execution` section") are the contract. **No persisted
-ledger shape and no new code:** the existing keys `held_ms` and `limit_ms` become optional values
-of three existing codes. The threshold comes from design §8: stay off, or on per instance only,
-until the ledger's longest legitimate still stretch is known.
-
-| # | Shape | Kind | Code slice | First writer | Notes |
-|---|---|---|---|---|---|
-| ST1-1 | `execution.capture.still_limit_ms` (`0` or `30000..=1800000`, 0), and per instance `instance.<id>.execution.capture.still_limit_ms` (default the section's) | configuration keys (§5 row; `config.parameters.execution` row; **`actingd-config` revision 24**, shared with AGT-1a §1.245; no second bump) (`still_limit_key_range_and_default`) | STILL-1 | STILL-1 | `since` 0.12.37; settable, read at each step; a value between 1 and 29 999 is `out_of_range` in the whole-section check |
-| ST1-2 | the still limit of a page wait and of a page-graph confirmation, a wait step's wait included | rule (no shape change) (the other five `gate_still1` tests) | STILL-1 | STILL-1 | counted on the wall clock from the back-off's frames, independent of the back-off's switch and of the factor (#411 A43b's rule tracks nothing at the factor 1000); frames of a held page never count; `linear_steps` waits, observation windows and input rechecks take none |
-| ST1-3 | `held_ms`, `limit_ms` optional on `contained_task_step_unconfirmed`, `contained_task_page_unknown`, `page_confirmation_failed` | optional values of existing codes, present only when a wait ended on the limit | STILL-1 | STILL-1 | `since` 0.12.37; `task_timing`'s `elapsed_ms` and `limit_ms` stay the wait's own, so `elapsed_ms` may be below `limit_ms`; a confirmation that goes on to a retry or to `on_error` carries the values only on a failure that ends the run |
-| ST1-4 | `CaptureCadence.still_limit_ms` (`execution-kernel`) | Runtime-internal interface (memory only) | STILL-1 | STILL-1 | the host hands the value for the run's instance with each step's pacing; `CaptureCadence::UNCONFIGURED` is 0 |
-
-**Rollback** (to 0.12.36). Nothing persisted changes. 0.12.36 refuses at start and in `check-config`
-a configuration file that names the section's member or an entry's (the members deny unknown
-members), **so the operator first removes them**. An online override of either key needs nothing:
-0.12.36 has no such key and drops the row (`config_override_dropped`) without refusing the record.
-
 ### 1.244 Slice S4a-1, which is #357 DB-2 (0.12.37): a selection document reads a standard pack's shared table (Workflow #430 §8.2, §9 row S4a; model M-357a v1.1, §1.65 TB5–TB10; coordinator work order `rd-1031/brief-s4a-db2.md`)
 
 **What landed against §1.65.** The rows below; no ledger shape, no wire shape, no configuration key.
@@ -5772,27 +5748,6 @@ members), **so the operator first removes them**. An online override of either k
 
 **Tests changed** (the approved behaviour change): `ledger_observer_tests`' `WORKBENCH_PATTERNS` gains the entry; `component_interfaces.rs`' `V0120` says `actingd-config` [5, 24].
 
-### 1.251 Slice OCR-SCALE-1 (0.12.37): a task of schema 0.9 may declare OCR fields, and a field's box follows a scaled anchor (#428, #392; Alice's ruling of 2026-11-02 that an interface scale is an event to support; coordinator work order `rd-1031/check-speed/brief-ocr-scale.md`)
-
-[ocr-fields.md](ocr-fields.md), section Task schema `0.9` fields tasks, is the contract. **No new code, key, ledger shape or wire shape.**
-
-**Why the limit existed.** `"0.9" => post_admission_ocr.is_none()` came in with schema 0.9 itself (commit `7e23026e23`, the phased routes): the slice's scope, with no reason, test or register row behind it, and the contract then called 0.9's budgets "non-OCR". `contained_task_phases_invalid` is another rule, schema 0.9 with `Lab-1y.control.v2`, and stays. Reading what later landed found one real problem, in one form only: schema 0.9's keyed ends supply a run's scheduling key, the `0.7` comparison supplies one too, and `finish_success_with_key` ends a run that has both in `contained_task_state_invalid` (admission keeps only `on_empty` away from a comparison). A fields run has no comparison key, so fields have no such problem.
-
-| # | Shape | Kind | Code slice | First writer | Notes |
-|---|---|---|---|---|---|
-| OS-1 | task schema `0.9` `post_admission_ocr`, `fields_v1` form | relaxed rule (resource file format) | OCR-SCALE-1 | resource side | `since` 0.12.37; optional; the gates, dictionaries, limits, zero-input rules, reports and projections of schema `0.8`; `package` revision 6, no second step (§1.244 TB6) |
-| OS-2 | task schema `0.9` `operations: []` with fields | relaxed rule (resource file format) | OCR-SCALE-1 | resource side | `since` 0.12.37; without fields it stays `contained_task_program_invalid`, `program_problem` `operations_empty`, whose token text now names both schemas |
-| OS-3 | the `0.7` comparison form in schema `0.9` | **unchanged refusal** | — | — | `resource_declaration_invalid` at its first unknown member, or `contained_task_program_invalid` where the gate does not run; the reason above |
-| OS-4 | a `template_relative` box on an anchor with `scales` | **unchanged behaviour**, now reachable by a field in a pack that declares it | REC-5 | resource side | `scaled_relative` already scales the offset and size by the matched factor; this slice writes the rule down and tests it through a fields run |
-
-**The scaling rule, and the evidence for it.** The rule REC-5 already gave relative colors, relative OCR and click offsets: `(|v| * f + 500) div 1000` from the matched top-left corner, the highest score across factors, no fallback when the anchor does not match. The resource side's frames of a real 0.90 interface scale show the icons and the text beside them shrinking together in one layer, and the reading's digits moving with the icons (its measured move of 30 and 18 pixels on one button is the layer's vanishing point, which is why the box hangs from the anchor and not from the frame). A second rule for fields would give one reading two answers.
-
-**Interface.** `package` stays [3, 6]: the new form is refused loudly by an older Runtime and shares revision 6 with DB-2 in one release. No bundle index or installer change.
-
-**Left open.** A pack in the `0.7` comparison form cannot move to schema `0.9` by this slice and keeps its parallel templates; moving it needs the keyed ends refused beside a comparison and the form told apart by `mode`, a slice of its own if wanted. Fields beside `phases` are admitted, since the collector does not read the stage, and no test runs them together. No pack changes here.
-
-**Rollback** (to 0.12.36). A pack that declares it is refused at the older build's declaration gate; `package` [3, 6] above its range refuses the combination earlier. Nothing persisted changes.
-
 ### 1.246 Slice AGT-1b (0.12.37): the worker, the record, the read face and the test command of the Runtime's messages (Workflow #432; design `rd-1031/agt/model-agt-v2.md` §10; coordinator work order `rd-1031/agt/brief-agt-1b.md`)
 
 [agent-wake.md](agent-wake.md) is the contract. **Nothing wakes automatically yet** (AGT-2 brings the tap and the rules) and **no transport exists yet** (AGT-T1): the production forwarder `Unavailable` answers `deferred`, so a person's test ends `deferred`, then `expired`.
@@ -5834,6 +5789,117 @@ members), **so the operator first removes them**. An online override of either k
 | AGTT1-7 | `crates/agent-forward/LICENSE-codex-goal-lifecycle.txt`, `NOTICE.md` section "Source code adapted from other projects" | licence notice | AGT-T1 | — | MIT source in an AGPL-3.0-only repository |
 
 **Departures from the design** (each is in the contract): no flush after the write, since `FlushFileBuffers` cannot be cancelled and would break the deadline; `add` does not check the message floor, since it cannot see the configuration; a failed hook exits 2 and prints nothing on stdout, by Claude Code's hook page; `pipe.rs` has no read yet, since this transport never reads (AGT-T2 adds it).
+
+### 1.248 Slice PF-1 (0.12.37): one capacity decision per chunk of a stream (Workflow #407; design `rd-1031/check-speed/model-check.md` §3, §7; coordinator work order `rd-1031/check-speed/brief-slices.md`)
+
+[capacity-admission.md](capacity-admission.md) and [runtime-config.md](runtime-config.md) ("The `artifact_store` section") are the contract. The number 1.248 is the coordinator's. No ledger shape, no wire shape, no outcome code changes.
+
+**Why.** Every write of a stream took a capacity decision. A diagnostic stream writes once per record, 107 to 426 records a frame; one measured run spent 17.25 s of its 18.25 s of diagnostic writing on those decisions. The new fast path (§7's ACT slices) reads more frames, so this comes first.
+
+**What changes live.** Nothing a run records or decides, except that a refusal or a binding change on a stream may surface up to one chunk (1 MiB) later. A decision still asks about the bytes of the write that needs it, so it is refused under the same condition with the same code, and never earlier. `capacity_admit` in task timing still counts one check per write, now mostly the chunk's count, so its attempts are unchanged and its total falls.
+
+**The edges** (CHECK-M addendum item 2; [capacity-admission.md](capacity-admission.md), [task-diagnostic-stream.md](task-diagnostic-stream.md)). The allowance is cached **per stream**, a count on the stream that is not shared and that the owner never holds. "At most one chunk late" is per stream; the whole machine's bound is the chunk times the live streams. A single write beyond what is left, or larger than a chunk, takes one decision for all of its own bytes before any is written, and what was left does not count towards it. A change of bound volume is seen at that stream's next decision, at most a chunk of bytes later, with today's refusal and reason. An I/O failure inside a chunk takes no decision, is the stream's fatal `artifact_write_failed` at once, and ends the stream's count with it, so nothing leaks to another stream or a later decision.
+
+**Rollback** (to 0.12.36). Nothing persisted. A file that names `artifact_store` is refused by the older build, as any newer section is; an instruction value of the key is reported as not restored.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| PF1-1 | `artifact_store.stream_admit_chunk_bytes` | configuration key, new section | PF-1 | PF-1 | `since` 0.12.37; integer `0..=67108864`, default 1048576 from the defaults file; settable; `actingd-config` revision 24 with §1.245 |
+| PF1-2 | `ArtifactStore::set_stream_admit_chunk_bytes` | artifact-store method | PF-1 | — | 0 until an owner sets it; a stream takes the value when it opens. Only the Runtime's host sets it, so offline stores and fixtures judge every write as before |
+
+### 1.249 Slice STILL-1 (0.12.37): a wait on a still screen it does not accept ends at a configured limit (Workflow #407; Alice's 11-02 report of the 15–20 minute runs; design `rd-1031/check-speed/model-check.md` §2, §6, §7; coordinator work order `rd-1031/check-speed/brief-slices.md`)
+
+**Why.** Four failed manual runs measured in the design ended on a screen that neither moved nor
+was recognised, and each waited out its limit: three spent 654 to 896 s there, the fourth at least
+204 s. Neither a recognition filter nor proactive capture shortens that wall time. Off by default:
+with `still_limit_ms` 0 no clock is read, no frame is compared for it, and every wait runs as
+before. [resource-declarations.md](resource-declarations.md) ("Capture cadence") and
+[runtime-config.md](runtime-config.md) ("The `execution` section") are the contract. **No persisted
+ledger shape and no new code:** the existing keys `held_ms` and `limit_ms` become optional values
+of three existing codes. The threshold comes from design §8: stay off, or on per instance only,
+until the ledger's longest legitimate still stretch is known.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| ST1-1 | `execution.capture.still_limit_ms` (`0` or `30000..=1800000`, 0), and per instance `instance.<id>.execution.capture.still_limit_ms` (default the section's) | configuration keys (§5 row; `config.parameters.execution` row; **`actingd-config` revision 24**, shared with AGT-1a §1.245; no second bump) (`still_limit_key_range_and_default`) | STILL-1 | STILL-1 | `since` 0.12.37; settable, read at each step; a value between 1 and 29 999 is `out_of_range` in the whole-section check |
+| ST1-2 | the still limit of a page wait and of a page-graph confirmation, a wait step's wait included | rule (no shape change) (the other five `gate_still1` tests) | STILL-1 | STILL-1 | counted on the wall clock from the back-off's frames, independent of the back-off's switch and of the factor (#411 A43b's rule tracks nothing at the factor 1000); frames of a held page never count; `linear_steps` waits, observation windows and input rechecks take none |
+| ST1-3 | `held_ms`, `limit_ms` optional on `contained_task_step_unconfirmed`, `contained_task_page_unknown`, `page_confirmation_failed` | optional values of existing codes, present only when a wait ended on the limit | STILL-1 | STILL-1 | `since` 0.12.37; `task_timing`'s `elapsed_ms` and `limit_ms` stay the wait's own, so `elapsed_ms` may be below `limit_ms`; a confirmation that goes on to a retry or to `on_error` carries the values only on a failure that ends the run |
+| ST1-4 | `CaptureCadence.still_limit_ms` (`execution-kernel`) | Runtime-internal interface (memory only) | STILL-1 | STILL-1 | the host hands the value for the run's instance with each step's pacing; `CaptureCadence::UNCONFIGURED` is 0 |
+
+**Rollback** (to 0.12.36). Nothing persisted changes. 0.12.36 refuses at start and in `check-config`
+a configuration file that names the section's member or an entry's (the members deny unknown
+members), **so the operator first removes them**. An online override of either key needs nothing:
+0.12.36 has no such key and drops the row (`config_override_dropped`) without refusing the record.
+
+### 1.250 Slices ACT-1 and ACT-2 (0.12.37): the settled path of a step after its input, and the gap between two actions (Workflow #407; coordinator work order `rd-1031/check-speed/brief-slices.md`; design `model-check.md` §1.6, §1.7, §7)
+
+[performance-control.md](performance-control.md) ("Step pacing") and
+[runtime-config.md](runtime-config.md) ("The `execution` section") are the contract. The number 1.250
+is the coordinator's. **Off by default:** under `execution.action_gap.mode` `declared` every step's
+order is the one before these slices. No package changes.
+
+**What.** Under `settled` a tap reads frames from the first frame after its input and goes on the
+first destination frame; `post_delay_ms` is the limit of that reading and is never added. A
+`fixed` or `random` gap finishes before the frame that decides the input and its guard, asked once
+per step; `performance` keeps only the pre-input wait. The path's frames and waits are recorded as a
+confirmation's, and the blind wait's boundary stays, empty.
+
+**What changes live.** Nothing until someone sets `settled`. With it, the frames of a step grow from
+about one to one per `poll_ms` until its destination shows, and the next step's guard judges an
+earlier frame.
+
+**Rollback** (to 0.12.36). Nothing persisted but the two values below in a run's diagnostics, which
+keep the row shape. A configuration file that names the keys is refused by an older Runtime
+(`actingd-config`), as is an instruction value restored from `host.config_overrides`, which is
+dropped with its record; a file that does not name them is read as before.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| ACT-1 | `execution.action_gap.{mode, poll_ms, settle_frames, settle_change_max_milli, settled_max_stage, fallback_hold_ms}`, each also `instance.<id>.…` | configuration keys | ACT-1 | ACT-1 | settable, read at each step; an instance's own key has default `none` |
+| ACT-2 | `execution.action_gap.{kind, fixed_ms, random_min_ms, random_max_ms}`, each also `instance.<id>.…` | configuration keys | ACT-2 | ACT-2 | as above; `random_min_ms` at most `random_max_ms` (`section_check`) |
+| ACT-3 | `StepPacing.settled_path`, `SettledPath`, `SettledHolds`, `ContainedTaskRuntime::step_action_gap`, `settled_path_held`, `settled_path_fell_back` (`execution-kernel`) | Runtime-internal interface (memory only) | ACT-1 | ACT-1 | trait defaults: no gap, never held, nothing recorded; a runtime that hands no path (offline, fixtures, the Lab's declared operation) keeps the order before it |
+| ACT-4 | `contained_task_action_gap_recorded` (info, ladder `none`; optional `action_gap_ms`, `package_id`, `pack_operation_id`), key `action_gap_ms` | outcome code and key | ACT-1, ACT-2 | ACT-1, ACT-2 | new, since nothing else says a gap was drawn or an operation fell back; one code with values (#420 S4). Written only in a run's diagnostics, as a recognition error row of the phase `action_gap`, as a mark's miss is (§1.28): no new row, no ledger shape, no `ledger` step |
+
+### 1.251 Slice OCR-SCALE-1 (0.12.37): a task of schema 0.9 may declare OCR fields, and a field's box follows a scaled anchor (#428, #392; Alice's ruling of 2026-11-02 that an interface scale is an event to support; coordinator work order `rd-1031/check-speed/brief-ocr-scale.md`)
+
+[ocr-fields.md](ocr-fields.md), section Task schema `0.9` fields tasks, is the contract. **No new code, key, ledger shape or wire shape.**
+
+**Why the limit existed.** `"0.9" => post_admission_ocr.is_none()` came in with schema 0.9 itself (commit `7e23026e23`, the phased routes): the slice's scope, with no reason, test or register row behind it, and the contract then called 0.9's budgets "non-OCR". `contained_task_phases_invalid` is another rule, schema 0.9 with `Lab-1y.control.v2`, and stays. Reading what later landed found one real problem, in one form only: schema 0.9's keyed ends supply a run's scheduling key, the `0.7` comparison supplies one too, and `finish_success_with_key` ends a run that has both in `contained_task_state_invalid` (admission keeps only `on_empty` away from a comparison). A fields run has no comparison key, so fields have no such problem.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| OS-1 | task schema `0.9` `post_admission_ocr`, `fields_v1` form | relaxed rule (resource file format) | OCR-SCALE-1 | resource side | `since` 0.12.37; optional; the gates, dictionaries, limits, zero-input rules, reports and projections of schema `0.8`; `package` revision 6, no second step (§1.244 TB6) |
+| OS-2 | task schema `0.9` `operations: []` with fields | relaxed rule (resource file format) | OCR-SCALE-1 | resource side | `since` 0.12.37; without fields it stays `contained_task_program_invalid`, `program_problem` `operations_empty`, whose token text now names both schemas |
+| OS-3 | the `0.7` comparison form in schema `0.9` | **unchanged refusal** | — | — | `resource_declaration_invalid` at its first unknown member, or `contained_task_program_invalid` where the gate does not run; the reason above |
+| OS-4 | a `template_relative` box on an anchor with `scales` | **unchanged behaviour**, now reachable by a field in a pack that declares it | REC-5 | resource side | `scaled_relative` already scales the offset and size by the matched factor; this slice writes the rule down and tests it through a fields run |
+
+**The scaling rule, and the evidence for it.** The rule REC-5 already gave relative colors, relative OCR and click offsets: `(|v| * f + 500) div 1000` from the matched top-left corner, the highest score across factors, no fallback when the anchor does not match. The resource side's frames of a real 0.90 interface scale show the icons and the text beside them shrinking together in one layer, and the reading's digits moving with the icons (its measured move of 30 and 18 pixels on one button is the layer's vanishing point, which is why the box hangs from the anchor and not from the frame). A second rule for fields would give one reading two answers.
+
+**Interface.** `package` stays [3, 6]: the new form is refused loudly by an older Runtime and shares revision 6 with DB-2 in one release. No bundle index or installer change.
+
+**Left open.** A pack in the `0.7` comparison form cannot move to schema `0.9` by this slice and keeps its parallel templates; moving it needs the keyed ends refused beside a comparison and the form told apart by `mode`, a slice of its own if wanted. Fields beside `phases` are admitted, since the collector does not read the stage, and no test runs them together. No pack changes here.
+
+**Rollback** (to 0.12.36). A pack that declares it is refused at the older build's declaration gate; `package` [3, 6] above its range refuses the combination earlier. Nothing persisted changes.
+
+### 1.252 Slice PF-2 (0.12.37): `RecognitionStarted`'s two commits observed stage by stage, in the existing task timing shape (Workflow #407; design `rd-1031/check-speed/model-check.md` §3, §7, addendum item 3; coordinator work order `rd-1031/check-speed/brief-slices.md`)
+
+[task-diagnostic-stream.md](task-diagnostic-stream.md) is the contract. The number 1.252 is the coordinator's. **No new persisted shape, no outcome code, no configuration key, no interface revision.** The test: `recognition_started_stages_are_observed` (host gate row beside P-k1b).
+
+**Why.** The started record's span showed 39 to 155 ms a frame in the design's samples, with no stage timing on it; the design suspected a wait for `fact_write_gate`. Reading the path shows a second candidate the span cannot tell apart: `recognition.requested` is a pipeline event, so it also takes the `performance` lock after the gate is dropped.
+
+**What changes.** The arm's two commits go through `append_event_observed`, which is the same append with its stages observed. The records, their order, their links and every failure path stay; the kernel sees no change.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| PF2-1 | task timing evidence `boundaries.recognition_payload_stages`, `boundaries.recognition_task_stages` | existing members, wider meaning | PF-2 | PF-2 | they now hold `RecognitionStarted`'s commits beside `RecognitionCompleted`'s (`recognition.requested` in the first, `task.recognition_started` in the second), so `attempts` is started plus completed records; a value from before 0.12.37 is `RecognitionCompleted`'s alone and is not comparable per attempt. No component reads these members; an older reader decodes them unchanged, so the `ledger` revision stays |
+
+**Why not the design's new member `recognition_started_stages`.** The design named it. `TaskTimingBoundaryObservations` denies unknown members, so a member added there is a record an earlier reader refuses, which by [component-interfaces.md](component-interfaces.md) ("Bump rule") raises `ledger` to 6: a rollback to 0.12.36 refused and the console's contract pin moved, for an observation. The existing families answer the question: a started commit's stage is bounded by the record spans ([task-diagnostic-stream.md](task-diagnostic-stream.md)), and the two records' spans differed by ten times in both directions in the design's samples, so the bound is close where it matters. A later exact split per record would be that member, with that revision.
+
+**What it does not do.** It shows the wait; it does not name the holder. A stage's `max_us` against its `total_us / attempts`, set beside the same commit's own `writer_response` and `fact_sync` (what one append holds the gate for), tells a queue of ordinary appends from one long holder. `writer` stays one snapshot, replaced on every commit, so it is usually `RecognitionCompleted`'s.
+
+**The golden.** `apps/actinglab/tests/golden/expected.json`: `attempts` 1 to 2 in the spans of the two families, nothing else. Written by hand, because no build runs on the authoring machine; CI compares it.
+
+**Rollback** (to 0.12.36). Nothing to do; the members decode as before.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
@@ -5997,23 +6063,6 @@ an overview near the budget starts cutting a little earlier, in the order it alr
 |---|---|---|---|---|---|
 | R0B2-1 | `instances[].activity?` | `actingctl overview` / `ac_overview` answer | R-0b2 | R-0b2 | `since` 0.12.36; from the one Status read; never cut |
 
-### 1.248 Slice PF-1 (0.12.37): one capacity decision per chunk of a stream (Workflow #407; design `rd-1031/check-speed/model-check.md` §3, §7; coordinator work order `rd-1031/check-speed/brief-slices.md`)
-
-[capacity-admission.md](capacity-admission.md) and [runtime-config.md](runtime-config.md) ("The `artifact_store` section") are the contract. The number 1.248 is the coordinator's. No ledger shape, no wire shape, no outcome code changes.
-
-**Why.** Every write of a stream took a capacity decision. A diagnostic stream writes once per record, 107 to 426 records a frame; one measured run spent 17.25 s of its 18.25 s of diagnostic writing on those decisions. The new fast path (§7's ACT slices) reads more frames, so this comes first.
-
-**What changes live.** Nothing a run records or decides, except that a refusal or a binding change on a stream may surface up to one chunk (1 MiB) later. A decision still asks about the bytes of the write that needs it, so it is refused under the same condition with the same code, and never earlier. `capacity_admit` in task timing still counts one check per write, now mostly the chunk's count, so its attempts are unchanged and its total falls.
-
-**The edges** (CHECK-M addendum item 2; [capacity-admission.md](capacity-admission.md), [task-diagnostic-stream.md](task-diagnostic-stream.md)). The allowance is cached **per stream**, a count on the stream that is not shared and that the owner never holds. "At most one chunk late" is per stream; the whole machine's bound is the chunk times the live streams. A single write beyond what is left, or larger than a chunk, takes one decision for all of its own bytes before any is written, and what was left does not count towards it. A change of bound volume is seen at that stream's next decision, at most a chunk of bytes later, with today's refusal and reason. An I/O failure inside a chunk takes no decision, is the stream's fatal `artifact_write_failed` at once, and ends the stream's count with it, so nothing leaks to another stream or a later decision.
-
-**Rollback** (to 0.12.36). Nothing persisted. A file that names `artifact_store` is refused by the older build, as any newer section is; an instruction value of the key is reported as not restored.
-
-| # | Shape | Kind | Code slice | First writer | Notes |
-|---|---|---|---|---|---|
-| PF1-1 | `artifact_store.stream_admit_chunk_bytes` | configuration key, new section | PF-1 | PF-1 | `since` 0.12.37; integer `0..=67108864`, default 1048576 from the defaults file; settable; `actingd-config` revision 24 with §1.245 |
-| PF1-2 | `ArtifactStore::set_stream_admit_chunk_bytes` | artifact-store method | PF-1 | — | 0 until an owner sets it; a stream takes the value when it opens. Only the Runtime's host sets it, so offline stores and fixtures judge every write as before |
-
 ### 5.1 Capacity of `config.parameters`
 
 `config.parameters` is one runtime fact whose `record_list` holds at most 256 rows (M387 §5.9,
@@ -6034,55 +6083,6 @@ The total stayed under 256 for up to eight instances (255 rows) before #405's th
 keys (SR-1, §1.23); with them it passes 256 at five instances. So D1b implements the split (coordinator ruling, 2026-10-12): `config.parameters`
 becomes one `config.parameters.<section>` fact per section (M387 §5.9), written and read that way
 from D1b on, and each section fact holds at most 256 rows.
-
-### 1.250 Slices ACT-1 and ACT-2 (0.12.37): the settled path of a step after its input, and the gap between two actions (Workflow #407; coordinator work order `rd-1031/check-speed/brief-slices.md`; design `model-check.md` §1.6, §1.7, §7)
-
-[performance-control.md](performance-control.md) ("Step pacing") and
-[runtime-config.md](runtime-config.md) ("The `execution` section") are the contract. The number 1.250
-is the coordinator's. **Off by default:** under `execution.action_gap.mode` `declared` every step's
-order is the one before these slices. No package changes.
-
-**What.** Under `settled` a tap reads frames from the first frame after its input and goes on the
-first destination frame; `post_delay_ms` is the limit of that reading and is never added. A
-`fixed` or `random` gap finishes before the frame that decides the input and its guard, asked once
-per step; `performance` keeps only the pre-input wait. The path's frames and waits are recorded as a
-confirmation's, and the blind wait's boundary stays, empty.
-
-**What changes live.** Nothing until someone sets `settled`. With it, the frames of a step grow from
-about one to one per `poll_ms` until its destination shows, and the next step's guard judges an
-earlier frame.
-
-**Rollback** (to 0.12.36). Nothing persisted but the two values below in a run's diagnostics, which
-keep the row shape. A configuration file that names the keys is refused by an older Runtime
-(`actingd-config`), as is an instruction value restored from `host.config_overrides`, which is
-dropped with its record; a file that does not name them is read as before.
-
-| # | Shape | Kind | Code slice | First writer | Notes |
-|---|---|---|---|---|---|
-| ACT-1 | `execution.action_gap.{mode, poll_ms, settle_frames, settle_change_max_milli, settled_max_stage, fallback_hold_ms}`, each also `instance.<id>.…` | configuration keys | ACT-1 | ACT-1 | settable, read at each step; an instance's own key has default `none` |
-| ACT-2 | `execution.action_gap.{kind, fixed_ms, random_min_ms, random_max_ms}`, each also `instance.<id>.…` | configuration keys | ACT-2 | ACT-2 | as above; `random_min_ms` at most `random_max_ms` (`section_check`) |
-| ACT-3 | `StepPacing.settled_path`, `SettledPath`, `SettledHolds`, `ContainedTaskRuntime::step_action_gap`, `settled_path_held`, `settled_path_fell_back` (`execution-kernel`) | Runtime-internal interface (memory only) | ACT-1 | ACT-1 | trait defaults: no gap, never held, nothing recorded; a runtime that hands no path (offline, fixtures, the Lab's declared operation) keeps the order before it |
-| ACT-4 | `contained_task_action_gap_recorded` (info, ladder `none`; optional `action_gap_ms`, `package_id`, `pack_operation_id`), key `action_gap_ms` | outcome code and key | ACT-1, ACT-2 | ACT-1, ACT-2 | new, since nothing else says a gap was drawn or an operation fell back; one code with values (#420 S4). Written only in a run's diagnostics, as a recognition error row of the phase `action_gap`, as a mark's miss is (§1.28): no new row, no ledger shape, no `ledger` step |
-
-### 1.252 Slice PF-2 (0.12.37): `RecognitionStarted`'s two commits observed stage by stage, in the existing task timing shape (Workflow #407; design `rd-1031/check-speed/model-check.md` §3, §7, addendum item 3; coordinator work order `rd-1031/check-speed/brief-slices.md`)
-
-[task-diagnostic-stream.md](task-diagnostic-stream.md) is the contract. The number 1.252 is the coordinator's. **No new persisted shape, no outcome code, no configuration key, no interface revision.** The test: `recognition_started_stages_are_observed` (host gate row beside P-k1b).
-
-**Why.** The started record's span showed 39 to 155 ms a frame in the design's samples, with no stage timing on it; the design suspected a wait for `fact_write_gate`. Reading the path shows a second candidate the span cannot tell apart: `recognition.requested` is a pipeline event, so it also takes the `performance` lock after the gate is dropped.
-
-**What changes.** The arm's two commits go through `append_event_observed`, which is the same append with its stages observed. The records, their order, their links and every failure path stay; the kernel sees no change.
-
-| # | Shape | Kind | Code slice | First writer | Notes |
-|---|---|---|---|---|---|
-| PF2-1 | task timing evidence `boundaries.recognition_payload_stages`, `boundaries.recognition_task_stages` | existing members, wider meaning | PF-2 | PF-2 | they now hold `RecognitionStarted`'s commits beside `RecognitionCompleted`'s (`recognition.requested` in the first, `task.recognition_started` in the second), so `attempts` is started plus completed records; a value from before 0.12.37 is `RecognitionCompleted`'s alone and is not comparable per attempt. No component reads these members; an older reader decodes them unchanged, so the `ledger` revision stays |
-
-**Why not the design's new member `recognition_started_stages`.** The design named it. `TaskTimingBoundaryObservations` denies unknown members, so a member added there is a record an earlier reader refuses, which by [component-interfaces.md](component-interfaces.md) ("Bump rule") raises `ledger` to 6: a rollback to 0.12.36 refused and the console's contract pin moved, for an observation. The existing families answer the question: a started commit's stage is bounded by the record spans ([task-diagnostic-stream.md](task-diagnostic-stream.md)), and the two records' spans differed by ten times in both directions in the design's samples, so the bound is close where it matters. A later exact split per record would be that member, with that revision.
-
-**What it does not do.** It shows the wait; it does not name the holder. A stage's `max_us` against its `total_us / attempts`, set beside the same commit's own `writer_response` and `fact_sync` (what one append holds the gate for), tells a queue of ordinary appends from one long holder. `writer` stays one snapshot, replaced on every commit, so it is usually `RecognitionCompleted`'s.
-
-**The golden.** `apps/actinglab/tests/golden/expected.json`: `attempts` 1 to 2 in the spans of the two families, nothing else. Written by hand, because no build runs on the authoring machine; CI compares it.
-
-**Rollback** (to 0.12.36). Nothing to do; the members decode as before.
 
 ## 6 Interface revisions (declared once for v0.12.0 by #378 A8, ORD §3.6)
 

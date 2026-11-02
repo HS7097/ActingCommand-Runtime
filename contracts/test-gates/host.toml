@@ -3013,6 +3013,7 @@ incident = ["#432 AGT-1a"]
 coverage = "Y"
 tests = [
     "actingcommand-runtime-host::lib::tests::gate_agt_1b::no_section_starts_no_worker_and_writes_no_file_or_row",
+    "actingcommand-runtime-host::lib::tests::gate_agt_1b::production_assembly_builds_the_real_forwarder_and_starts_nothing",
     "actingcommand-runtime-host::lib::tests::gate_agt_1b::test_wake_writes_body_then_row_then_sends_once",
     "actingcommand-runtime-host::lib::tests::gate_agt_1b::intent_is_committed_before_the_forward_writes",
     "actingcommand-runtime-host::lib::tests::gate_agt_1b::a_refused_intent_means_no_write",

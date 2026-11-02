@@ -1448,6 +1448,33 @@ impl RuntimeHost {
             }))
     }
 
+    /// Test only: one send through the forwarder the start assembled, with how many intents it
+    /// committed. For a channel the registry does not hold, so its deadline is never read.
+    #[cfg(test)]
+    pub(crate) fn agent_wake_forward_send_for_test(
+        &self,
+        channel: &str,
+    ) -> RuntimeHostResult<(ForwardOutcome, u32)> {
+        let shared = self.shared_ref(HostLocation::AgentWakeWorker)?;
+        let mut intents = 0;
+        let outcome = shared.agent_wake.forward.send(
+            channel,
+            &ForwardMessage {
+                id: [0; 16],
+                text: String::new(),
+            },
+            &SendLimits {
+                deadline: Instant::now(),
+                stopped: &|| false,
+            },
+            &mut || -> Result<(), IntentFailed> {
+                intents += 1;
+                Ok(())
+            },
+        );
+        Ok((outcome, intents))
+    }
+
     /// Test only: whether the worker's thread runs.
     #[cfg(test)]
     pub(crate) fn agent_wake_thread_runs_for_test(&self) -> RuntimeHostResult<bool> {

@@ -288,6 +288,47 @@ fn no_section_starts_no_worker_and_writes_no_file_or_row() {
     assert!(!bed.folder().exists());
 }
 
+// The production assembly, with no section and no test forwarder, holds the real forwarder: only it
+// reads the registry under the state root, so a channel the registry does not hold fails with no
+// intent, where `Unavailable` would answer `Deferred`. Nothing starts and nothing is written.
+#[test]
+fn production_assembly_builds_the_real_forwarder_and_starts_nothing() {
+    let bed = Bed::new(&[CHANNEL]);
+    let clock: Arc<dyn RuntimeClock> = bed.clock.clone();
+    let host = RuntimeHost::start(
+        config(&bed.root).with_runtime_clock(clock),
+        Arc::new(FakeProvider::one(
+            "node.a",
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    assert!(!host.agent_wake_thread_runs_for_test().expect("the thread"));
+    assert_eq!(bed.status(&host), None);
+    let (outcome, intents) = host
+        .agent_wake_forward_send_for_test("无此频道")
+        .expect("a send");
+    assert!(
+        matches!(
+            outcome,
+            ForwardOutcome::Failed {
+                problem: DeliveryProblem::ChannelUnknown,
+                ..
+            }
+        ),
+        "{outcome:?}"
+    );
+    assert_eq!(intents, 0);
+    assert_eq!(rows(&host), Vec::new());
+    assert_eq!(host.agent_wake_fact_for_test().expect("the fact"), None);
+    assert!(!bed.folder().exists());
+    let forward_folder = fs::read_dir(bed.root.path().join("agent-forward"))
+        .expect("the registry's folder")
+        .count();
+    assert_eq!(forward_folder, 1, "the registry alone");
+}
+
 #[test]
 fn test_wake_writes_body_then_row_then_sends_once() {
     let bed = Bed::new(&[CHANNEL]);

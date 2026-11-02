@@ -1832,9 +1832,10 @@ impl RuntimeHost {
         // `HostShared` below moves some of its fields, and the provider startup uses this.
         let startup_discovery = startup_discovery_config(&config);
         // Workflow #432 AGT-1b (design section 2): built with the shared state, before the start's
-        // settlement writes records. `Unavailable` answers until a transport exists (AGT-T1).
-        let agent_forward: Arc<dyn actingcommand_agent_forward::AgentForward> =
-            Arc::new(actingcommand_agent_forward::Unavailable);
+        // settlement writes records. AGT-T1: the real forwarder starts nothing when it is built.
+        let agent_forward: Arc<dyn actingcommand_agent_forward::AgentForward> = Arc::new(
+            actingcommand_agent_forward::RealForward::new(config.state_root.clone()),
+        );
         #[cfg(test)]
         let agent_forward_held = config.agent_forward_for_test.is_some();
         #[cfg(test)]
