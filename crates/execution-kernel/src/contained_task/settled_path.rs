@@ -138,8 +138,9 @@ pub(super) struct SettledWindow {
 
 /// ACT-4: how a step's reading ended.
 pub(super) enum SettledReading {
-    /// The step goes on this frame.
-    Arrived(PageObservation),
+    /// The step goes on this frame. Boxed: it holds the frame, and inline it would be the one
+    /// large variant (clippy `large_enum_variant`).
+    Arrived(Box<PageObservation>),
     /// The step goes to its confirmation, which has `spent` of its timeout behind it: what the
     /// reading of a step without `post_delay_ms` counted, else nothing.
     Confirm { spent: Duration },
@@ -401,7 +402,7 @@ impl PreparedContainedTask {
                         });
                     if goes {
                         if settling.settled() {
-                            return Ok(SettledReading::Arrived(observation));
+                            return Ok(SettledReading::Arrived(Box::new(observation)));
                         }
                         None
                     } else if wait_page

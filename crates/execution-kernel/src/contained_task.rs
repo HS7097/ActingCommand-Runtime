@@ -5736,7 +5736,7 @@ impl PreparedContainedTask {
                         let resolution = match arrived {
                             settled_path::SettledReading::Arrived(reached) => {
                                 arrived_settled = Some(operation_id.clone());
-                                PostconditionResolution::Reached(reached)
+                                PostconditionResolution::Reached(*reached)
                             }
                             settled_path::SettledReading::Confirm { spent } => self
                                 .await_postcondition_after(
