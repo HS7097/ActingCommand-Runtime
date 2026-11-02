@@ -9,6 +9,159 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.37
+
+本版是 v0.12.36 之后合并的 10 个 PR，其中两个是各带五片的集成 PR：S4a-1、AGT-1a、STILL-1、OCR-SCALE-1，集成一（PF-1、ACT-1+2、AGT-1b、AGT-T1、PF-2），
+集成二（AGT-2、AGT-T2、AGT-T3、ACT-4、LOAD-1），以及 LOAD-2、AGT-T1b、LOAD-3、SUB-LAG-1。先说部署：账本的声明不变（仍是 [3, 5]），部署不用带
+`--accept-ledger-one-way`，计划里也没有 `ledger_verify` 这一步；装上以后能退回 v0.12.36，条件见下面的退回。
+新行为在配置之前全都是关的：动作之后读帧的路径（`execution.action_gap.mode` 默认 `declared`）、静止画面的上限（`execution.capture.still_limit_ms`
+默认 0）、加载页（`execution.loading.mode` 默认 `off`）、智能体唤起（没有 `agent_wake` 段，也没有登记的频道）。包侧的新写法（选择文档读共享表、
+schema 0.9 的 OCR 字段、`expect_after.target_present` / `target_gone` / `loading`、包里的加载页副本）现在装着的包都没有用（v0.12.36 会拒收前几种）。
+调度停着（每台实例都暂停）的时候，运行上只有一处变化：
+**事件订阅者跟不上时，现在只结束它自己的这次订阅（SUB-LAG-1）。** 读事件流（`SubscribeEvents`）的客户端，比如控制台，读得慢、实时队列满了，
+回执是 `failed`，码是 `subscription_lagged`（`host_halted` false），带 `resume_after_sequence`，按它重新订阅不丢事件；Runtime 和别的订阅者照常。
+以前这种情况会让整个 Runtime 停下。
+有运行的时候（不论是不是调度发起的）另有两处默认就生效，都不改任何决定：诊断流按块做容量判定（PF-1，每块 1 MiB，拒绝最多晚一块），
+识别开始的两次提交也计进任务计时的分段（PF-2，两族的 `attempts` 变成开始加完成）。
+另外要知道的：
+
+- **`runtime-client` [3, 5]**（AGT-1b）：Status 多一个成员 `agent_wake`，只在配置有 `agent_wake` 段时出现。声明上限 4 的控制台（UI v0.12.4 是 [3, 4]）
+  读到它就解不开整个 Status，安装工具的配对检查却照样通过，所以**先升级控制台，再往配置里加 `agent_wake` 段**。
+- **`package` [3, 6]**：包可以声明 `expect_after.target_present` / `target_gone`（ACT-4）和 `expect_after.loading`（LOAD-2），选择文档可以声明
+  `tables`（S4a-1），schema 0.9 的任务可以声明 `post_admission_ocr`（OCR-SCALE-1），包可以带 `resources/loading.json`（LOAD-1）。用到这些的资源版本
+  要求本版：先部署 Runtime，再部署包。
+- 新命令：`actingctl agent-channel add|remove|list|claude-hook|claude-register|notice`、`actingctl agent-wake-test`（都不是 MCP 工具，MCP 工具仍是
+  40 个）；`actinglab package loading --root-file <file> --packs-root <dir> (--write | --check)`、`actinglab package bundle --loading`。
+
+配置：`actingd-config` 从 [5, 23] 改为 [5, 24]（AGT-1a 升一次，STILL-1、ACT-1+2、PF-1、ACT-4、LOAD-3 都并进修订 24）；`package` 从 [3, 5] 改为
+[3, 6]（S4a-1 升一次，OCR-SCALE-1、ACT-4、LOAD-1、LOAD-2 并进修订 6）；`runtime-client` 从 [3, 4] 改为 [3, 5]（AGT-1b，`min` 不动）；`ledger` 仍是
+[3, 5]，`install-selection` 仍是 [1, 1]，`install-control` 仍是 [0, 1]，`runtime-outcomes` 仍是 [1, 1]。`component-interfaces.json` 和
+`contracts/component-interfaces.md` 的 `actingd-config` 24、`runtime-client` 5、`package` 6 三行一致。
+
+- 新键（`since` 都是 0.12.37；控制台分档没改，新键都是 `hidden`）：
+  - `execution.capture.still_limit_ms`（STILL-1）：0 或 30000 到 1800000，默认 0（关）；可在线改，每一步读；每实例
+    `instance.<id>.execution.capture.still_limit_ms`，默认跟节里的值。1 到 29999 由整节检查拒绝。
+  - `execution.action_gap.*`（ACT-1、ACT-2、ACT-4）十一个：`mode`（`declared` 或 `settled`，默认 `declared`）、`kind`（`fixed`、`random`、
+    `performance`，默认 `fixed`）、`fixed_ms`、`random_min_ms`、`random_max_ms`（0 到 60000，默认 0；`random_min_ms` 不大于 `random_max_ms`）、
+    `poll_ms`（0 到 1000，默认 50）、`settle_frames`（1 到 8，默认 1）、`settle_change_max_milli`（0 到 1000000，默认 500）、`settled_max_stage`
+    （`s0` 到 `s4`，默认 `s1`）、`fallback_hold_ms`（0 到 86400000，默认 3600000）、`settled_limit_ms`（0 到 5000，默认 2000）。都可在线改，
+    每一步读；每实例同名键 `instance.<id>.execution.action_gap.<成员>` 没有默认值，不写就用节里的。`mode` 是 `declared` 时其余各键都不起作用。
+  - `execution.loading.mode`（LOAD-3）：`off`、`shadow`、`on`，默认 `off`；可在线改；每实例 `instance.<id>.execution.loading.mode` 没有默认值。
+    Lab 操作固定 `off`。
+  - `artifact_store.stream_admit_chunk_bytes`（PF-1，新节）：0 到 67108864，默认 1048576；可在线改，新开的流才用新值；0 就是以前的每次写都判一次。
+  - `agent_wake` 段（AGT-1a）的 19 个键：都没有默认值，整段写全或不写；不写时没有这些键、没有 `agent_wake` 的 subsystem 行，`ConfigureSettings`
+    对它们答 `config_key_unknown`，所以第一次打开是改配置文件再重启。`body.dir`、`delivery.queue_capacity` 不能在线改，其余 17 个可以。写法、
+    取值范围和示例在 `contracts/agent-wake.md`。
+- 默认值文件：多上面 14 个有默认值的键，`ledger_observer.tag.workbench_patterns` 多一条 `host.agent_wake`（没有 `agent_wake` 段时 Runtime 唯一的
+  不同）。部署计划的默认值对比因此有 15 行，来源都是 `default`，没有已有键的值变化。程序事实 `config.parameters` 多 `artifact_store` 一行，有
+  `agent_wake` 段时再多它的参数行和 `config.subsystems` 的一行。
+- `instances[]` 的条目多一个可选成员 `execution`（`capture.still_limit_ms`、`action_gap`、`loading`）。配置示例 `actingd.config.example.json` 现在
+  写了 `execution.action_gap.kind: performance`，只在 `settled` 下起作用；照它写的配置 v0.12.36 不认（见退回）。
+- 结果码：新码 18 个（S4a-1 的 `standard_pack_table_missing`、`standard_pack_table_mismatch`、`standard_pack_table_read`、`term_fallback_used`、
+  `resource_table_identity_uncovered`；唤起的 `agent_wake_config_invalid`、`agent_wake_delivery_failed`、`agent_wake_message_too_long`、
+  `agent_wake_channel_unknown`、`agent_wake_disabled`、`agent_budget_exhausted`、`invalid_agent_wake_test_origin`、`request_agent_wake_test_completed`、
+  `agent_wake_test_queued`、`agent_channel_reported`、`agent_channel_failed`；诊断里的 `contained_task_action_gap_recorded`、
+  `contained_task_loading_recorded`），新位置 5 个（`agent_wake_worker`、`agent_wake_restore`、`agent_wake_test`、`join_agent_wake_worker`、
+  `runtime_agent_wake_test`），新值键 12 个（含 `resume_after_sequence`），新词表 4 个（`agent_delivery_state`、`agent_delivery_problem`、
+  `loading_event`、`table_mismatch`）。已有的码多了可选值：`contained_task_step_unconfirmed`、`contained_task_page_unknown`、
+  `page_confirmation_failed` 多 `held_ms`、`limit_ms`（STILL-1）和 `loading_page_id`、`loading_ms`、`loading_limit_ms`（LOAD-3）；
+  `subscription_lagged` 多 `ledger_sequence`、`resume_after_sequence`；`standard_pack_root_invalid` 多 `package_id`。已有词表加词：
+  `config_value_problem` 9 个、`program_problem` 7 个、`standard_pack_problem` 8 个。结果码目录从 3869 个码、1733 个位置变成 3887 个、1738 个；
+  没有新定稿或退役的条目，所以本版的发布文件是空的。
+- 账本：`ledger` 不升，没有新记录形状。新码只出现在已有的记录上（比如 `standard_pack_read` 的 `standard_pack_table_read`、唤起工作线程的非致命
+  `runtime.failed`）。PF-2 把 `RecognitionStarted` 的两次提交也记进已有的 `recognition_payload_stages`、`recognition_task_stages`，这两族的
+  `attempts` 和 v0.12.37 以前的值不能逐次比较。
+- 程序文件：多一个 workspace 成员 `crates/agent-forward`（库，不是新程序）；Runtime 包和 Tools 包的文件清单和 v0.12.36 一样。AGT-T1b 的 C# 小助手
+  和 AGT-T3 的 DSH 助手都嵌在程序里，前者在第一次唤起会话时用 .NET Framework 的 `csc.exe` 编译到状态根的 `agent-forward\claude-input\`。
+  `NOTICE.md` 多一节从 codex-goal-lifecycle（MIT）改写的源码，`actingctl agent-channel notice` 打出它的许可文本。
+
+升级时要知道的：
+
+- 不用 `--accept-ledger-one-way`（按安装工具的代码核过）：两边的 `ledger` 都是 [3, 5]，`previous_max_in_next`（5 在 [3, 5] 里）和 `one_way`
+  （R\*.max 5 不大于 Rp.max 5）都过；带上也不改判断。现行和目标的 `ledger` 相同，所以计划里没有 `ledger_verify`，apply 不读账本。
+- 安装命令的代码自 v0.12.36 没有改（只改了一个测试的期望值和一行注释），v0.12.36 的安装工具判的边和本版一样，只是自己的声明和认得的键不同（见下面的配对）。
+  本版的 check-config 读现行配置照常通过（现行配置没有修订 24 的成员）；包的边在单一位置根上只有 `pack_declaration_unknown` 警告（见退回）。
+- 部署的自动回退和 `install undo` 这次可以用：账本不变，接口边都过，只要配置还没写进新成员（刚部署完就是这样），回退门的配置一项也过。
+- 打开唤起的顺序：先把控制台升级到声明 `runtime-client` 上限 5 的版本，再加 `agent_wake` 段并重启，再用 `actingctl agent-channel add` 登记频道，
+  最后用 `actingctl agent-wake-test` 试一次。四种转发都没在真会话上试过（开发和 CI 没碰过真会话、真管道和真令牌，AGT-T1b 能否拉起已停的会话也没验证），
+第一次实测之前不要依赖它；
+  客户端每次更新后跑一次测试消息。
+- STILL-1 的上限要先离线统计成功运行里最长的合法静止段再定，在那之前保持关，或只对单台实例开。ACT-1+2 开 `settled` 之前要实测 `when`、
+  `on_guard_refused` 判最早那一帧会不会选错。
+
+退回 v0.12.36（按安装工具的代码核过）：
+
+- 安装工具允许退回。`ledger` 两边都是 [3, 5]：`previous_max_in_next`（Rp.max 5 在 R\* [3, 5] 里）和 `one_way` 都过，不用 `--accept-ledger-one-way`。
+  `runtime-client` 5 → 4：`installer_meets_previous`、`installer_meets_next` 只比安装工具和两边的交集，本版的 I [3, 5] 和 Rp [3, 5]、R\* [3, 4]
+  都有交集（v0.12.36 的 I [3, 4] 也一样），过。`install-control`、`runtime-outcomes` 两边相同。部署的自动回退、`rollback plan|apply`、`install undo`
+  走的是同一组边和同一个回退门。
+- `actingd-config` 24 → 23：没有哪条边直接比两边的范围，挡住退回的是配置的内容。回退门的配置一项让 v0.12.36 的 check-config 读现行配置，配置里只要有
+  修订 24 的成员（`agent_wake` 段、`artifact_store` 段、`execution.action_gap`、`execution.capture.still_limit_ms`、`execution.loading`，或
+  `instances[]` 条目的 `execution`），它就拒绝（这些地方都拒收不认识的成员），退回以 `rollback_gate_failed`（`rollback_gate_parts` 含 `config`，
+  带 check-config 的拒绝）结束，什么都不改。用 v0.12.36 的 `actingctl` 来退回时，`execution` 下的新成员先让 `installer_knows_keys` 不过，以
+  `interface_edge` 拒绝。**所以退回之前先从配置文件里删掉这些成员。** 在线改过的值（`host.config_overrides` 的行）不用管：v0.12.36 启动时逐行丢掉
+  （`config_override_dropped`），不拒绝。
+- `package` 6 → 5：`bundle_max_in_next` 对登记的每个游戏根比它声明的上限在不在 R\* [3, 5] 里，声明 [6, 6] 的会以 `interface_edge` 拒绝。可单一位置根的包
+  登记是接管时写的，不带声明，所以这条边只给 `pack_declaration_unknown` 警告，挡不住。用了新写法的包在 v0.12.36 上准入时被拒：选择文档的 `tables`
+  （`contained_task_select_policy_invalid`），`expect_after.target_present` / `target_gone` / `loading` 和 schema 0.9 的 `post_admission_ocr`
+  （声明门 `resource_declaration_invalid`），步骤计划的 `wait_page`（`contained_task_linear_invalid`）；只带加载页副本的包照常跑，副本被忽略。
+  **所以退回之前先把包换回不用这些写法的版本。** 现在没有包用它们。
+- 落盘的东西都不挡：账本没有新形状，回退门的账本一项会让 v0.12.36 自己的读者把部署以来的页读一遍来核；运行时事实 `host.agent_wake`，v0.12.36 当作
+  不认识的键接受；`<state_root>\agent-forward\`（频道登记、Claude 会话记录、编译好的小助手、`claude-woken.json`）和唤起的正文目录留在盘上，
+  v0.12.36 不读。会话记录里有 DPAPI 保护的令牌，要清掉就先 `actingctl agent-channel remove`。运行诊断里 ACT-1+2、ACT-4、LOAD-3 的新行沿用原来的行形状。
+- 退回以后，一个读得慢的事件订阅者又会让 v0.12.36 的 Runtime 停下（SUB-LAG-1 只在本版）。
+- 客户端和 Runtime 的配对（`runtime-client` 本版 [3, 5]、v0.12.36 [3, 4]；`apps/actingctl` 自 v0.12.36 加了 `agent-channel`、`agent-wake-test`，
+  以及 `overview` 和 `ac_overview` 的 `agent_wake` 块，MCP 工具仍是 40 个）：
+  - v0.12.36 的安装工具装本版：照常，不带 `--accept-ledger-one-way`。它的声明 I 是 `runtime-client` [3, 4]，和 Rp [3, 4]、R\* [3, 5] 都有交集
+    （`installer_meets_previous`、`installer_meets_next`），`install-control` [0, 1] 相同，`runtime-outcomes` 1 在它的 [1, 1] 里，现行配置没有它
+    不认识的键（`installer_knows_keys`）；账本两条边、没有 `ledger_verify` 都和上面一样。从本版的构建目录跑本版的安装工具（I 是 [3, 5]）结果相同。
+  - 修订 [3, 4] 的客户端连本版（UI v0.12.4 声明 `actingd-config` [5, 23]、`ledger` [3, 5]、`runtime-client` [3, 4]、`runtime-outcomes` [1, 1]；
+    v0.12.36 的 actingctl、MCP 和 actinglab 也是 [3, 4]）：
+    - 没有 `agent_wake` 段：照常。Status 不带新成员，别的回答形状和请求都没变。订阅跟不上时它收到 `failed` 的 `subscription_lagged`
+      （`host_halted` false）；结果的值是开放的，不认识的 `resume_after_sequence` 也解得开，它不读这个游标，就按自己记下的游标重订。UI 的边按代码
+      都过：`actingd-config` 三方共同的 5 到 23；Rp.max、R\*.max 都是 5，在 [3, 5] 里；[3, 4] 和 [3, 5] 有交集；`runtime-outcomes` 1 在 [1, 1] 里。
+    - 有 `agent_wake` 段：每次读 Status 都解不开（`RuntimeControlPlaneStatus` 拒收不认识的成员），报 `runtime_receipt_decode_failed`，状态和 overview
+      都读不了，别的请求照常。配对检查照样通过，挡不住，所以先升级控制台。MCP 前端还没换子进程时的旧 actingctl 也一样。
+    - UI 声明的 `actingd-config` 上限是 23：配置文件写进修订 24 的成员以后，UI 自己读写配置文件时认不认得，要 UI 侧确认（单一位置根的计划还不算
+      UI 的边，R-15c、R-15d 起才算）。
+  - 本版的 actingctl 和 MCP 连 v0.12.36 的 Runtime（部署切换的几秒里，或退回以后）：照常。Status 没有 `agent_wake`，overview 就不显示这一块；只有
+    `agent-wake-test` 会被断开连接（v0.12.36 解不开 `AgentWakeTest`）。`agent-channel` 不连 Runtime。
+  - actinglab 和 Runtime 混版：`package loading`、`package bundle --loading`、`resource validate` 的新族和 `package check` 的 `loading` 成员都在本机读，
+    和 Runtime 无关。资源侧要留意：从本版起，带加载页副本的包，游戏根上没有 `loading.json` 时 `standard-pack check` 拒绝它，`package bundle` 不带
+    `--loading` 也拒绝它。
+
+运行上的变化：
+
+- 事件订阅（SUB-LAG-1）：跟不上的订阅者只结束自己这次订阅，带 `resume_after_sequence`；Runtime 不再因此停下，写入线程的故障仍然致命。
+- 读共享表（S4a-1）：选择文档可声明 `tables`；表缺失、不一致或坏了只拒这一次运行；每张读到的表记一条 `standard_pack_read`；调度层仍拒读表的文档。
+- 唤起配置（AGT-1a）：`agent_wake` 段和频道登记的形状；没有这一段时只多一条 `workbench_patterns`。
+- 唤起工作线程（AGT-1b）：有这一段时起一个线程，写 `host.agent_wake`，Status 和 overview 多 `agent_wake`；人手动的 `actingctl agent-wake-test`。
+- 自动唤起（AGT-2）：有带规则的段时，阶梯用尽、实例隔离后等人处理、规则列出码的运行失败会唤起规则指定的频道；同一实例一阵合并成一条，有冷却和按本机日的上限。
+- Claude Code 转发（AGT-T1）：`actingctl agent-channel` 登记频道；令牌只在 DPAPI 文件和发送那一刻的内存里。
+- 唤起已停的 Claude 会话（AGT-T1b）：发送前经 Claude Desktop 把会话打开，只打开、不输入；每条消息最多一次，`agent-channel add --restore off` 可关。
+- Codex 转发（AGT-T2）、DSH 转发（AGT-T3）：这两种频道的消息不再一直等到过期。
+- 流的容量判定（PF-1）：每 1 MiB 判一次（`artifact_store.stream_admit_chunk_bytes`），拒绝和卷绑定变化最多晚一块被看到。
+- 识别开始的分段计时（PF-2）：计进已有的两族，`attempts` 是开始加完成；不升 `ledger`。
+- 静止上限（STILL-1）：静止又不被接受的等待到 `execution.capture.still_limit_ms` 提前结束，默认关。
+- 动作后读帧和动作间隔（ACT-1+2）：`execution.action_gap.*`，默认 `declared`，和以前逐字节相同。
+- 终态目标（ACT-4）：包可声明 `target_present`、`target_gone`；`settled` 下没写 `post_delay_ms` 的点击最多读 `settled_limit_ms`。
+- OCR 字段（OCR-SCALE-1）：schema 0.9 可声明 `post_admission_ocr` 的 `fields_v1`，字段框跟着带 `scales` 的锚点缩放。
+- 加载页（LOAD-1、LOAD-2、LOAD-3）：游戏根的 `loading.json` 由 `actinglab package loading` 拷进每个包，加载器编译副本、准入 `expect_after.loading`；
+  页图只在 `execution.loading.mode` `on` 下等加载页，`shadow` 只记录，默认 `off`。
+
+本版合并的 PR：
+
+- #1481 S4a-1（#357 DB-2，#430）：选择文档可声明 `tables`，按键从游戏根的共享表取值；运行准备时绑定，表的问题只拒这一次运行（新码 `standard_pack_table_missing`、`standard_pack_table_mismatch`）；每张读到的表记一条 `standard_pack_read`（`standard_pack_table_read`）。`package` [3, 6]。
+- #1482 AGT-1a（#432）：`agent_wake` 配置段（19 个键，整段写全或不写）、频道登记的形状、新 crate `agent-forward` 的骨架，以及消息和正文的纯函数。`actingd-config` [5, 24]。
+- #1484 STILL-1（#407）：`execution.capture.still_limit_ms`，静止又不被接受的页等待和确认到上限提前结束，沿用原来的码并带 `held_ms`、`limit_ms`；默认 0（关）。
+- #1485 OCR-SCALE-1（#428）：schema 0.9 可声明 `post_admission_ocr` 的 `fields_v1`；字段框挂在带 `scales` 的锚点上，随匹配倍率缩放；0.7 的 comparison 在 0.9 里仍被拒。
+- #1490 0.12.37 集成：PF-1（#407）流的每块一次容量判定；ACT-1+2（#407）`execution.action_gap.*`，默认 `declared`；AGT-1b（#432）唤起工作线程、`host.agent_wake`、Status 和 overview 的 `agent_wake`、`actingctl agent-wake-test`，`runtime-client` [3, 5]；AGT-T1（#432）Claude Code 转发和 `actingctl agent-channel`；PF-2（#407）识别开始记录的分段计时。
+- #1496 0.12.37 集成二：AGT-2（#432）首批三种自动触发、规则、合并、冷却和按本机日的上限；AGT-T2（#432）Codex 转发；AGT-T3（#432）DSH 转发；ACT-4（#407）`expect_after.target_present`、`target_gone` 和 `settled_limit_ms`；LOAD-1（#407）游戏根的 `loading.json`、包里的副本和 `actinglab package loading`。
+- #1497 LOAD-2（#407）：加载器编译包里的加载页副本，准入 `expect_after.loading` 和步骤计划的 `wait_page`；`resource validate` 认得这两个文件；运行时还不等。
+- #1498 AGT-T1b（#432）：Claude 频道的会话已停时，发送前经 Claude Desktop 把它打开，只打开、不输入；每条消息最多一次，没登记上线的会话不再反复打开。
+- #1499 LOAD-3（#407）：页图在加载页上的等待、`execution.loading.mode`（`off`、`shadow`、`on`，默认 `off`）和诊断码 `contained_task_loading_recorded`。
+- #1500 SUB-LAG-1（#419）：跟不上的事件订阅者只结束自己的订阅和这次请求，带 `resume_after_sequence`；写入线程的故障仍然致命。
+
 ## v0.12.36
 
 本版是 v0.12.35 之后合并的 8 个 PR：114-A、R-4、R-0b、R-0b2、R-11、LN-VERIFY、INST-UNDO-EDGE、FLAKY-LNWS1。先说部署：账本的声明从 [3, 4] 改为
