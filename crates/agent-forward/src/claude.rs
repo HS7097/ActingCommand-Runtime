@@ -22,7 +22,10 @@ use crate::{
     SendLimits,
 };
 use actingcommand_host_metrics::{ProcessProbe, probe_process};
-use restore::{MAX_RESTORE, REGISTRATION_POLL, RestoreWait, Restorer, unresponsive, waiting};
+use restore::{
+    MAX_RESTORE, REGISTRATION_POLL, RestoreWait, Restorer, Unrestored, reserve_wake, unresponsive,
+    waiting,
+};
 use serde::{Deserialize, Serialize};
 use std::io::{self, ErrorKind, Read};
 use std::path::{Path, PathBuf};
@@ -84,6 +87,11 @@ struct SessionRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     protected_token: Option<String>,
     updated_at_unix_ms: u64,
+    /// AGT-T1b: when a restore of this session got no SessionStart registration by its deadline.
+    /// While it is set, no message restores the session. A registration writes a new record
+    /// without it, which is what clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    restore_unanswered_at_unix_ms: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -269,6 +277,8 @@ fn store_live(
         pipe: Some(socket),
         protected_token: Some(to_hex(&blob)),
         updated_at_unix_ms: now_unix_ms,
+        // A registration: any restore mark goes with the old record.
+        restore_unanswered_at_unix_ms: None,
     };
     locked(state_root, || write_record(state_root, &record))
 }
@@ -491,12 +501,21 @@ enum Liveness {
     /// Its record is online and its owner runs with the record's creation time.
     Live(SessionRecord),
     /// It has no live record: none, an ended one, or one whose process has gone. This is the
-    /// stopped session a channel may restore.
-    Stopped(&'static str),
+    /// stopped session a channel may restore, unless an earlier restore went `unanswered`.
+    Stopped { why: &'static str, unanswered: bool },
     /// Its record cannot be read now.
     Unreadable(io::Error),
     /// The send ends here, with no write.
     Ends(ForwardOutcome),
+}
+
+/// A session with no live record, as [`ClaudeForward::liveness`] found it.
+#[derive(Clone, Copy)]
+struct StoppedSession<'a> {
+    native_id: &'a str,
+    why: &'static str,
+    /// An earlier restore of it got no registration, and none has come since.
+    unanswered: bool,
 }
 
 /// Sends to Claude Code sessions.
@@ -542,12 +561,19 @@ impl ClaudeForward {
         }
         match self.liveness(&native_id) {
             Liveness::Live(record) => self.write(&record, message, limits, before_write),
-            Liveness::Stopped(why) => match self.restore(&native_id, restore, why, limits) {
-                Ok((record, note)) => {
-                    noted(self.write(&record, message, limits, before_write), &note)
+            Liveness::Stopped { why, unanswered } => {
+                let session = StoppedSession {
+                    native_id: &native_id,
+                    why,
+                    unanswered,
+                };
+                match self.restore(&session, &message.id, restore, limits) {
+                    Ok((record, note)) => {
+                        noted(self.write(&record, message, limits, before_write), &note)
+                    }
+                    Err(outcome) => outcome,
                 }
-                Err(outcome) => outcome,
-            },
+            }
             Liveness::Unreadable(error) => {
                 offline(&format!("the session's record cannot be read now: {error}"))
             }
@@ -558,7 +584,12 @@ impl ClaudeForward {
     fn liveness(&self, native_id: &str) -> Liveness {
         let record = match read_record(&self.state_root, native_id) {
             Ok(Some(record)) => record,
-            Ok(None) => return Liveness::Stopped("the session has no live record"),
+            Ok(None) => {
+                return Liveness::Stopped {
+                    why: "the session has no live record",
+                    unanswered: false,
+                };
+            }
             Err(RecordFailure::Read(error)) => return Liveness::Unreadable(error),
             Err(RecordFailure::Shape) => {
                 return Liveness::Ends(failed(
@@ -567,8 +598,12 @@ impl ClaudeForward {
                 ));
             }
         };
+        let unanswered = record.restore_unanswered_at_unix_ms.is_some();
         if !record.online || record.pipe.is_none() || record.protected_token.is_none() {
-            return Liveness::Stopped("the session has ended");
+            return Liveness::Stopped {
+                why: "the session has ended",
+                unanswered,
+            };
         }
         match self.system.probe(record.owner_pid) {
             ProcessProbe::Running { created_at_unix_ms }
@@ -576,9 +611,10 @@ impl ClaudeForward {
             {
                 Liveness::Live(record)
             }
-            ProcessProbe::Running { .. } | ProcessProbe::NotRunning => {
-                Liveness::Stopped("the session's process has gone")
-            }
+            ProcessProbe::Running { .. } | ProcessProbe::NotRunning => Liveness::Stopped {
+                why: "the session's process has gone",
+                unanswered,
+            },
             ProcessProbe::Unknown(code) => Liveness::Ends(failed(
                 DeliveryProblem::OwnerMismatch,
                 format!("the session's process cannot be checked: {code}"),
@@ -586,20 +622,38 @@ impl ClaudeForward {
         }
     }
 
-    /// Restores the stopped session `native_id` (`why` says how it is stopped) and waits for its
-    /// live record, within the send's deadline and at most [`MAX_RESTORE`]. `Ok` holds the record
-    /// and a note for the detail; `Err` ends the send, with no write.
+    /// Restores the stopped session and waits for its live record, within the send's deadline and
+    /// at most [`MAX_RESTORE`]. `Ok` holds the record and a note for the detail; `Err` ends the
+    /// send, with no write.
+    ///
+    /// A message wakes at most once (`message_id` is recorded before the helper runs), and a
+    /// session whose wake got no registration by its deadline is marked and not woken again,
+    /// for any message, until a registration rewrites its record.
     fn restore(
         &self,
-        native_id: &str,
+        session: &StoppedSession<'_>,
+        message_id: &[u8; 16],
         restore: bool,
-        why: &str,
         limits: &SendLimits<'_>,
     ) -> Result<(SessionRecord, String), ForwardOutcome> {
+        let StoppedSession {
+            native_id,
+            why,
+            unanswered,
+        } = *session;
         if !restore {
             return Err(offline(&format!(
                 "{why}; this channel does not restore a stopped session"
             )));
+        }
+        if unanswered {
+            return Err(waiting(
+                RestoreWait::Unanswered,
+                &format!(
+                    "{why}; an earlier restore of this session got no SessionStart registration \
+                     by its deadline, and none has come since"
+                ),
+            ));
         }
         if (limits.quiet)() {
             return Err(waiting(
@@ -615,7 +669,29 @@ impl ClaudeForward {
                 "no time was left to restore the stopped session",
             ));
         }
-        let note = self.restorer.wake(native_id, deadline, limits.stopped)?;
+        match reserve_wake(&self.state_root, message_id) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(waiting(
+                    RestoreWait::WakeSpent,
+                    &format!("{why}; this message already had its one restore"),
+                ));
+            }
+            Err(Refusal(text)) => {
+                return Err(failed(
+                    DeliveryProblem::HelperFailed,
+                    format!("the restore could not be recorded, so none was started: {text}"),
+                ));
+            }
+        }
+        let note = match self.restorer.wake(native_id, deadline, limits.stopped) {
+            Ok(note) => note,
+            Err(Unrestored {
+                outcome,
+                unanswered: true,
+            }) => return Err(self.mark_unanswered(native_id, outcome)),
+            Err(Unrestored { outcome, .. }) => return Err(outcome),
+        };
         loop {
             match self.liveness(native_id) {
                 Liveness::Live(record) => {
@@ -628,7 +704,7 @@ impl ClaudeForward {
                 }
                 Liveness::Ends(outcome) => return Err(noted(outcome, &note)),
                 // A record being replaced can be unreadable for a moment.
-                Liveness::Stopped(_) | Liveness::Unreadable(_) => {}
+                Liveness::Stopped { .. } | Liveness::Unreadable(_) => {}
             }
             if (limits.stopped)() {
                 return Err(unresponsive(format!(
@@ -637,13 +713,68 @@ impl ClaudeForward {
             }
             let now = clock.now();
             if now >= deadline {
-                return Err(waiting(
-                    RestoreWait::NotRegistered,
-                    "Claude Desktop shows the conversation, and the session stored no live \
-                     record by the deadline (its SessionStart hook stores it)",
+                return Err(self.mark_unanswered(
+                    native_id,
+                    waiting(
+                        RestoreWait::NotRegistered,
+                        "Claude Desktop shows the conversation, and the session stored no live \
+                         record by the deadline (its SessionStart hook stores it)",
+                    ),
                 ));
             }
             clock.pause((deadline - now).min(REGISTRATION_POLL));
+        }
+    }
+
+    /// Marks the session `native_id` as restored with no registration, then answers `outcome`; the
+    /// mark goes into its record, under the folder's lock. A record that has turned live meanwhile
+    /// is left alone. A mark that cannot be written fails the send loudly.
+    fn mark_unanswered(&self, native_id: &str, outcome: ForwardOutcome) -> ForwardOutcome {
+        let marked = locked(&self.state_root, || {
+            let at = crate::cli::now_unix_ms()?;
+            let record = match self.liveness(native_id) {
+                Liveness::Live(_) => return Ok(()),
+                Liveness::Unreadable(error) => {
+                    return Err(Refusal(format!(
+                        "the session's record cannot be read: {error}"
+                    )));
+                }
+                Liveness::Ends(_) => {
+                    return Err(Refusal("the session's record cannot be checked".to_owned()));
+                }
+                Liveness::Stopped { .. } => read_record(&self.state_root, native_id)
+                    .map_err(|_| Refusal("the session's record cannot be read".to_owned()))?,
+            };
+            let marked = match record {
+                Some(record) => SessionRecord {
+                    updated_at_unix_ms: at,
+                    restore_unanswered_at_unix_ms: Some(at),
+                    ..record
+                },
+                // No session ever registered: a record that holds only the mark.
+                None => SessionRecord {
+                    schema: RECORD_SCHEMA.to_owned(),
+                    native_id: native_id.to_owned(),
+                    owner_pid: 0,
+                    owner_created_at_unix_ms: 0,
+                    online: false,
+                    pipe: None,
+                    protected_token: None,
+                    updated_at_unix_ms: at,
+                    restore_unanswered_at_unix_ms: Some(at),
+                },
+            };
+            write_record(&self.state_root, &marked)
+        });
+        match marked {
+            Ok(()) => outcome,
+            Err(Refusal(text)) => failed(
+                DeliveryProblem::HelperFailed,
+                format!(
+                    "the session got no registration after its restore, and the mark that stops \
+                     further restores could not be written: {text}"
+                ),
+            ),
         }
     }
 
@@ -1048,6 +1179,7 @@ mod tests {
             pipe: Some(r"\\.\pipe\neutral".to_owned()),
             protected_token: Some("00".to_owned()),
             updated_at_unix_ms: 1,
+            restore_unanswered_at_unix_ms: None,
         };
         write_record(root.path(), &record).expect("write the record");
         let (outcome, intents) = deliver(&forward(root.path(), running(77)), "m");
@@ -1876,7 +2008,196 @@ mod tests {
         assert_eq!(intents, 0, "nothing was written, so it is never unknown");
         assert_eq!(*lock(&waited), MAX_RESTORE);
         assert_eq!(lock(&seen).len(), 1, "one restore per send");
-        assert_eq!(record_text(root.path(), SESSION), None);
+        // No session ever registered: a record that holds only the mark.
+        let record = record_of(root.path());
+        assert!(record.restore_unanswered_at_unix_ms.is_some());
+        assert!(!record.online && record.pipe.is_none() && record.protected_token.is_none());
+    }
+
+    /// One send of [`TEXT`] as the message whose id bytes are all `id`, by a channel whose switch
+    /// is on, with no quiet time.
+    fn send_message(forward: &ClaudeForward, id: u8) -> (ForwardOutcome, u32) {
+        let stopped = || false;
+        let limits = SendLimits {
+            deadline: Instant::now() + Duration::from_secs(60),
+            stopped: &stopped,
+            quiet: &stopped,
+        };
+        let message = ForwardMessage {
+            id: [id; 16],
+            text: TEXT.to_owned(),
+        };
+        let mut intents = 0;
+        let outcome = forward.deliver(SESSION, true, &message, &limits, &mut || {
+            intents += 1;
+            Ok(())
+        });
+        (outcome, intents)
+    }
+
+    /// Whether `outcome` waits with the restore word `word`.
+    fn waits_with(outcome: &ForwardOutcome, word: &str) -> bool {
+        matches!(outcome, ForwardOutcome::Deferred { detail, .. } if detail.contains(&format!("({word})")))
+    }
+
+    fn record_of(root: &Path) -> SessionRecord {
+        serde_json::from_str(&record_text(root, SESSION).expect("the record")).expect("a record")
+    }
+
+    #[test]
+    fn a_retry_of_the_same_message_never_wakes_again() {
+        let root = state_root();
+        add_session(root.path());
+        // The helper ran and found a draft: the message's one restore is used.
+        let draft = json!({"state": "queued", "reason": "draft_present", "detail": "a draft"});
+        let (helper, seen) = fake_helper(draft.clone(), true, || {});
+        let (sender, _) = restoring(root.path(), one_conversation(root.path()), helper);
+        let (first, intents) = send_message(&sender, 1);
+        assert!(waits_with(&first, "draft_present"), "{first:?}");
+        assert_eq!(intents, 0);
+        assert_eq!(lock(&seen).len(), 1);
+
+        // Its retry waits with no restore, also from a new forwarder, as after a restart.
+        let (again, intents) = send_message(&sender, 1);
+        assert!(waits_with(&again, "wake_spent"), "{again:?}");
+        assert!(
+            matches!(
+                again,
+                ForwardOutcome::Deferred {
+                    reason: DeferReason::TargetOffline,
+                    ..
+                }
+            ),
+            "{again:?}"
+        );
+        assert_eq!(intents, 0);
+        let (helper, restarted_seen) = fake_helper(draft, true, || {});
+        let (restarted, _) = restoring(root.path(), one_conversation(root.path()), helper);
+        let (after_restart, intents) = send_message(&restarted, 1);
+        assert!(
+            waits_with(&after_restart, "wake_spent"),
+            "{after_restart:?}"
+        );
+        assert_eq!(intents, 0);
+        assert!(
+            lock(&restarted_seen).is_empty(),
+            "no restore after the restart"
+        );
+        assert_eq!(lock(&seen).len(), 1, "one restore for the message");
+
+        // Another message has its own one.
+        let (other, _) = send_message(&sender, 2);
+        assert!(waits_with(&other, "draft_present"), "{other:?}");
+        assert_eq!(lock(&seen).len(), 2);
+    }
+
+    #[test]
+    fn a_channel_whose_wake_got_no_registration_is_not_woken_again_until_it_registers() {
+        let root = state_root();
+        let server = TestServer::new(4096);
+        add_session(root.path());
+        let (helper, seen) = fake_helper(loaded(), true, || {});
+        let (sender, waited) = restoring(root.path(), one_conversation(root.path()), helper);
+        // The conversation came up, and no registration by the deadline: the session is marked.
+        let (first, intents) = send_message(&sender, 1);
+        assert!(waits_with(&first, "not_registered"), "{first:?}");
+        assert_eq!(intents, 0);
+        assert_eq!(*lock(&waited), MAX_RESTORE);
+        assert!(
+            record_of(root.path())
+                .restore_unanswered_at_unix_ms
+                .is_some()
+        );
+
+        // Every other message waits with no restore, also from a new forwarder after a restart.
+        for id in [2, 3] {
+            let (outcome, intents) = send_message(&sender, id);
+            assert!(
+                matches!(
+                    outcome,
+                    ForwardOutcome::Deferred {
+                        reason: DeferReason::TargetNotLoaded,
+                        ..
+                    }
+                ) && waits_with(&outcome, "restore_unanswered"),
+                "{outcome:?}"
+            );
+            assert_eq!(intents, 0);
+        }
+        let (helper, restarted_seen) = fake_helper(loaded(), true, || {});
+        let (restarted, _) = restoring(root.path(), one_conversation(root.path()), helper);
+        let (outcome, _) = send_message(&restarted, 4);
+        assert!(waits_with(&outcome, "restore_unanswered"), "{outcome:?}");
+        assert!(
+            lock(&restarted_seen).is_empty(),
+            "no restore after the restart"
+        );
+        assert_eq!(lock(&seen).len(), 1, "one restore in all");
+        assert_eq!(*lock(&waited), MAX_RESTORE, "no further wait");
+
+        // The session registers by itself: its message goes over the inbox, with no restore.
+        registers(root.path(), &server.name)();
+        let (outcome, intents) = send_message(&sender, 5);
+        assert!(
+            matches!(
+                outcome,
+                ForwardOutcome::Delivered {
+                    proof: DeliveryProof::Written,
+                    ..
+                }
+            ),
+            "{outcome:?}"
+        );
+        assert_eq!(intents, 1);
+        assert_eq!(lock(&seen).len(), 1);
+        let wire = String::from_utf8(server.read_to_end()).expect("the frame is text");
+        assert!(wire.contains("发送测试"), "{wire}");
+    }
+
+    #[test]
+    fn a_registration_clears_the_unanswered_mark() {
+        let root = state_root();
+        add_session(root.path());
+        let (helper, seen) = fake_helper(loaded(), true, || {});
+        let (sender, _) = restoring(root.path(), one_conversation(root.path()), helper);
+        let (first, _) = send_message(&sender, 1);
+        assert!(waits_with(&first, "not_registered"), "{first:?}");
+        assert!(
+            record_of(root.path())
+                .restore_unanswered_at_unix_ms
+                .is_some()
+        );
+
+        // The registration writes a new record without the mark; the session's end keeps it clear.
+        registers(root.path(), r"\\.\pipe\cc-msg-00")();
+        let text = record_text(root.path(), SESSION).expect("the record");
+        assert!(!text.contains("restore_unanswered"), "{text}");
+        let ended = hook_end(
+            root.path(),
+            end_input(SESSION).as_bytes(),
+            &|| Ok(own_process()),
+            3,
+        );
+        assert_eq!(ended, Ok(HookResult::Cleared));
+        assert!(
+            record_of(root.path())
+                .restore_unanswered_at_unix_ms
+                .is_none()
+        );
+
+        // So the stopped session's next message restores it again.
+        let (outcome, _) = send_message(&sender, 2);
+        assert!(waits_with(&outcome, "not_registered"), "{outcome:?}");
+        assert_eq!(
+            lock(&seen).len(),
+            2,
+            "the mark no longer holds the restore back"
+        );
+        assert!(
+            record_of(root.path())
+                .restore_unanswered_at_unix_ms
+                .is_some()
+        );
     }
 
     #[test]

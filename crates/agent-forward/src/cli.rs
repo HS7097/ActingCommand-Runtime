@@ -134,7 +134,7 @@ fn failed(refusal: Refusal) -> CliFailure {
     CliFailure::Failed { text: refusal.0 }
 }
 
-fn now_unix_ms() -> Result<u64, Refusal> {
+pub(crate) fn now_unix_ms() -> Result<u64, Refusal> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .ok()

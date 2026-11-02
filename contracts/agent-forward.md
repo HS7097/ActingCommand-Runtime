@@ -52,7 +52,9 @@ actingctl agent-channel notice
 
 `<state_root>\agent-forward\claude-sessions\<native id>.json`, schema
 `actingcommand.agent-claude-session.v1`: the owner's process id and creation time, `online`, the pipe's
-name, and the token as a DPAPI blob for the current Windows user.
+name, and the token as a DPAPI blob for the current Windows user; and, since 0.12.37, the optional
+`restore_unanswered_at_unix_ms`, which a registration's new record never carries (see "Restoring a
+stopped session").
 
 **The token** is in that blob and briefly in memory, and nowhere else: not in a `detail`, a log, an
 error, a ledger field, a configuration key or a test snapshot. The frame is zeroed after the write.
@@ -138,16 +140,18 @@ it. The rest of the send's deadline is left for the write; with none left the me
 | Step | Result when it fails |
 |---|---|
 | The switch is on | `Deferred`, `target_offline` |
+| The session's record holds no unanswered mark | `Deferred`, `target_not_loaded`, detail `(restore_unanswered)`; the helper does not run |
 | No quiet window and no hold covers now | `Deferred`, `target_offline`, detail `(quiet)`; the helper does not run |
 | Time is left | `Deferred`, `target_unresponsive` |
+| The message has not had its one restore; it is recorded now, before anything else | it has: `Deferred`, `target_offline`, detail `(wake_spent)`; the record cannot be read or written: `Failed`, `helper_failed` |
 | `%APPDATA%\Claude\config.json` names the active account (`lastKnownAccountUuid`, a UUID) | no file: `Failed`, `channel_unknown`; another shape: `Failed`, `protocol_changed` |
 | A bounded walk (depth 8, 20 000 files, 4 MiB each, no links) over `claude-code-sessions\<account>\` finds exactly one unarchived pointer whose `cliSessionId` is the session's id; its `sessionId` is `local_<uuid>` and its file name | none or several: `Failed`, `channel_unknown`; a pointer of another shape: `Failed`, `protocol_changed` |
 | The active account reads the same after the walk | `Failed`, `owner_mismatch` |
 | The helper is there, or compiles | `Failed`, `helper_failed`; out of time: `Deferred`, `target_unresponsive` |
-| The helper answers within the deadline and its bounds | out of time or a stop: `Deferred`, `target_unresponsive` (it is killed); otherwise `Failed`, `helper_failed` |
+| The helper answers within the deadline and its bounds | the deadline: `Deferred`, `target_unresponsive`, it is killed and **the session is marked**; a stop: the same, unmarked; otherwise `Failed`, `helper_failed` |
 | It answers `loaded` | `queued`: `Deferred` with its word (below); `not_submitted`: `Failed`, `helper_failed`, or `owner_mismatch` when its own account check failed |
 | The route reads the same again | `Failed`, `owner_mismatch` |
-| The session's live record appears, looked at every 100 ms until the restore's deadline | `Deferred`, `target_not_loaded`, detail `(not_registered)`. Never `unknown`: nothing was written |
+| The session's live record appears, looked at every 100 ms until the restore's deadline | `Deferred`, `target_not_loaded`, detail `(not_registered)`, and **the session is marked**. Never `unknown`: nothing was written. A mark that cannot be written: `Failed`, `helper_failed` |
 | Time is still left for the message | `Deferred`, `target_unresponsive` |
 | | the preflight, the intent and the one write above; the detail starts "the stopped session was restored through Claude Desktop" |
 
@@ -162,8 +166,28 @@ it. The rest of the send's deadline is left for the write; with none left the me
 | `no_window` | Claude Desktop shows no main window | `ipc_unavailable` |
 | `window_not_unique` | Claude Desktop shows more than one main window | `ipc_unavailable` |
 | `not_registered` | the conversation is up, and no live record came by the deadline | `target_not_loaded` |
+| `wake_spent` | this message already had its one restore | `target_offline` |
+| `restore_unanswered` | an earlier restore of this session got no registration, and none has come since | `target_not_loaded` |
 
-Each is tried again at `delivery.retry_interval_ms`, and each try restores again.
+**At most one restore per message, and none for a session that did not answer.** Every waiting
+message is tried again at `delivery.retry_interval_ms`, as any deferred row, and ends loudly
+(`expired`) at give-up. But:
+
+- **One restore per message.** Before the helper runs, the message's wake id is recorded in
+  `<state_root>\agent-forward\claude-woken.json` (schema `actingcommand.agent-claude-woken.v1`, the
+  newest 256 ids, no text, no secret), under the folder's lock. A retry of that message never runs
+  the helper again, whatever the first run answered, a queued draft included, and the record survives
+  a restart. The message waits `wake_spent` until its session comes back by itself, or give-up.
+- **No restore of a session that did not answer.** A restore whose helper was cut off at its deadline,
+  or whose conversation came up with no live record by the deadline, marks the session:
+  `restore_unanswered_at_unix_ms` in its record
+  (`<state_root>\agent-forward\claude-sessions\<native id>.json`; with no record yet, a record that
+  holds only the mark, offline, no pipe, no token). While the mark is there, **no message of any rule
+  restores that session**: each waits `restore_unanswered`. The mark lives in the record because the
+  record is what a registration rewrites: the SessionStart hook and `claude-register` write a new
+  record without it, so **a registration clears the mark**, with no step of its own; it survives a
+  restart and a deploy, and a session's end keeps it cleared. A record that turned live in the
+  meantime is not marked.
 
 **The helper.** `crates/agent-forward/src/claude/ClaudeDesktopWake.cs`, embedded in the binaries and
 compiled on first use, as the adapted source does: the .NET Framework's
@@ -190,10 +214,12 @@ network. A new build's source has a new name; older programs stay on disk.
 
 **Costs of a restore** (beside "What this costs"):
 
-- **It acts on her screen.** The conversation changes under her eyes, and every retry of a waiting
-  message restores again: a channel whose session never registers (no hook) has its conversation
-  brought up again every `retry_interval_ms` until give-up. Turn the switch off for a channel whose
-  session is not to be opened, or that has no hook.
+- **It acts on her screen, at most once per message and once per silent session.** The conversation
+  changes under her eyes when a message restores it. A session that does not register (no hook, a
+  wrong id, a failing hook) is brought up once, then marked, and stays untouched until it registers:
+  its messages wait and end loudly at give-up. A message whose one restore found a draft waits for
+  its session to come back by itself. Turn the switch off for a channel whose session is not to be
+  opened.
 - **It needs Claude Desktop running in her desktop session,** and the Runtime in the same session and
   Windows user; a CLI-only session has no pointer and fails `channel_unknown` at once, so its switch
   must be off.

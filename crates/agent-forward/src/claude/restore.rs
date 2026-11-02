@@ -13,9 +13,11 @@
 //! be done now, `Failed` when the route or the helper says it cannot be done.
 
 use super::{failed, session_id, to_hex};
+use crate::Refusal;
+use crate::cli::{locked, write_atomic};
 use crate::process::{self, Bounds, Finished, RunFailure};
 use crate::{DeferReason, DeliveryProblem, ForwardOutcome};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
@@ -64,6 +66,10 @@ pub(super) enum RestoreWait {
     WindowNotUnique,
     /// The conversation came up, and the session stored no live record by the deadline.
     NotRegistered,
+    /// This message already had its one restore.
+    WakeSpent,
+    /// An earlier restore of the session got no registration, and none has come since.
+    Unanswered,
 }
 
 impl RestoreWait {
@@ -76,16 +82,18 @@ impl RestoreWait {
             Self::NoWindow => "no_window",
             Self::WindowNotUnique => "window_not_unique",
             Self::NotRegistered => "not_registered",
+            Self::WakeSpent => "wake_spent",
+            Self::Unanswered => "restore_unanswered",
         }
     }
 
     /// The neutral reason the row records.
     pub(super) const fn reason(self) -> DeferReason {
         match self {
-            Self::Quiet => DeferReason::TargetOffline,
+            Self::Quiet | Self::WakeSpent => DeferReason::TargetOffline,
             Self::DraftPresent | Self::InputBusy => DeferReason::TargetAwaitingInput,
             Self::NoWindow | Self::WindowNotUnique => DeferReason::IpcUnavailable,
-            Self::NotRegistered => DeferReason::TargetNotLoaded,
+            Self::NotRegistered | Self::Unanswered => DeferReason::TargetNotLoaded,
         }
     }
 
@@ -335,19 +343,104 @@ struct WakeRequest<'a> {
 /// Why a helper run gave no answer.
 #[derive(Debug)]
 pub(super) enum HelperFailure {
-    /// The deadline or a stop came first. Nothing was sent, and the message is tried again.
+    /// The compiler's deadline, or a stop, came first. Nothing was sent.
     OutOfTime(String),
+    /// The helper itself was cut off at its deadline: it may have brought the conversation up, and
+    /// no registration came. The session is marked as for [`RestoreWait::NotRegistered`].
+    Unanswered(String),
     /// The helper or its compiler could not run, or failed.
     Failed(String),
 }
 
 impl HelperFailure {
-    fn outcome(self) -> ForwardOutcome {
+    fn unrestored(self) -> Unrestored {
         match self {
-            Self::OutOfTime(detail) => unresponsive(detail),
-            Self::Failed(detail) => failed(DeliveryProblem::HelperFailed, detail),
+            Self::OutOfTime(detail) => unresponsive(detail).into(),
+            Self::Unanswered(detail) => Unrestored {
+                outcome: unresponsive(detail),
+                unanswered: true,
+            },
+            Self::Failed(detail) => failed(DeliveryProblem::HelperFailed, detail).into(),
         }
     }
+}
+
+/// How a restore ended without the conversation up. `unanswered`: the session is to be marked,
+/// since a restore may have shown it and no registration came by the deadline.
+pub(super) struct Unrestored {
+    pub(super) outcome: ForwardOutcome,
+    pub(super) unanswered: bool,
+}
+
+impl From<ForwardOutcome> for Unrestored {
+    fn from(outcome: ForwardOutcome) -> Self {
+        Self {
+            outcome,
+            unanswered: false,
+        }
+    }
+}
+
+/// The record of the messages that had their one restore: the wake ids of the newest
+/// [`MAX_WOKEN`], `<state_root>\agent-forward\claude-woken.json`. It holds no secret and no text.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WokenFile {
+    schema: String,
+    messages: Vec<String>,
+}
+
+const WOKEN_SCHEMA: &str = "actingcommand.agent-claude-woken.v1";
+/// The most messages remembered: as many as the delivery rows can hold.
+const MAX_WOKEN: usize = 256;
+
+fn woken_path(state_root: &Path) -> PathBuf {
+    state_root.join("agent-forward").join("claude-woken.json")
+}
+
+/// Records, before the helper runs, that the message `message_id` has its one restore. `false`
+/// when it already had it. The record survives a restart, so no retry ever restores twice.
+pub(super) fn reserve_wake(state_root: &Path, message_id: &[u8; 16]) -> Result<bool, Refusal> {
+    let id = to_hex(message_id);
+    locked(state_root, || {
+        let path = woken_path(state_root);
+        let mut messages = match fs::read(&path) {
+            Ok(bytes) => {
+                let file: WokenFile = serde_json::from_slice(&bytes).map_err(|_| {
+                    Refusal("the record of restored messages is of another shape".to_owned())
+                })?;
+                if file.schema != WOKEN_SCHEMA {
+                    return Err(Refusal(
+                        "the record of restored messages is of another shape".to_owned(),
+                    ));
+                }
+                file.messages
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => Vec::new(),
+            Err(error) => {
+                return Err(Refusal(format!(
+                    "the record of restored messages cannot be read: {error}"
+                )));
+            }
+        };
+        if messages.contains(&id) {
+            return Ok(false);
+        }
+        messages.push(id);
+        let excess = messages.len().saturating_sub(MAX_WOKEN);
+        let messages = messages.split_off(excess);
+        let text = serde_json::to_vec_pretty(&WokenFile {
+            schema: WOKEN_SCHEMA.to_owned(),
+            messages,
+        })
+        .map_err(|error| {
+            Refusal(format!(
+                "the record of restored messages cannot be encoded: {error}"
+            ))
+        })?;
+        write_atomic(&path, &text)?;
+        Ok(true)
+    })
 }
 
 fn run_failure(program: &str, failure: RunFailure) -> HelperFailure {
@@ -470,7 +563,14 @@ impl WakeHelper for CompiledHelper {
             stopped,
             &Instant::now,
         )
-        .map_err(|failure| run_failure("the helper", failure))
+        .map_err(|failure| match failure {
+            RunFailure::TimedOut => HelperFailure::Unanswered(
+                "the helper did not finish by the deadline and was stopped; it may have shown \
+                 the conversation, and nothing was sent"
+                    .to_owned(),
+            ),
+            other => run_failure("the helper", other),
+        })
     }
 }
 
@@ -558,18 +658,20 @@ impl Restorer {
 
     /// Brings up the desktop conversation of the stopped session `native_id`, by `deadline`. `Ok`
     /// says it is displayed, with a note for the send's detail; the session's own hook stores its
-    /// live record next. `Err` ends the send, with no write.
+    /// live record next. `Err` ends the send, with no write, and says whether the session is to be
+    /// marked.
     pub(super) fn wake(
         &self,
         native_id: &str,
         deadline: Instant,
         stopped: &dyn Fn() -> bool,
-    ) -> Result<String, ForwardOutcome> {
+    ) -> Result<String, Unrestored> {
         let Some(profile) = self.profile.as_deref() else {
             return Err(failed(
                 DeliveryProblem::ProtocolChanged,
                 "APPDATA is not set, so Claude Desktop's profile cannot be found".to_owned(),
-            ));
+            )
+            .into());
         };
         let selected = route(profile, native_id).map_err(RouteFailure::outcome)?;
         let request = serde_json::to_vec(&WakeRequest {
@@ -586,9 +688,9 @@ impl Restorer {
         let finished = self
             .helper
             .run(request, deadline, stopped)
-            .map_err(HelperFailure::outcome)?;
+            .map_err(HelperFailure::unrestored)?;
         match answer(&finished)? {
-            Answer::Queued { wait, detail } => Err(waiting(wait, &detail)),
+            Answer::Queued { wait, detail } => Err(waiting(wait, &detail).into()),
             Answer::Loaded => {
                 if route(profile, native_id).map_err(RouteFailure::outcome)? != selected {
                     return Err(failed(
@@ -596,7 +698,8 @@ impl Restorer {
                         "Claude Desktop's account or conversation of the session changed while it \
                          was restored"
                             .to_owned(),
-                    ));
+                    )
+                    .into());
                 }
                 let warnings = cut(&finished.stderr);
                 Ok(if warnings.is_empty() {
