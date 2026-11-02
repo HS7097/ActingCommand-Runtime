@@ -73,6 +73,8 @@ pub use remedy::{
 };
 // Workflow #384 D2-S3.
 mod resource_adjustment;
+// Workflow #429 R-12: the routine summary's health statistics of this owner epoch (memory only).
+mod routine_summary;
 // SCH-M ED-2: the instance store record `health.run_duration` (the run-duration samples).
 mod run_duration;
 // Workflow #386 SR-6b, MCP-19a: the latest evaluation's not-run explanation, memory only.

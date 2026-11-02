@@ -219,6 +219,152 @@ fn cut_next(result: &mut Value) -> Option<String> {
     None
 }
 
+/// The members an exported `ac_routine_summary` answer keeps beside `export`.
+const ROUTINE_SUMMARY_EXPORTED_HEADER: [&str; 3] = ["owner_epoch", "granularity", "revision"];
+
+pub(super) const ROUTINE_SUMMARY_DESCRIPTION: &str = "The routine summary's health statistics, the same read and answer as actingctl routine-summary (Workflow #429 R-12): per instance, the policy runs and direct runs the Runtime settled since it started, by task and by an hour (granularity hour) or a calendar day (granularity day) of the Runtime host's local clock (a day across a daylight saving change has 23 or 25 hours), read from the Runtime's memory; nothing is read from or written to the ledger. Health statistics only, never a count of runs done or allowed. Answers {owner_epoch, granularity, revision, instances: [{instance_alias, coverage_from_unix_ms, buckets: [{start_unix_ms, end_unix_ms, revision, tasks: [{task_id, successes, failures: [{code, count}], interruptions}]}]}]}: a run that succeeded is a success, one that failed counts under its outcome code (failures is absent when there is none), one that ended contained_task_cancelled (a stop or a drain's cancel) is an interruption, never a failure; a run counts in the bucket of its settle time. Each instance keeps its last 48 hour buckets and 14 day buckets: coverage_from_unix_ms is when its statistics are complete from, the Runtime's start until an older bucket was dropped, then the start of the oldest bucket kept. revision is the summary's revision now: pass it as since to read only the buckets changed after it; a page whose owner_epoch differs from the one the cursor came with means the Runtime restarted (its memory and revisions begin again), so drop the cursor and read without since. instance (alias, instance_id or ADB port) narrows it to that instance, resolved with one status read; without it every instance. An answer larger than the output budget is written whole to %TEMP%\\actingcommand-mcp\\materials\\<sha256>.json and answered as {owner_epoch, granularity, revision, export {path, sha256, size}} with the warning answer_exported; narrow it with instance or since.";
+
+/// `{granularity, instance?, since?}`: `granularity` ↔ `--hour | --day`, `instance` and `since`
+/// as the CLI's flags.
+pub(super) fn routine_summary_input() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "granularity": {
+                "enum": ["hour", "day"],
+                "description": "The bucket width: an hour or a calendar day of the Runtime host's local clock.",
+            },
+            "instance": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Instance alias, instance_id or ADB port; without it every instance.",
+            },
+            "since": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "The revision of an earlier answer of the same owner_epoch: only the buckets changed after it.",
+            },
+        },
+        "required": ["granularity"],
+        "additionalProperties": false,
+    })
+}
+
+/// The answer's shape: `RoutineSummaryPage`, or its header beside `export`.
+pub(super) fn routine_summary_result() -> Value {
+    let mut failure = json!({
+        "type": "object",
+        "properties": {"count": {"type": "integer"}},
+        "required": ["code", "count"],
+    });
+    failure["properties"]["code"] = json!({"type": "string"});
+    let task = json!({
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string"},
+            "successes": {"type": "integer"},
+            "failures": {"type": "array", "items": failure},
+            "interruptions": {"type": "integer"},
+        },
+        "required": ["task_id", "successes", "interruptions"],
+    });
+    json!({
+        "type": "object",
+        "properties": {
+            "owner_epoch": {"type": "string"},
+            "granularity": {"enum": ["hour", "day"]},
+            "revision": {"type": "integer"},
+            "instances": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "instance_alias": {"type": "string"},
+                        "coverage_from_unix_ms": {"type": "integer"},
+                        "buckets": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "start_unix_ms": {"type": "integer"},
+                                    "end_unix_ms": {"type": "integer"},
+                                    "revision": {"type": "integer"},
+                                    "tasks": {"type": "array", "items": task},
+                                },
+                                "required": ["start_unix_ms", "end_unix_ms", "revision", "tasks"],
+                            },
+                        },
+                    },
+                    "required": ["instance_alias", "coverage_from_unix_ms", "buckets"],
+                },
+            },
+            "export": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "sha256": {"type": "string"},
+                    "size": {"type": "integer"},
+                },
+            },
+        },
+        "required": ["owner_epoch", "granularity", "revision"],
+    })
+}
+
+/// `ac_routine_summary {granularity, instance?, since?}` (Workflow #429 R-12): the CLI's read
+/// (`crate::routine_summary::read`) on the server's connection, its page the answer; a page larger
+/// than the output budget is exported, as `ac_remedy_get` does.
+pub(super) fn routine_summary(
+    context: &ToolContext<'_>,
+    arguments: &Map<String, Value>,
+) -> ToolOutcome {
+    use crate::routine_summary::{self as summary, Failure};
+    use actingcommand_contract::RoutineSummaryGranularity;
+
+    let arguments = Arguments::new(arguments, &["granularity", "instance", "since"])?;
+    let granularity = match arguments.required_string("granularity")? {
+        "hour" => RoutineSummaryGranularity::Hour,
+        "day" => RoutineSummaryGranularity::Day,
+        _ => {
+            return Err(invalid_argument(
+                "granularity",
+                ArgumentProblem::NotRecognised,
+            ));
+        }
+    };
+    let selector = arguments.string("instance")?;
+    let since_revision = arguments.integer("since", 0, u64::MAX)?;
+    let connected = context.runtime.connect()?;
+    let page = summary::read(&connected.client, selector, granularity, since_revision).map_err(
+        |failure| match failure {
+            Failure::Runtime(error) => context.runtime.failure(&connected, &error),
+            selector @ Failure::Selector { .. } => ToolError::outcome("usage", selector.outcome()),
+        },
+    )?;
+    let answer = json!(page);
+    if tools::fits_success(&answer) {
+        return Ok(ToolSuccess::new(answer));
+    }
+    let export = super::events::export_json(&answer)?;
+    let mut exported = ROUTINE_SUMMARY_EXPORTED_HEADER
+        .iter()
+        .filter_map(|member| {
+            answer
+                .get(*member)
+                .map(|value| ((*member).to_owned(), value.clone()))
+        })
+        .collect::<Map<_, _>>();
+    let mut warning = Outcome::new(ActingctlCode::AnswerExported);
+    if let Some(path) = export["path"].as_str() {
+        warning = warning.path(path);
+    }
+    exported.insert("export".to_owned(), export);
+    Ok(ToolSuccess {
+        result: Value::Object(exported),
+        warnings: vec![tools::warning(&warning)],
+    })
+}
+
 /// The instance an `instance` argument names by alias, instance_id or ADB port, as the
 /// Runtime's status lists them: the selector the CLI shares (`crate::instance_selector`).
 pub(super) fn select_instance<'s>(

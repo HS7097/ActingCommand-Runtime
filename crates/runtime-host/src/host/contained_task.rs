@@ -6926,6 +6926,8 @@ impl HostShared {
                 },
             )
             .map_err(RequestFailure::poison_without_terminal)?;
+        // Workflow #429 R-12: the task the run's record names, which the routine summary counts.
+        let task_label = prepared.task_label().to_owned();
         // Workflow #387 D1c-H (B1): the run's records count for direction ① only under
         // `rules.direct_runs = trigger`; the counter sees its key held by the run's
         // `DirectTaskRun` claim, the fence's manual set.
@@ -6950,6 +6952,9 @@ impl HostShared {
         );
         // R-0b: the run's execution ended and its lease is released.
         drop(activity);
+        // Workflow #429 R-12 (register §1.264): the routine summary counts the run as it settled.
+        self.note_routine_run(instance_alias, &task_label, &executed)
+            .map_err(RequestFailure::poison_without_terminal)?;
         // Workflow #191 ps2: the client of a cancelled run resets the instance next
         // (`SafeReset` on this connection); an instance pause hands the device back only after
         // that. Noted while the run is still registered, so a draining pause sees it.
@@ -7690,6 +7695,8 @@ impl HostShared {
                 },
             )
             .map_err(RequestFailure::poison_without_terminal)?;
+        // Workflow #429 R-12: the task the run's record names, which the routine summary counts.
+        let task_label = prepared.task_label().to_owned();
         let executed = self.execute_contained_task_with_lease(
             &task_request_message,
             &validated,
@@ -7711,6 +7718,9 @@ impl HostShared {
         );
         // R-0b: the run's execution ended (its lease is released, or handed to its ladder).
         drop(activity);
+        // Workflow #429 R-12 (register §1.264): the routine summary counts the run as it settled.
+        self.note_routine_run(instance_alias, &task_label, &executed)
+            .map_err(RequestFailure::poison_without_terminal)?;
         // #385 P-k (Tk-10): a run with a factor segment above 1000 is settled on its budget
         // time; the time its budget clock did not count stays with its dispatch's clock.
         if let Some(reduction) = active_run.control.paced_reduction() {

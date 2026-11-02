@@ -3034,12 +3034,12 @@ fn a4_each_request_kind_that_completes_has_its_own_success_code() {
         Kind::UpgradeStateStatus,
         Kind::LoadPack,
         Kind::UnloadPack,
-        // Workflow #429 R-0: refused `not_implemented` until their slices add the behaviour.
+        // Workflow #429 R-0: refused `not_implemented` until their slices add the behaviour
+        // (`RoutineSummary` completes since R-12, register §1.264).
         Kind::RunInstanceTask,
         Kind::StopInstanceRun,
         Kind::EditPackSchedule,
         Kind::EditResourceTarget,
-        Kind::RoutineSummary,
         // Workflow #429 R-0c: refused `not_implemented` until R-8.
         Kind::PackScheduleView,
     ];

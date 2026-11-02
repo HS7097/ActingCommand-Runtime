@@ -9,9 +9,11 @@
 use super::*;
 use crate::agent_wake::rows::WakeRow;
 use crate::host::WakeRecordForTest;
+use crate::routine_summary::RunEnd;
 use actingcommand_agent_forward::{
     AgentForward, DeliveryProblem, DeliveryProof, FakeForward, ForwardOutcome, fake_registry_text,
 };
+use actingcommand_contract::outcome::CodeStr;
 use actingcommand_contract::{
     AgentDeliveryState, AgentWakeQuiet, AgentWakeStatus, ConfigSettingChange,
     RoutineSummaryGranularity, RuntimeConfigManifest, RuntimeReceipt, RuntimeReceiptState,
@@ -495,4 +497,77 @@ fn the_summary_body_holds_the_routine_summary_and_the_days_wakes() {
             assert!(instances[0].get("routine_summary_page").is_none());
         }
     }
+}
+
+// Workflow #429 R-12 (register §1.264): with runs counted, the body holds real numbers. The host's
+// zone is the rule's, nine hours east; one run of the day before and three of the summary's day
+// are counted. The instance's page in the body keeps only the bucket of the summary's own local
+// day, with its success, its failure by code and its interruption, while the read by day answers
+// both days' buckets.
+#[test]
+fn the_summary_body_counts_the_routine_runs_of_its_own_day() {
+    let bed = Bed::new();
+    let host = bed.start(section(json!([summary_rule(21 * 60)])), delivering(1));
+    host.routine_summary_set_local_offset_for_test(i64::try_from(EAST_NINE_MS).expect("an offset"))
+        .expect("the routine summary's zone");
+    let failed = CodeStr::from(RuntimeErrorCode::ContainedTaskDeadlineExceeded.code());
+    // NOW is 16:33 of the day before the summary's.
+    host.routine_summary_count_for_test(ALIAS, "task.a", RunEnd::Succeeded)
+        .expect("a counted run");
+    bed.move_to(at(1, 9 * 60));
+    for end in [
+        RunEnd::Succeeded,
+        RunEnd::Failed(failed),
+        RunEnd::Interrupted,
+    ] {
+        host.routine_summary_count_for_test(ALIAS, "task.a", end)
+            .expect("a counted run");
+    }
+    bed.move_to(at(1, 21 * 60));
+    step(&host);
+    let kept = rows(&host);
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].kind, "daily_summary");
+    let body = bed.body(&kept[0]);
+    assert_eq!(body["summary"]["date"], json!("2026-10-27"));
+    let page = &body["summary"]["instances"][0]["routine_summary_page"];
+    assert_eq!(page["granularity"], json!("day"), "{body}");
+    assert_eq!(page["revision"], json!(4));
+    let entry = &page["instances"][0];
+    assert_eq!(entry["instance_alias"], json!(ALIAS));
+    let buckets = entry["buckets"].as_array().expect("the buckets");
+    assert_eq!(buckets.len(), 1, "{page}");
+    assert_eq!(buckets[0]["start_unix_ms"], json!(at(1, 0)));
+    assert_eq!(buckets[0]["end_unix_ms"], json!(at(2, 0)));
+    assert_eq!(buckets[0]["revision"], json!(4));
+    assert_eq!(
+        buckets[0]["tasks"],
+        json!([{
+            "task_id": "task.a",
+            "successes": 1,
+            "failures": [{"code": "contained_task_deadline_exceeded", "count": 1}],
+            "interruptions": 1,
+        }])
+    );
+
+    // The read itself answers the day before's bucket too.
+    let answered = bed.receipt(
+        &host,
+        RuntimeOperation::RoutineSummary {
+            instance: Some(ALIAS.to_owned()),
+            granularity: RoutineSummaryGranularity::Day,
+            since_revision: None,
+        },
+    );
+    let Some(RuntimeResult::RoutineSummary { summary: whole }) = answered.result() else {
+        panic!("a routine summary: {answered:?}");
+    };
+    let read = &whole.instances[0].buckets;
+    assert_eq!(read.len(), 2);
+    assert_eq!(read[0].start_unix_ms, at(0, 0));
+    assert_eq!(read[0].tasks[0].successes, 1);
+    assert_eq!(
+        serde_json::to_value(&read[1]).expect("the bucket"),
+        buckets[0]
+    );
 }

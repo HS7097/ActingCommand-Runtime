@@ -224,8 +224,11 @@ rule's clock makes the wake; no record does. Its day is the **local day of the r
     with what `RoutineSummary` ([runtime-interface.md](runtime-interface.md), `granularity` `day`)
     answers for it from the host's memory, through the read's own function: its page as
     `routine_summary_page`, or its refusal, codes only, as `routine_summary_refused`. No ledger read
-    beyond what that read does. **Until R-12 (Workflow #429) the read answers `not_implemented`**, so
-    each entry carries that refusal.
+    beyond what that read does. From R-12 (Workflow #429, since 0.12.38) the read answers its page,
+    and the page in the body keeps only the buckets that overlap the summary's own local day (the
+    rule's offset; for a rule of the host's zone, that day's one bucket), its other members as the
+    read answered them; before 0.12.38 the read answered `not_implemented`, and each entry carried
+    that refusal.
   - `wakes`: the rows of that local day before this summary, by `kind` and the `state` each is in now
     (tests and other summaries included), as `host.agent_wake` holds them (`delivery.history_rows`).
   - `runtime`: the Runtime's owner epoch and when this start began, as `StartReport` says them.

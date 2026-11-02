@@ -62,7 +62,9 @@ pub enum ResourceTargetEdit {
     Delete { id: String },
 }
 
-/// The bucket width of a `RoutineSummary` (R-12): an hour, or an activity day.
+/// The bucket width of a `RoutineSummary` (R-12): an hour of the host's local clock, or a
+/// calendar day of it, each from the host's local offset when the bucket opens (a day across a
+/// daylight saving change lasts 23 or 25 hours).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RoutineSummaryGranularity {

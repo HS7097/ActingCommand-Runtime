@@ -621,6 +621,9 @@ mod tests {
     // Workflow #429 R-4: ac_config_set, actingctl config set, ac_facts and status --config answer
     // the settings' version of the last change.
     mod gate_429_r4;
+    // Workflow #429 R-12: actingctl routine-summary prints the page; ac_routine_summary is an
+    // observer read of the same page.
+    mod gate_429_r12;
     mod gate_mcp19b;
     mod gate_mcp8;
     // Workflow #421 MCP-ENTRY, test row E-12: `mcp-config --entry` for the four clients.

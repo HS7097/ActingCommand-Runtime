@@ -4088,9 +4088,9 @@ pub enum RuntimeOperation {
         op: ResourceTargetEdit,
     },
     /// Reads the routine summary's health statistics from the host's memory, for one instance
-    /// or every instance, by hour or by activity day; with `since_revision` only the buckets
-    /// changed after it (R-12), a cursor good only within the `owner_epoch` the page that gave
-    /// it answered. Reads and records nothing in the ledger.
+    /// or every instance, by hour or by calendar day of the host's local clock; with
+    /// `since_revision` only the buckets changed after it (R-12), a cursor good only within the
+    /// `owner_epoch` the page that gave it answered. Reads and records nothing in the ledger.
     RoutineSummary {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         instance: Option<String>,

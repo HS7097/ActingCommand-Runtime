@@ -94,6 +94,10 @@ mod schedule;
 // Workflow #429 R-2: `perf-preset set|get` (MCP `ac_perf_preset`), the performance presets.
 mod perf_preset;
 
+// Workflow #429 R-12: `routine-summary` (MCP `ac_routine_summary`), the routine summary's health
+// statistics.
+mod routine_summary;
+
 use actingcommand_contract::codes::{ContractCode, ContractLocation, SharedCode};
 use actingcommand_contract::outcome::{Category, Detail, IoOp, Outcome, RawSource};
 use actingcommand_contract::{
@@ -279,6 +283,11 @@ fn main() -> ExitCode {
     // Workflow #429 R-2: `perf-preset` takes its action as the second word (and `set` its preset
     // as the third) and leaves before `Invocation::parse`; its flags are `flags_of`'s.
     if let Some(exit) = perf_preset::dispatch(&arguments, detail) {
+        return exit;
+    }
+    // Workflow #429 R-12: `routine-summary` takes `--hour` or `--day` without a value and leaves
+    // before `Invocation::parse`; its flags are `flags_of`'s.
+    if let Some(exit) = routine_summary::dispatch(&arguments, detail) {
         return exit;
     }
     match run(arguments, detail) {
@@ -1909,6 +1918,14 @@ fn flags_of(command: &str, action: Option<&str>) -> Option<&'static [&'static st
         perf_preset::COMMAND if matches!(action, Some(perf_preset::SET | perf_preset::GET)) => {
             &["--state-root"]
         }
+        // Workflow #429 R-12: one width flag (no value), the instance and the cursor.
+        routine_summary::COMMAND => &[
+            "--state-root",
+            routine_summary::HOUR,
+            routine_summary::DAY,
+            "--instance",
+            routine_summary::SINCE,
+        ],
         _ => return None,
     };
     Some(flags)

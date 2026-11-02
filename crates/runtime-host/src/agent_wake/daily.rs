@@ -10,6 +10,7 @@
 
 use crate::agent_wake::guards::{DAY_MS, local_day};
 use crate::agent_wake::rows::WakeRow;
+use actingcommand_contract::RoutineSummaryPage;
 use actingcommand_runtime_config::agent_wake::{KIND_DAILY_SUMMARY, SummaryAt, WakeRule};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -33,6 +34,28 @@ pub(crate) fn due_at(at: SummaryAt, day: u64) -> u64 {
         + i128::from(at.minute_of_day) * i128::from(MINUTE_MS)
         - i128::from(offset_ms(at));
     u64::try_from(due).unwrap_or(0)
+}
+
+/// The instants of the rule's local day `day`, `[from, until)`: its midnight to the next, by the
+/// rule's offset.
+pub(crate) fn day_span(at: SummaryAt, day: u64) -> (u64, u64) {
+    let midnight = |day: u64| {
+        u64::try_from(i128::from(day) * i128::from(DAY_MS) - i128::from(offset_ms(at))).unwrap_or(0)
+    };
+    (midnight(day), midnight(day.saturating_add(1)))
+}
+
+/// Workflow #429 R-12: `page`, an instance's `RoutineSummary` page by day, with only the buckets
+/// that overlap `span`, the summary's own local day. The page's other members stay as the read
+/// answered them.
+pub(crate) fn within_day(mut page: RoutineSummaryPage, span: (u64, u64)) -> RoutineSummaryPage {
+    let (from, until) = span;
+    for instance in &mut page.instances {
+        instance
+            .buckets
+            .retain(|bucket| bucket.start_unix_ms < until && bucket.end_unix_ms > from);
+    }
+    page
 }
 
 /// `YYYY-MM-DD` of a local day, days since 1970-01-01 (the proleptic Gregorian calendar).

@@ -23,7 +23,8 @@
 //! - **The daily summary** (AGT-2b) is no record's: a `daily_summary` rule's summary of its own
 //!   local day is made once that day's minute has come, the feature is on and nothing quiet covers
 //!   now, unless the rows hold it already or the budget is used up. Its body holds what
-//!   `RoutineSummary` answers for each of the rule's instances and the day's wakes.
+//!   `RoutineSummary` answers for each of the rule's instances by day, the buckets of the rule's
+//!   local day only (Workflow #429 R-12), and the day's wakes.
 //! - **The rows** are the runtime fact `host.agent_wake`, recorded through `record_runtime_fact`,
 //!   which commits FULL for Runtime scope. So a recorded `sending` is durable before the write. A
 //!   row records at most `prepared`, the first `deferred`, `sending` and its result; a later reason
@@ -1168,7 +1169,7 @@ impl HostShared {
                 self.count_suppressed(1, now_unix_ms);
                 continue;
             }
-            let instances = self.summary_instances(rule)?;
+            let instances = self.summary_instances(rule, daily::day_span(at, day))?;
             let started_at_unix_ms =
                 lock(&self.start_facts, HostLocation::AgentWakeWorker)?.started_at_unix_ms();
             let summary = daily::summary_member(SummaryInput {
@@ -1210,9 +1211,14 @@ impl HostShared {
     }
 
     /// What `RoutineSummary` answers for each of `rule`'s instances, from the host's memory and
-    /// through the read's own function: its page, or its refusal in codes only. Only a failure the
-    /// Runtime does not survive comes back.
-    fn summary_instances(&self, rule: &WakeRule) -> RuntimeHostResult<Vec<Value>> {
+    /// through the read's own function: its page by day with only the buckets that overlap
+    /// `span`, the summary's own local day (Workflow #429 R-12), or its refusal in codes only.
+    /// Only a failure the Runtime does not survive comes back.
+    fn summary_instances(
+        &self,
+        rule: &WakeRule,
+        span: (u64, u64),
+    ) -> RuntimeHostResult<Vec<Value>> {
         let aliases = match &rule.instances {
             WakeInstances::Listed(aliases) => aliases.clone(),
             WakeInstances::All => {
@@ -1227,7 +1233,9 @@ impl HostShared {
         };
         let mut instances = Vec::with_capacity(aliases.len());
         for alias in aliases {
-            let answer = self.routine_summary(Some(&alias), RoutineSummaryGranularity::Day, None);
+            let answer = self
+                .routine_summary(Some(&alias), RoutineSummaryGranularity::Day, None)
+                .map(|page| daily::within_day(page, span));
             let mut entry = Map::new();
             entry.insert("instance_alias".to_owned(), Value::from(alias));
             // A page or an envelope that does not serialize is written as no value at all.

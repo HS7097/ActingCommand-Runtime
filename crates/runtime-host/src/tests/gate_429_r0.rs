@@ -6,13 +6,13 @@
 // `not_implemented` (Denied) naming its operation, as LoadPack is before U-3, and has no effect:
 // nothing is appended to the ledger and no instance's status changes. Workflow #429 R-4 (register
 // §1.239, since 0.12.36) gives `ConfigureSettings.expected_version` its behaviour, so that case
-// left this test (`gate_387_d1b`, `r4_t*`).
+// left this test (`gate_387_d1b`, `r4_t*`); so does `RoutineSummary` with R-12 (register §1.264,
+// since 0.12.38; `gate_429_r12`).
 
 use super::gate_383_ao4q::ledger_head;
 use super::*;
 use actingcommand_contract::{
-    FactScope, PackScheduleEditRow, ResourceTargetEdit, RoutineSummaryGranularity,
-    RuntimeInstanceStatus,
+    FactScope, PackScheduleEditRow, ResourceTargetEdit, RuntimeInstanceStatus,
 };
 use serde_json::json;
 
@@ -91,14 +91,6 @@ fn r0_each_workbench_kind_without_behaviour_answers_not_implemented_with_no_effe
                 },
             }),
             "edit_resource_target",
-        ),
-        (
-            client.request(RuntimeOperation::RoutineSummary {
-                instance: Some(ALIAS.to_owned()),
-                granularity: RoutineSummaryGranularity::Hour,
-                since_revision: None,
-            }),
-            "routine_summary",
         ),
         (
             client.agent_request(RuntimeOperation::ApplyResourceTargets {

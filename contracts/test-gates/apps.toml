@@ -314,6 +314,15 @@ tests = [
 ]
 incident = ["#429 R-4"]
 
+# Workflow #429 R-12 (0.12.38; brief rd-1031/agt/brief-r12.md; register §1.264; contracts/runtime-interface.md, the command and tool tables): on an in-process Runtime with a fixed clock, actingctl routine-summary --hour and --day, with and without --since, print the page the Runtime answers to the same read as the line's members beside request_routine_summary_completed; no width, both widths, a width twice, a cursor that is no number and an unknown flag are actingctl_usage_invalid naming the flag, and a selector no instance has is instance_unknown. ac_routine_summary is in the tool table on the observer tier, read-only, not destructive, idempotent, granularity required; it answers the same page (since as the cursor) as the CLI prints; an unknown or missing granularity is arguments_invalid and an unknown instance instance_unknown
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_429_r12::actingctl_summary_prints_the_page",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_429_r12::mcp_routine_summary_is_an_observer_read",
+]
+incident = ["#429 R-12"]
+
 # actingctl, MCP and the watchdog speak outcomes: one result line per exit with its exit code by category, MCP errors {class, outcome}, watchdog report v2 and state.json v2 (Workflow #378 A5)
 [[gate]]
 key = "43"
