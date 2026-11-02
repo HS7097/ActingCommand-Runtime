@@ -167,6 +167,7 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 | 路径 | 包 | 职责 |
 | --- | --- | --- |
 | crates/actingcommand-contract | actingcommand-contract | 协议、设备与引擎边界的合约定义，不含目标逻辑 |
+| crates/agent-forward | actingcommand-agent-forward | Runtime 自己向智能体会话转发：频道登记和各传输；唯一写客户端名字的 crate |
 | crates/artifact-store | actingcommand-artifact-store | 工件字节、哈希、保留元数据、帧缓冲与证据归档 |
 | crates/device | actingcommand-device | 设备层原语；输入经显式后端链选择 |
 | crates/display-adapter | actingcommand-display-adapter | 包的基准坐标、尺度帧与设备帧之间的纯整数映射：九宫格锚点、取整、旋转与裁剪；不做 I/O，不接后端 |

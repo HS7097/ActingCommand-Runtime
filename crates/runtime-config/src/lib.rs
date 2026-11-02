@@ -29,7 +29,9 @@
 //!   (Workflow #421 INST-1, read by `actingctl install` from the configuration file,
 //!   [`install::settings`]); `host` (RB-2, Alice's ruling of 2026-10-29: the memory and I/O
 //!   priority actingd gives its own process at start); `store_foreground` (STORE-FG-2: the store
-//!   applications a store update package may tap in, only from the configuration file).
+//!   applications a store update package may tap in, only from the configuration file);
+//!   `agent_wake` (Workflow #432 AGT-1a: the Runtime's messages to registered channels, whole or
+//!   absent, with no default anywhere).
 //!
 //! - Workflow #429 R-4 (since 0.12.36): the settings' version ([`EffectiveConfig::version`]), the
 //!   token `ConfigureSettings.expected_version` compares, and the console's three tiers of the
@@ -42,6 +44,8 @@
 
 // ACT-1, ACT-2 (Workflow #407): `execution.action_gap.*`, how a step goes on after its input.
 pub mod action_gap;
+// Workflow #432 AGT-1a: `agent_wake.*`, whole or absent; no section, no keys and no rows.
+pub mod agent_wake;
 mod codes;
 mod defaults;
 pub mod device_link;
@@ -79,6 +83,7 @@ pub mod watchdog;
 pub use action_gap::{
     ActionGapConfig, ActionGapFile, ActionGapKind, ActionGapMode, InstanceExecutionFile,
 };
+pub use agent_wake::{AgentWakeConfig, AgentWakeFile};
 pub use codes::{ConfigCode, ConfigValueProblem};
 pub use defaults::{
     DefaultsFile, DefaultsInvalid, SHIPPED_DEFAULTS, sha256_text, shipped_defaults_sha256,
@@ -217,3 +222,7 @@ mod gate_store_fg2;
 // SS-4 (register §1.231, test 5): the no-progress switch, on by default and per instance.
 #[cfg(test)]
 mod gate_ss4;
+
+// Workflow #432 AGT-1a: the `agent_wake` section's checks and settable keys.
+#[cfg(test)]
+mod gate_agt_1a;

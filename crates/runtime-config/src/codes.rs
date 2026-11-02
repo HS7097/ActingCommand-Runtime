@@ -43,6 +43,10 @@ actingcommand_contract::outcome_codes! {
         /// `config_key`, and `config_value_problem` saying which rule; Workflow #385 P-c, PERF
         /// §11). The same values sent by an instruction are refused as `config_value_invalid`.
         PerfConfigInvalid => "perf_config_invalid": error / none,
+        /// Error. The `agent_wake` section breaks a rule at start or in `check-config` (keys
+        /// `config_key`, and `config_value_problem` saying which rule; Workflow #432 AGT-1a). The
+        /// same values sent by an instruction are refused as `config_value_invalid`.
+        AgentWakeConfigInvalid => "agent_wake_config_invalid": error / none,
     }
 }
 
@@ -79,5 +83,24 @@ actingcommand_contract::outcome_vocabulary! {
         /// A ladder claim's TTL not above the heartbeat bound, beyond the longest renewal, or
         /// below the hold margin.
         ClaimTtlOutOfRange => "claim_ttl_out_of_range",
+        /// Workflow #432 AGT-1a: the `agent_wake` section leaves out one of its keys; it is whole
+        /// or absent.
+        RequiredMissing => "required_missing",
+        /// A rule's kind outside the section's closed list.
+        KindUnknown => "kind_unknown",
+        /// A rule's `instances` that is neither `*` nor a list of configured aliases.
+        InstanceUnknown => "instance_unknown",
+        /// A daily cap above the budget, or the budget above the rows `host.agent_wake` keeps.
+        CapsExceed => "caps_exceed",
+        /// `agent_wake.body.dir` inside a folder the Runtime keeps its own material in.
+        DirReserved => "dir_reserved",
+        /// A registered channel whose shortest message does not fit `agent_wake.summary.max_chars`.
+        MessageFloor => "message_floor",
+        /// A note, never a refusal: the channel registry is missing or cannot be read.
+        RegistryUnreadable => "registry_unreadable",
+        /// A note, never a refusal: a rule's `to` that the channel registry does not list.
+        ChannelUnknown => "channel_unknown",
+        /// A note, never a refusal: a program a registered channel names is not there.
+        ChannelProgramMissing => "channel_program_missing",
     }
 }
