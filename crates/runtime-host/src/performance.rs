@@ -39,7 +39,7 @@ pub(crate) use capacity::{CapacityPreflightConfig, CapacityResampler, CapacityRo
 mod pacing;
 pub(crate) use pacing::{
     EffectivePacing, PacingBackendRole, PacingSample, PacingSampleSource, PacingShadow,
-    action_gap_drawn, action_gap_fell_back, apply_action_gap, floor_pressure,
+    action_gap_drawn, action_gap_fell_back, apply_settled_path, floor_pressure,
 };
 
 const BASIS_POINTS_MAX: u16 = 10_000;

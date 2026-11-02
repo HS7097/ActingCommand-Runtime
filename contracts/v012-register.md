@@ -5914,9 +5914,10 @@ is the coordinator's. **Off by default:** under `execution.action_gap.mode` `dec
 order is the one before these slices. No package changes.
 
 **What.** Under `settled` a tap reads frames from the first frame after its input and goes on the
-first destination frame; `post_delay_ms` is the limit of that reading and is never added. The
-pre-input wait carries the configured gap above the pacing term. The path's frames and waits are
-recorded as a confirmation's, and the blind wait's boundary stays, empty.
+first destination frame; `post_delay_ms` is the limit of that reading and is never added. A
+`fixed` or `random` gap finishes before the frame that decides the input and its guard, asked once
+per step; `performance` keeps only the pre-input wait. The path's frames and waits are recorded as a
+confirmation's, and the blind wait's boundary stays, empty.
 
 **What changes live.** Nothing until someone sets `settled`. With it, the frames of a step grow from
 about one to one per `poll_ms` until its destination shows, and the next step's guard judges an
@@ -5931,7 +5932,7 @@ dropped with its record; a file that does not name them is read as before.
 |---|---|---|---|---|---|
 | ACT-1 | `execution.action_gap.{mode, poll_ms, settle_frames, settle_change_max_milli, settled_max_stage, fallback_hold_ms}`, each also `instance.<id>.…` | configuration keys | ACT-1 | ACT-1 | settable, read at each step; an instance's own key has default `none` |
 | ACT-2 | `execution.action_gap.{kind, fixed_ms, random_min_ms, random_max_ms}`, each also `instance.<id>.…` | configuration keys | ACT-2 | ACT-2 | as above; `random_min_ms` at most `random_max_ms` (`section_check`) |
-| ACT-3 | `StepPacing.settled_path`, `SettledPath`, `SettledHolds`, `ContainedTaskRuntime::settled_path_held`, `settled_path_fell_back` (`execution-kernel`) | Runtime-internal interface (memory only) | ACT-1 | ACT-1 | trait defaults: never held, nothing recorded; a runtime that hands no path (offline, fixtures, the Lab's declared operation) keeps the order before it |
+| ACT-3 | `StepPacing.settled_path`, `SettledPath`, `SettledHolds`, `ContainedTaskRuntime::step_action_gap`, `settled_path_held`, `settled_path_fell_back` (`execution-kernel`) | Runtime-internal interface (memory only) | ACT-1 | ACT-1 | trait defaults: no gap, never held, nothing recorded; a runtime that hands no path (offline, fixtures, the Lab's declared operation) keeps the order before it |
 | ACT-4 | `contained_task_action_gap_recorded` (info, ladder `none`; optional `action_gap_ms`, `package_id`, `pack_operation_id`), key `action_gap_ms` | outcome code and key | ACT-1, ACT-2 | ACT-1, ACT-2 | new, since nothing else says a gap was drawn or an operation fell back; one code with values (#420 S4). Written only in a run's diagnostics, as a recognition error row of the phase `action_gap`, as a mark's miss is (§1.28): no new row, no ledger shape, no `ledger` step |
 
 ## 6 Interface revisions (declared once for v0.12.0 by #378 A8, ORD §3.6)

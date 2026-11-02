@@ -8,8 +8,8 @@
 //!   the blind `post_delay_ms`, the confirmation. `settled` reads frames from the first frame after
 //!   the input, and `post_delay_ms` only limits that reading.
 //! - `kind`, `fixed_ms`, `random_min_ms`, `random_max_ms`: the gap a step of a `settled` instance
-//!   adds to its pre-input wait: a fixed one, one drawn per step, or (`performance`) none beyond
-//!   the pacing curve's term, which stays under every kind.
+//!   waits before the frame that decides its input: a fixed one, one drawn per step, or
+//!   (`performance`) none, leaving the pacing curve's pre-input wait, which stays under every kind.
 //! - `poll_ms`: the pause between two frames of that reading.
 //! - `settle_frames`, `settle_change_max_milli`: how many consecutive destination frames, unchanged
 //!   by at most that many milli, the reading takes; 1 goes on the first.
@@ -196,8 +196,8 @@ pub(crate) static INSTANCE_ROWS: &[KeyRow] = &[
 pub enum ActionGapMode {
     /// The input, the blind `post_delay_ms`, the confirmation; no gap is added.
     Declared,
-    /// Frames from the first frame after the input, `post_delay_ms` as their limit; the gap is
-    /// added.
+    /// Frames from the first frame after the input, `post_delay_ms` as their limit; the gap comes
+    /// before the frame that decides the input.
     Settled,
 }
 

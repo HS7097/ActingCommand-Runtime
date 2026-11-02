@@ -935,7 +935,7 @@ settled path and its gap ([performance-control.md](performance-control.md), "Ste
 | Key | Type | Default (`actingd.defaults.json`) | Settable |
 |---|---|---|---|
 | `execution.action_gap.mode` | `declared` or `settled` | `declared` | yes |
-| `execution.action_gap.kind` | `fixed`, `random` or `performance`, what a `settled` step adds before its input | `fixed` | yes |
+| `execution.action_gap.kind` | `fixed`, `random` or `performance`, what a `settled` step waits before the frame that decides its input; `performance` waits nothing there | `fixed` | yes |
 | `execution.action_gap.fixed_ms` | milliseconds `0..=60000`, the gap of `fixed` | `0` | yes |
 | `execution.action_gap.random_min_ms`, `random_max_ms` | milliseconds `0..=60000`, the range of `random`; `random_min_ms` at most `random_max_ms`, each as it is in effect (`section_check`) | `0`, `0` | yes |
 | `execution.action_gap.poll_ms` | milliseconds `0..=1000`, the pause between two frames of the settled path | `50` | yes |

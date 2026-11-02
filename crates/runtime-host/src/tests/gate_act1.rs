@@ -6,16 +6,16 @@
 //
 // - The settled path goes with `mode` `settled` at a pacing stage up to `settled_max_stage`; above
 //   it, and under `declared`, none does, and the step takes its `post_delay_ms`.
-// - The gap adds to the pacing term `pre_input_wait_base_ms × (f − 1000) / 1000` and is never
-//   multiplied by the factor: `fixed` adds `fixed_ms`, `random` a value of its range drawn per step
-//   from a seed and kept for the run's diagnostics, `performance` nothing, and `declared` nothing
-//   whatever the kind.
+// - The pre-input wait stays the pacing term alone, `pre_input_wait_base_ms × (f − 1000) / 1000`,
+//   under every kind. The step's gap is asked apart: `fixed` is `fixed_ms`, `random` a value of its
+//   range from a seed, `performance` nothing, and `declared` nothing whatever the kind. The kernel's
+//   gate holds where it is waited.
 //
 // The pacing term below: base 300 ms, so 0 at the factor 1000 and 75 ms at 1250.
 
 use crate::codes::ActionGapCode;
 use crate::performance::{
-    EffectivePacing, action_gap_drawn, action_gap_fell_back, apply_action_gap,
+    EffectivePacing, action_gap_drawn, action_gap_fell_back, apply_settled_path,
 };
 use actingcommand_contract::PerformancePacingStage;
 use actingcommand_execution_kernel::{SettledPath, StepPacing};
@@ -52,13 +52,6 @@ fn paced(factor_milli: u32) -> StepPacing {
     .step_pacing(0, PRE_INPUT_WAIT_BASE_MS)
 }
 
-// The pre-input wait of a step at the factor `factor_milli` under `gap`, from `seed`.
-fn pre_input_wait(gap: &ActionGapConfig, factor_milli: u32, seed: u64) -> Duration {
-    apply_action_gap(paced(factor_milli), gap, PerformancePacingStage::S0, seed)
-        .0
-        .pre_input_wait
-}
-
 fn ms(value: u64) -> Duration {
     Duration::from_millis(value)
 }
@@ -74,7 +67,7 @@ fn stage_above_settled_max_uses_declared() {
         ..settled()
     };
     for stage in STAGES {
-        let (pacing, _) = apply_action_gap(paced(1_000), &gap, stage, 0);
+        let pacing = apply_settled_path(paced(1_000), &gap, stage);
         let expected =
             (stage <= PerformancePacingStage::S1).then(|| SettledPath::new(ms(20), 2, 300));
         assert_eq!(pacing.settled_path, expected, "{stage:?}");
@@ -85,9 +78,11 @@ fn stage_above_settled_max_uses_declared() {
         ..gap
     };
     for stage in STAGES {
-        let (pacing, drawn) = apply_action_gap(paced(1_250), &declared, stage, 7);
-        assert_eq!(pacing, paced(1_250), "{stage:?}");
-        assert_eq!(drawn, None, "{stage:?}");
+        assert_eq!(
+            apply_settled_path(paced(1_250), &declared, stage),
+            paced(1_250),
+            "{stage:?}"
+        );
     }
 }
 
@@ -98,8 +93,15 @@ fn gap_fixed_zero_adds_nothing() {
         fixed_ms: 0,
         ..settled()
     };
-    assert_eq!(pre_input_wait(&gap, 1_000, 0), Duration::ZERO);
-    assert_eq!(pre_input_wait(&gap, 1_250, 0), ms(75));
+    assert_eq!(gap.gap_ms(7), 0);
+    assert!(!gap.draws());
+    // `declared` adds nothing whatever the kind's value.
+    let declared = ActionGapConfig {
+        mode: ActionGapMode::Declared,
+        fixed_ms: 500,
+        ..gap
+    };
+    assert_eq!(declared.gap_ms(7), 0);
 }
 
 #[test]
@@ -110,18 +112,12 @@ fn gap_random_stays_in_range_and_is_seeded() {
         random_max_ms: 300,
         ..settled()
     };
+    assert!(gap.draws());
     let mut drawn = Vec::new();
     for seed in 0..1_000 {
-        let (pacing, value) =
-            apply_action_gap(paced(1_000), &gap, PerformancePacingStage::S0, seed);
-        let value = value.expect("a drawn gap is kept for the diagnostics");
+        let value = gap.gap_ms(seed);
         assert!((100..=300).contains(&value), "seed {seed}: {value}");
-        assert_eq!(pacing.pre_input_wait, ms(value), "seed {seed}");
-        assert_eq!(
-            apply_action_gap(paced(1_000), &gap, PerformancePacingStage::S0, seed).1,
-            Some(value),
-            "the same seed draws the same gap"
-        );
+        assert_eq!(gap.gap_ms(seed), value, "the same seed draws the same gap");
         drawn.push(value);
     }
     assert_eq!(drawn.iter().min(), Some(&100));
@@ -141,53 +137,17 @@ fn gap_random_stays_in_range_and_is_seeded() {
 
 #[test]
 fn gap_performance_is_the_pre_input_curve() {
-    // `fixed_ms` is another kind's: the wait is the curve's alone, 0 at the factor 1000.
+    // `fixed_ms` is another kind's: no gap, and the pre-input wait is the curve's alone, 0 at the
+    // factor 1000.
     let gap = ActionGapConfig {
         kind: ActionGapKind::Performance,
         fixed_ms: 500,
         ..settled()
     };
-    for factor_milli in [1_000, 1_250, 2_000] {
-        assert_eq!(
-            pre_input_wait(&gap, factor_milli, 0),
-            paced(factor_milli).pre_input_wait,
-            "{factor_milli}"
-        );
-    }
-    assert_eq!(pre_input_wait(&gap, 1_000, 0), Duration::ZERO);
-}
-
-#[test]
-fn gap_adds_to_the_pacing_term() {
-    let fixed = ActionGapConfig {
-        kind: ActionGapKind::Fixed,
-        fixed_ms: 40,
-        ..settled()
-    };
-    assert_eq!(pre_input_wait(&fixed, 1_000, 0), ms(40));
-    assert_eq!(pre_input_wait(&fixed, 1_250, 0), ms(115));
-    let random = ActionGapConfig {
-        kind: ActionGapKind::Random,
-        random_min_ms: 10,
-        random_max_ms: 10,
-        ..settled()
-    };
-    assert_eq!(pre_input_wait(&random, 1_250, 0), ms(85));
-}
-
-#[test]
-fn gap_is_never_multiplied_by_the_factor() {
-    // The wait less the pacing term is `fixed_ms` at every factor.
-    let gap = ActionGapConfig {
-        kind: ActionGapKind::Fixed,
-        fixed_ms: 40,
-        ..settled()
-    };
-    for factor_milli in [1_000, 1_250, 2_000, 4_000] {
-        assert_eq!(
-            pre_input_wait(&gap, factor_milli, 0) - paced(factor_milli).pre_input_wait,
-            ms(40),
-            "{factor_milli}"
-        );
+    assert_eq!(gap.gap_ms(7), 0);
+    assert!(!gap.draws());
+    for (factor_milli, curve) in [(1_000, 0), (1_250, 75), (2_000, 300)] {
+        let pacing = apply_settled_path(paced(factor_milli), &gap, PerformancePacingStage::S0);
+        assert_eq!(pacing.pre_input_wait, ms(curve), "{factor_milli}");
     }
 }

@@ -2603,6 +2603,14 @@ pub trait ContainedTaskRuntime {
     /// only. A runtime counts it for the step in progress; the default does nothing.
     fn observe_extra_wait_round(&mut self) {}
 
+    /// ACT-2 (Workflow #407, register §1.250): the gap of the step that decides its input now,
+    /// `execution.action_gap`'s `fixed` or `random`, asked once per step and only by a step that
+    /// sends an input. The kernel waits it as it is, then decides on a frame taken after it. Zero
+    /// (the default) waits nothing and takes no frame.
+    fn step_action_gap(&mut self) -> Result<Duration, Self::Error> {
+        Ok(Duration::ZERO)
+    }
+
     /// ACT-1 (Workflow #407, register §1.250): whether `operation_label` of `package_id` failed on
     /// the settled path and is still held on its `post_delay_ms` ([`SettledHolds`]). A runtime
     /// that hands no settled path is never asked.
@@ -5022,6 +5030,8 @@ impl PreparedContainedTask {
                     )?);
                     let pace = observation_timing.pace();
                     let mut attempt = 1;
+                    // ACT-2: the step's gap is asked and waited once, whatever is verified again.
+                    let mut gap_taken = false;
                     'attempt: loop {
                         if budget_elapsed_since(runtime, pace, started) >= task_timeout {
                             return Err(self
@@ -5155,6 +5165,69 @@ impl PreparedContainedTask {
                             // pack's attempt count stays, and the retry comes before the pack's
                             // own failure decision. The one sampling deadline check before the
                             // input precedes the effect intent.
+                            //
+                            // ACT-2 (design addendum 1): a `fixed` or `random` gap comes before the
+                            // frame that decides the input: nothing is judged on a frame older than
+                            // the gap. The frame is a page wait's, so a loading screen or a shared
+                            // interrupt during the gap is handled as on any page wait. A guard then
+                            // judges the page and the target on it; a step with no guard refuses a
+                            // page it was not dispatched from.
+                            if !gap_taken {
+                                gap_taken = true;
+                                let gap = runtime
+                                    .step_action_gap()
+                                    .map_err(ContainedTaskRunError::operation::<R>)?;
+                                if !gap.is_zero() {
+                                    self.wait_pre_input(runtime, gap, pace, task_deadline)?;
+                                    let frame = self.capture_until_page(
+                                        runtime,
+                                        ocr_collector,
+                                        step_timeout,
+                                        capture_interval,
+                                        observation_timing,
+                                        (pacing, ExecutionKernelLocation::ObservationBeforeInput),
+                                    )?;
+                                    step_timing = observation_timing.with_deadline(
+                                        budget_observation_now(runtime, pace) + step_window,
+                                    );
+                                    // The frame the last step arrived on is no longer judged.
+                                    arrived_settled = None;
+                                    let game = self.control.game.as_str();
+                                    if operation.unguarded_trusted_coordinate
+                                        && !crate::page_anchor_matches(
+                                            game,
+                                            &frame.page_label,
+                                            &from_page,
+                                        )
+                                        && !crate::page_anchor_matches(
+                                            game,
+                                            &frame.page_label,
+                                            &operation.from,
+                                        )
+                                    {
+                                        let refused = ContainedTaskError::with_detail(
+                                            ExecutionKernelCode::ContainedTaskGuardRefused.code(),
+                                            format!(
+                                                "operation={} expected_page={from_page} observed_page={}",
+                                                operation.id, frame.page_label
+                                            ),
+                                        )
+                                        .with_values(guard_refusal_values(&frame));
+                                        let after_page = frame.page_label.clone();
+                                        observation = Some(frame);
+                                        Self::refuse_before_input::<R::Error>(
+                                            operation,
+                                            retry_policy.as_ref(),
+                                            attempt,
+                                            refused,
+                                            Some(after_page),
+                                            &mut machine,
+                                        )?;
+                                        break 'attempt;
+                                    }
+                                    observation = Some(frame);
+                                }
+                            }
                             let mut retries = SampleRetries::new(
                                 pacing,
                                 ExecutionKernelLocation::ObservationBeforeInput,

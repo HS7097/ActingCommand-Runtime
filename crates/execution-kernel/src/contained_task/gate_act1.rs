@@ -15,10 +15,15 @@
 //   for `fallback_hold_ms`, across runs; no input is ever added.
 // - `settle_frames` 2 takes two consecutive destination frames that did not change.
 //
+// ACT-2 (design addendum 1): a `fixed` or `random` gap comes before the frame that decides the input
+// and its guard, is asked once per step whatever is verified again, adds to the pacing term and is
+// never multiplied by the factor.
+//
 // Every expected value comes from those lines and the package values below. The runs play scripted
 // frames on the scripted clock (EXEC-I4) at the factor 1000: the device shows `screens[n]` after
 // `n` inputs, a frame is delivered at once, and every pause moves the clock by its length. A frame's
-// left pixel names its page (`home`, `lobby`, `result`; dark is no page). The package declares no
+// left pixel names its page (`home`, `lobby`, `result`; dark is no page), and a grey right pixel is
+// the target `flag/ready`. The package declares no
 // capture interval, so a confirmation takes a frame every 50 ms; the back-off is off.
 
 use super::tests::scripted::{ScriptedEvent, ScriptedFrame, ScriptedRuntime};
@@ -69,7 +74,9 @@ fn pack() -> RecognitionPack {
         "targets": [
             target("page/home", HOME),
             target("page/lobby", LOBBY),
-            target("page/result", RESULT)
+            target("page/result", RESULT),
+            {"type": "color", "id": "flag/ready",
+             "region": {"x": 1, "y": 0, "width": 1, "height": 1}, "expected": GREY}
         ]
     }))
     .expect("recognition pack")
@@ -114,7 +121,8 @@ fn task_with(operations: Vec<Value>, program_members: Value) -> PreparedContaine
         "game": "neutral",
         "server": "test",
         "resolution": {"width": 2, "height": 1},
-        "entry_task_id": "task"
+        "entry_task_id": "task",
+        "timeout_ms": 600_000
     }))
     .expect("task control");
     control.validate().expect("an admitted control");
@@ -159,6 +167,31 @@ fn task_with(operations: Vec<Value>, program_members: Value) -> PreparedContaine
 
 fn task(operations: Vec<Value>) -> PreparedContainedTask {
     task_with(operations, json!({}))
+}
+
+// A tap that a guard on `flag/ready` allows, on `home` only.
+fn guarded_tap(id: &str, members: Value) -> Value {
+    let mut operation = tap(id, "home", members);
+    operation["unguarded_trusted_coordinate"] = json!(false);
+    operation["guard"] = json!({"page_id": "home", "target_id": "flag/ready",
+                                "expected_rect": {"x": 1, "y": 0, "width": 1, "height": 1},
+                                "color_probe": "flag/ready"});
+    operation
+}
+
+// `home` with the guard's target showing.
+fn home_ready() -> ScriptedFrame {
+    ScriptedFrame::rgb(2, 1, &[HOME, GREY])
+}
+
+// The events up to and including the first input.
+fn up_to_the_input(runtime: &ScriptedRuntime) -> Vec<ScriptedEvent> {
+    let events = runtime.events();
+    let input = events
+        .iter()
+        .position(|event| *event == ScriptedEvent::Input)
+        .expect("an input");
+    events[..=input].to_vec()
 }
 
 // Runs `task` on `screens` with the settled path `path` handed at every step.
@@ -470,4 +503,136 @@ fn settled_never_adds_an_input() {
     let twice = task(vec![tap("open", "home", members)]);
     let (_, runtime) = settled(&twice, screens(HOME), PATH);
     assert_eq!(runtime.inputs().len(), 2);
+}
+
+// A long gap: the step's arrival frame does not show the target, and a guard on it would refuse.
+// The target shows by the end of the gap, and the step decides on the frame after the gap, with no
+// wait between that frame and the input. Without a gap the guard judges the arrival frame and
+// refuses.
+#[test]
+fn a_long_gap_decides_on_a_frame_after_the_gap() {
+    const GAP: Duration = Duration::from_millis(60_000);
+    let task = task(vec![guarded_tap("open", expect(json!("result"), 1_000))]);
+    let screens = || vec![vec![shown(HOME), home_ready()], vec![shown(RESULT)]];
+    let mut runtime = ScriptedRuntime::new(screens()).with_action_gap(GAP);
+    let result = task.run(&mut runtime);
+    succeeded(&result);
+    assert_eq!(
+        up_to_the_input(&runtime),
+        [
+            ScriptedEvent::Recognized,
+            ScriptedEvent::Paused(GAP),
+            ScriptedEvent::Recognized,
+            ScriptedEvent::EffectIntent,
+            ScriptedEvent::Input,
+        ]
+    );
+    let (result, runtime) = declared(&task, screens());
+    assert!(result.is_err(), "no gap: the arrival frame decides");
+    assert!(runtime.inputs().is_empty());
+}
+
+// The page changes during the gap: the step sends no input, with a guard and with none, and ends
+// with the guard's refusal.
+#[test]
+fn a_page_change_during_the_gap_is_seen_by_the_guard() {
+    let refused = ExecutionKernelCode::ContainedTaskGuardRefused.as_str();
+    for (case, operation) in [
+        (
+            "a guard",
+            guarded_tap("open", expect(json!("result"), 1_000)),
+        ),
+        (
+            "no guard",
+            tap("open", "home", expect(json!("result"), 1_000)),
+        ),
+    ] {
+        let task = task(vec![operation]);
+        let mut runtime =
+            ScriptedRuntime::new(vec![vec![home_ready(), shown(LOBBY)], vec![shown(RESULT)]])
+                .with_action_gap(Duration::from_millis(500));
+        let error = match task.run(&mut runtime) {
+            Err(ContainedTaskRunError::Task(error)) => error,
+            other => panic!("{case}: expected a task failure, got {other:?}"),
+        };
+        assert_eq!(error.code().as_str(), refused, "{case}");
+        assert!(runtime.inputs().is_empty(), "{case}");
+    }
+}
+
+// The guard is verified again on a fresh frame (`input_recheck`), and the step's confirmation fails
+// and it clicks again: its gap was asked once, waited once.
+#[test]
+fn the_random_gap_is_drawn_once_when_the_guard_is_re_verified() {
+    const GAP: Duration = Duration::from_millis(500);
+    let mut members = expect(json!("result"), 100);
+    members["input_recheck"] = json!({"kind": "fresh_frame"});
+    members["retryable"] = json!(true);
+    members["max_attempts"] = json!(2);
+    members["retry_interval_ms"] = json!(10);
+    let task = task(vec![guarded_tap("open", members)]);
+    let mut runtime = ScriptedRuntime::new(vec![
+        vec![home_ready()],
+        vec![home_ready()],
+        vec![shown(RESULT)],
+    ])
+    .with_action_gap(GAP);
+    let result = task.run(&mut runtime);
+    succeeded(&result);
+    assert_eq!(runtime.inputs().len(), 2);
+    assert_eq!(runtime.action_gap_draws(), 1);
+    assert_eq!(
+        runtime
+            .pauses()
+            .iter()
+            .filter(|pause| **pause == GAP)
+            .count(),
+        1
+    );
+}
+
+// The gap and the pacing term are two waits, the gap first, then the frame, then the term.
+#[test]
+fn gap_adds_to_the_pacing_term() {
+    let gap = Duration::from_millis(40);
+    let term = Duration::from_millis(75);
+    let task = task(vec![tap("open", "home", expect(json!("result"), 1_000))]);
+    let mut runtime = ScriptedRuntime::new(vec![vec![shown(HOME)], vec![shown(RESULT)]])
+        .with_action_gap(gap)
+        .with_step_extras(0, term);
+    let result = task.run(&mut runtime);
+    succeeded(&result);
+    assert_eq!(
+        up_to_the_input(&runtime),
+        [
+            ScriptedEvent::Recognized,
+            ScriptedEvent::Paused(gap),
+            ScriptedEvent::Recognized,
+            ScriptedEvent::Paused(term),
+            ScriptedEvent::EffectIntent,
+            ScriptedEvent::Input,
+        ]
+    );
+}
+
+// At the factor 2000 the gap lasts what it says.
+#[test]
+fn gap_is_never_multiplied_by_the_factor() {
+    let gap = Duration::from_millis(40);
+    let task = task(vec![tap("open", "home", expect(json!("result"), 1_000))]);
+    let mut runtime = ScriptedRuntime::new(vec![vec![shown(HOME)], vec![shown(RESULT)]])
+        .with_action_gap(gap)
+        .with_step_factors(vec![2_000]);
+    let result = task.run(&mut runtime);
+    succeeded(&result);
+    assert_eq!(
+        up_to_the_input(&runtime),
+        [
+            ScriptedEvent::Recognized,
+            ScriptedEvent::Paused(gap),
+            ScriptedEvent::Recognized,
+            ScriptedEvent::EffectIntent,
+            ScriptedEvent::Input,
+        ]
+    );
 }

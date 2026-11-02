@@ -1597,6 +1597,11 @@ impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
         self.inner.observe_extra_wait_round();
     }
 
+    /// ACT-2: the run's draws and diagnostics, as for its own steps.
+    fn step_action_gap(&mut self) -> Result<std::time::Duration, Self::Error> {
+        self.inner.step_action_gap()
+    }
+
     /// ACT-1: the Runtime's holds, as for the run's own steps.
     fn settled_path_held(
         &mut self,
@@ -4021,10 +4026,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     /// PERF-B1 (Workflow #407 B1): and the `execution.capture` keys in effect, the ceiling of a
     /// declared capture interval and the back-off of the step's waits for a page.
     ///
-    /// ACT-1, ACT-2 (Workflow #407, register §1.250): and the instance's `execution.action_gap`
-    /// keys in effect: the settled path at a stage up to `settled_max_stage`, and the step's gap,
-    /// added to its pre-input wait. A drawn gap comes from the run's seed and the number of the
-    /// draw, and goes to the run's diagnostics.
+    /// ACT-1 (Workflow #407, register §1.250): and the settled path, under the instance's
+    /// `execution.action_gap` keys in effect at a stage up to `settled_max_stage`.
     fn step_pacing(&mut self) -> Result<StepPacing, Self::Error> {
         let retries = self
             .host
@@ -4063,23 +4066,33 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         } else {
             actingcommand_contract::PerformancePacingStage::S0
         };
-        let seed = if action_gap.draws() {
-            self.action_gap_seed()?
-        } else {
-            0
-        };
-        let (pacing, drawn_ms) = crate::performance::apply_action_gap(
+        Ok(crate::performance::apply_settled_path(
             effective
                 .step_pacing(retries, pre_input_wait_base_ms)
                 .with_capture_cadence(capture_cadence),
             &action_gap,
             stage,
-            seed,
-        );
-        if let Some(gap_ms) = drawn_ms {
+        ))
+    }
+
+    /// ACT-2 (Workflow #407, register §1.250): the step's gap under the instance's keys in effect.
+    /// A drawn one comes from the run's seed and the number of the draw, and goes to the run's
+    /// diagnostics; the kernel asks once per step.
+    fn step_action_gap(&mut self) -> Result<std::time::Duration, Self::Error> {
+        let action_gap = self
+            .host
+            .action_gap(self.instance_alias)
+            .map_err(RequestFailure::poison_without_terminal)?;
+        let seed = if action_gap.draws() {
+            self.action_gap_seed()?
+        } else {
+            0
+        };
+        let gap_ms = action_gap.gap_ms(seed);
+        if action_gap.draws() {
             self.diagnostic_action_gap(crate::performance::action_gap_drawn(gap_ms))?;
         }
-        Ok(pacing)
+        Ok(std::time::Duration::from_millis(gap_ms))
     }
 
     /// ACT-1 (§1.6): the Runtime's holds.

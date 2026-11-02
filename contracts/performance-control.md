@@ -319,11 +319,20 @@ deadline, settlement and record is the one before pacing.
   the `linear_steps` path. A failed confirmation, or a next step whose guard fails on the frame an
   operation arrived on, keeps the run's later steps on `post_delay_ms` and holds that (package,
   operation) on it for `fallback_hold_ms`, across runs, in memory; the run's diagnostics record it.
-  No input, attempt or retry is added. Under `settled` the pre-input wait also carries the step's
-  gap: `fixed_ms`, or under `random` a value of its range drawn at each `step_pacing()` answer from
-  the run's sampling seed and the number of the draw, written to the run's diagnostics; `performance`
-  adds none. The gap adds to the pacing term and is never multiplied by the factor, and it applies
-  whether or not the step takes the path.
+  No input, attempt or retry is added. Under `settled` a step that sends an input also has a gap,
+  on both the page-graph and the `linear_steps` path, whether or not it takes the settled path:
+  `fixed_ms`, or under `random` a value of its range drawn once per step from the run's sampling
+  seed and the number of the draw and written to the run's diagnostics. The gap is finished first;
+  the frame that decides the input and its guard is taken after it (on the page-graph path as a page
+  wait, so a loading screen or a shared interrupt is handled there, and a step with no guard refuses
+  a page it was not dispatched from, `contained_task_guard_refused`). Verifying the step again, and
+  its later attempts, add no gap. The gap lasts what it says, never multiplied by the factor, and is
+  separate from the pacing term below it. What dispatched the step (a candidate's `when`, on the
+  page graph) was judged before the gap and is not judged again. `performance` adds no gap: it
+  leaves only the pre-input wait, which stays after the decision because it is small and part of the
+  pacing contract: `pre_input_wait_base_ms` × (f − 1000) / 1000, at the shipped values (base 300 ms)
+  at most 150 ms at a factor up to S1's 1 500, 900 ms at the curve's top factor 4 000 and 1 200 ms
+  at `max_factor_milli` 5 000.
 - **A still screen it cannot recognise (Workflow #411 A43b).** A page wait or a step's
   confirmation whose latest two frames are unchanged by the one frame-change measure
   ([color-digest.md](color-digest.md), section Frame change, at its default) and match no page

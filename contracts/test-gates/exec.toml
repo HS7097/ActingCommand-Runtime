@@ -2319,6 +2319,18 @@ tests = [
 ]
 incident = ["#407"]
 
+# ACT-2 (Workflow #407, register §1.250; design addendum 1): a fixed or random gap finishes before the frame that decides the input and its guard, so a page change during it is refused with and without a guard; it is asked once per step whatever is verified again; it adds to the pacing term and is never multiplied by the factor
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_act1::a_long_gap_decides_on_a_frame_after_the_gap",
+    "actingcommand-execution-kernel::lib::contained_task::gate_act1::a_page_change_during_the_gap_is_seen_by_the_guard",
+    "actingcommand-execution-kernel::lib::contained_task::gate_act1::the_random_gap_is_drawn_once_when_the_guard_is_re_verified",
+    "actingcommand-execution-kernel::lib::contained_task::gate_act1::gap_adds_to_the_pacing_term",
+    "actingcommand-execution-kernel::lib::contained_task::gate_act1::gap_is_never_multiplied_by_the_factor",
+]
+incident = ["#407"]
+
 # ROUT-L RL-T (#386; contracts/standard-pack-schedule.md "Tools"): standard-pack compose receives every --instance <alias>=<game>/<server> given after its words (the command's own, not the global --instance), so two bound instances of one game and server compose one <id>@<alias> copy of the rule and of each item per instance, each in its instance's scope
 [[gate]]
 coverage = "Y"

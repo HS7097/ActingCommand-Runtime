@@ -2184,7 +2184,7 @@ tests = [
 ]
 incident = ["#407 B1"]
 
-# ACT-1, ACT-2 (Workflow #407, register §1.250): execution.action_gap.*, default off, ranges and whole check, per instance from the file and an instruction; the host hands the settled path at a stage up to settled_max_stage and none under declared; the gap adds to the pacing term, is never multiplied by the factor, is nothing at fixed 0 and for performance, and a random one stays in its range, seeded, and is kept for the run's diagnostics
+# ACT-1, ACT-2 (Workflow #407, register §1.250): execution.action_gap.*, default off, ranges and whole check, per instance from the file and an instruction; the host hands the settled path at a stage up to settled_max_stage and none under declared; the gap is nothing at fixed 0, for performance (the pre-input wait stays the curve's) and under declared, and a random one stays in its range, seeded, and is kept for the run's diagnostics
 [[gate]]
 coverage = "Y"
 tests = [
@@ -2193,8 +2193,6 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_act1::gap_fixed_zero_adds_nothing",
     "actingcommand-runtime-host::lib::tests::gate_act1::gap_random_stays_in_range_and_is_seeded",
     "actingcommand-runtime-host::lib::tests::gate_act1::gap_performance_is_the_pre_input_curve",
-    "actingcommand-runtime-host::lib::tests::gate_act1::gap_adds_to_the_pacing_term",
-    "actingcommand-runtime-host::lib::tests::gate_act1::gap_is_never_multiplied_by_the_factor",
 ]
 incident = ["#407"]
 

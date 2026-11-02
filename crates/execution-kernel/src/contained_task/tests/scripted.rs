@@ -24,7 +24,8 @@
 // frames it showed after each number of inputs.
 //
 // ACT-1: every answer may also carry a settled path (`with_settled_path`; without one none), and
-// the runtime holds what falls back from it as the host does, for its scripted clock.
+// the runtime holds what falls back from it as the host does, for its scripted clock. ACT-2: it
+// answers a step's gap (`with_action_gap`; without one none) and counts how often it was asked.
 //
 // Workflow #392 DA-2a: a frame may carry the geometry its producer recorded (`with_geometry`;
 // without one a fixture's), and the runtime may answer a game's display declaration
@@ -131,6 +132,8 @@ pub(crate) struct ScriptedRuntime {
     settled_hold: Duration,
     settled_holds: SettledHolds,
     settled_fallbacks: Vec<String>,
+    action_gap: Duration,
+    action_gap_draws: u32,
     extra_rounds_started: u32,
     events: Vec<ScriptedEvent>,
     base: Instant,
@@ -167,6 +170,8 @@ impl ScriptedRuntime {
             settled_hold: Duration::ZERO,
             settled_holds: SettledHolds::default(),
             settled_fallbacks: Vec::new(),
+            action_gap: Duration::ZERO,
+            action_gap_draws: 0,
             extra_rounds_started: 0,
             events: Vec::new(),
             base: Instant::now() + CLOCK_LEAD,
@@ -276,6 +281,19 @@ impl ScriptedRuntime {
             settled_hold: hold,
             ..self
         }
+    }
+
+    // The same device, answering every step's gap with `gap` (ACT-2).
+    pub(crate) fn with_action_gap(self, gap: Duration) -> Self {
+        Self {
+            action_gap: gap,
+            ..self
+        }
+    }
+
+    // How often the kernel asked for a step's gap (ACT-2).
+    pub(crate) fn action_gap_draws(&self) -> u32 {
+        self.action_gap_draws
     }
 
     // The operations that fell back from the settled path, in order (ACT-1).
@@ -425,6 +443,11 @@ impl ContainedTaskRuntime for ScriptedRuntime {
 
     fn observe_extra_wait_round(&mut self) {
         self.extra_rounds_started += 1;
+    }
+
+    fn step_action_gap(&mut self) -> Result<Duration, Self::Error> {
+        self.action_gap_draws += 1;
+        Ok(self.action_gap)
     }
 
     fn settled_path_held(
