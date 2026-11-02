@@ -8,6 +8,7 @@
 //! None of these needs the Runtime. They touch only `<state_root>\agent-forward\`, under one file
 //! lock, and every file goes through `.part`, flush and rename.
 
+use crate::Refusal;
 use crate::channels::{CHANNELS_SCHEMA, Channel, ChannelClient, ChannelRegistry, registry_path};
 use crate::claude;
 use crate::dpapi::Secret;
@@ -128,34 +129,34 @@ fn required<'a>(
         .ok_or_else(|| usage(Some(flag), UsageProblem::Required))
 }
 
-fn failed(text: String) -> CliFailure {
-    CliFailure::Failed { text }
+fn failed(refusal: Refusal) -> CliFailure {
+    CliFailure::Failed { text: refusal.0 }
 }
 
-fn now_unix_ms() -> Result<u64, String> {
+fn now_unix_ms() -> Result<u64, Refusal> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .ok()
         .and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok())
-        .ok_or_else(|| "the system clock is unavailable".to_owned())
+        .ok_or_else(|| Refusal("the system clock is unavailable".to_owned()))
 }
 
 /// Runs `work` holding the lock of `<state_root>\agent-forward\`. The operating system releases the
 /// lock if this process dies.
 pub(crate) fn locked<T>(
     state_root: &Path,
-    work: impl FnOnce() -> Result<T, String>,
-) -> Result<T, String> {
+    work: impl FnOnce() -> Result<T, Refusal>,
+) -> Result<T, Refusal> {
     let directory = state_root.join("agent-forward");
     fs::create_dir_all(&directory)
-        .map_err(|error| format!("cannot create {}: {error}", directory.display()))?;
+        .map_err(|error| Refusal(format!("cannot create {}: {error}", directory.display())))?;
     let path = directory.join(LOCK_FILE);
     let file = OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
         .open(&path)
-        .map_err(|error| format!("cannot open {}: {error}", path.display()))?;
+        .map_err(|error| Refusal(format!("cannot open {}: {error}", path.display())))?;
     let started = Instant::now();
     loop {
         match file.try_lock() {
@@ -164,10 +165,10 @@ pub(crate) fn locked<T>(
                 std::thread::sleep(LOCK_POLL);
             }
             Err(TryLockError::WouldBlock) => {
-                return Err(format!("another writer holds {}", path.display()));
+                return Err(Refusal(format!("another writer holds {}", path.display())));
             }
             Err(TryLockError::Error(error)) => {
-                return Err(format!("cannot lock {}: {error}", path.display()));
+                return Err(Refusal(format!("cannot lock {}: {error}", path.display())));
             }
         }
     }
@@ -175,21 +176,22 @@ pub(crate) fn locked<T>(
 }
 
 /// Replaces `path` whole: its `.part` beside it, flushed, then renamed.
-pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), Refusal> {
     let mut part = path.as_os_str().to_owned();
     part.push(".part");
     let part = PathBuf::from(part);
     if let Some(directory) = path.parent() {
         fs::create_dir_all(directory)
-            .map_err(|error| format!("cannot create {}: {error}", directory.display()))?;
+            .map_err(|error| Refusal(format!("cannot create {}: {error}", directory.display())))?;
     }
     let write = || -> std::io::Result<()> {
         let mut file = File::create(&part)?;
         file.write_all(bytes)?;
         file.sync_all()
     };
-    write().map_err(|error| format!("cannot write {}: {error}", part.display()))?;
-    fs::rename(&part, path).map_err(|error| format!("cannot replace {}: {error}", path.display()))
+    write().map_err(|error| Refusal(format!("cannot write {}: {error}", part.display())))?;
+    fs::rename(&part, path)
+        .map_err(|error| Refusal(format!("cannot replace {}: {error}", path.display())))
 }
 
 fn client_word(client: ChannelClient) -> &'static str {
@@ -215,28 +217,30 @@ fn channel_value(channel: &Channel) -> Value {
     value
 }
 
-fn read_channels(state_root: &Path) -> Result<Vec<Channel>, String> {
+fn read_channels(state_root: &Path) -> Result<Vec<Channel>, Refusal> {
     match crate::channels::read_registry(state_root) {
         Ok(Some(registry)) => Ok(registry.channels),
         Ok(None) => Ok(Vec::new()),
-        Err(failure) => Err(format!("the channel registry is unreadable: {failure:?}")),
+        Err(failure) => Err(Refusal(format!(
+            "the channel registry is unreadable: {failure:?}"
+        ))),
     }
 }
 
 /// Writes the registry after the same check its reader makes, so no command can leave a registry
 /// that later reads as invalid. The caller holds the lock.
-fn write_channels(state_root: &Path, channels: &[Value]) -> Result<(), String> {
+fn write_channels(state_root: &Path, channels: &[Value]) -> Result<(), Refusal> {
     let text = serde_json::to_string_pretty(&json!({
         "schema": CHANNELS_SCHEMA,
         "channels": channels,
     }))
-    .map_err(|error| format!("cannot encode the registry: {error}"))?;
+    .map_err(|error| Refusal(format!("cannot encode the registry: {error}")))?;
     ChannelRegistry::parse(&text).map_err(|invalid| {
-        format!(
+        Refusal(format!(
             "the channel is refused: {:?} ({})",
             invalid.problem,
             invalid.channel.as_deref().unwrap_or("no name")
-        )
+        ))
     })?;
     write_atomic(&registry_path(state_root), text.as_bytes())
 }
@@ -255,10 +259,10 @@ pub(crate) fn add_channel(
     client: &str,
     native_id: &str,
     dsh: Option<DshFlags<'_>>,
-) -> Result<Value, String> {
+) -> Result<Value, Refusal> {
     let native_id = if client == client_word(ChannelClient::Claude) {
         claude::session_id(native_id)
-            .ok_or_else(|| "a Claude channel's native id is a session's UUID".to_owned())?
+            .ok_or_else(|| Refusal("a Claude channel's native id is a session's UUID".to_owned()))?
     } else {
         native_id.to_owned()
     };
@@ -286,7 +290,7 @@ pub(crate) fn add_channel(
 }
 
 /// Removes one channel. A Claude channel's live record loses its token: it has no more use.
-fn remove_channel(state_root: &Path, name: &str) -> Result<(), String> {
+fn remove_channel(state_root: &Path, name: &str) -> Result<(), Refusal> {
     let removed = locked(state_root, || {
         let channels = read_channels(state_root)?;
         let Some(removed) = channels
@@ -294,7 +298,7 @@ fn remove_channel(state_root: &Path, name: &str) -> Result<(), String> {
             .find(|channel| channel.name == name)
             .cloned()
         else {
-            return Err("no channel has this name".to_owned());
+            return Err(Refusal("no channel has this name".to_owned()));
         };
         let rest: Vec<Value> = channels
             .iter()
@@ -360,7 +364,7 @@ fn hook(words: &[OsString]) -> Result<CliAnswer, CliFailure> {
     });
     result
         .map(|_| CliAnswer::Silent)
-        .map_err(|text| CliFailure::Hook { text })
+        .map_err(|Refusal(text)| CliFailure::Hook { text })
 }
 
 /// Runs the words after `agent-channel`.

@@ -8,6 +8,7 @@
 //! error text here holds the token, the frame, the pipe's name or a native id, because a `detail`
 //! goes to a delivery file a person reads.
 
+use crate::Refusal;
 use crate::ancestor::{self, ProcessIdentity};
 use crate::channels::{ChannelClient, ChannelRegistry, RegistryReadFailure, read_registry};
 use crate::cli::{locked, write_atomic};
@@ -104,12 +105,14 @@ pub(crate) fn session_id(text: &str) -> Option<String> {
 }
 
 /// Whether `value` has the shape of a session's local inbox.
-fn validate_pipe(value: &str) -> Result<(), &'static str> {
+fn validate_pipe(value: &str) -> Result<(), Refusal> {
     let Some(suffix) = value
         .strip_prefix(r"\\.\pipe\LOCAL\cc-msg-")
         .or_else(|| value.strip_prefix(r"\\.\pipe\cc-msg-"))
     else {
-        return Err("the inbox is not a local cc-msg named pipe");
+        return Err(Refusal(
+            "the inbox is not a local cc-msg named pipe".to_owned(),
+        ));
     };
     if suffix.is_empty()
         || suffix.len() > MAX_PIPE_SUFFIX
@@ -117,7 +120,9 @@ fn validate_pipe(value: &str) -> Result<(), &'static str> {
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
     {
-        return Err("the inbox's pipe name has another shape");
+        return Err(Refusal(
+            "the inbox's pipe name has another shape".to_owned(),
+        ));
     }
     Ok(())
 }
@@ -171,41 +176,49 @@ fn read_record(state_root: &Path, native_id: &str) -> Result<Option<SessionRecor
     Ok(Some(record))
 }
 
-fn write_record(state_root: &Path, record: &SessionRecord) -> Result<(), String> {
+fn write_record(state_root: &Path, record: &SessionRecord) -> Result<(), Refusal> {
     let text = serde_json::to_vec_pretty(record)
-        .map_err(|error| format!("cannot encode a session's record: {error}"))?;
+        .map_err(|error| Refusal(format!("cannot encode a session's record: {error}")))?;
     write_atomic(&record_path(state_root, &record.native_id), &text)
 }
 
-fn read_hook_input(input: impl Read, expected_event: &str) -> Result<String, String> {
+fn read_hook_input(input: impl Read, expected_event: &str) -> Result<String, Refusal> {
     let mut bytes = Vec::new();
     input
         .take(MAX_HOOK_INPUT + 1)
         .read_to_end(&mut bytes)
-        .map_err(|error| format!("cannot read the hook's input: {error}"))?;
+        .map_err(|error| Refusal(format!("cannot read the hook's input: {error}")))?;
     if bytes.len() as u64 > MAX_HOOK_INPUT {
-        return Err("the hook's input exceeds 64 KiB".to_owned());
+        return Err(Refusal("the hook's input exceeds 64 KiB".to_owned()));
     }
-    let hook: HookInput = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("the hook's input is not of the expected shape: {error}"))?;
+    let hook: HookInput = serde_json::from_slice(&bytes).map_err(|error| {
+        Refusal(format!(
+            "the hook's input is not of the expected shape: {error}"
+        ))
+    })?;
     if hook
         .hook_event_name
         .as_deref()
         .is_some_and(|name| name != expected_event)
     {
-        return Err(format!(
+        return Err(Refusal(format!(
             "the hook's event is not {expected_event}: check the hook's entry in the settings"
-        ));
+        )));
     }
-    session_id(&hook.session_id).ok_or_else(|| "the hook's session id is not a UUID".to_owned())
+    session_id(&hook.session_id)
+        .ok_or_else(|| Refusal("the hook's session id is not a UUID".to_owned()))
 }
 
-fn registry_of(state_root: &Path) -> Result<Option<ChannelRegistry>, String> {
-    read_registry(state_root).map_err(|failure| match failure {
-        RegistryReadFailure::Read(kind) => format!("the channel registry cannot be read: {kind}"),
-        RegistryReadFailure::Invalid(invalid) => {
-            format!("the channel registry is invalid: {:?}", invalid.problem)
-        }
+fn registry_of(state_root: &Path) -> Result<Option<ChannelRegistry>, Refusal> {
+    read_registry(state_root).map_err(|failure| {
+        Refusal(match failure {
+            RegistryReadFailure::Read(kind) => {
+                format!("the channel registry cannot be read: {kind}")
+            }
+            RegistryReadFailure::Invalid(invalid) => {
+                format!("the channel registry is invalid: {:?}", invalid.problem)
+            }
+        })
     })
 }
 
@@ -214,29 +227,33 @@ fn store_live(
     state_root: &Path,
     native_id: &str,
     environment: SessionEnvironment,
-    owner: &dyn Fn() -> Result<ProcessIdentity, String>,
+    owner: &dyn Fn() -> Result<ProcessIdentity, Refusal>,
     now_unix_ms: u64,
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     let socket = environment.socket.ok_or_else(|| {
-        format!("this channel's session has no {SOCKET_VARIABLE}: cross-session messaging is off")
+        Refusal(format!(
+            "this channel's session has no {SOCKET_VARIABLE}: cross-session messaging is off"
+        ))
     })?;
     let token = environment.token.ok_or_else(|| {
-        format!("this channel's session has no {TOKEN_VARIABLE}: cross-session messaging is off")
+        Refusal(format!(
+            "this channel's session has no {TOKEN_VARIABLE}: cross-session messaging is off"
+        ))
     })?;
-    validate_pipe(&socket).map_err(str::to_owned)?;
+    validate_pipe(&socket)?;
     let bytes = token.as_bytes();
     if bytes.is_empty()
         || bytes.len() > MAX_TOKEN_BYTES
         || bytes.iter().any(u8::is_ascii_control)
         || std::str::from_utf8(bytes).is_err()
     {
-        return Err(format!(
+        return Err(Refusal(format!(
             "this channel's session has an invalid {TOKEN_VARIABLE}"
-        ));
+        )));
     }
     let owner = owner()?;
     let blob = dpapi::protect(bytes)
-        .map_err(|error| format!("cannot protect the session's token: {error}"))?;
+        .map_err(|error| Refusal(format!("cannot protect the session's token: {error}")))?;
     drop(token);
     let record = SessionRecord {
         schema: RECORD_SCHEMA.to_owned(),
@@ -257,9 +274,9 @@ pub(crate) fn hook_start(
     state_root: &Path,
     input: impl Read,
     environment: &dyn Fn() -> SessionEnvironment,
-    owner: &dyn Fn() -> Result<ProcessIdentity, String>,
+    owner: &dyn Fn() -> Result<ProcessIdentity, Refusal>,
     now_unix_ms: u64,
-) -> Result<HookResult, String> {
+) -> Result<HookResult, Refusal> {
     let native_id = read_hook_input(input, "SessionStart")?;
     let Some(registry) = registry_of(state_root)? else {
         return Ok(HookResult::NotAChannel);
@@ -280,13 +297,15 @@ pub(crate) fn hook_start(
 pub(crate) fn hook_end(
     state_root: &Path,
     input: impl Read,
-    owner: &dyn Fn() -> Result<ProcessIdentity, String>,
+    owner: &dyn Fn() -> Result<ProcessIdentity, Refusal>,
     now_unix_ms: u64,
-) -> Result<HookResult, String> {
+) -> Result<HookResult, Refusal> {
     let native_id = read_hook_input(input, "SessionEnd")?;
-    let record = read_record(state_root, &native_id).map_err(|failure| match failure {
-        RecordFailure::Read(error) => format!("cannot read the session's record: {error}"),
-        RecordFailure::Shape => "the session's record is of another shape".to_owned(),
+    let record = read_record(state_root, &native_id).map_err(|failure| {
+        Refusal(match failure {
+            RecordFailure::Read(error) => format!("cannot read the session's record: {error}"),
+            RecordFailure::Shape => "the session's record is of another shape".to_owned(),
+        })
     })?;
     let Some(record) = record else {
         return Ok(HookResult::NothingToClear);
@@ -300,7 +319,7 @@ pub(crate) fn hook_end(
     Ok(HookResult::Cleared)
 }
 
-fn clear_record(state_root: &Path, record: SessionRecord, now_unix_ms: u64) -> Result<(), String> {
+fn clear_record(state_root: &Path, record: SessionRecord, now_unix_ms: u64) -> Result<(), Refusal> {
     let cleared = SessionRecord {
         online: false,
         pipe: None,
@@ -316,17 +335,19 @@ pub(crate) fn clear_removed(
     state_root: &Path,
     native_id: &str,
     now_unix_ms: u64,
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     let Some(native_id) = session_id(native_id) else {
         return Ok(());
     };
     match read_record(state_root, &native_id) {
         Ok(Some(record)) => clear_record(state_root, record, now_unix_ms),
         Ok(None) => Ok(()),
-        Err(RecordFailure::Read(error)) => {
-            Err(format!("cannot read the channel's record: {error}"))
-        }
-        Err(RecordFailure::Shape) => Err("the channel's record is of another shape".to_owned()),
+        Err(RecordFailure::Read(error)) => Err(Refusal(format!(
+            "cannot read the channel's record: {error}"
+        ))),
+        Err(RecordFailure::Shape) => Err(Refusal(
+            "the channel's record is of another shape".to_owned(),
+        )),
     }
 }
 
@@ -336,26 +357,28 @@ pub(crate) fn register(
     state_root: &Path,
     name: &str,
     environment: SessionEnvironment,
-    owner: &dyn Fn() -> Result<ProcessIdentity, String>,
+    owner: &dyn Fn() -> Result<ProcessIdentity, Refusal>,
     now_unix_ms: u64,
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     let Some(registry) = registry_of(state_root)? else {
-        return Err("no channel registry exists: add the channel first".to_owned());
+        return Err(Refusal(
+            "no channel registry exists: add the channel first".to_owned(),
+        ));
     };
     let Some(channel) = registry
         .channel(name)
         .filter(|channel| channel.client == ChannelClient::Claude)
     else {
-        return Err("no Claude channel has this name".to_owned());
+        return Err(Refusal("no Claude channel has this name".to_owned()));
     };
     let Some(native_id) = session_id(&channel.native_id) else {
-        return Err("the channel's native id is not a UUID".to_owned());
+        return Err(Refusal("the channel's native id is not a UUID".to_owned()));
     };
     let own = environment.session_id.as_deref().and_then(session_id);
     if own.as_deref() != Some(native_id.as_str()) {
-        return Err(format!(
+        return Err(Refusal(format!(
             "{SESSION_VARIABLE} is not this channel's session id: run this inside that session"
-        ));
+        )));
     }
     store_live(state_root, &native_id, environment, owner, now_unix_ms)
 }
@@ -504,8 +527,8 @@ impl ClaudeForward {
                 );
             }
         }
-        if let Err(problem) = validate_pipe(pipe) {
-            return failed(DeliveryProblem::ProtocolChanged, problem.to_owned());
+        if let Err(Refusal(text)) = validate_pipe(pipe) {
+            return failed(DeliveryProblem::ProtocolChanged, text);
         }
         match self.system.same_user(record.owner_pid) {
             Ok(true) => {}
@@ -836,7 +859,7 @@ mod tests {
             1,
         )
         .expect_err("a bad pipe fails");
-        hidden(&failure, "a hook's failure");
+        hidden(&failure.0, "a hook's failure");
     }
 
     #[test]
@@ -1027,7 +1050,7 @@ mod tests {
         let no_variables = || -> SessionEnvironment {
             panic!("a session that is no channel has its variables left alone")
         };
-        let no_owner = || -> Result<ProcessIdentity, String> {
+        let no_owner = || -> Result<ProcessIdentity, Refusal> {
             panic!("a session that is no channel is not looked into")
         };
         let start = |root: &Path| {
@@ -1086,8 +1109,8 @@ mod tests {
                 1,
             )
             .expect_err("a channel's session without both variables fails");
-            assert!(failure.contains(names), "{failure}");
-            assert!(!failure.contains(TOKEN), "{failure}");
+            assert!(failure.0.contains(names), "{failure:?}");
+            assert!(!failure.0.contains(TOKEN), "{failure:?}");
             assert_eq!(record_text(root.path(), SESSION), None, "nothing is stored");
         }
     }

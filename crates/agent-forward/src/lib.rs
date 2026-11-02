@@ -44,6 +44,12 @@ pub use fake::{FakeForward, FakeSend};
 
 use std::time::Instant;
 
+/// Why a local step of this crate failed: text for a person's developer line. It is never a code,
+/// and it never holds a credential.
+#[cfg(windows)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Refusal(pub(crate) String);
+
 /// One message to one channel.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForwardMessage {
