@@ -4408,6 +4408,9 @@ fn score_candidates(
                 .iter()
                 .filter_map(|known| match &known.input {
                     ValueRef::Fact { .. } | ValueRef::KeyedFact { .. } => known.known_until_unix_ms,
+                    // Workflow #357 DB-2: the collect option refuses a document that declares a
+                    // table, so this arm only keeps the match total.
+                    ValueRef::Table { .. } => None,
                     ValueRef::Field { field } => projection.field_expiries.get(field).copied(),
                 })
                 .min();
@@ -4456,6 +4459,9 @@ fn unknown_inputs(
                 ValueRef::Fact { fact_key } | ValueRef::KeyedFact { fact_key, .. } => {
                     (fact_key.as_str(), unknown.reason)
                 }
+                // Workflow #357 DB-2: never listed either, for the same reason; its table id
+                // names no real key and keeps the match total.
+                ValueRef::Table { table_id, .. } => (table_id.as_str(), unknown.reason),
                 // A field that names an instance fact whose record has expired is read as
                 // expired, not as missing (decision D1).
                 ValueRef::Field { field }

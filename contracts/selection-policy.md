@@ -272,6 +272,80 @@ facts; the evaluator only reads them):
   The publisher refuses to start when the active identities plus the
   identities it plans would exceed 256.
 
+## Tables and `table`
+
+Workflow #357 DB-2 (Runtime 0.12.37; register §1.65 TB5–TB10, §1.244; `since` 0.12.37). A document
+may read a standard pack's shared table
+([package-reference.md](package-reference.md), "Tables"): final values under a row key, with no
+expression, float or text column. The Runtime knows the table's paths and column names, never what
+they mean.
+
+**Declaration.** The optional member `tables`, at most 8, each
+`{table_id, path, row_key, columns}`. `table_id` is the file's, `[a-z][a-z0-9_]{0,63}`; `path` is
+exactly `tables/<table_id>.json`, relative to the game root of the package that declares the step.
+`row_key` copies the file's. `columns` maps every column the document reads, and every row-key column
+but the key, to its type (`integer`, `boolean`, `enum_string`; never a record list). Left empty it is
+not written, so a document without tables keeps its canonical bytes, `policy_sha256` and
+`input_sha256`; `schema_version` does not change.
+
+**Reference.** `{"source": "table", table_id, key_field, pins, value_column, fallback_column?,
+absent?}`.
+
+| Member | Rule |
+|---|---|
+| `key_field` | A declared `enum_string` field. In a select step, the layout's identity field |
+| `pins` | 0 to 7, exactly the row key's columns but the key, each once, so a key names at most one row. `{column, equals}` with a typed literal, or `{column, equals_fact, otherwise?}` with a declared scalar fact of the column's type whose `allowed` lies inside the column's. `otherwise` is one level, `{equals}` or `{equals_fact}`, used when the fact is unavailable |
+| `value_column` | A declared column |
+| `fallback_column` | Scoring terms only: a different declared column of the same type, read in the same row when `value_column` is null |
+| `absent` | Gates only: the value read for a key that has rows, none of this class |
+
+A gate or a term that reads a table declares `drop_candidate` or `abort_evaluation`: missing data
+never stands in for a value. A read with pins is itself a gate's read with `absent`, or follows a gate
+that reads the same table, key and pins with `absent`: the class gate. A tie-break reads a table only
+where a gate or a term reads the same table, key and pins, and with neither `absent` nor
+`fallback_column`. All of these are `validate`'s, with no table at hand.
+
+**Binding.** `SelectionTables::bind(policy, tables)` is the one constructor: the file's `row_key`
+equals the declared one, each declared column is in the file with its type, and a declared `allowed`
+is a subset of the file's. A difference is one word of the vocabulary `table_mismatch`: `row_key`,
+`column_absent`, `column_type`, `allowed_not_subset`. A declared table that nothing bound is
+`dangling_reference` in `evaluate_with_tables` and `upper_bound_with_tables`, and `evaluate` and
+`upper_bound` are those two with no table at all. The crate still reads no file:
+`LoadedTable::load(table, now)` takes a table its caller read, turns every cell of a column past its
+`valid_until_unix_s` to null, and indexes the rows by key.
+
+**One read**, in this order:
+
+1. The key is the candidate's `key_field`.
+2. Each pin's value: the literal, the fact, or its `otherwise` (reason `term_fallback_used` with
+   `table_column`). Still unavailable, the read is Unknown with the first fact's own reason.
+3. The row. No row has the key: Unknown, `lookup_miss`. The key has rows and none holds the pins: the
+   read's `absent`, a known value, and the class gate decides against the candidate.
+4. The cell. Null, also by expiry: the `fallback_column` in the same row when it is not null (reason
+   `term_fallback_used`), else Unknown, `lookup_miss`.
+5. An `enum_string` value outside the document's `allowed`: Unknown, `type_mismatch`, so no lookup's
+   default can swallow a value the table added.
+
+`lookup_miss` means here that nothing by table or by lookup transform holds a value.
+
+**Static table drop.** A candidate dropped under `drop_candidate` only by steps 3 to 5 is dropped by
+the table's own data, which reading again cannot change. A fact behind a pin is instance data and
+never counts, nor does a value the term's own transform cannot use. The verdict's
+`static_table_drop` says so, and is never serialized: the record holds `unknown_dropped` with its
+reason, as for any drop. The select step does not count such a candidate as an unknown instance, so it
+blocks nothing ([selection-graph.md](selection-graph.md), "Tables").
+
+**Input identity.** A document that declares a table adds the member `tables` to the hashed input: an
+object by `table_id`, each value the rows the references read for the candidates, each row an object
+of its key column and its declared columns, in the order of the row key's projection, each once. An
+expired column is the null the run read. A row read for no candidate is not in it, so the hash moves
+when a row read moves and for no other. Tables are outside every package's content hash and the
+suspension identity (M-357a v1.1 §2.7); no record names their release.
+
+**Scheduling.** `evaluate_collect` refuses a document that declares a table, and the catalog compile
+refuses it with `type_mismatch` (`tables=declared consumer=scheduling`), as for a record list. Dispatch
+value goes through the resource line (Alice's 121 A); only a task's select step reads a table.
+
 ## Upper bound
 
 `upper_bound(policy, facts, now_unix_ms, identities, field_domains)` returns the
@@ -298,6 +372,12 @@ largest score a candidate that was not read could reach: `NoneEligible`,
   leaves it unknown.
 - `NoneEligible` means no identity can be ranked. Leaving the 64-bit range, or
   a declared list that cannot be read, gives `Unbounded`.
+
+A table value is exact for a hypothetical identity, as a `keyed_fact` value is, and so is a pinned
+fact in the snapshot. A gate that reads a table excludes an identity it cannot hold for under
+`drop_candidate`, and has no finite bound where it may be unknown and cannot hold under
+`abort_evaluation`; every other gate is as it was, so a document without a table keeps its bound. A
+key field that is not the identity domain has no finite bound (Workflow #357 DB-2).
 
 ## Decision
 

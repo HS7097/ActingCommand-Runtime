@@ -94,6 +94,8 @@ actingcommand_contract::outcome_codes! {
         /// scope, which is the only scope a reading or an adjustment writes. The validation
         /// still succeeds (keys `path`, `json_pointer`, `fact_key`).
         ResourcePoolProducerMissing => "resource_pool_producer_missing": warning / none,
+        /// Workflow #357 DB-2 (TB5): a document's table has no row for identities of its layout.
+        ResourceTableIdentityUncovered => "resource_table_identity_uncovered": warning / none,
         // ---- end of nine6
         // ---- #411 RV-1 (pending): `actinglab resource verify` (contracts/resource-verify.md).
         /// Success. Every step of `resource verify` passed (keys `step_count`).

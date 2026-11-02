@@ -39,6 +39,13 @@ pub(super) fn help_data() -> Value {
             "resource catalog": ["--repo <repository root>", "--catalog <static catalog JSON>", "--catalog-server <server>", "--field <identity feature name>"],
             "package preflight": ["--package <directory | .zip | .json container>", "--zip <published .zip package>"],
             "package check": ["--package <directory | .zip | .json container>"],
+            "package dry-run": [
+                "--package <directory | .zip | .json container> | --zip <published .zip package>",
+                "--fixture <recorded.png> (repeatable, one per frame)",
+                "--out <the result file>",
+                "--seed <unsigned 64-bit integer: the run's draws, 0 without it>",
+                "--standard-pack-root <the root of the game directories: the shared tables a select step reads>"
+            ],
             "operation validate": ["--repo <repository root>", "--operation-dir <repository-relative operation directory>"],
             "lab watch": crate::runtime_debug::watch_options(),
             "lab unpin": ["--artifact-id <artifact-id>", "--pin-sequence <sequence>", "--pin-event-id <event-id>"],
@@ -65,7 +72,8 @@ pub(super) fn help_data() -> Value {
                 "--facts <the instance answer of actingctl facts --instance or ac_facts, read without a key prefix>",
                 "--select <operation id of a select step: replays its scan over the frames, with --scan>",
                 "--scan <the step's scan declaration, a JSON file, with --select>",
-                "--parameter <name>=<value> (with --select; repeatable, once per parameter the package declares; replaces that parameter's declared default)"
+                "--parameter <name>=<value> (with --select; repeatable, once per parameter the package declares; replaces that parameter's declared default)",
+                "--standard-pack-root <the root of the game directories: the shared tables a select step reads>"
             ],
             "package bundle": [
                 "--applications <applications.json>", "--packs-root <directory of pack directories>",

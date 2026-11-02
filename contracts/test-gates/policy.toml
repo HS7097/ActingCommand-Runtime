@@ -834,6 +834,29 @@ tests = [
 ]
 incident = ["#411 A26", "#386 SR-6a"]
 
+# Workflow #357 DB-2 (#430 S4a-1; M-357a v1.1 §3, §5, §8; register §1.244): a selection document that reads a shared table: every rule of the document, K2 in one binding, the read rule end to end through the evaluator (full match, absent, a required fact unknown under drop and abort, lookup_miss, type_mismatch, expiry, fallback, otherwise, a pin on another value), the input identity and a document without tables by golden, the upper bound, and the scheduling consumer's refusal
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-selection-policy::lib::gate_357_db2::db2_a_full_match_selects_by_the_table_value",
+    "actingcommand-selection-policy::lib::gate_357_db2::db2_a_key_with_rows_but_none_matching_the_pins_reads_absent",
+    "actingcommand-selection-policy::lib::gate_357_db2::db2_a_required_fact_unknown_drops_or_aborts_as_the_document_says",
+    "actingcommand-selection-policy::lib::gate_357_db2::db2_a_missing_key_a_null_cell_and_an_undeclared_enum_are_static_drops",
+    "actingcommand-selection-policy::lib::gate_357_db2::db2_an_expired_column_reads_as_null",
+    "actingcommand-selection-policy::lib::gate_357_db2::db2_a_fallback_column_is_used_and_reported_or_does_not_apply",
+    "actingcommand-selection-policy::lib::gate_357_db2::db2_a_pins_otherwise_is_used_and_names_its_column",
+    "actingcommand-selection-policy::lib::gate_357_db2::db2_a_pin_on_a_fact_holding_another_value",
+    "actingcommand-selection-policy::lib::gate_357_db2::db2_a_document_without_tables_keeps_its_bytes_and_identities",
+    "actingcommand-selection-policy::lib::gate_357_db2::db2_the_input_identity_covers_the_rows_read",
+    "actingcommand-selection-policy::lib::gate_357_db2::db2_bind_refuses_each_difference_from_the_declaration",
+    "actingcommand-selection-policy::lib::gate_357_db2::db2_an_unbound_table_is_refused_and_the_collect_option_refuses_tables",
+    "actingcommand-selection-policy::lib::gate_357_db2::db2_the_upper_bound_reads_the_table_exactly",
+    "actingcommand-selection-policy::lib::gate_357_db2::db2_a_tie_break_reads_a_row_the_terms_read",
+    "actingcommand-selection-policy::lib::gate_357_db2::db2_every_document_rule_refuses",
+    "actingcommand-policy::lib::source::tests::db2_a_document_that_declares_a_table_is_refused_for_scheduling",
+]
+incident = ["#357 DB-2"]
+
 # Workflow #411 B2 (b-plan §2.2, BT-B2 tests T1 and T3; contracts/selection-policy.md, section Predicates; register §1.146 B2-1; no persisted ledger shape): the predicate integer_compare {left, op, right, mul?, add?} compares left with right x mul + add as a value test does, so a gate cost le funds x 1 + (-2000) keeps the candidate within its funds less the reserve and rejects the other; a document without the new members keeps its canonical bytes and policy_sha256, and an integer_compare without mul and add serialises neither
 [[gate]]
 key = "58"

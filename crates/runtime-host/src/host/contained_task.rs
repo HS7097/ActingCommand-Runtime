@@ -1438,6 +1438,8 @@ pub(super) struct RuntimeContainedTask<'a> {
     /// Workflow #373 NAV-6: the run's shared interrupt pages, read in its preparation; taken
     /// out while one is handled.
     pub(super) interrupts: Option<Box<super::standard_pack::RunInterrupts>>,
+    /// Workflow #357 DB-2 (TB7, K4): the shared tables the run bound; evaluation reads no file.
+    pub(super) tables: actingcommand_execution_kernel::RunTables,
     /// Workflow #373 NAV-6: the steps the interrupt layers of the run executed.
     pub(super) interrupt_steps: u32,
     /// Workflow #373 NAV-6: the effective configuration records of interrupt layer packages,
@@ -1709,6 +1711,14 @@ impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
         ContainedTaskRunError<Self::Error>,
     > {
         self.inner.offered_shared_interrupt(frame)
+    }
+
+    /// Workflow #357 DB-2: a layer of the run reads the tables the run bound.
+    fn standard_pack_table(
+        &mut self,
+        path: &str,
+    ) -> Option<Arc<actingcommand_execution_kernel::LoadedTable>> {
+        self.inner.tables.table(path)
     }
 }
 
@@ -4014,6 +4024,14 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     /// round; it counts for the step in progress in the run's task timing evidence.
     fn observe_extra_wait_round(&mut self) {
         self.task_timing.extra_wait_round();
+    }
+
+    /// Workflow #357 DB-2 (TB7): the table the run's preparation or a layer's admission bound.
+    fn standard_pack_table(
+        &mut self,
+        path: &str,
+    ) -> Option<Arc<actingcommand_execution_kernel::LoadedTable>> {
+        self.tables.table(path)
     }
 
     /// Workflow #373 NAV-6: the run's shared interrupt pages (`host/standard_pack.rs`).
@@ -6617,13 +6635,17 @@ impl HostShared {
         active_run.control.note_package_load(package_load);
         // Workflow #373 NAV-6: the run's shared interrupt pages, read in its preparation;
         // Workflow #373 NAV-5: with its navigation data, which replaces the return-home fallback;
-        // Workflow #392 DA-2a: with its game's display declaration.
-        let standard_pack = self.prepare_run_interrupts(&prepared)?;
+        // Workflow #392 DA-2a: with its game's display declaration; Workflow #357 DB-2: and the
+        // shared tables of its package and its prerequisite layers.
+        let mut standard_pack = self.prepare_run_standard_pack(&prepared)?;
         let navigated = super::navigation::navigation_applies(standard_pack.interrupts.as_deref());
         let prerequisites =
             self.resolve_prerequisite_chain(instance_alias, &prepared, navigated, || {
                 self.package_material_deadline(active_run.control.deadline())
             })?;
+        for layer in &prerequisites {
+            self.bind_run_tables(layer, &mut standard_pack.tables)?;
+        }
         // Workflow #411 A22: a recovery binding that neither the run's home entry nor a ladder
         // after its failed end can use is refused here, before any record, claim or lease.
         self.check_recovery_binding(&resolved, task_request, &prepared, &prerequisites)?;
@@ -6938,8 +6960,12 @@ impl HostShared {
                 Ok(material_deadline)
             })?;
         // Workflow #373 NAV-6: the run's shared interrupt pages, read in its preparation
-        // (Workflow #392 DA-2a: with its game's display declaration).
-        let standard_pack = self.prepare_run_interrupts(&prepared)?;
+        // (Workflow #392 DA-2a: with its game's display declaration; Workflow #357 DB-2: and the
+        // shared tables of its package and its prerequisite layers).
+        let mut standard_pack = self.prepare_run_standard_pack(&prepared)?;
+        for layer in &prerequisites {
+            self.bind_run_tables(layer, &mut standard_pack.tables)?;
+        }
         if pending.recovery_rung {
             let (capture, input) = prepared.recovery_entry_channels();
             if let Some(code) = self
@@ -7596,6 +7622,7 @@ impl HostShared {
             executed_steps: Some(0),
             own_executed_steps: None,
             interrupts: standard_pack.interrupts,
+            tables: standard_pack.tables,
             interrupt_steps: 0,
             interrupt_configurations: 0,
             planned_steps,
@@ -8531,6 +8558,7 @@ impl HostShared {
         let recovery_request = ContainedTaskRequest::new(binding.package_path()).map_err(|_| {
             ContainedTaskRunError::task(HostCode::ContainedTaskHomeRecoveryBindingInvalid.as_str())
         })?;
+        // Workflow #357 DB-2: an entry recovery layer binds its tables at its admission.
         let recovery = match prepare_contained_task(
             instance_alias,
             &recovery_request,
@@ -8539,7 +8567,11 @@ impl HostShared {
                 .vision_provider(),
             self.package_material_deadline(runtime.control.deadline())
                 .map_err(ContainedTaskRunError::Boundary)?,
-        ) {
+        )
+        .and_then(|recovery| {
+            self.bind_run_tables(&recovery, &mut runtime.tables)?;
+            Ok(recovery)
+        }) {
             Ok(recovery) => recovery,
             Err(mut failure) => {
                 let code = failure.error.code();

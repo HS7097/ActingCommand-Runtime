@@ -2,6 +2,7 @@
 
 //! Zero-device adapter for evaluating contained tasks against recorded frames.
 
+use crate::RunTables;
 use crate::codes::ExecutionKernelCode;
 use crate::{
     ContainedTaskCode, ContainedTaskGuardOutcome, ContainedTaskRunError, ContainedTaskRunOptions,
@@ -208,7 +209,13 @@ pub fn simulate_contained_task(
     task: &PreparedContainedTask,
     frames: Vec<Frame>,
 ) -> Result<OfflineSimulationResult, OfflineSimulationError> {
-    simulate(task, frames, None, OfflineDraw::default())
+    simulate(
+        task,
+        frames,
+        None,
+        OfflineDraw::default(),
+        RunTables::default(),
+    )
 }
 
 /// [`simulate_contained_task`] with the caller's instant for a select step (Workflow #308): the
@@ -219,7 +226,13 @@ pub fn simulate_contained_task_at(
     frames: Vec<Frame>,
     now_unix_ms: u64,
 ) -> Result<OfflineSimulationResult, OfflineSimulationError> {
-    simulate(task, frames, Some(now_unix_ms), OfflineDraw::default())
+    simulate(
+        task,
+        frames,
+        Some(now_unix_ms),
+        OfflineDraw::default(),
+        RunTables::default(),
+    )
 }
 
 /// Workflow #406 T4: [`simulate_contained_task`] (with the caller's instant for a select step
@@ -231,7 +244,20 @@ pub fn simulate_contained_task_drawn(
     now_unix_ms: Option<u64>,
     draw: OfflineDraw,
 ) -> Result<OfflineSimulationResult, OfflineSimulationError> {
-    simulate(task, frames, now_unix_ms, draw)
+    simulate(task, frames, now_unix_ms, draw, RunTables::default())
+}
+
+/// Workflow #357 DB-2 (TB7): [`simulate_contained_task_drawn`] whose select steps read the shared
+/// tables `tables`, bound from the dry run's root. Without them a document that declares a table
+/// fails `selection_evaluation_failed`.
+pub fn simulate_contained_task_with_tables(
+    task: &PreparedContainedTask,
+    frames: Vec<Frame>,
+    now_unix_ms: Option<u64>,
+    draw: OfflineDraw,
+    tables: RunTables,
+) -> Result<OfflineSimulationResult, OfflineSimulationError> {
+    simulate(task, frames, now_unix_ms, draw, tables)
 }
 
 fn simulate(
@@ -239,6 +265,7 @@ fn simulate(
     frames: Vec<Frame>,
     now_unix_ms: Option<u64>,
     draw: OfflineDraw,
+    tables: RunTables,
 ) -> Result<OfflineSimulationResult, OfflineSimulationError> {
     let mut runtime = OfflineRuntime::new(
         frames,
@@ -247,6 +274,7 @@ fn simulate(
         task.default_run_parameters(),
         draw,
     );
+    runtime.tables = tables;
     let decision = if runtime.frames.is_empty() {
         OfflineDecision::Refused {
             code: SharedCode::OfflineFixtureMissing.code().into(),
@@ -415,6 +443,8 @@ struct OfflineRuntime {
     run_parameters: RunParameters,
     /// Workflow #406 T4: how the run draws its box points.
     draw: OfflineDraw,
+    /// Workflow #357 DB-2: the shared tables bound from the dry run's root.
+    tables: RunTables,
 }
 
 impl OfflineRuntime {
@@ -437,6 +467,7 @@ impl OfflineRuntime {
             confirmation_repeats_last_frame: false,
             run_parameters,
             draw,
+            tables: RunTables::default(),
         }
     }
 }
@@ -498,6 +529,14 @@ impl ContainedTaskRuntime for OfflineRuntime {
     /// Workflow #406 T4: the touch keys in effect, with one candidate (no landing history).
     fn touch_sampling(&mut self) -> Result<Option<TouchSampling>, Self::Error> {
         Ok(self.draw.step_touch())
+    }
+
+    /// Workflow #357 DB-2 (TB7): the dry run's root's table.
+    fn standard_pack_table(
+        &mut self,
+        path: &str,
+    ) -> Option<std::sync::Arc<actingcommand_selection_policy::LoadedTable>> {
+        self.tables.table(path)
     }
 
     fn selection_state(
@@ -777,7 +816,23 @@ pub fn replay_contained_task_drawn<I, E>(
 where
     I: Iterator<Item = Result<Frame, E>>,
 {
+    replay_contained_task_with_tables(task, frames, facts, draw, RunTables::default())
+}
+
+/// Workflow #357 DB-2 (TB7): [`replay_contained_task_drawn`] whose select steps read the shared
+/// tables `tables`, bound from the replay's root.
+pub fn replay_contained_task_with_tables<I, E>(
+    task: &PreparedContainedTask,
+    frames: I,
+    facts: OfflineReplayFacts,
+    draw: OfflineDraw,
+    tables: RunTables,
+) -> Result<OfflineReplayResult, OfflineReplayError<E>>
+where
+    I: Iterator<Item = Result<Frame, E>>,
+{
     let mut runtime = ReplayRuntime {
+        tables,
         task,
         frames,
         facts,
@@ -860,6 +915,8 @@ struct ReplayRuntime<'t, I> {
     fields: Option<OcrFieldsReport>,
     /// Workflow #406 T4: how the run draws its box points.
     draw: OfflineDraw,
+    /// Workflow #357 DB-2: the shared tables bound from the replay's root.
+    tables: RunTables,
 }
 
 #[derive(Debug)]
@@ -925,6 +982,14 @@ where
     /// Workflow #406 T4: the touch keys in effect, with one candidate (no landing history).
     fn touch_sampling(&mut self) -> Result<Option<TouchSampling>, Self::Error> {
         Ok(self.draw.step_touch())
+    }
+
+    /// Workflow #357 DB-2 (TB7): the replay's root's table.
+    fn standard_pack_table(
+        &mut self,
+        path: &str,
+    ) -> Option<std::sync::Arc<actingcommand_selection_policy::LoadedTable>> {
+        self.tables.table(path)
     }
 
     fn selection_state(

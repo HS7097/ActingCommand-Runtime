@@ -25,7 +25,9 @@ use actingcommand_policy::{
     CatalogDocumentSource, ObservationRef, PoolValueSource, PoolsDocument, SchedulingDocumentKind,
     ScopeSelector, validate_catalog_declaration,
 };
-use actingcommand_resource_tooling::{DECLARATION_EXCLUSIONS_FILE, DeclarationExclusions};
+use actingcommand_resource_tooling::{
+    DECLARATION_EXCLUSIONS_FILE, DeclarationExclusions, check_policy_tables, declared_policy_tables,
+};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, Metadata};
@@ -210,11 +212,7 @@ fn validate_selection(
                     entries,
                     read_files: reader.read_files.clone(),
                     read_bytes: reader.read_bytes,
-                    warnings: reader
-                        .pool_warnings
-                        .iter()
-                        .map(PoolProducerWarning::outcome)
-                        .collect(),
+                    warnings: reader.warning_outcomes(),
                 });
             }
         }
@@ -225,7 +223,22 @@ fn validate_selection(
         .pool_warnings
         .iter()
         .map(PoolProducerWarning::answer)
+        .chain(
+            reader
+                .coverage_warnings
+                .iter()
+                .map(TableCoverageWarning::answer),
+        )
         .collect::<Vec<_>>();
+    for warning in &reader.coverage_warnings {
+        eprintln!(
+            "WARN actinglab: {} path={} table_id={} count={}",
+            ActinglabCode::ResourceTableIdentityUncovered.as_str(),
+            warning.path,
+            warning.table_id,
+            warning.count
+        );
+    }
     for warning in &reader.pool_warnings {
         eprintln!(
             "WARN actinglab: {} path={} json_pointer={} fact_key={}",
@@ -248,14 +261,39 @@ fn validate_selection(
     Ok(ValidatedSelection {
         answer,
         entries,
-        warnings: reader
-            .pool_warnings
-            .iter()
-            .map(PoolProducerWarning::outcome)
-            .collect(),
+        warnings: reader.warning_outcomes(),
         read_files: reader.read_files,
         read_bytes: reader.read_bytes,
     })
+}
+
+/// Workflow #357 DB-2 (register §1.65 TB5): one `resource_table_identity_uncovered` warning: a
+/// document's table has no row for `count` identities of its layout, so those candidates are
+/// dropped and recorded. A document that reads the table under `abort_evaluation` is refused
+/// instead.
+struct TableCoverageWarning {
+    path: String,
+    table_id: String,
+    count: usize,
+}
+
+impl TableCoverageWarning {
+    /// `{code, path, table_id, count}`, one element of the answer's `warnings`.
+    fn answer(&self) -> Value {
+        json!({
+            "code": ActinglabCode::ResourceTableIdentityUncovered.as_str(),
+            "path": self.path,
+            "table_id": self.table_id,
+            "count": self.count,
+        })
+    }
+
+    fn outcome(&self) -> Outcome {
+        Outcome::new(ActinglabCode::ResourceTableIdentityUncovered)
+            .path(&self.path)
+            .table_id(self.table_id.as_str())
+            .count(self.count)
+    }
 }
 
 /// Workflow #390 nine6: one `resource_pool_producer_missing` warning, a `ledger_fact` pool of
@@ -321,6 +359,8 @@ struct DeclarationReader {
     /// The pools documents already checked for producers in this run, by path.
     checked_pools: BTreeSet<String>,
     pool_warnings: Vec<PoolProducerWarning>,
+    /// Workflow #357 DB-2: the documents' tables with identities they hold no row for.
+    coverage_warnings: Vec<TableCoverageWarning>,
 }
 
 impl DeclarationReader {
@@ -340,6 +380,7 @@ impl DeclarationReader {
             published_keys: None,
             checked_pools: BTreeSet::new(),
             pool_warnings: Vec::new(),
+            coverage_warnings: Vec::new(),
         })
     }
 
@@ -1110,11 +1151,73 @@ impl DeclarationReader {
                         Some(_) => "operation_json_dependency",
                         None => return Ok(None),
                     };
+                let task_data = data.clone();
                 self.task(&task, data)?;
+                if family == "selection_policy" {
+                    self.policy_tables(path, &task_data)?;
+                }
                 return Ok(Some(family));
             }
         }
         Ok(None)
+    }
+
+    /// Workflow #357 DB-2 (M-357a v1.1 §2.3; register §1.65 TB5): the selection document at
+    /// `path`, valid on its own by now, against the tables of the repository root's `tables/`:
+    /// each it declares is there, and is bound with the Runtime's own check (K2). The identities
+    /// of its layout that a table holds no row for are a warning, and refuse a document that
+    /// reads the table under `abort_evaluation`. The family stays the document's.
+    fn policy_tables(&mut self, path: &Path, task: &Value) -> CliOutcome<()> {
+        let bytes = self.read(path, MAX_DOCUMENT_BYTES)?;
+        let mut tables = Vec::new();
+        for table_id in declared_policy_tables(&bytes) {
+            let name = format!("{table_id}.json");
+            let table = Path::new(STANDARD_PACK_TABLES_DIRECTORY).join(&name);
+            if !self.existing_file(&table)? {
+                return Err(invalid(
+                    path,
+                    &format!("standard_pack_table_missing: {}", path_text(&table)),
+                ));
+            }
+            tables.push((name, self.read(&table, MAX_DOCUMENT_BYTES)?));
+        }
+        if tables.is_empty() {
+            return Ok(());
+        }
+        let gaps = check_policy_tables(&bytes, task, &tables)
+            .map_err(|reason| invalid(path, &format!("standard_pack_table_mismatch: {reason}")))?;
+        for gap in gaps {
+            if gap.aborts {
+                return Err(invalid(
+                    path,
+                    &format!(
+                        "{}: table_id={} count={} read under abort_evaluation",
+                        ActinglabCode::ResourceTableIdentityUncovered.as_str(),
+                        gap.table_id,
+                        gap.uncovered
+                    ),
+                ));
+            }
+            self.coverage_warnings.push(TableCoverageWarning {
+                path: path_text(path),
+                table_id: gap.table_id,
+                count: gap.uncovered,
+            });
+        }
+        Ok(())
+    }
+
+    /// Workflow #411 RV-1: the warnings as `resource verify` reports them.
+    fn warning_outcomes(&self) -> Vec<Outcome> {
+        self.pool_warnings
+            .iter()
+            .map(PoolProducerWarning::outcome)
+            .chain(
+                self.coverage_warnings
+                    .iter()
+                    .map(TableCoverageWarning::outcome),
+            )
+            .collect()
     }
 
     fn task(&mut self, path: &Path, data: Value) -> CliOutcome<()> {

@@ -19,6 +19,7 @@ use super::{
     ScanReading, ScanSession, ScanSource, u32_of,
 };
 use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
+use crate::contained_task::RunTables;
 use crate::contained_task::{
     ContainedTaskBoundaryTiming, ContainedTaskError, ContainedTaskGuardOutcome,
     ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTimingContext, ContainedTaskTrace,
@@ -479,6 +480,8 @@ impl<R: ContainedTaskRuntime> ScanSource for RuntimeScanSource<'_, R> {
 /// `selection_scan_replay_frame_missing`.
 struct ReplayRuntime {
     frames: std::vec::IntoIter<Frame>,
+    /// Workflow #357 DB-2: the tables the replay was given.
+    tables: RunTables,
 }
 
 impl ContainedTaskRuntime for ReplayRuntime {
@@ -500,6 +503,13 @@ impl ContainedTaskRuntime for ReplayRuntime {
 
     fn record(&mut self, _trace: ContainedTaskTrace) -> Result<(), ContainedTaskError> {
         Ok(())
+    }
+
+    fn standard_pack_table(
+        &mut self,
+        path: &str,
+    ) -> Option<std::sync::Arc<actingcommand_selection_policy::LoadedTable>> {
+        self.tables.table(path)
     }
 }
 
@@ -526,8 +536,32 @@ pub fn dry_run_scan(
     facts: &SelectionFactSnapshot,
     now_unix_ms: u64,
 ) -> Result<ScanDryRun, ContainedTaskError> {
+    dry_run_scan_with_tables(
+        task,
+        operation_id,
+        scan,
+        frames,
+        facts,
+        now_unix_ms,
+        RunTables::default(),
+    )
+}
+
+/// Workflow #357 DB-2 (TB7): [`dry_run_scan`] answering for shared tables from `tables`, as an
+/// offline runtime answers from the dry run's root.
+#[allow(clippy::too_many_arguments)]
+pub fn dry_run_scan_with_tables(
+    task: &PreparedContainedTask,
+    operation_id: &str,
+    scan: &ScanDeclaration,
+    frames: Vec<Frame>,
+    facts: &SelectionFactSnapshot,
+    now_unix_ms: u64,
+    tables: RunTables,
+) -> Result<ScanDryRun, ContainedTaskError> {
     let mut runtime = ReplayRuntime {
         frames: frames.into_iter(),
+        tables,
     };
     run_scan(
         task,
@@ -559,6 +593,28 @@ pub fn replay_scan(
     frames: Vec<Frame>,
     facts: &crate::OfflineReplayFacts,
     run_parameters: &crate::RunParameters,
+) -> Result<ScanDryRun, ContainedTaskError> {
+    replay_scan_with_tables(
+        task,
+        operation_id,
+        scan,
+        frames,
+        facts,
+        run_parameters,
+        RunTables::default(),
+    )
+}
+
+/// Workflow #357 DB-2 (TB7): [`replay_scan`] answering for shared tables from `tables`.
+#[allow(clippy::too_many_arguments)]
+pub fn replay_scan_with_tables(
+    task: &PreparedContainedTask,
+    operation_id: &str,
+    scan: &ScanDeclaration,
+    frames: Vec<Frame>,
+    facts: &crate::OfflineReplayFacts,
+    run_parameters: &crate::RunParameters,
+    tables: RunTables,
 ) -> Result<ScanDryRun, ContainedTaskError> {
     let prepared = task
         .program
@@ -620,7 +676,15 @@ pub fn replay_scan(
         now_unix_ms,
         &prepared.policy().record_list_keys(),
     );
-    dry_run_scan(task, operation_id, scan, frames, &facts, now_unix_ms)
+    dry_run_scan_with_tables(
+        task,
+        operation_id,
+        scan,
+        frames,
+        &facts,
+        now_unix_ms,
+        tables,
+    )
 }
 
 /// One scan session of the select step `operation_id` over `runtime`, whose next capture is the
@@ -682,10 +746,18 @@ pub(in crate::contained_task) fn run_scan<R: ContainedTaskRuntime>(
         }
     };
     let frame = (first.scene.width(), first.scene.height());
-    let mut session = ScanSession::new(
+    let tables = crate::contained_task::run_tables::evaluation_tables(runtime, prepared.policy())
+        .map_err(|refusal| {
+        ContainedTaskError::with_detail(
+            ExecutionKernelCode::SelectionEvaluationFailed.code(),
+            refusal.to_string(),
+        )
+    })?;
+    let mut session = ScanSession::with_tables(
         scan,
         layout,
         prepared.policy(),
+        &tables,
         facts,
         now_unix_ms,
         frame,

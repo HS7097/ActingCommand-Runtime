@@ -136,6 +136,18 @@ pub(crate) fn parse_selection_document(
             ),
         ));
     }
+    // Workflow #357 DB-2 (register §1.65 TB10; Alice's 121 A): scheduling reads no table, since
+    // dispatch value goes through the resource line; a document that declares one stays refused.
+    if parsed.value.uses_tables() {
+        return Err(selection_diagnostic(
+            source,
+            schema_version,
+            SelectionError::new(
+                SelectionErrorCode::TypeMismatch,
+                "tables=declared consumer=scheduling",
+            ),
+        ));
+    }
     Ok(parsed.value)
 }
 
@@ -676,6 +688,42 @@ mod tests {
         // The document is valid for an in-task select step; the scheduler reads scalar facts
         // only, so it refuses the document instead of aborting every evaluation.
         let error = parse_selection_document(&source).expect_err("record list for scheduling");
+        assert_eq!(error.code, CatalogDiagnosticCode::TypeMismatch);
+        assert_eq!(error.source.document, SchedulingDocumentKind::Selection);
+    }
+
+    /// Workflow #357 DB-2 (register §1.65 TB10; Alice's 121 A): a document valid for an in-task
+    /// select step that declares a shared table is refused here, with the same diagnostic kind as
+    /// a record list, and not silently skipped.
+    #[test]
+    fn db2_a_document_that_declares_a_table_is_refused_for_scheduling() {
+        let read = serde_json::json!({
+            "source": "table", "table_id": "unit_scores", "key_field": "member", "pins": [],
+            "value_column": "score_milli"
+        });
+        let document = serde_json::json!({
+            "schema_version": "actingcommand.selection-policy.v1",
+            "policy_id": "policy-table",
+            "applies_to": {"candidate_layout_id": "layout-a", "outcome_keys": {
+                "selected": "s", "empty": "e", "insufficient": "i", "ambiguous": "a", "unknown": "u"
+            }},
+            "fields": [{"name": "member",
+                        "value_type": {"type": "enum_string", "allowed": ["unit.a"]}}],
+            "facts": [],
+            "tables": [{"table_id": "unit_scores", "path": "tables/unit_scores.json",
+                        "row_key": ["unit"], "columns": {"score_milli": {"type": "integer"}}}],
+            "gates": [],
+            "scoring": [{"term_id": "term-score", "value": read,
+                         "transform": {"kind": "identity"}, "weight_milli": 1000,
+                         "on_unknown": {"kind": "drop_candidate"}}],
+            "selection": {"mode": "none_allowed", "required_count": 1},
+            "tie_break": [{"kind": "candidate_id", "direction": "lowest_first"}]
+        });
+        let source = CatalogDocumentSource::new(
+            "memory://selection.json",
+            serde_json::to_vec(&document).expect("document bytes"),
+        );
+        let error = parse_selection_document(&source).expect_err("a table for scheduling");
         assert_eq!(error.code, CatalogDiagnosticCode::TypeMismatch);
         assert_eq!(error.source.document, SchedulingDocumentKind::Selection);
     }

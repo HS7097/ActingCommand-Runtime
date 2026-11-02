@@ -12,11 +12,13 @@
 use std::collections::BTreeMap;
 
 use crate::evaluator::{ListIndex, read_lists, transform};
-use crate::facts::{ScalarValue, SelectionFactSnapshot};
+use crate::facts::{ScalarValue, SelectionFactSnapshot, UnknownReason};
 use crate::schema::{
-    FactDeclaration, IntegerCompareOp, LookupKey, Predicate, ScoringTerm, SelectionError,
-    SelectionErrorCode, SelectionPolicy, TermUnknownHandling, Transform, ValueRef, ValueType,
+    FactDeclaration, GateUnknownHandling, IntegerCompareOp, LookupKey, Predicate, ScoringTerm,
+    SelectionError, SelectionErrorCode, SelectionPolicy, TermUnknownHandling, Transform, ValueRef,
+    ValueType,
 };
+use crate::tables::SelectionTables;
 
 /// What one candidate field can hold on a candidate that was not read. The document types a
 /// field only as integer, boolean or enumerated string, so the caller states the range.
@@ -57,6 +59,9 @@ pub enum UpperBound {
 /// entries the domain reaches and its default; a `substitute_milli` value joins the candidates
 /// whenever the input is ranged or unknown. An `Err` means the inputs do not describe the
 /// document: an invalid document or a missing or mistyped domain.
+///
+/// A document that declares a table needs [`upper_bound_with_tables`]: here it is
+/// `dangling_reference`.
 pub fn upper_bound(
     policy: &SelectionPolicy,
     facts: &SelectionFactSnapshot,
@@ -64,7 +69,33 @@ pub fn upper_bound(
     identities: &[String],
     field_domains: &BTreeMap<String, FieldDomain>,
 ) -> Result<UpperBound, SelectionError> {
+    upper_bound_with_tables(
+        policy,
+        SelectionTables::none(),
+        facts,
+        now_unix_ms,
+        identities,
+        field_domains,
+    )
+}
+
+/// [`upper_bound`] with the shared tables the document declares (Workflow #357 DB-2, M-357a v1.1
+/// §3.6): a table value is exact for the hypothetical identity, as a `keyed_fact` value is, and
+/// its pinned facts are the snapshot's. A gate that reads a table excludes an identity it cannot
+/// hold for, under `drop_candidate`, and has no finite bound where it may be unknown and cannot
+/// hold, under `abort_evaluation`. Every other gate is as it was, so a document without a table
+/// keeps its bound. A key field that is not the identity domain has no finite bound; admission
+/// refuses such a document.
+pub fn upper_bound_with_tables(
+    policy: &SelectionPolicy,
+    tables: &SelectionTables,
+    facts: &SelectionFactSnapshot,
+    now_unix_ms: u64,
+    identities: &[String],
+    field_domains: &BTreeMap<String, FieldDomain>,
+) -> Result<UpperBound, SelectionError> {
     policy.validate()?;
+    tables.check_bound(policy)?;
     for declaration in &policy.fields {
         let name = &declaration.name;
         let domain = field_domains.get(name).ok_or_else(|| {
@@ -95,6 +126,13 @@ pub fn upper_bound(
             }
         }
     }
+    if policy
+        .table_key_fields()
+        .into_iter()
+        .any(|key_field| field_domains.get(key_field) != Some(&FieldDomain::Identity))
+    {
+        return Ok(UpperBound::Unbounded);
+    }
     // A list that cannot be read ends every evaluation, so nothing bounds the score.
     let Ok(lists) = read_lists(policy, facts, now_unix_ms) else {
         return Ok(UpperBound::Unbounded);
@@ -112,6 +150,7 @@ pub fn upper_bound(
             facts: &facts_by_key,
             snapshot: facts,
             lists: &lists,
+            tables,
             now_unix_ms,
         };
         match hypothesis.score(policy) {
@@ -169,6 +208,7 @@ struct Hypothesis<'a> {
     facts: &'a BTreeMap<&'a str, &'a FactDeclaration>,
     snapshot: &'a SelectionFactSnapshot,
     lists: &'a ListIndex<'a>,
+    tables: &'a SelectionTables,
     now_unix_ms: u64,
 }
 
@@ -176,6 +216,18 @@ impl Hypothesis<'_> {
     fn score(&self, policy: &SelectionPolicy) -> Score {
         for gate in &policy.gates {
             let possible = self.possible(&gate.predicate);
+            // Workflow #357 DB-2 (§3.6): missing table data is static, so a gate that reads a
+            // table and cannot hold never lets the identity through: dropped under
+            // `drop_candidate`; under `abort_evaluation` it ends the evaluation when unknown.
+            if gate.predicate.reads_table() {
+                if !possible.truth {
+                    if possible.unknown && gate.on_unknown == GateUnknownHandling::AbortEvaluation {
+                        return Score::Unbounded;
+                    }
+                    return Score::Excluded;
+                }
+                continue;
+            }
             if !possible.truth && !possible.unknown {
                 return Score::Excluded;
             }
@@ -235,6 +287,20 @@ impl Hypothesis<'_> {
                     });
                 Reading::Exact(value)
             }
+            // The fallback cell is a value here; only `evaluate` reports it (§5).
+            ValueRef::Table { .. } => Reading::Exact(
+                self.tables
+                    .read(reference, self.identity, &|fact_key| {
+                        self.facts
+                            .get(fact_key)
+                            .ok_or(UnknownReason::FactMissing)
+                            .and_then(|declared| {
+                                self.snapshot.resolve(declared, self.now_unix_ms).cloned()
+                            })
+                    })
+                    .value
+                    .ok(),
+            ),
         }
     }
 

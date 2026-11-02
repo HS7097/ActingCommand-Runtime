@@ -1067,6 +1067,56 @@ fn n6_7_handling_beyond_max_per_run_or_sixteen_in_a_run_ends_the_run() {
     assert_eq!(state.input_count.load(Ordering::Acquire), 16);
 }
 
+// ---- Workflow #357 DB-2: a layer the run admits binds its tables at its admission.
+
+/// M-357a v1.1 §2.4, K1: the run's own package reads no table, so its preparation passes; the
+/// handler it admits on a shared interrupt page reads a table the game root holds broken, so the
+/// run ends with the table's own code. The Runtime stays up, and the broken table is the run's
+/// failure alone. The handler is an assembled package: its `package_id` ends in `.zip`, so its
+/// path in the game root is read as one.
+#[test]
+fn db2_a_layer_package_with_a_broken_table_ends_the_run_that_admits_it() {
+    const LAYER: &str = "neutral.test.layer.zip";
+    let state = Arc::new(FakeState::default());
+    let temp = TempDir::new().expect("tempdir");
+    let mut root = GameRoot::new(temp.path());
+    root.features()
+        .listed_only(LAYER)
+        .bundle()
+        .pages()
+        .interrupts(json!([interrupt("notice", LAYER, json!("resume"), 1)]));
+    fs::write(
+        root.game.join(LAYER),
+        super::gate_308_l4b::scan_select_package_with(
+            super::gate_357_db2::table_policy("none_allowed", super::gate_357_db2::literal_pin()),
+            true,
+        ),
+    )
+    .expect("write the layer package");
+    fs::create_dir_all(root.game.join("tables")).expect("tables directory");
+    fs::write(root.game.join("tables/unit_scores.json"), b"[1.5]").expect("write the table");
+    overlay_then_away_then_home(&state, 0, Overlay::Notice);
+    state.physical_task_geometry.store(true, Ordering::Release);
+    let host = RuntimeHost::start(
+        config(&temp).with_standard_packs_root(Some(root.root.clone())),
+        Arc::new(
+            FakeProvider::one(ALIAS, instance_id(), Arc::clone(&state))
+                .with_vision_provider(Arc::new(super::gate_308_l4b::CardNames)),
+        ),
+    )
+    .expect("runtime host");
+
+    let ended = run(&host, &temp, "layer", &away_to_home());
+    assert_eq!(ended.receipt.state(), RuntimeReceiptState::Failed);
+    let failure = ended.failure();
+    assert_eq!(failure.code().as_str(), "standard_pack_table_invalid");
+    assert_eq!(text(&failure, "game"), Some("neutral"));
+    assert_eq!(text(&failure, "standard_pack_problem"), Some("malformed"));
+    assert_eq!(state.input_count.load(Ordering::Acquire), 0);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close runtime host");
+}
+
 // ---- Workflow #411 B43: an interrupt page whose limit is an environment problem.
 
 const ENVIRONMENT_LIMIT: &str = "contained_task_interrupt_environment_limit_reached";

@@ -34,6 +34,7 @@ use crate::schema::{
     SelectionPolicy, SortDirection, TermUnknownHandling, TieBreakKey, Transform, ValueRef,
     ValueType,
 };
+use crate::tables::{SelectionTables, TableReading};
 
 /// The rows each `keyed_fact` reference reads, by its record list and its `where`, keyed by
 /// the row's key column.
@@ -170,6 +171,11 @@ pub struct CandidateVerdict {
     pub gates: Vec<GateResult>,
     pub terms: Vec<TermResult>,
     pub reasons: Vec<DecisionReason>,
+    /// Workflow #357 DB-2 (M-357a v1.1 §3.4, D21): the candidate is dropped only by the table's
+    /// own static data, which reading again cannot change. The select step does not count it as
+    /// an unknown instance. Never written: no record carries it (register §1.65 TB8).
+    #[serde(skip)]
+    pub static_table_drop: bool,
 }
 
 /// What the decision as a whole came to.
@@ -226,6 +232,10 @@ struct EvaluationInput<'a> {
     candidates: &'a [Candidate],
     facts: &'a SelectionFactSnapshot,
     now_unix_ms: u64,
+    /// Workflow #357 DB-2 (M-357a v1.1 §3.7): the table rows the evaluation reads, only when the
+    /// document declares a table, so a document without one keeps its `input_sha256`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tables: Option<BTreeMap<String, Vec<BTreeMap<String, serde_json::Value>>>>,
 }
 
 /// Evaluates one policy over one candidate set and one fact snapshot.
@@ -234,20 +244,55 @@ struct EvaluationInput<'a> {
 /// reason chain. An `Err` means the inputs could not be evaluated at all: an invalid
 /// document, a malformed candidate set, or integer overflow. An unknown input is not an
 /// error; it produces a typed unknown outcome or a dropped candidate, as the document says.
+/// A document that declares a table needs [`evaluate_with_tables`]: here it is
+/// `dangling_reference`.
 pub fn evaluate(
     policy: &SelectionPolicy,
     candidates: &[Candidate],
     facts: &SelectionFactSnapshot,
     now_unix_ms: u64,
 ) -> Result<SelectionDecision, SelectionError> {
+    evaluate_with_tables(
+        policy,
+        SelectionTables::none(),
+        candidates,
+        facts,
+        now_unix_ms,
+    )
+}
+
+/// [`evaluate`] with the shared tables the document declares (Workflow #357 DB-2, D15): the one
+/// scorer. A declared table `tables` does not hold is `dangling_reference`. The tables are read
+/// here from memory; no file is read.
+pub fn evaluate_with_tables(
+    policy: &SelectionPolicy,
+    tables: &SelectionTables,
+    candidates: &[Candidate],
+    facts: &SelectionFactSnapshot,
+    now_unix_ms: u64,
+) -> Result<SelectionDecision, SelectionError> {
     policy.validate()?;
     check_candidate_set(candidates)?;
+    tables.check_bound(policy)?;
 
     let policy_sha256 = canonical_sha256(policy)?;
+    let read_rows = policy.uses_tables().then(|| {
+        let resolver = Resolver::new(policy, facts, ListIndex::new(), tables, now_unix_ms);
+        tables.read_rows(
+            policy,
+            candidates,
+            &|key_field, candidate| match resolver.read_field(key_field, candidate) {
+                Ok(ScalarValue::String(key)) => Some(key),
+                _ => None,
+            },
+            &|fact_key| resolver.read_fact(fact_key),
+        )
+    });
     let input_sha256 = canonical_sha256(&EvaluationInput {
         candidates,
         facts,
         now_unix_ms,
+        tables: read_rows,
     })?;
     let mut reasons = vec![
         DecisionReason::new(SelectionPolicyCode::SelectionPolicyIdentity, &policy_sha256),
@@ -280,7 +325,7 @@ pub fn evaluate(
             ));
         }
     };
-    let resolver = Resolver::new(policy, facts, lists, now_unix_ms);
+    let resolver = Resolver::new(policy, facts, lists, tables, now_unix_ms);
 
     let mut verdicts = Vec::with_capacity(candidates.len());
     let mut survivors: Vec<Ranked> = Vec::new();
@@ -463,7 +508,9 @@ pub struct CollectedCandidate {
 /// An `Err` means the same as for [`evaluate`]: the inputs could not be evaluated at all. A
 /// document that declares a record list is refused with `type_mismatch`: only a task's select
 /// step reads one, through [`evaluate`] and its up-front list check, and the scheduling consumer
-/// refuses such a document at catalog compile for the same reason.
+/// refuses such a document at catalog compile for the same reason. A document that declares a
+/// shared table is refused the same way (Workflow #357 DB-2, register §1.65 TB10): dispatch value
+/// goes through the resource line, so scheduling reads no table.
 pub fn evaluate_collect(
     policy: &SelectionPolicy,
     candidates: &[Candidate],
@@ -477,8 +524,20 @@ pub fn evaluate_collect(
             "value_type=record_list option=collect",
         ));
     }
+    if policy.uses_tables() {
+        return Err(SelectionError::new(
+            SelectionErrorCode::TypeMismatch,
+            "tables=declared option=collect",
+        ));
+    }
     check_candidate_set(candidates)?;
-    let resolver = Resolver::new(policy, facts, ListIndex::new(), now_unix_ms);
+    let resolver = Resolver::new(
+        policy,
+        facts,
+        ListIndex::new(),
+        SelectionTables::none(),
+        now_unix_ms,
+    );
     candidates
         .iter()
         .map(|candidate| collect_candidate(policy, candidate, &resolver))
@@ -717,6 +776,7 @@ struct Resolver<'a> {
     facts: BTreeMap<&'a str, &'a FactDeclaration>,
     snapshot: &'a SelectionFactSnapshot,
     lists: ListIndex<'a>,
+    tables: &'a SelectionTables,
     now_unix_ms: u64,
 }
 
@@ -725,6 +785,7 @@ impl<'a> Resolver<'a> {
         policy: &'a SelectionPolicy,
         snapshot: &'a SelectionFactSnapshot,
         lists: ListIndex<'a>,
+        tables: &'a SelectionTables,
         now_unix_ms: u64,
     ) -> Self {
         Self {
@@ -740,7 +801,55 @@ impl<'a> Resolver<'a> {
                 .collect(),
             snapshot,
             lists,
+            tables,
             now_unix_ms,
+        }
+    }
+
+    /// A declared scalar fact in the pinned snapshot, or why it is unknown.
+    fn read_fact(&self, fact_key: &str) -> Result<ScalarValue, UnknownReason> {
+        let declared = self.facts.get(fact_key).ok_or(UnknownReason::FactMissing)?;
+        self.snapshot.resolve(declared, self.now_unix_ms).cloned()
+    }
+
+    /// One `table` read for `candidate` (§3.4), its key being the candidate's own; an `Err` is a
+    /// key the candidate does not carry, which is no fact about the table.
+    fn table_reading(
+        &self,
+        reference: &ValueRef,
+        candidate: &Candidate,
+    ) -> Result<TableReading, UnknownReason> {
+        let ValueRef::Table { key_field, .. } = reference else {
+            return Err(UnknownReason::TypeMismatch);
+        };
+        let ScalarValue::String(key) = self.read_field(key_field, candidate)? else {
+            return Err(UnknownReason::TypeMismatch);
+        };
+        Ok(self
+            .tables
+            .read(reference, &key, &|fact_key| self.read_fact(fact_key)))
+    }
+
+    /// [`Self::read`], noting in `reads` what a gate or a term must report of a `table` read.
+    fn read_noting(
+        &self,
+        reference: &ValueRef,
+        candidate: &Candidate,
+        reads: &mut Reads,
+    ) -> Result<ScalarValue, UnknownReason> {
+        if !reference.is_table() {
+            let read = self.read(reference, candidate);
+            if read.is_err() {
+                reads.marks.other_unknown = true;
+            }
+            return read;
+        }
+        match self.table_reading(reference, candidate) {
+            Ok(reading) => reads.marks.note(reading),
+            Err(reason) => {
+                reads.marks.other_unknown = true;
+                Err(reason)
+            }
         }
     }
 
@@ -773,13 +882,8 @@ impl<'a> Resolver<'a> {
     ) -> Result<ScalarValue, UnknownReason> {
         match reference {
             ValueRef::Field { field } => self.read_field(field, candidate),
-            ValueRef::Fact { fact_key } => {
-                let declared = self
-                    .facts
-                    .get(fact_key.as_str())
-                    .ok_or(UnknownReason::FactMissing)?;
-                self.snapshot.resolve(declared, self.now_unix_ms).cloned()
-            }
+            ValueRef::Fact { fact_key } => self.read_fact(fact_key),
+            ValueRef::Table { .. } => self.table_reading(reference, candidate)?.value,
             ValueRef::KeyedFact {
                 fact_key,
                 key_field,
@@ -854,6 +958,58 @@ struct Reads {
     recording: bool,
     known: Vec<KnownInput>,
     unknown: Vec<(ValueRef, UnknownReason)>,
+    /// Workflow #357 DB-2: what the `table` reads of the gate or term being decided came to.
+    marks: TableMarks,
+}
+
+/// What a gate's or a term's reads noted (M-357a v1.1 §5): the two marks a `table` read carries
+/// to [`assess`], and whether anything else was unknown. Neither mark reaches a record except as
+/// the reason `term_fallback_used`.
+#[derive(Default)]
+struct TableMarks {
+    used_fallback: bool,
+    otherwise_column: Option<String>,
+    static_unknown: bool,
+    other_unknown: bool,
+}
+
+impl TableMarks {
+    fn note(&mut self, reading: TableReading) -> Result<ScalarValue, UnknownReason> {
+        self.used_fallback |= reading.used_fallback;
+        if self.otherwise_column.is_none() {
+            self.otherwise_column = reading.otherwise_column;
+        }
+        if reading.value.is_err() {
+            if reading.static_unknown {
+                self.static_unknown = true;
+            } else {
+                self.other_unknown = true;
+            }
+        }
+        reading.value
+    }
+
+    /// Whether every Unknown the gate or term met is the table's own static data (D21).
+    fn only_static(&self) -> bool {
+        self.static_unknown && !self.other_unknown
+    }
+
+    /// `term_fallback_used` for the rule, at most one per candidate and rule; a pin's `otherwise`
+    /// names its column.
+    fn fallback_reason(&self, rule_id: &str) -> Option<DecisionReason> {
+        if !self.used_fallback && self.otherwise_column.is_none() {
+            return None;
+        }
+        let outcome = Outcome::new(SelectionPolicyCode::TermFallbackUsed).rule_id(rule_id);
+        let outcome = match &self.otherwise_column {
+            Some(column) => outcome.table_column(column.as_str()),
+            None => outcome,
+        };
+        Some(DecisionReason::with(
+            outcome,
+            format!("rule `{rule_id}` read a declared fallback"),
+        ))
+    }
 }
 
 impl Reads {
@@ -862,6 +1018,7 @@ impl Reads {
             recording: true,
             known: Vec::new(),
             unknown: Vec::new(),
+            marks: TableMarks::default(),
         }
     }
 
@@ -870,6 +1027,7 @@ impl Reads {
             recording: false,
             known: Vec::new(),
             unknown: Vec::new(),
+            marks: TableMarks::default(),
         }
     }
 
@@ -902,10 +1060,12 @@ fn assess(
         gates: Vec::new(),
         terms: Vec::new(),
         reasons: Vec::new(),
+        static_table_drop: false,
     };
 
     let mut unrecorded = Reads::ignored();
     for gate in &policy.gates {
+        unrecorded.marks = TableMarks::default();
         let (outcome, keep) = match truth(&gate.predicate, candidate, resolver, &mut unrecorded) {
             Truth::True => (GateOutcome::Passed, true),
             Truth::False => (GateOutcome::Failed, false),
@@ -951,6 +1111,9 @@ fn assess(
                 format!("gate `{}` used the declared verdict", gate.gate_id),
             ));
         }
+        if let Some(reason) = unrecorded.marks.fallback_reason(&gate.gate_id) {
+            verdict.reasons.push(reason);
+        }
         if !keep {
             verdict.status = if dropped {
                 verdict.reasons.push(DecisionReason::rule(
@@ -958,6 +1121,7 @@ fn assess(
                     &gate.gate_id,
                     format!("gate `{}` met an unknown input", gate.gate_id),
                 ));
+                verdict.static_table_drop = unrecorded.marks.only_static();
                 CandidateStatus::UnknownDropped
             } else {
                 verdict.reasons.push(DecisionReason::rule(
@@ -976,9 +1140,11 @@ fn assess(
 
     let mut total: i128 = 0;
     for term in &policy.scoring {
-        let resolved = resolver
-            .read(&term.value, candidate)
-            .and_then(|value| transform(&term.transform, &value));
+        let mut term_reads = Reads::ignored();
+        let read = resolver.read_noting(&term.value, candidate, &mut term_reads);
+        // A value the term's own transform cannot use is the document's, not the table's.
+        let static_unknown = read.is_err() && term_reads.marks.only_static();
+        let resolved = read.and_then(|value| transform(&term.transform, &value));
         let (outcome, keep) = match resolved {
             Ok(transformed_milli) => (TermOutcome::Scored { transformed_milli }, true),
             Err(reason) => match term.on_unknown {
@@ -1041,6 +1207,9 @@ fn assess(
                 format!("term `{}` used the declared value", term.term_id),
             ));
         }
+        if keep && let Some(reason) = term_reads.marks.fallback_reason(&term.term_id) {
+            verdict.reasons.push(reason);
+        }
         verdict.terms.push(TermResult {
             term_id: term.term_id.clone(),
             outcome,
@@ -1049,6 +1218,7 @@ fn assess(
         });
         if !keep {
             verdict.status = CandidateStatus::UnknownDropped;
+            verdict.static_table_drop = static_unknown;
             verdict.reasons.push(DecisionReason::rule(
                 SelectionPolicyCode::TermUnknownDropped,
                 &term.term_id,
@@ -1211,7 +1381,7 @@ fn leaf(
     decide: impl FnOnce(&ScalarValue) -> Option<bool>,
 ) -> Truth {
     let decided = resolver
-        .read(reference, candidate)
+        .read_noting(reference, candidate, reads)
         .and_then(|value| decide(&value).ok_or(UnknownReason::TypeMismatch));
     match decided {
         Ok(holds) => {
@@ -1234,7 +1404,7 @@ fn integer_side(
     reads: &mut Reads,
 ) -> Result<i64, UnknownReason> {
     let read = resolver
-        .read(reference, candidate)
+        .read_noting(reference, candidate, reads)
         .and_then(|value| match value {
             ScalarValue::Integer(value) => Ok(value),
             _ => Err(UnknownReason::TypeMismatch),

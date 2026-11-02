@@ -1341,6 +1341,17 @@ tests = [
 ]
 incident = ["#373 NAV-5"]
 
+# Workflow #357 DB-2 (#430 S4a-1; M-357a v1.1 §3.5 K3; register §1.244): admission reads a table document, never a table: a layout that rejects unknown identities, its identity field as the key, one candidate; the kernel and the declaration gate; the resource tool binds a document to its repository's tables and measures their coverage
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::selection::tests::db2_a_table_document_needs_a_rejecting_layout_its_identity_key_and_one_candidate",
+    "actingcommand-pack-containment::lib::source::declarations::tests::db2_a_table_document_needs_a_rejecting_layout_and_its_identity_field_as_the_key",
+    "actingcommand-resource-tooling::lib::table_bindings::tests::db2_a_document_is_bound_and_its_identity_coverage_measured",
+    "actingcommand-execution-kernel::lib::contained_task::gate_308_l4b::db2_sixty_four_candidates_on_the_fallback_stay_in_the_record_budget_or_fail_loud",
+]
+incident = ["#357 DB-2"]
+
 # Workflow #308 SEL-L4b (frozen selector model S0 v2.1 §6 row L4b; register §1.85): a select step declares `scan` and `on_empty` and an expect_after declares `expect_identity`, each admitted by its rules; a scan select decides over its members numbered in first-seen order, is blocked when an unknown instance might change an empty or insufficient decision or outrank the choice, ends the run normally on `on_empty` when nobody listed is present and nothing is unknown, returns to its chosen member by repositions and then one advance without bouncing, confirms it on a fresh frame by its identity at its content position, and records one decision per path with the v2 projection and unknown_check; a single-frame select with `on_empty` applies the same rules; the destination's expect_identity reads the chosen identity back; ledger-forensics pairs each of several intents of one step action with its own input by frame
 [[gate]]
 key = "79"

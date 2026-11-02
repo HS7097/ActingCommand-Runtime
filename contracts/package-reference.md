@@ -880,7 +880,7 @@ data files beside its package directories, one directory per game below the conf
   never stops the Runtime. Workflow #357 DB-1: at startup every table of a sound game root is
   also read, only to report the refused ones, one more `standard_pack_read` record each
   (`standard_pack_table_invalid` or `standard_pack_table_unreadable`); nothing is kept and a run
-  reads no table (DB-2 binds them to runs). In a run's preparation, the root of the run's game when it holds
+  reads no table (DB-2 binds them to runs: [selection-graph.md](selection-graph.md), "Tables"). In a run's preparation, the root of the run's game when it holds
   `interrupts.json`, (Workflow #373 NAV-5) `navigation.json` or (Workflow #392 DA-4)
   `display-layout.json`, and (Workflow #373 NAV-3a)
   when the run resolves a prerequisite package

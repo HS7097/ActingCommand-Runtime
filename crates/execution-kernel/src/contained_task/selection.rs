@@ -58,8 +58,8 @@ use actingcommand_recognition_pack::{
 use actingcommand_selection_policy::{
     Candidate, CandidateStatus, CandidateVerdict, DecisionReason, GateUnknownHandling,
     MAX_DOCUMENT_BYTES, ScalarValue, SelectionDecision, SelectionFactSnapshot, SelectionMode,
-    SelectionOutcome, SelectionPolicy, TermUnknownHandling, ValueRef, ValueType, evaluate,
-    parse_canonical_json, upper_bound,
+    SelectionOutcome, SelectionPolicy, SelectionTables, TermUnknownHandling, ValueRef, ValueType,
+    evaluate_with_tables, parse_canonical_json, upper_bound_with_tables,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -676,7 +676,9 @@ fn read_policy(bytes: &[u8]) -> Result<SelectionPolicy, String> {
 /// The document applies to `layout`: it names the layout, reads only features the layout
 /// declares with their type (`passed` as boolean, `measure_milli` as integer), and requires
 /// exactly one candidate. A document that reads a record list through `keyed_fact` needs a
-/// layout that rejects unknown identities, so the evaluator never meets an unknown key.
+/// layout that rejects unknown identities, so the evaluator never meets an unknown key. Workflow
+/// #357 DB-2 (K3): so does a document that declares a shared table, and each `table` read keys
+/// its rows by the layout's identity field. Admission reads the document only, never a table.
 fn check_policy(policy: &SelectionPolicy, layout: &CandidateLayout) -> Result<(), String> {
     if policy.applies_to.candidate_layout_id != layout.id {
         return Err(format!(
@@ -747,6 +749,26 @@ fn check_policy(policy: &SelectionPolicy, layout: &CandidateLayout) -> Result<()
             layout.id
         ));
     }
+    if policy.uses_tables() {
+        if layout.unknown_identity != UnknownIdentityHandling::Reject {
+            return Err(format!(
+                "layout={} unknown_identity=readable_attributes tables=declared",
+                layout.id
+            ));
+        }
+        for key_field in policy.table_key_fields() {
+            if !layout
+                .features
+                .iter()
+                .any(|feature| feature.name == key_field && feature.identity.is_some())
+            {
+                return Err(format!(
+                    "layout={} key_field={key_field} identity=undeclared",
+                    layout.id
+                ));
+            }
+        }
+    }
     if policy.selection.required_count != 1 {
         return Err(format!(
             "required_count={} where a select step chooses one candidate",
@@ -780,6 +802,7 @@ fn project(
 /// field of its name: a boolean or an integer as the projection carries it.
 fn decide(
     policy: &SelectionPolicy,
+    tables: &SelectionTables,
     layout: &CandidateLayout,
     projection: &CandidateProjection,
     facts: &SelectionFactSnapshot,
@@ -833,8 +856,21 @@ fn decide(
                 .collect(),
         })
         .collect::<Vec<_>>();
-    evaluate(policy, &candidates, facts, now_unix_ms).map_err(|error| {
+    evaluate_with_tables(policy, tables, &candidates, facts, now_unix_ms).map_err(|error| {
         ContainedTaskError::with_detail(SELECTION_EVALUATION_FAILED, error.to_string())
+    })
+}
+
+/// Workflow #357 DB-2 (TB7): the tables this select step's document declares, as its runtime
+/// answers for them from the run's preparation. No file is read. A table bound in preparation
+/// binds again; a refusal here means the runtime answered with another table, and a table it
+/// cannot answer for is the evaluator's `dangling_reference`: both `selection_evaluation_failed`.
+fn step_tables<R: ContainedTaskRuntime>(
+    runtime: &mut R,
+    policy: &SelectionPolicy,
+) -> Result<SelectionTables, ContainedTaskError> {
+    super::run_tables::evaluation_tables(runtime, policy).map_err(|refusal| {
+        ContainedTaskError::with_detail(SELECTION_EVALUATION_FAILED, refusal.to_string())
     })
 }
 
@@ -1274,7 +1310,15 @@ impl PreparedContainedTask {
             now_unix_ms,
             &prepared.policy.record_list_keys(),
         );
-        let decision = decide(&prepared.policy, layout, &projection, &facts, now_unix_ms)?;
+        let tables = step_tables(runtime, &prepared.policy)?;
+        let decision = decide(
+            &prepared.policy,
+            &tables,
+            layout,
+            &projection,
+            &facts,
+            now_unix_ms,
+        )?;
         let mut record =
             selection_record(prepared, &projection, &snapshot, now_unix_ms, &decision)?;
         // Workflow #308 SEL-L4b: rules 2 and 3 of S0 §3.2 apply to a single-frame select that
@@ -1285,7 +1329,7 @@ impl PreparedContainedTask {
                 layout,
                 &projection,
                 &decision,
-                (&facts, now_unix_ms),
+                (&facts, &tables, now_unix_ms),
             )?),
             None => None,
         };
@@ -1320,7 +1364,7 @@ impl PreparedContainedTask {
                 let (confirmation, selected) = self.confirm(
                     runtime,
                     operation,
-                    (&projection, &decision, (&facts, now_unix_ms)),
+                    (&projection, &decision, (&facts, &tables, now_unix_ms)),
                     candidate_id,
                     timing,
                     deadline,
@@ -1376,10 +1420,10 @@ impl PreparedContainedTask {
         &self,
         runtime: &mut R,
         operation: &TaskOperation,
-        (projection, decision, (facts, now_unix_ms)): (
+        (projection, decision, (facts, tables, now_unix_ms)): (
             &CandidateProjection,
             &SelectionDecision,
-            (&SelectionFactSnapshot, u64),
+            (&SelectionFactSnapshot, &SelectionTables, u64),
         ),
         candidate_id: &str,
         timing: ContainedTaskTimingContext,
@@ -1566,7 +1610,14 @@ impl PreparedContainedTask {
             // instant; only the decisions compare, never the feature values.
             SelectConfirm::Decision => {
                 let hashes = decision_hash(projection, decision).and_then(|evaluated| {
-                    let again = decide(&prepared.policy, layout, &confirmed, facts, now_unix_ms)?;
+                    let again = decide(
+                        &prepared.policy,
+                        tables,
+                        layout,
+                        &confirmed,
+                        facts,
+                        now_unix_ms,
+                    )?;
                     Ok((evaluated, decision_hash(&confirmed, &again)?))
                 });
                 let (evaluated, decision_sha256) = match hashes {
@@ -1722,14 +1773,16 @@ impl PreparedContainedTask {
             now_unix_ms,
             &prepared.policy.record_list_keys(),
         );
+        let tables = step_tables(runtime, &prepared.policy)?;
         let deadline = timing.deadline();
         // #385 P-k: the scan's remaining time is budget time.
         let remaining = deadline
             .saturating_duration_since(super::budget_observation_now(runtime, timing.pace()));
-        let mut session = ScanSession::new(
+        let mut session = ScanSession::with_tables(
             scan,
             layout,
             &prepared.policy,
+            &tables,
             &facts,
             now_unix_ms,
             (first.scene.width(), first.scene.height()),
@@ -1887,18 +1940,21 @@ fn scan_click(
 /// SEL-L4b, §1.4, §3.4): its unknown instances are the actionable candidates the kernel kept
 /// from the evaluator (an unresolved consensus feature, an identity feature that read no
 /// identity) and those the evaluator dropped as unknown, each bounded at its Known identity, or
-/// over the whole domain without one, with the pinned `facts` at their instant.
+/// over the whole domain without one, with the pinned `facts` at their instant. Workflow #357
+/// DB-2 (M-357a v1.1 §4.3): a static table drop is no unknown instance.
 fn single_frame_unknown_check(
     prepared: &PreparedSelect,
     layout: &CandidateLayout,
     projection: &CandidateProjection,
     decision: &SelectionDecision,
-    (facts, now_unix_ms): (&SelectionFactSnapshot, u64),
+    (facts, tables, now_unix_ms): (&SelectionFactSnapshot, &SelectionTables, u64),
 ) -> Result<TaskSelectionUnknownCheck, ContainedTaskError> {
     let evaluated = decision
         .candidates
         .iter()
-        .filter(|verdict| !matches!(verdict.status, CandidateStatus::UnknownDropped))
+        .filter(|verdict| {
+            !matches!(verdict.status, CandidateStatus::UnknownDropped) || verdict.static_table_drop
+        })
         .map(|verdict| verdict.candidate_id.as_str())
         .collect::<std::collections::BTreeSet<_>>();
     let unknown = projection
@@ -1924,8 +1980,9 @@ fn single_frame_unknown_check(
                     _ => None,
                 })
                 .unwrap_or_else(|| domain.clone());
-            let bound = upper_bound(
+            let bound = upper_bound_with_tables(
                 &prepared.policy,
+                tables,
                 facts,
                 now_unix_ms,
                 &identities,
@@ -2080,7 +2137,16 @@ pub(super) fn dry_run_select_with_facts(
         .evaluator
         .candidate_layout(&prepared.layout_id)
         .ok_or_else(|| ContainedTaskError::new(SELECT_INVALID))?;
-    let decision = decide(policy, layout, &candidate_projection, facts, now_unix_ms)?;
+    // A saved frame's dry run has no run preparation: a document that declares a table is the
+    // evaluator's `dangling_reference`, and `actinglab replay` answers for a whole run instead.
+    let decision = decide(
+        policy,
+        SelectionTables::none(),
+        layout,
+        &candidate_projection,
+        facts,
+        now_unix_ms,
+    )?;
     Ok(SelectionDryRun {
         candidate_projection,
         decision,
@@ -2225,7 +2291,15 @@ mod tests {
             snapshot_at_unix_ms: 0,
             facts: BTreeMap::new(),
         };
-        let decision = decide(&policy, layout, &projection, &facts, 0).expect("decision");
+        let decision = decide(
+            &policy,
+            SelectionTables::none(),
+            layout,
+            &projection,
+            &facts,
+            0,
+        )
+        .expect("decision");
         // Only actionable rows are evaluated: the cut first row, which would read open and win
         // the lowest-ID tie-break, is neither a verdict nor the choice.
         assert_eq!(
@@ -2305,6 +2379,51 @@ mod tests {
             "tie_break": [{"kind": "candidate_id", "direction": "lowest_first"}]
         }))
         .expect("keyed policy decodes")
+    }
+
+    /// A document that reads a shared table by its identity field `key_field`.
+    fn table_policy(key_field: &str, required_count: u32) -> SelectionPolicy {
+        serde_json::from_value(json!({
+            "schema_version": actingcommand_selection_policy::SELECTION_POLICY_SCHEMA_VERSION,
+            "policy_id": "policy-table",
+            "applies_to": {"candidate_layout_id": "layout-list", "outcome_keys": {
+                "selected": "s", "empty": "e", "insufficient": "i", "ambiguous": "a", "unknown": "u"
+            }},
+            "fields": keyed_policy().fields,
+            "facts": [],
+            "tables": [{"table_id": "unit_scores", "path": "tables/unit_scores.json",
+                        "row_key": ["unit"], "columns": {"score_milli": {"type": "integer"}}}],
+            "gates": [],
+            "scoring": [{"term_id": "term-score",
+                         "value": {"source": "table", "table_id": "unit_scores",
+                                   "key_field": key_field, "pins": [],
+                                   "value_column": "score_milli"},
+                         "transform": {"kind": "identity"}, "weight_milli": 1000,
+                         "on_unknown": {"kind": "drop_candidate"}}],
+            "selection": {"mode": "none_allowed", "required_count": required_count},
+            "tie_break": [{"kind": "candidate_id", "direction": "lowest_first"}]
+        }))
+        .expect("the table document decodes")
+    }
+
+    /// Workflow #357 DB-2 (K3, TB6; coordinator decision 2): admission reads the document only:
+    /// it needs a layout that rejects unknown identities and the layout's identity field as its
+    /// key, and a select step still chooses one candidate. No table is read here.
+    #[test]
+    fn db2_a_table_document_needs_a_rejecting_layout_its_identity_key_and_one_candidate() {
+        let identity_field = keyed_policy().fields[0].name.clone();
+        let policy = table_policy(&identity_field, 1);
+        policy.validate().expect("a valid document");
+        check_policy(&policy, &identity_layout("reject")).expect("a rejecting layout admits it");
+        let readable = check_policy(&policy, &identity_layout("readable_attributes"))
+            .expect_err("readable attributes would hand the table an unknown key");
+        assert!(
+            readable.contains("unknown_identity=readable_attributes tables=declared"),
+            "{readable}"
+        );
+        let two = table_policy(&identity_field, 2);
+        let refusal = check_policy(&two, &identity_layout("reject")).expect_err("one candidate");
+        assert!(refusal.contains("required_count=2"), "{refusal}");
     }
 
     #[test]

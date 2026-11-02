@@ -428,6 +428,28 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "term_fallback_used": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "selection-policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "rule_id": "required",
+        "table_column": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.37",
+      "description": "A gate or scoring term (rule_id) read a standard-pack table through its declared fallback: the fallback_column, because the first column's cell is null, or a pin's otherwise, whose column is table_column (Workflow #357 DB-2, M-357a v1.1 D10, D24).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "term_unknown_dropped": {
       "category": "info",
       "ladder_class": "none",

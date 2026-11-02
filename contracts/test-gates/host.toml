@@ -1440,6 +1440,22 @@ tests = [
 ]
 incident = ["#373 NAV-5"]
 
+# Workflow #357 DB-2 (#430 S4a-1; M-357a v1.1 §2.4, §4.3; register §1.244; #419): a table failure denies that one run before any lease and task record, and a package that reads no table still runs; a table repaired or broken in place is the next run's; a scan lists static table drops as candidates and never as unknown (P4, P5), gates out another class, and keeps a missing pinned fact unknown (P6)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_357_db2::db2_a_table_failure_denies_that_run_and_nothing_else",
+    "actingcommand-runtime-host::lib::tests::gate_357_db2::db2_an_unreadable_table_no_root_and_a_broken_root_deny_the_run",
+    "actingcommand-runtime-host::lib::tests::gate_357_db2::db2_a_scan_lists_static_table_drops_as_candidates_and_never_as_unknown",
+    "actingcommand-runtime-host::lib::tests::gate_357_db2::db2_a_scan_gates_out_another_class_and_keeps_a_missing_pinned_fact_unknown",
+    "actingcommand-runtime-host::lib::tests::gate_357_db2::db2_a_run_records_the_table_it_reads_with_its_digest_and_a_run_that_reads_none_records_none",
+    "actingcommand-runtime-host::lib::tests::gate_357_db2::db2_a_single_frame_select_chooses_by_the_bound_table",
+    "actingcommand-runtime-host::lib::tests::gate_357_db2::db2_a_single_frame_select_drops_what_the_table_lacks_without_an_unknown_instance",
+    "actingcommand-runtime-host::lib::tests::gate_357_db2::db2_a_table_failure_on_one_instance_leaves_the_other_instance_running",
+    "actingcommand-runtime-host::lib::tests::gate_373_nav6::db2_a_layer_package_with_a_broken_table_ends_the_run_that_admits_it",
+]
+incident = ["#357 DB-2"]
+
 # Workflow #308 SEL-L4b (frozen selector model S0 v2.1 §1.4; register §1.85): a package whose select step declares `scan` and `on_empty` runs through the host; a scan that finds nobody listed ends the run Completed on the step's page with no input, one v2 decision record and the on_empty key as its scheduling disposition, derived by the host's existing rules
 [[gate]]
 key = "77"
