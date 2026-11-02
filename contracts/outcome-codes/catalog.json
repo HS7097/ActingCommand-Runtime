@@ -2351,6 +2351,26 @@
       "type": "duration_ms",
       "description": "The gap a step drew between its recognition and its input under execution.action_gap.kind random, in milliseconds (ACT-2)."
     },
+    "loading_event": {
+      "type": "vocab:loading_event",
+      "description": "What a frame of a wait did with the package's loading pages: the first transition frame of a stretch, the first frame after one, or a transition frame past the wait's allowance (Workflow #407 LOAD-3, since 0.12.37)."
+    },
+    "loading_page_id": {
+      "type": "id",
+      "description": "The loading page a transition frame showed: the first of the wait's loading pages that held on it, in their order, or the page of the package the confirmation adds as one (Workflow #407 LOAD-3, since 0.12.37)."
+    },
+    "loading_ms": {
+      "type": "duration_ms",
+      "description": "The budget time the transition frames of one input's waits had spent of their allowance, in milliseconds: before the frame for entered, up to the frame for left and limit_reached (Workflow #407 LOAD-3, since 0.12.37)."
+    },
+    "loading_limit_ms": {
+      "type": "duration_ms",
+      "description": "The allowance of one input's waits for transition frames in effect, in milliseconds of budget time: the operation's loading.max_ms, else its wait page's max_ms, else the package's (Workflow #407 LOAD-3, since 0.12.37)."
+    },
+    "loading_exit_gap_ms": {
+      "type": "duration_ms",
+      "description": "The budget time between the last transition frame of a stretch and the first frame after it, in milliseconds: how late the wait saw the loading end, which the back-off over transition frames lengthens (Workflow #407 LOAD-3, since 0.12.37)."
+    },
     "reading_value": {
       "type": "name",
       "description": "A fact reading as the admission of a dispatch read it, its canonical JSON ({\"type\": <kind>, \"value\": <value>}), at most 128 bytes (SS-4, contracts/scheduling/README.md \"No-progress guard\")."
@@ -3670,6 +3690,21 @@
         },
         "reading_unknown": {
           "description": "The cost of a regenerating pool the task consumes needs the pool's reading, which is unknown or expired; pool_id names the pool, fact_key and unknown_reason its reading when it reads a fact, and the fact refresh is asked for it."
+        }
+      }
+    },
+    "loading_event": {
+      "description": "What a frame of a wait did with the package's loading pages, the value of contained_task_loading_recorded (Workflow #407 LOAD-3, since 0.12.37; contracts/resource-declarations.md \"Loading pages\").",
+      "review": "pending",
+      "tokens": {
+        "entered": {
+          "description": "The first transition frame of a stretch of them: a loading page held, row 3 of the frame judgement. page_id is the page of the package it suppresses, when one held."
+        },
+        "left": {
+          "description": "The first frame after a stretch of transition frames that is none. page_id is the page that held on it (a destination, another page, or none); loading_exit_gap_ms is the time since the stretch's last transition frame."
+        },
+        "limit_reached": {
+          "description": "A transition frame after the input's allowance was spent: under on the wait ends on it with its own code and the loading values; under shadow it is recorded once and nothing changes."
         }
       }
     },

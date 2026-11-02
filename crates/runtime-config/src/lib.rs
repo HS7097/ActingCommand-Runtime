@@ -108,7 +108,7 @@ pub use emulator_control::{
 };
 pub use execution::{
     CaptureCadenceConfig, ExecutionCaptureFile, ExecutionFile, InstanceExecutionCaptureFile,
-    InstanceExecutionFile,
+    InstanceExecutionFile, LoadingFile, LoadingModeConfig,
 };
 pub use host::{HostFile, HostProcessConfig, ProcessPriorityLevel};
 pub use host_claims::{HostClaimsFile, RENEWAL_SLACK_MS, RUN_END_GRACE_MS};
@@ -219,6 +219,11 @@ mod gate_still1;
 // ACT-1, ACT-2 (Workflow #407, register §1.250): the `execution.action_gap` keys.
 #[cfg(test)]
 mod gate_act2;
+
+// LOAD-3 (Workflow #407, register §1.260): `execution.loading.mode`, off by default and per
+// instance.
+#[cfg(test)]
+mod gate_load3;
 
 // #422 LN-7c Q: the evidence-frame rule's age and the frame queries' pace and chunk.
 #[cfg(test)]

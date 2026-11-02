@@ -398,3 +398,17 @@ actingcommand_contract::outcome_vocabulary! {
         LoadingPageInvalid => "loading_page_invalid",
     }
 }
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Workflow #407 LOAD-3 (vocabulary `loading_event`, since 0.12.37;
+    /// contracts/resource-declarations.md, "Loading pages"): what a frame of a wait did with the
+    /// package's loading pages, the value of the host's `contained_task_loading_recorded`.
+    pub enum LoadingEventKind: "loading_event" {
+        /// The first transition frame of a stretch of them.
+        Entered => "entered",
+        /// The first frame after a stretch of transition frames that is none.
+        Left => "left",
+        /// A transition frame after the input's allowance was spent.
+        LimitReached => "limit_reached",
+    }
+}

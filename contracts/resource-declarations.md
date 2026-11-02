@@ -1572,9 +1572,10 @@ Workflow #407 LOAD-1 (since 0.12.37; [v012-register.md](v012-register.md) §1.25
 game is between two pages) are declared once, at the root of its resource repository, and copied
 into each pack, whose version then freezes them. The root reader and a run's preparation never
 read `loading.json`; the pack loader compiles a pack's copy (LOAD-2, since 0.12.37, "The compiled
-copy" below) and admits the operations that adjust it ("Operation-level loading" below). **No run
-waits on a loading page in this release:** LOAD-3 runs them in a page graph and LOAD-4 in a step
-plan; until then a compiled loading set is admitted and reported (`package check`), nothing else.
+copy" below) and admits the operations that adjust it ("Operation-level loading" below). A page
+graph's waits run on them under `execution.loading.mode`, `off` by default (LOAD-3, since 0.12.37,
+"Waits on loading pages" below); a step plan does not yet (LOAD-4), so there a compiled loading set
+is admitted and reported (`package check`), nothing else.
 The tools check the files ([package-reference.md](package-reference.md), `package loading`,
 `package bundle --loading`, `standard-pack check`, `resource validate`). A pack that carries a
 copy needs a Runtime that reads it: the Runtime is deployed first, then the packs.
@@ -1666,7 +1667,8 @@ it). A confirmation's `expect_after.loading` adjusts the pack's loading pages fo
 The confirmation's loading pages are, from the highest priority: none with `"off"`; else the pack's
 less `except`, with `add` and the wait page. Its allowance is `loading.max_ms`, else the wait
 page's `max_ms`, else the pack's; with no loading page there is none. A wait step may declare it,
-for its away clock. Nothing runs on it in this release (LOAD-3, LOAD-4).
+for its away clock. A page graph runs it under `execution.loading.mode` `on` ("Waits on loading
+pages" below); a step plan does not yet (LOAD-4).
 
 | Member | Declaration gate | Runtime admission (`contained_task_program_invalid`, `program_problem` as below, the task declaration's `path`, `json_pointer` the member below `/operations/<i>/expect_after`) |
 | --- | --- | --- |
@@ -1678,3 +1680,61 @@ for its away clock. Nothing runs on it in this release (LOAD-3, LOAD-4).
 The source build takes each `add` page into the task's page set, as a wait page. A step plan
 checks a wait page as a page graph does (`wait_page_invalid`, `wait_max_invalid`). An older
 task schema refuses `loading` (`contained_task_operation_invalid` at admission).
+
+**Waits on loading pages** (Workflow #407 LOAD-3, since 0.12.37, [v012-register.md](v012-register.md)
+§1.260; design `rd-1031/check-speed/model-loading.md` §3, §4, §6). Under
+`execution.loading.mode` ([runtime-config.md](runtime-config.md), "The `execution` section"; per
+instance, settable, the host hands it with each step's pacing, [performance-control.md](performance-control.md),
+"Step pacing"):
+
+- `off`, the default and every Lab operation's: no loading page is evaluated and every decision is
+  the one before LOAD-3, a wait page's included (it pauses its confirmation up to its `max_ms` and
+  then counts as a frame of no destination).
+- `shadow`: every frame of a page-graph wait is evaluated against the wait's loading pages and
+  recorded as below; the allowance is counted as `on` would spend it; no decision changes.
+- `on`: the judgement below decides.
+
+*One judgement.* The settled path, the confirmation (with its extra rounds and observe-only
+retries), the failure decision's confirmation, a wait step's wait, a page wait (the run's first,
+`AwaitPage`, a step without a destination, the frame after an action gap) and an observation window
+judge each frame by one rule, row by row: (1) two or more pages, or a destination that is an error
+page: `contained_task_recognition_conflict`, as before; (2) an error page, as before (a page wait
+takes it as any page); (3) one or more of the wait's loading pages held on the frame, several being
+no ambiguity, or its page is one the confirmation adds as one (`loading.add`, the wait page): a
+**transition frame**; (4) what the wait waits for: the step's final state (ACT-4, "Final-state
+targets"), a page wait's page; (5) anything else, as before. The loading pages are evaluated by id
+on the frame just recognized, in a scene context of their own (their targets are their own). A
+transition frame suppresses the page under it: it is never the step's final state (ACT-4 is not
+asked on it, so it is no `target_present` or `target_gone` evidence and never flip evidence), never
+an entry or the frame a step decides on, feeds no collector and no reading, and is never still
+(STILL-1 and the rule of a still unrecognised screen stop on it, as on a held page). A black, white
+or unrecognised screen is no transition frame and gets no exemption.
+
+*The allowance.* The wait's loading pages are, for a confirmation, the operation's ("Operation-level
+loading" above) and for a page wait the pack's; their allowance is `loading.max_ms`, else the wait
+page's `max_ms`, else the pack's (a set with no limit anywhere has none: its first transition frame
+ends the wait). One allowance serves one input: its settled path, its confirmation and its failure
+decision's confirmation share it, and the next input takes a new one; a wait step and a page wait
+take one each. A transition frame is offered to the shared interrupt pages first: a handled one
+pauses the wait as a handled interrupt does and spends nothing. Otherwise it spends the budget time
+since the wait's frame before it, at most what is left, and the wait's clock pauses for it (the
+settled path hands the step to its confirmation at once with it). The task deadline, the host's
+wall-clock deadline, cancellation and capacity refusals hold as before. A transition frame after the
+allowance is spent ends the wait on it, through the wait's own path and code, without further time
+or extra rounds: a page-graph confirmation `contained_task_step_unconfirmed` when its operation
+decides to fail, else `page_confirmation_failed`; a page wait `contained_task_page_unknown`. The
+failure carries `loading_page_id`, `loading_ms` and `loading_limit_ms` beside its other values;
+`page_id` names the page the loading page suppressed, if one held; the transition frame is never
+the failure's frame, so a failure decision that retries has no frame to tap on and adds no input.
+Under `on` a wait page is one of the loading pages, so past its `max_ms` the wait ends, named,
+instead of counting the page as a frame of no destination. An observation window only suppresses:
+its transition frames are frames of no destination and spend nothing. The back-off over transition
+frames is the one over a held page's frames.
+
+*Records* (`shadow` and `on`, the run's diagnostics only, no ledger shape): each frame's evaluation
+of the loading pages as page rows of the phase `loading`, with its time; and
+`contained_task_loading_recorded` (info) on the frame it names, `loading_event` `entered` (the first
+transition frame of a stretch; `page_id` the page it suppresses), `left` (the first frame after it;
+`page_id` the page on it, `loading_exit_gap_ms` the time since the stretch's last transition frame)
+or `limit_reached` (once per allowance), with `loading_page_id` (the stretch's first loading page),
+`loading_ms`, `loading_limit_ms` and `pack_operation_id` (none for a page wait).

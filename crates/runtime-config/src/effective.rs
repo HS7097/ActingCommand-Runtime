@@ -19,7 +19,7 @@ use crate::defaults::shipped_scalar;
 use crate::device_link::DeviceLinkConfig;
 use crate::device_state::DeviceStateConfig;
 use crate::display_safe_area::DisplaySafeAreaConfig;
-use crate::execution::CaptureCadenceConfig;
+use crate::execution::{CaptureCadenceConfig, LoadingModeConfig};
 use crate::host::HostProcessConfig;
 use crate::idle::IdleConfig;
 use crate::ledger_observer::LedgerObserverConfig;
@@ -582,6 +582,18 @@ impl EffectiveConfig {
         CaptureCadenceConfig::parse(&|key: &str| self.value_or_shipped(key))
     }
 
+    /// LOAD-3 (register §1.260): `execution.loading.mode` in effect for the instance whose registry
+    /// id is `instance_id`, its own when the configuration carries one, otherwise the section's.
+    /// The host hands it to the kernel with each step's pacing.
+    pub fn loading_mode(&self, instance_id: &str) -> Result<LoadingModeConfig, ConfigFailure> {
+        execution::instance_loading_mode(&|key: &str| self.value_or_shipped(key), instance_id)
+    }
+
+    /// LOAD-3: the section's `execution.loading.mode` in effect.
+    pub fn loading_mode_section(&self) -> Result<LoadingModeConfig, ConfigFailure> {
+        execution::section_loading_mode(&|key: &str| self.value_or_shipped(key))
+    }
+
     /// STILL-1: `execution.capture.still_limit_ms` in effect for the instance whose registry id is
     /// `instance_id`, its own when the configuration carries one, otherwise the section's; 0 is
     /// off. The host hands it to the kernel with each step's pacing.
@@ -957,6 +969,18 @@ impl EffectiveConfig {
                 .collect::<BTreeSet<_>>();
             for instance in instances {
                 self.action_gap(instance)?;
+            }
+        }
+        // LOAD-3: the section's loading mode, and each instance's in effect.
+        if sections.contains(execution::SECTION) || sections.contains(INSTANCE_SECTION) {
+            self.loading_mode_section()?;
+            let instances = self
+                .settings
+                .iter()
+                .filter_map(|setting| setting.instance.as_deref())
+                .collect::<BTreeSet<_>>();
+            for instance in instances {
+                self.loading_mode(instance)?;
             }
         }
         if !sections.contains(INSTANCE_SECTION) {

@@ -18,11 +18,18 @@
 //!   ends; 0, the default, switches it off. Also per instance
 //!   (`instance.<instance id>.execution.capture.still_limit_ms`, defaulting to the section's).
 //!
-//! Host-wide but for that per-instance key. The host hands every key to the kernel with each
+//! - `loading.mode` (LOAD-3, Workflow #407, register §1.260): how a step's waits treat the
+//!   package's loading pages: `off` (the default) as before they existed, `shadow` evaluating and
+//!   recording them without changing any decision, `on` pausing on them. Also per instance
+//!   (`instance.<instance id>.execution.loading.mode`; an instance that names none takes the
+//!   section's).
+//!
+//! Host-wide but for those per-instance keys. The host hands every key to the kernel with each
 //! step's pacing, so an instruction may change each while the Runtime runs: the ceiling takes
-//! effect at the next run, the back-off and the still limit at the next step. Every default lives
-//! in the defaults file. A value outside its range is `config_value_invalid` (`out_of_range`) at
-//! start, in `check-config` and in an instruction; a value of another type is `wrong_type`.
+//! effect at the next run, the back-off, the still limit and the loading mode at the next step.
+//! Every default lives in the defaults file. A value outside its range is `config_value_invalid`
+//! (`out_of_range`) at start, in `check-config` and in an instruction; a value of another type is
+//! `wrong_type`.
 
 use crate::codes::ConfigValueProblem;
 use crate::effective::ConfigFailure;
@@ -44,6 +51,11 @@ pub const CAPTURE_IDLE_CEILING_MS: &str = "execution.capture.idle_ceiling_ms";
 /// STILL-1: how long a wait may see unchanged frames it does not accept, in milliseconds; 0 is
 /// off. Also per instance (`instance.<instance id>.execution.capture.still_limit_ms`).
 pub const CAPTURE_STILL_LIMIT_MS: &str = "execution.capture.still_limit_ms";
+/// LOAD-3: how a step's waits treat the package's loading pages, one of [`LOADING_MODE_TOKENS`].
+/// Also per instance (`instance.<instance id>.execution.loading.mode`).
+pub const LOADING_MODE: &str = "execution.loading.mode";
+/// The values of [`LOADING_MODE`].
+pub const LOADING_MODE_TOKENS: &[&str] = &["off", "shadow", "on"];
 
 /// The bounds of `capture.max_interval_ms`. Schema: at least the 5 000 ms every package was held
 /// to before PERF-B1, so no configuration refuses a package that was admitted before; at most the
@@ -89,6 +101,20 @@ pub struct ExecutionFile {
     // ACT-1, ACT-2 (register §1.250; `action_gap.rs`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     action_gap: Option<crate::action_gap::ActionGapFile>,
+    // LOAD-3 (register §1.260): within `actingd-config` revision 24, no second step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    loading: Option<LoadingFile>,
+}
+
+/// LOAD-3: the `execution.loading` member of the section and of an instance's `execution` member.
+// Interface anchor `actingd-config` revision 24 (contracts/component-interfaces.md; LOAD-3): a
+// Runtime before LOAD-3 refuses a file that names it, because the section and the entries deny
+// unknown members.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LoadingFile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mode: Option<Value>,
 }
 
 /// The `execution.capture` member.
@@ -121,6 +147,9 @@ pub struct InstanceExecutionFile {
     // ACT-1, ACT-2 (register §1.250; `action_gap.rs`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     action_gap: Option<crate::action_gap::ActionGapFile>,
+    // LOAD-3 (register §1.260): the instance's own loading mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    loading: Option<LoadingFile>,
 }
 
 /// STILL-1: the `execution.capture` member of an `instances[]` entry.
@@ -171,7 +200,90 @@ pub(crate) static ROWS: &[KeyRow] = &[
         reader: "STILL-1",
         since: "0.12.37",
     },
+    // LOAD-3: handed to the kernel with each step's pacing, so an instruction takes effect at the
+    // next step.
+    KeyRow {
+        name: KeyName::Exact(LOADING_MODE),
+        file_path: FilePath::Key,
+        value_type: ValueType::String,
+        range: KeyRange::Tokens(LOADING_MODE_TOKENS),
+        default: DefaultSource::File,
+        settable: Settable::Yes,
+        reader: "LOAD-3",
+        since: "0.12.37",
+    },
 ];
+
+/// LOAD-3: the instance's own loading mode, named as the section-level key it overrides. No
+/// default: an instance that names none reads the section's and reports no row of its own.
+pub(crate) const INSTANCE_LOADING_MODE_ROW: KeyRow = KeyRow {
+    name: KeyName::PerInstance(LOADING_MODE),
+    file_path: FilePath::InstanceMember,
+    value_type: ValueType::String,
+    range: KeyRange::Tokens(LOADING_MODE_TOKENS),
+    default: DefaultSource::None,
+    settable: Settable::Yes,
+    reader: "LOAD-3",
+    since: "0.12.37",
+};
+
+/// LOAD-3: how a step's waits treat the package's loading pages (`execution.loading.mode`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoadingModeConfig {
+    /// As before loading pages existed: none is evaluated.
+    Off,
+    /// Evaluated and recorded on every frame of a wait; no decision changes.
+    Shadow,
+    /// A frame on which one holds pauses the wait, within its allowance.
+    On,
+}
+
+fn parse_loading_mode(token: &str) -> Option<LoadingModeConfig> {
+    match token {
+        "off" => Some(LoadingModeConfig::Off),
+        "shadow" => Some(LoadingModeConfig::Shadow),
+        "on" => Some(LoadingModeConfig::On),
+        _ => None,
+    }
+}
+
+/// LOAD-3: the loading mode `key` holds (the section's key or an instance's);
+/// `config_value_invalid` for `key` otherwise.
+fn loading_mode(
+    value: &dyn Fn(&str) -> Option<FactScalar>,
+    key: &str,
+) -> Result<LoadingModeConfig, ConfigFailure> {
+    match value(key) {
+        Some(FactScalar::String(token)) => parse_loading_mode(&token)
+            .ok_or_else(|| ConfigFailure::invalid_value(key, ConfigValueProblem::OutOfRange)),
+        _ => Err(ConfigFailure::invalid_value(
+            key,
+            ConfigValueProblem::WrongType,
+        )),
+    }
+}
+
+/// LOAD-3: the section's loading mode in effect.
+pub(crate) fn section_loading_mode(
+    value: &dyn Fn(&str) -> Option<FactScalar>,
+) -> Result<LoadingModeConfig, ConfigFailure> {
+    loading_mode(value, LOADING_MODE)
+}
+
+/// LOAD-3: the loading mode in effect for the instance whose registry id is `instance_id`: its own
+/// `instance.<instance_id>.execution.loading.mode` when the configuration carries it, otherwise
+/// the section's.
+pub(crate) fn instance_loading_mode(
+    value: &dyn Fn(&str) -> Option<FactScalar>,
+    instance_id: &str,
+) -> Result<LoadingModeConfig, ConfigFailure> {
+    let own = instance_key(instance_id, LOADING_MODE);
+    if value(&own).is_some() {
+        loading_mode(value, &own)
+    } else {
+        loading_mode(value, LOADING_MODE)
+    }
+}
 
 /// STILL-1: the instance's own still limit; the section's value in effect is its default.
 pub(crate) const INSTANCE_STILL_LIMIT_ROW: KeyRow = KeyRow {

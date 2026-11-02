@@ -673,6 +673,14 @@ outcome_keys! {
     // ---- ACT-2 (the gap between two actions, contracts/runtime-config.md): begin ----
     action_gap_ms: duration_ms,
     // ---- ACT-2: end ----
+    // ---- LOAD-3 (loading pages in a wait, contracts/resource-declarations.md "Loading pages"):
+    // begin ----
+    loading_event: vocab(loading_event),
+    loading_page_id: id,
+    loading_ms: duration_ms,
+    loading_limit_ms: duration_ms,
+    loading_exit_gap_ms: duration_ms,
+    // ---- LOAD-3: end ----
     // ---- Workflow #429 R-7a (the player hold, contracts/player-hold.md): begin ----
     hold_id: id,
     hold_phase: vocab(player_hold_phase),

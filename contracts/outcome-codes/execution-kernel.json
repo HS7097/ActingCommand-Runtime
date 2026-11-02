@@ -2064,6 +2064,9 @@
         "artifact_id": "optional",
         "held_ms": "optional",
         "limit_ms": "optional",
+        "loading_page_id": "optional",
+        "loading_ms": "optional",
+        "loading_limit_ms": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -2073,7 +2076,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A page-graph step's postcondition was not confirmed within its wait and its operation decided to fail. pack_operation_id is the operation, page_ids its destination pages, attempts its attempts; page_id is the page the last frame of the wait matched and is absent when that frame matched no page; artifact_id is that frame. STILL-1: held_ms and limit_ms are present when the wait ended early on execution.capture.still_limit_ms: how long its frames had stayed unchanged, and the limit in effect.",
+      "description": "A page-graph step's postcondition was not confirmed within its wait and its operation decided to fail. pack_operation_id is the operation, page_ids its destination pages, attempts its attempts; page_id is the page the last frame of the wait matched and is absent when that frame matched no page; artifact_id is that frame. STILL-1: held_ms and limit_ms are present when the wait ended early on execution.capture.still_limit_ms: how long its frames had stayed unchanged, and the limit in effect. LOAD-3 (since 0.12.37): loading_page_id, loading_ms and loading_limit_ms are present when the wait ended on a transition frame after its loading allowance was spent under execution.loading.mode on; page_id is then the page of the package the loading page suppressed, if one held.",
       "common_causes": "The tap was ignored (page_id is the departure page); the screen moved to a page the step does not expect (page_id is that page); the last frame matched no page (no page_id: an animation, a dialog the package does not declare, or a page whose targets no longer match).",
       "handling": "Read page_id and look at the frame artifact_id names: an ignored tap needs a longer settle or a click box that lands on the control; an unexpected page needs that page declared as a destination or an interrupt; no page needs the frame's page declared or its targets fixed."
     },
@@ -2212,6 +2215,9 @@
       "values": {
         "held_ms": "optional",
         "limit_ms": "optional",
+        "loading_page_id": "optional",
+        "loading_ms": "optional",
+        "loading_limit_ms": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -2221,7 +2227,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A step's expected page was not confirmed after its input. STILL-1: held_ms and limit_ms are present when the wait ended early on execution.capture.still_limit_ms: how long its frames had stayed unchanged, and the limit in effect.",
+      "description": "A step's expected page was not confirmed after its input. STILL-1: held_ms and limit_ms are present when the wait ended early on execution.capture.still_limit_ms: how long its frames had stayed unchanged, and the limit in effect. LOAD-3 (since 0.12.37): loading_page_id, loading_ms and loading_limit_ms are present when the wait ended on a transition frame after its loading allowance was spent under execution.loading.mode on.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

@@ -1577,6 +1577,15 @@ impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
         self.inner.diagnostic_pages(phase, results)?;
         self.inner.record_capture_recognition(results)
     }
+
+    /// LOAD-3 (Workflow #407, register §1.260): an entry recovery layer's loading records are the
+    /// run's.
+    fn record_loading(
+        &mut self,
+        record: actingcommand_execution_kernel::LoadingRecord<'_>,
+    ) -> Result<(), Self::Error> {
+        self.inner.record_loading(record)
+    }
     /// Workflow #386 SR-1 (scheduling model §2.2): the Runtime samples.
     fn sampling_supported(&self) -> bool {
         true
@@ -4041,6 +4050,9 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     ///
     /// ACT-1 (Workflow #407, register §1.250): and the settled path, under the instance's
     /// `execution.action_gap` keys in effect at a stage up to `settled_max_stage`.
+    ///
+    /// LOAD-3 (Workflow #407, register §1.260): and the instance's `execution.loading.mode` in
+    /// effect.
     fn step_pacing(&mut self) -> Result<StepPacing, Self::Error> {
         let retries = self
             .host
@@ -4080,13 +4092,19 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         } else {
             actingcommand_contract::PerformancePacingStage::S0
         };
+        // LOAD-3: the loading mode is the run's instance's.
+        let loading = self
+            .host
+            .loading_mode(self.instance_alias)
+            .map_err(RequestFailure::poison_without_terminal)?;
         Ok(crate::performance::apply_settled_path(
             effective
                 .step_pacing(retries, pre_input_wait_base_ms)
                 .with_capture_cadence(capture_cadence),
             &action_gap,
             stage,
-        ))
+        )
+        .with_loading(loading))
     }
 
     /// ACT-2 (Workflow #407, register §1.250): the step's gap under the instance's keys in effect.
@@ -4259,6 +4277,28 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
         }
         self.diagnostic_pages(phase, results)?;
         self.record_capture_recognition(results)
+    }
+
+    /// LOAD-3 (Workflow #407, register §1.260): a frame's evaluation of the wait's loading pages is
+    /// one of that frame's evaluations and page rows of the phase `loading`, never the frame's page
+    /// recognition; a transition is one `contained_task_loading_recorded` row on that frame.
+    fn record_loading(
+        &mut self,
+        record: actingcommand_execution_kernel::LoadingRecord<'_>,
+    ) -> Result<(), Self::Error> {
+        match record {
+            actingcommand_execution_kernel::LoadingRecord::Evaluated { results, timing } => {
+                self.task_timing.record_evaluation(
+                    timing,
+                    self.last_frame_id.map(|id| *id.transport()),
+                    None,
+                );
+                self.diagnostic_pages(task_diagnostic::LOADING_PHASE, results)
+            }
+            actingcommand_execution_kernel::LoadingRecord::Event(event) => {
+                self.diagnostic_loading(event)
+            }
+        }
     }
     fn record_guard_evaluation(
         &mut self,

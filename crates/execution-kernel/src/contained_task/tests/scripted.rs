@@ -35,6 +35,12 @@
 // effect is unsupported), each effect then counting as an input does for the script, and it keeps
 // the stores the kernel asked it to admit and the taps the kernel routed to a store, which count
 // as inputs too (a store it refuses, `refusing_store`, ends the run with that error).
+//
+// LOAD-3: every answer may also carry a loading mode (`with_loading_mode`; without one `off`); it
+// keeps each loading record with the number of frames captured when it came, and it may answer
+// the shared interrupt check (`with_shared_interrupts`: the n-th offer is handled when the list
+// says so, the handling taking its scripted time; without one none is handled) and counts the
+// offers.
 
 use super::super::*;
 use actingcommand_device::CaptureBackendName;
@@ -147,6 +153,13 @@ pub(crate) struct ScriptedRuntime {
     store_admissions: Vec<String>,
     store_inputs: Vec<(InputAction, String)>,
     store_refusal: Option<&'static str>,
+    // LOAD-3.
+    loading: LoadingMode,
+    loading_events: Vec<(usize, LoadingEvent)>,
+    loading_evaluations: Vec<usize>,
+    interrupts: Vec<bool>,
+    interrupt_handling: Duration,
+    interrupt_offers: usize,
 }
 
 impl ScriptedRuntime {
@@ -184,7 +197,48 @@ impl ScriptedRuntime {
             store_admissions: Vec::new(),
             store_inputs: Vec::new(),
             store_refusal: None,
+            loading: LoadingMode::Off,
+            loading_events: Vec::new(),
+            loading_evaluations: Vec::new(),
+            interrupts: Vec::new(),
+            interrupt_handling: Duration::ZERO,
+            interrupt_offers: 0,
         }
+    }
+
+    // The same device, whose every `step_pacing()` answer also hands the loading mode `mode`
+    // (LOAD-3).
+    pub(crate) fn with_loading_mode(self, mode: LoadingMode) -> Self {
+        Self {
+            loading: mode,
+            ..self
+        }
+    }
+
+    // The same device, answering the `n`-th shared interrupt check as handled when `handled[n]`
+    // says so (and not after the list), each handling taking `handling` of its clock (LOAD-3).
+    pub(crate) fn with_shared_interrupts(self, handled: Vec<bool>, handling: Duration) -> Self {
+        Self {
+            interrupts: handled,
+            interrupt_handling: handling,
+            ..self
+        }
+    }
+
+    // The transitions of the loading pages the kernel recorded, each with the number of frames
+    // captured when it came (the frame it names is that one), in order (LOAD-3).
+    pub(crate) fn loading_events(&self) -> &[(usize, LoadingEvent)] {
+        &self.loading_events
+    }
+
+    // The frames on which the kernel evaluated loading pages, by their number (LOAD-3).
+    pub(crate) fn loading_evaluations(&self) -> &[usize] {
+        &self.loading_evaluations
+    }
+
+    // How often the kernel offered a frame to the shared interrupt pages (LOAD-3).
+    pub(crate) fn interrupt_offers(&self) -> usize {
+        self.interrupt_offers
     }
 
     // The same device, performing the application effect; each effect moves the script on as an
@@ -438,7 +492,36 @@ impl ContainedTaskRuntime for ScriptedRuntime {
         Ok(pacing
             .with_extra_wait_rounds(self.extra_wait_rounds)
             .with_pre_input_wait(self.pre_input_wait)
-            .with_settled_path(self.settled_path))
+            .with_settled_path(self.settled_path)
+            .with_loading(self.loading))
+    }
+
+    fn record_loading(&mut self, record: LoadingRecord<'_>) -> Result<(), Self::Error> {
+        match record {
+            LoadingRecord::Evaluated { .. } => self.loading_evaluations.push(self.captures),
+            LoadingRecord::Event(event) => {
+                self.loading_events.push((self.captures, event.clone()));
+            }
+        }
+        Ok(())
+    }
+
+    fn shared_interrupt(
+        &mut self,
+        _frame: SharedInterruptFrame<'_>,
+    ) -> Result<SharedInterruptVerdict, ContainedTaskRunError<Self::Error>> {
+        let handled = self
+            .interrupts
+            .get(self.interrupt_offers)
+            .copied()
+            .unwrap_or(false);
+        self.interrupt_offers += 1;
+        if handled {
+            self.offset += self.interrupt_handling;
+            Ok(SharedInterruptVerdict::Handled)
+        } else {
+            Ok(SharedInterruptVerdict::NotHandled)
+        }
     }
 
     fn observe_extra_wait_round(&mut self) {

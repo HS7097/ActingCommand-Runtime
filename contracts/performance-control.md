@@ -348,6 +348,14 @@ deadline, settlement and record is the one before pacing.
   declared length and its wall time counts in full against its limit. A page it accepts or a
   frame that changed returns it to the step's factor at once. The run's budget clock, the
   task's deadline, the extra rounds and the outcome of a wait that runs out are unchanged.
+- **Loading pages (LOAD-3, Workflow #407; register §1.260; since 0.12.37).** Each answer also hands
+  `StepPacing::loading`, the instance's `execution.loading.mode` in effect (`off`, the default, for
+  every run without the key and for every Lab operation). Under `shadow` and `on` the page-graph
+  waits evaluate the package's loading pages on each frame and record them; under `on` a frame on
+  which one holds pauses the wait on the budget clock within the input's allowance, never past the
+  task's deadline or the host's, and is never still (both rules above stop on it as on a held page).
+  Its back-off is a held page's. The rules are in [resource-declarations.md](resource-declarations.md),
+  "Waits on loading pages"; `linear_steps` waits are unchanged (LOAD-4).
 - **Host deadline and lease.** A run's host deadline (`response_deadline_ms`), its lease TTL,
   its active checks and `contained_task_deadline_exceeded` stay wall-clock and identical at
   every factor. A stretched run that reaches its host deadline ends

@@ -20,6 +20,7 @@
 //!   observe-only retries. A `linear_steps` task rechecks its clicks too (#411 B12), evaluating
 //!   only the step's page on each fresh frame.
 
+use super::loading::{FrameRow, LoadingAllowance, LoadingFrame};
 use super::{
     ClickRect, ContainedTaskBoundaryTiming, ContainedTaskError, ContainedTaskGuardOutcome,
     ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTimingContext, ExtraRounds,
@@ -496,7 +497,10 @@ impl PreparedContainedTask {
     /// task's budget, starts the step's extra rounds (`rounds`) first, captures only: `stable`
     /// another window of `window_ms` from now, `window_end` another `budget` from now in which a
     /// frame that shows a destination ends it. ACT-4: a frame shows a destination only as the
-    /// step's final state ([`Self::final_state`]).
+    /// step's final state ([`Self::final_state`]). Workflow #407 LOAD-3 (§5): each frame is judged
+    /// by the one judgement ([`Self::judge_frame`]) against the input's loading pages, and the
+    /// window only suppresses: under `on` a transition frame is a frame of no destination, and no
+    /// frame pauses the window or spends the allowance; its transitions are recorded.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn observe_window<R: ContainedTaskRuntime>(
         &self,
@@ -507,7 +511,7 @@ impl PreparedContainedTask {
         arrived: PageObservation,
         (interval, budget): (Duration, Duration),
         timing: ContainedTaskTimingContext,
-        (retries, mut rounds): (&mut SampleRetries, ExtraRounds),
+        (retries, mut rounds, loading): (&mut SampleRetries, ExtraRounds, &mut LoadingAllowance),
     ) -> Result<PostconditionResolution, ContainedTaskRunError<R::Error>> {
         let task_deadline = timing.deadline();
         let consensus = !self.evaluator.pack().target_consensus.is_empty();
@@ -571,6 +575,7 @@ impl PreparedContainedTask {
                                 required_delay_ms: None,
                             }),
                             still_limit: None,
+                            loading_limit: None,
                         });
                     }
                     limit
@@ -602,16 +607,16 @@ impl PreparedContainedTask {
             } else {
                 timing
             };
-            let observed = match self.capture_page_scene(runtime, ocr_collector, None, frame_timing)
-            {
-                Ok(observed) => observed,
-                Err(failure) => {
-                    retries.retry(runtime, failure, budget)?;
-                    latest = false;
-                    held = 0;
-                    continue;
-                }
-            };
+            let observed =
+                match self.capture_page_loading(runtime, ocr_collector, frame_timing, loading) {
+                    Ok(observed) => observed,
+                    Err(failure) => {
+                        retries.retry(runtime, failure, budget)?;
+                        latest = false;
+                        held = 0;
+                        continue;
+                    }
+                };
             if budget_now(runtime, pace) >= task_deadline {
                 return Err(self
                     .task_timeout_error(
@@ -624,33 +629,51 @@ impl PreparedContainedTask {
                     .with_timing_check_position(TaskTimingCheckPosition::PostconditionAfterCapture)
                     .into());
             }
+            // LOAD-3 (§3.1): the one judgement; ACT-4: a destination page that is not the step's
+            // final state, or that a transition frame suppresses, is a frame of no destination.
+            let judged = self.judge_frame(
+                runtime,
+                Some(operation),
+                observed.as_ref().ok(),
+                loading,
+                timing,
+            )?;
+            let page = observed
+                .as_ref()
+                .ok()
+                .map(|observation| observation.page_label.clone());
+            if judged.row == FrameRow::Conflict {
+                return Err(ContainedTaskError::with_detail(
+                    ExecutionKernelCode::ContainedTaskRecognitionConflict.code(),
+                    page.unwrap_or_default(),
+                )
+                .into());
+            }
+            let frame_at = budget_now(runtime, pace);
+            loading.watch(
+                runtime,
+                &self.control.game,
+                LoadingFrame {
+                    transition: judged.transition,
+                    page: page.as_deref(),
+                    now: frame_at,
+                    previous: frame_at,
+                },
+            )?;
             let scene = match observed {
                 Ok(observation) => {
                     last_frame_page = Some(observation.page_label.clone());
-                    // ACT-4: the one final-state judgement; a destination page that is not the
-                    // step's final state is a frame of no destination.
-                    let judged = self.final_state(runtime, operation, &observation, timing)?;
-                    let destinations = judged.destinations;
-                    let error_page = self
-                        .program
-                        .is_error_page(&self.control, &observation.page_label);
-                    if destinations > 1 || (destinations == 1 && error_page) {
-                        return Err(ContainedTaskError::with_detail(
-                            ExecutionKernelCode::ContainedTaskRecognitionConflict.code(),
-                            observation.page_label,
-                        )
-                        .into());
-                    }
-                    if error_page {
+                    if judged.row == FrameRow::ErrorPage {
                         return Ok(PostconditionResolution::Failed {
                             observation: Some(observation),
                             last_frame_page,
                             hit_error_page: true,
                             timing_failure: None,
                             still_limit: None,
+                            loading_limit: None,
                         });
                     }
-                    if judged.reached {
+                    if judged.row == FrameRow::Reached {
                         latest = true;
                         if observation.page_label == current.page_label {
                             held += 1;
