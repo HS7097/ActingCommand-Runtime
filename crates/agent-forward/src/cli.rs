@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 //! `actingctl agent-channel` (Workflow #432; `contracts/agent-forward.md`): the channel registry's
-//! writer, Claude Code's hook and self-registration, and the notice of the adapted source. The
-//! grammar and the client words are this crate's; `actingctl` passes the words after `agent-channel`
-//! and prints the answer.
+//! writer (with a Claude channel's `restore` switch, AGT-T1b), Claude Code's hook and
+//! self-registration, and the notice of the adapted source. The grammar and the client words are
+//! this crate's; `actingctl` passes the words after `agent-channel` and prints the answer.
 //!
 //! None of these needs the Runtime. They touch only `<state_root>\agent-forward\`, under one file
 //! lock, and every file goes through `.part`, flush and rename.
@@ -23,7 +23,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 /// The command's first word on `actingctl`'s command line.
 pub const COMMAND: &str = "agent-channel";
 
-const USAGE: &str = "usage: actingctl agent-channel add --state-root <path> --name <name> --client <claude|codex|dsh|antigravity> --native-id <id> [--dsh-app-root <path> --dsh-home <path> --dsh-node <path>]\nusage: actingctl agent-channel remove --state-root <path> --name <name>\nusage: actingctl agent-channel list --state-root <path>\nusage: actingctl agent-channel claude-hook <start|end> --state-root <path>\nusage: actingctl agent-channel claude-register --state-root <path> --name <name>\nusage: actingctl agent-channel notice";
+const USAGE: &str = "usage: actingctl agent-channel add --state-root <path> --name <name> --client <claude|codex|dsh|antigravity> --native-id <id> [--dsh-app-root <path> --dsh-home <path> --dsh-node <path>] [--restore <on|off>]\n  --restore (Claude channels only, default on): restore the channel's stopped session through Claude Desktop before a send; it switches the conversation Claude Desktop shows and restores a minimized window, and waits while the window holds an unsent draft\nusage: actingctl agent-channel remove --state-root <path> --name <name>\nusage: actingctl agent-channel list --state-root <path>\nusage: actingctl agent-channel claude-hook <start|end> --state-root <path>\nusage: actingctl agent-channel claude-register --state-root <path> --name <name>\nusage: actingctl agent-channel notice";
 
 const STATE_ROOT: &str = "--state-root";
 const NAME: &str = "--name";
@@ -32,6 +32,7 @@ const NATIVE_ID: &str = "--native-id";
 const DSH_APP_ROOT: &str = "--dsh-app-root";
 const DSH_HOME: &str = "--dsh-home";
 const DSH_NODE: &str = "--dsh-node";
+const RESTORE: &str = "--restore";
 
 /// The file the writers of `<state_root>\agent-forward\` lock.
 const LOCK_FILE: &str = ".lock";
@@ -214,6 +215,9 @@ fn channel_value(channel: &Channel) -> Value {
         value["home_root"] = json!(paths.home_root);
         value["node_executable"] = json!(paths.node_executable);
     }
+    if channel.client == ChannelClient::Claude {
+        value["restore"] = json!(channel.restore);
+    }
     value
 }
 
@@ -252,8 +256,8 @@ pub(crate) struct DshFlags<'a> {
     pub(crate) node_executable: Option<&'a str>,
 }
 
-/// Adds one channel to the registry. A Claude channel's id is a session's UUID, kept in lower case;
-/// a DSH channel's id is one session id of the shape its helper accepts.
+/// [`add_line`] with no `--restore`, for the tests.
+#[cfg(test)]
 pub(crate) fn add_channel(
     state_root: &Path,
     name: &str,
@@ -261,6 +265,27 @@ pub(crate) fn add_channel(
     native_id: &str,
     dsh: Option<DshFlags<'_>>,
 ) -> Result<Value, Refusal> {
+    add_line(state_root, name, client, native_id, dsh, None)
+}
+
+/// Adds one channel to the registry. A Claude channel's id is a session's UUID, kept in lower case,
+/// and its line carries `restore`: `--restore` as given, on when not given; no other client takes
+/// it. A DSH channel's id is one session id of the shape its helper accepts.
+pub(crate) fn add_line(
+    state_root: &Path,
+    name: &str,
+    client: &str,
+    native_id: &str,
+    dsh: Option<DshFlags<'_>>,
+    restore: Option<bool>,
+) -> Result<Value, Refusal> {
+    let claude_channel = client == client_word(ChannelClient::Claude);
+    if restore.is_some() && !claude_channel {
+        return Err(Refusal(
+            "--restore is a Claude channel's switch: no other client's session is restored"
+                .to_owned(),
+        ));
+    }
     if client == client_word(ChannelClient::Dsh) && !crate::dsh::valid_session_id(native_id) {
         return Err(Refusal(
             "a DSH channel's native id is one session id: a letter or a digit, then letters, \
@@ -268,13 +293,16 @@ pub(crate) fn add_channel(
                 .to_owned(),
         ));
     }
-    let native_id = if client == client_word(ChannelClient::Claude) {
+    let native_id = if claude_channel {
         claude::session_id(native_id)
             .ok_or_else(|| Refusal("a Claude channel's native id is a session's UUID".to_owned()))?
     } else {
         native_id.to_owned()
     };
     let mut entry = json!({"name": name, "client": client, "native_id": native_id});
+    if claude_channel {
+        entry["restore"] = json!(restore.unwrap_or(true));
+    }
     if let Some(dsh) = dsh {
         for (member, value) in [
             ("app_root", dsh.app_root),
@@ -393,6 +421,7 @@ pub fn run(words: &[OsString]) -> Result<CliAnswer, CliFailure> {
                     DSH_APP_ROOT,
                     DSH_HOME,
                     DSH_NODE,
+                    RESTORE,
                 ],
             )?;
             let flag = |name: &'static str| values.get(name).map(String::as_str);
@@ -401,12 +430,19 @@ pub fn run(words: &[OsString]) -> Result<CliAnswer, CliFailure> {
                 home_root: flag(DSH_HOME),
                 node_executable: flag(DSH_NODE),
             };
-            let channel = add_channel(
+            let restore = match flag(RESTORE) {
+                None => None,
+                Some("on") => Some(true),
+                Some("off") => Some(false),
+                Some(other) => return Err(usage(Some(other), UsageProblem::NotRecognised)),
+            };
+            let channel = add_line(
                 Path::new(required(&values, STATE_ROOT)?),
                 required(&values, NAME)?,
                 required(&values, CLIENT)?,
                 required(&values, NATIVE_ID)?,
                 Some(dsh),
+                restore,
             )
             .map_err(failed)?;
             let mut members = Map::new();

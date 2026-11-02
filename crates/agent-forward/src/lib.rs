@@ -9,7 +9,8 @@
 //! ([`channels`]), and, on Windows, [`RealForward`] with its transports (Claude Code, AGT-T1; Codex,
 //! AGT-T2; DSH, AGT-T3; `contracts/agent-forward.md`) and the `actingctl agent-channel` commands
 //! ([`cli`]). It is the only crate that names a client, and every type the trait answers with is
-//! neutral, so its callers never need a client word.
+//! neutral, so its callers never need a client word. A Claude Code channel may restore its stopped
+//! session through Claude Desktop before a send (AGT-T1b), never while [`SendLimits::quiet`] holds.
 //!
 //! `unsafe` is allowed in three modules only, `pipe`, `dpapi` and `ancestor`.
 
@@ -69,6 +70,9 @@ pub struct SendLimits<'a> {
     pub deadline: Instant,
     /// Whether the Runtime is stopping.
     pub stopped: &'a dyn Fn() -> bool,
+    /// Whether a quiet window or the hold covers now (`contracts/agent-wake.md`, "Quiet and off"):
+    /// a transport then opens no stopped session. It is asked at the moment a transport would.
+    pub quiet: &'a dyn Fn() -> bool,
 }
 
 /// `before_write` refused: the intent could not be committed, so nothing may be written.
@@ -263,10 +267,13 @@ impl AgentForward for RealForward {
             };
         };
         match channel.client {
-            channels::ChannelClient::Claude => {
-                self.claude
-                    .deliver(&channel.native_id, message, limits, before_write)
-            }
+            channels::ChannelClient::Claude => self.claude.deliver(
+                &channel.native_id,
+                channel.restore,
+                message,
+                limits,
+                before_write,
+            ),
             channels::ChannelClient::Codex => {
                 self.codex
                     .deliver(&channel.native_id, message, limits, before_write)

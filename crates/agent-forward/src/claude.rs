@@ -2,11 +2,14 @@
 // Adapted from HS7097/codex-goal-lifecycle@c9538cc5 scripts/runtime/src/bridge/claude.rs and scripts/runtime/src/bridge/security.rs. Copyright (c) 2026 HS7097. MIT: see ../LICENSE-codex-goal-lifecycle.txt.
 
 //! Claude Code sessions as channels (Workflow #432; `contracts/agent-forward.md`): the live record a
-//! session's hook or command stores, and one write to the session's inbox.
+//! session's hook or command stores, and one write to the session's inbox. A stopped session of a
+//! channel that allows it is first restored through Claude Desktop ([`restore`], AGT-T1b).
 //!
 //! The token lives only in the record's DPAPI blob and, briefly, in a [`Secret`]. No `detail` and no
 //! error text here holds the token, the frame, the pipe's name or a native id, because a `detail`
 //! goes to a delivery file a person reads.
+
+mod restore;
 
 use crate::Refusal;
 use crate::ancestor::{self, ProcessIdentity};
@@ -19,6 +22,7 @@ use crate::{
     SendLimits,
 };
 use actingcommand_host_metrics::{ProcessProbe, probe_process};
+use restore::{MAX_RESTORE, REGISTRATION_POLL, RestoreWait, Restorer, unresponsive, waiting};
 use serde::{Deserialize, Serialize};
 use std::io::{self, ErrorKind, Read};
 use std::path::{Path, PathBuf};
@@ -459,15 +463,53 @@ fn failed(problem: DeliveryProblem, detail: String) -> ForwardOutcome {
     ForwardOutcome::Failed { problem, detail }
 }
 
+/// `outcome` with `note` before its detail.
+fn noted(outcome: ForwardOutcome, note: &str) -> ForwardOutcome {
+    let with = |detail: String| format!("{note}; {detail}");
+    match outcome {
+        ForwardOutcome::Deferred { reason, detail } => ForwardOutcome::Deferred {
+            reason,
+            detail: with(detail),
+        },
+        ForwardOutcome::Delivered { proof, detail } => ForwardOutcome::Delivered {
+            proof,
+            detail: with(detail),
+        },
+        ForwardOutcome::Failed { problem, detail } => ForwardOutcome::Failed {
+            problem,
+            detail: with(detail),
+        },
+        ForwardOutcome::Unknown { problem, detail } => ForwardOutcome::Unknown {
+            problem,
+            detail: with(detail),
+        },
+    }
+}
+
+/// Whether a session can take a message now.
+enum Liveness {
+    /// Its record is online and its owner runs with the record's creation time.
+    Live(SessionRecord),
+    /// It has no live record: none, an ended one, or one whose process has gone. This is the
+    /// stopped session a channel may restore.
+    Stopped(&'static str),
+    /// Its record cannot be read now.
+    Unreadable(io::Error),
+    /// The send ends here, with no write.
+    Ends(ForwardOutcome),
+}
+
 /// Sends to Claude Code sessions.
 pub(crate) struct ClaudeForward {
     state_root: PathBuf,
     system: Box<dyn OwnerSystem>,
+    restorer: Restorer,
 }
 
 impl ClaudeForward {
     pub(crate) fn new(state_root: PathBuf) -> Self {
         Self {
+            restorer: Restorer::new(&state_root),
             state_root,
             system: Box::new(RealSystem),
         }
@@ -476,9 +518,15 @@ impl ClaudeForward {
     /// One message to the session `native_id`: the preflight writes nothing, `before_write` commits
     /// the intent, and then there is one write. `Written` proves only the write: Claude Code holding
     /// the message, dropping it or refusing the token all look the same from here.
+    ///
+    /// A session with no live record waits, unless `restore` (the channel's switch) allows a
+    /// restore and no quiet time covers now: then Claude Desktop is asked to bring its conversation
+    /// up, and the send goes on once the session's hook has stored its live record. Nothing is ever
+    /// typed into the window.
     pub(crate) fn deliver(
         &self,
         native_id: &str,
+        restore: bool,
         message: &ForwardMessage,
         limits: &SendLimits<'_>,
         before_write: &mut dyn FnMut() -> Result<(), IntentFailed>,
@@ -490,44 +538,128 @@ impl ClaudeForward {
             );
         };
         if (limits.stopped)() || Instant::now() >= limits.deadline {
-            return ForwardOutcome::Deferred {
-                reason: DeferReason::TargetUnresponsive,
-                detail: "the send was stopped or out of time before it began".to_owned(),
-            };
+            return unresponsive("the send was stopped or out of time before it began");
         }
-        let record = match read_record(&self.state_root, &native_id) {
-            Ok(Some(record)) => record,
-            Ok(None) => return offline("the session has no live record"),
-            Err(RecordFailure::Read(error)) => {
-                return offline(&format!("the session's record cannot be read now: {error}"));
+        match self.liveness(&native_id) {
+            Liveness::Live(record) => self.write(&record, message, limits, before_write),
+            Liveness::Stopped(why) => match self.restore(&native_id, restore, why, limits) {
+                Ok((record, note)) => {
+                    noted(self.write(&record, message, limits, before_write), &note)
+                }
+                Err(outcome) => outcome,
+            },
+            Liveness::Unreadable(error) => {
+                offline(&format!("the session's record cannot be read now: {error}"))
             }
+            Liveness::Ends(outcome) => outcome,
+        }
+    }
+
+    fn liveness(&self, native_id: &str) -> Liveness {
+        let record = match read_record(&self.state_root, native_id) {
+            Ok(Some(record)) => record,
+            Ok(None) => return Liveness::Stopped("the session has no live record"),
+            Err(RecordFailure::Read(error)) => return Liveness::Unreadable(error),
             Err(RecordFailure::Shape) => {
-                return failed(
+                return Liveness::Ends(failed(
                     DeliveryProblem::ProtocolChanged,
                     "the session's record is of another shape".to_owned(),
-                );
+                ));
             }
         };
-        let (true, Some(pipe), Some(protected_token)) = (
-            record.online,
-            record.pipe.as_deref(),
-            record.protected_token.as_deref(),
-        ) else {
-            return offline("the session has ended");
-        };
+        if !record.online || record.pipe.is_none() || record.protected_token.is_none() {
+            return Liveness::Stopped("the session has ended");
+        }
         match self.system.probe(record.owner_pid) {
             ProcessProbe::Running { created_at_unix_ms }
-                if created_at_unix_ms == record.owner_created_at_unix_ms => {}
+                if created_at_unix_ms == record.owner_created_at_unix_ms =>
+            {
+                Liveness::Live(record)
+            }
             ProcessProbe::Running { .. } | ProcessProbe::NotRunning => {
-                return offline("the session's process has gone");
+                Liveness::Stopped("the session's process has gone")
             }
-            ProcessProbe::Unknown(code) => {
-                return failed(
-                    DeliveryProblem::OwnerMismatch,
-                    format!("the session's process cannot be checked: {code}"),
-                );
-            }
+            ProcessProbe::Unknown(code) => Liveness::Ends(failed(
+                DeliveryProblem::OwnerMismatch,
+                format!("the session's process cannot be checked: {code}"),
+            )),
         }
+    }
+
+    /// Restores the stopped session `native_id` (`why` says how it is stopped) and waits for its
+    /// live record, within the send's deadline and at most [`MAX_RESTORE`]. `Ok` holds the record
+    /// and a note for the detail; `Err` ends the send, with no write.
+    fn restore(
+        &self,
+        native_id: &str,
+        restore: bool,
+        why: &str,
+        limits: &SendLimits<'_>,
+    ) -> Result<(SessionRecord, String), ForwardOutcome> {
+        if !restore {
+            return Err(offline(&format!(
+                "{why}; this channel does not restore a stopped session"
+            )));
+        }
+        if (limits.quiet)() {
+            return Err(waiting(
+                RestoreWait::Quiet,
+                &format!("{why}; a quiet window or the hold covers now"),
+            ));
+        }
+        let clock = &*self.restorer.clock;
+        let started = clock.now();
+        let deadline = limits.deadline.min(started + MAX_RESTORE);
+        if started >= deadline {
+            return Err(unresponsive(
+                "no time was left to restore the stopped session",
+            ));
+        }
+        let note = self.restorer.wake(native_id, deadline, limits.stopped)?;
+        loop {
+            match self.liveness(native_id) {
+                Liveness::Live(record) => {
+                    if (limits.stopped)() || Instant::now() >= limits.deadline {
+                        return Err(unresponsive(format!(
+                            "{note}; no time was left for the message, so nothing was written"
+                        )));
+                    }
+                    return Ok((record, note));
+                }
+                Liveness::Ends(outcome) => return Err(noted(outcome, &note)),
+                // A record being replaced can be unreadable for a moment.
+                Liveness::Stopped(_) | Liveness::Unreadable(_) => {}
+            }
+            if (limits.stopped)() {
+                return Err(unresponsive(format!(
+                    "{note}; the Runtime stopped while the session started"
+                )));
+            }
+            let now = clock.now();
+            if now >= deadline {
+                return Err(waiting(
+                    RestoreWait::NotRegistered,
+                    "Claude Desktop shows the conversation, and the session stored no live \
+                     record by the deadline (its SessionStart hook stores it)",
+                ));
+            }
+            clock.pause((deadline - now).min(REGISTRATION_POLL));
+        }
+    }
+
+    /// The preflight of a live session, the intent, and the one write.
+    fn write(
+        &self,
+        record: &SessionRecord,
+        message: &ForwardMessage,
+        limits: &SendLimits<'_>,
+        before_write: &mut dyn FnMut() -> Result<(), IntentFailed>,
+    ) -> ForwardOutcome {
+        let (Some(pipe), Some(protected_token)) =
+            (record.pipe.as_deref(), record.protected_token.as_deref())
+        else {
+            return offline("the session has ended");
+        };
         if let Err(Refusal(text)) = validate_pipe(pipe) {
             return failed(DeliveryProblem::ProtocolChanged, text);
         }
@@ -635,9 +767,14 @@ impl ClaudeForward {
 
 #[cfg(test)]
 mod tests {
+    use super::restore::{HelperFailure, Route, SOURCE, WaitClock, WakeHelper};
     use super::*;
-    use crate::cli::add_channel;
+    use crate::cli::{self, CliAnswer, CliFailure, UsageProblem, add_channel};
     use crate::pipe::tests::TestServer;
+    use crate::process::Finished;
+    use serde_json::{Value, json};
+    use std::ffi::OsString;
+    use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
     use tempfile::TempDir;
 
     // Everything here is invented: no test reads a variable of its own environment or opens a pipe
@@ -665,10 +802,16 @@ mod tests {
         }
     }
 
+    /// A forwarder whose restorer may not be used: the tests of a send that restores nothing.
     fn forward(root: &Path, probe: ProcessProbe) -> ClaudeForward {
         ClaudeForward {
             state_root: root.to_path_buf(),
             system: Box::new(FakeSystem { probe }),
+            restorer: Restorer {
+                profile: None,
+                helper: Box::new(NoHelper),
+                clock: Box::new(restore::RealClock),
+            },
         }
     }
 
@@ -739,6 +882,7 @@ mod tests {
         deliver_until(forward, text, Instant::now() + Duration::from_secs(60))
     }
 
+    /// A send of a channel that does not restore its stopped session: the path these tests pin.
     fn deliver_until(
         forward: &ClaudeForward,
         text: &str,
@@ -748,9 +892,10 @@ mod tests {
         let limits = SendLimits {
             deadline,
             stopped: &stopped,
+            quiet: &stopped,
         };
         let mut intents = 0;
-        let outcome = forward.deliver(SESSION, &message(text), &limits, &mut || {
+        let outcome = forward.deliver(SESSION, false, &message(text), &limits, &mut || {
             intents += 1;
             Ok(())
         });
@@ -1007,11 +1152,12 @@ mod tests {
         let limits = SendLimits {
             deadline: Instant::now() + Duration::from_secs(60),
             stopped: &stopped,
+            quiet: &stopped,
         };
         // The server goes away between the intent and the write.
         let mut server = Some(server);
         let sender = forward(root.path(), running(77));
-        let outcome = sender.deliver(SESSION, &message("m"), &limits, &mut || {
+        let outcome = sender.deliver(SESSION, false, &message("m"), &limits, &mut || {
             drop(server.take());
             Ok(())
         });
@@ -1032,7 +1178,9 @@ mod tests {
         let server = TestServer::new(4096);
         live_session(root.path(), &server.name, own_process());
         let sender = forward(root.path(), running(77));
-        let outcome = sender.deliver(SESSION, &message("m"), &limits, &mut || Err(IntentFailed));
+        let outcome = sender.deliver(SESSION, false, &message("m"), &limits, &mut || {
+            Err(IntentFailed)
+        });
         assert!(
             matches!(
                 outcome,
@@ -1148,5 +1296,633 @@ mod tests {
         assert!(!record.online);
         assert_eq!(record.owner_pid, OWNER.pid);
         assert_eq!(record.updated_at_unix_ms, 3);
+    }
+
+    // ---- AGT-T1b: restoring a stopped session. Claude Desktop is never reached: the profile is
+    // an invented folder, the helper a fake that answers as the real one would, and the wait's
+    // clock moves only when the wait pauses. ----
+
+    const ACCOUNT: &str = "00000000-0000-4000-8000-0000000000cc";
+    const OTHER_ACCOUNT: &str = "00000000-0000-4000-8000-0000000000dd";
+    const LOCAL: &str = "local_00000000-0000-4000-8000-0000000000ee";
+    const OTHER_LOCAL: &str = "local_00000000-0000-4000-8000-0000000000ff";
+    const TEXT: &str = "ActingCommand to 频道\n发送测试";
+
+    fn lock<T>(shared: &Mutex<T>) -> MutexGuard<'_, T> {
+        shared.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The helper of the tests that restore nothing: running it fails the test.
+    struct NoHelper;
+
+    impl WakeHelper for NoHelper {
+        fn run(
+            &self,
+            _request: Vec<u8>,
+            _deadline: Instant,
+            _stopped: &dyn Fn() -> bool,
+        ) -> Result<Finished, HelperFailure> {
+            panic!("this test restores no session")
+        }
+    }
+
+    /// The requests a fake helper was given.
+    type Seen = Arc<Mutex<Vec<Vec<u8>>>>;
+
+    /// A helper that records its request, does `effect` (what Claude Desktop and the session's
+    /// hook would do meanwhile), and answers `answer`, exiting 0 when `success`.
+    struct FakeHelper {
+        seen: Seen,
+        answer: Value,
+        success: bool,
+        effect: Box<dyn Fn() + Send + Sync>,
+    }
+
+    impl WakeHelper for FakeHelper {
+        fn run(
+            &self,
+            request: Vec<u8>,
+            _deadline: Instant,
+            _stopped: &dyn Fn() -> bool,
+        ) -> Result<Finished, HelperFailure> {
+            lock(&self.seen).push(request);
+            (self.effect)();
+            Ok(Finished {
+                success: self.success,
+                stdout: self.answer.to_string().into_bytes(),
+                stderr: Vec::new(),
+            })
+        }
+    }
+
+    fn fake_helper(
+        answer: Value,
+        success: bool,
+        effect: impl Fn() + Send + Sync + 'static,
+    ) -> (FakeHelper, Seen) {
+        let seen = Seen::default();
+        let helper = FakeHelper {
+            seen: Arc::clone(&seen),
+            answer,
+            success,
+            effect: Box::new(effect),
+        };
+        (helper, seen)
+    }
+
+    fn loaded() -> Value {
+        json!({"state": "loaded", "process_id": 1})
+    }
+
+    /// A clock that moves only when the wait pauses.
+    struct FakeClock {
+        start: Instant,
+        waited: Arc<Mutex<Duration>>,
+    }
+
+    impl WaitClock for FakeClock {
+        fn now(&self) -> Instant {
+            self.start + *lock(&self.waited)
+        }
+
+        fn pause(&self, length: Duration) {
+            *lock(&self.waited) += length;
+        }
+    }
+
+    /// A forwarder that restores through `helper` with the invented profile `profile`, and how
+    /// long its wait has paused.
+    fn restoring(
+        root: &Path,
+        profile: Option<PathBuf>,
+        helper: FakeHelper,
+    ) -> (ClaudeForward, Arc<Mutex<Duration>>) {
+        let waited = Arc::new(Mutex::new(Duration::ZERO));
+        let forward = ClaudeForward {
+            state_root: root.to_path_buf(),
+            system: Box::new(FakeSystem { probe: running(77) }),
+            restorer: Restorer {
+                profile,
+                helper: Box::new(helper),
+                clock: Box::new(FakeClock {
+                    start: Instant::now(),
+                    waited: Arc::clone(&waited),
+                }),
+            },
+        };
+        (forward, waited)
+    }
+
+    /// One send of [`TEXT`] by a channel whose switch is `restore`, while the worker judges
+    /// `quiet`; the outcome and how often the intent was asked.
+    fn send(forward: &ClaudeForward, restore: bool, quiet: bool) -> (ForwardOutcome, u32) {
+        let stopped = || false;
+        let quiet = move || quiet;
+        let limits = SendLimits {
+            deadline: Instant::now() + Duration::from_secs(60),
+            stopped: &stopped,
+            quiet: &quiet,
+        };
+        let mut intents = 0;
+        let outcome = forward.deliver(SESSION, restore, &message(TEXT), &limits, &mut || {
+            intents += 1;
+            Ok(())
+        });
+        (outcome, intents)
+    }
+
+    /// Writes an invented Claude Desktop profile: its active account, and one pointer per
+    /// `(conversation, session, archived)` under that account.
+    fn write_profile(profile: &Path, account: &str, pointers: &[(&str, &str, bool)]) {
+        let folder = profile
+            .join("claude-code-sessions")
+            .join(account)
+            .join("neutral");
+        std::fs::create_dir_all(&folder).expect("the profile's folders");
+        std::fs::write(
+            profile.join("config.json"),
+            json!({"lastKnownAccountUuid": account}).to_string(),
+        )
+        .expect("config.json");
+        for (local, session, archived) in pointers {
+            std::fs::write(
+                folder.join(format!("{local}.json")),
+                json!({"sessionId": local, "cliSessionId": session, "isArchived": archived})
+                    .to_string(),
+            )
+            .expect("a pointer");
+        }
+    }
+
+    /// The profile folder under `root`, written as [`write_profile`] does.
+    fn profile(root: &Path, account: &str, pointers: &[(&str, &str, bool)]) -> PathBuf {
+        let profile = root.join("profile");
+        write_profile(&profile, account, pointers);
+        profile
+    }
+
+    /// The one conversation of the session, under the active account.
+    fn one_conversation(root: &Path) -> Option<PathBuf> {
+        Some(profile(root, ACCOUNT, &[(LOCAL, SESSION, false)]))
+    }
+
+    /// What the session's SessionStart hook does once Claude Desktop has started it.
+    fn registers(root: &Path, pipe: &str) -> impl Fn() + Send + Sync + 'static {
+        let root = root.to_path_buf();
+        let pipe = pipe.to_owned();
+        move || {
+            let stored = hook_start(
+                &root,
+                start_input(SESSION).as_bytes(),
+                &|| environment(&pipe),
+                &|| Ok(own_process()),
+                2,
+            );
+            assert_eq!(stored, Ok(HookResult::Stored));
+        }
+    }
+
+    #[test]
+    fn a_live_session_is_not_woken() {
+        let root = state_root();
+        let server = TestServer::new(4096);
+        live_session(root.path(), &server.name, own_process());
+        // No profile exists, so a restore would fail; the helper records any run.
+        let (helper, seen) = fake_helper(loaded(), true, || {});
+        let (sender, waited) = restoring(root.path(), Some(root.path().join("absent")), helper);
+        let (outcome, intents) = send(&sender, true, false);
+        assert!(
+            matches!(
+                outcome,
+                ForwardOutcome::Delivered {
+                    proof: DeliveryProof::Written,
+                    ..
+                }
+            ),
+            "{outcome:?}"
+        );
+        assert!(!detail_of(&outcome).contains("restored"), "{outcome:?}");
+        assert_eq!(intents, 1);
+        assert!(lock(&seen).is_empty(), "nothing was restored");
+        assert_eq!(*lock(&waited), Duration::ZERO);
+        let wire = String::from_utf8(server.read_to_end()).expect("the frame is text");
+        assert!(wire.contains("发送测试"), "{wire}");
+    }
+
+    #[test]
+    fn restore_off_never_wakes() {
+        let words = |root: &Path, rest: &[&str]| -> Vec<OsString> {
+            let mut words: Vec<OsString> = ["add", "--state-root"]
+                .into_iter()
+                .map(OsString::from)
+                .collect();
+            words.push(root.as_os_str().to_owned());
+            words.extend(["--name", "频道"].into_iter().map(OsString::from));
+            words.extend(rest.iter().map(OsString::from));
+            words
+        };
+
+        // `add` writes the switch: off when asked.
+        let root = state_root();
+        let added = cli::run(&words(
+            root.path(),
+            &[
+                "--client",
+                "claude",
+                "--native-id",
+                SESSION,
+                "--restore",
+                "off",
+            ],
+        ));
+        assert!(
+            matches!(&added, Ok(CliAnswer::Members(members)) if members["channel"]["restore"] == json!(false)),
+            "{added:?}"
+        );
+        let registry = read_registry(root.path())
+            .expect("a readable registry")
+            .expect("a registry");
+        let channel = registry.channel("频道").expect("the channel");
+        assert!(!channel.restore);
+
+        // On by default; refused for another client, and for a word other than on or off.
+        let other = state_root();
+        cli::run(&words(
+            other.path(),
+            &["--client", "claude", "--native-id", SESSION],
+        ))
+        .expect("the channel is added");
+        let by_default = read_registry(other.path())
+            .expect("a readable registry")
+            .expect("a registry");
+        assert!(by_default.channel("频道").expect("the channel").restore);
+        let third = state_root();
+        let refused = cli::run(&words(
+            third.path(),
+            &["--client", "codex", "--native-id", "x", "--restore", "on"],
+        ));
+        assert!(
+            matches!(&refused, Err(CliFailure::Failed { text }) if text.contains("--restore")),
+            "{refused:?}"
+        );
+        let refused = cli::run(&words(
+            third.path(),
+            &[
+                "--client",
+                "claude",
+                "--native-id",
+                SESSION,
+                "--restore",
+                "yes",
+            ],
+        ));
+        assert!(
+            matches!(
+                &refused,
+                Err(CliFailure::Usage {
+                    problem: UsageProblem::NotRecognised,
+                    ..
+                })
+            ),
+            "{refused:?}"
+        );
+        assert_eq!(read_registry(third.path()), Ok(None), "nothing was written");
+
+        // A stopped session of the channel that is off: no record, then an ended one.
+        let (helper, seen) = fake_helper(loaded(), true, || {});
+        let (sender, waited) = restoring(root.path(), one_conversation(root.path()), helper);
+        let offline = |outcome: &ForwardOutcome| {
+            matches!(
+                outcome,
+                ForwardOutcome::Deferred {
+                    reason: DeferReason::TargetOffline,
+                    ..
+                }
+            )
+        };
+        let (outcome, intents) = send(&sender, channel.restore, false);
+        assert!(offline(&outcome), "{outcome:?}");
+        assert_eq!(intents, 0);
+        registers(root.path(), r"\\.\pipe\cc-msg-00")();
+        let ended = hook_end(
+            root.path(),
+            end_input(SESSION).as_bytes(),
+            &|| Ok(own_process()),
+            3,
+        );
+        assert_eq!(ended, Ok(HookResult::Cleared));
+        let (outcome, intents) = send(&sender, channel.restore, false);
+        assert!(offline(&outcome), "{outcome:?}");
+        assert_eq!(intents, 0);
+        assert!(lock(&seen).is_empty(), "nothing was restored");
+        assert_eq!(*lock(&waited), Duration::ZERO);
+    }
+
+    #[test]
+    fn quiet_window_defers_without_waking() {
+        let root = state_root();
+        add_session(root.path());
+        let (helper, seen) = fake_helper(loaded(), true, || {});
+        let (sender, waited) = restoring(root.path(), one_conversation(root.path()), helper);
+        let (outcome, intents) = send(&sender, true, true);
+        assert!(
+            matches!(
+                &outcome,
+                ForwardOutcome::Deferred {
+                    reason: DeferReason::TargetOffline,
+                    detail,
+                } if detail.contains("(quiet)")
+            ),
+            "{outcome:?}"
+        );
+        assert_eq!(intents, 0);
+        assert!(lock(&seen).is_empty(), "nothing was restored");
+        assert_eq!(*lock(&waited), Duration::ZERO);
+
+        // Once the quiet time is over, the same channel's send restores.
+        let (outcome, intents) = send(&sender, true, false);
+        assert_eq!(lock(&seen).len(), 1, "{outcome:?}");
+        assert_eq!(intents, 0);
+    }
+
+    #[test]
+    fn a_pointer_set_that_is_not_exactly_one_conversation_fails() {
+        // Exactly one is a route.
+        let root = state_root();
+        let desktop = profile(
+            root.path(),
+            ACCOUNT,
+            &[(LOCAL, SESSION, false), (OTHER_LOCAL, OTHER_SESSION, false)],
+        );
+        assert_eq!(
+            restore::route(&desktop, SESSION),
+            Ok(Route {
+                account: ACCOUNT.to_owned(),
+                local_session: LOCAL.to_owned(),
+            })
+        );
+
+        // A send to a stopped session of a channel whose profile `desktop` writes.
+        fn fails(desktop: impl Fn(&Path) -> PathBuf) {
+            let root = state_root();
+            add_session(root.path());
+            let (helper, seen) = fake_helper(loaded(), true, || {});
+            let (sender, _) = restoring(root.path(), Some(desktop(root.path())), helper);
+            let (outcome, intents) = send(&sender, true, false);
+            assert!(
+                matches!(
+                    outcome,
+                    ForwardOutcome::Failed {
+                        problem: DeliveryProblem::ChannelUnknown,
+                        ..
+                    }
+                ),
+                "{outcome:?}"
+            );
+            for hidden in [SESSION, LOCAL, OTHER_LOCAL, ACCOUNT] {
+                assert!(!detail_of(&outcome).contains(hidden), "{outcome:?}");
+            }
+            assert_eq!(intents, 0);
+            assert!(lock(&seen).is_empty(), "the helper never ran");
+        }
+        // None: another session's conversation, and this session's archived one.
+        fails(|root| {
+            profile(
+                root,
+                ACCOUNT,
+                &[(OTHER_LOCAL, OTHER_SESSION, false), (LOCAL, SESSION, true)],
+            )
+        });
+        // Two.
+        fails(|root| {
+            profile(
+                root,
+                ACCOUNT,
+                &[(LOCAL, SESSION, false), (OTHER_LOCAL, SESSION, false)],
+            )
+        });
+        // None for the active account: the pointer is another account's.
+        fails(|root| {
+            let desktop = profile(root, OTHER_ACCOUNT, &[(LOCAL, SESSION, false)]);
+            std::fs::write(
+                desktop.join("config.json"),
+                json!({"lastKnownAccountUuid": ACCOUNT}).to_string(),
+            )
+            .expect("config.json");
+            desktop
+        });
+        // No profile at all.
+        fails(|root| root.join("absent"));
+    }
+
+    #[test]
+    fn an_account_change_during_route_fails() {
+        // Between the lookup's two reads of the active account.
+        let root = state_root();
+        let desktop = profile(root.path(), ACCOUNT, &[(LOCAL, SESSION, false)]);
+        let mut reads = 0;
+        let changed = restore::route_with(&desktop, SESSION, &mut || {
+            reads += 1;
+            let account = if reads == 1 { ACCOUNT } else { OTHER_ACCOUNT };
+            Ok(Some(account.to_owned()))
+        });
+        assert_eq!(
+            changed.map_err(|failure| failure.problem),
+            Err(DeliveryProblem::OwnerMismatch)
+        );
+        assert_eq!(reads, 2);
+
+        // While the helper ran: the conversation now belongs to another account.
+        let root = state_root();
+        add_session(root.path());
+        let desktop = profile(root.path(), ACCOUNT, &[(LOCAL, SESSION, false)]);
+        let switched = desktop.clone();
+        let (helper, seen) = fake_helper(loaded(), true, move || {
+            write_profile(&switched, OTHER_ACCOUNT, &[(LOCAL, SESSION, false)]);
+        });
+        let (sender, waited) = restoring(root.path(), Some(desktop), helper);
+        let (outcome, intents) = send(&sender, true, false);
+        assert!(
+            matches!(
+                outcome,
+                ForwardOutcome::Failed {
+                    problem: DeliveryProblem::OwnerMismatch,
+                    ..
+                }
+            ),
+            "{outcome:?}"
+        );
+        assert_eq!(intents, 0);
+        assert_eq!(lock(&seen).len(), 1);
+        assert_eq!(*lock(&waited), Duration::ZERO);
+
+        // The helper's own check of the account.
+        let root = state_root();
+        add_session(root.path());
+        let (helper, _) = fake_helper(
+            json!({
+                "state": "not_submitted",
+                "problem": "account_changed",
+                "error": "Claude Desktop account changed; the session was not restored",
+            }),
+            false,
+            || {},
+        );
+        let (sender, _) = restoring(root.path(), one_conversation(root.path()), helper);
+        let (outcome, intents) = send(&sender, true, false);
+        assert!(
+            matches!(
+                outcome,
+                ForwardOutcome::Failed {
+                    problem: DeliveryProblem::OwnerMismatch,
+                    ..
+                }
+            ),
+            "{outcome:?}"
+        );
+        assert_eq!(intents, 0);
+    }
+
+    #[test]
+    fn queued_draft_is_deferred_with_its_reason() {
+        for (word, reason) in [
+            ("draft_present", DeferReason::TargetAwaitingInput),
+            ("input_busy", DeferReason::TargetAwaitingInput),
+            ("no_window", DeferReason::IpcUnavailable),
+            ("window_not_unique", DeferReason::IpcUnavailable),
+        ] {
+            let root = state_root();
+            add_session(root.path());
+            let (helper, seen) = fake_helper(
+                json!({"state": "queued", "reason": word, "detail": "the helper's words"}),
+                true,
+                || {},
+            );
+            let (sender, waited) = restoring(root.path(), one_conversation(root.path()), helper);
+            let (outcome, intents) = send(&sender, true, false);
+            let ForwardOutcome::Deferred {
+                reason: waits_for,
+                detail,
+            } = &outcome
+            else {
+                panic!("{word}: {outcome:?}");
+            };
+            assert_eq!(*waits_for, reason, "{word}");
+            assert!(
+                detail.contains(&format!("({word})")) && detail.contains("the helper's words"),
+                "{detail}"
+            );
+            for hidden in [SESSION, LOCAL, ACCOUNT] {
+                assert!(!detail.contains(hidden), "{detail}");
+            }
+            assert_eq!(intents, 0);
+            assert_eq!(lock(&seen).len(), 1);
+            assert_eq!(
+                *lock(&waited),
+                Duration::ZERO,
+                "a queued restore does not wait"
+            );
+        }
+    }
+
+    #[test]
+    fn loaded_then_registration_delivers_over_the_pipe() {
+        let root = state_root();
+        let server = TestServer::new(4096);
+        add_session(root.path());
+        let (helper, seen) = fake_helper(loaded(), true, registers(root.path(), &server.name));
+        let (sender, waited) = restoring(root.path(), one_conversation(root.path()), helper);
+        let (outcome, intents) = send(&sender, true, false);
+        let ForwardOutcome::Delivered {
+            proof: DeliveryProof::Written,
+            detail,
+        } = &outcome
+        else {
+            panic!("{outcome:?}");
+        };
+        assert!(
+            detail.contains("restored through Claude Desktop"),
+            "{detail}"
+        );
+        assert_eq!(intents, 1);
+        assert_eq!(lock(&seen).len(), 1);
+        assert_eq!(
+            *lock(&waited),
+            Duration::ZERO,
+            "the record was there at the first look"
+        );
+        let wire = String::from_utf8(server.read_to_end()).expect("the frame is text");
+        assert!(
+            wire.starts_with("{\"type\":\"auth\"") && wire.contains("发送测试"),
+            "{wire}"
+        );
+    }
+
+    #[test]
+    fn loaded_without_registration_by_the_deadline_is_deferred() {
+        let root = state_root();
+        add_session(root.path());
+        let (helper, seen) = fake_helper(loaded(), true, || {});
+        let (sender, waited) = restoring(root.path(), one_conversation(root.path()), helper);
+        let (outcome, intents) = send(&sender, true, false);
+        let ForwardOutcome::Deferred {
+            reason: DeferReason::TargetNotLoaded,
+            detail,
+        } = &outcome
+        else {
+            panic!("{outcome:?}");
+        };
+        assert!(detail.contains("(not_registered)"), "{detail}");
+        assert_eq!(intents, 0, "nothing was written, so it is never unknown");
+        assert_eq!(*lock(&waited), MAX_RESTORE);
+        assert_eq!(lock(&seen).len(), 1, "one restore per send");
+        assert_eq!(record_text(root.path(), SESSION), None);
+    }
+
+    #[test]
+    fn the_wake_never_sends_text() {
+        let root = state_root();
+        let server = TestServer::new(4096);
+        add_session(root.path());
+        let (helper, seen) = fake_helper(loaded(), true, registers(root.path(), &server.name));
+        let (sender, _) = restoring(root.path(), one_conversation(root.path()), helper);
+        let (outcome, intents) = send(&sender, true, false);
+        assert!(
+            matches!(outcome, ForwardOutcome::Delivered { .. }),
+            "{outcome:?}"
+        );
+        assert_eq!(intents, 1);
+
+        // The helper's whole input names the conversation and asks for the wake only.
+        let requests = lock(&seen).clone();
+        assert_eq!(requests.len(), 1);
+        let request: Value = serde_json::from_slice(&requests[0]).expect("the request is JSON");
+        assert_eq!(
+            request,
+            json!({"local_session": LOCAL, "account_id": ACCOUNT, "wake_only": true})
+        );
+        let request_text = String::from_utf8_lossy(&requests[0]);
+        assert!(
+            !request_text.contains("text") && !request_text.contains("发送测试"),
+            "{request_text}"
+        );
+        // The message went over the inbox, and only there.
+        let wire = String::from_utf8(server.read_to_end()).expect("the frame is text");
+        assert!(wire.contains("发送测试"), "{wire}");
+
+        // The ported source has no path that fills the prompt or presses a button.
+        for token in [
+            "SetValue",
+            "Invoke",
+            "DoDefaultAction",
+            "\"Send\"",
+            "SendKeys",
+            "SendInput",
+            "prepare_only",
+            "[\"text\"]",
+        ] {
+            assert!(!SOURCE.contains(token), "the helper's source holds {token}");
+        }
+        assert!(SOURCE.contains("\"wake_only\""));
     }
 }

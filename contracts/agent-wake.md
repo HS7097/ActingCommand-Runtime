@@ -301,6 +301,11 @@ The give-up clock is read only when a send is due, so a quiet time causes no exp
 rows past `delivery.give_up_ms` become `expired`, loud once each, and younger ones go. Quiet writes no
 record per tick. The Runtime does not read quota: whether a silence applies is a person's act.
 
+A send under way is handed the worker's judgement of quiet at the moment a transport asks
+(`SendLimits::quiet`, since 0.12.37): a transport opens no stopped session while a window or the hold
+covers now, even one that began during the pass, and a judgement that fails counts as quiet
+([agent-forward.md](agent-forward.md)).
+
 ## Failures
 
 A delivery failure is a non-fatal `runtime.failed` with system links and no instance link, at most one per

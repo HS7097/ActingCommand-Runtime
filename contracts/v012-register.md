@@ -6066,6 +6066,35 @@ pack's copy.
 
 The tests: `crates/resource-tooling/src/gate_load1.rs`, nine, in the exec gate map beside ACT-2.
 
+### 1.259 Slice AGT-T1b (0.12.37): a Claude Code channel restores its stopped session through Claude Desktop before a send (Workflow #432; Alice's ruling of 2026-11-02 on pending item 159, the wake only, the delivery staying the cross-session kind she chose the same evening; design `rd-1031/agt/model-agt-v2.md` §5.4, §7.2, §8; coordinator work order `rd-1031/agt/brief-agt-t1b.md`)
+
+[agent-forward.md](agent-forward.md), "Restoring a stopped session", is the contract. The number 1.259 is the coordinator's. **No ledger shape, outcome code, configuration key, row reason or problem word and no interface revision changes:** a restore ends in the neutral words §1.246 already has, and its named word goes into the delivery detail.
+
+**What changes live.** A registered Claude channel's message to a stopped session (no live record, an ended one, or one whose process has gone), which waited `deferred` (`target_offline`) until the session came back, now first has Claude Desktop bring that session's conversation up, unless the channel's switch is off or a quiet window or the hold covers now; the message then goes over the inbox as before. It switches the conversation Claude Desktop shows, restores a minimized window without taking the focus, and waits while the window holds an unsent draft. Nothing is typed into the window.
+
+**Rollback** (to a build without this slice). An older build reads no unknown member in a channel line, so a registry whose Claude lines carry `restore` is unreadable to it and its channels wait `registry_unreadable`: after a rollback, remove the member from each line (or `remove` and `add` each channel with the older `actingctl`). The compiled helper under `claude-input\` stays on disk and is ignored.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| AGTT1B-1 | the member `restore` (boolean) of a Claude line in `<state_root>\agent-forward\channels.json` | registry shape of AGTT1-2 | AGT-T1b | `agent-channel add` | absent reads as true; on another client's line the registry is refused (`RegistryProblem::RestoreInvalid`) |
+| AGTT1B-2 | `agent-channel add --restore <on\|off>` | flag of AGTT1-1 | AGT-T1b | the person | on when not given; refused for another client (`agent_channel_failed`); another word is `actingctl_usage_invalid`; `list` shows the member |
+| AGTT1B-3 | `<state_root>\agent-forward\claude-input\input-<sha256 of the source>.exe`, its `.cs`, and `.build.exe` while compiling | new program state | AGT-T1b | the worker, at the first restore of a build | compiled from the embedded `ClaudeDesktopWake.cs` with the .NET Framework's `csc.exe`; holds no secret; the Runtime removes none |
+| AGTT1B-4 | `SendLimits::quiet` (`crates/agent-forward`) | Runtime-internal interface | AGT-T1b | the agent wake worker | the worker's quiet judgement at the moment a transport asks; a judgement that fails counts as quiet; the other transports ignore it |
+| AGTT1B-5 | the restore arm of the Claude transport; detail words `quiet`, `draft_present`, `input_busy`, `no_window`, `window_not_unique`, `not_registered` | behaviour of AGTT1-5 | AGT-T1b | the worker | `deferred` with `target_offline`, `target_awaiting_input`, `ipc_unavailable`, `target_not_loaded` or `target_unresponsive`; `failed` with `channel_unknown`, `protocol_changed`, `owner_mismatch` or `helper_failed`; never `unknown`, since nothing is written before the session's record is there |
+| AGTT1B-6 | `NOTICE.md`, the codex-goal-lifecycle section | licence notice | AGT-T1b | — | three more source files, two more destinations |
+
+**Departures from the adapted source** (each is in the contract):
+- No Claude Desktop window, and several, answer `queued` (`no_window`, `window_not_unique`) and the message waits, as the work order asks; the source fails both.
+- A queued answer carries a fixed word beside its text, and the helper's own account check answers `problem: account_changed`, so the Runtime maps both without reading the text.
+- The helper's request is `local_session`, `account_id` and `wake_only` only, and it refuses any other member; the input path, `text`, `allow_switch` and `prepare_only` are gone.
+- An abandoned lock counts as held by the new run; in the source a helper that died holding it would fail every later run.
+- The compiler writes `.build.exe`, renamed into place on success, so a compile cut off at the deadline leaves no program that looks finished.
+- The source's own UI lock and private-folder ACL are not carried: the worker sends one message at a time, the helper's named mutex is the shared lock, and the folder has the state root's access rules.
+- No `config.json`, or no folder of the active account, is "no conversation" (`channel_unknown`), where the source fails reading it; the account must be a hyphenated UUID.
+- One deadline: the restore takes at most 25 s of the send's; when the session's record arrives with no time left the message waits (`target_unresponsive`) instead of risking an `unknown` write.
+
+**Tests:** the nine of the work order, in the crate's own test module (host gate row "AGT-T1b"). Adapted, with the same assertions: the Claude transport's existing tests send with the switch off, the path they pin, through a forwarder whose restorer may not be used; the Codex and DSH tests, and the worker's test send, add a `quiet` that answers false. Nothing is verified against a live Claude Desktop: the helper was compiled once and never run.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
