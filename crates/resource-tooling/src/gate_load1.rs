@@ -532,10 +532,13 @@ fn loading_root_file_refuses_each_broken_member() {
 }
 
 // `--write` gives a pack of `test` the page of every server, only the targets it reads and their
-// templates; `--check` then passes, and a second `--write` writes nothing.
+// templates; `--check` then passes, and a second `--write` writes nothing. The root excludes no
+// pack: ALPHA is the only pack here, and an exclusion that names no pack is refused.
 #[test]
 fn loading_write_copies_selected_pages_targets_and_templates() {
-    let repo = Repo::new(&[pack(ALPHA, "test")], &valid_root(), &templates());
+    let mut root = valid_root();
+    root["exclude_packages"] = json!([]);
+    let repo = Repo::new(&[pack(ALPHA, "test")], &root, &templates());
     let written = repo.run(PackageLoadingMode::Write).expect("--write");
     assert_eq!(written.status, "written");
     assert_eq!(written.game, GAME);
@@ -677,7 +680,7 @@ fn loading_check_names_every_stale_pack() {
         &repo.pack(GAMMA).join("resources/loading.json"),
         &fs::read(alpha.join("resources/loading.json")).expect("copy"),
     );
-    let expected = vec![
+    let expected = [
         (BETA, "resources/loading/spinner.png"),
         (GAMMA, "resources/loading.json"),
         (ALPHA, "resources/loading.json"),
