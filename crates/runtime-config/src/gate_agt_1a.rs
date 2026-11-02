@@ -143,7 +143,7 @@ fn agent_wake_rows_have_no_default_and_the_section_must_be_whole() {
         let key = key_of(row);
         let mut section = whole();
         let path = key.strip_prefix("agent_wake.").expect("the section's key");
-        let (parent, name) = path.rsplit_once('.').map_or(("", path), |pair| pair);
+        let (parent, name) = path.rsplit_once('.').unwrap_or(("", path));
         let holder = if parent.is_empty() {
             &mut section
         } else {
@@ -278,7 +278,7 @@ fn agent_wake_caps_must_fit_the_history_rows() {
     // The rows kept above what one record list holds: the key's own range.
     let mut over = whole();
     set(&mut over, "delivery.history_rows", json!(257));
-    let refused = rendered(over).err().expect("outside the key's range");
+    let refused = rendered(over).expect_err("outside the key's range");
     assert_eq!(refused.failure_code(), ConfigCode::ConfigValueInvalid);
     assert_eq!(refused.config_key(), HISTORY_ROWS);
     assert_eq!(refused.problem(), Some(ConfigValueProblem::OutOfRange));
