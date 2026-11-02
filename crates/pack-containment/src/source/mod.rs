@@ -36,12 +36,19 @@ mod declarations;
 // Workflow #411 B1 (slice BT-B1): a reading mark's dictionary and agreement at the gate.
 #[cfg(test)]
 mod gate_411_bt_b1;
+// Workflow #407 LOAD-2: a source pack's loading copy, compiled with the pack.
+mod loading;
+// Workflow #407 LOAD-2: the compiled loading copy and the operation-level declarations.
+#[cfg(test)]
+mod gate_load2;
 pub(crate) use declarations::validate_loaded_declarations;
 pub use declarations::{
     declaration_expected_shape, declaration_file_requests, validate_bundle_declarations,
     validate_contained_declarations, validate_control_declarations,
     validate_navigation_declarations, validate_resource_declarations,
 };
+pub use loading::loading_template_problem;
+pub(crate) use loading::{LoadingRefusal, compile_pack_loading};
 
 /// File data needed by parsing; metadata-only templates are not decoded.
 #[derive(Debug, Clone, Copy)]
@@ -794,6 +801,22 @@ impl OperationParser {
                         &mut errors,
                     );
                 }
+                // Workflow #407 LOAD-2: so is each page its confirmation's loading adds.
+                let added = operation_loading_page_ids(operation)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>();
+                validate_declared_page_set(
+                    &bundle.task_json_path(),
+                    &format!(
+                        "operation {:?} loading add",
+                        operation.get("id").and_then(Value::as_str)
+                    ),
+                    &added,
+                    &self.game,
+                    &declared_anchor_ids,
+                    &page_rule_ids,
+                    &mut errors,
+                );
                 validate_click_shape(bundle, operation, &mut errors);
                 if let Some(template) = operation.get("verify_template").and_then(Value::as_str) {
                     if is_env_template_ref(template) {
@@ -1171,8 +1194,12 @@ impl OperationParser {
                         &mut order,
                     );
                 }
-                // #411 B36/B19 (A35-S3): a confirmation's wait page.
-                if let Some(anchor_id) = operation_wait_page_id(operation) {
+                // #411 B36/B19 (A35-S3): a confirmation's wait page; Workflow #407 LOAD-2: and
+                // each page its loading adds.
+                for anchor_id in operation_wait_page_id(operation)
+                    .into_iter()
+                    .chain(operation_loading_page_ids(operation))
+                {
                     add_page(
                         &self.game,
                         anchor_id,
@@ -2058,6 +2085,17 @@ fn operation_wait_page_id(operation: &Value) -> Option<&str> {
     operation
         .pointer("/expect_after/wait_page/page_id")
         .and_then(Value::as_str)
+}
+
+/// Workflow #407 LOAD-2: the pages a confirmation's `expect_after.loading.add` names, which no
+/// other operation field names.
+fn operation_loading_page_ids(operation: &Value) -> impl Iterator<Item = &str> {
+    operation
+        .pointer("/expect_after/loading/add")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
 }
 
 fn validate_click_shape(bundle: &Bundle, operation: &Value, errors: &mut Vec<String>) {
@@ -3480,8 +3518,12 @@ fn declared_task_page_ids(bundle: &Bundle, game: &str) -> CliOutcome<BTreeSet<St
         if let Some(page) = operation_transition_page_id(operation) {
             pages.insert(normalize_page_rule_id(game, page));
         }
-        // #411 B36/B19 (A35-S3): a confirmation's wait page.
-        if let Some(page) = operation_wait_page_id(operation) {
+        // #411 B36/B19 (A35-S3): a confirmation's wait page; Workflow #407 LOAD-2: and each page
+        // its loading adds.
+        for page in operation_wait_page_id(operation)
+            .into_iter()
+            .chain(operation_loading_page_ids(operation))
+        {
             pages.insert(normalize_page_rule_id(game, page));
         }
     }
@@ -4504,8 +4546,12 @@ fn selected_available_page_ids(game: &str, bundles: &[Bundle]) -> CliOutcome<BTr
             if let Some(page) = operation_transition_page_id(operation) {
                 insert_selected_page_id(game, page, &mut pages);
             }
-            // #411 B36/B19 (A35-S3): a confirmation's wait page.
-            if let Some(page) = operation_wait_page_id(operation) {
+            // #411 B36/B19 (A35-S3): a confirmation's wait page; Workflow #407 LOAD-2: and each
+            // page its loading adds.
+            for page in operation_wait_page_id(operation)
+                .into_iter()
+                .chain(operation_loading_page_ids(operation))
+            {
                 insert_selected_page_id(game, page, &mut pages);
             }
         }

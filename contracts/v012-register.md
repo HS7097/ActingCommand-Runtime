@@ -6066,6 +6066,77 @@ pack's copy.
 
 The tests: `crates/resource-tooling/src/gate_load1.rs`, nine, in the exec gate map beside ACT-2.
 
+### 1.258 Slice LOAD-2 (0.12.37): a pack's loading copy compiled by the loader, and the operation-level `expect_after.loading` admitted in a page graph and a step plan (Workflow #407; design `rd-1031/check-speed/model-loading.md` §2.4, §5, §6, §7 LOAD-2; coordinator work order `rd-1031/check-speed/brief-load-2.md`)
+
+[resource-declarations.md](resource-declarations.md) ("Loading pages": "The compiled copy",
+"Operation-level loading"; the `resource validate` table), [linear-steps.md](linear-steps.md)
+(the admission table) and [package-reference.md](package-reference.md) (`package check`, the
+source layout, `standard-pack check`) are the contract. The number 1.258 is the coordinator's.
+**No run-time behaviour changes:** a compiled loading set is admitted and reported, and nothing
+waits on it (LOAD-3 runs it in a page graph, LOAD-4 in a step plan). No ledger shape, wire shape,
+configuration key or outcome code is new.
+
+**What.** (1) The source-pack loader (`pack-containment`, `source/loading.rs`) reads
+`resources/loading.json` with `parse_pack_loading` and holds it against its pack: its coordinate
+space, the declaration gate of its targets (task schema `0.9` rules, no colour `digest`), the
+pack's match metric, no page or target id the pack declares, every template present and not of
+one colour, no other file below `resources/loading/`. Its targets join the derived recognition
+pack under their own ids; its pages join the derived page set as `loading: {max_ms, pages}`, each
+id under the game. (2) The page detector keeps them beside its pages: `loading_page_ids`,
+`loading_max_ms`, `with_loading_pages`; `page_ids`, `contains_page` and `evaluate_all_*` leave them
+out, `evaluate_pages_outcomes_in_context` finds them by id; a loading page reads template and
+colour targets only. (3) `expect_after.loading` (`"off"` or `{except?, add?, max_ms?}`) at the
+declaration gate and in kernel admission (`TaskProgram::validate_loading`), in both execution
+modes; the source build takes each `add` page into the task's page set. (4) A step plan admits a
+wait page and `loading`; `reason=wait` refuses wait steps only, and a page its loading adds, or its
+wait page, that is its own `from`, destination or transition page is `reason=loading_page`. (5)
+`package check` answers `loading: {pages, max_ms}` for a pack that carries a copy. (6) `resource
+validate` takes `loading.json` (family `standard_pack_loading`) and `<pack>/resources/loading.json`
+(family `pack_loading`), the copy against the one the root file makes, and names a stale one.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| LD2-1 | task schema `0.9` `expect_after.loading`: `"off"`, or `{except?: [page], add?: [page], max_ms?}` | resource file format | LOAD-2 | resource side | `since` 0.12.37; page graph and step plan; `UnconsumedField` before schema `0.9`; **`package` revision 6, no second step** (§1.244, §1.251, §1.254, §1.257) |
+| LD2-2 | a step plan's `expect_after.wait_page` | admission rule widened | LOAD-2 | resource side | `since` 0.12.37; checked as a page graph checks it; nothing waits on it until LOAD-4; within revision 6 |
+| LD2-3 | `program_problem` tokens `loading_conflict`, `loading_except_unknown`, `loading_page_invalid` | new tokens of an existing vocabulary on the existing `contained_task_program_invalid` | LOAD-2 | LOAD-2 | `json_pointer` below `/operations/<i>/expect_after`; `wait_max_invalid` and `wait_page_invalid` also serve `loading.max_ms` and a step plan's wait page; `loading_page_invalid` is also a `standard_pack_problem` token of LOAD-1, of another vocabulary |
+| LD2-4 | `contained_task_linear_invalid` `reason=loading_page` | detail reason | LOAD-2 | LOAD-2 | a step plan's page added by its loading, or its wait page, that is its own `from`, destination or transition page |
+| LD2-5 | the pack loader's refusal of a copy: `standard_pack_root_invalid` (`game`, `path`, `standard_pack_problem`, `json_pointer`, `package_id`), or `resource_declaration_invalid` in `resources/loading.json` | existing codes and problems at a new place | LOAD-2 | LOAD-2 | `loading_coordinate_mismatch`, `loading_page_collision`, `loading_target_collision`, `loading_template_invalid`, `loading_pack_stale`, and the copy's own `parse_pack_loading` issues |
+| LD2-6 | the derived page set's member `loading` (`{max_ms, pages}`); `LoadingPageSet`, `load_loading_pages_from_json_str`, `PageDetector::with_loading_pages`, `loading_page_ids`, `loading_max_ms` | Runtime-internal interface (memory only) | LOAD-2 | the loader | derived in memory, never in a source pack (a source pack holding a derived file is refused as before) |
+| LD2-7 | `package check` answer member `loading: {pages, max_ms}`; `PreparedContainedTask::loading_set`, `PackageLoadingSet` | tool answer, Runtime-internal interface | LOAD-2 | LOAD-2 | absent for a pack without a copy, so every other answer is unchanged; `ac_pack_check` answers it verbatim |
+| LD2-8 | `resource validate` families `standard_pack_loading`, `pack_loading`; `check_loading_root_file`, `check_pack_loading_copy` (`resource-tooling`) | tool families | LOAD-2 | LOAD-2 | LOAD-1's report: both files were refused as unmapped, with no exclusion |
+
+**Decisions within the work order.** (a) A copy's refusals reuse `standard_pack_root_invalid` and
+LOAD-1's problems (no new code); a member the gate refuses is `resource_declaration_invalid` in the
+copy. (b) The copy's `defaults.match_metric` must be the pack's: one recognition pack has one
+metric, so a different one cannot be honoured per target and is refused, not ignored; its
+`template_threshold` and `color_max_distance` become each target's own value where it declares
+none. (c) Loading page ids are compiled under the game (`<game>/<page>`), as the pack's pages are,
+so an `except` entry is written as a page reference is, with or without the game. (d) `package
+loading`, `--check` and `resource validate` read a pack without its copy, and `standard-pack check`
+checks the copies before its cross-check admits the packages: a stale or broken copy is named as
+stale, never refused first by the loader that now compiles it. (e) In a step plan, the
+design's `loading_page` reason covers the wait page too, since a wait page is one more page
+added to the confirmation's loading set (design §0); a page graph keeps its wait-page rule.
+(f) Duplicates in `except` and in `add` are refused at the later entry.
+
+**Interface.** `package` stays [3, 6]: LOAD-2 joins revision 6 (with DB-2, OCR-SCALE-1, ACT-4 and
+LOAD-1), since this PR merges before 0.12.37 is cut, and adds no step
+([component-interfaces.md](component-interfaces.md)).
+
+**What changes live.** Nothing until a resource repository writes copies: no pack holds one today,
+and no task declares `loading`. A pack that carries a copy is then refused by the 0.12.37 loader
+where the copy breaks a rule against its pack, and admitted, with its set reported, otherwise.
+
+**Rollback** (to 0.12.36). Nothing persisted changes. An older loader admits a pack with a copy and
+runs it as without it; it refuses `expect_after.loading` at its declaration gate and a step plan's
+wait page at admission.
+
+The tests: `crates/pack-containment/src/source/gate_load2.rs` (four),
+`crates/execution-kernel/src/contained_task/gate_load2.rs` (five) and
+`apps/actinglab/src/tests/gate_load2.rs` (two), in the exec gate map beside LOAD-1. Adapted:
+`crates/resource-tooling/src/gate_load1.rs`'s pack fixture declares the copy's match metric, since
+`package bundle --loading` now admits a pack's copy through the loader (decision (b)).
+
 ### 1.259 Slice AGT-T1b (0.12.37): a Claude Code channel restores its stopped session through Claude Desktop before a send (Workflow #432; Alice's ruling of 2026-11-02 on pending item 159, the wake only, the delivery staying the cross-session kind she chose the same evening; design `rd-1031/agt/model-agt-v2.md` §5.4, §7.2, §8; coordinator work order `rd-1031/agt/brief-agt-t1b.md`)
 
 [agent-forward.md](agent-forward.md), "Restoring a stopped session", is the contract. The number 1.259 is the coordinator's. **No ledger shape, outcome code, configuration key, row reason or problem word and no interface revision changes:** a restore ends in the neutral words §1.246 already has, and its named word goes into the delivery detail.

@@ -2387,6 +2387,24 @@ tests = [
 ]
 incident = ["#407 LOAD-1"]
 
+# LOAD-2 (Workflow #407, 0.12.37; register §1.258; design rd-1031/check-speed/model-loading.md §2.4, §5, §6, §7 LOAD-2): the source-pack loader compiles a pack's loading copy, its pages into the derived page set's loading member outside the page set and its targets into the recognition pack, and refuses a page or target id the pack declares and a missing template; a pack without a copy compiles as before; expect_after.loading is admitted by name (loading_conflict for off or max_ms beside a wait page, loading_except_unknown, loading_page_invalid for from, destination and error pages); a step plan admits loading and a wait page and refuses wait steps; package check lists the effective loading set; resource validate accepts loading.json and a current copy and names a stale one
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-pack-containment::lib::source::gate_load2::pack_loading_compiles_pages_outside_the_page_set",
+    "actingcommand-pack-containment::lib::source::gate_load2::pack_loading_refuses_a_page_or_target_id_the_pack_declares",
+    "actingcommand-pack-containment::lib::source::gate_load2::pack_loading_refuses_a_missing_template",
+    "actingcommand-pack-containment::lib::source::gate_load2::pack_without_loading_file_compiles_as_before",
+    "actingcommand-execution-kernel::lib::contained_task::gate_load2::operation_loading_off_with_wait_page_is_refused",
+    "actingcommand-execution-kernel::lib::contained_task::gate_load2::operation_loading_except_must_name_an_inherited_page",
+    "actingcommand-execution-kernel::lib::contained_task::gate_load2::operation_loading_add_refuses_from_destination_and_error_pages",
+    "actingcommand-execution-kernel::lib::contained_task::gate_load2::operation_loading_max_and_wait_page_max_together_are_refused",
+    "actingcommand-execution-kernel::lib::contained_task::gate_load2::linear_admits_loading_and_wait_page_and_refuses_wait_steps",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_load2::package_check_lists_the_effective_loading_set",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_load2::resource_validate_accepts_a_current_loading_copy_and_names_a_stale_one",
+]
+incident = ["#407 LOAD-2"]
+
 # ROUT-L RL-T (#386; contracts/standard-pack-schedule.md "Tools"): standard-pack compose receives every --instance <alias>=<game>/<server> given after its words (the command's own, not the global --instance), so two bound instances of one game and server compose one <id>@<alias> copy of the rule and of each item per instance, each in its instance's scope
 [[gate]]
 coverage = "Y"

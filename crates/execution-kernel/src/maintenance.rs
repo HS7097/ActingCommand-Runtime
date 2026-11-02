@@ -36,6 +36,15 @@ pub struct TaskPackageDescriptor {
     reading_keys: Vec<String>,
 }
 
+/// Workflow #407 LOAD-2 (register §1.258; design `model-loading.md` §6): the loading set a
+/// package compiled from its loading copy, as `package check` answers it: its pages, each id
+/// without the game prefix, in the copy's order, and the allowance of one confirmation.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct PackageLoadingSet {
+    pub pages: Vec<String>,
+    pub max_ms: u64,
+}
+
 impl PreparedContainedTask {
     /// Available only after containment and full offline preparation.
     /// Missing identity or declarations fail preparation; callers must not infer them from

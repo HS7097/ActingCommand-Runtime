@@ -92,7 +92,9 @@ fn write_pack(directory: &Path, pack: Pack) {
         "locale": "en-US",
         "goal": "LOAD-1 fixture",
         "coordinate_space": {"width": pack.width, "height": height},
-        "defaults": {"template_threshold": 0.9, "color_max_distance": 0.0},
+        // Workflow #407 LOAD-2: the loader compiles a copy, whose match metric is the pack's.
+        "defaults": {"template_threshold": 0.9, "color_max_distance": 0.0,
+                     "match_metric": "ccoeff_normed"},
         "color_probes": [probe("home", [0, 0, 255]), probe(target, [255, 0, 0])],
         "page_rules": {
             "home": {"required": ["home_colour"]},

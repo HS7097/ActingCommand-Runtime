@@ -56,6 +56,12 @@ const INPUT_RECHECK_OPTIONAL: &[(&str, &[&str], &[&str])] =
 const WHEN_MEMBERS: &[&str] = &["present", "absent"];
 /// Workflow #390 EXEC-1: the one value of an operation's `on_guard_refused`.
 const GUARD_REFUSAL_NEXT_CANDIDATE: &str = "next_candidate";
+/// Workflow #407 LOAD-2: the value of `expect_after.loading` that takes no loading page.
+const LOADING_OFF: &str = "off";
+/// Workflow #407 LOAD-2: the task schema a pack's loading copy declares its targets in.
+const LOADING_TARGET_SCHEMA: &str = "0.9";
+/// The match metric a recognition pack uses when its defaults name none.
+const DEFAULT_MATCH_METRIC: &str = "ccorr_normed";
 
 struct Declaration<'a> {
     file: &'a Path,
@@ -593,6 +599,7 @@ impl Declaration<'_> {
                             "wait_page",
                             "target_present",
                             "target_gone",
+                            "loading",
                         ],
                     )?;
                     // #411 B36/B19 (A35-S3): `{page_id, max_ms}`, task schema `0.9` only.
@@ -600,6 +607,12 @@ impl Declaration<'_> {
                         expected.get("wait_page").filter(|value| !value.is_null())
                     {
                         self.wait_page(wait_page, &child(&pointer, "wait_page"))?;
+                    }
+                    // Workflow #407 LOAD-2: `"off"` or `{except?, add?, max_ms?}`, task schema
+                    // `0.9` only.
+                    if let Some(loading) = expected.get("loading").filter(|value| !value.is_null())
+                    {
+                        self.loading(loading, &child(&pointer, "loading"))?;
                     }
                     // ACT-4 (Workflow #407): arrays of target names, task schema `0.9` only.
                     for member in ["target_present", "target_gone"] {
@@ -764,6 +777,33 @@ impl Declaration<'_> {
             self.required(object, pointer, "max_ms")?,
             &child(pointer, "max_ms"),
         )
+    }
+
+    /// Workflow #407 LOAD-2: a confirmation's `expect_after.loading`, task schema `0.9` only
+    /// (`UnconsumedField` before it): the string `off` (`InvalidValue` for another string), or an
+    /// object with the optional members `except` and `add` (arrays of strings) and `max_ms` (an
+    /// unsigned integer), nothing else. Runtime admission checks the pages and the value.
+    fn loading(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        if self.schema_before(TaskSchema::V0_9) {
+            return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
+        }
+        match value {
+            Value::String(text) if text == LOADING_OFF => Ok(()),
+            Value::String(_) => Err(self.error(pointer, ResourceDeclarationReason::InvalidValue)),
+            Value::Object(_) => {
+                let object = self.object(value, pointer, &["except", "add", "max_ms"])?;
+                for member in ["except", "add"] {
+                    if let Some(pages) = object.get(member).filter(|value| !value.is_null()) {
+                        self.strings(pages, &child(pointer, member))?;
+                    }
+                }
+                if let Some(max_ms) = object.get("max_ms").filter(|value| !value.is_null()) {
+                    self.unsigned(max_ms, &child(pointer, "max_ms"))?;
+                }
+                Ok(())
+            }
+            _ => Err(self.error(pointer, ResourceDeclarationReason::InvalidType)),
+        }
     }
 
     /// ACT-4 (Workflow #407): a confirmation's `expect_after.target_present` or `target_gone`,
@@ -2746,6 +2786,56 @@ pub fn validate_navigation_declarations(path: &Path, navigation: &Value) -> CliO
         schema: navigation.get("schema_version").and_then(Value::as_str),
     }
     .navigation(navigation)
+}
+
+/// Workflow #407 LOAD-2 (register §1.258): the declaration gate of a pack's loading copy
+/// (`resources/loading.json`, read by `parse_pack_loading`), on the targets LOAD-1 carries as
+/// written: each is checked as a task schema `0.9` `task.json` declares one of its family in the
+/// pack's `frame`, and a colour target that declares `digest` is refused (`UnconsumedField`: a
+/// loading page reads single-frame template and colour targets only). The copy's
+/// `defaults.match_metric`, when it names one, is the pack's own `pack_metric` (`InvalidValue`
+/// otherwise): one recognition pack matches every template with one metric. Each refusal is
+/// `resource_declaration_invalid` at its pointer in the copy.
+pub(super) fn validate_pack_loading_declarations(
+    copy: &actingcommand_contract::PackLoading,
+    frame: [u64; 2],
+    pack_metric: Option<&str>,
+) -> CliOutcome<()> {
+    use actingcommand_contract::{LoadingTargetFamily, PACK_LOADING_FILE};
+    let declaration = Declaration {
+        file: Path::new(PACK_LOADING_FILE),
+        schema: Some(LOADING_TARGET_SCHEMA),
+    };
+    if let Some(metric) = copy
+        .defaults
+        .as_ref()
+        .and_then(|defaults| defaults.get("match_metric"))
+        .and_then(Value::as_str)
+        && metric != pack_metric.unwrap_or(DEFAULT_MATCH_METRIC)
+    {
+        return Err(declaration.error(
+            "/defaults/match_metric",
+            ResourceDeclarationReason::InvalidValue,
+        ));
+    }
+    for family in LoadingTargetFamily::ALL {
+        let targets = copy
+            .targets
+            .iter()
+            .filter(|target| target.family() == family);
+        for (index, target) in targets.enumerate() {
+            let pointer = format!("/{}/{index}", family.member());
+            let value = Value::Object(target.declaration().clone());
+            declaration.target(&value, &pointer, family.member(), false, frame)?;
+            if target.declaration().contains_key("digest") {
+                return Err(declaration.error(
+                    &child(&pointer, "digest"),
+                    ResourceDeclarationReason::UnconsumedField,
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Workflow #411 B15 (contracts/remedies.md section 2.4 rule 2): a package does not provide a

@@ -71,7 +71,8 @@ one operation is at fault; an existing check keeps its existing code.
 | no operation declares an `observation_window`, a page-graph declaration (Workflow #390 EXEC-2, `resource-declarations.md`); an `input_recheck` of any kind is admitted (Workflow #411 B12) | the field name |
 | no operation declares a `when` or an `on_guard_refused`, page-graph candidate operations (Workflow #390 EXEC-1, `resource-declarations.md`) | the field name |
 | no operation declares `max_runs` or `on_max_runs`, a page-graph per-run cap (Workflow #411 B16 part 1, `resource-declarations.md`) | `max_runs` |
-| no operation is a `wait` step or declares an `expect_after.wait_page`, page-graph declarations (Workflow #411 B36, B19, `resource-declarations.md`, "Wait steps and wait pages"); checked before the operation's other checks | `wait` |
+| no operation is a `wait` step, a page-graph declaration (Workflow #411 B36, B19, `resource-declarations.md`, "Wait steps and wait pages"); checked before the operation's other checks. Workflow #407 LOAD-2 (since 0.12.37): an `expect_after.wait_page` and an `expect_after.loading` are admitted, checked before these rules as a page graph checks them (`contained_task_program_invalid` with `program_problem`, `resource-declarations.md`, "Loading pages"); nothing waits on them until LOAD-4 runs them | `wait` |
+| a page the operation's `expect_after.loading.add` names, and its wait page, is none of its own pages: not its `from`, its destination or its `page` transition's page (Workflow #407 LOAD-2, since 0.12.37) | `loading_page` |
 | no operation declares an `expect_after.target_present` or `target_gone`, judged by the page-graph confirmation (ACT-4, since 0.12.37, `resource-declarations.md`, "Final-state targets"); checked right after `wait` | `expect_targets` |
 | each operation's `to` / `expect_after` names exactly one page | `destination` |
 | each operation's destination differs from its `from` | `to_equals_from` |

@@ -225,8 +225,10 @@ The bundle contains `control.json` with the existing Lab control fields, and:
 - Optional `resources/loading.json` (`actingcommand.pack-loading.v1`) and `resources/loading/`,
   the pack's loading copy (Workflow #407 LOAD-1, since 0.12.37;
   [resource-declarations.md](resource-declarations.md), "Loading pages"), written by `actinglab
-  package loading --write`. No loader of this release reads it: a pack that carries one is
-  admitted and runs as without it (LOAD-2 compiles it, LOAD-3 runs it).
+  package loading --write`. The loader compiles it with the pack (Workflow #407 LOAD-2, since
+  0.12.37, "The compiled copy" there): its pages join the derived page set's member `loading`,
+  outside its pages, and its targets the derived recognition pack. No run waits on them yet
+  (LOAD-3 runs them). A file below `resources/loading/` is part of the copy.
 
 Recognition pack/pages, navigation, operation index, primitives and the derived manifest
 (only its `entry_task_id`, no file hashes since Workflow #336 PKG-S1) are derived only in
@@ -413,19 +415,24 @@ current when it carries neither.
   `status: "preview"` with `dry_run: true`, `written: false`, a pack it would write with
   `state: "stale"`.
 
-**A pack that carries a loading copy needs a Runtime that reads it.** No Runtime of this release
-reads the copy (LOAD-2 compiles it, LOAD-3 runs it): a pack that carries one is admitted and runs
-as without it, on this Runtime and on every older one. So the resource side writes copies only
-for a Runtime that reads them, and deploys in that order: the Runtime first, then the packs.
+**A pack that carries a loading copy needs a Runtime that reads it.** From LOAD-2 (0.12.37) the
+loader compiles the copy and refuses one that breaks a rule against its pack; a Runtime before it
+admits such a pack and runs it as without the copy, and no Runtime of 0.12.37 waits on a loading
+page yet (LOAD-3 runs them). So the resource side writes copies only for a Runtime that reads
+them, and deploys in that order: the Runtime first, then the packs. `package loading` itself
+reads each pack without its copy (the copy is what it compares and rewrites), so a stale or
+broken copy is reported and rewritten, never refused by the loader first.
 
 `actinglab standard-pack check --root <game root>` runs the same checks on an installed game
 root `<standard_packs.root>/<game>/` (the game is the directory's name; its packages are the
 directories its `bundle.json` lists): the root files it holds, the cross-check and the report,
 and (ROUT-L RL-1a) the root's `schedule.json` as `--schedule` is checked above, and (Workflow
-#392 DA-4) its `display-layout.json` as `--display-layout` is, and (Workflow #407 LOAD-1) last,
-with its `loading.json`, every package's loading copy as `package loading --check` checks it, the
+#392 DA-4) its `display-layout.json` as `--display-layout` is, and (Workflow #407 LOAD-1) with
+its `loading.json`, every package's loading copy as `package loading --check` checks it, the
 templates read from the root's `loading/` (the file is then listed in `root_files`, last), and
-without it, every package that carries a loading copy is refused (`loading_pack_stale`). It only
+without it, every package that carries a loading copy is refused (`loading_pack_stale`); from
+LOAD-2 this check runs before the cross-check admits the packages, whose loader compiles a copy,
+so a stale copy is named as stale. It only
 reads. Every package of the registry is admitted, once, by its directory, with or
 without the navigation files (Workflow #411 A25): a package a root file names first for its
 part, every other package of the registry after them. Its answer is `{status: "checked", root,
@@ -677,7 +684,11 @@ order (empty when there is none): an operation's click whose declared box is one
 `point` click or a long press without a box (each a box of 1×1 at its point) or a `rect`,
 `specific_rect` or long-press box of 1×1, with `pack_operation_id` and the box (`box_x`,
 `box_y`, `box_width`, `box_height`). A click located on the frame (`target`, `target_center`,
-`offset`) and a drag are not judged. The package still passes (exit 0).
+`offset`) and a drag are not judged. The package still passes (exit 0). Workflow #407 LOAD-2
+(since 0.12.37): a package that carries a loading copy also answers `loading: {pages, max_ms}`,
+the loading set its loader compiled (each page id without the game, in the copy's order, and the
+allowance of one confirmation; [resource-declarations.md](resource-declarations.md), "Loading
+pages"); a package without one answers as before, without the member.
 A procedure binding's `scheduled_execution.package_path` may equally name a directory or a
 container file. Evidence replay continues to
 use its independent evidence ZIP hash (`lab replay-evidence --expected-sha256`).
@@ -929,10 +940,12 @@ data files beside its package directories, one directory per game below the conf
   "Loading pages"). Optional; laid with its `loading/` templates by `package bundle --loading`, for
   audit only. What runs is each pack's own copy (`resources/loading.json`), which the pack's
   version freezes. Only `actinglab standard-pack check` reads the file (every package's copy is
-  checked against it, and without it no package may carry a copy). The Runtime's root reader, its
-  startup, a run's preparation, the policy crate and check-config never read it, and no loader of
-  this release reads a pack's copy: **a pack that carries one needs a Runtime that reads it, so
-  the Runtime is deployed first, then the packs.** The installed `loading/` directory makes a
+  checked against it, and without it no package may carry a copy), and from LOAD-2 `actinglab
+  resource validate` of the repository's file and of a pack's copy. The Runtime's root reader, its
+  startup, a run's preparation, the policy crate and check-config never read it; the pack loader
+  compiles a pack's copy (LOAD-2, since 0.12.37) and no run waits on it yet: **a pack that carries
+  one needs a Runtime that reads it, so the Runtime is deployed first, then the packs.** The
+  installed `loading/` directory makes a
   package id `loading` collide with it; the bundle index does not reserve that name in this
   release, so a resource repository must not name a pack `loading`.
 - **One check, three readers.** The contract crate's checks (`parse_standard_pack_pages`,
