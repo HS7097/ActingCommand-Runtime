@@ -5916,6 +5916,7 @@ when it takes effect.
 | `scheduling.remedy.*`, and per instance `instance.<id>.scheduling.remedy.choices` (**`actingd-config` revision 6**, Workflow #411 B15; §1.110 B15-8) | `enabled`, `max_per_round`, `choices` | `true`, 2 (`1..=8`), `[]`; an instance's list replaces the section's as a whole, default the section's; every key settable; rows of the `session.remedy.choices` shape ([runtime-config.md](runtime-config.md)) | #411 B15 R3 (built, §1.113) | #411 B15 R4 (0.12.3); R7 (check-config notes) |
 | `touch.*` (**`actingd-config` revision 7**, Workflow #406; §1.136) | `sampling.sigma_ratio_milli`, `sampling.max_redraws`, `sampling.candidate_count`, `history.points_per_box`, `history.max_boxes` | 250 (`1..=1000`), 8 (`0..=64`), 4 (`1..=16`), 16 (`1..=256`), 1024 (`1..=65536`); host-wide, every key settable (plan Q13; [runtime-config.md](runtime-config.md)) | #406 T12 (§1.136) | #406 T12 (0.12.x) |
 | `emulator_control.*` (**`actingd-config` revision 8**, #411 A50; §1.158) | `restart_exit_wait_ms` | 60 000 (`1000..=300000`); host-wide, settable ([runtime-config.md](runtime-config.md)) | A50 (§1.158 A50-5) | A50 (0.12.x) |
+| `artifact_store.*` (**`actingd-config` revision 24**, Workflow #407 PF-1; §1.248) | `stream_admit_chunk_bytes` | 1 048 576 (`0..=67108864`); host-wide, settable, a stream takes it when it opens ([runtime-config.md](runtime-config.md), "The `artifact_store` section") | PF-1 (§1.248 PF1-1) | PF-1 (0.12.37) |
 | `host.*` (**`actingd-config` revision 20**, RB-2; §1.202) | `process_memory_priority`, `process_io_priority` | `normal` (`normal` \| `low`); not settable, applied by actingd to its own process at start ([runtime-config.md](runtime-config.md), "The `host` section") | RB-2 (§1.202 RB2-1) | RB-2 (0.12.28) |
 | `store_foreground.*` (**`actingd-config` revision 21**, STORE-FG-2; §1.209) | `allowed_application_ids` | `[]` (0 to 16 unique Android package names, none an instance's `application_id`); not settable, only the configuration file widens it ([runtime-config.md](runtime-config.md), "The `store_foreground` section") | STORE-FG-2 (§1.209 SF2-1) | STORE-FG-2 (0.12.29) |
 | `agent_wake.*` (**`actingd-config` revision 24**, Workflow #432 AGT-1a; §1.245) | the 19 keys of [agent-wake.md](agent-wake.md) | no default anywhere, as an exception to this section's opening: the section is whole or absent, and a file that does not name it has no key | AGT-1a (§1.245 AGT1A-1) | AGT-1b (0.12.37) |
@@ -5952,6 +5953,23 @@ an overview near the budget starts cutting a little earlier, in the order it alr
 | # | Shape | Kind | Code slice | First writer | Notes |
 |---|---|---|---|---|---|
 | R0B2-1 | `instances[].activity?` | `actingctl overview` / `ac_overview` answer | R-0b2 | R-0b2 | `since` 0.12.36; from the one Status read; never cut |
+
+### 1.248 Slice PF-1 (0.12.37): one capacity decision per chunk of a stream (Workflow #407; design `rd-1031/check-speed/model-check.md` §3, §7; coordinator work order `rd-1031/check-speed/brief-slices.md`)
+
+[capacity-admission.md](capacity-admission.md) and [runtime-config.md](runtime-config.md) ("The `artifact_store` section") are the contract. The number 1.248 is the coordinator's. No ledger shape, no wire shape, no outcome code changes.
+
+**Why.** Every write of a stream took a capacity decision. A diagnostic stream writes once per record, 107 to 426 records a frame; one measured run spent 17.25 s of its 18.25 s of diagnostic writing on those decisions. The new fast path (§7's ACT slices) reads more frames, so this comes first.
+
+**What changes live.** Nothing a run records or decides, except that a refusal or a binding change on a stream may surface up to one chunk (1 MiB) later. A decision still asks about the bytes of the write that needs it, so it is refused under the same condition with the same code, and never earlier. `capacity_admit` in task timing still counts one check per write, now mostly the chunk's count, so its attempts are unchanged and its total falls.
+
+**The edges** (CHECK-M addendum item 2; [capacity-admission.md](capacity-admission.md), [task-diagnostic-stream.md](task-diagnostic-stream.md)). The allowance is cached **per stream**, a count on the stream that is not shared and that the owner never holds. "At most one chunk late" is per stream; the whole machine's bound is the chunk times the live streams. A single write beyond what is left, or larger than a chunk, takes one decision for all of its own bytes before any is written, and what was left does not count towards it. A change of bound volume is seen at that stream's next decision, at most a chunk of bytes later, with today's refusal and reason. An I/O failure inside a chunk takes no decision, is the stream's fatal `artifact_write_failed` at once, and ends the stream's count with it, so nothing leaks to another stream or a later decision.
+
+**Rollback** (to 0.12.36). Nothing persisted. A file that names `artifact_store` is refused by the older build, as any newer section is; an instruction value of the key is reported as not restored.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| PF1-1 | `artifact_store.stream_admit_chunk_bytes` | configuration key, new section | PF-1 | PF-1 | `since` 0.12.37; integer `0..=67108864`, default 1048576 from the defaults file; settable; `actingd-config` revision 24 with §1.245 |
+| PF1-2 | `ArtifactStore::set_stream_admit_chunk_bytes` | artifact-store method | PF-1 | — | 0 until an owner sets it; a stream takes the value when it opens. Only the Runtime's host sets it, so offline stores and fixtures judge every write as before |
 
 ### 5.1 Capacity of `config.parameters`
 

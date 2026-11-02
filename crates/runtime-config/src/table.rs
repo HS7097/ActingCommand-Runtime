@@ -186,6 +186,7 @@ fn mechanism_sections() -> Vec<&'static [KeyRow]> {
         idle::ROWS,
         display_safe_area::ROWS,
         frame_retention::ROWS,
+        crate::artifact_store::ROWS,
         install::ROWS,
         host::ROWS,
         store_foreground::ROWS,
@@ -204,7 +205,8 @@ fn mechanism_sections() -> Vec<&'static [KeyRow]> {
 /// the `startup_discovery` section (Workflow #390 DISC-1), the `touch` section (Workflow #406
 /// T12), the `emulator_control` section (#411 A50), the `watchdog` section (#411 A66), the
 /// `execution` section (PERF-B1), the `idle` section (IDLE-1), the `display_safe_area` section
-/// (Workflow #392 DA-4b-D), the evidence-frame key (#422 LN-7c Q), the `install` section
+/// (Workflow #392 DA-4b-D), the evidence-frame key (#422 LN-7c Q), the `artifact_store` section
+/// (Workflow #407 PF-1), the `install` section
 /// (Workflow #421 INST-1), the `host` section (RB-2), the `store_foreground` section
 /// (STORE-FG-2), the `agent_wake` section (Workflow #432 AGT-1a), then the per-instance section
 /// (D1b).

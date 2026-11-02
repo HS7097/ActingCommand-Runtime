@@ -89,11 +89,45 @@ owner records the failed attempt, unperformed recognition and capacity reference
 then keeps the monitor loop running. Actual Artifact I/O failures remain fatal.
 
 ArtifactStore consumes Runtime's read-only committed projection at stream open,
-each stream write, and prepared-byte commit. These admissions and capacity
-inheritance require an installed owner. Its absence returns fatal
-`capacity_owner_missing` during `admit_artifact_bytes`, without a capacity decision
-or fact reference. Opening a store for reads and verifying material remain valid
-without an admission owner.
+prepared-byte commit, and a stream write that the last decision does not cover.
+These admissions and capacity inheritance require an installed owner. Its absence
+returns fatal `capacity_owner_missing` during `admit_artifact_bytes`, without a
+capacity decision or fact reference. Opening a store for reads and verifying
+material remain valid without an admission owner.
+
+Workflow #407 PF-1 (0.12.37; `contracts/v012-register.md` §1.248): one decision on a
+stream covers `artifact_store.stream_admit_chunk_bytes` bytes (default 1 MiB;
+[runtime-config.md](runtime-config.md), "The `artifact_store` section"), counted from
+the write that took it. A write within what is left takes no decision. A write beyond
+it takes one for its own bytes, as every write did before PF-1, so a refusal has the
+same meaning, condition and code, and never comes earlier. A refusal, a stale fact or
+a changed binding surfaces at most one chunk later than it would have, and a stream
+may pass the hard threshold by that much (the projection never reserved storage, and
+its fact already lags by the band above). 0 takes a decision for every write, and a
+store whose owner sets no value keeps 0: the Runtime's host hands the value in effect
+to its store at start and after every change; offline tools and fixtures set none. A
+stream takes the value when it opens and keeps it. Stream open, Drain and the seal's
+zero-new-byte decision are unchanged.
+
+The edges of that rule (CHECK-M addendum item 2):
+
+- **Several streams.** The allowance is each stream's own count, not shared and not held
+  by the owner: a decision reserves nothing. "At most one chunk late" is per stream. The
+  whole machine's bound is the chunk times the live streams, each of which may write what
+  is left of its own chunk after the volume fills. Production's live streams are one
+  diagnostic stream per run in progress and short-lived PPOCR diagnostic documents.
+- **A write larger than what is left, or than a chunk.** One decision for all of that
+  write's own bytes, before any of them is written; what was left does not count towards
+  it. Refused, none of it is written. Allowed, a write of a chunk or more leaves nothing over.
+  Such a write is never late.
+- **A changed bound volume.** A stream binds at its opening decision and compares at each
+  later decision, so a change is seen at its next one, at most a chunk of bytes later:
+  `capacity_admission_refused` with `binding_changed`, as before. Those bytes go through
+  the file handle the stream already holds. Drain still passes it, as before.
+- **An I/O failure.** A file write that fails inside a chunk takes no new decision. It is
+  the stream's fatal `artifact_write_failed` with its native detail and the last decision
+  as context; the staging file is removed and the stream stays failed. The count ends
+  with the stream, so nothing leaks: no other stream's chunk and no later decision moves.
 
 Trusted terminal/error/release owners select Drain in Rust; there is no client or
 resource field for it. Drain still requires an owner. A stream retains the owner

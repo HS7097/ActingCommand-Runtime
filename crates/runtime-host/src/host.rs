@@ -2386,6 +2386,8 @@ impl RuntimeHost {
             shared.refresh_blackout_catalog(true)?;
             // LN-9 (#422): the scrub's rate in effect, an instruction value included.
             shared.refresh_ledger_scrub_rate()?;
+            // Workflow #407 PF-1: the stream chunk in effect, an instruction value included.
+            shared.refresh_stream_admit_chunk()?;
             // Workflow #373 NAV-6 (M-373 §7): every standard-pack game root, read and recorded;
             // a broken one never stops the start.
             shared.register_standard_packs_on_start()?;

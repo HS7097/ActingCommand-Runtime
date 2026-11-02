@@ -156,6 +156,11 @@ pub struct ArtifactStream {
     failure: Option<ArtifactStoreError>,
     capacity: Option<Arc<dyn ArtifactCapacityAdmission>>,
     append_timing: Option<ArtifactAppendTiming>,
+    /// Workflow #407 PF-1: the bytes one capacity decision covers, fixed when the stream opens;
+    /// 0 judges every write.
+    admit_chunk_bytes: u64,
+    /// Workflow #407 PF-1: what is left of the last decision's chunk.
+    admitted_unspent: u64,
 }
 
 /// Direct call observations from one logical append, without task or record identity.
@@ -259,6 +264,27 @@ impl ArtifactStream {
         self.failure = Some(error.clone());
         error
     }
+
+    /// Workflow #407 PF-1 (`artifact_store.stream_admit_chunk_bytes`): a write within what is left
+    /// of the last decision's chunk needs no new decision. A write beyond it takes one for its own
+    /// bytes, so a refusal means what it always meant, and the decision then covers the rest of a
+    /// new chunk. A refusal or a binding change therefore surfaces at most one chunk late. A short
+    /// write's remainder is charged again, which can only bring the next decision forward.
+    fn admit_stream_bytes(&mut self, bytes: u64) -> ArtifactStoreResult<()> {
+        if let Some(unspent) = self.admitted_unspent.checked_sub(bytes) {
+            self.admitted_unspent = unspent;
+            return Ok(());
+        }
+        self.admitted_unspent = 0;
+        admit_bytes(
+            self.capacity.as_deref(),
+            &mut self.context,
+            &self.temp_path,
+            bytes,
+        )?;
+        self.admitted_unspent = self.admit_chunk_bytes.saturating_sub(bytes);
+        Ok(())
+    }
 }
 
 impl Write for ArtifactStream {
@@ -267,12 +293,7 @@ impl Write for ArtifactStream {
             return Err(std::io::Error::other(error.clone()));
         }
         let started = self.append_timing.as_ref().map(|_| Instant::now());
-        let admission = admit_bytes(
-            self.capacity.as_deref(),
-            &mut self.context,
-            &self.temp_path,
-            bytes.len() as u64,
-        );
+        let admission = self.admit_stream_bytes(bytes.len() as u64);
         if let (Some(started), Some(timing)) = (started, self.append_timing.as_mut()) {
             timing.capacity_admit.observe(
                 observed_span(started),
@@ -359,6 +380,9 @@ pub struct ArtifactStore {
     events: IdentifierIssuer,
     writer: Mutex<()>,
     capacity: OnceLock<Arc<dyn ArtifactCapacityAdmission>>,
+    /// Workflow #407 PF-1: what a stream opened from now on takes as its chunk; 0 until an owner
+    /// sets it, so a store nobody configures judges every write.
+    stream_admit_chunk_bytes: AtomicU64,
 }
 
 impl ArtifactStore {
@@ -395,11 +419,19 @@ impl ArtifactStore {
             })?,
             writer: Mutex::new(()),
             capacity: OnceLock::new(),
+            stream_admit_chunk_bytes: AtomicU64::new(0),
         })
     }
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Workflow #407 PF-1: the bytes one capacity decision covers on a stream opened from now on
+    /// (`artifact_store.stream_admit_chunk_bytes`); a stream already open keeps its own.
+    pub fn set_stream_admit_chunk_bytes(&self, bytes: u64) {
+        self.stream_admit_chunk_bytes
+            .store(bytes, Ordering::Relaxed);
     }
 
     /// Installed once before new-byte admission. Read-only stores may remain without an owner.
@@ -629,6 +661,8 @@ impl ArtifactStore {
             failure: None,
             capacity,
             append_timing: None,
+            admit_chunk_bytes: self.stream_admit_chunk_bytes.load(Ordering::Relaxed),
+            admitted_unspent: 0,
         })
     }
 
@@ -2406,6 +2440,316 @@ pub(crate) mod tests {
         assert!(sink.event_types.is_empty());
         assert!(!staging.exists());
         assert!(material_files(temp.path()).is_empty());
+    }
+
+    // Workflow #407 PF-1 (`rd-1031/check-speed/model-check.md` §3, §7): a fake owner that keeps
+    // every amount it is asked about and answers with the outcome and volume it holds now.
+    struct ChunkOwner {
+        asked: Mutex<Vec<u64>>,
+        outcome: Mutex<actingcommand_contract::CapacityAdmissionOutcome>,
+        volume: Mutex<String>,
+    }
+
+    impl ChunkOwner {
+        fn new() -> Self {
+            Self {
+                asked: Mutex::new(Vec::new()),
+                outcome: Mutex::new(actingcommand_contract::CapacityAdmissionOutcome::Allowed),
+                volume: Mutex::new("fixture-volume".to_owned()),
+            }
+        }
+
+        fn asked(&self) -> Vec<u64> {
+            self.asked.lock().expect("asked").clone()
+        }
+    }
+
+    impl crate::ArtifactCapacityAdmission for ChunkOwner {
+        fn decide(
+            &self,
+            _path: &std::path::Path,
+            bytes: u64,
+        ) -> ArtifactStoreResult<actingcommand_contract::CapacityDecision> {
+            use actingcommand_contract::{CapacityAdmissionOutcome, CapacityAdmissionReason};
+            self.asked.lock().expect("asked").push(bytes);
+            let ids = IdentifierIssuer::new().expect("fixture identity");
+            let outcome = *self.outcome.lock().expect("outcome");
+            Ok(actingcommand_contract::CapacityDecision {
+                owner_epoch: *ids.mint_owner_epoch().expect("capacity owner").transport(),
+                decided_at_unix_ms: 1,
+                decided_at_monotonic_ms: 0,
+                requested_bytes: bytes,
+                target_volume: Some(self.volume.lock().expect("volume").clone()),
+                admission_result: outcome,
+                reason: if outcome == CapacityAdmissionOutcome::Allowed {
+                    CapacityAdmissionReason::FreshSample
+                } else {
+                    CapacityAdmissionReason::HardThreshold
+                },
+                fact: None,
+            })
+        }
+    }
+
+    /// A stream of a store whose chunk is `chunk` bytes, with the fake owner behind it; the owner
+    /// has already been asked once, for 0 bytes, by the stream's opening.
+    fn chunked_stream(temp: &tempfile::TempDir, chunk: u64) -> (Arc<ChunkOwner>, ArtifactStream) {
+        let (owner, store) = chunked_store(temp, chunk);
+        let stream = open_stream(&store);
+        assert_eq!(owner.asked(), [0], "the stream's opening asks once");
+        (owner, stream)
+    }
+
+    /// A store whose chunk is `chunk` bytes, with the fake owner behind it.
+    fn chunked_store(temp: &tempfile::TempDir, chunk: u64) -> (Arc<ChunkOwner>, ArtifactStore) {
+        let store = ArtifactStore::open(temp.path()).expect("store");
+        let owner = Arc::new(ChunkOwner::new());
+        store
+            .install_capacity_admission(owner.clone())
+            .expect("fixture capacity owner");
+        store.set_stream_admit_chunk_bytes(chunk);
+        (owner, store)
+    }
+
+    fn open_stream(store: &ArtifactStore) -> ArtifactStream {
+        let request = request(b"stream context");
+        store
+            .begin_stream(
+                ArtifactKind::DiagnosticJson,
+                request.context,
+                request.policy,
+            )
+            .expect("begin stream")
+    }
+
+    // Addendum item 2: the allowance is each stream's own, so two streams on one store and one
+    // owner never spend each other's chunk, and after the volume fills each may still write what
+    // is left of its own: late by at most a chunk per stream, a chunk times the live streams for
+    // the machine.
+    #[test]
+    fn two_streams_each_admit_on_their_own_chunk() {
+        use actingcommand_contract::CapacityAdmissionOutcome;
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (owner, store) = chunked_store(&temp, 1000);
+        let mut first = open_stream(&store);
+        let mut second = open_stream(&store);
+        assert_eq!(owner.asked(), [0, 0]);
+
+        first.append(&[b'x'; 600]).expect("the first decision");
+        second.append(&[b'x'; 600]).expect("the second decision");
+        assert_eq!(owner.asked(), [0, 0, 600, 600], "neither shares a chunk");
+        first.append(&[b'x'; 300]).expect("within the first chunk");
+        second
+            .append(&[b'x'; 300])
+            .expect("within the second chunk");
+        assert_eq!(owner.asked(), [0, 0, 600, 600]);
+
+        // Only the first stream's chunk runs out; the second keeps its 100 bytes.
+        first.append(&[b'x'; 300]).expect("a new first chunk");
+        assert_eq!(owner.asked(), [0, 0, 600, 600, 300]);
+
+        // The volume fills: each stream still writes exactly what is left of its own chunk.
+        *owner.outcome.lock().expect("outcome") = CapacityAdmissionOutcome::HardPressure;
+        first.append(&[b'x'; 700]).expect("the first stream's rest");
+        second
+            .append(&[b'x'; 100])
+            .expect("the second stream's rest");
+        assert_eq!(owner.asked(), [0, 0, 600, 600, 300]);
+        for stream in [&mut first, &mut second] {
+            let error = stream.append(b"x").expect_err("the next byte is refused");
+            assert_eq!(error.code(), SharedCode::CapacityAdmissionRefused.as_str());
+        }
+        assert_eq!(owner.asked(), [0, 0, 600, 600, 300, 1, 1]);
+    }
+
+    // Addendum item 2: a single write beyond what is left takes one decision for all of its own
+    // bytes. What was left of the chunk does not count towards it, nothing of it is written
+    // before the answer, and it leaves nothing over.
+    #[test]
+    fn a_write_larger_than_a_chunk_is_admitted_as_itself() {
+        use actingcommand_contract::CapacityAdmissionOutcome;
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (owner, mut stream) = chunked_stream(&temp, 1000);
+        stream.append(&[b'x'; 100]).expect("the decision's write");
+
+        stream.append(&[b'x'; 2500]).expect("the large write");
+        assert_eq!(owner.asked(), [0, 100, 2500]);
+        let decision = stream.context.capacity.as_ref().expect("the last decision");
+        assert_eq!(decision.requested_bytes, 2500);
+        assert_eq!(stream.material.byte_count(), 2600);
+        assert_eq!(stream.admitted_unspent, 0);
+
+        // Refused as a whole, with 900 bytes of a new chunk still unspent.
+        stream.append(&[b'x'; 100]).expect("a new chunk");
+        assert_eq!(owner.asked(), [0, 100, 2500, 100]);
+        assert_eq!(stream.admitted_unspent, 900);
+        *owner.outcome.lock().expect("outcome") = CapacityAdmissionOutcome::HardPressure;
+        let staging = stream.temp_path.clone();
+        let error = stream
+            .append(&[b'x'; 2500])
+            .expect_err("refused as a whole");
+        assert_eq!(error.code(), SharedCode::CapacityAdmissionRefused.as_str());
+        assert_eq!(
+            error.capacity().expect("the decision").requested_bytes,
+            2500
+        );
+        assert_eq!(stream.material.byte_count(), 2700, "none of it was written");
+        assert!(!staging.exists());
+    }
+
+    // Addendum item 2: a decision reserves nothing, so an allowance is only a count on its own
+    // stream. A file write that fails inside a chunk is the stream's fatal write failure, with the
+    // last decision as context and no new one; the stream stays failed, its count goes with it, and
+    // no other stream's chunk or any later stream's decision moves.
+    #[test]
+    fn an_io_failure_after_admission_is_reported_and_the_allowance_is_not_leaked() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (owner, store) = chunked_store(&temp, 1000);
+        let mut failing = open_stream(&store);
+        let mut sibling = open_stream(&store);
+        failing.append(&[b'x'; 100]).expect("the decision's write");
+        sibling
+            .append(&[b'x'; 100])
+            .expect("the sibling's decision");
+        assert_eq!(owner.asked(), [0, 0, 100, 100]);
+
+        // A read-only handle makes the next native write fail, inside the admitted chunk.
+        let staging = failing.temp_path.clone();
+        failing.file = Some(File::open(&staging).expect("read-only stream handle"));
+        let error = failing.append(&[b'x'; 100]).expect_err("the write fails");
+        assert_eq!(error.code(), SharedCode::ArtifactWriteFailed.as_str());
+        assert_eq!(
+            error.operation(),
+            StoreLocation::WriteArtifactStream.as_str()
+        );
+        assert!(error.is_fatal(), "{error}");
+        assert!(
+            error.capacity().is_some(),
+            "the last decision is its context"
+        );
+        assert!(!staging.exists());
+        assert_eq!(owner.asked(), [0, 0, 100, 100], "no decision was involved");
+
+        // Reported from then on, with no new decision and no bytes.
+        let again = failing.append(b"x").expect_err("the stream stays failed");
+        assert_eq!(again, error);
+        assert_eq!(owner.asked(), [0, 0, 100, 100]);
+        assert_eq!(failing.abort().expect_err("the cached failure"), error);
+
+        // The sibling still has its own 900 bytes, and no more.
+        sibling.append(&[b'x'; 900]).expect("the sibling's chunk");
+        assert_eq!(owner.asked(), [0, 0, 100, 100]);
+        sibling.append(b"x").expect("the sibling's next chunk");
+        assert_eq!(owner.asked(), [0, 0, 100, 100, 1]);
+
+        // A later stream starts from nothing: its opening, then its own first decision.
+        let mut later = open_stream(&store);
+        later
+            .append(&[b'x'; 10])
+            .expect("the later stream's decision");
+        assert_eq!(owner.asked(), [0, 0, 100, 100, 1, 0, 10]);
+    }
+
+    #[test]
+    fn stream_admits_once_per_chunk() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (owner, mut stream) = chunked_stream(&temp, 1000);
+        // Ten writes of 300 bytes: a decision covers three of them and 100 bytes go unused.
+        for _ in 0..10 {
+            let (appended, timing) = stream.append_observed(&[b'x'; 300]);
+            appended.expect("an admitted write");
+            // The check is entered and measured on every write, a decision or not.
+            assert_eq!(timing.capacity_admit.attempts, Some(1));
+        }
+        assert_eq!(
+            owner.asked(),
+            [0, 300, 300, 300, 300],
+            "each decision is asked about the write that needs it, never about the chunk"
+        );
+
+        // A write larger than a chunk takes its own decision and leaves nothing over.
+        stream.append(&[b'x'; 2500]).expect("a large write");
+        stream.append(&[b'x'; 1]).expect("the next write");
+        assert_eq!(owner.asked(), [0, 300, 300, 300, 300, 2500, 1]);
+
+        // No key, as a store nobody configures has: every write takes a decision.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (owner, mut stream) = chunked_stream(&temp, 0);
+        for _ in 0..3 {
+            stream.append(&[b'x'; 7]).expect("a judged write");
+        }
+        assert_eq!(owner.asked(), [0, 7, 7, 7]);
+    }
+
+    #[test]
+    fn stream_refusal_surfaces_within_one_chunk() {
+        use actingcommand_contract::CapacityAdmissionOutcome;
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (owner, mut stream) = chunked_stream(&temp, 1000);
+        let staging = stream.temp_path.clone();
+        stream.append(&[b'x'; 100]).expect("the decision's write");
+
+        // The volume fills. Only what is left of the chunk may still go.
+        *owner.outcome.lock().expect("outcome") = CapacityAdmissionOutcome::HardPressure;
+        let mut written_after = 0_u64;
+        let error = loop {
+            match stream.append(&[b'x'; 100]) {
+                Ok(()) => written_after += 100,
+                Err(error) => break error,
+            }
+            assert!(written_after < 1000, "the refusal surfaces within a chunk");
+        };
+        assert_eq!(written_after, 900);
+        assert_eq!(error.code(), SharedCode::CapacityAdmissionRefused.as_str());
+        assert_eq!(
+            error.operation(),
+            StoreLocation::AdmitArtifactBytes.as_str()
+        );
+        assert!(!error.is_fatal(), "{error}");
+
+        // It is the refusal of today's stream: the staging file is gone, and the stream stays
+        // failed without asking again.
+        assert!(!staging.exists());
+        let asked = owner.asked().len();
+        let again = stream.append(b"x").expect_err("the stream stays failed");
+        assert_eq!(again, error);
+        assert_eq!(owner.asked().len(), asked);
+        assert_eq!(stream.abort().expect_err("the cached refusal"), error);
+
+        // A trusted terminal owner still drains through a refused decision.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (owner, mut stream) = chunked_stream(&temp, 1000);
+        stream.for_drain();
+        *owner.outcome.lock().expect("outcome") = CapacityAdmissionOutcome::HardPressure;
+        stream.append(&[b'x'; 2500]).expect("a drain write");
+        stream.abort().expect("nothing failed");
+    }
+
+    #[test]
+    fn stream_binding_change_is_seen_at_next_chunk() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (owner, mut stream) = chunked_stream(&temp, 1000);
+        stream.append(&[b'x'; 400]).expect("the decision's write");
+
+        // The target moves to another volume: unseen until the chunk is used up.
+        *owner.volume.lock().expect("volume") = "other-volume".to_owned();
+        stream.append(&[b'x'; 500]).expect("within the chunk");
+        assert_eq!(owner.asked(), [0, 400]);
+
+        let error = stream
+            .append(&[b'x'; 200])
+            .expect_err("the next decision sees the change");
+        assert_eq!(owner.asked(), [0, 400, 200]);
+        assert_eq!(error.code(), SharedCode::CapacityAdmissionRefused.as_str());
+        let decision = error.capacity().expect("the refusal's decision");
+        assert_eq!(
+            decision.reason,
+            actingcommand_contract::CapacityAdmissionReason::BindingChanged
+        );
+        assert_eq!(
+            decision.admission_result,
+            actingcommand_contract::CapacityAdmissionOutcome::Unknown
+        );
     }
 
     #[test]

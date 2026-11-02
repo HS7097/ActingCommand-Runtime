@@ -213,11 +213,30 @@ The optional `diagnostic_record_write.subphases` contains exactly `encode`,
 `framing`, `capacity_admit`, `file_write` and `material_update`. Host measures the
 original serde call (including its typed `to_value` conversion) and checked
 framing/reserve/comma/newline work. ArtifactStream returns in-memory observations
-of entered calls within that same single append: the complete original capacity
-decision/binding/Drain check, the actual file write, and the original hash/count
-update of only the successfully returned bytes. Each short-write iteration keeps
-its own admission and file/material call in the fixed cumulative counts and last
-sample. Host adds the actual record index and merges into the original phase/run.
+of entered calls within that same single append: the capacity check (the chunk
+count, and the complete capacity decision/binding/Drain check when the last decision
+no longer covers the write, Workflow #407 PF-1; [capacity-admission.md](capacity-admission.md)),
+the actual file write, and the original hash/count update of only the successfully
+returned bytes. Each short-write iteration keeps its own check and file/material call
+in the fixed cumulative counts and last sample, so `capacity_admit.attempts` still
+equals `file_write.attempts` and counts checks, not decisions. Host adds the actual
+record index and merges into the original phase/run.
+
+A run's diagnostic stream caches its capacity allowance itself (Workflow #407 PF-1, CHECK-M
+addendum item 2; `contracts/v012-register.md` §1.248; [capacity-admission.md](capacity-admission.md)
+is the rule):
+
+- **Per stream.** Each stream has its own count; streams share none, and the owner holds none.
+  "At most one chunk late" (`artifact_store.stream_admit_chunk_bytes`, default 1 MiB) is per
+  stream. The whole machine's bound is the chunk times the live streams.
+- **A write larger than what is left, or than a chunk.** One decision for all of its own bytes,
+  before any is written. A refused record leaves nothing of itself in the stream, and the run takes
+  the refusal path it always took.
+- **A changed bound volume.** Seen at the stream's next decision, so at most a chunk of bytes later:
+  `capacity_admission_refused` with `binding_changed`.
+- **An I/O failure.** A failed write takes no new decision and is reported at once as the stream's
+  fatal `artifact_write_failed`; the stream stays failed, and its count ends with it, so no other
+  stream's allowance moves.
 
 Every subphase retains attempts/errors/total/max/last with checked microseconds
 and accumulation. Unentered calls have `unobserved` status and absent elapsed

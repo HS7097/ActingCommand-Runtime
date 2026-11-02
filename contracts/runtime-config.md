@@ -91,7 +91,8 @@ lab-options`; acsetup's Lab transaction through it, Workflow #429 R-0). Until U-
 read and reported only: nothing is refused by them. Workflow #390 DISC-1's rows: the
 `startup_discovery` section below (default `file`, not settable, read once at assembly).
 Workflow #406 T12's rows: the `touch` section below (default `file`, settable). PERF-B1's rows:
-the `execution` section below (default `file`, settable). Workflow #392 DA-4b-D's rows: the
+the `execution` section below (default `file`, settable). Workflow #407 PF-1's row: the
+`artifact_store` section below (default `file`, settable; since 0.12.37). Workflow #392 DA-4b-D's rows: the
 `display_safe_area` section below (default `file`, settable) and the per-instance
 `display_safe_area.model` (string, default `section:display_safe_area.model`, settable). RB-2's
 rows: the `host` section below (string `normal` | `low`, default `file`, not settable: applied
@@ -1162,6 +1163,26 @@ rows are those of `config.parameters.display_safe_area` and, per instance,
 `config.parameters.instance`. What the declarations hold, which insets a frame takes and how a
 broken declaration is refused (`display_map_unresolved` with its `display_problem`) is
 [display-adapter.md](display-adapter.md) section 9.
+
+## The `artifact_store` section (Workflow #407 PF-1)
+
+Workflow #407 PF-1 ([v012-register.md](v012-register.md) §1.248): how many bytes of an open stream
+one capacity decision covers. A run's diagnostic stream takes one write per record, and one measured
+production run spent 95% of its diagnostic writing on a decision per write
+([capacity-admission.md](capacity-admission.md) is the rule; it says what a chunk changes).
+
+| Key | Type | Default (`actingd.defaults.json`) | Settable |
+|---|---|---|---|
+| `artifact_store.stream_admit_chunk_bytes` | integer `0..=67108864`, the bytes one decision covers; 0 takes a decision for every write | `1048576` (1 MiB) | yes |
+
+- **When it takes effect.** The host hands the value in effect to its artifact store at start, once
+  the instruction values are restored, and after every `ConfigureSettings`. A stream takes it when
+  it opens, so an instruction takes effect at the next stream; an open stream keeps its own.
+- **Refusal.** A value of another type is `config_value_invalid` (`wrong_type`), one outside its range
+  `out_of_range`, each naming the key, at start, in `check-config` and in `ConfigureSettings`.
+- `actingd-config` revision 24 ([component-interfaces.md](component-interfaces.md)) adds the section;
+  a file that does not name it keeps its revision. The row is reported in
+  `config.parameters.artifact_store`, and the key is `hidden` in the console's tiers.
 
 ## The `host` section (RB-2)
 
