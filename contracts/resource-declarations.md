@@ -56,6 +56,12 @@ cross-references, each naming the entry's field pointer. Workflow #384 D2-S3: th
 amount's target cross-reference. No task schema, content-directory, `control.json`,
 `resources.json` or derived pack/pages version changes.
 
+A task of schema `0.7` or `0.8` requires `post_admission_ocr` (`MissingField`), in the form
+`ocr-fields.md` gives its schema. A task of schema `0.9` may declare it, in the schema `0.8`
+`fields_v1` form only (Workflow #428 OCR-SCALE-1, since 0.12.37; `ocr-fields.md`, section Task
+schema `0.9` fields tasks); a member of another form is `UnknownField` at its pointer. Before
+`0.7` it is `UnconsumedField` @ `/post_admission_ocr`.
+
 The applications table may carry an optional top-level `label`: the game's display name for people, free text (bilingual `中文 / English` recommended) of 1-128 bytes after trimming, without control characters; consumers fall back to `game` when it is absent.
 
 Each `servers.<server>` entry of the applications table carries `application_id`,
@@ -789,7 +795,8 @@ it, as a target that declares `unique` is.
 The match's box is the resampled template's, and the factor it hit at scales the package
 lengths that hang on the match, each `(|v| * f + 500) div 1000` with the sign of `v`, a width or
 height at least 1: a relative color region (`template-relative-color.md`), a
-`template_relative` OCR region whose anchor declares `scales` (`ocr-fields.md`) and a click
+`template_relative` OCR region whose anchor declares `scales` (`ocr-fields.md`; a field's box in
+section Task schema `0.9` fields tasks there) and a click
 `offset` (a `target` click takes the resampled box itself). With `unique`, a position at
 another factor whose box does not intersect the best one is a second place like any other. A
 mask applies to each resampled template's gray values. The evaluation and the task diagnostic

@@ -6880,7 +6880,7 @@
       "review": "pending",
       "tokens": {
         "operations_empty": {
-          "description": "The task declares no operation, which only a task schema 0.8 zero-input reading task without recovery may (contracts/ocr-fields.md)."
+          "description": "The task declares no operation, which only a zero-input fields task of task schema 0.8 or 0.9 without recovery may (contracts/ocr-fields.md)."
         },
         "wait_member_refused": {
           "description": "A wait step (#411 B36/B19, A35-S3) declares a member it never takes: click, application, select, guard, unguarded_trusted_coordinate, retryable, max_attempts, retry_interval_ms, post_delay_ms, on_error, input_recheck, observation_window, on_guard_refused, or a wait page of its own (expect_after.wait_page)."

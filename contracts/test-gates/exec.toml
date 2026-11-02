@@ -1006,6 +1006,19 @@ tests = [
 ]
 incident = ["#396"]
 
+# Workflow #428 OCR-SCALE-1 (0.12.37; register §1.251): a task of schema 0.9 may declare OCR fields, the schema 0.8 form behind the schema 0.8 gates. A box on an anchor with scales reads every digit at factors 1000 and 900 from the same layer; an absent anchor ends in contained_task_ocr_fields_unresolved with no provider call; a box on an anchor without scales keeps its declared size in both schemas; schema 0.9 refuses what schema 0.8 refuses with the same code; schema 0.9 takes no comparison, needs fields or an operation and keeps Lab-1y.control.v2; schema 0.8 still requires fields and takes no scales; the source and Runtime admission agree
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::ocr_scale_tests::a_box_following_an_anchor_reads_the_same_cells_at_factors_1000_and_900",
+    "actingcommand-execution-kernel::lib::contained_task::ocr_scale_tests::an_absent_anchor_ends_in_the_named_failure_with_no_read",
+    "actingcommand-execution-kernel::lib::contained_task::ocr_scale_tests::a_box_on_an_anchor_without_scales_keeps_its_declared_size_in_both_schemas",
+    "actingcommand-execution-kernel::lib::contained_task::ocr_scale_tests::schema_0_9_refuses_what_schema_0_8_refuses_with_the_same_code",
+    "actingcommand-execution-kernel::lib::contained_task::ocr_scale_tests::each_schema_takes_its_declaration_form_and_its_control",
+    "actingcommand-resource-tooling::neutral_game_pipeline::ocr_scale1_source_and_admission_take_fields_in_schema_0_9_and_leave_0_8_unchanged",
+]
+incident = ["#428 OCR-SCALE-1"]
+
 # Workflow #411 A58, #428 CFL-1: recognition preprocessing. Every step kind turns a small region into its golden bytes and evidence (keep_colors with its per-channel tolerance, keep_range in RGB and in HSV on the 0-179 hue scale with (255,0,8) at 179, gray, contrast, threshold, invert; kept_milli counted before invert, and inverted); an HSV hue range whose lower is above its upper wraps through 0; Otsu splits between two peaks, takes the smallest tied threshold and zeroes a region of one value; the remainder decides between two splits of the same quotient (0 0 0 1 1 1 2 4 gives 3); apply accepts a 720p region and one of 2^24 pixels, the domain check accepts up to 2^24 pixels, and apply refuses a larger region (RegionTooLarge); a gray chain gives the scene's gray byte for byte; the same region and chain give the same bytes twice; only the twelve chains of the two shapes are accepted, and a refusal names its step and member (step count, first step, order, repetition, colors, hue, bounds, contrast, threshold)
 [[gate]]
 coverage = "Y"

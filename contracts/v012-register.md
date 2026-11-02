@@ -5772,6 +5772,27 @@ members), **so the operator first removes them**. An online override of either k
 
 **Tests changed** (the approved behaviour change): `ledger_observer_tests`' `WORKBENCH_PATTERNS` gains the entry; `component_interfaces.rs`' `V0120` says `actingd-config` [5, 24].
 
+### 1.251 Slice OCR-SCALE-1 (0.12.37): a task of schema 0.9 may declare OCR fields, and a field's box follows a scaled anchor (#428, #392; Alice's ruling of 2026-11-02 that an interface scale is an event to support; coordinator work order `rd-1031/check-speed/brief-ocr-scale.md`)
+
+[ocr-fields.md](ocr-fields.md), section Task schema `0.9` fields tasks, is the contract. **No new code, key, ledger shape or wire shape.**
+
+**Why the limit existed.** `"0.9" => post_admission_ocr.is_none()` came in with schema 0.9 itself (commit `7e23026e23`, the phased routes): the slice's scope, with no reason, test or register row behind it, and the contract then called 0.9's budgets "non-OCR". `contained_task_phases_invalid` is another rule, schema 0.9 with `Lab-1y.control.v2`, and stays. Reading what later landed found one real problem, in one form only: schema 0.9's keyed ends supply a run's scheduling key, the `0.7` comparison supplies one too, and `finish_success_with_key` ends a run that has both in `contained_task_state_invalid` (admission keeps only `on_empty` away from a comparison). A fields run has no comparison key, so fields have no such problem.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| OS-1 | task schema `0.9` `post_admission_ocr`, `fields_v1` form | relaxed rule (resource file format) | OCR-SCALE-1 | resource side | `since` 0.12.37; optional; the gates, dictionaries, limits, zero-input rules, reports and projections of schema `0.8`; `package` revision 6, no second step (§1.244 TB6) |
+| OS-2 | task schema `0.9` `operations: []` with fields | relaxed rule (resource file format) | OCR-SCALE-1 | resource side | `since` 0.12.37; without fields it stays `contained_task_program_invalid`, `program_problem` `operations_empty`, whose token text now names both schemas |
+| OS-3 | the `0.7` comparison form in schema `0.9` | **unchanged refusal** | — | — | `resource_declaration_invalid` at its first unknown member, or `contained_task_program_invalid` where the gate does not run; the reason above |
+| OS-4 | a `template_relative` box on an anchor with `scales` | **unchanged behaviour**, now reachable by a field in a pack that declares it | REC-5 | resource side | `scaled_relative` already scales the offset and size by the matched factor; this slice writes the rule down and tests it through a fields run |
+
+**The scaling rule, and the evidence for it.** The rule REC-5 already gave relative colors, relative OCR and click offsets: `(|v| * f + 500) div 1000` from the matched top-left corner, the highest score across factors, no fallback when the anchor does not match. The resource side's frames of a real 0.90 interface scale show the icons and the text beside them shrinking together in one layer, and the reading's digits moving with the icons (its measured move of 30 and 18 pixels on one button is the layer's vanishing point, which is why the box hangs from the anchor and not from the frame). A second rule for fields would give one reading two answers.
+
+**Interface.** `package` stays [3, 6]: the new form is refused loudly by an older Runtime and shares revision 6 with DB-2 in one release. No bundle index or installer change.
+
+**Left open.** A pack in the `0.7` comparison form cannot move to schema `0.9` by this slice and keeps its parallel templates; moving it needs the keyed ends refused beside a comparison and the form told apart by `mode`, a slice of its own if wanted. Fields beside `phases` are admitted, since the collector does not read the stage, and no test runs them together. No pack changes here.
+
+**Rollback** (to 0.12.36). A pack that declares it is refused at the older build's declaration gate; `package` [3, 6] above its range refuses the combination earlier. Nothing persisted changes.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

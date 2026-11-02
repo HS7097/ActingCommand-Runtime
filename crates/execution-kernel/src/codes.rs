@@ -333,8 +333,8 @@ actingcommand_contract::outcome_vocabulary! {
     /// `program_problem`, Workflow #411 A39): the value of `contained_task_program_invalid` where
     /// the refusal names its rule.
     pub enum ProgramProblem: "program_problem" {
-        /// The task declares no operation, which only a task schema `0.8` zero-input reading
-        /// task without recovery may (contracts/ocr-fields.md).
+        /// The task declares no operation, which only a zero-input fields task of task schema
+        /// `0.8` or `0.9` without recovery may (contracts/ocr-fields.md).
         OperationsEmpty => "operations_empty",
         // #411 B36/B19 (A35-S3): the rules of a wait step and of a confirmation's wait page
         // (contracts/resource-declarations.md, "Wait steps and wait pages").

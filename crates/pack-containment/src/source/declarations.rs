@@ -2947,7 +2947,8 @@ pub fn validate_bundle_declarations(bundle: &Bundle, files: &ParseFiles) -> CliO
         declaration.schema = value.get("schema_version").and_then(Value::as_str);
         declaration.truth_set(
             &value,
-            bundle.data["schema_version"].as_str() == Some("0.8"),
+            // Workflow #428 OCR-SCALE-1: a fields dictionary, of task schema 0.8 or 0.9.
+            bundle.task_schema_at_least(TaskSchema::V0_8),
         )?;
     }
     Ok(())
@@ -3450,7 +3451,8 @@ impl Declaration<'_> {
     }
 
     fn post_ocr(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
-        let fields_mode = self.schema == Some("0.8");
+        // Workflow #428 OCR-SCALE-1: task schema 0.9 takes the schema 0.8 form, and only it.
+        let fields_mode = !self.schema_before(TaskSchema::V0_8);
         let fields: &[&str] = if fields_mode {
             &["mode", "page_ids", "fields", "limits", "outcome_key"]
         } else {
@@ -4108,6 +4110,8 @@ impl Declaration<'_> {
             Some("0.7" | "0.8") => {
                 self.required(object, "", "post_admission_ocr")?;
             }
+            // Workflow #428 OCR-SCALE-1: optional here; `post_ocr` holds it to the fields form.
+            Some("0.9") => {}
             _ if object.contains_key("post_admission_ocr") => {
                 return Err(self.error(
                     "/post_admission_ocr",
