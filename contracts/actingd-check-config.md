@@ -307,6 +307,10 @@ The members of `report`:
       `config_subsystem_flag_absent`).
     - `agent_dispatcher`: its section (`config_subsystem_configured` or
       `config_subsystem_section_absent`).
+    - `agent_wake` (Workflow #432 AGT-1a): this row is there only with an
+      `agent_wake` section. `config_subsystem_configured` or
+      `config_subsystem_configured_off` by `agent_wake.enabled`, with a `note`
+      link for what is wrong with the channel registry ("Agent wake" below).
     - `governance`: always on (`config_subsystem_always_on`). With a
       `governance` section the value `count` is the size of the effective
       allow-list; without one there is no `count` (any well-formed card is
@@ -1219,6 +1223,28 @@ as startup does), the uninstall registry keys and the file system. It never
 runs `MuMuManager.exe` or ADB, starts or stops no instance and records nothing.
 With two installations the winner can differ between runs (a running process
 comes first), which is why a configured `mumu_root` is preferred.
+
+## Agent wake
+
+Workflow #432 AGT-1a ([agent-wake.md](agent-wake.md)). With an `agent_wake` section,
+`check-config` and a start check it whole at stage `config_assemble`. A broken rule fails with
+`agent_wake_config_invalid` (`config_key`, `config_value_problem`):
+
+- a key left out, or an empty section: the section is whole or absent;
+- rule ids are unique, `kinds` come from the closed list, `run_failed` needs `codes`, and codes are
+  catalog codes not retired;
+- `instances` are `"*"` or configured aliases;
+- `rule.daily_cap` ≤ `budget.daily_cap` ≤ `delivery.history_rows` (at most 256, the key's range);
+- `body.dir` is a relative folder outside `ledger`, `artifacts`, `release-blobs` and `kept`;
+- `panic_backoff_ms` ≤ `panic_backoff_max_ms`;
+- `quiet.windows` keep the rules of a blackout entry;
+- every registered channel's message fits `summary.max_chars` at its floor (`message_floor`, naming
+  `agent_wake.summary.max_chars`).
+
+`check-config` reads the channel registry under the state root and nothing else of it. A registry
+that is missing or unreadable, a rule's `to` it does not list and a program a channel names that is
+not there are `note` links on the `agent_wake` subsystem row and never a refusal (#419). No message
+is sent and no channel is contacted.
 
 ## Exit code
 

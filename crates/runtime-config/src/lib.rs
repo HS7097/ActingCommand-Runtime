@@ -29,7 +29,9 @@
 //!   (Workflow #421 INST-1, read by `actingctl install` from the configuration file,
 //!   [`install::settings`]); `host` (RB-2, Alice's ruling of 2026-10-29: the memory and I/O
 //!   priority actingd gives its own process at start); `store_foreground` (STORE-FG-2: the store
-//!   applications a store update package may tap in, only from the configuration file).
+//!   applications a store update package may tap in, only from the configuration file);
+//!   `agent_wake` (Workflow #432 AGT-1a: the Runtime's messages to registered channels, whole or
+//!   absent, with no default anywhere).
 //!
 //! - Workflow #429 R-4 (since 0.12.36): the settings' version ([`EffectiveConfig::version`]), the
 //!   token `ConfigureSettings.expected_version` compares, and the console's three tiers of the
@@ -40,6 +42,8 @@
 
 #![forbid(unsafe_code)]
 
+// Workflow #432 AGT-1a: `agent_wake.*`, whole or absent; no section, no keys and no rows.
+pub mod agent_wake;
 mod codes;
 mod defaults;
 pub mod device_link;
@@ -74,6 +78,7 @@ mod ui_tier;
 mod value;
 pub mod watchdog;
 
+pub use agent_wake::{AgentWakeConfig, AgentWakeFile};
 pub use codes::{ConfigCode, ConfigValueProblem};
 pub use defaults::{
     DefaultsFile, DefaultsInvalid, SHIPPED_DEFAULTS, sha256_text, shipped_defaults_sha256,
@@ -94,7 +99,10 @@ pub use emulator_control::{
     RESTART_EXIT_WAIT_MAX_MS as EMULATOR_RESTART_EXIT_WAIT_MAX_MS,
     RESTART_EXIT_WAIT_MS as EMULATOR_RESTART_EXIT_WAIT_MS,
 };
-pub use execution::{CaptureCadenceConfig, ExecutionCaptureFile, ExecutionFile};
+pub use execution::{
+    CaptureCadenceConfig, ExecutionCaptureFile, ExecutionFile, InstanceExecutionCaptureFile,
+    InstanceExecutionFile,
+};
 pub use host::{HostFile, HostProcessConfig, ProcessPriorityLevel};
 pub use host_claims::{HostClaimsFile, RENEWAL_SLACK_MS, RUN_END_GRACE_MS};
 pub use idle::{IdleAction, IdleConfig, IdleFile};
@@ -197,6 +205,10 @@ mod gate_411_b37;
 #[cfg(test)]
 mod gate_407_b1;
 
+// STILL-1 (Workflow #407, register §1.249): the still limit's key, off by default and per instance.
+#[cfg(test)]
+mod gate_still1;
+
 // #422 LN-7c Q: the evidence-frame rule's age and the frame queries' pace and chunk.
 #[cfg(test)]
 mod gate_ln7c_q;
@@ -208,3 +220,7 @@ mod gate_store_fg2;
 // SS-4 (register §1.231, test 5): the no-progress switch, on by default and per instance.
 #[cfg(test)]
 mod gate_ss4;
+
+// Workflow #432 AGT-1a: the `agent_wake` section's checks and settable keys.
+#[cfg(test)]
+mod gate_agt_1a;

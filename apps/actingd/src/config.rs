@@ -71,6 +71,9 @@ mod gate_rb2;
 // own application.
 #[cfg(test)]
 mod gate_store_fg2;
+// Test-only: Workflow #432 AGT-1a, the `agent_wake` section's keys, row and refusals.
+#[cfg(test)]
+mod gate_agt_1a;
 
 const CONFIG_SCHEMA_VERSION: &str = "actingcommand.actingd.config.v1";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
@@ -289,6 +292,10 @@ pub(super) struct ActingdConfigFile {
     // members; a file that does not name it keeps its revision.
     #[serde(default)]
     store_foreground: Option<actingcommand_runtime_config::StoreForegroundFile>,
+    /// Workflow #432 AGT-1a: the Runtime's messages to registered channels (`agent_wake.*`), whole
+    /// or absent, with no default anywhere. Interface anchor: see the type.
+    #[serde(default)]
+    agent_wake: Option<actingcommand_runtime_config::AgentWakeFile>,
     instances: Vec<InstanceConfig>,
     #[serde(skip)]
     source_root: PathBuf,
@@ -875,6 +882,12 @@ struct InstanceConfig {
     // that names it, because the entry denies unknown members.
     #[serde(default)]
     display_safe_area: Option<actingcommand_runtime_config::InstanceDisplaySafeAreaFile>,
+    /// STILL-1: the instance's own still limit (`instance.<id>.execution.capture.still_limit_ms`);
+    /// left out, the `execution` section's.
+    // Interface anchor `actingd-config` revision 24: a Runtime before STILL-1 refuses an entry
+    // that names it, because the entry denies unknown members.
+    #[serde(default)]
+    execution: Option<actingcommand_runtime_config::InstanceExecutionFile>,
     #[serde(default)]
     fixture_backend: Option<FixtureBackendConfigFile>,
     /// Workflow #398 RD-1b (model-398 v1.1 §3.1): the kind of device the instance drives,
@@ -1480,6 +1493,13 @@ impl ActingdConfigFile {
                 serde_json::to_value(&instance.display_safe_area)
                     .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
             );
+            // STILL-1: reported as `instance.<id>.execution.capture.still_limit_ms`; left out,
+            // the section's.
+            members.insert(
+                actingcommand_runtime_config::execution::SECTION.to_owned(),
+                serde_json::to_value(&instance.execution)
+                    .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            );
             // Workflow #398 RD-1b: `device.kind` is reported as `instance.<id>.device_kind`.
             if let Some(device) = &instance.device {
                 members.insert(
@@ -1627,7 +1647,11 @@ impl ActingdConfigFile {
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
             "store_foreground": serde_json::to_value(&self.store_foreground)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            "agent_wake": serde_json::to_value(&self.agent_wake)
+                .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
         });
+        // Workflow #432 AGT-1a: an empty section renders no row, and is still a section.
+        let agent_wake_named = self.agent_wake.is_some();
         let standard_packs_root = self
             .standard_packs
             .map(|section| {
@@ -1705,7 +1729,7 @@ impl ActingdConfigFile {
             .with_stuck_recovery(stuck_recovery)
             .with_standard_packs_root(standard_packs_root);
         // Every effective value is read back from `host`; the file only says what it named.
-        let manifest = manifest::build(&manifest::ManifestInputs {
+        let mut manifest = manifest::build(&manifest::ManifestInputs {
             host: &host,
             bind_port_explicit: self.bind_port.is_some(),
             device_diagnostic_mode_explicit: self.device_diagnostic_mode.is_some(),
@@ -1734,7 +1758,7 @@ impl ActingdConfigFile {
         // Workflow #387 D1b: the whole-section checks of the file layer, with the facts of other
         // crates they read (§5.3); a start and check-config refuse the same way.
         // RB-2: the start applies the `host` section to its own process right after this.
-        let process_priority =
+        let (process_priority, agent_wake_row) =
             actingcommand_runtime_config::EffectiveConfig::from_manifest(&manifest)
                 .and_then(|effective| {
                     effective.check(&actingcommand_runtime_config::CheckContext::new(
@@ -1745,12 +1769,25 @@ impl ActingdConfigFile {
                     effective
                         .store_foreground()?
                         .refuse_instance_applications(application_ids.iter().map(String::as_str))?;
-                    effective.host_process()
+                    // Workflow #432 AGT-1a: what only the assembly can check, and the row.
+                    let agent_wake_row = agent_wake_named
+                        .then(|| {
+                            manifest::agent_wake_subsystem(
+                                &effective,
+                                host.state_root(),
+                                &configured_aliases,
+                            )
+                        })
+                        .transpose()?;
+                    Ok((effective.host_process()?, agent_wake_row))
                 })
                 .map_err(|failure| {
                     *refused = Some(failure.outcome());
                     failure.failure_code().code()
                 })?;
+        if let Some(row) = agent_wake_row {
+            manifest::insert_agent_wake(&mut manifest, row);
+        }
         host = host.with_config_manifest(manifest.clone());
         if let Some(selection) = &config_selection {
             host = host.with_config_selection(selection.clone());

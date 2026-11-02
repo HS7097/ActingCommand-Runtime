@@ -34,7 +34,7 @@ use display_gate::{FramePixels, ScaleFrame};
 use actingcommand_contract::{
     RecognitionCandidateScore, RecognitionCandidateScores, TASK_RECOGNITION_CANDIDATE_SCORE_LIMIT,
 };
-use capture_cadence::{CaptureBackoff, MAX_DECLARED_INTERVAL_MS};
+use capture_cadence::{CaptureBackoff, MAX_DECLARED_INTERVAL_MS, StillLimitReached};
 use observation_window::{InputRecheck, RecheckedInput};
 use sample_retry::{ExtraRounds, SampleRetries};
 use still_wait::StillUnrecognised;
@@ -261,6 +261,9 @@ mod gate_411_lab_rp;
 // ceiling of a declared interval, and the back-off on unchanged frames.
 #[cfg(test)]
 mod gate_407_b1;
+// STILL-1 (Workflow #407, register §1.249): a wait on a still screen ends at its limit.
+#[cfg(test)]
+mod gate_still1;
 // Workflow #392 DA-2a: the display adapter's frame gate.
 mod display_gate;
 // Workflow #392 DA-2a (model 392 v1.2 §13 rows DA2-T1 to T3, T6, T12, T14, T15, the identity
@@ -535,6 +538,18 @@ impl ContainedTaskError {
             limit_ms: limit.as_millis() as u64,
             required_delay_ms: required_delay.map(|delay| delay.as_millis() as u64),
         }))
+    }
+
+    /// STILL-1: the failure of a wait that ended on its still limit carries `held_ms` and
+    /// `limit_ms` beside the values it already has; any other failure is returned unchanged.
+    fn with_still_limit(self, reached: Option<StillLimitReached>) -> Self {
+        match reached {
+            Some(reached) => {
+                let outcome = reached.values(self.outcome());
+                self.with_values(outcome)
+            }
+            None => self,
+        }
     }
 
     pub fn timing(&self) -> Option<&TaskTimingFailure> {
@@ -5518,62 +5533,74 @@ impl PreparedContainedTask {
                             observation_timing,
                             pacing,
                         )?;
-                        let (failed_observation, last_frame_page, hit_error_page, timing_failure) =
-                            match resolution {
-                                PostconditionResolution::Reached(reached) => {
-                                    observation = Some(reached);
-                                    // Workflow #308 SEL-L4b (S0 §1.3): the destination reads the
-                                    // business ID its `choice_of` step chose.
-                                    self.expect_identity(
-                                        runtime,
-                                        operation,
-                                        (step_index, &operation_id),
-                                        &mut observation,
-                                        &chosen_identities,
-                                        observation_timing,
-                                    )?;
-                                    if let Some(reason) = self.complete_successful_step(
+                        let (
+                            failed_observation,
+                            last_frame_page,
+                            hit_error_page,
+                            timing_failure,
+                            still_limit,
+                        ) = match resolution {
+                            PostconditionResolution::Reached(reached) => {
+                                observation = Some(reached);
+                                // Workflow #308 SEL-L4b (S0 §1.3): the destination reads the
+                                // business ID its `choice_of` step chose.
+                                self.expect_identity(
+                                    runtime,
+                                    operation,
+                                    (step_index, &operation_id),
+                                    &mut observation,
+                                    &chosen_identities,
+                                    observation_timing,
+                                )?;
+                                if let Some(reason) = self.complete_successful_step(
+                                    runtime,
+                                    ocr_collector,
+                                    &mut machine,
+                                    &mut stability_tracker,
+                                    step_index,
+                                    &operation_id,
+                                    observation.as_ref().ok_or_else(|| {
+                                        ContainedTaskError::new(
+                                            SharedCode::ContainedTaskPageUnknown.code(),
+                                        )
+                                    })?,
+                                )? {
+                                    return self.finish_stability_termination(
                                         runtime,
                                         ocr_collector,
-                                        &mut machine,
-                                        &mut stability_tracker,
-                                        step_index,
-                                        &operation_id,
+                                        &machine,
                                         observation.as_ref().ok_or_else(|| {
                                             ContainedTaskError::new(
                                                 SharedCode::ContainedTaskPageUnknown.code(),
                                             )
                                         })?,
-                                    )? {
-                                        return self.finish_stability_termination(
-                                            runtime,
-                                            ocr_collector,
-                                            &machine,
-                                            observation.as_ref().ok_or_else(|| {
-                                                ContainedTaskError::new(
-                                                    SharedCode::ContainedTaskPageUnknown.code(),
-                                                )
-                                            })?,
-                                            reason,
-                                            pace,
-                                        );
-                                    }
-                                    break;
+                                        reason,
+                                        pace,
+                                    );
                                 }
-                                PostconditionResolution::Failed {
-                                    observation,
-                                    last_frame_page,
-                                    hit_error_page,
-                                    timing_failure,
-                                } => (observation, last_frame_page, hit_error_page, timing_failure),
-                                // #411 B36/B19 (A35-S3): only a wait step holds on its own page.
-                                PostconditionResolution::Held { .. } => {
-                                    return Err(ContainedTaskError::new(
-                                        SharedCode::ContainedTaskStateInvalid.code(),
-                                    )
-                                    .into());
-                                }
-                            };
+                                break;
+                            }
+                            PostconditionResolution::Failed {
+                                observation,
+                                last_frame_page,
+                                hit_error_page,
+                                timing_failure,
+                                still_limit,
+                            } => (
+                                observation,
+                                last_frame_page,
+                                hit_error_page,
+                                timing_failure,
+                                still_limit,
+                            ),
+                            // #411 B36/B19 (A35-S3): only a wait step holds on its own page.
+                            PostconditionResolution::Held { .. } => {
+                                return Err(ContainedTaskError::new(
+                                    SharedCode::ContainedTaskStateInvalid.code(),
+                                )
+                                .into());
+                            }
+                        };
                         let after_page = failed_observation
                             .as_ref()
                             .map(|observation| observation.page_label.clone());
@@ -5592,6 +5619,7 @@ impl PreparedContainedTask {
                                 ),
                             )
                             .with_timing(timing_failure)
+                            .with_still_limit(still_limit)
                             .into());
                         };
                         match operation.failure_decision(
@@ -5749,6 +5777,7 @@ impl PreparedContainedTask {
                                         observation: None,
                                         hit_error_page: false,
                                         timing_failure,
+                                        still_limit,
                                         ..
                                     } => {
                                         Self::finish_effect_attempt(
@@ -5764,6 +5793,7 @@ impl PreparedContainedTask {
                                             ),
                                         )
                                         .with_timing(timing_failure)
+                                        .with_still_limit(still_limit)
                                         .into());
                                     }
                                     // #411 B36/B19 (A35-S3): only a wait step holds on its own
@@ -5813,6 +5843,7 @@ impl PreparedContainedTask {
                                         detail,
                                     )
                                     .with_timing(timing_failure)
+                                    .with_still_limit(still_limit)
                                     .into());
                                 }
                                 // #411 A15: an unconfirmed step names its operation, its
@@ -5832,6 +5863,7 @@ impl PreparedContainedTask {
                                 )
                                 .with_values(values)
                                 .with_timing(timing_failure)
+                                .with_still_limit(still_limit)
                                 .into());
                             }
                         }
@@ -6473,7 +6505,8 @@ impl PreparedContainedTask {
     /// §2.1): an observation whose sampling timed out is made again in a new window of
     /// `timeout`, as `retries` (the step's pacing and which observation this is) allows. #411
     /// A43b: while its latest two frames are still and gave no page, the rest of the wait is
-    /// counted unpaced ([`StillUnrecognised`]).
+    /// counted unpaced ([`StillUnrecognised`]). STILL-1: frames that stay unchanged and give no
+    /// page for the still limit end the wait as its limit does, with `held_ms` and `limit_ms`.
     fn capture_until_page<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -6491,7 +6524,9 @@ impl PreparedContainedTask {
         // rounds, one window each, before it fails.
         let mut rounds = ExtraRounds::of(retries.0);
         // PERF-B1 (R3): the pause before the wait's next frame, lengthened over unchanged frames.
-        let mut backoff = CaptureBackoff::new(interval, retries.0);
+        // STILL-1: and the still clock, with what it ended on.
+        let mut backoff = CaptureBackoff::still_limited(interval, retries.0);
+        let mut still_limit = None;
         let mut retries = SampleRetries::new(retries.0, retries.1);
         let mut started = budget_now(runtime, pace);
         let mut window_started = budget_observation_now(runtime, pace);
@@ -6562,8 +6597,8 @@ impl PreparedContainedTask {
             missed = true;
             // #411 A43b: the frame gave no page of the package.
             still.frame(runtime, &scene)?;
-            // PERF-B1 (R3): compared with the wait's frame before it.
-            backoff.frame(&scene)?;
+            // PERF-B1 (R3): compared with the wait's frame before it. STILL-1: and it counts.
+            backoff.still_frame(runtime, &scene)?;
             // Workflow #373 NAV-6 (§6.1 point 2): no page of the package matched; the frame is
             // offered to the shared interrupt pages before the wait goes on, its budget paused
             // while one is handled.
@@ -6574,6 +6609,11 @@ impl PreparedContainedTask {
                 still.interrupted();
                 backoff.reset();
                 continue;
+            }
+            // STILL-1: no later round of the wait would see more than this screen.
+            still_limit = backoff.still_limit_reached(runtime);
+            if still_limit.is_some() {
+                break;
             }
             let now = budget_now(runtime, pace);
             if now.saturating_duration_since(started) >= still.limit(runtime, timeout) {
@@ -6619,6 +6659,7 @@ impl PreparedContainedTask {
             timeout,
             None,
         )
+        .with_still_limit(still_limit)
         .into())
     }
 
@@ -7364,7 +7405,8 @@ impl PreparedContainedTask {
     /// wait of a wait step and of a confirmation with a wait page ([`HeldPage`]): a wait step's
     /// own page keeps the wait going up to its `max_ms` and restarts the timeout, which then runs
     /// only on frames of neither page; the wait page pauses the confirmation's timeout up to its
-    /// `max_ms`.
+    /// `max_ms`. STILL-1: frames that stay unchanged, none a destination and none on that page,
+    /// for the still limit end the wait as its limit does, with the limit named on the failure.
     #[allow(clippy::too_many_arguments)]
     fn await_postcondition<R: ContainedTaskRuntime>(
         &self,
@@ -7395,7 +7437,9 @@ impl PreparedContainedTask {
         // the part of the window counted unpaced.
         let mut still = StillUnrecognised::new(pace);
         // PERF-B1 (R3): the pause before the wait's next frame, lengthened over unchanged frames.
-        let mut backoff = CaptureBackoff::new(interval, pacing);
+        // STILL-1: and the still clock, with what it ended on.
+        let mut backoff = CaptureBackoff::still_limited(interval, pacing);
+        let mut still_limit = None;
         // #411 B36/B19 (A35-S3): the page the wait holds on, when the operation declares one (a
         // wait step's own page, the confirmation's wait page), and the budget instant of the
         // wait's latest frame.
@@ -7503,6 +7547,7 @@ impl PreparedContainedTask {
                             observation: Some(observation),
                             hit_error_page: true,
                             timing_failure: None,
+                            still_limit: None,
                         });
                     }
                     let on_held = match held.as_mut() {
@@ -7514,6 +7559,8 @@ impl PreparedContainedTask {
                         ),
                         None => HeldFrame::Away,
                     };
+                    // STILL-1: a frame of the page the wait holds on never counts as still.
+                    let still_counts = matches!(on_held, HeldFrame::Away);
                     let (paused, unconfirmed) = match on_held {
                         // A wait step's page after its `max_ms`: the wait ends there.
                         HeldFrame::Ended(timing_failure) => {
@@ -7549,7 +7596,11 @@ impl PreparedContainedTask {
                     };
                     // PERF-B1 (R3): every frame that does not end the wait, the page it holds on
                     // included, is compared with the wait's frame before it.
-                    backoff.frame(&observation.scene)?;
+                    if still_counts {
+                        backoff.still_frame(runtime, &observation.scene)?;
+                    } else {
+                        backoff.held_frame(&observation.scene)?;
+                    }
                     last_frame_page = Some(observation.page_label.clone());
                     last_observation = Some(observation);
                     (paused, unconfirmed)
@@ -7558,8 +7609,8 @@ impl PreparedContainedTask {
                     last_frame_page = None;
                     // #411 A43b: the frame gave no page.
                     still.frame(runtime, &scene)?;
-                    // PERF-B1 (R3).
-                    backoff.frame(&scene)?;
+                    // PERF-B1 (R3). STILL-1: and it counts.
+                    backoff.still_frame(runtime, &scene)?;
                     (self.offer_shared_interrupt(runtime, &scene)?, true)
                 }
             };
@@ -7578,6 +7629,11 @@ impl PreparedContainedTask {
                 }
                 last_frame_at += paused;
                 continue;
+            }
+            // STILL-1: no later round of the wait would see more than this screen.
+            still_limit = backoff.still_limit_reached(runtime);
+            if still_limit.is_some() {
+                break;
             }
             let now = budget_now(runtime, pace);
             if now.saturating_duration_since(started) >= still.limit(runtime, timeout) {
@@ -7626,6 +7682,7 @@ impl PreparedContainedTask {
                 limit_ms: timeout.as_millis() as u64,
                 required_delay_ms: None,
             }),
+            still_limit,
         })
     }
 }
@@ -7739,6 +7796,8 @@ enum PostconditionResolution {
         last_frame_page: Option<String>,
         hit_error_page: bool,
         timing_failure: Option<TaskTimingFailure>,
+        /// STILL-1: the wait ended on its still limit.
+        still_limit: Option<StillLimitReached>,
     },
 }
 

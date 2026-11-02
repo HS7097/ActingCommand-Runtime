@@ -3987,7 +3987,8 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     /// 1000.
     ///
     /// PERF-B1 (Workflow #407 B1): and the `execution.capture` keys in effect, the ceiling of a
-    /// declared capture interval and the back-off of the step's waits for a page.
+    /// declared capture interval, the back-off of the step's waits for a page and (STILL-1) their
+    /// still limit.
     fn step_pacing(&mut self) -> Result<StepPacing, Self::Error> {
         let retries = self
             .host
@@ -4006,9 +4007,10 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                 0
             };
         // PERF-B1 (Workflow #407 B1): the `execution.capture` keys in effect, with the step.
+        // STILL-1: the still limit is the run's instance's.
         let capture_cadence = self
             .host
-            .capture_cadence()
+            .capture_cadence(self.instance_alias)
             .map_err(RequestFailure::poison_without_terminal)?;
         let now = self
             .pacing
