@@ -287,6 +287,10 @@ mod gate_load2;
 // pages, under `execution.loading.mode`.
 #[cfg(test)]
 mod gate_load3;
+// LOAD-4 (Workflow #407, register §1.262): a step plan's waits on loading pages, and a loading set
+// with no limit refused at admission.
+#[cfg(test)]
+mod gate_load4;
 // Workflow #392 DA-2a: the display adapter's frame gate.
 mod display_gate;
 // Workflow #392 DA-2a (model 392 v1.2 §13 rows DA2-T1 to T3, T6, T12, T14, T15, the identity

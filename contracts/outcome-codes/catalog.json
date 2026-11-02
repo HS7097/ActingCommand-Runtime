@@ -7108,6 +7108,9 @@
         },
         "loading_page_invalid": {
           "description": "Workflow #407 LOAD-2 (since 0.12.37): an entry of an operation's expect_after.loading.add is not one page of the package or repeats an earlier one, or, in a page graph, is the operation's from page, one of its destinations or an error page (a step plan refuses its own pages with contained_task_linear_invalid, reason=loading_page); json_pointer /operations/<i>/expect_after/loading/add/<j>."
+        },
+        "loading_max_missing": {
+          "description": "Workflow #407 LOAD-4 (since 0.12.38): an operation's confirmation has loading pages (expect_after.loading.add) and no limit is named for them: no expect_after.loading.max_ms, no wait page and no loading copy in the package, in a page graph and in a step plan; json_pointer /operations/<i>/expect_after/loading."
         }
       }
     },

@@ -31,7 +31,8 @@
 //!   page. The `on_timeout` end is a keyed end of the static checks (`TaskOperation::keyed_ends`).
 //! - **`expect_after.loading`** (Workflow #407 LOAD-2): `off`, or the package's loading pages less
 //!   `except`, with `add`, and `max_ms`; admitted in both execution modes
-//!   ([`TaskProgram::validate_loading`]), run by LOAD-3.
+//!   ([`TaskProgram::validate_loading`]; LOAD-4: pages with no limit anywhere are refused), run
+//!   by LOAD-3 in a page graph and by LOAD-4 in a step plan.
 //! - **Under `execution.loading.mode` `on`** (Workflow #407 LOAD-3, `loading.rs`): the wait page is
 //!   one of the confirmation's loading pages and its `max_ms` their allowance: a frame on it after
 //!   the allowance is spent ends the wait, named, where under `off` and `shadow` it counts as a
@@ -324,7 +325,9 @@ impl TaskProgram {
     ///   ([`TaskProgram::validate_linear`]);
     /// - in a step plan, which takes a wait page from LOAD-2 on, the wait page's rules of a page
     ///   graph: one page of the package (`wait_page_invalid`), its `max_ms` 1..=1800000
-    ///   (`wait_max_invalid`).
+    ///   (`wait_max_invalid`);
+    /// - Workflow #407 LOAD-4: loading pages for which no limit is named, no `loading.max_ms`, no
+    ///   wait page and no loading copy in the package (`loading_max_missing`, at `loading`).
     ///
     /// An older task schema refuses `loading` with `contained_task_operation_invalid`, as the
     /// declaration gate refuses it with `UnconsumedField`. A wait step may declare it.
@@ -413,6 +416,12 @@ impl TaskProgram {
                 if (!step_plan && own_page) || !added.insert(resolved) {
                     return Err(refused());
                 }
+            }
+            // Workflow #407 LOAD-4: loading pages whose limit is named nowhere. Only `add` can
+            // bring them: the copy's pages come with its `max_ms`, a wait page with its own.
+            let declared = operation.confirmation_loading(game, detector);
+            if !declared.is_empty() && declared.limit_ms.is_none() {
+                return Err(refuse(ProgramProblem::LoadingMaxMissing, "loading"));
             }
         }
         Ok(())

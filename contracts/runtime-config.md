@@ -971,7 +971,9 @@ shipped example configuration writes `kind` `performance`: no gap beyond the pac
 
 **The loading mode (LOAD-3, Workflow #407; register §1.260; `actingd-config` revision 24; since
 0.12.37).** How a page-graph run's waits treat the package's loading pages
-([resource-declarations.md](resource-declarations.md), "Waits on loading pages").
+([resource-declarations.md](resource-declarations.md), "Waits on loading pages"), and from 0.12.38
+a `linear_steps` run's (LOAD-4, register §1.262; [linear-steps.md](linear-steps.md), "Loading
+pages"); the key itself is unchanged.
 
 | Key | Type | Default (`actingd.defaults.json`) | Settable |
 |---|---|---|---|
