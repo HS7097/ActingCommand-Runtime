@@ -1239,9 +1239,14 @@ impl HostShared {
             text: message.text.clone(),
         };
         let stopped = || self.fatal.is_shutdown_requested();
+        // Asked by a transport at the moment it would open a stopped session (Workflow #432 AGT-T1b),
+        // so a quiet window or the hold that begins during this pass stops it. A judgement that
+        // fails counts as quiet; the next pass's own judgement reports the failure.
+        let quiet = || !matches!(self.agent_wake_quiet(config), Ok(None));
         let limits = SendLimits {
             deadline: Instant::now() + Duration::from_millis(config.delivery.send_deadline_ms),
             stopped: &stopped,
+            quiet: &quiet,
         };
         let mut committed = false;
         let mut refused_for_stop = false;
@@ -1966,6 +1971,7 @@ impl RuntimeHost {
             &SendLimits {
                 deadline: Instant::now(),
                 stopped: &|| false,
+                quiet: &|| false,
             },
             &mut || -> Result<(), IntentFailed> {
                 intents += 1;

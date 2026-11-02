@@ -985,6 +985,7 @@ mod tests {
         let limits = SendLimits {
             deadline: Instant::now() + Duration::from_secs(60),
             stopped: &stopped,
+            quiet: &stopped,
         };
         let message = ForwardMessage {
             id: WAKE_ID,
