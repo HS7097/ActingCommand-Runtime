@@ -15552,6 +15552,9 @@
       "values": {
         "held_ms": "optional",
         "limit_ms": "optional",
+        "loading_page_id": "optional",
+        "loading_ms": "optional",
+        "loading_limit_ms": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -15561,7 +15564,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): contained task page unknown. STILL-1: held_ms and limit_ms are present when a page wait ended early on execution.capture.still_limit_ms: how long its frames had stayed unchanged, and the limit in effect.",
+      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): contained task page unknown. STILL-1: held_ms and limit_ms are present when a page wait ended early on execution.capture.still_limit_ms: how long its frames had stayed unchanged, and the limit in effect. LOAD-3 (since 0.12.37): loading_page_id, loading_ms and loading_limit_ms are present when a page wait ended on a transition frame after the package's loading allowance was spent under execution.loading.mode on.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

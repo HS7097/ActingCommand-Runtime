@@ -35,6 +35,7 @@ use actingcommand_contract::{
     RecognitionCandidateScore, RecognitionCandidateScores, TASK_RECOGNITION_CANDIDATE_SCORE_LIMIT,
 };
 use capture_cadence::{CaptureBackoff, MAX_DECLARED_INTERVAL_MS, StillLimitReached};
+use loading::{Charge, FrameRow, LoadingAllowance, LoadingFrame, LoadingLimit};
 use observation_window::{InputRecheck, RecheckedInput};
 use sample_retry::{ExtraRounds, SampleRetries};
 use still_wait::StillUnrecognised;
@@ -80,6 +81,8 @@ mod capture_cadence;
 mod settled_path;
 // ACT-4 (Workflow #407): the final state of a step, `target_present` and `target_gone`.
 mod final_state;
+// LOAD-3 (Workflow #407): the one frame judgement of a wait and its loading pages' allowance.
+mod loading;
 // Workflow #390 OUT-2: the caps of a designated effect set.
 mod designated_effects;
 // #412 Lab B-3 S1: one declared operation run as the kernel runs it.
@@ -280,6 +283,10 @@ mod gate_act4;
 // plan's wait page and loading.
 #[cfg(test)]
 mod gate_load2;
+// LOAD-3 (Workflow #407, register §1.260): the page-graph run's waits on the package's loading
+// pages, under `execution.loading.mode`.
+#[cfg(test)]
+mod gate_load3;
 // Workflow #392 DA-2a: the display adapter's frame gate.
 mod display_gate;
 // Workflow #392 DA-2a (model 392 v1.2 §13 rows DA2-T1 to T3, T6, T12, T14, T15, the identity
@@ -291,6 +298,7 @@ use actingcommand_selection_policy::SelectionPolicy;
 pub use capture_cadence::CaptureCadence;
 pub use declared_operation::{DeclaredOperation, DeclaredOperationOutcome};
 pub use linear::linear_main_interface;
+pub use loading::{LoadingEvent, LoadingMode, LoadingRecord};
 pub use readings::{
     ReadingMarks, ResourceAdjustmentAmountValue, ResourceAdjustmentResult, ResourceReadingMiss,
     ResourceReadingProblem, judge_resource_adjustment_amount, judge_resource_reading,
@@ -560,6 +568,19 @@ impl ContainedTaskError {
     /// STILL-1: the failure of a wait that ended on its still limit carries `held_ms` and
     /// `limit_ms` beside the values it already has; any other failure is returned unchanged.
     fn with_still_limit(self, reached: Option<StillLimitReached>) -> Self {
+        match reached {
+            Some(reached) => {
+                let outcome = reached.values(self.outcome());
+                self.with_values(outcome)
+            }
+            None => self,
+        }
+    }
+
+    /// LOAD-3: the failure of a wait that ended on its loading allowance carries
+    /// `loading_page_id`, `loading_ms` and `loading_limit_ms` beside the values it already has;
+    /// any other failure is returned unchanged.
+    fn with_loading_limit(self, reached: Option<LoadingLimit>) -> Self {
         match reached {
             Some(reached) => {
                 let outcome = reached.values(self.outcome());
@@ -2370,6 +2391,9 @@ pub struct StepPacing {
     /// waiting its `post_delay_ms` blind, where nothing keeps it from it ([`SettledPath`]); `None`
     /// (the default) is the order before the path.
     pub settled_path: Option<SettledPath>,
+    /// LOAD-3 (Workflow #407, register §1.260): `execution.loading.mode` in effect for the step's
+    /// instance; [`LoadingMode::Off`] (the default) evaluates no loading page.
+    pub loading: LoadingMode,
 }
 
 impl Default for StepPacing {
@@ -2391,7 +2415,13 @@ impl StepPacing {
             pre_input_wait: Duration::ZERO,
             capture_cadence: CaptureCadence::UNCONFIGURED,
             settled_path: None,
+            loading: LoadingMode::Off,
         }
+    }
+
+    /// LOAD-3: the same pacing under the loading mode `loading`.
+    pub const fn with_loading(self, loading: LoadingMode) -> Self {
+        Self { loading, ..self }
     }
 
     /// ACT-1: the same pacing with the settled path `settled_path`.
@@ -2608,6 +2638,15 @@ pub trait ContainedTaskRuntime {
         _result: Option<&actingcommand_recognition_pack::RecognitionPackResult<TargetEvaluation>>,
         _evaluation: ContainedTaskGuardEvaluation,
     ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    /// LOAD-3 (Workflow #407, register §1.260): a record of a wait's loading pages under
+    /// `execution.loading.mode` `shadow` or `on`: one frame's evaluation of them (the phase
+    /// `loading`, on the frame just captured, with its time), or a transition (`entered`, `left`,
+    /// `limit_reached`) on that frame. A runtime writes them to the run's diagnostics; the frame's
+    /// page recognition is not changed by them. The default records nothing.
+    fn record_loading(&mut self, _record: LoadingRecord<'_>) -> Result<(), Self::Error> {
         Ok(())
     }
 
@@ -5726,6 +5765,10 @@ impl PreparedContainedTask {
                             Duration::from_millis(timing.timeout.milliseconds);
                         let confirmation_interval =
                             Duration::from_millis(timing.interval.milliseconds);
+                        // LOAD-3 (§3.2): the input's one allowance for its loading pages, shared
+                        // by the settled path, the confirmation and the failure decision's
+                        // confirmation; the next input takes a new one.
+                        let mut loading = LoadingAllowance::for_input(self, operation, pacing);
                         // #385 P-k (performance model v1.4.2 §5.4 item 1): the confirmation's
                         // extra rounds come before the failure decision below, so a destination
                         // that arrives in one needs no second input. ACT-1 (§1.6): the settled
@@ -5740,7 +5783,7 @@ impl PreparedContainedTask {
                                 window,
                                 confirmation_timeout,
                                 observation_timing,
-                                pacing,
+                                (pacing, &mut loading),
                             )?,
                             None => settled_path::SettledReading::Confirm {
                                 spent: Duration::ZERO,
@@ -5759,7 +5802,7 @@ impl PreparedContainedTask {
                                     (confirmation_timeout, spent),
                                     confirmation_interval,
                                     observation_timing,
-                                    pacing,
+                                    (pacing, &mut loading),
                                 )?,
                         };
                         let (
@@ -5767,7 +5810,7 @@ impl PreparedContainedTask {
                             last_frame_page,
                             hit_error_page,
                             timing_failure,
-                            still_limit,
+                            (still_limit, loading_limit),
                         ) = match resolution {
                             PostconditionResolution::Reached(reached) => {
                                 observation = Some(reached);
@@ -5815,12 +5858,13 @@ impl PreparedContainedTask {
                                 hit_error_page,
                                 timing_failure,
                                 still_limit,
+                                loading_limit,
                             } => (
                                 observation,
                                 last_frame_page,
                                 hit_error_page,
                                 timing_failure,
-                                still_limit,
+                                (still_limit, loading_limit),
                             ),
                             // #411 B36/B19 (A35-S3): only a wait step holds on its own page.
                             PostconditionResolution::Held { .. } => {
@@ -5856,6 +5900,7 @@ impl PreparedContainedTask {
                             )
                             .with_timing(timing_failure)
                             .with_still_limit(still_limit)
+                            .with_loading_limit(loading_limit)
                             .into());
                         };
                         match operation.failure_decision(
@@ -5900,6 +5945,8 @@ impl PreparedContainedTask {
                                 });
                                 // #385 P-k (§5.4): the failure decision's confirmation decides
                                 // whether the step clicks again, so it takes no extra round.
+                                // LOAD-3 (§3.2): it shares the attempt's allowance, so a loading
+                                // screen that outlasted it adds no input.
                                 match self.await_postcondition(
                                     runtime,
                                     ocr_collector,
@@ -5907,7 +5954,7 @@ impl PreparedContainedTask {
                                     confirmation_timeout,
                                     confirmation_interval,
                                     observation_timing,
-                                    pacing.without_extra_wait_rounds(),
+                                    (pacing.without_extra_wait_rounds(), &mut loading),
                                 )? {
                                     PostconditionResolution::Reached(reached) => {
                                         observation = Some(reached);
@@ -6014,6 +6061,7 @@ impl PreparedContainedTask {
                                         hit_error_page: false,
                                         timing_failure,
                                         still_limit,
+                                        loading_limit,
                                         ..
                                     } => {
                                         Self::finish_effect_attempt(
@@ -6030,6 +6078,7 @@ impl PreparedContainedTask {
                                         )
                                         .with_timing(timing_failure)
                                         .with_still_limit(still_limit)
+                                        .with_loading_limit(loading_limit)
                                         .into());
                                     }
                                     // #411 B36/B19 (A35-S3): only a wait step holds on its own
@@ -6100,6 +6149,7 @@ impl PreparedContainedTask {
                                 .with_values(values)
                                 .with_timing(timing_failure)
                                 .with_still_limit(still_limit)
+                                .with_loading_limit(loading_limit)
                                 .into());
                             }
                         }
@@ -6743,6 +6793,11 @@ impl PreparedContainedTask {
     /// A43b: while its latest two frames are still and gave no page, the rest of the wait is
     /// counted unpaced ([`StillUnrecognised`]). STILL-1: frames that stay unchanged and give no
     /// page for the still limit end the wait as its limit does, with `held_ms` and `limit_ms`.
+    /// LOAD-3 (§3.1, §3.2): each frame is judged by the one judgement ([`Self::judge_frame`])
+    /// against the package's loading pages, with an allowance of its own (the package's); under
+    /// `on` a transition frame is never the page the wait returns: it pauses the wait, and one
+    /// after the allowance is spent ends it with `contained_task_page_unknown` and the loading
+    /// values.
     fn capture_until_page<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -6763,9 +6818,13 @@ impl PreparedContainedTask {
         // STILL-1: and the still clock, with what it ended on.
         let mut backoff = CaptureBackoff::still_limited(interval, retries.0);
         let mut still_limit = None;
+        // LOAD-3: the page wait's own allowance, and whether the wait ended on it.
+        let mut loading = LoadingAllowance::for_page_wait(self, retries.0);
+        let mut loading_limit = None;
         let mut retries = SampleRetries::new(retries.0, retries.1);
         let mut started = budget_now(runtime, pace);
         let mut window_started = budget_observation_now(runtime, pace);
+        let mut last_frame_at = started;
         // Whether the window has seen a frame that gave no page of the package.
         let mut missed = false;
         // #411 A43b: whether the latest two frames are still and gave no page, and the part of
@@ -6803,18 +6862,19 @@ impl PreparedContainedTask {
                 still.new_window(runtime);
                 continue;
             }
-            let observation = match self.capture_page_scene(runtime, ocr_collector, None, timing) {
-                Ok(observation) => observation,
-                Err(failure) => {
-                    retries.retry(runtime, failure, timeout)?;
-                    started = budget_now(runtime, pace);
-                    window_started = budget_observation_now(runtime, pace);
-                    missed = false;
-                    still.observation_failed();
-                    backoff.reset();
-                    continue;
-                }
-            };
+            let observation =
+                match self.capture_page_loading(runtime, ocr_collector, timing, &mut loading) {
+                    Ok(observation) => observation,
+                    Err(failure) => {
+                        retries.retry(runtime, failure, timeout)?;
+                        started = budget_now(runtime, pace);
+                        window_started = budget_observation_now(runtime, pace);
+                        missed = false;
+                        still.observation_failed();
+                        backoff.reset();
+                        continue;
+                    }
+                };
             if budget_now(runtime, pace) >= task_deadline {
                 return Err(self
                     .task_timeout_error(
@@ -6826,25 +6886,83 @@ impl PreparedContainedTask {
                     )
                     .into());
             }
+            // LOAD-3 (§3.1): the one judgement, without an operation: any page is what the wait
+            // waits for, an error page included.
+            let frame_at = budget_now(runtime, pace);
+            let previous_frame_at = std::mem::replace(&mut last_frame_at, frame_at);
+            let judged = self.judge_frame(
+                runtime,
+                None,
+                observation.as_ref().ok(),
+                &loading,
+                base_timing,
+            )?;
+            let page = observation
+                .as_ref()
+                .ok()
+                .map(|observation| observation.page_label.clone());
+            let frame = LoadingFrame {
+                transition: judged.transition,
+                page: page.as_deref(),
+                now: frame_at,
+                previous: previous_frame_at,
+            };
             let scene = match observation {
-                Ok(observation) => return Ok(observation),
+                Ok(observation) if judged.row != FrameRow::Transition => {
+                    loading.frame(runtime, &self.control.game, frame)?;
+                    return Ok(observation);
+                }
+                Ok(observation) => observation.scene,
                 Err(scene) => scene,
             };
             missed = true;
-            // #411 A43b: the frame gave no page of the package.
-            still.frame(runtime, &scene)?;
-            // PERF-B1 (R3): compared with the wait's frame before it. STILL-1: and it counts.
-            backoff.still_frame(runtime, &scene)?;
-            // Workflow #373 NAV-6 (§6.1 point 2): no page of the package matched; the frame is
-            // offered to the shared interrupt pages before the wait goes on, its budget paused
-            // while one is handled.
-            if let Some(paused) = self.offer_shared_interrupt(runtime, &scene)? {
-                let paused = pace.budget_span(paused);
-                started += paused;
-                window_started += paused;
-                still.interrupted();
-                backoff.reset();
-                continue;
+            if judged.row == FrameRow::Transition {
+                // LOAD-3 (§3.1 row 3, `on`): offered to the shared interrupt pages first; a handled
+                // one pauses the wait and spends nothing. Otherwise the frame spends the
+                // allowance and pauses the wait, or ends it once the allowance is spent; it is
+                // never still.
+                match self.offer_shared_interrupt(runtime, &scene)? {
+                    Some(paused) => {
+                        let paused = pace.budget_span(paused);
+                        started += paused;
+                        window_started += paused;
+                        still.interrupted();
+                        backoff.reset();
+                        last_frame_at += paused;
+                        continue;
+                    }
+                    None => match loading.frame(runtime, &self.control.game, frame)? {
+                        Charge::Spent(limit) => {
+                            loading_limit = Some(limit);
+                            break;
+                        }
+                        Charge::Paused(span) => {
+                            started += span;
+                            window_started += span;
+                        }
+                        Charge::None => {}
+                    },
+                }
+                still.held(runtime);
+                backoff.held_frame(&scene)?;
+            } else {
+                loading.frame(runtime, &self.control.game, frame)?;
+                // #411 A43b: the frame gave no page of the package.
+                still.frame(runtime, &scene)?;
+                // PERF-B1 (R3): compared with the wait's frame before it. STILL-1: and it counts.
+                backoff.still_frame(runtime, &scene)?;
+                // Workflow #373 NAV-6 (§6.1 point 2): no page of the package matched; the frame
+                // is offered to the shared interrupt pages before the wait goes on, its budget
+                // paused while one is handled.
+                if let Some(paused) = self.offer_shared_interrupt(runtime, &scene)? {
+                    let paused = pace.budget_span(paused);
+                    started += paused;
+                    window_started += paused;
+                    still.interrupted();
+                    backoff.reset();
+                    last_frame_at += paused;
+                    continue;
+                }
             }
             // STILL-1: no later round of the wait would see more than this screen.
             still_limit = backoff.still_limit_reached(runtime);
@@ -6896,6 +7014,7 @@ impl PreparedContainedTask {
             None,
         )
         .with_still_limit(still_limit)
+        .with_loading_limit(loading_limit)
         .into())
     }
 
@@ -7149,12 +7268,36 @@ impl PreparedContainedTask {
             candidates,
             sampling_deadline,
             None,
+            None,
+        )
+    }
+
+    /// LOAD-3: [`Self::capture_page_scene`] whose frame is also evaluated against `loading`'s
+    /// pages ([`Self::probe_loading`]).
+    fn capture_page_loading<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        ocr_collector: &mut PostAdmissionOcrCollector<'_>,
+        timing: ContainedTaskTimingContext,
+        loading: &mut LoadingAllowance,
+    ) -> Result<Result<PageObservation, Scene>, ContainedTaskRunError<R::Error>> {
+        self.capture_frame_gated(
+            runtime,
+            Some(ocr_collector),
+            None,
+            timing,
+            None,
+            None,
+            None,
+            Some(loading),
         )
     }
 
     /// [`Self::capture_frame_scene`]; ACT-1 (§1.6): `feed_gate` decides, once the frame has its
     /// page, whether it feeds `ocr_collector`, so that of a settled path's frames only the one the
-    /// step goes on does. Everything else about the frame is as for any other.
+    /// step goes on does. Everything else about the frame is as for any other. LOAD-3: with
+    /// `loading`, the frame is evaluated against its pages once its page recognition is recorded
+    /// ([`Self::probe_loading`]), and under `on` a transition frame feeds nothing.
     #[allow(clippy::too_many_arguments)]
     fn capture_frame_gated<R: ContainedTaskRuntime>(
         &self,
@@ -7165,6 +7308,7 @@ impl PreparedContainedTask {
         candidates: Option<PageCandidates<'_>>,
         sampling_deadline: Option<Instant>,
         mut feed_gate: Option<&mut settled_path::FeedGate<'_>>,
+        mut loading: Option<&mut LoadingAllowance>,
     ) -> Result<Result<PageObservation, Scene>, ContainedTaskRunError<R::Error>> {
         let (candidates, exclusive) = match candidates {
             None => (None, true),
@@ -7557,6 +7701,10 @@ impl PreparedContainedTask {
                 )
                 .into());
             }
+            // LOAD-3 (§6): the frame's loading pages, once its page recognition is recorded.
+            if let Some(loading) = loading.as_deref_mut() {
+                self.probe_loading(runtime, &scene, timing, loading)?;
+            }
             if let Some(required) = required_entry {
                 // Workflow #373 NAV-3b: the frame's one page is any page of the required entry.
                 let matched = page
@@ -7589,6 +7737,11 @@ impl PreparedContainedTask {
                 Some(gate) => gate(page_label.as_str(), &scene)?,
                 None => true,
             };
+            // LOAD-3 (§3.1 row 3): under `on` a transition frame is no frame the step goes on.
+            let feeds = feeds
+                && !loading.as_deref().is_some_and(|loading| {
+                    loading.suppresses(&self.control.game, Some(page_label.as_str()))
+                });
             let mut unfed_frame = PostAdmissionOcrCollector::default();
             let ocr_collector = if feeds {
                 &mut *ocr_collector
@@ -7681,6 +7834,10 @@ impl PreparedContainedTask {
     /// `max_ms`. STILL-1: frames that stay unchanged, none a destination and none on that page,
     /// for the still limit end the wait as its limit does, with the limit named on the failure.
     /// ACT-4: a frame is a destination's only as the step's final state ([`Self::final_state`]).
+    /// LOAD-3: each frame is judged by the one judgement ([`Self::judge_frame`]) and spends
+    /// `loading`, the input's allowance; under `on` a transition frame pauses the wait (the wait
+    /// page is one of its loading pages, so it holds no wait page of its own), never becomes the
+    /// failure's frame, and one after the allowance is spent ends the wait on it.
     #[allow(clippy::too_many_arguments)]
     fn await_postcondition<R: ContainedTaskRuntime>(
         &self,
@@ -7690,7 +7847,7 @@ impl PreparedContainedTask {
         timeout: Duration,
         interval: Duration,
         timing: ContainedTaskTimingContext,
-        pacing: StepPacing,
+        (pacing, loading): (StepPacing, &mut LoadingAllowance),
     ) -> Result<PostconditionResolution, ContainedTaskRunError<R::Error>> {
         self.await_postcondition_after(
             runtime,
@@ -7699,7 +7856,7 @@ impl PreparedContainedTask {
             (timeout, Duration::ZERO),
             interval,
             timing,
-            pacing,
+            (pacing, loading),
         )
     }
 
@@ -7716,7 +7873,7 @@ impl PreparedContainedTask {
         (timeout, spent): (Duration, Duration),
         interval: Duration,
         timing: ContainedTaskTimingContext,
-        pacing: StepPacing,
+        (pacing, loading): (StepPacing, &mut LoadingAllowance),
     ) -> Result<PostconditionResolution, ContainedTaskRunError<R::Error>> {
         let task_deadline = timing.deadline();
         let base_timing = timing;
@@ -7749,8 +7906,11 @@ impl PreparedContainedTask {
         // #411 B36/B19 (A35-S3): the page the wait holds on, when the operation declares one (a
         // wait step's own page, the confirmation's wait page), and the budget instant of the
         // wait's latest frame.
-        let mut held = HeldPage::of(operation, started);
+        // LOAD-3: under `on` the wait page is one of the input's loading pages, not a page held.
+        let mut held = HeldPage::of(operation, started, loading.decides());
         let mut last_frame_at = handed_over;
+        // LOAD-3: the wait ended on a transition frame after its allowance was spent.
+        let mut loading_limit = None;
         loop {
             let window_end = still.window_end(runtime, window_started, timeout);
             let timing = if self.evaluator.pack().target_consensus.is_empty() {
@@ -7784,18 +7944,19 @@ impl PreparedContainedTask {
                 still.new_window(runtime);
                 continue;
             }
-            let observation = match self.capture_page_scene(runtime, ocr_collector, None, timing) {
-                Ok(observation) => observation,
-                Err(failure) => {
-                    retries.retry(runtime, failure, timeout)?;
-                    started = budget_now(runtime, pace);
-                    window_started = budget_observation_now(runtime, pace);
-                    missed = false;
-                    still.observation_failed();
-                    backoff.reset();
-                    continue;
-                }
-            };
+            let observation =
+                match self.capture_page_loading(runtime, ocr_collector, timing, loading) {
+                    Ok(observation) => observation,
+                    Err(failure) => {
+                        retries.retry(runtime, failure, timeout)?;
+                        started = budget_now(runtime, pace);
+                        window_started = budget_observation_now(runtime, pace);
+                        missed = false;
+                        still.observation_failed();
+                        backoff.reset();
+                        continue;
+                    }
+                };
             if budget_now(runtime, pace) >= task_deadline {
                 return Err(self
                     .task_timeout_error(
@@ -7811,28 +7972,80 @@ impl PreparedContainedTask {
             // #411 B36/B19 (A35-S3): the budget instant of this frame, and of the one before it.
             let frame_at = budget_now(runtime, pace);
             let previous_frame_at = std::mem::replace(&mut last_frame_at, frame_at);
+            // LOAD-3 (§3.1): the one judgement. ACT-4: a destination page that is not the step's
+            // final state is a frame of no destination.
+            let page = observation
+                .as_ref()
+                .ok()
+                .map(|observation| observation.page_label.clone());
+            let judged = self.judge_frame(
+                runtime,
+                Some(operation),
+                observation.as_ref().ok(),
+                loading,
+                base_timing,
+            )?;
+            if judged.row == FrameRow::Conflict {
+                return Err(ContainedTaskError::with_detail(
+                    ExecutionKernelCode::ContainedTaskRecognitionConflict.code(),
+                    page.unwrap_or_default(),
+                )
+                .into());
+            }
+            let game = self.control.game.as_str();
+            let at = |transition| LoadingFrame {
+                transition,
+                page: page.as_deref(),
+                now: frame_at,
+                previous: previous_frame_at,
+            };
             // Workflow #373 NAV-6 (§6.1 point 3): a frame that is no destination (and no error
             // page) is offered to the shared interrupt pages; the confirmation budget is paused
             // while one is handled. #411 B36/B19 (A35-S3): a frame of the page the wait holds on
             // is not offered; it keeps the wait going, and only a wait page past its `max_ms`
             // counts as a frame that did not confirm the step.
             let (paused, unconfirmed) = match observation {
-                Ok(observation) => {
-                    // ACT-4: the one final-state judgement; a destination page that is not the
-                    // step's final state is a frame of no destination.
-                    let judged = self.final_state(runtime, operation, &observation, base_timing)?;
-                    let destination_matches = judged.destinations;
-                    let hit_error_page = self
-                        .program
-                        .is_error_page(&self.control, &observation.page_label);
-                    if destination_matches > 1 || (destination_matches == 1 && hit_error_page) {
-                        return Err(ContainedTaskError::with_detail(
-                            ExecutionKernelCode::ContainedTaskRecognitionConflict.code(),
-                            observation.page_label,
-                        )
-                        .into());
+                // LOAD-3 (§3.1 row 3, `on`): a transition frame is offered to the shared interrupt
+                // pages first; a handled one pauses the wait and spends nothing. Otherwise it
+                // spends the allowance and pauses the wait, or ends it once the allowance is
+                // spent. It is never the failure's frame nor still, and `page_id` still names the
+                // page it suppresses.
+                observation if judged.row == FrameRow::Transition => {
+                    let scene = match &observation {
+                        Ok(observation) => &observation.scene,
+                        Err(scene) => scene,
+                    };
+                    let paused = match self.offer_shared_interrupt(runtime, scene)? {
+                        Some(paused) => Some(paused),
+                        None => match loading.frame(runtime, game, at(true))? {
+                            Charge::Spent(limit) => {
+                                last_frame_page = page;
+                                last_observation = None;
+                                loading_limit = Some(limit);
+                                break;
+                            }
+                            Charge::Paused(span) => {
+                                started += span;
+                                window_started += span;
+                                None
+                            }
+                            Charge::None => None,
+                        },
+                    };
+                    if paused.is_none() {
+                        still.held(runtime);
+                        backoff.held_frame(scene)?;
                     }
-                    if judged.reached {
+                    last_frame_page = page;
+                    last_observation = None;
+                    (paused, true)
+                }
+                // LOAD-3: every other frame spends nothing; under `shadow` the allowance is
+                // counted and recorded as `on` would spend it, and no decision changes.
+                Ok(observation) => {
+                    loading.frame(runtime, game, at(judged.transition))?;
+                    let hit_error_page = judged.row == FrameRow::ErrorPage;
+                    if judged.row == FrameRow::Reached {
                         // Workflow #390 EXEC-2 (FCM E-05): a declared observation window watches
                         // the screen before the step finishes.
                         return match operation.observation_window {
@@ -7844,7 +8057,7 @@ impl PreparedContainedTask {
                                 observation,
                                 (interval, timeout),
                                 base_timing,
-                                (&mut retries, ExtraRounds::of(pacing)),
+                                (&mut retries, ExtraRounds::of(pacing), loading),
                             ),
                             None => Ok(PostconditionResolution::Reached(observation)),
                         };
@@ -7856,6 +8069,7 @@ impl PreparedContainedTask {
                             hit_error_page: true,
                             timing_failure: None,
                             still_limit: None,
+                            loading_limit: None,
                         });
                     }
                     let on_held = match held.as_mut() {
@@ -7914,6 +8128,7 @@ impl PreparedContainedTask {
                     (paused, unconfirmed)
                 }
                 Err(scene) => {
+                    loading.frame(runtime, game, at(judged.transition))?;
                     last_frame_page = None;
                     // #411 A43b: the frame gave no page.
                     still.frame(runtime, &scene)?;
@@ -7991,6 +8206,7 @@ impl PreparedContainedTask {
                 required_delay_ms: None,
             }),
             still_limit,
+            loading_limit,
         })
     }
 }
@@ -8106,6 +8322,8 @@ enum PostconditionResolution {
         timing_failure: Option<TaskTimingFailure>,
         /// STILL-1: the wait ended on its still limit.
         still_limit: Option<StillLimitReached>,
+        /// LOAD-3: the wait ended on a transition frame after its loading allowance was spent.
+        loading_limit: Option<LoadingLimit>,
     },
 }
 
@@ -13537,7 +13755,7 @@ mod post_admission_ocr_tests {
                                 deadline,
                                 actingcommand_contract::TaskTimingBudgetOrigin::Task,
                             ),
-                            StepPacing::default(),
+                            (StepPacing::default(), &mut LoadingAllowance::off()),
                         )
                         .unwrap(),
                         PostconditionResolution::Reached(_)

@@ -969,6 +969,25 @@ instance reads the section's key. `EffectiveConfig::action_gap(instance_id)` ret
 effect; the host reads them at each step, so an instruction takes effect at the next step. The
 shipped example configuration writes `kind` `performance`: no gap beyond the pacing curve's term.
 
+**The loading mode (LOAD-3, Workflow #407; register §1.260; `actingd-config` revision 24; since
+0.12.37).** How a page-graph run's waits treat the package's loading pages
+([resource-declarations.md](resource-declarations.md), "Waits on loading pages").
+
+| Key | Type | Default (`actingd.defaults.json`) | Settable |
+|---|---|---|---|
+| `execution.loading.mode` | `off` (no loading page is evaluated; every decision is the one before LOAD-3), `shadow` (evaluated and recorded on every frame of a wait; no decision changes) or `on` (a transition frame pauses the wait within the input's allowance; one after the allowance is spent ends it, named) | `off` | yes |
+
+It is also per instance, `instance.<instance id>.execution.loading.mode`, in the file the entry's
+`execution.loading.mode` member; its default is `none`: an instance that names it reports a row and
+an instruction may set it (clearing that instruction leaves the section's), and every other instance
+reads the section's key. Another word is `config_value_invalid` (`out_of_range`), another type
+`wrong_type`, at start, in `check-config` and in `ConfigureSettings`.
+`EffectiveConfig::loading_mode(instance_id)` returns the mode in effect, the instance's own or else
+the section's; the host hands it to the kernel with each step's pacing, so an instruction takes
+effect at the next step. Lab operations always run under `off`. `actingd-config` revision 24 adds the
+section's member and the entry's, within the same revision as STILL-1 and ACT-1/ACT-2 (one revision
+for the release); a file that names neither keeps its revision.
+
 ## The `install` section (Workflow #421 INST-1)
 
 Workflow #421 ([install-cli.md](install-cli.md)): the tunables of `actingctl install`, the

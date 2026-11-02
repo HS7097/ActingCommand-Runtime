@@ -3122,6 +3122,22 @@ actingcommand_contract::outcome_codes! {
 }
 // ---- ACT-1, ACT-2: end ----
 
+// ---- LOAD-3 (Workflow #407, register §1.260): begin ----
+actingcommand_contract::outcome_codes! {
+    /// The host's code of a wait's loading pages under `execution.loading.mode` `shadow` or `on`.
+    /// No existing code fits: nothing else says a wait saw a loading page come or go. One domain
+    /// code with values (#420 S4); written to the run's diagnostics only, no ledger shape.
+    pub(crate) enum LoadingCode {
+        /// Info. Written to a run's diagnostics as a row of the phase `loading` on the frame it
+        /// names: `loading_event` `entered` (the first transition frame of a stretch), `left` (the
+        /// first frame after it, with `loading_exit_gap_ms`) or `limit_reached` (a transition
+        /// frame after the allowance was spent), with `loading_page_id`, `loading_ms`,
+        /// `loading_limit_ms`, and `pack_operation_id` and `page_id` where there are.
+        Recorded => "contained_task_loading_recorded": info / none,
+    }
+}
+// ---- LOAD-3: end ----
+
 // ---- UPD-1 (design-upd1 §2, §3, §4; Alice's rulings 95 and 96 of 2026-10-29 17:1x): begin ----
 actingcommand_contract::outcome_codes! {
     /// The host's codes of the "client out of date" path (UPD-1, register §1.215): the named end

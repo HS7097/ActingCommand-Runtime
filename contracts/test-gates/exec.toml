@@ -2405,6 +2405,31 @@ tests = [
 ]
 incident = ["#407 LOAD-2"]
 
+# LOAD-3 (Workflow #407, 0.12.37; register §1.260 LD3-2; design rd-1031/check-speed/model-loading.md §3, §4, §6, §7 LOAD-3): under execution.loading.mode off and shadow every decision is the one before, shadow recording each frame's loading pages and their entered, left and limit_reached; under on one judgement decides each frame of a page-graph wait (conflict, error page, transition frame, what the wait waits for): a transition frame is offered to the shared interrupt pages first, then spends the input's one allowance (shared by the settled path, the confirmation and the failure decision's confirmation; a page wait has the package's) and pauses the wait, never past the task deadline, never still, never a destination, decision frame or ACT-4 flip evidence, and adds no input; one after the allowance ends the wait through its own path and code with loading_page_id, loading_ms and loading_limit_ms; a plain still screen gets no exemption; off, except, add, the wait page and max_ms set the loading pages and the allowance in their order
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_load3::loading_mode_off_keeps_todays_wait",
+    "actingcommand-execution-kernel::lib::contained_task::gate_load3::loading_shadow_records_without_changing_a_decision",
+    "actingcommand-execution-kernel::lib::contained_task::gate_load3::loading_frame_pauses_the_confirmation_until_the_destination",
+    "actingcommand-execution-kernel::lib::contained_task::gate_load3::several_loading_pages_and_reentries_share_one_allowance",
+    "actingcommand-execution-kernel::lib::contained_task::gate_load3::loading_allowance_spent_ends_the_wait_with_its_values",
+    "actingcommand-execution-kernel::lib::contained_task::gate_load3::loading_over_a_destination_suppresses_it",
+    "actingcommand-execution-kernel::lib::contained_task::gate_load3::loading_never_hides_an_error_page",
+    "actingcommand-execution-kernel::lib::contained_task::gate_load3::loading_never_hides_a_recognition_conflict",
+    "actingcommand-execution-kernel::lib::contained_task::gate_load3::loading_frame_is_offered_to_the_shared_interrupt_pages_first",
+    "actingcommand-execution-kernel::lib::contained_task::gate_load3::loading_pause_never_passes_the_task_deadline",
+    "actingcommand-execution-kernel::lib::contained_task::gate_load3::loading_frame_never_counts_as_still",
+    "actingcommand-execution-kernel::lib::contained_task::gate_load3::plain_still_screen_gets_no_loading_exemption",
+    "actingcommand-execution-kernel::lib::contained_task::gate_load3::settled_path_hands_a_loading_frame_over_with_its_allowance",
+    "actingcommand-execution-kernel::lib::contained_task::gate_load3::failure_decision_shares_the_attempts_allowance",
+    "actingcommand-execution-kernel::lib::contained_task::gate_load3::operation_off_except_add_and_max_apply_in_priority_order",
+    "actingcommand-execution-kernel::lib::contained_task::gate_load3::loading_frame_is_never_a_decision_frame",
+    "actingcommand-execution-kernel::lib::contained_task::gate_load3::loading_never_adds_an_input",
+    "actingcommand-execution-kernel::lib::contained_task::gate_load3::a_transition_frame_is_never_act4_flip_evidence",
+]
+incident = ["#407 LOAD-3"]
+
 # ROUT-L RL-T (#386; contracts/standard-pack-schedule.md "Tools"): standard-pack compose receives every --instance <alias>=<game>/<server> given after its words (the command's own, not the global --instance), so two bound instances of one game and server compose one <id>@<alias> copy of the rule and of each item per instance, each in its instance's scope
 [[gate]]
 coverage = "Y"

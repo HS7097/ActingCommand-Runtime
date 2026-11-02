@@ -6137,6 +6137,63 @@ The tests: `crates/pack-containment/src/source/gate_load2.rs` (four),
 `crates/resource-tooling/src/gate_load1.rs`'s pack fixture declares the copy's match metric, since
 `package bundle --loading` now admits a pack's copy through the loader (decision (b)).
 
+### 1.260 Slice LOAD-3 (0.12.37): a page graph's waits on the package's loading pages, `execution.loading.mode`, and their diagnostics (Workflow #407; design `rd-1031/check-speed/model-loading.md` §3, §4, §6, §7 LOAD-3; coordinator work order `rd-1031/check-speed/brief-load-3.md`)
+
+[resource-declarations.md](resource-declarations.md) ("Loading pages": "Waits on loading pages"),
+[performance-control.md](performance-control.md) ("Step pacing") and
+[runtime-config.md](runtime-config.md) ("The `execution` section") are the contract. The number 1.260
+is the coordinator's. **Off by default:** under `execution.loading.mode` `off` (and for every Lab
+operation) no loading page is evaluated and every decision is the one before this slice; `shadow`
+evaluates and records them and changes no decision. No package changes; `linear_steps` waits are
+LOAD-4's.
+
+**What.** (1) One frame judgement (`contained_task/loading.rs`, `PreparedContainedTask::judge_frame`)
+for the settled path, the confirmation, the failure decision's confirmation, a wait step's wait, a
+page wait and an observation window: a recognition conflict, an error page, a transition frame (a
+loading page held, or a page the confirmation adds as one), what the wait waits for, anything else.
+ACT-4's final-state judgement is its row 4 and is never asked on a transition frame. (2) One
+allowance per input (`LoadingAllowance`), shared by the settled path, the confirmation with its
+extra rounds and observe-only retries and the failure decision's confirmation; one per wait step and
+one per page wait (the pack's). A transition frame is offered to the shared interrupt pages first;
+otherwise it spends the time since the wait's frame before it and pauses the wait; after the
+allowance it ends the wait through its own path and code with the loading values, no further time
+and no extra round. Under `on` a wait page is one of the loading pages, so the silent fall-back past
+its `max_ms` goes; under `off` and `shadow` it stays. (3) A transition frame is never the failure's
+frame, a decision frame, an entry, final-state or flip evidence, fed to a collector, or still. (4) The
+frame's loading pages are evaluated by id once its page recognition is recorded, in a scene context
+of their own (the page recognition's context holds the run's sample recorder, and a loading copy's
+targets are its own), timed on the run's clock. (5) The host hands the mode with each step's pacing,
+writes each evaluation as page rows of the phase `loading` (never the frame's page recognition) and
+each transition as `contained_task_loading_recorded`.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| LD3-1 | `execution.loading.mode` (`off`, `shadow`, `on`; default `off`), and per instance `instance.<id>.execution.loading.mode` (default `none`) | configuration keys (§5 row; `config.parameters.execution` row; **`actingd-config` revision 24**, shared with AGT-1a §1.245, STILL-1 §1.249 and ACT-1/ACT-2 §1.250; no second step) (`loading_mode_key_default_off_and_per_instance_override`) | LOAD-3 | LOAD-3 | `since` 0.12.37; settable, read at each step; another word `out_of_range`, another type `wrong_type` |
+| LD3-2 | the one judgement, the allowance and its sharing, suppression, the wait page under `on` | rule (no shape change) (the seventeen `gate_load3` kernel tests and `a_transition_frame_is_never_act4_flip_evidence`) | LOAD-3 | LOAD-3 | page graph only; observation windows suppress and spend nothing; the back-off over transition frames is a held page's (the time from the last transition frame to the first frame after it is recorded, `loading_exit_gap_ms`, so a cap can be set from `shadow` data; no key for it) |
+| LD3-3 | `contained_task_loading_recorded` (info, ladder `none`; required `loading_event`, `loading_page_id`, `loading_ms`, `loading_limit_ms`; optional `pack_operation_id`, `page_id`, `loading_exit_gap_ms`); vocabulary `loading_event` (`entered`, `left`, `limit_reached`); keys `loading_event`, `loading_page_id`, `loading_ms`, `loading_limit_ms`, `loading_exit_gap_ms` | outcome code, vocabulary and keys | LOAD-3 | LOAD-3 | new, since nothing else says a wait saw a loading page come or go; one code with values (#420 S4). Written only in a run's diagnostics, as a recognition error row of the phase `loading` on the frame it names, as ACT-2's rows are (§1.250 ACT-4): no new row shape, no ledger shape, no `ledger` step (`loading_rows_record_entry_exit_and_limit_frames`) |
+| LD3-4 | `loading_page_id`, `loading_ms`, `loading_limit_ms` optional on `contained_task_step_unconfirmed`, `page_confirmation_failed`, `contained_task_page_unknown` | optional values of existing codes, present only when a wait ended on its allowance | LOAD-3 | LOAD-3 | `since` 0.12.37; no new failure code (coordinator's decision); `page_id` names the page the loading page suppressed; LOAD-4 adds them to `contained_task_linear_entry_unmatched` with its run |
+| LD3-5 | `StepPacing.loading`, `LoadingMode`, `ContainedTaskRuntime::record_loading`, `LoadingRecord`, `LoadingEvent`, vocabulary enum `LoadingEventKind` (`execution-kernel`) | Runtime-internal interface (memory only) | LOAD-3 | LOAD-3 | trait default records nothing; a runtime that hands no mode (offline, fixtures, the Lab) runs `off` |
+
+**Decisions within the work order.** (a) A confirmation whose loading pages have no limit anywhere
+(pages added to a package without a loading copy, and no `max_ms`) has an allowance of zero: its
+first transition frame ends the wait, named, rather than waiting without a bound. (b) Under `shadow`
+the allowance counts every transition frame, without asking the shared interrupt pages first, since
+asking may act on the screen; a failed evaluation of the loading pages fails the run under `on` with
+the page recognition's code and under `shadow` only records its row. (c) `loading_page_id` is a
+stretch's first loading page: a stretch that passes from one loading page to another is one stretch.
+
+**Interface.** `actingd-config` stays [5, 24]: LOAD-3 joins revision 24 of unreleased 0.12.37
+(AGT-1a, STILL-1, ACT-1/ACT-2), so no second step ([component-interfaces.md](component-interfaces.md)).
+`package` and `ledger` do not change.
+
+**What changes live.** Nothing until someone sets `shadow` or `on` for an instance and its packs
+carry loading copies; none does today.
+
+**Rollback** (to 0.12.36). Nothing persisted but the rows in a run's diagnostics, which keep the row
+shape. 0.12.36 refuses a configuration file that names `execution.loading` or an entry's (the members
+deny unknown members), **so the operator first removes them**; an online override is dropped with its
+record (`config_override_dropped`).
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -6242,6 +6299,7 @@ when it takes effect.
 | `execution.action_gap.*` | `mode`, `kind`, `fixed_ms`, `random_min_ms`, `random_max_ms`, `poll_ms`, `settle_frames`, `settle_change_max_milli`, `settled_max_stage`, `fallback_hold_ms`, also per instance (**`actingd-config` revision 24**) | `declared`, `fixed`, 0, 0, 0, 50, 1, 500, `s1`, 3 600 000, settable (§1.250) | ACT-1, ACT-2 | ACT-1, ACT-2 (0.12.37) |
 | `execution.capture.*` | `max_interval_ms`, `backoff_enabled`, `idle_ceiling_ms` (**`actingd-config` revision 11**) | 60 000 (`5000..=1800000`), `true`, 5 000 (`50..=60000`), settable (§1.177 B1-2, B1-3) | PERF-B1 | PERF-B1 (0.12.x) |
 | `execution.capture.still_limit_ms`, and per instance `instance.<id>.execution.capture.still_limit_ms` (**`actingd-config` revision 24**; §1.249) | the key itself | 0, off (`0` or `30000..=1800000`); an instance's default is the section's; settable | STILL-1 | STILL-1 (0.12.37) |
+| `execution.loading.mode`, and per instance `instance.<id>.execution.loading.mode` (**`actingd-config` revision 24**; §1.260) | the key itself | `off` (`off`, `shadow`, `on`); an instance's own has default `none` and the section's is in effect; settable | LOAD-3 | LOAD-3 (0.12.37) |
 | `scheduling.recognition.*` | `sample_timeout_retries` | 2 | SR-1 (built, §1.23) | SR-1 (v0.12.0) |
 | `scheduling.rerun.*`, `scheduling.cost_commit.*`, `scheduling.blackout.*`, `scheduling.feature_lock.*`, `scheduling.not_run.*` | SCHED §9 (17 keys) | SCHED §9 | SR-1 (built, §1.23) | SR-2b, SR-4a, SR-5a, SR-10 (0.12.x); `not_run.diagnose_rows` MCP-19b |
 | `scheduling.expected_runtime.*` and per instance `instance.<id>.scheduling.expected_runtime.*`; `scheduling.fact_refresh.expected_duration_ms` (`actingd-config` revision 11) | `enabled`, `runs`, `margin_ms`; the declared duration of a fact refresh read | `true`, 5 (`1..=16`), 300 000 (`0..=3600000`); 60 000 (`1..=1800000`); an instance's default is the section's (SCH-M §3.4) | ED-1 (built, §1.178) | ED-2 |
