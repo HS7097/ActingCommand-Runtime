@@ -43,6 +43,8 @@ and `operation explain` keep their existing behavior.
 | `navigation.json` (repository root only) | The edges and the recovery chain (`actingcommand.navigation.v1`, Workflow #373 NAV-5): `parse_standard_pack_navigation` against the repository root's `pages.json` (its `game`, its page ids); reported with family `standard_pack_navigation` |
 | `schedule.json` (repository root only) | The schedule rules (`actingcommand.schedule.v1`, ROUT-L RL-1a, RL-T): `parse_standard_pack_schedule`, the reader every composer runs ([standard-pack-schedule.md](standard-pack-schedule.md), "The file"); a refusal is `resource_declaration_invalid` whose details name `standard_pack_problem` and `json_pointer`; the packages its rules and `held` name, and the composition, are checked by `package bundle --schedule`; reported with family `standard_pack_schedule` |
 | `tables/<table_id>.json` (repository root's `tables/` only) | A shared table (`actingcommand.table.v1`, Workflow #357 DB-1, M-357a v1.1 §2): `parse_standard_pack_table`, the Runtime reader's own check (the table names its game itself), and `table_too_large` for the directory's 65th file or later by file name; reported with family `standard_pack_tables`. The binding and coverage checks of the family come with DB-2 |
+| `loading.json` (repository root only) | A game's loading pages (`actingcommand.loading.v1`, Workflow #407 LOAD-1, LOAD-2 since 0.12.37; section [Loading pages](#loading-pages)): `parse_standard_pack_loading`, then every template it declares as `package loading` reads them; a refusal is `resource_declaration_invalid` whose details name `standard_pack_problem` and `json_pointer`; reported with family `standard_pack_loading` |
+| `<pack>/resources/loading.json` | A pack's loading copy (`actingcommand.pack-loading.v1`, LOAD-2): `parse_pack_loading`, then, with the repository root's `loading.json`, the copy that file makes for the pack (`<pack>` read as `package loading` reads it, its templates byte for byte), else no copy at all; a stale copy is `resource_declaration_invalid` naming the copy, `standard_pack_problem` `loading_pack_stale`, `json_pointer`, the pack's `package_id` and every issue; reported with family `pack_loading`. Its templates (`.png`) are no declaration document |
 | Parser semantic-mapping and task-facts declarations | The parser's existing declaration-pair rules |
 
 A task of schema `0.8` or `0.9` may declare the top-level family `resource_readings`
@@ -1317,9 +1319,10 @@ admits them by code.
 coordinator decisions Q9 to Q11 of 2026-10-21). An operation of a task schema `0.9` page-graph
 task may be a wait step, which makes no input, and a step's confirmation may declare a wait page.
 One kernel wait serves both: the confirmation's. An older task schema refuses either with
-`UnconsumedField`; a `linear_steps` task refuses either at admission
-(`contained_task_linear_invalid`, `reason=wait`, [Linear steps](linear-steps.md)). A task that
-declares neither runs as before. The members join package revision 6, which the closing slice
+`UnconsumedField`; a `linear_steps` task refuses a wait step at admission
+(`contained_task_linear_invalid`, `reason=wait`, [Linear steps](linear-steps.md)) and, from
+LOAD-2 (since 0.12.37, [Loading pages](#loading-pages)), admits a wait page, on which nothing
+waits there until LOAD-4. A task that declares neither runs as before. The members join package revision 6, which the closing slice
 of the release declares; until then the Runtime admits them by code.
 
 ```json
@@ -1567,12 +1570,14 @@ text target located on the frame, whose expected text is the button's own label
 Workflow #407 LOAD-1 (since 0.12.37; [v012-register.md](v012-register.md) §1.257; design
 `rd-1031/check-speed/model-loading.md` §2). A game's loading pages (screens that only show the
 game is between two pages) are declared once, at the root of its resource repository, and copied
-into each pack, whose version then freezes them. **No Runtime component reads either file in this
-release:** not the root reader, not a run's preparation and not the pack loader, which admits a
-pack that carries a copy and runs it as without one. LOAD-2 compiles the copy and LOAD-3 runs it;
-until then the files are only checked by the tools ([package-reference.md](package-reference.md),
-`package loading`, `package bundle --loading`, `standard-pack check`). A pack that carries a copy
-needs a Runtime that reads it: the Runtime is deployed first, then the packs.
+into each pack, whose version then freezes them. The root reader and a run's preparation never
+read `loading.json`; the pack loader compiles a pack's copy (LOAD-2, since 0.12.37, "The compiled
+copy" below) and admits the operations that adjust it ("Operation-level loading" below). **No run
+waits on a loading page in this release:** LOAD-3 runs them in a page graph and LOAD-4 in a step
+plan; until then a compiled loading set is admitted and reported (`package check`), nothing else.
+The tools check the files ([package-reference.md](package-reference.md), `package loading`,
+`package bundle --loading`, `standard-pack check`, `resource validate`). A pack that carries a
+copy needs a Runtime that reads it: the Runtime is deployed first, then the packs.
 
 **The root file.** `<repository>/loading.json`, with its templates in `<repository>/loading/`:
 
@@ -1617,3 +1622,59 @@ applies to, carries no copy. A pack that takes a page and declares a page of a c
 itself, or a target of a copied target's id, is refused (`loading_page_collision`,
 `loading_target_collision`). Every refusal is `standard_pack_root_invalid`, with `package_id`
 when the issue is a pack's; a copy that is not the one the root file makes is `loading_pack_stale`.
+
+**The compiled copy** (Workflow #407 LOAD-2, since 0.12.37, [v012-register.md](v012-register.md)
+§1.258). The loader of a source pack (a directory, a `.json` or `.zip` container; the Runtime, Lab,
+`package check`, `package preflight` and the tools that admit a pack) reads `resources/loading.json`
+and compiles it with the pack. A refusal of a rule of the copy is `standard_pack_root_invalid` with
+the pack's `game` and `package_id`, `path` the file inside the pack and the copy's `json_pointer`;
+a refused member is `resource_declaration_invalid` in `resources/loading.json`:
+
+| Rule | Refusal |
+| --- | --- |
+| the copy keeps the rules of `parse_pack_loading` (the table above, without `game`, `servers` and `exclude_packages`) | its first issue (`malformed`, `loading_target_invalid`, ...) |
+| `coordinate_space` is the pack's (its entry task's) | `loading_coordinate_mismatch` at `/coordinate_space` |
+| each target is a declaration of its family as a task schema `0.9` `task.json` declares one, checked by the pack's declaration gate in the copy's frame; a colour target declares no `digest` (a loading page reads single-frame template and colour targets only) | `resource_declaration_invalid` at the member (`UnconsumedField` for `digest`) |
+| `defaults.match_metric`, when declared, is the pack's own (its entry task's, else `ccorr_normed`): one recognition pack matches every template with one metric | `resource_declaration_invalid` at `/defaults/match_metric` (`InvalidValue`) |
+| no page id is a page of the pack, compared under the game as the pack's pages are | `loading_page_collision` at `/pages/<i>/id` |
+| no target id is a target of the pack's recognition pack | `loading_target_collision` at `/<family>/<i>/id` |
+| each template the copy reads is in the pack, a PNG not of one colour throughout | `loading_template_invalid` at `/<family>/<i>/template` |
+| no other file lies below `resources/loading/`, and no file lies there without the copy | `loading_pack_stale`, `path` that file, `json_pointer` empty |
+
+Its targets join the derived recognition pack as declared, under their own ids: a template's
+`threshold` is its own, else the copy's `defaults.template_threshold`, else the pack's; a colour
+target's `max_distance` is its own, else the copy's `defaults.color_max_distance` (else the pack's
+default applies); the pack is written at schema `0.7` when a target needs it. Its pages join the
+derived page set as the member `loading`, `{"max_ms": <the copy's>, "pages": [...]}`, each id under
+the game (`<game>/<page>`) and never among the page set's `pages`: a page reference, an entry, a
+destination, `page_ids` and every whole-set page recognition leave them out, and only an
+evaluation that names them reads them. A loading page reads template and colour targets only.
+`package check` answers the set as `loading: {pages, max_ms}`, each page without the game, in the
+copy's order ([package-reference.md](package-reference.md)); a pack without a copy answers and
+compiles as before.
+
+**Operation-level loading** (LOAD-2, since 0.12.37; task schema `0.9`, `UnconsumedField` before
+it). A confirmation's `expect_after.loading` adjusts the pack's loading pages for that one wait:
+
+```json
+"expect_after": {"page_id": "page_b", "timeout_ms": 20000, "loading": "off"}
+"expect_after": {"page_id": "page_b",
+                 "loading": {"except": ["transition"], "add": ["page_c"], "max_ms": 300000}}
+"expect_after": {"page_id": "page_b", "wait_page": {"page_id": "page_c", "max_ms": 1200000}}
+```
+
+The confirmation's loading pages are, from the highest priority: none with `"off"`; else the pack's
+less `except`, with `add` and the wait page. Its allowance is `loading.max_ms`, else the wait
+page's `max_ms`, else the pack's; with no loading page there is none. A wait step may declare it,
+for its away clock. Nothing runs on it in this release (LOAD-3, LOAD-4).
+
+| Member | Declaration gate | Runtime admission (`contained_task_program_invalid`, `program_problem` as below, the task declaration's `path`, `json_pointer` the member below `/operations/<i>/expect_after`) |
+| --- | --- | --- |
+| `loading` | the string `off` (`InvalidValue` for another string), or an object with the optional members `except`, `add` (arrays of strings) and `max_ms` (an unsigned integer), nothing else (`InvalidType`, `UnknownField`) | `off` beside a `wait_page` (`loading_conflict`, at `loading`) |
+| `loading.max_ms` | as above | 1..=1800000 (`wait_max_invalid`); never beside a `wait_page`, whose `max_ms` is the allowance already (`loading_conflict`, at `loading/max_ms`) |
+| `loading.except[]` | as above | names one loading page the pack compiled, with or without the game, once (`loading_except_unknown`, at the entry) |
+| `loading.add[]` | as above | one page of the pack, once; in a page graph not the operation's `from` page, a destination or an error page, since a click that changes nothing would read as loading (`loading_page_invalid`, at the entry). In a step plan a page added, or the wait page, that is the step's `from`, destination or transition page is `contained_task_linear_invalid`, `reason=loading_page` ([Linear steps](linear-steps.md)) |
+
+The source build takes each `add` page into the task's page set, as a wait page. A step plan
+checks a wait page as a page graph does (`wait_page_invalid`, `wait_max_invalid`). An older
+task schema refuses `loading` (`contained_task_operation_invalid` at admission).

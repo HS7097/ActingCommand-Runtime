@@ -6,7 +6,8 @@ use actingcommand_contract::page_projection::{
     ProjectionCatalog, ProjectionMetadata, VerifiedProjectionMetadata,
 };
 use actingcommand_page_detector::{
-    PageDefinition, PageDetector, PageSet, load_page_set_from_json_str,
+    PageDefinition, PageDetector, PageDetectorError, PageSet, load_loading_pages_from_json_str,
+    load_page_set_from_json_str,
 };
 use actingcommand_recognition_pack::{
     AssetResolver, NnProviderRequest, NnProviderResult, OcrProviderRequest, OcrProviderResult,
@@ -954,6 +955,9 @@ struct LabControl {
     entry_task_id: String,
     #[serde(default)]
     resource_root: Option<String>,
+    /// Workflow #407 LOAD-2: names the package in a refusal of its loading copy.
+    #[serde(default)]
+    package_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -1336,11 +1340,18 @@ fn build_recognition_pipeline(
                 },
             }
         })?;
-    let detector =
-        PageDetector::new(page_set.clone()).map_err(|err| ContainmentError::PackParse {
-            path: pages_path.to_string(),
-            message: err.to_string(),
-        })?;
+    let parse_error = |err: PageDetectorError| ContainmentError::PackParse {
+        path: pages_path.to_string(),
+        message: err.to_string(),
+    };
+    let detector = PageDetector::new(page_set.clone()).map_err(parse_error)?;
+    // Workflow #407 LOAD-2: the loading pages the page set carries beside its pages.
+    let detector = match load_loading_pages_from_json_str(pages_json.trim_start_matches('\u{feff}'))
+        .map_err(parse_error)?
+    {
+        Some(loading) => detector.with_loading_pages(loading).map_err(parse_error)?,
+        None => detector,
+    };
     detector
         .validate(&evaluator)
         .map_err(|err| match err.declaration_issue() {

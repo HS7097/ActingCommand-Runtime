@@ -71,6 +71,10 @@ mod gate_386_rlt;
 // game root's display declaration.
 #[path = "gate_392_da4.rs"]
 mod gate_392_da4;
+// Workflow #407 LOAD-2: `package check` answers a pack's loading set, and `resource validate`
+// reads `loading.json` and a pack's loading copy.
+#[path = "gate_load2.rs"]
+mod gate_load2;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

@@ -276,6 +276,10 @@ mod gate_act1;
 // `post_delay_ms` on the settled path.
 #[cfg(test)]
 mod gate_act4;
+// LOAD-2 (Workflow #407, register §1.258): the admission of `expect_after.loading` and of a step
+// plan's wait page and loading.
+#[cfg(test)]
+mod gate_load2;
 // Workflow #392 DA-2a: the display adapter's frame gate.
 mod display_gate;
 // Workflow #392 DA-2a (model 392 v1.2 §13 rows DA2-T1 to T3, T6, T12, T14, T15, the identity
@@ -2983,12 +2987,20 @@ impl PreparedContainedTask {
 
     /// Workflow #411 B34: [`Self::describe_path`]'s admission, returning also the clicks whose
     /// declared box is one point ([`Self::single_point_clicks`]), which `package check` warns
-    /// on. The verdict is `describe_path`'s.
+    /// on, and (Workflow #407 LOAD-2) the loading set it answers ([`Self::loading_set`]). The
+    /// verdict is `describe_path`'s.
     pub fn describe_path_with_single_point_clicks(
         instance_label: &str,
         locator: &std::path::Path,
         deadline: std::time::Instant,
-    ) -> Result<(crate::TaskPackageDescriptor, Vec<SinglePointClick>), ContainedTaskError> {
+    ) -> Result<
+        (
+            crate::TaskPackageDescriptor,
+            Vec<SinglePointClick>,
+            Option<crate::PackageLoadingSet>,
+        ),
+        ContainedTaskError,
+    > {
         let bundle =
             ExternallyVerifiedBundle::load_metadata_path(instance_label, locator, deadline)
                 .map_err(contained_task_admission_error)?;
@@ -2996,6 +3008,7 @@ impl PreparedContainedTask {
         Ok((
             prepared.package_descriptor(),
             prepared.single_point_clicks(),
+            prepared.loading_set(),
         ))
     }
 
@@ -8696,8 +8709,10 @@ impl TaskProgram {
                 ExecutionKernelCode::ContainedTaskPhasesInvalid.code(),
             ));
         }
-        // Workflow #336: a step plan replaces the page-graph checks below.
+        // Workflow #336: a step plan replaces the page-graph checks below. Workflow #407 LOAD-2:
+        // its `expect_after.loading` and wait pages first.
         if control.execution_mode == linear::LINEAR_STEPS {
+            self.validate_loading(control, detector, bundle.operation_path())?;
             return self.validate_linear(control, detector).map(|_| ());
         }
         validate_stability_contract(control, self)?;
@@ -8774,8 +8789,10 @@ impl TaskProgram {
             validate_page_references(&control.game, &terminal_pages, detector)?;
             validate_page_set_overlap(&control.game, &terminal_pages, &self.error_pages, detector)?;
         }
-        // #411 B36/B19 (A35-S3): wait steps and wait pages, before the common operation checks.
+        // #411 B36/B19 (A35-S3): wait steps and wait pages, before the common operation checks;
+        // Workflow #407 LOAD-2: then each confirmation's `loading`.
         self.validate_wait_steps(control, detector, bundle.operation_path())?;
+        self.validate_loading(control, detector, bundle.operation_path())?;
         let mut operation_ids = BTreeSet::new();
         for operation in &self.operations {
             operation.validate(control, self.defaults, &self.schema_version)?;
@@ -10551,6 +10568,11 @@ struct TaskOperationExpectation {
     /// ACT-4: targets that definitely do not pass on it.
     #[serde(default)]
     target_gone: Vec<String>,
+    /// Workflow #407 LOAD-2: the confirmation's loading pages against the package's own: `off`,
+    /// or pages taken out, pages added and its own allowance; task schema `0.9`, admitted only
+    /// ([`wait_step::TaskLoading`]); LOAD-3 runs it.
+    #[serde(default)]
+    loading: Option<wait_step::TaskLoading>,
 }
 
 /// An `expect_after`'s `expect_identity` (Workflow #308 SEL-L4b, S0 §1.3): the select step whose

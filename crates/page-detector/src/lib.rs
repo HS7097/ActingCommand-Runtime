@@ -132,10 +132,23 @@ pub struct PageDefinition {
     pub forbidden: Vec<String>,
 }
 
+/// Workflow #407 LOAD-2 (register §1.258): the loading pages a pack compiled from its loading
+/// copy, the member `loading` of its derived page set: pages beside the page set, never in it, and
+/// the effective allowance `max_ms` of one confirmation.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LoadingPageSet {
+    pub max_ms: u64,
+    pub pages: Vec<PageDefinition>,
+}
+
 #[derive(Debug, Clone)]
 pub struct PageDetector {
     page_set: PageSet,
     page_indexes: HashMap<String, usize>,
+    /// Workflow #407 LOAD-2: the loading pages, by id, outside `page_set`.
+    loading: Option<LoadingPageSet>,
+    loading_indexes: HashMap<String, usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -322,7 +335,7 @@ pub fn load_page_set_from_json_str(json: &str) -> PageDetectorResult<PageSet> {
             }
             Ok(())
         };
-    check(&value, "", &["schema_version", "pages"])?;
+    check(&value, "", &["schema_version", "pages", "loading"])?;
     if let Some(pages) = value.get("pages").and_then(serde_json::Value::as_array) {
         for (index, page) in pages.iter().enumerate() {
             check(
@@ -332,8 +345,36 @@ pub fn load_page_set_from_json_str(json: &str) -> PageDetectorResult<PageSet> {
             )?;
         }
     }
+    // Workflow #407 LOAD-2: the loading pages a source pack compiles beside its pages.
+    if let Some(loading) = value.get("loading") {
+        check(loading, "/loading", &["max_ms", "pages"])?;
+        if let Some(pages) = loading.get("pages").and_then(serde_json::Value::as_array) {
+            for (index, page) in pages.iter().enumerate() {
+                check(
+                    page,
+                    &format!("/loading/pages/{index}"),
+                    &["id", "required", "any_of", "optional", "forbidden"],
+                )?;
+            }
+        }
+    }
     serde_json::from_value(value)
         .map_err(|err| PageDetectorError::fatal(format!("failed to parse page set JSON: {err}")))
+}
+
+/// Workflow #407 LOAD-2 (register §1.258): the member `loading` of a derived page set, checked as
+/// [`load_page_set_from_json_str`] checks the page set; `None` when the page set declares none.
+pub fn load_loading_pages_from_json_str(json: &str) -> PageDetectorResult<Option<LoadingPageSet>> {
+    let value: serde_json::Value = serde_json::from_str(json)
+        .map_err(|err| PageDetectorError::fatal(format!("failed to parse page set JSON: {err}")))?;
+    value
+        .get("loading")
+        .map(|loading| {
+            serde_json::from_value(loading.clone()).map_err(|err| {
+                PageDetectorError::fatal(format!("failed to parse the page set's loading: {err}"))
+            })
+        })
+        .transpose()
 }
 
 pub fn require_all_page_evaluations(
@@ -383,7 +424,63 @@ impl PageDetector {
         Ok(Self {
             page_set,
             page_indexes,
+            loading: None,
+            loading_indexes: HashMap::new(),
         })
+    }
+
+    /// Workflow #407 LOAD-2 (register §1.258): the detector with the pack's loading pages, kept
+    /// outside the page set: [`Self::page_ids`], [`Self::contains_page`] and every
+    /// `evaluate_all_*` leave them out, [`Self::evaluate_pages_outcomes_in_context`] evaluates them
+    /// by id. Refused: no page or more than `MAX_LOADING_PAGES`, a `max_ms` outside
+    /// 1..=`MAX_LOADING_MS`, a page that breaks the rules of a page definition, and a page id that
+    /// is empty, repeated or a page of the page set.
+    pub fn with_loading_pages(mut self, loading: LoadingPageSet) -> PageDetectorResult<Self> {
+        use actingcommand_contract::{MAX_LOADING_MS, MAX_LOADING_PAGES};
+        if !(1..=MAX_LOADING_PAGES).contains(&loading.pages.len()) {
+            return Err(PageDetectorError::fatal(format!(
+                "loading holds {} page(s), expected 1 to {MAX_LOADING_PAGES}",
+                loading.pages.len()
+            )));
+        }
+        if !(1..=MAX_LOADING_MS).contains(&loading.max_ms) {
+            return Err(PageDetectorError::fatal(format!(
+                "loading max_ms {} is outside 1..={MAX_LOADING_MS}",
+                loading.max_ms
+            )));
+        }
+        let mut indexes = HashMap::new();
+        for (index, page) in loading.pages.iter().enumerate() {
+            if page.id.is_empty() {
+                return Err(PageDetectorError::fatal(format!(
+                    "loading page[{index}] id is empty"
+                )));
+            }
+            if self.page_indexes.contains_key(&page.id)
+                || indexes.insert(page.id.clone(), index).is_some()
+            {
+                return Err(PageDetectorError::fatal(format!(
+                    "loading page id '{}' is duplicated",
+                    page.id
+                )));
+            }
+            validate_page_definition(page)?;
+        }
+        self.loading = Some(loading);
+        self.loading_indexes = indexes;
+        Ok(self)
+    }
+
+    /// Workflow #407 LOAD-2: the ids of the loading pages, in their order; none without them.
+    pub fn loading_page_ids(&self) -> impl Iterator<Item = &str> {
+        self.loading
+            .iter()
+            .flat_map(|loading| loading.pages.iter().map(|page| page.id.as_str()))
+    }
+
+    /// Workflow #407 LOAD-2: the allowance of one confirmation the loading pages declare.
+    pub fn loading_max_ms(&self) -> Option<u64> {
+        self.loading.as_ref().map(|loading| loading.max_ms)
     }
 
     pub fn validate(&self, evaluator: &RecognitionEvaluator) -> PageDetectorResult<()> {
@@ -474,6 +571,20 @@ impl PageDetector {
                             page.id
                         ),
                     ));
+                }
+            }
+        }
+        // Workflow #407 LOAD-2: a loading page reads single-frame template and colour targets only.
+        for page in self.loading.iter().flat_map(|loading| &loading.pages) {
+            for target_id in page_target_ids(page) {
+                if !matches!(
+                    evaluator.target_kind(target_id).map_err(pack_error)?,
+                    TargetKind::Template | TargetKind::Color
+                ) {
+                    return Err(PageDetectorError::fatal(format!(
+                        "loading page '{}' reads '{target_id}', which is no template or colour target",
+                        page.id
+                    )));
                 }
             }
         }
@@ -634,7 +745,8 @@ impl PageDetector {
     /// Workflow #336 (`linear_steps`): evaluates only the listed page ids, in list order, with
     /// the per-page outcomes of [`Self::evaluate_all_outcomes_in_context`]. Each outcome's
     /// `index` is the page's index in the page set. An id outside the page set fails the batch
-    /// before any page is evaluated.
+    /// before any page is evaluated. Workflow #407 LOAD-2: a loading page is found by its id too,
+    /// its `index` counted after the page set's pages.
     pub fn evaluate_pages_outcomes_in_context(
         &self,
         context: &actingcommand_recognition_pack::SceneEvaluation<'_>,
@@ -642,7 +754,13 @@ impl PageDetector {
     ) -> PageBatchResult {
         let mut pages = Vec::with_capacity(page_ids.len());
         for page_id in page_ids {
-            let Some(index) = self.page_indexes.get(*page_id).copied() else {
+            if let Some(index) = self.page_indexes.get(*page_id).copied() {
+                pages.push((index, &self.page_set.pages[index]));
+            } else if let (Some(index), Some(loading)) =
+                (self.loading_indexes.get(*page_id).copied(), &self.loading)
+            {
+                pages.push((self.page_set.pages.len() + index, &loading.pages[index]));
+            } else {
                 return Err(BatchLevelError {
                     cause: Box::new(PageDetectorError::fatal(format!(
                         "page id not found: {page_id}"
@@ -650,8 +768,7 @@ impl PageDetector {
                     completed: Vec::new(),
                     unexecuted: Vec::new(),
                 });
-            };
-            pages.push((index, &self.page_set.pages[index]));
+            }
         }
         if let Err(cause) = validate_batch_request(context.evaluator(), context.scene()) {
             return Err(BatchLevelError {

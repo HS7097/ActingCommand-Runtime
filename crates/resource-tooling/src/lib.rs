@@ -111,6 +111,8 @@ pub use maa_task_graph::{
 };
 pub use package_directory::package_bundle;
 pub use package_loading::package_loading;
+// Workflow #407 LOAD-2: `actinglab resource validate` of `loading.json` and a pack's copy.
+pub use package_loading::{check_loading_root_file, check_pack_loading_copy};
 pub use package_publish::{
     PackagePublicationCommit, PackagePublicationTransaction, PublishedPackageReader,
     open_published_package,

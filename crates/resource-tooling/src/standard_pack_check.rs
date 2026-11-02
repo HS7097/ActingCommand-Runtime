@@ -294,6 +294,28 @@ pub fn check_standard_pack_root(
         };
         root_invalid(&game, &root.join(STANDARD_PACK_BUNDLE_FILE), &issue)
     })?;
+    // Workflow #407 LOAD-1: with `loading.json`, every package's loading copy is the one it
+    // makes, as `package loading --check` checks it; without it, no package carries one. LOAD-2:
+    // before the cross-check admits the packages, whose loader compiles a copy, so a stale copy is
+    // named as stale.
+    let packages = checked
+        .registry
+        .package_ids()
+        .filter_map(|package_id| {
+            let entry = checked.registry.get(package_id)?;
+            Some((package_id.to_owned(), root.join(&entry.directory)))
+        })
+        .collect::<Vec<_>>();
+    let loading = root.join(STANDARD_PACK_LOADING_FILE);
+    if fs::symlink_metadata(&loading).is_ok() {
+        let directories = packages
+            .iter()
+            .map(|(_, directory)| directory.clone())
+            .collect::<Vec<_>>();
+        check_loading(&loading, &game, &directories)?;
+    } else {
+        stale_copies(&game, &packages)?;
+    }
     let mut warnings = cross_check(
         &game,
         &checked,
@@ -334,26 +356,8 @@ pub fn check_standard_pack_root(
             &|directory: &str| root.join(directory),
         )?;
     }
-    // Workflow #407 LOAD-1: with `loading.json`, every package's loading copy is the one it
-    // makes, as `package loading --check` checks it; without it, no package carries one.
-    let packages = checked
-        .registry
-        .package_ids()
-        .filter_map(|package_id| {
-            let entry = checked.registry.get(package_id)?;
-            Some((package_id.to_owned(), root.join(&entry.directory)))
-        })
-        .collect::<Vec<_>>();
-    let loading = root.join(STANDARD_PACK_LOADING_FILE);
     if fs::symlink_metadata(&loading).is_ok() {
-        let directories = packages
-            .iter()
-            .map(|(_, directory)| directory.clone())
-            .collect::<Vec<_>>();
-        check_loading(&loading, &game, &directories)?;
         present.push(STANDARD_PACK_LOADING_FILE);
-    } else {
-        stale_copies(&game, &packages)?;
     }
     Ok(StandardPackCheckResponse {
         status: "checked".to_owned(),

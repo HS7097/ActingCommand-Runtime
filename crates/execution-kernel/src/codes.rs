@@ -385,5 +385,16 @@ actingcommand_contract::outcome_vocabulary! {
         /// A target stands in the rules of neither the operation's `from` page nor one of its
         /// destinations, directly or as a member of a check there.
         ExpectTargetUnreachable => "expect_target_unreachable",
+        // Workflow #407 LOAD-2 (since 0.12.37): an `expect_after`'s `loading`
+        // (contracts/resource-declarations.md, "Loading pages"); the refused member is in the
+        // operation's `expect_after`.
+        /// `loading` is `off` beside a wait page, or names `max_ms` beside a wait page's.
+        LoadingConflict => "loading_conflict",
+        /// An entry of `loading.except` names no loading page the package inherits, or repeats
+        /// one.
+        LoadingExceptUnknown => "loading_except_unknown",
+        /// An entry of `loading.add` is not one page of the package, repeats one, or (page graph)
+        /// is the operation's `from` page, one of its destinations or an error page.
+        LoadingPageInvalid => "loading_page_invalid",
     }
 }

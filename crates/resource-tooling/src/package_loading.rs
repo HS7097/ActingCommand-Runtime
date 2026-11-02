@@ -8,7 +8,8 @@
 //! The root file is read by the contract crate's one check ([`parse_standard_pack_loading`]), for
 //! the game the packs declare; every template it declares is read from the `loading/` directory
 //! beside it and must be a PNG that is not of one colour throughout. Every pack directory is read
-//! with the loader's own snapshot and admitted by its path, as `package bundle` admits it; its
+//! with the loader's own snapshot and admitted without its loading copy (Workflow #407 LOAD-2: the
+//! loader compiles a copy, and a stale one is this tool's to report and rewrite); its
 //! copy is the root file's pages for its server ([`StandardPackLoading::for_server`]), none when
 //! `exclude_packages` names it or no page applies to its server. A pack that takes pages and
 //! declares another coordinate space, or a page or target id of the copy itself, is refused, as
@@ -45,8 +46,8 @@ use actingcommand_contract::{
     parse_pack_loading, parse_standard_pack_loading,
 };
 use actingcommand_execution_kernel::canonical_page_anchor;
+use actingcommand_pack_containment::source::loading_template_problem;
 use actingcommand_pack_containment::{Containment, ContainmentError, InstanceId};
-use actingcommand_recognition::Scene;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -71,7 +72,7 @@ pub fn package_loading(request: PackageLoadingRequest) -> LabResult<PackageLoadi
         .map(|pack| pack.game.clone())
         .ok_or_else(|| LabError::usage("--packs-root holds no pack directory"))?;
     let root = LoadingRoot::read(&request.root_file, &game)?;
-    let plans = plan(&root, packs)?;
+    let plans = plan(&root, packs, true)?;
     let status = match request.mode {
         PackageLoadingMode::Check => {
             refuse_stale(&root, &plans)?;
@@ -133,9 +134,36 @@ pub(crate) fn check_loading(
         .map(|directory| read_pack(directory.as_path()))
         .collect::<LabResult<Vec<_>>>()?;
     let root = LoadingRoot::read(root_file, game)?;
-    let plans = plan(&root, packs)?;
+    let plans = plan(&root, packs, true)?;
     refuse_stale(&root, &plans)?;
     Ok(root)
+}
+
+/// Workflow #407 LOAD-2 (register §1.258): `actinglab resource validate` of a game root's
+/// `loading.json` that its contract check admitted: every template it declares is read from the
+/// `loading/` directory beside it, for the game it names, as `package loading` reads them.
+pub fn check_loading_root_file(root_file: &Path, game: &str) -> LabResult<()> {
+    LoadingRoot::read(root_file, game).map(|_| ())
+}
+
+/// Workflow #407 LOAD-2 (register §1.258): `actinglab resource validate` of the loading copy of
+/// the pack directory `pack`: with the repository's `loading.json` (`root_file`), the copy must be
+/// the one `package loading --write` makes for the pack, as `--check` decides it (an
+/// `exclude_packages` entry that names another pack is not this check's); without one, a pack
+/// that carries a copy is stale. A refusal is `standard_pack_root_invalid` with `package_id`.
+pub fn check_pack_loading_copy(root_file: Option<&Path>, pack: &Path) -> LabResult<()> {
+    let pack = read_pack(pack)?;
+    match root_file {
+        None => stale_copies(
+            &pack.game,
+            &[(pack.package_id.clone(), pack.directory.clone())],
+        ),
+        Some(root_file) => {
+            let root = LoadingRoot::read(root_file, &pack.game)?;
+            let plans = plan(&root, vec![pack], false)?;
+            refuse_stale(&root, &plans)
+        }
+    }
 }
 
 /// `package bundle` without `--loading` and `standard-pack check` of a game root without
@@ -226,7 +254,8 @@ impl LoadingRoot {
             }
             let file = pack_path(&directory, template);
             match read_bounded(&file) {
-                Ok(Some(bytes)) => match template_problem(&bytes) {
+                // Workflow #407 LOAD-2: the pack loader's own check of a template.
+                Ok(Some(bytes)) => match loading_template_problem(&bytes) {
                     None => {
                         templates.insert(template.to_owned(), bytes);
                     }
@@ -266,22 +295,6 @@ impl LoadingRoot {
     }
 }
 
-/// Why a template cannot tell a loading page: it is no PNG this build decodes, or every pixel is
-/// of one colour (a black or white screen is no loading page); `None` when it can.
-fn template_problem(bytes: &[u8]) -> Option<String> {
-    let scene = match Scene::from_png(bytes) {
-        Ok(scene) => scene,
-        Err(error) => return Some(format!("no PNG this build decodes: {error}")),
-    };
-    let (pixels, _) = scene.rgb8_pixels().as_chunks::<3>();
-    let mut pixels = pixels.iter();
-    let first = pixels.next();
-    if first.is_none() || pixels.all(|pixel| Some(pixel) == first) {
-        return Some("every pixel is of one colour".to_owned());
-    }
-    None
-}
-
 /// What one pack declares, as the loader admits it, and the loading copy it carries.
 struct LoadingPack {
     directory: PathBuf,
@@ -298,8 +311,10 @@ struct LoadingPack {
     copy: BTreeMap<String, Vec<u8>>,
 }
 
-/// Reads the pack at `directory` with the loader's snapshot and admits it by its path, as
-/// `package bundle` does.
+/// Reads the pack at `directory` with the loader's snapshot and admits it as `package bundle`
+/// does, without its loading copy: Workflow #407 LOAD-2 compiles a copy in the loader, and a copy
+/// that is stale or broken is what this tool reports and rewrites, so it is held aside and
+/// compared, never admitted here.
 fn read_pack(directory: &Path) -> LabResult<LoadingPack> {
     let refused_pack = |error: ContainmentError| {
         LabError::package_invalid(format!("{}: {error}", directory.display()))
@@ -312,15 +327,14 @@ fn read_pack(directory: &Path) -> LabResult<LoadingPack> {
     };
     let deadline = Instant::now() + PACK_DEADLINE;
     let mut containment = Containment::for_metadata_validation();
-    let copy = containment
+    let (copy, rest): (BTreeMap<_, _>, BTreeMap<_, _>) = containment
         .snapshot_content_directory(directory, deadline)
         .map_err(refused_pack)?
         .into_iter()
-        .filter(|(path, _)| pack_loading_entry(path))
-        .collect::<BTreeMap<_, _>>();
+        .partition(|(path, _)| pack_loading_entry(path));
     let instance = InstanceId::new(LOADING_LABEL).map_err(refused_pack)?;
     let bundle = containment
-        .load_path(&instance, directory, false, deadline)
+        .load_content_entries(&instance, rest, false, deadline)
         .map_err(refused_pack)?;
     let control = bundle.control().ok_or_else(|| unreadable("control.json"))?;
     let text = |key: &str| {
@@ -465,13 +479,14 @@ impl PackPlan {
     }
 }
 
-/// The copy of every pack, or a refusal listing every issue of the packs (module doc).
-fn plan(root: &LoadingRoot, packs: Vec<LoadingPack>) -> LabResult<Vec<PackPlan>> {
+/// The copy of every pack, or a refusal listing every issue of the packs (module doc). With
+/// `all_packs`, `packs` are every pack of the root, so an `exclude_packages` entry must name one.
+fn plan(root: &LoadingRoot, packs: Vec<LoadingPack>, all_packs: bool) -> LabResult<Vec<PackPlan>> {
     let loading = &root.loading;
     let game = loading.game.as_str();
     let mut issues = Vec::new();
     for (index, excluded) in loading.exclude_packages.iter().enumerate() {
-        if !packs.iter().any(|pack| &pack.package_id == excluded) {
+        if all_packs && !packs.iter().any(|pack| &pack.package_id == excluded) {
             issues.push(issue(
                 game,
                 &root.path,

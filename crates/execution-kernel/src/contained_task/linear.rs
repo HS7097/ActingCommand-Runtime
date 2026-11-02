@@ -602,8 +602,8 @@ impl TaskProgram {
         let mut operation_ids = BTreeSet::new();
         let mut steps = Vec::with_capacity(self.operations.len());
         for (index, operation) in self.operations.iter().enumerate() {
-            // #411 B36/B19 (A35-S3): a wait step and a confirmation's wait page are page-graph
-            // declarations.
+            // #411 B36/B19 (A35-S3): a wait step is a page-graph declaration. Workflow #407 LOAD-2:
+            // a confirmation's wait page and loading are admitted (`validate_loading`).
             if operation.declares_wait() {
                 return Err(invalid("wait", Some(operation)));
             }
@@ -728,6 +728,21 @@ impl TaskProgram {
                 }
                 Some(optional) => Some(Duration::from_millis(optional.settle_ms)),
             };
+            // Workflow #407 LOAD-2 (design `model-loading.md` §5): a page the step's loading adds,
+            // or its wait page, is none of its own pages: a frame of it never proves the input.
+            for page in operation.loading_added_pages() {
+                let page = resolve(page)?;
+                let transition_page = matches!(
+                    &transition,
+                    Some(LinearTransition::Page { page: passed, .. }) if *passed == page
+                );
+                if page == to
+                    || transition_page
+                    || matches!(&from, LinearFrom::Page(from) if *from == page)
+                {
+                    return Err(invalid("loading_page", Some(operation)));
+                }
+            }
             steps.push(LinearStep {
                 from,
                 to,
