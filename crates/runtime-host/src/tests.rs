@@ -202,9 +202,11 @@ mod gate_357_db1;
 // Workflow #357 DB-2 (#430 S4a-1): a selection document that reads a shared table, through the
 // host's run preparation.
 mod gate_357_db2;
+// Workflow #432 AGT-1a: the client words stay in the forwarding crate.
 mod gate_375_r3;
 mod gate_381a;
 mod gate_381b;
+mod gate_agt_1a;
 // CAP-IDX (since 0.12.27): capture takes the MuMu index from the discovery binding; a shifted
 // port is checked against MuMu's report before capture opens.
 mod gate_cap_idx;

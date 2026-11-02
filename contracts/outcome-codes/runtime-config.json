@@ -1,6 +1,28 @@
 {
   "owner": "runtime-config",
   "codes": {
+    "agent_wake_config_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-config",
+      "layer": "config",
+      "uncertain": false,
+      "values": {
+        "config_key": "required",
+        "config_value_problem": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.37",
+      "description": "The agent_wake section breaks a rule at start or in check-config (Workflow #432 AGT-1a; contracts/agent-wake.md): a key left out of the section, a rule's kind, code or alias that is not known, a daily cap above what holds it, a body folder inside the Runtime's own material, a quiet window that breaks a blackout entry's rule, or a registered channel whose shortest message does not fit; config_key names the key and config_value_problem the rule. The same values sent by a ConfigureSettings instruction are refused as config_value_invalid with the same key and problem. As a note link on the agent_wake subsystem row it says what is wrong with the channel registry and refuses nothing.",
+      "common_causes": "A hand-edited agent_wake section written in part or with a word the section does not take.",
+      "handling": "Fix the key config_key names as config_value_problem says, then commit the configuration again."
+    },
     "blackout_config_invalid": {
       "category": "error",
       "ladder_class": "none",

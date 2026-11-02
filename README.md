@@ -167,6 +167,7 @@ The workspace declares 34 members, resolver `3`, a workspace-level edition of 20
 | Path | Package | Responsibility |
 | --- | --- | --- |
 | crates/actingcommand-contract | actingcommand-contract | Contract definitions for the protocol, device and engine boundaries; no target logic |
+| crates/agent-forward | actingcommand-agent-forward | The Runtime's own forwarding to agent sessions: the channel registry and the transports; the only crate that names a client |
 | crates/artifact-store | actingcommand-artifact-store | Artifact bytes, hashes, retention metadata, frame buffers and evidence archives |
 | crates/device | actingcommand-device | Device-layer primitives; input selected through an explicit backend chain |
 | crates/display-adapter | actingcommand-display-adapter | Pure integer mapping between a package's base coordinates, the scale frame and the device frame: nine-grid anchors, rounding, rotation and crop; no I/O, no backend |

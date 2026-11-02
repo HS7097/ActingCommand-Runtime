@@ -5727,6 +5727,27 @@ composite's success no longer names `next.undo`. Nothing persisted changes.
 
 **Rollback** (to 0.12.36). A pack whose document declares `tables` is refused at admission by the older build, `contained_task_select_policy_invalid`; `package` [3, 6] above its range refuses the combination earlier. Nothing persisted changes.
 
+### 1.245 Slice AGT-1a (0.12.37): the `agent_wake` section, the channel registry's shape and the pure parts of a wake (Workflow #432; design `rd-1031/agt/model-agt-v2.md` §10; coordinator work order `rd-1031/agt/brief-agt-1a-v2.md`)
+
+[agent-wake.md](agent-wake.md) is the contract. No thread, no transport, no record and no behaviour change: nothing reads the section yet beyond its checks.
+
+**What changes live.** With no `agent_wake` section, one thing: the entry `host.agent_wake` in `ledger_observer.tag.workbench_patterns`, and so one list entry in `config.parameters.ledger_observer` and the defaults file's digest in `config.selection`. No key, no subsystem row and no section fact. With a section, its keys, its `agent_wake` subsystem row and the read of the channel registry at start and in `check-config`.
+
+**Rollback** (to 0.12.36). A configuration file that names the section is refused by the older build (`config_decode_failed`), so **remove the section first**. Online overrides of its keys need nothing: an older build drops each row (`config_override_dropped`). Nothing else persisted changes, and `ledger` does not move.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| AGT1A-1 | `agent_wake.*`, 19 keys ([agent-wake.md](agent-wake.md)) | new configuration section, **`actingd-config` [5, 24]** | AGT-1a | the person | every default `none`, so whole or absent; not settable: `body.dir`, `delivery.queue_capacity`; `since` 0.12.37 |
+| AGT1A-2 | `agent_wake_config_invalid` (error, ladder class `none`; `config_key`, `config_value_problem?`; owner `runtime-config`, domain `agent_`) | new outcome code | AGT-1a | start, `check-config` | through an instruction `config_value_invalid` with the same key and problem |
+| AGT1A-3 | `config_value_problem` + `required_missing`, `kind_unknown`, `instance_unknown`, `caps_exceed`, `dir_reserved`, `message_floor`, `registry_unreadable`, `channel_unknown`, `channel_program_missing` | vocabulary words | AGT-1a | start, `check-config` | the last three only as `note` links, never a refusal; `duplicate_id` and `match_missing` also cover this section's rules |
+| AGT1A-4 | subsystem row `agent_wake` | `config.subsystems` row | AGT-1a | start, `check-config` | only with a section, right after `agent_dispatcher` |
+| AGT1A-5 | `host.agent_wake` in `tag.workbench_patterns` (`[&str; 13]`) | default of a list key | AGT-1a | AGT-1b writes the fact | see §4 |
+| AGT1A-6 | `crates/agent-forward` (`actingcommand-agent-forward`): `AgentForward`, `ForwardMessage`, `SendLimits`, `ForwardOutcome`, `DeliveryProof`, `DeferReason`, `DeliveryProblem`, `IntentFailed`, `Unavailable`, `FakeForward` (`test-support`), `channels` | new crate, host job | AGT-1a | — | the only crate with client words; no pipe, no process, `forbid(unsafe_code)` for now, no new third-party dependency |
+| AGT1A-7 | `<state_root>\agent-forward\channels.json`, schema `actingcommand.agent-channels.v1` | program state, read only here | AGT-1a | AGT-T1's command | no secret; a registry that breaks a rule is unreadable as a whole |
+| AGT1A-8 | `render_message`, `render_body` (`crates/runtime-host/src/agent_wake/`), body schema `actingcommand.agent-wake-body.v1` | pure functions | AGT-1a | AGT-1b calls them | `dead_code` allowed until then |
+
+**Tests changed** (the approved behaviour change): `ledger_observer_tests`' `WORKBENCH_PATTERNS` gains the entry; `component_interfaces.rs`' `V0120` says `actingd-config` [5, 24].
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -5791,6 +5812,7 @@ U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `Loa
 | `host.config_overrides` | workbench | yes (added to `tag.workbench_patterns` by M387 §5.7) | D1b |
 | `host.contained_settlement` (an integer: the start event of the last start that completed the settlement of open direct runs; [runtime-fact-store.md](runtime-fact-store.md)) | workbench | yes (added to `tag.workbench_patterns` by #411 A65) | #411 A65 |
 | `host.idle_state` (a record list: the instances the idle action closed or is closing, with their action and wake; since 0.12.25 its writer row names the start anchor, not the owner epoch (#405 N-2), and a woken instance stays in it, `woken`, until its startup package has run (#405 O-2); [runtime-fact-store.md](runtime-fact-store.md)) | workbench | yes (added to `tag.workbench_patterns` by #405 IDLE-1P) | #405 IDLE-1P |
+| `host.agent_wake` (a record list: the newest `agent_wake.delivery.history_rows` wakes and their delivery states; [agent-wake.md](agent-wake.md); AGT-1a adds the tag entry, AGT-1b the writer; §1.245 AGT1A-5) | workbench | yes (added to `tag.workbench_patterns`) | #432 AGT-1b |
 | `config.selection`, `config.catalog` | workbench | no (`config.` is re-observed) | D1b, MCP-9a |
 | `config.parameters.touch` (a section fact of the `config.parameters.<section>` family, five rows; §1.136 T12-4) | workbench | no (`config.` is re-observed) | #406 T12 |
 | `config.parameters.emulator_control` (a section fact of the `config.parameters.<section>` family, one row; §1.158 A50-5) | workbench | no (`config.` is re-observed) | #411 A50 |
@@ -5850,6 +5872,7 @@ when it takes effect.
 | `emulator_control.*` (**`actingd-config` revision 8**, #411 A50; §1.158) | `restart_exit_wait_ms` | 60 000 (`1000..=300000`); host-wide, settable ([runtime-config.md](runtime-config.md)) | A50 (§1.158 A50-5) | A50 (0.12.x) |
 | `host.*` (**`actingd-config` revision 20**, RB-2; §1.202) | `process_memory_priority`, `process_io_priority` | `normal` (`normal` \| `low`); not settable, applied by actingd to its own process at start ([runtime-config.md](runtime-config.md), "The `host` section") | RB-2 (§1.202 RB2-1) | RB-2 (0.12.28) |
 | `store_foreground.*` (**`actingd-config` revision 21**, STORE-FG-2; §1.209) | `allowed_application_ids` | `[]` (0 to 16 unique Android package names, none an instance's `application_id`); not settable, only the configuration file widens it ([runtime-config.md](runtime-config.md), "The `store_foreground` section") | STORE-FG-2 (§1.209 SF2-1) | STORE-FG-2 (0.12.29) |
+| `agent_wake.*` (**`actingd-config` revision 24**, Workflow #432 AGT-1a; §1.245) | the 19 keys of [agent-wake.md](agent-wake.md) | no default anywhere, as an exception to this section's opening: the section is whole or absent, and a file that does not name it has no key | AGT-1a (§1.245 AGT1A-1) | AGT-1b (0.12.37) |
 | `performance.presets` (**`actingd-config` revision 22**, Workflow #429 R-2; §1.220) | the key itself (an object of presets) | `standard`, `adaptive`, `light` (§1.220 R2-3); not settable, read once at assembly ([runtime-config.md](runtime-config.md), "Presets") | R-2 (§1.220 R2-3) | R-2 (0.12.31) |
 
 - Removed by option 丙 in the same revision (PKG-S4): `startup_package.expected_sha256`,

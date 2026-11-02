@@ -2963,3 +2963,27 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_w1_8::w1_8_t8_the_performance_status_shows_the_reader_pools_pages",
 ]
 incident = ["#422 W1-8"]
+
+# AGT-1a (Workflow #432, 0.12.37; design rd-1031/agt/model-agt-v2.md section 10; register section 1.245; contracts/agent-wake.md): the agent_wake section has no default and is whole or absent, its caps fit the rows kept, its quiet windows use the blackout rules and its settable keys are the design's table; the message counts its header, cuts only the alias and refuses a channel below its floor; the body is bounded, read-only and codes only; the channel registry refuses bad names and paths; and the client words stay in crates/agent-forward.
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::gate_agt_1a::agent_wake_rows_have_no_default_and_the_section_must_be_whole",
+    "actingcommand-runtime-config::lib::gate_agt_1a::agent_wake_settable_keys_match_the_table",
+    "actingcommand-runtime-config::lib::gate_agt_1a::agent_wake_caps_must_fit_the_history_rows",
+    "actingcommand-runtime-config::lib::gate_agt_1a::agent_wake_quiet_windows_use_the_blackout_rules",
+    "actingcommand-runtime-host::lib::agent_wake::summary::tests::message_counts_unicode_scalars_including_the_header",
+    "actingcommand-runtime-host::lib::agent_wake::summary::tests::message_first_line_is_exactly_the_fixed_header_and_channel",
+    "actingcommand-runtime-host::lib::agent_wake::summary::tests::message_cuts_only_the_alias_and_marks_it",
+    "actingcommand-runtime-host::lib::agent_wake::summary::tests::message_never_cuts_the_kind_or_the_path",
+    "actingcommand-runtime-host::lib::agent_wake::summary::tests::message_with_no_instance_omits_the_alias",
+    "actingcommand-runtime-host::lib::agent_wake::summary::tests::message_floor_is_refused_for_a_channel_that_cannot_fit",
+    "actingcommand-runtime-host::lib::agent_wake::body::tests::body_is_bounded_and_names_what_it_dropped",
+    "actingcommand-runtime-host::lib::agent_wake::body::tests::body_capabilities_are_read_only_without_device_contact",
+    "actingcommand-runtime-host::lib::agent_wake::body::tests::body_outcome_is_codes_only_and_holds_no_device_values",
+    "actingcommand-runtime-host::lib::agent_wake::body::tests::body_carries_the_not_authorization_notice",
+    "actingcommand-runtime-host::lib::tests::gate_agt_1a::agent_wake_sources_name_no_client",
+    "actingcommand-agent-forward::lib::channels::tests::channels_refuse_control_characters_long_names_and_duplicates",
+    "actingcommand-agent-forward::lib::channels::tests::channels_dsh_requires_three_absolute_paths",
+]
+incident = ["#432 AGT-1a"]
