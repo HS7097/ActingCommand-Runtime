@@ -3607,6 +3607,28 @@
       "common_causes": "A drawn gap is ordinary under kind random. A fall-back is a confirmation that failed, or a next step's guard that refused the frame the operation arrived on.",
       "handling": "None for a drawn gap. A fall-back needs no action; many of them on one operation say its page is not ready when it first shows, which settle_frames or the package's declarations can answer."
     },
+    "contained_task_loading_recorded": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "loading_event": "required",
+        "loading_page_id": "required",
+        "loading_ms": "required",
+        "loading_limit_ms": "required",
+        "pack_operation_id": "optional",
+        "page_id": "optional",
+        "loading_exit_gap_ms": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.37",
+      "description": "A transition of a wait's loading pages under execution.loading.mode shadow or on (Workflow #407 LOAD-3), a row of the phase loading in the run's diagnostics on the frame it names, no ledger shape. loading_event entered: the first transition frame of a stretch, page_id the page of the package it suppresses; left: the first frame after it, page_id the page that held on it and loading_exit_gap_ms the time since the stretch's last transition frame; limit_reached: a transition frame after the input's allowance was spent, once per allowance. loading_ms is the allowance spent (before the frame for entered), loading_limit_ms the allowance, pack_operation_id the operation whose input it belongs to (none for a page wait).",
+      "common_causes": "A loading screen between two pages. Under shadow the rows measure how long a game's loading lasts and whether a loading page shows over a page that can already be operated (entered with page_id a destination while the loading mark stays).",
+      "handling": "None for entered and left. Many limit_reached rows say the allowance (the package's max_ms, an operation's loading.max_ms or wait_page.max_ms) is too short for that loading, or that a loading mark stays on a page that is ready: raise the allowance, or exclude the page with loading.except or the loading page's forbidden targets."
+    },
     "contained_task_active_identity_mismatch": {
       "category": "error",
       "ladder_class": "none",

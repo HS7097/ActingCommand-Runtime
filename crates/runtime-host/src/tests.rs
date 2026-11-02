@@ -124,6 +124,9 @@ mod gate_0122_a7t;
 mod gate_0122_pk1b;
 // ACT-1, ACT-2 (Workflow #407, register §1.250): the settled path and the gap a step is handed.
 mod gate_act1;
+// LOAD-3 (Workflow #407, register §1.260): a run's loading page rows under
+// `execution.loading.mode` `on`.
+mod gate_load3;
 // #407 PF-2 (0.12.37), register §1.252: `RecognitionStarted`'s two commits are observed stage by
 // stage.
 mod gate_407_pf2;

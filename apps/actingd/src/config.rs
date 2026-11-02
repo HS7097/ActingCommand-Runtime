@@ -894,7 +894,8 @@ struct InstanceConfig {
     // Interface anchor `actingd-config` revision 24: a Runtime before STILL-1 refuses an entry
     // that names it, because the entry denies unknown members.
     /// ACT-1, ACT-2 (register §1.250): the instance's own `execution.action_gap` keys
-    /// (`instance.<id>.execution.action_gap.*`); a member it leaves out is the section's.
+    /// (`instance.<id>.execution.action_gap.*`); a member it leaves out is the section's. LOAD-3
+    /// (register §1.260): and its own `execution.loading.mode`.
     // Interface anchor `actingd-config` revision 24: a Runtime before ACT-1 refuses an entry that
     // names it, because the entry denies unknown members.
     #[serde(default)]
@@ -1507,7 +1508,7 @@ impl ActingdConfigFile {
             // STILL-1: reported as `instance.<id>.execution.capture.still_limit_ms`; left out,
             // the section's.
             // ACT-1, ACT-2: reported as `instance.<id>.execution.action_gap.*` when the file names
-            // them.
+            // them; LOAD-3: so is `instance.<id>.execution.loading.mode`.
             members.insert(
                 actingcommand_runtime_config::execution::SECTION.to_owned(),
                 serde_json::to_value(&instance.execution)

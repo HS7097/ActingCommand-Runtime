@@ -32,7 +32,13 @@
 //! - **`expect_after.loading`** (Workflow #407 LOAD-2): `off`, or the package's loading pages less
 //!   `except`, with `add`, and `max_ms`; admitted in both execution modes
 //!   ([`TaskProgram::validate_loading`]), run by LOAD-3.
+//! - **Under `execution.loading.mode` `on`** (Workflow #407 LOAD-3, `loading.rs`): the wait page is
+//!   one of the confirmation's loading pages and its `max_ms` their allowance: a frame on it after
+//!   the allowance is spent ends the wait, named, where under `off` and `shadow` it counts as a
+//!   frame of no destination as before. A wait step keeps its own page as above; its `loading`
+//!   pauses its away clock only.
 
+use super::loading::LoadingAllowance;
 use super::{
     ContainedTaskError, ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTimingContext,
     ERROR_PAGE_REACHED, PageObservation, PostAdmissionOcrCollector, PostconditionResolution,
@@ -65,8 +71,8 @@ pub(super) struct TaskWait {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct TaskWaitPage {
-    page_id: String,
-    max_ms: u64,
+    pub(super) page_id: String,
+    pub(super) max_ms: u64,
 }
 
 /// Workflow #407 LOAD-2: the one word of `expect_after.loading` that takes no loading page.
@@ -79,10 +85,10 @@ const LOADING_OFF: &str = "off";
 /// else the wait page's, else the package's. Admitted only: LOAD-3 runs it.
 #[derive(Debug, Clone, Default)]
 pub(super) struct TaskLoading {
-    off: bool,
-    except: Vec<String>,
-    add: Vec<String>,
-    max_ms: Option<u64>,
+    pub(super) off: bool,
+    pub(super) except: Vec<String>,
+    pub(super) add: Vec<String>,
+    pub(super) max_ms: Option<u64>,
 }
 
 impl<'de> Deserialize<'de> for TaskLoading {
@@ -447,14 +453,24 @@ pub(super) enum HeldFrame {
 
 impl<'o> HeldPage<'o> {
     /// The page `operation`'s confirmation wait holds on, the wait starting at the budget
-    /// instant `started`: a wait step's `from`, or the confirmation's wait page.
-    pub(super) fn of(operation: &'o TaskOperation, started: Instant) -> Option<Self> {
+    /// instant `started`: a wait step's `from`, or the confirmation's wait page. Workflow #407
+    /// LOAD-3: under `execution.loading.mode` `on` (`loading_on`) the wait page is one of the
+    /// input's loading pages instead ([`super::loading::LoadingAllowance`]): its `max_ms` is their
+    /// allowance, and a frame on it past that ends the wait, named, where it held on here.
+    pub(super) fn of(
+        operation: &'o TaskOperation,
+        started: Instant,
+        loading_on: bool,
+    ) -> Option<Self> {
         if let Some(wait) = &operation.wait {
             return Some(Self {
                 page: &operation.from,
                 max: Duration::from_millis(wait.max_ms),
                 hold: Hold::Step { since: started },
             });
+        }
+        if loading_on {
+            return None;
         }
         operation.wait_page().map(|wait_page| Self {
             page: &wait_page.page_id,
@@ -564,6 +580,9 @@ impl PreparedContainedTask {
         (timing, pacing): (ContainedTaskTimingContext, StepPacing),
     ) -> Result<WaitStepEnd, ContainedTaskRunError<R::Error>> {
         let effective = operation.effective_timing(&self.control);
+        // Workflow #407 LOAD-3 (§3.2): the step's one allowance for its loading pages, on its away
+        // clock.
+        let mut loading = LoadingAllowance::for_input(self, operation, pacing);
         let resolution = self.await_postcondition(
             runtime,
             ocr_collector,
@@ -571,50 +590,68 @@ impl PreparedContainedTask {
             Duration::from_millis(effective.timeout.milliseconds),
             Duration::from_millis(effective.interval.milliseconds),
             timing,
-            pacing,
+            (pacing, &mut loading),
         )?;
-        let (observation, last_frame_page, timing_failure, still_limit) = match resolution {
-            PostconditionResolution::Reached(reached) => {
-                return Ok(WaitStepEnd::Reached(Box::new(reached)));
-            }
-            PostconditionResolution::Held {
-                observation,
-                timing_failure,
-            } => {
-                if let Some(key) = operation.wait_on_timeout_key() {
-                    return Ok(WaitStepEnd::Keyed {
-                        page_label: observation.page_label,
-                        outcome_key: key.to_owned(),
-                    });
+        let (observation, last_frame_page, timing_failure, (still_limit, loading_limit)) =
+            match resolution {
+                PostconditionResolution::Reached(reached) => {
+                    return Ok(WaitStepEnd::Reached(Box::new(reached)));
                 }
-                let page = observation.page_label.clone();
-                (Some(observation), Some(page), Some(timing_failure), None)
-            }
-            PostconditionResolution::Failed {
-                observation,
-                hit_error_page: true,
-                ..
-            } => {
-                Self::finish_effect_attempt(
-                    runtime,
-                    step_index,
-                    &operation.id,
-                    observation.as_ref(),
-                )?;
-                return Err(ContainedTaskError::with_detail(
-                    ERROR_PAGE_REACHED,
-                    confirmation_failure_detail(&operation.id, 1, observation.as_ref(), true, None),
-                )
-                .into());
-            }
-            PostconditionResolution::Failed {
-                observation,
-                last_frame_page,
-                timing_failure,
-                still_limit,
-                ..
-            } => (observation, last_frame_page, timing_failure, still_limit),
-        };
+                PostconditionResolution::Held {
+                    observation,
+                    timing_failure,
+                } => {
+                    if let Some(key) = operation.wait_on_timeout_key() {
+                        return Ok(WaitStepEnd::Keyed {
+                            page_label: observation.page_label,
+                            outcome_key: key.to_owned(),
+                        });
+                    }
+                    let page = observation.page_label.clone();
+                    (
+                        Some(observation),
+                        Some(page),
+                        Some(timing_failure),
+                        (None, None),
+                    )
+                }
+                PostconditionResolution::Failed {
+                    observation,
+                    hit_error_page: true,
+                    ..
+                } => {
+                    Self::finish_effect_attempt(
+                        runtime,
+                        step_index,
+                        &operation.id,
+                        observation.as_ref(),
+                    )?;
+                    return Err(ContainedTaskError::with_detail(
+                        ERROR_PAGE_REACHED,
+                        confirmation_failure_detail(
+                            &operation.id,
+                            1,
+                            observation.as_ref(),
+                            true,
+                            None,
+                        ),
+                    )
+                    .into());
+                }
+                PostconditionResolution::Failed {
+                    observation,
+                    last_frame_page,
+                    timing_failure,
+                    still_limit,
+                    loading_limit,
+                    ..
+                } => (
+                    observation,
+                    last_frame_page,
+                    timing_failure,
+                    (still_limit, loading_limit),
+                ),
+            };
         Self::finish_effect_attempt(runtime, step_index, &operation.id, observation.as_ref())?;
         // #411 A15: the operation, its destination pages, its one attempt and the page of the
         // wait's last frame (none when that frame matched no page).
@@ -638,6 +675,7 @@ impl PreparedContainedTask {
         .with_values(values)
         .with_timing(timing_failure)
         .with_still_limit(still_limit)
+        .with_loading_limit(loading_limit)
         .into())
     }
 }

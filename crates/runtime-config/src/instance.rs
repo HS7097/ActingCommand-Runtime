@@ -36,7 +36,9 @@
 //! SS-4 (register §1.231) adds `scheduling.no_progress.enabled`, in the entry's `scheduling`
 //! member, default the `scheduling` section's key of the same name, settable. STILL-1 (register
 //! §1.249) adds `execution.capture.still_limit_ms`, in the entry's `execution` member, default the
-//! `execution` section's key of the same name, settable.
+//! `execution` section's key of the same name, settable. LOAD-3 (register §1.260) adds
+//! `execution.loading.mode`, in the entry's `execution` member, no default of its own (the
+//! section's is in effect), settable.
 
 use crate::codes::ConfigValueProblem;
 use crate::display_safe_area;
@@ -221,6 +223,9 @@ pub(crate) static ROWS: &[KeyRow] = &[
     // STILL-1 (register §1.249): the instance's own still limit; the section's value in effect is
     // its default.
     execution::INSTANCE_STILL_LIMIT_ROW,
+    // LOAD-3 (register §1.260): the instance's own loading mode; reported only for an instance
+    // whose entry names one or an instruction sets one, otherwise the section's is in effect.
+    execution::INSTANCE_LOADING_MODE_ROW,
 ];
 
 /// SCH-M ED-1: one instance's expected-duration member, named as the section-level key whose

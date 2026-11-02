@@ -516,6 +516,9 @@
       "settled_max_stage": "s1",
       "fallback_hold_ms": 3600000,
       "settled_limit_ms": 2000
+    },
+    "loading": {
+      "mode": "off"
     }
   },
   "idle": {

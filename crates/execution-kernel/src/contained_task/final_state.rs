@@ -104,12 +104,11 @@ pub(super) fn target_state(result: &RecognitionPackResult<TargetEvaluation>) -> 
     }
 }
 
-/// The one final-state judgement of a frame after an operation's input.
+/// The one final-state judgement of a frame after an operation's input. The recognition conflict
+/// (more than one destination, or one on an error page) is row 1 of LOAD-3's frame judgement,
+/// decided before this one is asked.
 #[derive(Debug)]
 pub(super) struct FinalState {
-    /// How many of the operation's destinations the frame's page names; more than one, or one on
-    /// an error page, is the caller's recognition conflict.
-    pub(super) destinations: usize,
     /// Whether the frame is the step's final state.
     pub(super) reached: bool,
     /// Each listed target's state, `target_present` then `target_gone`, in declared order; none
@@ -303,7 +302,6 @@ impl PreparedContainedTask {
                 .is_error_page(&self.control, &observation.page_label)
         {
             return Ok(FinalState {
-                destinations,
                 reached: false,
                 targets: Vec::new(),
             });
@@ -311,11 +309,7 @@ impl PreparedContainedTask {
         let targets =
             self.judge_expected_targets(runtime, operation, &observation.scene, timing)?;
         let reached = targets.iter().all(|(listed, state)| listed.holds(*state));
-        Ok(FinalState {
-            destinations,
-            reached,
-            targets,
-        })
+        Ok(FinalState { reached, targets })
     }
 
     /// ACT-4: the flip evidence of a step whose destinations name the page it left, on `decision`,

@@ -41,6 +41,7 @@
 //! one before it. No record changes shape: its frames and waits are recorded as a confirmation's.
 
 use super::final_state::{self, FlipEvidence};
+use super::loading::{Charge, FrameRow, LoadingAllowance, LoadingFrame};
 use super::observation_window::StillScreen;
 use super::sample_retry::SampleRetries;
 use super::wait_step::HeldPage;
@@ -301,6 +302,9 @@ impl PreparedContainedTask {
     /// The reading itself: the final-state frame the step goes on, or its hand-over to the
     /// confirmation (the limit passed, or a frame of the confirmation's wait page). `timeout` is
     /// the confirmation's: a sampled observation is made within it, as a confirmation's frame is.
+    /// LOAD-3 (§3.4): each frame is judged by the one judgement and spends `loading`, the input's
+    /// allowance; under `on` a transition frame (the wait page among them) hands the step over at
+    /// once, its time spent of the allowance and not of the reading.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn settled_confirmation<R: ContainedTaskRuntime>(
         &self,
@@ -310,7 +314,7 @@ impl PreparedContainedTask {
         window: SettledWindow,
         timeout: Duration,
         timing: ContainedTaskTimingContext,
-        pacing: StepPacing,
+        (pacing, loading): (StepPacing, &mut LoadingAllowance),
     ) -> Result<SettledReading, ContainedTaskRunError<R::Error>> {
         let task_deadline = timing.deadline();
         let pace = timing.pace();
@@ -320,8 +324,10 @@ impl PreparedContainedTask {
         let mut retries =
             SampleRetries::new(pacing, ExecutionKernelLocation::ObservationAfterInput);
         let mut started = budget_now(runtime, pace);
-        let wait_page = HeldPage::of(operation, started);
+        // LOAD-3: under `on` the wait page is one of the input's loading pages.
+        let wait_page = HeldPage::of(operation, started, loading.decides());
         let mut settling = SettleCount::new(window.path);
+        let mut last_frame_at = started;
         loop {
             if budget_now(runtime, pace) >= task_deadline {
                 return Err(self
@@ -359,6 +365,7 @@ impl PreparedContainedTask {
                 None,
                 None,
                 Some(&mut feeds),
+                Some(&mut *loading),
             );
             let observation = match captured {
                 Ok(observation) => observation,
@@ -380,26 +387,53 @@ impl PreparedContainedTask {
                     .with_timing_check_position(TaskTimingCheckPosition::PostconditionAfterCapture)
                     .into());
             }
+            // LOAD-3 (§3.1): the one judgement; ACT-4's final state is its row 4, and a transition
+            // frame is no final state, so it never turns a listed target either.
+            let frame_at = budget_now(runtime, pace);
+            let previous_frame_at = std::mem::replace(&mut last_frame_at, frame_at);
+            let page = observation
+                .as_ref()
+                .ok()
+                .map(|observation| observation.page_label.clone());
+            let judged = self.judge_frame(
+                runtime,
+                Some(operation),
+                observation.as_ref().ok(),
+                loading,
+                timing,
+            )?;
+            if judged.row == FrameRow::Conflict {
+                return Err(ContainedTaskError::with_detail(
+                    ExecutionKernelCode::ContainedTaskRecognitionConflict.code(),
+                    page.unwrap_or_default(),
+                )
+                .into());
+            }
+            let frame = LoadingFrame {
+                transition: judged.transition,
+                page: page.as_deref(),
+                now: frame_at,
+                previous: previous_frame_at,
+            };
+            if judged.row == FrameRow::Transition {
+                // LOAD-3 (§3.4): handed over at once with the allowance; the frame's time is spent
+                // of the allowance, not of the reading. A spent allowance ends the wait at the
+                // confirmation's first transition frame.
+                if let Charge::Paused(span) = loading.frame(runtime, game, frame)? {
+                    started += span;
+                }
+                return Ok(window.hand_over(runtime, pace, started));
+            }
+            loading.frame(runtime, game, frame)?;
             let handled = match observation {
                 Ok(observation) => {
-                    // ACT-4: the one final-state judgement, and a turned target where the
-                    // destination names the page the step left.
-                    let judged = self.final_state(runtime, operation, &observation, timing)?;
-                    let matches = judged.destinations;
-                    let hit_error_page = self
-                        .program
-                        .is_error_page(&self.control, &observation.page_label);
-                    if matches > 1 || (matches == 1 && hit_error_page) {
-                        return Err(ContainedTaskError::with_detail(
-                            ExecutionKernelCode::ContainedTaskRecognitionConflict.code(),
-                            observation.page_label,
-                        )
-                        .into());
-                    }
-                    let goes = judged.reached
-                        && window.flip.as_ref().is_none_or(|flip| {
-                            flip.turned(final_state::frame_id(&observation), &judged)
-                        });
+                    let hit_error_page = judged.row == FrameRow::ErrorPage;
+                    let goes = judged.final_state.as_ref().is_some_and(|judged| {
+                        judged.reached
+                            && window.flip.as_ref().is_none_or(|flip| {
+                                flip.turned(final_state::frame_id(&observation), judged)
+                            })
+                    });
                     if goes {
                         if settling.settled() {
                             return Ok(SettledReading::Arrived(Box::new(observation)));
@@ -425,7 +459,10 @@ impl PreparedContainedTask {
                 }
             };
             if let Some(handled) = handled {
-                started += pace.budget_span(handled);
+                let handled = pace.budget_span(handled);
+                started += handled;
+                // LOAD-3: the handling is no time of the next frame's span either.
+                last_frame_at += handled;
                 settling.away();
                 continue;
             }

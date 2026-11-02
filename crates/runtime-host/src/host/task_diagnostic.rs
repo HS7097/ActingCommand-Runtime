@@ -24,6 +24,10 @@ use actingcommand_recognition_pack::{
 };
 use std::io::Write;
 
+/// LOAD-3 (Workflow #407, register §1.260): the phase of the rows of a wait's loading pages, their
+/// per-frame evaluations and their transitions.
+pub(super) const LOADING_PHASE: &str = "loading";
+
 pub(super) struct DiagnosticStep {
     pub(super) index: u32,
     pub(super) action_id: ActionId,
@@ -908,6 +912,30 @@ impl RuntimeContainedTask<'_> {
                     timing: None,
                     sample: None,
                     outcome,
+                },
+            })),
+        )
+        .map(|_| ())
+    }
+
+    /// LOAD-3 (Workflow #407, register §1.260): one `contained_task_loading_recorded`, a transition
+    /// of a wait's loading pages (`entered`, `left`, `limit_reached`), written on the frame just
+    /// captured as a recognition error row of the phase `loading`, as ACT-2's rows are: no new row
+    /// shape.
+    pub(super) fn diagnostic_loading(
+        &mut self,
+        event: &actingcommand_execution_kernel::LoadingEvent,
+    ) -> Result<(), RequestFailure> {
+        self.diagnostic(
+            None,
+            Payload::Error(Box::new(TaskDiagnosticErrorData::Recognition {
+                phase: LOADING_PHASE.to_owned(),
+                target_id: None,
+                error: TaskDiagnosticRecognitionError {
+                    region: None,
+                    timing: None,
+                    sample: None,
+                    outcome: event.values(Outcome::new(crate::codes::LoadingCode::Recorded)),
                 },
             })),
         )

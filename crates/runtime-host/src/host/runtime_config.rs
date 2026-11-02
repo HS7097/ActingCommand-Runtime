@@ -1165,6 +1165,45 @@ impl HostShared {
         .with_still_limit_ms(still_limit_ms))
     }
 
+    /// LOAD-3 (Workflow #407, register §1.260): `execution.loading.mode` in effect for the instance
+    /// `instance_alias` (`EffectiveConfig::loading_mode` by its registry id; an alias the registry
+    /// does not hold takes the section's), read at each step of a contained run and handed to the
+    /// kernel with the step's pacing.
+    pub(super) fn loading_mode(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<actingcommand_execution_kernel::LoadingMode> {
+        let instance_id = lock(
+            &self.registered_instances,
+            ConfigHostLocation::ReadRuntimeConfig,
+        )?
+        .values()
+        .find(|instance| instance.instance_alias == instance_alias)
+        .map(|instance| crate::failure_identity::identifier_text(&instance.instance_id));
+        let config = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?;
+        let mode = config
+            .loading_mode(instance_id.as_deref().unwrap_or(instance_alias))
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })?;
+        Ok(match mode {
+            actingcommand_runtime_config::LoadingModeConfig::Off => {
+                actingcommand_execution_kernel::LoadingMode::Off
+            }
+            actingcommand_runtime_config::LoadingModeConfig::Shadow => {
+                actingcommand_execution_kernel::LoadingMode::Shadow
+            }
+            actingcommand_runtime_config::LoadingModeConfig::On => {
+                actingcommand_execution_kernel::LoadingMode::On
+            }
+        })
+    }
+
     /// ACT-1, ACT-2 (Workflow #407, register §1.250): the `execution.action_gap` keys in effect
     /// for the instance `instance_alias` (`EffectiveConfig::action_gap` by its registry id; an
     /// alias the registry does not hold takes the section's), read at each step of a contained run.
