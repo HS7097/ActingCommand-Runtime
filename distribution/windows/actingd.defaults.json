@@ -561,5 +561,8 @@
   },
   "store_foreground": {
     "allowed_application_ids": []
+  },
+  "artifact_store": {
+    "stream_admit_chunk_bytes": 1048576
   }
 }

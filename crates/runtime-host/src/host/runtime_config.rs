@@ -316,6 +316,9 @@ impl HostShared {
         // LN-9 (#422): the ledger's scrub reads its rate before its next chunk.
         self.refresh_ledger_scrub_rate()
             .map_err(RequestFailure::poison_without_terminal)?;
+        // Workflow #407 PF-1: a stream opened from now on takes the chunk in effect.
+        self.refresh_stream_admit_chunk()
+            .map_err(RequestFailure::poison_without_terminal)?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: Some(terminal(&event)),
@@ -472,6 +475,24 @@ impl HostShared {
                     RuntimeErrorCode::LedgerFailure,
                 )
             })
+    }
+
+    /// Workflow #407 PF-1: `artifact_store.stream_admit_chunk_bytes` in effect (settable), handed
+    /// to the artifact store at start, once the instruction values are restored, and after every
+    /// change of the configuration; a stream takes it when it opens.
+    pub(super) fn refresh_stream_admit_chunk(&self) -> RuntimeHostResult<()> {
+        let chunk_bytes = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .stream_admit_chunk_bytes()
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })?;
+        self.artifacts.set_stream_admit_chunk_bytes(chunk_bytes);
+        Ok(())
     }
 
     /// #422 LN-7c Q (`rd-1026/ln7c/final-query.md` §5): the frame cleaner's keys in effect, read at

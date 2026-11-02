@@ -23,7 +23,9 @@
 //!   `emulator_control` (#411 A50; emu-watch adds the emulator watch's keys); `watchdog` (#411
 //!   A66, read by the watchdog and `actingctl` from the configuration file,
 //!   [`watchdog::start_window_ms`]); `execution` (PERF-B1, Workflow #407 B1: the kernel's
-//!   capture cadence); `idle` (IDLE-1, Alice's ruling 41: the idle action of an instance with
+//!   capture cadence); `artifact_store` (Workflow #407 PF-1: how many bytes of a stream one
+//!   capacity decision covers); `idle` (IDLE-1, Alice's ruling 41: the idle action of an instance
+//!   with
 //!   no task soon, also per instance); `display_safe_area` (Workflow #392 DA-4b-D, Alice's
 //!   ruling 69: the declared safe areas' directory and each instance's device model); `install`
 //!   (Workflow #421 INST-1, read by `actingctl install` from the configuration file,
@@ -50,6 +52,8 @@ pub mod emulator_control;
 pub mod execution;
 mod existing;
 pub mod frame_retention;
+// Workflow #407 PF-1: `artifact_store.*`, how many bytes of a stream one capacity decision covers.
+pub mod artifact_store;
 // RB-2: `host.*`, the memory and I/O priority actingd gives its own process at start.
 pub mod host;
 mod host_claims;

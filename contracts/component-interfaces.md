@@ -151,6 +151,15 @@ writes the configuration, the console edits it, and actingd reads it.
 The console reads no package, so it is not a `package` reader. What a pack's run
 records is covered by `ledger` and `runtime-client`.
 
+`actingd-config` revision 24 also carries the optional `artifact_store` section (Workflow #407
+PF-1, Runtime 0.12.37; `contracts/v012-register.md` §1.248): `artifact_store.stream_admit_chunk_bytes`,
+the bytes one capacity decision covers on a stream (default 1 MiB; settable; [runtime-config.md](runtime-config.md),
+"The `artifact_store` section"). Additive: a Runtime before PF-1 refuses a file that names the
+section, because the file denies unknown members; a file that does not name it keeps its revision,
+so the Runtime still reads revisions 5 to 23. Anchor: `crates/runtime-config/src/artifact_store.rs`,
+`ArtifactStoreFile`; `apps/actingd/src/config.rs`, `ActingdConfigFile::artifact_store`;
+`distribution/windows/actingd.defaults.json`; `distribution/windows/component-interfaces.json`.
+
 ### What Runtime v0.11.3 moved
 
 Runtime v0.11.3 declares `actingd-config` [2, 3], `install-selection` [1, 1],

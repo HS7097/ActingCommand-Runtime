@@ -12,8 +12,9 @@
 //! `execution`; IDLE-1 adds `idle`; ROUT-L RL-1b adds `standard_packs`, the scheduler
 //! workbench's two keys; Workflow #392 DA-4b-D adds `display_safe_area`; #422 LN-7c Q adds
 //! `frame_retention_evidence_max_age_days`; Workflow #421 INST-1 adds `install`; RB-2 adds
-//! `host`; STORE-FG-2 adds `store_foreground`).
+//! `host`; STORE-FG-2 adds `store_foreground`; Workflow #407 PF-1 adds `artifact_store`).
 
+use crate::artifact_store::ArtifactStoreFile;
 use crate::device_link::DeviceLinkFile;
 use crate::device_state::DeviceStateFile;
 use crate::display_safe_area::DisplaySafeAreaFile;
@@ -104,6 +105,9 @@ pub struct DefaultsFile {
     /// STORE-FG-2: no store allowed (`[]`).
     #[serde(default)]
     pub store_foreground: Option<StoreForegroundFile>,
+    /// Workflow #407 PF-1: a capacity decision per 1 MiB of a stream.
+    #[serde(default)]
+    pub artifact_store: Option<ArtifactStoreFile>,
 }
 
 /// A defaults file that is not a JSON object of known sections.

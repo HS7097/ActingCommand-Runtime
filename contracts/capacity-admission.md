@@ -89,11 +89,25 @@ owner records the failed attempt, unperformed recognition and capacity reference
 then keeps the monitor loop running. Actual Artifact I/O failures remain fatal.
 
 ArtifactStore consumes Runtime's read-only committed projection at stream open,
-each stream write, and prepared-byte commit. These admissions and capacity
-inheritance require an installed owner. Its absence returns fatal
-`capacity_owner_missing` during `admit_artifact_bytes`, without a capacity decision
-or fact reference. Opening a store for reads and verifying material remain valid
-without an admission owner.
+prepared-byte commit, and a stream write that the last decision does not cover.
+These admissions and capacity inheritance require an installed owner. Its absence
+returns fatal `capacity_owner_missing` during `admit_artifact_bytes`, without a
+capacity decision or fact reference. Opening a store for reads and verifying
+material remain valid without an admission owner.
+
+Workflow #407 PF-1 (0.12.37; `contracts/v012-register.md` §1.248): one decision on a
+stream covers `artifact_store.stream_admit_chunk_bytes` bytes (default 1 MiB;
+[runtime-config.md](runtime-config.md), "The `artifact_store` section"), counted from
+the write that took it. A write within what is left takes no decision. A write beyond
+it takes one for its own bytes, as every write did before PF-1, so a refusal has the
+same meaning, condition and code, and never comes earlier. A refusal, a stale fact or
+a changed binding surfaces at most one chunk later than it would have, and a stream
+may pass the hard threshold by that much (the projection never reserved storage, and
+its fact already lags by the band above). 0 takes a decision for every write, and a
+store whose owner sets no value keeps 0: the Runtime's host hands the value in effect
+to its store at start and after every change; offline tools and fixtures set none. A
+stream takes the value when it opens and keeps it. Stream open, Drain and the seal's
+zero-new-byte decision are unchanged.
 
 Trusted terminal/error/release owners select Drain in Rust; there is no client or
 resource field for it. Drain still requires an owner. A stream retains the owner

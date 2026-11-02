@@ -566,6 +566,12 @@ impl EffectiveConfig {
         CaptureCadenceConfig::parse(&|key: &str| self.value_or_shipped(key))
     }
 
+    /// Workflow #407 PF-1: `artifact_store.stream_admit_chunk_bytes` in effect, the bytes one
+    /// capacity decision covers on a stream, which the host hands the store.
+    pub fn stream_admit_chunk_bytes(&self) -> Result<u64, ConfigFailure> {
+        crate::artifact_store::stream_admit_chunk_bytes(&|key: &str| self.value_or_shipped(key))
+    }
+
     /// Workflow #386 SR-1: `scheduling.recognition.sample_timeout_retries` in effect, the base
     /// number of observe-only retries the host hands the kernel at each step.
     pub fn sample_timeout_retries(&self) -> Result<u32, ConfigFailure> {
@@ -882,6 +888,9 @@ impl EffectiveConfig {
         }
         if sections.contains(execution::SECTION) {
             self.capture_cadence()?;
+        }
+        if sections.contains(crate::artifact_store::SECTION) {
+            self.stream_admit_chunk_bytes()?;
         }
         if sections.contains(idle::SECTION) {
             self.idle_section()?;

@@ -213,11 +213,14 @@ The optional `diagnostic_record_write.subphases` contains exactly `encode`,
 `framing`, `capacity_admit`, `file_write` and `material_update`. Host measures the
 original serde call (including its typed `to_value` conversion) and checked
 framing/reserve/comma/newline work. ArtifactStream returns in-memory observations
-of entered calls within that same single append: the complete original capacity
-decision/binding/Drain check, the actual file write, and the original hash/count
-update of only the successfully returned bytes. Each short-write iteration keeps
-its own admission and file/material call in the fixed cumulative counts and last
-sample. Host adds the actual record index and merges into the original phase/run.
+of entered calls within that same single append: the capacity check (the chunk
+count, and the complete capacity decision/binding/Drain check when the last decision
+no longer covers the write, Workflow #407 PF-1; [capacity-admission.md](capacity-admission.md)),
+the actual file write, and the original hash/count update of only the successfully
+returned bytes. Each short-write iteration keeps its own check and file/material call
+in the fixed cumulative counts and last sample, so `capacity_admit.attempts` still
+equals `file_write.attempts` and counts checks, not decisions. Host adds the actual
+record index and merges into the original phase/run.
 
 Every subphase retains attempts/errors/total/max/last with checked microseconds
 and accumulation. Unentered calls have `unobserved` status and absent elapsed
