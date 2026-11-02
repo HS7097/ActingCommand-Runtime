@@ -17,6 +17,8 @@
 //! by its second loading frame, a capture interval later, and its loading never ends.
 
 use super::*;
+use actingcommand_contract::RuntimeConfigManifest;
+use actingcommand_runtime_config::{DefaultsFile, KeyName, mechanism_rows, render_parameters};
 use serde_json::{Value, json};
 
 const ALIAS: &str = "neutral.instance";
@@ -106,6 +108,25 @@ fn package(max_ms: u64) -> Vec<u8> {
     zip.finish().expect("finish package").into_inner()
 }
 
+// The start's `execution` section as actingd renders it from the defaults file, so that an
+// instruction may set `execution.loading.mode` (default `off`) while the Runtime runs: a host
+// started without a configuration manifest holds no key an instruction could set.
+fn manifest() -> RuntimeConfigManifest {
+    let (_, defaults) = DefaultsFile::shipped().expect("the defaults file parses");
+    let rows = mechanism_rows()
+        .into_iter()
+        .filter(|row| {
+            matches!(row.name, KeyName::Exact(key)
+                if key.split('.').next() == Some(actingcommand_runtime_config::execution::SECTION))
+        })
+        .collect::<Vec<_>>();
+    RuntimeConfigManifest {
+        subsystems: Vec::new(),
+        parameters: render_parameters(&rows, &[], &defaults, &json!({}), &|_| None)
+            .expect("the section resolves"),
+    }
+}
+
 // A host whose one instance shows `home` before its input and, after it, the spinner over no page
 // for `loading_frames` captures, then `terminal`.
 fn host(root: &TempDir, loading_frames: usize) -> RuntimeHost {
@@ -137,7 +158,7 @@ fn host(root: &TempDir, loading_frames: usize) -> RuntimeHost {
         },
     ));
     RuntimeHost::start(
-        config(root),
+        config(root).with_config_manifest(manifest()),
         Arc::new(FakeProvider::one(ALIAS, instance_id(), state)),
     )
     .expect("runtime host")

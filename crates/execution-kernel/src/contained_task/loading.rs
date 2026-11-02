@@ -189,7 +189,9 @@ pub(super) struct LoadingAllowance {
     held: Vec<String>,
     limit: Duration,
     spent: Duration,
-    operation: Option<String>,
+    /// The package's id of the operation whose input the allowance belongs to (its events'
+    /// `pack_operation_id`); none for a page wait.
+    pack_operation_id: Option<String>,
     stretch: Option<Stretch>,
     limit_recorded: bool,
 }
@@ -204,7 +206,7 @@ impl LoadingAllowance {
             held: Vec::new(),
             limit: Duration::ZERO,
             spent: Duration::ZERO,
-            operation: None,
+            pack_operation_id: None,
             stretch: None,
             limit_recorded: false,
         }
@@ -257,7 +259,7 @@ impl LoadingAllowance {
             probed,
             added,
             limit: Duration::from_millis(limit_ms),
-            operation: Some(operation.id.clone()),
+            pack_operation_id: Some(operation.id.clone()),
             ..Self::off()
         }
     }
@@ -445,7 +447,7 @@ impl LoadingAllowance {
             loading_page_id,
             spent: self.spent,
             limit: self.limit,
-            pack_operation_id: self.operation.clone(),
+            pack_operation_id: self.pack_operation_id.clone(),
             page_id,
             exit_gap,
         };
