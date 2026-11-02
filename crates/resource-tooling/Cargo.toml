@@ -14,6 +14,8 @@ actingcommand-execution-kernel = { workspace = true }
 actingcommand-pack-containment = { workspace = true }
 # ROUT-L RL-1a: the composer of the standard packs' schedule rules.
 actingcommand-policy = { workspace = true }
+# Workflow #407 LOAD-1: a loading template is decoded to refuse one of one colour.
+actingcommand-recognition = { workspace = true }
 actingcommand-recognition-pack = { workspace = true }
 actingcommand-selection-policy = { workspace = true }
 serde = { workspace = true }
@@ -23,5 +25,4 @@ zip = { workspace = true }
 
 [dev-dependencies]
 actingcommand-page-detector = { workspace = true }
-actingcommand-recognition = { workspace = true }
 tempfile = "3"

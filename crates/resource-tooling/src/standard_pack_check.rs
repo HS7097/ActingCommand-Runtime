@@ -65,9 +65,16 @@
 //! of the root provides (`capability_unprovided`), each package on a cycle of remedies and
 //! provided capabilities (`cycle`) and each provider of a capability whose providers declare
 //! different parameters (`parameters_mismatch`). Nothing is refused.
+//!
+//! Workflow #407 LOAD-1: then, `actinglab standard-pack check` of a game root that holds
+//! `loading.json` checks every package's loading copy as `package loading --check` checks it
+//! (`package_loading`), the templates read from the root's `loading/`, and lists the file in
+//! `root_files`; of a root without it, a package that carries a loading copy is refused
+//! (`loading_pack_stale`). No Runtime reader reads either file.
 
 use crate::codes::ResourceToolingCode;
 use crate::package_directory::{PACK_DEADLINE, packs_empty};
+use crate::package_loading::{check_loading, stale_copies};
 use crate::standard_pack_schedule::report_schedule;
 use crate::{
     DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES, StandardPackCheckRequest, StandardPackCheckResponse,
@@ -78,7 +85,7 @@ use actingcommand_contract::outcome::{Detail, Outcome, RemedyProblem};
 use actingcommand_contract::{
     BundleIndex, InterruptThen, LabError, LabErrorClass, LabResult, NavigationProblem,
     NavigationRole, ProvidedCapability, RuntimeErrorCode, STANDARD_PACK_BUNDLE_FILE,
-    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
+    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_LOADING_FILE,
     STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE,
     StandardPackProblem, StandardPackRoot, StandardPackRootBytes, StandardPackRootIssue,
     parse_standard_pack_schedule, read_standard_pack_root,
@@ -117,6 +124,9 @@ pub(crate) struct RootFileInputs {
     /// Workflow #392 DA-4: `display-layout.json`, checked by the root reader and laid beside
     /// `bundle.json`.
     display_layout: Option<RootFile>,
+    /// Workflow #407 LOAD-1: `loading.json`, which no root reader reads: `package_loading` reads
+    /// and checks it with its templates, and every pack's copy against it.
+    loading: Option<PathBuf>,
 }
 
 impl RootFileInputs {
@@ -143,7 +153,14 @@ impl RootFileInputs {
             navigation: read(files.navigation.as_ref())?,
             schedule: read(files.schedule.as_ref())?,
             display_layout: read(files.display_layout.as_ref())?,
+            loading: files.loading.clone(),
         })
+    }
+
+    /// Workflow #407 LOAD-1: the `loading.json` given, if any. It is no root file of the root
+    /// reader, so [`Self::is_empty`] and [`Self::files`] leave it out.
+    pub(crate) fn loading(&self) -> Option<&Path> {
+        self.loading.as_deref()
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -316,6 +333,27 @@ pub fn check_standard_pack_root(
             &root.join(STANDARD_PACK_SCHEDULE_FILE),
             &|directory: &str| root.join(directory),
         )?;
+    }
+    // Workflow #407 LOAD-1: with `loading.json`, every package's loading copy is the one it
+    // makes, as `package loading --check` checks it; without it, no package carries one.
+    let packages = checked
+        .registry
+        .package_ids()
+        .filter_map(|package_id| {
+            let entry = checked.registry.get(package_id)?;
+            Some((package_id.to_owned(), root.join(&entry.directory)))
+        })
+        .collect::<Vec<_>>();
+    let loading = root.join(STANDARD_PACK_LOADING_FILE);
+    if fs::symlink_metadata(&loading).is_ok() {
+        let directories = packages
+            .iter()
+            .map(|(_, directory)| directory.clone())
+            .collect::<Vec<_>>();
+        check_loading(&loading, &game, &directories)?;
+        present.push(STANDARD_PACK_LOADING_FILE);
+    } else {
+        stale_copies(&game, &packages)?;
     }
     Ok(StandardPackCheckResponse {
         status: "checked".to_owned(),

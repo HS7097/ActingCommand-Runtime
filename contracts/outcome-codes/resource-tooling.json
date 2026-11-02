@@ -1033,7 +1033,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A package bundle directory could not be written: packs root invalid.",
+      "description": "A package bundle directory could not be written: packs root invalid. Workflow #407 LOAD-1: also actinglab package loading's --packs-root, an entry of which is no pack directory.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1051,7 +1051,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.9",
-      "description": "Workflow #411 A40: the pack table holds no pack. package bundle's --packs-root holds no pack directory (path packs, the standard package's pack directory), or the bundle.json that actinglab standard-pack check reads lists no pack (path bundle.json, json_pointer /packs). Paths are relative to the standard package, never absolute local paths.",
+      "description": "Workflow #411 A40: the pack table holds no pack. package bundle's --packs-root holds no pack directory (path packs, the standard package's pack directory), or the bundle.json that actinglab standard-pack check reads lists no pack (path bundle.json, json_pointer /packs). Paths are relative to the standard package, never absolute local paths. Workflow #407 LOAD-1: also actinglab package loading's --packs-root holding no pack directory (path packs).",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -1067,7 +1067,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A package bundle directory could not be written: write failed.",
+      "description": "A package bundle directory could not be written: write failed. Workflow #407 LOAD-1: also a pack's loading copy that actinglab package loading --write could not write; the message names the file and the files already written, and nothing is removed.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

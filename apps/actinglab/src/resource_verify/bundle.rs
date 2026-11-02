@@ -11,8 +11,9 @@
 //!    `bundle.json` in the zip only;
 //! 4. `out/<game>-resources-<sha7>.zip`, entries in ordinal order, and `out/SHA256SUMS`;
 //! 5. the zip read back into `read-back/<game>/`;
-//! 6. the installed root `installed/<game>/` (the root files beside `bundle.json`, each
-//!    `packs/<id>/` as `<id>/`), checked by `standard-pack check`;
+//! 6. the installed root `installed/<game>/` (the root files beside `bundle.json` and, Workflow
+//!    #407 LOAD-1, the `loading/` templates beside `loading.json`, each `packs/<id>/` as
+//!    `<id>/`), checked by `standard-pack check`;
 //! 7. every read-back pack admitted again.
 //!
 //! Nothing is deleted; a failed `package bundle` leaves its `bundle.part`.
@@ -43,14 +44,19 @@ const INTERFACES_FILE: &str = "interfaces.json";
 /// The `package` revision the zip's `interfaces.json` declares, as `bundle.ps1` writes it.
 const PACKAGE_REVISION: u32 = 3;
 /// The standard-pack root files `package bundle` lays beside `bundle.json` (ROUT-L RL-1a:
-/// `schedule.json` too; Workflow #392 DA-4: `display-layout.json` too).
-const ROOT_FILES: [&str; 5] = [
+/// `schedule.json` too; Workflow #392 DA-4: `display-layout.json` too; Workflow #407 LOAD-1:
+/// `loading.json` too, given as `--loading`, with its templates in `loading/`).
+const ROOT_FILES: [&str; 6] = [
     "pages.json",
     "interrupts.json",
     "navigation.json",
     "schedule.json",
     "display-layout.json",
+    LOADING_FILE,
 ];
+/// Workflow #407 LOAD-1: the game's loading pages, and the directory of their templates beside it.
+const LOADING_FILE: &str = "loading.json";
+const LOADING_DIRECTORY: &str = "loading";
 const BYTE_ORDER_MARK: &[u8] = b"\xEF\xBB\xBF";
 
 /// What the bundle step reads.
@@ -151,6 +157,7 @@ fn lay_out(
             navigation: root_file("navigation.json"),
             schedule: root_file("schedule.json"),
             display_layout: root_file("display-layout.json"),
+            loading: root_file(LOADING_FILE),
         },
     })
     .map_err(|error| lab_failure(&error))?;
@@ -267,8 +274,17 @@ fn lay_out(
     let installed = installed_parent.join(&game);
     create_dir(&installed)?;
     for (name, bytes) in &read {
-        if safe_entry(name) && !name.contains('/') {
-            write_new(&installed.join(name), bytes)?;
+        // Workflow #407 LOAD-1: the templates of `loading.json` beside it, in `loading/`.
+        let loading_template = name
+            .strip_prefix(LOADING_DIRECTORY)
+            .is_some_and(|rest| rest.starts_with('/'));
+        if safe_entry(name) && (!name.contains('/') || loading_template) {
+            let target = join_relative(&installed, name);
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|error| write_failed(parent, &error, IoOp::CreateDir))?;
+            }
+            write_new(&target, bytes)?;
         }
     }
     for pack in &index.packs {
@@ -373,6 +389,10 @@ fn check_index(
         "packs".to_owned(),
     ]);
     expected.extend(root_files.iter().map(|name| (*name).to_owned()));
+    // Workflow #407 LOAD-1: `loading.json` comes with the directory of its templates.
+    if root_files.contains(&LOADING_FILE) {
+        expected.insert(LOADING_DIRECTORY.to_owned());
+    }
     let present = list_names(bundle_dir)
         .map_err(|error| read_failed(bundle_dir, &error, BundleProblem::RootFileDiffers))?;
     for name in present.symmetric_difference(&expected) {

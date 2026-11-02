@@ -6014,6 +6014,58 @@ record.
 
 **Departures from the design** (each is in the contract): one deadline covers the `check` and the `send`, which the adapted source gave a full wait each, and the `send` is not started with under 2 s left; the problem words of an `unknown` send (`write_timed_out` at the deadline, `write_failed` at a stop, `helper_failed` for an unreadable answer, `receipt_mismatch` for other ids and every partial proof) are this slice's choice, since the design names only the state; a helper that cannot start after the intent is `failed`, since it never ran; the helper runs in the app root, so it holds no directory of the installation; the adapted source's unit test of the helper is not carried, since CI runs no Node.
 
+### 1.257 Slice LOAD-1 (0.12.37): a game's loading pages, declared once at the repository root, copied into each pack and checked by the tools (Workflow #407; design `rd-1031/check-speed/model-loading.md` §2, §7 LOAD-1; coordinator work order `rd-1031/check-speed/brief-load-1.md`)
+
+[resource-declarations.md](resource-declarations.md) ("Loading pages") and
+[package-reference.md](package-reference.md) ("Self-contained source layout", "Content-directory
+tools and the bundle index", "Standard package root") are the contract. The number 1.257 is the
+coordinator's. **No run-time behaviour changes:** no Runtime component reads `loading.json` or a
+pack's copy (LOAD-2 compiles the copy, LOAD-3 runs it). No ledger shape, no wire shape, no
+configuration key and no outcome code is new.
+
+**What.** (1) The contract crate (`standard_pack_loading.rs`): `loading.json`
+(`actingcommand.loading.v1`) and a pack's copy (`actingcommand.pack-loading.v1`), their limits,
+`parse_standard_pack_loading`, `parse_pack_loading`, the copy a server takes
+(`StandardPackLoading::for_server`) and the types LOAD-2 compiles (`PackLoading`, `LoadingPage`,
+`LoadingTarget`, `LoadingCoordinateSpace`). (2) `actinglab package loading --root-file
+--packs-root (--write | --check)`. (3) `package bundle --loading` checks every pack's copy first
+and lays `loading.json` and its templates beside `bundle.json`; without it a pack that carries a
+copy is refused. (4) `actinglab standard-pack check` checks every package's copy against a game
+root's `loading.json`, and without the file refuses a package that carries one. (5) `resource
+verify` passes a repository's `loading.json` to `package bundle` as `--loading`.
+
+**Decisions within the work order.** (a) Every refusal is `standard_pack_root_invalid` (with
+`package_id`, optional, when the issue is a pack's), every issue listed in `details.issues`. (b) A
+copy is compared by reading it (`parse_pack_loading`), the templates byte for byte, so a copy
+another tool formats differently is current. (c) `--write` removes nothing: a pack that holds a
+file its copy no longer has is refused first, naming the file. (d) Without a root file, a pack's
+copy is stale, so no copy is bundled or installed unchecked. (e) A target is carried as written:
+only its `id`, its `template` and that it has a `region` are checked here; the pack's declaration
+gate checks the rest when LOAD-2 compiles the copy. (f) Template names are lowercase, so two never
+differ only in case.
+
+**Interface.** `package` stays [3, 6]: the copy joins revision 6 (with DB-2 §1.244 and
+OCR-SCALE-1 §1.251), since this PR merges before 0.12.37 is cut, and adds no step. No loader of
+this release or an older one reads it, so a pack that carries one runs as without it; **the
+Runtime is deployed first, then the packs.**
+
+**What changes live.** Nothing until a resource repository writes `loading.json`; no repository
+and no pack holds one or a `resources/loading/` today. `standard-pack check` and `package bundle`
+then also refuse a pack that carries a copy without a root file.
+
+**Rollback** (to 0.12.36). Nothing persisted changes; an older build ignores `loading.json` and a
+pack's copy.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| LD1-1 | `loading.json` (`actingcommand.loading.v1`) and `loading/<stem>.png`, its rules and limits | resource file format (repository root; laid beside `bundle.json` for audit) | LOAD-1 | resource side | `since` 0.12.37; read only by the tools |
+| LD1-2 | `resources/loading.json` (`actingcommand.pack-loading.v1`) and `resources/loading/` | pack format, **`package` revision 6** (no second step) | LOAD-1 | `package loading --write` | `since` 0.12.37; read by no loader until LOAD-2 |
+| LD1-3 | `standard_pack_problem` `loading_target_invalid`, `loading_page_invalid`, `loading_max_invalid`, `loading_template_invalid`, `loading_coordinate_mismatch`, `loading_page_collision`, `loading_target_collision`, `loading_pack_stale` | catalog vocabulary | LOAD-1 | LOAD-1 | `since` 0.12.37; `pages_count` also covers more than 16 loading pages |
+| LD1-4 | `standard_pack_root_invalid` value `package_id` (optional); `details.issues` of its refusals | catalog value, CLI detail | LOAD-1 | LOAD-1 | `package_bundle_write_failed`, `package_bundle_packs_root_invalid` and `package_bundle_packs_empty` also serve `package loading` |
+| LD1-5 | `actinglab package loading`; `package bundle --loading`; `StandardPackRootFiles.loading` | tool command and flag | LOAD-1 | LOAD-1 | `package loading` is `mixed` under `--dry-run` (`--check` no effect, `--write` preview) |
+
+The tests: `crates/resource-tooling/src/gate_load1.rs`, nine, in the exec gate map beside ACT-2.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

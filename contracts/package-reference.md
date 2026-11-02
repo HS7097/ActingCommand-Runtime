@@ -222,6 +222,11 @@ The bundle contains `control.json` with the existing Lab control fields, and:
 - All referenced templates, OCR dictionaries/truth sets and operation dependencies at
   their declared local paths inside this tree.
 - Optional `resources/navigation/<game>.<server>.projection.json` source annotations.
+- Optional `resources/loading.json` (`actingcommand.pack-loading.v1`) and `resources/loading/`,
+  the pack's loading copy (Workflow #407 LOAD-1, since 0.12.37;
+  [resource-declarations.md](resource-declarations.md), "Loading pages"), written by `actinglab
+  package loading --write`. No loader of this release reads it: a pack that carries one is
+  admitted and runs as without it (LOAD-2 compiles it, LOAD-3 runs it).
 
 Recognition pack/pages, navigation, operation index, primitives and the derived manifest
 (only its `entry_task_id`, no file hashes since Workflow #336 PKG-S1) are derived only in
@@ -238,7 +243,8 @@ declares.
 `actinglab package bundle --applications <file> --packs-root <directory> --out <new
 directory> [--source-repository <owner>/<name> --source-commit <commit>] [--maintenance <file>]
 [--pages <file>] [--interrupts <file>] [--navigation <file>] [--schedule <file>]
-[--display-layout <file>]` lays out the resource section of a standard package:
+[--display-layout <file>] [--loading <file>]` lays out the resource section of a standard
+package:
 
 ```text
 applications.json              the given applications table, copied byte for byte
@@ -248,6 +254,8 @@ interrupts.json                with --interrupts, copied byte for byte
 navigation.json                with --navigation, copied byte for byte
 schedule.json                  with --schedule, copied byte for byte (ROUT-L RL-1a)
 display-layout.json            with --display-layout, copied byte for byte (Workflow #392 DA-4)
+loading.json                   with --loading, copied byte for byte (Workflow #407 LOAD-1)
+loading/<file>.png             with --loading, every template it declares, byte for byte
 packs/<package_id>/control.json
 packs/<package_id>/resources/...
 ```
@@ -359,11 +367,66 @@ the one structure check ("Standard package root", `display-layout.json`: a refus
 file is named; it names no package, so the cross-check checks nothing more of it. The root files
 are copied byte for byte last.
 
+**Loading pages** (Workflow #407 LOAD-1, since 0.12.37; [resource-declarations.md](resource-declarations.md),
+"Loading pages"). `--loading` names the game's `loading.json`, with its templates in the
+`loading/` directory beside it. Before anything is written, every pack of `--packs-root` is
+checked as `package loading --check` checks it (below), for the applications table's game; any
+issue refuses the bundle with every issue listed, and nothing is written. Then the file is laid
+beside `bundle.json` as `loading.json`, and every template it declares as `loading/<file>.png`,
+byte for byte, after the other root files: they are there for audit only, and no reader of the
+installed root uses them but `standard-pack check`. Without `--loading`, a pack that carries a
+loading copy (`resources/loading.json` or `resources/loading/`) is refused with
+`standard_pack_root_invalid`, `standard_pack_problem` `loading_pack_stale`, its `package_id` and
+the copy's `path`, one per such pack, and nothing is written: a copy is never bundled unchecked.
+
+`actinglab package loading --root-file <loading.json> --packs-root <directory> (--write |
+--check)` (Workflow #407 LOAD-1, since 0.12.37) copies a game's loading pages into its packs, or
+checks the copies. `--packs-root` is read as `package bundle` reads it (every entry one pack
+directory, read with the loader's snapshot and admitted by its path); the game is the packs'
+game. The root file is checked by the contract crate's `parse_standard_pack_loading`, and every
+template it declares must be a PNG of more than one colour in the `loading/` directory beside it
+(`loading_template_invalid` otherwise). A pack's copy is the root file's pages that apply to the
+pack's server, only the targets they name and their templates, the root file's `defaults`,
+`coordinate_space` and `max_ms` (`StandardPackLoading::for_server`); a pack that
+`exclude_packages` names, or of a server no page applies to, takes none. These are refused, each
+an issue: a pack of another game (`game_mismatch`, its `package_id`), an `exclude_packages` entry
+that names no pack (`package_not_listed`), a pack that takes pages and declares another
+`coordinate_space` (`loading_coordinate_mismatch`) or a page or target of a copied id itself
+(`loading_page_collision`, `loading_target_collision`, at the page's or target's id in the root
+file). Every refusal is `standard_pack_root_invalid` (exit 2) with `game`, `path`,
+`standard_pack_problem`, `json_pointer` and, for a pack's issue, `package_id`; `details.issues`
+lists every issue and `details.outcome` is the first; nothing is written. A copy is current when
+its `resources/loading.json` reads (`parse_pack_loading`) as the copy the root file makes and its
+`resources/loading/` holds exactly the copy's templates, byte for byte; a pack that takes none is
+current when it carries neither.
+
+- `--check` writes nothing. It answers `{status: "checked", game, root_file, max_ms, packs}`, each
+  pack `{package_id, server, pages, excluded, state: "current"}`, or refuses with one
+  `loading_pack_stale` per pack that is not current, its `path` the first file that differs.
+- `--write` writes every file of every pack that is not current, each to `<file>.part` and renamed
+  over the file, the templates before `resources/loading.json`, and answers `status: "written"`,
+  a pack it wrote with `state: "written"`. It removes nothing: a pack that holds a file its copy
+  no longer has (a template no page reads any more, or a copy of a pack that now takes none) is
+  refused first, one `loading_pack_stale` per such file, and nothing is written. A failed write is
+  `package_bundle_write_failed` naming the file and the files already written.
+- Under the global `--dry-run`, `--write` refuses what it refuses, writes nothing and answers
+  `status: "preview"` with `dry_run: true`, `written: false`, a pack it would write with
+  `state: "stale"`.
+
+**A pack that carries a loading copy needs a Runtime that reads it.** No Runtime of this release
+reads the copy (LOAD-2 compiles it, LOAD-3 runs it): a pack that carries one is admitted and runs
+as without it, on this Runtime and on every older one. So the resource side writes copies only
+for a Runtime that reads them, and deploys in that order: the Runtime first, then the packs.
+
 `actinglab standard-pack check --root <game root>` runs the same checks on an installed game
 root `<standard_packs.root>/<game>/` (the game is the directory's name; its packages are the
 directories its `bundle.json` lists): the root files it holds, the cross-check and the report,
 and (ROUT-L RL-1a) the root's `schedule.json` as `--schedule` is checked above, and (Workflow
-#392 DA-4) its `display-layout.json` as `--display-layout` is. It only reads. Every package of the registry is admitted, once, by its directory, with or
+#392 DA-4) its `display-layout.json` as `--display-layout` is, and (Workflow #407 LOAD-1) last,
+with its `loading.json`, every package's loading copy as `package loading --check` checks it, the
+templates read from the root's `loading/` (the file is then listed in `root_files`, last), and
+without it, every package that carries a loading copy is refused (`loading_pack_stale`). It only
+reads. Every package of the registry is admitted, once, by its directory, with or
 without the navigation files (Workflow #411 A25): a package a root file names first for its
 part, every other package of the registry after them. Its answer is `{status: "checked", root,
 game, root_files, pack_count, warnings}`, given only once every package of the registry was
@@ -655,6 +718,8 @@ data files beside its package directories, one directory per game below the conf
   schedule.json      actingcommand.schedule.v1: the game's schedule rules (ROUT-L RL-1a)
   display-layout.json  actingcommand.display-layout.v1: the game's display declaration (#392 DA-4)
   ui.json            actingcommand.ui.v1, optional: display metadata for clients (#429 R-11)
+  loading.json       actingcommand.loading.v1, optional: the game's loading pages, for audit (#407 LOAD-1)
+  loading/           the templates loading.json declares (#407 LOAD-1)
   <directory>/       one package directory per bundle pack
 ```
 
@@ -860,6 +925,16 @@ data files beside its package directories, one directory per game below the conf
     reader, its startup and run preparation, the policy crate and check-config never read it,
     so the file never changes a run, and a directory that holds only `ui.json` is no game root
     for them. A real standard package's `ui.json` is the resource side's to write.
+- **`loading.json`** (Workflow #407 LOAD-1, since 0.12.37; [resource-declarations.md](resource-declarations.md),
+  "Loading pages"). Optional; laid with its `loading/` templates by `package bundle --loading`, for
+  audit only. What runs is each pack's own copy (`resources/loading.json`), which the pack's
+  version freezes. Only `actinglab standard-pack check` reads the file (every package's copy is
+  checked against it, and without it no package may carry a copy). The Runtime's root reader, its
+  startup, a run's preparation, the policy crate and check-config never read it, and no loader of
+  this release reads a pack's copy: **a pack that carries one needs a Runtime that reads it, so
+  the Runtime is deployed first, then the packs.** The installed `loading/` directory makes a
+  package id `loading` collide with it; the bundle index does not reserve that name in this
+  release, so a resource repository must not name a pack `loading`.
 - **One check, three readers.** The contract crate's checks (`parse_standard_pack_pages`,
   `parse_standard_pack_interrupts`, `parse_standard_pack_navigation`, (Workflow #392 DA-4)
   `parse_standard_pack_display_layout`,

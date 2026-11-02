@@ -164,8 +164,9 @@ pub fn parse_standard_pack_ui(
 
 /// The JSON document of `bytes` with its members in the file's order, and in `repeated` the
 /// pointer of every member an object repeats (the last one is kept, as `serde_json` keeps it);
-/// `None` when the bytes are no JSON document.
-fn read_document(bytes: &[u8], repeated: &mut Vec<String>) -> Option<Value> {
+/// `None` when the bytes are no JSON document. Workflow #407 LOAD-1: `loading.json` and a pack's
+/// loading copy are read by it too.
+pub(crate) fn read_document(bytes: &[u8], repeated: &mut Vec<String>) -> Option<Value> {
     let mut deserializer = serde_json::Deserializer::from_slice(bytes);
     let document = Tracked {
         pointer: String::new(),
@@ -577,7 +578,7 @@ fn aspect_ratio(text: &str) -> bool {
 }
 
 /// The pointer of the member `name` of the object at `pointer` (RFC 6901).
-fn at(pointer: &str, name: &str) -> String {
+pub(crate) fn at(pointer: &str, name: &str) -> String {
     format!("{pointer}/{}", name.replace('~', "~0").replace('/', "~1"))
 }
 

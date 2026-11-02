@@ -1561,3 +1561,59 @@ with `package_bundle_store_tap_unlocated` of each store operation whose click ta
 (`point`, `rect`, `specific_rect`): a store's buttons move between devices, so a store step taps a
 text target located on the frame, whose expected text is the button's own label
 ([package-reference.md](package-reference.md), the cross-check). Admission still takes it.
+
+### Loading pages
+
+Workflow #407 LOAD-1 (since 0.12.37; [v012-register.md](v012-register.md) §1.257; design
+`rd-1031/check-speed/model-loading.md` §2). A game's loading pages (screens that only show the
+game is between two pages) are declared once, at the root of its resource repository, and copied
+into each pack, whose version then freezes them. **No Runtime component reads either file in this
+release:** not the root reader, not a run's preparation and not the pack loader, which admits a
+pack that carries a copy and runs it as without one. LOAD-2 compiles the copy and LOAD-3 runs it;
+until then the files are only checked by the tools ([package-reference.md](package-reference.md),
+`package loading`, `package bundle --loading`, `standard-pack check`). A pack that carries a copy
+needs a Runtime that reads it: the Runtime is deployed first, then the packs.
+
+**The root file.** `<repository>/loading.json`, with its templates in `<repository>/loading/`:
+
+```json
+{"schema_version": "actingcommand.loading.v1", "game": "neutral",
+ "coordinate_space": {"width": 1280, "height": 720},
+ "defaults": {"template_threshold": 0.9, "match_metric": "ccoeff_normed"},
+ "max_ms": 30000,
+ "anchors": [{"id": "loading/spinner", "template": "loading/spinner.png",
+              "region": {"mode": "rect", "rect": {"x": 600, "y": 320, "width": 80, "height": 80}},
+              "threshold": 0.8}],
+ "verify_templates": [],
+ "color_probes": [{"id": "loading/backdrop",
+                   "region": {"mode": "rect", "rect": {"x": 0, "y": 0, "width": 16, "height": 16}},
+                   "expected": [8, 8, 8]}],
+ "pages": [{"id": "transition", "required": ["loading/spinner", "loading/backdrop"]},
+           {"id": "download", "servers": ["test"], "required": ["loading/spinner"],
+            "forbidden": ["loading/backdrop"]}],
+ "exclude_packages": ["neutral.test.store"]}
+```
+
+| Member | Rule (refused with `standard_pack_problem`) |
+| --- | --- |
+| the document | an object of exactly these members; `schema_version`, `game`, `coordinate_space`, `max_ms` and `pages` required; a member repeated in one object, unknown, missing or not of its type (`malformed`) |
+| `schema_version` | `actingcommand.loading.v1` (`malformed`) |
+| `game` | the game of the packs, of the bundle or of the game root's directory (`game_mismatch`) |
+| `coordinate_space` | `{width, height}`, positive integers, the frame size the regions are declared in (`malformed`); every pack that takes a page declares the same (`loading_coordinate_mismatch`) |
+| `defaults` | optional; `template_threshold` in (0, 1], `color_max_distance` at least 0, `match_metric` `ccorr_normed` or `ccoeff_normed`, nothing else (`malformed`) |
+| `max_ms` | the game's allowance for one confirmation, 1 to 1800000 (`loading_max_invalid`) |
+| `anchors`, `verify_templates`, `color_probes` | optional; targets as `task.json` declares them. Each `id` is `loading/<name>`, the name 1 to 64 bytes of `[a-z][a-z0-9_]*`, unique across the three (`loading_target_invalid`); each has an object `region` (`malformed`); a template target's `template` is `loading/<stem>.png`, the stem 1 to 64 bytes of `[a-z0-9_-]` not starting with `-` (`loading_target_invalid`). The template must exist, be a PNG and not be of one colour throughout: a black or white screen is no loading page (`loading_template_invalid`, checked by the tools). The other members are carried as written and checked by the pack's declaration gate when the copy is compiled (LOAD-2). Only single-frame template and colour targets are declared: no OCR or other lazily evaluated target |
+| `pages` | 1 to 16 pages (`pages_count`); each `{id, required, any_of?, forbidden?, servers?}` as a `task.json` page rule: `id` a page id, 1 to 64 bytes of `[a-z][a-z0-9_]*` (`page_id_invalid`), listed once (`page_duplicate`); every id it names is a target of the file and `required` holds a template target, so a colour target goes only with a template (`loading_page_invalid`); `any_of` a list of non-empty groups; `servers` a non-empty list of distinct server words (`[a-z0-9._-]`, 1 to 128 bytes), absent for every server (`malformed`) |
+| `exclude_packages` | optional; distinct package ids that take no loading page (`malformed`); each names a pack (`package_not_listed`, checked by the tools) |
+
+**The copy.** `resources/loading.json` (`actingcommand.pack-loading.v1`) and `resources/loading/`
+inside a pack: the pages that apply to the pack's server, in the root file's order and without
+`servers`; only the targets they name, as declared, in the root file's order; the root file's
+`defaults`, `coordinate_space` and `max_ms`; and in `resources/loading/` exactly the templates of
+those targets, byte for byte (a template's path `loading/<file>.png` is relative to the pack's
+`resources/`). It carries no `game`, no `exclude_packages`, no digest and no source commit (option
+丙): the pack's version is what freezes it. An excluded pack, and a pack of a server no page
+applies to, carries no copy. A pack that takes a page and declares a page of a copied page's id
+itself, or a target of a copied target's id, is refused (`loading_page_collision`,
+`loading_target_collision`). Every refusal is `standard_pack_root_invalid`, with `package_id`
+when the issue is a pack's; a copy that is not the one the root file makes is `loading_pack_stale`.
