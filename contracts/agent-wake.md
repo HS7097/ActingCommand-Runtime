@@ -18,8 +18,13 @@ the defaults file holds a value, and a section that leaves out a key is refused 
 (`required_missing`). An empty section is refused too, naming `agent_wake.enabled`. With no section
 there are no keys and no rows, and `ConfigureSettings` answers `config_key_unknown`; turning it on
 the first time is a file edit and a restart, a person's step. `actingd-config` revision 24
-([component-interfaces.md](component-interfaces.md)) adds the section. An example with the shipped
-values:
+([component-interfaces.md](component-interfaces.md)) adds the section.
+
+**Turning it on, in this order: first update the console, then add the section.** `runtime-client`
+stays [3, 5], so the pairing check passes for a console whose `max` is 3 or 4, but the status denies
+unknown members: with the section present such a console cannot read the status at all.
+
+An example with the shipped values:
 
 ```json
 "agent_wake": {
