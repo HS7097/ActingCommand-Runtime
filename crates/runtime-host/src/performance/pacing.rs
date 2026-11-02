@@ -139,7 +139,9 @@ impl EffectivePacing {
 /// ACT-1 (Workflow #407, register §1.250; `contracts/performance-control.md`, "Step pacing"):
 /// `pacing` with the settled path of the instance's `execution.action_gap` keys `gap` when the
 /// pacing stage `stage` allows it. `declared` returns `pacing` as it came. The pre-input wait stays
-/// the pacing term alone; a step's gap is not part of this answer (`step_action_gap`).
+/// the pacing term alone; a step's gap is not part of this answer (`step_action_gap`). ACT-4
+/// (register §1.254): the path carries `settled_limit_ms`, the limit of a step without
+/// `post_delay_ms`.
 pub(crate) fn apply_settled_path(
     pacing: actingcommand_execution_kernel::StepPacing,
     gap: &actingcommand_runtime_config::ActionGapConfig,
@@ -151,6 +153,7 @@ pub(crate) fn apply_settled_path(
             gap.settle_frames,
             gap.settle_change_max_milli,
         )
+        .with_omitted_delay_limit(std::time::Duration::from_millis(gap.settled_limit_ms))
     }))
 }
 

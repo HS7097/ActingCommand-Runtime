@@ -372,5 +372,18 @@ actingcommand_contract::outcome_vocabulary! {
         /// A store update package declares no `application` operation that launches or restarts
         /// the assigned application.
         StoreWayBackMissing => "store_way_back_missing",
+        // ACT-4 (Workflow #407, since 0.12.37): the targets of an `expect_after`'s
+        // `target_present` and `target_gone` (contracts/resource-declarations.md, "Final-state
+        // targets"); the refused member is the list entry.
+        /// A target stands in both lists, or twice in one.
+        ExpectTargetsOverlap => "expect_targets_overlap",
+        /// A target names no target of the package's recognition pack.
+        ExpectTargetUnknown => "expect_target_unknown",
+        /// A target is not judged on one frame: no template or colour target, or one under
+        /// target consensus.
+        ExpectTargetKind => "expect_target_kind",
+        /// A target stands in the rules of neither the operation's `from` page nor one of its
+        /// destinations, directly or as a member of a check there.
+        ExpectTargetUnreachable => "expect_target_unreachable",
     }
 }

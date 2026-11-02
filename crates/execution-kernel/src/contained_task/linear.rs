@@ -607,6 +607,10 @@ impl TaskProgram {
             if operation.declares_wait() {
                 return Err(invalid("wait", Some(operation)));
             }
+            // ACT-4: final-state targets are judged by the page-graph confirmation.
+            if operation.declares_expected_targets() {
+                return Err(invalid("expect_targets", Some(operation)));
+            }
             operation.validate(control, self.defaults, &self.schema_version)?;
             if !operation_ids.insert(operation.id.as_str()) {
                 return Err(ContainedTaskError::new(

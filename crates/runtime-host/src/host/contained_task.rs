@@ -1639,6 +1639,18 @@ impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
         self.inner.ensure_active()
     }
 
+    /// ACT-4: recorded as for the run's own steps.
+    fn record_expected_target(
+        &mut self,
+        target_id: &str,
+        result: &actingcommand_recognition_pack::RecognitionPackResult<
+            actingcommand_recognition_pack::TargetEvaluation,
+        >,
+        timing: ContainedTaskEvaluationTiming,
+    ) -> Result<(), Self::Error> {
+        self.inner.record_expected_target(target_id, result, timing)
+    }
+
     fn record_guard_evaluation(
         &mut self,
         target: Option<&str>,
@@ -4176,6 +4188,29 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             ContainedTaskGuardEvaluation::of_sample(result),
         )?;
         self.ensure_active()
+    }
+
+    /// ACT-4 (Workflow #407, register §1.254): a final-state target's evaluation, on the frame it
+    /// judges, which is the last captured: its time is one of that frame's evaluations, its row a
+    /// guard row of the phase `expect_after`.
+    fn record_expected_target(
+        &mut self,
+        target_id: &str,
+        result: &actingcommand_recognition_pack::RecognitionPackResult<
+            actingcommand_recognition_pack::TargetEvaluation,
+        >,
+        timing: ContainedTaskEvaluationTiming,
+    ) -> Result<(), Self::Error> {
+        self.task_timing.record_evaluation(
+            timing,
+            self.last_frame_id.map(|id| *id.transport()),
+            None,
+        );
+        self.diagnostic_guard(
+            Some(target_id),
+            Some(result),
+            ContainedTaskGuardEvaluation::ExpectAfter,
+        )
     }
 
     fn update_run_progress(&mut self, executed_steps: u32) {

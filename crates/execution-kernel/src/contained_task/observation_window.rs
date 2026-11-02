@@ -495,7 +495,8 @@ impl PreparedContainedTask {
     /// #385 P-k (performance model v1.4.2 §5.4 item 1): a window that ends that way, within the
     /// task's budget, starts the step's extra rounds (`rounds`) first, captures only: `stable`
     /// another window of `window_ms` from now, `window_end` another `budget` from now in which a
-    /// frame that shows a destination ends it.
+    /// frame that shows a destination ends it. ACT-4: a frame shows a destination only as the
+    /// step's final state ([`Self::final_state`]).
     #[allow(clippy::too_many_arguments)]
     pub(super) fn observe_window<R: ContainedTaskRuntime>(
         &self,
@@ -626,8 +627,10 @@ impl PreparedContainedTask {
             let scene = match observed {
                 Ok(observation) => {
                     last_frame_page = Some(observation.page_label.clone());
-                    let destinations =
-                        operation.matching_destination_count(&self.control, &observation)?;
+                    // ACT-4: the one final-state judgement; a destination page that is not the
+                    // step's final state is a frame of no destination.
+                    let judged = self.final_state(runtime, operation, &observation, timing)?;
+                    let destinations = judged.destinations;
                     let error_page = self
                         .program
                         .is_error_page(&self.control, &observation.page_label);
@@ -647,7 +650,7 @@ impl PreparedContainedTask {
                             still_limit: None,
                         });
                     }
-                    if destinations == 1 {
+                    if judged.reached {
                         latest = true;
                         if observation.page_label == current.page_label {
                             held += 1;

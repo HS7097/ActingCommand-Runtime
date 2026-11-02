@@ -5921,6 +5921,57 @@ dropped with its record; a file that does not name them is read as before.
 
 **Tests** (gate rows in `host.toml`, "AGT-2"): the twelve of the design's §10 and `the_daily_cap_rolls_over_at_the_local_day`. No existing assertion changed.
 
+### 1.254 Slice ACT-4 (0.12.37): final-state targets on both sides, flip evidence for a same-page step, and a tap without `post_delay_ms` on the settled path (Workflow #407; Alice 11-02: a click ends in a loading page, a new page, or a page that lost one feature, and normally the next action follows at once; design `rd-1031/check-speed/model-check.md` §1.5, §1.6, §7 with `model-check-addendum.md` items 5 and 6, which win where they differ; 项目秘书's review, #407 comment 6570494843, sections 1 and 5; coordinator work order `rd-1031/check-speed/brief-act4.md`)
+
+[resource-declarations.md](resource-declarations.md) ("Final-state targets", "Capture cadence"),
+[performance-control.md](performance-control.md) ("Step pacing") and
+[runtime-config.md](runtime-config.md) ("The `execution` section") are the contract. The number
+1.254 is the coordinator's. **No package changes, no outcome code, no ledger shape, no wire shape.**
+
+**Why.** A click whose only effect is that its page lost or gained one feature could not be said:
+the 73 operations whose destination names their own page had no evidence of their effect but the
+blind wait, and the settled path had to keep it. Two lists say it, one judgement reads them for
+every path, and on a same-page step only a change since the frame that decided the click counts,
+so a state already true before the click is never taken for its effect. A package that wants no
+blind wait leaves `post_delay_ms` out (admission keeps refusing 0); until now such a tap had no
+settled reading at all.
+
+**What changes live.** Nothing for any package of today: none declares the lists, and every tap
+of today declares `post_delay_ms`, whose behaviour is unchanged. A tap without it reads under
+`settled` up to `settled_limit_ms`, then its confirmation goes on with what is left of its
+timeout; its total time is that timeout, as before.
+
+**Cost** (measure, not assume). Each listed target is evaluated by itself on each destination frame
+after the input and once on the decision frame: `RecognitionEvaluator::evaluate_target` opens a
+scene context of its own, so a template is matched again (the page recognition's template results
+stay in that recognition's context, and target consensus results in another cache), and a colour
+target is computed, which nothing caches. Each evaluation's time is recorded as one of its frame's
+`recognition_evaluate` samples and its row carries the phase `expect_after`, so the cost of a
+declaration is read from the runs that use it. No number is claimed here: no run declares the
+lists yet.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| AC4-1 | task schema `0.9` `expect_after.target_present`, `expect_after.target_gone` (arrays of target names) | resource file format | ACT-4 | resource side | `since` 0.12.37; optional, page-graph tasks only (`contained_task_linear_invalid`, `reason=expect_targets`, under `linear_steps`); `UnconsumedField` before schema `0.9`; `package` revision 6, **no second step** (§1.244 TB6, §1.251) |
+| AC4-2 | `program_problem` tokens `expect_targets_overlap`, `expect_target_unknown`, `expect_target_kind`, `expect_target_unreachable` | new tokens of an existing vocabulary on the existing `contained_task_program_invalid` | ACT-4 | ACT-4 | the disjoint lists; a target of the pack; a single-frame template or colour target outside target consensus (lazy and multi-frame targets are out of this slice); a target of the `from` page's or a destination's rules, directly or as a member of a check there. `path` the task declaration, `json_pointer` the list entry |
+| AC4-3 | the final-state judgement of the settled path, the confirmation (a wait step's included) and the observation window | rule (no shape change) | ACT-4 | ACT-4 | destination page AND every `present` passes AND every `gone` has a definite non-match (evaluated, not passed, no registered reason that leaves it open, and the evaluation's own evidence); not evaluated, failed or unresolvable is not gone. A destination page that is not the final state is a frame of no destination to each path |
+| AC4-4 | flip evidence of a same-page step on the settled path | rule (memory only) | ACT-4 | ACT-4 | the listed targets' states on the decision frame, taken after the input and before any later capture; a final state goes at once only when one listed target turned (present from a definite non-match to a pass, gone from a pass to a definite non-match); frame ids differ where the runtime gives them; a state true on the decision frame keeps `post_delay_ms` and the confirmation; a select step keeps them |
+| AC4-5 | `execution.action_gap.settled_limit_ms` (`0..=5000`, default 2000) and `instance.<id>.execution.action_gap.settled_limit_ms` (default the section's) | configuration keys | ACT-4 | ACT-4 | settable, read at each step; within **`actingd-config` revision 24**, no second step (§1.245, §1.250). The bound is the longest `post_delay_ms` a package may declare, whose place the limit takes; the default is a blind wait packages commonly declare. 0 keeps a tap without `post_delay_ms` on its confirmation at once |
+| AC4-6 | `SettledPath::omitted_delay_limit`, `SettledPath::with_omitted_delay_limit`, `ContainedTaskRuntime::record_expected_target`, `ContainedTaskGuardEvaluation::ExpectAfter` (`execution-kernel`) | Runtime-internal interface (memory only) | ACT-4 | ACT-4 | trait default: the evaluation recorded as a guard evaluation, its time dropped; `SettledPath::new` carries a zero limit, so a runtime that hands none keeps a tap without `post_delay_ms` on its confirmation |
+| AC4-7 | the guard phase `expect_after` of task diagnostic `target` and `error` rows | new value of an existing string member | ACT-4 | ACT-4 | the same row shape as `when`'s, as ACT-1's `action_gap` (§1.250 ACT-4) |
+
+**Not in this slice.** `loading_pages` (its own design), ACT-3, ROI readiness, selective evidence;
+lazy and multi-frame targets in the lists; the feed of the post-admission collectors on the settled
+path, which still follows the destination page (a destination frame that is not yet the final state
+feeds them as every frame of a confirmation does); the identity read-back (`expect_identity`), which
+follows the final state as before.
+
+**Rollback** (to 0.12.36). Nothing persisted but the phase value above, in a run's diagnostics. A
+pack that declares the lists is refused at the older build's declaration gate; `package` [3, 6]
+refuses the combination earlier. A configuration file that names `settled_limit_ms` is refused by
+the older build, as any newer member is; an instruction value of the key is dropped with its
+record.
+
 ### 1.255 Slice AGT-T2 (0.12.37): the Codex transport (Workflow #432; design `rd-1031/agt/model-agt-v2.md` §5.2, §6.1, §6.4, §6.7, §7.2, §10, §11; coordinator work order `rd-1031/agt/brief-agt-t2.md`)
 
 [agent-forward.md](agent-forward.md) ("Codex") is the contract, and the one place with client words. The number 1.255 is the coordinator's. **No new persisted shape, no outcome code, no configuration key, no interface revision.**

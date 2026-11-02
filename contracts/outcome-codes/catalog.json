@@ -7024,6 +7024,18 @@
         },
         "store_way_back_missing": {
           "description": "STORE-FG-1 (since 0.12.29): a package that declares store_update declares no application operation that launches or restarts the assigned application; json_pointer /store_update."
+        },
+        "expect_targets_overlap": {
+          "description": "ACT-4 (since 0.12.37): a target of an operation's expect_after stands in both target_present and target_gone, or twice in one of them; json_pointer /operations/<i>/expect_after/<list>/<j>, the later entry."
+        },
+        "expect_target_unknown": {
+          "description": "ACT-4 (since 0.12.37): an entry of an operation's expect_after.target_present or target_gone names no target of the package's recognition pack; json_pointer /operations/<i>/expect_after/<list>/<j>."
+        },
+        "expect_target_kind": {
+          "description": "ACT-4 (since 0.12.37): an entry of an operation's expect_after.target_present or target_gone names a target that is not judged on one frame: no template or colour target (located text, a value test, a check, an OCR, model or digest target), or one under target consensus; json_pointer /operations/<i>/expect_after/<list>/<j>."
+        },
+        "expect_target_unreachable": {
+          "description": "ACT-4 (since 0.12.37): an entry of an operation's expect_after.target_present or target_gone names a target that stands in the rules (required, any_of, optional, forbidden) of neither the operation's from page nor one of its destinations, directly or as a member of a check there; json_pointer /operations/<i>/expect_after/<list>/<j>."
         }
       }
     },
