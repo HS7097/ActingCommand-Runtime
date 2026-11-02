@@ -96,6 +96,10 @@ actingcommand_contract::outcome_vocabulary! {
         DirReserved => "dir_reserved",
         /// A registered channel whose shortest message does not fit `agent_wake.summary.max_chars`.
         MessageFloor => "message_floor",
+        /// Workflow #432 AGT-2b: a `daily_summary` rule that names another kind or codes, leaves
+        /// out its minute or offset or names one out of range, or whose day cap is not 1; or a
+        /// rule of another kind that names a minute or an offset.
+        DailySummaryShape => "daily_summary_shape",
         /// A note, never a refusal: the channel registry is missing or cannot be read.
         RegistryUnreadable => "registry_unreadable",
         /// A note, never a refusal: a rule's `to` that the channel registry does not list.

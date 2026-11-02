@@ -4,7 +4,9 @@
 //! guards"): a cool-down per rule, instance and code, and a day cap per rule and over all rules,
 //! each day being the host's local day. Every count is read from the rows of `host.agent_wake`,
 //! which a start restores, so a restart forgets none of them. A person's test is held by none and
-//! counts toward none. Pure: the worker hands the rows, the time and the day of an instant.
+//! counts toward none. A daily summary (Workflow #432 AGT-2b) is made once a day of its rule's own
+//! offset in place of the cool-down and the rule's cap, and the budget holds it and counts it like
+//! every wake. Pure: the worker hands the rows, the time and the day of an instant.
 
 use crate::agent_wake::rows::WakeRow;
 use actingcommand_contract::outcome::CodeStr;
@@ -104,7 +106,8 @@ pub(crate) fn hold(
     None
 }
 
-/// Whether a cap is used up on `today`: the budget's, or any rule's.
+/// Whether a cap is used up on `today`: the budget's, or any rule's. A daily summary rule's cap of
+/// one is its summary's own (Workflow #432 AGT-2b), never a cap used up.
 pub(crate) fn exhausted_today(
     rows: &[WakeRow],
     rules: &[WakeRule],
@@ -115,5 +118,6 @@ pub(crate) fn exhausted_today(
     count(of_today(rows, today, day_of)) >= budget_daily_cap
         || rules
             .iter()
+            .filter(|rule| rule.summary_at.is_none())
             .any(|rule| day_usage(rows, &rule.id, today, day_of).rule >= rule.daily_cap)
 }

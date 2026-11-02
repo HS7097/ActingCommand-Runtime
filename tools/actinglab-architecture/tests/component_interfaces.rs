@@ -71,7 +71,10 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   Workflow #432 AGT-1a (0.12.37, Alice's words of 2026-11-02, register §1.245): revision 24 adds
 ///   the optional `agent_wake` section, and ACT-1 and ACT-2 (same release, register §1.250)
 ///   `execution.action_gap` and an instance entry's `execution`; revisions 5 to 23 are still
-///   read, so [5, 24].
+///   read, so [5, 24]. Workflow #432 AGT-2b (0.12.38, Alice's words of 2026-11-02 19:4x, register
+///   §1.263): revision 25 adds a rule's `on.at_minute_of_day` and `on.utc_offset_minutes`, the time
+///   of a `daily_summary` rule; revisions 5 to 24 are still read (only a `daily_summary` rule, which
+///   had no emitter, now needs its time), so [5, 25].
 /// - `install-control` stays [0, 1] (model-378 §16 A-7; U-4 raises it in 0.12.x).
 /// - `install-selection` is unchanged (model-378 §10).
 /// - `ledger` [3, 3]: SQLite format 2, `actingcommand.event.v3`; format 1 is refused. Workflow
@@ -101,7 +104,7 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   as before, so [3, 5].
 /// - `runtime-outcomes` [1, 1]: the new interface of model-378 §10.
 const V0120: &[(&str, [u64; 2])] = &[
-    ("actingd-config", [5, 24]),
+    ("actingd-config", [5, 25]),
     ("install-control", [0, 1]),
     ("install-selection", [1, 1]),
     ("ledger", [3, 5]),

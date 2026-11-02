@@ -90,7 +90,8 @@ pub const KIND_LADDER_EXHAUSTED: &str = "ladder_exhausted";
 pub const KIND_INSTANCE_FENCED: &str = "instance_fenced";
 /// A run failed with a code the rule lists.
 pub const KIND_RUN_FAILED: &str = "run_failed";
-/// The daily results summary. It has no emitter yet (AGT-2b).
+/// The daily summary (Workflow #432 AGT-2b): a timer rule's own kind, no record's. Such a rule
+/// names this kind alone, a minute of the day and an offset from UTC, no codes, and a day cap of 1.
 pub const KIND_DAILY_SUMMARY: &str = "daily_summary";
 /// A person's test of the delivery.
 pub const KIND_DELIVERY_TEST: &str = "delivery_test";
@@ -120,6 +121,13 @@ pub const MAX_RULE_ID_BYTES: usize = 64;
 pub const MAX_RULE_CODES: usize = 64;
 /// The longest a rule's cool-down may be: a week. Schema.
 pub const MAX_COOLDOWN_MS: u64 = 7 * 24 * 60 * 60 * 1000;
+/// The last minute of a day a daily summary may name. Schema.
+pub const MAX_SUMMARY_MINUTE_OF_DAY: u16 = 1_439;
+/// The offsets from UTC, in minutes, a daily summary may name: the civil zones'. Schema.
+pub const MIN_SUMMARY_UTC_OFFSET_MINUTES: i16 = -720;
+pub const MAX_SUMMARY_UTC_OFFSET_MINUTES: i16 = 840;
+/// A daily summary rule's `daily_cap`: one summary a local day. Schema.
+pub const SUMMARY_DAILY_CAP: u64 = 1;
 
 /// A message with no alias, apart from its channel and body folder: `ActingCommand to ` (17), the
 /// line break (1), a kind word with ` 正文 ` (8) and the longest file name,
@@ -324,6 +332,14 @@ pub enum WakeInstances {
     Listed(Vec<String>),
 }
 
+/// When a daily summary is due (Workflow #432 AGT-2b): a minute of the local day of a fixed offset
+/// from UTC, written as a quiet window writes them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SummaryAt {
+    pub minute_of_day: u16,
+    pub utc_offset_minutes: i16,
+}
+
 /// One rule: which outcome wakes which channel.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WakeRule {
@@ -334,6 +350,8 @@ pub struct WakeRule {
     pub to: String,
     pub cooldown_ms: u64,
     pub daily_cap: u64,
+    /// `Some` exactly for a `daily_summary` rule (AGT-2b).
+    pub summary_at: Option<SummaryAt>,
 }
 
 /// The section in effect, checked whole.
@@ -354,6 +372,12 @@ struct RuleMatchFile {
     kinds: Vec<String>,
     #[serde(default)]
     codes: Vec<String>,
+    // Interface anchor `actingd-config` revision 25 (contracts/component-interfaces.md): a Runtime
+    // before AGT-2b refuses a rule that names either, because the member denies unknown members.
+    #[serde(default)]
+    at_minute_of_day: Option<i64>,
+    #[serde(default)]
+    utc_offset_minutes: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -504,6 +528,7 @@ fn parse_rule(entry: Value) -> Result<WakeRule, ConfigFailure> {
     {
         return Err(invalid(RULES, ConfigValueProblem::KindUnknown));
     }
+    let summary_at = summary_at(&file)?;
     // A failed run wakes only for the codes the rule lists: no list, no wake.
     if file.on.codes.is_empty() && file.on.kinds.iter().any(|kind| kind == KIND_RUN_FAILED) {
         return Err(invalid(RULES, ConfigValueProblem::MatchMissing));
@@ -523,7 +548,41 @@ fn parse_rule(entry: Value) -> Result<WakeRule, ConfigFailure> {
         to: file.to,
         cooldown_ms: file.cooldown_ms,
         daily_cap: file.daily_cap,
+        summary_at,
     })
+}
+
+/// A daily summary rule's time (Workflow #432 AGT-2b): the rule names `daily_summary` alone, no
+/// codes, `at_minute_of_day` (0 to 1439) and `utc_offset_minutes` (−720 to 840), and `daily_cap`
+/// 1; a rule of another kind names neither member. Any other shape is `daily_summary_shape`.
+fn summary_at(file: &RuleFile) -> Result<Option<SummaryAt>, ConfigFailure> {
+    let refused = || invalid(RULES, ConfigValueProblem::DailySummaryShape);
+    let on = &file.on;
+    if !on.kinds.iter().any(|kind| kind == KIND_DAILY_SUMMARY) {
+        return match (on.at_minute_of_day, on.utc_offset_minutes) {
+            (None, None) => Ok(None),
+            _ => Err(refused()),
+        };
+    }
+    if on.kinds.len() != 1 || !on.codes.is_empty() || file.daily_cap != SUMMARY_DAILY_CAP {
+        return Err(refused());
+    }
+    let minute_of_day = on
+        .at_minute_of_day
+        .and_then(|minute| u16::try_from(minute).ok())
+        .filter(|minute| *minute <= MAX_SUMMARY_MINUTE_OF_DAY)
+        .ok_or_else(refused)?;
+    let utc_offset_minutes = on
+        .utc_offset_minutes
+        .and_then(|offset| i16::try_from(offset).ok())
+        .filter(|offset| {
+            (MIN_SUMMARY_UTC_OFFSET_MINUTES..=MAX_SUMMARY_UTC_OFFSET_MINUTES).contains(offset)
+        })
+        .ok_or_else(refused)?;
+    Ok(Some(SummaryAt {
+        minute_of_day,
+        utc_offset_minutes,
+    }))
 }
 
 fn parse_rules(entries: Vec<Value>) -> Result<Vec<WakeRule>, ConfigFailure> {

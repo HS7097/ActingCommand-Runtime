@@ -240,3 +240,7 @@ mod gate_ss4;
 // Workflow #432 AGT-1a: the `agent_wake` section's checks and settable keys.
 #[cfg(test)]
 mod gate_agt_1a;
+
+// Workflow #432 AGT-2b: the shape of a daily summary rule.
+#[cfg(test)]
+mod gate_agt_2b;

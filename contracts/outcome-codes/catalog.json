@@ -6419,6 +6419,9 @@
         "message_floor": {
           "description": "A registered channel whose shortest message does not fit agent_wake.summary.max_chars."
         },
+        "daily_summary_shape": {
+          "description": "An agent_wake daily_summary rule that names another kind or codes, leaves out at_minute_of_day or utc_offset_minutes or names one out of range, or whose daily_cap is not 1; or a rule of another kind that names either (Workflow #432 AGT-2b)."
+        },
         "registry_unreadable": {
           "description": "A note, never a refusal: the channel registry is missing or cannot be read."
         },

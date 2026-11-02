@@ -1,7 +1,7 @@
 {
   "schema_version": "actingcommand.component-interfaces.v1",
   "speaks": {
-    "actingd-config": [5, 24],
+    "actingd-config": [5, 25],
     "install-selection": [1, 1],
     "install-control": [0, 1],
     "ledger": [3, 5],
