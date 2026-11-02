@@ -41,6 +41,16 @@
 //! with its time, and `entered` (the first transition frame of a stretch), `left` (the first frame
 //! after it, with the time since its last transition frame) and `limit_reached` (once per
 //! allowance), in both `shadow` and `on`.
+//!
+//! **A step plan** (Workflow #407 LOAD-4, register §1.262; design §5; `linear.rs`): its waits ask
+//! the same judgement, as a page wait does (any candidate that passes is what the wait waits for).
+//! The pages its confirmation adds are evaluated by id with the package's loading pages
+//! ([`LoadingAllowance::for_linear_input`]), since a step plan's wait evaluates its candidates
+//! only. Its entry wait has an allowance of its own, the package's.
+//!
+//! **Admission** (LOAD-4): a confirmation whose loading pages have no limit anywhere
+//! ([`TaskOperation::confirmation_loading`]) is refused (`loading_max_missing`), in a page graph
+//! and in a step plan; the allowance of zero such a set would have stays as a guard.
 
 use super::final_state::FinalState;
 use super::{
@@ -52,7 +62,7 @@ use crate::codes::LoadingEventKind;
 use actingcommand_contract::TaskTimingResult;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_page_detector::{
-    PageBatchResult, PageDetectorError, require_all_page_evaluations,
+    PageBatchResult, PageDetector, PageDetectorError, require_all_page_evaluations,
 };
 use std::time::{Duration, Instant};
 
@@ -125,6 +135,62 @@ pub enum LoadingRecord<'a> {
     Event(&'a LoadingEvent),
 }
 
+/// Workflow #407 (design §2.4): the loading pages of one confirmation and their limit, as its
+/// operation declares them against the package's loading copy.
+#[derive(Debug, Default)]
+pub(super) struct ConfirmationLoading {
+    /// The package's loading pages less `except`, as the detector names them, in the copy's
+    /// order.
+    pub(super) inherited: Vec<String>,
+    /// The pages of the package the confirmation adds (`loading.add`, then its wait page), as
+    /// declared.
+    pub(super) added: Vec<String>,
+    /// `loading.max_ms`, else the wait page's `max_ms`, else the copy's; none when none of them is
+    /// named.
+    pub(super) limit_ms: Option<u64>,
+}
+
+impl ConfirmationLoading {
+    /// Whether the confirmation has no loading page.
+    pub(super) fn is_empty(&self) -> bool {
+        self.inherited.is_empty() && self.added.is_empty()
+    }
+}
+
+impl TaskOperation {
+    /// Workflow #407 (design §2.4): the confirmation's loading pages and their limit in `game`,
+    /// against the package's loading copy `detector` holds: none with `loading: "off"`; else the
+    /// copy's pages less `except`, with `add` and the wait page. Admission reads it (LOAD-4: pages
+    /// with no limit are refused) and so does each input's allowance.
+    pub(super) fn confirmation_loading(
+        &self,
+        game: &str,
+        detector: &PageDetector,
+    ) -> ConfirmationLoading {
+        let declared = self.loading();
+        if declared.is_some_and(|loading| loading.off) {
+            return ConfirmationLoading::default();
+        }
+        let except = declared.map_or(&[][..], |loading| loading.except.as_slice());
+        ConfirmationLoading {
+            inherited: detector
+                .loading_page_ids()
+                .filter(|page| {
+                    !except
+                        .iter()
+                        .any(|excepted| crate::page_anchor_matches(game, page, excepted))
+                })
+                .map(str::to_owned)
+                .collect(),
+            added: self.loading_added_pages().map(str::to_owned).collect(),
+            limit_ms: declared
+                .and_then(|loading| loading.max_ms)
+                .or_else(|| self.wait_page().map(|wait_page| wait_page.max_ms))
+                .or_else(|| detector.loading_max_ms()),
+        }
+    }
+}
+
 /// A wait that ended on its allowance: the values its failure carries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct LoadingLimit {
@@ -180,7 +246,8 @@ struct Stretch {
 pub(super) struct LoadingAllowance {
     mode: LoadingMode,
     /// The loading pages of the package's loading copy each frame is evaluated against, as the
-    /// detector names them, in the copy's order.
+    /// detector names them, in the copy's order; in a step plan, then the pages its confirmation
+    /// adds (LOAD-4).
     probed: Vec<String>,
     /// The pages of the package the confirmation adds as loading pages (`loading.add`, its wait
     /// page), as the package declares them.
@@ -215,9 +282,10 @@ impl LoadingAllowance {
     /// The allowance of one input of `operation` (or of a wait step's wait), under `pacing`'s mode
     /// (§2.4): `loading: "off"` takes no page; otherwise the package's loading pages less
     /// `except`, with `add` and the wait page. Its limit is `loading.max_ms`, else the wait page's
-    /// `max_ms`, else the package's. A set with no limit anywhere (pages added to a package that
-    /// carries no loading copy, without a `max_ms`) has an allowance of zero: its first transition
-    /// frame ends the wait, named.
+    /// `max_ms`, else the package's ([`TaskOperation::confirmation_loading`]). A set with no limit
+    /// anywhere (pages added to a package that carries no loading copy, without a `max_ms`) is
+    /// refused at admission (LOAD-4, `loading_max_missing`); as a guard it has an allowance of
+    /// zero here: its first transition frame ends the wait, named.
     pub(super) fn for_input(
         task: &PreparedContainedTask,
         operation: &TaskOperation,
@@ -226,42 +294,42 @@ impl LoadingAllowance {
         if pacing.loading == LoadingMode::Off {
             return Self::off();
         }
-        let declared = operation.loading();
-        if declared.is_some_and(|loading| loading.off) {
+        let declared = operation.confirmation_loading(task.control.game.as_str(), &task.detector);
+        if declared.is_empty() {
             return Self::off();
         }
-        let game = task.control.game.as_str();
-        let except = declared.map_or(&[][..], |loading| loading.except.as_slice());
-        let probed = task
-            .detector
-            .loading_page_ids()
-            .filter(|page| {
-                !except
-                    .iter()
-                    .any(|excepted| crate::page_anchor_matches(game, page, excepted))
-            })
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
-        let added = operation
-            .loading_added_pages()
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
-        if probed.is_empty() && added.is_empty() {
-            return Self::off();
-        }
-        let limit_ms = declared
-            .and_then(|loading| loading.max_ms)
-            .or_else(|| operation.wait_page().map(|wait_page| wait_page.max_ms))
-            .or_else(|| task.detector.loading_max_ms())
-            .unwrap_or(0);
         Self {
             mode: pacing.loading,
-            probed,
-            added,
-            limit: Duration::from_millis(limit_ms),
+            probed: declared.inherited,
+            added: declared.added,
+            limit: Duration::from_millis(declared.limit_ms.unwrap_or(0)),
             pack_operation_id: Some(operation.id.clone()),
             ..Self::off()
         }
+    }
+
+    /// Workflow #407 LOAD-4 (§5): the allowance of one input of a step plan's `operation`, as
+    /// [`Self::for_input`] gives it, except that the pages its confirmation adds, `resolved` as
+    /// the detector names them (in the order the operation declares them), are evaluated by id
+    /// with the package's loading pages: a step plan's wait evaluates its candidates only, so a
+    /// page the step adds is never a frame's page there.
+    pub(super) fn for_linear_input(
+        task: &PreparedContainedTask,
+        operation: &TaskOperation,
+        pacing: StepPacing,
+        resolved: &[String],
+    ) -> Self {
+        let mut allowance = Self::for_input(task, operation, pacing);
+        if !allowance.added.is_empty() {
+            allowance.added.clear();
+            // A page both added and the wait page is evaluated once.
+            for page in resolved {
+                if !allowance.probed.contains(page) {
+                    allowance.probed.push(page.clone());
+                }
+            }
+        }
+        allowance
     }
 
     /// The allowance of one page wait under `pacing`'s mode: the package's loading pages and its

@@ -355,7 +355,8 @@ deadline, settlement and record is the one before pacing.
   which one holds pauses the wait on the budget clock within the input's allowance, never past the
   task's deadline or the host's, and is never still (both rules above stop on it as on a held page).
   Its back-off is a held page's. The rules are in [resource-declarations.md](resource-declarations.md),
-  "Waits on loading pages"; `linear_steps` waits are unchanged (LOAD-4).
+  "Waits on loading pages"; `linear_steps` waits follow them from 0.12.38 (LOAD-4, register §1.262;
+  [linear-steps.md](linear-steps.md), "Loading pages").
 - **Host deadline and lease.** A run's host deadline (`response_deadline_ms`), its lease TTL,
   its active checks and `contained_task_deadline_exceeded` stay wall-clock and identical at
   every factor. A stretched run that reaches its host deadline ends

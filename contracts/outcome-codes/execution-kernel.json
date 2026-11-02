@@ -1780,6 +1780,9 @@
       "layer": "kernel",
       "uncertain": false,
       "values": {
+        "loading_page_id": "optional",
+        "loading_ms": "optional",
+        "loading_limit_ms": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -1789,7 +1792,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A linear task's entry page was not recognized.",
+      "description": "A linear task's entry page was not recognized. LOAD-4 (since 0.12.38): loading_page_id, loading_ms and loading_limit_ms are present when the entry wait ended on a transition frame after the package's loading allowance was spent under execution.loading.mode on.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2127,6 +2130,9 @@
       "layer": "kernel",
       "uncertain": false,
       "values": {
+        "loading_page_id": "optional",
+        "loading_ms": "optional",
+        "loading_limit_ms": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -2136,7 +2142,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A linear application step's next page did not pass.",
+      "description": "A linear application step's next page did not pass. LOAD-4 (since 0.12.38): loading_page_id, loading_ms and loading_limit_ms are present when the step's wait ended on a transition frame after its loading allowance was spent under execution.loading.mode on.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -2227,7 +2233,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A step's expected page was not confirmed after its input. STILL-1: held_ms and limit_ms are present when the wait ended early on execution.capture.still_limit_ms: how long its frames had stayed unchanged, and the limit in effect. LOAD-3 (since 0.12.37): loading_page_id, loading_ms and loading_limit_ms are present when the wait ended on a transition frame after its loading allowance was spent under execution.loading.mode on.",
+      "description": "A step's expected page was not confirmed after its input. STILL-1: held_ms and limit_ms are present when the wait ended early on execution.capture.still_limit_ms: how long its frames had stayed unchanged, and the limit in effect. LOAD-3 (since 0.12.37): loading_page_id, loading_ms and loading_limit_ms are present when the wait ended on a transition frame after its loading allowance was spent under execution.loading.mode on. LOAD-4 (since 0.12.38): so in a linear_steps task, for the wait of the intermediate page, of the next step's page or of its candidates, and of the retry decision.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

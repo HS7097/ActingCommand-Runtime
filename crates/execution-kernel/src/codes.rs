@@ -396,6 +396,10 @@ actingcommand_contract::outcome_vocabulary! {
         /// An entry of `loading.add` is not one page of the package, repeats one, or (page graph)
         /// is the operation's `from` page, one of its destinations or an error page.
         LoadingPageInvalid => "loading_page_invalid",
+        /// Workflow #407 LOAD-4 (since 0.12.38): the confirmation has loading pages and no limit
+        /// is named for them: no `loading.max_ms`, no wait page and no loading copy in the
+        /// package.
+        LoadingMaxMissing => "loading_max_missing",
     }
 }
 

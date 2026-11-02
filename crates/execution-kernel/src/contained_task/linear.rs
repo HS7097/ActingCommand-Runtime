@@ -14,7 +14,18 @@
 //! (Workflow #339): its page may not appear, and the run then skips it. The input before a run
 //! of optional operations awaits their pages together with the page after the run, and the
 //! page that passes decides which operation runs next.
+//!
+//! Workflow #407 LOAD-4 (register §1.262; design `rd-1031/check-speed/model-loading.md` §5): under
+//! `execution.loading.mode` `on` each frame of a wait is judged by LOAD-3's one judgement
+//! (`loading.rs`): the loading pages are evaluated on the frame its candidates are, and one that
+//! holds makes it a transition frame whatever candidate passed. A transition frame is never a
+//! candidate, the intermediate page or the step's own page; it pauses the wait (its arrival
+//! budget, a skip target's settle and first sighting, an extra round's end) within the attempt's
+//! allowance, which the attempt's waits and its retry decision's share, and one after the
+//! allowance is spent ends the wait with the loading values. The entry wait has an allowance of
+//! its own. Under `off` and `shadow` every decision is the one before LOAD-4.
 
+use super::loading::{Charge, FrameRow, LoadingAllowance, LoadingFrame, LoadingLimit};
 use super::{
     ApplicationEffectSupport, CaptureBackoff, ContainedTaskBoundaryTiming, ContainedTaskError,
     ContainedTaskOutcome, ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTimingContext,
@@ -101,6 +112,9 @@ struct LinearStep {
     /// Workflow #339: the run of optional operations that this step's input may reach, for the
     /// operation before a run and for its members; `None` when the input reaches `to` only.
     run: Option<usize>,
+    /// Workflow #407 LOAD-4: the pages the step's confirmation adds as loading pages
+    /// (`loading.add`, then its wait page), as the detector names them.
+    loading_added: Vec<String>,
 }
 
 /// A maximal run of consecutive optional operations (Workflow #339 §3.1). The operation before
@@ -454,6 +468,9 @@ struct LinearMiss {
     /// Workflow #339: the skip target of a run passed during the wait; the input took effect,
     /// so the attempt has no retry decision.
     skip_target_seen: bool,
+    /// Workflow #407 LOAD-4: the wait ended on a transition frame after the attempt's loading
+    /// allowance was spent.
+    loading_limit: Option<LoadingLimit>,
 }
 
 /// The budgets of the wait for the next step's page.
@@ -465,6 +482,11 @@ struct LinearArrival {
 }
 
 type LinearAttemptResult<E> = Result<Result<PageObservation, LinearMiss>, ContainedTaskRunError<E>>;
+
+/// One wait's end: the frame on which a candidate passed, or none once its budget is spent, with
+/// the loading values when it ended on its allowance (Workflow #407 LOAD-4).
+type LinearWaitResult<E> =
+    Result<Result<PageObservation, Option<LoadingLimit>>, ContainedTaskRunError<E>>;
 
 fn postcondition_timing(elapsed: Duration, limit: Duration) -> Option<TaskTimingFailure> {
     Some(TaskTimingFailure {
@@ -502,12 +524,13 @@ fn page_confirmation_failed(
     .with_timing(postcondition_timing(elapsed, limit))
 }
 
-/// An application step whose next page did not pass (§5.3 h): never retried.
+/// An application step whose next page did not pass (§5.3 h): never retried. Workflow #407
+/// LOAD-4: a wait that ended on the attempt's loading allowance adds its loading values.
 fn application_unconfirmed(
     operation: &TaskOperation,
     step: &LinearStep,
     action: ApplicationLifecycleAction,
-    miss: &LinearMiss,
+    miss: LinearMiss,
     awaited: &str,
 ) -> ContainedTaskError {
     ContainedTaskError::with_detail(
@@ -521,6 +544,7 @@ fn application_unconfirmed(
         ),
     )
     .with_timing(postcondition_timing(miss.elapsed, miss.limit))
+    .with_loading_limit(miss.loading_limit)
 }
 
 /// Workflow #336 R25 (ruling 5961093808): whether `page` is the main interface of a linear
@@ -730,6 +754,8 @@ impl TaskProgram {
             };
             // Workflow #407 LOAD-2 (design `model-loading.md` §5): a page the step's loading adds,
             // or its wait page, is none of its own pages: a frame of it never proves the input.
+            // LOAD-4: the step's waits evaluate them by these ids.
+            let mut loading_added = Vec::new();
             for page in operation.loading_added_pages() {
                 let page = resolve(page)?;
                 let transition_page = matches!(
@@ -742,6 +768,7 @@ impl TaskProgram {
                 {
                     return Err(invalid("loading_page", Some(operation)));
                 }
+                loading_added.push(page);
             }
             steps.push(LinearStep {
                 from,
@@ -750,6 +777,7 @@ impl TaskProgram {
                 transition,
                 optional,
                 run: None,
+                loading_added,
             });
         }
         if steps[0].from != entry {
@@ -924,31 +952,40 @@ impl PreparedContainedTask {
             LinearFrom::Any => None,
             LinearFrom::Page(page) => {
                 let entry_started = budget_now(runtime, run.timing.pace());
-                let observed = self
-                    .linear_wait(
-                        runtime,
-                        &[page.as_str()],
-                        run.step_timeout,
-                        run.capture_interval,
-                        LinearWaitPurpose::Entry,
-                        run,
-                    )?
-                    .ok_or_else(|| {
-                        ContainedTaskError::with_detail(ENTRY_UNMATCHED, format!("page={page}"))
-                            .with_timing(Some(TaskTimingFailure {
-                                scope: TaskTimingScope::PageRecognition,
-                                stage: TaskTimingStage::EntryRecognition,
-                                elapsed_ms: budget_elapsed_since(
-                                    runtime,
-                                    run.timing.pace(),
-                                    entry_started,
-                                )
-                                .as_millis() as u64,
-                                limit_ms: run.step_timeout.as_millis() as u64,
-                                required_delay_ms: None,
-                            }))
-                    })?;
-                Some(observed)
+                // Workflow #407 LOAD-4 (§5): the entry wait has an allowance of its own, the
+                // package's, as a page wait has.
+                let mut loading = LoadingAllowance::for_page_wait(self, run.pacing);
+                let entered = self.linear_wait(
+                    runtime,
+                    &[page.as_str()],
+                    run.step_timeout,
+                    run.capture_interval,
+                    LinearWaitPurpose::Entry,
+                    (run, &mut loading),
+                )?;
+                match entered {
+                    Ok(observed) => Some(observed),
+                    Err(loading_limit) => {
+                        return Err(ContainedTaskError::with_detail(
+                            ENTRY_UNMATCHED,
+                            format!("page={page}"),
+                        )
+                        .with_timing(Some(TaskTimingFailure {
+                            scope: TaskTimingScope::PageRecognition,
+                            stage: TaskTimingStage::EntryRecognition,
+                            elapsed_ms: budget_elapsed_since(
+                                runtime,
+                                run.timing.pace(),
+                                entry_started,
+                            )
+                            .as_millis() as u64,
+                            limit_ms: run.step_timeout.as_millis() as u64,
+                            required_delay_ms: None,
+                        }))
+                        .with_loading_limit(loading_limit)
+                        .into());
+                    }
+                }
             }
         };
         // Workflow #384 D2-S2 (model §3.5): the entry frame goes to recognition when the entry
@@ -1150,8 +1187,23 @@ impl PreparedContainedTask {
                     self.linear_application(runtime, run, step_index, operation, action)?;
                 }
             }
+            // Workflow #407 LOAD-4 (§5): the attempt's one allowance for its loading pages, shared
+            // by its waits and its retry decision's; the next input takes a new one.
+            let mut loading = LoadingAllowance::for_linear_input(
+                self,
+                operation,
+                run.pacing,
+                &step.loading_added,
+            );
             self.linear_post_input_delay(runtime, run, arrival.post_input_delay)?;
-            let miss = match self.linear_after_input(runtime, run, step, candidates, arrival)? {
+            let miss = match self.linear_after_input(
+                runtime,
+                run,
+                step,
+                candidates,
+                arrival,
+                &mut loading,
+            )? {
                 Ok(reached) => {
                     Self::linear_step_finished(
                         runtime,
@@ -1168,7 +1220,7 @@ impl PreparedContainedTask {
                 // §5.3 h: an application step is never retried and has no retry decision.
                 Self::linear_step_finished(runtime, step_index, operation, UNRECOGNIZED_PAGE)?;
                 return Err(
-                    application_unconfirmed(operation, step, action, &miss, &awaited).into(),
+                    application_unconfirmed(operation, step, action, miss, &awaited).into(),
                 );
             }
             // Workflow #339 §3.5: a seen skip target shows the input took effect; another input
@@ -1178,18 +1230,23 @@ impl PreparedContainedTask {
                 || attempt >= max_attempts
             {
                 Self::linear_step_finished(runtime, step_index, operation, UNRECOGNIZED_PAGE)?;
-                return Err(match (miss.kind, &step.transition) {
-                    (LinearMissKind::Intermediate, Some(LinearTransition::Page { page, .. })) => {
-                        ContainedTaskError::with_detail(
-                            INTERMEDIATE_UNOBSERVED,
-                            format!(
-                                "operation={} attempts={attempt} intermediate_page={page}",
-                                operation.id
-                            ),
-                        )
-                        .with_timing(postcondition_timing(miss.elapsed, miss.limit))
-                    }
-                    (kind, _) => page_confirmation_failed(
+                return Err(match (miss.kind, &step.transition, miss.loading_limit) {
+                    // Workflow #407 LOAD-4 (§5): a wait that ended on the attempt's loading
+                    // allowance, the intermediate page's included, is the confirmation's failure
+                    // with the loading values.
+                    (
+                        LinearMissKind::Intermediate,
+                        Some(LinearTransition::Page { page, .. }),
+                        None,
+                    ) => ContainedTaskError::with_detail(
+                        INTERMEDIATE_UNOBSERVED,
+                        format!(
+                            "operation={} attempts={attempt} intermediate_page={page}",
+                            operation.id
+                        ),
+                    )
+                    .with_timing(postcondition_timing(miss.elapsed, miss.limit)),
+                    (kind, _, loading_limit) => page_confirmation_failed(
                         operation,
                         step,
                         attempt,
@@ -1197,7 +1254,8 @@ impl PreparedContainedTask {
                         &awaited,
                         miss.elapsed,
                         miss.limit,
-                    ),
+                    )
+                    .with_loading_limit(loading_limit),
                 }
                 .into());
             }
@@ -1215,21 +1273,24 @@ impl PreparedContainedTask {
                 _ => candidates.pages.clone(),
             };
             decision_pages.push(own_page.as_str());
+            // Workflow #407 LOAD-4 (§5): the decision's waits share the attempt's allowance, and a
+            // transition frame is never the gate or the step's own page, so no input follows a
+            // loading screen.
             let decided = self.linear_wait(
                 runtime,
                 &decision_pages,
                 run.step_timeout,
                 run.capture_interval,
                 LinearWaitPurpose::RetryDecision,
-                run,
+                (run, &mut loading),
             )?;
             match decided {
-                Some(frame) if frame.page_label != *own_page => {
+                Ok(frame) if frame.page_label != *own_page => {
                     // The input took effect late: this attempt goes on, without another input.
                     let continued = match &step.transition {
                         Some(LinearTransition::Page { .. }) => self.linear_arrival(
                             runtime,
-                            run,
+                            (run, &mut loading),
                             candidates,
                             arrival.budget,
                             arrival.interval,
@@ -1244,7 +1305,7 @@ impl PreparedContainedTask {
                             };
                             self.linear_wait_set(
                                 runtime,
-                                run,
+                                (run, &mut loading),
                                 candidates,
                                 arrival.budget,
                                 arrival.interval,
@@ -1288,17 +1349,18 @@ impl PreparedContainedTask {
                                 miss.elapsed,
                                 miss.limit,
                             )
+                            .with_loading_limit(miss.loading_limit)
                             .into());
                         }
                     }
                 }
-                Some(frame) => {
+                Ok(frame) => {
                     // This step's own page: the input was swallowed; input again on this frame.
                     Self::linear_step_finished(runtime, step_index, operation, &frame.page_label)?;
                     attempt += 1;
                     observation = Some(frame);
                 }
-                None => {
+                Err(loading_limit) => {
                     Self::linear_step_finished(runtime, step_index, operation, UNRECOGNIZED_PAGE)?;
                     return Err(page_confirmation_failed(
                         operation,
@@ -1309,6 +1371,7 @@ impl PreparedContainedTask {
                         budget_elapsed_since(runtime, pace, decision_started),
                         run.step_timeout,
                     )
+                    .with_loading_limit(loading_limit)
                     .into());
                 }
             }
@@ -1489,7 +1552,7 @@ impl PreparedContainedTask {
             let step_timing = run.timing.with_deadline(
                 budget_observation_now(runtime, run.timing.pace()) + run.step_timeout,
             );
-            match self.linear_observe_scene(runtime, &[page], step_timing) {
+            match self.linear_observe_scene(runtime, &[page], step_timing, None) {
                 Ok(Ok(observation)) => return Ok((observation, step_timing)),
                 Ok(Err(_)) => {
                     return Err(ContainedTaskError::new(
@@ -1621,7 +1684,8 @@ impl PreparedContainedTask {
     }
 
     /// One attempt after its post-input wait (§5.4): the intermediate state, then the next
-    /// step's page, or the candidates of a run of optional operations (Workflow #339).
+    /// step's page, or the candidates of a run of optional operations (Workflow #339). Workflow
+    /// #407 LOAD-4: every wait of the attempt spends `loading`, its allowance.
     fn linear_after_input<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -1629,11 +1693,12 @@ impl PreparedContainedTask {
         step: &LinearStep,
         candidates: &LinearCandidates<'_>,
         arrival: LinearArrival,
+        loading: &mut LoadingAllowance,
     ) -> LinearAttemptResult<R::Error> {
         match &step.transition {
             None => self.linear_arrival(
                 runtime,
-                run,
+                (run, loading),
                 candidates,
                 arrival.budget,
                 arrival.interval,
@@ -1651,28 +1716,29 @@ impl PreparedContainedTask {
                     *timeout,
                     *interval,
                     LinearWaitPurpose::AfterInput,
-                    run,
+                    (run, &mut *loading),
                 )? {
                     // The next step's arrival budget starts at the frame that showed the page.
-                    Some(_) => self.linear_arrival(
+                    Ok(_) => self.linear_arrival(
                         runtime,
-                        run,
+                        (run, loading),
                         candidates,
                         arrival.budget,
                         arrival.interval,
                         LinearMissKind::AfterIntermediate,
                     ),
-                    None => Ok(Err(LinearMiss {
+                    Err(loading_limit) => Ok(Err(LinearMiss {
                         kind: LinearMissKind::Intermediate,
                         elapsed: budget_elapsed_since(runtime, run.timing.pace(), started),
                         limit: *timeout,
                         skip_target_seen: false,
+                        loading_limit,
                     })),
                 }
             }
             Some(LinearTransition::Window { max, .. }) => self.linear_arrival(
                 runtime,
-                run,
+                (run, loading),
                 candidates,
                 max.saturating_sub(arrival.post_input_delay)
                     .saturating_add(arrival.budget),
@@ -1683,35 +1749,43 @@ impl PreparedContainedTask {
     }
 
     /// The wait for the next step's page; several candidates (Workflow #339) are awaited by
-    /// `linear_wait_set`.
+    /// `linear_wait_set`. Workflow #407 LOAD-4: it spends `loading`, the attempt's allowance.
     fn linear_arrival<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
-        run: LinearRun,
+        (run, loading): (LinearRun, &mut LoadingAllowance),
         candidates: &LinearCandidates<'_>,
         budget: Duration,
         interval: Duration,
         miss: LinearMissKind,
     ) -> LinearAttemptResult<R::Error> {
         let &[page] = candidates.pages.as_slice() else {
-            return self.linear_wait_set(runtime, run, candidates, budget, interval, miss, None);
-        };
-        let started = budget_now(runtime, run.timing.pace());
-        Ok(self
-            .linear_wait(
+            return self.linear_wait_set(
                 runtime,
-                &[page],
+                (run, loading),
+                candidates,
                 budget,
                 interval,
-                LinearWaitPurpose::AfterInput,
-                run,
-            )?
-            .ok_or_else(|| LinearMiss {
-                kind: miss,
-                elapsed: budget_elapsed_since(runtime, run.timing.pace(), started),
-                limit: budget,
-                skip_target_seen: false,
-            }))
+                miss,
+                None,
+            );
+        };
+        let started = budget_now(runtime, run.timing.pace());
+        let waited = self.linear_wait(
+            runtime,
+            &[page],
+            budget,
+            interval,
+            LinearWaitPurpose::AfterInput,
+            (run, loading),
+        )?;
+        Ok(waited.map_err(|loading_limit| LinearMiss {
+            kind: miss,
+            elapsed: budget_elapsed_since(runtime, run.timing.pace(), started),
+            limit: budget,
+            skip_target_seen: false,
+            loading_limit,
+        }))
     }
 
     /// Workflow #339 §3.4: the wait for several candidates, the optional pages of a run first
@@ -1720,12 +1794,15 @@ impl PreparedContainedTask {
     /// showed it, so that an optional page arriving late still runs; frames on which nothing
     /// passes are ignored. The wait gives up `budget` after it starts, or, once the skip target
     /// was seen, the settle plus `budget` after that capture. `seen` is a capture that already
-    /// showed the skip target (the retry decision's frame).
+    /// showed the skip target (the retry decision's frame). Workflow #407 LOAD-4 (§5): a
+    /// transition frame is no candidate; it pauses the wait, the settle and the first sighting of
+    /// the skip target within `loading`, the attempt's allowance, and one after the allowance is
+    /// spent ends the wait.
     #[allow(clippy::too_many_arguments)]
     fn linear_wait_set<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
-        run: LinearRun,
+        (run, loading): (LinearRun, &mut LoadingAllowance),
         candidates: &LinearCandidates<'_>,
         budget: Duration,
         interval: Duration,
@@ -1734,6 +1811,7 @@ impl PreparedContainedTask {
     ) -> LinearAttemptResult<R::Error> {
         let purpose = LinearWaitPurpose::AfterInput;
         let deadline = run.timing.deadline();
+        let game = self.control.game.as_str();
         let skip_target = *candidates
             .pages
             .last()
@@ -1755,6 +1833,9 @@ impl PreparedContainedTask {
             round_end.map_or(end, |round_end| end.max(round_end))
         };
         let mut started = budget_now(runtime, pace);
+        // Workflow #407 LOAD-4: the budget instant of the wait's latest frame, its start before
+        // the first.
+        let mut last_frame_at = started;
         loop {
             if budget_now(runtime, pace) >= deadline {
                 return Err(self
@@ -1774,7 +1855,12 @@ impl PreparedContainedTask {
                 run.timing.with_deadline(observation_deadline)
             };
             let captured = budget_now(runtime, pace);
-            let observation = match self.linear_observe_scene(runtime, &candidates.pages, timing) {
+            let observation = match self.linear_observe_scene(
+                runtime,
+                &candidates.pages,
+                timing,
+                Some(&mut *loading),
+            ) {
                 Ok(observation) => observation,
                 Err(failure) => {
                     // Workflow #386 SR-1 (scheduling model §2.1 item 1): a sampling timeout
@@ -1798,8 +1884,78 @@ impl PreparedContainedTask {
                     )
                     .into());
             }
+            // Workflow #407 LOAD-4 (§5): LOAD-3's one judgement, any candidate that passes being
+            // what the wait waits for; the frame spends the allowance as it says.
+            let frame_at = budget_now(runtime, pace);
+            let previous_frame_at = std::mem::replace(&mut last_frame_at, frame_at);
+            let judged = self.judge_frame(
+                runtime,
+                None,
+                observation.as_ref().ok(),
+                loading,
+                run.timing,
+            )?;
+            let page = observation
+                .as_ref()
+                .ok()
+                .map(|observation| observation.page_label.clone());
+            let at = LoadingFrame {
+                transition: judged.transition,
+                page: page.as_deref(),
+                now: frame_at,
+                previous: previous_frame_at,
+            };
             match observation {
+                // A transition frame (`on`) is offered to the shared interrupt pages first; a
+                // handled one pauses the wait as below and spends nothing. Otherwise it spends the
+                // allowance and pauses the wait, the settle and the skip target's first sighting
+                // with it, as a handled interrupt does, or ends the wait once the allowance is
+                // spent. It is no candidate, so never the skip target's first sighting.
+                observation if judged.row == FrameRow::Transition => {
+                    let scene = match &observation {
+                        Ok(observation) => &observation.scene,
+                        Err(scene) => scene,
+                    };
+                    let span = match self.offer_shared_interrupt(runtime, scene)? {
+                        Some(paused) => {
+                            let paused = pace.budget_span(paused);
+                            started += paused;
+                            if let Some(first) = &mut seen {
+                                *first += paused;
+                            }
+                            if let Some(end) = &mut round_end {
+                                *end += paused;
+                            }
+                            backoff.reset();
+                            last_frame_at += paused;
+                            continue;
+                        }
+                        None => match loading.frame(runtime, game, at)? {
+                            Charge::Spent(limit) => {
+                                return Ok(Err(LinearMiss {
+                                    kind: miss,
+                                    elapsed: budget_elapsed_since(runtime, pace, started),
+                                    limit: wait_end(started, seen, round_end)
+                                        .saturating_duration_since(started),
+                                    skip_target_seen: seen.is_some(),
+                                    loading_limit: Some(limit),
+                                }));
+                            }
+                            Charge::Paused(span) => span,
+                            Charge::None => Duration::ZERO,
+                        },
+                    };
+                    started += span;
+                    if let Some(first) = &mut seen {
+                        *first += span;
+                    }
+                    if let Some(end) = &mut round_end {
+                        *end += span;
+                    }
+                    backoff.held_frame(scene)?;
+                }
                 Ok(observation) => {
+                    loading.frame(runtime, game, at)?;
                     let captured = if observation.sampling.is_some() {
                         pace.budget(observation.frame_started)
                     } else {
@@ -1822,6 +1978,7 @@ impl PreparedContainedTask {
                 // to the shared interrupt pages, and the wait (its settle included) is paused
                 // while one is handled.
                 Err(scene) => {
+                    loading.frame(runtime, game, at)?;
                     // PERF-B1 (R3).
                     backoff.frame(&scene)?;
                     if let Some(paused) = self.offer_shared_interrupt(runtime, &scene)? {
@@ -1834,6 +1991,7 @@ impl PreparedContainedTask {
                             *end += paused;
                         }
                         backoff.reset();
+                        last_frame_at += paused;
                         continue;
                     }
                 }
@@ -1851,6 +2009,7 @@ impl PreparedContainedTask {
                     elapsed,
                     limit,
                     skip_target_seen: seen.is_some(),
+                    loading_limit: None,
                 }));
             }
             // The settle bounds the sleep only while it lasts; after it, captures keep the
@@ -1941,11 +2100,16 @@ impl PreparedContainedTask {
     }
 
     /// Captures until one of `candidates` passes, at most `budget` after the first capture;
-    /// `None` once the budget is spent. A task deadline inside the wait fails the task.
+    /// `Err(None)` once the budget is spent. A task deadline inside the wait fails the task.
     /// Workflow #386 SR-1 (scheduling model §2.1): an observation whose sampling timed out is
     /// made again in a new window of `budget`, as the run's pacing allows. #385 P-k (§5.4 item
     /// 1): a spent budget starts the step's extra rounds first, one `budget` each, captures only;
     /// the retry decision, whose frame decides whether the step inputs again, takes none.
+    /// Workflow #407 LOAD-4 (§5): each frame is judged by LOAD-3's one judgement against
+    /// `loading`; a transition frame (`on`) is no candidate, is offered to the shared interrupt
+    /// pages first and otherwise spends the allowance and pauses the wait (its budget, its window,
+    /// an extra round's end), and one after the allowance is spent ends the wait, `Err` with the
+    /// loading values.
     fn linear_wait<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -1953,10 +2117,11 @@ impl PreparedContainedTask {
         budget: Duration,
         interval: Duration,
         purpose: LinearWaitPurpose,
-        run: LinearRun,
-    ) -> Result<Option<PageObservation>, ContainedTaskRunError<R::Error>> {
+        (run, loading): (LinearRun, &mut LoadingAllowance),
+    ) -> LinearWaitResult<R::Error> {
         let deadline = run.timing.deadline();
         let base_timing = run.timing;
+        let game = self.control.game.as_str();
         // #385 P-k (performance model v1.4.2 §5.3): the wait's limits are budget time.
         let pace = run.timing.pace();
         let mut retries = SampleRetries::new(run.pacing, purpose.observation());
@@ -1966,6 +2131,9 @@ impl PreparedContainedTask {
         };
         let mut started = budget_now(runtime, pace);
         let mut window_started = budget_observation_now(runtime, pace);
+        // Workflow #407 LOAD-4: the budget instant of the wait's latest frame, its start before
+        // the first.
+        let mut last_frame_at = started;
         // Whether the window has seen a frame on which no awaited page passed.
         let mut missed = false;
         // PERF-B1 (R3): the pause before the wait's next frame, lengthened over unchanged frames.
@@ -2000,24 +2168,25 @@ impl PreparedContainedTask {
                 )?
             {
                 if !rounds.another(runtime, Some((pace, deadline))) {
-                    return Ok(None);
+                    return Ok(Err(None));
                 }
                 started = budget_now(runtime, pace);
                 window_started = budget_observation_now(runtime, pace);
                 missed = false;
                 continue;
             }
-            let observation = match self.linear_observe_scene(runtime, candidates, timing) {
-                Ok(observation) => observation,
-                Err(failure) => {
-                    retries.retry(runtime, failure, budget)?;
-                    started = budget_now(runtime, pace);
-                    window_started = budget_observation_now(runtime, pace);
-                    missed = false;
-                    backoff.reset();
-                    continue;
-                }
-            };
+            let observation =
+                match self.linear_observe_scene(runtime, candidates, timing, Some(&mut *loading)) {
+                    Ok(observation) => observation,
+                    Err(failure) => {
+                        retries.retry(runtime, failure, budget)?;
+                        started = budget_now(runtime, pace);
+                        window_started = budget_observation_now(runtime, pace);
+                        missed = false;
+                        backoff.reset();
+                        continue;
+                    }
+                };
             if budget_now(runtime, pace) >= deadline {
                 return Err(self
                     .linear_task_timeout(
@@ -2029,28 +2198,80 @@ impl PreparedContainedTask {
                     )
                     .into());
             }
+            // Workflow #407 LOAD-4 (§5): LOAD-3's one judgement, any candidate that passes being
+            // what the wait waits for; the frame spends the allowance as it says.
+            let frame_at = budget_now(runtime, pace);
+            let previous_frame_at = std::mem::replace(&mut last_frame_at, frame_at);
+            let judged = self.judge_frame(
+                runtime,
+                None,
+                observation.as_ref().ok(),
+                loading,
+                base_timing,
+            )?;
+            let page = observation
+                .as_ref()
+                .ok()
+                .map(|observation| observation.page_label.clone());
+            let at = LoadingFrame {
+                transition: judged.transition,
+                page: page.as_deref(),
+                now: frame_at,
+                previous: previous_frame_at,
+            };
             let scene = match observation {
-                Ok(observation) => return Ok(Some(observation)),
+                Ok(observation) if judged.row != FrameRow::Transition => {
+                    loading.frame(runtime, game, at)?;
+                    return Ok(Ok(observation));
+                }
+                Ok(observation) => observation.scene,
                 Err(scene) => scene,
             };
             missed = true;
-            // PERF-B1 (R3).
-            backoff.frame(&scene)?;
-            // Workflow #373 NAV-6 (§6.1 point 3): a frame on which no awaited page passed is
-            // offered to the shared interrupt pages; the wait's budget is paused while one is
-            // handled.
-            if let Some(paused) = self.offer_shared_interrupt(runtime, &scene)? {
-                let paused = pace.budget_span(paused);
-                started += paused;
-                window_started += paused;
-                backoff.reset();
-                continue;
+            if judged.row == FrameRow::Transition {
+                // A transition frame (`on`) is offered to the shared interrupt pages first; a
+                // handled one pauses the wait as below and spends nothing. Otherwise it spends the
+                // allowance and pauses the wait, or ends it once the allowance is spent.
+                match self.offer_shared_interrupt(runtime, &scene)? {
+                    Some(paused) => {
+                        let paused = pace.budget_span(paused);
+                        started += paused;
+                        window_started += paused;
+                        backoff.reset();
+                        last_frame_at += paused;
+                        continue;
+                    }
+                    None => match loading.frame(runtime, game, at)? {
+                        Charge::Spent(limit) => return Ok(Err(Some(limit))),
+                        Charge::Paused(span) => {
+                            started += span;
+                            window_started += span;
+                        }
+                        Charge::None => {}
+                    },
+                }
+                backoff.held_frame(&scene)?;
+            } else {
+                loading.frame(runtime, game, at)?;
+                // PERF-B1 (R3).
+                backoff.frame(&scene)?;
+                // Workflow #373 NAV-6 (§6.1 point 3): a frame on which no awaited page passed is
+                // offered to the shared interrupt pages; the wait's budget is paused while one is
+                // handled.
+                if let Some(paused) = self.offer_shared_interrupt(runtime, &scene)? {
+                    let paused = pace.budget_span(paused);
+                    started += paused;
+                    window_started += paused;
+                    backoff.reset();
+                    last_frame_at += paused;
+                    continue;
+                }
             }
             let now = budget_now(runtime, pace);
             if now.saturating_duration_since(started) >= budget {
                 // The next round keeps the interval: its first frame comes one interval on.
                 if !rounds.another(runtime, Some((pace, deadline))) {
-                    return Ok(None);
+                    return Ok(Err(None));
                 }
                 started = now;
                 window_started = budget_observation_now(runtime, pace);
@@ -2099,19 +2320,24 @@ impl PreparedContainedTask {
     /// One capture and the evaluation of `candidates` only, recorded as every capture is, at
     /// the `CapturePage` boundary (§5.3). The first passing candidate is the frame's page; with
     /// the frame's input reference the committed input context binds a following input.
+    /// Workflow #407 LOAD-4: with `loading`, the frame's scene is also evaluated against its pages
+    /// once its candidates' recognition is recorded (LOAD-3's `probe_loading`).
     fn linear_observe_scene<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
         candidates: &[&str],
         timing: ContainedTaskTimingContext,
+        loading: Option<&mut LoadingAllowance>,
     ) -> Result<Result<PageObservation, Scene>, ContainedTaskRunError<R::Error>> {
-        self.capture_frame_scene(
+        self.capture_frame_gated(
             runtime,
             None,
             None,
             timing,
             Some(PageCandidates::Ordered(candidates)),
             None,
+            None,
+            loading,
         )
     }
 }
