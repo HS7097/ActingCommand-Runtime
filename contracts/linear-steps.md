@@ -72,6 +72,7 @@ one operation is at fault; an existing check keeps its existing code.
 | no operation declares a `when` or an `on_guard_refused`, page-graph candidate operations (Workflow #390 EXEC-1, `resource-declarations.md`) | the field name |
 | no operation declares `max_runs` or `on_max_runs`, a page-graph per-run cap (Workflow #411 B16 part 1, `resource-declarations.md`) | `max_runs` |
 | no operation is a `wait` step or declares an `expect_after.wait_page`, page-graph declarations (Workflow #411 B36, B19, `resource-declarations.md`, "Wait steps and wait pages"); checked before the operation's other checks | `wait` |
+| no operation declares an `expect_after.target_present` or `target_gone`, judged by the page-graph confirmation (ACT-4, since 0.12.37, `resource-declarations.md`, "Final-state targets"); checked right after `wait` | `expect_targets` |
 | each operation's `to` / `expect_after` names exactly one page | `destination` |
 | each operation's destination differs from its `from` | `to_equals_from` |
 | `entry_page` declared and equal to the first operation's `from` (both `"any"` for an application entry) | `entry_page` |

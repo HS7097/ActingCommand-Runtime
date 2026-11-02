@@ -1377,6 +1377,51 @@ destination, and infers no click and no guard for a wait step; a wait step is no
 - No code and no record are added: the step writes `StepStarted` and `StepFinished` and the
   frames their capture and recognition records.
 
+### Final-state targets
+
+ACT-4 (Workflow #407, since 0.12.37, [v012-register.md](v012-register.md) §1.254; design
+`model-check.md` §1.5 and its addendum items 5 and 6). A step's `expect_after` of a task schema
+`0.9` page-graph task may say which targets its final frame shows and which it no longer shows, so
+that a click whose effect is a change on the same page (a popup closed, a button lit) needs no
+second page. An older task schema refuses either member with `UnconsumedField`; a `linear_steps`
+task refuses them at admission (`contained_task_linear_invalid`, `reason=expect_targets`). A task
+that declares neither runs as before.
+
+```json
+"expect_after": {"page_id": "page_a", "timeout_ms": 3000, "target_gone": ["mark/popup_close"]}
+"expect_after": {"page_id": "page_a", "target_present": ["mark/confirm_lit"]}
+```
+
+| Member | Declaration gate | Runtime admission (`contained_task_program_invalid`, `program_problem` as below, the task declaration's `path` and the list entry as `json_pointer`, `/operations/<i>/expect_after/<member>/<j>`) |
+| --- | --- | --- |
+| `expect_after.target_present`, `expect_after.target_gone` | each an array of strings (`InvalidType` otherwise) | the two lists share no target and list none twice (`expect_targets_overlap`, at the later entry); each entry names a target of the package's recognition pack (`expect_target_unknown`) that is judged on one frame: a template or colour target, not under `target_consensus` (`expect_target_kind`; located text, value tests, checks, OCR, model and digest targets are refused, lazy or multi-frame targets being out of this slice); and it stands in the rules (`required`, `any_of`, `optional`, `forbidden`) of the operation's `from` page or of one of its destinations, directly or as a member of a check standing there (`expect_target_unreachable`; `from` `any` names no page of its own) |
+
+- **The final state.** A frame after the step's input is the step's final state when its page is
+  exactly one of the step's destinations, every `target_present` passes on it and every
+  `target_gone` has a definite non-match: evaluated, not passed, and no registered reason that
+  leaves the result open (a template that is not unique, for one). A target that was not
+  evaluated, whose evaluation failed or whose region the frame cannot give is neither present nor
+  gone. One judgement serves the settled path, the confirmation and the observation window
+  (section Task schema `0.9` observation windows and input rechecks): to each of them a frame of a destination page that is not the final state is a frame of no
+  destination, so the confirmation waits on (and offers it to the shared interrupt pages), the
+  window does not count it, and the step's timeout and failure are those of a destination that
+  does not show.
+- **Evidence on the same page.** Where the step's destinations name the page it left and the
+  instance runs the settled path ([performance-control.md](performance-control.md), "Step
+  pacing"), the step goes at once only on a final state that turned one listed target from the
+  frame that decided its input: a `target_present` that definitely did not pass there and passes
+  now, or a `target_gone` that passed there and definitely does not now. The two frames are two
+  captures, and where the runtime gives frame ids, the two ids differ. A final state already true on
+  the decision frame is not this input's effect: the step keeps its `post_delay_ms` and its
+  confirmation, as before. A select step's tap is drawn on a frame of its own, so a select step with
+  such a destination keeps them too.
+- **Records.** Each evaluation is a guard row of the task diagnostic stream with the phase
+  `expect_after`, on the frame it judges ([task-diagnostic-stream.md](task-diagnostic-stream.md)),
+  and its time is one of that frame's `recognition_evaluate` samples. Each listed target is
+  evaluated on each destination frame by itself: a template is matched again, since the page
+  recognition keeps its template results in its own scene context, and a colour target is
+  computed. No code and no ledger shape are added.
+
 ### Capture cadence
 
 PERF-B1 (Workflow #407 B1, [v012-register.md](v012-register.md) §1.177): how often a run captures
@@ -1411,7 +1456,8 @@ while a step waits for a page. No new member, code or record; any task schema.
   frames stay unchanged by the same measure for that long, in wall time, ends at the first frame
   at or past it, without its remaining time or extra rounds. Each counted frame is one the wait
   does not accept: a page wait's frame of no page, a confirmation's frame of no page or of a page
-  that is no destination. A frame of the page the wait holds on (a wait step's own page, a wait
+  that is no destination (ACT-4: or of a destination page that is not the step's final state,
+  [Final-state targets](#final-state-targets)). A frame of the page the wait holds on (a wait step's own page, a wait
   page within its `max_ms`) never counts; it, a changed frame, a handled shared interrupt page and
   a failed observation restart the clock. The wait fails as its own limit fails it, with no new
   code: `contained_task_page_unknown` for a page wait, and for a confirmation the operation's
@@ -1424,7 +1470,15 @@ while a step waits for a page. No new member, code or record; any task schema.
   `execution.action_gap.mode` `settled` ([performance-control.md](performance-control.md), "Step
   pacing"), a tap's `post_delay_ms` is the longest it reads frames for its destination, not a wait
   that must pass. Nothing changes for a package: it declares what it declared. A destination that
-  names the operation's own page proves nothing on its first frame, so that step keeps the wait.
+  names the operation's own page proves nothing on its first frame, so that step keeps the wait,
+  unless it lists final-state targets (ACT-4, [Final-state targets](#final-state-targets)).
+- **A tap without `post_delay_ms` (ACT-4, since 0.12.37).** Admission keeps refusing
+  `post_delay_ms` 0; a package that wants no blind wait leaves the member out. Under the settled
+  path such a tap reads frames up to `execution.action_gap.settled_limit_ms` (default 2000;
+  [runtime-config.md](runtime-config.md), "The `execution` section"), within its confirmation's
+  timeout, and the confirmation then goes on from what the reading spent: no wait is added and its
+  timeout does not start again. A confirmation limit is not a sleep. With the key 0, or without the
+  settled path, the tap goes to its confirmation at once, as before.
 
 ### Store update packages
 
@@ -1507,3 +1561,59 @@ with `package_bundle_store_tap_unlocated` of each store operation whose click ta
 (`point`, `rect`, `specific_rect`): a store's buttons move between devices, so a store step taps a
 text target located on the frame, whose expected text is the button's own label
 ([package-reference.md](package-reference.md), the cross-check). Admission still takes it.
+
+### Loading pages
+
+Workflow #407 LOAD-1 (since 0.12.37; [v012-register.md](v012-register.md) §1.257; design
+`rd-1031/check-speed/model-loading.md` §2). A game's loading pages (screens that only show the
+game is between two pages) are declared once, at the root of its resource repository, and copied
+into each pack, whose version then freezes them. **No Runtime component reads either file in this
+release:** not the root reader, not a run's preparation and not the pack loader, which admits a
+pack that carries a copy and runs it as without one. LOAD-2 compiles the copy and LOAD-3 runs it;
+until then the files are only checked by the tools ([package-reference.md](package-reference.md),
+`package loading`, `package bundle --loading`, `standard-pack check`). A pack that carries a copy
+needs a Runtime that reads it: the Runtime is deployed first, then the packs.
+
+**The root file.** `<repository>/loading.json`, with its templates in `<repository>/loading/`:
+
+```json
+{"schema_version": "actingcommand.loading.v1", "game": "neutral",
+ "coordinate_space": {"width": 1280, "height": 720},
+ "defaults": {"template_threshold": 0.9, "match_metric": "ccoeff_normed"},
+ "max_ms": 30000,
+ "anchors": [{"id": "loading/spinner", "template": "loading/spinner.png",
+              "region": {"mode": "rect", "rect": {"x": 600, "y": 320, "width": 80, "height": 80}},
+              "threshold": 0.8}],
+ "verify_templates": [],
+ "color_probes": [{"id": "loading/backdrop",
+                   "region": {"mode": "rect", "rect": {"x": 0, "y": 0, "width": 16, "height": 16}},
+                   "expected": [8, 8, 8]}],
+ "pages": [{"id": "transition", "required": ["loading/spinner", "loading/backdrop"]},
+           {"id": "download", "servers": ["test"], "required": ["loading/spinner"],
+            "forbidden": ["loading/backdrop"]}],
+ "exclude_packages": ["neutral.test.store"]}
+```
+
+| Member | Rule (refused with `standard_pack_problem`) |
+| --- | --- |
+| the document | an object of exactly these members; `schema_version`, `game`, `coordinate_space`, `max_ms` and `pages` required; a member repeated in one object, unknown, missing or not of its type (`malformed`) |
+| `schema_version` | `actingcommand.loading.v1` (`malformed`) |
+| `game` | the game of the packs, of the bundle or of the game root's directory (`game_mismatch`) |
+| `coordinate_space` | `{width, height}`, positive integers, the frame size the regions are declared in (`malformed`); every pack that takes a page declares the same (`loading_coordinate_mismatch`) |
+| `defaults` | optional; `template_threshold` in (0, 1], `color_max_distance` at least 0, `match_metric` `ccorr_normed` or `ccoeff_normed`, nothing else (`malformed`) |
+| `max_ms` | the game's allowance for one confirmation, 1 to 1800000 (`loading_max_invalid`) |
+| `anchors`, `verify_templates`, `color_probes` | optional; targets as `task.json` declares them. Each `id` is `loading/<name>`, the name 1 to 64 bytes of `[a-z][a-z0-9_]*`, unique across the three (`loading_target_invalid`); each has an object `region` (`malformed`); a template target's `template` is `loading/<stem>.png`, the stem 1 to 64 bytes of `[a-z0-9_-]` not starting with `-` (`loading_target_invalid`). The template must exist, be a PNG and not be of one colour throughout: a black or white screen is no loading page (`loading_template_invalid`, checked by the tools). The other members are carried as written and checked by the pack's declaration gate when the copy is compiled (LOAD-2). Only single-frame template and colour targets are declared: no OCR or other lazily evaluated target |
+| `pages` | 1 to 16 pages (`pages_count`); each `{id, required, any_of?, forbidden?, servers?}` as a `task.json` page rule: `id` a page id, 1 to 64 bytes of `[a-z][a-z0-9_]*` (`page_id_invalid`), listed once (`page_duplicate`); every id it names is a target of the file and `required` holds a template target, so a colour target goes only with a template (`loading_page_invalid`); `any_of` a list of non-empty groups; `servers` a non-empty list of distinct server words (`[a-z0-9._-]`, 1 to 128 bytes), absent for every server (`malformed`) |
+| `exclude_packages` | optional; distinct package ids that take no loading page (`malformed`); each names a pack (`package_not_listed`, checked by the tools) |
+
+**The copy.** `resources/loading.json` (`actingcommand.pack-loading.v1`) and `resources/loading/`
+inside a pack: the pages that apply to the pack's server, in the root file's order and without
+`servers`; only the targets they name, as declared, in the root file's order; the root file's
+`defaults`, `coordinate_space` and `max_ms`; and in `resources/loading/` exactly the templates of
+those targets, byte for byte (a template's path `loading/<file>.png` is relative to the pack's
+`resources/`). It carries no `game`, no `exclude_packages`, no digest and no source commit (option
+丙): the pack's version is what freezes it. An excluded pack, and a pack of a server no page
+applies to, carries no copy. A pack that takes a page and declares a page of a copied page's id
+itself, or a target of a copied target's id, is refused (`loading_page_collision`,
+`loading_target_collision`). Every refusal is `standard_pack_root_invalid`, with `package_id`
+when the issue is a pack's; a copy that is not the one the root file makes is `loading_pack_stale`.

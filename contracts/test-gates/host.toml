@@ -2200,7 +2200,7 @@ tests = [
 ]
 incident = ["#407 STILL-1"]
 
-# ACT-1, ACT-2 (Workflow #407, register §1.250): execution.action_gap.*, default off, ranges and whole check, per instance from the file and an instruction; the host hands the settled path at a stage up to settled_max_stage and none under declared; the gap is nothing at fixed 0, for performance (the pre-input wait stays the curve's) and under declared, and a random one stays in its range, seeded, and is kept for the run's diagnostics
+# ACT-1, ACT-2 (Workflow #407, register §1.250): execution.action_gap.*, default off, ranges and whole check, per instance from the file and an instruction; the host hands the settled path at a stage up to settled_max_stage and none under declared (ACT-4, register §1.254: with settled_limit_ms, default 2000); the gap is nothing at fixed 0, for performance (the pre-input wait stays the curve's) and under declared, and a random one stays in its range, seeded, and is kept for the run's diagnostics
 [[gate]]
 coverage = "Y"
 tests = [
@@ -3043,6 +3043,26 @@ tests = [
 ]
 incident = ["#432 AGT-1b"]
 
+# AGT-2 (Workflow #432, 0.12.37; design rd-1031/agt/model-agt-v2.md sections 2, 4, 5.3, 7.3 and 10; register section 1.253; contracts/agent-wake.md): each first kind wakes with its code and instance; a fence wakes only when it waits for a person and never for the work that met it; a failed run needs a listed code; interrupted, drilled and planned ladders and other writers of the same record types wake nothing, and a delivery failure is never a candidate; a ladder's end and a person wait within coalesce_ms make one wake with the rest related; cool-downs and day caps survive a restart; a used-up cap is said once a day and stops the wakes; a full queue never blocks the append path; the queue takes records before the thread starts; a scheduling pause stops no wake and a wake changes no scheduling; and the day cap rolls over at the host's local day.
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_agt_2::each_first_kind_wakes_with_its_code_and_instance",
+    "actingcommand-runtime-host::lib::tests::gate_agt_2::fence_wakes_only_when_it_waits_for_a_person",
+    "actingcommand-runtime-host::lib::tests::gate_agt_2::a_fence_met_by_other_work_does_not_wake",
+    "actingcommand-runtime-host::lib::tests::gate_agt_2::run_failed_needs_a_listed_code",
+    "actingcommand-runtime-host::lib::tests::gate_agt_2::interrupted_and_drill_ladders_do_not_wake",
+    "actingcommand-runtime-host::lib::tests::gate_agt_2::other_writers_of_the_record_type_do_not_wake",
+    "actingcommand-runtime-host::lib::tests::gate_agt_2::ladder_end_and_person_wait_make_one_wake_with_the_rest_related",
+    "actingcommand-runtime-host::lib::tests::gate_agt_2::cooldown_and_daily_cap_survive_a_restart",
+    "actingcommand-runtime-host::lib::tests::gate_agt_2::budget_exhausted_is_recorded_once_a_day_and_stops_wakes",
+    "actingcommand-runtime-host::lib::tests::gate_agt_2::a_full_queue_never_blocks_the_append_path",
+    "actingcommand-runtime-host::lib::tests::gate_agt_2::the_queue_takes_records_from_before_the_thread_starts",
+    "actingcommand-runtime-host::lib::tests::gate_agt_2::a_scheduling_pause_stops_no_wake_and_a_wake_changes_no_scheduling",
+    "actingcommand-runtime-host::lib::tests::gate_agt_2::the_daily_cap_rolls_over_at_the_local_day",
+]
+incident = ["#432 AGT-2"]
+
 # AGT-T1 (Workflow #432, 0.12.37; design rd-1031/agt/model-agt-v2.md section 10; register section 1.247; contracts/agent-forward.md): a write past its deadline or asked to stop is cancelled in the calling thread; the frame is the auth line then the user line and is in no detail; a bad pipe name, a missing record, a dead owner and another server all end before the intent, and a write error after it is unknown; the hook stores nothing for a session that is no channel, fails loud for a channel, and its end clears the blob only for the owner. The real-pipe tests use a local server with an invented name and an invented token.
 [[gate]]
 coverage = "Y"
@@ -3063,3 +3083,31 @@ tests = [
     "actingcommand-agent-forward::lib::cli::tests::notice_prints_the_mit_text",
 ]
 incident = ["#432 AGT-T1"]
+
+# AGT-T2 (Workflow #432, 0.12.37; design rd-1031/agt/model-agt-v2.md section 10; register section 1.255; contracts/agent-forward.md): an idle task gets a start and a running one a steer, with the wake's id; an absent pipe, a task not loaded and a task still loading wait before the intent, as does a task waiting for input; a steer refused because its turn ended gets one start with the same id; other refusals fail and a missing answer is unknown; another state stream version is a changed protocol; and every discovery question is answered that this client cannot handle it. The tests run on a scripted frame source and open no pipe.
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-agent-forward::lib::codex::client::tests::idle_starts_a_turn_and_running_steers",
+    "actingcommand-agent-forward::lib::codex::client::tests::not_loaded_absent_pipe_and_loading_are_deferred",
+    "actingcommand-agent-forward::lib::codex::client::tests::awaiting_input_is_deferred",
+    "actingcommand-agent-forward::lib::codex::client::tests::an_ended_turn_rejection_gets_one_start_with_the_same_id",
+    "actingcommand-agent-forward::lib::codex::client::tests::other_rejections_fail_and_no_answer_is_unknown",
+    "actingcommand-agent-forward::lib::codex::client::tests::an_unsupported_stream_version_is_protocol_changed",
+    "actingcommand-agent-forward::lib::codex::client::tests::discovery_requests_are_answered_cannot_handle",
+]
+incident = ["#432 AGT-T2"]
+
+# AGT-T3 (Workflow #432, 0.12.37; design rd-1031/agt/model-agt-v2.md sections 6.5 and 10; register section 1.256; contracts/agent-forward.md): a check that is not ready waits with no intent; recorded with this message's ids is delivered; not_submitted and rejected fail; everything else after the intent is unknown and never sent again; a stuck helper is killed at a deadline the test controls; output over a bound is helper_failed; a session id outside the shape is refused by agent-channel add and by the send. The helper is a stand-in, this test binary run again, with invented ids and paths; no test starts Node.
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-agent-forward::lib::dsh::tests::check_not_ready_is_deferred_before_intent",
+    "actingcommand-agent-forward::lib::dsh::tests::recorded_with_matching_ids_is_delivered",
+    "actingcommand-agent-forward::lib::dsh::tests::not_submitted_and_rejected_fail",
+    "actingcommand-agent-forward::lib::dsh::tests::everything_else_after_intent_is_unknown",
+    "actingcommand-agent-forward::lib::dsh::tests::a_stuck_helper_is_killed_at_its_deadline",
+    "actingcommand-agent-forward::lib::dsh::tests::helper_output_over_its_bound_is_helper_failed",
+    "actingcommand-agent-forward::lib::dsh::tests::session_ids_outside_the_shape_are_refused",
+]
+incident = ["#432 AGT-T3"]

@@ -252,7 +252,8 @@ pub(crate) struct DshFlags<'a> {
     pub(crate) node_executable: Option<&'a str>,
 }
 
-/// Adds one channel to the registry. A Claude channel's id is a session's UUID, kept in lower case.
+/// Adds one channel to the registry. A Claude channel's id is a session's UUID, kept in lower case;
+/// a DSH channel's id is one session id of the shape its helper accepts.
 pub(crate) fn add_channel(
     state_root: &Path,
     name: &str,
@@ -260,6 +261,13 @@ pub(crate) fn add_channel(
     native_id: &str,
     dsh: Option<DshFlags<'_>>,
 ) -> Result<Value, Refusal> {
+    if client == client_word(ChannelClient::Dsh) && !crate::dsh::valid_session_id(native_id) {
+        return Err(Refusal(
+            "a DSH channel's native id is one session id: a letter or a digit, then letters, \
+             digits, - or _, 256 at most"
+                .to_owned(),
+        ));
+    }
     let native_id = if client == client_word(ChannelClient::Claude) {
         claude::session_id(native_id)
             .ok_or_else(|| Refusal("a Claude channel's native id is a session's UUID".to_owned()))?

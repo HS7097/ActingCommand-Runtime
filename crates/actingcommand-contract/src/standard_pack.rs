@@ -69,7 +69,7 @@ pub const MAX_NAVIGATION_RECORDED_PAGES: usize = 8;
 crate::outcome_vocabulary! {
     /// What is wrong with a standard-pack root file (vocabulary `standard_pack_problem`,
     /// Workflow #373 NAV-6) or, since Workflow #357 DB-1, a table file of the root's `tables/`
-    /// (M-357a v1.1 §6.2).
+    /// (M-357a v1.1 §6.2), or, since Workflow #407 LOAD-1, a pack's loading copy.
     pub enum StandardPackProblem: "standard_pack_problem" {
         /// The file is not JSON of the file's shape and version (for a table: not canonical
         /// JSON either, that is with a floating point number, an unsafe integer or a duplicate
@@ -89,7 +89,8 @@ crate::outcome_vocabulary! {
         PageIdInvalid => "page_id_invalid",
         /// A page id is listed twice.
         PageDuplicate => "page_duplicate",
-        /// `pages` holds no page, or more than 256.
+        /// `pages` holds no page, or more than 256; (Workflow #407 LOAD-1) in `loading.json` or a
+        /// pack's loading copy, more than 16.
         PagesCount => "pages_count",
         /// `features` names no package, or more than 8.
         FeaturesCount => "features_count",
@@ -169,6 +170,28 @@ crate::outcome_vocabulary! {
         /// R-11: a name under a pack's `parameters` in `ui.json` is not a parameter the package
         /// declares; until R-10 brings package-level declarations, every name.
         UiParameterUndeclared => "ui_parameter_undeclared",
+        /// Workflow #407 LOAD-1 (since 0.12.37): a target of `loading.json` or of a pack's loading
+        /// copy has an id that is not `loading/<name>` or that the file declares twice, or a
+        /// template target's `template` is not `loading/<file>.png`.
+        LoadingTargetInvalid => "loading_target_invalid",
+        /// LOAD-1: a loading page's `required` holds no template target, or a page names a target
+        /// the file does not declare.
+        LoadingPageInvalid => "loading_page_invalid",
+        /// LOAD-1: `max_ms` is outside 1..=1800000.
+        LoadingMaxInvalid => "loading_max_invalid",
+        /// LOAD-1: a template `loading.json` declares is missing, cannot be read, is no PNG or is
+        /// of one colour throughout.
+        LoadingTemplateInvalid => "loading_template_invalid",
+        /// LOAD-1: a pack that takes loading pages declares another `coordinate_space` than
+        /// `loading.json`.
+        LoadingCoordinateMismatch => "loading_coordinate_mismatch",
+        /// LOAD-1: a pack that takes a loading page declares a page of the same id itself.
+        LoadingPageCollision => "loading_page_collision",
+        /// LOAD-1: a pack that takes a loading target declares a target of the same id itself.
+        LoadingTargetCollision => "loading_target_collision",
+        /// LOAD-1: a pack's loading copy (`resources/loading.json`, `resources/loading/`) is not
+        /// the one `loading.json` makes for it, or the pack carries one with no `loading.json`.
+        LoadingPackStale => "loading_pack_stale",
     }
 }
 
@@ -241,8 +264,9 @@ crate::outcome_vocabulary! {
 pub struct StandardPackRootIssue {
     /// One of [`STANDARD_PACK_BUNDLE_FILE`], [`STANDARD_PACK_PAGES_FILE`],
     /// [`STANDARD_PACK_INTERRUPTS_FILE`], [`STANDARD_PACK_NAVIGATION_FILE`], (Workflow #392
-    /// DA-4) [`crate::STANDARD_PACK_DISPLAY_LAYOUT_FILE`] or (Workflow #429 R-11)
-    /// [`crate::STANDARD_PACK_UI_FILE`].
+    /// DA-4) [`crate::STANDARD_PACK_DISPLAY_LAYOUT_FILE`], (Workflow #429 R-11)
+    /// [`crate::STANDARD_PACK_UI_FILE`] or (Workflow #407 LOAD-1)
+    /// [`crate::STANDARD_PACK_LOADING_FILE`] and a pack's [`crate::PACK_LOADING_FILE`].
     pub file: &'static str,
     pub problem: StandardPackProblem,
     pub pointer: String,

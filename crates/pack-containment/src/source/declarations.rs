@@ -591,6 +591,8 @@ impl Declaration<'_> {
                             "interval_ms",
                             "expect_identity",
                             "wait_page",
+                            "target_present",
+                            "target_gone",
                         ],
                     )?;
                     // #411 B36/B19 (A35-S3): `{page_id, max_ms}`, task schema `0.9` only.
@@ -598,6 +600,13 @@ impl Declaration<'_> {
                         expected.get("wait_page").filter(|value| !value.is_null())
                     {
                         self.wait_page(wait_page, &child(&pointer, "wait_page"))?;
+                    }
+                    // ACT-4 (Workflow #407): arrays of target names, task schema `0.9` only.
+                    for member in ["target_present", "target_gone"] {
+                        if let Some(targets) = expected.get(member).filter(|value| !value.is_null())
+                        {
+                            self.expected_targets(targets, &child(&pointer, member))?;
+                        }
                     }
                     self.page(
                         self.required(expected, &pointer, "page_id")?,
@@ -755,6 +764,16 @@ impl Declaration<'_> {
             self.required(object, pointer, "max_ms")?,
             &child(pointer, "max_ms"),
         )
+    }
+
+    /// ACT-4 (Workflow #407): a confirmation's `expect_after.target_present` or `target_gone`,
+    /// task schema `0.9` only (`UnconsumedField` before it): an array of target names (strings).
+    /// Runtime admission checks the targets.
+    fn expected_targets(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        if self.schema_before(TaskSchema::V0_9) {
+            return Err(self.error(pointer, ResourceDeclarationReason::UnconsumedField));
+        }
+        self.strings(value, pointer)
     }
 
     /// #411 B16 part 1: an operation's `max_runs`, task schema `0.9` only (`UnconsumedField`

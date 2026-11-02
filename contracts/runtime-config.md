@@ -960,6 +960,7 @@ settled path and its gap ([performance-control.md](performance-control.md), "Ste
 | `execution.action_gap.settle_change_max_milli` | integer `0..=1000000`, the largest frame change between two of them; read only from 2 frames | `500` | yes |
 | `execution.action_gap.settled_max_stage` | `s0` to `s4`, the highest pacing stage at which a step takes the settled path | `s1` | yes |
 | `execution.action_gap.fallback_hold_ms` | milliseconds `0..=86400000`, how long an operation that failed while the path was handed keeps its `post_delay_ms`; 0 holds it for its run only | `3600000` | yes |
+| `execution.action_gap.settled_limit_ms` (ACT-4, register §1.254, since 0.12.37) | milliseconds `0..=5000`, the limit of the settled path's reading for a tap that declares no `post_delay_ms` (the bound of a declared one), within its confirmation's timeout; the confirmation then goes on from what the reading spent, adding no wait and starting no new timeout. A limit, never a wait. 0 sends such a tap to its confirmation at once, as before ([resource-declarations.md](resource-declarations.md), "Capture cadence") | `2000` | yes |
 
 Each key is also per instance, `instance.<instance id>.execution.action_gap.<member>`, in the file
 the entry's `execution.action_gap` member; its default is `none`: an instance that names it reports a

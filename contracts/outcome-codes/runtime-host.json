@@ -22324,6 +22324,31 @@
       "common_causes": "The section has not been added to actingd's configuration, or the feature was turned off.",
       "handling": "Add the section (a file edit and a restart) or set agent_wake.enabled to true, then ask again."
     },
+    "agent_budget_exhausted": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "config_key": "required",
+        "limit_count": "required",
+        "label": "optional",
+        "agent_channel": "optional",
+        "alias": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.37",
+      "description": "The day's budget of the Runtime's wakes is used up for the host's local day (Workflow #432 AGT-2; contracts/agent-wake.md): config_key agent_wake.rules with label naming the rule whose daily_cap was reached, or agent_wake.budget.daily_cap for all rules together; limit_count is the cap. Said once a day, by the wake that filled the cap, as a runtime.failed record with system links and no instance link; no further wake of that rule, or of any rule, is made until the next local day. It never becomes a wake itself and touches no scheduling.",
+      "common_causes": "Many ladder ends, fences that wait for a person, or failed runs of a listed code in one day.",
+      "handling": "Read host.agent_wake and the records the rows name. Raise the cap with ac_config_set if the wakes were wanted; otherwise look at why so many came."
+    },
     "recovery_ladder_drill_already_running": {
       "category": "error",
       "ladder_class": "none",

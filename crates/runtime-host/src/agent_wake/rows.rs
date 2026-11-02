@@ -6,6 +6,7 @@
 //! text and never a channel's address. [`kept_rows`] reads a record back strictly: a row of another
 //! shape makes the whole record unreadable, which the start says and goes on from.
 
+use crate::codes::HostCode;
 use actingcommand_agent_forward::DeferReason;
 use actingcommand_contract::outcome::CodeStr;
 use actingcommand_contract::{
@@ -274,10 +275,10 @@ pub(crate) fn kept_rows(record: &RuntimeFactRecord) -> Option<Vec<WakeRow>> {
     rows.iter().map(kept_row).collect()
 }
 
-/// Whether a record's code can never be a candidate for a wake: a delivery failure cannot make a
-/// wake. AGT-2's tap reads it.
+/// Whether a record's code can never be a candidate for a wake: a delivery failure and a used-up
+/// budget cannot make a wake. The tap (Workflow #432 AGT-2) reads it.
 pub(crate) fn never_a_candidate(spelling: &str) -> bool {
-    spelling.starts_with("agent_wake_") || spelling == "agent_budget_exhausted"
+    spelling.starts_with("agent_wake_") || spelling == HostCode::AgentBudgetExhausted.as_str()
 }
 
 /// The 16 bytes of a wake id (`agent_wake_<32 hex digits>`), the message's id at a transport.

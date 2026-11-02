@@ -15,6 +15,9 @@
 //!   by at most that many milli, the reading takes; 1 goes on the first.
 //! - `settled_max_stage`: the highest pacing stage at which a step reads that way.
 //! - `fallback_hold_ms`: how long an operation that failed on that reading stays on `declared`.
+//! - `settled_limit_ms` (ACT-4, register §1.254): the limit of that reading for a step that
+//!   declares no `post_delay_ms`, within its confirmation's timeout, which then goes on from what
+//!   the reading spent; 0 sends such a step to its confirmation at once. A limit, never a wait.
 //!
 //! Each key is settable, read at each step, and also per instance
 //! (`instance.<instance id>.execution.action_gap.<member>`, in the file the entry's
@@ -52,6 +55,8 @@ pub const SETTLE_CHANGE_MAX_MILLI: &str = "execution.action_gap.settle_change_ma
 pub const SETTLED_MAX_STAGE: &str = "execution.action_gap.settled_max_stage";
 /// How long an operation that failed on that reading stays on `declared`, in milliseconds.
 pub const FALLBACK_HOLD_MS: &str = "execution.action_gap.fallback_hold_ms";
+/// ACT-4: the limit of that reading for a step that declares no `post_delay_ms`, in milliseconds.
+pub const SETTLED_LIMIT_MS: &str = "execution.action_gap.settled_limit_ms";
 
 /// The values of [`MODE`].
 pub const MODE_TOKENS: &[&str] = &["declared", "settled"];
@@ -78,6 +83,9 @@ const FALLBACK_HOLD_RANGE: KeyRange = KeyRange::Integer {
     min: 0,
     max: 86_400_000,
 };
+/// The bounds of `settled_limit_ms`: none to the longest `post_delay_ms` a package may declare
+/// (5 000 ms), whose place it takes. Schema.
+const SETTLED_LIMIT_RANGE: KeyRange = KeyRange::Integer { min: 0, max: 5_000 };
 
 /// The `execution.action_gap` member of the section and of an instance's `execution` member: every
 /// member may be left out and none is unknown (M387 §5.3).
@@ -107,6 +115,9 @@ pub struct ActionGapFile {
     settled_max_stage: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     fallback_hold_ms: Option<Value>,
+    // ACT-4 (register §1.254): within `actingd-config` revision 24, no second step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    settled_limit_ms: Option<Value>,
 }
 
 const fn section_row(name: &'static str, value_type: ValueType, range: KeyRange) -> KeyRow {
@@ -138,6 +149,14 @@ const fn instance_row(member: &'static str, value_type: ValueType, range: KeyRan
     }
 }
 
+/// ACT-4: a row whose key the slice ACT-4 added and reads.
+const fn act4(row: KeyRow) -> KeyRow {
+    KeyRow {
+        reader: "ACT-4",
+        ..row
+    }
+}
+
 /// One row per section-level key.
 pub(crate) static ROWS: &[KeyRow] = &[
     section_row(MODE, ValueType::String, KeyRange::Tokens(MODE_TOKENS)),
@@ -158,6 +177,11 @@ pub(crate) static ROWS: &[KeyRow] = &[
         KeyRange::Tokens(PACING_STAGE_TOKENS),
     ),
     section_row(FALLBACK_HOLD_MS, ValueType::DurationMs, FALLBACK_HOLD_RANGE),
+    act4(section_row(
+        SETTLED_LIMIT_MS,
+        ValueType::DurationMs,
+        SETTLED_LIMIT_RANGE,
+    )),
 ];
 
 /// One row per instance's own key, after the per-instance section's other rows.
@@ -180,6 +204,11 @@ pub(crate) static INSTANCE_ROWS: &[KeyRow] = &[
         KeyRange::Tokens(PACING_STAGE_TOKENS),
     ),
     instance_row(FALLBACK_HOLD_MS, ValueType::DurationMs, FALLBACK_HOLD_RANGE),
+    act4(instance_row(
+        SETTLED_LIMIT_MS,
+        ValueType::DurationMs,
+        SETTLED_LIMIT_RANGE,
+    )),
 ];
 
 /// How a step goes on after its input (`execution.action_gap.mode`).
@@ -216,6 +245,8 @@ pub struct ActionGapConfig {
     pub settle_change_max_milli: u32,
     pub settled_max_stage: PerformancePacingStage,
     pub fallback_hold_ms: u64,
+    /// ACT-4: the settled reading's limit for a step without `post_delay_ms`.
+    pub settled_limit_ms: u64,
 }
 
 impl ActionGapConfig {
@@ -344,6 +375,7 @@ fn parse_keys(
         })?,
         settled_max_stage: word(value, &key_of(SETTLED_MAX_STAGE), parse_stage)?,
         fallback_hold_ms: bounded(value, &key_of(FALLBACK_HOLD_MS), FALLBACK_HOLD_RANGE)?,
+        settled_limit_ms: bounded(value, &key_of(SETTLED_LIMIT_MS), SETTLED_LIMIT_RANGE)?,
     })
 }
 

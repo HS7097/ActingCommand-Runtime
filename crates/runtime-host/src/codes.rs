@@ -325,6 +325,11 @@ actingcommand_contract::outcome_codes! {
         AgentWakeChannelUnknown => "agent_wake_channel_unknown": error / none,
         /// Error. `AgentWakeTest` while the `agent_wake` section is absent or `enabled` is false.
         AgentWakeDisabled => "agent_wake_disabled": error / none,
+        /// Warning. A rule's `daily_cap` or `agent_wake.budget.daily_cap` is used up for the
+        /// host's local day (Workflow #432 AGT-2): said once, by the wake that filled it, and no
+        /// wake of that rule (or of any rule) is made again until the next local day. `config_key`
+        /// names the cap, `label` the rule, `limit_count` the cap's value. No instance link.
+        AgentBudgetExhausted => "agent_budget_exhausted": warning / none,
         /// Error. A drill was refused: a ladder holds or waits for the instance and
         /// `rules.already_running` is `suppress` (its `recovery_ladder_suppressed`, tagged
         /// `drill`, says `already_running`).

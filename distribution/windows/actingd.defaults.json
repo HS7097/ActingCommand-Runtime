@@ -514,7 +514,8 @@
       "settle_frames": 1,
       "settle_change_max_milli": 500,
       "settled_max_stage": "s1",
-      "fallback_hold_ms": 3600000
+      "fallback_hold_ms": 3600000,
+      "settled_limit_ms": 2000
     }
   },
   "idle": {

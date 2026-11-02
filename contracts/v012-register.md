@@ -5901,6 +5901,171 @@ dropped with its record; a file that does not name them is read as before.
 
 **Rollback** (to 0.12.36). Nothing to do; the members decode as before.
 
+### 1.253 Slice AGT-2 (0.12.37): the tap, the first triggers, the rules and the guards of the Runtime's messages (Workflow #432; design `rd-1031/agt/model-agt-v2.md` §4, §5.3, §7.3, §10; coordinator work order `rd-1031/agt/brief-agt-2.md`)
+
+[agent-wake.md](agent-wake.md), "Triggers, rules and guards", is the contract. The number 1.253 is the coordinator's.
+
+**What changes live.** Nothing in production, where no `agent_wake` section is configured: without one there is no queue and the tap returns at once. With a section that has rules, three committed records wake a channel automatically: the exhausted end of a ladder a trigger started (`ladder_exhausted`), `instance_resources_fence_awaiting_person` (`instance_fenced`), and a run's failed terminal with a code a rule lists (`run_failed`). No ledger shape, no wire shape, no configuration key and no interface revision changes: the rows, the body and the section are AGT-1a's and AGT-1b's. A wake touches no pause, lease, queue or fence.
+
+**Rollback** (to 0.12.36). As §1.245 says: remove the section first. Nothing else persisted changes.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| AGT2-1 | the tap: one call beside direction ①'s count on the append path (`host/facts.rs`) | Runtime-internal (memory only) | AGT-2 | AGT-2 | leaf lock, drop and count when full, no record; interrupted, drilled and planned ladders, `instance_resources_fenced` and other writers of `task.failed` are never candidates, nor the worker's own codes |
+| AGT2-2 | rules, coalescing and guards (`crates/runtime-host/src/agent_wake/{rules,guards}.rs`) | rule (no shape change) | AGT-2 | AGT-2 | one wake per instance and channel within `delivery.coalesce_ms`, the strongest kind, the rest `related`; cool-down per rule, instance and code; caps per rule and over all rules by the **host's local day**, all read from `host.agent_wake` |
+| AGT2-3 | `agent_budget_exhausted` (warning, ladder class `none`; `config_key`, `limit_count`, `label?`, `agent_channel?`, `alias?`; owner `runtime-host`, domain `agent_`) | new outcome code | AGT-2 | the worker | said by the wake that fills a cap, so once a day per rule and once for the budget; never a candidate; the design's name |
+| AGT2-4 | `agent_delivery_problem` + `local_time_unknown` | vocabulary word | AGT-2 | the worker | the host's local day could not be read; the iteration fails before it takes a candidate |
+| AGT2-5 | `Status.agent_wake`: `failed_today` and `suppressed_today` count the host's local day; `suppressed_today` also counts cool-downs, caps and a full burst; `attention` also for a cap used up today | meaning of existing members | AGT-2 | — | **AGT-1b counted a UTC day as a stopgap; this slice changes it to the host's local day** |
+
+**Where it differs from the design's letter.** The design says "one per instance in a burst"; with rules to more than one channel each channel gets its own wake, the strongest of what its rules match, so a second channel's rule is never lost to the first's (with one channel the two readings agree). `codes` filters only `run_failed`. A person's test skips the guards and counts toward no cap. `agent_budget_exhausted` names the rule with `label` (a rule id may hold capitals, which `rule_id`, a token, refuses), so no key is added.
+
+**Tests** (gate rows in `host.toml`, "AGT-2"): the twelve of the design's §10 and `the_daily_cap_rolls_over_at_the_local_day`. No existing assertion changed.
+
+### 1.254 Slice ACT-4 (0.12.37): final-state targets on both sides, flip evidence for a same-page step, and a tap without `post_delay_ms` on the settled path (Workflow #407; Alice 11-02: a click ends in a loading page, a new page, or a page that lost one feature, and normally the next action follows at once; design `rd-1031/check-speed/model-check.md` §1.5, §1.6, §7 with `model-check-addendum.md` items 5 and 6, which win where they differ; 项目秘书's review, #407 comment 6570494843, sections 1 and 5; coordinator work order `rd-1031/check-speed/brief-act4.md`)
+
+[resource-declarations.md](resource-declarations.md) ("Final-state targets", "Capture cadence"),
+[performance-control.md](performance-control.md) ("Step pacing") and
+[runtime-config.md](runtime-config.md) ("The `execution` section") are the contract. The number
+1.254 is the coordinator's. **No package changes, no outcome code, no ledger shape, no wire shape.**
+
+**Why.** A click whose only effect is that its page lost or gained one feature could not be said:
+the 73 operations whose destination names their own page had no evidence of their effect but the
+blind wait, and the settled path had to keep it. Two lists say it, one judgement reads them for
+every path, and on a same-page step only a change since the frame that decided the click counts,
+so a state already true before the click is never taken for its effect. A package that wants no
+blind wait leaves `post_delay_ms` out (admission keeps refusing 0); until now such a tap had no
+settled reading at all.
+
+**What changes live.** Nothing for any package of today: none declares the lists, and every tap
+of today declares `post_delay_ms`, whose behaviour is unchanged. A tap without it reads under
+`settled` up to `settled_limit_ms`, then its confirmation goes on with what is left of its
+timeout; its total time is that timeout, as before.
+
+**Cost** (measure, not assume). Each listed target is evaluated by itself on each destination frame
+after the input and once on the decision frame: `RecognitionEvaluator::evaluate_target` opens a
+scene context of its own, so a template is matched again (the page recognition's template results
+stay in that recognition's context, and target consensus results in another cache), and a colour
+target is computed, which nothing caches. Each evaluation's time is recorded as one of its frame's
+`recognition_evaluate` samples and its row carries the phase `expect_after`, so the cost of a
+declaration is read from the runs that use it. No number is claimed here: no run declares the
+lists yet.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| AC4-1 | task schema `0.9` `expect_after.target_present`, `expect_after.target_gone` (arrays of target names) | resource file format | ACT-4 | resource side | `since` 0.12.37; optional, page-graph tasks only (`contained_task_linear_invalid`, `reason=expect_targets`, under `linear_steps`); `UnconsumedField` before schema `0.9`; `package` revision 6, **no second step** (§1.244 TB6, §1.251) |
+| AC4-2 | `program_problem` tokens `expect_targets_overlap`, `expect_target_unknown`, `expect_target_kind`, `expect_target_unreachable` | new tokens of an existing vocabulary on the existing `contained_task_program_invalid` | ACT-4 | ACT-4 | the disjoint lists; a target of the pack; a single-frame template or colour target outside target consensus (lazy and multi-frame targets are out of this slice); a target of the `from` page's or a destination's rules, directly or as a member of a check there. `path` the task declaration, `json_pointer` the list entry |
+| AC4-3 | the final-state judgement of the settled path, the confirmation (a wait step's included) and the observation window | rule (no shape change) | ACT-4 | ACT-4 | destination page AND every `present` passes AND every `gone` has a definite non-match (evaluated, not passed, no registered reason that leaves it open, and the evaluation's own evidence); not evaluated, failed or unresolvable is not gone. A destination page that is not the final state is a frame of no destination to each path |
+| AC4-4 | flip evidence of a same-page step on the settled path | rule (memory only) | ACT-4 | ACT-4 | the listed targets' states on the decision frame, taken after the input and before any later capture; a final state goes at once only when one listed target turned (present from a definite non-match to a pass, gone from a pass to a definite non-match); frame ids differ where the runtime gives them; a state true on the decision frame keeps `post_delay_ms` and the confirmation; a select step keeps them |
+| AC4-5 | `execution.action_gap.settled_limit_ms` (`0..=5000`, default 2000) and `instance.<id>.execution.action_gap.settled_limit_ms` (default the section's) | configuration keys | ACT-4 | ACT-4 | settable, read at each step; within **`actingd-config` revision 24**, no second step (§1.245, §1.250). The bound is the longest `post_delay_ms` a package may declare, whose place the limit takes; the default is a blind wait packages commonly declare. 0 keeps a tap without `post_delay_ms` on its confirmation at once |
+| AC4-6 | `SettledPath::omitted_delay_limit`, `SettledPath::with_omitted_delay_limit`, `ContainedTaskRuntime::record_expected_target`, `ContainedTaskGuardEvaluation::ExpectAfter` (`execution-kernel`) | Runtime-internal interface (memory only) | ACT-4 | ACT-4 | trait default: the evaluation recorded as a guard evaluation, its time dropped; `SettledPath::new` carries a zero limit, so a runtime that hands none keeps a tap without `post_delay_ms` on its confirmation |
+| AC4-7 | the guard phase `expect_after` of task diagnostic `target` and `error` rows | new value of an existing string member | ACT-4 | ACT-4 | the same row shape as `when`'s, as ACT-1's `action_gap` (§1.250 ACT-4) |
+
+**Not in this slice.** `loading_pages` (its own design), ACT-3, ROI readiness, selective evidence;
+lazy and multi-frame targets in the lists; the feed of the post-admission collectors on the settled
+path, which still follows the destination page (a destination frame that is not yet the final state
+feeds them as every frame of a confirmation does); the identity read-back (`expect_identity`), which
+follows the final state as before.
+
+**Rollback** (to 0.12.36). Nothing persisted but the phase value above, in a run's diagnostics. A
+pack that declares the lists is refused at the older build's declaration gate; `package` [3, 6]
+refuses the combination earlier. A configuration file that names `settled_limit_ms` is refused by
+the older build, as any newer member is; an instruction value of the key is dropped with its
+record.
+
+### 1.255 Slice AGT-T2 (0.12.37): the Codex transport (Workflow #432; design `rd-1031/agt/model-agt-v2.md` §5.2, §6.1, §6.4, §6.7, §7.2, §10, §11; coordinator work order `rd-1031/agt/brief-agt-t2.md`)
+
+[agent-forward.md](agent-forward.md) ("Codex") is the contract, and the one place with client words. The number 1.255 is the coordinator's. **No new persisted shape, no outcome code, no configuration key, no interface revision.**
+
+**What changes live.** A registered Codex channel, which waited as `deferred` (`ipc_unavailable`), now gets one submission to its task's owner through the desktop's IPC when the desktop runs and the task is loaded; the row's `proof` is `accepted`. Claude Code's channels, DSH's and Antigravity's are as before. `agent-channel add --client codex --native-id <id>` already took a task's id and is unchanged.
+
+**Rollback.** Nothing persisted changes; an older build answers `deferred` for a Codex channel again.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| AGTT2-1 | the Codex arm of `RealForward` (`crates/agent-forward/src/codex/`) | transport | AGT-T2 | the worker | `delivered` with `accepted`; `deferred` with `ipc_unavailable`, `target_not_loaded`, `target_awaiting_input` or `target_unresponsive`; `failed` and `unknown` with the existing problems; no new word |
+| AGTT2-2 | `PipeClient::read_exact` (`pipe.rs`) | Runtime-internal interface | AGT-T2 | — | the overlapped read under the write's rule: deadline and stop in the calling thread, cancel, then wait for the operation; no new `unsafe` module |
+| AGTT2-3 | `NOTICE.md`, section "Source code adapted from other projects" | licence notice | AGT-T2 | — | adds `desktop.rs`, `relay.rs` and the three `codex/` files |
+
+**Departures from the design and the source** (each is in the contract):
+- Before the intent, a pipe that opens and then breaks or closes is `deferred` (`ipc_unavailable`), and the deadline or a stop is `deferred` (`target_unresponsive`): nothing was submitted. The source fails both.
+- The fallback's idle is the snapshot's (no turn in progress, nothing waiting): the source's rollout evidence reads the client's home, which this transport never reads.
+- The source persists its warning before the fallback to its own log; here it goes into the outcome's `detail`.
+- One owner discovery per state read, where the source asks twice.
+- `add` keeps a Codex channel's id as typed; the send refuses one that is not a non-nil hyphenated UUID (`failed`, `channel_unknown`).
+
+**Tests:** the seven of §10 AGT-T2, in the crate's own test module on a scripted frame source (host gate row "AGT-T2"). No test opens a pipe.
+
+### 1.256 Slice AGT-T3 (0.12.37): the DSH transport (Workflow #432; design `rd-1031/agt/model-agt-v2.md` §5.2, §6.1, §6.5, §6.7, §7.2, §10, §11; coordinator work order `rd-1031/agt/brief-agt-t3.md`)
+
+[agent-forward.md](agent-forward.md), section "DSH", is the contract. Number 1.256 is the coordinator's. **No ledger shape, wire shape, outcome code, configuration key or interface revision changes;** the rows record a DSH send with the neutral words §1.246 already has.
+
+**What changes live.** Nothing until a person registers a DSH channel. Before this slice such a channel waited `deferred` (`ipc_unavailable`) and expired at give-up; now `RealForward` hands its message to the embedded helper.
+
+**Rollback** (to a build without this slice). Nothing persisted is new: a DSH channel's registry line has §1.247's shape, and the older build lets its messages wait `deferred` (`ipc_unavailable`). A row left `sending` is `unknown` after the restart, as for every client.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| AGTT3-1 | the DSH arm of `RealForward` (`crates/agent-forward`, Windows) | new behaviour of AGTT1-5 | AGT-T3 | the agent wake worker | `check`, then the intent, then one `send`; `delivered` with proof `recorded` |
+| AGTT3-2 | `crates/agent-forward/src/dsh_notify.mjs`, input and answer of schema `dsh-native-notification/v1` | embedded helper program | AGT-T3 | — | run as `<node> --input-type=module -e`; adapted MIT source without its `observe` mode; reads `.web-url` and the cookies itself and removes them from its errors |
+| AGTT3-3 | a DSH message's request id and RPC id: SHA-256 of the wake id and a fixed label, as UUIDs of version 8 | derived identity | AGT-T3 | — | the same for every try of one message; never stored |
+| AGTT3-4 | `agent-channel add --client dsh` refuses a native id outside one DSH session id | narrowed rule of AGTT1-1 | AGT-T3 | — | a letter or a digit, then letters, digits, `-` or `_`, 256 bytes at most; the three absolute paths were already required by the registry (AGT-1a) |
+| AGTT3-5 | `crates/agent-forward`: dependency `sha2` (workspace) | new dependency | AGT-T3 | — | no new third-party crate in the workspace; no `unsafe` in `dsh` or `process` |
+| AGTT3-6 | `NOTICE.md`, the codex-goal-lifecycle section | licence notice | AGT-T3 | — | three more source files, two more destinations |
+
+**Departures from the design** (each is in the contract): one deadline covers the `check` and the `send`, which the adapted source gave a full wait each, and the `send` is not started with under 2 s left; the problem words of an `unknown` send (`write_timed_out` at the deadline, `write_failed` at a stop, `helper_failed` for an unreadable answer, `receipt_mismatch` for other ids and every partial proof) are this slice's choice, since the design names only the state; a helper that cannot start after the intent is `failed`, since it never ran; the helper runs in the app root, so it holds no directory of the installation; the adapted source's unit test of the helper is not carried, since CI runs no Node.
+
+### 1.257 Slice LOAD-1 (0.12.37): a game's loading pages, declared once at the repository root, copied into each pack and checked by the tools (Workflow #407; design `rd-1031/check-speed/model-loading.md` §2, §7 LOAD-1; coordinator work order `rd-1031/check-speed/brief-load-1.md`)
+
+[resource-declarations.md](resource-declarations.md) ("Loading pages") and
+[package-reference.md](package-reference.md) ("Self-contained source layout", "Content-directory
+tools and the bundle index", "Standard package root") are the contract. The number 1.257 is the
+coordinator's. **No run-time behaviour changes:** no Runtime component reads `loading.json` or a
+pack's copy (LOAD-2 compiles the copy, LOAD-3 runs it). No ledger shape, no wire shape, no
+configuration key and no outcome code is new.
+
+**What.** (1) The contract crate (`standard_pack_loading.rs`): `loading.json`
+(`actingcommand.loading.v1`) and a pack's copy (`actingcommand.pack-loading.v1`), their limits,
+`parse_standard_pack_loading`, `parse_pack_loading`, the copy a server takes
+(`StandardPackLoading::for_server`) and the types LOAD-2 compiles (`PackLoading`, `LoadingPage`,
+`LoadingTarget`, `LoadingCoordinateSpace`). (2) `actinglab package loading --root-file
+--packs-root (--write | --check)`. (3) `package bundle --loading` checks every pack's copy first
+and lays `loading.json` and its templates beside `bundle.json`; without it a pack that carries a
+copy is refused. (4) `actinglab standard-pack check` checks every package's copy against a game
+root's `loading.json`, and without the file refuses a package that carries one. (5) `resource
+verify` passes a repository's `loading.json` to `package bundle` as `--loading`.
+
+**Decisions within the work order.** (a) Every refusal is `standard_pack_root_invalid` (with
+`package_id`, optional, when the issue is a pack's), every issue listed in `details.issues`. (b) A
+copy is compared by reading it (`parse_pack_loading`), the templates byte for byte, so a copy
+another tool formats differently is current. (c) `--write` removes nothing: a pack that holds a
+file its copy no longer has is refused first, naming the file. (d) Without a root file, a pack's
+copy is stale, so no copy is bundled or installed unchecked. (e) A target is carried as written:
+only its `id`, its `template` and that it has a `region` are checked here; the pack's declaration
+gate checks the rest when LOAD-2 compiles the copy. (f) Template names are lowercase, so two never
+differ only in case.
+
+**Interface.** `package` stays [3, 6]: the copy joins revision 6 (with DB-2 §1.244 and
+OCR-SCALE-1 §1.251), since this PR merges before 0.12.37 is cut, and adds no step. No loader of
+this release or an older one reads it, so a pack that carries one runs as without it; **the
+Runtime is deployed first, then the packs.**
+
+**What changes live.** Nothing until a resource repository writes `loading.json`; no repository
+and no pack holds one or a `resources/loading/` today. `standard-pack check` and `package bundle`
+then also refuse a pack that carries a copy without a root file.
+
+**Rollback** (to 0.12.36). Nothing persisted changes; an older build ignores `loading.json` and a
+pack's copy.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| LD1-1 | `loading.json` (`actingcommand.loading.v1`) and `loading/<stem>.png`, its rules and limits | resource file format (repository root; laid beside `bundle.json` for audit) | LOAD-1 | resource side | `since` 0.12.37; read only by the tools |
+| LD1-2 | `resources/loading.json` (`actingcommand.pack-loading.v1`) and `resources/loading/` | pack format, **`package` revision 6** (no second step) | LOAD-1 | `package loading --write` | `since` 0.12.37; read by no loader until LOAD-2 |
+| LD1-3 | `standard_pack_problem` `loading_target_invalid`, `loading_page_invalid`, `loading_max_invalid`, `loading_template_invalid`, `loading_coordinate_mismatch`, `loading_page_collision`, `loading_target_collision`, `loading_pack_stale` | catalog vocabulary | LOAD-1 | LOAD-1 | `since` 0.12.37; `pages_count` also covers more than 16 loading pages |
+| LD1-4 | `standard_pack_root_invalid` value `package_id` (optional); `details.issues` of its refusals | catalog value, CLI detail | LOAD-1 | LOAD-1 | `package_bundle_write_failed`, `package_bundle_packs_root_invalid` and `package_bundle_packs_empty` also serve `package loading` |
+| LD1-5 | `actinglab package loading`; `package bundle --loading`; `StandardPackRootFiles.loading` | tool command and flag | LOAD-1 | LOAD-1 | `package loading` is `mixed` under `--dry-run` (`--check` no effect, `--write` preview) |
+
+The tests: `crates/resource-tooling/src/gate_load1.rs`, nine, in the exec gate map beside ACT-2.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

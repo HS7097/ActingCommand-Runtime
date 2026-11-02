@@ -1739,7 +1739,7 @@
     },
     "standard_pack_problem": {
       "type": "vocab:standard_pack_problem",
-      "description": "What is wrong with a standard-pack root file (Workflow #373 NAV-6) or table file (Workflow #357 DB-1)."
+      "description": "What is wrong with a standard-pack root file (Workflow #373 NAV-6), table file (Workflow #357 DB-1) or pack's loading copy (Workflow #407 LOAD-1)."
     },
     "json_pointer": {
       "type": "pointer",
@@ -5071,6 +5071,9 @@
         },
         "worker_spawn_failed": {
           "description": "The worker thread could not start; the feature is off until the next start."
+        },
+        "local_time_unknown": {
+          "description": "The host's local day could not be read, so the day caps could not be judged; the waiting candidates stay queued (Workflow #432 AGT-2)."
         }
       }
     },
@@ -6075,7 +6078,7 @@
       }
     },
     "standard_pack_problem": {
-      "description": "What is wrong with a standard-pack root file (Workflow #373 NAV-6) or table file (Workflow #357 DB-1).",
+      "description": "What is wrong with a standard-pack root file (Workflow #373 NAV-6), table file (Workflow #357 DB-1) or pack's loading copy (Workflow #407 LOAD-1).",
       "tokens": {
         "malformed": {
           "description": "The file is not JSON of the file's shape and version; for a table, not canonical JSON either (a floating point number, an unsafe integer or a duplicate key)."
@@ -6099,7 +6102,7 @@
           "description": "A page id is listed twice."
         },
         "pages_count": {
-          "description": "pages holds no page, or more than 256."
+          "description": "pages holds no page, or more than 256; in loading.json or a pack's loading copy, more than 16 (Workflow #407 LOAD-1)."
         },
         "features_count": {
           "description": "features names no package, or more than 8."
@@ -6196,6 +6199,30 @@
         },
         "ui_parameter_undeclared": {
           "description": "A name under a pack's parameters in ui.json is not a parameter the package declares; until package-level declarations exist (R-10), every name (Workflow #429 R-11, since 0.12.36)."
+        },
+        "loading_target_invalid": {
+          "description": "A target of loading.json or of a pack's loading copy has an id that is not loading/<name> or that the file declares twice, or a template target's template is not loading/<file>.png (Workflow #407 LOAD-1, since 0.12.37)."
+        },
+        "loading_page_invalid": {
+          "description": "A loading page's required holds no template target, or a page names a target the file does not declare (Workflow #407 LOAD-1, since 0.12.37)."
+        },
+        "loading_max_invalid": {
+          "description": "max_ms of loading.json or of a pack's loading copy is outside 1 to 1800000 (Workflow #407 LOAD-1, since 0.12.37)."
+        },
+        "loading_template_invalid": {
+          "description": "A template loading.json declares is missing, cannot be read, is no PNG or is of one colour throughout (Workflow #407 LOAD-1, since 0.12.37)."
+        },
+        "loading_coordinate_mismatch": {
+          "description": "A pack that takes loading pages declares another coordinate_space than loading.json (Workflow #407 LOAD-1, since 0.12.37)."
+        },
+        "loading_page_collision": {
+          "description": "A pack that takes a loading page declares a page of the same id itself (Workflow #407 LOAD-1, since 0.12.37)."
+        },
+        "loading_target_collision": {
+          "description": "A pack that takes a loading target declares a target of the same id itself (Workflow #407 LOAD-1, since 0.12.37)."
+        },
+        "loading_pack_stale": {
+          "description": "A pack's loading copy (resources/loading.json, resources/loading/) is not the one loading.json makes for it, or the pack carries one with no loading.json (Workflow #407 LOAD-1, since 0.12.37)."
         }
       }
     },
@@ -7021,6 +7048,18 @@
         },
         "store_way_back_missing": {
           "description": "STORE-FG-1 (since 0.12.29): a package that declares store_update declares no application operation that launches or restarts the assigned application; json_pointer /store_update."
+        },
+        "expect_targets_overlap": {
+          "description": "ACT-4 (since 0.12.37): a target of an operation's expect_after stands in both target_present and target_gone, or twice in one of them; json_pointer /operations/<i>/expect_after/<list>/<j>, the later entry."
+        },
+        "expect_target_unknown": {
+          "description": "ACT-4 (since 0.12.37): an entry of an operation's expect_after.target_present or target_gone names no target of the package's recognition pack; json_pointer /operations/<i>/expect_after/<list>/<j>."
+        },
+        "expect_target_kind": {
+          "description": "ACT-4 (since 0.12.37): an entry of an operation's expect_after.target_present or target_gone names a target that is not judged on one frame: no template or colour target (located text, a value test, a check, an OCR, model or digest target), or one under target consensus; json_pointer /operations/<i>/expect_after/<list>/<j>."
+        },
+        "expect_target_unreachable": {
+          "description": "ACT-4 (since 0.12.37): an entry of an operation's expect_after.target_present or target_gone names a target that stands in the rules (required, any_of, optional, forbidden) of neither the operation's from page nor one of its destinations, directly or as a member of a check there; json_pointer /operations/<i>/expect_after/<list>/<j>."
         }
       }
     },

@@ -1132,6 +1132,10 @@ impl HostShared {
             self.fatal.mark(error.clone())?;
             return Err(error);
         }
+        // Workflow #432 AGT-2: the agent-wake tap, the same pattern: a first trigger's committed
+        // record is offered to the bounded queue under its own leaf lock, a full queue drops and
+        // counts, and nothing is recorded or can fail on the write path.
+        self.offer_wake_candidate(&event);
         Ok(event)
     }
 

@@ -38,6 +38,8 @@ const SHIPPED: ActionGapConfig = ActionGapConfig {
     settle_change_max_milli: 500,
     settled_max_stage: PerformancePacingStage::S1,
     fallback_hold_ms: 3_600_000,
+    // ACT-4 (register §1.254): the key its slice added, at its shipped default.
+    settled_limit_ms: 2_000,
 };
 
 fn context() -> CheckContext {

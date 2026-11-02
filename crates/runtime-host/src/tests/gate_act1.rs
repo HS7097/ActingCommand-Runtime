@@ -59,6 +59,7 @@ fn ms(value: u64) -> Duration {
 #[test]
 fn stage_above_settled_max_uses_declared() {
     // `settled_max_stage` s1: S0 and S1 go on the path with the keys' values, S2 and above do not.
+    // ACT-4: the path carries `settled_limit_ms`, here the shipped 2 000.
     let gap = ActionGapConfig {
         poll_ms: 20,
         settle_frames: 2,
@@ -68,8 +69,8 @@ fn stage_above_settled_max_uses_declared() {
     };
     for stage in STAGES {
         let pacing = apply_settled_path(paced(1_000), &gap, stage);
-        let expected =
-            (stage <= PerformancePacingStage::S1).then(|| SettledPath::new(ms(20), 2, 300));
+        let expected = (stage <= PerformancePacingStage::S1)
+            .then(|| SettledPath::new(ms(20), 2, 300).with_omitted_delay_limit(ms(2_000)));
         assert_eq!(pacing.settled_path, expected, "{stage:?}");
     }
     // `declared`: none at any stage, and the pacing as it came.

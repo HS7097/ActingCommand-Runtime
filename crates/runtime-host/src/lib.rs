@@ -8,10 +8,11 @@
 #![forbid(unsafe_code)]
 
 mod agent_dispatcher;
-// Workflow #432 AGT-1a: the message to a registered channel and its body, pure.
+// Workflow #432 AGT-1a: the message to a registered channel and its body, pure; AGT-2 adds the
+// rules and the guards of the automatic wakes.
 #[allow(
     dead_code,
-    reason = "AGT-1b's worker calls it; AGT-2 fills what a trigger adds"
+    reason = "the worker reads what it needs; the refusals' and the bound's other fields serve the tests"
 )]
 mod agent_wake;
 // UPD-1: the instance fact `health.application.update_required` and the gate it holds.

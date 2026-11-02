@@ -78,6 +78,8 @@ mod candidates;
 mod capture_cadence;
 // ACT-1 (Workflow #407): the settled path of a step after its input.
 mod settled_path;
+// ACT-4 (Workflow #407): the final state of a step, `target_present` and `target_gone`.
+mod final_state;
 // Workflow #390 OUT-2: the caps of a designated effect set.
 mod designated_effects;
 // #412 Lab B-3 S1: one declared operation run as the kernel runs it.
@@ -270,6 +272,10 @@ mod gate_still1;
 // ACT-1 (Workflow #407, register §1.250): the settled path of a step after its input.
 #[cfg(test)]
 mod gate_act1;
+// ACT-4 (Workflow #407, register §1.254): final-state targets, flip evidence and a step without
+// `post_delay_ms` on the settled path.
+#[cfg(test)]
+mod gate_act4;
 // Workflow #392 DA-2a: the display adapter's frame gate.
 mod display_gate;
 // Workflow #392 DA-2a (model 392 v1.2 §13 rows DA2-T1 to T3, T6, T12, T14, T15, the identity
@@ -2242,6 +2248,9 @@ pub enum ContainedTaskGuardEvaluation {
     /// Workflow #411 B1 (register §1.153 LR-6): one frame of a value test whose side declares
     /// an agreement was evaluated.
     AgreementSample,
+    /// ACT-4 (Workflow #407, register §1.254): a target of an operation's `expect_after`
+    /// (`target_present`, `target_gone`) was evaluated on a frame of its step.
+    ExpectAfter,
 }
 
 impl ContainedTaskGuardEvaluation {
@@ -2252,6 +2261,7 @@ impl ContainedTaskGuardEvaluation {
             Self::Evaluated | Self::TrustedCoordinate | Self::PageMismatch => "guard",
             Self::When => "when",
             Self::AgreementSample => actingcommand_contract::TASK_DIAGNOSTIC_PHASE_AGREEMENT_SAMPLE,
+            Self::ExpectAfter => "expect_after",
         }
     }
 
@@ -2272,7 +2282,11 @@ impl ContainedTaskGuardEvaluation {
     /// target, `None` for those that evaluate one.
     pub const fn unexecuted_code(self) -> Option<Code> {
         match self {
-            Self::CandidateSample | Self::Evaluated | Self::When | Self::AgreementSample => None,
+            Self::CandidateSample
+            | Self::Evaluated
+            | Self::When
+            | Self::AgreementSample
+            | Self::ExpectAfter => None,
             Self::TrustedCoordinate => Some(ExecutionKernelCode::ContainedTaskGuardSkipped.code()),
             Self::PageMismatch => Some(ExecutionKernelCode::ContainedTaskGuardPageMismatch.code()),
         }
@@ -2695,6 +2709,24 @@ pub trait ContainedTaskRuntime {
             Some(target_id),
             Some(result),
             ContainedTaskGuardEvaluation::of_sample(result),
+        )
+    }
+
+    /// ACT-4 (Workflow #407, register §1.254): one evaluation of a target an operation's
+    /// `expect_after` lists, on the frame it judges and with the time it took: the decision frame
+    /// of the step's input before any frame after it is taken, or a frame right after its capture.
+    /// A runtime records it as a guard evaluation of the phase `expect_after` on that frame, and
+    /// its time as one of the frame's evaluations; the default records the evaluation only.
+    fn record_expected_target(
+        &mut self,
+        target_id: &str,
+        result: &actingcommand_recognition_pack::RecognitionPackResult<TargetEvaluation>,
+        _timing: ContainedTaskEvaluationTiming,
+    ) -> Result<(), Self::Error> {
+        self.record_guard_evaluation(
+            Some(target_id),
+            Some(result),
+            ContainedTaskGuardEvaluation::ExpectAfter,
         )
     }
 
@@ -3126,6 +3158,13 @@ impl PreparedContainedTask {
         program.validate(&control, &bundle, &detector)?;
         program.validate_text_reads(bundle.operation_path(), &evaluator)?;
         program.validate_when_targets(bundle.operation_path(), &evaluator)?;
+        // ACT-4: the targets of each `expect_after`'s `target_present` and `target_gone`.
+        program.validate_expected_targets(
+            &control,
+            &detector,
+            &evaluator,
+            bundle.operation_path(),
+        )?;
         // #411 B16 part 1 and B22: keyed `on_max_runs` and `on_guard_refused`.
         program.validate_keyed_ends(&evaluator)?;
         // STORE-FG-1: the store steps, their listing proof and the way back.
@@ -5593,11 +5632,19 @@ impl PreparedContainedTask {
                                 )
                             })?;
                         // ACT-1 (§1.6): the settled path reads frames in place of the blind
-                        // wait, and the wait's boundary stays, empty.
+                        // wait, and the wait's boundary stays, empty. ACT-4: the frame that
+                        // decided the input is still the step's observation here.
                         let settled = if settled_off {
                             None
                         } else {
-                            self.settled_window(runtime, operation, &from_page, pacing, tapped)?
+                            self.settled_window(
+                                runtime,
+                                operation,
+                                &from_page,
+                                pacing,
+                                (tapped, observation.as_ref()),
+                                observation_timing,
+                            )?
                         };
                         let boundary = actingcommand_contract::TaskTimingBoundary::PostInputWait;
                         let identity = runtime.task_boundary_identity(boundary);
@@ -5670,7 +5717,8 @@ impl PreparedContainedTask {
                         // extra rounds come before the failure decision below, so a destination
                         // that arrives in one needs no second input. ACT-1 (§1.6): the settled
                         // path's reading comes first, and without a destination frame the
-                        // confirmation starts where the blind wait would have ended.
+                        // confirmation starts where the blind wait would have ended. ACT-4: for a
+                        // step without `post_delay_ms` it goes on from what the reading spent.
                         let arrived = match settled {
                             Some(window) => self.settled_confirmation(
                                 runtime,
@@ -5681,22 +5729,25 @@ impl PreparedContainedTask {
                                 observation_timing,
                                 pacing,
                             )?,
-                            None => None,
+                            None => settled_path::SettledReading::Confirm {
+                                spent: Duration::ZERO,
+                            },
                         };
                         let resolution = match arrived {
-                            Some(reached) => {
+                            settled_path::SettledReading::Arrived(reached) => {
                                 arrived_settled = Some(operation_id.clone());
-                                PostconditionResolution::Reached(reached)
+                                PostconditionResolution::Reached(*reached)
                             }
-                            None => self.await_postcondition(
-                                runtime,
-                                ocr_collector,
-                                operation,
-                                confirmation_timeout,
-                                confirmation_interval,
-                                observation_timing,
-                                pacing,
-                            )?,
+                            settled_path::SettledReading::Confirm { spent } => self
+                                .await_postcondition_after(
+                                    runtime,
+                                    ocr_collector,
+                                    operation,
+                                    (confirmation_timeout, spent),
+                                    confirmation_interval,
+                                    observation_timing,
+                                    pacing,
+                                )?,
                         };
                         let (
                             failed_observation,
@@ -7616,6 +7667,7 @@ impl PreparedContainedTask {
     /// only on frames of neither page; the wait page pauses the confirmation's timeout up to its
     /// `max_ms`. STILL-1: frames that stay unchanged, none a destination and none on that page,
     /// for the still limit end the wait as its limit does, with the limit named on the failure.
+    /// ACT-4: a frame is a destination's only as the step's final state ([`Self::final_state`]).
     #[allow(clippy::too_many_arguments)]
     fn await_postcondition<R: ContainedTaskRuntime>(
         &self,
@@ -7627,6 +7679,32 @@ impl PreparedContainedTask {
         timing: ContainedTaskTimingContext,
         pacing: StepPacing,
     ) -> Result<PostconditionResolution, ContainedTaskRunError<R::Error>> {
+        self.await_postcondition_after(
+            runtime,
+            ocr_collector,
+            operation,
+            (timeout, Duration::ZERO),
+            interval,
+            timing,
+            pacing,
+        )
+    }
+
+    /// [`Self::await_postcondition`] with `spent` of `timeout` already behind it: ACT-4 (boundary
+    /// A), the settled reading of a step without `post_delay_ms` handed it over. It adds no wait
+    /// before its first frame and starts no new timeout; a wait page's time counts from its own
+    /// first frame.
+    #[allow(clippy::too_many_arguments)]
+    fn await_postcondition_after<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        ocr_collector: &mut PostAdmissionOcrCollector<'_>,
+        operation: &TaskOperation,
+        (timeout, spent): (Duration, Duration),
+        interval: Duration,
+        timing: ContainedTaskTimingContext,
+        pacing: StepPacing,
+    ) -> Result<PostconditionResolution, ContainedTaskRunError<R::Error>> {
         let task_deadline = timing.deadline();
         let base_timing = timing;
         // #385 P-k (performance model v1.4.2 §5.3): the confirmation's limits are budget time.
@@ -7634,8 +7712,14 @@ impl PreparedContainedTask {
         let mut retries =
             SampleRetries::new(pacing, ExecutionKernelLocation::ObservationAfterInput);
         let mut rounds = ExtraRounds::of(pacing);
-        let mut started = budget_now(runtime, pace);
-        let mut window_started = budget_observation_now(runtime, pace);
+        let handed_over = budget_now(runtime, pace);
+        let earlier = |instant: Instant| {
+            instant.checked_sub(spent).ok_or_else(|| {
+                ContainedTaskError::new(SharedCode::ContainedTaskStateInvalid.code())
+            })
+        };
+        let mut started = earlier(handed_over)?;
+        let mut window_started = earlier(budget_observation_now(runtime, pace))?;
         let mut last_observation = None;
         // #411 A15: the page the last frame of the wait matched, none when it matched no page
         // (`last_observation` keeps the last frame that matched one).
@@ -7653,7 +7737,7 @@ impl PreparedContainedTask {
         // wait step's own page, the confirmation's wait page), and the budget instant of the
         // wait's latest frame.
         let mut held = HeldPage::of(operation, started);
-        let mut last_frame_at = started;
+        let mut last_frame_at = handed_over;
         loop {
             let window_end = still.window_end(runtime, window_started, timeout);
             let timing = if self.evaluator.pack().target_consensus.is_empty() {
@@ -7721,8 +7805,10 @@ impl PreparedContainedTask {
             // counts as a frame that did not confirm the step.
             let (paused, unconfirmed) = match observation {
                 Ok(observation) => {
-                    let destination_matches =
-                        operation.matching_destination_count(&self.control, &observation)?;
+                    // ACT-4: the one final-state judgement; a destination page that is not the
+                    // step's final state is a frame of no destination.
+                    let judged = self.final_state(runtime, operation, &observation, base_timing)?;
+                    let destination_matches = judged.destinations;
                     let hit_error_page = self
                         .program
                         .is_error_page(&self.control, &observation.page_label);
@@ -7733,7 +7819,7 @@ impl PreparedContainedTask {
                         )
                         .into());
                     }
-                    if destination_matches == 1 {
+                    if judged.reached {
                         // Workflow #390 EXEC-2 (FCM E-05): a declared observation window watches
                         // the screen before the step finishes.
                         return match operation.observation_window {
@@ -10458,6 +10544,13 @@ struct TaskOperationExpectation {
     /// `max_ms` of time on it; task schema `0.9`, page-graph tasks only.
     #[serde(default)]
     wait_page: Option<wait_step::TaskWaitPage>,
+    /// ACT-4 (Workflow #407): targets that pass on the step's final frame; task schema `0.9`,
+    /// page-graph tasks only ([`final_state`]).
+    #[serde(default)]
+    target_present: Vec<String>,
+    /// ACT-4: targets that definitely do not pass on it.
+    #[serde(default)]
+    target_gone: Vec<String>,
 }
 
 /// An `expect_after`'s `expect_identity` (Workflow #308 SEL-L4b, S0 §1.3): the select step whose

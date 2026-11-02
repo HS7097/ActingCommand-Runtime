@@ -10,8 +10,13 @@
 //! (`standard_pack_check`), and laid beside `bundle.json` byte for byte. ROUT-L RL-1a: so is
 //! `schedule.json` (`--schedule`), checked by the Runtime's composer (`standard_pack_schedule`).
 //! Workflow #392 DA-4: and `display-layout.json` (`--display-layout`), checked by the root reader.
+//! Workflow #407 LOAD-1: with `--loading`, every pack's loading copy is checked as `package
+//! loading --check` checks it before anything is written, and `loading.json` with the templates it
+//! declares is laid beside `bundle.json` (`loading/`), for audit only; without it, a pack that
+//! carries a loading copy is refused (`package_loading`).
 
 use crate::codes::ResourceToolingCode;
+use crate::package_loading::{LoadingRoot, check_loading, named_packs, stale_copies};
 use crate::standard_pack_check::{
     RootFileInputs, cross_check, probe_keys_marked, store_update_cooldowns,
 };
@@ -20,7 +25,8 @@ use crate::{PackageBundleRequest, PackageBundleResponse};
 use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
     BundleIndex, BundleIndexVersion, BundleMaintenance, BundlePack, LabError, LabErrorClass,
-    LabResult, MaintenanceUse, package_id_names_one_path_segment, reserved_package_id,
+    LabResult, MaintenanceUse, STANDARD_PACK_LOADING_DIRECTORY, STANDARD_PACK_LOADING_FILE,
+    package_id_names_one_path_segment, reserved_package_id,
 };
 use actingcommand_execution_kernel::{NavigationPackageDescriptor, TaskPackageDescriptor};
 use actingcommand_execution_kernel::{PreparedContainedTask, validate_bundle_maintenance};
@@ -85,6 +91,14 @@ pub fn package_bundle(request: PackageBundleRequest) -> LabResult<PackageBundleR
     let applications = Applications::parse(&applications_bytes)?;
     let root_files = RootFileInputs::read(&request.root_files)?;
     let directories = pack_directories(&absolute(&request.packs_root)?)?;
+    // Workflow #407 LOAD-1: every pack's loading copy, before anything is written.
+    let loading = match root_files.loading() {
+        Some(root_file) => Some(check_loading(root_file, &applications.game, &directories)?),
+        None => {
+            stale_copies(&applications.game, &named_packs(&directories))?;
+            None
+        }
+    };
     fs::create_dir(&staging).map_err(|error| write_error(&staging, error))?;
     write_bundle(
         &staging,
@@ -96,6 +110,9 @@ pub fn package_bundle(request: PackageBundleRequest) -> LabResult<PackageBundleR
         &root_files,
     )
     .and_then(|(index, warnings, benefit_coverage)| {
+        if let Some(loading) = &loading {
+            lay_loading(&staging, loading)?;
+        }
         fs::rename(&staging, &out).map_err(|error| write_error(&out, error))?;
         Ok(PackageBundleResponse {
             status: "written".to_string(),
@@ -319,6 +336,21 @@ fn write_bundle(
     Ok((index, warnings, benefit_coverage))
 }
 
+/// Workflow #407 LOAD-1: `loading.json` and every template it declares, byte for byte, beside
+/// `bundle.json` (`loading/<file>.png`), after the other root files.
+fn lay_loading(staging: &Path, loading: &LoadingRoot) -> LabResult<()> {
+    write_new(&staging.join(STANDARD_PACK_LOADING_FILE), &loading.bytes)?;
+    let directory = staging.join(STANDARD_PACK_LOADING_DIRECTORY);
+    fs::create_dir(&directory).map_err(|error| write_error(&directory, error))?;
+    for (template, bytes) in &loading.templates {
+        let file = template
+            .split('/')
+            .fold(staging.to_owned(), |parent, part| parent.join(part));
+        write_new(&file, bytes)?;
+    }
+    Ok(())
+}
+
 /// The `package_id` a pack source's `control.json` declares, which names the pack's directory
 /// (`packs/<package_id>`): one path segment, and never a name the game root reserves (its
 /// `tables` directory, Workflow #357 M-357a §2.1; Workflow #373 NAV-T, M-373 §3.1: a root file's
@@ -444,8 +476,9 @@ impl Applications {
     }
 }
 
-/// Every entry of `packs_root` is one pack source directory, in name order.
-fn pack_directories(packs_root: &Path) -> LabResult<Vec<PathBuf>> {
+/// Every entry of `packs_root` is one pack source directory, in name order (Workflow #407
+/// LOAD-1: `package loading --packs-root` reads it the same way).
+pub(crate) fn pack_directories(packs_root: &Path) -> LabResult<Vec<PathBuf>> {
     let invalid =
         |message: String| bundle_error(ResourceToolingCode::PackageBundlePacksRootInvalid, message);
     let mut directories = Vec::new();

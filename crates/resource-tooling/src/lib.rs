@@ -80,8 +80,16 @@ mod gate_428_cfl2;
 #[cfg(test)]
 mod gate_ss5;
 
+// Workflow #407 LOAD-1 (register §1.257): a game's loading.json, the packs' loading copies,
+// package loading --write and --check, package bundle --loading and standard-pack check.
+#[cfg(test)]
+mod gate_load1;
+
 mod maa_task_graph;
 mod package_directory;
+// Workflow #407 LOAD-1: `package loading`, and the check `package bundle` and `standard-pack
+// check` run with it.
+mod package_loading;
 mod package_publish;
 mod package_validate;
 mod resource_convert;
@@ -102,6 +110,7 @@ pub use maa_task_graph::{
     MaaTaskGraphStats, compile_maa_task_graph,
 };
 pub use package_directory::package_bundle;
+pub use package_loading::package_loading;
 pub use package_publish::{
     PackagePublicationCommit, PackagePublicationTransaction, PublishedPackageReader,
     open_published_package,
