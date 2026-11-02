@@ -3043,6 +3043,26 @@ tests = [
 ]
 incident = ["#432 AGT-1b"]
 
+# AGT-2 (Workflow #432, 0.12.37; design rd-1031/agt/model-agt-v2.md sections 2, 4, 5.3, 7.3 and 10; register section 1.253; contracts/agent-wake.md): each first kind wakes with its code and instance; a fence wakes only when it waits for a person and never for the work that met it; a failed run needs a listed code; interrupted, drilled and planned ladders and other writers of the same record types wake nothing, and a delivery failure is never a candidate; a ladder's end and a person wait within coalesce_ms make one wake with the rest related; cool-downs and day caps survive a restart; a used-up cap is said once a day and stops the wakes; a full queue never blocks the append path; the queue takes records before the thread starts; a scheduling pause stops no wake and a wake changes no scheduling; and the day cap rolls over at the host's local day.
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_agt_2::each_first_kind_wakes_with_its_code_and_instance",
+    "actingcommand-runtime-host::lib::tests::gate_agt_2::fence_wakes_only_when_it_waits_for_a_person",
+    "actingcommand-runtime-host::lib::tests::gate_agt_2::a_fence_met_by_other_work_does_not_wake",
+    "actingcommand-runtime-host::lib::tests::gate_agt_2::run_failed_needs_a_listed_code",
+    "actingcommand-runtime-host::lib::tests::gate_agt_2::interrupted_and_drill_ladders_do_not_wake",
+    "actingcommand-runtime-host::lib::tests::gate_agt_2::other_writers_of_the_record_type_do_not_wake",
+    "actingcommand-runtime-host::lib::tests::gate_agt_2::ladder_end_and_person_wait_make_one_wake_with_the_rest_related",
+    "actingcommand-runtime-host::lib::tests::gate_agt_2::cooldown_and_daily_cap_survive_a_restart",
+    "actingcommand-runtime-host::lib::tests::gate_agt_2::budget_exhausted_is_recorded_once_a_day_and_stops_wakes",
+    "actingcommand-runtime-host::lib::tests::gate_agt_2::a_full_queue_never_blocks_the_append_path",
+    "actingcommand-runtime-host::lib::tests::gate_agt_2::the_queue_takes_records_from_before_the_thread_starts",
+    "actingcommand-runtime-host::lib::tests::gate_agt_2::a_scheduling_pause_stops_no_wake_and_a_wake_changes_no_scheduling",
+    "actingcommand-runtime-host::lib::tests::gate_agt_2::the_daily_cap_rolls_over_at_the_local_day",
+]
+incident = ["#432 AGT-2"]
+
 # AGT-T1 (Workflow #432, 0.12.37; design rd-1031/agt/model-agt-v2.md section 10; register section 1.247; contracts/agent-forward.md): a write past its deadline or asked to stop is cancelled in the calling thread; the frame is the auth line then the user line and is in no detail; a bad pipe name, a missing record, a dead owner and another server all end before the intent, and a write error after it is unknown; the hook stores nothing for a session that is no channel, fails loud for a channel, and its end clears the blob only for the owner. The real-pipe tests use a local server with an invented name and an invented token.
 [[gate]]
 coverage = "Y"

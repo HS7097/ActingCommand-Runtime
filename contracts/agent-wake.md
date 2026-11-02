@@ -4,11 +4,13 @@ Workflow #432. The Runtime tells an agent session that something needs it by sen
 one short message. The forwarding is the Runtime's own function, it has no sender identity, and the
 message's first line is fixed. Client words live only in `crates/agent-forward`.
 
-**State of this contract (AGT-1b, 0.12.37).** The configuration, the registry's shape, the worker, the
-rows, the read faces and a person's test exist. **Nothing wakes automatically yet:** the triggers come
-with AGT-2, and a wake exists only through `actingctl agent-wake-test`. **No transport exists yet:** the
-forwarder answers `deferred`, so a test ends `deferred`, then `expired`, until AGT-T1 brings the first
-one. With no `agent_wake` section the only difference a Runtime shows is the one
+**State of this contract (AGT-2, 0.12.37).** The configuration, the registry's shape, the worker, the
+rows, the read faces, a person's test and the first triggers exist. **Wakes happen automatically once a
+section with rules exists** ("Triggers, rules and guards" below); nothing is configured in production,
+so nothing wakes there until a person adds the section. **One transport exists:** a Claude Code channel
+([agent-forward.md](agent-forward.md), AGT-T1). A channel of any other client is registered but answers
+`deferred` until that client's own transport lands, so its message waits and ends `expired` at give-up.
+With no `agent_wake` section the only difference a Runtime shows is the one
 `ledger_observer.tag.workbench_patterns` entry: no thread, no file, no row and no status member.
 
 ## The `agent_wake` section
@@ -39,6 +41,8 @@ An example with the shipped values:
              "hold_until_unix_ms": 0 },
   "budget": { "daily_cap": 24 },
   "rules": [
+    { "id": "ladder", "on": { "kinds": ["ladder_exhausted"] }, "instances": "*",
+      "to": "<channel>", "cooldown_ms": 1800000, "daily_cap": 8 },
     { "id": "fence", "on": { "kinds": ["instance_fenced"] }, "instances": "*",
       "to": "<channel>", "cooldown_ms": 1800000, "daily_cap": 8 },
     { "id": "runs", "on": { "kinds": ["run_failed"], "codes": ["<registered code>"] },
@@ -72,10 +76,11 @@ An example with the shipped values:
 A rule is `{id, on: {kinds, codes?}, instances, to, cooldown_ms, daily_cap}`. `id` is 1 to 64 bytes
 of letters, digits, `_` and `-`. `kinds` come from the closed list `ladder_exhausted`,
 `instance_fenced`, `run_failed`, `daily_summary`, `delivery_test`; these are configuration words,
-not the ledger's `AgentWakeKind`. `instances` is `"*"` or a list of aliases. `to` is a channel name:
-1 to 16 Unicode scalars with no control character, opaque to the section. `cooldown_ms` is at most
-a week, and `daily_cap` is at least 1. An instruction may point a rule at another registered channel;
-it can never add a channel.
+not the ledger's `AgentWakeKind`. `codes` applies to `run_failed` only, which needs it. `instances`
+is `"*"` or a list of aliases. `to` is a channel name: 1 to 16 Unicode scalars with no control
+character, opaque to the section. `cooldown_ms` is at most a week, and `daily_cap` is at least 1. An
+instruction may point a rule at another registered channel; it can never add a channel. What the
+rules do is in "Triggers, rules and guards".
 
 ### Refusals
 
@@ -108,6 +113,68 @@ configured needs the instances: the start, `check-config` and, for an instructio
 rule's `to` the registry does not list (`channel_unknown`) and a program a channel names that is not
 there (`channel_program_missing`) are `note` links of `agent_wake_config_invalid` on the
 `agent_wake` subsystem row. None of them stops a start.
+
+## Triggers, rules and guards
+
+Workflow #432 AGT-2. A wake is the Runtime's own function and independent of scheduling: a scheduling
+pause stops no wake, and a wake never touches a pause, a lease, a queue or a fence.
+
+**The tap.** One call beside direction ①'s count on the append path sees each committed record once.
+It works in memory only, under the bounded queue's own leaf lock. A full queue drops the candidate and
+counts it (`delivery.queue_capacity`); the worker then says it once (`agent_wake_delivery_failed`,
+`wake_queue_full`). Nothing is recorded and nothing can fail on the write path. The queue is built with
+the host's shared state, so a record committed during the start, before the worker's thread runs,
+waits for it. Candidates live in memory: a crash loses those not yet made rows.
+
+**The first triggers.** A candidate needs an instance link.
+
+| Kind | Record | Word | Never a candidate |
+|---|---|---|---|
+| `ladder_exhausted` | the end (`recovery_ladder_finished`, `exhausted`) of a ladder a trigger started, with `recovery_ladder_exhausted` | 阶梯用尽 | an interrupted ladder (its code is `recovery_ladder_interrupted`), a person's drill (tagged `drill`), a plan drill (`planned`) |
+| `instance_fenced` | `runtime.failed` with `instance_resources_fence_awaiting_person`: a fence began to wait for a person | 实例隔离 | `instance_resources_fenced`, the code of a fence's own record and of the failure of work that met it |
+| `run_failed` | a run's failed terminal (`task.failed`, `terminal_committed`), by the run's failure code (a relayed spelling the catalog does not register is its `raw_code`) | 运行失败 | a code no rule lists; another writer's `task.failed`, which is no terminal |
+
+The worker's own codes (`agent_wake_*`) and `agent_budget_exhausted` are never candidates, so a
+delivery failure or a used-up budget cannot make a wake. `daily_summary` has no emitter yet.
+
+**Rules.** A rule matches a candidate of one of its `kinds` on an instance its `instances` covers;
+`run_failed` also needs the candidate's code in the rule's `codes`: no list, no wake. A candidate no
+rule matches is dropped and not counted.
+
+**Coalescing.** One instance's matched candidates are gathered for `delivery.coalesce_ms` from the
+first one (0: those taken in the same pass). Then each channel receives at most one wake: of the rules
+that send to it, the one whose matched candidate is the strongest (`ladder_exhausted`, then
+`instance_fenced`, then `run_failed`; the earlier one on a tie, then the rule written first). The
+burst's other candidates are listed in the body's `related` as `{kind, event_id, code}`. A ladder's
+end followed by its fence's wait for a person is therefore one wake; the burst is by instance, not by
+correlation, because the person-wait record has fresh links. A burst holds at most
+`delivery.queue_capacity` candidates; past that a stronger one takes the weakest one's place, and the
+one left out is counted as suppressed.
+
+**Guards,** in this order, each read from the rows of `host.agent_wake`, which a start restores, so a
+restart forgets none of them:
+
+1. **Cool-down:** no second wake of one rule, instance and code within the rule's `cooldown_ms`.
+2. **Rule cap:** at most the rule's `daily_cap` wakes per local day.
+3. **Budget:** at most `budget.daily_cap` wakes per local day over all rules.
+
+A day is the **host's local day**: the machine's zone at that instant, daylight saving time included.
+A held candidate is counted in `suppressed_today` and never recorded. A person's test skips the
+guards and counts toward no cap.
+
+**A used-up cap is said once a day.** The wake that fills a rule's cap, or the budget, writes one
+`agent_budget_exhausted` (a warning with no instance link: `config_key` `agent_wake.rules` with
+`label` the rule's id and `agent_channel` its channel, or `agent_wake.budget.daily_cap`; `limit_count`
+the cap; `alias` the instance). Wakes of that rule, or of every rule, then stop until the next local
+day, and `Status.agent_wake.attention` shows it. A cap an instruction lowers below the day's count
+holds at once and says nothing more that day. If the host's local day cannot be read, the iteration
+fails (`agent_wake_delivery_failed`, `local_time_unknown`) before it takes anything, and the
+candidates wait in the queue.
+
+**The body of an automatic wake** carries `rule`, `instance_alias`, `trigger` (the record's type, id,
+sequence and links, its outcome codes only) and `related`, and `next_reads`: for a failed run first
+`ac_get_run` with the run's request id, then `ac_events` with the instance and `after_sequence` just
+before the burst's first record.
 
 ## The message
 
@@ -197,7 +264,8 @@ memory. After a stop, no new `sending`; `prepared` and `deferred` rows carry on 
 `Deferred` with a `reason`, `Delivered` with a `proof` (`written`, `accepted`, `recorded`,
 `receipt`), `Failed` or `Unknown` with a `problem`. A transport commits the intent through
 `before_write`, once, immediately before its first possible write, and writes nothing when that
-fails. Until a transport exists, the implementation `Unavailable` answers `Deferred`.
+fails. The Runtime assembles `RealForward`: a channel of a client with no transport in this build
+answers `Deferred` and nothing is written ([agent-forward.md](agent-forward.md)).
 
 ## The fact `host.agent_wake`
 
@@ -238,7 +306,8 @@ record per tick. The Runtime does not read quota: whether a silence applies is a
 A delivery failure is a non-fatal `runtime.failed` with system links and no instance link, at most one per
 wake: `agent_wake_delivery_failed` (`agent_delivery_state`, `agent_delivery_problem`, `agent_channel`,
 `alias`, `file`), `agent_wake_message_too_long`, `agent_wake_channel_unknown`. It reaches no ladder, fence
-or pause, and it can never become a wake. Every failure of the worker is `Operation`; only a real ledger
+or pause, and it can never become a wake. `agent_budget_exhausted` (a warning, "Triggers, rules and
+guards") takes the same path. Every failure of the worker is `Operation`; only a real ledger
 failure stays `Global`. A panic or an error of an iteration writes one such record (`worker_panicked`, or
 the error) and waits `delivery.panic_backoff_ms`, doubling to `delivery.panic_backoff_max_ms`, reset by a
 clean iteration. A worker thread that cannot start turns the feature off and says so
@@ -249,8 +318,10 @@ yet made rows; the crash itself is loud.
 
 - **`Status.agent_wake`** (`runtime-client` revision 5), from memory, absent with no section: `{enabled,
   worker: running|backing_off|unavailable, quiet?: window|hold, open, last_wake_at_unix_ms?, failed_today,
-  suppressed_today, attention}`. `attention` is true only for a row that failed today or an unreadable
-  registry. A day is a UTC day until AGT-2 brings the host's local day.
+  suppressed_today, attention}`. `suppressed_today` counts the candidates dropped with the feature off, a
+  full queue or burst, a cool-down or a cap. `attention` is true only for a row that failed today, a cap
+  used up today, or an unreadable registry. A day is the host's local day (AGT-2; until then it was a
+  UTC day).
 - **`actingctl overview`, `ac_overview`:** the block `agent_wake`, that member of the one Status read; MCP
   never cuts it.
 - **Rows:** `actingctl facts`, `ac_facts`, key `host.agent_wake`. **History:** `ac_events` by type, always

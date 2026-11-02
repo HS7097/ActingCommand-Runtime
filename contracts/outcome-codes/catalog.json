@@ -5071,6 +5071,9 @@
         },
         "worker_spawn_failed": {
           "description": "The worker thread could not start; the feature is off until the next start."
+        },
+        "local_time_unknown": {
+          "description": "The host's local day could not be read, so the day caps could not be judged; the waiting candidates stay queued (Workflow #432 AGT-2)."
         }
       }
     },

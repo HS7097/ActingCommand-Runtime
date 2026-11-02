@@ -159,6 +159,9 @@ const CONNECTION_PREPARATION_CONNECTION_VALUE: u64 = u64::MAX - 3;
 mod agent_control;
 // Workflow #432 AGT-1b: the worker of the Runtime's messages to registered channels.
 mod agent_wake;
+// Workflow #432 AGT-2: the records the tap's tests commit.
+#[cfg(test)]
+pub(crate) use agent_wake::WakeRecordForTest;
 // UPD-1: the host's writes of `health.application.update_required`.
 mod application_update;
 mod backend_open;

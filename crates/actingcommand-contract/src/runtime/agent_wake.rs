@@ -78,6 +78,9 @@ crate::outcome_vocabulary! {
         WorkerPanicked => "worker_panicked",
         /// The worker thread could not start; the feature is off until the next start.
         WorkerSpawnFailed => "worker_spawn_failed",
+        /// The host's local day could not be read, so the day caps could not be judged; the
+        /// waiting candidates stay queued (Workflow #432 AGT-2).
+        LocalTimeUnknown => "local_time_unknown",
     }
 }
 
@@ -116,11 +119,14 @@ pub struct AgentWakeStatus {
     pub open: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_wake_at_unix_ms: Option<u64>,
-    /// The rows that ended `failed`, `unknown`, `expired` or `body_failed` today.
+    /// The rows that ended `failed`, `unknown`, `expired` or `body_failed` today. A day is the
+    /// host's local day.
     pub failed_today: u32,
-    /// The candidates dropped today: the feature off, or the queue full.
+    /// The candidates dropped today: the feature off, the queue or a burst full, a rule's
+    /// cool-down or a day cap (Workflow #432 AGT-2).
     pub suppressed_today: u32,
-    /// Something here needs a look: a row that failed today, or an unreadable channel registry.
+    /// Something here needs a look: a row that failed today, a day cap used up today, or an
+    /// unreadable channel registry.
     pub attention: bool,
 }
 
