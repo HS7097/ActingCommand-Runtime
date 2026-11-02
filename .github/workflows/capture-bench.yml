@@ -1,0 +1,212 @@
+name: Capture bench build
+
+# #402 step 1 (experiment branch only, never merged): the exact-SHA Windows build of the capture
+# bench `ac-capture-bench`, in a workflow of its own so windows-remote-build.yml stays exactly as
+# on main (scripts/windows-tools/Test-WindowsRemoteBuildTools.ps1 counts its pinned action uses).
+# The bench is no release binary and is in no release package. crates/device/build.rs embeds the
+# scrcpy server verified here against windows-tool-sources.v1.json, as it does for actingd in the
+# Windows build. The bench's D1 rehearsal tests stay in ci.yml's `bench` job.
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact 40-character lowercase commit SHA to build
+        required: true
+        type: string
+
+concurrency:
+  group: capture-bench-${{ github.event.pull_request.number || inputs.source_sha || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Resolve exact source SHA
+        id: source
+        shell: pwsh
+        env:
+          DISPATCH_SOURCE_SHA: ${{ inputs.source_sha }}
+          PULL_REQUEST_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sourceSha = switch ($env:GITHUB_EVENT_NAME) {
+            'workflow_dispatch' { $env:DISPATCH_SOURCE_SHA }
+            'pull_request' { $env:PULL_REQUEST_SOURCE_SHA }
+            default { throw "unsupported workflow event: $env:GITHUB_EVENT_NAME" }
+          }
+          if (-not [regex]::IsMatch(
+              $sourceSha,
+              '\A[0-9a-f]{40}\z',
+              [Text.RegularExpressions.RegexOptions]::CultureInvariant
+          )) {
+            throw 'source SHA must be exactly 40 lowercase hexadecimal characters'
+          }
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "source_sha=$sourceSha"
+
+      - name: Check out exact source SHA
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ steps.source.outputs.source_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify checked-out commit
+        shell: pwsh
+        env:
+          EXPECTED_SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actualHead = (& git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0) {
+            throw "git rev-parse HEAD failed with exit code $LASTEXITCODE"
+          }
+          if (-not [string]::Equals(
+              $actualHead,
+              $env:EXPECTED_SOURCE_SHA,
+              [StringComparison]::Ordinal
+          )) {
+            throw "checked-out commit mismatch: expected $env:EXPECTED_SOURCE_SHA, actual $actualHead"
+          }
+
+      - name: Fetch and verify the scrcpy server
+        shell: pwsh
+        run: |
+          # The same source and checks as windows-remote-build.yml (#402 RD-3): the official
+          # scrcpy release asset at its versioned URL only (no other host, no cache, no fallback),
+          # its size and SHA-256 against windows-tool-sources.v1.json. crates/device/build.rs
+          # checks the file against the same pin again and embeds it. Nothing is executed here.
+          # Only network errors and non-200 responses are retried; a mismatch never is.
+          $ErrorActionPreference = 'Stop'
+          $pin = (Get-Content -LiteralPath 'scripts/windows-tools/windows-tool-sources.v1.json' -Raw |
+            ConvertFrom-Json -Depth 100).components.'scrcpy-server-5.0.1'
+          $artifacts = @($pin.artifacts)
+          if ($artifacts.Count -ne 1) {
+            throw "scrcpy_server_content_invalid: the pin must list exactly one artifact, it lists $($artifacts.Count)"
+          }
+          $artifact = $artifacts[0]
+          $url = [string]$artifact.url
+          $size = [long]$artifact.size
+          $pinnedSha256 = [string]$artifact.sha256
+          $version = [regex]::Escape([string]$pin.version)
+          if ($url -cnotmatch "\Ahttps://github\.com/Genymobile/scrcpy/releases/download/v$version/scrcpy-server-v$version\z") {
+            throw "scrcpy_server_source_unavailable: the pinned URL is not the official release asset: $url"
+          }
+          $root = Join-Path $env:RUNNER_TEMP 'actingcommand-scrcpy-server'
+          New-Item -ItemType Directory -Path $root | Out-Null
+
+          $handler = [Net.Http.HttpClientHandler]::new()
+          $client = [Net.Http.HttpClient]::new($handler)
+          $client.Timeout = [TimeSpan]::FromMinutes(5)
+          $bytes = $null
+          try {
+            for ($attempt = 1; $attempt -le 3 -and $null -eq $bytes; $attempt++) {
+              if ($attempt -gt 1) {
+                Start-Sleep -Seconds (10 * ($attempt - 1))
+              }
+              try {
+                $response = $client.GetAsync($url).GetAwaiter().GetResult()
+              } catch {
+                Write-Host "scrcpy server attempt $attempt/3: GET $url failed: $($_.Exception.GetBaseException().Message)"
+                continue
+              }
+              try {
+                $status = [int]$response.StatusCode
+                $final = $response.RequestMessage.RequestUri
+                Write-Host "scrcpy server attempt $attempt/3: GET $url -> HTTP $status from $($final.Host)"
+                if ($status -ne 200) {
+                  continue
+                }
+                if ($final.Scheme -cne 'https' -or
+                    ($final.Host -cne 'github.com' -and
+                     -not $final.Host.EndsWith('.githubusercontent.com', [StringComparison]::Ordinal))) {
+                  throw "scrcpy_server_source_unavailable: the release asset was served from an unexpected host: $($final.Host)"
+                }
+                $bytes = $response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()
+              } finally {
+                $response.Dispose()
+              }
+            }
+          } finally {
+            $client.Dispose()
+            $handler.Dispose()
+          }
+          if ($null -eq $bytes) {
+            throw "scrcpy_server_source_unavailable: no HTTP 200 response from $url in 3 attempts"
+          }
+
+          if ($bytes.LongLength -ne $size) {
+            throw "scrcpy_server_digest_mismatch: received $($bytes.LongLength) bytes, the pin says $size"
+          }
+          $sha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+          if ($sha256 -cne $pinnedSha256) {
+            throw "scrcpy_server_digest_mismatch: SHA-256 expected $pinnedSha256 (pin), actual $sha256"
+          }
+          $path = Join-Path $root ([IO.Path]::GetFileName([string]$artifact.relative_path))
+          [IO.File]::WriteAllBytes($path, $bytes)
+          Write-Host "scrcpy server v$($pin.version): $($bytes.LongLength) bytes, SHA-256 $sha256 (pin)"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "ACTINGCOMMAND_SCRCPY_SERVER=$path"
+
+      - name: Configure stable MSVC Rust toolchain
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & rustup toolchain install stable --profile minimal --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) {
+            throw "rustup toolchain install failed with exit code $LASTEXITCODE"
+          }
+          & rustup default stable
+          if ($LASTEXITCODE -ne 0) {
+            throw "rustup default failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Build capture bench
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & cargo build --locked --release --target x86_64-pc-windows-msvc `
+            -p actingcommand-capture-bench --bin ac-capture-bench
+          if ($LASTEXITCODE -ne 0) {
+            throw "capture bench cargo build failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Stage capture bench artifact
+        id: bench_stage
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $source = Join-Path $PWD 'target\x86_64-pc-windows-msvc\release\ac-capture-bench.exe'
+          if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+            throw "expected build output is missing: $source"
+          }
+          $name = "actingcommand-capture-bench-$env:SOURCE_SHA"
+          $dir = Join-Path $env:RUNNER_TEMP $name
+          New-Item -ItemType Directory -Path $dir | Out-Null
+          Copy-Item -LiteralPath $source -Destination (Join-Path $dir 'ac-capture-bench.exe')
+          $manifest = [ordered]@{
+            commit_sha = $env:SOURCE_SHA
+            file = 'ac-capture-bench.exe'
+            size_bytes = (Get-Item -LiteralPath (Join-Path $dir 'ac-capture-bench.exe')).Length
+            sha256 = (Get-FileHash -LiteralPath (Join-Path $dir 'ac-capture-bench.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
+            scrcpy_server_embedded_from = $env:ACTINGCOMMAND_SCRCPY_SERVER
+            never_released = $true
+          }
+          [IO.File]::WriteAllText((Join-Path $dir 'BENCH-MANIFEST.json'), ($manifest | ConvertTo-Json -Depth 4), [Text.UTF8Encoding]::new($false))
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "name=$name"
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "dir=$dir"
+
+      - name: Upload capture bench artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.bench_stage.outputs.name }}
+          path: ${{ steps.bench_stage.outputs.dir }}
+          if-no-files-found: error
+          retention-days: 7

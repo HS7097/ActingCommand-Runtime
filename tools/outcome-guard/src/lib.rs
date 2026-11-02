@@ -67,6 +67,10 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
     ),
     member("crates/lab", "A2d lists it until B4 converts the lab sites"),
     member(
+        "tools/capture-bench",
+        "Workflow #402 experiment, branch never merged",
+    ),
+    member(
         "tools/actinglab-architecture",
         "standing: a test tool, not a result path",
     ),
