@@ -5815,6 +5815,26 @@ members), **so the operator first removes them**. An online override of either k
 
 **Tests changed** (the approved behaviour change): `component_interfaces.rs`' `V0120` and `gate_429_r0b_pairing` say `runtime-client` [3, 5]; the fake Runtime of `gate_422_ov24k` can answer the new status member.
 
+### 1.247 Slice AGT-T1 (0.12.37): the first transport and `actingctl agent-channel` (Workflow #432; design `rd-1031/agt/model-agt-v2.md` §5.1, §5.2, §6.1, §6.3, §6.7, §7.2, §10, §11; coordinator work order `rd-1031/agt/brief-agt-t1.md`)
+
+[agent-forward.md](agent-forward.md) is the contract, and the one place with client words. Number 1.247 is the coordinator's.
+
+**What changes live.** Nothing until the Runtime's assembly uses `RealForward` (AGT-1b's assembly, one line) and a person registers a channel. `agent-channel` is new and works with no Runtime. No interface revision moves.
+
+**Rollback.** `<state_root>\agent-forward\` stays on disk and an older build ignores it. Its session records hold DPAPI blobs, so `agent-channel remove`, or a session's end, is what clears a token.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| AGTT1-1 | `actingctl agent-channel` | new command | AGT-T1 | the person; a session's hook | not an MCP tool; no Runtime and no slot; the hook's two commands print nothing on success, and the notice prints plain text |
+| AGTT1-2 | `<state_root>\agent-forward\channels.json` | first writer of AGT1A-7 | AGT-T1 | `agent-channel add`, `remove` | no secret, file lock, `.part`, flush, rename |
+| AGTT1-3 | `<state_root>\agent-forward\claude-sessions\<native id>.json`, schema `actingcommand.agent-claude-session.v1` | new program state | AGT-T1 | a session's hook or registration | holds a credential as a DPAPI blob for the current Windows user; no ledger field, no configuration key |
+| AGTT1-4 | `agent_channel_reported` (success), `agent_channel_failed` (error), ladder class `none`, owner `actingctl`, domain `agent_` | new outcome codes | AGT-T1 | `agent-channel` | no values: the text of a failure is the developer line's, and never holds a credential |
+| AGTT1-5 | `RealForward::new(state_root)`, `cli` (`crates/agent-forward`, Windows) | new public items | AGT-T1 | AGT-1b's assembly | answers `Deferred` (`ipc_unavailable`) for a client with no transport |
+| AGTT1-6 | `crates/agent-forward`: `deny(unsafe_code)`, allowed only in `pipe`, `dpapi`, `ancestor`; `deny(unsafe_op_in_unsafe_fn)` | changes AGT1A-6's `forbid` | AGT-T1 | — | new dependencies: `actingcommand-host-metrics`, `windows-sys` features as the design's list; dev `tempfile`; no new third-party crate |
+| AGTT1-7 | `crates/agent-forward/LICENSE-codex-goal-lifecycle.txt`, `NOTICE.md` section "Source code adapted from other projects" | licence notice | AGT-T1 | — | MIT source in an AGPL-3.0-only repository |
+
+**Departures from the design** (each is in the contract): no flush after the write, since `FlushFileBuffers` cannot be cancelled and would break the deadline; `add` does not check the message floor, since it cannot see the configuration; a failed hook exits 2 and prints nothing on stdout, by Claude Code's hook page; `pipe.rs` has no read yet, since this transport never reads (AGT-T2 adds it).
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

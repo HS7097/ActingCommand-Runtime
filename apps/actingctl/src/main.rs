@@ -150,6 +150,14 @@ fn main() -> ExitCode {
         cli_line::developer_line(outcome, None);
     });
     let arguments: Vec<OsString> = env::args_os().skip(1).collect();
+    // Workflow #432 AGT-T1: `agent-channel` touches only its own files and never needs the Runtime
+    // or an installation. It leaves first: a session's hook must not depend on, or pin, a slot.
+    #[cfg(windows)]
+    {
+        if let Some(exit) = agent_channel(&arguments) {
+            return exit;
+        }
+    }
     if let Err(error) = actingcommand_contract::process_installation() {
         let outcome = Outcome::new(error.code());
         // Model §7.3: `mcp-serve` and `mcp-config` print no result line (stdout is the
@@ -300,6 +308,67 @@ fn main() -> ExitCode {
 /// (A4 part B L2), so its line goes out as a refused one.
 fn failed(outcome: &Outcome, text: Option<&str>) -> ExitCode {
     cli_line::refused(outcome, text)
+}
+
+/// Workflow #432 AGT-T1: `agent-channel` (`contracts/agent-forward.md`). The crate parses the words
+/// and does the work; this prints its answer. Two kinds of exit print no result line, as
+/// `mcp-serve` prints none: a hook's stdout would enter the session's context, and the notice is
+/// text for a person. A registered session's failed hook exits 2, the exit its client shows on that
+/// event, with its one stderr line.
+#[cfg(windows)]
+fn agent_channel(arguments: &[OsString]) -> Option<ExitCode> {
+    use actingcommand_agent_forward::cli::{self, CliAnswer, CliFailure, UsageProblem};
+    use std::io::Write;
+
+    let (command, words) = arguments.split_first()?;
+    if command.to_str() != Some(cli::COMMAND) {
+        return None;
+    }
+    Some(match cli::run(words) {
+        Ok(CliAnswer::Members(members)) => {
+            cli_line::success(members, &Outcome::new(ActingctlCode::AgentChannelReported))
+        }
+        Ok(CliAnswer::Text(text)) => match io::stdout().write_all(text.as_bytes()) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                cli_line::developer_line(
+                    &Outcome::new(ActingctlCode::ActingctlOutputFailed),
+                    Some(&error.to_string()),
+                );
+                ExitCode::FAILURE
+            }
+        },
+        Ok(CliAnswer::Silent) => ExitCode::SUCCESS,
+        Err(CliFailure::Usage {
+            argument,
+            problem,
+            usage,
+        }) => {
+            let problem = match problem {
+                UsageProblem::Unknown => ArgumentProblem::Unknown,
+                UsageProblem::Required => ArgumentProblem::Required,
+                UsageProblem::Repeated => ArgumentProblem::Repeated,
+                UsageProblem::ValueMissing => ArgumentProblem::ValueMissing,
+                UsageProblem::NotUtf8 => ArgumentProblem::NotUtf8,
+                UsageProblem::NotRecognised => ArgumentProblem::NotRecognised,
+            };
+            cli_line::failure(
+                &cli_line::usage_invalid(argument.as_deref(), problem),
+                Some(usage),
+            )
+        }
+        Err(CliFailure::Failed { text }) => cli_line::failure(
+            &Outcome::new(ActingctlCode::AgentChannelFailed),
+            Some(&text),
+        ),
+        Err(CliFailure::Hook { text }) => {
+            cli_line::developer_line(
+                &Outcome::new(ActingctlCode::AgentChannelFailed),
+                Some(&text),
+            );
+            ExitCode::from(2)
+        }
+    })
 }
 
 /// Workflow #381 A R1′, R2: how one `install-transition` run talks to the Runtime.

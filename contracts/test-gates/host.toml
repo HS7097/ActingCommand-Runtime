@@ -3033,3 +3033,24 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_agt_1b::agent_wake_test_takes_only_person_origins",
 ]
 incident = ["#432 AGT-1b"]
+
+# AGT-T1 (Workflow #432, 0.12.37; design rd-1031/agt/model-agt-v2.md section 10; register section 1.247; contracts/agent-forward.md): a write past its deadline or asked to stop is cancelled in the calling thread; the frame is the auth line then the user line and is in no detail; a bad pipe name, a missing record, a dead owner and another server all end before the intent, and a write error after it is unknown; the hook stores nothing for a session that is no channel, fails loud for a channel, and its end clears the blob only for the owner. The real-pipe tests use a local server with an invented name and an invented token.
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-agent-forward::lib::pipe::tests::pipe_write_past_its_deadline_is_cancelled",
+    "actingcommand-agent-forward::lib::pipe::tests::pipe_stops_when_asked",
+    "actingcommand-agent-forward::lib::pipe::tests::pipe_reports_the_server_pid",
+    "actingcommand-agent-forward::lib::dpapi::tests::dpapi_round_trips_and_a_tampered_blob_fails",
+    "actingcommand-agent-forward::lib::claude::tests::frame_is_auth_line_then_user_line",
+    "actingcommand-agent-forward::lib::claude::tests::frame_never_appears_in_a_detail",
+    "actingcommand-agent-forward::lib::claude::tests::pipe_name_outside_the_inbox_shape_is_refused",
+    "actingcommand-agent-forward::lib::claude::tests::missing_record_or_dead_owner_is_deferred_before_intent",
+    "actingcommand-agent-forward::lib::claude::tests::a_different_server_pid_fails_before_intent",
+    "actingcommand-agent-forward::lib::claude::tests::a_write_error_after_intent_is_unknown",
+    "actingcommand-agent-forward::lib::claude::tests::hook_stores_nothing_for_a_session_that_is_no_channel",
+    "actingcommand-agent-forward::lib::claude::tests::hook_for_a_channel_needs_both_variables_and_fails_loud",
+    "actingcommand-agent-forward::lib::claude::tests::hook_end_clears_the_blob_and_ignores_another_owner",
+    "actingcommand-agent-forward::lib::cli::tests::notice_prints_the_mit_text",
+]
+incident = ["#432 AGT-T1"]
