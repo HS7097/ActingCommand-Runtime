@@ -178,7 +178,7 @@ fn failures(host: &RuntimeHost, spelled: &str) -> Vec<(Outcome, bool)> {
             .payload()
             .outcome()
             .filter(|outcome| outcome.code().as_str() == spelled)
-            .map(|outcome| (outcome, event.links().instance_id().is_some()))
+            .map(|outcome| (outcome.clone(), event.links().instance_id().is_some()))
     })
     .collect()
 }
@@ -406,7 +406,7 @@ fn restart_turns_sending_into_unknown_and_never_resends() {
     assert_eq!(state(&host), AgentDeliveryState::Sending);
     host.close().expect("close");
 
-    bed.clock.advance(1);
+    bed.clock.advance(1_000);
     let forward = Arc::new(FakeForward::new([delivered()]));
     let host = bed.start(section(), forward.clone());
     assert_eq!(state(&host), AgentDeliveryState::Unknown);
@@ -439,6 +439,7 @@ fn restart_keeps_prepared_and_deferred_and_tries_them() {
     assert_eq!(state(&host), AgentDeliveryState::Prepared);
     host.close().expect("close");
 
+    bed.clock.advance(1_000);
     let forward = Arc::new(FakeForward::new([delivered()]));
     let host = bed.start(section(), forward.clone());
     assert_eq!(state(&host), AgentDeliveryState::Prepared);
@@ -451,6 +452,7 @@ fn restart_keeps_prepared_and_deferred_and_tries_them() {
     step(&host);
     assert_eq!(state(&host), AgentDeliveryState::Deferred);
     host.close().expect("close");
+    bed.clock.advance(1_000);
     let forward = Arc::new(FakeForward::new([delivered()]));
     let host = bed.start(section(), forward.clone());
     assert_eq!(state(&host), AgentDeliveryState::Deferred);
@@ -703,7 +705,7 @@ fn unreadable_row_shape_is_loud_and_the_start_goes_on() {
     .expect("the record");
     host.close().expect("close");
 
-    bed.clock.advance(1);
+    bed.clock.advance(1_000);
     let forward = Arc::new(FakeForward::new([delivered()]));
     let host = bed.start(section(), forward.clone());
     assert_eq!(failures(&host, "invalid_runtime_state_fact").len(), 1);
