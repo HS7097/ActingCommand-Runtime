@@ -109,6 +109,26 @@ to its store at start and after every change; offline tools and fixtures set non
 stream takes the value when it opens and keeps it. Stream open, Drain and the seal's
 zero-new-byte decision are unchanged.
 
+The edges of that rule (CHECK-M addendum item 2):
+
+- **Several streams.** The allowance is each stream's own count, not shared and not held
+  by the owner: a decision reserves nothing. "At most one chunk late" is per stream. The
+  whole machine's bound is the chunk times the live streams, each of which may write what
+  is left of its own chunk after the volume fills. Production's live streams are one
+  diagnostic stream per run in progress and short-lived PPOCR diagnostic documents.
+- **A write larger than what is left, or than a chunk.** One decision for all of that
+  write's own bytes, before any of them is written; what was left does not count towards
+  it. Refused, none of it is written. Allowed, a write of a chunk or more leaves nothing over.
+  Such a write is never late.
+- **A changed bound volume.** A stream binds at its opening decision and compares at each
+  later decision, so a change is seen at its next one, at most a chunk of bytes later:
+  `capacity_admission_refused` with `binding_changed`, as before. Those bytes go through
+  the file handle the stream already holds. Drain still passes it, as before.
+- **An I/O failure.** A file write that fails inside a chunk takes no new decision. It is
+  the stream's fatal `artifact_write_failed` with its native detail and the last decision
+  as context; the staging file is removed and the stream stays failed. The count ends
+  with the stream, so nothing leaks: no other stream's chunk and no later decision moves.
+
 Trusted terminal/error/release owners select Drain in Rust; there is no client or
 resource field for it. Drain still requires an owner. A stream retains the owner
 used at its successful open; sealing its already-written bytes uses that same

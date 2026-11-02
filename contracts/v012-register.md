@@ -5893,6 +5893,8 @@ an overview near the budget starts cutting a little earlier, in the order it alr
 
 **What changes live.** Nothing a run records or decides, except that a refusal or a binding change on a stream may surface up to one chunk (1 MiB) later. A decision still asks about the bytes of the write that needs it, so it is refused under the same condition with the same code, and never earlier. `capacity_admit` in task timing still counts one check per write, now mostly the chunk's count, so its attempts are unchanged and its total falls.
 
+**The edges** (CHECK-M addendum item 2; [capacity-admission.md](capacity-admission.md), [task-diagnostic-stream.md](task-diagnostic-stream.md)). The allowance is cached **per stream**, a count on the stream that is not shared and that the owner never holds. "At most one chunk late" is per stream; the whole machine's bound is the chunk times the live streams. A single write beyond what is left, or larger than a chunk, takes one decision for all of its own bytes before any is written, and what was left does not count towards it. A change of bound volume is seen at that stream's next decision, at most a chunk of bytes later, with today's refusal and reason. An I/O failure inside a chunk takes no decision, is the stream's fatal `artifact_write_failed` at once, and ends the stream's count with it, so nothing leaks to another stream or a later decision.
+
 **Rollback** (to 0.12.36). Nothing persisted. A file that names `artifact_store` is refused by the older build, as any newer section is; an instruction value of the key is reported as not restored.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
