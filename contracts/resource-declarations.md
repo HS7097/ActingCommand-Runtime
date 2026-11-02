@@ -1574,8 +1574,8 @@ into each pack, whose version then freezes them. The root reader and a run's pre
 read `loading.json`; the pack loader compiles a pack's copy (LOAD-2, since 0.12.37, "The compiled
 copy" below) and admits the operations that adjust it ("Operation-level loading" below). A page
 graph's waits run on them under `execution.loading.mode`, `off` by default (LOAD-3, since 0.12.37,
-"Waits on loading pages" below); a step plan does not yet (LOAD-4), so there a compiled loading set
-is admitted and reported (`package check`), nothing else.
+"Waits on loading pages" below), and so do a step plan's (LOAD-4, since 0.12.38,
+[Linear steps](linear-steps.md), "Loading pages").
 The tools check the files ([package-reference.md](package-reference.md), `package loading`,
 `package bundle --loading`, `standard-pack check`, `resource validate`). A pack that carries a
 copy needs a Runtime that reads it: the Runtime is deployed first, then the packs.
@@ -1668,11 +1668,12 @@ The confirmation's loading pages are, from the highest priority: none with `"off
 less `except`, with `add` and the wait page. Its allowance is `loading.max_ms`, else the wait
 page's `max_ms`, else the pack's; with no loading page there is none. A wait step may declare it,
 for its away clock. A page graph runs it under `execution.loading.mode` `on` ("Waits on loading
-pages" below); a step plan does not yet (LOAD-4).
+pages" below), and from 0.12.38 a step plan (LOAD-4, [Linear steps](linear-steps.md), "Loading
+pages").
 
 | Member | Declaration gate | Runtime admission (`contained_task_program_invalid`, `program_problem` as below, the task declaration's `path`, `json_pointer` the member below `/operations/<i>/expect_after`) |
 | --- | --- | --- |
-| `loading` | the string `off` (`InvalidValue` for another string), or an object with the optional members `except`, `add` (arrays of strings) and `max_ms` (an unsigned integer), nothing else (`InvalidType`, `UnknownField`) | `off` beside a `wait_page` (`loading_conflict`, at `loading`) |
+| `loading` | the string `off` (`InvalidValue` for another string), or an object with the optional members `except`, `add` (arrays of strings) and `max_ms` (an unsigned integer), nothing else (`InvalidType`, `UnknownField`) | `off` beside a `wait_page` (`loading_conflict`, at `loading`); LOAD-4 (since 0.12.38): loading pages for which no limit is named, no `loading.max_ms`, no `wait_page` and no loading copy in the pack, as pages `add`ed to a pack without a copy have (`loading_max_missing`, at `loading`), in a page graph and in a step plan |
 | `loading.max_ms` | as above | 1..=1800000 (`wait_max_invalid`); never beside a `wait_page`, whose `max_ms` is the allowance already (`loading_conflict`, at `loading/max_ms`) |
 | `loading.except[]` | as above | names one loading page the pack compiled, with or without the game, once (`loading_except_unknown`, at the entry) |
 | `loading.add[]` | as above | one page of the pack, once; in a page graph not the operation's `from` page, a destination or an error page, since a click that changes nothing would read as loading (`loading_page_invalid`, at the entry). In a step plan a page added, or the wait page, that is the step's `from`, destination or transition page is `contained_task_linear_invalid`, `reason=loading_page` ([Linear steps](linear-steps.md)) |
@@ -1712,8 +1713,9 @@ or unrecognised screen is no transition frame and gets no exemption.
 
 *The allowance.* The wait's loading pages are, for a confirmation, the operation's ("Operation-level
 loading" above) and for a page wait the pack's; their allowance is `loading.max_ms`, else the wait
-page's `max_ms`, else the pack's (a set with no limit anywhere has none: its first transition frame
-ends the wait). One allowance serves one input: its settled path, its confirmation and its failure
+page's `max_ms`, else the pack's (a set with no limit anywhere is refused at admission from 0.12.38,
+`loading_max_missing`; a run that meets one anyway gives it none: its first transition frame ends
+the wait). One allowance serves one input: its settled path, its confirmation and its failure
 decision's confirmation share it, and the next input takes a new one; a wait step and a page wait
 take one each. A transition frame is offered to the shared interrupt pages first: a handled one
 pauses the wait as a handled interrupt does and spends nothing. Otherwise it spends the budget time

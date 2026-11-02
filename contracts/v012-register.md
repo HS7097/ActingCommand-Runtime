@@ -6248,6 +6248,65 @@ record (`config_override_dropped`).
 
 **Rollback** (to 0.12.36). Nothing persisted changes. A 0.12.36 Runtime poisons itself on a lag again; a console that reads `resume_after_sequence` finds it absent there and resubscribes from its own last cursor.
 
+### 1.262 Slice LOAD-4 (0.12.38): a step plan's waits on loading pages, and a loading set with no limit refused at admission (Workflow #407; design `rd-1031/check-speed/model-loading.md` §5, §7 LOAD-4; coordinator work order `rd-1031/check-speed/brief-load-4.md`)
+
+[linear-steps.md](linear-steps.md) ("Loading pages", the admission and failure tables) and
+[resource-declarations.md](resource-declarations.md) ("Operation-level loading", "Waits on loading
+pages") are the contract. The number 1.262 is the coordinator's. **Off by default:** under
+`execution.loading.mode` `off` and `shadow` a `linear_steps` run decides as before LOAD-4 (`shadow`
+evaluates and records). No configuration key, ledger shape, wire shape or outcome code is new.
+
+**What.** (1) A step plan's waits (the entry, the intermediate page, the next step's page, the
+candidates of a run of optional operations, the retry decision and the arrival after a late gate)
+evaluate the wait's loading pages on the frame their candidates are evaluated on and ask LOAD-3's
+one judgement (`judge_frame`, any candidate that passes being what the wait waits for): a loading
+page comes before every candidate. The pages a confirmation adds (`loading.add`, its wait page) are
+evaluated by id with them, since a linear wait recognizes no page but its candidates
+(`LoadingAllowance::for_linear_input`). (2) Under `on` a transition frame is offered to the shared
+interrupt pages first, otherwise it spends the allowance and pauses the wait as a handled interrupt
+does (the arrival budget, a skip target's settle and first sighting, an extra round's end); it is
+never a candidate, the intermediate page or the step's own page. (3) One allowance per input, shared
+by the attempt's waits and its retry decision's, so a loading screen adds no input; the entry wait
+has its own, the pack's. (4) A transition frame after the allowance ends the wait: the entry with
+`contained_task_linear_entry_unmatched`, an attempt's waits and its retry decision's with
+`page_confirmation_failed` (the intermediate page's wait too), an application step's with
+`contained_task_linear_application_unconfirmed`, each with the loading values. (5) Admission, both
+modes (`TaskProgram::validate_loading`, through `TaskOperation::confirmation_loading`, the set and
+limit the allowance reads too): an operation whose loading pages have no limit named anywhere is
+refused. LOAD-3's allowance of zero for such a set stays as a guard.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| LD4-1 | a step plan's waits under `execution.loading.mode` | rule (no shape change) (the six `gate_load4` run tests) | LOAD-4 | LOAD-4 | `off` and `shadow` keep every decision; the fresh frame of a step's page before its input (ACT-2's gap, an observe-only retry) is one observation and evaluates no loading page |
+| LD4-2 | `program_problem` token `loading_max_missing` on `contained_task_program_invalid`, `json_pointer` `/operations/<i>/expect_after/loading` | new token of an existing vocabulary | LOAD-4 | LOAD-4 | `since` 0.12.38; in a page graph and a step plan (`a_loading_set_without_any_limit_is_refused_at_admission`, `a_linear_loading_set_without_any_limit_is_refused_at_admission`); only `add` can bring such pages: a copy's pages come with its `max_ms`, a wait page with its own |
+| LD4-3 | `loading_page_id`, `loading_ms`, `loading_limit_ms` optional on `contained_task_linear_entry_unmatched` and `contained_task_linear_application_unconfirmed` | optional values of existing codes | LOAD-4 | LOAD-4 | `since` 0.12.38; present only when the wait ended on its allowance; `page_confirmation_failed` already takes them (LD3-4) |
+| LD4-4 | `ConfirmationLoading`, `TaskOperation::confirmation_loading`, `LoadingAllowance::for_linear_input` (`execution-kernel`) | Runtime-internal interface (memory only) | LOAD-4 | LOAD-4 | one reading of a confirmation's loading pages and limit for admission and the allowance |
+
+**Decisions within the work order.** (a) The intermediate page's wait that ends on the allowance is
+`page_confirmation_failed` with the loading values, not `contained_task_linear_intermediate_unobserved`,
+as the design's §5 names the confirmation's code for the arrival and the intermediate page alike;
+`intermediate_seen` and the rest of the detail are as before. (b) An application step's wait follows
+the same allowance; its failure keeps its own code, `contained_task_linear_application_unconfirmed`,
+which takes the loading values too (§5 names only the two codes above; without them an application
+step's wait cut short by its allowance would carry nothing that says so). (c) An attempt whose wait
+ended on the allowance still goes to its retry decision, as a page-graph attempt goes to its failure
+decision; the decision shares the spent allowance, so its first transition frame ends it.
+
+**Interface.** `package` stays [3, 6], no step for 0.12.38 ([component-interfaces.md](component-interfaces.md)):
+LOAD-4 declares no new member. A step plan's `expect_after.loading` and wait page are LOAD-2's
+members, which 0.12.37 admits and does not run; running them is behaviour, and `loading_max_missing`
+is a stricter refusal of an already-admitted shape (pages `add`ed to a pack without a copy, with no
+`max_ms`), which 0.12.37 admits (a page graph runs it with an allowance of zero). `actingd-config`
+and `ledger` do not change.
+
+**What changes live.** Nothing until an instance runs `shadow` or `on` with packs that carry loading
+copies or declare `loading`; none does today. A pack that declares `loading.add` without a limit in a
+pack without a copy is refused from 0.12.38; no pack declares `loading` today.
+
+**Rollback** (to 0.12.37). Nothing persisted changes but the rows in a run's diagnostics, which keep
+their shape. 0.12.37 runs a step plan's waits as without loading pages and admits a loading set
+with no limit, giving it an allowance of zero in a page graph.
+
 ### 1.263 Slice AGT-2b (0.12.38): the daily summary, a timer rule's wake (Workflow #432; Alice's words of 2026-11-02 19:4x on pending item 158, 「定时汇报以及别的希望提醒的，都可以走这个通道」; design `rd-1031/agt/model-agt-v2.md` §4, §5.3, §10; coordinator work order `rd-1031/agt/brief-agt-2b.md`)
 
 [agent-wake.md](agent-wake.md), "The daily summary", is the contract. The number 1.263 is the coordinator's. This is the first step of 0.12.38's `actingd-config` revision; later slices of the release join it.

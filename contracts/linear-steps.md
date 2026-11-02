@@ -71,7 +71,7 @@ one operation is at fault; an existing check keeps its existing code.
 | no operation declares an `observation_window`, a page-graph declaration (Workflow #390 EXEC-2, `resource-declarations.md`); an `input_recheck` of any kind is admitted (Workflow #411 B12) | the field name |
 | no operation declares a `when` or an `on_guard_refused`, page-graph candidate operations (Workflow #390 EXEC-1, `resource-declarations.md`) | the field name |
 | no operation declares `max_runs` or `on_max_runs`, a page-graph per-run cap (Workflow #411 B16 part 1, `resource-declarations.md`) | `max_runs` |
-| no operation is a `wait` step, a page-graph declaration (Workflow #411 B36, B19, `resource-declarations.md`, "Wait steps and wait pages"); checked before the operation's other checks. Workflow #407 LOAD-2 (since 0.12.37): an `expect_after.wait_page` and an `expect_after.loading` are admitted, checked before these rules as a page graph checks them (`contained_task_program_invalid` with `program_problem`, `resource-declarations.md`, "Loading pages"); nothing waits on them until LOAD-4 runs them | `wait` |
+| no operation is a `wait` step, a page-graph declaration (Workflow #411 B36, B19, `resource-declarations.md`, "Wait steps and wait pages"); checked before the operation's other checks. Workflow #407 LOAD-2 (since 0.12.37): an `expect_after.wait_page` and an `expect_after.loading` are admitted, checked before these rules as a page graph checks them (`contained_task_program_invalid` with `program_problem`, `resource-declarations.md`, "Loading pages"; LOAD-4, since 0.12.38: a step whose loading pages have no limit named anywhere is `loading_max_missing`); LOAD-4 runs them ("Loading pages" below) | `wait` |
 | a page the operation's `expect_after.loading.add` names, and its wait page, is none of its own pages: not its `from`, its destination or its `page` transition's page (Workflow #407 LOAD-2, since 0.12.37) | `loading_page` |
 | no operation declares an `expect_after.target_present` or `target_gone`, judged by the page-graph confirmation (ACT-4, since 0.12.37, `resource-declarations.md`, "Final-state targets"); checked right after `wait` | `expect_targets` |
 | each operation's `to` / `expect_after` names exactly one page | `destination` |
@@ -287,6 +287,49 @@ a hand-written package gives `N`'s page rule a target that fails under the popup
 a color in an area the popup dims or covers) or declares the popup as a `forbidden` target of
 `N`. Otherwise, when a close click is swallowed, an unrecorded popup appears or a popup is late
 beyond its settle, `N` passes under the popup and the run goes on as if no popup had appeared.
+
+## Loading pages
+
+Workflow #407 LOAD-4 (since 0.12.38, [v012-register.md](v012-register.md) §1.262; design
+`rd-1031/check-speed/model-loading.md` §5). A pack's loading pages, a step's
+`expect_after.loading` and its wait page ([resource-declarations.md](resource-declarations.md),
+"Loading pages") act on a linear run's waits under `execution.loading.mode`
+([runtime-config.md](runtime-config.md), "The `execution` section") as they act on a page graph's
+("Waits on loading pages" there):
+
+- `off`, the default, and `shadow`: every decision is the one before LOAD-4; `shadow` evaluates
+  each frame of a wait against its loading pages and records them.
+- `on`: each frame of a wait is judged by the page graph's one judgement. The wait's loading pages
+  are evaluated by id on the frame its candidates are evaluated on, and they come before every
+  candidate: a frame on which one holds is a **transition frame**, whatever candidate passed. The
+  pages a step's confirmation adds (`loading.add`, its wait page) are evaluated the same way, since
+  a linear wait evaluates no page but its candidates.
+
+A transition frame is no candidate: never the next step's page, an optional page or the skip
+target, never the intermediate page (so never proof that the input took effect), and never the
+step's own page in a retry decision. It is offered to the shared interrupt pages first; otherwise
+it spends the allowance and pauses the wait as a handled interrupt does: its arrival budget `T`, a
+skip target's settle and the capture the settle counts from, and an extra round's end. The task
+deadline holds.
+
+**The allowance** is one per input. The attempt's intermediate wait, its arrival wait and its retry
+decision's waits share it, so a loading screen that outlasts it adds no input; the next attempt
+takes a new one. Its pages and limit are the confirmation's (`loading.max_ms`, else the wait page's
+`max_ms`, else the pack's). The entry wait has one of its own: the pack's loading pages and
+`max_ms`. A transition frame after the allowance is spent ends the wait on it, with no further time
+and no extra round, and the failure carries `loading_page_id`, `loading_ms` and `loading_limit_ms`:
+
+| The wait | Failure |
+|---|---|
+| the entry | `contained_task_linear_entry_unmatched` |
+| an attempt's (its intermediate page, the next step's page or the candidates of a run) or its retry decision's | `page_confirmation_failed`, its detail as below (`intermediate_seen=true` after a seen intermediate page); the intermediate page's wait too, which otherwise ends `contained_task_linear_intermediate_unobserved` |
+| an application step's | `contained_task_linear_application_unconfirmed` |
+
+An attempt whose wait ended so goes to its retry decision as any failed attempt does, and the
+decision ends on its first transition frame. The transitions are recorded as in a page graph
+(`contained_task_loading_recorded`, the run's diagnostics). The fresh frame of the step's page
+before its input (ACT-2's gap, an observe-only retry) is one observation, not a wait, and evaluates
+no loading page.
 
 ## Application steps
 
@@ -707,10 +750,10 @@ starts the stuck-recovery ladder.
 
 | Situation | `failure_code` | Timing (existing values) |
 |---|---|---|
-| The first step's page does not pass within `step_timeout_ms` | `contained_task_linear_entry_unmatched` | `page_recognition` / `entry_recognition` |
+| The first step's page does not pass within `step_timeout_ms`, or (LOAD-4) the entry wait ended on its loading allowance, with the loading values ("Loading pages") | `contained_task_linear_entry_unmatched` | `page_recognition` / `entry_recognition` |
 | The intermediate page is not seen within its timeout, with no attempt left | `contained_task_linear_intermediate_unobserved` | `postcondition` / `postcondition` |
-| The next step's page does not pass in its budget (with no attempt left), the retry decision sees neither page, the next step's page does not follow a seen intermediate page, or no candidate passes within `S + T` after a seen skip target | `page_confirmation_failed`, detail `transition=none\|page\|window ...` (`intermediate_seen=true` after a seen intermediate page) | `postcondition` / `postcondition`, `limit_ms` the spent budget |
-| After an application step, the intermediate page is not seen, the next step's page does not pass in its budget, or it does not follow a seen intermediate page | `contained_task_linear_application_unconfirmed`, detail `operation=<id> application=<action> attempts=1 transition=none\|page\|window ... intermediate_seen=<bool>` | `postcondition` / `postcondition`, `limit_ms` the spent budget |
+| The next step's page does not pass in its budget (with no attempt left), the retry decision sees neither page, the next step's page does not follow a seen intermediate page, or no candidate passes within `S + T` after a seen skip target; or (LOAD-4) one of these waits, or the intermediate page's, ended on the attempt's loading allowance, with the loading values ("Loading pages") | `page_confirmation_failed`, detail `transition=none\|page\|window ...` (`intermediate_seen=true` after a seen intermediate page) | `postcondition` / `postcondition`, `limit_ms` the spent budget |
+| After an application step, the intermediate page is not seen, the next step's page does not pass in its budget, or it does not follow a seen intermediate page; or (LOAD-4) its wait ended on its loading allowance, with the loading values | `contained_task_linear_application_unconfirmed`, detail `operation=<id> application=<action> attempts=1 transition=none\|page\|window ... intermediate_seen=<bool>` | `postcondition` / `postcondition`, `limit_ms` the spent budget |
 | An instance without an assigned application, including the offline simulation | `application_effect_requires_assigned_application` (`invalid_request`, denied), before any capture | none |
 | The adb command of an application effect fails | `application_backend_operation_failed` | none |
 | A guard refusal | `contained_task_guard_refused`, its outcome naming `page_id` (the page of the frame the guard judged on) and `artifact_id` (that frame, the run's `GuardRejection` pin) on the terminal and the receipt (#411 A30) | none |

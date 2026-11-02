@@ -2430,6 +2430,21 @@ tests = [
 ]
 incident = ["#407 LOAD-3"]
 
+# LOAD-4 (Workflow #407, 0.12.38; register §1.262; design rd-1031/check-speed/model-loading.md §5, §7 LOAD-4): under execution.loading.mode off and shadow a linear_steps run decides as before, shadow recording; under on its candidates and loading pages are evaluated on one frame and a loading page comes before every candidate: a transition frame pauses the arrival budget and a skip target's settle and first sighting, is never a candidate, the intermediate page or the step's own page, the retry decision shares the attempt's allowance and adds no input, and one after the allowance ends the wait with page_confirmation_failed (intermediate_seen as before) or, at the entry, contained_task_linear_entry_unmatched, with loading_page_id, loading_ms and loading_limit_ms; an operation whose loading pages have no limit named anywhere is refused at admission with loading_max_missing, in a page graph and a step plan
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_load4::linear_loading_pauses_the_arrival_budget",
+    "actingcommand-execution-kernel::lib::contained_task::gate_load4::linear_loading_pauses_a_skip_targets_settle",
+    "actingcommand-execution-kernel::lib::contained_task::gate_load4::linear_loading_is_not_the_intermediate_page",
+    "actingcommand-execution-kernel::lib::contained_task::gate_load4::linear_loading_over_a_candidate_suppresses_it",
+    "actingcommand-execution-kernel::lib::contained_task::gate_load4::linear_retry_decision_on_loading_adds_no_input",
+    "actingcommand-execution-kernel::lib::contained_task::gate_load4::linear_loading_limit_ends_with_page_confirmation_failed_and_its_values",
+    "actingcommand-execution-kernel::lib::contained_task::gate_load4::a_loading_set_without_any_limit_is_refused_at_admission",
+    "actingcommand-execution-kernel::lib::contained_task::gate_load4::a_linear_loading_set_without_any_limit_is_refused_at_admission",
+]
+incident = ["#407 LOAD-4"]
+
 # ROUT-L RL-T (#386; contracts/standard-pack-schedule.md "Tools"): standard-pack compose receives every --instance <alias>=<game>/<server> given after its words (the command's own, not the global --instance), so two bound instances of one game and server compose one <id>@<alias> copy of the rule and of each item per instance, each in its instance's scope
 [[gate]]
 coverage = "Y"
