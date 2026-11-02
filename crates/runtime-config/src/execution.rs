@@ -86,6 +86,9 @@ pub const CAPTURE_STILL_LIMIT_ON_RANGE: KeyRange = KeyRange::Integer {
 pub struct ExecutionFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     capture: Option<ExecutionCaptureFile>,
+    // ACT-1, ACT-2 (register §1.250; `action_gap.rs`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    action_gap: Option<crate::action_gap::ActionGapFile>,
 }
 
 /// The `execution.capture` member.
@@ -105,14 +108,19 @@ pub struct ExecutionCaptureFile {
     still_limit_ms: Option<Value>,
 }
 
-/// STILL-1: the `execution` member of an `instances[]` entry: the instance's own still limit.
-// Interface anchor `actingd-config` revision 24 (contracts/component-interfaces.md; STILL-1): a
-// Runtime before STILL-1 refuses an entry that names it, because the entry denies unknown members.
+/// STILL-1, ACT-1, ACT-2: the `execution` member of an `instances[]` entry: the instance's own
+/// still limit and its own `action_gap` keys.
+// Interface anchor `actingd-config` revision 24 (contracts/component-interfaces.md; STILL-1, ACT-1,
+// ACT-2): a Runtime before them refuses an entry that names it, because the entry denies unknown
+// members.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct InstanceExecutionFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     capture: Option<InstanceExecutionCaptureFile>,
+    // ACT-1, ACT-2 (register §1.250; `action_gap.rs`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    action_gap: Option<crate::action_gap::ActionGapFile>,
 }
 
 /// STILL-1: the `execution.capture` member of an `instances[]` entry.

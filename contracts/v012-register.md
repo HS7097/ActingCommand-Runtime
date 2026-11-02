@@ -5895,6 +5895,7 @@ when it takes effect.
 | `performance.pacing.*` | PERF §10.3 (26 keys; `mode` stays `observe` in every release until Alice approves); Workflow #427-B (**`actingd-config` revision 19**): the optional `max_concurrent_runs` | PERF §10.3; #427-B: no default (unset, no limit), `1..=65535`, not settable (§1.199 427B-4) | P-c (built, §1.24); #427-B | P-k, P-s, P-h (0.12.x); `clock_jump_ms`, `heavy_dispatch_limit.*` P-c; `max_concurrent_runs` #427-B |
 | `performance.calibration.*` | PERF §10.4 (19 keys) | PERF §10.4 | P-c (built, §1.24) | P-a (0.12.x) |
 | `execution.defaults.*` | the kernel's fallback defaults (PERF §10.4 last notes) | today's constants | **not built:** P-c left it out (PR #748 deviation 5, "after SR-1"), and no later slice parses it, so it is not part of revision 5 (open for the coordinator, A8 report) | — (the kernel's fallbacks stay code constants in v0.12.0) |
+| `execution.action_gap.*` | `mode`, `kind`, `fixed_ms`, `random_min_ms`, `random_max_ms`, `poll_ms`, `settle_frames`, `settle_change_max_milli`, `settled_max_stage`, `fallback_hold_ms`, also per instance (**`actingd-config` revision 24**) | `declared`, `fixed`, 0, 0, 0, 50, 1, 500, `s1`, 3 600 000, settable (§1.250) | ACT-1, ACT-2 | ACT-1, ACT-2 (0.12.37) |
 | `execution.capture.*` | `max_interval_ms`, `backoff_enabled`, `idle_ceiling_ms` (**`actingd-config` revision 11**) | 60 000 (`5000..=1800000`), `true`, 5 000 (`50..=60000`), settable (§1.177 B1-2, B1-3) | PERF-B1 | PERF-B1 (0.12.x) |
 | `execution.capture.still_limit_ms`, and per instance `instance.<id>.execution.capture.still_limit_ms` (**`actingd-config` revision 24**; §1.249) | the key itself | 0, off (`0` or `30000..=1800000`); an instance's default is the section's; settable | STILL-1 | STILL-1 (0.12.37) |
 | `scheduling.recognition.*` | `sample_timeout_retries` | 2 | SR-1 (built, §1.23) | SR-1 (v0.12.0) |
@@ -5991,6 +5992,35 @@ The total stayed under 256 for up to eight instances (255 rows) before #405's th
 keys (SR-1, §1.23); with them it passes 256 at five instances. So D1b implements the split (coordinator ruling, 2026-10-12): `config.parameters`
 becomes one `config.parameters.<section>` fact per section (M387 §5.9), written and read that way
 from D1b on, and each section fact holds at most 256 rows.
+
+### 1.250 Slices ACT-1 and ACT-2 (0.12.37): the settled path of a step after its input, and the gap between two actions (Workflow #407; coordinator work order `rd-1031/check-speed/brief-slices.md`; design `model-check.md` §1.6, §1.7, §7)
+
+[performance-control.md](performance-control.md) ("Step pacing") and
+[runtime-config.md](runtime-config.md) ("The `execution` section") are the contract. The number 1.250
+is the coordinator's. **Off by default:** under `execution.action_gap.mode` `declared` every step's
+order is the one before these slices. No package changes.
+
+**What.** Under `settled` a tap reads frames from the first frame after its input and goes on the
+first destination frame; `post_delay_ms` is the limit of that reading and is never added. A
+`fixed` or `random` gap finishes before the frame that decides the input and its guard, asked once
+per step; `performance` keeps only the pre-input wait. The path's frames and waits are recorded as a
+confirmation's, and the blind wait's boundary stays, empty.
+
+**What changes live.** Nothing until someone sets `settled`. With it, the frames of a step grow from
+about one to one per `poll_ms` until its destination shows, and the next step's guard judges an
+earlier frame.
+
+**Rollback** (to 0.12.36). Nothing persisted but the two values below in a run's diagnostics, which
+keep the row shape. A configuration file that names the keys is refused by an older Runtime
+(`actingd-config`), as is an instruction value restored from `host.config_overrides`, which is
+dropped with its record; a file that does not name them is read as before.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| ACT-1 | `execution.action_gap.{mode, poll_ms, settle_frames, settle_change_max_milli, settled_max_stage, fallback_hold_ms}`, each also `instance.<id>.…` | configuration keys | ACT-1 | ACT-1 | settable, read at each step; an instance's own key has default `none` |
+| ACT-2 | `execution.action_gap.{kind, fixed_ms, random_min_ms, random_max_ms}`, each also `instance.<id>.…` | configuration keys | ACT-2 | ACT-2 | as above; `random_min_ms` at most `random_max_ms` (`section_check`) |
+| ACT-3 | `StepPacing.settled_path`, `SettledPath`, `SettledHolds`, `ContainedTaskRuntime::step_action_gap`, `settled_path_held`, `settled_path_fell_back` (`execution-kernel`) | Runtime-internal interface (memory only) | ACT-1 | ACT-1 | trait defaults: no gap, never held, nothing recorded; a runtime that hands no path (offline, fixtures, the Lab's declared operation) keeps the order before it |
+| ACT-4 | `contained_task_action_gap_recorded` (info, ladder `none`; optional `action_gap_ms`, `package_id`, `pack_operation_id`), key `action_gap_ms` | outcome code and key | ACT-1, ACT-2 | ACT-1, ACT-2 | new, since nothing else says a gap was drawn or an operation fell back; one code with values (#420 S4). Written only in a run's diagnostics, as a recognition error row of the phase `action_gap`, as a mark's miss is (§1.28): no new row, no ledger shape, no `ledger` step |
 
 ## 6 Interface revisions (declared once for v0.12.0 by #378 A8, ORD §3.6)
 

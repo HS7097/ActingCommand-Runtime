@@ -894,6 +894,26 @@ impl RuntimeContainedTask<'_> {
         .map(|_| ())
     }
 
+    /// ACT-1, ACT-2 (Workflow #407, register §1.250): one `contained_task_action_gap_recorded`,
+    /// a step's drawn gap or an operation's fall-back from the settled path, written as a
+    /// recognition error row of the phase `action_gap`, as a mark's miss is: no new row shape.
+    pub(super) fn diagnostic_action_gap(&mut self, outcome: Outcome) -> Result<(), RequestFailure> {
+        self.diagnostic(
+            None,
+            Payload::Error(Box::new(TaskDiagnosticErrorData::Recognition {
+                phase: "action_gap".to_owned(),
+                target_id: None,
+                error: TaskDiagnosticRecognitionError {
+                    region: None,
+                    timing: None,
+                    sample: None,
+                    outcome,
+                },
+            })),
+        )
+        .map(|_| ())
+    }
+
     pub(super) fn finish_diagnostic(
         &mut self,
         result: &Result<ContainedTaskOutcome, ContainedTaskRunError<RequestFailure>>,

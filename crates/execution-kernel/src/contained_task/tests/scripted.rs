@@ -23,6 +23,10 @@
 // (`with_capture_cadence`; without one the kernel's unconfigured cadence), and it counts the
 // frames it showed after each number of inputs.
 //
+// ACT-1: every answer may also carry a settled path (`with_settled_path`; without one none), and
+// the runtime holds what falls back from it as the host does, for its scripted clock. ACT-2: it
+// answers a step's gap (`with_action_gap`; without one none) and counts how often it was asked.
+//
 // Workflow #392 DA-2a: a frame may carry the geometry its producer recorded (`with_geometry`;
 // without one a fixture's), and the runtime may answer a game's display declaration
 // (`with_display_layout`; without one none).
@@ -124,6 +128,12 @@ pub(crate) struct ScriptedRuntime {
     extra_wait_rounds: u32,
     pre_input_wait: Duration,
     capture_cadence: Option<CaptureCadence>,
+    settled_path: Option<SettledPath>,
+    settled_hold: Duration,
+    settled_holds: SettledHolds,
+    settled_fallbacks: Vec<String>,
+    action_gap: Duration,
+    action_gap_draws: u32,
     extra_rounds_started: u32,
     events: Vec<ScriptedEvent>,
     base: Instant,
@@ -156,6 +166,12 @@ impl ScriptedRuntime {
             extra_wait_rounds: 0,
             pre_input_wait: Duration::ZERO,
             capture_cadence: None,
+            settled_path: None,
+            settled_hold: Duration::ZERO,
+            settled_holds: SettledHolds::default(),
+            settled_fallbacks: Vec::new(),
+            action_gap: Duration::ZERO,
+            action_gap_draws: 0,
             extra_rounds_started: 0,
             events: Vec::new(),
             base: Instant::now() + CLOCK_LEAD,
@@ -255,6 +271,34 @@ impl ScriptedRuntime {
             capture_cadence: Some(cadence),
             ..self
         }
+    }
+
+    // The same device, whose every `step_pacing()` answer also hands the settled path `path`, an
+    // operation that falls back from it being held for `hold` (ACT-1).
+    pub(crate) fn with_settled_path(self, path: SettledPath, hold: Duration) -> Self {
+        Self {
+            settled_path: Some(path),
+            settled_hold: hold,
+            ..self
+        }
+    }
+
+    // The same device, answering every step's gap with `gap` (ACT-2).
+    pub(crate) fn with_action_gap(self, gap: Duration) -> Self {
+        Self {
+            action_gap: gap,
+            ..self
+        }
+    }
+
+    // How often the kernel asked for a step's gap (ACT-2).
+    pub(crate) fn action_gap_draws(&self) -> u32 {
+        self.action_gap_draws
+    }
+
+    // The operations that fell back from the settled path, in order (ACT-1).
+    pub(crate) fn settled_fallbacks(&self) -> &[String] {
+        &self.settled_fallbacks
     }
 
     // Every pause the kernel asked for, in order.
@@ -393,11 +437,38 @@ impl ContainedTaskRuntime for ScriptedRuntime {
         };
         Ok(pacing
             .with_extra_wait_rounds(self.extra_wait_rounds)
-            .with_pre_input_wait(self.pre_input_wait))
+            .with_pre_input_wait(self.pre_input_wait)
+            .with_settled_path(self.settled_path))
     }
 
     fn observe_extra_wait_round(&mut self) {
         self.extra_rounds_started += 1;
+    }
+
+    fn step_action_gap(&mut self) -> Result<Duration, Self::Error> {
+        self.action_gap_draws += 1;
+        Ok(self.action_gap)
+    }
+
+    fn settled_path_held(
+        &mut self,
+        package_id: &str,
+        operation_label: &str,
+    ) -> Result<bool, Self::Error> {
+        let now = self.monotonic_now();
+        Ok(self.settled_holds.held(package_id, operation_label, now))
+    }
+
+    fn settled_path_fell_back(
+        &mut self,
+        package_id: &str,
+        operation_label: &str,
+    ) -> Result<(), Self::Error> {
+        let now = self.monotonic_now();
+        self.settled_holds
+            .hold(package_id, operation_label, now, self.settled_hold);
+        self.settled_fallbacks.push(operation_label.to_owned());
+        Ok(())
     }
 
     fn monotonic_now(&mut self) -> Instant {

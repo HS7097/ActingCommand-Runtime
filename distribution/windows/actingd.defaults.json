@@ -503,6 +503,18 @@
       "backoff_enabled": true,
       "idle_ceiling_ms": 5000,
       "still_limit_ms": 0
+    },
+    "action_gap": {
+      "mode": "declared",
+      "kind": "fixed",
+      "fixed_ms": 0,
+      "random_min_ms": 0,
+      "random_max_ms": 0,
+      "poll_ms": 50,
+      "settle_frames": 1,
+      "settle_change_max_milli": 500,
+      "settled_max_stage": "s1",
+      "fallback_hold_ms": 3600000
     }
   },
   "idle": {

@@ -2335,6 +2335,10 @@
       "type": "duration_ms",
       "description": "The expected duration E a judged candidate's net benefit is divided by to rank it: the pair's expected duration, else its last settled run's, else the declared one, in milliseconds (SS-2b)."
     },
+    "action_gap_ms": {
+      "type": "duration_ms",
+      "description": "The gap a step drew between its recognition and its input under execution.action_gap.kind random, in milliseconds (ACT-2)."
+    },
     "reading_value": {
       "type": "name",
       "description": "A fact reading as the admission of a dispatch read it, its canonical JSON ({\"type\": <kind>, \"value\": <value>}), at most 128 bytes (SS-4, contracts/scheduling/README.md \"No-progress guard\")."

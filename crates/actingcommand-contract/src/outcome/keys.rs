@@ -666,6 +666,9 @@ outcome_keys! {
     reading_digest: hash,
     basis_readings: records(fact_key; reading_value, reading_digest, observed_at_unix_ms),
     // ---- SS-4: end ----
+    // ---- ACT-2 (the gap between two actions, contracts/runtime-config.md): begin ----
+    action_gap_ms: duration_ms,
+    // ---- ACT-2: end ----
     // ---- Workflow #429 R-7a (the player hold, contracts/player-hold.md): begin ----
     hold_id: id,
     hold_phase: vocab(player_hold_phase),

@@ -69,7 +69,9 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   ruling 105 A, register §1.231): revision 23 adds `scheduling.no_progress.enabled` and an
 ///   instance entry's `scheduling.no_progress`; revisions 5 to 22 are still read, so [5, 23].
 ///   Workflow #432 AGT-1a (0.12.37, Alice's words of 2026-11-02, register §1.245): revision 24 adds
-///   the optional `agent_wake` section; revisions 5 to 23 are still read, so [5, 24].
+///   the optional `agent_wake` section, and ACT-1 and ACT-2 (same release, register §1.250)
+///   `execution.action_gap` and an instance entry's `execution`; revisions 5 to 23 are still
+///   read, so [5, 24].
 /// - `install-control` stays [0, 1] (model-378 §16 A-7; U-4 raises it in 0.12.x).
 /// - `install-selection` is unchanged (model-378 §10).
 /// - `ledger` [3, 3]: SQLite format 2, `actingcommand.event.v3`; format 1 is refused. Workflow

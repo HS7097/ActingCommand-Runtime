@@ -76,6 +76,8 @@ use std::time::{Duration, Instant, SystemTime};
 mod candidates;
 // PERF-B1 (Workflow #407 B1): a wait's capture cadence.
 mod capture_cadence;
+// ACT-1 (Workflow #407): the settled path of a step after its input.
+mod settled_path;
 // Workflow #390 OUT-2: the caps of a designated effect set.
 mod designated_effects;
 // #412 Lab B-3 S1: one declared operation run as the kernel runs it.
@@ -264,6 +266,10 @@ mod gate_407_b1;
 // STILL-1 (Workflow #407, register §1.249): a wait on a still screen ends at its limit.
 #[cfg(test)]
 mod gate_still1;
+
+// ACT-1 (Workflow #407, register §1.250): the settled path of a step after its input.
+#[cfg(test)]
+mod gate_act1;
 // Workflow #392 DA-2a: the display adapter's frame gate.
 mod display_gate;
 // Workflow #392 DA-2a (model 392 v1.2 §13 rows DA2-T1 to T3, T6, T12, T14, T15, the identity
@@ -289,6 +295,7 @@ pub use scan::{
     dry_run_scan, dry_run_scan_with_tables, replay_scan, replay_scan_with_tables,
 };
 pub use selection::{SelectionDryRun, SelectionState, SelectionStateRequest, dry_run_select};
+pub use settled_path::{SettledHolds, SettledPath};
 pub use timing::{
     ContainedTaskBoundaryIdentity, ContainedTaskBoundaryTiming, ContainedTaskEvaluationTiming,
     ContainedTaskTimingContext, observe_instant_span,
@@ -2341,6 +2348,10 @@ pub struct StepPacing {
     /// PERF-B1 (Workflow #407 B1): the `execution.capture` keys in effect for the step
     /// ([`Self::with_capture_cadence`]); [`CaptureCadence::UNCONFIGURED`] by default.
     pub capture_cadence: CaptureCadence,
+    /// ACT-1 (Workflow #407, register §1.250): the step reads frames after its input instead of
+    /// waiting its `post_delay_ms` blind, where nothing keeps it from it ([`SettledPath`]); `None`
+    /// (the default) is the order before the path.
+    pub settled_path: Option<SettledPath>,
 }
 
 impl Default for StepPacing {
@@ -2361,6 +2372,15 @@ impl StepPacing {
             extra_wait_rounds: 0,
             pre_input_wait: Duration::ZERO,
             capture_cadence: CaptureCadence::UNCONFIGURED,
+            settled_path: None,
+        }
+    }
+
+    /// ACT-1: the same pacing with the settled path `settled_path`.
+    pub const fn with_settled_path(self, settled_path: Option<SettledPath>) -> Self {
+        Self {
+            settled_path,
+            ..self
         }
     }
 
@@ -2600,6 +2620,36 @@ pub trait ContainedTaskRuntime {
     /// reached its limit and started one more round ([`StepPacing::extra_wait_rounds`]), captures
     /// only. A runtime counts it for the step in progress; the default does nothing.
     fn observe_extra_wait_round(&mut self) {}
+
+    /// ACT-2 (Workflow #407, register §1.250): the gap of the step that decides its input now,
+    /// `execution.action_gap`'s `fixed` or `random`, asked once per step and only by a step that
+    /// sends an input. The kernel waits it as it is, then decides on a frame taken after it. Zero
+    /// (the default) waits nothing and takes no frame.
+    fn step_action_gap(&mut self) -> Result<Duration, Self::Error> {
+        Ok(Duration::ZERO)
+    }
+
+    /// ACT-1 (Workflow #407, register §1.250): whether `operation_label` of `package_id` failed on
+    /// the settled path and is still held on its `post_delay_ms` ([`SettledHolds`]). A runtime
+    /// that hands no settled path is never asked.
+    fn settled_path_held(
+        &mut self,
+        _package_id: &str,
+        _operation_label: &str,
+    ) -> Result<bool, Self::Error> {
+        Ok(false)
+    }
+
+    /// ACT-1: a step of `operation_label` of `package_id` failed while the settled path was
+    /// handed: its confirmation failed, or the next step refused the frame it arrived on. The run's
+    /// later steps keep their `post_delay_ms`; the runtime holds the operation and records it.
+    fn settled_path_fell_back(
+        &mut self,
+        _package_id: &str,
+        _operation_label: &str,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
 
     /// Test plan E-3 (EXEC-I3, test plan §3.10): the monotonic instant every timer of the
     /// contained-task kernel reads: task and step deadlines, waits, observation windows and the
@@ -4877,6 +4927,10 @@ impl PreparedContainedTask {
         // #412 Lab B-3 (design §2.1 point 4): the guard refusal a declared operation was passed
         // over on.
         let mut passed_over_refusal = None;
+        // ACT-1 (§1.6): whether a failure keeps the run's later steps on their `post_delay_ms`, and
+        // the operation that arrived on the settled path, until the next step sends its input.
+        let mut settled_off = false;
+        let mut arrived_settled: Option<String> = None;
 
         loop {
             // #412 Lab B-3 (design §2.1 point 4): a declared operation's run returns once its one
@@ -4994,6 +5048,8 @@ impl PreparedContainedTask {
                     )?);
                     let pace = observation_timing.pace();
                     let mut attempt = 1;
+                    // ACT-2: the step's gap is asked and waited once, whatever is verified again.
+                    let mut gap_taken = false;
                     'attempt: loop {
                         if budget_elapsed_since(runtime, pace, started) >= task_timeout {
                             return Err(self
@@ -5088,6 +5144,8 @@ impl PreparedContainedTask {
                                 }
                             }
                         }
+                        // ACT-1 (§1.6): only a plain tap may take the settled path.
+                        let mut tapped = false;
                         if let Some(effect) = operation.application {
                             // Slice #316-B3: no guard, no coordinate, no `task.effect_intent`;
                             // the runtime boundary records the `application.*` chain itself.
@@ -5125,6 +5183,69 @@ impl PreparedContainedTask {
                             // pack's attempt count stays, and the retry comes before the pack's
                             // own failure decision. The one sampling deadline check before the
                             // input precedes the effect intent.
+                            //
+                            // ACT-2 (design addendum 1): a `fixed` or `random` gap comes before the
+                            // frame that decides the input: nothing is judged on a frame older than
+                            // the gap. The frame is a page wait's, so a loading screen or a shared
+                            // interrupt during the gap is handled as on any page wait. A guard then
+                            // judges the page and the target on it; a step with no guard refuses a
+                            // page it was not dispatched from.
+                            if !gap_taken {
+                                gap_taken = true;
+                                let gap = runtime
+                                    .step_action_gap()
+                                    .map_err(ContainedTaskRunError::operation::<R>)?;
+                                if !gap.is_zero() {
+                                    self.wait_pre_input(runtime, gap, pace, task_deadline)?;
+                                    let frame = self.capture_until_page(
+                                        runtime,
+                                        ocr_collector,
+                                        step_timeout,
+                                        capture_interval,
+                                        observation_timing,
+                                        (pacing, ExecutionKernelLocation::ObservationBeforeInput),
+                                    )?;
+                                    step_timing = observation_timing.with_deadline(
+                                        budget_observation_now(runtime, pace) + step_window,
+                                    );
+                                    // The frame the last step arrived on is no longer judged.
+                                    arrived_settled = None;
+                                    let game = self.control.game.as_str();
+                                    if operation.unguarded_trusted_coordinate
+                                        && !crate::page_anchor_matches(
+                                            game,
+                                            &frame.page_label,
+                                            &from_page,
+                                        )
+                                        && !crate::page_anchor_matches(
+                                            game,
+                                            &frame.page_label,
+                                            &operation.from,
+                                        )
+                                    {
+                                        let refused = ContainedTaskError::with_detail(
+                                            ExecutionKernelCode::ContainedTaskGuardRefused.code(),
+                                            format!(
+                                                "operation={} expected_page={from_page} observed_page={}",
+                                                operation.id, frame.page_label
+                                            ),
+                                        )
+                                        .with_values(guard_refusal_values(&frame));
+                                        let after_page = frame.page_label.clone();
+                                        observation = Some(frame);
+                                        Self::refuse_before_input::<R::Error>(
+                                            operation,
+                                            retry_policy.as_ref(),
+                                            attempt,
+                                            refused,
+                                            Some(after_page),
+                                            &mut machine,
+                                        )?;
+                                        break 'attempt;
+                                    }
+                                    observation = Some(frame);
+                                }
+                            }
                             let mut retries = SampleRetries::new(
                                 pacing,
                                 ExecutionKernelLocation::ObservationBeforeInput,
@@ -5191,6 +5312,17 @@ impl PreparedContainedTask {
                                 let (guard, target, selected) = match pre_input {
                                     Ok(outcome) => outcome,
                                     Err(failure) => {
+                                        // ACT-1 (§1.6): the frame the last step went on did not
+                                        // hold for this step: that arrival was too early.
+                                        if let Some(arrived) = arrived_settled.take() {
+                                            settled_off = true;
+                                            runtime
+                                                .settled_path_fell_back(
+                                                    &self.control.package_id,
+                                                    &arrived,
+                                                )
+                                                .map_err(ContainedTaskRunError::operation::<R>)?;
+                                        }
                                         let timed_out = sample_retry::is_timeout(&failure);
                                         // #411 B22 (B-train plan §2.11 item 2): the key of a keyed
                                         // `on_guard_refused` whose named target failed definitely
@@ -5392,6 +5524,8 @@ impl PreparedContainedTask {
                             if let Some(fresh) = rechecked {
                                 observation = Some(fresh);
                             }
+                            tapped = matches!(action, InputAction::Tap { .. });
+                            arrived_settled = None;
                             // #385 P-k (performance model v1.4.2 §5.2): the action is generated
                             // and its sampling check passed; the step's pre-input wait comes
                             // before the effect intent, and nothing is recognized again after it.
@@ -5458,16 +5592,27 @@ impl PreparedContainedTask {
                                     SharedCode::ContainedTaskStateInvalid.code(),
                                 )
                             })?;
+                        // ACT-1 (§1.6): the settled path reads frames in place of the blind
+                        // wait, and the wait's boundary stays, empty.
+                        let settled = if settled_off {
+                            None
+                        } else {
+                            self.settled_window(runtime, operation, &from_page, pacing, tapped)?
+                        };
                         let boundary = actingcommand_contract::TaskTimingBoundary::PostInputWait;
                         let identity = runtime.task_boundary_identity(boundary);
                         let wait_started = runtime.monotonic_now();
-                        let waited = Self::wait_paced_post_input_delay(
-                            runtime,
-                            operation,
-                            started,
-                            task_timeout,
-                            pace,
-                        );
+                        let waited = if settled.is_some() {
+                            Ok(())
+                        } else {
+                            Self::wait_paced_post_input_delay(
+                                runtime,
+                                operation,
+                                started,
+                                task_timeout,
+                                pace,
+                            )
+                        };
                         let wait_ended = runtime.monotonic_now();
                         runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
                             boundary,
@@ -5523,16 +5668,36 @@ impl PreparedContainedTask {
                             Duration::from_millis(timing.interval.milliseconds);
                         // #385 P-k (performance model v1.4.2 §5.4 item 1): the confirmation's
                         // extra rounds come before the failure decision below, so a destination
-                        // that arrives in one needs no second input.
-                        let resolution = self.await_postcondition(
-                            runtime,
-                            ocr_collector,
-                            operation,
-                            confirmation_timeout,
-                            confirmation_interval,
-                            observation_timing,
-                            pacing,
-                        )?;
+                        // that arrives in one needs no second input. ACT-1 (§1.6): the settled
+                        // path's reading comes first, and without a destination frame the
+                        // confirmation starts where the blind wait would have ended.
+                        let arrived = match settled {
+                            Some(window) => self.settled_confirmation(
+                                runtime,
+                                ocr_collector,
+                                operation,
+                                window,
+                                confirmation_timeout,
+                                observation_timing,
+                                pacing,
+                            )?,
+                            None => None,
+                        };
+                        let resolution = match arrived {
+                            Some(reached) => {
+                                arrived_settled = Some(operation_id.clone());
+                                PostconditionResolution::Reached(reached)
+                            }
+                            None => self.await_postcondition(
+                                runtime,
+                                ocr_collector,
+                                operation,
+                                confirmation_timeout,
+                                confirmation_interval,
+                                observation_timing,
+                                pacing,
+                            )?,
+                        };
                         let (
                             failed_observation,
                             last_frame_page,
@@ -5601,6 +5766,13 @@ impl PreparedContainedTask {
                                 .into());
                             }
                         };
+                        // ACT-1 (§1.6): a failed confirmation while the settled path is handed.
+                        if pacing.settled_path.is_some() {
+                            settled_off = true;
+                            runtime
+                                .settled_path_fell_back(&self.control.package_id, &operation_id)
+                                .map_err(ContainedTaskRunError::operation::<R>)?;
+                        }
                         let after_page = failed_observation
                             .as_ref()
                             .map(|observation| observation.page_label.clone());
@@ -6905,6 +7077,31 @@ impl PreparedContainedTask {
         candidates: Option<PageCandidates<'_>>,
         sampling_deadline: Option<Instant>,
     ) -> Result<Result<PageObservation, Scene>, ContainedTaskRunError<R::Error>> {
+        self.capture_frame_gated(
+            runtime,
+            ocr_collector,
+            required_entry,
+            timing,
+            candidates,
+            sampling_deadline,
+            None,
+        )
+    }
+
+    /// [`Self::capture_frame_scene`]; ACT-1 (§1.6): `feed_gate` decides, once the frame has its
+    /// page, whether it feeds `ocr_collector`, so that of a settled path's frames only the one the
+    /// step goes on does. Everything else about the frame is as for any other.
+    #[allow(clippy::too_many_arguments)]
+    fn capture_frame_gated<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        ocr_collector: Option<&mut PostAdmissionOcrCollector<'_>>,
+        required_entry: Option<RequiredEntry<'_>>,
+        timing: ContainedTaskTimingContext,
+        candidates: Option<PageCandidates<'_>>,
+        sampling_deadline: Option<Instant>,
+        mut feed_gate: Option<&mut settled_path::FeedGate<'_>>,
+    ) -> Result<Result<PageObservation, Scene>, ContainedTaskRunError<R::Error>> {
         let (candidates, exclusive) = match candidates {
             None => (None, true),
             Some(PageCandidates::Ordered(pages)) => (Some(pages), false),
@@ -7321,6 +7518,18 @@ impl PreparedContainedTask {
             }
             let Some(page_label) = page else {
                 return Ok(Err(scene));
+            };
+            // ACT-1 (§1.6): a frame the gate does not take feeds nothing, as if the run read no
+            // field, collected nothing and read no mark.
+            let feeds = match feed_gate.take() {
+                Some(gate) => gate(page_label.as_str(), &scene)?,
+                None => true,
+            };
+            let mut unfed_frame = PostAdmissionOcrCollector::default();
+            let ocr_collector = if feeds {
+                &mut *ocr_collector
+            } else {
+                &mut unfed_frame
             };
             // Preserve a recorder failure's original boundary type across the collector's task error API.
             let mut recording_failure = None;

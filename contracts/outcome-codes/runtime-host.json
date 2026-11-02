@@ -3589,6 +3589,24 @@
       "common_causes": "A ledger whose runtime facts were changed outside the Runtime, or a ledger written by another program.",
       "handling": "TBD"
     },
+    "contained_task_action_gap_recorded": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "action_gap_ms": "optional",
+        "package_id": "optional",
+        "pack_operation_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.37",
+      "description": "A record of the execution.action_gap keys in a run's diagnostics (a row of the phase action_gap, no ledger shape). With action_gap_ms: the gap a step drew under kind random. With package_id and pack_operation_id: that operation failed while the settled path was handed, so the run's later steps keep their post_delay_ms and the operation stays on it for fallback_hold_ms.",
+      "common_causes": "A drawn gap is ordinary under kind random. A fall-back is a confirmation that failed, or a next step's guard that refused the frame the operation arrived on.",
+      "handling": "None for a drawn gap. A fall-back needs no action; many of them on one operation say its page is not ready when it first shows, which settle_frames or the package's declarations can answer."
+    },
     "contained_task_active_identity_mismatch": {
       "category": "error",
       "ladder_class": "none",

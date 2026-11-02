@@ -44,6 +44,8 @@
 
 #![forbid(unsafe_code)]
 
+// ACT-1, ACT-2 (Workflow #407): `execution.action_gap.*`, how a step goes on after its input.
+pub mod action_gap;
 // Workflow #432 AGT-1a: `agent_wake.*`, whole or absent; no section, no keys and no rows.
 pub mod agent_wake;
 mod codes;
@@ -82,6 +84,7 @@ mod ui_tier;
 mod value;
 pub mod watchdog;
 
+pub use action_gap::{ActionGapConfig, ActionGapFile, ActionGapKind, ActionGapMode};
 pub use agent_wake::{AgentWakeConfig, AgentWakeFile};
 pub use codes::{ConfigCode, ConfigValueProblem};
 pub use defaults::{
@@ -212,6 +215,10 @@ mod gate_407_b1;
 // STILL-1 (Workflow #407, register §1.249): the still limit's key, off by default and per instance.
 #[cfg(test)]
 mod gate_still1;
+
+// ACT-1, ACT-2 (Workflow #407, register §1.250): the `execution.action_gap` keys.
+#[cfg(test)]
+mod gate_act2;
 
 // #422 LN-7c Q: the evidence-frame rule's age and the frame queries' pace and chunk.
 #[cfg(test)]

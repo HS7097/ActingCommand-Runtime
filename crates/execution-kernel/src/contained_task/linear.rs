@@ -1117,7 +1117,15 @@ impl PreparedContainedTask {
                     let frame = observation.as_ref().ok_or_else(|| {
                         ContainedTaskError::new(SharedCode::ContainedTaskPageUnknown.code())
                     })?;
-                    self.linear_input(runtime, run, step_index, operation, frame, step_timing)?;
+                    self.linear_input(
+                        runtime,
+                        run,
+                        step_index,
+                        operation,
+                        frame,
+                        step_timing,
+                        attempt,
+                    )?;
                 }
                 LinearEffect::Application(action) => {
                     self.linear_application(runtime, run, step_index, operation, action)?;
@@ -1290,7 +1298,9 @@ impl PreparedContainedTask {
 
     /// The guard on the frame that passed this step, then the effect intent and the input
     /// bound to that frame's input context, in the order of the page-graph path; with a declared
-    /// input recheck (Workflow #411 B12), to the input context of the recheck's last frame.
+    /// input recheck (Workflow #411 B12), to the input context of the recheck's last frame. ACT-2:
+    /// the first attempt waits the step's gap and takes a fresh frame of the step's page first.
+    #[allow(clippy::too_many_arguments)]
     fn linear_input<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -1299,6 +1309,7 @@ impl PreparedContainedTask {
         operation: &TaskOperation,
         observation: &PageObservation,
         step_timing: ContainedTaskTimingContext,
+        attempt: u32,
     ) -> Result<(), ContainedTaskRunError<R::Error>> {
         let deadline = run.timing.deadline();
         // Workflow #386 SR-1 (scheduling model §2.1 items 1-3): the guard's observation whose
@@ -1309,6 +1320,22 @@ impl PreparedContainedTask {
             SampleRetries::new(run.pacing, ExecutionKernelLocation::ObservationBeforeInput);
         let mut step_timing = step_timing;
         let mut again: Option<PageObservation> = None;
+        if attempt == 1 {
+            let gap = runtime
+                .step_action_gap()
+                .map_err(ContainedTaskRunError::operation::<R>)?;
+            if !gap.is_zero() {
+                self.wait_pre_input(runtime, gap, run.timing.pace(), deadline)?;
+                let (frame, timing) = self.linear_observe_before_input(
+                    runtime,
+                    run,
+                    &observation.page_label,
+                    &mut retries,
+                )?;
+                again = Some(frame);
+                step_timing = timing;
+            }
+        }
         let (guard, action, sampling, input_context) = loop {
             let frame = again.as_ref().unwrap_or(observation);
             let page = frame.page_label.clone();

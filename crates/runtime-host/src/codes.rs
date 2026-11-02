@@ -3082,6 +3082,22 @@ actingcommand_contract::outcome_locations! {
 }
 // ---- STORE-FG-2: end ----
 
+// ---- ACT-1, ACT-2 (Workflow #407, register §1.250): begin ----
+actingcommand_contract::outcome_codes! {
+    /// The host's code of the `execution.action_gap` keys. No existing code fits: nothing else
+    /// says a step's gap was drawn or an operation went back to its `post_delay_ms`. One domain
+    /// code with values (#420 S4); written to the run's diagnostics only, no ledger shape.
+    pub(crate) enum ActionGapCode {
+        /// Info. Written to a run's diagnostics as a row of the phase `action_gap`. With
+        /// `action_gap_ms`: the gap a step drew under `execution.action_gap.kind` `random`. With
+        /// `package_id` and `pack_operation_id`: that operation failed while the settled path was
+        /// handed, so the run's later steps keep their `post_delay_ms` and the operation stays on
+        /// it for `execution.action_gap.fallback_hold_ms`.
+        Recorded => "contained_task_action_gap_recorded": info / none,
+    }
+}
+// ---- ACT-1, ACT-2: end ----
+
 // ---- UPD-1 (design-upd1 §2, §3, §4; Alice's rulings 95 and 96 of 2026-10-29 17:1x): begin ----
 actingcommand_contract::outcome_codes! {
     /// The host's codes of the "client out of date" path (UPD-1, register §1.215): the named end

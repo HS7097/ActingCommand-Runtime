@@ -12,6 +12,7 @@
 //! value and lives only while an instruction value is set; a start keeps that value while the
 //! file still does not write the key, and voids it (`config_override_superseded`) once it does.
 
+use crate::action_gap::{self, ActionGapConfig};
 use crate::agent_wake::AgentWakeConfig;
 use crate::codes::{ConfigCode, ConfigValueProblem};
 use crate::defaults::shipped_scalar;
@@ -594,6 +595,19 @@ impl EffectiveConfig {
         crate::artifact_store::stream_admit_chunk_bytes(&|key: &str| self.value_or_shipped(key))
     }
 
+    /// ACT-1, ACT-2 (register §1.250): the section's `execution.action_gap` keys in effect,
+    /// checked whole.
+    pub fn action_gap_section(&self) -> Result<ActionGapConfig, ConfigFailure> {
+        action_gap::section(&|key: &str| self.value_or_shipped(key))
+    }
+
+    /// ACT-1, ACT-2 (register §1.250): the `execution.action_gap` keys in effect for the instance
+    /// whose registry id is `instance_id`, checked whole: each its own when the configuration
+    /// carries it, otherwise the section's. The host reads them at each step of a contained run.
+    pub fn action_gap(&self, instance_id: &str) -> Result<ActionGapConfig, ConfigFailure> {
+        action_gap::instance(&|key: &str| self.value_or_shipped(key), instance_id)
+    }
+
     /// Workflow #386 SR-1: `scheduling.recognition.sample_timeout_retries` in effect, the base
     /// number of observe-only retries the host hands the kernel at each step.
     pub fn sample_timeout_retries(&self) -> Result<u32, ConfigFailure> {
@@ -932,6 +946,18 @@ impl EffectiveConfig {
         }
         if sections.contains(agent_wake::SECTION) {
             self.agent_wake()?;
+        }
+        // ACT-2: a change of either side may break `random_min_ms` at most `random_max_ms`.
+        if sections.contains(execution::SECTION) || sections.contains(INSTANCE_SECTION) {
+            self.action_gap_section()?;
+            let instances = self
+                .settings
+                .iter()
+                .filter_map(|setting| setting.instance.as_deref())
+                .collect::<BTreeSet<_>>();
+            for instance in instances {
+                self.action_gap(instance)?;
+            }
         }
         if !sections.contains(INSTANCE_SECTION) {
             return Ok(());
