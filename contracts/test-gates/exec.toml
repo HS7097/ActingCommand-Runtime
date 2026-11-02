@@ -2356,6 +2356,21 @@ tests = [
 ]
 incident = ["#407"]
 
+# ACT-4 (Workflow #407, 0.12.37; register §1.254; design model-check.md §1.5, §1.6, §7 and addendum items 5 and 6): expect_after.target_present and target_gone, two disjoint lists of single-frame template or colour targets of the operation's from page or its destinations, refused by name (expect_target_unreachable, expect_target_kind for a lazy or consensus target, expect_target_unknown, expect_targets_overlap); one final-state judgement (destination page, every present passing, every gone with a definite non-match) for the settled path, the confirmation and the observation window, and a target not evaluated, failed or left open by its reason is not gone; a same-page destination goes at once on the settled path only on a target turned from the decision frame, and a state true before the tap keeps post_delay_ms and the confirmation; a tap without post_delay_ms reads on the settled path up to settled_limit_ms and its confirmation goes on from what that spent, with no added wait and no new timeout
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_act4::target_gone_keeps_a_same_page_step_waiting_until_it_fails",
+    "actingcommand-execution-kernel::lib::contained_task::gate_act4::target_gone_lets_a_same_page_step_go_at_once_in_settled",
+    "actingcommand-execution-kernel::lib::contained_task::gate_act4::target_gone_refuses_a_target_outside_from_page",
+    "actingcommand-execution-kernel::lib::contained_task::gate_act4::target_gone_refuses_a_lazy_target",
+    "actingcommand-execution-kernel::lib::contained_task::gate_act4::a_state_true_before_the_click_is_not_this_clicks_effect",
+    "actingcommand-execution-kernel::lib::contained_task::gate_act4::an_unevaluated_target_is_not_gone",
+    "actingcommand-execution-kernel::lib::contained_task::gate_act4::the_three_paths_share_one_final_state_judgement",
+    "actingcommand-execution-kernel::lib::contained_task::gate_act4::an_omitted_post_delay_hands_over_without_a_new_wait",
+]
+incident = ["#407 ACT-4"]
+
 # ROUT-L RL-T (#386; contracts/standard-pack-schedule.md "Tools"): standard-pack compose receives every --instance <alias>=<game>/<server> given after its words (the command's own, not the global --instance), so two bound instances of one game and server compose one <id>@<alias> copy of the rule and of each item per instance, each in its instance's scope
 [[gate]]
 coverage = "Y"

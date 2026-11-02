@@ -2200,7 +2200,7 @@ tests = [
 ]
 incident = ["#407 STILL-1"]
 
-# ACT-1, ACT-2 (Workflow #407, register §1.250): execution.action_gap.*, default off, ranges and whole check, per instance from the file and an instruction; the host hands the settled path at a stage up to settled_max_stage and none under declared; the gap is nothing at fixed 0, for performance (the pre-input wait stays the curve's) and under declared, and a random one stays in its range, seeded, and is kept for the run's diagnostics
+# ACT-1, ACT-2 (Workflow #407, register §1.250): execution.action_gap.*, default off, ranges and whole check, per instance from the file and an instruction; the host hands the settled path at a stage up to settled_max_stage and none under declared (ACT-4, register §1.254: with settled_limit_ms, default 2000); the gap is nothing at fixed 0, for performance (the pre-input wait stays the curve's) and under declared, and a random one stays in its range, seeded, and is kept for the run's diagnostics
 [[gate]]
 coverage = "Y"
 tests = [

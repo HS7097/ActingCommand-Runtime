@@ -1377,6 +1377,51 @@ destination, and infers no click and no guard for a wait step; a wait step is no
 - No code and no record are added: the step writes `StepStarted` and `StepFinished` and the
   frames their capture and recognition records.
 
+### Final-state targets
+
+ACT-4 (Workflow #407, since 0.12.37, [v012-register.md](v012-register.md) §1.254; design
+`model-check.md` §1.5 and its addendum items 5 and 6). A step's `expect_after` of a task schema
+`0.9` page-graph task may say which targets its final frame shows and which it no longer shows, so
+that a click whose effect is a change on the same page (a popup closed, a button lit) needs no
+second page. An older task schema refuses either member with `UnconsumedField`; a `linear_steps`
+task refuses them at admission (`contained_task_linear_invalid`, `reason=expect_targets`). A task
+that declares neither runs as before.
+
+```json
+"expect_after": {"page_id": "page_a", "timeout_ms": 3000, "target_gone": ["mark/popup_close"]}
+"expect_after": {"page_id": "page_a", "target_present": ["mark/confirm_lit"]}
+```
+
+| Member | Declaration gate | Runtime admission (`contained_task_program_invalid`, `program_problem` as below, the task declaration's `path` and the list entry as `json_pointer`, `/operations/<i>/expect_after/<member>/<j>`) |
+| --- | --- | --- |
+| `expect_after.target_present`, `expect_after.target_gone` | each an array of strings (`InvalidType` otherwise) | the two lists share no target and list none twice (`expect_targets_overlap`, at the later entry); each entry names a target of the package's recognition pack (`expect_target_unknown`) that is judged on one frame: a template or colour target, not under `target_consensus` (`expect_target_kind`; located text, value tests, checks, OCR, model and digest targets are refused, lazy or multi-frame targets being out of this slice); and it stands in the rules (`required`, `any_of`, `optional`, `forbidden`) of the operation's `from` page or of one of its destinations, directly or as a member of a check standing there (`expect_target_unreachable`; `from` `any` names no page of its own) |
+
+- **The final state.** A frame after the step's input is the step's final state when its page is
+  exactly one of the step's destinations, every `target_present` passes on it and every
+  `target_gone` has a definite non-match: evaluated, not passed, and no registered reason that
+  leaves the result open (a template that is not unique, for one). A target that was not
+  evaluated, whose evaluation failed or whose region the frame cannot give is neither present nor
+  gone. One judgement serves the settled path, the confirmation and the observation window
+  (section Task schema `0.9` observation windows and input rechecks): to each of them a frame of a destination page that is not the final state is a frame of no
+  destination, so the confirmation waits on (and offers it to the shared interrupt pages), the
+  window does not count it, and the step's timeout and failure are those of a destination that
+  does not show.
+- **Evidence on the same page.** Where the step's destinations name the page it left and the
+  instance runs the settled path ([performance-control.md](performance-control.md), "Step
+  pacing"), the step goes at once only on a final state that turned one listed target from the
+  frame that decided its input: a `target_present` that definitely did not pass there and passes
+  now, or a `target_gone` that passed there and definitely does not now. The two frames are two
+  captures, and where the runtime gives frame ids, the two ids differ. A final state already true on
+  the decision frame is not this input's effect: the step keeps its `post_delay_ms` and its
+  confirmation, as before. A select step's tap is drawn on a frame of its own, so a select step with
+  such a destination keeps them too.
+- **Records.** Each evaluation is a guard row of the task diagnostic stream with the phase
+  `expect_after`, on the frame it judges ([task-diagnostic-stream.md](task-diagnostic-stream.md)),
+  and its time is one of that frame's `recognition_evaluate` samples. Each listed target is
+  evaluated on each destination frame by itself: a template is matched again, since the page
+  recognition keeps its template results in its own scene context, and a colour target is
+  computed. No code and no ledger shape are added.
+
 ### Capture cadence
 
 PERF-B1 (Workflow #407 B1, [v012-register.md](v012-register.md) §1.177): how often a run captures
@@ -1424,7 +1469,15 @@ while a step waits for a page. No new member, code or record; any task schema.
   `execution.action_gap.mode` `settled` ([performance-control.md](performance-control.md), "Step
   pacing"), a tap's `post_delay_ms` is the longest it reads frames for its destination, not a wait
   that must pass. Nothing changes for a package: it declares what it declared. A destination that
-  names the operation's own page proves nothing on its first frame, so that step keeps the wait.
+  names the operation's own page proves nothing on its first frame, so that step keeps the wait,
+  unless it lists final-state targets (ACT-4, [Final-state targets](#final-state-targets)).
+- **A tap without `post_delay_ms` (ACT-4, since 0.12.37).** Admission keeps refusing
+  `post_delay_ms` 0; a package that wants no blind wait leaves the member out. Under the settled
+  path such a tap reads frames up to `execution.action_gap.settled_limit_ms` (default 2000;
+  [runtime-config.md](runtime-config.md), "The `execution` section"), within its confirmation's
+  timeout, and the confirmation then goes on from what the reading spent: no wait is added and its
+  timeout does not start again. A confirmation limit is not a sleep. With the key 0, or without the
+  settled path, the tap goes to its confirmation at once, as before.
 
 ### Store update packages
 

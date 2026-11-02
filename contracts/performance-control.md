@@ -313,10 +313,18 @@ deadline, settlement and record is the one before pacing.
   or at once on a frame of the declared `expect_after.wait_page`, the confirmation runs as it always
   did, its own timeout from there. A frame of neither is offered to the shared interrupt pages as a
   confirmation's is; an error page is left to the confirmation. A step keeps `post_delay_ms` when
-  its input is no plain tap (a gesture, an application effect), when it declares no `post_delay_ms`
-  or an `observation_window`, when its destinations name the page it left (the first frame would
-  pass with no sign of the input), when it is a designated effect, a store step or a scan, and on
-  the `linear_steps` path. A failed confirmation, or a next step whose guard fails on the frame an
+  its input is no plain tap (a gesture, an application effect), when it declares an
+  `observation_window`, when its destinations name the page it left (the first frame would pass
+  with no sign of the input) and it lists no final-state target, when it is a designated effect, a
+  store step or a scan, and on the `linear_steps` path. ACT-4 (register §1.254, since 0.12.37):
+  a frame goes on only as the step's final state, its destination page with every
+  `expect_after.target_present` passing and every `target_gone` definitely not
+  ([resource-declarations.md](resource-declarations.md), "Final-state targets"); a destination that
+  names the page the step left goes at once only on a final state that turned a listed target from
+  the frame that decided the input, and one already true there keeps `post_delay_ms`. A tap that
+  declares no `post_delay_ms` reads up to `settled_limit_ms` (0: to its confirmation at once, as
+  before), and its confirmation goes on from what that reading spent: no wait is added and its
+  timeout does not start again. A failed confirmation, or a next step whose guard fails on the frame an
   operation arrived on, keeps the run's later steps on `post_delay_ms` and holds that (package,
   operation) on it for `fallback_hold_ms`, across runs, in memory; the run's diagnostics record it.
   No input, attempt or retry is added. Under `settled` a step that sends an input also has a gap,

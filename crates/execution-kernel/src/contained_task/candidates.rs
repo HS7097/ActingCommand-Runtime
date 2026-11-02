@@ -383,8 +383,8 @@ fn evaluation_of<'e>(
 /// registered reason (a plain miss). A registered reason other than `value_test_not_met`
 /// (`value_test_unresolved`, an unresolved OCR region, a match that is not unique, …) is no
 /// definite fail. A composite fails definitely when its members' definite fails decide it: one
-/// of `all_of`, every one of `any_of`.
-fn definitely_failed(evaluation: &TargetEvaluation) -> bool {
+/// of `all_of`, every one of `any_of`. ACT-4: a `target_gone` is gone only on a definite fail.
+pub(super) fn definitely_failed(evaluation: &TargetEvaluation) -> bool {
     if evaluation.passed {
         return false;
     }
