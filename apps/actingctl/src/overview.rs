@@ -58,6 +58,10 @@
 //! Workflow #429 R-0b2 (register §1.243): each instance row carries `activity`, what the instance
 //! does now, the member of the block's one Status read; no other read gives it, and MCP never
 //! cuts it.
+//!
+//! Workflow #432 AGT-1b (register §1.246): the block `agent_wake` is the delivery of the Runtime's
+//! messages to registered channels, the status member of the one Status read; absent with no
+//! `agent_wake` section, and MCP never cuts it. Rows are read with `facts`, key `host.agent_wake`.
 
 use crate::cli_line;
 use crate::codes::{ActingctlCode, ArgumentProblem};
@@ -80,7 +84,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const USAGE: &str = "usage: actingctl overview --state-root <path> [--root <install root>] [--instance <alias|instance_id|ADB port>] [--sections <block>[,<block>...]]\nblocks: global_pause, instances, run_window, lab_tool, install, performance, catalog, config_generation, watchdog, fact_refresh (default all); daemon and incomplete are always answered";
+const USAGE: &str = "usage: actingctl overview --state-root <path> [--root <install root>] [--instance <alias|instance_id|ADB port>] [--sections <block>[,<block>...]]\nblocks: global_pause, instances, run_window, lab_tool, install, performance, catalog, config_generation, watchdog, fact_refresh, agent_wake (default all); daemon and incomplete are always answered";
 /// The run window: the last 24 h.
 const RUN_WINDOW_MS: u64 = 24 * 60 * 60 * 1000;
 /// `<root>\runtime\BUILD-MANIFEST.json` is read whole up to this size.
@@ -115,10 +119,12 @@ pub(crate) enum Section {
     /// Workflow #384 D2-S5 (D2 model §6 S5): what the fact refresh waits for, as
     /// `fact-refresh` prints it.
     FactRefresh,
+    /// Workflow #432 AGT-1b: the delivery of the Runtime's messages, the status member.
+    AgentWake,
 }
 
 impl Section {
-    pub(crate) const ALL: [Self; 10] = [
+    pub(crate) const ALL: [Self; 11] = [
         Self::GlobalPause,
         Self::Instances,
         Self::RunWindow,
@@ -129,6 +135,7 @@ impl Section {
         Self::ConfigGeneration,
         Self::Watchdog,
         Self::FactRefresh,
+        Self::AgentWake,
     ];
 
     /// The block's member name in the answer.
@@ -144,6 +151,7 @@ impl Section {
             Self::ConfigGeneration => "config_generation",
             Self::Watchdog => "watchdog",
             Self::FactRefresh => "fact_refresh",
+            Self::AgentWake => "agent_wake",
         }
     }
 
@@ -159,21 +167,22 @@ impl Section {
             Self::ConfigGeneration => 7,
             Self::Watchdog => 8,
             Self::FactRefresh => 9,
+            Self::AgentWake => 10,
         }
     }
 }
 
 /// The blocks one overview answers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Sections([bool; 10]);
+pub(crate) struct Sections([bool; 11]);
 
 impl Sections {
     /// Every block: `--sections` / `sections` omitted.
-    pub(crate) const ALL: Self = Self([true; 10]);
+    pub(crate) const ALL: Self = Self([true; 11]);
 
     /// The blocks `names` names, each once or more; `None` when one of them names no block.
     pub(crate) fn parse<'a>(names: impl IntoIterator<Item = &'a str>) -> Option<Self> {
-        let mut sections = [false; 10];
+        let mut sections = [false; 11];
         for name in names {
             let section = Section::ALL
                 .into_iter()
@@ -401,6 +410,13 @@ pub(crate) fn read(
         .filter(|_| sections.contains(Section::GlobalPause))
     {
         result.insert(Section::GlobalPause.name().to_owned(), json!(pause));
+    }
+    // Workflow #432 AGT-1b: from the one Status read above; no other read gives it.
+    if let Some(agent_wake) = status
+        .agent_wake()
+        .filter(|_| sections.contains(Section::AgentWake))
+    {
+        result.insert(Section::AgentWake.name().to_owned(), json!(agent_wake));
     }
     insert(&mut result, Section::Instances, instances);
     insert(

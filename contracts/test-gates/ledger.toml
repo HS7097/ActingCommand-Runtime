@@ -241,6 +241,19 @@ tests = [
 ]
 incident = []
 
+# Workflow #407 PF-1 (0.12.37; design rd-1031/check-speed/model-check.md sections 3 and 7; register section 1.248; contracts/capacity-admission.md): a stream asks the capacity owner once per chunk, about the bytes of the write that needs it; a refusal or a binding change surfaces within a chunk and means what it always meant
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-artifact-store::lib::store::tests::stream_admits_once_per_chunk",
+    "actingcommand-artifact-store::lib::store::tests::stream_refusal_surfaces_within_one_chunk",
+    "actingcommand-artifact-store::lib::store::tests::stream_binding_change_is_seen_at_next_chunk",
+    "actingcommand-artifact-store::lib::store::tests::two_streams_each_admit_on_their_own_chunk",
+    "actingcommand-artifact-store::lib::store::tests::a_write_larger_than_a_chunk_is_admitted_as_itself",
+    "actingcommand-artifact-store::lib::store::tests::an_io_failure_after_admission_is_reported_and_the_allowance_is_not_leaked",
+]
+incident = ["#407 PF-1"]
+
 # Frame store
 [[gate]]
 key = "23"

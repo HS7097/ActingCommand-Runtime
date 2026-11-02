@@ -10,6 +10,22 @@ use crate::{
 use std::collections::VecDeque;
 use std::sync::{Mutex, PoisonError};
 
+/// The text of a registry that lists `names`, for the tests of a crate that names no client.
+pub fn fake_registry_text(names: &[&str]) -> String {
+    let channels = names
+        .iter()
+        .map(|name| {
+            serde_json::json!({
+                "name": name,
+                "client": "claude",
+                "native_id": "00000000-0000-4000-8000-000000000001",
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({"schema": crate::channels::CHANNELS_SCHEMA, "channels": channels})
+        .to_string()
+}
+
 /// One send as the fake saw it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FakeSend {

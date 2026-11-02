@@ -279,6 +279,11 @@ impl<'o> HeldPage<'o> {
         })
     }
 
+    /// ACT-1: whether a frame whose page is `page_label` shows the page the wait holds on.
+    pub(super) fn shows(&self, game: &str, page_label: &str) -> bool {
+        crate::page_anchor_matches(game, page_label, self.page)
+    }
+
     /// A frame of the wait whose page is `page_label`, neither a destination nor an error page,
     /// at the budget instant `now`; `previous` is the budget instant of the wait's frame before
     /// it (its start for the first frame). A frame on the wait page pauses the confirmation clock

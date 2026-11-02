@@ -311,6 +311,20 @@ actingcommand_contract::outcome_codes! {
         /// Error. A drill was refused: stuck recovery is off for the instance, so no ladder
         /// starts on it (the command's `command.rejected` and the receipt).
         RecoveryLadderDrillDisabled => "recovery_ladder_drill_disabled": error / none,
+        /// Error. A message to a registered channel failed (Workflow #432 AGT-1b;
+        /// `contracts/agent-wake.md`): `agent_delivery_state` says how it ended and
+        /// `agent_delivery_problem` why, or the worker's own iteration failed. It carries no
+        /// instance link and no client text, and only its operation fails.
+        AgentWakeDeliveryFailed => "agent_wake_delivery_failed": error / none,
+        /// Error. A message does not fit `agent_wake.summary.max_chars` with its header, kind word
+        /// and path, none of which is ever cut: the limit was set below the channel's floor while
+        /// the Runtime ran. The row ends `failed` and nothing is sent.
+        AgentWakeMessageTooLong => "agent_wake_message_too_long": error / none,
+        /// Error. A channel the readable registry does not list: an `AgentWakeTest` is refused, a
+        /// row ends `failed`.
+        AgentWakeChannelUnknown => "agent_wake_channel_unknown": error / none,
+        /// Error. `AgentWakeTest` while the `agent_wake` section is absent or `enabled` is false.
+        AgentWakeDisabled => "agent_wake_disabled": error / none,
         /// Error. A drill was refused: a ladder holds or waits for the instance and
         /// `rules.already_running` is `suppress` (its `recovery_ladder_suppressed`, tagged
         /// `drill`, says `already_running`).
@@ -1620,6 +1634,11 @@ actingcommand_contract::outcome_locations! {
         AdmitRecoveryLadder => "admit_recovery_ladder",
         // Workflow #390 DRILL-1: a person's drill of an instance's ladder.
         RecoveryLadderDrill => "recovery_ladder_drill",
+        // Workflow #432 AGT-1b: the worker of the Runtime's messages, its start and a person's test.
+        AgentWakeWorker => "agent_wake_worker",
+        AgentWakeRestore => "agent_wake_restore",
+        AgentWakeTest => "agent_wake_test",
+        JoinAgentWakeWorker => "join_agent_wake_worker",
         AdmitRuntimeCleanup => "admit_runtime_cleanup",
         AdmitRuntimeContinuation => "admit_runtime_continuation",
         AdmitRuntimeWork => "admit_runtime_work",
@@ -3081,6 +3100,22 @@ actingcommand_contract::outcome_locations! {
     }
 }
 // ---- STORE-FG-2: end ----
+
+// ---- ACT-1, ACT-2 (Workflow #407, register §1.250): begin ----
+actingcommand_contract::outcome_codes! {
+    /// The host's code of the `execution.action_gap` keys. No existing code fits: nothing else
+    /// says a step's gap was drawn or an operation went back to its `post_delay_ms`. One domain
+    /// code with values (#420 S4); written to the run's diagnostics only, no ledger shape.
+    pub(crate) enum ActionGapCode {
+        /// Info. Written to a run's diagnostics as a row of the phase `action_gap`. With
+        /// `action_gap_ms`: the gap a step drew under `execution.action_gap.kind` `random`. With
+        /// `package_id` and `pack_operation_id`: that operation failed while the settled path was
+        /// handed, so the run's later steps keep their `post_delay_ms` and the operation stays on
+        /// it for `execution.action_gap.fallback_hold_ms`.
+        Recorded => "contained_task_action_gap_recorded": info / none,
+    }
+}
+// ---- ACT-1, ACT-2: end ----
 
 // ---- UPD-1 (design-upd1 §2, §3, §4; Alice's rulings 95 and 96 of 2026-10-29 17:1x): begin ----
 actingcommand_contract::outcome_codes! {

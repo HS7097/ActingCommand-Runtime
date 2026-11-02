@@ -5705,30 +5705,6 @@ composite's success no longer names `next.undo`. Nothing persisted changes.
 | UE-1 | `install undo`: `interface_edge`, then `rollback_gate_failed`, when a Runtime of the undone build has started; result member `edges` | install command | INST-UNDO-EDGE | INST-UNDO-EDGE | `since` 0.12.36; reused code and refusal words |
 | UE-2 | `next.undo` of a composite's success left out when the edges would refuse it | install command | INST-UNDO-EDGE | INST-UNDO-EDGE | `since` 0.12.36 |
 
-### 1.249 Slice STILL-1 (0.12.37): a wait on a still screen it does not accept ends at a configured limit (Workflow #407; Alice's 11-02 report of the 15–20 minute runs; design `rd-1031/check-speed/model-check.md` §2, §6, §7; coordinator work order `rd-1031/check-speed/brief-slices.md`)
-
-**Why.** Four failed manual runs measured in the design ended on a screen that neither moved nor
-was recognised, and each waited out its limit: three spent 654 to 896 s there, the fourth at least
-204 s. Neither a recognition filter nor proactive capture shortens that wall time. Off by default:
-with `still_limit_ms` 0 no clock is read, no frame is compared for it, and every wait runs as
-before. [resource-declarations.md](resource-declarations.md) ("Capture cadence") and
-[runtime-config.md](runtime-config.md) ("The `execution` section") are the contract. **No persisted
-ledger shape and no new code:** the existing keys `held_ms` and `limit_ms` become optional values
-of three existing codes. The threshold comes from design §8: stay off, or on per instance only,
-until the ledger's longest legitimate still stretch is known.
-
-| # | Shape | Kind | Code slice | First writer | Notes |
-|---|---|---|---|---|---|
-| ST1-1 | `execution.capture.still_limit_ms` (`0` or `30000..=1800000`, 0), and per instance `instance.<id>.execution.capture.still_limit_ms` (default the section's) | configuration keys (§5 row; `config.parameters.execution` row; **`actingd-config` revision 24**, shared with AGT-1a §1.245; no second bump) (`still_limit_key_range_and_default`) | STILL-1 | STILL-1 | `since` 0.12.37; settable, read at each step; a value between 1 and 29 999 is `out_of_range` in the whole-section check |
-| ST1-2 | the still limit of a page wait and of a page-graph confirmation, a wait step's wait included | rule (no shape change) (the other five `gate_still1` tests) | STILL-1 | STILL-1 | counted on the wall clock from the back-off's frames, independent of the back-off's switch and of the factor (#411 A43b's rule tracks nothing at the factor 1000); frames of a held page never count; `linear_steps` waits, observation windows and input rechecks take none |
-| ST1-3 | `held_ms`, `limit_ms` optional on `contained_task_step_unconfirmed`, `contained_task_page_unknown`, `page_confirmation_failed` | optional values of existing codes, present only when a wait ended on the limit | STILL-1 | STILL-1 | `since` 0.12.37; `task_timing`'s `elapsed_ms` and `limit_ms` stay the wait's own, so `elapsed_ms` may be below `limit_ms`; a confirmation that goes on to a retry or to `on_error` carries the values only on a failure that ends the run |
-| ST1-4 | `CaptureCadence.still_limit_ms` (`execution-kernel`) | Runtime-internal interface (memory only) | STILL-1 | STILL-1 | the host hands the value for the run's instance with each step's pacing; `CaptureCadence::UNCONFIGURED` is 0 |
-
-**Rollback** (to 0.12.36). Nothing persisted changes. 0.12.36 refuses at start and in `check-config`
-a configuration file that names the section's member or an entry's (the members deny unknown
-members), **so the operator first removes them**. An online override of either key needs nothing:
-0.12.36 has no such key and drops the row (`config_override_dropped`) without refusing the record.
-
 ### 1.244 Slice S4a-1, which is #357 DB-2 (0.12.37): a selection document reads a standard pack's shared table (Workflow #430 §8.2, §9 row S4a; model M-357a v1.1, §1.65 TB5–TB10; coordinator work order `rd-1031/brief-s4a-db2.md`)
 
 **What landed against §1.65.** The rows below; no ledger shape, no wire shape, no configuration key.
@@ -5772,6 +5748,118 @@ members), **so the operator first removes them**. An online override of either k
 
 **Tests changed** (the approved behaviour change): `ledger_observer_tests`' `WORKBENCH_PATTERNS` gains the entry; `component_interfaces.rs`' `V0120` says `actingd-config` [5, 24].
 
+### 1.246 Slice AGT-1b (0.12.37): the worker, the record, the read face and the test command of the Runtime's messages (Workflow #432; design `rd-1031/agt/model-agt-v2.md` §10; coordinator work order `rd-1031/agt/brief-agt-1b.md`)
+
+[agent-wake.md](agent-wake.md) is the contract. **Nothing wakes automatically yet** (AGT-2 brings the tap and the rules) and **no transport exists yet** (AGT-T1): the production forwarder `Unavailable` answers `deferred`, so a person's test ends `deferred`, then `expired`.
+
+**What changes live.** With no `agent_wake` section, nothing: no thread, no file, no row, no status member. With a section: one thread `actingcommand-runtime-agent-wake`, the fact `host.agent_wake`, the folder `<state_root>\<body.dir>\`, `Status.agent_wake`, the overview block `agent_wake`, and the request `AgentWakeTest`. Failures of the worker are `Operation` at `contain_failure` and carry no instance link (#419).
+
+**Rollback** (to 0.12.36). Remove the section first, as §1.245 says. A 0.12.36 reader accepts the unknown runtime-fact key, and `ledger` does not move. `runtime-client` [3, 5] pairs with every console 0.12.36 pairs with.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| AGT1B-1 | `RuntimeOperation::AgentWakeTest{to, instance_alias?}`, `RuntimeResult::AgentWakeTestQueued{queued: {wake_id, channel, quiet?}}`, `RuntimeControlPlaneStatus.agent_wake?`, **`runtime-client` [3, 5]** | wire | AGT-1b | AGT-1b | general instruction, recorded through G14; origins (User, Ui) and (Cli, Cli) only; not an MCP tool. **A console whose `max` is below 5 refuses a status that carries the member:** update it before adding the section |
+| AGT1B-2 | `host.agent_wake`, a record list: `wake_id, kind, rule?, test, instance_alias?, code?, channel, created_at_unix_ms, updated_at_unix_ms, state, reason?, proof?, problem?, body_file?, body_sha256?, body_chars?, message_chars?, alias_cut, trigger_event_id?, correlation_id?` | runtime fact | AGT-1b | the worker | at most four records per wake; names, a digest and counts, never text; a shape this build cannot read is `invalid_runtime_state_fact` and the start goes on |
+| AGT1B-3 | `<state_root>\<body.dir>\w<unix_ms>[-n].json`, `.delivery.json` (schema `actingcommand.agent-wake-delivery.v1`) | program state | AGT-1b | the worker | swept by age and count, never an open row's files |
+| AGT1B-4 | `agent_wake_delivery_failed`, `agent_wake_message_too_long`, `agent_wake_channel_unknown`, `agent_wake_disabled` (runtime-host); `invalid_agent_wake_test_origin`, `request_agent_wake_test_completed` (contract); `agent_wake_test_queued` (actingctl) | outcome codes | AGT-1b | the worker, the door, `agent-wake-test` | `agent_budget_exhausted` comes with AGT-2 |
+| AGT1B-5 | keys `agent_channel` (name), `agent_delivery_state`, `agent_delivery_problem` (vocabularies of those names); locations `agent_wake_worker`, `agent_wake_restore`, `agent_wake_test`, `join_agent_wake_worker`, `runtime_agent_wake_test` | key table | AGT-1b | the worker | typed setters, so a value cannot make `append_lifecycle_failure` fail |
+| AGT1B-6 | `actingctl agent-wake-test --to <channel> [--instance <alias>] [--wait-s <seconds>]`; overview block `agent_wake` (never cut by MCP) | CLI, read face | AGT-1b | — | from the one Status read |
+| AGT1B-7 | an instruction that changes `agent_wake.rules` with an alias no instance is registered under: `config_value_invalid`, `instance_unknown` | refusal | AGT-1b | `ConfigureSettings` | left by AGT-1a: the section check has no instance list |
+
+**Where it differs from the design's letter.** `agent_wake_test_queued` is actingctl's, as `recovery_ladder_drill_queued` is: the receipt's success code is `request_agent_wake_test_completed`, one per kind. A new contract code `invalid_agent_wake_test_origin` carries the gate: none fits by name. A test during quiet stays `prepared`, not `deferred`: §2's pipeline and "no record per tick". A day in `failed_today` and `suppressed_today` is a UTC day until AGT-2 brings the host's local day.
+
+**Tests changed** (the approved behaviour change): `component_interfaces.rs`' `V0120` and `gate_429_r0b_pairing` say `runtime-client` [3, 5]; the fake Runtime of `gate_422_ov24k` can answer the new status member.
+
+### 1.247 Slice AGT-T1 (0.12.37): the first transport and `actingctl agent-channel` (Workflow #432; design `rd-1031/agt/model-agt-v2.md` §5.1, §5.2, §6.1, §6.3, §6.7, §7.2, §10, §11; coordinator work order `rd-1031/agt/brief-agt-t1.md`)
+
+[agent-forward.md](agent-forward.md) is the contract, and the one place with client words. Number 1.247 is the coordinator's.
+
+**What changes live.** Nothing until the Runtime's assembly uses `RealForward` (AGT-1b's assembly, one line) and a person registers a channel. `agent-channel` is new and works with no Runtime. No interface revision moves.
+
+**Rollback.** `<state_root>\agent-forward\` stays on disk and an older build ignores it. Its session records hold DPAPI blobs, so `agent-channel remove`, or a session's end, is what clears a token.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| AGTT1-1 | `actingctl agent-channel` | new command | AGT-T1 | the person; a session's hook | not an MCP tool; no Runtime and no slot; the hook's two commands print nothing on success, and the notice prints plain text |
+| AGTT1-2 | `<state_root>\agent-forward\channels.json` | first writer of AGT1A-7 | AGT-T1 | `agent-channel add`, `remove` | no secret, file lock, `.part`, flush, rename |
+| AGTT1-3 | `<state_root>\agent-forward\claude-sessions\<native id>.json`, schema `actingcommand.agent-claude-session.v1` | new program state | AGT-T1 | a session's hook or registration | holds a credential as a DPAPI blob for the current Windows user; no ledger field, no configuration key |
+| AGTT1-4 | `agent_channel_reported` (success), `agent_channel_failed` (error), ladder class `none`, owner `actingctl`, domain `agent_` | new outcome codes | AGT-T1 | `agent-channel` | no values: the text of a failure is the developer line's, and never holds a credential |
+| AGTT1-5 | `RealForward::new(state_root)`, `cli` (`crates/agent-forward`, Windows) | new public items | AGT-T1 | AGT-1b's assembly | answers `Deferred` (`ipc_unavailable`) for a client with no transport |
+| AGTT1-6 | `crates/agent-forward`: `deny(unsafe_code)`, allowed only in `pipe`, `dpapi`, `ancestor`; `deny(unsafe_op_in_unsafe_fn)` | changes AGT1A-6's `forbid` | AGT-T1 | — | new dependencies: `actingcommand-host-metrics`, `windows-sys` features as the design's list; dev `tempfile`; no new third-party crate |
+| AGTT1-7 | `crates/agent-forward/LICENSE-codex-goal-lifecycle.txt`, `NOTICE.md` section "Source code adapted from other projects" | licence notice | AGT-T1 | — | MIT source in an AGPL-3.0-only repository |
+
+**Departures from the design** (each is in the contract): no flush after the write, since `FlushFileBuffers` cannot be cancelled and would break the deadline; `add` does not check the message floor, since it cannot see the configuration; a failed hook exits 2 and prints nothing on stdout, by Claude Code's hook page; `pipe.rs` has no read yet, since this transport never reads (AGT-T2 adds it).
+
+### 1.248 Slice PF-1 (0.12.37): one capacity decision per chunk of a stream (Workflow #407; design `rd-1031/check-speed/model-check.md` §3, §7; coordinator work order `rd-1031/check-speed/brief-slices.md`)
+
+[capacity-admission.md](capacity-admission.md) and [runtime-config.md](runtime-config.md) ("The `artifact_store` section") are the contract. The number 1.248 is the coordinator's. No ledger shape, no wire shape, no outcome code changes.
+
+**Why.** Every write of a stream took a capacity decision. A diagnostic stream writes once per record, 107 to 426 records a frame; one measured run spent 17.25 s of its 18.25 s of diagnostic writing on those decisions. The new fast path (§7's ACT slices) reads more frames, so this comes first.
+
+**What changes live.** Nothing a run records or decides, except that a refusal or a binding change on a stream may surface up to one chunk (1 MiB) later. A decision still asks about the bytes of the write that needs it, so it is refused under the same condition with the same code, and never earlier. `capacity_admit` in task timing still counts one check per write, now mostly the chunk's count, so its attempts are unchanged and its total falls.
+
+**The edges** (CHECK-M addendum item 2; [capacity-admission.md](capacity-admission.md), [task-diagnostic-stream.md](task-diagnostic-stream.md)). The allowance is cached **per stream**, a count on the stream that is not shared and that the owner never holds. "At most one chunk late" is per stream; the whole machine's bound is the chunk times the live streams. A single write beyond what is left, or larger than a chunk, takes one decision for all of its own bytes before any is written, and what was left does not count towards it. A change of bound volume is seen at that stream's next decision, at most a chunk of bytes later, with today's refusal and reason. An I/O failure inside a chunk takes no decision, is the stream's fatal `artifact_write_failed` at once, and ends the stream's count with it, so nothing leaks to another stream or a later decision.
+
+**Rollback** (to 0.12.36). Nothing persisted. A file that names `artifact_store` is refused by the older build, as any newer section is; an instruction value of the key is reported as not restored.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| PF1-1 | `artifact_store.stream_admit_chunk_bytes` | configuration key, new section | PF-1 | PF-1 | `since` 0.12.37; integer `0..=67108864`, default 1048576 from the defaults file; settable; `actingd-config` revision 24 with §1.245 |
+| PF1-2 | `ArtifactStore::set_stream_admit_chunk_bytes` | artifact-store method | PF-1 | — | 0 until an owner sets it; a stream takes the value when it opens. Only the Runtime's host sets it, so offline stores and fixtures judge every write as before |
+
+### 1.249 Slice STILL-1 (0.12.37): a wait on a still screen it does not accept ends at a configured limit (Workflow #407; Alice's 11-02 report of the 15–20 minute runs; design `rd-1031/check-speed/model-check.md` §2, §6, §7; coordinator work order `rd-1031/check-speed/brief-slices.md`)
+
+**Why.** Four failed manual runs measured in the design ended on a screen that neither moved nor
+was recognised, and each waited out its limit: three spent 654 to 896 s there, the fourth at least
+204 s. Neither a recognition filter nor proactive capture shortens that wall time. Off by default:
+with `still_limit_ms` 0 no clock is read, no frame is compared for it, and every wait runs as
+before. [resource-declarations.md](resource-declarations.md) ("Capture cadence") and
+[runtime-config.md](runtime-config.md) ("The `execution` section") are the contract. **No persisted
+ledger shape and no new code:** the existing keys `held_ms` and `limit_ms` become optional values
+of three existing codes. The threshold comes from design §8: stay off, or on per instance only,
+until the ledger's longest legitimate still stretch is known.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| ST1-1 | `execution.capture.still_limit_ms` (`0` or `30000..=1800000`, 0), and per instance `instance.<id>.execution.capture.still_limit_ms` (default the section's) | configuration keys (§5 row; `config.parameters.execution` row; **`actingd-config` revision 24**, shared with AGT-1a §1.245; no second bump) (`still_limit_key_range_and_default`) | STILL-1 | STILL-1 | `since` 0.12.37; settable, read at each step; a value between 1 and 29 999 is `out_of_range` in the whole-section check |
+| ST1-2 | the still limit of a page wait and of a page-graph confirmation, a wait step's wait included | rule (no shape change) (the other five `gate_still1` tests) | STILL-1 | STILL-1 | counted on the wall clock from the back-off's frames, independent of the back-off's switch and of the factor (#411 A43b's rule tracks nothing at the factor 1000); frames of a held page never count; `linear_steps` waits, observation windows and input rechecks take none |
+| ST1-3 | `held_ms`, `limit_ms` optional on `contained_task_step_unconfirmed`, `contained_task_page_unknown`, `page_confirmation_failed` | optional values of existing codes, present only when a wait ended on the limit | STILL-1 | STILL-1 | `since` 0.12.37; `task_timing`'s `elapsed_ms` and `limit_ms` stay the wait's own, so `elapsed_ms` may be below `limit_ms`; a confirmation that goes on to a retry or to `on_error` carries the values only on a failure that ends the run |
+| ST1-4 | `CaptureCadence.still_limit_ms` (`execution-kernel`) | Runtime-internal interface (memory only) | STILL-1 | STILL-1 | the host hands the value for the run's instance with each step's pacing; `CaptureCadence::UNCONFIGURED` is 0 |
+
+**Rollback** (to 0.12.36). Nothing persisted changes. 0.12.36 refuses at start and in `check-config`
+a configuration file that names the section's member or an entry's (the members deny unknown
+members), **so the operator first removes them**. An online override of either key needs nothing:
+0.12.36 has no such key and drops the row (`config_override_dropped`) without refusing the record.
+
+### 1.250 Slices ACT-1 and ACT-2 (0.12.37): the settled path of a step after its input, and the gap between two actions (Workflow #407; coordinator work order `rd-1031/check-speed/brief-slices.md`; design `model-check.md` §1.6, §1.7, §7)
+
+[performance-control.md](performance-control.md) ("Step pacing") and
+[runtime-config.md](runtime-config.md) ("The `execution` section") are the contract. The number 1.250
+is the coordinator's. **Off by default:** under `execution.action_gap.mode` `declared` every step's
+order is the one before these slices. No package changes.
+
+**What.** Under `settled` a tap reads frames from the first frame after its input and goes on the
+first destination frame; `post_delay_ms` is the limit of that reading and is never added. A
+`fixed` or `random` gap finishes before the frame that decides the input and its guard, asked once
+per step; `performance` keeps only the pre-input wait. The path's frames and waits are recorded as a
+confirmation's, and the blind wait's boundary stays, empty.
+
+**What changes live.** Nothing until someone sets `settled`. With it, the frames of a step grow from
+about one to one per `poll_ms` until its destination shows, and the next step's guard judges an
+earlier frame.
+
+**Rollback** (to 0.12.36). Nothing persisted but the two values below in a run's diagnostics, which
+keep the row shape. A configuration file that names the keys is refused by an older Runtime
+(`actingd-config`), as is an instruction value restored from `host.config_overrides`, which is
+dropped with its record; a file that does not name them is read as before.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| ACT-1 | `execution.action_gap.{mode, poll_ms, settle_frames, settle_change_max_milli, settled_max_stage, fallback_hold_ms}`, each also `instance.<id>.…` | configuration keys | ACT-1 | ACT-1 | settable, read at each step; an instance's own key has default `none` |
+| ACT-2 | `execution.action_gap.{kind, fixed_ms, random_min_ms, random_max_ms}`, each also `instance.<id>.…` | configuration keys | ACT-2 | ACT-2 | as above; `random_min_ms` at most `random_max_ms` (`section_check`) |
+| ACT-3 | `StepPacing.settled_path`, `SettledPath`, `SettledHolds`, `ContainedTaskRuntime::step_action_gap`, `settled_path_held`, `settled_path_fell_back` (`execution-kernel`) | Runtime-internal interface (memory only) | ACT-1 | ACT-1 | trait defaults: no gap, never held, nothing recorded; a runtime that hands no path (offline, fixtures, the Lab's declared operation) keeps the order before it |
+| ACT-4 | `contained_task_action_gap_recorded` (info, ladder `none`; optional `action_gap_ms`, `package_id`, `pack_operation_id`), key `action_gap_ms` | outcome code and key | ACT-1, ACT-2 | ACT-1, ACT-2 | new, since nothing else says a gap was drawn or an operation fell back; one code with values (#420 S4). Written only in a run's diagnostics, as a recognition error row of the phase `action_gap`, as a mark's miss is (§1.28): no new row, no ledger shape, no `ledger` step |
+
 ### 1.251 Slice OCR-SCALE-1 (0.12.37): a task of schema 0.9 may declare OCR fields, and a field's box follows a scaled anchor (#428, #392; Alice's ruling of 2026-11-02 that an interface scale is an event to support; coordinator work order `rd-1031/check-speed/brief-ocr-scale.md`)
 
 [ocr-fields.md](ocr-fields.md), section Task schema `0.9` fields tasks, is the contract. **No new code, key, ledger shape or wire shape.**
@@ -5792,6 +5880,26 @@ members), **so the operator first removes them**. An online override of either k
 **Left open.** A pack in the `0.7` comparison form cannot move to schema `0.9` by this slice and keeps its parallel templates; moving it needs the keyed ends refused beside a comparison and the form told apart by `mode`, a slice of its own if wanted. Fields beside `phases` are admitted, since the collector does not read the stage, and no test runs them together. No pack changes here.
 
 **Rollback** (to 0.12.36). A pack that declares it is refused at the older build's declaration gate; `package` [3, 6] above its range refuses the combination earlier. Nothing persisted changes.
+
+### 1.252 Slice PF-2 (0.12.37): `RecognitionStarted`'s two commits observed stage by stage, in the existing task timing shape (Workflow #407; design `rd-1031/check-speed/model-check.md` §3, §7, addendum item 3; coordinator work order `rd-1031/check-speed/brief-slices.md`)
+
+[task-diagnostic-stream.md](task-diagnostic-stream.md) is the contract. The number 1.252 is the coordinator's. **No new persisted shape, no outcome code, no configuration key, no interface revision.** The test: `recognition_started_stages_are_observed` (host gate row beside P-k1b).
+
+**Why.** The started record's span showed 39 to 155 ms a frame in the design's samples, with no stage timing on it; the design suspected a wait for `fact_write_gate`. Reading the path shows a second candidate the span cannot tell apart: `recognition.requested` is a pipeline event, so it also takes the `performance` lock after the gate is dropped.
+
+**What changes.** The arm's two commits go through `append_event_observed`, which is the same append with its stages observed. The records, their order, their links and every failure path stay; the kernel sees no change.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| PF2-1 | task timing evidence `boundaries.recognition_payload_stages`, `boundaries.recognition_task_stages` | existing members, wider meaning | PF-2 | PF-2 | they now hold `RecognitionStarted`'s commits beside `RecognitionCompleted`'s (`recognition.requested` in the first, `task.recognition_started` in the second), so `attempts` is started plus completed records; a value from before 0.12.37 is `RecognitionCompleted`'s alone and is not comparable per attempt. No component reads these members; an older reader decodes them unchanged, so the `ledger` revision stays |
+
+**Why not the design's new member `recognition_started_stages`.** The design named it. `TaskTimingBoundaryObservations` denies unknown members, so a member added there is a record an earlier reader refuses, which by [component-interfaces.md](component-interfaces.md) ("Bump rule") raises `ledger` to 6: a rollback to 0.12.36 refused and the console's contract pin moved, for an observation. The existing families answer the question: a started commit's stage is bounded by the record spans ([task-diagnostic-stream.md](task-diagnostic-stream.md)), and the two records' spans differed by ten times in both directions in the design's samples, so the bound is close where it matters. A later exact split per record would be that member, with that revision.
+
+**What it does not do.** It shows the wait; it does not name the holder. A stage's `max_us` against its `total_us / attempts`, set beside the same commit's own `writer_response` and `fact_sync` (what one append holds the gate for), tells a queue of ordinary appends from one long holder. `writer` stays one snapshot, replaced on every commit, so it is usually `RecognitionCompleted`'s.
+
+**The golden.** `apps/actinglab/tests/golden/expected.json`: `attempts` 1 to 2 in the spans of the two families, nothing else. Written by hand, because no build runs on the authoring machine; CI compares it.
+
+**Rollback** (to 0.12.36). Nothing to do; the members decode as before.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
@@ -5857,7 +5965,7 @@ U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `Loa
 | `host.config_overrides` | workbench | yes (added to `tag.workbench_patterns` by M387 §5.7) | D1b |
 | `host.contained_settlement` (an integer: the start event of the last start that completed the settlement of open direct runs; [runtime-fact-store.md](runtime-fact-store.md)) | workbench | yes (added to `tag.workbench_patterns` by #411 A65) | #411 A65 |
 | `host.idle_state` (a record list: the instances the idle action closed or is closing, with their action and wake; since 0.12.25 its writer row names the start anchor, not the owner epoch (#405 N-2), and a woken instance stays in it, `woken`, until its startup package has run (#405 O-2); [runtime-fact-store.md](runtime-fact-store.md)) | workbench | yes (added to `tag.workbench_patterns` by #405 IDLE-1P) | #405 IDLE-1P |
-| `host.agent_wake` (a record list: the newest `agent_wake.delivery.history_rows` wakes and their delivery states; [agent-wake.md](agent-wake.md); AGT-1a adds the tag entry, AGT-1b the writer; §1.245 AGT1A-5) | workbench | yes (added to `tag.workbench_patterns`) | #432 AGT-1b |
+| `host.agent_wake` (a record list: the newest `agent_wake.delivery.history_rows` wakes and their delivery states; [agent-wake.md](agent-wake.md); AGT-1a adds the tag entry, AGT-1b the writer; §1.245 AGT1A-5, §1.246 AGT1B-2) | workbench | yes (added to `tag.workbench_patterns`) | #432 AGT-1b |
 | `config.selection`, `config.catalog` | workbench | no (`config.` is re-observed) | D1b, MCP-9a |
 | `config.parameters.touch` (a section fact of the `config.parameters.<section>` family, five rows; §1.136 T12-4) | workbench | no (`config.` is re-observed) | #406 T12 |
 | `config.parameters.emulator_control` (a section fact of the `config.parameters.<section>` family, one row; §1.158 A50-5) | workbench | no (`config.` is re-observed) | #411 A50 |
@@ -5895,6 +6003,7 @@ when it takes effect.
 | `performance.pacing.*` | PERF §10.3 (26 keys; `mode` stays `observe` in every release until Alice approves); Workflow #427-B (**`actingd-config` revision 19**): the optional `max_concurrent_runs` | PERF §10.3; #427-B: no default (unset, no limit), `1..=65535`, not settable (§1.199 427B-4) | P-c (built, §1.24); #427-B | P-k, P-s, P-h (0.12.x); `clock_jump_ms`, `heavy_dispatch_limit.*` P-c; `max_concurrent_runs` #427-B |
 | `performance.calibration.*` | PERF §10.4 (19 keys) | PERF §10.4 | P-c (built, §1.24) | P-a (0.12.x) |
 | `execution.defaults.*` | the kernel's fallback defaults (PERF §10.4 last notes) | today's constants | **not built:** P-c left it out (PR #748 deviation 5, "after SR-1"), and no later slice parses it, so it is not part of revision 5 (open for the coordinator, A8 report) | — (the kernel's fallbacks stay code constants in v0.12.0) |
+| `execution.action_gap.*` | `mode`, `kind`, `fixed_ms`, `random_min_ms`, `random_max_ms`, `poll_ms`, `settle_frames`, `settle_change_max_milli`, `settled_max_stage`, `fallback_hold_ms`, also per instance (**`actingd-config` revision 24**) | `declared`, `fixed`, 0, 0, 0, 50, 1, 500, `s1`, 3 600 000, settable (§1.250) | ACT-1, ACT-2 | ACT-1, ACT-2 (0.12.37) |
 | `execution.capture.*` | `max_interval_ms`, `backoff_enabled`, `idle_ceiling_ms` (**`actingd-config` revision 11**) | 60 000 (`5000..=1800000`), `true`, 5 000 (`50..=60000`), settable (§1.177 B1-2, B1-3) | PERF-B1 | PERF-B1 (0.12.x) |
 | `execution.capture.still_limit_ms`, and per instance `instance.<id>.execution.capture.still_limit_ms` (**`actingd-config` revision 24**; §1.249) | the key itself | 0, off (`0` or `30000..=1800000`); an instance's default is the section's; settable | STILL-1 | STILL-1 (0.12.37) |
 | `scheduling.recognition.*` | `sample_timeout_retries` | 2 | SR-1 (built, §1.23) | SR-1 (v0.12.0) |
@@ -5916,6 +6025,7 @@ when it takes effect.
 | `scheduling.remedy.*`, and per instance `instance.<id>.scheduling.remedy.choices` (**`actingd-config` revision 6**, Workflow #411 B15; §1.110 B15-8) | `enabled`, `max_per_round`, `choices` | `true`, 2 (`1..=8`), `[]`; an instance's list replaces the section's as a whole, default the section's; every key settable; rows of the `session.remedy.choices` shape ([runtime-config.md](runtime-config.md)) | #411 B15 R3 (built, §1.113) | #411 B15 R4 (0.12.3); R7 (check-config notes) |
 | `touch.*` (**`actingd-config` revision 7**, Workflow #406; §1.136) | `sampling.sigma_ratio_milli`, `sampling.max_redraws`, `sampling.candidate_count`, `history.points_per_box`, `history.max_boxes` | 250 (`1..=1000`), 8 (`0..=64`), 4 (`1..=16`), 16 (`1..=256`), 1024 (`1..=65536`); host-wide, every key settable (plan Q13; [runtime-config.md](runtime-config.md)) | #406 T12 (§1.136) | #406 T12 (0.12.x) |
 | `emulator_control.*` (**`actingd-config` revision 8**, #411 A50; §1.158) | `restart_exit_wait_ms` | 60 000 (`1000..=300000`); host-wide, settable ([runtime-config.md](runtime-config.md)) | A50 (§1.158 A50-5) | A50 (0.12.x) |
+| `artifact_store.*` (**`actingd-config` revision 24**, Workflow #407 PF-1; §1.248) | `stream_admit_chunk_bytes` | 1 048 576 (`0..=67108864`); host-wide, settable, a stream takes it when it opens ([runtime-config.md](runtime-config.md), "The `artifact_store` section") | PF-1 (§1.248 PF1-1) | PF-1 (0.12.37) |
 | `host.*` (**`actingd-config` revision 20**, RB-2; §1.202) | `process_memory_priority`, `process_io_priority` | `normal` (`normal` \| `low`); not settable, applied by actingd to its own process at start ([runtime-config.md](runtime-config.md), "The `host` section") | RB-2 (§1.202 RB2-1) | RB-2 (0.12.28) |
 | `store_foreground.*` (**`actingd-config` revision 21**, STORE-FG-2; §1.209) | `allowed_application_ids` | `[]` (0 to 16 unique Android package names, none an instance's `application_id`); not settable, only the configuration file widens it ([runtime-config.md](runtime-config.md), "The `store_foreground` section") | STORE-FG-2 (§1.209 SF2-1) | STORE-FG-2 (0.12.29) |
 | `agent_wake.*` (**`actingd-config` revision 24**, Workflow #432 AGT-1a; §1.245) | the 19 keys of [agent-wake.md](agent-wake.md) | no default anywhere, as an exception to this section's opening: the section is whole or absent, and a file that does not name it has no key | AGT-1a (§1.245 AGT1A-1) | AGT-1b (0.12.37) |

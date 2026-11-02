@@ -23,7 +23,9 @@
 //!   `emulator_control` (#411 A50; emu-watch adds the emulator watch's keys); `watchdog` (#411
 //!   A66, read by the watchdog and `actingctl` from the configuration file,
 //!   [`watchdog::start_window_ms`]); `execution` (PERF-B1, Workflow #407 B1: the kernel's
-//!   capture cadence); `idle` (IDLE-1, Alice's ruling 41: the idle action of an instance with
+//!   capture cadence); `artifact_store` (Workflow #407 PF-1: how many bytes of a stream one
+//!   capacity decision covers); `idle` (IDLE-1, Alice's ruling 41: the idle action of an instance
+//!   with
 //!   no task soon, also per instance); `display_safe_area` (Workflow #392 DA-4b-D, Alice's
 //!   ruling 69: the declared safe areas' directory and each instance's device model); `install`
 //!   (Workflow #421 INST-1, read by `actingctl install` from the configuration file,
@@ -42,6 +44,8 @@
 
 #![forbid(unsafe_code)]
 
+// ACT-1, ACT-2 (Workflow #407): `execution.action_gap.*`, how a step goes on after its input.
+pub mod action_gap;
 // Workflow #432 AGT-1a: `agent_wake.*`, whole or absent; no section, no keys and no rows.
 pub mod agent_wake;
 mod codes;
@@ -54,6 +58,8 @@ pub mod emulator_control;
 pub mod execution;
 mod existing;
 pub mod frame_retention;
+// Workflow #407 PF-1: `artifact_store.*`, how many bytes of a stream one capacity decision covers.
+pub mod artifact_store;
 // RB-2: `host.*`, the memory and I/O priority actingd gives its own process at start.
 pub mod host;
 mod host_claims;
@@ -78,6 +84,7 @@ mod ui_tier;
 mod value;
 pub mod watchdog;
 
+pub use action_gap::{ActionGapConfig, ActionGapFile, ActionGapKind, ActionGapMode};
 pub use agent_wake::{AgentWakeConfig, AgentWakeFile};
 pub use codes::{ConfigCode, ConfigValueProblem};
 pub use defaults::{
@@ -208,6 +215,10 @@ mod gate_407_b1;
 // STILL-1 (Workflow #407, register §1.249): the still limit's key, off by default and per instance.
 #[cfg(test)]
 mod gate_still1;
+
+// ACT-1, ACT-2 (Workflow #407, register §1.250): the `execution.action_gap` keys.
+#[cfg(test)]
+mod gate_act2;
 
 // #422 LN-7c Q: the evidence-frame rule's age and the frame queries' pace and chunk.
 #[cfg(test)]

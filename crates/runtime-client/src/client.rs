@@ -2000,6 +2000,28 @@ impl RuntimeClient {
         }
     }
 
+    /// Asks for a test of the delivery to the registered channel `to` (`AgentWakeTest`, Workflow
+    /// #432 AGT-1b) and returns the queued wake; `instance_alias` only names an instance in the
+    /// message. The Runtime answers at once and the worker does the rest, so the default receipt
+    /// wait applies. An answer for another channel is an unexpected result.
+    pub fn agent_wake_test(
+        &self,
+        to: &str,
+        instance_alias: Option<&str>,
+    ) -> RuntimeClientResult<actingcommand_contract::AgentWakeTestQueued> {
+        const OPERATION: Location = ClientLocation::RuntimeAgentWakeTest.location();
+        match self.execute(
+            OPERATION,
+            RuntimeOperation::AgentWakeTest {
+                to: to.to_owned(),
+                instance_alias: instance_alias.map(str::to_owned),
+            },
+        )? {
+            RuntimeResult::AgentWakeTestQueued { queued } if queued.channel == to => Ok(queued),
+            _ => Err(self.unexpected_result(OPERATION)),
+        }
+    }
+
     pub fn acquire_lease(&self, instance_alias: &str) -> RuntimeClientResult<LeaseToken> {
         #[cfg(feature = "test-observation")]
         record_active(

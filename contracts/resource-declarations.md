@@ -1420,6 +1420,11 @@ while a step waits for a page. No new member, code or record; any task schema.
   had stayed unchanged) and `limit_ms` (the limit in effect) on the outcome. A declared retry still
   applies, and its confirmation starts a new clock. The waits of a `linear_steps` step, observation
   windows and input rechecks have no still limit.
+- **`post_delay_ms` under the settled path (ACT-1, since 0.12.37).** Where the instance runs
+  `execution.action_gap.mode` `settled` ([performance-control.md](performance-control.md), "Step
+  pacing"), a tap's `post_delay_ms` is the longest it reads frames for its destination, not a wait
+  that must pass. Nothing changes for a package: it declares what it declared. A destination that
+  names the operation's own page proves nothing on its first frame, so that step keeps the wait.
 
 ### Store update packages
 

@@ -1467,6 +1467,8 @@ pub(super) struct RuntimeContainedTask<'a> {
     pub(super) entry_scene: Option<Scene>,
     sampling_run_seed: Option<u64>,
     used_action_seeds: BTreeSet<u64>,
+    /// ACT-2: how many gaps the run has drawn.
+    action_gap_draws: u64,
     finalizing: Option<TaskOutcome>,
     capture_evidence: CaptureEvidenceAccumulator,
     pub(super) configuration_records: u8,
@@ -1593,6 +1595,30 @@ impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
     /// #385 P-k: the run's extra wait rounds count in its own evidence.
     fn observe_extra_wait_round(&mut self) {
         self.inner.observe_extra_wait_round();
+    }
+
+    /// ACT-2: the run's draws and diagnostics, as for its own steps.
+    fn step_action_gap(&mut self) -> Result<std::time::Duration, Self::Error> {
+        self.inner.step_action_gap()
+    }
+
+    /// ACT-1: the Runtime's holds, as for the run's own steps.
+    fn settled_path_held(
+        &mut self,
+        package_id: &str,
+        operation_label: &str,
+    ) -> Result<bool, Self::Error> {
+        self.inner.settled_path_held(package_id, operation_label)
+    }
+
+    /// ACT-1: recorded in the run's own diagnostics.
+    fn settled_path_fell_back(
+        &mut self,
+        package_id: &str,
+        operation_label: &str,
+    ) -> Result<(), Self::Error> {
+        self.inner
+            .settled_path_fell_back(package_id, operation_label)
     }
 
     fn record_candidate_evaluation(
@@ -3229,6 +3255,17 @@ impl RuntimeContainedTask<'_> {
         )
     }
 
+    /// ACT-2 (Workflow #407, register §1.250): the seed of the run's next drawn gap, from the seed
+    /// its action seeds come from and the number of the draw.
+    fn action_gap_seed(&mut self) -> Result<u64, RequestFailure> {
+        let run_seed = require_contained_task_sampling_run_seed(self.sampling_run_seed)
+            .map_err(RequestFailure::poison_without_terminal)?;
+        let draw = self.action_gap_draws;
+        self.action_gap_draws += 1;
+        contained_task_sampling_seed(&("action_gap_v1/draw", run_seed, draw))
+            .map_err(RequestFailure::poison_without_terminal)
+    }
+
     fn absolute_step_index(&self, step_index: u32) -> Result<u32, RequestFailure> {
         self.layer_step_index(step_index).ok_or_else(|| {
             RequestFailure::poison_without_terminal(RuntimeHostError::fatal(
@@ -3989,6 +4026,9 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
     /// PERF-B1 (Workflow #407 B1): and the `execution.capture` keys in effect, the ceiling of a
     /// declared capture interval, the back-off of the step's waits for a page and (STILL-1) their
     /// still limit.
+    ///
+    /// ACT-1 (Workflow #407, register §1.250): and the settled path, under the instance's
+    /// `execution.action_gap` keys in effect at a stage up to `settled_max_stage`.
     fn step_pacing(&mut self) -> Result<StepPacing, Self::Error> {
         let retries = self
             .host
@@ -4017,9 +4057,82 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             .reads_clock(effective.factor_milli)
             .then(|| self.monotonic_now());
         self.pacing.hand(effective.factor_milli, now);
-        Ok(effective
-            .step_pacing(retries, pre_input_wait_base_ms)
-            .with_capture_cadence(capture_cadence))
+        let action_gap = self
+            .host
+            .action_gap(self.instance_alias)
+            .map_err(RequestFailure::poison_without_terminal)?;
+        let stage = if action_gap.mode == actingcommand_runtime_config::ActionGapMode::Settled {
+            self.host
+                .effective_pacing_stage(self.instance_alias)
+                .map_err(RequestFailure::poison_without_terminal)?
+        } else {
+            actingcommand_contract::PerformancePacingStage::S0
+        };
+        Ok(crate::performance::apply_settled_path(
+            effective
+                .step_pacing(retries, pre_input_wait_base_ms)
+                .with_capture_cadence(capture_cadence),
+            &action_gap,
+            stage,
+        ))
+    }
+
+    /// ACT-2 (Workflow #407, register §1.250): the step's gap under the instance's keys in effect.
+    /// A drawn one comes from the run's seed and the number of the draw, and goes to the run's
+    /// diagnostics; the kernel asks once per step.
+    fn step_action_gap(&mut self) -> Result<std::time::Duration, Self::Error> {
+        let action_gap = self
+            .host
+            .action_gap(self.instance_alias)
+            .map_err(RequestFailure::poison_without_terminal)?;
+        let seed = if action_gap.draws() {
+            self.action_gap_seed()?
+        } else {
+            0
+        };
+        let gap_ms = action_gap.gap_ms(seed);
+        if action_gap.draws() {
+            self.diagnostic_action_gap(crate::performance::action_gap_drawn(gap_ms))?;
+        }
+        Ok(std::time::Duration::from_millis(gap_ms))
+    }
+
+    /// ACT-1 (§1.6): the Runtime's holds.
+    fn settled_path_held(
+        &mut self,
+        package_id: &str,
+        operation_label: &str,
+    ) -> Result<bool, Self::Error> {
+        let now = self.monotonic_now();
+        self.host
+            .settled_path_held(package_id, operation_label, now)
+            .map_err(RequestFailure::poison_without_terminal)
+    }
+
+    /// ACT-1 (§1.6): the operation is held for `fallback_hold_ms`, and the run's diagnostics say
+    /// so.
+    fn settled_path_fell_back(
+        &mut self,
+        package_id: &str,
+        operation_label: &str,
+    ) -> Result<(), Self::Error> {
+        let action_gap = self
+            .host
+            .action_gap(self.instance_alias)
+            .map_err(RequestFailure::poison_without_terminal)?;
+        let now = self.monotonic_now();
+        self.host
+            .hold_settled_path(
+                package_id,
+                operation_label,
+                now,
+                std::time::Duration::from_millis(action_gap.fallback_hold_ms),
+            )
+            .map_err(RequestFailure::poison_without_terminal)?;
+        self.diagnostic_action_gap(crate::performance::action_gap_fell_back(
+            package_id,
+            operation_label,
+        ))
     }
 
     /// #385 P-k (PERF v1.4.2 §5.4 item 1, register P5): a wait of the run started one more
@@ -5101,7 +5214,20 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                         .links()
                         .with_frame_id(frame_id)
                         .with_recognition_id(recognition_id);
-                    self.host.append_event(
+                    // #407 PF-2 (register §1.252): the same two commits, observed stage by stage
+                    // in the families of `RecognitionCompleted`'s two commits. The recognition is
+                    // not current until both are in, so its id is named here.
+                    let identity = task_timing::BoundaryIdentity {
+                        recognition_id: Some(*recognition_id.transport()),
+                        ..self.timing_identity(
+                            actingcommand_contract::TaskTimingBoundary::RecognitionStartedRecord,
+                        )
+                    };
+                    let append_started = self.task_timing.begin_append_stages_only(
+                        task_timing::TaskAppend::RecognitionPayload,
+                        identity,
+                    );
+                    let (appended, observation) = self.host.append_event_observed(
                         EventSeverity::Info,
                         EventSource::Runtime,
                         OriginModule::Recognition,
@@ -5111,9 +5237,19 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                             EventAction::RecognitionObserve,
                             AuditInput::new(),
                         ),
-                    )?;
-                    self.append_task(
+                    );
+                    self.task_timing
+                        .finish_append(append_started, appended.is_ok(), observation);
+                    appended?;
+                    let append_started = self.task_timing.begin_append_stages_only(
+                        task_timing::TaskAppend::RecognitionTask,
+                        identity,
+                    );
+                    let (appended, observation) = self.host.append_event_observed(
                         EventSeverity::Info,
+                        EventSource::Runtime,
+                        OriginModule::Runtime,
+                        EventActor::Runtime,
                         links,
                         TaskPayloadDraft::semantic(
                             TaskSemanticFact::RecognitionStarted {
@@ -5123,7 +5259,10 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                             },
                             AuditInput::new(),
                         ),
-                    )?;
+                    );
+                    self.task_timing
+                        .finish_append(append_started, appended.is_ok(), observation);
+                    appended?;
                     self.current_recognition_id = Some(recognition_id);
                     Ok(())
                 })();
@@ -7637,6 +7776,7 @@ impl HostShared {
             entry_scene: None,
             sampling_run_seed,
             used_action_seeds: BTreeSet::new(),
+            action_gap_draws: 0,
             finalizing: None,
             capture_evidence: CaptureEvidenceAccumulator::default(),
             configuration_records: 0,

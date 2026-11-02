@@ -3878,6 +3878,14 @@
       "since": "0.12.0",
       "description": "A Runtime client operation: ask for a drill of an instance's stuck-recovery ladder (DrillRecoveryLadder, Workflow #390 DRILL-1)."
     },
+    "runtime_agent_wake_test": {
+      "owner": "runtime-client",
+      "layer": "client",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.37",
+      "description": "A Runtime client operation: a person's test of the delivery to a registered channel (AgentWakeTest, Workflow #432 AGT-1b)."
+    },
     "runtime_fact_refresh_status": {
       "owner": "runtime-client",
       "layer": "client",

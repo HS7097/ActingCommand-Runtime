@@ -91,7 +91,8 @@ lab-options`; acsetup's Lab transaction through it, Workflow #429 R-0). Until U-
 read and reported only: nothing is refused by them. Workflow #390 DISC-1's rows: the
 `startup_discovery` section below (default `file`, not settable, read once at assembly).
 Workflow #406 T12's rows: the `touch` section below (default `file`, settable). PERF-B1's rows:
-the `execution` section below (default `file`, settable). Workflow #392 DA-4b-D's rows: the
+the `execution` section below (default `file`, settable). Workflow #407 PF-1's row: the
+`artifact_store` section below (default `file`, settable; since 0.12.37). Workflow #392 DA-4b-D's rows: the
 `display_safe_area` section below (default `file`, settable) and the per-instance
 `display_safe_area.model` (string, default `section:display_safe_area.model`, settable). RB-2's
 rows: the `host` section below (string `normal` | `low`, default `file`, not settable: applied
@@ -943,6 +944,30 @@ start, in `check-config` and in `ConfigureSettings`. It holds in wall time, what
 pacing factor is and whether the back-off is on. `actingd-config` revision 24 adds the section's
 member and the entry's; a file that names neither keeps its revision.
 
+**How a step goes on after its input (ACT-1, ACT-2, Workflow #407; register §1.250; `actingd-config`
+revision 24; since 0.12.37).** The `execution.action_gap` keys. `mode` `declared`, the default, is
+the order before these keys, byte for byte: nothing below happens. `mode` `settled` gives a step the
+settled path and its gap ([performance-control.md](performance-control.md), "Step pacing").
+
+| Key | Type | Default (`actingd.defaults.json`) | Settable |
+|---|---|---|---|
+| `execution.action_gap.mode` | `declared` or `settled` | `declared` | yes |
+| `execution.action_gap.kind` | `fixed`, `random` or `performance`, what a `settled` step waits before the frame that decides its input; `performance` waits nothing there | `fixed` | yes |
+| `execution.action_gap.fixed_ms` | milliseconds `0..=60000`, the gap of `fixed` | `0` | yes |
+| `execution.action_gap.random_min_ms`, `random_max_ms` | milliseconds `0..=60000`, the range of `random`; `random_min_ms` at most `random_max_ms`, each as it is in effect (`section_check`) | `0`, `0` | yes |
+| `execution.action_gap.poll_ms` | milliseconds `0..=1000`, the pause between two frames of the settled path | `50` | yes |
+| `execution.action_gap.settle_frames` | integer `1..=8`, how many consecutive destination frames the settled path takes; 1 goes on the first | `1` | yes |
+| `execution.action_gap.settle_change_max_milli` | integer `0..=1000000`, the largest frame change between two of them; read only from 2 frames | `500` | yes |
+| `execution.action_gap.settled_max_stage` | `s0` to `s4`, the highest pacing stage at which a step takes the settled path | `s1` | yes |
+| `execution.action_gap.fallback_hold_ms` | milliseconds `0..=86400000`, how long an operation that failed while the path was handed keeps its `post_delay_ms`; 0 holds it for its run only | `3600000` | yes |
+
+Each key is also per instance, `instance.<instance id>.execution.action_gap.<member>`, in the file
+the entry's `execution.action_gap` member; its default is `none`: an instance that names it reports a
+row and an instruction may set it (clearing that instruction leaves the section's), and every other
+instance reads the section's key. `EffectiveConfig::action_gap(instance_id)` returns the keys in
+effect; the host reads them at each step, so an instruction takes effect at the next step. The
+shipped example configuration writes `kind` `performance`: no gap beyond the pacing curve's term.
+
 ## The `install` section (Workflow #421 INST-1)
 
 Workflow #421 ([install-cli.md](install-cli.md)): the tunables of `actingctl install`, the
@@ -1162,6 +1187,26 @@ rows are those of `config.parameters.display_safe_area` and, per instance,
 `config.parameters.instance`. What the declarations hold, which insets a frame takes and how a
 broken declaration is refused (`display_map_unresolved` with its `display_problem`) is
 [display-adapter.md](display-adapter.md) section 9.
+
+## The `artifact_store` section (Workflow #407 PF-1)
+
+Workflow #407 PF-1 ([v012-register.md](v012-register.md) §1.248): how many bytes of an open stream
+one capacity decision covers. A run's diagnostic stream takes one write per record, and one measured
+production run spent 95% of its diagnostic writing on a decision per write
+([capacity-admission.md](capacity-admission.md) is the rule; it says what a chunk changes).
+
+| Key | Type | Default (`actingd.defaults.json`) | Settable |
+|---|---|---|---|
+| `artifact_store.stream_admit_chunk_bytes` | integer `0..=67108864`, the bytes one decision covers; 0 takes a decision for every write | `1048576` (1 MiB) | yes |
+
+- **When it takes effect.** The host hands the value in effect to its artifact store at start, once
+  the instruction values are restored, and after every `ConfigureSettings`. A stream takes it when
+  it opens, so an instruction takes effect at the next stream; an open stream keeps its own.
+- **Refusal.** A value of another type is `config_value_invalid` (`wrong_type`), one outside its range
+  `out_of_range`, each naming the key, at start, in `check-config` and in `ConfigureSettings`.
+- `actingd-config` revision 24 ([component-interfaces.md](component-interfaces.md)) adds the section;
+  a file that does not name it keeps its revision. The row is reported in
+  `config.parameters.artifact_store`, and the key is `hidden` in the console's tiers.
 
 ## The `host` section (RB-2)
 

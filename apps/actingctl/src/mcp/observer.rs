@@ -34,7 +34,8 @@ use std::time::Duration;
 
 /// MCP-0 command table §4.9: the top-level blocks ac_overview cuts first, in this order, when its
 /// answer does not fit the output budget. A slice that adds an overview block registers its place
-/// here in the same PR; a block the answer does not hold is passed over.
+/// here in the same PR; a block the answer does not hold is passed over. Workflow #432 AGT-1b:
+/// `agent_wake` is not here: it is a few members of the Status read and is never cut.
 const CUT_BLOCKS: [&str; 8] = [
     "host",
     "startup",

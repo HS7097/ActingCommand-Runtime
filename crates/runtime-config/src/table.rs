@@ -6,8 +6,8 @@
 //! fixes the format; each section adds its rows in its own file (§5.1).
 
 use crate::{
-    agent_wake, device_link, device_state, display_safe_area, emulator_control, execution,
-    existing, frame_retention, host, host_claims, idle, install, instance, lab_module,
+    action_gap, agent_wake, device_link, device_state, display_safe_area, emulator_control,
+    execution, existing, frame_retention, host, host_claims, idle, install, instance, lab_module,
     ledger_observer, performance, recovery_ladder, scheduling, standard_packs, startup_discovery,
     store_foreground, touch, watchdog,
 };
@@ -183,9 +183,11 @@ fn mechanism_sections() -> Vec<&'static [KeyRow]> {
         emulator_control::ROWS,
         watchdog::ROWS,
         execution::ROWS,
+        action_gap::ROWS,
         idle::ROWS,
         display_safe_area::ROWS,
         frame_retention::ROWS,
+        crate::artifact_store::ROWS,
         install::ROWS,
         host::ROWS,
         store_foreground::ROWS,
@@ -193,6 +195,7 @@ fn mechanism_sections() -> Vec<&'static [KeyRow]> {
         // renders no row of it.
         agent_wake::ROWS,
         instance::ROWS,
+        action_gap::INSTANCE_ROWS,
     ]
 }
 
@@ -204,10 +207,11 @@ fn mechanism_sections() -> Vec<&'static [KeyRow]> {
 /// the `startup_discovery` section (Workflow #390 DISC-1), the `touch` section (Workflow #406
 /// T12), the `emulator_control` section (#411 A50), the `watchdog` section (#411 A66), the
 /// `execution` section (PERF-B1), the `idle` section (IDLE-1), the `display_safe_area` section
-/// (Workflow #392 DA-4b-D), the evidence-frame key (#422 LN-7c Q), the `install` section
+/// (Workflow #392 DA-4b-D), the evidence-frame key (#422 LN-7c Q), the `artifact_store` section
+/// (Workflow #407 PF-1), the `install` section
 /// (Workflow #421 INST-1), the `host` section (RB-2), the `store_foreground` section
 /// (STORE-FG-2), the `agent_wake` section (Workflow #432 AGT-1a), then the per-instance section
-/// (D1b).
+/// (D1b) with its `execution.action_gap` keys (ACT-1).
 pub fn mechanism_rows() -> Vec<KeyRow> {
     mechanism_sections()
         .into_iter()

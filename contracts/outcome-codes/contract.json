@@ -5782,6 +5782,26 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "invalid_agent_wake_test_origin": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.37",
+      "description": "Runtime contract validation refused a value: an AgentWakeTest from another origin than a person's (User+Ui or Cli+Cli), the same gate as a pause (Workflow #432 AGT-1b).",
+      "common_causes": "A client other than actingctl or the console sent the request.",
+      "handling": "Run actingctl agent-wake-test. No MCP tool sends it, so an agent cannot use the Runtime to ping others."
+    },
     "fact_origin_mixed": {
       "category": "error",
       "ladder_class": "none",
@@ -17648,6 +17668,20 @@
       "description": "A completed receipt of a DrillRecoveryLadder request: the Runtime admitted the drill and queued its claim. Workflow #378 A4: one success code per request kind (Workflow #390 DRILL-1 adds the kind).",
       "common_causes": "The request succeeded.",
       "handling": "Nothing to do; the result carries the answer."
+    },
+    "request_agent_wake_test_completed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.37",
+      "description": "A completed receipt of an AgentWakeTest request: the test wake is queued for the worker. Workflow #378 A4: one success code per request kind (Workflow #432 AGT-1b adds the kind).",
+      "common_causes": "The request succeeded.",
+      "handling": "Nothing to do; the result carries the wake's id, and its row in host.agent_wake follows."
     },
     "request_fact_refresh_status_completed": {
       "category": "success",

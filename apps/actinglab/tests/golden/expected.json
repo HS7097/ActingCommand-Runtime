@@ -2742,7 +2742,7 @@
                               },
                               "recognition_payload_stages": {
                                 "device_diagnostics": {
-                                  "attempts": 1,
+                                  "attempts": 2,
                                   "errors": 0,
                                   "last": {
                                     "budget_before": {
@@ -2777,7 +2777,7 @@
                                   "total_us": "<MICROSECONDS>"
                                 },
                                 "draft": {
-                                  "attempts": 1,
+                                  "attempts": 2,
                                   "errors": 0,
                                   "last": {
                                     "budget_before": {
@@ -2812,7 +2812,7 @@
                                   "total_us": "<MICROSECONDS>"
                                 },
                                 "fact_gate": {
-                                  "attempts": 1,
+                                  "attempts": 2,
                                   "errors": 0,
                                   "last": {
                                     "budget_before": {
@@ -2847,7 +2847,7 @@
                                   "total_us": "<MICROSECONDS>"
                                 },
                                 "fact_sync": {
-                                  "attempts": 1,
+                                  "attempts": 2,
                                   "errors": 0,
                                   "last": {
                                     "budget_before": {
@@ -2882,7 +2882,7 @@
                                   "total_us": "<MICROSECONDS>"
                                 },
                                 "ledger_durable": {
-                                  "attempts": 1,
+                                  "attempts": 2,
                                   "errors": 0,
                                   "last": {
                                     "budget_before": {
@@ -2917,7 +2917,7 @@
                                   "total_us": "<MICROSECONDS>"
                                 },
                                 "ledger_persistence": {
-                                  "attempts": 1,
+                                  "attempts": 2,
                                   "errors": 0,
                                   "last": {
                                     "budget_before": {
@@ -2952,7 +2952,7 @@
                                   "total_us": "<MICROSECONDS>"
                                 },
                                 "ledger_publication": {
-                                  "attempts": 1,
+                                  "attempts": 2,
                                   "errors": 0,
                                   "last": {
                                     "budget_before": {
@@ -2987,7 +2987,7 @@
                                   "total_us": "<MICROSECONDS>"
                                 },
                                 "ledger_queue": {
-                                  "attempts": 1,
+                                  "attempts": 2,
                                   "errors": 0,
                                   "last": {
                                     "budget_before": {
@@ -3022,7 +3022,7 @@
                                   "total_us": "<MICROSECONDS>"
                                 },
                                 "ledger_send": {
-                                  "attempts": 1,
+                                  "attempts": 2,
                                   "errors": 0,
                                   "last": {
                                     "budget_before": {
@@ -3057,7 +3057,7 @@
                                   "total_us": "<MICROSECONDS>"
                                 },
                                 "pipeline": {
-                                  "attempts": 1,
+                                  "attempts": 2,
                                   "errors": 0,
                                   "last": {
                                     "budget_before": {
@@ -3124,7 +3124,7 @@
                                   "writer_received": "<PROCESS_INSTANT>"
                                 },
                                 "writer_response": {
-                                  "attempts": 1,
+                                  "attempts": 2,
                                   "errors": 0,
                                   "last": {
                                     "budget_before": {
@@ -3231,7 +3231,7 @@
                               },
                               "recognition_task_stages": {
                                 "device_diagnostics": {
-                                  "attempts": 1,
+                                  "attempts": 2,
                                   "errors": 0,
                                   "last": {
                                     "budget_before": {
@@ -3266,7 +3266,7 @@
                                   "total_us": "<MICROSECONDS>"
                                 },
                                 "draft": {
-                                  "attempts": 1,
+                                  "attempts": 2,
                                   "errors": 0,
                                   "last": {
                                     "budget_before": {
@@ -3301,7 +3301,7 @@
                                   "total_us": "<MICROSECONDS>"
                                 },
                                 "fact_gate": {
-                                  "attempts": 1,
+                                  "attempts": 2,
                                   "errors": 0,
                                   "last": {
                                     "budget_before": {
@@ -3336,7 +3336,7 @@
                                   "total_us": "<MICROSECONDS>"
                                 },
                                 "fact_sync": {
-                                  "attempts": 1,
+                                  "attempts": 2,
                                   "errors": 0,
                                   "last": {
                                     "budget_before": {
@@ -3371,7 +3371,7 @@
                                   "total_us": "<MICROSECONDS>"
                                 },
                                 "ledger_durable": {
-                                  "attempts": 1,
+                                  "attempts": 2,
                                   "errors": 0,
                                   "last": {
                                     "budget_before": {
@@ -3406,7 +3406,7 @@
                                   "total_us": "<MICROSECONDS>"
                                 },
                                 "ledger_persistence": {
-                                  "attempts": 1,
+                                  "attempts": 2,
                                   "errors": 0,
                                   "last": {
                                     "budget_before": {
@@ -3441,7 +3441,7 @@
                                   "total_us": "<MICROSECONDS>"
                                 },
                                 "ledger_publication": {
-                                  "attempts": 1,
+                                  "attempts": 2,
                                   "errors": 0,
                                   "last": {
                                     "budget_before": {
@@ -3476,7 +3476,7 @@
                                   "total_us": "<MICROSECONDS>"
                                 },
                                 "ledger_queue": {
-                                  "attempts": 1,
+                                  "attempts": 2,
                                   "errors": 0,
                                   "last": {
                                     "budget_before": {
@@ -3511,7 +3511,7 @@
                                   "total_us": "<MICROSECONDS>"
                                 },
                                 "ledger_send": {
-                                  "attempts": 1,
+                                  "attempts": 2,
                                   "errors": 0,
                                   "last": {
                                     "budget_before": {
@@ -3546,7 +3546,7 @@
                                   "total_us": "<MICROSECONDS>"
                                 },
                                 "pipeline": {
-                                  "attempts": 1,
+                                  "attempts": 2,
                                   "errors": 0,
                                   "last": {
                                     "budget_before": {
@@ -3613,7 +3613,7 @@
                                   "writer_received": "<PROCESS_INSTANT>"
                                 },
                                 "writer_response": {
-                                  "attempts": 1,
+                                  "attempts": 2,
                                   "errors": 0,
                                   "last": {
                                     "budget_before": {

@@ -2896,6 +2896,20 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "agent_wake_test_queued": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.37",
+      "description": "actingctl agent-wake-test: the test wake is queued for the worker; the line carries {wake_id, channel, quiet?} and, with --wait-s, the wake's row (Workflow #432 AGT-1b).",
+      "common_causes": "The request succeeded.",
+      "handling": "Read the row in host.agent_wake: delivered, or deferred with its reason. A build with no transport answers deferred."
+    },
     "runtime_fact_refresh_reported": {
       "category": "success",
       "ladder_class": "none",
@@ -2935,6 +2949,34 @@
       "status": "active",
       "since": "0.12.0",
       "description": "actingctl capability-gap: one capability gap (capability, why) was appended as one line to this user's local log %LOCALAPPDATA%\\ActingCommand\\actingctl\\capability-gaps.jsonl, as ac_capability_gap records it; the line and the log's path were printed. Nothing is sent anywhere and nothing goes to the Runtime or its ledger (Workflow #410 item 6).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "agent_channel_reported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.37",
+      "description": "actingctl agent-channel did its work on the channel registry or a session's live record: a channel added, removed or listed, or a running session registered; the result line holds what changed or the channels. Nothing goes to the Runtime or its ledger (Workflow #432 AGT-T1; contracts/agent-forward.md).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "agent_channel_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.37",
+      "description": "actingctl agent-channel did not do its work: the registry or a record could not be read or written, a channel was refused, or a registered session's hook or registration lacked what it needs. The developer line says which, and never holds a credential. A registered session's failed hook prints only that line and exits 2 (Workflow #432 AGT-T1; contracts/agent-forward.md).",
       "common_causes": "TBD",
       "handling": "TBD"
     },

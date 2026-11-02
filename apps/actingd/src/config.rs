@@ -253,6 +253,13 @@ pub(super) struct ActingdConfigFile {
     // members; a file that does not name it keeps its revision.
     #[serde(default)]
     execution: Option<actingcommand_runtime_config::ExecutionFile>,
+    /// Workflow #407 PF-1: how many bytes of a stream one capacity decision covers
+    /// (`artifact_store.stream_admit_chunk_bytes`); the defaults file holds the default.
+    // Interface anchor `actingd-config` revision 24 (contracts/component-interfaces.md): a Runtime
+    // before PF-1 refuses a file that names the section, because the file denies unknown members;
+    // a file that does not name it keeps its revision.
+    #[serde(default)]
+    artifact_store: Option<actingcommand_runtime_config::artifact_store::ArtifactStoreFile>,
     /// IDLE-1 (Alice's ruling 41): what the Runtime does with an instance that has no task soon
     /// (`idle.*`), each member optional; the defaults file holds every default.
     // Interface anchor `actingd-config` revision 12 (contracts/component-interfaces.md): a Runtime
@@ -886,6 +893,10 @@ struct InstanceConfig {
     /// left out, the `execution` section's.
     // Interface anchor `actingd-config` revision 24: a Runtime before STILL-1 refuses an entry
     // that names it, because the entry denies unknown members.
+    /// ACT-1, ACT-2 (register §1.250): the instance's own `execution.action_gap` keys
+    /// (`instance.<id>.execution.action_gap.*`); a member it leaves out is the section's.
+    // Interface anchor `actingd-config` revision 24: a Runtime before ACT-1 refuses an entry that
+    // names it, because the entry denies unknown members.
     #[serde(default)]
     execution: Option<actingcommand_runtime_config::InstanceExecutionFile>,
     #[serde(default)]
@@ -1495,6 +1506,8 @@ impl ActingdConfigFile {
             );
             // STILL-1: reported as `instance.<id>.execution.capture.still_limit_ms`; left out,
             // the section's.
+            // ACT-1, ACT-2: reported as `instance.<id>.execution.action_gap.*` when the file names
+            // them.
             members.insert(
                 actingcommand_runtime_config::execution::SECTION.to_owned(),
                 serde_json::to_value(&instance.execution)
@@ -1636,6 +1649,8 @@ impl ActingdConfigFile {
             "watchdog": serde_json::to_value(&self.watchdog)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
             "execution": serde_json::to_value(&self.execution)
+                .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
+            "artifact_store": serde_json::to_value(&self.artifact_store)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
             "idle": serde_json::to_value(&self.idle)
                 .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,

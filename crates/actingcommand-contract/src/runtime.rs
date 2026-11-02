@@ -72,6 +72,10 @@ pub use workbench::*;
 // Workflow #429 R-7a (register §1.233, since 0.12.35): the player hold's frozen contract.
 mod player_hold;
 pub use player_hold::*;
+// Workflow #432 AGT-1b (register §1.246, since 0.12.37; `runtime-client` 5): the Runtime's messages
+// to registered channels: the status member, the test command's answer, the record vocabularies.
+mod agent_wake;
+pub use agent_wake::*;
 // Workflow 114-A (register §1.236, since 0.12.36): the frozen vocabularies of `ScheduleHistory`.
 mod schedule_history;
 pub use schedule_history::*;
@@ -1898,6 +1902,10 @@ pub struct RuntimeControlPlaneStatus {
     /// revision 1 in the new owner epoch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     scheduling_pause: Option<SchedulingPauseState>,
+    /// Workflow #432 AGT-1b (`contracts/agent-wake.md`, `runtime-client` 5): the delivery of the
+    /// Runtime's messages, from memory; absent with no `agent_wake` section.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_wake: Option<AgentWakeStatus>,
     /// Workflow #429 R-7a (§2.6 O-7 2): `with_derived_control` was called, so a later change of a
     /// member derives `control` again. Not on the wire and not part of equality: a status read
     /// back equals the one written.
@@ -1912,6 +1920,7 @@ impl PartialEq for RuntimeControlPlaneStatus {
             && self.instances == other.instances
             && self.source == other.source
             && self.scheduling_pause == other.scheduling_pause
+            && self.agent_wake == other.agent_wake
     }
 }
 
@@ -1939,10 +1948,22 @@ impl RuntimeControlPlaneStatus {
             instances,
             source: None,
             scheduling_pause: None,
+            agent_wake: None,
             control_derived: false,
         };
         status.validate()?;
         Ok(status)
+    }
+
+    /// Workflow #432 AGT-1b: the delivery of the Runtime's messages.
+    #[must_use]
+    pub fn with_agent_wake(mut self, agent_wake: Option<AgentWakeStatus>) -> Self {
+        self.agent_wake = agent_wake;
+        self
+    }
+
+    pub const fn agent_wake(&self) -> Option<&AgentWakeStatus> {
+        self.agent_wake.as_ref()
     }
 
     /// Workflow #429 R-7a (§2.6 O-7 2): a status whose `control` was derived derives it again,
@@ -3866,6 +3887,16 @@ pub enum RuntimeOperation {
         instance_alias: String,
         mode: crate::RecoveryDrillMode,
     },
+    /// Workflow #432 AGT-1b (`contracts/agent-wake.md`, `runtime-client` 5): a person's test of the
+    /// delivery to the registered channel `to`, through the real worker, body file, row and
+    /// transport. Only an explicit User+Ui or Cli+Cli request may issue it, and no MCP tool sends
+    /// it, so an agent cannot use the Runtime to ping others. `instance_alias` only names an
+    /// instance in the message; a test touches no instance, so it is not an instance's request.
+    AgentWakeTest {
+        to: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        instance_alias: Option<String>,
+    },
     RunContainedTask {
         instance_alias: String,
         holder_id: HolderId,
@@ -4342,6 +4373,12 @@ impl RuntimeOperation {
             | Self::DrillRecoveryLadder { instance_alias, .. } => {
                 validate_instance_alias(instance_alias)
             }
+            // Workflow #432 AGT-1b: `to` is opaque here; the host answers a name that is no
+            // registered channel's `agent_wake_channel_unknown`.
+            Self::AgentWakeTest { instance_alias, .. } => match instance_alias {
+                Some(instance_alias) => validate_instance_alias(instance_alias),
+                None => Ok(()),
+            },
             Self::RecognizeArtifact { request } => request.validate(),
             Self::RenewLease { token } | Self::ReleaseLease { token } => token.validate(),
             Self::CaptureSequence {
@@ -4508,6 +4545,7 @@ impl fmt::Debug for RuntimeOperation {
             Self::ResumeScheduling { .. } => "RuntimeOperation::ResumeScheduling(<redacted>)",
             Self::SelfCheckInstance { .. } => "RuntimeOperation::SelfCheckInstance(<redacted>)",
             Self::DrillRecoveryLadder { .. } => "RuntimeOperation::DrillRecoveryLadder(<redacted>)",
+            Self::AgentWakeTest { .. } => "RuntimeOperation::AgentWakeTest(<redacted>)",
             Self::RunContainedTask { .. } => "RuntimeOperation::RunContainedTask(<redacted>)",
             Self::Input { .. } => "RuntimeOperation::Input(<redacted>)",
             Self::PublishFact { .. } => "RuntimeOperation::PublishFact(<typed-fact>)",
@@ -4782,6 +4820,18 @@ impl RuntimeRequest {
         ) {
             return Err(RuntimeContractError::new(
                 RuntimeContractCode::InvalidSchedulingPauseOrigin,
+            ));
+        }
+        // Workflow #432 AGT-1b: only the person (Ui) or the operator (Cli) may test the delivery;
+        // no scheduler, agent or Lab path can make the Runtime message a session.
+        if matches!(self.operation, RuntimeOperation::AgentWakeTest { .. })
+            && !matches!(
+                (self.actor, self.source),
+                (EventActor::User, EventSource::Ui) | (EventActor::Cli, EventSource::Cli)
+            )
+        {
+            return Err(RuntimeContractError::new(
+                RuntimeContractCode::InvalidAgentWakeTestOrigin,
             ));
         }
         // Fact publication (Workflow #308 slice 4a-2; Workflow #411 B15 R6): an observation
@@ -5522,6 +5572,11 @@ pub enum RuntimeResult {
     /// waits for the instance's key; its ladder records follow under `drill.ladder_request_id`.
     RecoveryLadderDrillQueued {
         drill: crate::RecoveryLadderDrill,
+    },
+    /// `AgentWakeTest` (Workflow #432 AGT-1b): the test wake waits for the worker; its row in
+    /// `host.agent_wake` follows under `queued.wake_id`.
+    AgentWakeTestQueued {
+        queued: AgentWakeTestQueued,
     },
     ContainedTaskCompleted {
         run_id: RunId,

@@ -23,6 +23,8 @@ default = ["mcp"]
 mcp = []
 
 [dependencies]
+# Workflow #432 AGT-T1: `agent-channel`, whose grammar and client words are that crate's.
+actingcommand-agent-forward = { workspace = true }
 actingcommand-contract = { workspace = true }
 # #411 P49 (MCP-ENTRY review L4): `mcp-entry list` compares a status file's pid and recorded
 # process creation time with the operating system's (the probe the owner release uses).

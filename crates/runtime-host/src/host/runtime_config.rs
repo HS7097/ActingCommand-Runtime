@@ -28,6 +28,30 @@ use actingcommand_runtime_config::{
     RestoreNote, STUCK_RECOVERY, STUCK_RECOVERY_COOLDOWN_SECS, instance_key,
 };
 
+/// Workflow #432 AGT-1b: an instruction that changes `agent_wake.rules` names no alias that is no
+/// registered instance's (`config_value_invalid`, `instance_unknown`).
+fn refuse_wake_rule_aliases(
+    applied: &AppliedSettings,
+    aliases: &[String],
+) -> Result<(), actingcommand_runtime_config::ConfigFailure> {
+    use actingcommand_runtime_config::agent_wake::RULES;
+    if !applied.settings.iter().any(|setting| setting.key == RULES) {
+        return Ok(());
+    }
+    let Some(section) = applied.config.agent_wake()? else {
+        return Ok(());
+    };
+    section
+        .refuse_unknown_instances(aliases.iter().map(String::as_str))
+        .map_err(|_| {
+            actingcommand_runtime_config::ConfigFailure::with_problem(
+                actingcommand_runtime_config::ConfigCode::ConfigValueInvalid,
+                RULES,
+                actingcommand_runtime_config::ConfigValueProblem::InstanceUnknown,
+            )
+        })
+}
+
 impl HostShared {
     /// Workflow #387 D1b: the configuration facts of a start, with the instruction values the
     /// earlier runs set restored first (§5.6, §5.7). Any refusal fails the start.
@@ -215,7 +239,22 @@ impl HostShared {
             // Workflow #389 U-2: `host.config_overrides` names the channel from U-2 on.
             channel: validated.channel().map(|binding| binding.channel),
         };
-        let applied = match current.apply(changes, &stamp, &context) {
+        // Workflow #432 AGT-1b: the section check has no instance list, so a rule's aliases are
+        // checked here against the registered instances, as the start checks them.
+        let aliases = lock(
+            &self.registered_instances,
+            ConfigHostLocation::ConfigureSettings,
+        )?
+        .values()
+        .map(|instance| instance.instance_alias.clone())
+        .collect::<Vec<_>>();
+        let applied = current
+            .apply(changes, &stamp, &context)
+            .and_then(|applied| {
+                refuse_wake_rule_aliases(&applied, &aliases)?;
+                Ok(applied)
+            });
+        let applied = match applied {
             Ok(applied) => applied,
             Err(failure) => {
                 let error = RuntimeHostError::request(
@@ -315,6 +354,9 @@ impl HostShared {
             .map_err(RequestFailure::poison_without_terminal)?;
         // LN-9 (#422): the ledger's scrub reads its rate before its next chunk.
         self.refresh_ledger_scrub_rate()
+            .map_err(RequestFailure::poison_without_terminal)?;
+        // Workflow #407 PF-1: a stream opened from now on takes the chunk in effect.
+        self.refresh_stream_admit_chunk()
             .map_err(RequestFailure::poison_without_terminal)?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
@@ -472,6 +514,24 @@ impl HostShared {
                     RuntimeErrorCode::LedgerFailure,
                 )
             })
+    }
+
+    /// Workflow #407 PF-1: `artifact_store.stream_admit_chunk_bytes` in effect (settable), handed
+    /// to the artifact store at start, once the instruction values are restored, and after every
+    /// change of the configuration; a stream takes it when it opens.
+    pub(super) fn refresh_stream_admit_chunk(&self) -> RuntimeHostResult<()> {
+        let chunk_bytes = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .stream_admit_chunk_bytes()
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })?;
+        self.artifacts.set_stream_admit_chunk_bytes(chunk_bytes);
+        Ok(())
     }
 
     /// #422 LN-7c Q (`rd-1026/ln7c/final-query.md` §5): the frame cleaner's keys in effect, read at
@@ -1103,6 +1163,67 @@ impl HostShared {
             cadence.idle_ceiling_ms,
         )
         .with_still_limit_ms(still_limit_ms))
+    }
+
+    /// ACT-1, ACT-2 (Workflow #407, register §1.250): the `execution.action_gap` keys in effect
+    /// for the instance `instance_alias` (`EffectiveConfig::action_gap` by its registry id; an
+    /// alias the registry does not hold takes the section's), read at each step of a contained run.
+    pub(super) fn action_gap(
+        &self,
+        instance_alias: &str,
+    ) -> RuntimeHostResult<actingcommand_runtime_config::ActionGapConfig> {
+        let instance_id = lock(
+            &self.registered_instances,
+            ConfigHostLocation::ReadRuntimeConfig,
+        )?
+        .values()
+        .find(|instance| instance.instance_alias == instance_alias)
+        .map(|instance| crate::failure_identity::identifier_text(&instance.instance_id));
+        let config = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?;
+        config
+            .action_gap(instance_id.as_deref().unwrap_or(instance_alias))
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })
+    }
+
+    /// ACT-1: whether `operation_label` of `package_id` is held off the settled path at `now`.
+    pub(super) fn settled_path_held(
+        &self,
+        package_id: &str,
+        operation_label: &str,
+        now: Instant,
+    ) -> RuntimeHostResult<bool> {
+        Ok(
+            lock(&self.settled_holds, ConfigHostLocation::ReadRuntimeConfig)?.held(
+                package_id,
+                operation_label,
+                now,
+            ),
+        )
+    }
+
+    /// ACT-1: `operation_label` of `package_id` fell back from the settled path at `now`, held for
+    /// `span`.
+    pub(super) fn hold_settled_path(
+        &self,
+        package_id: &str,
+        operation_label: &str,
+        now: Instant,
+        span: Duration,
+    ) -> RuntimeHostResult<()> {
+        lock(&self.settled_holds, ConfigHostLocation::ReadRuntimeConfig)?.hold(
+            package_id,
+            operation_label,
+            now,
+            span,
+        );
+        Ok(())
     }
 
     /// Records one configuration fact, observed now and strictly after the stored record of its
