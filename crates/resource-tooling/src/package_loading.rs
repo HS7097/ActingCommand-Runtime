@@ -273,7 +273,8 @@ fn template_problem(bytes: &[u8]) -> Option<String> {
         Ok(scene) => scene,
         Err(error) => return Some(format!("no PNG this build decodes: {error}")),
     };
-    let mut pixels = scene.rgb8_pixels().chunks_exact(3);
+    let (pixels, _) = scene.rgb8_pixels().as_chunks::<3>();
+    let mut pixels = pixels.iter();
     let first = pixels.next();
     if first.is_none() || pixels.all(|pixel| Some(pixel) == first) {
         return Some("every pixel is of one colour".to_owned());
