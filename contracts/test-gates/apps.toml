@@ -1194,3 +1194,13 @@ tests = [
     "actingcommand-mcp-entry::bin:actingcommand-mcp-entry::tests::e25_a_newer_install_during_a_deferred_switch_is_planned_again",
 ]
 incident = ["#411 P49"]
+
+# AGT-1a (Workflow #432, 0.12.37; design rd-1031/agt/model-agt-v2.md section 10; register section 1.245; contracts/agent-wake.md; actingd-config revision 24): with no agent_wake section the assembly reports no key and no subsystem row and an instruction's key is unknown; with one it reports them, refuses bad kinds, codes and unknown aliases and names the key, and a missing registry or an unknown channel is a note and never a refusal.
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_agt_1a::agent_wake_section_absent_keys_are_unknown_and_no_subsystem_row",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_agt_1a::agent_wake_refuses_bad_kinds_codes_and_unknown_aliases",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_agt_1a::agent_wake_invalid_names_its_config_key",
+]
+incident = ["#432 AGT-1a"]

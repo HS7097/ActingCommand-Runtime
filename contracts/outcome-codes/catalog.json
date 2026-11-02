@@ -6196,13 +6196,13 @@
           "description": "The request names the key more than once."
         },
         "duplicate_id": {
-          "description": "Two trigger items of recovery_ladder.triggers share an id (Workflow #387 D1c)."
+          "description": "Two trigger items of recovery_ladder.triggers share an id (Workflow #387 D1c), or two rules of agent_wake.rules do (Workflow #432 AGT-1a)."
         },
         "stage_not_allowed": {
           "description": "A trigger item names no stage, a stage twice, or a stage no item may name (recovery_preparation, resource_fence)."
         },
         "match_missing": {
-          "description": "A trigger item names neither classes nor codes."
+          "description": "A trigger item names neither classes nor codes, or an agent_wake rule names no kind, or run_failed with no codes."
         },
         "code_unknown": {
           "description": "A code, a code prefix or a ladder class the catalog does not list."
@@ -6227,6 +6227,33 @@
         },
         "claim_ttl_out_of_range": {
           "description": "A ladder claim's TTL not above the heartbeat bound, beyond the longest renewal, or below the hold margin."
+        },
+        "required_missing": {
+          "description": "The agent_wake section leaves out one of its keys; it is whole or absent (Workflow #432 AGT-1a)."
+        },
+        "kind_unknown": {
+          "description": "An agent_wake rule's kind outside the section's closed list."
+        },
+        "instance_unknown": {
+          "description": "An agent_wake rule's instances that are neither * nor a list of configured aliases."
+        },
+        "caps_exceed": {
+          "description": "An agent_wake daily cap above the budget, or the budget above the rows host.agent_wake keeps."
+        },
+        "dir_reserved": {
+          "description": "agent_wake.body.dir inside a folder the Runtime keeps its own material in."
+        },
+        "message_floor": {
+          "description": "A registered channel whose shortest message does not fit agent_wake.summary.max_chars."
+        },
+        "registry_unreadable": {
+          "description": "A note, never a refusal: the channel registry is missing or cannot be read."
+        },
+        "channel_unknown": {
+          "description": "A note, never a refusal: an agent_wake rule's to that the channel registry does not list."
+        },
+        "channel_program_missing": {
+          "description": "A note, never a refusal: a program a registered channel names is not there."
         }
       }
     },
@@ -8717,6 +8744,7 @@
       "actingd",
       "contract",
       "runtime-client",
+      "runtime-config",
       "runtime-host"
     ],
     "all_": [

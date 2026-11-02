@@ -426,7 +426,8 @@
         "host.perf_calibration.*",
         "host.config_overrides",
         "host.contained_settlement",
-        "host.idle_state"
+        "host.idle_state",
+        "host.agent_wake"
       ],
       "reobserve_prefixes": [
         "device.",

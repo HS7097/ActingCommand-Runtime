@@ -45,6 +45,7 @@ dependencies = [
 name = "actingcommand-actingd"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-agent-forward",
  "actingcommand-artifact-store",
  "actingcommand-contract",
  "actingcommand-device",
@@ -100,6 +101,14 @@ dependencies = [
  "serde_json",
  "syn",
  "toml",
+]
+
+[[package]]
+name = "actingcommand-agent-forward"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
