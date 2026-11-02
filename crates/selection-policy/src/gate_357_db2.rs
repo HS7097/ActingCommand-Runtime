@@ -659,12 +659,15 @@ fn db2_a_tie_break_reads_a_row_the_terms_read() {
     assert_eq!(verdict(&decision, "unit.d").rank, Some(3));
 }
 
-/// One case of [`db2_every_document_rule_refuses`], which gives its closure its signature.
+/// One case of [`db2_every_document_rule_refuses`]: its label, its change and the refusal's code.
+type RuleCase<'a> = (&'a str, Box<dyn Fn(&mut Value) + 'a>, SelectionErrorCode);
+
+/// A [`RuleCase`], whose closure this gives its signature.
 fn case<'a>(
     label: &'a str,
     change: impl Fn(&mut Value) + 'a,
     code: SelectionErrorCode,
-) -> (&'a str, Box<dyn Fn(&mut Value) + 'a>, SelectionErrorCode) {
+) -> RuleCase<'a> {
     (label, Box::new(change), code)
 }
 

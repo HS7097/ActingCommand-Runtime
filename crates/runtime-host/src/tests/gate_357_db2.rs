@@ -580,8 +580,8 @@ fn db2_a_single_frame_select_chooses_by_the_bound_table() {
 }
 
 /// §4.3 for a single frame: nobody has a row, so each is dropped, none is an unknown instance, and
-/// the step ends on its `on_empty` (P4); without `on_empty` under `exactly_one` it is
-/// `selection_not_selected` (P5).
+/// the step ends on its `on_empty` (P4), over the `fixed_slots` layout such a step needs; without
+/// `on_empty` under `exactly_one` it is `selection_not_selected` (P5).
 #[test]
 fn db2_a_single_frame_select_drops_what_the_table_lacks_without_an_unknown_instance() {
     let fixture = Fixture::new();

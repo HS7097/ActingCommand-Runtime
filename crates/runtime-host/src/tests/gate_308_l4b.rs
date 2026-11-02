@@ -234,31 +234,53 @@ pub(super) fn scan_select_package_with(policy: serde_json::Value, on_empty: bool
     select_package(policy, on_empty, true)
 }
 
-/// [`scan_select_package_with`] whose select step declares no scan: it decides on one frame.
+/// [`scan_select_package_with`] whose select step declares no scan: it decides on one frame. With
+/// `on_empty` its layout holds the cards as fixed slots, because a single-frame select that
+/// declares `on_empty` is admitted only over `fixed_slots` (`contracts/selection-graph.md`,
+/// Declaration; `on_empty layout=not_fixed_slots`).
 pub(super) fn single_frame_select_package(policy: serde_json::Value, on_empty: bool) -> Vec<u8> {
     select_package(policy, on_empty, false)
+}
+
+// Card k's slot: the rectangles a `repeated_anchor` instance has at card k's anchor, (4, top).
+fn card_slot(card: u32) -> serde_json::Value {
+    let top = 10 + 12 * card;
+    serde_json::json!({"rect": {"x": 4, "y": top, "width": 16, "height": 8},
+                       "click": {"x": 6, "y": top + 1, "width": 4, "height": 4},
+                       "targets": {}})
 }
 
 fn select_package(policy: serde_json::Value, on_empty: bool, with_scan: bool) -> Vec<u8> {
     let identities = table_read_identities();
     let space = serde_json::json!({"width": WIDTH, "height": HEIGHT});
-    let layout = serde_json::json!({
-        "id": "layout/cards", "page_id": "neutral/list", "kind": "repeated_anchor",
-        "anchor": "ui/card", "max_instances": 8, "order": "top_to_bottom",
-        "instance_rect": {"x": 0, "y": 0, "width": 16, "height": 8},
-        "click": {"x": 2, "y": 1, "width": 4, "height": 4},
-        "readable_band": {"x": 0, "y": 0, "width": WIDTH, "height": HEIGHT},
-        "unknown_identity": "reject",
-        "features": [{"name": "member", "value": "identity", "target": "card/name",
-                      "offset": {"x": 0, "y": 0},
-                      "identity": {
-                          "entries": identities.iter()
-                              .map(|id| serde_json::json!({"id": id, "aliases": [id]}))
-                              .collect::<Vec<_>>(),
-                          "recognition": {"kind": "ocr_aliases", "max_distance": 1,
-                                          "minimum_margin": 1,
-                                          "minimum_confidence_milli": 800}}}]
-    });
+    let features = serde_json::json!([{
+        "name": "member", "value": "identity", "target": "card/name",
+        "offset": {"x": 0, "y": 0},
+        "identity": {
+            "entries": identities.iter()
+                .map(|id| serde_json::json!({"id": id, "aliases": [id]}))
+                .collect::<Vec<_>>(),
+            "recognition": {"kind": "ocr_aliases", "max_distance": 1, "minimum_margin": 1,
+                            "minimum_confidence_milli": 800}}
+    }]);
+    let layout = if on_empty && !with_scan {
+        serde_json::json!({
+            "id": "layout/cards", "page_id": "neutral/list", "kind": "fixed_slots",
+            "unknown_identity": "reject",
+            "features": features,
+            "slots": (0..CARDS).map(card_slot).collect::<Vec<_>>()
+        })
+    } else {
+        serde_json::json!({
+            "id": "layout/cards", "page_id": "neutral/list", "kind": "repeated_anchor",
+            "anchor": "ui/card", "max_instances": 8, "order": "top_to_bottom",
+            "instance_rect": {"x": 0, "y": 0, "width": 16, "height": 8},
+            "click": {"x": 2, "y": 1, "width": 4, "height": 4},
+            "readable_band": {"x": 0, "y": 0, "width": WIDTH, "height": HEIGHT},
+            "unknown_identity": "reject",
+            "features": features
+        })
+    };
     let control = serde_json::json!({
         "schema_version": "Lab-1y.control.v2",
         "package_id": "neutral.scan.task",
