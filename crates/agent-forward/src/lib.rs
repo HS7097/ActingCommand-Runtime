@@ -274,12 +274,10 @@ impl AgentForward for RealForward {
             channels::ChannelClient::Dsh => {
                 self.dsh.deliver(channel, message, limits, before_write)
             }
-            channels::ChannelClient::Antigravity => {
-                ForwardOutcome::Deferred {
-                    reason: DeferReason::IpcUnavailable,
-                    detail: "this build has no transport for this channel's client".to_owned(),
-                }
-            }
+            channels::ChannelClient::Antigravity => ForwardOutcome::Deferred {
+                reason: DeferReason::IpcUnavailable,
+                detail: "this build has no transport for this channel's client".to_owned(),
+            },
         }
     }
 }
