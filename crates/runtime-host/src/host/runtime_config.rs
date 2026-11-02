@@ -28,6 +28,30 @@ use actingcommand_runtime_config::{
     RestoreNote, STUCK_RECOVERY, STUCK_RECOVERY_COOLDOWN_SECS, instance_key,
 };
 
+/// Workflow #432 AGT-1b: an instruction that changes `agent_wake.rules` names no alias that is no
+/// registered instance's (`config_value_invalid`, `instance_unknown`).
+fn refuse_wake_rule_aliases(
+    applied: &AppliedSettings,
+    aliases: &[String],
+) -> Result<(), actingcommand_runtime_config::ConfigFailure> {
+    use actingcommand_runtime_config::agent_wake::RULES;
+    if !applied.settings.iter().any(|setting| setting.key == RULES) {
+        return Ok(());
+    }
+    let Some(section) = applied.config.agent_wake()? else {
+        return Ok(());
+    };
+    section
+        .refuse_unknown_instances(aliases.iter().map(String::as_str))
+        .map_err(|_| {
+            actingcommand_runtime_config::ConfigFailure::with_problem(
+                actingcommand_runtime_config::ConfigCode::ConfigValueInvalid,
+                RULES,
+                actingcommand_runtime_config::ConfigValueProblem::InstanceUnknown,
+            )
+        })
+}
+
 impl HostShared {
     /// Workflow #387 D1b: the configuration facts of a start, with the instruction values the
     /// earlier runs set restored first (§5.6, §5.7). Any refusal fails the start.
@@ -215,7 +239,22 @@ impl HostShared {
             // Workflow #389 U-2: `host.config_overrides` names the channel from U-2 on.
             channel: validated.channel().map(|binding| binding.channel),
         };
-        let applied = match current.apply(changes, &stamp, &context) {
+        // Workflow #432 AGT-1b: the section check has no instance list, so a rule's aliases are
+        // checked here against the registered instances, as the start checks them.
+        let aliases = lock(
+            &self.registered_instances,
+            ConfigHostLocation::ConfigureSettings,
+        )?
+        .values()
+        .map(|instance| instance.instance_alias.clone())
+        .collect::<Vec<_>>();
+        let applied = current
+            .apply(changes, &stamp, &context)
+            .and_then(|applied| {
+                refuse_wake_rule_aliases(&applied, &aliases)?;
+                Ok(applied)
+            });
+        let applied = match applied {
             Ok(applied) => applied,
             Err(failure) => {
                 let error = RuntimeHostError::request(

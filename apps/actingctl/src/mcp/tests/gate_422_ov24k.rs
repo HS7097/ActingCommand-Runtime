@@ -548,6 +548,62 @@ fn ov24k_o2_the_performance_block_writes_each_dwell_once() {
     assert_eq!(dwell_in_place(&answer), json!(differing));
 }
 
+// Workflow #432 AGT-1b (register §1.246): the block `agent_wake` is the status member of the one
+// Status read, and absent with no `agent_wake` section.
+#[test]
+fn overview_block_comes_from_the_one_status_read() {
+    let place = Place {
+        root: None,
+        install_root: None,
+        state_root: None,
+    };
+    let root = TempDir::new().expect("tempdir");
+    let mut answers = Answers::busy();
+    answers.agent_wake = Some(actingcommand_contract::AgentWakeStatus {
+        enabled: true,
+        worker: actingcommand_contract::AgentWakeWorkerState::Running,
+        quiet: Some(actingcommand_contract::AgentWakeQuiet::Hold),
+        open: 2,
+        last_wake_at_unix_ms: Some(NOW_UNIX_MS),
+        failed_today: 1,
+        suppressed_today: 3,
+        attention: true,
+    });
+    let runtime = FakeRuntime::start(root.path(), answers);
+    let client = connect(root.path());
+    let read_one = read(
+        &client,
+        &place,
+        sections(&["agent_wake"]),
+        unreached_deadline(),
+    );
+    assert_eq!(runtime.asked(), vec!["status"], "one read gives it");
+    assert_eq!(
+        read_one.result["agent_wake"],
+        json!({
+            "enabled": true,
+            "worker": "running",
+            "quiet": "hold",
+            "open": 2,
+            "last_wake_at_unix_ms": NOW_UNIX_MS,
+            "failed_today": 1,
+            "suppressed_today": 3,
+            "attention": true,
+        })
+    );
+
+    let root = TempDir::new().expect("tempdir");
+    let _runtime = FakeRuntime::start(root.path(), Answers::busy());
+    let client = connect(root.path());
+    let read_none = read(
+        &client,
+        &place,
+        sections(&["agent_wake"]),
+        unreached_deadline(),
+    );
+    assert!(!read_none.result.contains_key("agent_wake"));
+}
+
 #[test]
 fn ov24k_o3_a_spent_budget_skips_performance_and_fact_refresh_and_asks_the_runtime_for_neither() {
     let root = TempDir::new().expect("tempdir");
@@ -1057,6 +1113,8 @@ struct Answers {
     facts: RuntimeFactSnapshot,
     performance: RuntimePerformanceStatus,
     fact_refresh: RuntimeFactRefreshStatus,
+    /// Workflow #432 AGT-1b: the status member `agent_wake`.
+    agent_wake: Option<actingcommand_contract::AgentWakeStatus>,
 }
 
 impl Answers {
@@ -1089,6 +1147,7 @@ impl Answers {
             },
             performance: performance(FLEET),
             fact_refresh: fact_refresh(),
+            agent_wake: None,
         }
     }
 }
@@ -1126,7 +1185,8 @@ impl FakeRuntime {
         )
         .expect("write the Runtime info");
         let status = RuntimeControlPlaneStatus::new(owner_epoch, answers.instances.clone())
-            .expect("fake status");
+            .expect("fake status")
+            .with_agent_wake(answers.agent_wake.clone());
         let stopping = Arc::new(AtomicBool::new(false));
         let asked = Arc::new(Mutex::new(Vec::new()));
         let acceptor = {

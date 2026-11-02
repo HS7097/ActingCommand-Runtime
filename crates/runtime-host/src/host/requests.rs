@@ -551,6 +551,14 @@ impl HostShared {
                 self.require_physical_instance_alias(instance_alias)?;
                 self.drill_recovery_ladder(request, validated, instance_alias, *mode)
             }
+            // Workflow #432 AGT-1b: a person's test of the delivery to a registered channel. The
+            // alias only names an instance in the message.
+            RuntimeOperation::AgentWakeTest { to, instance_alias } => {
+                if let Some(instance_alias) = instance_alias {
+                    self.require_physical_instance_alias(instance_alias)?;
+                }
+                self.agent_wake_test(request, validated, to, instance_alias.as_deref())
+            }
             RuntimeOperation::RunContainedTask {
                 instance_alias,
                 holder_id,

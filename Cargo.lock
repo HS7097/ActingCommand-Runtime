@@ -409,6 +409,7 @@ dependencies = [
 name = "actingcommand-runtime-host"
 version = "0.1.0"
 dependencies = [
+ "actingcommand-agent-forward",
  "actingcommand-artifact-store",
  "actingcommand-contract",
  "actingcommand-device",

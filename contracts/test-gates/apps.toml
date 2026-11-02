@@ -1204,3 +1204,11 @@ tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::config::gate_agt_1a::agent_wake_invalid_names_its_config_key",
 ]
 incident = ["#432 AGT-1a"]
+
+# AGT-1b (Workflow #432, 0.12.37; design rd-1031/agt/model-agt-v2.md section 10; register section 1.246; contracts/agent-wake.md): the overview's block agent_wake is the status member of the one Status read, and absent with no section.
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::overview_block_comes_from_the_one_status_read",
+]
+incident = ["#432 AGT-1b"]

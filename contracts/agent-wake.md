@@ -4,11 +4,12 @@ Workflow #432. The Runtime tells an agent session that something needs it by sen
 one short message. The forwarding is the Runtime's own function, it has no sender identity, and the
 message's first line is fixed. Client words live only in `crates/agent-forward`.
 
-**State of this contract (AGT-1a, 0.12.37).** Only the configuration, the registry's shape and the
-pure parts exist. No thread runs, nothing is sent, no body is written and `host.agent_wake` has no
-writer yet. With no `agent_wake` section the only difference a Runtime shows is the one
-`ledger_observer.tag.workbench_patterns` entry. Later slices fill in the worker, the transports and
-the triggers, and say so here.
+**State of this contract (AGT-1b, 0.12.37).** The configuration, the registry's shape, the worker, the
+rows, the read faces and a person's test exist. **Nothing wakes automatically yet:** the triggers come
+with AGT-2, and a wake exists only through `actingctl agent-wake-test`. **No transport exists yet:** the
+forwarder answers `deferred`, so a test ends `deferred`, then `expired`, until AGT-T1 brings the first
+one. With no `agent_wake` section the only difference a Runtime shows is the one
+`ledger_observer.tag.workbench_patterns` entry: no thread, no file, no row and no status member.
 
 ## The `agent_wake` section
 
@@ -92,10 +93,11 @@ rendered, as in every section. A broken rule below is `agent_wake_config_invalid
 | `panic_backoff_ms` above `panic_backoff_max_ms`; a bad quiet window | `section_check` |
 | A registered channel whose shortest message does not fit `summary.max_chars` | `message_floor` |
 
-Whether each alias is configured and whether each channel fits need the instances, the registry and
-the state root, so only the start and `check-config` check them. A limit an instruction sets below a
-channel's floor passes the section check; that send is then refused, loudly, and never carries a cut
-path.
+Whether each channel fits needs the registry and the state root, so only the start and `check-config`
+check it. A limit an instruction sets below a channel's floor passes the section check; that send is then
+refused, loudly (`agent_wake_message_too_long`), and never carries a cut path. Whether each alias is
+configured needs the instances: the start, `check-config` and, for an instruction that changes
+`agent_wake.rules`, the host check it (`config_value_invalid`, `instance_unknown`).
 
 **Notes, never refusals (#419).** A registry that is missing or unreadable (`registry_unreadable`), a
 rule's `to` the registry does not list (`channel_unknown`) and a program a channel names that is not
@@ -165,7 +167,7 @@ needs are `crates/agent-forward`'s.
 
 ## Delivery states
 
-Later slices write these in the rows of the tagged runtime fact `host.agent_wake`. No state claims a
+The worker writes these in the rows of the tagged runtime fact `host.agent_wake`. No state claims a
 session acted: delivery is not completion.
 
 | State | Means | Next | Loud? |
@@ -179,8 +181,89 @@ session acted: delivery is not completion.
 | `expired` | `give_up_ms` passed while deferred | stop | yes |
 | `body_failed` | The body could not be written | stop | yes |
 
+**Rules.** The intent is durable before the write: a transport commits it through `before_write`, which
+records `sending`. Once that returned, the row never writes again; after a restart `sending` is
+`unknown`, never resent. Only `prepared` and `deferred` are ever tried, oldest first per channel, at
+least `delivery.channel_gap_ms` apart. A row takes at most four records: `prepared`, the first
+`deferred`, `sending` and the result; a later reason goes only to the detail file and the worker's
+memory. After a stop, no new `sending`; `prepared` and `deferred` rows carry on at the next start.
+
 `AgentForward` (`crates/agent-forward`) answers in neutral words, so its callers need no client word:
 `Deferred` with a `reason`, `Delivered` with a `proof` (`written`, `accepted`, `recorded`,
 `receipt`), `Failed` or `Unknown` with a `problem`. A transport commits the intent through
 `before_write`, once, immediately before its first possible write, and writes nothing when that
 fails. Until a transport exists, the implementation `Unavailable` answers `Deferred`.
+
+## The fact `host.agent_wake`
+
+Scope Runtime, a record list, source `runtime`, tagged so a start loads it, the newest
+`delivery.history_rows` rows (open rows are never trimmed first). One row per wake:
+
+`wake_id, kind, rule?, test, instance_alias?, code?, channel, created_at_unix_ms, updated_at_unix_ms,
+state, reason?, proof?, problem?, body_file?, body_sha256?, body_chars?, message_chars?, alias_cut,
+trigger_event_id?, correlation_id?`
+
+It holds names, a digest and counts, never a body's or a message's text and never a channel's address.
+A record of a shape this build does not read is said once (`invalid_runtime_state_fact`) and the start
+goes on with no rows; the next write replaces it, and its files go through the retention sweep.
+
+**The delivery detail file** `w<...>.delivery.json`, beside the body, is rewritten at each state and
+retry: `{schema: "actingcommand.agent-wake-delivery.v1", wake_id, channel, state, reason, proof, problem,
+message_text, detail, updated_at_unix_ms}`. This is where a person reads what went wrong: `detail` is the
+client's own words, at most 4 KiB, and they reach no ledger field.
+
+**Retention.** After each wake and hourly, by `body.retention_days`, then by `body.max_files`, oldest
+first. It never removes an open row's files, touches only the worker's own file names and writes no
+record but a failure's.
+
+## Quiet and off
+
+| Switch | New candidates | Sends | Open rows |
+|---|---|---|---|
+| `quiet.windows` | become rows and bodies | none | wait; `prepared` stays `prepared` |
+| `quiet.hold_until_unix_ms` | become rows and bodies | none until that time | wait; `0` holds nothing |
+| `enabled` false | dropped, counted | none | `deferred`, reason `disabled`; a row in `sending` finishes |
+
+The give-up clock is read only when a send is due, so a quiet time causes no expiry noise: when it ends,
+rows past `delivery.give_up_ms` become `expired`, loud once each, and younger ones go. Quiet writes no
+record per tick. The Runtime does not read quota: whether a silence applies is a person's act.
+
+## Failures
+
+A delivery failure is a non-fatal `runtime.failed` with system links and no instance link, at most one per
+wake: `agent_wake_delivery_failed` (`agent_delivery_state`, `agent_delivery_problem`, `agent_channel`,
+`alias`, `file`), `agent_wake_message_too_long`, `agent_wake_channel_unknown`. It reaches no ladder, fence
+or pause, and it can never become a wake. Every failure of the worker is `Operation`; only a real ledger
+failure stays `Global`. A panic or an error of an iteration writes one such record (`worker_panicked`, or
+the error) and waits `delivery.panic_backoff_ms`, doubling to `delivery.panic_backoff_max_ms`, reset by a
+clean iteration. A worker thread that cannot start turns the feature off and says so
+(`worker_spawn_failed`); it never stops a start. Candidates live in memory, so a crash may lose those not
+yet made rows; the crash itself is loud.
+
+## Read faces
+
+- **`Status.agent_wake`** (`runtime-client` revision 5), from memory, absent with no section: `{enabled,
+  worker: running|backing_off|unavailable, quiet?: window|hold, open, last_wake_at_unix_ms?, failed_today,
+  suppressed_today, attention}`. `attention` is true only for a row that failed today or an unreadable
+  registry. A day is a UTC day until AGT-2 brings the host's local day.
+- **`actingctl overview`, `ac_overview`:** the block `agent_wake`, that member of the one Status read; MCP
+  never cuts it.
+- **Rows:** `actingctl facts`, `ac_facts`, key `host.agent_wake`. **History:** `ac_events` by type, always
+  with `after_sequence`.
+- **A console whose `runtime-client` `max` is below 5 refuses a status that carries the member** (the status
+  denies unknown members), so update the console before adding the section.
+
+## A person's test
+
+```text
+actingctl agent-wake-test --state-root <root> --to <channel> [--instance <alias>] [--wait-s <seconds>]
+```
+
+The request `AgentWakeTest{to, instance_alias?}` takes the origins (User, Ui) and (Cli, Cli) only, else
+`invalid_agent_wake_test_origin`, the same gate as a pause. **It is not an MCP tool:** an agent cannot use the
+Runtime to ping others. It goes through the real worker, file, row and transport with kind `delivery_test`,
+word 发送测试, `test: true` and no `trigger`, and it obeys quiet: the answer `{wake_id, channel, quiet?}` names
+what holds it. Refusals: `agent_wake_disabled`, `agent_wake_channel_unknown` (a readable registry that does not
+list the name, or a name of no channel's shape). A missing or unreadable registry takes the test, whose row
+waits `deferred`, reason `registry_unreadable`. The line's outcome is `agent_wake_test_queued`; `--wait-s`
+adds the wake's `row`.

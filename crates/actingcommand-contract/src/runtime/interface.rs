@@ -283,6 +283,8 @@ runtime_operation_kinds! {
     // Workflow #429 R-7a (register §1.233): the player hold's two kinds.
     AcquirePlayerHold,
     ReleasePlayerHold,
+    // Workflow #432 AGT-1b (register §1.246): a person's test of the delivery to a channel.
+    AgentWakeTest,
 }
 
 impl RuntimeOperationKind {
@@ -339,6 +341,8 @@ impl RuntimeOperationKind {
             // channel taking them from U-6).
             | Self::AcquirePlayerHold
             | Self::ReleasePlayerHold
+            // Workflow #432 AGT-1b: the Runtime sends the test message itself.
+            | Self::AgentWakeTest
             | Self::RunInstanceTask
             | Self::StopInstanceRun
             | Self::EditPackSchedule
@@ -507,6 +511,8 @@ impl RuntimeOperationKind {
             // Workflow #429 R-7a: registered with the shapes; R-7b first answers completed.
             Self::AcquirePlayerHold => Some(ReceiptCode::AcquirePlayerHoldCompleted.code()),
             Self::ReleasePlayerHold => Some(ReceiptCode::ReleasePlayerHoldCompleted.code()),
+            // Workflow #432 AGT-1b.
+            Self::AgentWakeTest => Some(ReceiptCode::AgentWakeTestCompleted.code()),
         }
     }
 }
@@ -606,6 +612,7 @@ impl RuntimeOperation {
             Self::PackScheduleView { .. } => Kind::PackScheduleView,
             Self::AcquirePlayerHold { .. } => Kind::AcquirePlayerHold,
             Self::ReleasePlayerHold { .. } => Kind::ReleasePlayerHold,
+            Self::AgentWakeTest { .. } => Kind::AgentWakeTest,
         }
     }
 
@@ -764,6 +771,9 @@ mod tests {
             // general instructions recorded through G14.
             K::AcquirePlayerHold => (General, Some(Instruction), true),
             K::ReleasePlayerHold => (General, Some(Instruction), true),
+            // Workflow #432 AGT-1b (register §1.246): a general instruction recorded through G14,
+            // with the same origin gate as a pause.
+            K::AgentWakeTest => (General, Some(Instruction), true),
         }
     }
 

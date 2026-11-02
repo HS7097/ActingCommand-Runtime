@@ -184,6 +184,8 @@ actingcommand_contract::outcome_codes! {
         RuntimeOverviewReported => "runtime_overview_reported": success / none,
         // Workflow #390 DRILL-1: `ladder-drill`, a drill of an instance's ladder admitted.
         RecoveryLadderDrillQueued => "recovery_ladder_drill_queued": success / none,
+        // Workflow #432 AGT-1b: `agent-wake-test`, a test wake queued for the worker.
+        AgentWakeTestQueued => "agent_wake_test_queued": success / none,
         // Workflow #385 P-m: `perf-status`.
         RuntimePerformanceReported => "runtime_performance_reported": success / none,
         // Workflow #384 D2-S5: `fact-refresh`.

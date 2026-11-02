@@ -64,7 +64,9 @@ impl SilenceSources {
 }
 
 /// A configuration entry as the pure judgement reads it.
-fn judged(entries: Vec<actingcommand_runtime_config::BlackoutEntry>) -> Vec<BlackoutEntry> {
+pub(super) fn judged(
+    entries: Vec<actingcommand_runtime_config::BlackoutEntry>,
+) -> Vec<BlackoutEntry> {
     entries
         .into_iter()
         .map(|entry| BlackoutEntry {

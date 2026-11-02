@@ -182,6 +182,8 @@ crate::outcome_codes! {
         BindChannelCompleted => "request_bind_channel_completed": success / none,
         // Workflow #390 DRILL-1: a ladder drill was admitted and queued.
         DrillRecoveryLadderCompleted => "request_drill_recovery_ladder_completed": success / none,
+        // Workflow #432 AGT-1b: a test wake was queued for the worker.
+        AgentWakeTestCompleted => "request_agent_wake_test_completed": success / none,
         // Workflow #385 P-m (register §1.61 W15).
         PerformanceStatusCompleted => "request_performance_status_completed": success / none,
         // Workflow #384 D2-S5 (register §1.68).
@@ -588,6 +590,8 @@ crate::outcome_codes! {
         InvalidRuntimeDebugOrigin => "invalid_runtime_debug_origin": error / none,
         InvalidEmulatorControlOrigin => "invalid_emulator_control_origin": error / none,
         InvalidSchedulingPauseOrigin => "invalid_scheduling_pause_origin": error / none,
+        // Workflow #432 AGT-1b: `AgentWakeTest` from another origin than a person's.
+        InvalidAgentWakeTestOrigin => "invalid_agent_wake_test_origin": error / none,
         FactOriginMixed => "fact_origin_mixed": error / none,
         InvalidAgentDispatcherOrigin => "invalid_agent_dispatcher_origin": error / none,
         InvalidContainedTaskCancellationStatus => "invalid_contained_task_cancellation_status": error / none,

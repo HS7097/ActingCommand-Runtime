@@ -119,7 +119,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// The developer text of `actingctl_usage_invalid`.
-const USAGE: &str = "usage: actingctl <observe|reset|status [--config]|config set <key>=<json>...|config clear <key>...|facts (--program|--instance <alias|instance_id|ADB port>) [--key-prefix <prefix>]|request-shutdown|install-transition --action-json <json>|monitor-status|perf-status [--instance <alias|instance_id|ADB port>]|fact-refresh [--instance <alias|instance_id|ADB port>]|schedule [--instance <alias|instance_id|ADB port>]|monitor-set|monitor-clear|emulator <status|start|stop|restart|discover>|stream|task-run|task-offset <task_id> <offset_milli>|pause [--reason <code>] [--drain-timeout-ms <n>]|resume|selfcheck <alias>|ladder-drill --instance <alias|instance_id|ADB port> [--device]> --state-root <path> [--instance <id>] [--program] [--wait <seconds>] [--package <locator> [--recovery-package <locator>]]\nusage: actingctl watchdog <status|run-once [--from-task]|install|uninstall> --root <install root>";
+const USAGE: &str = "usage: actingctl <observe|reset|status [--config]|config set <key>=<json>...|config clear <key>...|facts (--program|--instance <alias|instance_id|ADB port>) [--key-prefix <prefix>]|request-shutdown|install-transition --action-json <json>|monitor-status|perf-status [--instance <alias|instance_id|ADB port>]|fact-refresh [--instance <alias|instance_id|ADB port>]|schedule [--instance <alias|instance_id|ADB port>]|monitor-set|monitor-clear|emulator <status|start|stop|restart|discover>|stream|task-run|task-offset <task_id> <offset_milli>|pause [--reason <code>] [--drain-timeout-ms <n>]|resume|selfcheck <alias>|ladder-drill --instance <alias|instance_id|ADB port> [--device]|agent-wake-test --to <channel> [--instance <alias>] [--wait-s <seconds>]> --state-root <path> [--instance <id>] [--program] [--wait <seconds>] [--package <locator> [--recovery-package <locator>]]\nusage: actingctl watchdog <status|run-once [--from-task]|install|uninstall> --root <install root>";
 /// The developer text of an `ACTINGCOMMAND_DETAIL` the CLI does not know.
 const DETAIL_USAGE: &str = "ACTINGCOMMAND_DETAIL takes codes or full";
 /// The member a result that is not a JSON object goes under.
@@ -794,6 +794,20 @@ fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError>
                 )?;
             reported(&drill, success)
         }
+        // Workflow #432 AGT-1b: the queued test, and with `--wait-s` the wake's row.
+        Command::AgentWakeTest { to, wait } => {
+            let queued = client
+                .agent_wake_test(&to, optional_instance.as_deref())
+                .map_err(ActingctlError::Runtime)?;
+            let mut members = result_members(&queued, RESULT_MEMBER)?;
+            if let Some(wait) = wait {
+                members.insert(
+                    "row".to_owned(),
+                    agent_wake_row(&client, &queued.wake_id, wait)?,
+                );
+            }
+            Ok(Done::new(members, Outcome::new(success)))
+        }
         Command::Stream { spec } => reported(
             &client
                 .capture_sequence(instance()?, spec)
@@ -855,6 +869,63 @@ fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError>
 }
 
 /// The line of a typed result whose subcommand succeeded with `success`.
+/// Workflow #432 AGT-1b: the row of the wake `wake_id` in `host.agent_wake`, read until it has left
+/// `prepared` and `sending` or `wait` is over; null while it has no row. A read records nothing.
+fn agent_wake_row(
+    client: &RuntimeClient,
+    wake_id: &str,
+    wait: Duration,
+) -> Result<Value, ActingctlError> {
+    use actingcommand_contract::{FactScalar, FactValue, RuntimeFactScope};
+    let deadline = std::time::Instant::now() + wait;
+    loop {
+        let snapshot = client
+            .runtime_fact_snapshot()
+            .map_err(ActingctlError::Runtime)?;
+        let row = snapshot
+            .records
+            .iter()
+            .find(|record| {
+                record.scope == RuntimeFactScope::Runtime && record.key == "host.agent_wake"
+            })
+            .and_then(|record| {
+                match &record.value {
+                FactValue::RecordList(rows) => rows.iter().find(|row| {
+                    matches!(row.get("wake_id"), Some(FactScalar::String(id)) if id == wake_id)
+                }),
+                _ => None,
+            }
+            });
+        let settled = row.is_some_and(|row| {
+            !matches!(
+                row.get("state"),
+                Some(FactScalar::String(state)) if state == "prepared" || state == "sending"
+            )
+        });
+        if settled || std::time::Instant::now() >= deadline {
+            let Some(row) = row else {
+                return Ok(Value::Null);
+            };
+            let members = row
+                .iter()
+                .map(|(key, value)| {
+                    let value = match value {
+                        FactScalar::Boolean(flag) => Value::from(*flag),
+                        FactScalar::Integer(number) => Value::from(*number),
+                        FactScalar::String(text) => Value::from(text.as_str()),
+                        FactScalar::TimestampMs(ms) | FactScalar::DurationMs(ms) => {
+                            Value::from(*ms)
+                        }
+                    };
+                    (key.clone(), value)
+                })
+                .collect::<Map<String, Value>>();
+            return Ok(Value::Object(members));
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
 fn reported(result: &impl Serialize, success: ActingctlCode) -> Result<Done, ActingctlError> {
     Ok(Done::new(
         result_members(result, RESULT_MEMBER)?,
@@ -1224,6 +1295,13 @@ enum Command {
     LadderDrill {
         mode: actingcommand_contract::RecoveryDrillMode,
     },
+    /// `agent-wake-test --to <channel> [--instance <alias>] [--wait-s <seconds>]` (Workflow #432
+    /// AGT-1b): a person's test of the delivery to a registered channel; `--wait-s` prints the
+    /// wake's row. No MCP tool sends it.
+    AgentWakeTest {
+        to: String,
+        wait: Option<Duration>,
+    },
     Stream {
         spec: CaptureSequenceSpec,
     },
@@ -1284,6 +1362,8 @@ impl Invocation {
         let mut drain_timeout_ms = None;
         // Workflow #390 DRILL-1: `ladder-drill --device` acts on the device.
         let mut device = false;
+        // Workflow #432 AGT-1b: `agent-wake-test --to <channel>`.
+        let mut to = None;
         // `task-offset` takes the task and the offset as the second and third tokens.
         let task_offset = if command == "task-offset" {
             let task_id = arguments
@@ -1405,6 +1485,14 @@ impl Invocation {
                 }
                 "--recover" => recovery_enabled = true,
                 "--device" => device = true,
+                "--to" => to = Some(require_text(&arguments, &mut index)?),
+                "--wait-s" => {
+                    let seconds = require_u64(&arguments, &mut index)?;
+                    if !(1..=MAX_WAIT_SECONDS).contains(&seconds) {
+                        return Err(ActingctlError::Usage);
+                    }
+                    wait = Some(Duration::from_secs(seconds));
+                }
                 "--program" => program = true,
                 "--config" => config = true,
                 "--key-prefix" => {
@@ -1517,6 +1605,10 @@ impl Invocation {
             "ladder-drill" => Command::LadderDrill {
                 mode: ladder_drill::mode(device),
             },
+            "agent-wake-test" => Command::AgentWakeTest {
+                to: to.ok_or(ActingctlError::Usage)?,
+                wait,
+            },
             "stream" => Command::Stream {
                 spec: CaptureSequenceSpec::new(
                     frame_count.unwrap_or(1),
@@ -1586,6 +1678,7 @@ impl Command {
             Self::Resume => ActingctlCode::RuntimeSchedulingResumed,
             Self::SelfCheck { .. } => ActingctlCode::InstanceSelfCheckReported,
             Self::LadderDrill { .. } => ActingctlCode::RecoveryLadderDrillQueued,
+            Self::AgentWakeTest { .. } => ActingctlCode::AgentWakeTestQueued,
             Self::Stream { .. } => ActingctlCode::InstanceFramesCaptured,
             Self::TaskRun { .. } => ActingctlCode::TaskRunReported,
         }
@@ -1619,6 +1712,7 @@ impl Command {
                 | Self::AgentPublishFacts { .. }
                 | Self::AgentApplyResourceTargets { .. }
                 | Self::SelfCheck { .. }
+                | Self::AgentWakeTest { .. }
         )
     }
 }
@@ -1691,6 +1785,8 @@ fn flags_of(command: &str, action: Option<&str>) -> Option<&'static [&'static st
         "facts" => &["--state-root", "--program", "--instance", "--key-prefix"],
         // Workflow #390 DRILL-1: a ladder drill acts on the device only with `--device`.
         "ladder-drill" => &["--state-root", "--instance", "--device"],
+        // Workflow #432 AGT-1b: the alias only names an instance in the message.
+        "agent-wake-test" => &["--state-root", "--to", "--instance", "--wait-s"],
         "monitor-set" => &[
             "--state-root",
             "--instance",

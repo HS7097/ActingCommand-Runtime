@@ -152,7 +152,8 @@ The target of [Ledger observer](ledger-observer.md) for this store (LEDG ยง3.1โ€
    the four settlement keys `task.*.last_duration_ms`, `.last_outcome`, `.failure_streak`,
    `.completed_at_unix_ms`, `host.scheduling_pause`, `host.install_transition` and its `.pauses`,
    `host.perf_baseline.*`, `host.perf_calibration.*`, `host.config_overrides`,
-   `host.contained_settlement` (#411 A65) and `host.idle_state` (#405 IDLE-1P). Keys under
+   `host.contained_settlement` (#411 A65), `host.idle_state` (#405 IDLE-1P) and `host.agent_wake`
+   (#432 AGT-1b, [agent-wake.md](agent-wake.md)). Keys under
    `ledger_observer.tag.reobserve_prefixes` (`device.`, `backend.`, `application.`, `lease.`,
    `provider.`, `config.`, `task.page`, `task.game`, `task.server`, `host.pack_registry.`) are not
    loaded: this start observes or replays them again, so the takeover invalidation of

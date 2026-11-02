@@ -93,7 +93,10 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   and members; R-7a fills none and still answers every revision-2 and revision-3 request as
 ///   before, so [2, 4]. Workflow #429 R-0b (0.12.36, register §1.238) raises `min` to 3: it fills
 ///   the status member `RuntimeInstanceStatus.activity`, which a revision-2 reader refuses (the
-///   status denies unknown members), so [3, 4].
+///   status denies unknown members), so [3, 4]. Workflow #432 AGT-1b (0.12.37, register §1.246)
+///   raises `max` to 5: the request kind `AgentWakeTest`, its result and the status member
+///   `agent_wake`, which is absent with no `agent_wake` section; every earlier request is answered
+///   as before, so [3, 5].
 /// - `runtime-outcomes` [1, 1]: the new interface of model-378 §10.
 const V0120: &[(&str, [u64; 2])] = &[
     ("actingd-config", [5, 24]),
@@ -101,7 +104,7 @@ const V0120: &[(&str, [u64; 2])] = &[
     ("install-selection", [1, 1]),
     ("ledger", [3, 5]),
     ("package", [3, 6]),
-    ("runtime-client", [3, 4]),
+    ("runtime-client", [3, 5]),
     ("runtime-outcomes", [1, 1]),
 ];
 
