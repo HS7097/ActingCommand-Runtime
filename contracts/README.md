@@ -204,7 +204,7 @@ remaining time. Existing request/lease cancellation and fatal boundaries remain.
 The wait does not reset those budgets or change retry, recovery, input, lease,
 heartbeat or resource-close behavior.
 
-Operation `0.9` declares non-OCR task budgets directly: optional `timeout_ms`
+Operation `0.9` declares its task budgets directly: optional `timeout_ms`
 defaults to 60000 and accepts `1..=1800000`; optional `max_steps` retains the
 existing 100-step default and 1000-step maximum. Its package control is
 `Lab-1y.control.v2`. The task RPC response ceiling is 1800000 ms and the official

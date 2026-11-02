@@ -109,6 +109,9 @@ mod wait_step;
 // Workflow #396 REC-5.
 #[cfg(test)]
 mod scales_tests;
+// Workflow #428 OCR-SCALE-1.
+#[cfg(test)]
+mod ocr_scale_tests;
 // Workflow #386 SR-1.
 #[cfg(test)]
 mod gate_386_sr1;
@@ -8261,7 +8264,12 @@ impl TaskProgram {
             Some(TaskSchema::V0_8) => self.post_admission_ocr.as_ref().is_some_and(|value| {
                 serde_json::from_value::<OcrFieldsDeclaration>(value.clone()).is_ok()
             }),
-            Some(TaskSchema::V0_9) => self.post_admission_ocr.is_none(),
+            // Workflow #428 OCR-SCALE-1: schema 0.9 may declare fields, the schema 0.8 form. The
+            // schema 0.7 comparison stays out: it selects the run's scheduling key, and the keyed
+            // ends only schema 0.9 has would be a second source (`finish_success_with_key`).
+            Some(TaskSchema::V0_9) => self.post_admission_ocr.as_ref().is_none_or(|value| {
+                serde_json::from_value::<OcrFieldsDeclaration>(value.clone()).is_ok()
+            }),
             None => false,
         } && (self.schema_at_least(TaskSchema::V0_9)
             || !matches!(self.entry_page, Some(EntryPageDeclaration::Set(_))));
@@ -8343,7 +8351,11 @@ impl TaskProgram {
         self.entry_page_set(control, detector)?;
         let target_pages = self.target_pages()?;
         if self.operations.is_empty() {
-            if self.schema_version != "0.8" || self.recovery.is_some() {
+            // Workflow #428 OCR-SCALE-1: a fields task of schema 0.8 or 0.9 reads without input.
+            if !self.schema_at_least(TaskSchema::V0_8)
+                || self.post_admission_ocr.is_none()
+                || self.recovery.is_some()
+            {
                 // Workflow #411 A39: the refusal names its rule and the refused member.
                 return Err(program_refusal(
                     ProgramProblem::OperationsEmpty,
@@ -8995,13 +9007,18 @@ impl TaskProgram {
         detector: &PageDetector,
         evaluator: &RecognitionEvaluator,
     ) -> Result<Option<PreparedOcrFields>, ContainedTaskError> {
-        if self.schema_version != "0.8" {
-            return Ok(None);
-        }
-        let mut declaration: OcrFieldsDeclaration =
-            serde_json::from_value(self.post_admission_ocr.clone().ok_or_else(|| {
+        // Workflow #428 OCR-SCALE-1: schema 0.8 requires the declaration, schema 0.9 may make it.
+        let declared = match self.schema() {
+            Some(TaskSchema::V0_8) => Some(self.post_admission_ocr.clone().ok_or_else(|| {
                 ContainedTaskError::new(SharedCode::OcrFieldsDeclarationMissing.code())
-            })?)
+            })?),
+            Some(TaskSchema::V0_9) => self.post_admission_ocr.clone(),
+            _ => None,
+        };
+        let Some(declared) = declared else {
+            return Ok(None);
+        };
+        let mut declaration: OcrFieldsDeclaration = serde_json::from_value(declared)
             .map_err(|_| ContainedTaskError::new(SharedCode::OcrFieldsDeclarationInvalid.code()))?;
         declaration.validate().map_err(ContainedTaskError::new)?;
         if let Some(metadata) = bundle.projection_metadata() {

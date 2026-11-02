@@ -235,6 +235,119 @@ fn zero_input_fields_source_and_admission_boundaries() {
     }
 }
 
+// Workflow #428 OCR-SCALE-1 (contracts/ocr-fields.md, section Task schema `0.9` fields tasks;
+// register §1.251): the source and Runtime admission agree. A zero-input fields task is admitted
+// in schema 0.9 under `Lab-1y.control.v2` as in schema 0.8 under `Lab-1y.control.v1`; schema 0.9
+// takes no comparison and needs fields or an operation; schema 0.8 still requires fields and
+// still takes no `scales`.
+#[test]
+fn ocr_scale1_source_and_admission_take_fields_in_schema_0_9_and_leave_0_8_unchanged() {
+    use actingcommand_execution_kernel::PreparedContainedTask;
+    use actingcommand_pack_containment::Sha256Hash;
+    use actingcommand_resource_tooling::{PackageValidateRequest, validate_package};
+    use std::io::{Cursor, Write};
+    use zip::{ZipWriter, write::FileOptions};
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("resources");
+    write_external_resource_fixture(&root);
+    let path = root.join("operations/return_home/task.json");
+    let mut task: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    task["operations"] = json!([]);
+    task["scheduling_outcome"] = json!({"mappings":[{"outcome_key":"fields_recorded",
+        "effect":"no_designated_effect","terminal_pages":["home"]}]});
+    task["ocr_targets"] = json!([{"id":"ocr/count","region":{"mode":"template_relative",
+            "anchor_target_id":"page/home","offset":{"x":4,"y":0},"width":16,"height":8},
+        "languages":["en"],"timeout_ms":1000,"match_mode":"exact","expected":["unused"],
+        "case_sensitive":false,"minimum_confidence":0.0,"model_ref":"PP-OCRv6_medium","model_sha256":"a".repeat(64)}]);
+    task["post_admission_ocr"] = json!({"mode":"fields_v1","page_ids":["home"],
+        "fields":[{"id":"count","group":"snapshot","target_id":"ocr/count","required":true,
+            "privacy":"public","trim":"whitespace_v1","value":{"type":"unsigned_integer","min":0,"max":u64::MAX}}],
+        "limits":{"max_frames":1,"max_items":1,"max_string_bytes":64,"max_total_bytes":4096,"max_truth_entries":1},
+        "outcome_key":"fields_recorded"});
+    let with_schema = |schema: &str| {
+        let mut value = task.clone();
+        value["schema_version"] = json!(schema);
+        value
+    };
+    let build = |value: &serde_json::Value, control: &str, name: &str| {
+        fs::write(&path, serde_json::to_vec(value).unwrap()).unwrap();
+        let outputs = OperationParser::load(&root, None, None, None)?.build_all()?;
+        let mut entries = std::collections::BTreeMap::from([
+            ("control.json", serde_json::to_vec(&json!({"schema_version":control,"package_id":"neutral.fields","execution_mode":"navigable_route",
+                "game":GAME,"server":SERVER,"resolution":{"width":1280,"height":720},"entry_task_id":"return_home"})).unwrap()),
+            ("resources/operations/return_home/task.json", serde_json::to_vec(value).unwrap()),
+            ("resources/operations/return_home/assets/HOME.png", one_pixel_png().to_vec()),
+            ("resources/operations/resources.json", fs::read(root.join("operations/resources.json")).unwrap()),
+            ("resources/recognition/fourth-game.test-shard.pack.json", serde_json::to_vec(&outputs.pack).unwrap()),
+            ("resources/recognition/fourth-game.test-shard.pages.json", serde_json::to_vec(&outputs.pages).unwrap()),
+            ("resources/navigation/fourth-game.test-shard.navigation.json", serde_json::to_vec(&outputs.navigation).unwrap()),
+        ]);
+        let files = entries.iter().filter_map(|(path, bytes)| path.strip_prefix("resources/").map(|path| json!({"path":path,"sha256":format!("sha256:{}", Sha256Hash::digest(bytes))}))).collect::<Vec<_>>();
+        entries.insert(
+            "resources/manifest.json",
+            serde_json::to_vec(
+                &json!({"schema_version":"0.3","entry_task_id":"return_home","files":files}),
+            )
+            .unwrap(),
+        );
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        for (path, bytes) in entries {
+            writer.start_file(path, FileOptions::default()).unwrap();
+            writer.write_all(&bytes).unwrap();
+        }
+        let bytes = writer.finish().unwrap().into_inner();
+        PreparedContainedTask::load("neutral-fields", &bytes).map_err(|error| {
+            actingcommand_contract::LabError::package_invalid(error.to_string())
+        })?;
+        fs::write(temp.path().join(format!("{name}.zip")), &bytes).unwrap();
+        Ok::<_, Box<actingcommand_contract::LabError>>(())
+    };
+
+    for (schema, control, name) in [
+        ("0.9", "Lab-1y.control.v2", "fields-0-9"),
+        ("0.8", "Lab-1y.control.v1", "fields-0-8"),
+    ] {
+        build(&with_schema(schema), control, name)
+            .unwrap_or_else(|error| panic!("schema {schema}: refused: {error}"));
+        let validated = validate_package(PackageValidateRequest {
+            zip_path: temp.path().join(format!("{name}.zip")),
+            include_entries: true,
+        })
+        .expect("package validation");
+        assert_eq!(validated.status, "valid", "schema {schema}");
+    }
+
+    let without_ocr = |schema: &str| {
+        let mut value = with_schema(schema);
+        value.as_object_mut().unwrap().remove("post_admission_ocr");
+        value
+    };
+    let mut comparison = with_schema("0.9");
+    comparison["post_admission_ocr"] = json!({"page_id":"home","target_id":"ocr/count",
+        "truth_set":{"path":"dictionary.json"},"normalization":"trim_lowercase_v1",
+        "comparison":"exact_set_v1","limits":task["post_admission_ocr"]["limits"],
+        "outcome_key":"fields_recorded"});
+    let mut scales_in_0_8 = with_schema("0.8");
+    scales_in_0_8["anchors"][0]["scales"] = json!({"factors_milli":[1000,900]});
+    for (case, value, control) in [
+        ("0.9 with a comparison", comparison, "Lab-1y.control.v2"),
+        ("0.9 with neither", without_ocr("0.9"), "Lab-1y.control.v2"),
+        (
+            "0.9 under control v1",
+            with_schema("0.9"),
+            "Lab-1y.control.v1",
+        ),
+        (
+            "0.8 without fields",
+            without_ocr("0.8"),
+            "Lab-1y.control.v1",
+        ),
+        ("0.8 with scales", scales_in_0_8, "Lab-1y.control.v1"),
+    ] {
+        assert!(build(&value, control, "refused").is_err(), "{case}");
+    }
+}
+
 fn write_external_resource_fixture(root: &Path) {
     fs::create_dir_all(root.join("operations/return_home/assets")).expect("operation assets");
     fs::create_dir_all(root.join("navigation")).expect("navigation directory");

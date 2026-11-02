@@ -1,6 +1,8 @@
 # Operation 0.8 OCR fields
 
 Operation schema `0.8` requires `post_admission_ocr.mode = fields_v1`.
+Operation `0.9` may declare the same form (section Task schema `0.9` fields tasks); what this
+contract says of a `0.8` fields task holds for it.
 Operation `0.7` continues to use its existing truth-set collection declaration and output.
 Fields and collection declarations cannot be mixed. Fields declarations, limits, field
 definitions, value types and dictionary references reject unknown members and variants.
@@ -55,7 +57,8 @@ set must coincide with the `fields_recorded` mapping's terminal-page set, and it
 target-page set with the union of every mapping's terminal pages, under the existing
 game-prefix page normalization, with no duplicate aliases and no page in two mappings.
 Every mapping has `no_designated_effect`, there is no designated operation, and the task
-has no recovery or stability declaration. A task of another schema, or one with recovery, that
+has no recovery or stability declaration. A task of another schema, a `0.9` task that declares
+no fields, or one with recovery, that
 declares `operations: []` is refused `contained_task_program_invalid` with `program_problem`
 `operations_empty`, the task declaration's `path` inside the package and `json_pointer`
 `/operations` (Workflow #411 A39). Build-task and Runtime admission apply the same
@@ -417,6 +420,46 @@ and reports stay at the existing controlled artifact paths with `DebugFull` rete
 profiles must use the redacted fields projection; raw references identify restricted
 evidence and do not authorize exporting its contents. Frame coverage and acquisition
 remain the responsibility of the resource task and its authorized execution window.
+
+## Task schema `0.9` fields tasks
+
+Workflow #428 OCR-SCALE-1, since 0.12.37. A task of schema `0.9` may declare
+`post_admission_ocr` in the `fields_v1` form; without it the task is as it was. With it, the
+declaration, its pages and targets, its dictionaries, limits and outcome, a zero-input task's
+rules, the collection, the reports and the projections are those of schema `0.8`, with the same
+refusals. Its `anchors[]` may then declare what schema `0.9` gives them, such as `scales` and a
+mask, so one pack reads a value at more than one interface zoom. The task's `control.json` is
+`Lab-1y.control.v2`, as for every schema `0.9` task; another control is refused
+`contained_task_phases_invalid`. A `linear_steps` task still declares no `post_admission_ocr`
+(`linear-steps.md`). A pack that uses this needs `package` revision 6
+(`component-interfaces.md`); an older Runtime refuses it at its declaration gate
+(`resource_declaration_invalid`, `UnconsumedField` at `/post_admission_ocr`).
+
+Only `fields_v1`. The `0.7` collection form stays in schema `0.7`: its comparison selects the
+run's scheduling outcome, and the keyed ends schema `0.9` adds (`on_max_runs`, a keyed
+`on_guard_refused`, a wait step's `on_timeout`) would be a second source for it, which ends a run
+in `contained_task_state_invalid`. In schema `0.9` it is refused `resource_declaration_invalid`
+at its first member `fields_v1` does not name.
+
+A `template_relative` box on an anchor that declares `scales` follows the anchor by one rule:
+
+- It hangs from the top-left corner of the anchor's match. `offset`, `width` and `height` are
+  written at factor 1000, the template's own size.
+- Each scales by the factor the anchor matched at: `(|v| * f + 500) div 1000` with the sign of
+  `v`, a width or height at least 1. A reading beside a scaled icon is in the same interface layer
+  and scales with it, so a box of unscaled size would take in its neighbours or, moved by an
+  unscaled offset, cut the reading.
+- When more than one factor matches, the highest score wins, and on equal scores the earlier
+  factor in the list (`resource-declarations.md`, section Task schema `0.9` multi-scale templates).
+- An anchor that does not match leaves the box unresolved: `region_unresolved`, `unresolved`
+  `anchor_not_matched`, no provider call, and a required field fails the task with
+  `contained_task_ocr_fields_unresolved`. There is no fallback to a fixed box.
+- The evidence keeps the declared `offset`, `width` and `height`; `anchor_match.rect` is the
+  resampled template's box and `roi` the scaled rectangle.
+
+For example, `offset` `(28, 0)`, 56 by 20, on an anchor that matched at `(90, 70)` at factor 900
+reads the rectangle `(115, 70, 50, 18)`. On an anchor without `scales` the same box stays 56 by
+20 wherever the anchor matched.
 
 ## Located text
 

@@ -109,7 +109,8 @@ pub fn source_file_requests(bundles: &[Bundle]) -> BTreeMap<PathBuf, SourceRead>
                 );
             }
         }
-        if bundle.data["schema_version"].as_str() == Some("0.8") {
+        // Workflow #428 OCR-SCALE-1: fields declarations are of task schema 0.8 or 0.9.
+        if bundle.task_schema_at_least(TaskSchema::V0_8) {
             if let Some(fields) = bundle
                 .data
                 .get("post_admission_ocr")
@@ -3747,7 +3748,12 @@ pub fn validate_post_admission_ocr_bundle(bundle: &Bundle, files: &ParseFiles) -
         .and_then(Value::as_str)
         .unwrap_or_default();
     let declaration = bundle.data.get("post_admission_ocr");
-    if schema == "0.8" {
+    // Workflow #428 OCR-SCALE-1: task schema 0.8 requires the fields declaration; task schema
+    // 0.9 may make it, and then under the same checks.
+    if TaskSchema::of(schema) == Some(TaskSchema::V0_9) && declaration.is_none() {
+        return Ok(());
+    }
+    if bundle.task_schema_at_least(TaskSchema::V0_8) {
         let value = declaration.ok_or_else(|| {
             CliError::package_invalid(SharedCode::OcrFieldsDeclarationMissing.as_str())
         })?;
@@ -5393,7 +5399,7 @@ pub fn validate_ocr_fields_mode_declaration(
     value: &Value,
     scheduling: Option<&Value>,
 ) -> CliOutcome<()> {
-    if schema != "0.8" {
+    if !TaskSchema::at_least(schema, TaskSchema::V0_8) {
         return Err(CliError::package_invalid(
             PackContainmentCode::OcrModeSchemaMismatch.as_str(),
         ));
