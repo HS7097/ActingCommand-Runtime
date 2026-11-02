@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  capture-bench test-pattern app (Workflow #402 step 1, C3). Game-neutral; it declares no
+  permission and uses no network: the time service is an abstract-namespace local socket, which
+  needs none. build.sh fails the build if the linked APK lists any permission.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="io.github.hs7097.capturebench.pattern">
+
+    <uses-sdk
+        android:minSdkVersion="26"
+        android:targetSdkVersion="35" />
+
+    <application
+        android:allowBackup="false"
+        android:hardwareAccelerated="true"
+        android:label="capture-bench pattern"
+        android:largeHeap="true"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
+
+        <activity
+            android:name="io.github.hs7097.capturebench.pattern.app.PatternActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|density|uiMode"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="unspecified">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
