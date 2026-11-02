@@ -82,7 +82,14 @@ pub(super) fn help_data() -> Value {
                 "--pages <pages.json>", "--interrupts <interrupts.json>",
                 "--navigation <navigation.json> (root files: cross-checked, laid beside bundle.json)",
                 "--schedule <schedule.json> (the schedule rules: composed as the Runtime composes them, laid beside bundle.json)",
-                "--display-layout <display-layout.json> (the display declaration: checked as the Runtime reads it, laid beside bundle.json)"
+                "--display-layout <display-layout.json> (the display declaration: checked as the Runtime reads it, laid beside bundle.json)",
+                "--loading <loading.json> (the game's loading pages: every pack's loading copy checked as package loading --check checks it, laid beside bundle.json with its loading/ templates; without it a pack that carries a copy is refused)"
+            ],
+            "package loading": [
+                "--root-file <loading.json> (the game's loading pages; their templates in the loading/ directory beside it)",
+                "--packs-root <directory of pack directories>",
+                "--write (writes each pack's resources/loading.json and resources/loading/ that is not the copy the root file makes; removes nothing; with --dry-run a preview that writes nothing)",
+                "--check (writes nothing; fails with standard_pack_root_invalid, loading_pack_stale, naming every pack whose copy is not the one the root file makes)"
             ],
             "standard-pack check": crate::standard_pack_cli::options(),
             "standard-pack compose": crate::standard_pack_cli::compose_options(),

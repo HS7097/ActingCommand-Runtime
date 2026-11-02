@@ -55,6 +55,8 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("package build-task", ["offline"], "retired"),
         command_cap("package build-pack", ["offline"], "retired"),
         command_cap("package bundle", ["offline"], "available"),
+        // Workflow #407 LOAD-1: copies a game's loading pages into its packs, or checks them.
+        command_cap("package loading", ["offline"], "available"),
         // Workflow #373 NAV-T: the bundle's cross-check of an installed game root; reads only.
         command_cap("standard-pack check", ["offline", "read_only"], "available"),
         // ROUT-L RL-1a: composes the schedule rules of bound games into a new directory.

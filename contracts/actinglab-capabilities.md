@@ -16,6 +16,9 @@ is `available` and declares `refused` (`dry_run_unsupported`); its entry carries
 member, `report_schema: "actinglab.resource-verify.v1"`, the schema of the report it writes, so a
 repository wrapper reads from `capabilities` whether the Tools it pins can verify.
 `resource check-release` is `retired`, with `reason_code` `resource_check_release_retired`.
+`package loading` (Workflow #407 LOAD-1, since 0.12.37; [package-reference.md](package-reference.md),
+"Content-directory tools and the bundle index") needs `offline`, is `available` and declares
+`mixed`: `--check` `no_effect`, `--write` a `dry_run` preview.
 The six device `--record` forms declare `refused`. Capture and its session alias use
 `dry_run_unsupported`; observe/do with `--capture --record` and both session application
 recording forms use `record_flag_unsupported`, before recording locks or Runtime access.

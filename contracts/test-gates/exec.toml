@@ -2356,6 +2356,22 @@ tests = [
 ]
 incident = ["#407"]
 
+# LOAD-1 (Workflow #407, 0.12.37; register §1.257; design rd-1031/check-speed/model-loading.md §2, §7 LOAD-1): a game's loading.json is refused at each broken member's pointer; package loading --write copies into each pack the pages of its server, only the targets they read and their templates, and nothing into an excluded pack; --check and standard-pack check name every stale pack; a page without a template target, a template of one colour, a page id a pack declares and a pack of another coordinate space are refused with nothing written; package bundle --loading refuses a stale pack and lays loading.json and its templates beside bundle.json, and without --loading refuses a pack that carries a copy
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_load1::loading_root_file_refuses_each_broken_member",
+    "actingcommand-resource-tooling::lib::gate_load1::loading_write_copies_selected_pages_targets_and_templates",
+    "actingcommand-resource-tooling::lib::gate_load1::loading_write_selects_pages_by_server_and_skips_excluded_packages",
+    "actingcommand-resource-tooling::lib::gate_load1::loading_check_names_every_stale_pack",
+    "actingcommand-resource-tooling::lib::gate_load1::loading_refuses_a_page_without_a_template_target",
+    "actingcommand-resource-tooling::lib::gate_load1::loading_refuses_a_single_colour_template",
+    "actingcommand-resource-tooling::lib::gate_load1::loading_refuses_a_page_id_a_pack_declares",
+    "actingcommand-resource-tooling::lib::gate_load1::loading_refuses_a_pack_of_another_coordinate_space",
+    "actingcommand-resource-tooling::lib::gate_load1::bundle_with_loading_refuses_a_stale_pack_and_lays_the_root_file",
+]
+incident = ["#407 LOAD-1"]
+
 # ROUT-L RL-T (#386; contracts/standard-pack-schedule.md "Tools"): standard-pack compose receives every --instance <alias>=<game>/<server> given after its words (the command's own, not the global --instance), so two bound instances of one game and server compose one <id>@<alias> copy of the rule and of each item per instance, each in its instance's scope
 [[gate]]
 coverage = "Y"

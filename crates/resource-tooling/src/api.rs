@@ -37,6 +37,71 @@ pub struct StandardPackRootFiles {
     /// Workflow #392 DA-4 (`--display-layout`): the game's display declaration,
     /// `display-layout.json` (model 392 v1.2 §4.1).
     pub display_layout: Option<PathBuf>,
+    /// Workflow #407 LOAD-1 (`--loading`): the game's loading pages, `loading.json`, with the
+    /// templates of its `loading/` directory beside it. Every pack's loading copy is checked as
+    /// `package loading --check` checks it, then the file and its templates are laid beside
+    /// `bundle.json`. Without it, a pack that carries a loading copy is refused.
+    pub loading: Option<PathBuf>,
+}
+
+/// Workflow #407 LOAD-1: `actinglab package loading --root-file <loading.json> --packs-root
+/// <directory> (--write | --check)`.
+#[derive(Debug, Clone)]
+pub struct PackageLoadingRequest {
+    /// The game's `loading.json`; its templates lie in the `loading/` directory beside it.
+    pub root_file: PathBuf,
+    /// The directory of pack directories, as `package bundle --packs-root`.
+    pub packs_root: PathBuf,
+    pub mode: PackageLoadingMode,
+}
+
+/// What `package loading` does once every check passed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageLoadingMode {
+    /// `--write`: writes every pack's copy that is not the one the root file makes.
+    Write,
+    /// `--write` under the global `--dry-run`: names the packs `--write` would write, and writes
+    /// nothing.
+    Preview,
+    /// `--check`: writes nothing, and refuses naming every pack whose copy is stale.
+    Check,
+}
+
+/// Workflow #407 LOAD-1: the answer of `package loading`.
+#[derive(Debug, Clone, Serialize)]
+pub struct PackageLoadingResponse {
+    /// `written`, `preview` or `checked`.
+    pub status: String,
+    pub game: String,
+    pub root_file: String,
+    /// The game's allowance for one confirmation, as the copies carry it.
+    pub max_ms: u64,
+    /// One entry per pack directory of `--packs-root`, in name order.
+    pub packs: Vec<PackLoadingReport>,
+}
+
+/// One pack of a `package loading` answer.
+#[derive(Debug, Clone, Serialize)]
+pub struct PackLoadingReport {
+    pub package_id: String,
+    pub server: String,
+    /// The loading pages its copy holds, in the root file's order; empty when it takes none.
+    pub pages: Vec<String>,
+    /// Whether the root file's `exclude_packages` names it.
+    pub excluded: bool,
+    pub state: PackLoadingState,
+}
+
+/// Where a pack's loading copy stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PackLoadingState {
+    /// Its copy is the one the root file makes (none, when it takes no page).
+    Current,
+    /// `--write` wrote it.
+    Written,
+    /// Under `--dry-run`: `--write` would write it.
+    Stale,
 }
 
 /// Workflow #373 NAV-T: `actinglab standard-pack check --root <game root>`, an installed game
@@ -52,7 +117,8 @@ pub struct StandardPackCheckResponse {
     pub status: String,
     pub root: String,
     pub game: String,
-    /// The root files the game root holds.
+    /// The root files the game root holds; (Workflow #407 LOAD-1) `loading.json` among them, last,
+    /// when it holds one.
     pub root_files: Vec<&'static str>,
     pub pack_count: usize,
     /// The report "entry page not in the list": one `package_bundle_entry_page_unlisted` per

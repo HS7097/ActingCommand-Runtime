@@ -126,6 +126,8 @@ const PACKAGE_FMT_FORMS: &[(&str, Mode)] = &[
     ("--check", Mode::NoEffect),
     ("without --check", UNSUPPORTED),
 ];
+// Workflow #407 LOAD-1: `--check` only reads; `--write` previews and writes nothing.
+const PACKAGE_LOADING_FORMS: &[(&str, Mode)] = &[("--check", Mode::NoEffect), ("--write", DRY_RUN)];
 const RECORD_FORMS: &[(&str, Mode)] = &[
     ("start", UNSUPPORTED),
     ("stop", DRY_RUN),
@@ -271,6 +273,7 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     ("record", Mode::Mixed(RECORD_FORMS)),
     ("session record", Mode::Mixed(RECORD_FORMS)),
     ("package fmt", Mode::Mixed(PACKAGE_FMT_FORMS)),
+    ("package loading", Mode::Mixed(PACKAGE_LOADING_FORMS)),
     // no_effect
     ("version", Mode::NoEffect),
     ("doctor", Mode::NoEffect),

@@ -1,18 +1,25 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use super::{CliError, CliOutcome, FlagArgs};
+use super::{CliError, CliOutcome, FlagArgs, GlobalOptions};
 use actingcommand_contract::BundleSource;
 use actingcommand_lab::{DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES, PackageBundleRequest};
-use actingcommand_resource_tooling::StandardPackRootFiles;
+use actingcommand_resource_tooling::{
+    PackageLoadingMode, PackageLoadingRequest, StandardPackRootFiles, package_loading,
+};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
+
+/// The flags of `package loading` (Workflow #407 LOAD-1).
+const LOADING_FLAGS: [&str; 4] = ["--root-file", "--packs-root", "--write", "--check"];
 
 /// Workflow #288 A2b: `package bundle --applications <file> --packs-root <directory> --out
 /// <directory>`, with `--source-repository` and `--source-commit` together or not at all; it
 /// writes bundle v4 (Workflow #336 PKG-S5). Workflow #373 NAV-T: `--pages`, `--interrupts` and
 /// `--navigation` name the standard-pack root files it checks, cross-checks and lays beside
 /// `bundle.json`; ROUT-L RL-1a: so does `--schedule` (`schedule.json`); Workflow #392 DA-4: and
-/// `--display-layout` (`display-layout.json`).
+/// `--display-layout` (`display-layout.json`). Workflow #407 LOAD-1: `--loading` names the
+/// game's `loading.json`: every pack's loading copy is checked against it, and it is laid beside
+/// `bundle.json` with its templates.
 pub(super) fn run_bundle(flags: &FlagArgs) -> CliOutcome<Value> {
     let maintenance = if flags.flags.contains_key("--maintenance") {
         use std::io::Read;
@@ -71,10 +78,60 @@ pub(super) fn run_bundle(flags: &FlagArgs) -> CliOutcome<Value> {
             navigation: root_file("--navigation")?,
             schedule: root_file("--schedule")?,
             display_layout: root_file("--display-layout")?,
+            loading: root_file("--loading")?,
         },
     };
     let mut lab = super::env_detection::build_readonly_lab()?;
     serialize_response(lab.package_bundle(request)?)
+}
+
+/// Workflow #407 LOAD-1: `package loading --root-file <loading.json> --packs-root <directory>
+/// (--write | --check)`, exactly one of the two. `--check` writes nothing; `--write` under the
+/// global `--dry-run` is a preview that writes nothing (`dry_run: true`, `written: false`).
+pub(super) fn run_loading(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
+    if let Some(flag) = flags
+        .flags
+        .keys()
+        .find(|flag| !LOADING_FLAGS.contains(&flag.as_str()))
+    {
+        return Err(CliError::usage(format!(
+            "package loading does not accept {flag}"
+        )));
+    }
+    flags.expect_positionals("package loading", 0)?;
+    for flag in LOADING_FLAGS {
+        if flags.flags.get(flag).is_some_and(|values| values.len() > 1) {
+            return Err(CliError::usage(format!(
+                "package loading takes {flag} once"
+            )));
+        }
+    }
+    for flag in ["--write", "--check"] {
+        if flags.flags.contains_key(flag) && !flags.bool(flag) {
+            return Err(CliError::usage(format!("{flag} takes no value")));
+        }
+    }
+    let mode = match (flags.bool("--write"), flags.bool("--check")) {
+        (true, false) if global.dry_run => PackageLoadingMode::Preview,
+        (true, false) => PackageLoadingMode::Write,
+        (false, true) => PackageLoadingMode::Check,
+        _ => {
+            return Err(CliError::usage(
+                "package loading takes exactly one of --write and --check",
+            ));
+        }
+    };
+    let response = package_loading(PackageLoadingRequest {
+        root_file: flags.required_path("--root-file")?,
+        packs_root: flags.required_path("--packs-root")?,
+        mode,
+    })?;
+    let mut data = serialize_response(response)?;
+    if mode == PackageLoadingMode::Preview {
+        data["dry_run"] = json!(true);
+        data["written"] = json!(false);
+    }
+    Ok(data)
 }
 
 fn serialize_response<T: Serialize>(response: T) -> CliOutcome<Value> {
