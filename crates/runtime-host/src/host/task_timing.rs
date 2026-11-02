@@ -289,6 +289,9 @@ pub(super) enum TaskAppend {
 pub(super) struct AppendStart {
     start: BoundaryStart,
     kind: TaskAppend,
+    /// Whether the commit's whole call is kept in its own `*_append` span. #407 PF-2: a
+    /// `RecognitionStarted` commit is not; its record's span covers it.
+    whole_call: bool,
 }
 
 impl TaskTimingObserver {
@@ -398,8 +401,25 @@ impl TaskTimingObserver {
                 identity,
             ),
             kind,
+            whole_call: true,
         }
     }
+
+    /// #407 PF-2 (register §1.252): one of `RecognitionStarted`'s two commits. Its stages count
+    /// in the family of `kind`, beside `RecognitionCompleted`'s commit of that kind; the
+    /// `*_append` span stays `RecognitionCompleted`'s alone, which keeps the started record's
+    /// share of a stage bounded by the two records' spans.
+    pub(super) fn begin_append_stages_only(
+        &self,
+        kind: TaskAppend,
+        identity: BoundaryIdentity,
+    ) -> AppendStart {
+        AppendStart {
+            whole_call: false,
+            ..self.begin_append(kind, identity)
+        }
+    }
+
     pub(super) fn begin_boundary(
         &self,
         boundary: TaskTimingBoundary,
@@ -524,20 +544,22 @@ impl TaskTimingObserver {
             Some((TaskTimingAppendStage::Pipeline, append.kind)),
             observation.pipeline,
         );
-        self.boundary_span(
-            start,
-            None,
-            AppendCallSpan {
-                present: true,
-                started: Some(start.started),
-                ended: Some(ended),
-                result: Some(if succeeded {
-                    TaskTimingResult::Ok
-                } else {
-                    TaskTimingResult::Err
-                }),
-            },
-        );
+        if append.whole_call {
+            self.boundary_span(
+                start,
+                None,
+                AppendCallSpan {
+                    present: true,
+                    started: Some(start.started),
+                    ended: Some(ended),
+                    result: Some(if succeeded {
+                        TaskTimingResult::Ok
+                    } else {
+                        TaskTimingResult::Err
+                    }),
+                },
+            );
+        }
     }
 
     fn ledger_span(

@@ -5905,6 +5905,26 @@ keys (SR-1, §1.23); with them it passes 256 at five instances. So D1b implement
 becomes one `config.parameters.<section>` fact per section (M387 §5.9), written and read that way
 from D1b on, and each section fact holds at most 256 rows.
 
+### 1.252 Slice PF-2 (0.12.37): `RecognitionStarted`'s two commits observed stage by stage, in the existing task timing shape (Workflow #407; design `rd-1031/check-speed/model-check.md` §3, §7, addendum item 3; coordinator work order `rd-1031/check-speed/brief-slices.md`)
+
+[task-diagnostic-stream.md](task-diagnostic-stream.md) is the contract. The number 1.252 is the coordinator's. **No new persisted shape, no outcome code, no configuration key, no interface revision.** The test: `recognition_started_stages_are_observed` (host gate row beside P-k1b).
+
+**Why.** The started record's span showed 39 to 155 ms a frame in the design's samples, with no stage timing on it; the design suspected a wait for `fact_write_gate`. Reading the path shows a second candidate the span cannot tell apart: `recognition.requested` is a pipeline event, so it also takes the `performance` lock after the gate is dropped.
+
+**What changes.** The arm's two commits go through `append_event_observed`, which is the same append with its stages observed. The records, their order, their links and every failure path stay; the kernel sees no change.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| PF2-1 | task timing evidence `boundaries.recognition_payload_stages`, `boundaries.recognition_task_stages` | existing members, wider meaning | PF-2 | PF-2 | they now hold `RecognitionStarted`'s commits beside `RecognitionCompleted`'s (`recognition.requested` in the first, `task.recognition_started` in the second), so `attempts` is started plus completed records; a value from before 0.12.37 is `RecognitionCompleted`'s alone and is not comparable per attempt. No component reads these members; an older reader decodes them unchanged, so the `ledger` revision stays |
+
+**Why not the design's new member `recognition_started_stages`.** The design named it. `TaskTimingBoundaryObservations` denies unknown members, so a member added there is a record an earlier reader refuses, which by [component-interfaces.md](component-interfaces.md) ("Bump rule") raises `ledger` to 6: a rollback to 0.12.36 refused and the console's contract pin moved, for an observation. The existing families answer the question: a started commit's stage is bounded by the record spans ([task-diagnostic-stream.md](task-diagnostic-stream.md)), and the two records' spans differed by ten times in both directions in the design's samples, so the bound is close where it matters. A later exact split per record would be that member, with that revision.
+
+**What it does not do.** It shows the wait; it does not name the holder. A stage's `max_us` against its `total_us / attempts`, set beside the same commit's own `writer_response` and `fact_sync` (what one append holds the gate for), tells a queue of ordinary appends from one long holder. `writer` stays one snapshot, replaced on every commit, so it is usually `RecognitionCompleted`'s.
+
+**The golden.** `apps/actinglab/tests/golden/expected.json`: `attempts` 1 to 2 in the spans of the two families, nothing else. Written by hand, because no build runs on the authoring machine; CI compares it.
+
+**Rollback** (to 0.12.36). Nothing to do; the members decode as before.
+
 ## 6 Interface revisions (declared once for v0.12.0 by #378 A8, ORD §3.6)
 
 Declared in `distribution/windows/component-interfaces.json`; the meaning of each revision and

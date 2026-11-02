@@ -85,6 +85,20 @@ call), `device_diagnostics`, `fact_sync` (including required invalidation), and
 An original error completes the entered observations before it propagates;
 later, unentered stages remain Unobserved.
 
+Since 0.12.37 (#407 PF-2, [register §1.252](v012-register.md)) the two families
+`recognition_payload_stages` and `recognition_task_stages` also hold the two
+ordered RecognitionStarted commits: `recognition.requested` in the first and
+`task.recognition_started` in the second, each with the started record's frame
+and the recognition's id. A family's `attempts` is therefore started records plus
+completed records. `recognition_payload_append` and `recognition_task_append` stay
+RecognitionCompleted's alone, and `recognition_started_record` still covers the
+started arm. One family holds one stage of both records and does not split them;
+the started record's share of a stage is bounded by the record spans: at most
+`recognition_started_record`, and at least that stage's total over the two families
+less `recognition_payload_append` and `recognition_task_append`. A
+`first_observed_expiry` in a started commit's stage names the family's
+`*_append` boundary with that `append_stage`.
+
 The same Ledger append reply transports process-local endpoints for `ledger_queue`
 (immediately before sending through writer receipt), `ledger_persistence` (writer
 receipt through backend persist return, including validation/preparation), and
