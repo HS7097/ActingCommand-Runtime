@@ -5944,6 +5944,25 @@ dropped with its record; a file that does not name them is read as before.
 
 **Tests:** the seven of §10 AGT-T2, in the crate's own test module on a scripted frame source (host gate row "AGT-T2"). No test opens a pipe.
 
+### 1.256 Slice AGT-T3 (0.12.37): the DSH transport (Workflow #432; design `rd-1031/agt/model-agt-v2.md` §5.2, §6.1, §6.5, §6.7, §7.2, §10, §11; coordinator work order `rd-1031/agt/brief-agt-t3.md`)
+
+[agent-forward.md](agent-forward.md), section "DSH", is the contract. Number 1.256 is the coordinator's. **No ledger shape, wire shape, outcome code, configuration key or interface revision changes;** the rows record a DSH send with the neutral words §1.246 already has.
+
+**What changes live.** Nothing until a person registers a DSH channel. Before this slice such a channel waited `deferred` (`ipc_unavailable`) and expired at give-up; now `RealForward` hands its message to the embedded helper.
+
+**Rollback** (to a build without this slice). Nothing persisted is new: a DSH channel's registry line has §1.247's shape, and the older build lets its messages wait `deferred` (`ipc_unavailable`). A row left `sending` is `unknown` after the restart, as for every client.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| AGTT3-1 | the DSH arm of `RealForward` (`crates/agent-forward`, Windows) | new behaviour of AGTT1-5 | AGT-T3 | the agent wake worker | `check`, then the intent, then one `send`; `delivered` with proof `recorded` |
+| AGTT3-2 | `crates/agent-forward/src/dsh_notify.mjs`, input and answer of schema `dsh-native-notification/v1` | embedded helper program | AGT-T3 | — | run as `<node> --input-type=module -e`; adapted MIT source without its `observe` mode; reads `.web-url` and the cookies itself and removes them from its errors |
+| AGTT3-3 | a DSH message's request id and RPC id: SHA-256 of the wake id and a fixed label, as UUIDs of version 8 | derived identity | AGT-T3 | — | the same for every try of one message; never stored |
+| AGTT3-4 | `agent-channel add --client dsh` refuses a native id outside one DSH session id | narrowed rule of AGTT1-1 | AGT-T3 | — | a letter or a digit, then letters, digits, `-` or `_`, 256 bytes at most; the three absolute paths were already required by the registry (AGT-1a) |
+| AGTT3-5 | `crates/agent-forward`: dependency `sha2` (workspace) | new dependency | AGT-T3 | — | no new third-party crate in the workspace; no `unsafe` in `dsh` or `process` |
+| AGTT3-6 | `NOTICE.md`, the codex-goal-lifecycle section | licence notice | AGT-T3 | — | three more source files, two more destinations |
+
+**Departures from the design** (each is in the contract): one deadline covers the `check` and the `send`, which the adapted source gave a full wait each, and the `send` is not started with under 2 s left; the problem words of an `unknown` send (`write_timed_out` at the deadline, `write_failed` at a stop, `helper_failed` for an unreadable answer, `receipt_mismatch` for other ids and every partial proof) are this slice's choice, since the design names only the state; a helper that cannot start after the intent is `failed`, since it never ran; the helper runs in the app root, so it holds no directory of the installation; the adapted source's unit test of the helper is not carried, since CI runs no Node.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

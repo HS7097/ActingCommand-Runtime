@@ -7,9 +7,9 @@
 //! It holds the [`AgentForward`] trait with its neutral types, the [`Unavailable`] implementation,
 //! [`FakeForward`] behind `test-support`, the channel registry's shape and validation
 //! ([`channels`]), and, on Windows, [`RealForward`] with its transports (Claude Code, AGT-T1; Codex,
-//! AGT-T2; `contracts/agent-forward.md`) and the `actingctl agent-channel` commands ([`cli`]). It is
-//! the only crate that names a client, and every type the trait answers with is neutral, so its
-//! callers never need a client word.
+//! AGT-T2; DSH, AGT-T3; `contracts/agent-forward.md`) and the `actingctl agent-channel` commands
+//! ([`cli`]). It is the only crate that names a client, and every type the trait answers with is
+//! neutral, so its callers never need a client word.
 //!
 //! `unsafe` is allowed in three modules only, `pipe`, `dpapi` and `ancestor`.
 
@@ -35,11 +35,15 @@ mod codex;
     reason = "the DPAPI calls and the volatile zeroing of this module"
 )]
 mod dpapi;
+#[cfg(windows)]
+mod dsh;
 #[cfg(any(test, feature = "test-support"))]
 mod fake;
 #[cfg(windows)]
 #[allow(unsafe_code, reason = "the overlapped named pipe calls of this module")]
 mod pipe;
+#[cfg(windows)]
+mod process;
 
 #[cfg(any(test, feature = "test-support"))]
 pub use fake::{FakeForward, FakeSend, fake_registry_text};
@@ -211,6 +215,7 @@ pub struct RealForward {
     state_root: std::path::PathBuf,
     claude: claude::ClaudeForward,
     codex: codex::CodexForward,
+    dsh: dsh::DshForward,
 }
 
 #[cfg(windows)]
@@ -221,6 +226,7 @@ impl RealForward {
         Self {
             claude: claude::ClaudeForward::new(state_root.clone()),
             codex: codex::CodexForward::new(),
+            dsh: dsh::DshForward::new(),
             state_root,
         }
     }
@@ -265,7 +271,10 @@ impl AgentForward for RealForward {
                 self.codex
                     .deliver(&channel.native_id, message, limits, before_write)
             }
-            channels::ChannelClient::Dsh | channels::ChannelClient::Antigravity => {
+            channels::ChannelClient::Dsh => {
+                self.dsh.deliver(channel, message, limits, before_write)
+            }
+            channels::ChannelClient::Antigravity => {
                 ForwardOutcome::Deferred {
                     reason: DeferReason::IpcUnavailable,
                     detail: "this build has no transport for this channel's client".to_owned(),

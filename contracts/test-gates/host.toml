@@ -3097,3 +3097,17 @@ tests = [
     "actingcommand-agent-forward::lib::codex::client::tests::discovery_requests_are_answered_cannot_handle",
 ]
 incident = ["#432 AGT-T2"]
+
+# AGT-T3 (Workflow #432, 0.12.37; design rd-1031/agt/model-agt-v2.md sections 6.5 and 10; register section 1.256; contracts/agent-forward.md): a check that is not ready waits with no intent; recorded with this message's ids is delivered; not_submitted and rejected fail; everything else after the intent is unknown and never sent again; a stuck helper is killed at a deadline the test controls; output over a bound is helper_failed; a session id outside the shape is refused by agent-channel add and by the send. The helper is a stand-in, this test binary run again, with invented ids and paths; no test starts Node.
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-agent-forward::lib::dsh::tests::check_not_ready_is_deferred_before_intent",
+    "actingcommand-agent-forward::lib::dsh::tests::recorded_with_matching_ids_is_delivered",
+    "actingcommand-agent-forward::lib::dsh::tests::not_submitted_and_rejected_fail",
+    "actingcommand-agent-forward::lib::dsh::tests::everything_else_after_intent_is_unknown",
+    "actingcommand-agent-forward::lib::dsh::tests::a_stuck_helper_is_killed_at_its_deadline",
+    "actingcommand-agent-forward::lib::dsh::tests::helper_output_over_its_bound_is_helper_failed",
+    "actingcommand-agent-forward::lib::dsh::tests::session_ids_outside_the_shape_are_refused",
+]
+incident = ["#432 AGT-T3"]
