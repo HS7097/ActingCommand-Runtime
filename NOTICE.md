@@ -6,6 +6,16 @@ This split repository was created from the local ActingCommand workspace. It con
 
 No upstream automation source code has been copied into this repository as part of the split.
 
+## Source code adapted from other projects
+
+### codex-goal-lifecycle
+
+- Source project: `HS7097/codex-goal-lifecycle`, commit `c9538cc5`, `scripts/runtime/src/bridge/claude.rs` and `scripts/runtime/src/bridge/security.rs`.
+- License: MIT, `Copyright (c) 2026 HS7097`.
+- License text: `crates/agent-forward/LICENSE-codex-goal-lifecycle.txt`; each adapted file says so at its top. Windows binaries print it with `actingctl agent-channel notice`.
+- Local destination: `crates/agent-forward/src/claude.rs`, `dpapi.rs`, `ancestor.rs`.
+- Purpose: the method of writing a short message to a Claude Code session's local inbox, the DPAPI protection of that session's token and the process ancestry and user checks (Workflow #432 AGT-T1; `contracts/agent-forward.md`). The sentence above about the split stays true: this was copied later, under this notice.
+
 ## Included external tool binaries
 
 ### MaaTouch

@@ -4,17 +4,40 @@
 //! words of 2026-11-02: it is a function of the Runtime, with a fixed header naming a registered
 //! channel).
 //!
-//! AGT-1a holds the skeleton only: the [`AgentForward`] trait with its neutral types, the
-//! [`Unavailable`] implementation that answers until a transport exists, [`FakeForward`] behind
-//! `test-support`, and the channel registry's shape and validation ([`channels`]). This crate
-//! opens no pipe and starts no process yet. It is the only crate that names a client, and every
-//! type the trait answers with is neutral, so its callers never need a client word.
+//! It holds the [`AgentForward`] trait with its neutral types, the [`Unavailable`] implementation,
+//! [`FakeForward`] behind `test-support`, the channel registry's shape and validation
+//! ([`channels`]), and, on Windows, [`RealForward`] with its first transport (Claude Code, AGT-T1;
+//! `contracts/agent-forward.md`) and the `actingctl agent-channel` commands ([`cli`]). It is the only
+//! crate that names a client, and every type the trait answers with is neutral, so its callers never
+//! need a client word.
+//!
+//! `unsafe` is allowed in three modules only, `pipe`, `dpapi` and `ancestor`.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
+#![deny(unsafe_op_in_unsafe_fn)]
 
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "the Win32 process and token calls of this module"
+)]
+mod ancestor;
 pub mod channels;
+#[cfg(windows)]
+mod claude;
+#[cfg(windows)]
+pub mod cli;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "the DPAPI calls and the volatile zeroing of this module"
+)]
+mod dpapi;
 #[cfg(any(test, feature = "test-support"))]
 mod fake;
+#[cfg(windows)]
+#[allow(unsafe_code, reason = "the overlapped named pipe calls of this module")]
+mod pipe;
 
 #[cfg(any(test, feature = "test-support"))]
 pub use fake::{FakeForward, FakeSend};
@@ -169,6 +192,71 @@ impl AgentForward for Unavailable {
         ForwardOutcome::Deferred {
             reason: DeferReason::IpcUnavailable,
             detail: "this build has no transport".to_owned(),
+        }
+    }
+}
+
+/// The production forwarder: it looks up the channel in the registry for each send and hands the
+/// message to the channel's client. A client with no transport in this build waits, with no write.
+#[cfg(windows)]
+pub struct RealForward {
+    state_root: std::path::PathBuf,
+    claude: claude::ClaudeForward,
+}
+
+#[cfg(windows)]
+impl RealForward {
+    /// The forwarder of the registry and the live records under `state_root`.
+    pub fn new(state_root: impl Into<std::path::PathBuf>) -> Self {
+        let state_root = state_root.into();
+        Self {
+            claude: claude::ClaudeForward::new(state_root.clone()),
+            state_root,
+        }
+    }
+}
+
+#[cfg(windows)]
+impl AgentForward for RealForward {
+    fn send(
+        &self,
+        channel: &str,
+        message: &ForwardMessage,
+        limits: &SendLimits<'_>,
+        before_write: &mut dyn FnMut() -> Result<(), IntentFailed>,
+    ) -> ForwardOutcome {
+        let registry = match channels::read_registry(&self.state_root) {
+            Ok(Some(registry)) => registry,
+            Ok(None) => {
+                return ForwardOutcome::Deferred {
+                    reason: DeferReason::RegistryUnreadable,
+                    detail: "no channel registry exists".to_owned(),
+                };
+            }
+            Err(failure) => {
+                return ForwardOutcome::Deferred {
+                    reason: DeferReason::RegistryUnreadable,
+                    detail: format!("the channel registry is unreadable: {failure:?}"),
+                };
+            }
+        };
+        let Some(channel) = registry.channel(channel) else {
+            return ForwardOutcome::Failed {
+                problem: DeliveryProblem::ChannelUnknown,
+                detail: "the registry has no channel of this name".to_owned(),
+            };
+        };
+        match channel.client {
+            channels::ChannelClient::Claude => {
+                self.claude
+                    .deliver(&channel.native_id, message, limits, before_write)
+            }
+            channels::ChannelClient::Codex
+            | channels::ChannelClient::Dsh
+            | channels::ChannelClient::Antigravity => ForwardOutcome::Deferred {
+                reason: DeferReason::IpcUnavailable,
+                detail: "this build has no transport for this channel's client".to_owned(),
+            },
         }
     }
 }

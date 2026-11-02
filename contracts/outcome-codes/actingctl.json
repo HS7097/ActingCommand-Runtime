@@ -2938,6 +2938,34 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "agent_channel_reported": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.37",
+      "description": "actingctl agent-channel did its work on the channel registry or a session's live record: a channel added, removed or listed, or a running session registered; the result line holds what changed or the channels. Nothing goes to the Runtime or its ledger (Workflow #432 AGT-T1; contracts/agent-forward.md).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
+    "agent_channel_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actingctl",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.37",
+      "description": "actingctl agent-channel did not do its work: the registry or a record could not be read or written, a channel was refused, or a registered session's hook or registration lacked what it needs. The developer line says which, and never holds a credential. A registered session's failed hook prints only that line and exits 2 (Workflow #432 AGT-T1; contracts/agent-forward.md).",
+      "common_causes": "TBD",
+      "handling": "TBD"
+    },
     "actingctl_capability_gap_write_failed": {
       "category": "error",
       "ladder_class": "none",

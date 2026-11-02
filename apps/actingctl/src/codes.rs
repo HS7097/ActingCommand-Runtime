@@ -146,6 +146,11 @@ actingcommand_contract::outcome_codes! {
         ActingctlCapabilityGapRecorded => "actingctl_capability_gap_recorded": success / none,
         ActingctlCapabilityGapWriteFailed => "actingctl_capability_gap_write_failed": error / none,
         // ---- end of #410 item 6
+        // ---- Workflow #432 AGT-T1: `agent-channel`, one code for its results and one for its
+        // failures; the text of a failure is the developer line's.
+        AgentChannelReported => "agent_channel_reported": success / none,
+        AgentChannelFailed => "agent_channel_failed": error / none,
+        // ---- end of AGT-T1
         // ---- Workflow #378 A5 (begin): the CLI's success codes (model §7.3), the MCP
         // transport and Lab codes, and the watchdog's report v2 and launcher codes (§7.5).
         AgentFactsPublished => "agent_facts_published": success / none,
