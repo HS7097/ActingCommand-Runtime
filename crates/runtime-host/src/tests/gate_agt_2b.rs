@@ -458,7 +458,7 @@ fn the_summary_body_holds_the_routine_summary_and_the_days_wakes() {
     };
     assert_eq!(
         summary["runtime"]["owner_epoch"],
-        serde_json::to_value(&report.owner_epoch).expect("the epoch")
+        serde_json::to_value(report.owner_epoch).expect("the epoch")
     );
     assert_eq!(
         summary["runtime"]["started_at_unix_ms"],
