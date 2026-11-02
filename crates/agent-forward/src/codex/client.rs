@@ -237,7 +237,7 @@ fn uuid_bytes(text: &str) -> Option<[u8; 16]> {
     }
     let digit = |byte: u8| char::from(byte).to_digit(16);
     let mut bytes = [0_u8; 16];
-    for (at, pair) in digits.chunks_exact(2).enumerate() {
+    for (at, pair) in digits.as_chunks::<2>().0.iter().enumerate() {
         bytes[at] = u8::try_from((digit(pair[0])? << 4) | digit(pair[1])?).ok()?;
     }
     Some(bytes)
