@@ -29,7 +29,7 @@ const DEVICE: DeviceBounds = DeviceBounds {
 };
 
 // §15 `tag.workbench_patterns`.
-const WORKBENCH_PATTERNS: [&str; 12] = [
+const WORKBENCH_PATTERNS: [&str; 13] = [
     "task.*.last_duration_ms",
     "task.*.last_outcome",
     "task.*.failure_streak",
@@ -42,6 +42,7 @@ const WORKBENCH_PATTERNS: [&str; 12] = [
     "host.config_overrides",
     "host.contained_settlement",
     "host.idle_state",
+    "host.agent_wake",
 ];
 // §15 `tag.reobserve_prefixes`.
 const REOBSERVE_PREFIXES: [&str; 10] = [

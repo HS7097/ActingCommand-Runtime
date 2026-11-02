@@ -97,6 +97,8 @@ the `execution` section below (default `file`, settable). Workflow #392 DA-4b-D'
 rows: the `host` section below (string `normal` | `low`, default `file`, not settable: applied
 before the ledger opens; since 0.12.28). STORE-FG-2's row: the `store_foreground` section below
 (list, default `file` `[]`, not settable: only the configuration file widens it; since 0.12.29).
+Workflow #432 AGT-1a's rows: the `agent_wake` section below (default `none` on every row: whole or
+absent; since 0.12.37).
 A manifest key the table does not have fails
 the start (`config_key_unknown`). The manifest lists the exact keys in row order
 (`recovery_ladder`, `host_claims`, `standard_packs`, `performance`, `scheduling`,
@@ -1220,6 +1222,17 @@ its run starts, and each of its store taps is sent, only while this list names t
   16 entries or an entry that is no Android package name, `out_of_range`; an entry listed twice,
   or an entry equal to a configured instance's `application_id` (a game is never its own store),
   `section_check`.
+
+## The `agent_wake` section (Workflow #432 AGT-1a)
+
+[agent-wake.md](agent-wake.md) is the section's contract: its 19 keys, its ranges and its refusals.
+Every row's default is `none`, so the section is whole or absent: neither code nor the defaults file
+holds a value of it, a file that does not name it reports no row, and `ConfigureSettings` then
+answers `config_key_unknown`. Settable, read at the next use: every key but `body.dir` and
+`delivery.queue_capacity`, which the assembly reads once. A broken rule is
+`agent_wake_config_invalid` (`config_key`, `config_value_problem`) at start and in `check-config`,
+and `config_value_invalid` with the same key and problem through an instruction. The rows are
+reported in `config.parameters.agent_wake`, and the keys are `hidden` in the console's tiers.
 - The Runtime compares package ids for equality only; no store is named in code, defaults or
   tests. The operator adds the official store's package id once Alice confirmed it (question 95).
 
@@ -1421,8 +1434,9 @@ Owner `runtime-config`: `config_key_unknown`, `config_key_not_settable`, `config
 `config_override_superseded`, `config_override_base_changed`, `config_override_dropped`,
 `recovery_ladder_config_invalid` and `recovery_ladder_code_unclassified` (D1c emits them),
 `blackout_config_invalid` (registered by SR-0; host blackout entries are parsed in this crate,
-so the code moved here; SR-1 emits it at start and in `check-config`) and `perf_config_invalid`
-(Workflow #385 P-c; domain `perf_`). Owner `runtime-host`:
+so the code moved here; SR-1 emits it at start and in `check-config`), `perf_config_invalid`
+(Workflow #385 P-c; domain `perf_`) and `agent_wake_config_invalid` (Workflow #432 AGT-1a; domain
+`agent_`). Owner `runtime-host`:
 `host_config_overrides_fact_invalid`, `host_config_overrides_persist_failed`,
 `host_config_overrides_fact_clock_overflow`, `host_config_value_type_invalid`, and (Workflow
 #429 R-4, reused, since 0.12.36) the shared `fact_observation_version_conflict` with `fact_key`
