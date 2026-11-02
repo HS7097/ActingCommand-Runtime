@@ -566,6 +566,13 @@ impl EffectiveConfig {
         CaptureCadenceConfig::parse(&|key: &str| self.value_or_shipped(key))
     }
 
+    /// STILL-1: `execution.capture.still_limit_ms` in effect for the instance whose registry id is
+    /// `instance_id`, its own when the configuration carries one, otherwise the section's; 0 is
+    /// off. The host hands it to the kernel with each step's pacing.
+    pub fn still_limit_ms(&self, instance_id: &str) -> Result<u64, ConfigFailure> {
+        execution::instance_still_limit_ms(&|key: &str| self.value_or_shipped(key), instance_id)
+    }
+
     /// Workflow #386 SR-1: `scheduling.recognition.sample_timeout_retries` in effect, the base
     /// number of observe-only retries the host hands the kernel at each step.
     pub fn sample_timeout_retries(&self) -> Result<u32, ConfigFailure> {
@@ -882,6 +889,10 @@ impl EffectiveConfig {
         }
         if sections.contains(execution::SECTION) {
             self.capture_cadence()?;
+            execution::still_limit_ms(
+                &|key: &str| self.value_or_shipped(key),
+                execution::CAPTURE_STILL_LIMIT_MS,
+            )?;
         }
         if sections.contains(idle::SECTION) {
             self.idle_section()?;

@@ -1070,25 +1070,39 @@ impl HostShared {
     }
 
     /// PERF-B1 (Workflow #407 B1): the `execution.capture` keys in effect, read at each step of a
-    /// contained run and handed to the kernel with the step's pacing.
+    /// contained run and handed to the kernel with the step's pacing. STILL-1 (register §1.249):
+    /// with the still limit in effect for the run's instance
+    /// (`EffectiveConfig::still_limit_ms` by its registry id; an alias the registry does not hold
+    /// takes the section's key).
     pub(super) fn capture_cadence(
         &self,
+        instance_alias: &str,
     ) -> RuntimeHostResult<actingcommand_execution_kernel::CaptureCadence> {
-        let cadence = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
-            .capture_cadence()
-            .map_err(|failure| {
-                RuntimeHostError::fatal(
-                    failure.failure_code(),
-                    ConfigHostLocation::ReadRuntimeConfig,
-                    RuntimeErrorCode::RuntimeHalted,
-                )
-                .with_outcome_values(|outcome| failure.with_values(outcome))
-            })?;
+        let instance_id = lock(
+            &self.registered_instances,
+            ConfigHostLocation::ReadRuntimeConfig,
+        )?
+        .values()
+        .find(|instance| instance.instance_alias == instance_alias)
+        .map(|instance| crate::failure_identity::identifier_text(&instance.instance_id));
+        let config = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?;
+        let cadence = config.capture_cadence().map_err(|failure| {
+            RuntimeHostError::fatal(
+                failure.failure_code(),
+                ConfigHostLocation::ReadRuntimeConfig,
+                RuntimeErrorCode::RuntimeHalted,
+            )
+            .with_outcome_values(|outcome| failure.with_values(outcome))
+        })?;
+        let still_limit_ms = config
+            .still_limit_ms(instance_id.as_deref().unwrap_or(instance_alias))
+            .map_err(remedy_config_failure)?;
         Ok(actingcommand_execution_kernel::CaptureCadence::new(
             cadence.max_interval_ms,
             cadence.backoff_enabled,
             cadence.idle_ceiling_ms,
-        ))
+        )
+        .with_still_limit_ms(still_limit_ms))
     }
 
     /// Records one configuration fact, observed now and strictly after the stored record of its
