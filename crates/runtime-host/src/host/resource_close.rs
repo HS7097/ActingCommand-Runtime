@@ -1469,7 +1469,13 @@ impl HostShared {
                 )?;
                 let failure =
                     RuntimeHostError::execution(HostLocation::OpenInstanceBackends, &error);
-                if error.resource_quiescence().is_some() {
+                // The open's failure record keeps its resource dispositions. #402 HS-3 (register
+                // §1.271): a paired open the registry refused for want of an application index
+                // acquired nothing, so it has none; its record is still written, since only it
+                // names the refusal (`nemu_app_index_missing` with `nemu_app_index_problem`).
+                if error.resource_quiescence().is_some()
+                    || error.failure_context().nemu_app_index_problem().is_some()
+                {
                     self.append_lifecycle_failure(
                         RuntimeLifecycleFailureStage::ConnectionPreparation,
                         RuntimeLifecycleFailure::Host(&failure),

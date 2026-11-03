@@ -47,6 +47,43 @@ impl NemuApplicationTarget {
             app_index,
         })
     }
+
+    /// #402 HS-3: the application index the paired session looks the package's display up with.
+    pub const fn app_index(&self) -> NemuAppIndex {
+        self.app_index
+    }
+}
+
+/// #402 HS-3 (design HS-M §4.1 item 3): the `MuMuManager.exe` and the MuMu index through which a
+/// paired open of `capture` reads its application's state, for an instance without a discovery
+/// binding: the MuMu root the capture's own resolution finds and the one `MuMuManager.exe` under
+/// it (as the paired open's version check finds it), and the index the capture names or derives
+/// from its target's port by the base-port rule. Resolves paths only; dispatches nothing.
+pub fn nemu_application_state_source(
+    capture: &CaptureBackendConfig,
+) -> DeviceResult<(std::path::PathBuf, u16)> {
+    let prepared = prepare_capture_backend_config(capture.clone())?;
+    if let Some(reason) = &prepared.nemu.mumu_identity_unavailable {
+        return Err(DeviceError::fatal(reason.message.clone()));
+    }
+    let root = prepared
+        .nemu
+        .nemu_folder
+        .as_ref()
+        .ok_or_else(|| DeviceError::fatal("Nemu input installation identity is missing"))?;
+    let manager = mumu_manager_in_root(root)?;
+    let index = prepared
+        .nemu
+        .instance_id
+        .or_else(|| serial_to_nemu_instance_id(&prepared.target.adb_arg()))
+        .and_then(|index| u16::try_from(index).ok())
+        .ok_or_else(|| {
+            DeviceError::fatal(format!(
+                "cannot derive the MuMu instance index from target {}",
+                prepared.target.label()
+            ))
+        })?;
+    Ok((manager, index))
 }
 
 #[derive(Debug, Clone)]
@@ -1096,18 +1133,24 @@ fn input_wait(
     }
 }
 
-fn require_input_version(root: &Path, timeout: Duration) -> DeviceResult<()> {
+/// The one `MuMuManager.exe` under a MuMu root (`nx_main`, or the legacy `shell`).
+fn mumu_manager_in_root(root: &Path) -> DeviceResult<std::path::PathBuf> {
     let candidates = [
         root.join("nx_main/MuMuManager.exe"),
         root.join("shell/MuMuManager.exe"),
     ];
-    let managers: Vec<_> = candidates.iter().filter(|path| path.is_file()).collect();
-    if managers.len() != 1 {
-        return Err(DeviceError::fatal(
+    let mut managers = candidates.into_iter().filter(|path| path.is_file());
+    match (managers.next(), managers.next()) {
+        (Some(manager), None) => Ok(manager),
+        _ => Err(DeviceError::fatal(
             "Nemu input requires one matching MuMuManager installation",
-        ));
+        )),
     }
-    let manager = managers[0];
+}
+
+fn require_input_version(root: &Path, timeout: Duration) -> DeviceResult<()> {
+    let manager = mumu_manager_in_root(root)?;
+    let manager = manager.as_path();
     let output = crate::adb::run_text_in_directory_with_timeout(
         manager
             .to_str()

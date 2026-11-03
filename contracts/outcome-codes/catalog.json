@@ -1725,6 +1725,10 @@
       "type": "vocab:backend_switch_problem",
       "description": "Why backend_switch_refused did not switch an instance's touch and capture backends (#402 HS-2)."
     },
+    "nemu_app_index_problem": {
+      "type": "vocab:nemu_app_index_problem",
+      "description": "Why nemu_app_index_missing found no Nemu application index for a paired Nemu open whose configuration names none (#402 HS-3)."
+    },
     "device_hold": {
       "type": "vocab:device_hold",
       "description": "What holds a handset (Workflow #398 RD-5b)."
@@ -6072,6 +6076,23 @@
         },
         "restore_failed": {
           "description": "The new backends did not open, and the previous backends did not open again either: the instance is unavailable and no other instance is touched. The causes are both failures."
+        }
+      }
+    },
+    "nemu_app_index_problem": {
+      "description": "Why a paired Nemu open of an instance whose configuration names no nemu_app_index resolved none from MuMuManager's read of the application's state, control -v <index> app info -pkg <package> (#402 HS-3, design HS-M section 4.1).",
+      "tokens": {
+        "package_not_installed": {
+          "description": "MuMuManager reports the instance's application package not installed (state not_installed)."
+        },
+        "application_not_running": {
+          "description": "MuMuManager reports the package installed and not running (state stopped): the paired session looks the package's display up, which an application that is not running has none of."
+        },
+        "info_unavailable": {
+          "description": "The read gave no answer: no MuMuManager to read through, a run that failed or passed its 10 s bound, a non-zero exit or an errcode envelope."
+        },
+        "info_malformed": {
+          "description": "MuMuManager answered something other than the documented document: not UTF-8, not JSON, over the output bound, or no state among running, stopped and not_installed."
         }
       }
     },

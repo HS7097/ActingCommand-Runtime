@@ -508,6 +508,24 @@ pub struct CaptureOpenFailure {
     pub instance_index: Option<i64>,
 }
 
+/// #402 HS-3 (design HS-M §4.1): why a paired Nemu open found no application index to open with,
+/// when the configuration names none and the Runtime read the application's state from
+/// `MuMuManager` (`control -v <index> app info -pkg <package>`) to resolve one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NemuAppIndexProblem {
+    /// `MuMuManager` reports the package not installed on the instance.
+    PackageNotInstalled,
+    /// `MuMuManager` reports the package installed but not running: the paired session looks
+    /// its display up by package, which a stopped application has none of.
+    ApplicationNotRunning,
+    /// The read gave no answer: no `MuMuManager` to read through, a failed or expired run, a
+    /// non-zero exit or an error envelope.
+    InfoUnavailable,
+    /// The read answered something other than the documented document (not UTF-8, not JSON,
+    /// over the output bound, or no known `state`).
+    InfoMalformed,
+}
+
 #[derive(Clone)]
 enum StoredDiagnosticMessage {
     Fixed(DeviceErrorDiagnosticMessage),
@@ -610,6 +628,8 @@ struct StoredDeviceEvidence {
     capture_open: Option<CaptureOpenFailure>,
     /// ISO-2b (#419 R1, ISO-M row E08): why the input's operation check stopped it.
     input_check_stop: Option<crate::InputCheckStop>,
+    /// #402 HS-3: why a paired Nemu open found no application index.
+    nemu_app_index_problem: Option<NemuAppIndexProblem>,
 }
 
 impl DeviceError {
@@ -646,6 +666,22 @@ impl DeviceError {
         self.evidence
             .as_deref()
             .and_then(|evidence| evidence.capture_open.as_ref())
+    }
+
+    /// #402 HS-3: this error as the refusal of a paired Nemu open that found no application
+    /// index, for `problem`.
+    pub fn with_nemu_app_index_problem(mut self, problem: NemuAppIndexProblem) -> Self {
+        self.evidence
+            .get_or_insert_with(Default::default)
+            .nemu_app_index_problem = Some(problem);
+        self
+    }
+
+    /// #402 HS-3: why the paired Nemu open this error refused found no application index.
+    pub fn nemu_app_index_problem(&self) -> Option<NemuAppIndexProblem> {
+        self.evidence
+            .as_deref()
+            .and_then(|evidence| evidence.nemu_app_index_problem)
     }
 
     pub(crate) fn with_input_parameters(

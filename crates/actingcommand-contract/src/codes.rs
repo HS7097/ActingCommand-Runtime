@@ -372,7 +372,6 @@ crate::outcome_codes! {
         NavigationDestructiveOverlap => "navigation_destructive_overlap": error / declaration_error,
         NavigationPageDrift => "navigation_page_drift": error / pack_logic_mismatch,
         NavigationTargetNotVisible => "navigation_target_not_visible": error / pack_logic_mismatch,
-        NemuAppIndexRequiresPairedInput => "nemu_app_index_requires_paired_input": error / none,
         NemuInputFrameRequired => "nemu_input_frame_required": error / none,
         NotImplemented => "not_implemented": error / none,
         // OCR-CONF (R-11): the kernel fails a fields task with it, the client reads it as a

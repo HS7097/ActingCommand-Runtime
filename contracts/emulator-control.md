@@ -341,6 +341,33 @@ refuses with `emulator_control_binding` (host code `emulator_control_unavailable
 surface keeps the trait default `emulator_control_support`
 (`emulator_control_unsupported`). No device session is opened or touched by the registry path.
 
+## Application state read
+
+#402 HS-3 ([v012-register.md](v012-register.md) §1.271; since 0.12.39). The one MuMuManager call
+outside discovery, emulator control and the state reads above:
+`actingcommand-device::mumu_manager::read_application_state(manager_path, index, package)`
+dispatches `MuMuManager.exe control -v <index> app info -pkg <package>` (no console window), which
+the vendor's command reference documents as the query of one application's state, answering
+`{"state": "running" | "stopped" | "not_installed"}`. It runs only before a paired Nemu session
+opens (touch and capture `nemu_ipc`) whose configuration names no `nemu_app_index` and that holds
+no resolution yet ([device-binding.md](device-binding.md), "Backends"): at most once per emulator
+start in practice, never for a handset, never for any other backend, never while a resolution is
+kept.
+
+- Bounded by `MUMU_MANAGER_COMMAND_TIMEOUT` = 10 s like every read here, requiring exit 0 and
+  strict UTF-8 JSON (`run_json`): a spawn failure is `mumu_manager_run`, an expired bound
+  `mumu_manager_timeout`, a non-zero exit `mumu_manager_exit`, an `{"errcode","errmsg"}` envelope
+  with `errcode != 0` `mumu_manager_errcode`; output that is not UTF-8, not JSON or over the bound
+  is `mumu_manager_decode`, `_json` or `_output_bound`, and any other document (a `state` of
+  another value included) `mumu_manager_shape`. The first group is `info_unavailable`, the second
+  `info_malformed` (`nemu_app_index_problem`).
+- The sibling `control -v <index> app info -i` and every mutating `control ... app` subcommand are
+  never dispatched.
+- The vendor publishes the call's syntax and one example answer only, not its behaviour on errors
+  or while the instance starts, so its first real use is checked on an experimental instance before
+  production runs it (#402, the coordinator's answer Q3). This contract describes the reader; the
+  observations of that check are added here when it is made.
+
 ## Event shape
 
 Every request is recorded intent -> result, all linked to the instance:

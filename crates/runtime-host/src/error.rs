@@ -881,6 +881,22 @@ impl RuntimeHostError {
         } else {
             runtime_error
         };
+        // #402 HS-3 (register §1.271): a paired open that found no application index names why,
+        // `nemu_app_index_missing` with its problem as the failure behind it.
+        let runtime_error = match error.failure_context().nemu_app_index_problem() {
+            Some(problem)
+                if spelled(
+                    kernel_code,
+                    &[DeviceSelfCheckFailure::PairedBackendOpenFailed.code()],
+                ) =>
+            {
+                runtime_error.with_caused_by(
+                    Outcome::new(HostCode::NemuAppIndexMissing)
+                        .nemu_app_index_problem(NemuAppIndexProblemToken(problem)),
+                )
+            }
+            _ => runtime_error,
+        };
         if error.resource_quiescence() == Some(ResourceQuiescence::Unconfirmed) {
             runtime_error.into_fatal()
         } else {
@@ -1206,6 +1222,28 @@ impl VocabularyToken for CaptureOpenCauseToken {
             Some(actingcommand_device::CaptureOpenCause::DisplayMissing) => "display_missing",
             Some(actingcommand_device::CaptureOpenCause::ConnectionFailed) => "connection_failed",
             None => "other",
+        }
+    }
+}
+
+/// #402 HS-3: why a paired Nemu open found no application index, as a token of the catalog
+/// vocabulary `nemu_app_index_problem`.
+#[derive(Clone, Copy)]
+struct NemuAppIndexProblemToken(actingcommand_device::NemuAppIndexProblem);
+
+impl VocabularyToken for NemuAppIndexProblemToken {
+    const VOCABULARY: &'static str = "nemu_app_index_problem";
+
+    fn token(self) -> &'static str {
+        match self.0 {
+            actingcommand_device::NemuAppIndexProblem::PackageNotInstalled => {
+                "package_not_installed"
+            }
+            actingcommand_device::NemuAppIndexProblem::ApplicationNotRunning => {
+                "application_not_running"
+            }
+            actingcommand_device::NemuAppIndexProblem::InfoUnavailable => "info_unavailable",
+            actingcommand_device::NemuAppIndexProblem::InfoMalformed => "info_malformed",
         }
     }
 }

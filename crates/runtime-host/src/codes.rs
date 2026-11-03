@@ -844,6 +844,8 @@ actingcommand_contract::outcome_codes! {
         MonotonicClockOverflow => "monotonic_clock_overflow": error / none,
         MonotonicClockRegressed => "monotonic_clock_regressed": error / none,
         MumuManagerVersionUnsupported => "mumu_manager_version_unsupported": error / none,
+        // #402 HS-3 (register §1.271): a paired Nemu open resolved no application index; the
+        // `caused_by` of `paired_backend_open_failed`, with `nemu_app_index_problem`.
         NemuAppIndexMissing => "nemu_app_index_missing": error / none,
         NemuApplicationIdentityInvalid => "nemu_application_identity_invalid": error / none,
         NemuCloseInstanceMissing => "nemu_close_instance_missing": error / none,
