@@ -6758,6 +6758,32 @@ with the resource side before production runs it.
 Nemu touch or names it beside another touch backend (§1.267, rollback), so remove such an index, or
 write Nemu touch with its index, first.
 
+### 1.273 Slice BX-1 (0.12.39): a blackout entry's parser and shape exported for clients (Workflow #429; the console's UI-3e1-b edits an instance's blackout entries through `ConfigureSettings`, and the UI repository carries no tests, so it builds and checks them with the Runtime's own functions; coordinator work order `rd-1031/brief-bx-1.md`)
+
+[runtime-config.md](runtime-config.md) ("Blackouts and the day boundary per instance", "A client's
+blackout entries") is the contract. The number 1.273 is the coordinator's (HS-3 and R-3 run
+alongside). No persisted ledger shape, wire shape, configuration key or outcome code is new or
+changed, and the Runtime's behaviour does not change.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| BX1-1 | `BlackoutListKey<'a>` {`Host`, `Instance(&'a str)`} with `config_key()` and `source()`; `BlackoutEntry::parse(list, &Value)` (one element of the list) and `BlackoutEntry::parse_list(list, &Value)` (the key's value) → typed entries or `ConfigFailure`, in `actingcommand-runtime-config` | crate API (a client surface) | BX-1 | the console (pins the crate) | one implementation: the configuration check's `blackout_entries` and `blackout_id`, its per-entry body now `blackout_entry`, which both call; the refusal is the check's, `blackout_config_invalid` with `config_key`, `field`, `blackout_source` and `blackout_id`, `field` pointing into the value passed (`""` or `/<member>` for one element, `/<n>` or `/<n>/<member>` for a list) where `check-config` points into the file; one element alone skips the list's bound of 64 and unique ids; a value that is not a list is `config_value_invalid` (`wrong_type`), as `ConfigureSettings` refuses it; `bx1_parse_refuses_as_the_config_check_does` |
+| BX1-2 | `BlackoutEntry::to_json`, `BlackoutEntry::list_json` → the JSON the key takes | crate API (a client surface) | BX-1 | the console | `kind` always written (a `weekly` entry read without it is written with it), weekdays in their order, members in name order, so the value's text is its canonical JSON, the text the Runtime keeps for the key (`config.parameters`, the instruction's `value_json`): the same entries are the same bytes and read back as the same entries; `bx1_round_trip_is_byte_stable`, `bx1_the_runtime_reads_what_the_client_writes` |
+| BX1-3 | the Runtime's reading of the host list, an instance's own list and `agent_wake.quiet.windows` | unchanged | BX-1 (the parser split, no rule changed) | — | the rules, refusals and pointers stay; `sr4a1_c2_bad_blackout_entries_are_refused_with_their_source` passes unchanged |
+
+**Tests** (gate row in `host.toml`, "Workflow #429 BX-1"): the three of the work order, in
+`gate_bx1` (runtime-config). No test adapted.
+
+**Interface.** No step for 0.12.39 ([component-interfaces.md](component-interfaces.md)): a Rust API
+of the crate the console pins is no interface of that table, as `ui_tier` was not (§1.239 R4-6),
+and no file, wire, ledger, package or outcome shape changes.
+
+**What changes live.** Nothing: the Runtime reads, checks and refuses blackout lists as before. A
+console built on this crate checks its entries before it sends them.
+
+**Rollback** (to 0.12.38). Nothing persisted changes. A console built on 0.12.39's crate needs the
+new names; the values it writes are the shape 0.12.38 reads.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

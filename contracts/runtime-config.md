@@ -526,6 +526,22 @@ names one, its entries checked as the host list's are.
 `EffectiveConfig::day_boundary_quiet`; SR-4a2 reads them, and `scheduling.blackout.quiet_horizon`,
 at every policy cycle.
 
+**A client's blackout entries (Workflow #429 BX-1, since 0.12.39;
+[v012-register.md](v012-register.md) §1.273).** A client (the console) builds and checks the
+entries of either list with the parser the configuration check runs and the shape it reads,
+through the crate it pins (`actingcommand-runtime-config`), and keeps no copy of the shape.
+`BlackoutListKey` (`Host`, `Instance(<instance id>)`) names the list, its key (`config_key()`) and
+its `blackout_source` (`source()`). `BlackoutEntry::parse` (one element of the list) and
+`BlackoutEntry::parse_list` (the key's value) give the typed entries or the refusal `check-config`
+gives (`blackout_config_invalid` with `field`, `blackout_source` and `blackout_id`), `field` pointing
+into the value passed instead of the file; one element alone has no list, so the bound of 64 and
+the unique ids are `parse_list`'s; a value that is not a list is `config_value_invalid`
+(`wrong_type`), as `ConfigureSettings` refuses it. `BlackoutEntry::to_json` and
+`BlackoutEntry::list_json` give the value the key takes, `kind` always written and members in name
+order, so its text is the canonical JSON the Runtime keeps for the key: the same entries are the
+same bytes, and they read back as the same entries. The Runtime's own reading does not change, and
+no wire shape is new.
+
 **Expected duration (SCH-M slice ED-1, frozen model v1.0 §3.4; `actingd-config` revision
 11).** `scheduling.expected_runtime.enabled`, `.runs` and `.margin_ms` set the expected duration E
 of a task package on an instance: the mean of its latest `runs` successful scheduled runs, rounded
