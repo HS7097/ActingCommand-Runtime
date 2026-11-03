@@ -19,6 +19,7 @@ fn instance_id() -> InstanceId {
         .expect("issuer")
         .mint_instance_id()
         .expect("instance id")
+        .transport()
 }
 
 /// A device instance entry `alias` of `id` with these members besides.
