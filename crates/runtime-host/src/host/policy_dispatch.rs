@@ -456,6 +456,10 @@ pub(super) struct SchedulingPauseTable {
     client_resets: BTreeMap<String, BTreeSet<ConnectionId>>,
     /// Workflow #361 B1: where each held pause came from (`None` is the global pause).
     origins: BTreeMap<Option<String>, PauseOrigin>,
+    /// The instance aliases a player holds: the player hold's dimension of the control gates.
+    /// Empty until R-7b brings the hold (Workflow #429); #402 HS-2's tests set it
+    /// (`hold_player_for_test`) to show that a backend switch reads the dimension.
+    player_held: BTreeSet<String>,
 }
 
 impl SchedulingPauseTable {
@@ -473,6 +477,17 @@ impl SchedulingPauseTable {
             instances,
             client_resets: BTreeMap::new(),
             origins: BTreeMap::new(),
+            player_held: BTreeSet::new(),
+        }
+    }
+
+    /// #402 HS-2, test builds: a player holds `instance_alias` (`held`), or no longer does.
+    #[cfg(test)]
+    pub(super) fn hold_player_for_test(&mut self, instance_alias: &str, held: bool) {
+        if held {
+            self.player_held.insert(instance_alias.to_owned());
+        } else {
+            self.player_held.remove(instance_alias);
         }
     }
 
@@ -661,15 +676,15 @@ impl SchedulingPauseTable {
     /// Workflow #429 R-7a2 (R-7a §2.6 O-3, O-4): the control gates of `instance_alias`, in the
     /// one order: its pauses from this table (its own in any stage, the global one) and
     /// `resource_fence`, its #403 fence in any stage, read at the same moment by the caller. The
-    /// player hold's dimension is false until R-7b. Its effective code is
-    /// `control_gates::effective_code`'s.
+    /// player hold's dimension is false until R-7b (only #402 HS-2's tests set it,
+    /// `player_held`). Its effective code is `control_gates::effective_code`'s.
     pub(super) fn control_gates(
         &self,
         instance_alias: &str,
         resource_fence: bool,
     ) -> actingcommand_contract::ControlGates {
         actingcommand_contract::ControlGates::evaluate(actingcommand_contract::ControlInputs {
-            player_hold: false,
+            player_hold: self.player_held.contains(instance_alias),
             instance_pause: self.instances.contains_key(instance_alias),
             global_pause: self.global.is_some(),
             resource_fence,

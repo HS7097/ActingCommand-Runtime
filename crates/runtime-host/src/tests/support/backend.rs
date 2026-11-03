@@ -128,6 +128,16 @@ pub(super) struct FakeState {
     // package Android reports in the foreground (`None`: no resumed activity); unset, the
     // assigned application as before.
     foreground_script: std::sync::Mutex<Option<ForegroundScript>>,
+    // #402 HS-2: the instance's registered backends (touch, capture) once set, which `resolve`
+    // names in its configuration; each switch replaces them and is recorded with the number of
+    // input opens before it.
+    backends: std::sync::Mutex<Option<(String, String)>>,
+    switches: std::sync::Mutex<Vec<(String, String, usize)>>,
+    // #402 HS-2: while the touch backend in effect is one of these, an input open fails as an
+    // input backend that does not open.
+    failing_touch: std::sync::Mutex<BTreeSet<String>>,
+    // #402 HS-2: the next input open (taken once) sends on the first, then waits for the second.
+    open_hold: std::sync::Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
 }
 
 /// Workflow #373 NAV-6: a frame script of [`FakeState`].
@@ -1094,14 +1104,30 @@ fn fake_opened_backend<T>(
     actingcommand_device::OpenedBackend::new(backend, report)
 }
 
-impl ExecutionBackendProvider for FakeProvider {
-    fn instance_aliases(&self) -> Vec<String> {
-        self.advertised_aliases
-            .clone()
-            .unwrap_or_else(|| self.entries.keys().cloned().collect())
+/// #402 HS-2: the configuration a fake registration with these backends reports (neutral test
+/// values).
+fn fake_device_configuration(
+    touch: &str,
+    capture: &str,
+) -> actingcommand_contract::EffectiveDeviceConfiguration {
+    actingcommand_contract::EffectiveDeviceConfiguration {
+        input_backend: touch.to_owned(),
+        capture_backend: capture.to_owned(),
+        input_adb: "<sealed-test>".to_owned(),
+        capture_adb: "<sealed-test>".to_owned(),
+        configured_serial: None,
+        resolved_serial: "TESTSERIAL0001".to_owned(),
+        input_command_timeout_ms: 5_000,
+        capture_command_timeout_ms: 5_000,
+        capture_timeout_ms: 5_000,
+        configured_mumu_root: None,
+        configured_capture_dll: None,
     }
+}
 
-    fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
+impl FakeProvider {
+    /// The instance as the fake registers it, before #402 HS-2's backends.
+    fn resolve_registered(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
         let entry = self.entries.get(instance_alias)?;
         if entry.state.emulator_control.load(Ordering::Acquire) {
             return Some(fake_discovered_instance(
@@ -1144,6 +1170,55 @@ impl ExecutionBackendProvider for FakeProvider {
             }
         })
     }
+}
+
+impl ExecutionBackendProvider for FakeProvider {
+    fn instance_aliases(&self) -> Vec<String> {
+        self.advertised_aliases
+            .clone()
+            .unwrap_or_else(|| self.entries.keys().cloned().collect())
+    }
+
+    // #402 HS-2: an instance whose backends are set resolves with them in its configuration.
+    fn resolve(&self, instance_alias: &str) -> Option<ResolvedExecutionInstance> {
+        let resolved = self.resolve_registered(instance_alias)?;
+        let backends = self
+            .entries
+            .get(instance_alias)?
+            .state
+            .backends
+            .lock()
+            .expect("fake backends")
+            .clone();
+        Some(match backends {
+            Some((touch, capture)) => resolved.with_configuration(fake_device_configuration(
+                &touch, &capture,
+            )),
+            None => resolved,
+        })
+    }
+
+    // #402 HS-2: the registration takes these backends (recorded with the input opens before
+    // the switch), as the device registry's entry does; nothing is opened.
+    fn switch_instance_backends(
+        &self,
+        instance_alias: &str,
+        touch: actingcommand_device::TouchBackendChoice,
+        capture: actingcommand_device::CaptureBackendChoice,
+    ) -> DeviceResult<Option<u32>> {
+        let entry = self
+            .entries
+            .get(instance_alias)
+            .ok_or_else(|| DeviceError::fatal("fake instance is not registered"))?;
+        let (touch, capture) = (touch.as_str().to_owned(), capture.as_str().to_owned());
+        entry.state.switches.lock().expect("fake switches").push((
+            touch.clone(),
+            capture.clone(),
+            entry.state.open_count.load(Ordering::Acquire),
+        ));
+        *entry.state.backends.lock().expect("fake backends") = Some((touch, capture));
+        Ok(None)
+    }
 
     fn vision_provider(&self) -> Option<Arc<dyn VisionProvider>> {
         self.vision_provider.as_ref().map(Arc::clone)
@@ -1160,6 +1235,29 @@ impl ExecutionBackendProvider for FakeProvider {
                 .ok_or_else(|| DeviceError::fatal("fake instance is not registered"))?;
             refuse_pending_open(&entry.state)?;
             entry.state.open_count.fetch_add(1, Ordering::AcqRel);
+            // #402 HS-2: a held open tells the test it started and waits for its release.
+            let hold = entry.state.open_hold.lock().expect("fake open hold").take();
+            if let Some((entered, release)) = hold {
+                entered.send(()).expect("the test listens for the held open");
+                release.recv().expect("the test releases the held open");
+            }
+            let touch = entry
+                .state
+                .backends
+                .lock()
+                .expect("fake backends")
+                .as_ref()
+                .map(|(touch, _)| touch.clone());
+            if touch.is_some_and(|touch| {
+                entry
+                    .state
+                    .failing_touch
+                    .lock()
+                    .expect("fake failing touch")
+                    .contains(&touch)
+            }) {
+                return Err(DeviceError::fatal("fake touch backend does not open"));
+            }
             if let Some(error) = entry
                 .state
                 .input_open_error

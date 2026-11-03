@@ -585,7 +585,7 @@ tests = [
 ]
 incident = ["#429 R-4"]
 
-# #402 HS-1 (0.12.39; brief rd-1031/backend-switch/brief-hs-1.md; register §1.267; contracts/runtime-config.md, "Key table", "Backends", "ConfigureSettings", "Restore at start" and "Console tiers"; contracts/device-binding.md, "Backends"; actingd-config revision 26): each device instance's touch_backend and capture_backend are rows of the per-instance section by the device layer's own names, explicit and not settable, and a fixture has neither; an instruction on either is config_key_not_settable until HS-2; the whole-instance check, with the backends each kind has as the host fills them in from the device layer, refuses a handset's nemu_ipc and droidcast_raw and an emulator's scrcpy (backend_kind_unsupported) and Nemu touch beside another capture (backend_pair_required), and any backend of a fixture; a request naming a backend key beside another key or another instance's backend key is backend_switch_not_alone; a start drops the restored backend values an instance's check refuses and keeps its other values; both rows are advanced, which fills the eight; actingd assembles Nemu touch without nemu_app_index and an index beside any other backend, still refusing Nemu touch beside another capture (nemu_input_requires_paired_capture), an index out of range and a handset's index
+# #402 HS-1 (0.12.39; brief rd-1031/backend-switch/brief-hs-1.md; register §1.267; contracts/runtime-config.md, "Key table", "Backends", "ConfigureSettings", "Restore at start" and "Console tiers"; contracts/device-binding.md, "Backends"; actingd-config revision 26): each device instance's touch_backend and capture_backend are rows of the per-instance section by the device layer's own names, explicit and, since HS-2 (register §1.270), settable, and a fixture has neither; the whole-instance check, with the backends each kind has as the host fills them in from the device layer, refuses a handset's nemu_ipc and droidcast_raw and an emulator's scrcpy (backend_kind_unsupported) and Nemu touch beside another capture (backend_pair_required), and any backend of a fixture; a request naming a backend key beside another key or another instance's backend key is backend_switch_not_alone; a start drops the restored backend values an instance's check refuses and keeps its other values; both rows are advanced, which fills the eight; actingd assembles Nemu touch without nemu_app_index and an index beside any other backend, still refusing Nemu touch beside another capture (nemu_input_requires_paired_capture), an index out of range and a handset's index
 [[gate]]
 coverage = "Y"
 tests = [
@@ -602,6 +602,31 @@ tests = [
     "actingcommand-runtime-config::lib::gate_hs1::hs1_restore_drops_pair_breaking_rows",
 ]
 incident = ["#402 HS-1"]
+
+# #402 HS-2 (0.12.39; brief rd-1031/backend-switch/brief-hs-2.md; register §1.270; contracts/runtime-config.md, "Switching an instance's backends", "Restore at start" and "The console's device backends group"; contracts/backend-open-observation.md, "device.backend_switched"; contracts/device-binding.md, "Backends"; contracts/runtime-interface.md, ConfigureSettings and ac_config_set; design rd-1031/backend-switch/model-backend-switch.md §2.2, §3, §6, §8): a ConfigureSettings naming an instance's two backend keys switches a free instance's backends on a backend_switch claim (operator class, at most CONNECTION_PREPARATION_CLAIM_WAIT_MS): the kept session closes, the registration takes the new backends with its own checks and capability table, a preparation opens them without a ladder on failure, then host.config_overrides, config.parameters.instance, device.backend_switched and command.validated; a run between its steps or a client lease past the wait is instance_busy (lease_queue_expired with holder_kind), a paused instance switches, a player's hold, a fence and a pending endpoint refuse before any open; a failed candidate restores the previous backends (open_failed with the open's code), a failed restore is restore_failed with both causes and leaves only that instance unavailable, a refused host.config_overrides restores them too; the multi-Nemu gate follows the switch, another instance is untouched, a status read is not blocked while the device opens; a start writes the restored backends into the registry before it prepares, and a restored backend that does not open leaves its instance unavailable, never the file's; the client's receipt wait covers the switch; ac_config_set with a backend key needs the operator tier
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_hs2::hs2_switch_free_instance_commits_and_records",
+    "actingcommand-runtime-host::lib::tests::gate_hs2::hs2_busy_refused_after_claim_wait",
+    "actingcommand-runtime-host::lib::tests::gate_hs2::hs2_run_between_steps_is_not_a_boundary",
+    "actingcommand-runtime-host::lib::tests::gate_hs2::hs2_paused_instance_switches",
+    "actingcommand-runtime-host::lib::tests::gate_hs2::hs2_player_hold_refuses",
+    "actingcommand-runtime-host::lib::tests::gate_hs2::hs2_fenced_instance_refuses",
+    "actingcommand-runtime-host::lib::tests::gate_hs2::hs2_pending_endpoint_refuses",
+    "actingcommand-runtime-host::lib::tests::gate_hs2::hs2_open_failure_keeps_old_and_names_cause",
+    "actingcommand-runtime-host::lib::tests::gate_hs2::hs2_restore_failure_fences_only_that_instance",
+    "actingcommand-runtime-host::lib::tests::gate_hs2::hs2_persist_failure_rolls_back",
+    "actingcommand-runtime-host::lib::tests::gate_hs2::hs2_capabilities_follow_switch",
+    "actingcommand-runtime-host::lib::tests::gate_hs2::hs2_multi_nemu_gate_follows_switch",
+    "actingcommand-runtime-host::lib::tests::gate_hs2::hs2_other_instances_untouched",
+    "actingcommand-runtime-host::lib::tests::gate_hs2::hs2_status_read_not_blocked_during_switch",
+    "actingcommand-runtime-host::lib::tests::gate_hs2::hs2_restore_at_start_applies_before_preparation",
+    "actingcommand-runtime-host::lib::tests::gate_hs2::hs2_restored_backend_failing_open_stays_unavailable",
+    "actingcommand-runtime-client::lib::tests::hs2_client_timeout_covers_switch",
+    "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_hs2::hs2_mcp_backend_key_needs_operator_tier",
+]
+incident = ["#402 HS-2"]
 
 # The recovery ladder by configuration: the section's whole-section check at start and through an instruction, what the default trigger items match, the record shapes, the rules that stay in code and the five that switch, direction one's count, and a routine failure that climbs by its trigger item, its rungs and the snapshot it was admitted with (Workflow #387 D1c)
 [[gate]]

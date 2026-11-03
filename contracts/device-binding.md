@@ -46,8 +46,9 @@ instance without `device` has no such row, and no row ever holds a serial.
 
 #402 HS-1 ([v012-register.md](v012-register.md) §1.267; since 0.12.39). The manifest reports every
 device instance's backends as `instance.<instance id>.touch_backend` and
-`instance.<instance id>.capture_backend` (section `instance`, by the device layer's own names, not
-settable until HS-2 brings the switch); a fixture has neither. Which backends each kind has is the
+`instance.<instance id>.capture_backend` (section `instance`, by the device layer's own names,
+settable since #402 HS-2: a change switches the device, [runtime-config.md](runtime-config.md),
+"Switching an instance's backends"); a fixture has neither. Which backends each kind has is the
 rule above (an emulator: every touch backend, every capture backend but `scrcpy`; a handset: no
 `nemu_ipc`, no `droidcast_raw`), and Nemu touch works only beside Nemu capture. actingd applies it
 to the file (`device_config_invalid` with `backend_kind_unsupported`;
@@ -60,6 +61,20 @@ instruction from HS-2 on (`config_value_invalid` with `backend_kind_unsupported`
 `nemu_app_index` (`actingd-config` revision 26): an emulator entry may name it whatever its
 backends; it is checked whenever named (`nemu_app_index_invalid`) and used only by Nemu touch, which
 no longer needs it in the file. A handset still names none.
+
+#402 HS-2 ([v012-register.md](v012-register.md) §1.270; since 0.12.39). A switch replaces the
+registration's two backends under the registration's own checks (both explicit, one target, Nemu
+touch only beside Nemu capture) and recomputes its capability table from them, merged with the
+provider's rows as at registration; every other setting of the two backends (adb, target,
+timeouts, tool paths, the Nemu folder, the binding's MuMu index) stays the registration's. It opens
+nothing and is refused while the instance's session is open (`execution_endpoint_rebind_session_open`,
+the rebind's guard); the provider's refusal is `execution_endpoint_rebind_failed`. A switch never
+`adb connect`s, `kill-server`s or `start-server`s by itself: the preparation after it opens the
+backends through the existing bounded opens. A handset's switch offers only its own backends (the
+kind rule above), so it never touches Nemu or MuMuManager. Until HS-3 the paired Nemu open takes the
+registration's index, which actingd hands over only beside the Nemu pair in the file; a switch to
+Nemu touch of an instance whose file names another touch backend therefore fails its open, named,
+and keeps the previous backends.
 
 ## The private binding file
 

@@ -10043,6 +10043,28 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "backend_switch_refused": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "backend_switch_problem": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.39",
+      "description": "A ConfigureSettings that names an instance's touch_backend or capture_backend key did not switch the instance's backends (#402 HS-2, design HS-M section 3.6); backend_switch_problem says why and the failure behind it is its caused_by (two links for restore_failed: the new backends' failure, then the restore's). Nothing was committed: no host.config_overrides row, no device.backend_switched record, the backends in effect unchanged. instance_busy, player_held, instance_fenced and endpoint_unavailable are Denied; open_failed and restore_failed are Failed.",
+      "common_causes": "The instance was running a task, a ladder, a lease or a Lab operation for longer than the switch claim's wait; a player holds it; it is fenced; its emulator is stopped or its handset unbound; the new backend does not open on this device (a missing tool, a Nemu touch whose application is not running).",
+      "handling": "To switch mid-task, pause the instance, let it drain, switch, then resume it. Release the player hold, run a self-check for a fence, start the emulator or bind the handset first. After open_failed the previous backends are in effect; choose a backend the device has. After restore_failed run a self-check of the instance."
+    },
     "nemu_input_task_deadline_missing": {
       "category": "error",
       "ladder_class": "none",
@@ -30266,6 +30288,22 @@
       "status": "active",
       "since": "0.12.4",
       "description": "A Runtime host operation or stage: check that no input reached the instance while a keyless online Lab observation took the frames its package's target consensus needs (#411 Lab L5)."
+    },
+    "switch_instance_backends": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.39",
+      "description": "A Runtime host operation (#402 HS-2): the switch of an instance's touch and capture backends by a ConfigureSettings, from its control gates through the registration's new backends, their preparation and the commit, or the restore of the previous backends."
+    },
+    "apply_restored_backends": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.39",
+      "description": "A Runtime host operation (#402 HS-2): at start, after the instruction values are restored and before any instance is prepared, the write of each instance's backends in effect into the registry."
     },
     "emulator_watch": {
       "owner": "runtime-host",

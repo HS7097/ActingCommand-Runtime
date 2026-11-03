@@ -37,6 +37,22 @@ pub(super) fn config_set(context: &ToolContext<'_>, arguments: &Map<String, Valu
     })
 }
 
+/// #402 HS-2: whether the call's changes name an instance's backend key (a call whose `changes`
+/// is malformed names none; the tool refuses it as before).
+pub(super) fn names_backend_key(arguments: &Map<String, Value>) -> bool {
+    arguments
+        .get("changes")
+        .and_then(Value::as_array)
+        .is_some_and(|changes| {
+            changes.iter().any(|change| {
+                change
+                    .get("key")
+                    .and_then(Value::as_str)
+                    .is_some_and(actingcommand_contract::is_instance_backend_key)
+            })
+        })
+}
+
 /// The changes of one `ac_config_set` call, the same request `actingctl config set|clear`
 /// sends: 1 to 64 objects `{key, value?}`, a missing or `null` value returning the key to its
 /// configuration-file value. Anything else is `arguments_invalid` for `changes`: not an array

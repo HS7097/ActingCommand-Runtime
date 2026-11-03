@@ -41,6 +41,8 @@
 //! - #402 HS-1 (since 0.12.39): each instance's `touch_backend` and `capture_backend` rows, read
 //!   only until HS-2, and their whole-instance check, whose backends of each kind of device the
 //!   caller fills in ([`CheckContext::with_backends`], [`BackendKindRules`]).
+//! - #402 HS-2 (since 0.12.39): both rows settable; the host switches the instance's backends
+//!   when an instruction changes them ([`backend_switch_instance`]).
 //!
 //! actingd reads the files and hands the assembled manifest to the host; the host applies
 //! instructions through this crate. It depends on the contract only (§5.1).
@@ -119,7 +121,7 @@ pub use idle::{IdleAction, IdleConfig, IdleFile};
 pub use instance::{
     BackendKindRules, CAPTURE_BACKEND, CAPTURE_BACKEND_TOKENS, DEVICE_KIND, DEVICE_KIND_TOKENS,
     DeviceBackends, RECOGNITION_PACKAGE, RECOVERY_LADDER_PROFILE, START_EMULATOR, STUCK_RECOVERY,
-    STUCK_RECOVERY_COOLDOWN_SECS, TOUCH_BACKEND, TOUCH_BACKEND_TOKENS,
+    STUCK_RECOVERY_COOLDOWN_SECS, TOUCH_BACKEND, TOUCH_BACKEND_TOKENS, backend_switch_instance,
 };
 pub use ledger_observer::{CaptureTiers, LedgerObserverConfig, LedgerObserverFile};
 pub use performance::PerformanceFile;

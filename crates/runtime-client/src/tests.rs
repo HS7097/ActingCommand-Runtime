@@ -3516,6 +3516,76 @@ fn receipt_timeout_selector_preserves_existing_operation_budgets() {
     );
 }
 
+// #402 HS-2 (register §1.270; design HS-M §2.2, §8 item 10): a `ConfigureSettings` that names an
+// instance's backend keys waits for the switch: its claim's wait, the new backends' preparation
+// and the previous ones' after a failed candidate, plus the IO margin. A change of any other key
+// still answers within the IO timeout.
+#[test]
+fn hs2_client_timeout_covers_switch() {
+    let io_timeout = Duration::from_millis(100);
+    let backend_open_timeout = Duration::from_secs(2);
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let instance = *ids.mint_instance_id().expect("instance").transport();
+    let instance = match serde_json::to_value(instance).expect("instance id encodes") {
+        serde_json::Value::String(text) => text,
+        other => panic!("an instance id is a string: {other}"),
+    };
+    let change = |key: String| actingcommand_contract::ConfigSettingChange {
+        key,
+        value: Some(serde_json::json!("maatouch")),
+    };
+    let configure = |changes| RuntimeOperation::ConfigureSettings {
+        changes,
+        expected_version: None,
+    };
+    let switch_wait = Duration::from_millis(
+        actingcommand_contract::CONNECTION_PREPARATION_CLAIM_WAIT_MS
+            + 2 * actingcommand_contract::CONNECTION_PREPARATION_WAIT_MS,
+    ) + io_timeout;
+    assert_eq!(
+        actingcommand_contract::BACKEND_SWITCH_WAIT_MS,
+        63_000,
+        "3 s for the claim and 30 s for each of the two preparations"
+    );
+    for member in ["touch_backend", "capture_backend"] {
+        assert_eq!(
+            receipt_response_timeout(
+                &configure(vec![change(format!("instance.{instance}.{member}"))]),
+                io_timeout,
+                backend_open_timeout,
+            ),
+            Ok(switch_wait),
+            "{member}"
+        );
+    }
+    assert_eq!(
+        receipt_response_timeout(
+            &configure(vec![
+                change(format!("instance.{instance}.touch_backend")),
+                change(format!("instance.{instance}.capture_backend")),
+            ]),
+            io_timeout,
+            backend_open_timeout,
+        ),
+        Ok(switch_wait)
+    );
+    for key in [
+        format!("instance.{instance}.stuck_recovery"),
+        "scheduling.parallel.enabled".to_owned(),
+        "touch_backend".to_owned(),
+    ] {
+        assert_eq!(
+            receipt_response_timeout(
+                &configure(vec![change(key.clone())]),
+                io_timeout,
+                backend_open_timeout,
+            ),
+            Ok(io_timeout),
+            "{key}"
+        );
+    }
+}
+
 #[test]
 fn capture_sequence_client_returns_exact_artifact_backed_frames_without_input() {
     let root = TempDir::new().expect("tempdir");

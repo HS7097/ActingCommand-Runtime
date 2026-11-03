@@ -15,13 +15,18 @@
 //! - Workflow #389 MCP-9a (register A5): `config.catalog`, the active policy catalog generation,
 //!   at start, after each committed catalog transition and after each approval decision, each
 //!   time only when it changed.
+//! - #402 HS-2 (register §1.270): a `ConfigureSettings` that switches an instance's backends
+//!   switches the device first (`backend_switch.rs`), then commits as any other change, with
+//!   `device.backend_switched` before its `command.validated`.
 
+use super::backend_switch::SwitchBackends;
 use super::*;
 use crate::codes::{ConfigHostCode, ConfigHostLocation};
 use actingcommand_contract::{
     ApprovalTarget, CONFIG_CATALOG_FACT_KEY, CONFIG_OVERRIDES_FACT_KEY,
     CONFIG_PARAMETERS_FACT_PREFIX, CatalogPayload, ConfigCatalog, ConfigSelection,
-    ConfigSettingChange, InstanceDeviceKind, InstanceStuckRecovery, config_parameters_fact_key,
+    ConfigSettingChange, DeviceBackendSwitched, InstanceDeviceKind, InstanceStuckRecovery,
+    config_parameters_fact_key,
 };
 use actingcommand_runtime_config::{
     AppliedSettings, CheckContext, EffectiveConfig, InstructionStamp, LadderConfig, LadderProfile,
@@ -169,12 +174,19 @@ impl HostShared {
     /// `fact_observation_version_conflict` with `fact_key` `host.config_overrides` and the
     /// `current_version`) and changes nothing. Without it the last writer wins, as before. A
     /// completed receipt carries the version after the change.
+    ///
+    /// #402 HS-2 (design HS-M §3.2; register §1.270): a request whose changes switch an
+    /// instance's backends (the instance's two backend keys, alone) switches the device before
+    /// it commits (`switch_instance_backends`): the gate is left once the request is checked, and
+    /// taken again for the commit. A change that leaves both backends as they are in effect
+    /// commits at once, as any other change.
     pub(super) fn configure_settings(
         &self,
         original: &RuntimeRequest,
         validated: &ValidatedRuntimeRequest<'_>,
         changes: &[ConfigSettingChange],
         expected_version: Option<u64>,
+        connection_id: ConnectionId,
     ) -> Result<OperationSuccess, RequestFailure> {
         let links = self.append_scoped_client_command_intent(
             original,
@@ -184,7 +196,7 @@ impl HostShared {
             None,
         )?;
         let context = self.config_check()?;
-        let _gate = lock(
+        let gate = lock(
             &self.config_override_gate,
             ConfigHostLocation::ConfigureSettings,
         )?;
@@ -202,25 +214,7 @@ impl HostShared {
                         .fact_key(CONFIG_OVERRIDES_FACT_KEY)
                         .current_version(current_version)
                 });
-                let rejected = self.append_event(
-                    EventSeverity::Error,
-                    EventSource::Runtime,
-                    OriginModule::Runtime,
-                    EventActor::Runtime,
-                    links,
-                    CommandPayloadDraft::rejected_with_outcome(
-                        EventAction::RuntimeAction,
-                        DiagnosticCode::CommandRejected,
-                        EffectDisposition::NotPerformed,
-                        error.outcome(),
-                        AuditInput::new(),
-                    ),
-                )?;
-                return Err(RequestFailure::request(
-                    error,
-                    RuntimeReceiptState::Denied,
-                    Some(terminal(&rejected)),
-                ));
+                return Err(self.refuse_settings(links, error, RuntimeReceiptState::Denied));
             }
         }
         let stamp = InstructionStamp {
@@ -239,8 +233,48 @@ impl HostShared {
             // Workflow #389 U-2: `host.config_overrides` names the channel from U-2 on.
             channel: validated.channel().map(|binding| binding.channel),
         };
-        // Workflow #432 AGT-1b: the section check has no instance list, so a rule's aliases are
-        // checked here against the registered instances, as the start checks them.
+        let applied = match self.apply_settings(&current, changes, &stamp, &context) {
+            Ok(applied) => applied,
+            Err(error) if error.is_fatal() => {
+                return Err(RequestFailure::poison_without_terminal(error));
+            }
+            Err(error) => {
+                return Err(self.refuse_settings(links, error, RuntimeReceiptState::Denied));
+            }
+        };
+        // #402 HS-2: the device switches first, outside the gate (status reads take it).
+        if let Some(plan) = self.backend_switch_plan(&current, &applied.config, changes)? {
+            drop(gate);
+            return self.switch_instance_backends(
+                original,
+                validated,
+                connection_id,
+                super::backend_switch::SwitchRequest {
+                    changes,
+                    stamp: &stamp,
+                    links,
+                    plan,
+                },
+            );
+        }
+        if let Some(failure) = self.persist_settings(&applied)? {
+            return Err(self.refuse_settings(links, failure, RuntimeReceiptState::Failed));
+        }
+        self.commit_settings(applied, links, None)
+    }
+
+    /// `changes` applied over `current` with the configuration's own checks and (Workflow #432
+    /// AGT-1b) the aliases of `agent_wake.rules` checked against the registered instances, as
+    /// the start checks them (the section check has no instance list). A refusal is the request's
+    /// error, with its values; #402 HS-2: a broken Nemu pair carries the registry's own code as
+    /// its `caused_by` (`nemu_input_requires_paired_capture`).
+    pub(super) fn apply_settings(
+        &self,
+        current: &EffectiveConfig,
+        changes: &[ConfigSettingChange],
+        stamp: &InstructionStamp,
+        context: &CheckContext,
+    ) -> Result<AppliedSettings, RuntimeHostError> {
         let aliases = lock(
             &self.registered_instances,
             ConfigHostLocation::ConfigureSettings,
@@ -248,80 +282,108 @@ impl HostShared {
         .values()
         .map(|instance| instance.instance_alias.clone())
         .collect::<Vec<_>>();
-        let applied = current
-            .apply(changes, &stamp, &context)
+        current
+            .apply(changes, stamp, context)
             .and_then(|applied| {
                 refuse_wake_rule_aliases(&applied, &aliases)?;
                 Ok(applied)
-            });
-        let applied = match applied {
-            Ok(applied) => applied,
-            Err(failure) => {
+            })
+            .map_err(|failure| {
+                let pair = failure.problem()
+                    == Some(actingcommand_runtime_config::ConfigValueProblem::BackendPairRequired);
                 let error = RuntimeHostError::request(
                     failure.failure_code(),
                     ConfigHostLocation::ConfigureSettings,
                     RuntimeErrorCode::InvalidRequest,
                 )
                 .with_outcome_values(|outcome| failure.with_values(outcome));
-                let rejected = self.append_event(
-                    EventSeverity::Error,
-                    EventSource::Runtime,
-                    OriginModule::Runtime,
-                    EventActor::Runtime,
-                    links,
-                    CommandPayloadDraft::rejected_with_outcome(
-                        EventAction::RuntimeAction,
-                        DiagnosticCode::CommandRejected,
-                        EffectDisposition::NotPerformed,
-                        error.outcome(),
-                        AuditInput::new(),
-                    ),
-                )?;
-                return Err(RequestFailure::request(
-                    error,
-                    RuntimeReceiptState::Denied,
-                    Some(terminal(&rejected)),
-                ));
-            }
-        };
-        // Recorded before the change takes effect (§5.7): first the whole new
-        // `host.config_overrides`, then each changed section's `config.parameters.<section>`. A
-        // refused `host.config_overrides` changes nothing and refuses the request. Once it is
-        // recorded, a refused section record would leave the ledger apart from the values in
-        // effect, so it stops the Runtime; the next start restores the recorded values (§5.6,
-        // all changes or none).
-        if let Err(error) =
-            self.record_config_fact(overrides_record(applied.config.override_rows()))
+                if pair {
+                    error.with_caused_by(Outcome::new(HostCode::NemuInputRequiresPairedCapture))
+                } else {
+                    error
+                }
+            })
+    }
+
+    /// The refusal of a `ConfigureSettings`: its `command.rejected` carrying `error` as its
+    /// outcome, and the request's failure in `state` with that record as its terminal. A refused
+    /// append stops the Runtime, as every refused record does.
+    pub(super) fn refuse_settings(
+        &self,
+        links: EventLinksDraft,
+        error: RuntimeHostError,
+        state: RuntimeReceiptState,
+    ) -> RequestFailure {
+        let rejected = self.append_event(
+            EventSeverity::Error,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            links,
+            CommandPayloadDraft::rejected_with_outcome(
+                EventAction::RuntimeAction,
+                DiagnosticCode::CommandRejected,
+                EffectDisposition::NotPerformed,
+                error.outcome(),
+                AuditInput::new(),
+            ),
+        );
+        match rejected {
+            Ok(rejected) => RequestFailure::request(error, state, Some(terminal(&rejected))),
+            Err(failure) => failure,
+        }
+    }
+
+    /// Records the whole new `host.config_overrides` of `applied` (§5.7). `Some` is the failure
+    /// of a record the ledger refused (`host_config_overrides_persist_failed` with the ledger's
+    /// refusal as its `caused_by`): nothing changed and the caller refuses the request; a fatal
+    /// refusal stops the Runtime.
+    pub(super) fn persist_settings(
+        &self,
+        applied: &AppliedSettings,
+    ) -> Result<Option<RuntimeHostError>, RequestFailure> {
+        // #402 HS-2, test builds: the ledger refuses this record, not as the Runtime's fatal.
+        #[cfg(test)]
+        if self
+            .config_persist_failure_for_test
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
         {
-            if error.is_fatal() {
-                return Err(RequestFailure::poison_without_terminal(error));
-            }
-            let failure = RuntimeHostError::request(
-                ConfigHostCode::OverridesPersistFailed,
-                ConfigHostLocation::PersistConfigOverrides,
-                RuntimeErrorCode::LedgerFailure,
-            )
-            .with_caused_by(error.outcome());
-            let rejected = self.append_event(
-                EventSeverity::Error,
-                EventSource::Runtime,
-                OriginModule::Runtime,
-                EventActor::Runtime,
-                links,
-                CommandPayloadDraft::rejected_with_outcome(
-                    EventAction::RuntimeAction,
-                    DiagnosticCode::CommandRejected,
-                    EffectDisposition::NotPerformed,
-                    failure.outcome(),
-                    AuditInput::new(),
-                ),
-            )?;
-            return Err(RequestFailure::request(
-                failure,
-                RuntimeReceiptState::Failed,
-                Some(terminal(&rejected)),
+            return Ok(Some(
+                RuntimeHostError::request(
+                    ConfigHostCode::OverridesPersistFailed,
+                    ConfigHostLocation::PersistConfigOverrides,
+                    RuntimeErrorCode::LedgerFailure,
+                )
+                .with_caused_by(Outcome::new(RuntimeErrorCode::LedgerFailure)),
             ));
         }
+        match self.record_config_fact(overrides_record(applied.config.override_rows())) {
+            Ok(()) => Ok(None),
+            Err(error) if error.is_fatal() => Err(RequestFailure::poison_without_terminal(error)),
+            Err(error) => Ok(Some(
+                RuntimeHostError::request(
+                    ConfigHostCode::OverridesPersistFailed,
+                    ConfigHostLocation::PersistConfigOverrides,
+                    RuntimeErrorCode::LedgerFailure,
+                )
+                .with_caused_by(error.outcome()),
+            )),
+        }
+    }
+
+    /// Commits `applied` once its `host.config_overrides` is recorded (`persist_settings`): each
+    /// changed section's `config.parameters.<section>`, then (#402 HS-2) the switch's
+    /// `device.backend_switched` when the request switched an instance's backends, then
+    /// `command.validated`, and the values take effect. Once `host.config_overrides` is recorded,
+    /// a refused section record would leave the ledger apart from the values in effect, so it
+    /// stops the Runtime; the next start restores the recorded values (§5.6, all changes or
+    /// none).
+    pub(super) fn commit_settings(
+        &self,
+        applied: AppliedSettings,
+        links: EventLinksDraft,
+        switched: Option<(EventLinksDraft, DeviceBackendSwitched)>,
+    ) -> Result<OperationSuccess, RequestFailure> {
         let in_effect = applied.config.manifest();
         for section in &applied.sections {
             self.record_config_fact(in_effect.parameter_section_fact_record(
@@ -330,6 +392,16 @@ impl HostShared {
                 OriginModule::Runtime,
             ))
             .map_err(RequestFailure::poison_without_terminal)?;
+        }
+        if let Some((switch_links, switched)) = switched {
+            self.append_event(
+                EventSeverity::Info,
+                EventSource::Runtime,
+                OriginModule::Runtime,
+                EventActor::Runtime,
+                switch_links,
+                RuntimePayloadDraft::device_backend_switched(switched),
+            )?;
         }
         let event = self.append_event(
             EventSeverity::Info,
@@ -368,6 +440,99 @@ impl HostShared {
             },
             failure_outcome: None,
         })
+    }
+
+    /// #402 HS-2 (design HS-M §3.2 step 1): the switch `changes` make, when they name an
+    /// instance's backend keys and leave its backends in effect (`applied`) other than they are
+    /// now (`current`): the registered instance and its two backends before and after. `None`
+    /// for a request without a backend key, and for one that leaves both as they are (a clear
+    /// back to the same values): that request commits at once, with no device step.
+    fn backend_switch_plan(
+        &self,
+        current: &EffectiveConfig,
+        applied: &EffectiveConfig,
+        changes: &[ConfigSettingChange],
+    ) -> RuntimeHostResult<Option<super::backend_switch::BackendSwitchPlan>> {
+        let Some(instance) = actingcommand_runtime_config::backend_switch_instance(changes) else {
+            return Ok(None);
+        };
+        let backends = |config: &EffectiveConfig| -> RuntimeHostResult<SwitchBackends> {
+            let name = |member: &str| match config.value(&instance_key(instance, member)) {
+                Some(FactScalar::String(name)) => Ok(name.clone()),
+                _ => Err(value_type_invalid(ConfigHostLocation::ConfigureSettings)),
+            };
+            let touch = name(actingcommand_runtime_config::TOUCH_BACKEND)?;
+            let capture = name(actingcommand_runtime_config::CAPTURE_BACKEND)?;
+            Ok(SwitchBackends {
+                touch: actingcommand_device::TouchBackendChoice::parse(&touch)
+                    .map_err(|_| value_type_invalid(ConfigHostLocation::ConfigureSettings))?,
+                capture: actingcommand_device::CaptureBackendChoice::parse(&capture)
+                    .map_err(|_| value_type_invalid(ConfigHostLocation::ConfigureSettings))?,
+            })
+        };
+        let from = backends(current)?;
+        let to = backends(applied)?;
+        if from == to {
+            return Ok(None);
+        }
+        let registered = lock(
+            &self.registered_instances,
+            ConfigHostLocation::ConfigureSettings,
+        )?
+        .values()
+        .map(|registered| (registered.instance_id, registered.instance_alias.clone()))
+        .collect::<Vec<_>>();
+        for (instance_id, instance_alias) in registered {
+            if identity_text(&instance_id, ConfigHostLocation::ConfigureSettings)? == instance {
+                return Ok(Some(super::backend_switch::BackendSwitchPlan {
+                    instance_id,
+                    instance_alias,
+                    from,
+                    to,
+                }));
+            }
+        }
+        // The key table has the key only for an instance of the configuration, which the host
+        // registered: an internal invariant.
+        Err(value_type_invalid(ConfigHostLocation::ConfigureSettings))
+    }
+
+    /// #402 HS-2 (design HS-M §3.8): the backends in effect of every registered instance whose
+    /// configuration names them, as the start restored them; the start writes those that differ
+    /// from its registration into the registry before any instance is prepared.
+    pub(super) fn backends_in_effect(&self) -> RuntimeHostResult<Vec<(String, SwitchBackends)>> {
+        let registered = lock(
+            &self.registered_instances,
+            ConfigHostLocation::ReadRuntimeConfig,
+        )?
+        .values()
+        .map(|registered| (registered.instance_id, registered.instance_alias.clone()))
+        .collect::<Vec<_>>();
+        let config = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?.clone();
+        let mut backends = Vec::new();
+        for (instance_id, instance_alias) in registered {
+            let instance = identity_text(&instance_id, ConfigHostLocation::ReadRuntimeConfig)?;
+            let name = |member: &str| match config.value(&instance_key(&instance, member)) {
+                Some(FactScalar::String(name)) => Some(name.clone()),
+                _ => None,
+            };
+            let (Some(touch), Some(capture)) = (
+                name(actingcommand_runtime_config::TOUCH_BACKEND),
+                name(actingcommand_runtime_config::CAPTURE_BACKEND),
+            ) else {
+                continue;
+            };
+            backends.push((
+                instance_alias,
+                SwitchBackends {
+                    touch: actingcommand_device::TouchBackendChoice::parse(&touch)
+                        .map_err(|_| value_type_invalid(ConfigHostLocation::ReadRuntimeConfig))?,
+                    capture: actingcommand_device::CaptureBackendChoice::parse(&capture)
+                        .map_err(|_| value_type_invalid(ConfigHostLocation::ReadRuntimeConfig))?,
+                },
+            ));
+        }
+        Ok(backends)
     }
 
     /// Workflow #429 R-4 (register §1.239): the runtime fact snapshot with the settings' version
@@ -437,7 +602,7 @@ impl HostShared {
     /// The facts of other crates the configuration's whole-section checks read (§5.3): the
     /// scheduler's heartbeat bound in effect, the device layer's bounds (Workflow #387 D1c) and
     /// (#402 HS-1) the backends each kind of device has.
-    fn config_check(&self) -> RuntimeHostResult<CheckContext> {
+    pub(super) fn config_check(&self) -> RuntimeHostResult<CheckContext> {
         let maximum_client_heartbeat_interval_ms =
             lock(&self.scheduler, ConfigHostLocation::ReadRuntimeConfig)?
                 .config()

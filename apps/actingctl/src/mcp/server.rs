@@ -652,6 +652,16 @@ fn call_tool(
             Some(protocol::response(&id, protocol::complete(era, result))),
         );
     }
+    // #402 HS-2: a call may need more than its tool's tier (`ac_config_set` switching a device's
+    // backends needs the operator tier); refused before anything is sent.
+    let required = tools::call_tier(tool, &arguments);
+    if !shared.tiers.contains(required) {
+        let result = tools::call_result(Err(tools::tier_not_enabled_at(tool, required)), era);
+        return sink.respond(
+            shared,
+            Some(protocol::response(&id, protocol::complete(era, result))),
+        );
+    }
     let key = id.to_string();
     let call = Arc::new(Call {
         cancelled: AtomicBool::new(false),

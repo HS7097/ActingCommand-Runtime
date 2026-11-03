@@ -130,6 +130,9 @@ mod gate_load3;
 // #402 HS-1 (register §1.267): the backends each kind of device has, as the host fills them into
 // the configuration's check.
 mod gate_hs1;
+// #402 HS-2 (register §1.270): an instance's touch and capture backends switched while the
+// Runtime runs, and restored at start.
+mod gate_hs2;
 // #407 PF-2 (0.12.37), register §1.252: `RecognitionStarted`'s two commits are observed stage by
 // stage.
 mod gate_407_pf2;

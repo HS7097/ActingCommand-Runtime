@@ -165,6 +165,9 @@ pub(crate) use agent_wake::WakeRecordForTest;
 // UPD-1: the host's writes of `health.application.update_required`.
 mod application_update;
 mod backend_open;
+// #402 HS-2 (register §1.270): an instance's backend switch, and the start's restore of the
+// switched backends into the registry.
+mod backend_switch;
 // Workflow #386 SR-4a3: complete silence at the host's own entries, read from the blackouts.
 mod blackout_silence;
 // Workflow #411 B41: the resting pages and package entries the chain handover reads.
@@ -1997,6 +2000,8 @@ impl RuntimeHost {
             ppocr_seal_hook_for_test: Mutex::new(None),
             #[cfg(test)]
             fence_failure_for_test: AtomicBool::new(false),
+            #[cfg(test)]
+            config_persist_failure_for_test: AtomicBool::new(false),
             resource_packages: config.resource_packages,
             stuck_recovery: OnceLock::new(),
             recovery_ladders: Mutex::new(BTreeMap::new()),
@@ -2427,6 +2432,10 @@ impl RuntimeHost {
             if let Some(config_manifest) = &config.config_manifest {
                 shared.start_runtime_config(config_manifest, config.config_selection.as_ref())?;
             }
+            // #402 HS-2 (design HS-M §3.8): the backends in effect, a restored instruction's
+            // included, written into the registry before any instance is prepared; no session
+            // exists yet, so no device is touched.
+            shared.apply_restored_backends()?;
             // Workflow #389 MCP-9a (register A5): the active policy catalog generation, re-observed
             // as every `config.` fact is.
             shared.record_config_catalog()?;
@@ -5763,6 +5772,10 @@ struct HostShared {
     // record would.
     #[cfg(test)]
     fence_failure_for_test: AtomicBool,
+    // #402 HS-2, test only: the ledger refuses the next record of `host.config_overrides`, as a
+    // refusal that is not the Runtime's fatal (`host_config_overrides_persist_failed`).
+    #[cfg(test)]
+    config_persist_failure_for_test: AtomicBool,
     // Slice #324-r1: the admitted default resource package by instance alias (status only).
     resource_packages: BTreeMap<String, actingcommand_contract::InstanceResourcePackage>,
     // Slice #316-B4: stuck-recovery settings by registered instance (absent = defaults) and the

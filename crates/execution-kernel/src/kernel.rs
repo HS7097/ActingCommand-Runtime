@@ -559,6 +559,35 @@ impl ExecutionKernel {
             })
     }
 
+    /// #402 HS-2 (design HS-M §3.2 step 3.3; register §1.270): switches the instance's touch and
+    /// capture backends in the provider's registration. A session still open would keep the
+    /// previous backends (and `resolve` would no longer match it), so one open here is refused,
+    /// as at a rebind (`execution_endpoint_rebind_session_open`): the host closes the instance's
+    /// session first, under its admission guard. A provider's refusal is
+    /// `execution_endpoint_rebind_failed`, the device error behind it. Returns the provider's
+    /// Nemu application index of a Nemu touch.
+    pub fn switch_instance_backends(
+        &self,
+        instance_alias: &str,
+        touch: actingcommand_device::TouchBackendChoice,
+        capture: actingcommand_device::CaptureBackendChoice,
+    ) -> ExecutionKernelResult<Option<u32>> {
+        let resolved = self.resolve(instance_alias)?;
+        if self.has_session(resolved.instance_id())? {
+            return Err(ExecutionKernelError::fatal(
+                ExecutionKernelCode::ExecutionEndpointRebindSessionOpen.code(),
+            ));
+        }
+        self.provider
+            .switch_instance_backends(instance_alias, touch, capture)
+            .map_err(|error| {
+                ExecutionKernelError::device(
+                    ExecutionKernelCode::ExecutionEndpointRebindFailed.code(),
+                    &error,
+                )
+            })
+    }
+
     pub fn observe_monitor(
         &self,
         instance_alias: &str,

@@ -207,35 +207,11 @@ impl ExecutionBackendRegistration {
         let application_id = application_id.into();
         validate_alias(&instance_alias)?;
         validate_application_id(&application_id)?;
-        if matches!(
-            input.requested,
-            TouchBackendChoice::Auto | TouchBackendChoice::AutoFastest
-        ) || matches!(
-            capture.requested,
-            CaptureBackendChoice::Auto | CaptureBackendChoice::AutoFastest
-        ) {
-            return Err(RuntimeHostError::fatal(
-                HostCode::ExecutionBackendSelectionNotExplicit,
-                HostLocation::BuildExecutionBackendRegistry,
-                RuntimeErrorCode::RuntimeHalted,
-            ));
-        }
-        if input.target.adb_arg() != capture.target.adb_arg() {
-            return Err(RuntimeHostError::fatal(
-                HostCode::ExecutionBackendTargetMismatch,
-                HostLocation::BuildExecutionBackendRegistry,
-                RuntimeErrorCode::RuntimeHalted,
-            ));
-        }
-        if input.requested == TouchBackendChoice::NemuIpc
-            && capture.requested != CaptureBackendChoice::NemuIpc
-        {
-            return Err(RuntimeHostError::fatal(
-                HostCode::NemuInputRequiresPairedCapture,
-                HostLocation::BuildExecutionBackendRegistry,
-                RuntimeErrorCode::RuntimeHalted,
-            ));
-        }
+        check_backend_selection(
+            &input,
+            &capture,
+            HostLocation::BuildExecutionBackendRegistry,
+        )?;
         let milliseconds = |duration: Duration| {
             u64::try_from(duration.as_millis()).map_err(|_| {
                 RuntimeHostError::fatal(
@@ -340,6 +316,46 @@ impl ExecutionBackendRegistration {
     }
 }
 
+/// The registration's own checks of a pair of backends (#402 HS-2: shared by the registration
+/// and a backend switch, design HS-M §3.2 step 3.3): both chosen explicitly, both on one target,
+/// and Nemu touch only beside Nemu capture. A refusal names `operation`.
+fn check_backend_selection(
+    input: &TouchBackendConfig,
+    capture: &CaptureBackendConfig,
+    operation: HostLocation,
+) -> RuntimeHostResult<()> {
+    if matches!(
+        input.requested,
+        TouchBackendChoice::Auto | TouchBackendChoice::AutoFastest
+    ) || matches!(
+        capture.requested,
+        CaptureBackendChoice::Auto | CaptureBackendChoice::AutoFastest
+    ) {
+        return Err(RuntimeHostError::fatal(
+            HostCode::ExecutionBackendSelectionNotExplicit,
+            operation,
+            RuntimeErrorCode::RuntimeHalted,
+        ));
+    }
+    if input.target.adb_arg() != capture.target.adb_arg() {
+        return Err(RuntimeHostError::fatal(
+            HostCode::ExecutionBackendTargetMismatch,
+            operation,
+            RuntimeErrorCode::RuntimeHalted,
+        ));
+    }
+    if input.requested == TouchBackendChoice::NemuIpc
+        && capture.requested != CaptureBackendChoice::NemuIpc
+    {
+        return Err(RuntimeHostError::fatal(
+            HostCode::NemuInputRequiresPairedCapture,
+            operation,
+            RuntimeErrorCode::RuntimeHalted,
+        ));
+    }
+    Ok(())
+}
+
 enum RegistryEntry {
     Real(Box<ExecutionBackendEntry>),
     #[cfg(feature = "fixture-backends")]
@@ -369,10 +385,13 @@ struct ExecutionBackendEntry {
     instance_id: InstanceId,
     application_id: String,
     application_adb: AdbConfig,
-    capabilities: EmulatorCapabilityProfile,
+    /// The provider capability profile admitted at startup, whose provider-owned rows every
+    /// capability table of the entry keeps (#402 HS-2: a backend switch recomputes the table).
+    provider_profile: Option<EmulatorCapabilityProfile>,
     nemu_app_index: Option<NemuAppIndex>,
     /// The ADB endpoint and everything built on it, behind a lock because emulator control
-    /// (re)binds a discovery-bound entry. Every guarded section only copies plain data.
+    /// (re)binds a discovery-bound entry and (#402 HS-2) a backend switch replaces its backends.
+    /// Every guarded section only copies plain data.
     endpoint: Mutex<EntryEndpoint>,
 }
 
@@ -383,6 +402,9 @@ struct EntryEndpoint {
     input: TouchBackendConfig,
     capture: CaptureBackendConfig,
     configuration: actingcommand_contract::EffectiveDeviceConfiguration,
+    /// The capability table of the backends in effect (#402 HS-2: under the lock, since a
+    /// switch replaces it with the backends).
+    capabilities: EmulatorCapabilityProfile,
 }
 
 impl EntryEndpoint {
@@ -534,12 +556,11 @@ impl ExecutionBackendEntry {
         };
         let application_adb = registration.input.adb_config.clone();
         let application_target = registration.input.target.clone();
-        let capabilities =
-            capability_profile(registration.input.requested, registration.capture.requested)?;
-        let capabilities = match registration.provider_profile {
-            Some(provider) => merge_capability_profile(&capabilities, &provider)?,
-            None => capabilities,
-        };
+        let capabilities = entry_capability_profile(
+            registration.input.requested,
+            registration.capture.requested,
+            registration.provider_profile.as_ref(),
+        )?;
         let mut endpoint = EntryEndpoint {
             state,
             // Workflow #398 RD-1a: the audit endpoint names the target by its label.
@@ -548,6 +569,7 @@ impl ExecutionBackendEntry {
             input: registration.input,
             capture: registration.capture,
             configuration: registration.configuration,
+            capabilities,
         };
         if endpoint.state.is_pending() {
             let host = endpoint.application_target.host.clone();
@@ -558,7 +580,7 @@ impl ExecutionBackendEntry {
             instance_id: registration.instance_id,
             application_id: registration.application_id,
             application_adb,
-            capabilities,
+            provider_profile: registration.provider_profile,
             nemu_app_index: registration.nemu_app_index,
             endpoint: Mutex::new(endpoint),
         })
@@ -569,18 +591,48 @@ impl ExecutionBackendEntry {
         self.endpoint.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// #402 HS-2 (design HS-M §3.2 step 3.3): the entry's backends become `touch` and
+    /// `capture`, under the lock that guards them, all or nothing: the registration's own checks
+    /// (`check_backend_selection`), the record of the configuration in effect and the capability
+    /// table recomputed from the new backends and merged with the provider's rows as at
+    /// registration. Every other setting of the two backends (adb, target, timeouts, tool paths,
+    /// the Nemu folder and index) is the entry's as it was. Opens nothing. Returns the Nemu
+    /// application index the entry opens Nemu touch with, when `touch` is Nemu IPC.
+    fn switch_backends(
+        &self,
+        touch: TouchBackendChoice,
+        capture: CaptureBackendChoice,
+    ) -> RuntimeHostResult<Option<u32>> {
+        let mut endpoint = self.endpoint();
+        let input = endpoint.input.clone().with_requested(touch);
+        let candidate = endpoint.capture.clone().with_requested(capture);
+        check_backend_selection(&input, &candidate, HostLocation::SwitchInstanceBackends)?;
+        let capabilities =
+            entry_capability_profile(touch, capture, self.provider_profile.as_ref())?;
+        endpoint.configuration.input_backend = touch.as_str().to_owned();
+        endpoint.configuration.capture_backend = capture.as_str().to_owned();
+        endpoint.input = input;
+        endpoint.capture = candidate;
+        endpoint.capabilities = capabilities;
+        Ok(self
+            .nemu_app_index
+            .filter(|_| touch == TouchBackendChoice::NemuIpc)
+            .map(NemuAppIndex::index))
+    }
+
     fn resolve(&self) -> ResolvedExecutionInstance {
-        let (state, audit_endpoint, configuration) = {
+        let (state, audit_endpoint, configuration, capabilities) = {
             let endpoint = self.endpoint();
             (
                 endpoint.state.clone(),
                 endpoint.audit_endpoint.clone(),
                 endpoint.configuration.clone(),
+                endpoint.capabilities.clone(),
             )
         };
         let resolved = ResolvedExecutionInstance::new(self.instance_id, audit_endpoint)
             .with_configuration(configuration)
-            .with_capabilities(self.capabilities.clone());
+            .with_capabilities(capabilities);
         match state {
             ResolvedInstanceEndpoint::Bound(adb_endpoint) => {
                 resolved.with_adb_endpoint(adb_endpoint)
@@ -1031,6 +1083,21 @@ impl ExecutionBackendRegistry {
     }
 }
 
+/// The capability table of an entry with these backends: the registry's own rows of `input`
+/// and `capture`, merged with the provider's rows when the entry has an admitted profile. #402
+/// HS-2: computed at registration and again at every backend switch.
+fn entry_capability_profile(
+    input: TouchBackendChoice,
+    capture: CaptureBackendChoice,
+    provider: Option<&EmulatorCapabilityProfile>,
+) -> RuntimeHostResult<EmulatorCapabilityProfile> {
+    let capabilities = capability_profile(input, capture)?;
+    match provider {
+        Some(provider) => merge_capability_profile(&capabilities, provider),
+        None => Ok(capabilities),
+    }
+}
+
 /// Records implementation/configuration only; this path never opens or probes a backend.
 ///
 /// HS-4 (#402, design §4.4): the Nemu input performs the tap, the long tap, the swipe, the
@@ -1442,6 +1509,38 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
         }
         endpoint.bind_capture_index();
         Ok(())
+    }
+
+    /// #402 HS-2 (design HS-M §3.2 step 3.3): a real entry switches its backends under its own
+    /// lock (`ExecutionBackendEntry::switch_backends`); a fixture has no device backend to
+    /// switch. A refusal of the registration's checks names its code in the device error.
+    fn switch_instance_backends(
+        &self,
+        instance_alias: &str,
+        touch: TouchBackendChoice,
+        capture: CaptureBackendChoice,
+    ) -> DeviceResult<Option<u32>> {
+        match self.entries.get(instance_alias) {
+            Some(RegistryEntry::Real(entry)) => {
+                entry.switch_backends(touch, capture).map_err(|error| {
+                    DeviceError::fatal(format!(
+                        "backend switch refused by the registration's checks: {}",
+                        error.code()
+                    ))
+                    .with_diagnostic(
+                        DeviceErrorCategory::Protocol,
+                        HostLocation::SwitchInstanceBackends,
+                    )
+                })
+            }
+            #[cfg(feature = "fixture-backends")]
+            Some(RegistryEntry::Fixture(_)) => Err(DeviceError::fatal(
+                "backend switch unavailable: a fixture simulation instance has no device backends",
+            )),
+            None => Err(DeviceError::fatal(
+                "execution backend instance is not registered",
+            )),
+        }
     }
 
     /// On-demand discovery: the same `MuMuManager` resolution as startup, mapped to the

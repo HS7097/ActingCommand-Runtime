@@ -155,6 +155,36 @@ projection carries only the event type and action. The wire change is
 additive: a `deny_unknown_fields` reader must move to this contract before it
 reads such an event.
 
+## Backend switch event (#402 HS-2)
+
+#402 HS-2 ([v012-register.md](v012-register.md) §1.270; design HS-M §3.5; since 0.12.39). A
+`ConfigureSettings` that switched an instance's touch and capture backends
+([runtime-config.md](runtime-config.md), "Switching an instance's backends") records one
+`runtime.lifecycle_observed` with the action `device.backend_switched`, after
+`host.config_overrides` and `config.parameters.instance` and before the command's
+`command.validated`, only when the switch committed:
+
+```text
+device.backend_switched {
+  instance_alias,
+  touch:   { from, to },                       # the device layer's names, before and after
+  capture: { from, to },
+  nemu_app_index?,                             # when touch `to` is nemu_ipc and the instance has one
+  nemu_app_index_source?: file | resolved,     # with nemu_app_index; `resolved` is HS-3's
+  session_generation                           # the session the switch's preparation opened
+}
+```
+
+The opens the switch made (the candidate's, and after a failed candidate the previous backends'
+again) are recorded as every open is (`backend.open_observed`, the `backend.selfcheck.*` facts,
+`device.self_check`); a refused switch records no `device.backend_switched`. The payload is a new
+`RuntimePayload::DeviceBackendSwitched` variant with the new closed
+`EventAction::DeviceBackendSwitched`; its sensitivity is `internal`, and the public projection
+carries only the event type and action. As for `device.self_check`, the change is additive and
+moves no interface: a `deny_unknown_fields` reader moves to this contract before it reads such an
+event. A record names a valid alias, backend names that are tokens, at least one backend that
+changed, and an index exactly with its source.
+
 ## Input parameters from the original connection
 
 `input_check` in BackendOpenReport and its public Summary is the original

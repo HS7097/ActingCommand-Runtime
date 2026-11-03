@@ -131,6 +131,10 @@ pub enum ClaimKind {
     ResumeReconnect,
     /// A self-check preparation.
     SelfCheck,
+    /// #402 HS-2: the switch of an instance's touch and capture backends (`ConfigureSettings`
+    /// naming its backend keys); an operator claim that waits for a free instance at most
+    /// `CONNECTION_PREPARATION_CLAIM_WAIT_MS`, as a self-check does.
+    BackendSwitch,
     /// The dedicated preparation lease of a daemon-start connection preparation (resume,
     /// self-check and emulator start prepare on their own claim's key since #369 S5 and S6b).
     DaemonStartPreparation,
@@ -170,6 +174,7 @@ impl ClaimKind {
             Self::InputLifecycle => "input_lifecycle",
             Self::ResumeReconnect => "resume_reconnect",
             Self::SelfCheck => "self_check",
+            Self::BackendSwitch => "backend_switch",
             Self::DaemonStartPreparation => "daemon_start_preparation",
             Self::LabOperation => "lab_operation",
             Self::ClientLease => "client_lease",
@@ -186,6 +191,7 @@ impl ClaimKind {
             | Self::InputLifecycle
             | Self::ResumeReconnect
             | Self::SelfCheck
+            | Self::BackendSwitch
             | Self::LabOperation
             | Self::ClientLease => ClaimClass::Operator,
             Self::Autostart | Self::DaemonStartPreparation | Self::ResourceClose => {
@@ -224,7 +230,9 @@ impl ClaimKind {
 
     /// Q-2a, Q-3 (0)/(1), C13: a grant to this kind uses drain capacity, and a transfer to it
     /// skips `capacity_allows_transfer` (a ladder's admission has already checked capacity; a
-    /// continuation keeps its ladder's hold).
+    /// continuation keeps its ladder's hold). #402 HS-2: a backend switch is a self-check of the
+    /// new backends and takes neither the request-time checks nor business capacity; it checks
+    /// the instance's endpoint itself (`endpoint_unavailable`).
     pub const fn skips_business_capacity(self) -> bool {
         matches!(
             self,
@@ -234,6 +242,7 @@ impl ClaimKind {
                 | Self::Autostart
                 | Self::ResumeReconnect
                 | Self::SelfCheck
+                | Self::BackendSwitch
                 | Self::DaemonStartPreparation
                 | Self::ResourceClose
         )

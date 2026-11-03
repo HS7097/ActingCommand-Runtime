@@ -21,6 +21,9 @@ mod recovery_ladder;
 pub use recovery_ladder::*;
 mod device_self_check;
 pub use device_self_check::*;
+// #402 HS-2 (register §1.270): `device.backend_switched`.
+mod device_backend_switched;
+pub use device_backend_switched::*;
 mod task_selection;
 pub use task_selection::*;
 // Workflow #383 SH-1 (register §1.1, §1.2, §1.4): the v0.12.0 shapes of the ledger observer,
@@ -9357,6 +9360,7 @@ enum RuntimeDraftKind {
     FactInvalidated(RuntimeFactInvalidatedDraft),
     FactSnapshot(RuntimeFactSnapshotDraft),
     DeviceSelfCheck(DeviceSelfCheckDraft),
+    DeviceBackendSwitched(DeviceBackendSwitchedDraft),
 }
 
 struct RuntimeFactRecordedDraft {
@@ -11494,6 +11498,9 @@ pub enum RuntimePayload {
     FactSnapshot(RuntimeFactSnapshotPayload),
     /// `device.self_check` (Workflow #317 sc3), a status hint under the lifecycle event type.
     DeviceSelfCheck(DeviceSelfCheckPayload),
+    /// `device.backend_switched` (#402 HS-2), a switch of an instance's backends under the
+    /// lifecycle event type.
+    DeviceBackendSwitched(DeviceBackendSwitchedPayload),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -11846,6 +11853,7 @@ family_payload!(RuntimePayload, {
     FactInvalidated => EventType::RuntimeFactInvalidated,
     FactSnapshot => EventType::RuntimeFactSnapshot,
     DeviceSelfCheck => EventType::RuntimeLifecycleObserved,
+    DeviceBackendSwitched => EventType::RuntimeLifecycleObserved,
 });
 family_payload!(MonitorPayload, {
     Requested => EventType::MonitorProbeRequested,
@@ -12117,6 +12125,9 @@ impl EventPayloadDraft {
                 }
                 RuntimeDraftKind::DeviceSelfCheck(detail) => {
                     RuntimePayload::DeviceSelfCheck(detail.sanitize(fingerprinter)?)
+                }
+                RuntimeDraftKind::DeviceBackendSwitched(detail) => {
+                    RuntimePayload::DeviceBackendSwitched(detail.sanitize(fingerprinter)?)
                 }
             }),
             Self::Monitor(value) => EventPayload::Monitor(match value.0 {
@@ -12642,6 +12653,7 @@ impl EventPayload {
                         | RuntimePayload::FactInvalidated(_)
                         | RuntimePayload::FactSnapshot(_)
                         | RuntimePayload::DeviceSelfCheck(_)
+                        | RuntimePayload::DeviceBackendSwitched(_)
                 )
                 | Self::Ledger(LedgerPayload::Signature(_))
         ) {
@@ -12842,6 +12854,9 @@ impl EventPayload {
             ));
         }
         if let Self::Runtime(RuntimePayload::DeviceSelfCheck(payload)) = self {
+            payload.validate()?;
+        }
+        if let Self::Runtime(RuntimePayload::DeviceBackendSwitched(payload)) = self {
             payload.validate()?;
         }
         if detail.touch_response_us().is_some()
