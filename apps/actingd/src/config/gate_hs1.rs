@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 fn instance_id() -> InstanceId {
-    IdentifierIssuer::new()
+    *IdentifierIssuer::new()
         .expect("issuer")
         .mint_instance_id()
         .expect("instance id")
@@ -24,7 +24,7 @@ fn instance_id() -> InstanceId {
 /// A device instance entry `alias` of `id` with these members besides.
 fn device(root: &TempDir, alias: &str, id: InstanceId, members: Value) -> Value {
     let mut entry = json!({
-        "alias": alias, "instance_id": id.transport(),
+        "alias": alias, "instance_id": id,
         "application_id": "neutral.application", "adb_path": root.path().join("missing-adb.exe"),
         "connect": false, "host": "127.0.0.1", "port": 16384
     });
@@ -100,7 +100,7 @@ fn hs1_backend_rows_in_manifest() {
                 json!({"touch_backend": "maatouch", "capture_backend": "nemu", "port": 16416}),
             ),
             json!({
-                "alias": "neutral.fixture", "instance_id": fixture.transport(),
+                "alias": "neutral.fixture", "instance_id": fixture,
                 "fixture_backend": {
                     "frames": [{"width": 1, "height": 1, "rgb": [1, 2, 3]}],
                     "max_inputs": 0
@@ -215,7 +215,7 @@ fn hs1_app_index_with_adb_touch_assembles() {
 
     // A handset still names none: it has no Nemu at all.
     let handset = json!({
-        "alias": "neutral.phone", "instance_id": id.transport(),
+        "alias": "neutral.phone", "instance_id": id,
         "application_id": "neutral.application", "adb_path": root.path().join("missing-adb.exe"),
         "touch_backend": "adb_shell_input", "capture_backend": "adb", "nemu_app_index": 0,
         "device": {"kind": "handset", "transport": "usb"}
