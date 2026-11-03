@@ -43,6 +43,9 @@
 //!   caller fills in ([`CheckContext::with_backends`], [`BackendKindRules`]).
 //! - #402 HS-2 (since 0.12.39): both rows settable; the host switches the instance's backends
 //!   when an instruction changes them ([`backend_switch_instance`]).
+//! - Workflow #429 R-3 (since 0.12.39): each instance's `start_emulator` settable, `true` only on
+//!   an instance bound by discovery, as the caller names them
+//!   ([`CheckContext::with_discovery_bound`]).
 //!
 //! actingd reads the files and hands the assembled manifest to the host; the host applies
 //! instructions through this crate. It depends on the contract only (§5.1).
@@ -254,3 +257,7 @@ mod gate_agt_2b;
 // #402 HS-1 (register §1.267): the two backend rows and the whole-instance backend check.
 #[cfg(test)]
 mod gate_hs1;
+
+// Workflow #429 R-3 (register §1.272): `start_emulator` settable, on a discovery-bound instance.
+#[cfg(test)]
+mod gate_r3;

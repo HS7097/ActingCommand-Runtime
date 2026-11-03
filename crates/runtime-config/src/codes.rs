@@ -108,6 +108,10 @@ actingcommand_contract::outcome_vocabulary! {
         /// HS-1: a request that names a backend key names another key too, or the backend keys
         /// of two instances.
         BackendSwitchNotAlone => "backend_switch_not_alone",
+        /// #429 R-3: `start_emulator` true on an instance whose emulator the Runtime cannot
+        /// start, one not bound by discovery (a fixture, a handset, an instance bound by its
+        /// port).
+        DiscoveryBindingRequired => "discovery_binding_required",
         /// A note, never a refusal: the channel registry is missing or cannot be read.
         RegistryUnreadable => "registry_unreadable",
         /// A note, never a refusal: a rule's `to` that the channel registry does not list.

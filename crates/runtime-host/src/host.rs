@@ -1037,7 +1037,11 @@ impl RuntimeHostConfig {
     /// Workflow #369 S6c: the instances whose stopped emulator the daemon starts at its start,
     /// by alias in configuration order (`RuntimeHost::enqueue_emulator_autostart`). An alias that
     /// is not a registered instance fails startup with `emulator_autostart_instance_unknown`, a
-    /// fixture instance with `emulator_autostart_requires_physical_instance`.
+    /// fixture instance with `emulator_autostart_requires_physical_instance`. Workflow #429 R-3
+    /// (register §1.272): every automatic emulator start reads `instance.<instance id>.
+    /// start_emulator` in effect at each decision; this list is what the key is for an instance
+    /// whose configuration does not carry it (a host started without actingd's manifest), and its
+    /// order comes first in the start turn.
     pub fn with_emulator_autostart(mut self, emulator_autostart: Vec<String>) -> Self {
         self.emulator_autostart = emulator_autostart;
         self
@@ -5484,6 +5488,19 @@ impl RegisteredInstance {
     /// provenance without any endpoint, have no device connection to check and are exempt.
     fn device_self_checked(&self) -> bool {
         self.provenance == ExecutionBackendProvenance::PhysicalDevice && self.adb_endpoint.is_some()
+    }
+
+    /// Workflow #429 R-3 (register §1.272): whether an automatic emulator start may start this
+    /// instance's emulator once its `start_emulator` is on: a physical instance bound by discovery
+    /// (pending or bound), whose emulator the provider starts by its binding key. A fixture, a
+    /// handset and an instance bound by its port are not.
+    fn emulator_start_candidate(&self) -> bool {
+        self.provenance == ExecutionBackendProvenance::PhysicalDevice
+            && self
+                .adb_endpoint
+                .as_ref()
+                .and_then(ResolvedInstanceEndpoint::discovered_binding)
+                .is_some()
     }
 }
 

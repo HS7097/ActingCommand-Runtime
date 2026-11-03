@@ -6696,6 +6696,70 @@ switches that instance only, while it is free, and commits only once the new bac
 backends; nothing else persisted changes. A `device.backend_switched` record is read only by a
 reader of this contract.
 
+### 1.272 Slice R-3 (0.12.39): `start_emulator` changed online, and read in effect by every automatic emulator start (Workflow #429 A.2 R-3, board row 「`start_emulator` 在线修改」, depending on 「配置、监视及有效暂停 / 持有规则」, acceptance 「启动 / 监视 / 唤醒重读与整节校验」; Alice's ruling 117 A of 10-31; for the console's UI-3e1-b, the automatic rules on the rescue bar; coordinator work order `rd-1031/brief-r3.md`)
+
+[runtime-config.md](runtime-config.md) ("Key table", "Starting an instance's emulator",
+"ConfigureSettings", "Restore at start", "Console tiers"), [emulator-control.md](emulator-control.md)
+("Configured start at daemon start", "Emulator watch") and
+[actingd-check-config.md](actingd-check-config.md) (`config_manifest`, "Discovery-bound
+instances") are the contract. The number 1.272 is the coordinator's. It builds on S6a and S6c
+(§1.36, §1.60), emu-watch, IDLE-1, PAUSE-AUTO (§1.230), R-1 (keys the file does not write) and
+HS-1 (the check context the host fills in, §1.267).
+
+**What.** `instance.<instance id>.start_emulator` becomes settable while the Runtime runs
+(`ConfigureSettings`: `actingctl config set`, MCP `ac_config_set`, the console). Its
+whole-instance check is the file's (S6a): `true` only on an instance bound by discovery, which the
+host names in the check context from its registry (a physical instance whose endpoint carries a
+discovery binding, pending or bound); a fixture, a handset or an instance bound by its port is
+`config_value_invalid` (`discovery_binding_required`). Every automatic emulator start reads the
+value in effect at its next decision instead of the start-time list: the configured start at
+daemon start, the emulator watch's restart, IDLE-1's wake after `stop_emulator`, and each of their
+claims once more on its key, after the pause, up to just before the Start (off: the key released,
+nothing started, `emulator_autostart_skipped` with `skip_reason` `start_emulator_off`). Ruling 117
+A holds everywhere through the one question `automatic_start_hold` (PAUSE-AUTO), unchanged: a
+paused instance is never started automatically, re-checked just before acting. A change starts and
+stops nothing by itself. A start restores the value as every instance key, re-checked against this
+start's instances.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| R3-1 | `instance.<instance id>.start_emulator` settable | configuration key (§1.36 E6-1; `settable` yes, reader R-3, `since` stays 0.12.0; default `none`, so R-1's rule for a key the file does not write applies; `ui_tier` `daily`, as it was: `advanced` holds its eight since HS-1) | R-3 | the person (CLI, MCP, the console) | `s6a_check_config_shows_start_emulator` (actingd) adapted: it pinned `settable` false |
+| R3-2 | `discovery_binding_required` | token of `vocab:config_value_problem` | R-3 | the configuration's whole-instance check | at start over the file layer (a second line: actingd refuses first with `start_emulator_requires_discovery_binding`), after every instruction, and at a start's restore (that value alone dropped, `config_override_dropped`) |
+| R3-3 | `CheckContext::with_discovery_bound`, field `discovery_bound` | Runtime-internal interface of `actingcommand-runtime-config` | R-3 | the host (`config_check`) | `None` (a context that does not know the instances: actingd's check of the file) asks no rule; `CheckContext` is no longer `Copy` and `with_backends` no longer `const` |
+| R3-4 | `start_emulator_off` | token of `vocab:emulator_autostart_skip_reason` on `emulator_autostart_skipped` | R-3 | the host | a claim that met the value off on its key (the daemon start's, a watch restart's, which gives its place in the bound back, an idle wake's, which is spent), and an IDLE-1 wake that found it off (no claim, nothing queued, the instance active again once free); once per claim or wake; no new code |
+
+**Tests** (gate row in `host.toml`, "#429 R-3"): the nine of the work order, eight in
+runtime-host (`gate_r3`; the scripted emulator, a scripted connectivity status, the manual clock
+and the pause table, no sleep) and `r3_restore_drops_a_value_that_no_longer_fits`
+(runtime-config, `gate_r3`). Adapted: the one named in R3-1.
+
+**Where it differs from the brief's letter.** (a) "A hold": the player hold is R-7b's and has no
+state yet; `automatic_start_hold` is the one place it will extend, and every consumer of the value
+asks it before and on its key, as before. (b) The value is re-read on each claim's key as well as at
+each consumer's decision, so a claim requested while the value was on never starts an emulator
+after it was turned off. (c) An instance turned on by an instruction takes its turn after those
+the file turned on (the configured ones in configuration order, then the others by alias): the
+host has no configuration order of an instance the file does not list. (d) An IDLE-1 wake whose
+start is off is spent rather than owed (unlike a paused one): the instance becomes active, its
+emulator left as it is, so a person's start or the watch's recognition (EMU-BIND) brings it back.
+(e) For a host started without actingd's manifest, the start-time list (`with_emulator_autostart`)
+is what the key is for an instance whose configuration does not carry it.
+
+**Interface.** No step for 0.12.39 ([component-interfaces.md](component-interfaces.md)):
+`actingd-config` stays [5, 26] (HS-1's step: the entry's existing member is unchanged, and an
+instruction row is no file shape), and `runtime-client`, `ledger`, `package` and
+`runtime-outcomes` do not move: the request and receipt shapes are the existing ones, and the two
+new words are additive in their vocabularies.
+
+**What changes live.** Nothing until someone sets the key: every instance's value in effect is its
+file's, as the start-time list was. Turned on for an instance, the watch's next poll restarts its
+stopped emulator (and a later daemon start starts it); turned off, no automatic start launches it,
+and its running emulator stays as it is.
+
+**Rollback** (to 0.12.38). Rows of the key in `host.config_overrides` are dropped at start
+(`config_override_dropped`: a key 0.12.38 may not set) and each instance's file value is in effect
+again; nothing else persisted changes.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -6811,7 +6875,7 @@ when it takes effect.
 | `scheduling.parallel.*` | Workflow #427-A (**`actingd-config` revision 19**): `enabled` | `false`, settable (§1.200 427A-1): whether the policy driver hands each admitted scheduled run to its instance's worker | #427-A | #427-A (0.12.22): read at the start of every policy round |
 | `scheduling.fact_refresh.*` | `enabled`, `min_interval_ms`, `daily_limit`, `failure_backoff_ms`, `max_consecutive_failures`, `recognition_join_timeout_ms`, `overdue_ms` (no default value: unset, no `fact_reader_overdue` is reported; that is its declared default, coordinator ruling 9 of 2026-10-16, so R4 holds) | D2M §3.4 | D2-S4 (built, §1.56 D41, all but `overdue_ms`); `recognition_join_timeout_ms` D2-S2 (built, §1.28); `overdue_ms` D2-S5 (built, §1.68 D53) | D2-S4 (v0.12.0); `recognition_join_timeout_ms` D2-S2; `overdue_ms` D2-S5 |
 | per instance | `recognition_package` `{package}` (a location only, no digest; no default) | D2M §3.2 v1.4.2 | D2-S2 (built, §1.28) | D2-S2 |
-| per instance | `start_emulator` | ORD §3.5 item 17: default `none` (off unless the entry names it); discovery-bound instances only | S6a (built, §1.36) | S6c (built, §1.60; v0.12.0) |
+| per instance | `start_emulator` | ORD §3.5 item 17: default `none` (off unless the entry names it); discovery-bound instances only; settable since 0.12.39 (Workflow #429 R-3, §1.272) | S6a (built, §1.36) | S6c (built, §1.60; v0.12.0); R-3 (every automatic start reads it in effect, §1.272) |
 | per instance | `capture_backend` gains the value `scrcpy` (no new key) | explicit only, never part of `auto` or `auto-fastest`; refused on an emulator instance (`device_config_invalid`), and every instance is an emulator until RD-1b adds `device.kind` (R1 §5.1); the stream's parameters are device-layer defaults, not keys, until D1b's mechanism | #402 RD-3 | #402 RD-3, after RD-1b |
 | per instance | `touch_backend`, `capture_backend` (the entry's existing members as keys; §1.267) and `nemu_app_index` relaxed (**`actingd-config` revision 26**) | HS-M §2.1: default `none` (a device instance names both, a fixture neither); the device layer's names; the kind's backends, touch `nemu_ipc` only beside capture `nemu_ipc`; settable since HS-2 (§1.270: a change switches the device); `nemu_app_index` on any emulator entry, no longer needed by Nemu touch | #402 HS-1 | assembly; the switch and the start's restore (HS-2) |
 | top level | `lab_module_authoring`, `lab_module_debugging` | UIM §4.1 | U-2 | U-2 (reported only in v0.12.0) |

@@ -21,7 +21,9 @@
 //!   Runtime held, one `device_state_observed` record `emulator_watch_state_changed` (info) under
 //!   the instance. A failed read is `emulator_state_read_failed` (warning), once per failing
 //!   streak; the reading stays.
-//! - **Restarts (R3).** A configured instance (`start_emulator`) whose read shows no emulator
+//! - **Restarts (R3).** A configured instance (`start_emulator` on in effect at the poll, Workflow
+//!   #429 R-3: the file's value or an instruction's, read at every poll; its claim reads it once
+//!   more on its key) whose read shows no emulator
 //!   process, whose key no claim holds and on which no autostart or emulator control claim waits
 //!   (never two starts at once), is started again unless its own scheduling pause holds it
 //!   (WATCH-P, below; the global pause does not): `emulator_autostart_queued`
@@ -152,6 +154,10 @@ actingcommand_contract::outcome_vocabulary! {
         /// phase; first before its own pause (R-7a §2.6). Registered with the contract; R-7b's
         /// `automatic_start_hold` is the first to answer it.
         PlayerHeld => "player_held",
+        /// Workflow #429 R-3 (register §1.272): the instance's `start_emulator` in effect is off:
+        /// a claim requested while it was on met it off on its key, or IDLE-1's wake after
+        /// `stop_emulator` found it off.
+        StartEmulatorOff => "start_emulator_off",
     }
 }
 
@@ -190,12 +196,13 @@ impl PausedSkips {
     }
 }
 
-/// PAUSE-AUTO (0.12.34): the skip record of `start` for `alias` under `hold`:
-/// `emulator_autostart_skipped` (info; `alias`, `skip_reason`, and the value naming the start).
+/// PAUSE-AUTO (0.12.34): the skip record of `start` for `alias` for `reason` (a hold's, or
+/// Workflow #429 R-3's `start_emulator_off`): `emulator_autostart_skipped` (info; `alias`,
+/// `skip_reason`, and the value naming the start).
 pub(super) fn start_skip_outcome(
     start: SkippedStart,
     alias: &str,
-    hold: AutomaticStartHold,
+    reason: WatchSkipReason,
 ) -> Outcome {
     let outcome = Outcome::new(HostCode::EmulatorAutostartSkipped).alias(alias);
     let outcome = match start {
@@ -203,7 +210,7 @@ pub(super) fn start_skip_outcome(
         SkippedStart::DaemonStart => outcome,
         SkippedStart::IdleWake => outcome.idle_action(IdleAction::StopEmulator.as_str()),
     };
-    outcome.skip_reason(hold.reason)
+    outcome.skip_reason(reason)
 }
 
 /// Whether the watch may start an instance's stopped emulator now (R3's bound).
@@ -375,7 +382,9 @@ impl HostShared {
     /// recorded under its instance and the next instance goes on; one it does not survive is
     /// returned.
     fn poll_emulators(&self, settings: &EmulatorWatchConfig, now_ms: u64) -> RuntimeHostResult<()> {
-        let configured = self.emulator_autostart()?.to_vec();
+        // Workflow #429 R-3 (register §1.272): the instances whose `start_emulator` is on in
+        // effect at this poll, each at its place in the start turn.
+        let configured = self.emulator_starts_in_effect(EmulatorWatchLocation::Watch)?;
         let watched = lock(&self.registered_instances, EmulatorWatchLocation::Watch)?
             .values()
             .filter(|instance| {
@@ -393,7 +402,8 @@ impl HostShared {
             }
             let position = configured
                 .iter()
-                .position(|(configured, _)| *configured == instance_id);
+                .find(|(_, configured, _)| *configured == instance_id)
+                .map(|(position, _, _)| *position);
             match self.watch_emulator(instance_id, &alias, position, settings, now_ms) {
                 Ok(()) => {}
                 Err(error) if error.is_fatal() => return Err(error),
@@ -487,7 +497,7 @@ impl HostShared {
         if !self.first_start_skip(start, instance_id, hold)? {
             return Ok(());
         }
-        self.record_emulator_watch(instance_id, start_skip_outcome(start, alias, hold))
+        self.record_emulator_watch(instance_id, start_skip_outcome(start, alias, hold.reason))
     }
 
     /// PAUSE-AUTO (0.12.34): whether the skip of `start` under `hold` is the first of the hold's

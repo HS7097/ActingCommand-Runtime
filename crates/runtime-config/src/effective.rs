@@ -86,8 +86,9 @@ pub struct DeviceBounds {
 }
 
 /// Facts of other crates a whole-section check reads (§5.1, §5.3): the caller fills them in,
-/// so this crate depends on neither the scheduler nor the device layer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// so this crate depends on neither the scheduler nor the device layer. Workflow #429 R-3: no
+/// longer `Copy`, since it holds the discovery-bound instances.
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct CheckContext {
     /// `scheduler.maximum_client_heartbeat_interval_ms` in effect (§4.3).
@@ -99,6 +100,13 @@ pub struct CheckContext {
     /// rule, which the whole-instance backend check reads; none until the caller fills them in
     /// ([`Self::with_backends`]), so an unfilled context refuses every backend in effect.
     pub backends: BackendKindRules,
+    /// Workflow #429 R-3 (register §1.272): the registry ids of the instances whose emulator the
+    /// Runtime can start, those bound by discovery, as the host's registry holds them
+    /// ([`Self::with_discovery_bound`]); `start_emulator` `true` on any other instance is
+    /// `discovery_binding_required`. `None` until the caller fills them in: a context that does not
+    /// know the instances (actingd's check of the file, which refuses that value earlier with its
+    /// own code) does not ask the rule.
+    pub discovery_bound: Option<BTreeSet<String>>,
 }
 
 impl CheckContext {
@@ -107,12 +115,22 @@ impl CheckContext {
             maximum_client_heartbeat_interval_ms,
             device,
             backends: BackendKindRules::NONE,
+            discovery_bound: None,
         }
     }
 
-    /// #402 HS-1: the context with the backends each kind of device has.
-    pub const fn with_backends(self, backends: BackendKindRules) -> Self {
+    /// #402 HS-1: the context with the backends each kind of device has. Workflow #429 R-3: no
+    /// longer `const`, since the context holds a set.
+    pub fn with_backends(self, backends: BackendKindRules) -> Self {
         Self { backends, ..self }
+    }
+
+    /// Workflow #429 R-3: the context with the registry ids of the instances bound by discovery.
+    pub fn with_discovery_bound(self, instances: BTreeSet<String>) -> Self {
+        Self {
+            discovery_bound: Some(instances),
+            ..self
+        }
     }
 }
 
@@ -811,7 +829,9 @@ impl EffectiveConfig {
     /// file-only choice. #402 HS-1: before any key is looked at, a request that names a backend
     /// key names only the backend keys of one instance (`config_value_invalid`,
     /// `backend_switch_not_alone`), and a changed instance's backends pass the whole-instance
-    /// backend check with the rest of the per-instance section.
+    /// backend check with the rest of the per-instance section. Workflow #429 R-3: so does each
+    /// instance's `start_emulator`, `true` only on an instance `context` names as bound by
+    /// discovery (`config_value_invalid`, `discovery_binding_required`).
     pub fn apply(
         &self,
         changes: &[ConfigSettingChange],
@@ -1019,6 +1039,12 @@ impl EffectiveConfig {
                 self.file_names_backends(instance),
                 &context.backends,
             )?;
+            // Workflow #429 R-3: `start_emulator` on only a discovery-bound instance.
+            instance::check_start_emulator(
+                instance,
+                |key| self.value(key).cloned(),
+                context.discovery_bound.as_ref(),
+            )?;
         }
         Ok(())
     }
@@ -1140,8 +1166,10 @@ impl EffectiveConfig {
     ///
     /// The restored values then pass the whole-section check of their sections with this
     /// start's file layer (§5.3); a section that fails it drops every value restored into it
-    /// (`config_override_dropped`). A record not of the shape this build writes is refused
-    /// whole.
+    /// (`config_override_dropped`). Before it, #402 HS-1: an instance's restored backends its
+    /// backend check refuses are dropped together; Workflow #429 R-3: a restored `start_emulator`
+    /// `true` of an instance `context` does not name as bound by discovery is dropped alone. A
+    /// record not of the shape this build writes is refused whole.
     pub fn restore(
         &mut self,
         rows: &[BTreeMap<String, FactScalar>],
@@ -1245,6 +1273,40 @@ impl EffectiveConfig {
                         config_key: key,
                     });
                 }
+            }
+        }
+        // Workflow #429 R-3 (register §1.272): a restored `start_emulator` `true` of an instance
+        // this start's context does not name as bound by discovery (its entry is a fixture's, a
+        // handset's or bound by its port now) no longer fits: that value alone is dropped
+        // (`config_override_dropped`), and the section check below sees the instance's file
+        // layer.
+        let restored_starts = self
+            .settings
+            .iter()
+            .filter(|setting| {
+                setting.instruction.is_some() && instance::is_start_emulator_row(setting.row)
+            })
+            .filter_map(|setting| setting.instance.clone())
+            .collect::<BTreeSet<_>>();
+        for instance_id in restored_starts {
+            if instance::check_start_emulator(
+                &instance_id,
+                |key| self.value(key).cloned(),
+                context.discovery_bound.as_ref(),
+            )
+            .is_ok()
+            {
+                continue;
+            }
+            let key = instance_key(&instance_id, instance::START_EMULATOR);
+            if let Some(setting) = self.settings.iter_mut().find(|setting| setting.key == key)
+                && setting.instruction.take().is_some()
+            {
+                notes.retain(|note| note.config_key != key);
+                notes.push(RestoreNote {
+                    note: ConfigCode::ConfigOverrideDropped,
+                    config_key: key,
+                });
             }
         }
         for section in restored_sections {

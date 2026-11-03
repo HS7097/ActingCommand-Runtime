@@ -762,7 +762,7 @@ tests = [
 ]
 incident = ["#396"]
 
-# Workflow #369 S6a: start_emulator is off unless an instance names it and is allowed only on a discovery-bound instance; check-config shows it on each discovery-bound entry and in the manifest (explicit, not settable); the operating system's connectivity level maps to internet, no internet or unknown
+# Workflow #369 S6a: start_emulator is off unless an instance names it and is allowed only on a discovery-bound instance; check-config shows it on each discovery-bound entry and in the manifest (explicit; settable since Workflow #429 R-3, register §1.272); the operating system's connectivity level maps to internet, no internet or unknown
 [[gate]]
 key = "63"
 coverage = "Y"
@@ -1264,6 +1264,22 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_pause_auto::pause_auto_8_restarts_skipped_on_their_key_give_their_places_in_the_bound_back",
 ]
 incident = ["PAUSE-AUTO"]
+
+# Workflow #429 R-3 (0.12.39; brief rd-1031/brief-r3.md; register §1.272; board #429 row R-3; Alice's ruling 117 A; contracts/runtime-config.md, "Starting an instance's emulator", "ConfigureSettings", "Restore at start" and "Console tiers"; contracts/emulator-control.md, "Configured start at daemon start", "Emulator watch"; contracts/actingd-check-config.md): instance.<id>.start_emulator is set by an instruction on a discovery-bound instance whose file does not name it (over base null) and over one whose file does, cleared back to no value, its row settable and daily (1); a fixture, a handset and an instance bound by its port refuse true, Denied config_value_invalid with config_value_problem discovery_binding_required naming the key, nothing changed (2); after a restart that restored the instruction values, the configured start at daemon start claims and starts the stopped emulator the value in effect turns on and not the one it turns off though the file and the start-time list name it (3); the emulator watch restarts a stopped emulator only while the value in effect is on, its restart claim met the value off on its key releasing the key with no command record and no failure pair, starting nothing, one skip start_emulator_off (watch_kind restart) and its place in the bound given back, and the next poll after turning it on restarts it (4); IDLE-1's wake after stop_emulator, with the action and the value turned off in one request, records the wake, requests no claim and starts nothing, one skip start_emulator_off (idle_action stop_emulator), and the instance is no longer kept closed (5); an instance turned on online and held by its own pause gets no daemon-start claim and no watch restart, one skip each (instance_paused) (6); a daemon-start claim of such an instance requested before the pause meets the pause on its key, releases it with no command record and no failure pair and starts nothing (7); setting, overriding and clearing the key starts, stops, claims and binds nothing (8); a start drops a restored true of an instance no longer bound by discovery alone (config_override_dropped) and keeps the rest (9)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_r3::r3_start_emulator_settable_online_on_a_discovery_bound_instance",
+    "actingcommand-runtime-host::lib::tests::gate_r3::r3_fixture_and_handset_refuse_start_emulator_named",
+    "actingcommand-runtime-host::lib::tests::gate_r3::r3_auto_launch_reads_the_value_in_effect",
+    "actingcommand-runtime-host::lib::tests::gate_r3::r3_monitor_relaunch_follows_the_value_in_effect",
+    "actingcommand-runtime-host::lib::tests::gate_r3::r3_idle_wake_follows_the_value_in_effect",
+    "actingcommand-runtime-host::lib::tests::gate_r3::r3_paused_instance_is_never_auto_launched",
+    "actingcommand-runtime-host::lib::tests::gate_r3::r3_pause_rechecked_just_before_launch",
+    "actingcommand-runtime-host::lib::tests::gate_r3::r3_change_itself_launches_and_stops_nothing",
+    "actingcommand-runtime-config::lib::gate_r3::r3_restore_drops_a_value_that_no_longer_fits",
+]
+incident = ["#429 R-3"]
 
 # A person's drill of one physical instance's stuck-recovery ladder is recorded like a ladder a trigger started and tagged drill: its trigger (stage drill, no run, task, preparation, rule or match), its plan, one recovery_rung_finished per rung and its end; only a ladder's own phases carry the tag, and only a drill ends planned. A plan drill never acts on the device (each rung it would run skipped drill_plan, the climb planned at info, no Stop, Start or preparation) and opens no cool-down window; a device drill climbs its rungs on the instance under the same key as a real ladder and opens the window, after which a drill the cool-down holds is refused recovery_ladder_drill_cooling_down after its tagged suppression; a drill of an instance whose stuck recovery is off is refused recovery_ladder_drill_disabled, and no agent origin may ask for one (Workflow #390 DRILL-1, forced compromise T-08; wave 13 ruling 9); a recovery_ladder.triggers[] item that names the stage drill is refused stage_not_allowed naming recovery_ladder.triggers, at start and by instruction, and the configuration in effect stays (register DR2; TEST-FU, train 15 rulings DRILL-1 item 6)
 [[gate]]

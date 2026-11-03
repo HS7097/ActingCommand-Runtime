@@ -13,7 +13,7 @@
 //! `recognition_package.package`: reported only for an instance that names it, read at assembly.
 //! Workflow #369 S6a adds `start_emulator` (ORD §3.5 item 17): `true` lets the daemon start the
 //! instance's stopped emulator at its start (S6c); default `none`, so a file that does not name
-//! it leaves it off and reports no row; read at assembly. Workflow #398 RD-4 adds
+//! it leaves it off and reports no row; read at assembly until R-3 (below). Workflow #398 RD-4 adds
 //! `recovery_ladder_profile` (model-398 v1.1 §6.2): the ladder profile the instance climbs by,
 //! before the section's `kind_profiles`; default `none` (no row unless the entry names it),
 //! settable, checked with the `recovery_ladder` section. Workflow #411 B15 R3 (model-b15 §5.2)
@@ -44,7 +44,10 @@
 //! each kind of device's backends from the check context the host fills in, and a request that
 //! names one names only the backend keys of one instance. #402 HS-2 (register §1.270, design HS-M
 //! §3) makes both settable: the host switches the instance's backends when an instruction changes
-//! them ([`backend_switch_instance`]).
+//! them ([`backend_switch_instance`]). Workflow #429 R-3 (register §1.272) makes `start_emulator`
+//! settable: every automatic emulator start reads the value in effect at its next decision, and
+//! the whole-instance check refuses `true` on an instance the check context does not name as bound
+//! by discovery (`check_start_emulator`).
 
 use crate::codes::ConfigValueProblem;
 use crate::display_safe_area;
@@ -63,6 +66,7 @@ use crate::table::{
     instance_key,
 };
 use actingcommand_contract::{ConfigSettingChange, FactScalar, InstanceStuckRecovery};
+use std::collections::BTreeSet;
 
 /// The member that turns the stuck-recovery ladder on or off for one instance.
 pub const STUCK_RECOVERY: &str = "stuck_recovery";
@@ -77,6 +81,7 @@ pub const DEVICE_KIND_TOKENS: &[&str] = &["emulator", "handset"];
 pub const RECOGNITION_PACKAGE: &str = "recognition_package";
 /// Workflow #369 S6a: whether the daemon starts the instance's stopped emulator at its start, the
 /// entry's `start_emulator`; discovery-bound instances only, off unless the file names it.
+/// Workflow #429 R-3: settable; every automatic emulator start reads it in effect.
 pub const START_EMULATOR: &str = "start_emulator";
 /// Workflow #398 RD-4 (model-398 v1.1 §6.2): the ladder profile the instance climbs by, the
 /// entry's `recovery_ladder_profile`; it comes before the `recovery_ladder` section's
@@ -155,14 +160,18 @@ pub(crate) static ROWS: &[KeyRow] = &[
         reader: "D2-S2",
         since: "0.12.0",
     },
+    // Workflow #429 R-3 (register §1.272; since 0.12.39 settable): reported only for an instance
+    // that names it or that an instruction sets it for; the daemon start, the emulator watch and
+    // IDLE-1's wake read it in effect at each decision, and `true` needs a discovery-bound instance
+    // (`check_start_emulator`).
     KeyRow {
         name: KeyName::PerInstance(START_EMULATOR),
         file_path: FilePath::InstanceMember,
         value_type: ValueType::Boolean,
         range: KeyRange::Any,
         default: DefaultSource::None,
-        settable: Settable::No(NotSettable::ReadAtAssembly),
-        reader: "S6c",
+        settable: Settable::Yes,
+        reader: "R-3",
         since: "0.12.0",
     },
     // Workflow #398 RD-4 (model-398 §6.2): reported only for an instance that names it (or, since
@@ -481,6 +490,42 @@ pub(crate) fn check_backends(
         ));
     }
     Ok(())
+}
+
+/// Workflow #429 R-3 (register §1.272): whether `row` is the `start_emulator` row.
+pub(crate) fn is_start_emulator_row(row: &KeyRow) -> bool {
+    row.name == KeyName::PerInstance(START_EMULATOR)
+}
+
+/// Workflow #429 R-3 (register §1.272; actingd's own rule for the file, Workflow #369 S6a): the
+/// instance's `start_emulator` `true` in effect needs an instance whose emulator the Runtime can
+/// start, one bound by discovery. `discovery_bound` names those instances as the host knows them
+/// (its registered physical instances bound by `instance_index` or `instance_name`); any other is
+/// `config_value_invalid` (`discovery_binding_required`) for the key: a fixture, a handset, an
+/// instance bound by its port. `None`: the context does not know the instances (actingd's check of
+/// the file, which refuses the same value earlier with its own code,
+/// `start_emulator_requires_discovery_binding`), and the rule is not asked. `false`, and no value,
+/// pass on every instance.
+pub(crate) fn check_start_emulator(
+    instance: &str,
+    value: impl Fn(&str) -> Option<FactScalar>,
+    discovery_bound: Option<&BTreeSet<String>>,
+) -> Result<(), ConfigFailure> {
+    let key = instance_key(instance, START_EMULATOR);
+    match value(&key) {
+        None | Some(FactScalar::Boolean(false)) => Ok(()),
+        Some(FactScalar::Boolean(true)) => match discovery_bound {
+            Some(bound) if !bound.contains(instance) => Err(ConfigFailure::invalid_value(
+                key,
+                ConfigValueProblem::DiscoveryBindingRequired,
+            )),
+            _ => Ok(()),
+        },
+        Some(_) => Err(ConfigFailure::invalid_value(
+            key,
+            ConfigValueProblem::WrongType,
+        )),
+    }
 }
 
 /// The whole-section check of one instance (§5.3): its two stuck-recovery members together form
