@@ -264,6 +264,36 @@ pub fn segmented_swipe_capability_error() -> DeviceError {
         )
 }
 
+/// HS-4 (#402, design `rd-1031/backend-switch/model-backend-switch.md` §4.4): a plain swipe as
+/// one contact, for a backend that performs it from events: the press at `start`, moves along the
+/// straight line to `end` spread evenly over `duration_ms` (one per 16 ms, at most 60, the last at
+/// `end`, the waits summing to `duration_ms`), and the release.
+pub(crate) fn linear_swipe_events(
+    start: (i32, i32),
+    end: (i32, i32),
+    duration_ms: u64,
+) -> Vec<SegmentedSwipeEvent> {
+    let steps = duration_ms
+        .div_ceil(SEGMENTED_SWIPE_FRAME_MS)
+        .clamp(1, MAX_SEGMENTED_SWIPE_STEPS);
+    let mut events = vec![SegmentedSwipeEvent::Down(start)];
+    let mut prior_elapsed_ms = 0_u64;
+    for step in 1..=steps {
+        let elapsed_ms = duration_ms * step / steps;
+        let along = |from: i32, to: i32| {
+            i128::from(from)
+                + (i128::from(to) - i128::from(from)) * i128::from(step) / i128::from(steps)
+        };
+        events.push(SegmentedSwipeEvent::Move {
+            point: (along(start.0, end.0) as i32, along(start.1, end.1) as i32),
+            delay_before_ms: elapsed_ms - prior_elapsed_ms,
+        });
+        prior_elapsed_ms = elapsed_ms;
+    }
+    events.push(SegmentedSwipeEvent::Up);
+    events
+}
+
 fn append_maa_2_0_segment(
     events: &mut Vec<SegmentedSwipeEvent>,
     start: (i32, i32),
@@ -338,6 +368,19 @@ pub trait InputBackend {
         duration_ms: u64,
     ) -> DeviceResult<()>;
 
+    /// HS-4 (#402): the long tap on the frame its step decided on, under the Runtime's check of
+    /// that step. A backend that needs neither performs [`Self::long_tap`].
+    fn long_tap_in_frame(
+        &mut self,
+        witness: &FencedWrite,
+        x: i32,
+        y: i32,
+        duration_ms: u64,
+        _context: &crate::InputExecutionContext,
+    ) -> DeviceResult<()> {
+        self.long_tap(witness, x, y, duration_ms)
+    }
+
     fn swipe(
         &mut self,
         witness: &FencedWrite,
@@ -347,6 +390,19 @@ pub trait InputBackend {
         y2: i32,
         duration_ms: u64,
     ) -> DeviceResult<()>;
+
+    /// HS-4 (#402): the swipe from `from` to `to` on the frame its step decided on, under the
+    /// Runtime's check of that step. A backend that needs neither performs [`Self::swipe`].
+    fn swipe_in_frame(
+        &mut self,
+        witness: &FencedWrite,
+        from: (i32, i32),
+        to: (i32, i32),
+        duration_ms: u64,
+        _context: &crate::InputExecutionContext,
+    ) -> DeviceResult<()> {
+        self.swipe(witness, from.0, from.1, to.0, to.1, duration_ms)
+    }
 
     fn supports_segmented_swipe(&self) -> bool {
         false
@@ -385,6 +441,17 @@ pub trait InputBackend {
     fn text(&mut self, witness: &FencedWrite, text: &str) -> DeviceResult<()>;
 
     fn reset(&mut self, witness: &FencedWrite) -> DeviceResult<()>;
+
+    /// HS-4 (#402): the reset under the Runtime's check of its step. A reset presses nothing, so
+    /// it reads no frame (the context carries no geometry). A backend that needs no check
+    /// performs [`Self::reset`].
+    fn reset_with_check(
+        &mut self,
+        witness: &FencedWrite,
+        _context: &crate::InputExecutionContext,
+    ) -> DeviceResult<()> {
+        self.reset(witness)
+    }
 
     fn close_once(
         &mut self,

@@ -481,6 +481,8 @@ mod gate_406_t12;
 // Workflow #406 T3 (host key 124), register §1.137: a run performs the path drag the kernel
 // generates, on a segmented backend and on the Nemu input.
 mod gate_406_t3;
+// HS-4 (#402), register §1.268: the reset a cancelled run's client owes passes the Nemu input.
+mod gate_hs4;
 
 // #412 Lab B-3 S2 (host keys 152 to 155), register §1.162: the host runs one declared operation
 // over the Lab lease and writes its LR-10 records.

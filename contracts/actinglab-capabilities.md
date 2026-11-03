@@ -77,11 +77,13 @@ with `device_kinds: ["handset"]` since only a handset selects it
 `capture_backend_must_be_explicit`, because actingd refuses an instance that
 names one. `touch_backends` lists the four input backends an instance may name
 (`touch_backend`), each with `gestures`, the Runtime input actions it performs,
-as declared support with status `unverified`: `nemu_ipc` performs `tap` and the
-three segmented drags (`single_touch_drag_with_vertical_brake_v1`,
+as declared support with status `unverified`: `nemu_ipc` performs `tap`, (HS-4,
+#402, since 0.12.39) `long_tap` and `swipe`, and the three segmented drags
+(`single_touch_drag_with_vertical_brake_v1`,
 `single_touch_drag_with_pause_and_brake_v1` and, Workflow #406 T3, the path drag
 `single_touch_path_drag_v1`), only on a frame the Runtime captured
-(`nemu_input_frame_required`); `maatouch` performs `tap`, `long_tap`, `swipe`,
+(`nemu_input_frame_required`), and neither `key` nor `text`; its reset needs no
+frame (`v012-register.md` §1.268); `maatouch` performs `tap`, `long_tap`, `swipe`,
 the three segmented drags, `key` and `text`; `minitouch` the same without `key`
 and `text`; `adb_shell_input` performs `tap`, `long_tap` (as a swipe that stays at
 its point), `swipe` and (Workflow #406 T3, plan Q18 (a)) the three segmented drags

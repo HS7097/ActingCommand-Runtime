@@ -15,7 +15,7 @@ use actingcommand_contract::{
 use actingcommand_device::{
     CaptureBackend, DeviceCloseAuthority, DeviceError, DeviceResourceClosePhase,
     DeviceResourceKind, DeviceResourceQuiescence, DeviceResult, DragWithPauseAndBrakeAction, Frame,
-    InputBackend, InputExecutionContext, InputOperationCheck, NemuFrameGeometry,
+    InputBackend, InputExecutionContext, InputOperationCheck, NemuFrameGeometry, NemuInputSupport,
     NemuSessionBackends, PathDragAction, PreparedSegmentedSwipePlan, SegmentedSwipeAction,
     prepare_drag_with_pause_and_brake, prepare_path_drag, prepare_segmented_swipe,
     segmented_swipe_capability_error,
@@ -44,6 +44,16 @@ impl InputFrameContext {
 
     pub const fn reference(&self) -> InputFrameReference {
         self.reference
+    }
+
+    /// Tests (HS-4): the context of a committed frame `reference` with no Nemu geometry, as a
+    /// host's runtime hands a run for a frame it committed.
+    #[cfg(test)]
+    pub(crate) fn for_test(reference: InputFrameReference) -> Self {
+        Self {
+            reference,
+            geometry: None,
+        }
     }
 
     fn captured(frame_id: FrameId, frame: &Frame) -> Self {
@@ -1807,28 +1817,37 @@ fn execute_input(
     let execute = || -> ExecutionKernelResult<ExecutionInputOutcome> {
         let context = match backends {
             SessionBackends::Nemu(..) => {
-                let reference = frame.ok_or_else(|| {
-                    ExecutionKernelError::fatal(SharedCode::NemuInputFrameRequired.code())
-                })?;
-                let committed = committed_frame
-                    .filter(|value| value.reference == reference)
-                    .ok_or_else(|| {
-                        ExecutionKernelError::fatal(
-                            ExecutionKernelCode::InputFrameNotCommitted.code(),
-                        )
+                let check = check.ok_or_else(|| {
+                    ExecutionKernelError::fatal(
+                        ExecutionKernelCode::NemuInputFencingRequired.code(),
+                    )
+                });
+                // HS-4 (#402, design §4.4): the reset presses nothing, so it reads no frame; it
+                // runs under its step's check alone. Every other input runs on its step's
+                // committed frame.
+                let geometry = if nemu_input_without_frame(&action) {
+                    None
+                } else {
+                    let reference = frame.ok_or_else(|| {
+                        ExecutionKernelError::fatal(SharedCode::NemuInputFrameRequired.code())
                     })?;
-                if committed.geometry.is_none() {
-                    return Err(ExecutionKernelError::fatal(
-                        ExecutionKernelCode::NemuInputFrameSourceMissing.code(),
-                    ));
-                }
+                    let committed = committed_frame
+                        .filter(|value| value.reference == reference)
+                        .ok_or_else(|| {
+                            ExecutionKernelError::fatal(
+                                ExecutionKernelCode::InputFrameNotCommitted.code(),
+                            )
+                        })?;
+                    if committed.geometry.is_none() {
+                        return Err(ExecutionKernelError::fatal(
+                            ExecutionKernelCode::NemuInputFrameSourceMissing.code(),
+                        ));
+                    }
+                    committed.geometry.clone()
+                };
                 Some(InputExecutionContext {
-                    geometry: committed.geometry.clone(),
-                    check: check.ok_or_else(|| {
-                        ExecutionKernelError::fatal(
-                            ExecutionKernelCode::NemuInputFencingRequired.code(),
-                        )
-                    })?,
+                    geometry,
+                    check: check?,
                 })
             }
             _ => None,
@@ -2041,6 +2060,16 @@ fn open_backends(
     Ok(observations)
 }
 
+/// HS-4 (#402, design §4.4): whether the Nemu input performs `action` without a frame (the
+/// reset).
+fn nemu_input_without_frame(action: &PreparedInputAction) -> bool {
+    matches!(
+        action,
+        PreparedInputAction::Direct(direct)
+            if NemuInputSupport::of(direct) == NemuInputSupport::WithoutFrame
+    )
+}
+
 fn execute_action(
     backend: &mut dyn InputBackend,
     witness: &FencedWrite,
@@ -2052,16 +2081,24 @@ fn execute_action(
             Some(context) => backend.tap_in_frame(witness, *x, *y, context),
             None => backend.tap(witness, *x, *y),
         },
-        PreparedInputAction::Direct(InputAction::LongTap { x, y, duration_ms }) => {
-            backend.long_tap(witness, *x, *y, *duration_ms)
-        }
+        // HS-4 (#402): a backend that takes the step's context (the Nemu input) presses the long
+        // tap and the swipe on its frame, under its check.
+        PreparedInputAction::Direct(InputAction::LongTap { x, y, duration_ms }) => match context {
+            Some(context) => backend.long_tap_in_frame(witness, *x, *y, *duration_ms, context),
+            None => backend.long_tap(witness, *x, *y, *duration_ms),
+        },
         PreparedInputAction::Direct(InputAction::Swipe {
             x1,
             y1,
             x2,
             y2,
             duration_ms,
-        }) => backend.swipe(witness, *x1, *y1, *x2, *y2, *duration_ms),
+        }) => match context {
+            Some(context) => {
+                backend.swipe_in_frame(witness, (*x1, *y1), (*x2, *y2), *duration_ms, context)
+            }
+            None => backend.swipe(witness, *x1, *y1, *x2, *y2, *duration_ms),
+        },
         PreparedInputAction::SegmentedSwipe(plan) => {
             if !backend.supports_segmented_swipe() {
                 return Err(segmented_swipe_capability_error());
@@ -2073,7 +2110,10 @@ fn execute_action(
         }
         PreparedInputAction::Direct(InputAction::Key { key }) => backend.key(witness, key),
         PreparedInputAction::Direct(InputAction::Text { text }) => backend.text(witness, text),
-        PreparedInputAction::Direct(InputAction::Reset) => backend.reset(witness),
+        PreparedInputAction::Direct(InputAction::Reset) => match context {
+            Some(context) => backend.reset_with_check(witness, context),
+            None => backend.reset(witness),
+        },
         PreparedInputAction::Direct(
             InputAction::SingleTouchDragWithVerticalBrakeV1 { .. }
             | InputAction::SingleTouchDragWithPauseAndBrakeV1 { .. }

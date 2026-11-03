@@ -261,6 +261,9 @@ mod gate_406_t12;
 // Workflow #406 T3 (exec key 111): the path drag the kernel generates in a box.
 #[cfg(test)]
 mod gate_406_t3;
+// HS-4 (#402, register §1.268): every input of a package's run names its step's frame.
+#[cfg(test)]
+mod gate_hs4;
 // #411 Lab RP (exec key 115): the Lab's single-step select evaluations read the run parameters.
 #[cfg(test)]
 mod gate_411_lab_rp;
