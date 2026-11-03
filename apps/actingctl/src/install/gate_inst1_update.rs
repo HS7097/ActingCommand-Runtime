@@ -1829,3 +1829,91 @@ fn p49_l9_the_notice_asks_no_reconnect_for_an_mcp_entrys_child() {
     assert_eq!(parsed.len(), 1, "{parsed:?}");
     assert_eq!(parsed[0].parent_pid, Some(50));
 }
+
+/// The `(interface, check)` of every failed edge of a plan's answer.
+fn failed_edges(answer: &super::Answer) -> Vec<(String, String)> {
+    answer.members["plan"]["edges"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the plan's edges: {answer:?}"))
+        .iter()
+        .filter(|edge| edge["result"] == "fail")
+        .map(|edge| {
+            (
+                edge["interface"].as_str().unwrap_or_default().to_owned(),
+                edge["check"].as_str().unwrap_or_default().to_owned(),
+            )
+        })
+        .collect()
+}
+
+// #402 HS-2b (register §1.274; contracts/component-interfaces.md, the `ledger` row of revision 6):
+// this build declares `ledger` [3, 6] (read from the declaration it carries in its manifests,
+// `host.rs`'s `OWN_DECLARATION`, the same file), the build before it [3, 5]. The update from the
+// [3, 5] build needs `--accept-ledger-one-way`: without it the plan is refused `interface_edge`
+// with the one failed row `one_way`, with it the update is planned and applied. The rollback from
+// this build to the [3, 5] build is refused `interface_edge`, flag or not, with the one failed row
+// `previous_max_in_next` (Rp.max 6 is not in R* [3, 5]); no ledger record is needed for it.
+#[test]
+fn hs2b_ledger_six_needs_the_one_way_flag_and_refuses_the_rollback_to_five() {
+    let own: Value = serde_json::from_str(include_str!(
+        "../../../../distribution/windows/component-interfaces.json"
+    ))
+    .expect("the build's declaration is JSON");
+    let six = own["speaks"]["ledger"].clone();
+    assert_eq!(six, json!([3, 6]), "this build's `ledger` range");
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let mut five = BuildSpec::new(C1);
+    set_speaks(&mut five, "ledger", json!([3, 5]));
+    let mut this_build = BuildSpec::new(C2);
+    set_speaks(&mut this_build, "ledger", six);
+    let root = prepared(temp.path(), "ledger-six", &five, &this_build, &host);
+    let one_way: &[&str] = &["--accept-ledger-one-way"];
+    let pair = |interface: &str, check: &str| [(interface.to_owned(), check.to_owned())];
+
+    // The update needs the flag.
+    let refused = plan_update(&host, &root, C2, &[]);
+    assert_refused(&refused, "install_update_plan", "interface_edge");
+    assert_eq!(
+        failed_edges(&refused),
+        pair("ledger", "one_way"),
+        "{refused:?}"
+    );
+    let planned = plan_update(&host, &root, C2, one_way);
+    assert_done(&planned, "install_update_plan");
+    let applied = apply_update(&host, &root, C2, &plan_id(&planned), one_way);
+    assert_done(&applied, "install_update_apply");
+    assert_eq!(
+        journal_of(&root, &operation_id(&applied))["acknowledged"],
+        json!(["accept_ledger_one_way"])
+    );
+
+    // The rollback to the [3, 5] build is refused, with the flag too.
+    let no_flag: &[&str] = &[];
+    for extra in [no_flag, one_way] {
+        let mut words = vec!["rollback", "plan", "--root", word(&root), "--to", C1];
+        words.extend_from_slice(extra);
+        let refused = run(&host, &words);
+        assert_refused(&refused, "install_rollback_plan", "interface_edge");
+        assert_eq!(
+            failed_edges(&refused),
+            pair("ledger", "previous_max_in_next"),
+            "{extra:?}: {refused:?}"
+        );
+        let row = refused.members["plan"]["edges"]
+            .as_array()
+            .expect("the edges")
+            .iter()
+            .find(|edge| edge["check"] == "previous_max_in_next")
+            .cloned()
+            .expect("the ledger row");
+        assert_eq!(
+            row["parties"],
+            json!([
+                {"party": "Rp", "source": "manifest", "range": [3, 6]},
+                {"party": "R*", "source": "manifest", "range": [3, 5]},
+            ]),
+            "{row}"
+        );
+    }
+}

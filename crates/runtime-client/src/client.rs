@@ -6757,10 +6757,12 @@ pub(super) fn receipt_response_timeout(
             ClientLocation::RuntimeStopInstanceRun.location(),
         ),
         // #402 HS-2 (design HS-M §2.2, §8 item 10): a `ConfigureSettings` that names an
-        // instance's backend keys switches its backends before it answers: the switch claim's
-        // wait, the new backends' preparation and the previous ones' after a failed candidate
-        // (`BACKEND_SWITCH_WAIT_MS`), plus the IO margin. Every other `ConfigureSettings` answers
-        // at once, as before.
+        // instance's backend keys switches its backends before it answers; HS-2b (register
+        // §1.274): it waits the switch's worst case (`BACKEND_SWITCH_WAIT_MS`: the claim, the two
+        // session closes, the two preparations and the commit's ledger write), plus the IO
+        // margin. A receipt that does not come in time is `runtime_receipt_timeout`, an
+        // unconfirmed result, never "not applied". Every other `ConfigureSettings` answers at
+        // once, as before.
         RuntimeOperation::ConfigureSettings { changes, .. }
             if changes
                 .iter()

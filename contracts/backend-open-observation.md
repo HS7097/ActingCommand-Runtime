@@ -180,10 +180,13 @@ again) are recorded as every open is (`backend.open_observed`, the `backend.self
 `device.self_check`); a refused switch records no `device.backend_switched`. The payload is a new
 `RuntimePayload::DeviceBackendSwitched` variant with the new closed
 `EventAction::DeviceBackendSwitched`; its sensitivity is `internal`, and the public projection
-carries only the event type and action. As for `device.self_check`, the change is additive and
-moves no interface: a `deny_unknown_fields` reader moves to this contract before it reads such an
-event. A record names a valid alias, backend names that are tokens, at least one backend that
-changed, and an index exactly with its source.
+carries only the event type and action. The action, the payload and its vocabulary
+`nemu_app_index_source` are `ledger` revision 6 (#402 HS-2b, [v012-register.md](v012-register.md)
+§1.274; [component-interfaces.md](component-interfaces.md)): a reader of [3, 5] refuses such a
+record, so the Runtime declares [3, 6] and going back to a Runtime of [3, 5] is refused. (HS-2 had
+called it additive as `device.self_check` was; `device.self_check` predates the interface table
+and is part of revision 1.) A record names a valid alias, backend names that are tokens, at least
+one backend that changed, and an index exactly with its source.
 
 ## Input parameters from the original connection
 

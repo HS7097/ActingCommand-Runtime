@@ -86,7 +86,9 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   so [3, 4], with no fresh state root and no migration. Workflow 114-A (0.12.36, register
 ///   §1.236) raises `max` to 5: the record type `policy.not_run_changed` and its payloads, shapes
 ///   only (no Runtime of 114-A writes one); revision-3 and revision-4 ledgers are still read, so
-///   [3, 5], one way.
+///   [3, 5], one way. #402 HS-2b (0.12.39, register §1.274) raises `max` to 6: HS-2's closed
+///   action `device.backend_switched` and its payload, with the vocabulary
+///   `nemu_app_index_source`; revision-3 to revision-5 ledgers are still read, so [3, 6], one way.
 /// - `package` 3: the one `package` bump of v0.12.0 (register §6); only bundle index v4 is read.
 ///   Workflow #411 B15 R1 (register §1.111) raises `max` to 4 in v0.12.3: a pack's `remedy` and
 ///   `provides`; a revision-3 pack is still read. Workflow #406 T3 (register §1.137) raises it to
@@ -110,7 +112,7 @@ const V0120: &[(&str, [u64; 2])] = &[
     ("actingd-config", [5, 26]),
     ("install-control", [0, 1]),
     ("install-selection", [1, 1]),
-    ("ledger", [3, 5]),
+    ("ledger", [3, 6]),
     ("package", [3, 6]),
     ("runtime-client", [3, 5]),
     ("runtime-outcomes", [1, 1]),

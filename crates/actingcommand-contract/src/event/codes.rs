@@ -176,7 +176,8 @@ closed_code!(EventAction {
     SignatureRetire => "signature.retire",
     OwnerUnlock => "owner.unlock",
     DeviceSelfCheck => "device.self_check",
-    // #402 HS-2 (register §1.270): an instance's touch and capture backends switched.
+    // #402 HS-2 (register §1.270): an instance's touch and capture backends switched; ledger
+    // revision 6 (HS-2b, register §1.274).
     DeviceBackendSwitched => "device.backend_switched",
 });
 

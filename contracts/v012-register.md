@@ -6652,9 +6652,9 @@ registry before it prepares any instance.
 | HS2-1 | `instance.<instance id>.touch_backend`, `.capture_backend` settable | configuration keys (§1.267 HS1-1; `settable` yes, reader HS-2; no `actingd-config` step: existing members, and an instruction row is no file shape) | HS-2 | the person (CLI, MCP, the console) | `hs1_backend_rows_read_only_until_hs2` (runtime-config) and `hs1_backend_rows_in_manifest` (actingd) adapted: they pinned "not settable until HS-2" |
 | HS2-2 | `ClaimKind::BackendSwitch`, token `backend_switch` | `vocab:claim_kind` token (memory only, never persisted; `holder_kind` names it) | HS-2 | the host | operator class, no request-time checks, drain capacity, as a self-check; `claim_kind_tokens_are_unique_...` (scheduler) adapted: its list gains the kind |
 | HS2-3 | `backend_switch_refused` (error, ladder `none`, owner runtime-host; values `alias`, `backend_switch_problem` required) and vocabulary `backend_switch_problem`: `instance_busy`, `player_held`, `instance_fenced`, `endpoint_unavailable`, `open_failed`, `restore_failed` | outcome code and value vocabulary (key `backend_switch_problem`) | HS-2 | the host | `since` 0.12.39; causes reuse `lease_queue_expired`, `player_hold_active`, `instance_resources_fenced`, the open codes; `restore_failed` has two `caused_by` links (the candidate's, then the restore's); a refused `host.config_overrides` keeps `host_config_overrides_persist_failed`, a failed restore its `note` |
-| HS2-4 | `device.backend_switched` (`runtime.lifecycle_observed`): `{instance_alias, touch: {from, to}, capture: {from, to}, nemu_app_index?, nemu_app_index_source?: file \| resolved, session_generation}` | new closed action and payload (`EventAction::DeviceBackendSwitched`, `RuntimePayload::DeviceBackendSwitched`), sensitivity `internal` | HS-2 | the host | as `device.self_check`: additive, no interface step; `hs2_switch_free_instance_commits_and_records` |
+| HS2-4 | `device.backend_switched` (`runtime.lifecycle_observed`): `{instance_alias, touch: {from, to}, capture: {from, to}, nemu_app_index?, nemu_app_index_source?: file \| resolved, session_generation}` | new closed action and payload (`EventAction::DeviceBackendSwitched`, `RuntimePayload::DeviceBackendSwitched`), sensitivity `internal` | HS-2 | the host | `ledger` revision 6 (corrected by HS-2b, §1.274; this cell first said "as `device.self_check`: additive, no interface step"); `hs2_switch_free_instance_commits_and_records` |
 | HS2-5 | `ExecutionBackendProvider::switch_instance_backends`, `ExecutionKernel::switch_instance_backends` | Runtime-internal interface (memory only) | HS-2 | the host | a provider without switchable backends keeps a refusal; a session still open is `execution_endpoint_rebind_session_open`, a provider's refusal `execution_endpoint_rebind_failed` (reused, operation `switch_instance_backends`) |
-| HS2-6 | `BACKEND_SWITCH_WAIT_MS` (63 000: the claim's 3 s and two preparations of 30 s), `is_instance_backend_key` | contract constant and helper | HS-2 | the client | the receipt wait of a `ConfigureSettings` naming a backend key; `hs2_client_timeout_covers_switch` |
+| HS2-6 | `BACKEND_SWITCH_WAIT_MS` (63 000: the claim's 3 s and two preparations of 30 s; 133 000 since HS-2b, §1.274, which adds the two session closes and the commit's ledger write), `is_instance_backend_key` | contract constant and helper | HS-2 | the client | the receipt wait of a `ConfigureSettings` naming a backend key; `hs2_client_timeout_covers_switch` |
 | HS2-7 | `ac_config_set` naming a backend key needs the operator tier | MCP tier rule (answer Q6) | HS-2 | actingctl | `tier_not_enabled` (`required_tier` `operator`) before anything is sent; every other call stays observer; `hs2_mcp_backend_key_needs_operator_tier` |
 | HS2-8 | `config_value_invalid` `backend_pair_required` through an instruction: `caused_by` `nemu_input_requires_paired_capture` | link on an existing refusal (§1.267 (d)) | HS-2 | the host | |
 | HS2-9 | the console's device backends group | console contract (design §6), for #429's settings page | — | the console | [runtime-config.md](runtime-config.md), "The console's device backends group"; no wire shape |
@@ -6681,20 +6681,33 @@ in `RuntimeInstanceStatus.activity` (no new activity kind: no wire change). (f) 
 is a direct run held at its own checkpoint inside the run (`PackageAdmitted`), on its own key, as a
 run between two steps is.
 
-**Interface.** No step for 0.12.39 ([component-interfaces.md](component-interfaces.md)):
-`actingd-config` stays [5, 26] (HS-1's step: no member changes; an instruction row is no file
-shape), and `runtime-client`, `ledger`, `package` and `runtime-outcomes` do not move: the request
-and receipt shapes are the existing ones, the new code and words are additive in revision 1, and the
-new record is additive as `device.self_check` was.
+**Interface** (corrected by HS-2b, §1.274). `actingd-config` stays [5, 26] (HS-1's step: no
+member changes; an instruction row is no file shape), and `runtime-client`, `package` and
+`runtime-outcomes` do not move: the request and receipt shapes are the existing ones, and the new
+code and words are additive in revision 1. `ledger` moves to [3, 6] in 0.12.39: the new closed
+action `device.backend_switched` and its payload are `ledger` revision 6
+([component-interfaces.md](component-interfaces.md)). This paragraph first said that `ledger` did
+not move because the record was additive "as `device.self_check` was". That was wrong by the
+contract: the `ledger` row of revision 5 makes a word added to a closed vocabulary, or a member
+added, a new revision, and a Runtime that declares [3, 5] refuses such a record (0.12.39's release
+preparation confirmed it in v0.12.38's code). `device.self_check` is no precedent: it predates the
+interface table and is part of revision 1 (§1.274).
 
 **What changes live.** Nothing until someone sets either key: with no instruction row nothing
 switches, and a start writes nothing into the registry. A person's change of an instance's backends
 switches that instance only, while it is free, and commits only once the new backends opened.
 
-**Rollback** (to 0.12.38). Rows of the two keys in `host.config_overrides` are dropped at start
-(`config_override_dropped`: keys 0.12.38 does not have) and each instance comes back with its file's
-backends; nothing else persisted changes. A `device.backend_switched` record is read only by a
-reader of this contract.
+**Rollback** (to 0.12.38; corrected by HS-2b, §1.274). `actingctl install` refuses it whether or
+not a switch was ever made: 0.12.38 declares `ledger` [3, 5] and 0.12.39 [3, 6] (Rp.max 6 is not in
+[3, 5]), and the update to 0.12.39 needs `--accept-ledger-one-way`. This paragraph first said that
+the rows of the two keys in `host.config_overrides` are dropped at 0.12.38's start
+(`config_override_dropped`) and nothing else changes, the record being read only by a reader of
+this contract. The rows would be dropped, but after one committed switch 0.12.38 cannot decode the
+record (`corrupt_ledger_record`): its start fails while the record is among the newest
+`open_verify_tail_records` records, the rollback gate toward it fails (`rollback_gate_failed`,
+`ledger_readability`), and a console built on its ledger reader cannot read the record either. The
+test phase does no compatibility work for old versions (Alice 10-11), so 0.12.38 is not taught to
+read it.
 
 ### 1.271 Slice HS-3 (0.12.39): the Nemu application index resolved when the paired session opens (#402; Alice's words of 2026-11-03 11:4x, 「这个东西必须得被CLI、MCP或者是Lab/UI指定并且可以热更改」; design `rd-1031/backend-switch/model-backend-switch.md` §4.1, §4.5 and §7 row HS-3, with the coordinator's answer Q3 on board #402 6609804982; coordinator work order `rd-1031/backend-switch/brief-hs-3.md`)
 
@@ -6847,6 +6860,125 @@ console built on this crate checks its entries before it sends them.
 
 **Rollback** (to 0.12.38). Nothing persisted changes. A console built on 0.12.39's crate needs the
 new names; the values it writes are the shape 0.12.38 reads.
+
+### 1.274 Slice HS-2b (0.12.39): `ledger` revision 6 for the backend switch's record, and a receipt wait that covers the whole switch (#402; the record found by 0.12.39's release preparation in v0.12.38's code, the wait by the console's UI channel; coordinator work order `rd-1031/backend-switch/brief-hs-2b.md`)
+
+[component-interfaces.md](component-interfaces.md) (the `ledger` row of revision 6),
+[runtime-config.md](runtime-config.md) ("Switching an instance's backends", "The wait"),
+[runtime-interface.md](runtime-interface.md) (the `config set` row) and
+[backend-open-observation.md](backend-open-observation.md) ("Backend switch event") are the
+contract. 1.274 was the next free number on the base `9cf1ce5e`; the Lab slice HS-L takes the one
+after it. It corrects HS-2 (§1.270: its HS2-4 and HS2-6 rows, its **Interface** and **Rollback**
+paragraphs, each saying what changed).
+
+**What.** (a) HS-2 recorded `device.backend_switched` as additive "as `device.self_check` was".
+By the `ledger` row of revision 5, a word added to a closed vocabulary or a member added is a new
+revision, and a Runtime that declares the older range refuses such a record. v0.12.38 does: it
+decodes records with fixed types and refuses unknown values, so after one committed switch its
+start fails while the record is among the newest `open_verify_tail_records` records, the rollback
+gate toward it fails (`rollback_gate_failed`, `ledger_readability`), and a console built on its
+ledger reader cannot read the record. The coordinator's decision: follow the contract. `ledger`
+goes to [3, 6] in 0.12.39, the deploy takes `--accept-ledger-one-way`, and going back to 0.12.38 is
+refused whether or not a switch was ever made; 0.12.38 is not taught to read the record (Alice
+10-11: no compatibility work for old versions). (b) `BACKEND_SWITCH_WAIT_MS` left out the switch's
+two session closes and the commit's ledger write, so a client could give up while the Runtime
+still switched, and `config_version` moves only at the commit. It is now the switch's worst case,
+and a client whose wait runs out re-reads before it sends again.
+
+**Revision 6, from the diff.** Between the tag `v0.12.38` and the base, the ledger-read types
+changed only in the contract crate (the ledger crate is unchanged): `EventAction` gained
+`DeviceBackendSwitched`, `RuntimePayload` its variant, the new payload file its types, the key
+table two keys, `codes.rs` lost one code. Revision 6 is revision 5 plus:
+
+- the closed action `device.backend_switched` (`EventAction::DeviceBackendSwitched`) of the
+  existing record type `runtime.lifecycle_observed`;
+- its payload `RuntimePayload::DeviceBackendSwitched`, `DeviceBackendSwitchedPayload`
+  (`instance_alias`, `touch` and `capture` as `DeviceBackendChange {from, to}`, the optional
+  `nemu_app_index` and `nemu_app_index_source`, `session_generation`, `audit`; unknown members
+  refused);
+- the closed vocabulary `nemu_app_index_source` (`NemuAppIndexSource`: `file`, `resolved`), HS-2's
+  (HS-3 first writes `resolved`).
+
+Not in it, each read by the reader only as a spelling or not read at all: the claim kind
+`backend_switch` (HS-2, memory only; it reaches a record only as the outcome value `holder_kind`,
+vocabulary `claim_kind`); `start_emulator_off` (R-3, the outcome value `skip_reason`, vocabulary
+`emulator_autostart_skip_reason`); the outcome vocabularies `backend_switch_problem` (HS-2) and
+`nemu_app_index_problem` (HS-3) and their keys; the backend names in `from` and `to` (checked as
+tokens, not a vocabulary); the codes HS-1 to HS-4, RH-1, BX-1 and R-3 added, and
+`nemu_app_index_requires_paired_input`, which HS-3 removed. Only HS-2 and HS-3 touched the contract
+crate; HS-1, HS-4, RH-1, BX-1 and R-3 changed no type the ledger reads. The ledger's own copies of the `Status` and `ScheduleExplanation` types
+(revision 5) and their sources are unchanged since v0.12.38, so no guard test of the copies moves;
+the record types, the views' type lists and the index keys are unchanged.
+
+**What `device.self_check` was.** It shipped with the first tagged Runtimes (Workflow #317 sc3,
+commit `d82e5985`, 2026-09-27), before the interface table existed (#364 RT-1, 2026-10-07).
+`ledger` revision 1 is every record that Runtimes v0.11.0 to v0.11.2 write, so `device.self_check`
+is part of revision 1: it never needed a revision of its own, and its "additive" in
+[backend-open-observation.md](backend-open-observation.md) predates the rule. It is no precedent
+for a record added after the table; taking it as one was HS-2's mistake, not a second one of its
+own.
+
+**The wait.** `BACKEND_SWITCH_WAIT_MS` is the sum of the bounds of the switch's steps in their
+order (the constant's doc comment names each):
+
+| Step | Bound | Term |
+|---|---|---|
+| the switch claim's wait in the instance's queue | 3 s | `CONNECTION_PREPARATION_CLAIM_WAIT_MS` |
+| the kept session's close before the candidate (`close_switch_session`) | no bound at its source: the kernel waits for the session's worker without a deadline (`ExecutionSession::close_with_input_check`, `recv` and `join`), though each backend's own shutdown has its bound; bounded with the contract's existing allowance for a device-session close (R-7a §3.1, until R-7b measures it) | `PLAYER_HOLD_CLOSE_ALLOWANCE_MS`, 30 s |
+| the candidate's connection preparation | 30 s | `CONNECTION_PREPARATION_WAIT_MS` |
+| the commit's ledger write: its `host.config_overrides` record, whose refusal the restore follows | one writer reply, `ledger_observer.writer_reply_timeout_ms` (10 s by default; the ledger's `GlobalLedger::REPLY_TIMEOUT`) | `LEDGER_WRITER_REPLY_WAIT_MS`, 10 s (new: the contract cannot name the ledger crate's constant, so the ledger's default now takes this one, value unchanged) |
+| the candidate's close before the restore | as the first close | `PLAYER_HOLD_CLOSE_ALLOWANCE_MS`, 30 s |
+| the preparation that restores the previous backends | 30 s | `CONNECTION_PREPARATION_WAIT_MS` |
+
+133 s, and the client adds its IO timeout. A commit whose `host.config_overrides` is written writes
+three more records (`config.parameters.instance`, `device.backend_switched`, `command.validated`;
+30 s at most) and restores nothing, which the last two terms (60 s) exceed. The request's own
+`command.received` and terminal record are not counted, as for every request. `runtime-client`'s
+`configure_settings` keeps computing its wait from the constant. A Runtime whose writer reply limit
+is configured above its default, or a close slower than its allowance, can still outlast the wait:
+the rule below covers it.
+
+**A lost receipt.** A `runtime_receipt_timeout` on a `ConfigureSettings` that names a backend key is
+an unconfirmed result, never "not applied": the client re-reads the settings' `config_version`
+(`RuntimeFactSnapshot`) and the instance's `activity` in `Status` (the switch shows as a
+`selfcheck` with its `request_id` while it runs) before it sends again.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| HS2B-1 | `device.backend_switched`, `RuntimePayload::DeviceBackendSwitched` and the vocabulary `nemu_app_index_source` | `ledger` revision 6 (HS-2's shapes, §1.270 HS2-4) | HS-2 | the host (HS-2; `resolved`: HS-3) | the revision only: no shape changes |
+| HS2B-2 | `ledger` [3, 6] | interface declaration | HS-2b | — | one way, as revisions 4 and 5 |
+| HS2B-3 | `LEDGER_WRITER_REPLY_WAIT_MS` (10 000) | contract constant | HS-2b | — | the default of `ledger_observer.writer_reply_timeout_ms`; the ledger's `COMMAND_TIMEOUT` takes it |
+| HS2B-4 | `BACKEND_SWITCH_WAIT_MS` (133 000) | contract constant (HS2-6, changed) | HS-2b | the client | the sum of its six named terms |
+| HS2B-5 | a lost receipt of a backend switch is unconfirmed | client rule | — | actingctl, MCP, the console, the Lab | re-read `config_version` and the instance's `activity` before sending again |
+
+**Tests** (gate row in `host.toml`, "#402 HS-2b"):
+`hs2b_ledger_six_needs_the_one_way_flag_and_refuses_the_rollback_to_five` (actingctl, the INST-1
+update gate: the build's own declaration is [3, 6]; from a [3, 5] build the update is refused
+`one_way` without the flag and applied with it, and the rollback to it is refused
+`previous_max_in_next`, flag or not). Adapted: `hs2_client_timeout_covers_switch` (runtime-client;
+it pinned 63 000, now the sum of the named terms, 133 000) and
+`the_runtime_declares_each_v0120_interface_revision_once` (actinglab-architecture; its `ledger`
+[3, 5] becomes [3, 6]). The INST-1 fixtures' builds keep their [3, 4] default; no guard test of the
+ledger's copies moves.
+
+**Where it differs from the brief's letter.** (a) "The contract crate constant the installer
+reads": there is none. `actingctl install` embeds `distribution/windows/component-interfaces.json`
+(`host.rs`, `OWN_DECLARATION`), and no other `speaks` table holds the build's range. (b) The
+commit's bound is named by a new contract constant, `LEDGER_WRITER_REPLY_WAIT_MS`, because the
+contract crate cannot depend on the ledger crate; the ledger's default takes it, so the value has
+one source. (c) The closes' term is R-7a's allowance; when R-7b measures the close and sets it,
+the switch's wait follows.
+
+**Interface.** `ledger` [3, 5] → [3, 6] (HS2B-2). `runtime-client`, `actingd-config`, `package`,
+`runtime-outcomes` and the install interfaces do not move: the wait is a client constant, and no
+request or receipt shape changes.
+
+**What changes live.** The deploy of 0.12.39 needs `--accept-ledger-one-way`, and the console in
+use must declare `ledger` with a maximum of 6 or more. A backend switch's receipt is waited for up
+to 133 s plus the IO margin. Nothing else.
+
+**Rollback** (to 0.12.38). Refused by `actingctl install` whether or not a switch was ever made
+(§1.270, **Rollback**, corrected).
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
@@ -7042,7 +7174,7 @@ K27 asserts the declaration. Every moving interface rises once for the release.
 | Interface | v0.12.0 | Sources in this register |
 |---|---|---|
 | `actingd-config` | [5, 5] | §5: every key it lists as parsed (not `execution.defaults.*`, see there); the removals of PKG-S4 §1.55 P4-3 and NAV-3a §1.67 N3A-3, which no v0.12.0 reader accepts. Workflow #411 B15 R3 raises it to [5, 6] in v0.12.3 (§1.113 B15C-4): revision 6 adds the remedy keys, and a revision-5 file is still read. Workflow #406 T12 raises it to [5, 7] in #406's release (§1.136 T12-5): revision 7 adds the `touch` section, and revision-5 and revision-6 files are still read. #411 A38 raises it to [5, 8] (§1.148 A38-7): revision 8 adds `recovery_ladder.fence_recheck`, and revisions 5 to 7 are still read. #411 A51 adds `ledger_observer.read_budget_ms` and `close_timeout_ms` to the same revision 8 (§1.151 A51-4). #411 B37 (A35-S1) adds `recovery_ladder.busy` to the same revision 8 (§1.152 B37-5). The 0.12.x release after v0.12.9 raises it to [5, 9] (§1.168 A35-5): revision 9 adds that release's configuration keys (#411 A35: `recovery_ladder.busy.screen`), and revisions 5 to 8 are still read. P0-LO raises it to [5, 10] in v0.12.11: revision 10 adds `ledger_observer.open_timeout_ms` and `open_warn_ratio_milli`, and revisions 5 to 9 are still read. #411 A64, #411 A66, PERF-B1 and SCH-M ED-1 raise it to [5, 11] in v0.12.12: revision 11 adds `host_claims.run_end_grace_ms` (A64, ruling C-43), the `watchdog` section (`start_window_ms`, A66), the `execution` section (`capture.max_interval_ms`, `capture.backoff_enabled`, `capture.idle_ceiling_ms`; PERF-B1, §1.177 B1-2) and SCH-M ED-1's `scheduling.expected_runtime.*` (also per instance) and `scheduling.fact_refresh.expected_duration_ms` (§1.178 ED1-3), and revisions 5 to 10 are still read. IDLE-1 (Alice's ruling 41) raises it to [5, 12] in the release after v0.12.12: revision 12 adds the `idle` section (`action`, `min_gap_ms`, `close_app_wake_lead_ms`, `stop_emulator_wake_lead_ms`) and an instance entry's `idle` member; ROUT-L RL-1b (same release, §1.185 RL1B-1, RL1B-2) adds to revision 12 the `standard_packs` keys `check_interval_ms` and `cached_generations` and a `policy` section without `catalog` (composer mode), #422 LN-5 `ledger_observer.history_page_rows` and #422 LN-TUNE `ledger_observer.writer_reply_timeout_ms`; and revisions 5 to 11 are still read. #422 LN-8 raises it to [5, 13] in the release after v0.12.13: revision 13 adds `ledger_observer.open_verify_tail_records`, and revisions 5 to 12 are still read. #422 LN-WS raises it to [5, 14] in v0.12.15 (§1.194): revision 14 adds `ledger_observer.read_check_vm_steps` and `history_scan_rows`, and revisions 5 to 13 are still read Workflow #392 DA-4b-D (Alice's ruling 69) raises it to [5, 15] in v0.12.16 (§1.195 DA4bD-2): revision 15 adds the `display_safe_area` section (`directory`, `check_interval_ms`, `model`) and an instance entry's `display_safe_area` member (`model`), and revisions 5 to 14 are still read. #422 LN-7c Q raises it to [5, 16] in v0.12.17 (§1.196 LN7CQ-1 to LN7CQ-3): revision 16 adds the top-level `frame_retention_evidence_max_age_days` and `ledger_observer.frame_query_steps_per_second` and `frame_query_chunk_frames`, and revisions 5 to 15 are still read. Workflow #421 INST-1 raises it to [5, 17] in v0.12.18: revision 17 adds the `install` section (the tunables of `actingctl install`, [install-cli.md](install-cli.md)), and revisions 5 to 16 are still read |
-| `ledger` | [3, 3] | A3 §1.9, SH-1, SR-2a reads, D1 ladder records, L4a §1.19, AO-1 dump import §1.26, AO-2 index table §1.38, U-2's G14 members §1.46, PKG-S2 and PKG-S3 removals (§2), NAV-6 §1.12, #403 §1.13, D1b §1.14, A2-P §1.15, SH-2 §1.25, OCR-CONF §1.8 V1, M-357b DB-3s §1.66. Workflow #411 BT-LR raises it to [3, 4] once for the 0.12.x B train (§1.153, Alice 2026-10-20): revision 4 adds the train's shapes, and a revision-3 ledger is still read. Workflow 114-A raises it to [3, 5] in 0.12.36 (§1.236): revision 5 adds `policy.not_run_changed` with its payloads and the ledger's own copies, shapes only, and revision-3 and revision-4 ledgers are still read; SS-9's own raise (§1.212) takes the next revision of a later release |
+| `ledger` | [3, 3] | A3 §1.9, SH-1, SR-2a reads, D1 ladder records, L4a §1.19, AO-1 dump import §1.26, AO-2 index table §1.38, U-2's G14 members §1.46, PKG-S2 and PKG-S3 removals (§2), NAV-6 §1.12, #403 §1.13, D1b §1.14, A2-P §1.15, SH-2 §1.25, OCR-CONF §1.8 V1, M-357b DB-3s §1.66. Workflow #411 BT-LR raises it to [3, 4] once for the 0.12.x B train (§1.153, Alice 2026-10-20): revision 4 adds the train's shapes, and a revision-3 ledger is still read. Workflow 114-A raises it to [3, 5] in 0.12.36 (§1.236): revision 5 adds `policy.not_run_changed` with its payloads and the ledger's own copies, shapes only, and revision-3 and revision-4 ledgers are still read. #402 HS-2b raises it to [3, 6] in 0.12.39 (§1.274): revision 6 adds HS-2's closed action `device.backend_switched` with its payload and the vocabulary `nemu_app_index_source`, and revision-3 to revision-5 ledgers are still read; SS-9's own raise (§1.212) takes the next revision of a later release |
 | `runtime-client` | [2, 2] | §3 W1–W4, W8–W12, W14, W15, W17 (AO-4q, MCP-4, D1b, SH-1, A4, U-1, RD-3, MCP-2, P-m, D2-S5); A2-P's wire spellings §1.15; 九处-1's status member `emulator_state` §1.91 N1-1. `runtime-client` 3 comes with its own later release (§3 W5–W7 and W13: MCP-19, AO-4, AO-8 with MCP-9b's `startup` and `host` in W7, SR-6b's `not_running` in W13; re-check 10-14, §1.25). Runtime v0.12.x serves the read `ScheduleExplanation` (§3 W5) under revision 2: only actingctl and MCP of the same Runtime send it and every revision-2 shape is unchanged; revision 3 includes it. #411 A51's page limit `read_budget` (§1.151 A51-1) is folded into revision 2 as §1.91 N1-1 was. Workflow #429 R-0 raises it to [2, 3] in 0.12.30 (§1.213 R0-7, §3 W21): revision 3 is revision 2 plus the workbench's shapes (R-0c's `PackScheduleView` included, §1.216 R0C-3), W5 and `StartReport` (§1.216 R0C-4); W6, W7 and W13 are not built and take a later revision. Workflow #429 R-7a raises it to [2, 4] in 0.12.35 (§1.233, §3 W22): revision 4 is revision 3 plus the player hold's shapes; R-7b raises `min` to 4. Workflow #429 R-0b raises `min` to 3 in 0.12.36 (§1.238): it fills `RuntimeInstanceStatus.activity`, so [3, 4] |
 | `package` | [3, 3] | PKG-S1; PKG-S5 §1.64 P5-1 with M-357a TB12 §1.65; D2-S2 §1.28 DS6; D2-S3 §1.39 D34; READ-1 §1.54 RE1; the NAV-3a follow-up §1.73 N3F-1; REC-6 §1.29 R6-2; REC-8 §1.35 R8-1; OUT-1 §1.40 O1-1; EXEC-2 §1.41 EX1; OUT-2 §1.48 O2-1; REC-5 §1.50 R5-2; EXEC-1 §1.57 EC1. M-357a TB1 and TB6 (DB-1, DB-2) and M-357b MS6–MS10 (DB-3a1, DB-3a2, DB-3b) bump it once more in the 0.12.x release that carries them, once only when they share a release. Workflow #411 B15's `remedy` (a `task.json` mapping member) and `provides` (a `control.json` member) ride revision 4 (writer R1, §1.110 B15-10), raised once in their release by its first slice that needs it. Workflow #406 T3 raises it to [3, 5] in #406's release (§1.137 T3-7): revision 5 adds the click `single_touch_path_drag_v1`, and revision-3 and revision-4 packs are still read. Workflow #357 DB-2 raises it to [3, 6] in 0.12.37 for TB1 and TB6, DB-1 having left it as it was (§1.244); M-357b MS6–MS10 need no second raise if they share that release |
 | `runtime-outcomes` | [1, 1] (new) | A5 §1.16, A6a §1.37 |
