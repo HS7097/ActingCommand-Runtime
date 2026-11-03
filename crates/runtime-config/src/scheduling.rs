@@ -44,6 +44,11 @@
 //! also per instance (`instance.<instance id>.scheduling.no_progress.enabled`, defaulting to the
 //! section's), whether the no-progress guard holds a pair whose latest successful run made no
 //! progress; read by the host at every evaluated policy cycle.
+//! BX-1 (Workflow #429, register §1.273, since 0.12.39): a blackout entry's parser and shape as a
+//! client surface ([`BlackoutListKey`], [`BlackoutEntry::parse`], [`BlackoutEntry::parse_list`],
+//! [`BlackoutEntry::to_json`], [`BlackoutEntry::list_json`]): the console builds and checks the
+//! entries it sends through `ConfigureSettings` with the parser the configuration check runs, so
+//! the entry's shape has one implementation.
 //!
 //! The section is read whole and checked whole (M387 §5.3). At start and in `check-config` a
 //! blackout entry that breaks a rule is `blackout_config_invalid` (with `field`, `blackout_source`
@@ -61,7 +66,7 @@ use actingcommand_contract::FactScalar;
 use actingcommand_contract::outcome::BlackoutSource;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The section's name: the first segment of its keys.
 pub const SECTION: &str = "scheduling";
@@ -1121,22 +1126,12 @@ struct OnceBlackoutFile {
 }
 
 /// Workflow #386 SR-4a1: where a blackout list lives: the key that holds it, the list it is
-/// (vocabulary `blackout_source`) and the JSON pointer of the list in the configuration file.
+/// (vocabulary `blackout_source`) and the JSON pointer of the list in the configuration file
+/// (BX-1: `""` for a client's list, whose pointers go into the value the client passed).
 pub(crate) struct BlackoutList<'a> {
     pub(crate) config_key: &'a str,
     pub(crate) source: BlackoutSource,
     pub(crate) pointer: String,
-}
-
-impl BlackoutList<'_> {
-    /// The JSON pointer of a member of entry `index`, or of the entry itself.
-    fn entry_pointer(&self, index: usize, member: Option<&str>) -> String {
-        let entry = format!("{}/{index}", self.pointer);
-        match member {
-            Some(member) => format!("{entry}/{member}"),
-            None => entry,
-        }
-    }
 }
 
 /// An integer within `min..=max`.
@@ -1164,39 +1159,62 @@ pub(crate) fn blackout_entries(
     let mut ids = BTreeSet::new();
     let mut entries = Vec::with_capacity(items.len().min(MAX_BLACKOUT_ENTRIES));
     for (index, item) in items.into_iter().enumerate() {
-        let id = item.get("id").and_then(blackout_id).map(str::to_owned);
-        let refused = |member: Option<&str>| {
-            ConfigFailure::blackout(
-                list.config_key,
-                list.entry_pointer(index, member),
-                id.clone(),
-                list.source,
-            )
-        };
+        let at = format!("{}/{index}", list.pointer);
         if index >= MAX_BLACKOUT_ENTRIES {
-            return Err(refused(None));
+            return Err(entry_refused(list, &at, &item, None));
         }
-        let unique_id = |value: &Value| match blackout_id(value) {
-            Some(entry_id) if !ids.contains(entry_id) => Ok(entry_id.to_owned()),
-            _ => Err(refused(Some("id"))),
-        };
-        let (entry_id, window) = match item.get(BLACKOUT_KIND) {
-            None => weekly_entry(&item, &unique_id, &refused)?,
-            Some(Value::String(kind)) if kind == BLACKOUT_WEEKLY => {
-                weekly_entry(&item, &unique_id, &refused)?
-            }
-            Some(Value::String(kind)) if kind == BLACKOUT_ONCE => {
-                once_entry(&item, &unique_id, &refused)?
-            }
-            Some(_) => return Err(refused(Some(BLACKOUT_KIND))),
-        };
-        ids.insert(entry_id.clone());
-        entries.push(BlackoutEntry {
-            id: entry_id,
-            window,
-        });
+        let entry = blackout_entry(list, &at, &item, &ids)?;
+        ids.insert(entry.id.clone());
+        entries.push(entry);
     }
     Ok(entries)
+}
+
+/// One entry of `list`, `item` at the JSON pointer `at`: a `weekly` entry (`kind` absent or
+/// `weekly`) or a `once` entry, whose id is not among `ids` (the ids of the entries before it in
+/// its list).
+fn blackout_entry(
+    list: &BlackoutList<'_>,
+    at: &str,
+    item: &Value,
+    ids: &BTreeSet<String>,
+) -> Result<BlackoutEntry, ConfigFailure> {
+    let refused = |member: Option<&str>| entry_refused(list, at, item, member);
+    let unique_id = |value: &Value| match blackout_id(value) {
+        Some(entry_id) if !ids.contains(entry_id) => Ok(entry_id.to_owned()),
+        _ => Err(refused(Some("id"))),
+    };
+    let (id, window) = match item.get(BLACKOUT_KIND) {
+        None => weekly_entry(item, &unique_id, &refused)?,
+        Some(Value::String(kind)) if kind == BLACKOUT_WEEKLY => {
+            weekly_entry(item, &unique_id, &refused)?
+        }
+        Some(Value::String(kind)) if kind == BLACKOUT_ONCE => {
+            once_entry(item, &unique_id, &refused)?
+        }
+        Some(_) => return Err(refused(Some(BLACKOUT_KIND))),
+    };
+    Ok(BlackoutEntry { id, window })
+}
+
+/// `blackout_config_invalid` for `member` (`None`: the entry as a whole) of `item`, the entry of
+/// `list` at the JSON pointer `at`, with the entry's id when it has a usable one.
+fn entry_refused(
+    list: &BlackoutList<'_>,
+    at: &str,
+    item: &Value,
+    member: Option<&str>,
+) -> ConfigFailure {
+    let field = match member {
+        Some(member) => format!("{at}/{member}"),
+        None => at.to_owned(),
+    };
+    ConfigFailure::blackout(
+        list.config_key,
+        field,
+        item.get("id").and_then(blackout_id).map(str::to_owned),
+        list.source,
+    )
 }
 
 /// One `weekly` entry: the shape and bounds of an activity window
@@ -1270,6 +1288,133 @@ fn once_entry(
             until_unix_ms,
         },
     ))
+}
+
+/// BX-1 (Workflow #429, register §1.273, since 0.12.39), a client surface: a blackout list a
+/// client edits, named by the key that holds it. The console builds and checks the entries it
+/// sends through `ConfigureSettings` with [`BlackoutEntry::parse`],
+/// [`BlackoutEntry::parse_list`], [`BlackoutEntry::to_json`] and [`BlackoutEntry::list_json`],
+/// the parser the configuration check runs and the shape that parser reads, so it keeps no copy of
+/// the entry's shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlackoutListKey<'a> {
+    /// The host list, `scheduling.blackout.host` (`blackout_source` `host`).
+    Host,
+    /// The own list of the instance whose registry id this is,
+    /// `instance.<instance id>.scheduling.blackout` (`blackout_source` `instance`).
+    Instance(&'a str),
+}
+
+impl BlackoutListKey<'_> {
+    /// The key that holds the list: the `config_key` of the `ConfigureSettings` change that sets
+    /// it and of a refusal of its entries.
+    pub fn config_key(self) -> String {
+        match self {
+            Self::Host => BLACKOUT_HOST.to_owned(),
+            Self::Instance(instance_id) => instance_key(instance_id, INSTANCE_BLACKOUT),
+        }
+    }
+
+    /// The list's `blackout_source`.
+    pub const fn source(self) -> BlackoutSource {
+        match self {
+            Self::Host => BlackoutSource::Host,
+            Self::Instance(_) => BlackoutSource::Instance,
+        }
+    }
+}
+
+/// BX-1: `list` as the parser takes it, its key `config_key`: pointers into the value the client
+/// passed.
+fn client_list<'k>(list: BlackoutListKey<'_>, config_key: &'k str) -> BlackoutList<'k> {
+    BlackoutList {
+        config_key,
+        source: list.source(),
+        pointer: String::new(),
+    }
+}
+
+impl BlackoutEntry {
+    /// BX-1 (since 0.12.39), a client surface: one entry of `list` from `item`, the JSON of one
+    /// element of the key's list, checked by the parser the configuration check runs. A broken
+    /// rule is the refusal that check gives: `blackout_config_invalid` for the key, with
+    /// `blackout_source`, `blackout_id` when the entry has a usable id, and `field`, the JSON
+    /// pointer of the member it concerns, here into `item` (`""` for the entry as a whole,
+    /// `/weekdays` for a member) where `check-config` points into the configuration file. One entry
+    /// is not a list: the bound of 64 entries and the unique ids are [`Self::parse_list`]'s.
+    pub fn parse(list: BlackoutListKey<'_>, item: &Value) -> Result<Self, ConfigFailure> {
+        let config_key = list.config_key();
+        blackout_entry(&client_list(list, &config_key), "", item, &BTreeSet::new())
+    }
+
+    /// BX-1 (since 0.12.39), a client surface: the entries of `list` from `value`, the key's value
+    /// as a `ConfigureSettings` change carries it, checked by the parser the configuration check
+    /// runs, with the list's rules (at most 64 entries, ids unique in the list). A value that is
+    /// not a list is `config_value_invalid` (`wrong_type`) for the key, as `ConfigureSettings`
+    /// refuses it; a broken entry is `blackout_config_invalid` as in [`Self::parse`], `field`
+    /// pointing into `value` (`/<n>` or `/<n>/<member>`). Through `ConfigureSettings` the Runtime
+    /// refuses a list with a broken entry as `config_value_invalid` (`section_check`) for the key
+    /// and keeps its configuration in effect.
+    pub fn parse_list(
+        list: BlackoutListKey<'_>,
+        value: &Value,
+    ) -> Result<Vec<Self>, ConfigFailure> {
+        let config_key = list.config_key();
+        let Value::Array(items) = value else {
+            return Err(ConfigFailure::invalid_value(
+                config_key,
+                ConfigValueProblem::WrongType,
+            ));
+        };
+        blackout_entries(&client_list(list, &config_key), items.clone())
+    }
+
+    /// BX-1 (since 0.12.39), a client surface: the entry as the key's list holds it, the shape
+    /// [`Self::parse`] reads: `weekly`
+    /// `{end_minute_of_day, id, kind: "weekly", start_minute_of_day, utc_offset_minutes, weekdays}`
+    /// (its `kind` written, its weekdays in their order) or `once`
+    /// `{from_unix_ms, id, kind: "once", until_unix_ms}`. The members are in name order, so the
+    /// value's text is its canonical JSON ([`crate::canonical_json`]), the text the Runtime keeps
+    /// for the key: the same entry is always the same bytes, and parsing them gives it back.
+    pub fn to_json(&self) -> Value {
+        let mut members = BTreeMap::new();
+        members.insert("id", Value::from(self.id.as_str()));
+        match &self.window {
+            BlackoutWindow::Weekly {
+                weekdays,
+                utc_offset_minutes,
+                start_minute_of_day,
+                end_minute_of_day,
+            } => {
+                members.insert(BLACKOUT_KIND, Value::from(BLACKOUT_WEEKLY));
+                members.insert("weekdays", Value::from(weekdays.clone()));
+                members.insert("utc_offset_minutes", Value::from(*utc_offset_minutes));
+                members.insert("start_minute_of_day", Value::from(*start_minute_of_day));
+                members.insert("end_minute_of_day", Value::from(*end_minute_of_day));
+            }
+            BlackoutWindow::Once {
+                from_unix_ms,
+                until_unix_ms,
+            } => {
+                members.insert(BLACKOUT_KIND, Value::from(BLACKOUT_ONCE));
+                members.insert("from_unix_ms", Value::from(*from_unix_ms));
+                members.insert("until_unix_ms", Value::from(*until_unix_ms));
+            }
+        }
+        Value::Object(
+            members
+                .into_iter()
+                .map(|(name, member)| (name.to_owned(), member))
+                .collect(),
+        )
+    }
+
+    /// BX-1 (since 0.12.39), a client surface: the key's value for `entries`, in their order, each
+    /// as [`Self::to_json`] writes it: the value of the `ConfigureSettings` change that sets the
+    /// list, which [`Self::parse_list`] reads back to `entries`.
+    pub fn list_json(entries: &[Self]) -> Value {
+        Value::Array(entries.iter().map(Self::to_json).collect())
+    }
 }
 
 /// Workflow #386 SR-4a1: `blackout.quiet_horizon` from `reader`.

@@ -2351,6 +2351,16 @@ tests = [
 ]
 incident = ["#386 SR-4a1"]
 
+# Workflow #429 BX-1 (0.12.39; brief rd-1031/brief-bx-1.md; register §1.273; contracts/runtime-config.md, "A client's blackout entries"): a blackout entry's parser and shape as a client surface, on the configuration check's own parser; the entries a client serializes are the JSON the key takes, kind written and members in name order, byte-stable (its text is the canonical text the Runtime keeps, parses back to the same entries for either list and serializes to the same bytes; an entry without kind or in another member order reads as the same entry and is written the same way); for the host list and an instance's own list every broken list check-config refuses the client's parse refuses with the same code, key, blackout_source and blackout_id, field pointing into the value passed, one entry alone for its own rules, a non-list wrong_type as ConfigureSettings refuses it, and ConfigureSettings refuses the same list config_value_invalid (section_check); what the client writes ConfigureSettings applies, the Runtime keeps byte for byte and reads as the same entries, and the same value in the file passes the start check and reads the same
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-config::lib::gate_bx1::bx1_round_trip_is_byte_stable",
+    "actingcommand-runtime-config::lib::gate_bx1::bx1_parse_refuses_as_the_config_check_does",
+    "actingcommand-runtime-config::lib::gate_bx1::bx1_the_runtime_reads_what_the_client_writes",
+]
+incident = ["#429 BX-1"]
+
 # SCH-M ED-1 (frozen model v1.0 §3.4 "Configuration", §6 row ED-1; contracts/runtime-config.md, "Expected duration"; register §1.178 ED1-3): scheduling.expected_runtime.enabled, runs and margin_ms default to true, 5 and 300000 and scheduling.fact_refresh.expected_duration_ms to 60000, all settable; each instance's expected_runtime keys default to the section's, an instance's own key overrides the section for that instance only (from the file and through an instruction), and a change of the section's key reaches every instance that names none
 [[gate]]
 coverage = "Y"
