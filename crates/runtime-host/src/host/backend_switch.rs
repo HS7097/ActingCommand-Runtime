@@ -245,6 +245,14 @@ impl HostShared {
             .map_err(RequestFailure::poison_without_terminal)?;
         // Step 4: the commit, under the gate.
         let refusal = if candidate.passed() {
+            // #402 HS-3: the file's index, else the one the candidate's paired open resolved.
+            let (nemu_app_index, nemu_app_index_source) = match nemu_app_index {
+                Some(index) => (Some(index), Some(NemuAppIndexSource::File)),
+                None => match self.execution()?.resolved_nemu_app_index(instance_alias) {
+                    Some(index) => (Some(index), Some(NemuAppIndexSource::Resolved)),
+                    None => (None, None),
+                },
+            };
             let switched = DeviceBackendSwitched {
                 instance_alias: instance_alias.to_owned(),
                 touch: DeviceBackendChange {
@@ -256,7 +264,7 @@ impl HostShared {
                     to: plan.to.capture.as_str().to_owned(),
                 },
                 nemu_app_index,
-                nemu_app_index_source: nemu_app_index.map(|_| NemuAppIndexSource::File),
+                nemu_app_index_source,
                 session_generation: candidate.generation.unwrap_or_default(),
             };
             match self.commit_switch(changes, stamp, &links, device_links.clone(), switched)? {

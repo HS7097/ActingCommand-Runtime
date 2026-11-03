@@ -1405,7 +1405,7 @@ open is.
 | `player_held` | a player holds the instance | `player_hold_active` | Denied |
 | `instance_fenced` | a #403 fence holds it (a self-check lifts it); also a kept session whose close the fence then took | `instance_resources_fenced` | Denied (Failed for the close) |
 | `endpoint_unavailable` | its endpoint is pending (the emulator is stopped) or its handset is not bound | — | Denied |
-| `open_failed` | the new backends did not open or failed their self-check; the previous ones are back | the failing step's code (`input_backend_open_failed`, `capture_backend_open_failed` with `capture_open_cause`, `paired_backend_open_failed`, a check or close code) | Failed |
+| `open_failed` | the new backends did not open or failed their self-check; the previous ones are back | the failing step's code (`input_backend_open_failed`, `capture_backend_open_failed` with `capture_open_cause`, `paired_backend_open_failed`, a check or close code; #402 HS-3: a paired open that resolved no Nemu application index has `nemu_app_index_missing` with `nemu_app_index_problem` as its own cause, [device-binding.md](device-binding.md), "Backends") | Failed |
 | `restore_failed` | the new backends failed and the previous ones did not open again: the instance is unavailable (its failed self-check withholds it), no other instance is touched (#419) | both failures, the candidate's then the restore's | Failed |
 
 A refused `host.config_overrides` keeps its own refusal, `host_config_overrides_persist_failed`
@@ -1678,7 +1678,7 @@ the one new code and the words above.
   | `backend_switch_refused`, `player_held` | 你正在玩这台，交还后再切 |
   | `backend_switch_refused`, `instance_fenced` | 这台被围栏了，先自检 |
   | `backend_switch_refused`, `endpoint_unavailable` | 模拟器没开，或真机没绑定 |
-  | `backend_switch_refused`, `open_failed` | 新后端没打开，已保留原来的, with the cause: `input_backend_open_failed`, `capture_backend_open_failed`, `paired_backend_open_failed` (the last two with `capture_open_cause`: `display_missing`, the application is not running; `connection_failed`; `other`) |
+  | `backend_switch_refused`, `open_failed` | 新后端没打开，已保留原来的, with the cause: `input_backend_open_failed`, `capture_backend_open_failed`, `paired_backend_open_failed` (the last two with `capture_open_cause`: `display_missing`, the application is not running; `connection_failed`; `other`; the paired one's own cause may be `nemu_app_index_missing` with `nemu_app_index_problem`: `package_not_installed`, `application_not_running`, `info_unavailable`, `info_malformed`) |
   | `backend_switch_refused`, `restore_failed` | 新的没打开，原来的也没恢复，这台暂时不可用, with both failures; suggest a self-check |
   | `host_config_overrides_persist_failed` | 没写进记录，已回退 |
   | `tier_not_enabled` | MCP only: the operator tier is not enabled |
@@ -1709,7 +1709,8 @@ and `current_version` for a `ConfigureSettings` at another version; (#402 HS-2, 
 `backend_switch_refused` (values `alias`, `backend_switch_problem`), whose causes reuse
 `lease_queue_expired`, `player_hold_active`, `instance_resources_fenced`, the open codes and
 `nemu_input_requires_paired_capture` (the cause of `backend_pair_required` through an
-instruction). Owner `contract`: `invalid_configure_settings`. Vocabulary `config_value_problem`
+instruction) and (#402 HS-3) `nemu_app_index_missing` with `nemu_app_index_problem` under a
+paired open's failure. Owner `contract`: `invalid_configure_settings`. Vocabulary `config_value_problem`
 (source `crates/runtime-config/src/codes.rs`); vocabulary `backend_switch_problem` (source
 `crates/runtime-host/src/codes.rs`).
 Every one is ladder class `none` (the Runtime's own configuration, decision-table row 7).

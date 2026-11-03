@@ -1264,7 +1264,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "Opening an instance's paired capture and input session failed and its temporary resources were released. In a contained task it fails only that run (nonfatal, runtime_code capture_failed); the Runtime and the other instances go on. #411 A50: the outcome says why with capture_open_cause, application_id and instance_index, as for capture_backend_open_failed.",
+      "description": "Opening an instance's paired capture and input session failed and its temporary resources were released. In a contained task it fails only that run (nonfatal, runtime_code capture_failed); the Runtime and the other instances go on. #411 A50: the outcome says why with capture_open_cause, application_id and instance_index, as for capture_backend_open_failed. #402 HS-3 (since 0.12.39): when the configuration names no nemu_app_index and the Runtime resolved none from MuMuManager before the open, its caused_by is nemu_app_index_missing with nemu_app_index_problem.",
       "common_causes": "The emulator's renderer is closed, not ready or restarting while adb still answers; the binding names a display or instance number the paired session cannot reach.",
       "handling": "As for capture_backend_open_failed: the configured recovery ladder restarts the emulator; otherwise restart it and run a self-check."
     },
@@ -2869,11 +2869,12 @@
         "request_id": "optional"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "A code several owners emit with one meaning (contract-owned, A2a D3): nemu app index requires paired input.",
+      "retired_in": "0.12.39",
+      "description": "Retired (#402 HS-3). The execution registry refused a nemu_app_index beside backends other than Nemu touch and Nemu capture. Since 0.12.39 an emulator entry may name the index whatever its backends (actingd-config revision 26, #402 HS-1) and the registration keeps it, so a backend switch to Nemu touch opens with the file's index; only a paired Nemu open uses it.",
       "common_causes": "TBD",
-      "handling": "TBD"
+      "handling": "None in 0.12.39 and later: the code is no longer emitted."
     },
     "nemu_input_frame_required": {
       "category": "error",

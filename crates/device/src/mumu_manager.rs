@@ -8,7 +8,11 @@
 //! `control -v <index> launch|shutdown`, then reads readiness back through `info -v <index>`
 //! (and, for a Stop, the process listing). Workflow #381 B: the vendor's `control ... restart`
 //! is never dispatched; a restart is a shutdown and then a launch, composed by the Runtime
-//! host, and a Restart reaching this module is refused before any vendor command. The hidden
+//! host, and a Restart reaching this module is refused before any vendor command. #402 HS-3:
+//! `read_application_state` dispatches `control -v <index> app info -pkg <package>`, which the
+//! vendor documents as a query of one application's `state` (`running`, `stopped`,
+//! `not_installed`); the Runtime reads it once before a paired Nemu session opens without a
+//! configured `nemu_app_index`. No other `control ... app` subcommand is dispatched. The hidden
 //! `api` subcommand and every other mutating subcommand (`setting`, `launch`, `shutdown`,
 //! `restart`, ...) are never used. No vendor-private file is read.
 
@@ -1404,6 +1408,115 @@ fn parse_instance_state(
         launch_err_code,
         launch_err_msg,
     })
+}
+
+/// #402 HS-3 (design HS-M §4.1): the `state` that `control -v <index> app info -pkg <package>`
+/// reports for one application package, by the vendor's documented values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MumuApplicationState {
+    /// `running`: the application runs.
+    Running,
+    /// `stopped`: the application is installed and not started.
+    Stopped,
+    /// `not_installed`: the application is not installed.
+    NotInstalled,
+}
+
+/// The stages of a refused [`read_application_state`] that answered something other than the
+/// documented document; every other refusal gave no answer.
+const APPLICATION_STATE_MALFORMED_STAGES: [Location; 4] = [
+    crate::codes::DeviceStage::MumuManagerDecode.location(),
+    crate::codes::DeviceStage::MumuManagerJson.location(),
+    crate::codes::DeviceStage::MumuManagerOutputBound.location(),
+    crate::codes::DeviceStage::MumuManagerShape.location(),
+];
+
+/// #402 HS-3 (design HS-M §4.1): runs `control -v <index> app info -pkg <package>` once, bounded
+/// by `MUMU_MANAGER_COMMAND_TIMEOUT`, requiring exit 0 and strict UTF-8 JSON as every read here
+/// does, and reads the application's state ([`parse_application_state`]). A refusal keeps its
+/// typed stage (`mumu_manager_run`, `_timeout`, `_exit`, `_decode`, `_json`, `_output_bound`,
+/// `_errcode`, `_shape`); [`application_state_read_problem`] tells a read that gave no answer
+/// from one that answered something else.
+pub fn read_application_state(
+    mumu_manager_path: &Path,
+    instance_index: u16,
+    package: &str,
+) -> DeviceResult<MumuApplicationState> {
+    let index = instance_index.to_string();
+    let args = [
+        "control",
+        "-v",
+        index.as_str(),
+        "app",
+        "info",
+        "-pkg",
+        package,
+    ];
+    let document = run_json(mumu_manager_path, &args)?;
+    parse_application_state(&document, instance_index, package)
+}
+
+/// #402 HS-3: the document `control -v <index> app info -pkg <package>` answers, as the vendor
+/// documents it: one object whose `state` is `running`, `stopped` or `not_installed`. An
+/// `{"errcode","errmsg"}` envelope with `errcode != 0` is a typed failure
+/// (`mumu_manager_errcode`); any other document, a `state` of another value included, is
+/// `mumu_manager_shape`.
+pub fn parse_application_state(
+    document: &serde_json::Value,
+    instance_index: u16,
+    package: &str,
+) -> DeviceResult<MumuApplicationState> {
+    let index = instance_index.to_string();
+    let args = [
+        "control",
+        "-v",
+        index.as_str(),
+        "app",
+        "info",
+        "-pkg",
+        package,
+    ];
+    let Some(object) = document.as_object() else {
+        return Err(shape_error(
+            &args,
+            "a top-level object with a string \"state\" field",
+            document,
+        ));
+    };
+    if let Some(envelope) = errcode_envelope(object) {
+        return Err(DeviceError::fatal(format!(
+            "MuMuManager {} returned an error envelope with exit 0: {envelope}",
+            args.join(" ")
+        ))
+        .with_diagnostic(
+            DeviceErrorCategory::Response,
+            crate::codes::DeviceStage::MumuManagerErrcode.location(),
+        ));
+    }
+    match object.get("state").and_then(serde_json::Value::as_str) {
+        Some("running") => Ok(MumuApplicationState::Running),
+        Some("stopped") => Ok(MumuApplicationState::Stopped),
+        Some("not_installed") => Ok(MumuApplicationState::NotInstalled),
+        _ => Err(shape_error(
+            &args,
+            "an object whose \"state\" is \"running\", \"stopped\" or \"not_installed\"",
+            document,
+        )),
+    }
+}
+
+/// #402 HS-3: what a refused [`read_application_state`] means for the index it was to resolve:
+/// [`crate::NemuAppIndexProblem::InfoMalformed`] when `MuMuManager` answered something other than
+/// the documented document (not UTF-8, not JSON, over the output bound, another shape);
+/// [`crate::NemuAppIndexProblem::InfoUnavailable`] otherwise (no run, an expired bound, a
+/// non-zero exit, an error envelope, or a failure of the caller's own before the read).
+pub fn application_state_read_problem(error: &DeviceError) -> crate::NemuAppIndexProblem {
+    match error.diagnostic() {
+        Some(diagnostic) if APPLICATION_STATE_MALFORMED_STAGES.contains(&diagnostic.stage()) => {
+            crate::NemuAppIndexProblem::InfoMalformed
+        }
+        _ => crate::NemuAppIndexProblem::InfoUnavailable,
+    }
 }
 
 fn trim_json_bytes(bytes: &[u8]) -> &[u8] {

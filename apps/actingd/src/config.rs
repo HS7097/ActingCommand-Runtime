@@ -814,6 +814,7 @@ struct InstanceConfig {
     instance_name: Option<String>,
     /// The MuMu application clone a Nemu touch drives (0 is the main application). #402 HS-1:
     /// an emulator entry may name it whatever its backends, and Nemu touch no longer needs it.
+    /// #402 HS-3: a named index wins; without one the paired open resolves it from MuMuManager.
     // Interface anchor `actingd-config` revision 26: Runtime 0.12.38 refuses an entry whose Nemu
     // touch leaves it out (`nemu_paired_input_configuration_missing`) or whose other touch backend
     // names it (`nemu_app_index_requires_paired_input`).
@@ -2488,8 +2489,9 @@ impl InstanceConfig {
         // whatever its backends, and Nemu touch no longer needs it in the file. The index is
         // checked whenever the entry names it and is used only by Nemu touch, which still needs
         // Nemu capture beside it (`nemu_input_requires_paired_capture`, the registry's own
-        // refusal). From HS-3 the Runtime resolves a missing index when it opens the paired
-        // session; until then the registry still requires it (`nemu_app_index_missing`).
+        // refusal). #402 HS-3: the registration keeps a named index whatever the backends (a
+        // switch to Nemu touch opens with the file's value); without one the Runtime resolves it
+        // when it opens the paired session.
         let nemu_app_index = self
             .nemu_app_index
             .map(|index| {
@@ -2497,15 +2499,13 @@ impl InstanceConfig {
                     .map_err(|_| ActingdCode::NemuAppIndexInvalid.code())
             })
             .transpose()?;
-        let nemu_app_index = match (requested, capture_requested) {
-            (TouchBackendChoice::NemuIpc, CaptureBackendChoice::NemuIpc) => nemu_app_index,
-            (TouchBackendChoice::NemuIpc, _) => {
-                return Err(
-                    actingcommand_runtime_host::HostCode::NemuInputRequiresPairedCapture.code(),
-                );
-            }
-            _ => None,
-        };
+        if requested == TouchBackendChoice::NemuIpc
+            && capture_requested != CaptureBackendChoice::NemuIpc
+        {
+            return Err(
+                actingcommand_runtime_host::HostCode::NemuInputRequiresPairedCapture.code(),
+            );
+        }
         let application_id = self
             .application_id
             .filter(|value| !value.trim().is_empty())

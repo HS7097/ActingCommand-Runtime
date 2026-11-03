@@ -1060,12 +1060,15 @@ Checked here, without discovery:
   (#402 HS-1, `actingd-config` revision 26, since 0.12.39) an emulator entry
   may name whatever its backends, is checked whenever named
   (`nemu_app_index_invalid`) and used only by Nemu touch, which no longer
-  needs it in the file. Until HS-3 (the same release) resolves a missing
-  index when the paired session opens, the registry this command registers
-  still refuses Nemu touch without one (`nemu_app_index_missing`), so nobody
-  writes such a file before 0.12.39 ships whole. Before 0.12.39 these were
-  `nemu_paired_input_configuration_missing` (retired) and
-  `nemu_app_index_requires_paired_input`;
+  needs it in the file. Since HS-3 (the same release) the Runtime resolves a
+  missing index when the paired session opens
+  ([device-binding.md](device-binding.md), "Backends"), so this command
+  passes Nemu touch without one: it registers the instance, reads no
+  MuMuManager for it and reports nothing about the index. A named index is
+  kept whatever the backends. Before 0.12.39 these were
+  `nemu_paired_input_configuration_missing` and
+  `nemu_app_index_requires_paired_input` (both retired), and HS-1's interim
+  `nemu_app_index_missing` at this command is gone;
 - alias and application identity as the execution registry accepts them
   (`instance_registration_invalid`), and duplicate aliases or instance ids
   (`duplicate_instance_alias` / `duplicate_instance_id`);

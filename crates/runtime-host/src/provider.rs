@@ -17,12 +17,13 @@ use actingcommand_contract::{
     InstanceId, MAX_INSTANCE_ALIAS_BYTES, RuntimeErrorCode,
 };
 use actingcommand_device::{
-    Adb, AdbConfig, CaptureBackend, CaptureBackendChoice, CaptureBackendConfig, DeviceError,
-    DeviceErrorCategory, DeviceErrorDiagnosticMessage, DeviceErrorSensitivity, DeviceLocation,
-    DeviceResult, DeviceTarget, InputBackend, MumuDiscoveryReport, NemuAppIndex,
-    NemuApplicationTarget, NemuInputConfig, NemuIpcSession, NemuResolutionReason,
-    NemuSessionBackends, PreparedSegmentedSwipePlan, TouchBackendChoice, TouchBackendConfig,
-    create_touch_backend_for_fenced_input, discover_mumu_instances, mumu_state_wait,
+    Adb, AdbConfig, CaptureBackend, CaptureBackendChoice, CaptureBackendConfig, CaptureOpenCause,
+    DeviceError, DeviceErrorCategory, DeviceErrorDiagnosticMessage, DeviceErrorSensitivity,
+    DeviceLocation, DeviceResult, DeviceTarget, InputBackend, MumuApplicationState,
+    MumuDiscoveryReport, NemuAppIndex, NemuAppIndexProblem, NemuApplicationTarget, NemuInputConfig,
+    NemuIpcSession, NemuResolutionReason, NemuSessionBackends, PreparedSegmentedSwipePlan,
+    TouchBackendChoice, TouchBackendConfig, create_touch_backend_for_fenced_input,
+    discover_mumu_instances, mumu_state_wait,
 };
 use actingcommand_device::{AdbDeviceStateShell, DeviceStateShell};
 use actingcommand_device::{AdbTrackDevices, DeviceSerial, TrackDevicesEvent, TrackDevicesStopper};
@@ -51,6 +52,31 @@ const PENDING_ADB_PORT: u16 = 0;
 /// The bounded `info -v <index>` read of a discovery-bound instance:
 /// `actingcommand_device::read_instance_state` in production, a fake in the registry's tests.
 type InstanceStateReader = Arc<dyn Fn(&Path, u16) -> DeviceResult<InstanceState> + Send + Sync>;
+
+/// #402 HS-3 (design HS-M §4.1): the bounded `control -v <index> app info -pkg <package>` read a
+/// paired Nemu open makes when the configuration names no `nemu_app_index`, through the given
+/// `MuMuManager.exe` and MuMu index: `actingcommand_device::read_application_state` in
+/// production (`MUMU_MANAGER_COMMAND_TIMEOUT`), a fake in the registry's tests.
+type ApplicationStateReader =
+    Arc<dyn Fn(&Path, u16, &str) -> DeviceResult<MumuApplicationState> + Send + Sync>;
+
+/// #402 HS-3: the paired Nemu open itself, `NemuIpcSession::open` in production; the registry's
+/// tests put a fake in its place, which opens no device.
+type NemuSessionOpener = Arc<
+    dyn Fn(
+            CaptureBackendConfig,
+            NemuApplicationTarget,
+            NemuInputConfig,
+            Option<&actingcommand_device::FrameMemoryBudget>,
+        ) -> DeviceResult<actingcommand_device::OpenedBackend<NemuSessionBackends>>
+        + Send
+        + Sync,
+>;
+
+/// #402 HS-3 (design HS-M §4.1): the application index a paired Nemu open resolves to when the
+/// configuration names none and `MuMuManager` reports the application running: the main
+/// application, not a clone (the frozen capture bench used it too).
+const RESOLVED_NEMU_APP_INDEX: u32 = 0;
 
 /// The typed, serde-free assembly the daemon hands the registry: every instance it registers,
 /// the vision provider it injects and the discovery surface it exposes. Built by the daemon
@@ -293,16 +319,11 @@ impl ExecutionBackendRegistration {
         self
     }
 
+    /// The configuration's `nemu_app_index`, whatever the registration's backends (#402 HS-3:
+    /// an emulator entry may name it beside any backends since `actingd-config` revision 26, and
+    /// a backend switch to Nemu touch opens with it). Only a paired Nemu open uses it, and then
+    /// the file's value wins: nothing is read from `MuMuManager`.
     pub fn with_nemu_app_index(mut self, app_index: NemuAppIndex) -> RuntimeHostResult<Self> {
-        if self.input.requested != TouchBackendChoice::NemuIpc
-            || self.capture.requested != CaptureBackendChoice::NemuIpc
-        {
-            return Err(RuntimeHostError::fatal(
-                SharedCode::NemuAppIndexRequiresPairedInput,
-                HostLocation::BuildExecutionBackendRegistry,
-                RuntimeErrorCode::RuntimeHalted,
-            ));
-        }
         NemuApplicationTarget::new(&self.application_id, app_index).map_err(|error| {
             RuntimeHostError::fatal(
                 HostCode::NemuApplicationIdentityInvalid,
@@ -405,9 +426,42 @@ struct EntryEndpoint {
     /// The capability table of the backends in effect (#402 HS-2: under the lock, since a
     /// switch replaces it with the backends).
     capabilities: EmulatorCapabilityProfile,
+    /// #402 HS-3 (design HS-M §4.1, "the cache"): the Nemu application index a paired open
+    /// resolved from `MuMuManager` when the configuration names none, for the entry's MuMu index,
+    /// package and root, in memory only. A rebinding drops it, and so does a paired open that
+    /// found no display for the package; the next paired open reads again.
+    resolved_nemu_app_index: Option<NemuAppIndex>,
+}
+
+/// #402 HS-3 (design HS-M §4.1 item 3): where a paired Nemu open reads its application's state.
+enum ApplicationStateSource {
+    /// A discovery-bound entry: the `MuMuManager.exe` it was discovered through and its index.
+    Binding {
+        mumu_manager_path: PathBuf,
+        instance_index: u16,
+    },
+    /// An entry without a discovery binding: the capture's own resolution (its MuMu root's one
+    /// `MuMuManager.exe`, the index it names or derives from the port).
+    Capture,
+    /// A handset: it has no `MuMuManager`, which is never read for it.
+    Handset,
 }
 
 impl EntryEndpoint {
+    /// #402 HS-3: where a paired Nemu open of this endpoint reads its application's state.
+    fn application_state_source(&self) -> ApplicationStateSource {
+        if self.handset().is_some() {
+            return ApplicationStateSource::Handset;
+        }
+        match self.state.discovered_binding() {
+            Some(discovered) => ApplicationStateSource::Binding {
+                mumu_manager_path: discovered.mumu_manager_path().to_path_buf(),
+                instance_index: discovered.instance_index(),
+            },
+            None => ApplicationStateSource::Capture,
+        }
+    }
+
     /// Workflow #398 RD-1b: the handset behind the endpoint; `None` for an emulator.
     fn handset(&self) -> Option<&HandsetEndpoint> {
         self.state.bound().and_then(ResolvedAdbEndpoint::handset)
@@ -505,6 +559,14 @@ impl NemuPortCheck {
     }
 }
 
+/// What a paired Nemu open reads and opens through: the CAP-IDX `info -v <index>` read, the #402
+/// HS-3 `app info -pkg` read and the paired open itself (the registry's own, or its tests' fakes).
+struct NemuOpenReads<'a> {
+    instance_state: &'a InstanceStateReader,
+    application_state: &'a ApplicationStateReader,
+    open: &'a NemuSessionOpener,
+}
+
 /// The backend-open report of a capture open, before the backend is selected.
 fn capture_open_report(
     capture: &CaptureBackendConfig,
@@ -570,6 +632,7 @@ impl ExecutionBackendEntry {
             capture: registration.capture,
             configuration: registration.configuration,
             capabilities,
+            resolved_nemu_app_index: None,
         };
         if endpoint.state.is_pending() {
             let host = endpoint.application_target.host.clone();
@@ -597,7 +660,8 @@ impl ExecutionBackendEntry {
     /// table recomputed from the new backends and merged with the provider's rows as at
     /// registration. Every other setting of the two backends (adb, target, timeouts, tool paths,
     /// the Nemu folder and index) is the entry's as it was. Opens nothing. Returns the Nemu
-    /// application index the entry opens Nemu touch with, when `touch` is Nemu IPC.
+    /// application index the configuration names, when `touch` is Nemu IPC (#402 HS-3: without
+    /// one, the paired open resolves it, `resolved_nemu_app_index`).
     fn switch_backends(
         &self,
         touch: TouchBackendChoice,
@@ -708,11 +772,11 @@ impl ExecutionBackendEntry {
     fn open_nemu_session(
         &self,
         memory: Option<&actingcommand_device::FrameMemoryBudget>,
-        reader: &InstanceStateReader,
+        reads: &NemuOpenReads<'_>,
     ) -> DeviceResult<Option<actingcommand_device::OpenedBackend<NemuSessionBackends>>> {
         // Same pending guard as `open_input` / `open_capture`: a paired session is opened on
         // the bound target only, with the binding's index after the same CAP-IDX port check.
-        let (input, capture, port_check) = {
+        let (input, capture, port_check, source, resolved) = {
             let endpoint = self.endpoint();
             if endpoint.input.requested != TouchBackendChoice::NemuIpc {
                 return Ok(None);
@@ -722,19 +786,31 @@ impl ExecutionBackendEntry {
                 endpoint.input.clone(),
                 endpoint.capture.clone(),
                 endpoint.nemu_port_check(),
+                endpoint.application_state_source(),
+                endpoint.resolved_nemu_app_index,
             )
         };
         if let Some(port_check) = port_check {
-            port_check.verify(reader).map_err(|error| {
+            port_check.verify(reads.instance_state).map_err(|error| {
                 actingcommand_device::observe_open_failure(nemu_pair_open_report(), error)
             })?;
         }
-        let application = NemuApplicationTarget::new(
-            &self.application_id,
-            self.nemu_app_index
-                .ok_or_else(|| DeviceError::fatal("Nemu application index is missing"))?,
-        )?;
-        NemuIpcSession::open(
+        // #402 HS-3 (design HS-M §4.1): the file's index wins; without one the index resolved
+        // before holds until a rebinding or a missing display, else `MuMuManager` is read once.
+        let app_index = match (self.nemu_app_index, resolved) {
+            (Some(index), _) | (None, Some(index)) => index,
+            (None, None) => {
+                let index = self
+                    .resolve_nemu_app_index(source, &capture, reads.application_state)
+                    .map_err(|error| {
+                        actingcommand_device::observe_open_failure(nemu_pair_open_report(), error)
+                    })?;
+                self.endpoint().resolved_nemu_app_index = Some(index);
+                index
+            }
+        };
+        let application = NemuApplicationTarget::new(&self.application_id, app_index)?;
+        (reads.open)(
             capture,
             application,
             NemuInputConfig {
@@ -744,7 +820,17 @@ impl ExecutionBackendEntry {
             },
             memory,
         )
-        .map_err(|error| actingcommand_device::observe_open_failure(nemu_pair_open_report(), error))
+        .map_err(|error| {
+            // An open that found no display for the package drops the resolution: the next
+            // paired open reads the application's state again.
+            if error
+                .capture_open_failure()
+                .is_some_and(|failure| failure.cause == CaptureOpenCause::DisplayMissing)
+            {
+                self.endpoint().resolved_nemu_app_index = None;
+            }
+            actingcommand_device::observe_open_failure(nemu_pair_open_report(), error)
+        })
         .map(|mut pair| {
             pair.backend.input = Box::new(DeviceRegistryInputDiagnosticBackend::new(
                 pair.backend.input,
@@ -752,6 +838,77 @@ impl ExecutionBackendEntry {
             ));
             Some(pair)
         })
+    }
+
+    /// #402 HS-3 (design HS-M §4.1 item 2): the application index of a paired open whose
+    /// configuration names none, from one bounded `control -v <index> app info -pkg <package>`
+    /// read through `source`: `running` is the main application's index; `not_installed`,
+    /// `stopped`, a read that gave no answer and one that answered another document refuse the
+    /// open, the problem named on the error (`nemu_app_index_problem`). A handset is refused
+    /// before anything is read.
+    fn resolve_nemu_app_index(
+        &self,
+        source: ApplicationStateSource,
+        capture: &CaptureBackendConfig,
+        reader: &ApplicationStateReader,
+    ) -> DeviceResult<NemuAppIndex> {
+        let refused = |problem: NemuAppIndexProblem, message: String| {
+            DeviceError::fatal(message)
+                .with_diagnostic(DeviceErrorCategory::Protocol, HostLocation::OpenNemuSession)
+                .with_nemu_app_index_problem(problem)
+        };
+        let (mumu_manager_path, instance_index) = match source {
+            ApplicationStateSource::Binding {
+                mumu_manager_path,
+                instance_index,
+            } => (mumu_manager_path, instance_index),
+            ApplicationStateSource::Capture => {
+                actingcommand_device::nemu_application_state_source(capture).map_err(|error| {
+                    error.with_nemu_app_index_problem(NemuAppIndexProblem::InfoUnavailable)
+                })?
+            }
+            ApplicationStateSource::Handset => {
+                return Err(refused(
+                    NemuAppIndexProblem::InfoUnavailable,
+                    "Nemu application index unresolved: a handset has no MuMuManager, which is never read for it".to_owned(),
+                ));
+            }
+        };
+        match reader(
+            mumu_manager_path.as_path(),
+            instance_index,
+            self.application_id.as_str(),
+        ) {
+            Ok(MumuApplicationState::Running) => NemuAppIndex::try_from(RESOLVED_NEMU_APP_INDEX),
+            Ok(MumuApplicationState::Stopped) => Err(refused(
+                NemuAppIndexProblem::ApplicationNotRunning,
+                format!(
+                    "Nemu application index unresolved: MuMuManager reports package {} installed and not running on MuMu instance {instance_index}",
+                    self.application_id
+                ),
+            )),
+            Ok(MumuApplicationState::NotInstalled) => Err(refused(
+                NemuAppIndexProblem::PackageNotInstalled,
+                format!(
+                    "Nemu application index unresolved: MuMuManager reports package {} not installed on MuMu instance {instance_index}",
+                    self.application_id
+                ),
+            )),
+            Err(error) => {
+                let problem = actingcommand_device::application_state_read_problem(&error);
+                Err(error.with_nemu_app_index_problem(problem))
+            }
+        }
+    }
+
+    /// #402 HS-3: the index the entry's last paired open resolved, while its touch backend is
+    /// Nemu IPC and the resolution holds (`resolved_nemu_app_index`).
+    fn resolved_nemu_app_index(&self) -> Option<u32> {
+        let endpoint = self.endpoint();
+        if endpoint.input.requested != TouchBackendChoice::NemuIpc {
+            return None;
+        }
+        endpoint.resolved_nemu_app_index.map(NemuAppIndex::index)
     }
 
     fn control_application(
@@ -933,11 +1090,25 @@ pub struct ExecutionBackendRegistry {
     discovery: Option<DiscoverySpec>,
     /// The bounded `info -v <index>` read: `read_instance_state` and the CAP-IDX port check.
     instance_state_reader: InstanceStateReader,
+    /// #402 HS-3: the bounded `app info -pkg` read of a paired open without a configured index.
+    application_state_reader: ApplicationStateReader,
+    /// #402 HS-3: the paired Nemu open.
+    nemu_session_opener: NemuSessionOpener,
 }
 
 /// The production `info -v <index>` read.
 fn mumu_instance_state_reader() -> InstanceStateReader {
     Arc::new(actingcommand_device::read_instance_state)
+}
+
+/// #402 HS-3: the production `control -v <index> app info -pkg <package>` read.
+fn mumu_application_state_reader() -> ApplicationStateReader {
+    Arc::new(actingcommand_device::read_application_state)
+}
+
+/// #402 HS-3: the production paired Nemu open.
+fn nemu_session_opener() -> NemuSessionOpener {
+    Arc::new(NemuIpcSession::open)
 }
 
 impl ExecutionBackendRegistry {
@@ -950,6 +1121,8 @@ impl ExecutionBackendRegistry {
             vision_provider: None,
             discovery: None,
             instance_state_reader: mumu_instance_state_reader(),
+            application_state_reader: mumu_application_state_reader(),
+            nemu_session_opener: nemu_session_opener(),
         };
         for registration in registrations {
             registry.register(registration)?;
@@ -979,6 +1152,8 @@ impl ExecutionBackendRegistry {
             vision_provider: vision.map(|spec| spec.provider),
             discovery,
             instance_state_reader: mumu_instance_state_reader(),
+            application_state_reader: mumu_application_state_reader(),
+            nemu_session_opener: nemu_session_opener(),
         };
         for spec in instances {
             registry.register_spec(spec)?;
@@ -996,21 +1171,13 @@ impl ExecutionBackendRegistry {
     }
 
     fn register_spec(&mut self, spec: InstanceSpec) -> RuntimeHostResult<()> {
+        // #402 HS-3: Nemu touch without `nemu_app_index` registers; its paired open resolves the
+        // index (`ExecutionBackendEntry::resolve_nemu_app_index`).
         let InstanceSpec {
             alias,
             instance_id,
             mode,
         } = spec;
-        if let InstanceMode::Real(registration) = &mode
-            && registration.input.requested == TouchBackendChoice::NemuIpc
-            && registration.nemu_app_index.is_none()
-        {
-            return Err(RuntimeHostError::fatal(
-                HostCode::NemuAppIndexMissing,
-                HostLocation::BuildExecutionBackendRegistry,
-                RuntimeErrorCode::RuntimeHalted,
-            ));
-        }
         if self.entries.contains_key(&alias) {
             return Err(RuntimeHostError::fatal(
                 HostCode::DuplicateInstanceAlias,
@@ -1057,6 +1224,36 @@ impl ExecutionBackendRegistry {
         reader: impl Fn(&Path, u16) -> DeviceResult<InstanceState> + Send + Sync + 'static,
     ) -> Self {
         self.instance_state_reader = Arc::new(reader);
+        self
+    }
+
+    /// #402 HS-3 tests: replaces the `control -v <index> app info -pkg <package>` read with a
+    /// fake.
+    #[cfg(test)]
+    pub(crate) fn with_application_state_reader(
+        mut self,
+        reader: impl Fn(&Path, u16, &str) -> DeviceResult<MumuApplicationState> + Send + Sync + 'static,
+    ) -> Self {
+        self.application_state_reader = Arc::new(reader);
+        self
+    }
+
+    /// #402 HS-3 tests: replaces the paired Nemu open with a fake, which opens no device.
+    #[cfg(test)]
+    pub(crate) fn with_nemu_session_opener(
+        mut self,
+        opener: impl Fn(
+            CaptureBackendConfig,
+            NemuApplicationTarget,
+            NemuInputConfig,
+            Option<&actingcommand_device::FrameMemoryBudget>,
+        )
+            -> DeviceResult<actingcommand_device::OpenedBackend<NemuSessionBackends>>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        self.nemu_session_opener = Arc::new(opener);
         self
     }
 
@@ -1262,11 +1459,25 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
         memory: Option<&actingcommand_device::FrameMemoryBudget>,
     ) -> DeviceResult<Option<actingcommand_device::OpenedBackend<NemuSessionBackends>>> {
         match self.entry(instance_alias)? {
-            RegistryEntry::Real(entry) => {
-                entry.open_nemu_session(memory, &self.instance_state_reader)
-            }
+            RegistryEntry::Real(entry) => entry.open_nemu_session(
+                memory,
+                &NemuOpenReads {
+                    instance_state: &self.instance_state_reader,
+                    application_state: &self.application_state_reader,
+                    open: &self.nemu_session_opener,
+                },
+            ),
             #[cfg(feature = "fixture-backends")]
             RegistryEntry::Fixture(_) => Ok(None),
+        }
+    }
+
+    /// #402 HS-3: the index a real entry's last paired open resolved (a fixture has no Nemu).
+    fn resolved_nemu_app_index(&self, instance_alias: &str) -> Option<u32> {
+        match self.entries.get(instance_alias)? {
+            RegistryEntry::Real(entry) => entry.resolved_nemu_app_index(),
+            #[cfg(feature = "fixture-backends")]
+            RegistryEntry::Fixture(_) => None,
         }
     }
 
@@ -1508,6 +1719,9 @@ impl ExecutionBackendProvider for ExecutionBackendRegistry {
             }
         }
         endpoint.bind_capture_index();
+        // #402 HS-3 (design HS-M §4.1): a rebinding drops the resolved Nemu application index;
+        // the next paired open (the start's preparation) reads it again.
+        endpoint.resolved_nemu_app_index = None;
         Ok(())
     }
 

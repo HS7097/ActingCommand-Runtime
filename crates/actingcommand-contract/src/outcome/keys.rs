@@ -730,4 +730,7 @@ outcome_keys! {
     // ---- #402 HS-2 (an instance's backend switch, contracts/runtime-config.md "Switching an
     // instance's backends"): why `backend_switch_refused` refused the switch. ----
     backend_switch_problem: vocab(backend_switch_problem),
+    // ---- #402 HS-3 (the Nemu application index resolved at the paired open,
+    // contracts/device-binding.md "Backends"): why `nemu_app_index_missing` found no index. ----
+    nemu_app_index_problem: vocab(nemu_app_index_problem),
 }

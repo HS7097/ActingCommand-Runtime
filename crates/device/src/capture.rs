@@ -41,7 +41,7 @@ mod scrcpy;
 pub use nemu_input::{
     InputCheckPhase, InputCheckStop, InputExecutionContext, InputOperationCheck, NemuAppIndex,
     NemuApplicationTarget, NemuFrameGeometry, NemuInputConfig, NemuInputSupport, NemuIpcSession,
-    NemuSessionBackends,
+    NemuSessionBackends, nemu_application_state_source,
 };
 pub use scrcpy::{SCRCPY_SERVER_SHA256, SCRCPY_SERVER_VERSION, ScrcpyBackend, ScrcpyConfig};
 
