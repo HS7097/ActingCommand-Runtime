@@ -2,8 +2,12 @@
 
 use super::*;
 use crate::{InputBackend, InputSelectionContext, PreparedSegmentedSwipePlan, SegmentedSwipeEvent};
-use actingcommand_contract::FencedWrite;
+use actingcommand_contract::{FencedWrite, InputAction};
 use std::ffi::{CString, c_char};
+
+// HS-4 (#402): the reset, the long tap and the swipe of the Nemu input, on a fake device.
+#[cfg(test)]
+mod gate_hs4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NemuAppIndex(i32);
@@ -340,6 +344,72 @@ fn unsupported() -> DeviceError {
         )
 }
 
+/// HS-4 (#402, design `rd-1031/backend-switch/model-backend-switch.md` §4.2, §4.4): what the Nemu
+/// input does with an input action. Every action it performs runs under the Runtime's check of its
+/// step (its lease, its deadline, its cancellation); every one but the reset also on the
+/// committed frame its step decided on, bound by that frame's geometry fence and by the deadline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NemuInputSupport {
+    /// Performed on the step's committed frame: the tap, the long tap, the swipe and the three
+    /// segmented drags.
+    InFrame,
+    /// Performed without a frame: the reset, which only lifts a contact whose lift was not
+    /// confirmed.
+    WithoutFrame,
+    /// Not performed: `key` and `text`.
+    Unsupported,
+}
+
+impl NemuInputSupport {
+    pub fn of(action: &InputAction) -> Self {
+        match action {
+            InputAction::Tap { .. }
+            | InputAction::LongTap { .. }
+            | InputAction::Swipe { .. }
+            | InputAction::SingleTouchDragWithVerticalBrakeV1 { .. }
+            | InputAction::SingleTouchDragWithPauseAndBrakeV1 { .. }
+            | InputAction::SingleTouchPathDragV1 { .. } => Self::InFrame,
+            InputAction::Reset => Self::WithoutFrame,
+            InputAction::Key { .. } | InputAction::Text { .. } => Self::Unsupported,
+        }
+    }
+}
+
+/// HS-4 (#402, §4.4): a long tap as one contact: the press at `point`, the hold of
+/// `duration_ms` and the release.
+fn long_tap_events(point: (i32, i32), duration_ms: u64) -> Vec<SegmentedSwipeEvent> {
+    vec![
+        SegmentedSwipeEvent::Down(point),
+        SegmentedSwipeEvent::Hold(duration_ms),
+        SegmentedSwipeEvent::Up,
+    ]
+}
+
+impl NemuInputView {
+    fn require_attached(&self) -> DeviceResult<()> {
+        if self.detached {
+            return Err(DeviceError::fatal("Nemu input view is detached"));
+        }
+        Ok(())
+    }
+
+    /// HS-4: `events` as one contact on the step's frame, through the worker's geometry fence
+    /// and deadline, as the tap's.
+    fn events_in_frame(
+        &self,
+        events: Vec<SegmentedSwipeEvent>,
+        context: &InputExecutionContext,
+    ) -> DeviceResult<()> {
+        self.require_attached()?;
+        self.owner
+            .input(context, |response| NemuIpcCommand::InputEvents {
+                events,
+                context: context.clone(),
+                response,
+            })
+    }
+}
+
 impl InputBackend for NemuInputView {
     fn selection_context(&self) -> Option<InputSelectionContext> {
         Some(InputSelectionContext {
@@ -352,6 +422,33 @@ impl InputBackend for NemuInputView {
     }
     fn long_tap(&mut self, _: &FencedWrite, _: i32, _: i32, _: u64) -> DeviceResult<()> {
         Err(unsupported())
+    }
+    /// HS-4 (#402, §4.4): the press, the hold of `duration_ms` and the release, on the step's
+    /// frame.
+    fn long_tap_in_frame(
+        &mut self,
+        _witness: &FencedWrite,
+        x: i32,
+        y: i32,
+        duration_ms: u64,
+        context: &InputExecutionContext,
+    ) -> DeviceResult<()> {
+        self.events_in_frame(long_tap_events((x, y), duration_ms), context)
+    }
+    /// HS-4 (#402, §4.4): the press at `from`, evenly timed moves to `to` and the release, on the
+    /// step's frame.
+    fn swipe_in_frame(
+        &mut self,
+        _witness: &FencedWrite,
+        from: (i32, i32),
+        to: (i32, i32),
+        duration_ms: u64,
+        context: &InputExecutionContext,
+    ) -> DeviceResult<()> {
+        self.events_in_frame(
+            crate::input::linear_swipe_events(from, to, duration_ms),
+            context,
+        )
     }
     fn swipe(
         &mut self,
@@ -372,6 +469,20 @@ impl InputBackend for NemuInputView {
     }
     fn reset(&mut self, _: &FencedWrite) -> DeviceResult<()> {
         Err(unsupported())
+    }
+    /// HS-4 (#402, §4.4): lifts a contact whose lift was not confirmed, else does nothing; it
+    /// reads no frame, as maatouch's and minitouch's resets reset their contacts.
+    fn reset_with_check(
+        &mut self,
+        _witness: &FencedWrite,
+        context: &InputExecutionContext,
+    ) -> DeviceResult<()> {
+        self.require_attached()?;
+        self.owner
+            .input(context, |response| NemuIpcCommand::InputReset {
+                context: context.clone(),
+                response,
+            })
     }
     fn supports_segmented_swipe(&self) -> bool {
         true
@@ -416,7 +527,7 @@ impl InputBackend for NemuInputView {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Contact {
     NotStarted,
     MayBeDown,
@@ -571,7 +682,8 @@ impl NemuIpcWorkerState {
     ) -> DeviceResult<()> {
         let hold = self.input.as_ref().ok_or_else(unsupported)?.config.tap_hold;
         let hold = u64::try_from(hold.as_millis()).map_err(|_| unsupported())?;
-        self.input_events(
+        perform_events(
+            self,
             &[
                 SegmentedSwipeEvent::Down((x, y)),
                 SegmentedSwipeEvent::Hold(hold),
@@ -589,166 +701,26 @@ impl NemuIpcWorkerState {
         stopped: &AtomicBool,
     ) -> DeviceResult<()> {
         plan.action().validate()?;
-        self.input_events(plan.events(), context, stopped)
+        perform_events(self, plan.events(), context, stopped)
     }
 
-    fn input_events(
+    /// HS-4 (#402): a long tap or a swipe, the events its view planned.
+    pub(super) fn input_gesture(
         &mut self,
         events: &[SegmentedSwipeEvent],
         context: &InputExecutionContext,
         stopped: &AtomicBool,
     ) -> DeviceResult<()> {
-        input_check(context.check.as_ref(), InputCheckPhase::Continue, stopped)?;
-        let geometry = context
-            .geometry
-            .as_ref()
-            .ok_or_else(|| DeviceError::fatal("Nemu input requires the committed source frame"))?;
-        let (width, height) = self.probe_resolution_with_input(Some((context, stopped)))?;
-        let input = self.input.as_mut().ok_or_else(unsupported)?;
-        if !Arc::ptr_eq(&input.owner, &geometry.owner)
-            || input.generation != geometry.generation
-            || self.display_id != geometry.display_id
-            || (width, height) != geometry.dimensions()
-        {
-            input.invalidate()?;
-            return Err(DeviceError::fatal(
-                "Nemu input frame target or geometry changed",
-            ));
-        }
-        if matches!(input.contact, Contact::MayBeDown | Contact::UpAttempted) {
-            return Err(contact_unconfirmed("Nemu input contact is unresolved"));
-        }
-        let mut delay = Duration::ZERO;
-        for event in events {
-            let milliseconds = match event {
-                SegmentedSwipeEvent::Down(point) | SegmentedSwipeEvent::Move { point, .. } => {
-                    if point.0 < 0
-                        || point.1 < 0
-                        || point.0 as u32 >= width
-                        || point.1 as u32 >= height
-                    {
-                        return Err(DeviceError::fatal(
-                            "Nemu input point is outside the source frame",
-                        ));
-                    }
-                    match event {
-                        SegmentedSwipeEvent::Move {
-                            delay_before_ms, ..
-                        } => *delay_before_ms,
-                        _ => 0,
-                    }
-                }
-                SegmentedSwipeEvent::Hold(ms) => *ms,
-                SegmentedSwipeEvent::Up => 0,
-            };
-            delay = delay
-                .checked_add(Duration::from_millis(milliseconds))
-                .ok_or_else(unsupported)?;
-        }
-        let reserve = input
-            .config
-            .shutdown_timeout
-            .min(input.config.command_timeout);
-        if delay.checked_add(reserve).ok_or_else(unsupported)?
-            >= input_check(context.check.as_ref(), InputCheckPhase::Continue, stopped)?
-        {
-            return Err(DeviceError::fatal(
-                "Nemu input deadline cannot cover the gesture and final up",
-            ));
-        }
-        let result = (|| {
-            for event in events {
-                match event {
-                    SegmentedSwipeEvent::Down((x, y)) => {
-                        self.finger_down(*x, *y, context, stopped)?
-                    }
-                    SegmentedSwipeEvent::Move {
-                        point: (x, y),
-                        delay_before_ms,
-                    } => {
-                        input_wait(
-                            Duration::from_millis(*delay_before_ms),
-                            context.check.as_ref(),
-                            stopped,
-                        )?;
-                        self.finger_down(*x, *y, context, stopped)?;
-                    }
-                    SegmentedSwipeEvent::Hold(ms) => {
-                        input_wait(Duration::from_millis(*ms), context.check.as_ref(), stopped)?
-                    }
-                    SegmentedSwipeEvent::Up => self.finger_up(context.check.as_ref(), stopped)?,
-                }
-            }
-            Ok(())
-        })();
-        match result {
-            Err(primary)
-                if self
-                    .input
-                    .as_ref()
-                    .is_some_and(|input| input.contact == Contact::MayBeDown) =>
-            {
-                match self.finger_up(context.check.as_ref(), stopped) {
-                    Ok(()) => Err(primary),
-                    Err(secondary) => Err(primary
-                        .merge_resource_cleanup(secondary)
-                        .with_resource_quiescence(DeviceResourceQuiescence::Unconfirmed, 1)),
-                }
-            }
-            result => result,
-        }
+        perform_events(self, events, context, stopped)
     }
 
-    fn finger_down(
+    /// HS-4 (#402): the reset.
+    pub(super) fn input_reset(
         &mut self,
-        x: i32,
-        y: i32,
         context: &InputExecutionContext,
         stopped: &AtomicBool,
     ) -> DeviceResult<()> {
-        let down = unsafe { self.symbol::<FingerDown>(b"nemu_input_event_finger_touch_down\0")? };
-        input_check(context.check.as_ref(), InputCheckPhase::Continue, stopped)?;
-        self.input.as_ref().ok_or_else(unsupported)?;
-        self.resume_vendor_stdio()?;
-        self.input.as_mut().ok_or_else(unsupported)?.contact = Contact::MayBeDown;
-        let result = unsafe { down(self.connect_id, self.display_id, 1, x, y) };
-        let native = if result != 0 {
-            Err(DeviceError::fatal(format!(
-                "Nemu finger down failed with code {result}"
-            )))
-        } else {
-            Ok(())
-        };
-        merge_input_snapshot(native, self.record_vendor_stdio_snapshot())
-    }
-
-    fn finger_up(
-        &mut self,
-        check: &dyn InputOperationCheck,
-        stopped: &AtomicBool,
-    ) -> DeviceResult<()> {
-        let up = unsafe { self.symbol::<FingerUp>(b"nemu_input_event_finger_touch_up\0")? };
-        input_check(check, InputCheckPhase::FinalUp, stopped)?;
-        self.input.as_ref().ok_or_else(unsupported)?;
-        // Workflow #191 H: the contact is released even when its output cannot be captured;
-        // that failure is reported with the snapshot's.
-        let resumed = self.resume_vendor_stdio();
-        self.input.as_mut().ok_or_else(unsupported)?.contact = Contact::UpAttempted;
-        let result = unsafe { up(self.connect_id, self.display_id, 1) };
-        if result == 0 {
-            self.input.as_mut().expect("input exists").contact = Contact::Released;
-        }
-        let native = if result != 0 {
-            Err(contact_unconfirmed(&format!(
-                "Nemu finger up failed with code {result}"
-            )))
-        } else {
-            Ok(())
-        };
-        merge_input_snapshot(
-            merge_input_snapshot(native, resumed),
-            self.record_vendor_stdio_snapshot(),
-        )
+        reset_contact(self, context, stopped)
     }
 
     pub(super) fn close_input_contact(
@@ -764,7 +736,8 @@ impl NemuIpcWorkerState {
                         "Nemu final up requires current fenced close",
                     ));
                 }
-                self.finger_up(
+                finger_up(
+                    self,
                     check.ok_or_else(|| {
                         contact_unconfirmed("Nemu final up has no current close check")
                     })?,
@@ -776,6 +749,288 @@ impl NemuIpcWorkerState {
             }
             _ => Ok(()),
         }
+    }
+}
+
+/// HS-4 (#402): one native contact call of the Nemu input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NemuTouchCall {
+    /// The finger down at a point: a press, or a move of the pressed finger.
+    Down(i32, i32),
+    /// The finger up.
+    Up,
+}
+
+/// HS-4 (#402): what one Nemu touch needs of its connection: the paired input's state, the
+/// display its native calls address and that display's size, the two native contact calls with
+/// the vendor output around each, and the waits between events. The worker's state makes them on
+/// the vendor library; the gate tests' fake device records them, with no library and no clock.
+trait NemuTouchPort {
+    /// The paired input's state; `None` on a capture-only connection.
+    fn touch_input(&mut self) -> Option<&mut NemuInputState>;
+    /// The display the native calls address.
+    fn touch_display(&self) -> i32;
+    /// Resolves the application's display and reads its size, checking the input first.
+    fn touch_resolution(
+        &mut self,
+        context: &InputExecutionContext,
+        stopped: &AtomicBool,
+    ) -> DeviceResult<(u32, u32)>;
+    /// Looks the native call up; a call the library lacks fails before any check.
+    fn touch_require(&self, call: NemuTouchCall) -> DeviceResult<()>;
+    /// Redirects the vendor output for the native call that follows.
+    fn touch_resume(&mut self) -> DeviceResult<()>;
+    /// Makes the native call; its return code, 0 for success.
+    fn touch_native(&mut self, call: NemuTouchCall) -> DeviceResult<i32>;
+    /// Reads the vendor output of the native call that returned.
+    fn touch_snapshot(&mut self) -> DeviceResult<()>;
+    /// Waits `duration` between two events, checking the input throughout.
+    fn touch_wait(
+        &mut self,
+        duration: Duration,
+        check: &dyn InputOperationCheck,
+        stopped: &AtomicBool,
+    ) -> DeviceResult<()>;
+}
+
+impl NemuTouchPort for NemuIpcWorkerState {
+    fn touch_input(&mut self) -> Option<&mut NemuInputState> {
+        self.input.as_mut()
+    }
+
+    fn touch_display(&self) -> i32 {
+        self.display_id
+    }
+
+    fn touch_resolution(
+        &mut self,
+        context: &InputExecutionContext,
+        stopped: &AtomicBool,
+    ) -> DeviceResult<(u32, u32)> {
+        self.probe_resolution_with_input(Some((context, stopped)))
+    }
+
+    fn touch_require(&self, call: NemuTouchCall) -> DeviceResult<()> {
+        match call {
+            NemuTouchCall::Down(..) => {
+                let _: FingerDown =
+                    unsafe { self.symbol(b"nemu_input_event_finger_touch_down\0")? };
+            }
+            NemuTouchCall::Up => {
+                let _: FingerUp = unsafe { self.symbol(b"nemu_input_event_finger_touch_up\0")? };
+            }
+        }
+        Ok(())
+    }
+
+    fn touch_resume(&mut self) -> DeviceResult<()> {
+        self.resume_vendor_stdio()
+    }
+
+    fn touch_native(&mut self, call: NemuTouchCall) -> DeviceResult<i32> {
+        let (connect_id, display_id) = (self.connect_id, self.display_id);
+        Ok(match call {
+            NemuTouchCall::Down(x, y) => {
+                let down: FingerDown =
+                    unsafe { self.symbol(b"nemu_input_event_finger_touch_down\0")? };
+                unsafe { down(connect_id, display_id, 1, x, y) }
+            }
+            NemuTouchCall::Up => {
+                let up: FingerUp = unsafe { self.symbol(b"nemu_input_event_finger_touch_up\0")? };
+                unsafe { up(connect_id, display_id, 1) }
+            }
+        })
+    }
+
+    fn touch_snapshot(&mut self) -> DeviceResult<()> {
+        self.record_vendor_stdio_snapshot()
+    }
+
+    fn touch_wait(
+        &mut self,
+        duration: Duration,
+        check: &dyn InputOperationCheck,
+        stopped: &AtomicBool,
+    ) -> DeviceResult<()> {
+        input_wait(duration, check, stopped)
+    }
+}
+
+/// One contact through `events` on the frame `context` names (§4.2 items 4 and 5): the frame's
+/// geometry fence first, then a deadline that covers the whole gesture and the final lift, then
+/// the events, a press or a move each a finger down at its point. A failure while the finger may
+/// be down lifts it once more.
+fn perform_events<P: NemuTouchPort>(
+    port: &mut P,
+    events: &[SegmentedSwipeEvent],
+    context: &InputExecutionContext,
+    stopped: &AtomicBool,
+) -> DeviceResult<()> {
+    input_check(context.check.as_ref(), InputCheckPhase::Continue, stopped)?;
+    let geometry = context
+        .geometry
+        .as_ref()
+        .ok_or_else(|| DeviceError::fatal("Nemu input requires the committed source frame"))?;
+    let (width, height) = port.touch_resolution(context, stopped)?;
+    let display_id = port.touch_display();
+    let input = port.touch_input().ok_or_else(unsupported)?;
+    if !Arc::ptr_eq(&input.owner, &geometry.owner)
+        || input.generation != geometry.generation
+        || display_id != geometry.display_id
+        || (width, height) != geometry.dimensions()
+    {
+        input.invalidate()?;
+        return Err(DeviceError::fatal(
+            "Nemu input frame target or geometry changed",
+        ));
+    }
+    if matches!(input.contact, Contact::MayBeDown | Contact::UpAttempted) {
+        return Err(contact_unconfirmed("Nemu input contact is unresolved"));
+    }
+    let mut delay = Duration::ZERO;
+    for event in events {
+        let milliseconds = match event {
+            SegmentedSwipeEvent::Down(point) | SegmentedSwipeEvent::Move { point, .. } => {
+                if point.0 < 0 || point.1 < 0 || point.0 as u32 >= width || point.1 as u32 >= height
+                {
+                    return Err(DeviceError::fatal(
+                        "Nemu input point is outside the source frame",
+                    ));
+                }
+                match event {
+                    SegmentedSwipeEvent::Move {
+                        delay_before_ms, ..
+                    } => *delay_before_ms,
+                    _ => 0,
+                }
+            }
+            SegmentedSwipeEvent::Hold(ms) => *ms,
+            SegmentedSwipeEvent::Up => 0,
+        };
+        delay = delay
+            .checked_add(Duration::from_millis(milliseconds))
+            .ok_or_else(unsupported)?;
+    }
+    let reserve = input
+        .config
+        .shutdown_timeout
+        .min(input.config.command_timeout);
+    if delay.checked_add(reserve).ok_or_else(unsupported)?
+        >= input_check(context.check.as_ref(), InputCheckPhase::Continue, stopped)?
+    {
+        return Err(DeviceError::fatal(
+            "Nemu input deadline cannot cover the gesture and final up",
+        ));
+    }
+    let result = run_events(port, events, context, stopped);
+    let unreleased = result.is_err()
+        && port
+            .touch_input()
+            .is_some_and(|input| input.contact == Contact::MayBeDown);
+    match result {
+        Err(primary) if unreleased => match finger_up(port, context.check.as_ref(), stopped) {
+            Ok(()) => Err(primary),
+            Err(secondary) => Err(primary
+                .merge_resource_cleanup(secondary)
+                .with_resource_quiescence(DeviceResourceQuiescence::Unconfirmed, 1)),
+        },
+        result => result,
+    }
+}
+
+/// The events of one contact in order, each checked before it (§4.2 item 5).
+fn run_events<P: NemuTouchPort>(
+    port: &mut P,
+    events: &[SegmentedSwipeEvent],
+    context: &InputExecutionContext,
+    stopped: &AtomicBool,
+) -> DeviceResult<()> {
+    let check = context.check.as_ref();
+    for event in events {
+        match event {
+            SegmentedSwipeEvent::Down((x, y)) => finger_down(port, *x, *y, context, stopped)?,
+            SegmentedSwipeEvent::Move {
+                point: (x, y),
+                delay_before_ms,
+            } => {
+                port.touch_wait(Duration::from_millis(*delay_before_ms), check, stopped)?;
+                finger_down(port, *x, *y, context, stopped)?;
+            }
+            SegmentedSwipeEvent::Hold(ms) => {
+                port.touch_wait(Duration::from_millis(*ms), check, stopped)?;
+            }
+            SegmentedSwipeEvent::Up => finger_up(port, check, stopped)?,
+        }
+    }
+    Ok(())
+}
+
+fn finger_down<P: NemuTouchPort>(
+    port: &mut P,
+    x: i32,
+    y: i32,
+    context: &InputExecutionContext,
+    stopped: &AtomicBool,
+) -> DeviceResult<()> {
+    let call = NemuTouchCall::Down(x, y);
+    port.touch_require(call)?;
+    input_check(context.check.as_ref(), InputCheckPhase::Continue, stopped)?;
+    port.touch_input().ok_or_else(unsupported)?;
+    port.touch_resume()?;
+    port.touch_input().ok_or_else(unsupported)?.contact = Contact::MayBeDown;
+    let native = port.touch_native(call).and_then(|result| {
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(DeviceError::fatal(format!(
+                "Nemu finger down failed with code {result}"
+            )))
+        }
+    });
+    merge_input_snapshot(native, port.touch_snapshot())
+}
+
+fn finger_up<P: NemuTouchPort>(
+    port: &mut P,
+    check: &dyn InputOperationCheck,
+    stopped: &AtomicBool,
+) -> DeviceResult<()> {
+    port.touch_require(NemuTouchCall::Up)?;
+    input_check(check, InputCheckPhase::FinalUp, stopped)?;
+    port.touch_input().ok_or_else(unsupported)?;
+    // Workflow #191 H: the contact is released even when its output cannot be captured;
+    // that failure is reported with the snapshot's.
+    let resumed = port.touch_resume();
+    port.touch_input().ok_or_else(unsupported)?.contact = Contact::UpAttempted;
+    let native = match port.touch_native(NemuTouchCall::Up) {
+        Ok(0) => {
+            if let Some(input) = port.touch_input() {
+                input.contact = Contact::Released;
+            }
+            Ok(())
+        }
+        Ok(result) => Err(contact_unconfirmed(&format!(
+            "Nemu finger up failed with code {result}"
+        ))),
+        Err(error) => Err(error.with_resource_quiescence(DeviceResourceQuiescence::Unconfirmed, 1)),
+    };
+    merge_input_snapshot(merge_input_snapshot(native, resumed), port.touch_snapshot())
+}
+
+/// HS-4 (#402, §4.4): the reset. A contact whose lift was not confirmed (pressed, or lifted
+/// without a confirmed answer) is lifted once, under the input's check; any other contact is left
+/// as it is and nothing is called. It reads no frame and no display, so `context` needs no
+/// geometry.
+fn reset_contact<P: NemuTouchPort>(
+    port: &mut P,
+    context: &InputExecutionContext,
+    stopped: &AtomicBool,
+) -> DeviceResult<()> {
+    let contact = port.touch_input().ok_or_else(unsupported)?.contact;
+    if matches!(contact, Contact::MayBeDown | Contact::UpAttempted) {
+        finger_up(port, context.check.as_ref(), stopped)
+    } else {
+        Ok(())
     }
 }
 

@@ -2,6 +2,9 @@
 
 #[cfg(feature = "fixture-backends")]
 mod fixtures;
+// HS-4 (#402): the capability table names what the Nemu input performs.
+#[cfg(test)]
+mod gate_hs4;
 
 use crate::codes::{HostCode, HostLocation};
 use crate::{RuntimeHostError, RuntimeHostResult};
@@ -531,7 +534,8 @@ impl ExecutionBackendEntry {
         };
         let application_adb = registration.input.adb_config.clone();
         let application_target = registration.input.target.clone();
-        let capabilities = capability_profile(&registration.input, &registration.capture)?;
+        let capabilities =
+            capability_profile(registration.input.requested, registration.capture.requested)?;
         let capabilities = match registration.provider_profile {
             Some(provider) => merge_capability_profile(&capabilities, &provider)?,
             None => capabilities,
@@ -1028,9 +1032,12 @@ impl ExecutionBackendRegistry {
 }
 
 /// Records implementation/configuration only; this path never opens or probes a backend.
+///
+/// HS-4 (#402, design §4.4): the Nemu input performs the tap, the long tap, the swipe, the
+/// segmented drags and the reset (`NemuInputSupport`), and neither `key` nor `text`.
 fn capability_profile(
-    input: &TouchBackendConfig,
-    capture: &CaptureBackendConfig,
+    input: TouchBackendChoice,
+    capture: CaptureBackendChoice,
 ) -> RuntimeHostResult<EmulatorCapabilityProfile> {
     let invalid = |_| {
         RuntimeHostError::fatal(
@@ -1043,15 +1050,19 @@ fn capability_profile(
         let (supported, source) = match capability {
             EmulatorCapability::InputTap | EmulatorCapability::InputLongTap
             | EmulatorCapability::InputSwipe | EmulatorCapability::InputReset =>
-                (true, input.requested.as_str()),
+                (true, input.as_str()),
             EmulatorCapability::InputSegmentedSwipe => (
-                matches!(input.requested, TouchBackendChoice::MaaTouch | TouchBackendChoice::Minitouch),
-                input.requested.as_str(),
+                matches!(
+                    input,
+                    TouchBackendChoice::MaaTouch | TouchBackendChoice::Minitouch
+                        | TouchBackendChoice::NemuIpc
+                ),
+                input.as_str(),
             ),
             EmulatorCapability::InputKey | EmulatorCapability::InputText => (
-                input.requested == TouchBackendChoice::MaaTouch, input.requested.as_str(),
+                input == TouchBackendChoice::MaaTouch, input.as_str(),
             ),
-            EmulatorCapability::CaptureFrame => (true, capture.requested.as_str()),
+            EmulatorCapability::CaptureFrame => (true, capture.as_str()),
             EmulatorCapability::ApplicationLaunch | EmulatorCapability::ApplicationStop
             | EmulatorCapability::ApplicationRestart => (true, "adb_application_lifecycle"),
             EmulatorCapability::InventoryRead | EmulatorCapability::InstanceStatusRead
@@ -1566,6 +1577,32 @@ impl InputBackend for DeviceRegistryInputDiagnosticBackend {
         })
     }
 
+    fn long_tap_in_frame(
+        &mut self,
+        witness: &FencedWrite,
+        x: i32,
+        y: i32,
+        duration_ms: u64,
+        context: &actingcommand_device::InputExecutionContext,
+    ) -> DeviceResult<()> {
+        self.run(DeviceLocation::InputLongTap, |backend| {
+            backend.long_tap_in_frame(witness, x, y, duration_ms, context)
+        })
+    }
+
+    fn swipe_in_frame(
+        &mut self,
+        witness: &FencedWrite,
+        from: (i32, i32),
+        to: (i32, i32),
+        duration_ms: u64,
+        context: &actingcommand_device::InputExecutionContext,
+    ) -> DeviceResult<()> {
+        self.run(DeviceLocation::InputSwipe, |backend| {
+            backend.swipe_in_frame(witness, from, to, duration_ms, context)
+        })
+    }
+
     fn swipe(
         &mut self,
         witness: &FencedWrite,
@@ -1619,6 +1656,16 @@ impl InputBackend for DeviceRegistryInputDiagnosticBackend {
 
     fn reset(&mut self, witness: &FencedWrite) -> DeviceResult<()> {
         self.run(DeviceLocation::InputReset, |backend| backend.reset(witness))
+    }
+
+    fn reset_with_check(
+        &mut self,
+        witness: &FencedWrite,
+        context: &actingcommand_device::InputExecutionContext,
+    ) -> DeviceResult<()> {
+        self.run(DeviceLocation::InputReset, |backend| {
+            backend.reset_with_check(witness, context)
+        })
     }
 
     fn close_once(

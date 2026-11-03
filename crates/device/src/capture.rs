@@ -40,7 +40,8 @@ mod nemu_input;
 mod scrcpy;
 pub use nemu_input::{
     InputCheckPhase, InputCheckStop, InputExecutionContext, InputOperationCheck, NemuAppIndex,
-    NemuApplicationTarget, NemuFrameGeometry, NemuInputConfig, NemuIpcSession, NemuSessionBackends,
+    NemuApplicationTarget, NemuFrameGeometry, NemuInputConfig, NemuInputSupport, NemuIpcSession,
+    NemuSessionBackends,
 };
 pub use scrcpy::{SCRCPY_SERVER_SHA256, SCRCPY_SERVER_VERSION, ScrcpyBackend, ScrcpyConfig};
 
@@ -2117,6 +2118,17 @@ enum NemuIpcCommand {
         context: InputExecutionContext,
         response: mpsc::Sender<DeviceResult<()>>,
     },
+    /// HS-4 (#402): a long tap or a swipe, as the events its view planned.
+    InputEvents {
+        events: Vec<crate::SegmentedSwipeEvent>,
+        context: InputExecutionContext,
+        response: mpsc::Sender<DeviceResult<()>>,
+    },
+    /// HS-4 (#402): the reset, which needs no frame.
+    InputReset {
+        context: InputExecutionContext,
+        response: mpsc::Sender<DeviceResult<()>>,
+    },
     InvalidateDisplay(mpsc::Sender<DeviceResult<()>>),
     Shutdown {
         authority: DeviceCloseAuthority,
@@ -2221,6 +2233,28 @@ impl NemuIpcWorker {
                         } => {
                             let result = worker_state_result(&mut state, |state| {
                                 state.input_segmented(&plan, &context, &worker_poisoned)
+                            });
+                            drop(context);
+                            response
+                                .send(result)
+                                .map_err(|_| DeviceError::fatal("Nemu IPC input response lost"))?;
+                        }
+                        NemuIpcCommand::InputEvents {
+                            events,
+                            context,
+                            response,
+                        } => {
+                            let result = worker_state_result(&mut state, |state| {
+                                state.input_gesture(&events, &context, &worker_poisoned)
+                            });
+                            drop(context);
+                            response
+                                .send(result)
+                                .map_err(|_| DeviceError::fatal("Nemu IPC input response lost"))?;
+                        }
+                        NemuIpcCommand::InputReset { context, response } => {
+                            let result = worker_state_result(&mut state, |state| {
+                                state.input_reset(&context, &worker_poisoned)
                             });
                             drop(context);
                             response

@@ -717,10 +717,11 @@ fn capture_backend_capabilities() -> Value {
 /// stays at its point. Workflow #406 T4: every backend that performs segmented plans performs the
 /// path drag (`single_touch_path_drag_v1`, Workflow #406 T3), and `adb_shell_input` performs the
 /// segmented plans (both brake drags and the path drag) through `input motionevent` from the
-/// device's Android SDK level 23 (plan Q18 (a)).
+/// device's Android SDK level 23 (plan Q18 (a)). HS-4 (#402): `nemu_ipc` performs the long tap
+/// and the swipe too (still no `key` or `text`).
 fn touch_backend_capabilities() -> Value {
     let mut backends = json!([
-        {"id": "nemu_ipc", "gestures": ["tap", "single_touch_drag_with_vertical_brake_v1", "single_touch_drag_with_pause_and_brake_v1", "single_touch_path_drag_v1"]},
+        {"id": "nemu_ipc", "gestures": ["tap", "long_tap", "swipe", "single_touch_drag_with_vertical_brake_v1", "single_touch_drag_with_pause_and_brake_v1", "single_touch_path_drag_v1"]},
         {"id": "maatouch", "gestures": ["tap", "long_tap", "swipe", "single_touch_drag_with_vertical_brake_v1", "single_touch_drag_with_pause_and_brake_v1", "single_touch_path_drag_v1", "key", "text"]},
         {"id": "minitouch", "gestures": ["tap", "long_tap", "swipe", "single_touch_drag_with_vertical_brake_v1", "single_touch_drag_with_pause_and_brake_v1", "single_touch_path_drag_v1"]},
         {"id": "adb_shell_input", "gestures": ["tap", "long_tap", "swipe", "single_touch_drag_with_vertical_brake_v1", "single_touch_drag_with_pause_and_brake_v1", "single_touch_path_drag_v1"]}

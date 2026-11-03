@@ -99,10 +99,18 @@ fn l4_capabilities_list_the_four_touch_backends_with_the_gestures_each_performs(
 
     // Workflow #406 T4 (adapted): since #406 T3 every segmented backend performs the path drag,
     // and `adb_shell_input` performs the segmented plans through `input motionevent` (plan Q18).
+    // HS-4 (#402, adapted): `nemu_ipc` performs the long tap and the swipe too.
     let expected = [
         (
             "nemu_ipc",
-            set(&["tap", VERTICAL_BRAKE, PAUSE_AND_BRAKE, PATH_DRAG]),
+            set(&[
+                "tap",
+                "long_tap",
+                "swipe",
+                VERTICAL_BRAKE,
+                PAUSE_AND_BRAKE,
+                PATH_DRAG,
+            ]),
         ),
         (
             "maatouch",
