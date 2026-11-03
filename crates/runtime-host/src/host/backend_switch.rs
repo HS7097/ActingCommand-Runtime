@@ -575,7 +575,9 @@ impl RuntimeHost {
         Ok(())
     }
 
-    /// Fences `instance_alias` (#403) as a failure of its own work does.
+    /// Fences `instance_alias` (#403) as a failure of its own work does: an instance fault of its
+    /// capture backend (as ISO-M's containment tests fence one), which the fence's record names
+    /// as its cause.
     pub(crate) fn fence_instance_for_test(&self, instance_alias: &str) -> RuntimeHostResult<()> {
         let location = crate::codes::test_spellings::TestLocation::FenceInstanceForTest;
         let shared = self.shared_ref(location)?;
@@ -583,10 +585,11 @@ impl RuntimeHost {
             .resolve_instance(instance_alias)
             .map_err(|failure| *failure.error)?
             .instance_id();
-        let failure = RuntimeHostError::request(
-            HostCode::InstanceResourcesFenced,
-            HostLocation::FenceInstanceResources,
-            RuntimeErrorCode::BackendOperationFailed,
+        let failure = RuntimeHostError::instance_fault(
+            actingcommand_contract::codes::SharedCode::CaptureBackendOperationFailed,
+            location,
+            RuntimeErrorCode::CaptureFailed,
+            instance_id,
         );
         shared
             .fence_contained_failure(&failure, instance_id, shared.events.system_links()?)?

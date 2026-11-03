@@ -17,8 +17,8 @@ use super::*;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     CONFIG_OVERRIDES_FACT_KEY, ConfigParameter, ConfigParameterSource, ConfigSettingChange,
-    DeviceBackendSwitchedPayload, FactScalar, RuntimeConfigManifest, RuntimeLifecyclePhase,
-    RuntimePayload, SchedulingPauseScope, config_parameters_fact_key,
+    DeviceBackendSwitchedPayload, FactScalar, InstanceStuckRecovery, RuntimeConfigManifest,
+    RuntimeLifecyclePhase, RuntimePayload, SchedulingPauseScope, config_parameters_fact_key,
 };
 use actingcommand_execution_kernel::{
     DiscoveredInstanceBinding, PendingAdbEndpoint, ResolvedInstanceEndpoint,
@@ -28,8 +28,9 @@ use serde_json::{Value, json};
 
 const A: &str = "node.a";
 const B: &str = "node.b";
-/// How long a test waits for the Runtime to reach a point it signals (never a sleep).
-const MEET: Duration = Duration::from_secs(30);
+/// How long a test waits for the Runtime to reach a point it signals (never a sleep). Every wait
+/// returns as soon as its message arrives; `GATE_WAIT` only bounds a broken run.
+const GATE_WAIT: Duration = Duration::from_secs(120);
 
 fn id_text(instance: InstanceId) -> String {
     match serde_json::to_value(instance).expect("instance id encodes") {
@@ -485,30 +486,41 @@ fn hs2_run_between_steps_is_not_a_boundary() {
         ),
     );
     // The run stops inside itself, on its own key, until the switch has its answer; then its
-    // deadline passes and it ends.
+    // deadline passes and it ends. A checkpoint answers only on the thread that armed it, so the
+    // run's thread arms it and then sends the run.
     let (at_checkpoint, reached) = mpsc::channel();
     let (go_on, resumed) = mpsc::channel::<()>();
     let checkpoint_clock = Arc::clone(&clock);
-    host.run_at_contained_task_checkpoint_for_test(run.request_id(), a.id, None, move |_| {
-        at_checkpoint.send(()).expect("the test meets the run");
-        resumed
-            .recv_timeout(MEET)
-            .expect("the test lets the run go on");
-        checkpoint_clock.advance(25);
-    })
-    .expect("the run's checkpoint");
     let request = switch_request(&ids, &a, "maatouch", "adb");
 
-    let (receipt, run_receipt) = thread::scope(|scope| {
-        let running = scope.spawn(|| send(&host, &run, 4203));
+    let (receipt, (run_receipt, admitted)) = thread::scope(|scope| {
+        let running = scope.spawn(|| {
+            let checkpoint = host
+                .run_at_contained_task_checkpoint_for_test(
+                    run.request_id(),
+                    a.id,
+                    None,
+                    move |_| {
+                        at_checkpoint.send(()).expect("the test meets the run");
+                        resumed
+                            .recv_timeout(GATE_WAIT)
+                            .expect("the test lets the run go on");
+                        checkpoint_clock.advance(25);
+                    },
+                )
+                .expect("the run's checkpoint");
+            let run_receipt = send(&host, &run, 4203);
+            (run_receipt, checkpoint.consumed())
+        });
         reached
-            .recv_timeout(MEET)
+            .recv_timeout(GATE_WAIT)
             .expect("the run reached its checkpoint");
         let receipt = send(&host, &request, 4204);
         go_on.send(()).expect("the run goes on");
         (receipt, running.join().expect("the run's thread"))
     });
 
+    assert_eq!(admitted, 1, "the run stopped at its checkpoint once");
     let outcome = refusal(&host, &request);
     assert_refused(
         &receipt,
@@ -607,7 +619,21 @@ fn hs2_player_hold_refuses() {
 fn hs2_fenced_instance_refuses() {
     let root = TempDir::new().expect("tempdir");
     let (a, rows) = Node::new(A, "adb_shell_input", "adb");
-    let host = start(&root, &[&a], rows);
+    // The instance's stuck recovery is off, as in the containment tests: no ladder takes the
+    // fence and self-checks (or unfences) the instance while the switch is refused.
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_stuck_recovery(BTreeMap::from([(
+                A.to_owned(),
+                InstanceStuckRecovery {
+                    enabled: false,
+                    cooldown_secs: 600,
+                },
+            )]))
+            .with_config_manifest(manifest(rows)),
+        Arc::new(provider(&[&a]).with_device_endpoints()),
+    )
+    .expect("runtime host");
     let ids = IdentifierIssuer::new().expect("identifier issuer");
     host.fence_instance_for_test(A).expect("fence the instance");
     let opens = a.opens();
@@ -916,7 +942,7 @@ fn hs2_status_read_not_blocked_during_switch() {
     let (snapshot, receipt) = thread::scope(|scope| {
         let switching = scope.spawn(|| send(&host, &request, 4217));
         opening
-            .recv_timeout(MEET)
+            .recv_timeout(GATE_WAIT)
             .expect("the switch is opening the new backends");
         // The settings and the fact snapshot read under the settings' gate, which the switch's
         // device steps do not hold.
