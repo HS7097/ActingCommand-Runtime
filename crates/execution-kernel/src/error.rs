@@ -155,9 +155,19 @@ pub struct ExecutionFailureContext {
     /// ISO-2b (#419 R1, ISO-M row E08): why the input's operation check stopped the input, when
     /// it did (the primary device failure's; a merged failure keeps the primary's).
     input_check_stop: Option<actingcommand_device::InputCheckStop>,
+    /// #402 HS-3: why a paired Nemu open found no application index, when it refused for that.
+    nemu_app_index_problem: Option<actingcommand_device::NemuAppIndexProblem>,
 }
 
 impl ExecutionFailureContext {
+    /// #402 HS-3: why the paired Nemu open this failure ended found no application index, when
+    /// the provider refused it for that.
+    pub const fn nemu_app_index_problem(
+        &self,
+    ) -> Option<actingcommand_device::NemuAppIndexProblem> {
+        self.nemu_app_index_problem
+    }
+
     /// ISO-2b (#419 R1, ISO-M row E08): why the input's operation check stopped the input this
     /// failure ended, when it did: the work that admitted the input ended, not the device.
     pub const fn input_check_stop(&self) -> Option<actingcommand_device::InputCheckStop> {
@@ -506,6 +516,7 @@ impl ExecutionKernelError {
                 native_detail_is_device_message: error.diagnostic_message().is_none(),
                 capture_open: error.capture_open_failure().cloned().map(Box::new),
                 input_check_stop: error.input_check_stop(),
+                nemu_app_index_problem: error.nemu_app_index_problem(),
                 causes,
                 resources: error
                     .resource_contributions()

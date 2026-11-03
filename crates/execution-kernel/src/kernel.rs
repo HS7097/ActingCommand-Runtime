@@ -588,6 +588,13 @@ impl ExecutionKernel {
             })
     }
 
+    /// #402 HS-3 (register §1.271): the Nemu application index the provider resolved when the
+    /// instance's paired session last opened, the configuration naming none; read on the
+    /// provider directly, from memory.
+    pub fn resolved_nemu_app_index(&self, instance_alias: &str) -> Option<u32> {
+        self.provider.resolved_nemu_app_index(instance_alias)
+    }
+
     pub fn observe_monitor(
         &self,
         instance_alias: &str,

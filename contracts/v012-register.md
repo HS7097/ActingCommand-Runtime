@@ -6696,6 +6696,68 @@ switches that instance only, while it is free, and commits only once the new bac
 backends; nothing else persisted changes. A `device.backend_switched` record is read only by a
 reader of this contract.
 
+### 1.271 Slice HS-3 (0.12.39): the Nemu application index resolved when the paired session opens (#402; Alice's words of 2026-11-03 11:4x, 「这个东西必须得被CLI、MCP或者是Lab/UI指定并且可以热更改」; design `rd-1031/backend-switch/model-backend-switch.md` §4.1, §4.5 and §7 row HS-3, with the coordinator's answer Q3 on board #402 6609804982; coordinator work order `rd-1031/backend-switch/brief-hs-3.md`)
+
+[device-binding.md](device-binding.md) ("Backends"), [emulator-control.md](emulator-control.md)
+("Application state read"), [actingd-check-config.md](actingd-check-config.md) ("Discovery-bound
+instances"), [runtime-config.md](runtime-config.md) (the `open_failed` cause, "Codes") and
+[backend-open-observation.md](backend-open-observation.md) (`nemu_app_index_source`) are the
+contract. The number 1.271 is the coordinator's. It builds on HS-1 (§1.267), which relaxed the file,
+and HS-2 (§1.270), whose switch it lets open Nemu touch without a configured index.
+
+**What.** A paired Nemu open (touch and capture `nemu_ipc`) takes the configuration's
+`nemu_app_index` when it names one and reads nothing. Otherwise it reads
+`MuMuManager control -v <MuMu index> app info -pkg <application_id>` once (10 s, inside the
+preparation's own time): `running` resolves index 0, the main application; `not_installed`, `stopped`,
+a read that gives no answer and one that answers another document refuse the open, named. The MuMu
+index and MuMuManager are the discovery binding's, or, for an instance bound by HOST:PORT, those
+its capture resolves. The resolution is kept in the registry entry until a rebinding or an open that
+finds no display. The registry no longer refuses to build without the index, so check-config and a
+start take Nemu touch without one.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| HS3-1 | `control -v <index> app info -pkg <package>` (`actingcommand-device::mumu_manager::read_application_state`, `parse_application_state`, `MumuApplicationState`, `application_state_read_problem`) | new vendor call, the vendor's documented query of one application's `state` | HS-3 | the registry | `since` 0.12.39; bounded by `MUMU_MANAGER_COMMAND_TIMEOUT`; the existing typed stages; dispatched only before a paired open without an index or a kept resolution, never for a handset; `app info -i` and the mutating `app` subcommands are never dispatched; first real use on an experimental instance (not this slice) |
+| HS3-2 | the resolution: the file's index wins; else `running` → 0 (`nemu_app_index_source` `resolved`); `not_installed`, `stopped`, unavailable, malformed → refusal | behaviour | HS-3 | the registry | `hs3_running_package_resolves_zero`, `hs3_file_index_wins`; the reader and the paired open are replaceable by fakes (`with_application_state_reader`, `with_nemu_session_opener`, test builds) |
+| HS3-3 | `nemu_app_index_missing` + optional value `nemu_app_index_problem`; vocabulary `nemu_app_index_problem`: `package_not_installed`, `application_not_running`, `info_unavailable`, `info_malformed`; key `nemu_app_index_problem` | outcome value, vocabulary and key (reused code) | HS-3 | the host | the `caused_by` of `paired_backend_open_failed` (and so of a switch's `open_failed`); `hs3_not_installed_refused_named`, `hs3_stopped_refused_named`, `hs3_reader_timeout_refused_named` (each also through a self-check's record); a refusal is not kept; a preparation writes the refusal's `runtime.failed` record (stage `runtime_lifecycle_connection_preparation`) though it acquired nothing, which otherwise only an open with resource dispositions gets: it is the one record that names the refusal |
+| HS3-4 | the resolution kept in the registry entry (memory only), dropped by `rebind_discovered_endpoint` and by a paired open that fails `display_missing` | rule | HS-3 | the registry | `hs3_cache_reused_until_rebind`, `hs3_display_missing_clears_cache` |
+| HS3-5 | the registry's refusal to build Nemu touch without an index (`register_spec`) removed; check-config's interim refusal from HS-1 with it | looser rule | HS-3 | — | check-config now registers such an instance, reads no MuMuManager for it and reports nothing about the index; `nemu_app_index_missing` is no longer a registry-build code |
+| HS3-6 | a named index kept by the registration whatever its backends (a switch to Nemu touch opens with it); `nemu_app_index_requires_paired_input` retired (`retired_in` 0.12.39) | looser rule, outcome code | HS-3 | actingd | §1.267 (b) said HS-2 and HS-3 carry it; `hs3_file_index_wins` (its second half) |
+| HS3-7 | `ExecutionBackendProvider::resolved_nemu_app_index`, `ExecutionKernel::resolved_nemu_app_index`; `NemuAppIndexProblem`, `DeviceError::with_nemu_app_index_problem` / `nemu_app_index_problem`, `ExecutionFailureContext::nemu_app_index_problem`; `nemu_application_state_source`, `NemuApplicationTarget::app_index` | Runtime-internal interface (memory only) | HS-3 | — | a provider without Nemu keeps the default (none); a switch records `nemu_app_index_source` `resolved` when its candidate's paired open resolved the index (§1.270 HS2-4) |
+| HS3-8 | a handset never reads MuMuManager: its paired open, which the configuration's kind check never lets exist, is refused before any read | guard | HS-3 | the registry | `info_unavailable`; `hs3_handset_never_reads_manager` |
+
+**Tests** (gate row in `host.toml`, "#402 HS-3"): the eight of the work order, in runtime-host
+(`gate_hs3`): a discovery-bound registration on its base port, a fake read answering the vendor's
+documented document through the device layer's parser (or failing as an expired run does), and a fake
+paired open that records its index and opens no device; the host's naming through a self-check whose
+fake provider answers the registry's own refusal (the fake provider's paired open gained that error).
+None adapted.
+
+**Where it differs from the brief's letter.** (a) HS3-6 is beyond the scope list: without it the
+file's index beside another touch backend was dropped at assembly and a switch to Nemu touch would
+have read MuMuManager instead, against "the file's value wins". (b) The switch record's `resolved`
+(HS3-7) follows from §1.270's record, which reserved it for HS-3. (c) The HOST:PORT path (the
+capture's own resolution, `nemu_application_state_source`) is not exercised by the eight, which bind
+through discovery as production does. (d) The vendor-surface watch list in this repository is
+`docs/architecture/emulator-control-capability-matrix.md`, which names the call; the export-table
+watch outside it is the coordinator's. (e) No separate deadline: the read is part of the paired
+open, so its 10 s count against the preparation's own time.
+
+**Interface.** No step for 0.12.39 ([component-interfaces.md](component-interfaces.md)):
+`actingd-config` stays [5, 26] (HS-1's step already let a file leave the index out beside Nemu touch
+and name it beside any backend; no member changes), `runtime-outcomes` takes an additive value,
+vocabulary and key in revision 1 and a retired code as §1.267 did, and `runtime-client`, `ledger`
+and `package` do not change.
+
+**What changes live.** Nothing while no instance's touch is `nemu_ipc` (production: all
+`adb_shell_input`): the new call runs only for a paired open without a configured index. Not in this
+slice: its first real use, which the coordinator verifies on an experimental instance in a window
+with the resource side before production runs it.
+
+**Rollback** (to 0.12.38). Nothing persisted. 0.12.38 refuses a file that leaves the index out beside
+Nemu touch or names it beside another touch backend (§1.267, rollback), so remove such an index, or
+write Nemu touch with its index, first.
+
 ### 1.273 Slice BX-1 (0.12.39): a blackout entry's parser and shape exported for clients (Workflow #429; the console's UI-3e1-b edits an instance's blackout entries through `ConfigureSettings`, and the UI repository carries no tests, so it builds and checks them with the Runtime's own functions; coordinator work order `rd-1031/brief-bx-1.md`)
 
 [runtime-config.md](runtime-config.md) ("Blackouts and the day boundary per instance", "A client's

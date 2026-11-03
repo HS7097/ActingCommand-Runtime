@@ -69,9 +69,11 @@ pub use mumu_manager::{
     MUMU_CAPABILITY_PROVIDER_ID, MUMU_MANAGER_COMMAND_TIMEOUT, MUMU_MANAGER_CONTROL_TIMEOUT,
     MUMU_MANAGER_MINIMUM_VERSION, MUMU_MANAGER_PROCESS_LIST_INTERVAL,
     MUMU_MANAGER_PROCESS_LIST_TIMEOUT, MUMU_MANAGER_STATE_WAIT_START, MUMU_MANAGER_STATE_WAIT_STOP,
-    MumuDiscoveryReport, MumuEmulatorCapabilityBackend, MumuManagerSource, MumuManagerVersion,
-    ResolvedMumuManager, control_instance, discover_mumu_instances, mumu_capability_profile,
-    mumu_state_wait, query_instances, query_version, read_instance_state, resolve_mumu_manager,
+    MumuApplicationState, MumuDiscoveryReport, MumuEmulatorCapabilityBackend, MumuManagerSource,
+    MumuManagerVersion, ResolvedMumuManager, application_state_read_problem, control_instance,
+    discover_mumu_instances, mumu_capability_profile, mumu_state_wait, parse_application_state,
+    query_instances, query_version, read_application_state, read_instance_state,
+    resolve_mumu_manager,
 };
 pub use nemu_diagnostic::*;
 pub use replay::*;

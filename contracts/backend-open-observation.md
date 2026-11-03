@@ -170,7 +170,7 @@ device.backend_switched {
   touch:   { from, to },                       # the device layer's names, before and after
   capture: { from, to },
   nemu_app_index?,                             # when touch `to` is nemu_ipc and the instance has one
-  nemu_app_index_source?: file | resolved,     # with nemu_app_index; `resolved` is HS-3's
+  nemu_app_index_source?: file | resolved,     # with nemu_app_index: the file's, or (HS-3) resolved by the candidate's paired open
   session_generation                           # the session the switch's preparation opened
 }
 ```

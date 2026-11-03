@@ -62,6 +62,40 @@ instruction from HS-2 on (`config_value_invalid` with `backend_kind_unsupported`
 backends; it is checked whenever named (`nemu_app_index_invalid`) and used only by Nemu touch, which
 no longer needs it in the file. A handset still names none.
 
+#402 HS-3 ([v012-register.md](v012-register.md) §1.271; since 0.12.39). The Nemu application index
+is resolved when the paired session opens (touch and capture `nemu_ipc`), never when the registry is
+built: Nemu touch without `nemu_app_index` passes check-config and a start.
+
+- **The file's value wins.** The registration keeps a named index whatever its backends, so a
+  switch to Nemu touch opens with it too; nothing is read from MuMuManager, and
+  `device.backend_switched` records it with `nemu_app_index_source` `file`.
+- **Otherwise one read.** Before the paired open the registry reads
+  `MuMuManager control -v <MuMu index> app info -pkg <application_id>` once
+  ([emulator-control.md](emulator-control.md), "Application state read"), bounded as every
+  MuMuManager read (10 s, `MUMU_MANAGER_COMMAND_TIMEOUT`) and inside the preparation's own time. A
+  discovery-bound instance reads through its binding's MuMuManager and index; an instance bound by
+  HOST:PORT through the one MuMuManager under the MuMu root its capture resolves and the index the
+  capture names or derives from the port. `running` resolves index 0, the main application (source
+  `resolved`). Every other answer refuses the paired open, `paired_backend_open_failed`, with
+  `nemu_app_index_missing` as its `caused_by` and that cause's `nemu_app_index_problem`:
+  `package_not_installed` (`not_installed`), `application_not_running` (`stopped`: the paired session
+  looks the package's display up, which an application that does not run has none of),
+  `info_unavailable` (no MuMuManager to read through, a failed or expired run, a non-zero exit, an
+  errcode envelope) or `info_malformed` (not UTF-8, not JSON, over the output bound, or no known
+  `state`). Only that instance's open fails (#419); a refusal is not kept, so the next open reads
+  again. A preparation (start, emulator control, resume, self-check) records the refusal as every
+  failed open (`backend.open_observed`, the `backend.selfcheck.*` facts, `device.self_check` with
+  `paired_backend_open_failed`) and, though it acquired nothing, with the `runtime.failed` record of
+  stage `runtime_lifecycle_connection_preparation` that a failed open with released resources gets:
+  that record's outcome carries the cause and its problem.
+- **The resolution is kept** in the registry entry, in memory only, for the entry's MuMu index,
+  package and root: a later paired open reads nothing. A rebinding after emulator control
+  (`rebind_discovered_endpoint`) drops it, and so does a paired open that fails `display_missing`;
+  the next paired open reads again. With the multi-Nemu gate closing the session at every lease end,
+  an emulator start usually costs one read.
+- **A handset never reads MuMuManager**: its kinds of backends have no Nemu, and the registry
+  refuses a paired open on a handset before any read (`info_unavailable`).
+
 #402 HS-2 ([v012-register.md](v012-register.md) §1.270; since 0.12.39). A switch replaces the
 registration's two backends under the registration's own checks (both explicit, one target, Nemu
 touch only beside Nemu capture) and recomputes its capability table from them, merged with the
@@ -71,10 +105,9 @@ nothing and is refused while the instance's session is open (`execution_endpoint
 the rebind's guard); the provider's refusal is `execution_endpoint_rebind_failed`. A switch never
 `adb connect`s, `kill-server`s or `start-server`s by itself: the preparation after it opens the
 backends through the existing bounded opens. A handset's switch offers only its own backends (the
-kind rule above), so it never touches Nemu or MuMuManager. Until HS-3 the paired Nemu open takes the
-registration's index, which actingd hands over only beside the Nemu pair in the file; a switch to
-Nemu touch of an instance whose file names another touch backend therefore fails its open, named,
-and keeps the previous backends.
+kind rule above), so it never touches Nemu or MuMuManager. Since HS-3 (above) a switch to Nemu touch
+opens with the file's index, or resolves one at the candidate's paired open; its
+`device.backend_switched` names the index with `nemu_app_index_source` `file` or `resolved`.
 
 ## The private binding file
 

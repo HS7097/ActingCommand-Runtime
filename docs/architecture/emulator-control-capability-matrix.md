@@ -199,6 +199,21 @@ at which point the registry binds the reported port and the host appends a secon
 `runtime.instance_bound` for the instance; `stop` returns it to pending. Nothing is bound with
 a guessed port (`contracts/emulator-control.md`, "Cold start").
 
+## MuMu application state (Runtime #402 HS-3)
+
+The vendor surface the Runtime dispatches through `MuMuManager.exe` is `version`, `info -v all`,
+`info -v <index>`, `control -v <index> launch|shutdown` and, since 0.12.39,
+`control -v <index> app info -pkg <package>`. The last is the vendor's documented query of one
+application's state (`{"state": "running" | "stopped" | "not_installed"}`);
+`actingcommand-device::mumu_manager::read_application_state` dispatches it once, bounded by
+`MUMU_MANAGER_COMMAND_TIMEOUT`, before a paired Nemu session of an instance whose configuration
+names no `nemu_app_index` opens, and the registry resolves index 0 from `running`
+(`contracts/device-binding.md`, "Backends"; `contracts/emulator-control.md`, "Application state
+read"). The sibling `app info -i` and every mutating `control ... app` subcommand are not used. The
+vendor documents one example answer and nothing on errors, so the call is on the vendor-surface
+watch list (this section): its answer is to be checked again after a MuMu update, and its first use
+on an experimental instance before production runs it.
+
 ## Offline workstation observation
 
 A static file-only inspection found MuMu and LDPlayer manager binaries, while their PE
@@ -210,7 +225,8 @@ a documented read-only provider query or mark it unavailable.
 
 - NetEase MuMu Player 12, `MuMuManager` developer guide:
   https://mumu.163.com/help/20240726/35047_1170006.html
-- NetEase MuMu Player, `MuMuManager` command reference (`version`, `info`):
+- NetEase MuMu Player, `MuMuManager` command reference (`version`, `info`, `control`, and
+  `control ... app info`, read 2026-11-04 for #402 HS-3):
   https://mumu.163.com/help/20240807/40912_1170006.html
 - LDPlayer, command-line interface guide:
   https://www.ldplayer.net/blog/introduction-to-ldplayer-command-line-interface.html

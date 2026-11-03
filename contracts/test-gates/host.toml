@@ -628,6 +628,21 @@ tests = [
 ]
 incident = ["#402 HS-2"]
 
+# #402 HS-3 (0.12.39; brief rd-1031/backend-switch/brief-hs-3.md; register §1.271; contracts/device-binding.md, "Backends"; contracts/emulator-control.md, "Application state read"; contracts/actingd-check-config.md, "Discovery-bound instances"; design rd-1031/backend-switch/model-backend-switch.md §4.1, §4.5): the registry builds Nemu touch without nemu_app_index; a paired open takes the file's index whatever the backends and reads nothing, else reads MuMuManager control -v <index> app info -pkg <package> once through the binding's MuMuManager and index (a fake answering the documented document through the device's parser): running resolves 0, not_installed and stopped refuse the open (paired_backend_open_failed caused by nemu_app_index_missing with nemu_app_index_problem package_not_installed, application_not_running), an expired read info_unavailable with its own stage, another document info_malformed, and a refusal is not kept; the resolution is reused until a rebinding and dropped after an open that finds no display; a handset never reads MuMuManager
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_hs3::hs3_running_package_resolves_zero",
+    "actingcommand-runtime-host::lib::tests::gate_hs3::hs3_file_index_wins",
+    "actingcommand-runtime-host::lib::tests::gate_hs3::hs3_not_installed_refused_named",
+    "actingcommand-runtime-host::lib::tests::gate_hs3::hs3_stopped_refused_named",
+    "actingcommand-runtime-host::lib::tests::gate_hs3::hs3_reader_timeout_refused_named",
+    "actingcommand-runtime-host::lib::tests::gate_hs3::hs3_cache_reused_until_rebind",
+    "actingcommand-runtime-host::lib::tests::gate_hs3::hs3_display_missing_clears_cache",
+    "actingcommand-runtime-host::lib::tests::gate_hs3::hs3_handset_never_reads_manager",
+]
+incident = ["#402 HS-3"]
+
 # The recovery ladder by configuration: the section's whole-section check at start and through an instruction, what the default trigger items match, the record shapes, the rules that stay in code and the five that switch, direction one's count, and a routine failure that climbs by its trigger item, its rungs and the snapshot it was admitted with (Workflow #387 D1c)
 [[gate]]
 key = "53"

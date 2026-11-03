@@ -138,6 +138,9 @@ pub(super) struct FakeState {
     failing_touch: std::sync::Mutex<BTreeSet<String>>,
     // #402 HS-2: the next input open (taken once) sends on the first, then waits for the second.
     open_hold: std::sync::Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
+    // #402 HS-3: while set, a paired Nemu open fails with this error, as the device registry's
+    // refusal of a paired open does; unset, the instance has no paired session, as before.
+    nemu_open_error: std::sync::Mutex<Option<DeviceError>>,
 }
 
 /// Workflow #373 NAV-6: a frame script of [`FakeState`].
@@ -1222,6 +1225,28 @@ impl ExecutionBackendProvider for FakeProvider {
 
     fn vision_provider(&self) -> Option<Arc<dyn VisionProvider>> {
         self.vision_provider.as_ref().map(Arc::clone)
+    }
+
+    // #402 HS-3: a paired open fails with the error set for it; otherwise there is none.
+    fn open_nemu_session(
+        &self,
+        instance_alias: &str,
+        _memory: Option<&actingcommand_device::FrameMemoryBudget>,
+    ) -> DeviceResult<
+        Option<actingcommand_device::OpenedBackend<actingcommand_device::NemuSessionBackends>>,
+    > {
+        let error = self.entries.get(instance_alias).and_then(|entry| {
+            entry
+                .state
+                .nemu_open_error
+                .lock()
+                .expect("nemu open error")
+                .clone()
+        });
+        match error {
+            Some(error) => Err(error),
+            None => Ok(None),
+        }
     }
 
     fn open_input(
