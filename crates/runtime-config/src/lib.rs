@@ -43,6 +43,10 @@
 //!   caller fills in ([`CheckContext::with_backends`], [`BackendKindRules`]).
 //! - #402 HS-2 (since 0.12.39): both rows settable; the host switches the instance's backends
 //!   when an instruction changes them ([`backend_switch_instance`]).
+//! - Workflow #429 BX-1 (since 0.12.39), a client surface: a blackout entry's parser and shape
+//!   ([`BlackoutListKey`], [`BlackoutEntry::parse`], [`BlackoutEntry::parse_list`],
+//!   [`BlackoutEntry::to_json`], [`BlackoutEntry::list_json`]), with which the console builds and
+//!   checks the entries it sends through `ConfigureSettings`.
 //!
 //! actingd reads the files and hands the assembled manifest to the host; the host applies
 //! instructions through this crate. It depends on the contract only (§5.1).
@@ -133,10 +137,10 @@ pub use recovery_ladder::{
 };
 pub use resolve::{file_value, member, render_parameters};
 pub use scheduling::{
-    BlackoutConfig, BlackoutEntry, BlackoutWindow, CostCommitConfig, EvaluationRetryConfig,
-    ExpectedRuntimeConfig, FactRefreshConfig, FeatureLockConfig, InstanceSchedulingFile,
-    PacingStage, PackAdmissionConfig, QuietHorizon, RandomDelay, RemedyChoiceRow, RemedyConfig,
-    RerunConfig, RerunExpiry, SchedulingConfig, SchedulingFile,
+    BlackoutConfig, BlackoutEntry, BlackoutListKey, BlackoutWindow, CostCommitConfig,
+    EvaluationRetryConfig, ExpectedRuntimeConfig, FactRefreshConfig, FeatureLockConfig,
+    InstanceSchedulingFile, PacingStage, PackAdmissionConfig, QuietHorizon, RandomDelay,
+    RemedyChoiceRow, RemedyConfig, RerunConfig, RerunExpiry, SchedulingConfig, SchedulingFile,
 };
 pub use standard_packs::{
     CACHED_GENERATIONS as STANDARD_PACKS_CACHED_GENERATIONS,
@@ -254,3 +258,7 @@ mod gate_agt_2b;
 // #402 HS-1 (register §1.267): the two backend rows and the whole-instance backend check.
 #[cfg(test)]
 mod gate_hs1;
+
+// Workflow #429 BX-1 (register §1.273): the blackout entry's parser and shape for clients.
+#[cfg(test)]
+mod gate_bx1;
