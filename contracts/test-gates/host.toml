@@ -628,6 +628,14 @@ tests = [
 ]
 incident = ["#402 HS-2"]
 
+# #402 HS-2b (0.12.39; brief rd-1031/backend-switch/brief-hs-2b.md; register §1.274; contracts/component-interfaces.md, the `ledger` row of revision 6; contracts/runtime-config.md, "Switching an instance's backends", "The wait"): HS-2's record device.backend_switched is ledger revision 6, so this build declares ledger [3, 6]: the update from a [3, 5] build needs --accept-ledger-one-way (one_way otherwise) and the rollback to it is refused, flag or not (previous_max_in_next, Rp [3, 6], R* [3, 5]); the switch's receipt wait is the sum of its named terms (the claim, two session closes, two preparations and the commit's ledger write, 133 s; HS-2's hs2_client_timeout_covers_switch, adapted, holds it)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingctl::bin:actingctl::install::gate_inst1_update::hs2b_ledger_six_needs_the_one_way_flag_and_refuses_the_rollback_to_five",
+]
+incident = ["#402 HS-2b"]
+
 # #402 HS-3 (0.12.39; brief rd-1031/backend-switch/brief-hs-3.md; register §1.271; contracts/device-binding.md, "Backends"; contracts/emulator-control.md, "Application state read"; contracts/actingd-check-config.md, "Discovery-bound instances"; design rd-1031/backend-switch/model-backend-switch.md §4.1, §4.5): the registry builds Nemu touch without nemu_app_index; a paired open takes the file's index whatever the backends and reads nothing, else reads MuMuManager control -v <index> app info -pkg <package> once through the binding's MuMuManager and index (a fake answering the documented document through the device's parser): running resolves 0, not_installed and stopped refuse the open (paired_backend_open_failed caused by nemu_app_index_missing with nemu_app_index_problem package_not_installed, application_not_running), an expired read info_unavailable with its own stage, another document info_malformed, and a refusal is not kept; the resolution is reused until a rebinding and dropped after an open that finds no display; a handset never reads MuMuManager
 [[gate]]
 coverage = "Y"

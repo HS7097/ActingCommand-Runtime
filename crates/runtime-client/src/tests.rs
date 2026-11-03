@@ -3517,9 +3517,12 @@ fn receipt_timeout_selector_preserves_existing_operation_budgets() {
 }
 
 // #402 HS-2 (register §1.270; design HS-M §2.2, §8 item 10): a `ConfigureSettings` that names an
-// instance's backend keys waits for the switch: its claim's wait, the new backends' preparation
-// and the previous ones' after a failed candidate, plus the IO margin. A change of any other key
-// still answers within the IO timeout.
+// instance's backend keys waits for the switch, plus the IO margin. A change of any other key
+// still answers within the IO timeout. Adapted by HS-2b (register §1.274), which makes the wait
+// the switch's worst case: `BACKEND_SWITCH_WAIT_MS` is the sum of its named terms, the claim's
+// wait, the two session closes (`PLAYER_HOLD_CLOSE_ALLOWANCE_MS` each), the two preparations and
+// the commit's ledger write (`LEDGER_WRITER_REPLY_WAIT_MS`), 133 s; it pinned 63 s, without the
+// closes and the write.
 #[test]
 fn hs2_client_timeout_covers_switch() {
     let io_timeout = Duration::from_millis(100);
@@ -3538,15 +3541,51 @@ fn hs2_client_timeout_covers_switch() {
         changes,
         expected_version: None,
     };
-    let switch_wait = Duration::from_millis(
-        actingcommand_contract::CONNECTION_PREPARATION_CLAIM_WAIT_MS
-            + 2 * actingcommand_contract::CONNECTION_PREPARATION_WAIT_MS,
-    ) + io_timeout;
+    let terms = [
+        (
+            "claim",
+            actingcommand_contract::CONNECTION_PREPARATION_CLAIM_WAIT_MS,
+        ),
+        (
+            "kept session's close",
+            actingcommand_contract::PLAYER_HOLD_CLOSE_ALLOWANCE_MS,
+        ),
+        (
+            "candidate's preparation",
+            actingcommand_contract::CONNECTION_PREPARATION_WAIT_MS,
+        ),
+        (
+            "commit's ledger write",
+            actingcommand_contract::LEDGER_WRITER_REPLY_WAIT_MS,
+        ),
+        (
+            "candidate's close",
+            actingcommand_contract::PLAYER_HOLD_CLOSE_ALLOWANCE_MS,
+        ),
+        (
+            "restore's preparation",
+            actingcommand_contract::CONNECTION_PREPARATION_WAIT_MS,
+        ),
+    ];
     assert_eq!(
+        terms.iter().map(|(_, ms)| ms).sum::<u64>(),
         actingcommand_contract::BACKEND_SWITCH_WAIT_MS,
-        63_000,
-        "3 s for the claim and 30 s for each of the two preparations"
+        "the switch's wait is the sum of its named terms: {terms:?}"
     );
+    assert_eq!(
+        terms,
+        [
+            ("claim", 3_000),
+            ("kept session's close", 30_000),
+            ("candidate's preparation", 30_000),
+            ("commit's ledger write", 10_000),
+            ("candidate's close", 30_000),
+            ("restore's preparation", 30_000),
+        ]
+    );
+    assert_eq!(actingcommand_contract::BACKEND_SWITCH_WAIT_MS, 133_000);
+    let switch_wait =
+        Duration::from_millis(actingcommand_contract::BACKEND_SWITCH_WAIT_MS) + io_timeout;
     for member in ["touch_backend", "capture_backend"] {
         assert_eq!(
             receipt_response_timeout(

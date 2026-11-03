@@ -2,8 +2,10 @@
 
 //! #402 HS-2 (design HS-M §3.5; register §1.270): `device.backend_switched`, the record of one
 //! instance whose touch and capture backends a `ConfigureSettings` switched. A new closed action
-//! and payload under the lifecycle event type, as `device.self_check` was: additive, so a reader
-//! that refuses unknown fields moves to this contract before it reads such an event.
+//! and payload under the lifecycle event type, and with them the closed vocabulary
+//! `nemu_app_index_source`: `ledger` revision 6 (#402 HS-2b, register §1.274;
+//! contracts/component-interfaces.md). A reader of [3, 5] refuses such a record (the action and
+//! the payload deny unknown values), so the record is a new revision, not an additive change.
 
 use super::*;
 use crate::codes::SanitizationCode;
