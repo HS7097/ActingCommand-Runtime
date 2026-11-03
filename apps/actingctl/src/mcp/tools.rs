@@ -543,7 +543,7 @@ pub(super) static TOOLS: &[ToolDef] = &[
         name: "ac_config_set",
         title: "Change settings",
         tier: Tier::Observer,
-        description: "Changes settings the Runtime may change while it runs, as actingctl config set and config clear do. changes is a list of {key, value} (1-64): key as actingctl status --config reports it in the config.parameters.<section> rows (only rows with settable true), value its new JSON value; a change without value returns the key to its configuration-file value. All changes take effect at once, or none does: an unknown key answers config_key_unknown, a key the Runtime reads only at start config_key_not_settable (change it in the configuration file, commit it with acsetup and restart the daemon instead), a value of the wrong type or range config_value_invalid. Every change is recorded in the ledger and kept across restarts until the configuration file changes the same key. Answers {settings: [{key, value, source}]}, each changed key as it is in effect afterwards (source instruction, or explicit/default after a clear).",
+        description: "Changes settings the Runtime may change while it runs, as actingctl config set and config clear do. changes is a list of {key, value} (1-64): key as actingctl status --config reports it in the config.parameters.<section> rows (only rows with settable true), value its new JSON value; a change without value returns the key to its configuration-file value. All changes take effect at once, or none does: an unknown key answers config_key_unknown, a key the Runtime reads only at start config_key_not_settable (change it in the configuration file, commit it with acsetup and restart the daemon instead), a value of the wrong type or range config_value_invalid. Every change is recorded in the ledger and kept across restarts until the configuration file changes the same key. Answers {settings: [{key, value, source}]}, each changed key as it is in effect afterwards (source instruction, or explicit/default after a clear). A call that changes an instance's touch or capture backend (instance.<instance id>.touch_backend, .capture_backend; name only that instance's two backend keys in it) switches that device's backends: it needs the operator tier (tier_not_enabled otherwise), runs only on a free instance, opens and self-checks the new backends before it answers (up to about a minute), and keeps the previous ones when they do not open (backend_switch_refused with backend_switch_problem: instance_busy, player_held, instance_fenced, endpoint_unavailable, open_failed, restore_failed). To switch an instance mid-task, pause it, let it drain, switch, then resume it.",
         read_only: false,
         destructive: false,
         idempotent: true,
@@ -1092,13 +1092,31 @@ pub(super) fn list_markdown() -> String {
 /// A call to a tool of a tier this process was not started with: `tier_not_enabled` with the
 /// tool's tier and `mcp_blocker` `server_tier` (U-3 retires it with the tiers).
 pub(super) fn tier_not_enabled(tool: &ToolDef) -> ToolError {
+    tier_not_enabled_at(tool, tool.tier)
+}
+
+/// `tier_not_enabled` naming `tier`, the tier the call needs (#402 HS-2: a call may need more
+/// than its tool's tier, `call_tier`).
+pub(super) fn tier_not_enabled_at(tool: &ToolDef, tier: Tier) -> ToolError {
     ToolError::outcome(
         "safety",
         Outcome::new(ActingctlCode::TierNotEnabled)
-            .required_tier(tool.tier)
+            .required_tier(tier)
             .mcp_tool(tool.name),
     )
     .blocked_by(McpBlocker::ServerTier)
+}
+
+/// #402 HS-2 (design HS-M §2.2; the coordinator's answer to its Q6): the tier one call needs:
+/// its tool's, except an `ac_config_set` whose changes name an instance's backend key
+/// (`instance.<instance id>.touch_backend`, `.capture_backend`), which switches that device's
+/// backends and needs the operator tier.
+pub(super) fn call_tier(tool: &ToolDef, arguments: &Map<String, Value>) -> Tier {
+    if tool.name == "ac_config_set" && super::settings::names_backend_key(arguments) {
+        Tier::Operator
+    } else {
+        tool.tier
+    }
 }
 
 /// The `tools/call` result: the envelope as compact JSON text, and from 2025-06-18 on also

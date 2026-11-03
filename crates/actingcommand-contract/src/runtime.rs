@@ -139,6 +139,25 @@ pub const CONNECTION_PREPARATION_WAIT_MS: u64 = 30_000;
 /// refused `lease_queue_expired`. A client adds it to `CONNECTION_PREPARATION_WAIT_MS` and its
 /// IO timeout for the receipt of either (W-3).
 pub const CONNECTION_PREPARATION_CLAIM_WAIT_MS: u64 = 3_000;
+/// #402 HS-2 (design HS-M §2.2, §8 item 10; register §1.270): the longest the Runtime takes to
+/// answer a `ConfigureSettings` that switches an instance's backends: the switch claim's wait in
+/// the instance's queue, the candidate backends' connection preparation and the preparation that
+/// restores the previous backends after a failed candidate. A client adds its IO timeout.
+pub const BACKEND_SWITCH_WAIT_MS: u64 =
+    CONNECTION_PREPARATION_CLAIM_WAIT_MS + 2 * CONNECTION_PREPARATION_WAIT_MS;
+
+/// #402 HS-2 (register §1.270): whether `key` is one of an instance's two backend keys,
+/// `instance.<instance id>.touch_backend` or `instance.<instance id>.capture_backend`, the keys a
+/// `ConfigureSettings` switches an instance's device backends with. The configuration's key table
+/// (`actingcommand-runtime-config`) names them; a client that does not pin that crate reads them
+/// here.
+pub fn is_instance_backend_key(key: &str) -> bool {
+    key.strip_prefix("instance.")
+        .and_then(|rest| rest.split_once('.'))
+        .is_some_and(|(instance, member)| {
+            !instance.is_empty() && matches!(member, "touch_backend" | "capture_backend")
+        })
+}
 /// Workflow #369 Q-2: how long a `SafeReset` or an `ApplicationLifecycle` command waits for its
 /// turn in the instance's queue before it is refused `lease_queue_expired`. A client adds it to
 /// the receipt wait of either (W-3).

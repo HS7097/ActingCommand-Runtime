@@ -176,6 +176,8 @@ closed_code!(EventAction {
     SignatureRetire => "signature.retire",
     OwnerUnlock => "owner.unlock",
     DeviceSelfCheck => "device.self_check",
+    // #402 HS-2 (register §1.270): an instance's touch and capture backends switched.
+    DeviceBackendSwitched => "device.backend_switched",
 });
 
 /// The closed set of codes a ledger diagnostic names (Workflow #378 A2a, decision D4). Each

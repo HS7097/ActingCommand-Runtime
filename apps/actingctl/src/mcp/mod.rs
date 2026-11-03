@@ -633,4 +633,6 @@ mod tests {
 
     // Workflow #411 slice E4, T1 (B27): ac_events names the event type it does not know.
     mod gate_411_e4;
+    // #402 HS-2: ac_config_set naming an instance's backend key needs the operator tier.
+    mod gate_hs2;
 }

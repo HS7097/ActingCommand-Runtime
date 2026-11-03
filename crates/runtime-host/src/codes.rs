@@ -851,6 +851,10 @@ actingcommand_contract::outcome_codes! {
         NemuInputDeadlineOverflow => "nemu_input_deadline_overflow": error / none,
         NemuInputRequiresPairedCapture => "nemu_input_requires_paired_capture": error / none,
         NemuInputTaskDeadlineMissing => "nemu_input_task_deadline_missing": error / none,
+        // #402 HS-2 (register §1.270; design HS-M §3.6): a `ConfigureSettings` that switches an
+        // instance's backends did not switch them (keys `alias`, `backend_switch_problem`; the
+        // failure behind it is its `caused_by`).
+        BackendSwitchRefused => "backend_switch_refused": error / none,
         NonfatalErrorMarkedFatal => "nonfatal_error_marked_fatal": error / none,
         // ---- Workflow #378 A6a (model section 7.4): the host's facts actingd writes as daemon
         // lines.
@@ -2533,6 +2537,32 @@ actingcommand_contract::outcome_locations! {
         // #411 Lab L5: the check that no input reached the instance while a keyless online Lab
         // observation took its frames.
         CheckObservationSampleInputs => "check_observation_sample_inputs",
+        // #402 HS-2: an instance's backend switch, and the start's write of the restored
+        // backends into the registry before any instance is prepared.
+        SwitchInstanceBackends => "switch_instance_backends",
+        ApplyRestoredBackends => "apply_restored_backends",
+    }
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// #402 HS-2 (register §1.270; design HS-M §3.6): why `backend_switch_refused` refused an
+    /// instance's backend switch (vocabulary `backend_switch_problem`).
+    pub enum BackendSwitchProblem: "backend_switch_problem" {
+        /// The instance was not free within the switch claim's wait: a run, a ladder, a lease,
+        /// a Lab operation or another operator claim held it.
+        InstanceBusy => "instance_busy",
+        /// A player holds the instance.
+        PlayerHeld => "player_held",
+        /// A #403 fence holds the instance; a self-check lifts it.
+        InstanceFenced => "instance_fenced",
+        /// The instance's endpoint is pending (its emulator is stopped) or its handset is not
+        /// bound: no backend can open.
+        EndpointUnavailable => "endpoint_unavailable",
+        /// The new backends did not open or pass their self-check; the previous ones are back.
+        OpenFailed => "open_failed",
+        /// The new backends did not open, and the previous ones did not open again either: the
+        /// instance is unavailable, the others are untouched.
+        RestoreFailed => "restore_failed",
     }
 }
 
@@ -2668,6 +2698,11 @@ pub(crate) mod test_spellings {
             StoreTestReport => "store_test_report",
             TakePolicyConditionForTest => "take_policy_condition_for_test",
             ValidatePolicyAdmissionRequestForTest => "validate_policy_admission_request_for_test",
+            // #402 HS-2: a test's player hold, fence and read of the multi-Nemu gate.
+            HoldPlayerForTest => "hold_player_for_test",
+            FenceInstanceForTest => "fence_instance_for_test",
+            KeepsDeviceSessionForTest => "keeps_device_session_for_test",
+            FailNextConfigPersistForTest => "fail_next_config_persist_for_test",
             // Workflow #398 RD-2: a test hands the device-link watch's events and timers in.
             DeviceLinkEventForTest => "device_link_event_for_test",
             DeviceLinkTickForTest => "device_link_tick_for_test",

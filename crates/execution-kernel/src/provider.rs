@@ -1568,6 +1568,24 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
         )
     }
 
+    /// #402 HS-2 (design HS-M §3.2 step 3.3; register §1.270): replaces the instance's touch and
+    /// capture backends in its registration with `touch` and `capture`, under the registration's
+    /// own checks (explicit choices, one target, Nemu touch only beside Nemu capture), and
+    /// recomputes its capability table from them. Opens nothing; the caller holds the instance's
+    /// admission guard and has closed its session. Returns the Nemu application index the
+    /// instance opens Nemu touch with, when `touch` is Nemu IPC and the registration has one.
+    /// Providers without switchable backends keep this refusal.
+    fn switch_instance_backends(
+        &self,
+        _instance_alias: &str,
+        _touch: actingcommand_device::TouchBackendChoice,
+        _capture: actingcommand_device::CaptureBackendChoice,
+    ) -> DeviceResult<Option<u32>> {
+        Err(DeviceError::fatal(
+            "backend switch unsupported by this provider",
+        ))
+    }
+
     /// Re-runs the provider's instance discovery on demand and reports what it finds. Binds,
     /// rebinds and registers nothing and opens no device session. Providers without an
     /// instance-discovery surface keep this typed refusal.

@@ -40,10 +40,11 @@
 //! `execution.loading.mode`, in the entry's `execution` member, no default of its own (the
 //! section's is in effect), settable. #402 HS-1 (register §1.267, design HS-M §2.1) adds
 //! `touch_backend` and `capture_backend`, the entry's existing members, which a device instance's
-//! entry always names and a fixture's never does: default `none`, not settable until HS-2 brings
-//! the switch; their whole-instance check takes each kind of device's backends from the check
-//! context the host fills in, and a request that names one names only the backend keys of one
-//! instance.
+//! entry always names and a fixture's never does: default `none`; their whole-instance check takes
+//! each kind of device's backends from the check context the host fills in, and a request that
+//! names one names only the backend keys of one instance. #402 HS-2 (register §1.270, design HS-M
+//! §3) makes both settable: the host switches the instance's backends when an instruction changes
+//! them ([`backend_switch_instance`]).
 
 use crate::codes::ConfigValueProblem;
 use crate::display_safe_area;
@@ -97,8 +98,8 @@ const HANDSET: &str = "handset";
 
 /// #402 HS-1 (HS-M §2.1; register §1.267): the instance's two backends. A device instance's
 /// entry always names both and a fixture's names neither (actingd refuses the rest), so they have
-/// no default. Not settable until HS-2 brings the switch (the switch is HS-2): actingd reads them
-/// once at assembly, when it builds the instance's registration.
+/// no default. #402 HS-2 (HS-M §3; register §1.270): settable; the host switches the instance's
+/// device backends before an instruction that changes them takes effect.
 const BACKEND_ROWS: [KeyRow; 2] = [
     backend_row(TOUCH_BACKEND, TOUCH_BACKEND_TOKENS),
     backend_row(CAPTURE_BACKEND, CAPTURE_BACKEND_TOKENS),
@@ -292,7 +293,8 @@ const fn random_delay_row(member: &'static str, value_type: ValueType, range: Ke
     }
 }
 
-/// #402 HS-1: one of the instance's two backend members, a word of `tokens`.
+/// #402 HS-1: one of the instance's two backend members, a word of `tokens`; settable since
+/// HS-2, which reads it when it switches the instance's backends.
 const fn backend_row(member: &'static str, tokens: &'static [&'static str]) -> KeyRow {
     KeyRow {
         name: KeyName::PerInstance(member),
@@ -300,8 +302,8 @@ const fn backend_row(member: &'static str, tokens: &'static [&'static str]) -> K
         value_type: ValueType::String,
         range: KeyRange::Tokens(tokens),
         default: DefaultSource::None,
-        settable: Settable::No(NotSettable::ReadAtAssembly),
-        reader: "HS-1",
+        settable: Settable::Yes,
+        reader: "HS-2",
         since: "0.12.39",
     }
 }
@@ -385,6 +387,16 @@ fn backend_instance(key: &str) -> Option<&str> {
     BACKEND_ROWS
         .iter()
         .find_map(|row| row.matches(key).flatten())
+}
+
+/// #402 HS-2 (HS-M §3.2; register §1.270): the instance whose backends `changes` switch, the
+/// instance id the first backend key names; `None` for a request that names no backend key. A
+/// request that [`EffectiveConfig::apply`](crate::EffectiveConfig::apply) admitted names only
+/// that instance's backend keys.
+pub fn backend_switch_instance(changes: &[ConfigSettingChange]) -> Option<&str> {
+    changes
+        .iter()
+        .find_map(|change| backend_instance(&change.key))
 }
 
 /// #402 HS-1 (HS-M §2.1 "一次只切一台"): a request that names a backend key names only the

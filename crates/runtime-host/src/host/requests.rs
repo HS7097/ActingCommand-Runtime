@@ -715,7 +715,13 @@ impl HostShared {
             RuntimeOperation::ConfigureSettings {
                 changes,
                 expected_version,
-            } => self.configure_settings(request, validated, changes, *expected_version),
+            } => self.configure_settings(
+                request,
+                validated,
+                changes,
+                *expected_version,
+                connection_id,
+            ),
             // Workflow #389 U-1: the contract has these shapes and later slices add the
             // behaviour (LoadPack and UnloadPack U-3, UpgradeState and UpgradeStateStatus U-4).
             // Until then each is refused and records nothing.

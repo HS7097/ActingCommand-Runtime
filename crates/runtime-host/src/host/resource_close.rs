@@ -1292,6 +1292,34 @@ impl HostShared {
         lease: PreparationLease<'_>,
         status: EmulatorStatusRead,
     ) -> RuntimeHostResult<PreparationAttempt> {
+        self.prepare_connection_attempt(
+            instance_alias,
+            instance_id,
+            links,
+            admission,
+            stage,
+            lease,
+            status,
+            PreparationPurpose::Connection,
+        )
+    }
+
+    /// `prepare_instance_connection_with_cooldown` for `purpose`. #402 HS-2 (design HS-M §3.2
+    /// step 3.4): a backend switch's preparation of its candidate backends
+    /// (`PreparationPurpose::Switch`) is that same preparation, except that its failure admits no
+    /// recovery ladder: the switch restores the previous backends and prepares them again itself.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn prepare_connection_attempt(
+        &self,
+        instance_alias: &str,
+        instance_id: InstanceId,
+        links: EventLinksDraft,
+        admission: &MutexGuard<'_, ()>,
+        stage: actingcommand_contract::RecoveryTriggerStage,
+        lease: PreparationLease<'_>,
+        status: EmulatorStatusRead,
+        purpose: PreparationPurpose,
+    ) -> RuntimeHostResult<PreparationAttempt> {
         lock(
             &self.recovery_ladders,
             HostLocation::BeginPreparationAttempt,
@@ -1349,6 +1377,7 @@ impl HostShared {
                     }
                     _ => None,
                 };
+                let failure = error.outcome();
                 self.record_connection_preparation_failure(instance_id, links, error)?;
                 return Ok(PreparationAttempt {
                     selfcheck: scheduling_resume_selfcheck(&[], Some(failure_code)),
@@ -1356,6 +1385,8 @@ impl HostShared {
                     event: None,
                     recoverable: false,
                     ladder: None,
+                    failure: Some(failure),
+                    generation: None,
                 });
             }
         };
@@ -1415,6 +1446,9 @@ impl HostShared {
                     observation.report.attempts.iter().any(|attempt| attempt.input_parameters.as_ref()
                         .is_some_and(|check| check.status == actingcommand_contract::BackendObservationStatus::Failed)))
         }));
+        // #402 HS-2: the failing open's own outcome, which a refused backend switch names as its
+        // cause (the self-check keeps only its code).
+        let mut open_failure = None;
         let (observations, mut failure_code) = match opened {
             None => (Vec::new(), status_failure),
             Some(Ok(observations)) => {
@@ -1433,9 +1467,9 @@ impl HostShared {
                     EventSource::Device,
                     OriginModule::DeviceProxy,
                 )?;
+                let failure =
+                    RuntimeHostError::execution(HostLocation::OpenInstanceBackends, &error);
                 if error.resource_quiescence().is_some() {
-                    let failure =
-                        RuntimeHostError::execution(HostLocation::OpenInstanceBackends, &error);
                     self.append_lifecycle_failure(
                         RuntimeLifecycleFailureStage::ConnectionPreparation,
                         RuntimeLifecycleFailure::Host(&failure),
@@ -1443,6 +1477,7 @@ impl HostShared {
                         None,
                     )?;
                 }
+                open_failure = Some(failure.outcome());
                 (
                     error.failure_context().backend_open_observations().to_vec(),
                     Some(error.code().as_str()),
@@ -1500,7 +1535,14 @@ impl HostShared {
             self.withhold_policy_instance_availability(instance_id)?;
         }
         let selfcheck = scheduling_resume_selfcheck(&observations, failure_code);
-        let recoverable = recoverable && confirmed && cleanup_succeeded;
+        // #402 HS-2: a backend switch's failed candidate starts no ladder (design HS-M §3.2 step
+        // 3.4); the switch prepares the previous backends again, and that preparation may.
+        let recoverable =
+            recoverable && confirmed && cleanup_succeeded && purpose != PreparationPurpose::Switch;
+        let generation = observations
+            .iter()
+            .map(|observation| observation.report.session_generation)
+            .max();
         let (event, ladder) = self.record_preparation_finished(
             instance_id,
             links.clone(),
@@ -1528,12 +1570,18 @@ impl HostShared {
             }
             ladder => ladder,
         };
+        let failure = selfcheck
+            .failure_code
+            .as_deref()
+            .map(|code| open_failure.unwrap_or_else(|| Outcome::relayed(code)));
         Ok(PreparationAttempt {
             selfcheck,
             cooldown_until: None,
             event: Some(event),
             recoverable,
             ladder,
+            failure,
+            generation,
         })
     }
 
@@ -1568,8 +1616,8 @@ fn close_lease_refused_by_queue(error: &RuntimeHostError) -> bool {
 }
 
 /// One connection preparation attempt (`prepare_instance_connection_with_cooldown`).
-struct PreparationAttempt {
-    selfcheck: SchedulingResumeSelfCheck,
+pub(super) struct PreparationAttempt {
+    pub(super) selfcheck: SchedulingResumeSelfCheck,
     /// The monotonic deadline of the takeover cooldown that refused the dedicated lease.
     cooldown_until: Option<u64>,
     /// The attempt's `instance_preparation_finished`, when the preparation got that far.
@@ -1578,7 +1626,31 @@ struct PreparationAttempt {
     recoverable: bool,
     /// Workflow #369 H-1, P1: on a held key, the ladder the failed preparation admitted, to
     /// which the key's holder hands the key at its release (`release_to_preparation_ladder`).
-    ladder: Option<PendingRecoveryLadder>,
+    pub(super) ladder: Option<PendingRecoveryLadder>,
+    /// #402 HS-2: the failing step's outcome when the self-check failed (the open's own, else
+    /// the self-check's code), which a refused backend switch names as its cause.
+    pub(super) failure: Option<Outcome>,
+    /// #402 HS-2: the session generation of the opens the preparation recorded, if any.
+    pub(super) generation: Option<u64>,
+}
+
+impl PreparationAttempt {
+    /// #402 HS-2: whether no step of the preparation failed (no failing step's code, the rule
+    /// the instance's availability follows); a failed one carries its `failure`.
+    pub(super) fn passed(&self) -> bool {
+        self.selfcheck.failure_code.is_none()
+    }
+}
+
+/// #402 HS-2: why a connection preparation runs. A backend switch's preparation of its
+/// candidate backends admits no recovery ladder when it fails (design HS-M §3.2 step 3.4).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum PreparationPurpose {
+    /// Every preparation before HS-2: the start's, a self-check's, a resume's, an emulator
+    /// control's, a ladder's.
+    Connection,
+    /// The candidate backends of a backend switch.
+    Switch,
 }
 
 /// Workflow #369: whose lease a connection preparation runs under: a dedicated lease of the

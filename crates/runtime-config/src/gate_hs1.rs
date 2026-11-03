@@ -108,7 +108,8 @@ fn assert_refused(refused: &ConfigFailure, key: &str, problem: ConfigValueProble
 #[test]
 fn hs1_backend_rows_read_only_until_hs2() {
     // The rows: a word of the device layer's explicit backends, no default (a fixture has
-    // none), not settable (read once at assembly: the switch is HS-2), since 0.12.39.
+    // none), since 0.12.39. #402 HS-2 (register §1.270) makes both settable: the switch is HS-2's
+    // (adapted from "not settable, read once at assembly", as the requirement changed).
     for (member, tokens) in [
         (TOUCH_BACKEND, TOUCH_BACKEND_TOKENS),
         (CAPTURE_BACKEND, CAPTURE_BACKEND_TOKENS),
@@ -120,11 +121,7 @@ fn hs1_backend_rows_read_only_until_hs2() {
         assert_eq!(row.value_type, ValueType::String, "{key}");
         assert_eq!(row.range, KeyRange::Tokens(tokens), "{key}");
         assert_eq!(row.default, DefaultSource::None, "{key}");
-        assert_eq!(
-            row.settable,
-            Settable::No(NotSettable::ReadAtAssembly),
-            "{key}"
-        );
+        assert_eq!(row.settable, Settable::Yes, "{key}");
         assert_eq!(row.since, "0.12.39", "{key}");
     }
     assert_eq!(
@@ -136,7 +133,7 @@ fn hs1_backend_rows_read_only_until_hs2() {
         ["adb", "droidcast_raw", "nemu_ipc", "scrcpy"]
     );
 
-    // The file layer reports both, explicit and not settable.
+    // The file layer reports both, explicit and (HS-2) settable.
     let config = from_entries(&[emulator(EMULATOR, "maatouch", "nemu_ipc")])
         .expect("the file layer renders");
     config.check(&context()).expect("the file layer passes");
@@ -152,32 +149,52 @@ fn hs1_backend_rows_read_only_until_hs2() {
             .expect("the row is reported");
         assert_eq!(row.value, FactScalar::String(value.to_owned()), "{key}");
         assert_eq!(row.source, ConfigParameterSource::Explicit, "{key}");
-        assert!(!row.settable, "{key}");
+        assert!(row.settable, "{key}");
     }
 
-    // An instruction on either key, both keys of the instance, or a clear: not settable, and
-    // nothing changes.
-    for changes in [
-        vec![set(&touch(EMULATOR), json!("adb_shell_input"))],
-        vec![set(&capture(EMULATOR), json!("adb"))],
-        vec![
-            set(&touch(EMULATOR), json!("nemu_ipc")),
-            set(&capture(EMULATOR), json!("nemu_ipc")),
-        ],
-        vec![ConfigSettingChange {
-            key: touch(EMULATOR),
-            value: None,
-        }],
+    // HS-2: an instruction on either key, or on both keys of the instance, applies; a clear
+    // returns the key to its file value.
+    for (changes, touch_now, capture_now) in [
+        (
+            vec![set(&touch(EMULATOR), json!("adb_shell_input"))],
+            "adb_shell_input",
+            "nemu_ipc",
+        ),
+        (
+            vec![set(&capture(EMULATOR), json!("adb"))],
+            "maatouch",
+            "adb",
+        ),
+        (
+            vec![
+                set(&touch(EMULATOR), json!("nemu_ipc")),
+                set(&capture(EMULATOR), json!("nemu_ipc")),
+            ],
+            "nemu_ipc",
+            "nemu_ipc",
+        ),
+        (
+            vec![ConfigSettingChange {
+                key: touch(EMULATOR),
+                value: None,
+            }],
+            "maatouch",
+            "nemu_ipc",
+        ),
     ] {
-        let refused = config
+        let applied = config
             .apply(&changes, &stamp(), &context())
-            .expect_err("not settable until HS-2");
+            .unwrap_or_else(|refused| panic!("{changes:?}: {refused:?}"));
         assert_eq!(
-            refused.failure_code(),
-            ConfigCode::ConfigKeyNotSettable,
+            applied.config.value(&touch(EMULATOR)),
+            Some(&FactScalar::String(touch_now.to_owned())),
             "{changes:?}"
         );
-        assert_eq!(refused.config_key(), changes[0].key, "{changes:?}");
+        assert_eq!(
+            applied.config.value(&capture(EMULATOR)),
+            Some(&FactScalar::String(capture_now.to_owned())),
+            "{changes:?}"
+        );
     }
     assert!(config.override_rows().is_empty());
 }

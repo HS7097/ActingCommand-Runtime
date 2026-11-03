@@ -6621,6 +6621,81 @@ failing before any input. A run that binds no recovery package is unchanged.
 **Rollback** (to 0.12.38). Nothing persisted changes. 0.12.38 refuses such a recovery package
 again.
 
+### 1.270 Slice HS-2 (0.12.39): an instance's touch and capture backends switched while the Runtime runs (#402; Alice's words of 2026-11-03 11:4x, 「这个东西必须得被CLI、MCP或者是Lab/UI指定并且可以热更改」; design `rd-1031/backend-switch/model-backend-switch.md` §2.2, §3, §6, §8 and §7 row HS-2, with the coordinator's answers to its §9 on board #402 6609804982; coordinator work order `rd-1031/backend-switch/brief-hs-2.md`)
+
+[runtime-config.md](runtime-config.md) ("Switching an instance's backends", "Restore at start",
+"The console's device backends group", "Codes"), [backend-open-observation.md](backend-open-observation.md)
+("Backend switch event"), [device-binding.md](device-binding.md) ("Backends") and
+[runtime-interface.md](runtime-interface.md) (the `config set` row, `ac_config_set`) are the
+contract. The number 1.270 is the coordinator's. It builds on HS-1 (§1.267), whose two rows it
+makes settable, and on HS-4 (§1.268).
+
+**What.** A `ConfigureSettings` whose changes name one instance's backend keys and leave its
+backends other than they are switches the device first. The switch is an operator claim of its own
+kind (`backend_switch`) in the instance's one queue that waits at most
+`CONNECTION_PREPARATION_CLAIM_WAIT_MS` (the constant, no key: answer Q2): a run (between its steps
+too), a ladder, a lease or a Lab operation that holds the instance longer refuses it, never defers
+it; a paused instance switches (pause, drain, switch, resume). A player's hold, a #403 fence and a
+pending endpoint or an unbound handset refuse it, before the claim and again under the admission
+guard. Then, without the settings' gate: the kept session closes; the registration takes the new
+backends with its own checks (one shared function with the registration) and recomputes the
+capability table, under the entry's lock, the kernel refusing a switch while a session is open; a
+connection preparation on the switch's key opens and self-checks them (purpose "switch": its
+failure starts no ladder). Passed, the changes apply again under the gate and commit with
+`device.backend_switched` before `command.validated`. Failed, or refused by the ledger: the
+candidate closes, the registration takes the previous backends, they are prepared again as a
+self-check is, and the request is refused, named. A start writes the restored backends into the
+registry before it prepares any instance.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| HS2-1 | `instance.<instance id>.touch_backend`, `.capture_backend` settable | configuration keys (§1.267 HS1-1; `settable` yes, reader HS-2; no `actingd-config` step: existing members, and an instruction row is no file shape) | HS-2 | the person (CLI, MCP, the console) | `hs1_backend_rows_read_only_until_hs2` (runtime-config) and `hs1_backend_rows_in_manifest` (actingd) adapted: they pinned "not settable until HS-2" |
+| HS2-2 | `ClaimKind::BackendSwitch`, token `backend_switch` | `vocab:claim_kind` token (memory only, never persisted; `holder_kind` names it) | HS-2 | the host | operator class, no request-time checks, drain capacity, as a self-check; `claim_kind_tokens_are_unique_...` (scheduler) adapted: its list gains the kind |
+| HS2-3 | `backend_switch_refused` (error, ladder `none`, owner runtime-host; values `alias`, `backend_switch_problem` required) and vocabulary `backend_switch_problem`: `instance_busy`, `player_held`, `instance_fenced`, `endpoint_unavailable`, `open_failed`, `restore_failed` | outcome code and value vocabulary (key `backend_switch_problem`) | HS-2 | the host | `since` 0.12.39; causes reuse `lease_queue_expired`, `player_hold_active`, `instance_resources_fenced`, the open codes; `restore_failed` has two `caused_by` links (the candidate's, then the restore's); a refused `host.config_overrides` keeps `host_config_overrides_persist_failed`, a failed restore its `note` |
+| HS2-4 | `device.backend_switched` (`runtime.lifecycle_observed`): `{instance_alias, touch: {from, to}, capture: {from, to}, nemu_app_index?, nemu_app_index_source?: file \| resolved, session_generation}` | new closed action and payload (`EventAction::DeviceBackendSwitched`, `RuntimePayload::DeviceBackendSwitched`), sensitivity `internal` | HS-2 | the host | as `device.self_check`: additive, no interface step; `hs2_switch_free_instance_commits_and_records` |
+| HS2-5 | `ExecutionBackendProvider::switch_instance_backends`, `ExecutionKernel::switch_instance_backends` | Runtime-internal interface (memory only) | HS-2 | the host | a provider without switchable backends keeps a refusal; a session still open is `execution_endpoint_rebind_session_open`, a provider's refusal `execution_endpoint_rebind_failed` (reused, operation `switch_instance_backends`) |
+| HS2-6 | `BACKEND_SWITCH_WAIT_MS` (63 000: the claim's 3 s and two preparations of 30 s), `is_instance_backend_key` | contract constant and helper | HS-2 | the client | the receipt wait of a `ConfigureSettings` naming a backend key; `hs2_client_timeout_covers_switch` |
+| HS2-7 | `ac_config_set` naming a backend key needs the operator tier | MCP tier rule (answer Q6) | HS-2 | actingctl | `tier_not_enabled` (`required_tier` `operator`) before anything is sent; every other call stays observer; `hs2_mcp_backend_key_needs_operator_tier` |
+| HS2-8 | `config_value_invalid` `backend_pair_required` through an instruction: `caused_by` `nemu_input_requires_paired_capture` | link on an existing refusal (§1.267 (d)) | HS-2 | the host | |
+| HS2-9 | the console's device backends group | console contract (design §6), for #429's settings page | — | the console | [runtime-config.md](runtime-config.md), "The console's device backends group"; no wire shape |
+
+**Tests** (gate row in `host.toml`, "#402 HS-2"): the eighteen of the work order, sixteen in
+runtime-host (`gate_hs2`, the fake provider's registration switching and recording; a test that
+meets the Runtime at a point waits on a channel, never sleeps), `hs2_client_timeout_covers_switch`
+(runtime-client) and `hs2_mcp_backend_key_needs_operator_tier` (actingctl). Adapted: the three named
+in HS2-1 and HS2-2.
+
+**Where it differs from the brief's letter.** (a) The player hold is R-7b's and not built yet: the
+switch reads its dimension of the control gates (`SchedulingPauseTable::control_gates`, false until
+R-7b), and `hs2_player_hold_refuses` sets that dimension through a test-only hook. (b) "Fences only
+that instance" (`restore_failed`): the instance is left unavailable by its own failed self-check,
+and the restore's ordinary preparation may start a ladder; no #403 fence is entered, since no
+resource is unconfirmed (an unconfirmed close still fences, as on every close path). (c) The fence
+and the endpoint are read before the claim too, so a switch on such an instance answers at once
+instead of after the claim's wait; the reads under the admission guard stay the deciding ones. (d)
+`nemu_app_index` is carried as before: the registration has it only beside the Nemu pair in the
+file, so until HS-3 resolves a missing index, a switch to Nemu touch of an instance whose file names
+another touch backend fails its paired open, named (`open_failed`), and keeps its backends; the
+record's `nemu_app_index_source` is `file` until HS-3. (e) The switch shows as the self-check it is
+in `RuntimeInstanceStatus.activity` (no new activity kind: no wire change). (f) "Run between steps"
+is a direct run held at its own checkpoint inside the run (`PackageAdmitted`), on its own key, as a
+run between two steps is.
+
+**Interface.** No step for 0.12.39 ([component-interfaces.md](component-interfaces.md)):
+`actingd-config` stays [5, 26] (HS-1's step: no member changes; an instruction row is no file
+shape), and `runtime-client`, `ledger`, `package` and `runtime-outcomes` do not move: the request
+and receipt shapes are the existing ones, the new code and words are additive in revision 1, and the
+new record is additive as `device.self_check` was.
+
+**What changes live.** Nothing until someone sets either key: with no instruction row nothing
+switches, and a start writes nothing into the registry. A person's change of an instance's backends
+switches that instance only, while it is free, and commits only once the new backends opened.
+
+**Rollback** (to 0.12.38). Rows of the two keys in `host.config_overrides` are dropped at start
+(`config_override_dropped`: keys 0.12.38 does not have) and each instance comes back with its file's
+backends; nothing else persisted changes. A `device.backend_switched` record is read only by a
+reader of this contract.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -6738,7 +6813,7 @@ when it takes effect.
 | per instance | `recognition_package` `{package}` (a location only, no digest; no default) | D2M §3.2 v1.4.2 | D2-S2 (built, §1.28) | D2-S2 |
 | per instance | `start_emulator` | ORD §3.5 item 17: default `none` (off unless the entry names it); discovery-bound instances only | S6a (built, §1.36) | S6c (built, §1.60; v0.12.0) |
 | per instance | `capture_backend` gains the value `scrcpy` (no new key) | explicit only, never part of `auto` or `auto-fastest`; refused on an emulator instance (`device_config_invalid`), and every instance is an emulator until RD-1b adds `device.kind` (R1 §5.1); the stream's parameters are device-layer defaults, not keys, until D1b's mechanism | #402 RD-3 | #402 RD-3, after RD-1b |
-| per instance | `touch_backend`, `capture_backend` (the entry's existing members as keys; §1.267) and `nemu_app_index` relaxed (**`actingd-config` revision 26**) | HS-M §2.1: default `none` (a device instance names both, a fixture neither); the device layer's names; the kind's backends, touch `nemu_ipc` only beside capture `nemu_ipc`; not settable until HS-2; `nemu_app_index` on any emulator entry, no longer needed by Nemu touch | #402 HS-1 | assembly (the switch: HS-2) |
+| per instance | `touch_backend`, `capture_backend` (the entry's existing members as keys; §1.267) and `nemu_app_index` relaxed (**`actingd-config` revision 26**) | HS-M §2.1: default `none` (a device instance names both, a fixture neither); the device layer's names; the kind's backends, touch `nemu_ipc` only beside capture `nemu_ipc`; settable since HS-2 (§1.270: a change switches the device); `nemu_app_index` on any emulator entry, no longer needed by Nemu touch | #402 HS-1 | assembly; the switch and the start's restore (HS-2) |
 | top level | `lab_module_authoring`, `lab_module_debugging` | UIM §4.1 | U-2 | U-2 (reported only in v0.12.0) |
 | `scheduling.suspension.*` | `lift_check_min_interval_ms` | 60 000: the least time between two lift checks of the same package (M-PKG §3.4, D1) | PKG-S3 (built, §1.47) | PKG-S3 (v0.12.0); SR-3 |
 | `device_link.*` | `watch.restart_backoff_ms`, `watch.restart_limit`, `watch.restart_window_ms`, `settle_ms`, `offline_action`, `restore_retry_ms` | `[1000, 5000, 30000]`, 5 (1..=100), 600 000 (at least the first restart wait), 3 000 (0..=60 000), `wait` (`wait` / `kick_once`), `[5000, 15000, 60000]` (model-398 §4.6; both lists non-empty); every key settable | RD-2 (built, §1.52) | RD-2 (v0.12.0) |

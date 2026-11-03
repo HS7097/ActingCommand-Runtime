@@ -1721,6 +1721,10 @@
       "type": "vocab:device_watch_problem",
       "description": "What went wrong with the device-link watch, the Runtime's one adb track-devices process (Workflow #398 RD-2)."
     },
+    "backend_switch_problem": {
+      "type": "vocab:backend_switch_problem",
+      "description": "Why backend_switch_refused did not switch an instance's touch and capture backends (#402 HS-2)."
+    },
     "device_hold": {
       "type": "vocab:device_hold",
       "description": "What holds a handset (Workflow #398 RD-5b)."
@@ -3209,6 +3213,9 @@
         },
         "device.self_check": {
           "description": "Device self check."
+        },
+        "device.backend_switched": {
+          "description": "An instance's touch and capture backends switched (#402 HS-2)."
         }
       }
     },
@@ -4450,6 +4457,9 @@
         },
         "self_check": {
           "description": "A self-check preparation."
+        },
+        "backend_switch": {
+          "description": "The switch of an instance's touch and capture backends (#402 HS-2)."
         },
         "daemon_start_preparation": {
           "description": "The dedicated preparation lease of a connection preparation."
@@ -6036,6 +6046,29 @@
         },
         "unbound": {
           "description": "The private binding file binds no device to the handset instance."
+        }
+      }
+    },
+    "backend_switch_problem": {
+      "description": "Why a ConfigureSettings that names an instance's backend keys did not switch its backends (#402 HS-2, design HS-M section 3.6).",
+      "tokens": {
+        "instance_busy": {
+          "description": "The instance was not free within the switch claim's wait (CONNECTION_PREPARATION_CLAIM_WAIT_MS): a run, even between two of its steps, a ladder, a lease, a Lab operation or another operator claim held it; the cause is lease_queue_expired with holder_kind."
+        },
+        "player_held": {
+          "description": "A player holds the instance; the cause is player_hold_active."
+        },
+        "instance_fenced": {
+          "description": "A #403 fence holds the instance; the cause is instance_resources_fenced. A passing self-check lifts it."
+        },
+        "endpoint_unavailable": {
+          "description": "The instance's endpoint is pending (its emulator is stopped) or its handset is not bound, so no backend can open."
+        },
+        "open_failed": {
+          "description": "The new backends did not open or failed their self-check; the previous backends were restored and opened again. The cause is the failing open's code."
+        },
+        "restore_failed": {
+          "description": "The new backends did not open, and the previous backends did not open again either: the instance is unavailable and no other instance is touched. The causes are both failures."
         }
       }
     },

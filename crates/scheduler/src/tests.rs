@@ -2026,6 +2026,8 @@ fn claim_kind_tokens_are_unique_and_the_stopped_instance_kinds_skip_admission_ch
         ClaimKind::InputLifecycle,
         ClaimKind::ResumeReconnect,
         ClaimKind::SelfCheck,
+        // #402 HS-2 (register §1.270): the backend switch's claim, a kind of its own.
+        ClaimKind::BackendSwitch,
         ClaimKind::DaemonStartPreparation,
         ClaimKind::LabOperation,
         ClaimKind::ClientLease,

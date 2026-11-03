@@ -727,4 +727,7 @@ outcome_keys! {
     // ---- #419 SUB-LAG-1 (a lagged event subscription, contracts/runtime-interface.md "A
     // subscriber that falls behind"): the cursor to subscribe again from; kept in codes mode. ----
     resume_after_sequence: integer,
+    // ---- #402 HS-2 (an instance's backend switch, contracts/runtime-config.md "Switching an
+    // instance's backends"): why `backend_switch_refused` refused the switch. ----
+    backend_switch_problem: vocab(backend_switch_problem),
 }

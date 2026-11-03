@@ -87,7 +87,7 @@ pub static UI_TIERS: &[(KeyName, UiTier)] = &[
     (KeyName::Exact(lab_module::AUTHORING), UiTier::Advanced),
     (KeyName::Exact(lab_module::DEBUGGING), UiTier::Advanced),
     // #402 HS-1 (HS-M §2.1, §6; coordinator's answer to Q4): each instance's two backends, which
-    // fill the eight; shown read-only until HS-2 makes them settable.
+    // fill the eight; settable since HS-2 (register §1.270), which switches the device's backends.
     (
         KeyName::PerInstance(instance::TOUCH_BACKEND),
         UiTier::Advanced,

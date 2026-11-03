@@ -22,6 +22,14 @@ impl TryFrom<u32> for NemuAppIndex {
     }
 }
 
+impl NemuAppIndex {
+    /// #402 HS-2: the index as the configuration names it (a `u32` that fits `i32`, so never
+    /// negative), for the record of a backend switch.
+    pub const fn index(self) -> u32 {
+        self.0.unsigned_abs()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct NemuApplicationTarget {
     application_id: CString,

@@ -2,8 +2,8 @@
 
 // #402 HS-1 (register §1.267; design `rd-1031/backend-switch/model-backend-switch.md` §2.1, §2.3,
 // §7 HS-1; coordinator work order `brief-hs-1.md`): the start-up assembly reports each device
-// instance's `touch_backend` and `capture_backend` by the device layer's own names (explicit, not
-// settable; a fixture has neither), and `actingd-config` revision 26 relaxes `nemu_app_index`: Nemu
+// instance's `touch_backend` and `capture_backend` by the device layer's own names (explicit and,
+// since #402 HS-2, settable; a fixture has neither), and `actingd-config` revision 26 relaxes `nemu_app_index`: Nemu
 // touch no longer needs it in the file, and an emulator entry may name it whatever its backends.
 // Nemu touch still needs Nemu capture (`nemu_input_requires_paired_capture`), a named index is
 // still checked (`nemu_app_index_invalid`) and a handset still names none. The names are made up.
@@ -66,7 +66,8 @@ fn row(
         .cloned()
 }
 
-/// Asserts the instance's two backend rows: these names, explicit, not settable.
+/// Asserts the instance's two backend rows: these names, explicit, settable (#402 HS-2; adapted
+/// from "not settable" as the requirement changed).
 fn assert_backends(assembly: &RuntimeAssembly, id: InstanceId, touch: &str, capture: &str) {
     for (member, name) in [(TOUCH_BACKEND, touch), (CAPTURE_BACKEND, capture)] {
         let reported = row(assembly, id, member).unwrap_or_else(|| panic!("{member} is reported"));
@@ -76,7 +77,7 @@ fn assert_backends(assembly: &RuntimeAssembly, id: InstanceId, touch: &str, capt
             "{member}"
         );
         assert_eq!(reported.source, ConfigParameterSource::Explicit, "{member}");
-        assert!(!reported.settable, "{member} is not settable until HS-2");
+        assert!(reported.settable, "{member} is settable since HS-2");
     }
 }
 

@@ -6756,6 +6756,25 @@ pub(super) fn receipt_response_timeout(
             backend_open_timeout,
             ClientLocation::RuntimeStopInstanceRun.location(),
         ),
+        // #402 HS-2 (design HS-M §2.2, §8 item 10): a `ConfigureSettings` that names an
+        // instance's backend keys switches its backends before it answers: the switch claim's
+        // wait, the new backends' preparation and the previous ones' after a failed candidate
+        // (`BACKEND_SWITCH_WAIT_MS`), plus the IO margin. Every other `ConfigureSettings` answers
+        // at once, as before.
+        RuntimeOperation::ConfigureSettings { changes, .. }
+            if changes
+                .iter()
+                .any(|change| actingcommand_contract::is_instance_backend_key(&change.key)) =>
+        {
+            Duration::from_millis(actingcommand_contract::BACKEND_SWITCH_WAIT_MS)
+                .checked_add(io_timeout)
+                .ok_or_else(|| {
+                    RuntimeClientError::fatal(
+                        ClientCode::RuntimeReceiptTimeoutOverflow,
+                        ClientLocation::RuntimeConfigureSettings.location(),
+                    )
+                })
+        }
         // Workflow #429 R-7a (§3.1, §3.2): the player hold's two requests wait their whole
         // formula (the receipt-read deadline plus the IO margin).
         RuntimeOperation::AcquirePlayerHold { .. } | RuntimeOperation::ReleasePlayerHold { .. } => {

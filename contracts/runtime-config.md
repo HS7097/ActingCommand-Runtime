@@ -110,9 +110,10 @@ entry's existing members by the device layer's own names (actingd reports an ali
 layer reads, such as touch `adb`, as `adb_shell_input`; `auto` and `auto-fastest` are no value of
 either, and a file that names one is refused as before, `touch_backend_must_be_explicit`,
 `capture_backend_must_be_explicit`); default `none` (a device instance's entry names both, a
-fixture's neither), so a fixture reports no row of either; not settable until HS-2 brings the
-switch (read once at assembly). Their whole-instance check is part of the per-instance section's
-(see "Backends" below).
+fixture's neither), so a fixture reports no row of either; settable since #402 HS-2
+([v012-register.md](v012-register.md) §1.270, same release): an instruction that changes them
+switches the instance's device backends first ("Switching an instance's backends" below). Their
+whole-instance check is part of the per-instance section's (see "Backends" below).
 A manifest key the table does not have fails
 the start (`config_key_unknown`). The manifest lists the exact keys in row order
 (`recovery_ladder`, `host_claims`, `standard_packs`, `performance`, `scheduling`,
@@ -1350,8 +1351,88 @@ The kinds' backends are the device layer's (`TouchBackendChoice::allowed_on`,
 [device-binding.md](device-binding.md)); the host fills them into the check context. actingd
 refuses a file that breaks either rule earlier, with its own codes (`device_config_invalid`,
 `backend_kind_unsupported`; `nemu_input_requires_paired_capture`), so at start the check is a second
-line, and the first one an instruction meets from HS-2 on. Until HS-2 neither key is settable, so
-no instruction reaches it (`config_key_not_settable`).
+line, and the first one an instruction meets (#402 HS-2, since 0.12.39: both keys are settable).
+Through an instruction a `backend_pair_required` refusal carries the registry's own code,
+`nemu_input_requires_paired_capture`, as its `caused_by`.
+
+## Switching an instance's backends (#402 HS-2)
+
+#402 HS-2 ([v012-register.md](v012-register.md) §1.270; design HS-M §2.2, §3, §8; since 0.12.39).
+A `ConfigureSettings` whose changes name an instance's backend keys (only that instance's, one or
+both: `backend_switch_not_alone` otherwise) and leave its backends in effect other than they are
+switches the instance's device backends before it commits. One that leaves both as they are (a
+clear back to the same values) commits at once, as any other change.
+
+**The boundary.** Only a free instance switches. The switch is an operator claim of its own kind,
+`backend_switch` (`vocab:claim_kind`), in the instance's one queue: it waits at most
+`CONNECTION_PREPARATION_CLAIM_WAIT_MS` (3 s, the contract constant a self-check's claim waits;
+no key). A run (a scheduled run, a startup package, a direct run, including one that stands between
+two of its steps), a recovery ladder, a client's lease, a Lab operation, a self-check or an emulator
+control that holds the instance longer refuses it; the switch is never deferred. An instance pause
+is a boundary: the claim passes the paused instance's closed gate, so a person who wants to switch
+mid-task pauses the instance, lets it drain, switches, and resumes it (the resume's reconnect
+self-checks the new backends once more). Between two Lab operations is a boundary too; a frame the
+Lab held from the old session is no longer committed, so the Lab observes again.
+
+**The steps.** (1) The request is checked under the settings' gate, as every `ConfigureSettings`
+is (the version, the keys, the values, the instance's backend check), and the gate is left. (2) The
+claim. (3) Under the instance's admission guard, without the settings' gate (a status read is not
+blocked): the control gates (a player's hold, a #403 fence, a pending endpoint or an unbound
+handset; the first two are also read before the claim, which then is not taken); the instance's
+kept session closes through the fenced close path; the registration takes the new backends with
+its own checks (both explicit, one target, Nemu touch only beside Nemu capture) and recomputes the
+instance's capability table, merged with the provider's rows; a connection preparation on the
+switch's key opens and self-checks them, reading the emulator status first, as a self-check does,
+but its failure starts no recovery ladder. (4) Passed: under the settings' gate the changes apply
+again over the configuration in effect (no version is compared: the instance's backend keys change
+only under the switch's claim, and every other key keeps its value), then `host.config_overrides`,
+`config.parameters.instance`, `device.backend_switched`
+([backend-open-observation.md](backend-open-observation.md)) and `command.validated` are recorded,
+the values take effect and the receipt is Completed with the new `config_version`. The kept session
+follows the multi-Nemu gate as after every preparation. (5) Failed, or the ledger refused
+`host.config_overrides`: the candidate's session closes, the registration takes the previous
+backends, and they are prepared again as a self-check is (that preparation may start a ladder,
+which the switch's key goes to); the request is refused. Nothing of a refused switch is committed:
+no `host.config_overrides` row and no `device.backend_switched`; its opens are recorded as every
+open is.
+
+**The refusals.** `backend_switch_refused` (error, owner `runtime-host`; values `alias`,
+`backend_switch_problem`), its cause as its `caused_by`:
+
+| `backend_switch_problem` | When | Cause | Receipt |
+|---|---|---|---|
+| `instance_busy` | the claim was not granted within its wait | `lease_queue_expired` (`holder_kind`, `timeout_ms`) | Denied |
+| `player_held` | a player holds the instance | `player_hold_active` | Denied |
+| `instance_fenced` | a #403 fence holds it (a self-check lifts it); also a kept session whose close the fence then took | `instance_resources_fenced` | Denied (Failed for the close) |
+| `endpoint_unavailable` | its endpoint is pending (the emulator is stopped) or its handset is not bound | — | Denied |
+| `open_failed` | the new backends did not open or failed their self-check; the previous ones are back | the failing step's code (`input_backend_open_failed`, `capture_backend_open_failed` with `capture_open_cause`, `paired_backend_open_failed`, a check or close code) | Failed |
+| `restore_failed` | the new backends failed and the previous ones did not open again: the instance is unavailable (its failed self-check withholds it), no other instance is touched (#419) | both failures, the candidate's then the restore's | Failed |
+
+A refused `host.config_overrides` keeps its own refusal, `host_config_overrides_persist_failed`
+(Failed), after the device's restore; a restore that failed then is its `note`. A value, a kind, a
+pair or a mix of keys stays `config_value_invalid` (Denied). Each refusal is the command's
+`command.rejected` and nothing else is recorded but the opens it made.
+
+**The wait.** A client waits `BACKEND_SWITCH_WAIT_MS` (the contract constant: the claim's 3 s plus
+two connection preparations of `CONNECTION_PREPARATION_WAIT_MS`, 63 s) plus its IO margin for the
+receipt of a `ConfigureSettings` that names a backend key (`runtime-client`'s receipt wait;
+`actingcommand_contract::is_instance_backend_key`). Every other `ConfigureSettings` answers at once.
+
+**The restore at start** (design HS-M §3.8). After the instruction values are restored (an
+instance's restored backends that break its backend check with this start's file layer are dropped
+together, "Restore at start" below), the start writes each instance's backends in effect into the
+registry when they differ from its registration, before any instance is prepared; no session exists
+yet, so no device is touched. A restored backend that does not open leaves its instance unavailable
+(its start self-check failed) and is never replaced by the file's: a person clears the keys
+(`config clear`), which is itself a switch. A registration that refuses backends the configuration's
+check passed is an internal invariant: the start fails, as for a registration it refuses from the
+file.
+
+**Channels.** `actingctl config set instance.<id>.touch_backend=… instance.<id>.capture_backend=…`
+and `config clear` (the CLI); MCP `ac_config_set`, which needs the operator tier for a change of a
+backend key (`tier_not_enabled` otherwise; every other change stays observer); the console's
+settings page ("The console's device backends group" below); the Lab's `session backend` (HS-L).
+There is one state per instance: no backend holds for a Lab session only.
 
 ## Facts
 
@@ -1384,6 +1465,11 @@ All changes or none:
 | the key is in the key table (a per-instance key of a configured instance); a key whose default is `none` counts whether or not the file writes it, once its instance (a per-instance key) or its section (an exact key) is in the configuration (Workflow #429 R-1, since 0.12.31) | `config_key_unknown` |
 | the key is settable | `config_key_not_settable` |
 | the value has the key's type and range, and is one an instruction may set (not `performance.pacing.mode` `full`, Workflow #429 R-2, since 0.12.31: `out_of_range`); no key is named twice; the changed sections pass their whole-section check (#402 HS-1: an instance's backends, "Backends" above) | `config_value_invalid` (`config_value_problem`: `wrong_type`, `out_of_range`, `repeated_key`, `section_check`, `backend_kind_unsupported`, `backend_pair_required`; `range_min`, `range_max` for a bounded key) |
+
+#402 HS-2 (since 0.12.39): a request that passes these checks and changes an instance's backends
+in effect switches the device first and commits only once the new backends opened, with
+`device.backend_switched` before `command.validated`; its own refusals and its wait are in
+"Switching an instance's backends" above.
 
 Records: `cli.command` (or the counter's own) and `command.received`; on a refusal
 `command.rejected` carrying the refusal as its outcome, and nothing else; otherwise the whole new
@@ -1451,11 +1537,12 @@ row records the base as absent, in the existing row shape: `base_source` `defaul
 value: the row goes, and the receipt reports the key as `{key, value: "null" (string), source:
 default}`, the base it was set over, since nothing is in effect. Settable keys with no default
 today: the per-instance `scheduling.blackout` and `recovery_ladder_profile`,
-`scheduling.fact_refresh.overdue_ms` and, since 0.12.31 (Workflow #429 R-2),
-`performance.pacing.max_concurrent_runs`; the other keys with no default
+`scheduling.fact_refresh.overdue_ms`, since 0.12.31 (Workflow #429 R-2),
+`performance.pacing.max_concurrent_runs` and, since 0.12.39 (#402 HS-2), the per-instance
+`touch_backend` and `capture_backend` (a device instance's file always writes both; a fixture's
+have no value and its backend check refuses any); the other keys with no default
 (`standard_packs.root`, the per-instance `device_kind`, `recognition_package` and
-`start_emulator`, and since 0.12.39 until HS-2 the per-instance `touch_backend` and
-`capture_backend`) are read once at assembly and stay `config_key_not_settable`.
+`start_emulator`) are read once at assembly and stay `config_key_not_settable`.
 
 ## Restore at start (M387 §12 question 3: the later change wins)
 
@@ -1510,8 +1597,11 @@ console reads the settings again.
 `touch_backend` or `capture_backend` breaks its backend check ("Backends" above) with this start's
 file layer (its kind, the Nemu pair) drops both of its restored backend values and nothing else
 (`config_override_dropped`), so its file's backends are in effect; the rest of the per-instance
-section is then checked as below. Until HS-2 every row of either key is dropped anyway, as one of
-a key that is not settable.
+section is then checked as below. #402 HS-2 (same release): the keys are settable, so the rows
+that pass are kept, and the start writes the restored backends into the registry before it
+prepares any instance ("Switching an instance's backends", "The restore at start", above). A
+rollback to 0.12.38 drops every row of either key (`config_override_dropped`: a key that release
+does not have), and the instance comes back with its file's backends.
 
 The restored values then pass the whole-section check of their sections with this start's file
 layer; a section that fails it drops every value restored into it (`config_override_dropped`).
@@ -1545,11 +1635,55 @@ most eight keys (`MAX_ADVANCED_KEYS`).
 | `host.process_io_priority` | advanced | no (applied before the ledger opens) | the file changes it at the next start |
 | `lab_module_authoring` | advanced | no | shown read-only; `actingctl install` changes it |
 | `lab_module_debugging` | advanced | no | shown read-only; `actingctl install` changes it |
-| `instance.<instance id>.touch_backend` | advanced | no (read once at assembly until HS-2 makes it settable) | the instance's touch backend (#402 HS-1, since 0.12.39) |
-| `instance.<instance id>.capture_backend` | advanced | no (read once at assembly until HS-2 makes it settable) | the instance's capture backend (#402 HS-1, since 0.12.39) |
+| `instance.<instance id>.touch_backend` | advanced | yes (#402 HS-2: a change switches the device) | the instance's touch backend (#402 HS-1, since 0.12.39) |
+| `instance.<instance id>.capture_backend` | advanced | yes (#402 HS-2: a change switches the device) | the instance's capture backend (#402 HS-1, since 0.12.39) |
 
 With the two backend rows (#402 HS-1, coordinator's answer Q4) `advanced` holds its eight keys; a
 later key of that tier needs the limit raised first.
+
+### The console's device backends group (#402 HS-2)
+
+#402 HS-2 (design HS-M §6, handed to the console's settings page, Workflow #429; since 0.12.39). No
+wire shape is new: the group reads `config.parameters.instance` and `config_version` and writes
+`ConfigureSettings` with `expected_version`; the receipts and refusals are the existing shapes with
+the one new code and the words above.
+
+- **The group.** One per instance, named 设备后端 (device backends), two rows; shown for a device
+  instance only (a fixture has neither key).
+- **The rows and the values offered**, filtered by the instance's kind
+  (`instance.<instance id>.device_kind`; no row is an emulator):
+
+  | Key | Row | Values and their names | Tier | Settable | Takes effect |
+  |---|---|---|---|---|---|
+  | `instance.<instance id>.touch_backend` | 触控后端 | `adb_shell_input` 「ADB 输入」, `maatouch` 「MaaTouch」, `minitouch` 「minitouch」, `nemu_ipc` 「MuMu 原生（Nemu IPC）」 (an emulator only) | advanced | yes | at once on a free instance, after a wait of at most 3 s; the instance reconnects and self-checks once (up to about 65 s), shown as 切换中 (switching) |
+  | `instance.<instance id>.capture_backend` | 截图后端 | `adb` 「ADB 截图」, `droidcast_raw` 「DroidCast」 (an emulator only), `nemu_ipc` 「MuMu 原生（Nemu IPC）」 (an emulator only), `scrcpy` 「scrcpy」 (a handset only; an emulator's waits for #402 step 2) | advanced | yes | as above |
+
+- **The pair.** Touch `nemu_ipc` offers capture `nemu_ipc` only; choosing it with another capture
+  sends both keys in one request. Changing the capture of a Nemu-touch instance first asks which
+  touch backend goes with it, then sends both. Both in one request means one `ConfigureSettings`
+  with `expected_version` and two changes.
+- **What each row shows.** The value in effect and its source (file, or instruction with its time
+  and channel); an instruction value offers 恢复为文件值 (back to the file's value), which sends a
+  clear and is itself a switch; beside the rows, the instance's current self-check
+  (`backend.selfcheck.input`, `.capture`, `.nemu` `.status`).
+- **The refusals it must show**, by top code, problem and cause, never a bare "failed":
+
+  | Code, problem | What the console says |
+  |---|---|
+  | `config_value_invalid`, `backend_kind_unsupported` | 这台设备没有这个后端 |
+  | `config_value_invalid`, `backend_pair_required` | MuMu 原生触控必须配 MuMu 原生截图 |
+  | `config_value_invalid`, `backend_switch_not_alone` | the console's own fault; it never sends such a request |
+  | `fact_observation_version_conflict` | 设置被别处改过，重读后再试 |
+  | `backend_switch_refused`, `instance_busy` | 这台正在忙 with its `holder_kind` (a run, a ladder, a Lab operation…); wait for it, or pause the instance first |
+  | `backend_switch_refused`, `player_held` | 你正在玩这台，交还后再切 |
+  | `backend_switch_refused`, `instance_fenced` | 这台被围栏了，先自检 |
+  | `backend_switch_refused`, `endpoint_unavailable` | 模拟器没开，或真机没绑定 |
+  | `backend_switch_refused`, `open_failed` | 新后端没打开，已保留原来的, with the cause: `input_backend_open_failed`, `capture_backend_open_failed`, `paired_backend_open_failed` (the last two with `capture_open_cause`: `display_missing`, the application is not running; `connection_failed`; `other`) |
+  | `backend_switch_refused`, `restore_failed` | 新的没打开，原来的也没恢复，这台暂时不可用, with both failures; suggest a self-check |
+  | `host_config_overrides_persist_failed` | 没写进记录，已回退 |
+  | `tier_not_enabled` | MCP only: the operator tier is not enabled |
+
+- **Tiers.** The tier is `ui_tier`'s (the table above).
 
 Not in the table, because none is a key of the key table: the diagnostics export (a command),
 the vision device (the configuration file's `vision` section) and an instance's
@@ -1571,7 +1705,11 @@ so the code moved here; SR-1 emits it at start and in `check-config`), `perf_con
 `host_config_overrides_fact_invalid`, `host_config_overrides_persist_failed`,
 `host_config_overrides_fact_clock_overflow`, `host_config_value_type_invalid`, and (Workflow
 #429 R-4, reused, since 0.12.36) the shared `fact_observation_version_conflict` with `fact_key`
-and `current_version` for a `ConfigureSettings` at another version. Owner `contract`:
-`invalid_configure_settings`. Vocabulary `config_value_problem` (source
-`crates/runtime-config/src/codes.rs`).
+and `current_version` for a `ConfigureSettings` at another version; (#402 HS-2, since 0.12.39)
+`backend_switch_refused` (values `alias`, `backend_switch_problem`), whose causes reuse
+`lease_queue_expired`, `player_hold_active`, `instance_resources_fenced`, the open codes and
+`nemu_input_requires_paired_capture` (the cause of `backend_pair_required` through an
+instruction). Owner `contract`: `invalid_configure_settings`. Vocabulary `config_value_problem`
+(source `crates/runtime-config/src/codes.rs`); vocabulary `backend_switch_problem` (source
+`crates/runtime-host/src/codes.rs`).
 Every one is ladder class `none` (the Runtime's own configuration, decision-table row 7).
