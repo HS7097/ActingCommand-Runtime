@@ -56,7 +56,7 @@
     "run <subcommand>",
     "report <subcommand>"
   ],
-  "command_count": 141,
+  "command_count": 142,
   "commands": [
     "help",
     "version",
@@ -188,6 +188,7 @@
     "session monitor-policy",
     "session instance",
     "session app",
+    "session backend",
     "session capture",
     "session stream",
     "session recover",

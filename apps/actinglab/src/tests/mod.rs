@@ -6,6 +6,9 @@ mod semantic_fixture;
 // Workflow #389 U-2: actinglab binds the Lab channel, with --via when a counter forwarded it.
 #[path = "gate_389_u2.rs"]
 mod gate_389_u2;
+// #402 HS-L: `session backend` switches an instance's backends through the Runtime.
+#[path = "gate_402_hsl.rs"]
+mod gate_402_hsl;
 // Workflow #336 PKG-S5 (apps key 64): `package digest` is retired.
 #[path = "gate_336_pkgs5.rs"]
 mod gate_336_pkgs5;

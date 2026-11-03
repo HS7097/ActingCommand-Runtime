@@ -19,6 +19,11 @@ repository wrapper reads from `capabilities` whether the Tools it pins can verif
 `package loading` (Workflow #407 LOAD-1, since 0.12.37; [package-reference.md](package-reference.md),
 "Content-directory tools and the bundle index") needs `offline`, is `available` and declares
 `mixed`: `--check` `no_effect`, `--write` a `dry_run` preview.
+`session backend` (#402 HS-L, since 0.12.40; [runtime-config.md](runtime-config.md), "The Lab")
+needs `running_runtime` and `device`, so its status is `unverified`, and declares `refused`
+(`dry_run_unsupported`). `session instance list` and `session instance registry` stay `offline` and
+`available`: their `runtime_backends` column reads the Runtime when it runs and says, beside the
+list, when it could not (`runtime_backends_read`).
 The six device `--record` forms declare `refused`. Capture and its session alias use
 `dry_run_unsupported`; observe/do with `--capture --record` and both session application
 recording forms use `record_flag_unsupported`, before recording locks or Runtime access.

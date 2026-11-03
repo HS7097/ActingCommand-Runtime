@@ -400,6 +400,12 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("session app stop", ["device"], "available"),
         command_cap("session app force-stop", ["device"], "available"),
         command_cap("session app restart", ["device"], "available"),
+        // #402 HS-L: switches the instance's touch and capture backends through the Runtime.
+        command_cap(
+            "session backend",
+            ["running_runtime", "device"],
+            "available",
+        ),
         command_cap("session capture", ["device"], "available"),
         command_cap("session capture diagnose", ["device"], "available"),
         command_cap("session recover", ["device"], "available"),

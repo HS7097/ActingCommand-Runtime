@@ -91,6 +91,13 @@ pub(super) fn help_data() -> Value {
                 "--write (writes each pack's resources/loading.json and resources/loading/ that is not the copy the root file makes; removes nothing; with --dry-run a preview that writes nothing)",
                 "--check (writes nothing; fails with standard_pack_root_invalid, loading_pack_stale, naming every pack whose copy is not the one the root file makes)"
             ],
+            // #402 HS-L: one ConfigureSettings of the instance's backend keys.
+            "session backend": [
+                "--instance <alias> (global, required: the Runtime instance whose backends change)",
+                "--touch <name> (adb_shell_input, maatouch, minitouch, nemu_ipc; the Runtime judges it)",
+                "--capture <name> (adb, droidcast_raw, nemu_ipc, scrcpy; the Runtime judges it)",
+                "--clear (both keys back to the configuration file's values, itself a switch; with neither --touch nor --capture)"
+            ],
             "standard-pack check": crate::standard_pack_cli::options(),
             "standard-pack compose": crate::standard_pack_cli::compose_options(),
             "package fmt": [

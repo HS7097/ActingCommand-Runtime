@@ -229,6 +229,8 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     ("session instance app stop", UNSUPPORTED),
     ("session instance app force-stop", UNSUPPORTED),
     ("session instance app restart", UNSUPPORTED),
+    // #402 HS-L: a backend switch has no dry run; `session instance list` reads the backends.
+    ("session backend", UNSUPPORTED),
     ("touch-probe", UNSUPPORTED),
     ("record start", UNSUPPORTED),
     ("record step", UNSUPPORTED),

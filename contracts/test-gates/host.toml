@@ -643,6 +643,17 @@ tests = [
 ]
 incident = ["#402 HS-3"]
 
+# #402 HS-L (0.12.40; brief rd-1031/backend-switch/brief-hs-l.md; register §1.275; contracts/runtime-config.md, "Switching an instance's backends" and "The Lab"; contracts/runtime-interface.md, actinglab's table; contracts/actinglab-dry-run.md; contracts/actinglab-capabilities.md; design rd-1031/backend-switch/model-backend-switch.md §2.2, §3.1, §7 row HS-L): actinglab --instance <alias> session backend [--touch <name>] [--capture <name>] [--clear] sends one ConfigureSettings on the lab channel naming the instance's backend keys (both in one request when both are named, so the registration takes them in one switch) and prints the receipt's settings in effect and config_version; --clear names both without a value and the file's backends come back, which is a switch, and beside --touch or --capture it is refused before anything is sent; a refusal prints the receipt's top code with its problem word, key, receipt state and whole outcome and exits non-zero (config_value_invalid backend_pair_required with nemu_input_requires_paired_capture, exit 2, nothing switched; backend_switch_refused open_failed with input_backend_open_failed after the previous backends came back, exit 4); after a switch a frame held from the closed session is refused input_frame_unavailable and the next do observes first and presses on its own frame; session instance list's runtime_backends is the Runtime's backends in effect with their source and runtime_backends_read the read's config_version, beside the file's columns
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_402_hsl::hsl_session_backend_sends_configure_settings",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_402_hsl::hsl_session_backend_clear_returns_file_values",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_402_hsl::hsl_refusal_printed_with_problem",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_402_hsl::hsl_stale_frame_reobserved_after_switch",
+]
+incident = ["#402 HS-L"]
+
 # The recovery ladder by configuration: the section's whole-section check at start and through an instruction, what the default trigger items match, the record shapes, the rules that stay in code and the five that switch, direction one's count, and a routine failure that climbs by its trigger item, its rungs and the snapshot it was admitted with (Workflow #387 D1c)
 [[gate]]
 key = "53"

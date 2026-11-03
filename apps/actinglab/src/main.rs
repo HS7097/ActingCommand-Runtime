@@ -210,6 +210,8 @@ mod runtime_session_adapter;
 mod runtime_slice_cli;
 mod runtime_stream_adapter;
 mod safe_file_stem;
+// #402 HS-L: an instance's touch and capture backends, set and read from the Runtime.
+mod session_backend;
 mod session_management;
 mod sha256;
 mod signature_cli;
@@ -598,6 +600,8 @@ fn run_session(sub: &str, global: &GlobalOptions, args: &[String]) -> CliOutcome
         "monitor-policy" => run_session_monitor_policy(global, args),
         "instance" => run_session_instance(global, args),
         "app" => run_session_app_or_recorded(global, args),
+        // #402 HS-L: one ConfigureSettings of the instance's backend keys, on the Lab channel.
+        "backend" => session_backend::run_session_backend(global, args),
         "capture" => run_capture(global, args),
         "stream" => runtime_stream_adapter::run_stream(global, args),
         "recover" => run_session_recover(global, args),
