@@ -1,0 +1,9 @@
+{
+  "schema_version": "actingcommand.outcome-codes.release.v2",
+  "release": "0.12.39",
+  "codes": {
+    "nemu_app_index_requires_paired_input": {"category": "error", "ladder_class": "none", "review": "pending", "status": "retired", "values": {"operation": {"type": "location", "required": false}, "runtime_code": {"type": "code", "required": false}, "host_halted": {"type": "boolean", "required": false}, "receipt_state": {"type": "vocab:receipt_state", "required": false}, "request_id": {"type": "id", "required": false}}},
+    "nemu_paired_input_configuration_missing": {"category": "error", "ladder_class": "none", "review": "settled", "status": "retired", "values": {}}
+  },
+  "locations": {}
+}
