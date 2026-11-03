@@ -173,9 +173,10 @@ fn r4_t4_changing_one_key_leaves_every_other_key_s_value_and_source_as_it_was() 
 }
 
 // R-4 test 5 (A.6 rule 8): `ui_tier` key by key against the contract table: the eight daily keys
-// (each per-instance one for any instance) and the six advanced ones; every other key of the
-// shipped configuration, a key the key table does not have and a malformed name are hidden. The
-// table holds exactly these rows, each a row of the key table, at most eight of them advanced.
+// (each per-instance one for any instance) and the eight advanced ones (#402 HS-1 adds each
+// instance's two backends to the six); every other key of the shipped configuration, a key the
+// key table does not have and a malformed name are hidden. The table holds exactly these rows,
+// each a row of the key table, at most eight of them advanced.
 #[test]
 fn r4_t5_ui_tier_key_by_key_and_an_unlisted_key_is_hidden() {
     let mut table = vec![
@@ -203,6 +204,9 @@ fn r4_t5_ui_tier_key_by_key_and_an_unlisted_key_is_hidden() {
     for instance in [INSTANCE_A, INSTANCE_B] {
         for member in ["scheduling.blackout", "start_emulator", "idle.action"] {
             table.push((format!("instance.{instance}.{member}"), UiTier::Daily));
+        }
+        for member in ["touch_backend", "capture_backend"] {
+            table.push((format!("instance.{instance}.{member}"), UiTier::Advanced));
         }
     }
     for (key, tier) in &table {
@@ -238,7 +242,7 @@ fn r4_t5_ui_tier_key_by_key_and_an_unlisted_key_is_hidden() {
         }
     }
 
-    assert_eq!(UI_TIERS.len(), 14);
+    assert_eq!(UI_TIERS.len(), 16);
     for (name, _) in UI_TIERS {
         assert!(
             rows().any(|row| row.name == *name),
@@ -249,7 +253,7 @@ fn r4_t5_ui_tier_key_by_key_and_an_unlisted_key_is_hidden() {
         .iter()
         .filter(|(_, tier)| *tier == UiTier::Advanced)
         .count();
-    assert_eq!(advanced, 6);
+    assert_eq!(advanced, 8);
     assert!(advanced <= MAX_ADVANCED_KEYS);
     assert!(UI_TIERS.iter().all(|(_, tier)| *tier != UiTier::Hidden));
 }

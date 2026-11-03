@@ -6422,6 +6422,15 @@
         "daily_summary_shape": {
           "description": "An agent_wake daily_summary rule that names another kind or codes, leaves out at_minute_of_day or utc_offset_minutes or names one out of range, or whose daily_cap is not 1; or a rule of another kind that names either (Workflow #432 AGT-2b)."
         },
+        "backend_kind_unsupported": {
+          "description": "A per-instance touch_backend or capture_backend the instance's kind of device does not have (an emulator has no scrcpy, a handset no nemu_ipc or droidcast_raw), or any backend of a fixture, which has none (#402 HS-1)."
+        },
+        "backend_pair_required": {
+          "description": "A per-instance touch_backend nemu_ipc beside a capture_backend other than nemu_ipc; Nemu touch works only paired with Nemu capture (#402 HS-1)."
+        },
+        "backend_switch_not_alone": {
+          "description": "A ConfigureSettings request that names a backend key also names another key, or the backend keys of two instances; one request switches one instance's backends and nothing else (#402 HS-1)."
+        },
         "registry_unreadable": {
           "description": "A note, never a refusal: the channel registry is missing or cannot be read."
         },

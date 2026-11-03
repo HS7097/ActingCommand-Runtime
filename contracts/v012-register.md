@@ -6470,6 +6470,78 @@ behind the writer's commits, and the writer no longer stops for them.
 **Rollback** (to 0.12.37). Nothing persisted changes. 0.12.37 resolves on the writer thread
 again.
 
+### 1.267 Slice HS-1 (0.12.39): each instance's touch and capture backends as two rows, read only, their whole-instance check, and `nemu_app_index` relaxed (#402; Alice's words of 2026-11-03 11:4x, 「这个东西必须得被CLI、MCP或者是Lab/UI指定并且可以热更改」; design `rd-1031/backend-switch/model-backend-switch.md` §2, §3.6, §3.8, §4.1, §7 HS-1, with the coordinator's answers to its §9 on board #402; coordinator work order `rd-1031/backend-switch/brief-hs-1.md`)
+
+[runtime-config.md](runtime-config.md) ("Key table", "`ConfigureSettings`", "Restore at start",
+"Console tiers"), [device-binding.md](device-binding.md) ("Backends") and
+[actingd-check-config.md](actingd-check-config.md) ("Discovery-bound instances") are the contract.
+The number 1.267 is the coordinator's. This is the first step of 0.12.39's `actingd-config`
+revision 26; later slices of the release join it. **Nothing switches:** the two rows are not
+settable until HS-2 brings the switch, and no instance's backends change.
+
+**What.** (1) The per-instance rows `instance.<instance id>.touch_backend` and
+`instance.<instance id>.capture_backend`, the `instances[]` entry's existing members, by the device
+layer's own names (actingd reports an alias the device layer reads, such as touch `adb`, as
+`adb_shell_input`); default `none` (a device instance's entry names both, a fixture's neither), not
+settable (read once at assembly), `ui_tier` `advanced`. (2) Their whole-instance check, in the
+per-instance section's check at start and after every instruction: a backend the instance's kind of
+device does not have (`backend_kind_unsupported`; the kinds' backends are the device layer's
+`allowed_on`, which the host fills into the check context, `backend_kind_rules`; a fixture, the
+instance whose file layer names neither backend, has none), and touch `nemu_ipc` beside another
+capture backend (`backend_pair_required`). (3) A `ConfigureSettings` that names a backend key names
+only the backend keys of that one instance, before any key is looked at
+(`backend_switch_not_alone`). (4) A start drops the restored backend values of an instance whose
+check they break, both of them and nothing else (`config_override_dropped`). (5) actingd: an
+emulator entry may name `nemu_app_index` whatever its backends (checked whenever named, used only by
+Nemu touch), Nemu touch no longer needs it in the file, and Nemu touch beside another capture
+backend is refused as `nemu_input_requires_paired_capture` (the registry's own code), which
+replaces the retired `nemu_paired_input_configuration_missing`.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| HS1-1 | `instance.<instance id>.touch_backend` (`adb_shell_input`, `maatouch`, `minitouch`, `nemu_ipc`), `instance.<instance id>.capture_backend` (`adb`, `droidcast_raw`, `nemu_ipc`, `scrcpy`) | configuration keys (§5 row; `config.parameters.instance` rows; no `actingd-config` step of their own: the members exist since revision 1) | HS-1 | actingd | `since` 0.12.39; default `none`; not settable until HS-2; `ui_tier` `advanced`, which fills the eight (coordinator's answer Q4); `hs1_backend_rows_in_manifest`, `hs1_backend_rows_read_only_until_hs2`, `hs1_ui_tier_backend_rows_advanced` |
+| HS1-2 | `config_value_problem` + `backend_kind_unsupported`, `backend_pair_required`, `backend_switch_not_alone` | vocabulary words | HS-1 | start, `check-config`, `ConfigureSettings` | on `config_value_invalid`, naming the key: the backend's key, the touch key, the first key that is not the instance's backend key; `hs1_handset_nemu_refused_kind`, `hs1_emulator_scrcpy_refused_kind`, `hs1_nemu_touch_without_nemu_capture_refused_pair`, `hs1_fixture_backend_instruction_refused`, `hs1_backend_change_not_alone_refused` |
+| HS1-3 | `CheckContext::backends`, `with_backends`, `BackendKindRules`, `DeviceBackends` (`actingcommand-runtime-config`); `backend_kind_rules` (`actingcommand-runtime-host`) | Runtime-internal interface (memory only) | HS-1 | the host, actingd | a context nobody fills in has no backend on any kind, so it refuses every backend in effect rather than pass one unchecked; a crate that pins `actingcommand-runtime-config` and checks a configuration with backend rows fills them in |
+| HS1-4 | restore: an instance's restored backend values that break its check with this start's file layer are dropped together | rule | HS-1 | the host | `hs1_restore_drops_pair_breaking_rows`; until HS-2 every such row is dropped anyway (not settable) |
+| HS1-5 | `nemu_app_index` on any emulator entry; Nemu touch without it | configuration file rule, **`actingd-config` [5, 26]** | HS-1 | the person | `hs1_nemu_touch_without_app_index_assembles`, `hs1_app_index_with_adb_touch_assembles`; a handset still names none (`device_config_invalid`); an index out of range is still `nemu_app_index_invalid` |
+| HS1-6 | `nemu_paired_input_configuration_missing` retired (`retired_in` 0.12.39, `replaced_by` `nemu_input_requires_paired_capture`) | outcome code | HS-1 | — | no longer emitted; the 0.12.38 release file keeps it |
+
+**Where it differs from the brief's letter.** (a) Until HS-3 a Nemu touch without
+`nemu_app_index` is refused when the registry is built, at check-config and at a start
+(`nemu_app_index_missing`, `provider.rs` `register_spec`), not when the paired session opens: the
+design gives the removal of that refusal to HS-3 (§4.1, §7), so HS-1 leaves `provider.rs` alone and
+only actingd's own entry rule is relaxed. Either way such a file is refused, named, until HS-3; nobody
+writes one before 0.12.39 ships whole. (b) `nemu_app_index_requires_paired_input` stays active:
+actingd no longer emits it, but the registry's own guard
+(`ExecutionBackendRegistration::with_nemu_app_index`) still does; actingd hands the index to the
+registration only beside the Nemu pair, so an index named beside another touch backend is checked
+and kept in the file until HS-2 and HS-3 carry it. (c) A fixture is told apart by its file layer
+(neither backend named), which actingd guarantees, so the host fills in only the two device kinds.
+(d) Through an instruction the `backend_pair_required` refusal carries no cause yet; HS-2, which
+first lets an instruction reach it, links `nemu_input_requires_paired_capture` there.
+
+**Tests** (gate row in `host.toml`, "HS-1"): the eleven of the work order. Adapted, as the
+requirement changes: `r4_t5_ui_tier_key_by_key_and_an_unlisted_key_is_hidden` (`r4_tests.rs`)
+pinned six advanced keys and fourteen rows; it now lists the two backend keys of each instance as
+advanced, eight advanced and sixteen rows. `component_interfaces.rs`' `V0120` says `actingd-config`
+[5, 26].
+
+**Interface.** `actingd-config` [5, 26] ([component-interfaces.md](component-interfaces.md)): a
+revision-25 file is still read; the one shape revision 26 adds is a file 0.12.38 refuses (above).
+`runtime-client`, `runtime-outcomes`, `ledger` and `package` do not change: no wire shape, no
+record shape, no new code.
+
+**What changes live.** Every device instance's `config.parameters.instance` gains its two rows
+(production: five instances, ten rows) and the settings' version changes once at the first start of
+0.12.39 (a console's token from before is refused and it reads the settings again). No instance's
+backends change and no file needs to change.
+
+**Rollback** (to 0.12.38). Nothing persisted: no instruction row of the two keys can exist, since
+neither is settable. A file that leaves `nemu_app_index` out beside Nemu touch, or names it beside
+another touch backend, is refused by 0.12.38 (`nemu_paired_input_configuration_missing`,
+`nemu_app_index_requires_paired_input`), so **remove such an index, or write Nemu touch with its
+index, first**; no production file names either today.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -6587,6 +6659,7 @@ when it takes effect.
 | per instance | `recognition_package` `{package}` (a location only, no digest; no default) | D2M §3.2 v1.4.2 | D2-S2 (built, §1.28) | D2-S2 |
 | per instance | `start_emulator` | ORD §3.5 item 17: default `none` (off unless the entry names it); discovery-bound instances only | S6a (built, §1.36) | S6c (built, §1.60; v0.12.0) |
 | per instance | `capture_backend` gains the value `scrcpy` (no new key) | explicit only, never part of `auto` or `auto-fastest`; refused on an emulator instance (`device_config_invalid`), and every instance is an emulator until RD-1b adds `device.kind` (R1 §5.1); the stream's parameters are device-layer defaults, not keys, until D1b's mechanism | #402 RD-3 | #402 RD-3, after RD-1b |
+| per instance | `touch_backend`, `capture_backend` (the entry's existing members as keys; §1.267) and `nemu_app_index` relaxed (**`actingd-config` revision 26**) | HS-M §2.1: default `none` (a device instance names both, a fixture neither); the device layer's names; the kind's backends, touch `nemu_ipc` only beside capture `nemu_ipc`; not settable until HS-2; `nemu_app_index` on any emulator entry, no longer needed by Nemu touch | #402 HS-1 | assembly (the switch: HS-2) |
 | top level | `lab_module_authoring`, `lab_module_debugging` | UIM §4.1 | U-2 | U-2 (reported only in v0.12.0) |
 | `scheduling.suspension.*` | `lift_check_min_interval_ms` | 60 000: the least time between two lift checks of the same package (M-PKG §3.4, D1) | PKG-S3 (built, §1.47) | PKG-S3 (v0.12.0); SR-3 |
 | `device_link.*` | `watch.restart_backoff_ms`, `watch.restart_limit`, `watch.restart_window_ms`, `settle_ms`, `offline_action`, `restore_retry_ms` | `[1000, 5000, 30000]`, 5 (1..=100), 600 000 (at least the first restart wait), 3 000 (0..=60 000), `wait` (`wait` / `kick_once`), `[5000, 15000, 60000]` (model-398 §4.6; both lists non-empty); every key settable | RD-2 (built, §1.52) | RD-2 (v0.12.0) |

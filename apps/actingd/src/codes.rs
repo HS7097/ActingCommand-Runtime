@@ -77,7 +77,6 @@ actingcommand_contract::outcome_codes! {
         /// daemon can start: a fixture, or an instance not bound by discovery (`alias`).
         StartEmulatorRequiresDiscoveryBinding => "start_emulator_requires_discovery_binding": error / none,
         NemuAppIndexInvalid => "nemu_app_index_invalid": error / none,
-        NemuPairedInputConfigurationMissing => "nemu_paired_input_configuration_missing": error / none,
         InstanceRegistrationInvalid => "instance_registration_invalid": error / none,
         FixtureDeviceFieldsForbidden => "fixture_device_fields_forbidden": error / none,
         FixtureBackendMissing => "fixture_backend_missing": error / none,

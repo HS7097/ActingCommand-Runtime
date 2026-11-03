@@ -86,6 +86,16 @@ pub static UI_TIERS: &[(KeyName, UiTier)] = &[
     (KeyName::Exact(host::PROCESS_IO_PRIORITY), UiTier::Advanced),
     (KeyName::Exact(lab_module::AUTHORING), UiTier::Advanced),
     (KeyName::Exact(lab_module::DEBUGGING), UiTier::Advanced),
+    // #402 HS-1 (HS-M §2.1, §6; coordinator's answer to Q4): each instance's two backends, which
+    // fill the eight; shown read-only until HS-2 makes them settable.
+    (
+        KeyName::PerInstance(instance::TOUCH_BACKEND),
+        UiTier::Advanced,
+    ),
+    (
+        KeyName::PerInstance(instance::CAPTURE_BACKEND),
+        UiTier::Advanced,
+    ),
 ];
 
 /// The console tier of `key`, as `config.parameters` names it (a per-instance key

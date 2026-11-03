@@ -435,7 +435,15 @@ The members of `report`:
     `instance.<instance_id>.recovery_ladder_profile` (string, `explicit`, settable) for an
     instance that names `recovery_ladder_profile`, the ladder profile it climbs by, and nothing
     for one that does not; a name no profile of the `recovery_ladder` section has fails assembly
-    with `recovery_ladder_config_invalid`. They form
+    with `recovery_ladder_config_invalid`. #402 HS-1 (since 0.12.39) adds, beside
+    `device_kind`, `instance.<instance_id>.touch_backend` and
+    `instance.<instance_id>.capture_backend` (string, `explicit`, not settable until HS-2) for
+    every device instance, by the device layer's own names (touch `adb` is reported as
+    `adb_shell_input`), and nothing for a fixture; the per-instance section's check refuses a
+    backend the instance's kind does not have (`backend_kind_unsupported`) and Nemu touch beside
+    another capture backend (`backend_pair_required`), each `config_value_invalid`, though an
+    entry that breaks either is refused earlier with its own code (see "Discovery-bound
+    instances" and "Devices"). They form
     the section `instance`, which with every other section counts against its own
     256-parameter bound ([runtime-config.md](runtime-config.md)). Workflow #387
     D1c adds, before the per-instance keys, the sections the mechanism resolves:
@@ -1047,10 +1055,17 @@ Checked here, without discovery:
   (`touch_backend_invalid`, `capture_backend_invalid`,
   `touch_backend_must_be_explicit`, `capture_backend_must_be_explicit`) and
   timeouts (`timeout_invalid`);
-- the `nemu_app_index` pairing: allowed only with `touch_backend` and
-  `capture_backend` both `nemu_ipc`, which require it
-  (`nemu_app_index_requires_paired_input`,
-  `nemu_paired_input_configuration_missing`, `nemu_app_index_invalid`);
+- the Nemu pair: `touch_backend` `nemu_ipc` only beside `capture_backend`
+  `nemu_ipc` (`nemu_input_requires_paired_capture`); and `nemu_app_index`, which
+  (#402 HS-1, `actingd-config` revision 26, since 0.12.39) an emulator entry
+  may name whatever its backends, is checked whenever named
+  (`nemu_app_index_invalid`) and used only by Nemu touch, which no longer
+  needs it in the file. Until HS-3 (the same release) resolves a missing
+  index when the paired session opens, the registry this command registers
+  still refuses Nemu touch without one (`nemu_app_index_missing`), so nobody
+  writes such a file before 0.12.39 ships whole. Before 0.12.39 these were
+  `nemu_paired_input_configuration_missing` (retired) and
+  `nemu_app_index_requires_paired_input`;
 - alias and application identity as the execution registry accepts them
   (`instance_registration_invalid`), and duplicate aliases or instance ids
   (`duplicate_instance_alias` / `duplicate_instance_id`);

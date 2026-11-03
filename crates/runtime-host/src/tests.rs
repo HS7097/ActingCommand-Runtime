@@ -127,6 +127,9 @@ mod gate_act1;
 // LOAD-3 (Workflow #407, register §1.260): a run's loading page rows under
 // `execution.loading.mode` `on`.
 mod gate_load3;
+// #402 HS-1 (register §1.267): the backends each kind of device has, as the host fills them into
+// the configuration's check.
+mod gate_hs1;
 // #407 PF-2 (0.12.37), register §1.252: `RecognitionStarted`'s two commits are observed stage by
 // stage.
 mod gate_407_pf2;

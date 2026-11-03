@@ -22,6 +22,7 @@ use crate::display_safe_area::DisplaySafeAreaConfig;
 use crate::execution::{CaptureCadenceConfig, LoadingModeConfig};
 use crate::host::HostProcessConfig;
 use crate::idle::IdleConfig;
+use crate::instance::BackendKindRules;
 use crate::ledger_observer::LedgerObserverConfig;
 use crate::recovery_ladder::LadderConfig;
 use crate::scheduling::{
@@ -30,7 +31,9 @@ use crate::scheduling::{
 };
 use crate::startup_discovery::StartupDiscoveryConfig;
 use crate::store_foreground::StoreForegroundConfig;
-use crate::table::{DefaultSource, INSTANCE_SECTION, KeyName, KeyRange, KeyRow, find_row, rows};
+use crate::table::{
+    DefaultSource, INSTANCE_SECTION, KeyName, KeyRange, KeyRow, find_row, instance_key, rows,
+};
 use crate::touch::TouchConfig;
 use crate::value::{canonical_json, parse_value, scalar_json};
 use crate::{
@@ -92,6 +95,10 @@ pub struct CheckContext {
     /// Workflow #387 D1c (D1b deviation 14): the device layer's bounds the `recovery_ladder`
     /// check reads (§4.2).
     pub device: DeviceBounds,
+    /// #402 HS-1 (HS-M §2.1): the backends each kind of device has, from the device layer's own
+    /// rule, which the whole-instance backend check reads; none until the caller fills them in
+    /// ([`Self::with_backends`]), so an unfilled context refuses every backend in effect.
+    pub backends: BackendKindRules,
 }
 
 impl CheckContext {
@@ -99,7 +106,13 @@ impl CheckContext {
         Self {
             maximum_client_heartbeat_interval_ms,
             device,
+            backends: BackendKindRules::NONE,
         }
+    }
+
+    /// #402 HS-1: the context with the backends each kind of device has.
+    pub const fn with_backends(self, backends: BackendKindRules) -> Self {
+        Self { backends, ..self }
     }
 }
 
@@ -795,13 +808,17 @@ impl EffectiveConfig {
     /// whether or not the file writes it (over `base_json` `null` when it does not); clearing it
     /// then leaves the key unset, and its receipt entry is `null` (text) from `default`. Workflow
     /// #429 R-2: `performance.pacing.mode` `full` is `config_value_invalid` (`out_of_range`), a
-    /// file-only choice.
+    /// file-only choice. #402 HS-1: before any key is looked at, a request that names a backend
+    /// key names only the backend keys of one instance (`config_value_invalid`,
+    /// `backend_switch_not_alone`), and a changed instance's backends pass the whole-instance
+    /// backend check with the rest of the per-instance section.
     pub fn apply(
         &self,
         changes: &[ConfigSettingChange],
         stamp: &InstructionStamp,
         context: &CheckContext,
     ) -> Result<AppliedSettings, ConfigFailure> {
+        instance::check_backend_change(changes)?;
         let mut next = self.clone();
         let mut seen = BTreeSet::new();
         let mut sections = BTreeSet::new();
@@ -995,8 +1012,26 @@ impl EffectiveConfig {
             instance::check_instance(instance, self.instance_index(instance), |key| {
                 self.value(key).cloned()
             })?;
+            // #402 HS-1: the instance's backends, by its kind of device.
+            instance::check_backends(
+                instance,
+                |key| self.value(key).cloned(),
+                self.file_names_backends(instance),
+                &context.backends,
+            )?;
         }
         Ok(())
+    }
+
+    /// #402 HS-1: whether the file layer names a backend of the instance whose registry id is
+    /// `instance_id` (a device instance's entry names both, a fixture's neither).
+    pub(crate) fn file_names_backends(&self, instance_id: &str) -> bool {
+        [instance::TOUCH_BACKEND, instance::CAPTURE_BACKEND]
+            .iter()
+            .any(|member| {
+                self.setting(&instance_key(instance_id, member))
+                    .is_some_and(|setting| setting.file_value.is_some())
+            })
     }
 
     /// The `host.config_overrides` rows of the instruction values in effect, in manifest order
@@ -1175,6 +1210,42 @@ impl EffectiveConfig {
                 stamp: recorded.stamp,
             });
             restored_sections.insert(config_parameter_section(&recorded.config_key).to_owned());
+        }
+        // #402 HS-1 (HS-M §3.8): an instance whose restored backends break its whole-instance
+        // backend check with this start's file layer (its kind, the Nemu pair) drops both of them
+        // (`config_override_dropped`) and nothing else; the section check below then sees the
+        // instance's file-layer backends.
+        let restored_backends = self
+            .settings
+            .iter()
+            .filter(|setting| {
+                setting.instruction.is_some() && instance::is_backend_row(setting.row)
+            })
+            .filter_map(|setting| setting.instance.clone())
+            .collect::<BTreeSet<_>>();
+        for instance_id in restored_backends {
+            if instance::check_backends(
+                &instance_id,
+                |key| self.value(key).cloned(),
+                self.file_names_backends(&instance_id),
+                &context.backends,
+            )
+            .is_ok()
+            {
+                continue;
+            }
+            for member in [instance::TOUCH_BACKEND, instance::CAPTURE_BACKEND] {
+                let key = instance_key(&instance_id, member);
+                if let Some(setting) = self.settings.iter_mut().find(|setting| setting.key == key)
+                    && setting.instruction.take().is_some()
+                {
+                    notes.retain(|note| note.config_key != key);
+                    notes.push(RestoreNote {
+                        note: ConfigCode::ConfigOverrideDropped,
+                        config_key: key,
+                    });
+                }
+            }
         }
         for section in restored_sections {
             if self

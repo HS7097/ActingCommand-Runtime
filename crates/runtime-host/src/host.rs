@@ -253,6 +253,8 @@ mod routine_summary;
 // evaluation's task states.
 mod run_duration;
 mod runtime_config;
+// #402 HS-1: the backends each kind of device has, which the configuration's check reads.
+pub use runtime_config::backend_kind_rules;
 mod runtime_facts;
 mod saved_artifact_ocr;
 use material_read::MaterialReadContext;

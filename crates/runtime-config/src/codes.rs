@@ -100,6 +100,14 @@ actingcommand_contract::outcome_vocabulary! {
         /// out its minute or offset or names one out of range, or whose day cap is not 1; or a
         /// rule of another kind that names a minute or an offset.
         DailySummaryShape => "daily_summary_shape",
+        /// HS-1 (#402 HS-M §2.1): a touch or capture backend the instance's kind of device does
+        /// not have; a fixture has none.
+        BackendKindUnsupported => "backend_kind_unsupported",
+        /// HS-1: touch `nemu_ipc` beside a capture backend other than `nemu_ipc`.
+        BackendPairRequired => "backend_pair_required",
+        /// HS-1: a request that names a backend key names another key too, or the backend keys
+        /// of two instances.
+        BackendSwitchNotAlone => "backend_switch_not_alone",
         /// A note, never a refusal: the channel registry is missing or cannot be read.
         RegistryUnreadable => "registry_unreadable",
         /// A note, never a refusal: a rule's `to` that the channel registry does not list.

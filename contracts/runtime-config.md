@@ -38,9 +38,12 @@ arrive with their slices (D1c `recovery_ladder` and `host_claims`, AO-1, P-c, SR
 - **Checks.** After the merge each section passes its whole-section check, at start (a start and
   `check-config` refuse the same way, with the failure's own code) and after every instruction.
   A check that needs a fact of another crate reads it from the check context the caller fills
-  in: the scheduler's `maximum_client_heartbeat_interval_ms` and (D1c) the device layer's own
+  in: the scheduler's `maximum_client_heartbeat_interval_ms`, (D1c) the device layer's own
   bounds of the application stop, the emulator Stop and the emulator Start
-  (`recovery_ladder_device_bounds`). A section's broken rule refuses a start or `check-config`
+  (`recovery_ladder_device_bounds`) and (#402 HS-1, since 0.12.39) the backends each kind of
+  device has, by the device layer's own rule (`backend_kind_rules`, `CheckContext::with_backends`;
+  a context nobody fills in has no backend on any kind, so it refuses every backend in effect
+  rather than pass one unchecked). A section's broken rule refuses a start or `check-config`
   with the section's own code; the same values sent by an instruction are refused as
   `config_value_invalid` with the same `config_key` and `config_value_problem`.
 
@@ -100,6 +103,16 @@ before the ledger opens; since 0.12.28). STORE-FG-2's row: the `store_foreground
 (list, default `file` `[]`, not settable: only the configuration file widens it; since 0.12.29).
 Workflow #432 AGT-1a's rows: the `agent_wake` section below (default `none` on every row: whole or
 absent; since 0.12.37).
+#402 HS-1's rows ([v012-register.md](v012-register.md) §1.267; since 0.12.39): the per-instance
+`touch_backend` (string `adb_shell_input`, `maatouch`, `minitouch` or `nemu_ipc`) and
+`capture_backend` (string `adb`, `droidcast_raw`, `nemu_ipc` or `scrcpy`), the `instances[]`
+entry's existing members by the device layer's own names (actingd reports an alias the device
+layer reads, such as touch `adb`, as `adb_shell_input`; `auto` and `auto-fastest` are no value of
+either, and a file that names one is refused as before, `touch_backend_must_be_explicit`,
+`capture_backend_must_be_explicit`); default `none` (a device instance's entry names both, a
+fixture's neither), so a fixture reports no row of either; not settable until HS-2 brings the
+switch (read once at assembly). Their whole-instance check is part of the per-instance section's
+(see "Backends" below).
 A manifest key the table does not have fails
 the start (`config_key_unknown`). The manifest lists the exact keys in row order
 (`recovery_ladder`, `host_claims`, `standard_packs`, `performance`, `scheduling`,
@@ -1320,6 +1333,26 @@ key is added.
 - The Runtime compares package ids for equality only; no store is named in code, defaults or
   tests. The operator adds the official store's package id once Alice confirmed it (question 95).
 
+## Backends (#402 HS-1)
+
+#402 HS-1 ([v012-register.md](v012-register.md) §1.267; design HS-M §2.1; since 0.12.39). Each
+device instance's `instance.<instance id>.touch_backend` and `.capture_backend` (Key table, above)
+pass a whole-instance check, part of the per-instance section's, at start and in `check-config`
+over the file layer and after every instruction over the values in effect:
+
+| Rule | Refusal (`config_value_invalid`, `config_value_problem`) | Key named |
+|---|---|---|
+| each backend is one the instance's kind of device has: an emulator (an entry without `device`, or `device.kind` `emulator`) has every touch backend and every capture backend but `scrcpy` (#402 step 2 decides it); a handset (`instance.<instance id>.device_kind` `handset`) has no `nemu_ipc` and no `droidcast_raw`; a fixture, the instance whose file layer names neither backend, has none | `backend_kind_unsupported` | the backend's key |
+| touch `nemu_ipc` is only beside capture `nemu_ipc` (the other way round is free: Nemu capture beside any touch backend is today's production) | `backend_pair_required` | the touch key |
+
+The kinds' backends are the device layer's (`TouchBackendChoice::allowed_on`,
+`CaptureBackendChoice::allowed_on`, the rule actingd's device check applies to the file,
+[device-binding.md](device-binding.md)); the host fills them into the check context. actingd
+refuses a file that breaks either rule earlier, with its own codes (`device_config_invalid`,
+`backend_kind_unsupported`; `nemu_input_requires_paired_capture`), so at start the check is a second
+line, and the first one an instruction meets from HS-2 on. Until HS-2 neither key is settable, so
+no instruction reaches it (`config_key_not_settable`).
+
 ## Facts
 
 | Fact (scope `runtime`) | Rows | Recorded |
@@ -1347,9 +1380,10 @@ All changes or none:
 
 | Check | Refusal (Denied) |
 |---|---|
+| (#402 HS-1, since 0.12.39; first, before any key is looked at) a request that names a backend key (`instance.<instance id>.touch_backend` or `.capture_backend`) names only the backend keys of that one instance, one or both, so that all of it or none of it is one switch of one device | `config_value_invalid` (`backend_switch_not_alone`), naming the first key that is not one of them: another key, or another instance's backend key |
 | the key is in the key table (a per-instance key of a configured instance); a key whose default is `none` counts whether or not the file writes it, once its instance (a per-instance key) or its section (an exact key) is in the configuration (Workflow #429 R-1, since 0.12.31) | `config_key_unknown` |
 | the key is settable | `config_key_not_settable` |
-| the value has the key's type and range, and is one an instruction may set (not `performance.pacing.mode` `full`, Workflow #429 R-2, since 0.12.31: `out_of_range`); no key is named twice; the changed sections pass their whole-section check | `config_value_invalid` (`config_value_problem`: `wrong_type`, `out_of_range`, `repeated_key`, `section_check`; `range_min`, `range_max` for a bounded key) |
+| the value has the key's type and range, and is one an instruction may set (not `performance.pacing.mode` `full`, Workflow #429 R-2, since 0.12.31: `out_of_range`); no key is named twice; the changed sections pass their whole-section check (#402 HS-1: an instance's backends, "Backends" above) | `config_value_invalid` (`config_value_problem`: `wrong_type`, `out_of_range`, `repeated_key`, `section_check`, `backend_kind_unsupported`, `backend_pair_required`; `range_min`, `range_max` for a bounded key) |
 
 Records: `cli.command` (or the counter's own) and `command.received`; on a refusal
 `command.rejected` carrying the refusal as its outcome, and nothing else; otherwise the whole new
@@ -1420,7 +1454,8 @@ today: the per-instance `scheduling.blackout` and `recovery_ladder_profile`,
 `scheduling.fact_refresh.overdue_ms` and, since 0.12.31 (Workflow #429 R-2),
 `performance.pacing.max_concurrent_runs`; the other keys with no default
 (`standard_packs.root`, the per-instance `device_kind`, `recognition_package` and
-`start_emulator`) are read once at assembly and stay `config_key_not_settable`.
+`start_emulator`, and since 0.12.39 until HS-2 the per-instance `touch_backend` and
+`capture_backend`) are read once at assembly and stay `config_key_not_settable`.
 
 ## Restore at start (M387 §12 question 3: the later change wins)
 
@@ -1471,6 +1506,13 @@ kept anywhere (no old-version compatibility, Alice 10-11). The version of the se
 a start differs from the one before it, so a console's token from before is refused and the
 console reads the settings again.
 
+#402 HS-1 (design HS-M §3.8; since 0.12.39). Before that check, an instance whose restored
+`touch_backend` or `capture_backend` breaks its backend check ("Backends" above) with this start's
+file layer (its kind, the Nemu pair) drops both of its restored backend values and nothing else
+(`config_override_dropped`), so its file's backends are in effect; the rest of the per-instance
+section is then checked as below. Until HS-2 every row of either key is dropped anyway, as one of
+a key that is not settable.
+
 The restored values then pass the whole-section check of their sections with this start's file
 layer; a section that fails it drops every value restored into it (`config_override_dropped`).
 Each note is a `runtime.failed` record whose outcome is the code with `config_key`, its severity
@@ -1503,6 +1545,11 @@ most eight keys (`MAX_ADVANCED_KEYS`).
 | `host.process_io_priority` | advanced | no (applied before the ledger opens) | the file changes it at the next start |
 | `lab_module_authoring` | advanced | no | shown read-only; `actingctl install` changes it |
 | `lab_module_debugging` | advanced | no | shown read-only; `actingctl install` changes it |
+| `instance.<instance id>.touch_backend` | advanced | no (read once at assembly until HS-2 makes it settable) | the instance's touch backend (#402 HS-1, since 0.12.39) |
+| `instance.<instance id>.capture_backend` | advanced | no (read once at assembly until HS-2 makes it settable) | the instance's capture backend (#402 HS-1, since 0.12.39) |
+
+With the two backend rows (#402 HS-1, coordinator's answer Q4) `advanced` holds its eight keys; a
+later key of that tier needs the limit raised first.
 
 Not in the table, because none is a key of the key table: the diagnostics export (a command),
 the vision device (the configuration file's `vision` section) and an instance's

@@ -38,6 +38,9 @@
 //! - Workflow #429 R-4 (since 0.12.36): the settings' version ([`EffectiveConfig::version`]), the
 //!   token `ConfigureSettings.expected_version` compares, and the console's three tiers of the
 //!   keys ([`ui_tier()`]).
+//! - #402 HS-1 (since 0.12.39): each instance's `touch_backend` and `capture_backend` rows, read
+//!   only until HS-2, and their whole-instance check, whose backends of each kind of device the
+//!   caller fills in ([`CheckContext::with_backends`], [`BackendKindRules`]).
 //!
 //! actingd reads the files and hands the assembled manifest to the host; the host applies
 //! instructions through this crate. It depends on the contract only (§5.1).
@@ -114,8 +117,9 @@ pub use host::{HostFile, HostProcessConfig, ProcessPriorityLevel};
 pub use host_claims::{HostClaimsFile, RENEWAL_SLACK_MS, RUN_END_GRACE_MS};
 pub use idle::{IdleAction, IdleConfig, IdleFile};
 pub use instance::{
-    DEVICE_KIND, DEVICE_KIND_TOKENS, RECOGNITION_PACKAGE, RECOVERY_LADDER_PROFILE, START_EMULATOR,
-    STUCK_RECOVERY, STUCK_RECOVERY_COOLDOWN_SECS,
+    BackendKindRules, CAPTURE_BACKEND, CAPTURE_BACKEND_TOKENS, DEVICE_KIND, DEVICE_KIND_TOKENS,
+    DeviceBackends, RECOGNITION_PACKAGE, RECOVERY_LADDER_PROFILE, START_EMULATOR, STUCK_RECOVERY,
+    STUCK_RECOVERY_COOLDOWN_SECS, TOUCH_BACKEND, TOUCH_BACKEND_TOKENS,
 };
 pub use ledger_observer::{CaptureTiers, LedgerObserverConfig, LedgerObserverFile};
 pub use performance::PerformanceFile;
@@ -244,3 +248,7 @@ mod gate_agt_1a;
 // Workflow #432 AGT-2b: the shape of a daily summary rule.
 #[cfg(test)]
 mod gate_agt_2b;
+
+// #402 HS-1 (register §1.267): the two backend rows and the whole-instance backend check.
+#[cfg(test)]
+mod gate_hs1;
