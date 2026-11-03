@@ -97,7 +97,7 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 
 ![一次运行时请求的完整生命周期](docs/assets/readme/request-lifecycle.zh.png)
 
-1. **组装**（`runtime-client`）：调用方从 79 个类型化 `RuntimeOperation` 变体中选一个（其中升级态与包加载 / 卸载四种、玩家工作台六种和玩家持有两种，共十二种回答 `not_implemented`），客户端生成 request_id 与 correlation_id，写入 actor、source 与提交时间，构成 `actingcommand.runtime.request.v4` 请求，可选的 `detail`（`codes` 或 `full`）表示客户端要回执结果的多少细节。
+1. **组装**（`runtime-client`）：调用方从 79 个类型化 `RuntimeOperation` 变体中选一个（其中升级态与包加载 / 卸载四种、玩家工作台六种里的五种和玩家持有两种，共十一种回答 `not_implemented`），客户端生成 request_id 与 correlation_id，写入 actor、source 与提交时间，构成 `actingcommand.runtime.request.v4` 请求，可选的 `detail`（`codes` 或 `full`）表示客户端要回执结果的多少细节。
 2. **发现**（`runtime-client`）：客户端读取 `<state_root>/runtime-info.json`，校验其 host 必须是环回地址、pid/port/启动时间非零，连上 TCP 后先发 Health；若 owner epoch 与发现时不一致，会话以 `runtime_owner_epoch_changed` 拒绝。随后客户端为这条连接绑定通道（`cli`、`mcp`、`ui` 或 `lab`）；Runtime 在每个请求上记下通道，但不按通道拒绝任何请求。
 3. **成帧**（`runtime-client`）：请求以 4 字节大端长度前缀加 JSON 发出，两端默认上限 1 MiB，并按操作类别装载回执读取期限。
 4. **受理**（`runtime-host`）：接受循环为每个连接分配递增的 ConnectionId，并在独立命名线程上服务；连接被 catch_unwind 包裹，退出时按 Disconnect 或 HostShutdown 释放该连接的租约。
@@ -234,11 +234,11 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 
 **稳定入口（v0.12.18）。** 单一位置安装下，所有客户端（Claude Code、Codex、Antigravity、DSH）不再直接启动 `actingctl mcp-serve`，而是启动 `<root>\mcp-entry\g1\actingcommand-mcp-entry.exe --root <root> --client <名字> -- mcp-serve --tier <档位>`。入口把 JSON-RPC 转给一个 `<root>\runtime\actingctl.exe` 子进程，`--` 之后的参数原样传过去；更新之后，它只在两次调用之间、只对核验完整的安装（`actingctl mcp-entry plan`）切到新的子进程，重放客户端的握手，并发出变更通知（旧协议发 `notifications/tools/list_changed`，2026-07-28 协议在 `subscriptions/listen` 流上发同一通知）。旧子进程还持有未读结果的任务或 Lab 句柄时，切换会一直等；子进程在请求进行中退出时，该请求得到 `mcp_entry_outcome_unknown`（用 `ac_get_run` 或 `ac_overview` 查看），绝不重发。客户端第一次改用入口需要重启一次，之后更新不再需要重启。Claude Code 会自己重新拉工具表；Codex 重新加载该服务，Antigravity 在 MCP 管理器里点 Refresh，DSH 通过插件生命周期重新加载、工具白名单保持不变。`actingctl mcp-config --client claude|codex|antigravity|dsh --entry --root <root> --tier <档位>` 打印各客户端的配置片段；`actingctl mcp-entry list --root <root>` 显示每个入口的状态（`<root>\mcp-entry\state\entry-<pid>.json`）。详见 [contracts/install-cli.md](contracts/install-cli.md) 的 “The MCP entry”。
 
-**档位。** `observer` 总是开、也是默认；`operator` 与 `author` 用 `--tier` 打开。`tools/list` 只列出已开档位的工具，未开档位的工具答 `tier_not_enabled`。下表列的是 v0.12.31 的 40 个工具；标 † 的 18 个是 0.12 系列新增的。工具错误是 `{class, outcome}`，`mcp-serve --detail codes|full` 决定每个 outcome 带多少细节。
+**档位。** `observer` 总是开、也是默认；`operator` 与 `author` 用 `--tier` 打开。`tools/list` 只列出已开档位的工具，未开档位的工具答 `tier_not_enabled`。下表列的是 v0.12.38 的 41 个工具；标 † 的 19 个是 0.12 系列新增的。工具错误是 `{class, outcome}`，`mcp-serve --detail codes|full` 决定每个 outcome 带多少细节。
 
 | 档位 | 工具 |
 | --- | --- |
-| observer（读取、Runtime 运行中可改的设置、性能预设、手机设备绑定、本地能力缺口记录与实例的补救选择，24 个） | `ac_overview`、`ac_events`、`ac_material`、`ac_observe`†、`ac_get_run`、`ac_diagnose`、`ac_runs`†、`ac_run_evidence`†、`ac_resources_list`、`ac_targets_get`、`ac_config_set`†、`ac_perf_preset`†、`ac_packs`†、`ac_facts`†、`ac_outcome_code`†、`ac_devices`†、`ac_device_bind`†、`ac_device_unbind`†、`ac_capability_gap`†、`ac_remedy_set`†、`ac_remedy_get`†、`ac_schedule`†、`ac_pack_check`、`ac_catalog_check` |
+| observer（读取、Runtime 运行中可改的设置、性能预设、手机设备绑定、本地能力缺口记录、实例的补救选择与例行健康统计，25 个） | `ac_overview`、`ac_events`、`ac_material`、`ac_observe`†、`ac_get_run`、`ac_diagnose`、`ac_runs`†、`ac_run_evidence`†、`ac_resources_list`、`ac_targets_get`、`ac_config_set`†、`ac_perf_preset`†、`ac_packs`†、`ac_facts`†、`ac_outcome_code`†、`ac_devices`†、`ac_device_bind`†、`ac_device_unbind`†、`ac_capability_gap`†、`ac_remedy_set`†、`ac_remedy_get`†、`ac_schedule`†、`ac_routine_summary`†、`ac_pack_check`、`ac_catalog_check` |
 | operator（设备、应用、调度与证据读取确认，9 个） | `ac_run_pack`、`ac_stop_run`、`ac_pause`、`ac_resume`、`ac_emulator`、`ac_app`†、`ac_ladder_drill`†、`ac_evidence_confirm_read`†、`ac_targets_set` |
 | author（Lab 录制，7 个） | `ac_lab_observe`、`ac_lab_do`、`ac_record_start`、`ac_record_mark`、`ac_record_stop`、`ac_record_status`、`ac_binding_draft` |
 
@@ -384,7 +384,7 @@ actingcommand-vision-provider-check --models-root <vision root>\models --hash
 - 工件保留：保留类有 DebugFull / Adaptive / Light 三个取值，各工件种类默认 Adaptive。采集帧按类别到期：截图清理器跑在主机的性能监视循环上，至多每 10 分钟清扫一遍，每轮在 1 秒内至多处理 16 帧。除非配置把 `frame_retention_enabled` 设为 `false`，它就是开启的。近似重复帧在其运行结束后删除，资源读数帧在运行结束 7 天后、其他帧在运行结束 1 天后删除；每次错误前 30 秒的帧和 Lab 帧移入 `<state root>\kept\<日期>\<叶目录>\`，由人删除；清理不往账本写任何记录。读取方仍能按工件 ID 找到被移走的帧，被删的帧读作缺失，被占用的帧留到后面一遍再处理。`frame_retention_dedup_error`（默认开）和 `frame_retention_dedup_lab`（默认关）决定错误窗口内与 Lab 输出里的近似重复帧是否也删除。其他工件种类不会被自动回收。
 - UI 在独立仓：一个在线 / 离线安装向导，以及一个可启动守护进程的只读监控台。它只经运行时 API 或账本的官方读取面与运行时交互，不拥有运行时生命周期。
 - 资源：实例配置的 `resource_package` 会被校验（`check-config` 与启动时）并在运行时状态里显示，但调度仍运行 `actingd` 配置里钉住的包（`policy.procedure_manifest[]` 的 `scheduled_execution.package_path`）。资源自动更新尚未建成。
-- 代理面只建成了守护进程一侧：`runtime-host` 有 `AgentDispatcher`，把唤醒请求记进账本（`agent.wake_requested`，来自策略的时间线与漂移信号）并管理有界的代理会话，可由 `actingd` 配置的 `agent_dispatcher` 段启用；`actingctl agent-publish-facts` 是已有的 Agent/Adapter 来源入口。智能体经 MCP 服务接入；这条路不会启动外部会话，自主探索与完整的自维护回路尚未建成。另一条路（`contracts/agent-wake.md`，`agent_wake` 段）是 Runtime 自己给已登记的会话发一条短消息：配置了带规则的段之后，恢复阶梯用尽、实例隔离后等人处理、规则列出错误码的运行失败这三类记录会自动唤起规则指定的频道（同一实例的一阵记录合并成一条，另有冷却和按本机日计的每日上限）；人手动的 `actingctl agent-wake-test` 走同一条路。发送通道有 Claude Code（会话已停时可以先经 Claude Desktop 把它唤起）、Codex 和 DSH，其他客户端的频道会等待并在期满时报失败。生产配置里还没有这一段，所以目前什么也不会被唤起。
+- 代理面只建成了守护进程一侧：`runtime-host` 有 `AgentDispatcher`，把唤醒请求记进账本（`agent.wake_requested`，来自策略的时间线与漂移信号）并管理有界的代理会话，可由 `actingd` 配置的 `agent_dispatcher` 段启用；`actingctl agent-publish-facts` 是已有的 Agent/Adapter 来源入口。智能体经 MCP 服务接入；这条路不会启动外部会话，自主探索与完整的自维护回路尚未建成。另一条路（`contracts/agent-wake.md`，`agent_wake` 段）是 Runtime 自己给已登记的会话发一条短消息：配置了带规则的段之后，恢复阶梯用尽、实例隔离后等人处理、规则列出错误码的运行失败这三类记录会自动唤起规则指定的频道（同一实例的一阵记录合并成一条，另有冷却和按本机日计的每日上限），`daily_summary` 规则每天到点发一份汇总（正文带每个实例的 `RoutineSummary` 回答）；人手动的 `actingctl agent-wake-test` 走同一条路。发送通道有 Claude Code（会话已停时可以先经 Claude Desktop 把它唤起）、Codex 和 DSH，其他客户端的频道会等待并在期满时报失败。生产配置里还没有这一段，所以目前什么也不会被唤起。
 - 未建成：时段黑名单（`contracts/scheduling-blackout.md` 先于代码写成）；按通道或按 Lab 选项拒绝（两个选项 `lab_module_authoring` 与 `lab_module_debugging` 会被读取并报告，默认都是关，但不拒绝任何请求，所以 Tools 里仍带着 Lab）；升级态与包加载 / 卸载请求（回答 `not_implemented`）。
 
 ## 参与
