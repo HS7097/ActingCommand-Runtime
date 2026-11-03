@@ -137,6 +137,8 @@ use std::fmt;
 // Ledger revision 3 (Workflow #378 A3): records carry `outcome`, severity is the category.
 // Ledger revision 4 (Workflow #411 B train, contracts/v012-register.md §1.153): additive members
 // and two task record types; the schema string and SQLite format 2 stay.
+// Ledger revision 5 (Workflow 114-A, §1.236): `policy.not_run_changed`. Ledger revision 6 (#402
+// HS-2b, §1.274): the closed action `device.backend_switched` and its payload.
 pub const GLOBAL_EVENT_SCHEMA_VERSION: &str = "actingcommand.event.v3";
 
 /// The complete identity of an existing semantic run fact. This read-only value is neither

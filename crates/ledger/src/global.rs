@@ -120,8 +120,10 @@ use store::LedgerStore;
 
 /// #422 LN-TUNE: the default of `ledger_observer.writer_reply_timeout_ms`, for a ledger opened
 /// without a failure plan that names one (an offline reader, a test). The Runtime's writer takes
-/// the configured value through its plan.
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
+/// the configured value through its plan. #402 HS-2b (register §1.274): the contract's
+/// `LEDGER_WRITER_REPLY_WAIT_MS` (10 s), the term a client's receipt wait counts for one reply.
+const COMMAND_TIMEOUT: Duration =
+    Duration::from_millis(actingcommand_contract::LEDGER_WRITER_REPLY_WAIT_MS);
 /// #411 A51 (R4): how often a close with a bound looks at the writer and at the clock.
 const CLOSE_POLL: Duration = Duration::from_millis(10);
 #[cfg(test)]

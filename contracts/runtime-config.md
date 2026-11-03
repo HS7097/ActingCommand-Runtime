@@ -1431,10 +1431,28 @@ A refused `host.config_overrides` keeps its own refusal, `host_config_overrides_
 pair or a mix of keys stays `config_value_invalid` (Denied). Each refusal is the command's
 `command.rejected` and nothing else is recorded but the opens it made.
 
-**The wait.** A client waits `BACKEND_SWITCH_WAIT_MS` (the contract constant: the claim's 3 s plus
-two connection preparations of `CONNECTION_PREPARATION_WAIT_MS`, 63 s) plus its IO margin for the
-receipt of a `ConfigureSettings` that names a backend key (`runtime-client`'s receipt wait;
+**The wait.** A client waits `BACKEND_SWITCH_WAIT_MS` plus its IO margin for the receipt of a
+`ConfigureSettings` that names a backend key (`runtime-client`'s receipt wait;
 `actingcommand_contract::is_instance_backend_key`). Every other `ConfigureSettings` answers at once.
+The contract constant is the switch's worst case, the bounds of its steps in their order (#402
+HS-2b, [v012-register.md](v012-register.md) §1.274): the claim (`CONNECTION_PREPARATION_CLAIM_WAIT_MS`,
+3 s), the kept session's close (`PLAYER_HOLD_CLOSE_ALLOWANCE_MS`, 30 s: no source bounds a session
+close, and this is the contract's allowance for one), the candidate's preparation
+(`CONNECTION_PREPARATION_WAIT_MS`, 30 s), the commit's ledger write (its `host.config_overrides`
+record, one writer reply at the default of `ledger_observer.writer_reply_timeout_ms`,
+`LEDGER_WRITER_REPLY_WAIT_MS`, 10 s), the candidate's close (30 s) and the restore's preparation
+(30 s): 133 s. A commit whose record is written writes three more records and restores nothing,
+which the last two terms exceed.
+
+**A lost receipt.** A client whose wait ran out (`runtime_receipt_timeout`) holds an unconfirmed
+result, never "not applied": the switch may still be running, or may have committed after the
+client stopped waiting (`config_version` moves only at the commit). Before it sends the change
+again it re-reads the settings' `config_version` (`RuntimeFactSnapshot`) and the instance's
+`activity` in `Status` (a switch shows as a `selfcheck` with the request's `request_id` while it
+runs): a moved version with the requested backends in effect is the switch applied, and an
+activity of the request is a switch still running, read again later. A Runtime whose writer reply
+limit is configured above its default, or a close slower than its allowance, can outlast the wait;
+the rule covers it.
 
 **The restore at start** (design HS-M §3.8). After the instruction values are restored (an
 instance's restored backends that break its backend check with this start's file layer are dropped
@@ -1737,7 +1755,7 @@ the one new code and the words above.
 
   | Key | Row | Values and their names | Tier | Settable | Takes effect |
   |---|---|---|---|---|---|
-  | `instance.<instance id>.touch_backend` | 触控后端 | `adb_shell_input` 「ADB 输入」, `maatouch` 「MaaTouch」, `minitouch` 「minitouch」, `nemu_ipc` 「MuMu 原生（Nemu IPC）」 (an emulator only) | advanced | yes | at once on a free instance, after a wait of at most 3 s; the instance reconnects and self-checks once (up to about 65 s), shown as 切换中 (switching) |
+  | `instance.<instance id>.touch_backend` | 触控后端 | `adb_shell_input` 「ADB 输入」, `maatouch` 「MaaTouch」, `minitouch` 「minitouch」, `nemu_ipc` 「MuMu 原生（Nemu IPC）」 (an emulator only) | advanced | yes | at once on a free instance, after a wait of at most 3 s; the instance reconnects and self-checks once (the receipt within `BACKEND_SWITCH_WAIT_MS`, 133 s, plus the IO margin; #402 HS-2b), shown as 切换中 (switching) |
   | `instance.<instance id>.capture_backend` | 截图后端 | `adb` 「ADB 截图」, `droidcast_raw` 「DroidCast」 (an emulator only), `nemu_ipc` 「MuMu 原生（Nemu IPC）」 (an emulator only), `scrcpy` 「scrcpy」 (a handset only; an emulator's waits for #402 step 2) | advanced | yes | as above |
 
 - **The pair.** Touch `nemu_ipc` offers capture `nemu_ipc` only; choosing it with another capture
@@ -1765,6 +1783,10 @@ the one new code and the words above.
   | `host_config_overrides_persist_failed` | 没写进记录，已回退 |
   | `tier_not_enabled` | MCP only: the operator tier is not enabled |
 
+- **A wait that ran out** (#402 HS-2b). `runtime_receipt_timeout` on such a request is an
+  unconfirmed result, never a refusal and never "not applied": the group re-reads the settings'
+  `config_version` and the instance's `activity` before it offers to send the change again ("A
+  lost receipt" above).
 - **Tiers.** The tier is `ui_tier`'s (the table above).
 
 Not in the table, because none is a key of the key table: the diagnostics export (a command),
