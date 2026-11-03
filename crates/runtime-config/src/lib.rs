@@ -46,6 +46,10 @@
 //! - Workflow #429 R-3 (since 0.12.39): each instance's `start_emulator` settable, `true` only on
 //!   an instance bound by discovery, as the caller names them
 //!   ([`CheckContext::with_discovery_bound`]).
+//! - Workflow #429 BX-1 (since 0.12.39), a client surface: a blackout entry's parser and shape
+//!   ([`BlackoutListKey`], [`BlackoutEntry::parse`], [`BlackoutEntry::parse_list`],
+//!   [`BlackoutEntry::to_json`], [`BlackoutEntry::list_json`]), with which the console builds and
+//!   checks the entries it sends through `ConfigureSettings`.
 //!
 //! actingd reads the files and hands the assembled manifest to the host; the host applies
 //! instructions through this crate. It depends on the contract only (§5.1).
@@ -136,10 +140,10 @@ pub use recovery_ladder::{
 };
 pub use resolve::{file_value, member, render_parameters};
 pub use scheduling::{
-    BlackoutConfig, BlackoutEntry, BlackoutWindow, CostCommitConfig, EvaluationRetryConfig,
-    ExpectedRuntimeConfig, FactRefreshConfig, FeatureLockConfig, InstanceSchedulingFile,
-    PacingStage, PackAdmissionConfig, QuietHorizon, RandomDelay, RemedyChoiceRow, RemedyConfig,
-    RerunConfig, RerunExpiry, SchedulingConfig, SchedulingFile,
+    BlackoutConfig, BlackoutEntry, BlackoutListKey, BlackoutWindow, CostCommitConfig,
+    EvaluationRetryConfig, ExpectedRuntimeConfig, FactRefreshConfig, FeatureLockConfig,
+    InstanceSchedulingFile, PacingStage, PackAdmissionConfig, QuietHorizon, RandomDelay,
+    RemedyChoiceRow, RemedyConfig, RerunConfig, RerunExpiry, SchedulingConfig, SchedulingFile,
 };
 pub use standard_packs::{
     CACHED_GENERATIONS as STANDARD_PACKS_CACHED_GENERATIONS,
@@ -261,3 +265,7 @@ mod gate_hs1;
 // Workflow #429 R-3 (register §1.272): `start_emulator` settable, on a discovery-bound instance.
 #[cfg(test)]
 mod gate_r3;
+
+// Workflow #429 BX-1 (register §1.273): the blackout entry's parser and shape for clients.
+#[cfg(test)]
+mod gate_bx1;
