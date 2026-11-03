@@ -9,6 +9,112 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.38
+
+本版是 v0.12.37 之后合并的 5 个 PR：LOAD-4、AGT-2b、LOAD-4b、R-12、RA-1。先说部署：账本的声明不变（仍是 [3, 5]），部署不用带
+`--accept-ledger-one-way`，计划里也没有 `ledger_verify` 这一步；装上以后能退回 v0.12.37，条件见下面的退回。没有新键，默认值文件没改。
+运行上要知道的是这几处：
+
+- **加载页仍然默认关**（`execution.loading.mode` 默认 `off`）。设成 `on` 以后，固定步骤类任务（`linear_steps`）现在也像 0.12.37 起的页图任务那样
+  在加载画面上等（LOAD-4）：加载页优先于候选页，加载画面不算到达、不算中间页，也不会在上面补点；等待按每次输入一份的额度暂停，额度用完才
+  带加载值具名失败。`shadow` 只评估和记录。不论哪种模式，准入时多拒收两种写法：
+  - 声明了加载页、却哪里都没写上限（没有 `expect_after.loading.max_ms`、没有等待页、包里也没有加载页副本）：`contained_task_program_invalid`，
+    `program_problem` 为 `loading_max_missing`，`json_pointer` 为 `/operations/<i>/expect_after/loading`，页图和固定步骤都拒（LOAD-4）；
+  - 固定步骤里 `loading.add` 列的页或等待页，是这一步的等待要等的页：可选操作串里输入可能到达的可选页、串的跳过目标（`from`、目的页和中间页
+    LOAD-2 已经拒）：`contained_task_linear_invalid`，`reason=loading_page`，带 `operation=<id>`（LOAD-4b）。
+
+  按登记簿，现在没有包声明 `loading`，这两种拒收不影响装着的包。
+- **每日汇总**（AGT-2b）要配置里有 `agent_wake` 段，段里有一条 `daily_summary` 规则；生产配置没有这一段，所以什么也不发。打开唤起的顺序不变：
+  先把控制台升级到声明 `runtime-client` 上限 5 的版本，再加这一段并重启，再用 `actingctl agent-channel add` 登记频道。规则只写
+  `on.kinds: ["daily_summary"]`，不带 `codes`，写 `on.at_minute_of_day`（0 到 1439）和 `on.utc_offset_minutes`（−720 到 840），`daily_cap` 为 1；
+  别的写法以 `agent_wake_config_invalid`（`config_value_problem` 为 `daily_summary_shape`）拒绝。按规则自己的偏移算本地日，每天到那一分钟发一条
+  `今日汇总 <日期> 正文 <路径>`；那一刻 Runtime 没在跑，就在同一天启动后补一次，绝不补前一天；静默、hold 或功能关闭期间等结束再发，当天先结束
+  就没有，下一份在 `skipped` 里写明。
+- **`RoutineSummary` 现在有回答**（以前是 `not_implemented`，R-12）：按实例和任务数成功、按结果码分开的失败和打断（只有 `contained_task_cancelled`
+  算打断），按宿主本地钟的小时或自然日分桶，每个实例最多留 48 个小时桶、14 个日桶；只在内存里，不读也不写账本，重启以后从头算（新的
+  `owner_epoch`，覆盖起点是这次启动）。新命令 `actingctl routine-summary (--hour | --day) [--instance <alias|instance_id|ADB port>] [--since <revision>]`，
+  新 MCP 工具 `ac_routine_summary`（observer 档，MCP 工具从 40 个变成 41 个），成功码是新码 `request_routine_summary_completed`。
+- **读帧不再排在账本写线程后面**（RA-1）：取素材的两次账本查找改由账本的读者池在写线程最后发布的点上回答，不再等本轮写入，也不再挡住写入；
+  没有读者池或读者全部结束时退回写线程，和以前一样。答复和拒绝都不变，没有新的失败种类。
+
+配置：`actingd-config` 从 [5, 24] 改为 [5, 25]（AGT-2b，`agent_wake.rules` 里一条规则的 `on.at_minute_of_day`、`on.utc_offset_minutes` 两个成员，
+没有新键；本版其余几片都不动它）；`package` 仍是 [3, 6]（LOAD-4、LOAD-4b 只是对已收形状更严的拒收，没有新成员）；`runtime-client` 仍是 [3, 5]
+（R-12 是 R-0 已有请求的行为，形状没变）；`ledger` 仍是 [3, 5]（RA-1 不改任何落盘形状）；`install-selection` 仍是 [1, 1]，`install-control` 仍是
+[0, 1]，`runtime-outcomes` 仍是 [1, 1]。`component-interfaces.json` 和 `contracts/component-interfaces.md` 的 `actingd-config` 25 一行一致。
+
+- 没有新键，默认值文件和配置示例都没改，部署计划的默认值对比是空的。修订 25 读得了修订 5 到 24 的配置文件，只有一种例外：写了 `daily_summary`
+  规则却没写时间的文件（0.12.37 收下这种规则，但从不按它做事），本版以 `daily_summary_shape` 拒绝。生产配置没有 `agent_wake` 段，不受影响。
+- 结果码：新码 1 个（成功码 `request_routine_summary_completed`），没有新位置；已有词表加词 2 个（`config_value_problem` 的 `daily_summary_shape`、
+  `program_problem` 的 `loading_max_missing`）；`contained_task_linear_entry_unmatched`、`contained_task_linear_application_unconfirmed` 多可选值
+  `loading_page_id`、`loading_ms`、`loading_limit_ms`（`page_confirmation_failed` 从 0.12.37 起就有）。结果码目录从 3887 个码、1738 个位置变成
+  3888 个、1738 个；没有新定稿或退役的条目，所以本版的发布文件是空的。
+- 账本：`ledger` 不升，没有新记录形状。`RoutineSummary` 不读不写账本；每日汇总的行沿用 `host.agent_wake` 已有的行形状（`kind` 为 `daily_summary`，
+  没有 `instance_alias` 和 `code`），正文 `actingcommand.agent-wake-body.v1` 多一个成员 `summary`。取素材在写线程的提交统计里照旧记作
+  `ResolveArtifact`，不算读者池的页数。
+- 程序文件：workspace 成员、Runtime 包和 Tools 包的文件清单都和 v0.12.37 一样。
+
+升级时要知道的：
+
+- 不用 `--accept-ledger-one-way`（按安装工具的代码核过）：两边的 `ledger` 都是 [3, 5]，`previous_max_in_next`（5 在 [3, 5] 里）和 `one_way`
+  （R\*.max 5 不大于 Rp.max 5）都过；带上也不改判断。现行和目标的 `ledger` 相同，所以计划里没有 `ledger_verify`，apply 不读账本。
+- 安装命令的代码自 v0.12.37 没有改，v0.12.37 的安装工具判的边和本版一样。本版的 check-config 读现行配置照常通过（现行配置没有 `agent_wake` 段）；
+  包的边在单一位置根上只有 `pack_declaration_unknown` 警告。
+- 部署的自动回退和 `install undo` 这次可以用：账本不变，接口边都过，只要配置还没写进修订 25 的成员（刚部署完就是这样），回退门的配置一项也过。
+- 资源侧要留意：打算用 `loading.add` 的包，要么写 `loading.max_ms`，要么带等待页或加载页副本，加的页也不能是这一步要等的页，否则本版准入就拒。
+
+退回 v0.12.37（按安装工具的代码核过）：
+
+- 安装工具允许退回。`ledger` 两边都是 [3, 5]：`previous_max_in_next`（Rp.max 5 在 R\* [3, 5] 里）和 `one_way` 都过，不用 `--accept-ledger-one-way`。
+  `runtime-client` 两边都是 [3, 5]，`installer_meets_previous`、`installer_meets_next` 都过；`install-control`、`runtime-outcomes` 两边相同；`package`
+  两边都是 [3, 6]，`bundle_max_in_next` 在单一位置根上只有 `pack_declaration_unknown` 警告。部署的自动回退、`rollback plan|apply`、`install undo`
+  走的是同一组边和同一个回退门。
+- `actingd-config` 25 → 24：没有哪条边直接比两边的范围。`installer_knows_keys` 也挡不住：`agent_wake.rules` 是 v0.12.37 认得的键（一个列表），它不往
+  列表里面查。挡住退回的是配置的内容：回退门的配置一项让 v0.12.37 的 check-config 读现行配置，只要有一条规则写了 `on.at_minute_of_day` 或
+  `on.utc_offset_minutes`，它就拒绝（规则的 `on` 拒收不认识的成员：`agent_wake_config_invalid`，`config_key` 为 `agent_wake.rules`，`config_value_problem`
+  为 `wrong_type`），退回以 `rollback_gate_failed`（`rollback_gate_parts` 含 `config`，带 check-config 的拒绝）结束，什么都不改。**所以只有配置里有
+  `daily_summary` 规则时，退回之前先从配置文件里删掉这条规则**；只删这两个成员 v0.12.37 也收，但再升回本版时没写时间的 `daily_summary` 规则会被
+  拒，要补回。没有 `agent_wake` 段、或段里没有这种规则的配置不用改。在线改过的 `agent_wake.rules`（`host.config_overrides` 的行）不用管：v0.12.37
+  启动时这一段恢复的在线值整段丢掉（`config_override_dropped`），不拒绝。
+- `package` 不挡：本版新拒收的两种写法 v0.12.37 照收（固定步骤不等加载页；没写上限的加载页在页图里额度为 0）。
+- 落盘的东西都不挡：账本没有新形状；`host.agent_wake` 里汇总的行是 v0.12.37 读得了的行形状，启动时照常恢复、计进总的每日上限；退回时还没送出的
+  汇总行 v0.12.37 照样送，消息里没有日期（正文完整）。`RoutineSummary` 的统计只在内存里，没有落盘。运行诊断里 LOAD-4 的行沿用原来的行形状。
+- 退回以后：`RoutineSummary` 又答 `not_implemented`，每日汇总不再生成；固定步骤不再等加载页；取素材回到写线程上。
+- 客户端和 Runtime 的配对（`runtime-client` 本版和 v0.12.37 都是 [3, 5]、v0.12.36 是 [3, 4]；`apps/actingctl` 自 v0.12.37 只加了 `routine-summary`
+  和 `ac_routine_summary`，Status 和 overview 的形状都没变）：
+  - v0.12.37 的安装工具装本版：照常，不带 `--accept-ledger-one-way`。它的声明 I 是 `runtime-client` [3, 5]，和 Rp [3, 5]、R\* [3, 5] 都有交集
+    （`installer_meets_previous`、`installer_meets_next`），`install-control` [0, 1] 相同，`runtime-outcomes` 1 在它的 [1, 1] 里，现行配置没有它
+    不认识的键（`installer_knows_keys`），本版的 check-config 收现行配置（`next_check_config`）；账本两条边、没有 `ledger_verify` 都和上面一样。
+    从本版的构建目录跑本版的安装工具，结果相同。
+  - 声明 [3, 5] 的客户端（v0.12.37 的 actingctl、MCP 和 actinglab；UI v0.12.5 将是）连本版：有没有 `agent_wake` 段都照常。线上形状和 v0.12.37 一样，
+    Status 的 `agent_wake` 也一样；`RoutineSummary` 的回答是 R-0 就有的形状，结果码在回执里是开放的字符串，新成功码也解得开（v0.12.37 的 actingctl
+    和 MCP 本来就不发这个请求）。配置文件写进修订 25 的规则成员以后，UI 自己读写配置文件时认不认得，要 UI 侧确认（单一位置根的计划还不算 UI 的边，
+    R-15c、R-15d 起才算）。
+  - 声明 [3, 4] 的客户端（v0.12.36 的 actingctl、MCP 和 actinglab；UI v0.12.4 声明 `actingd-config` [5, 23]、`ledger` [3, 5]、`runtime-client` [3, 4]、
+    `runtime-outcomes` [1, 1]）连本版：和连 v0.12.37 一样。
+    - 没有 `agent_wake` 段：照常，[3, 4] 和 [3, 5] 有交集，Status 不带 `agent_wake`，别的回答形状和请求都没变。
+    - 有 `agent_wake` 段（不论有没有 `daily_summary` 规则）：每次读 Status 都解不开（`RuntimeControlPlaneStatus` 拒收不认识的成员），报
+      `runtime_receipt_decode_failed`，状态和 overview 都读不了，别的请求照常。配对检查照样通过，挡不住，所以先升级控制台。
+  - 本版的 actingctl 和 MCP 连 v0.12.37 的 Runtime（部署切换的几秒里，或退回以后）：照常；只有 `routine-summary` 和 `ac_routine_summary` 拿到 Runtime
+    的 `not_implemented` 拒绝（actingctl 打印回执，退出 1）。
+
+运行上的变化：
+
+- 固定步骤的加载页（LOAD-4）：`on` 下入口、中间页、下一步的页、可选候选、重试判定的等待都认加载页，额度用完以 `contained_task_linear_entry_unmatched`、
+  `page_confirmation_failed` 或 `contained_task_linear_application_unconfirmed` 带加载值结束；`off`、`shadow` 的决定不变；没写上限的加载页准入时拒收。
+- 每日汇总（AGT-2b）：`daily_summary` 规则按自己的偏移每天到点发一份汇总，正文带各实例的 `RoutineSummary` 日页、当天各类唤起的计数、上一份和
+  中间空缺的日子；`actingd-config` [5, 25]。
+- 加载页不能是要等的页（LOAD-4b）：固定步骤的 `loading.add` 和等待页落在这一步的可选候选或跳过目标上时准入拒收；页图不变。
+- 例行健康统计（R-12）：`RoutineSummary` 从宿主内存回答，`actingctl routine-summary`、`ac_routine_summary`；不碰账本，重启清零。
+- 取素材走读者池（RA-1）：两次账本查找由读者池回答，不排在写入后面，也不挡写入；读者自己的失败不致命，账本本身的故障照旧致命。
+
+本版合并的 PR：
+
+- #1502 LOAD-4（#407）：固定步骤类任务在 `execution.loading.mode` `on` 下的加载页等待，复用 LOAD-3 的判定和每次输入一份的额度；准入拒收哪里都没写上限的加载页（`loading_max_missing`）；`contained_task_linear_entry_unmatched`、`contained_task_linear_application_unconfirmed` 多三个加载值。
+- #1503 AGT-2b（#432）：每日汇总，`daily_summary` 规则的 `on.at_minute_of_day`、`on.utc_offset_minutes`（`daily_summary_shape`），按规则的本地日到点、补发、静默后发，正文带每个实例的 `RoutineSummary`。`actingd-config` [5, 25]。
+- #1504 LOAD-4b（#407）：固定步骤的加载页和等待页不能是这一步等待要等的页（可选候选、跳过目标），沿用 `contained_task_linear_invalid`，`reason=loading_page`。
+- #1505 R-12（#429）：`RoutineSummary` 从宿主内存回答（成功、按码的失败、打断，小时和日桶，48 和 14 个上限，修订号和覆盖起点）；`actingctl routine-summary`、MCP `ac_routine_summary`；新成功码 `request_routine_summary_completed`。
+- #1506 RA-1（#422）：取素材的账本查找改由读者池在已发布的点上回答，写线程只在没有读者时兜底；`ledger` 不变。
+
 ## v0.12.37
 
 本版是 v0.12.36 之后合并的 10 个 PR，其中两个是各带五片的集成 PR：S4a-1、AGT-1a、STILL-1、OCR-SCALE-1，集成一（PF-1、ACT-1+2、AGT-1b、AGT-T1、PF-2），
