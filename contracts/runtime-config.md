@@ -83,9 +83,11 @@ resolved against the configuration file's directory; a location only, never a di
 `none`, not settable, read once at assembly; [resource-readings.md](resource-readings.md),
 "Recognition maintenance packages"), present only for an instance that names it. Workflow #369
 S6a's row: the per-instance `start_emulator` (boolean, from the entry's `start_emulator`, default
-`none`, so a file that does not name it leaves it off and reports no row; not settable, read once
-at assembly; allowed only on a discovery-bound instance, `start_emulator_requires_discovery_binding`,
-[actingd-check-config.md](actingd-check-config.md)); the daemon acts on it from S6c on. Workflow
+`none`, so a file that does not name it leaves it off and reports no row; read once at assembly
+until Workflow #429 R-3 makes it settable, since 0.12.39, [v012-register.md](v012-register.md)
+§1.272, "Starting an instance's emulator" below; allowed only on a discovery-bound instance,
+`start_emulator_requires_discovery_binding`, [actingd-check-config.md](actingd-check-config.md));
+the daemon acts on it from S6c on. Workflow
 #389 U-2's rows: the top-level `lab_module_authoring` and `lab_module_debugging` (boolean, default
 `file`, `false` in `actingd.defaults.json`, not settable, read once at assembly), the Lab's two
 options ([runtime-interface.md](runtime-interface.md), "Lab options"); a file names one
@@ -1450,6 +1452,57 @@ backend key (`tier_not_enabled` otherwise; every other change stays observer); t
 settings page ("The console's device backends group" below); the Lab's `session backend` (HS-L).
 There is one state per instance: no backend holds for a Lab session only.
 
+## Starting an instance's emulator (#429 R-3)
+
+Workflow #429 R-3 ([v012-register.md](v012-register.md) §1.272; board #429 row R-3, 「`start_emulator`
+在线修改」; Alice's ruling 117 A of 10-31; since 0.12.39). `instance.<instance id>.start_emulator`
+(boolean, Key table above) is settable while the Runtime runs: whether the Runtime starts the
+instance's stopped emulator by itself and starts it again when it stops. The console's rescue bar
+turns it on and off (UI-3e1-b, its automatic rules).
+
+**The whole-instance check.** `true` in effect is allowed only on an instance whose emulator the
+Runtime can start: a registered physical instance bound by discovery (`instance_index` or
+`instance_name`, pending or bound), as the host's registry holds it and fills it into the check
+context. Any other instance (a fixture, a handset, an instance bound by its port) is refused,
+`config_value_invalid` (`config_value_problem` `discovery_binding_required`, `config_key` the
+instance's key), at start over the file layer and after every instruction over the values in
+effect; `false`, and no value, pass on every instance. actingd refuses the same file value
+earlier with its own code (`start_emulator_requires_discovery_binding`,
+[actingd-check-config.md](actingd-check-config.md)), so at start the check is a second line, and
+the first one an instruction meets. The idle section's rule still holds: an instance whose
+`idle.action` in effect is `stop_emulator` needs `start_emulator` `true` (`section_check`), so a
+request that turns it off there changes the action too.
+
+**What reads it.** Every automatic emulator start reads the value in effect at its next decision,
+never a copy taken at the start ([emulator-control.md](emulator-control.md)):
+
+| Consumer | Decision |
+|---|---|
+| the configured start at daemon start | claims the instances it is on for at that start (the file's value or a restored instruction's) |
+| the emulator watch's restart (R3) | requests a restart, at each poll, only for an instance it is on for; observes every other one (R4) |
+| IDLE-1's wake after `stop_emulator` | starts the emulator only while it is on; off, the wake starts and queues nothing, one `emulator_autostart_skipped` (`skip_reason` `start_emulator_off`, `idle_action` `stop_emulator`) says so, and the woken instance is active again once it is free, its emulator left as it is |
+| each of their claims | reads it once more on its key, after the pause, up to just before the Start: off, it releases the key and starts nothing (`emulator_autostart_skipped`, `skip_reason` `start_emulator_off`; the watch's request leaves its bound, an idle wake's is spent) |
+
+A change takes effect at the consumer's next decision: setting or clearing the key starts and
+stops nothing by itself, and a running emulator is never stopped because the key turned off.
+The emulator watch's recognition of a running emulator (EMU-BIND) reads no `start_emulator`, as
+before. An instance turned on by an instruction takes its turn after those the file turned on
+(the configured ones in configuration order, then the others by alias).
+
+**Pauses (Alice's ruling 117 A).** While the instance's own scheduling pause holds it, in any
+stage, no automatic start launches its emulator, whatever the key says, and the pause is asked
+again on every claim's key just before the Start (PAUSE-AUTO, `automatic_start_hold`, the one
+place R-7b extends with the player hold; [emulator-control.md](emulator-control.md), "Pauses
+(PAUSE-AUTO)"). An explicit emulator control (a person, an agent, Lab) asks neither.
+
+**Restore.** As every instance key ("Restore at start" below), re-checked against this start's
+instances.
+
+**Channels.** `actingctl config set instance.<id>.start_emulator=true|false` and `config clear`;
+MCP `ac_config_set` (observer tier, as every key but the backends); the console. Tier `daily`
+("Console tiers" below). No `actingd-config` step: the entry's member is unchanged, and an
+instruction row is no file shape.
+
 ## Facts
 
 | Fact (scope `runtime`) | Rows | Recorded |
@@ -1480,7 +1533,7 @@ All changes or none:
 | (#402 HS-1, since 0.12.39; first, before any key is looked at) a request that names a backend key (`instance.<instance id>.touch_backend` or `.capture_backend`) names only the backend keys of that one instance, one or both, so that all of it or none of it is one switch of one device | `config_value_invalid` (`backend_switch_not_alone`), naming the first key that is not one of them: another key, or another instance's backend key |
 | the key is in the key table (a per-instance key of a configured instance); a key whose default is `none` counts whether or not the file writes it, once its instance (a per-instance key) or its section (an exact key) is in the configuration (Workflow #429 R-1, since 0.12.31) | `config_key_unknown` |
 | the key is settable | `config_key_not_settable` |
-| the value has the key's type and range, and is one an instruction may set (not `performance.pacing.mode` `full`, Workflow #429 R-2, since 0.12.31: `out_of_range`); no key is named twice; the changed sections pass their whole-section check (#402 HS-1: an instance's backends, "Backends" above) | `config_value_invalid` (`config_value_problem`: `wrong_type`, `out_of_range`, `repeated_key`, `section_check`, `backend_kind_unsupported`, `backend_pair_required`; `range_min`, `range_max` for a bounded key) |
+| the value has the key's type and range, and is one an instruction may set (not `performance.pacing.mode` `full`, Workflow #429 R-2, since 0.12.31: `out_of_range`); no key is named twice; the changed sections pass their whole-section check (#402 HS-1: an instance's backends, "Backends" above; Workflow #429 R-3, since 0.12.39: an instance's `start_emulator`, "Starting an instance's emulator" above) | `config_value_invalid` (`config_value_problem`: `wrong_type`, `out_of_range`, `repeated_key`, `section_check`, `backend_kind_unsupported`, `backend_pair_required`, `discovery_binding_required`; `range_min`, `range_max` for a bounded key) |
 
 #402 HS-2 (since 0.12.39): a request that passes these checks and changes an instance's backends
 in effect switches the device first and commits only once the new backends opened, with
@@ -1554,11 +1607,13 @@ value: the row goes, and the receipt reports the key as `{key, value: "null" (st
 default}`, the base it was set over, since nothing is in effect. Settable keys with no default
 today: the per-instance `scheduling.blackout` and `recovery_ladder_profile`,
 `scheduling.fact_refresh.overdue_ms`, since 0.12.31 (Workflow #429 R-2),
-`performance.pacing.max_concurrent_runs` and, since 0.12.39 (#402 HS-2), the per-instance
+`performance.pacing.max_concurrent_runs`, since 0.12.39 (#402 HS-2) the per-instance
 `touch_backend` and `capture_backend` (a device instance's file always writes both; a fixture's
-have no value and its backend check refuses any); the other keys with no default
-(`standard_packs.root`, the per-instance `device_kind`, `recognition_package` and
-`start_emulator`) are read once at assembly and stay `config_key_not_settable`.
+have no value and its backend check refuses any) and, since 0.12.39 (Workflow #429 R-3), the
+per-instance `start_emulator` (on a discovery-bound instance only, "Starting an instance's
+emulator" above); the other keys with no default (`standard_packs.root`, the per-instance
+`device_kind` and `recognition_package`) are read once at assembly and stay
+`config_key_not_settable`.
 
 ## Restore at start (M387 §12 question 3: the later change wins)
 
@@ -1619,6 +1674,17 @@ prepares any instance ("Switching an instance's backends", "The restore at start
 rollback to 0.12.38 drops every row of either key (`config_override_dropped`: a key that release
 does not have), and the instance comes back with its file's backends.
 
+Workflow #429 R-3 ([v012-register.md](v012-register.md) §1.272; since 0.12.39). An instance's
+restored `start_emulator` is restored as the other instance keys are (a value set over a file
+that does not write the key is kept while the file still does not, and superseded once it does;
+one over the file's value is kept while the file's value is unchanged). Before the section check,
+a restored `true` of an instance this start's registry does not hold as bound by discovery (its
+entry is a fixture's, a handset's or bound by its port now) no longer fits: that value alone is
+dropped (`config_override_dropped`, listed in `StartReport`'s `instructions_dropped`), the rest
+of the instance's values are kept, and its file's value is in effect. A rollback to 0.12.38 drops
+every row of the key (`config_override_dropped`: a key that release may not set), and each
+instance's file value is in effect again.
+
 The restored values then pass the whole-section check of their sections with this start's file
 layer; a section that fails it drops every value restored into it (`config_override_dropped`).
 Each note is a `runtime.failed` record whose outcome is the code with `config_key`, its severity
@@ -1643,7 +1709,7 @@ most eight keys (`MAX_ADVANCED_KEYS`).
 | `scheduling.parallel.enabled` | daily | yes | through the preset |
 | `scheduling.blackout.host` | daily | yes | the host's quiet times |
 | `instance.<instance id>.scheduling.blackout` | daily | yes | the instance's own quiet times |
-| `instance.<instance id>.start_emulator` | daily | no (read once at assembly until it is made settable) | whether the daemon starts the instance's emulator |
+| `instance.<instance id>.start_emulator` | daily | yes (Workflow #429 R-3, since 0.12.39; a discovery-bound instance only) | whether the Runtime starts and watches the instance's emulator automatically (the daemon start, the emulator watch's restart, IDLE-1's wake); `daily`, not `advanced`, which holds its eight |
 | `instance.<instance id>.idle.action` | daily | yes | what an idle instance does |
 | `mumu_root` | advanced | no | the MuMu root; the file changes it |
 | `frame_retention_evidence_max_age_days` | advanced | yes | the age of unconfirmed evidence frames |

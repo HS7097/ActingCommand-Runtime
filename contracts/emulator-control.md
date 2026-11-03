@@ -1178,7 +1178,13 @@ emu-watch (Alice's ruling 35: starting the emulators belongs to the Runtime; a p
 dispatches; #414 option 3): a scheduling pause, the instance's own or the global one (a restored
 one included), never holds or queues the claim and never makes it yield. PAUSE-AUTO (since
 0.12.34, "Pauses (PAUSE-AUTO)" below): the instance's own pause keeps the daemon start from
-requesting the claim, and ends one it meets on the claim's key, without a Start.
+requesting the claim, and ends one it meets on the claim's key, without a Start. Workflow #429 R-3
+(since 0.12.39; [runtime-config.md](runtime-config.md), "Starting an instance's emulator"): the key
+is settable, and the daemon start claims the instances it is on for in effect at that start (the
+file's value or a restored instruction's), not a list taken from the file: the configured ones in
+configuration order, then any other discovery-bound instance an instruction turned on, by alias.
+`RuntimeHostConfig::with_emulator_autostart` is what the key is for an instance whose
+configuration does not carry it (a host started without actingd's manifest).
 
 - **When.** `actingd` enqueues the claims once, after policy initialization succeeded (without
   a `policy` section, right after the host started) and before `runtime_ready`; the enqueue
@@ -1220,7 +1226,14 @@ requesting the claim, and ends one it meets on the claim's key, without a Start.
   - when the instance already runs (an operator started it): it releases its key and does
     nothing;
   - PAUSE-AUTO (since 0.12.34): when the instance's own scheduling pause holds it ("Pauses
-    (PAUSE-AUTO)" below): it releases its key and starts nothing.
+    (PAUSE-AUTO)" below): it releases its key and starts nothing;
+  - Workflow #429 R-3 (since 0.12.39), after the pause: when the instance's `start_emulator` is
+    off in effect (turned off while the claim waited): it releases its key with no `command.*`
+    record and no failure pair, starts nothing, and reports `emulator_autostart_skipped`
+    (`skip_reason` `start_emulator_off`, also a `device_state_observed` record under the
+    instance), once: the claim ends. A watch claim's request leaves the watch's bound; an idle
+    wake's claim spends the wake, which is not owed again. A recognition claim (EMU-BIND) starts
+    nothing and does not ask.
 - **Pauses (PAUSE-AUTO, since 0.12.34; Alice's ruling 117 A of 10-31, on the review's constraint
   that a start queued before the pause must not slip past it; production 10-31: every instance
   is paused, and the emulators are started by hand for maintenance).** Every automatic emulator
@@ -1305,7 +1318,9 @@ the configured starts; the watch ends with the host.
   `emulator_watch_state_changed` (info; `alias`, `process_started`, `android_started`,
   `adb_port_present`). A read that fails is `emulator_state_read_failed` (warning; `alias`, the
   read's failure text its foreign cause), once per failing streak; the reading stays.
-- **Restarts (R3).** An instance configured with `start_emulator` whose read shows no emulator
+- **Restarts (R3).** An instance configured with `start_emulator` (Workflow #429 R-3, since
+  0.12.39: on in effect at the poll, the file's value or an instruction's, read at every poll; its
+  claim reads it once more on its key, "Holding checks" above) whose read shows no emulator
   process, whose key no claim holds and on which no autostart or emulator control claim waits
   (never two starts for one instance at once), is started again unless its own scheduling pause
   holds it ("Pauses (WATCH-P)" below; the global pause does not):
@@ -1400,8 +1415,8 @@ the configured starts; the watch ends with the host.
   (PAUSE-AUTO)"), and the request it counted leaves the bound again. The watch asks the same
   question as every automatic start (`automatic_start_hold`). No configuration key: `watch_enabled = false` still
   stops the polls altogether.
-- **Observe only (R4).** An instance without `start_emulator` is read and recorded, never
-  started (EMU-BIND: a running one is recognized). The watch never stops or restarts a running
+- **Observe only (R4).** An instance without `start_emulator` (since 0.12.39: off in effect) is
+  read and recorded, never started (EMU-BIND: a running one is recognized). The watch never stops or restarts a running
   emulator, and no record names a device: an emulator instance is its `alias`.
 - **Idle stop (IDLE-1).** An instance whose emulator its idle action `stop_emulator` stops, or
   stopped and has not woken yet ([runtime-config.md](runtime-config.md), "The `idle` section"),
@@ -1425,6 +1440,14 @@ the configured starts; the watch ends with the host.
   starts nothing and records the same skip, and the instance owes the wake again, kept closed (not
   woken) with its wake at the time it was woken. The first idle check after the resume queues the
   wake as before. A `close_app` wake, which starts no emulator, is unchanged.
+  Workflow #429 R-3 (since 0.12.39): the wake's configured start is the instance's
+  `start_emulator` in effect at the wake. Off (an instruction turned it off together with the
+  action, which `stop_emulator` otherwise needs), the wake records its `instance_idle_action` but
+  requests no claim and queues nothing: one `emulator_autostart_skipped` (`skip_reason`
+  `start_emulator_off`, `idle_action` `stop_emulator`; a `device_state_observed` record under the
+  instance) says so, and the woken instance is active again once it is free, its emulator left as
+  it is (a person's start, or the watch's recognition of a running one, brings it back). A
+  wake's claim that meets the key off on its key ends the same way ("Holding checks" above).
 
 Each of the watch's records is also a report line, which `actingd` writes as a daemon line. Its
 keys are the `emulator_control` section's ([runtime-config.md](runtime-config.md)). Its codes
@@ -1442,7 +1465,10 @@ no code and no configuration key either: the value `skip_reason` (vocabulary
 restart or recognition the watch did not request because the instance's own pause held it.
 PAUSE-AUTO (since 0.12.34) adds no code, key or token: the same `skip_reason` marks a start the
 daemon start or IDLE-1's wake did not request, or that ended on its key, and `idle_action`
-(already on `emulator_autostart_queued`) tells the wake's from the daemon start's.
+(already on `emulator_autostart_queued`) tells the wake's from the daemon start's. Workflow #429
+R-3 (since 0.12.39) adds no code: the token `start_emulator_off` of `skip_reason` marks a claim that
+met the instance's `start_emulator` off on its key, and an IDLE-1 wake that found it off, and it
+makes the existing key settable.
 
 ## Client and CLI
 

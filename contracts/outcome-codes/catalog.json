@@ -5709,6 +5709,9 @@
         },
         "player_held": {
           "description": "The instance's player hold holds it, in any phase (Workflow #429 R-7a; R-7b first answers it): first before the instance's own pause (R-7a section 2.6). Recorded once per reason and revision."
+        },
+        "start_emulator_off": {
+          "description": "The instance's start_emulator in effect is off (#429 R-3, since 0.12.39): an autostart claim requested while it was on (the daemon start's, an IDLE-1 wake's, the emulator watch's restart) met it off on its key and released the key without a Start (the watch's request taking no place in its bound), or IDLE-1's wake after stop_emulator found it off and requested no claim: the wake ends without a Start and the instance is no longer kept closed. Recorded once per claim or wake."
         }
       }
     },
@@ -6484,6 +6487,9 @@
         },
         "backend_switch_not_alone": {
           "description": "A ConfigureSettings request that names a backend key also names another key, or the backend keys of two instances; one request switches one instance's backends and nothing else (#402 HS-1)."
+        },
+        "discovery_binding_required": {
+          "description": "A per-instance start_emulator true on an instance whose emulator the Runtime cannot start: one not bound by discovery (a fixture, a handset, an instance bound by its port), as the host knows its instances; since 0.12.39 (#429 R-3), when an instruction sets it and when a start restores it (actingd refuses the same file value earlier as start_emulator_requires_discovery_binding)."
         },
         "registry_unreadable": {
           "description": "A note, never a refusal: the channel registry is missing or cannot be read."

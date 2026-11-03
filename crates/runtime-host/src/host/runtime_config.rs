@@ -600,18 +600,57 @@ impl HostShared {
     }
 
     /// The facts of other crates the configuration's whole-section checks read (§5.3): the
-    /// scheduler's heartbeat bound in effect, the device layer's bounds (Workflow #387 D1c) and
-    /// (#402 HS-1) the backends each kind of device has.
+    /// scheduler's heartbeat bound in effect, the device layer's bounds (Workflow #387 D1c),
+    /// (#402 HS-1) the backends each kind of device has and (Workflow #429 R-3) the registered
+    /// instances bound by discovery, the only ones whose `start_emulator` may be `true`.
     pub(super) fn config_check(&self) -> RuntimeHostResult<CheckContext> {
         let maximum_client_heartbeat_interval_ms =
             lock(&self.scheduler, ConfigHostLocation::ReadRuntimeConfig)?
                 .config()
                 .maximum_client_heartbeat_interval_ms;
+        let discovery_bound = lock(
+            &self.registered_instances,
+            ConfigHostLocation::ReadRuntimeConfig,
+        )?
+        .values()
+        .filter(|instance| instance.emulator_start_candidate())
+        .map(|instance| crate::failure_identity::identifier_text(&instance.instance_id()))
+        .collect::<BTreeSet<_>>();
         Ok(CheckContext::new(
             maximum_client_heartbeat_interval_ms,
             super::recovery_ladder::recovery_ladder_device_bounds(),
         )
-        .with_backends(backend_kind_rules()))
+        .with_backends(backend_kind_rules())
+        .with_discovery_bound(discovery_bound))
+    }
+
+    /// Workflow #429 R-3 (register §1.272): whether `instance.<instance id>.start_emulator` of
+    /// `instance_id` is on in effect, which every automatic emulator start reads at each decision
+    /// (the daemon start, the emulator watch's restart, IDLE-1's wake, and each of their claims
+    /// once more on its key): the configuration's value when it carries the key, the file's or an
+    /// instruction's; otherwise (a host started without actingd's manifest, or an instance whose
+    /// file does not name the key and no instruction sets it) whether the host was configured
+    /// with the instance at its start (`with_emulator_autostart`, which actingd fills from the
+    /// same file).
+    pub(super) fn start_emulator_in_effect(
+        &self,
+        instance_id: InstanceId,
+    ) -> RuntimeHostResult<bool> {
+        let key = instance_key(
+            &crate::failure_identity::identifier_text(&instance_id),
+            actingcommand_runtime_config::START_EMULATOR,
+        );
+        let carried = lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .value(&key)
+            .cloned();
+        match carried {
+            Some(FactScalar::Boolean(on)) => Ok(on),
+            Some(_) => Err(value_type_invalid(ConfigHostLocation::ReadRuntimeConfig)),
+            None => Ok(self
+                .emulator_autostart()?
+                .iter()
+                .any(|(configured, _)| *configured == instance_id)),
+        }
     }
 
     /// Workflow #387 D1c: the `recovery_ladder` section in effect, read and checked once per

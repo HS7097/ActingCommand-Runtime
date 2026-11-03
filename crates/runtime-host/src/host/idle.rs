@@ -50,7 +50,12 @@
 //!   `emulator_autostart_skipped` (`skip_reason` `instance_paused`, `idle_action`
 //!   `stop_emulator`) per pause revision says so; a wake whose configured start meets the hold on
 //!   its key starts nothing and is owed again (`withhold_idle_wake`). The first check after the
-//!   resume queues it. A `close_app` wake (its startup package alone) is unchanged.
+//!   resume queues it. A `close_app` wake (its startup package alone) is unchanged. Workflow #429
+//!   R-3 (register §1.272): the configured emulator start is the instance's `start_emulator` in
+//!   effect, read at the wake (and by its claim once more on its key): off, the wake starts
+//!   nothing and queues nothing, one `emulator_autostart_skipped` (`skip_reason`
+//!   `start_emulator_off`, `idle_action` `stop_emulator`) says so, and the woken instance is active
+//!   again once it is free, its emulator left as it is.
 //! - **Records.** One `instance_idle_action` record per action and per wake (`operation`
 //!   `run_idle_action` or `queue_idle_wake`, `idle_action` naming the action), a
 //!   `device_state_observed` record under the instance and the same report line. An instance
@@ -106,7 +111,7 @@
 //!   from the tasks, so a reading alone never wakes a closed game.
 
 use super::contained_task::StartAnchors;
-use super::emulator_watch::SkippedStart;
+use super::emulator_watch::{SkippedStart, WatchSkipReason, start_skip_outcome};
 use super::failure_scope::Contained;
 use super::host_claims::{HostClaimWork, HostKey};
 use super::input::ApplicationKey;
@@ -578,7 +583,6 @@ impl HostShared {
             .map(|instance| (instance.instance_alias.clone(), instance.instance_id()))
             .collect::<Vec<_>>();
         let startup_packages = self.startup_packages()?;
-        let emulator_starts = self.emulator_autostart()?;
         // W2-B: the instances a kept startup package may still be queued for.
         let with_startup_package = instances
             .iter()
@@ -590,11 +594,11 @@ impl HostShared {
         let mut configured = BTreeMap::new();
         for (alias, instance_id) in instances {
             if let Some(config) = self.idle_settings(instance_id)? {
+                // Workflow #429 R-3: its emulator start as `start_emulator` is in effect, the
+                // file's or a restored instruction's.
                 let wakeable = startup_packages.contains_key(&instance_id)
                     && (config.action != IdleAction::StopEmulator
-                        || emulator_starts
-                            .iter()
-                            .any(|(configured, _)| *configured == instance_id));
+                        || self.start_emulator_in_effect(instance_id)?);
                 configured.insert(alias, (config.action, wakeable));
             }
         }
@@ -849,10 +853,8 @@ impl HostShared {
             Err(TryLockError::Poisoned(_)) => return Err(lock_poison_error(IdleLocation::Check)),
         };
         let startup_package = self.startup_packages()?.contains_key(&instance_id);
-        let configured_start = self
-            .emulator_autostart()?
-            .iter()
-            .any(|(configured, _)| *configured == instance_id);
+        // Workflow #429 R-3: the configured emulator start as `start_emulator` is in effect now.
+        let configured_start = self.start_emulator_in_effect(instance_id)?;
         Ok(IdleView {
             leased,
             queued,
@@ -965,18 +967,23 @@ impl HostShared {
         for item in work {
             match item {
                 WakeWork::EmulatorStart => {
-                    let position = self
-                        .emulator_autostart()?
-                        .iter()
-                        .position(|(configured, _)| *configured == instance_id)
-                        .ok_or_else(|| {
-                            RuntimeHostError::request(
-                                HostCode::EmulatorAutostartInstanceUnknown,
-                                IdleLocation::Wake,
-                                RuntimeErrorCode::InvalidRequest,
-                            )
-                            .with_outcome_values(|outcome| outcome.alias(alias))
-                        })?;
+                    // Workflow #429 R-3 (register §1.272): the configured start as
+                    // `start_emulator` is in effect now. Off, the wake starts nothing: its skip
+                    // says so, nothing more is queued (the start would have handed the key to the
+                    // startup package), and the woken instance is active again once it is free,
+                    // its emulator left as it is.
+                    let Some(position) =
+                        self.emulator_start_position(instance_id, alias, IdleLocation::Wake)?
+                    else {
+                        return self.record_idle(
+                            links,
+                            start_skip_outcome(
+                                SkippedStart::IdleWake,
+                                alias,
+                                WatchSkipReason::StartEmulatorOff,
+                            ),
+                        );
+                    };
                     self.record_idle(
                         links.clone(),
                         Outcome::new(HostCode::EmulatorAutostartQueued)

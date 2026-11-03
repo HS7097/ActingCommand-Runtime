@@ -67,7 +67,8 @@ pub static UI_TIERS: &[(KeyName, UiTier)] = &[
         KeyName::PerInstance(scheduling::INSTANCE_BLACKOUT),
         UiTier::Daily,
     ),
-    // Each instance's emulator: started by the daemon, and what an idle instance does.
+    // Each instance's emulator: started by the daemon (settable since Workflow #429 R-3, register
+    // §1.272; `advanced` holds its eight), and what an idle instance does.
     (
         KeyName::PerInstance(instance::START_EMULATOR),
         UiTier::Daily,

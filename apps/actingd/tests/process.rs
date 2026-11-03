@@ -3561,7 +3561,9 @@ fn s6a_check_config_shows_start_emulator() {
         ),
         "value": {"type": "boolean", "value": true},
         "source": "explicit",
-        "settable": false
+        // Workflow #429 R-3 (register §1.272): settable since 0.12.39 (adapted: it pinned "read
+        // once at assembly, not settable").
+        "settable": true
     });
     let parameters = report["config_manifest"]["parameters"]
         .as_array()

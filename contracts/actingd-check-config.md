@@ -430,8 +430,12 @@ The members of `report`:
     RD-1b adds `instance.<instance_id>.device_kind` (string, `emulator` or `handset`,
     not settable) for an instance that names `device`, and nothing for one that does
     not (see "Devices"). Workflow #369 S6a adds `instance.<instance_id>.start_emulator`
-    (boolean, `explicit`, not settable) for an instance that names `start_emulator`, and
-    nothing for one that does not (default `none`: off). Workflow #398 RD-4 adds
+    (boolean, `explicit`; not settable until Workflow #429 R-3, settable since 0.12.39,
+    [runtime-config.md](runtime-config.md), "Starting an instance's emulator") for an instance
+    that names `start_emulator`, and nothing for one that does not (default `none`: off). This
+    command checks the file alone: a `true` on an instance not bound by discovery is refused here
+    as `start_emulator_requires_discovery_binding` (below), the same rule the running Runtime
+    applies to an instruction as `config_value_invalid` (`discovery_binding_required`). Workflow #398 RD-4 adds
     `instance.<instance_id>.recovery_ladder_profile` (string, `explicit`, settable) for an
     instance that names `recovery_ladder_profile`, the ladder profile it climbs by, and nothing
     for one that does not; a name no profile of the `recovery_ladder` section has fails assembly
@@ -1078,7 +1082,11 @@ Checked here, without discovery:
   whose value `alias` names the instance. A discovery-bound entry of
   the result carries `start_emulator`. The daemon starts such an instance's
   stopped emulator at its start from Workflow #369 S6c on; this command starts
-  nothing.
+  nothing. Workflow #429 R-3 (since 0.12.39): the key is settable while the
+  Runtime runs (`instance.<instance_id>.start_emulator`), with the same rule as
+  this check applies to the file ([runtime-config.md](runtime-config.md),
+  "Starting an instance's emulator"); this command reads the file only and names
+  `instruction_values` in `not_checked`.
 
 Still deferred to startup, because each needs the discovery result
 (`contracts/provider-startup.md`): the `MuMuManager` version floor and

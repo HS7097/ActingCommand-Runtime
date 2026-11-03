@@ -94,6 +94,17 @@
 //! back, `refund_watch_request`). Each start records its skip once per pause revision. The pause
 //! is still no routine gate of the claim: it neither queues it nor makes it yield. An explicit
 //! emulator control (a person, an agent, Lab) never asks.
+//!
+//! Workflow #429 R-3 (register §1.272; Alice's ruling 117 A): `start_emulator` is settable, and
+//! every automatic start reads it in effect (`start_emulator_in_effect`) instead of the start-time
+//! list: the daemon start enqueues the instances it is on for now (`emulator_starts_in_effect`;
+//! the configured ones first, in configuration order, then any other discovery-bound instance an
+//! instruction turned on, by alias), the watch restarts only such an instance, and IDLE-1's wake
+//! after `stop_emulator` starts the emulator only while it is on. Each claim that would start the
+//! emulator reads it once more on its key, after the pause, up to just before the Start: off, it
+//! releases the key and starts nothing (`emulator_autostart_skipped`, `skip_reason`
+//! `start_emulator_off`; an idle wake's is spent, not owed again, and the watch's request leaves
+//! its bound). A change of the key starts and stops nothing by itself.
 
 use super::emulator_watch::{SkippedStart, WatchKind, WatchSkipReason, start_skip_outcome};
 use super::host_claims::{HostClaimWork, HostKey};
@@ -289,6 +300,10 @@ enum HoldEnd {
     /// hold on its key (`automatic_start_hold`, the instance's own scheduling pause): it starts,
     /// binds and prepares nothing.
     Held(AutomaticStartHold),
+    /// Workflow #429 R-3 (register §1.272): the daemon start's, an idle wake's or the watch's
+    /// restart claim met the instance's `start_emulator` off in effect on its key: it starts
+    /// nothing.
+    StartOff,
     /// EMU-BIND fix 1 (0.12.28, review L2): the recognition claim's read on its key found no
     /// recognition needed any more (the instance bound to the reported port and prepared, or the
     /// emulator not running with Android and a port): the read.
@@ -330,8 +345,12 @@ impl HostShared {
     /// reported; only a failure the Runtime does not survive is returned. PAUSE-AUTO (0.12.34):
     /// an instance an automatic start may not start now (`automatic_start_hold`: its own
     /// scheduling pause) gets no claim and is not counted; its skip is recorded after the count.
+    /// Workflow #429 R-3 (register §1.272): a configured instance is one whose `start_emulator` is
+    /// on in effect now (`emulator_starts_in_effect`), not the start-time list.
     pub(super) fn enqueue_emulator_autostart(&self) -> RuntimeHostResult<usize> {
-        let configured = self.emulator_autostart()?.to_vec();
+        // Workflow #429 R-3: the instances whose `start_emulator` is on in effect at this start
+        // (the file's, or an instruction's restored before it), each at its place in the turn.
+        let configured = self.emulator_starts_in_effect(HostLocation::EnqueueEmulatorAutostart)?;
         if configured.is_empty() {
             return Ok(0);
         }
@@ -340,7 +359,7 @@ impl HostShared {
         // hold of every other one.
         let mut held_stopped = BTreeSet::new();
         let mut held = BTreeMap::new();
-        for (_, instance_alias) in &configured {
+        for (_, _, instance_alias) in &configured {
             if self.idle_holds_emulator_stopped(instance_alias)? {
                 held_stopped.insert(instance_alias.clone());
             } else if let Some(hold) =
@@ -356,7 +375,7 @@ impl HostShared {
             )?;
             let mut pending = Vec::new();
             let mut skipped = Vec::new();
-            for (position, (instance_id, instance_alias)) in configured.into_iter().enumerate() {
+            for (position, instance_id, instance_alias) in configured {
                 if !registry
                     .get(&instance_id)
                     .is_some_and(RegisteredInstance::endpoint_pending)
@@ -428,6 +447,83 @@ impl HostShared {
     /// One report line (emu-watch: the watch's lines too).
     pub(super) fn report_emulator_autostart(&self, line: Outcome) -> RuntimeHostResult<()> {
         self.emulator_autostart_reports.push(line)
+    }
+
+    /// Workflow #429 R-3 (register §1.272): every instance an automatic emulator start may start,
+    /// at its place in the start turn: the instances the host was configured with at its start
+    /// (`with_emulator_autostart`), in configuration order, then every other registered physical
+    /// instance bound by discovery (`emulator_start_candidate`), by alias, whose `start_emulator`
+    /// an instruction may turn on. Read at each decision.
+    fn emulator_start_candidates(
+        &self,
+        at: Location,
+    ) -> RuntimeHostResult<Vec<(InstanceId, String)>> {
+        let mut candidates = self.emulator_autostart()?.to_vec();
+        // By alias: the registry's aliases are unique.
+        let others = lock(&self.registered_instances, at)?
+            .values()
+            .filter(|instance| {
+                instance.emulator_start_candidate()
+                    && !candidates
+                        .iter()
+                        .any(|(configured, _)| *configured == instance.instance_id())
+            })
+            .map(|instance| (instance.instance_alias.clone(), instance.instance_id()))
+            .collect::<BTreeMap<_, _>>();
+        candidates.extend(
+            others
+                .into_iter()
+                .map(|(instance_alias, instance_id)| (instance_id, instance_alias)),
+        );
+        Ok(candidates)
+    }
+
+    /// Workflow #429 R-3: the candidates whose `start_emulator` is on in effect now
+    /// (`start_emulator_in_effect`), each with its place in the start turn: the instances the
+    /// daemon start starts, and the watch restarts, at this decision.
+    pub(super) fn emulator_starts_in_effect(
+        &self,
+        at: impl Into<Location>,
+    ) -> RuntimeHostResult<Vec<(usize, InstanceId, String)>> {
+        let mut starts = Vec::new();
+        for (position, (instance_id, instance_alias)) in self
+            .emulator_start_candidates(at.into())?
+            .into_iter()
+            .enumerate()
+        {
+            if self.start_emulator_in_effect(instance_id)? {
+                starts.push((position, instance_id, instance_alias));
+            }
+        }
+        Ok(starts)
+    }
+
+    /// Workflow #429 R-3: the place in the start turn of `instance_id` while its `start_emulator`
+    /// is on in effect; `None` while it is off. An instance turned on that is no candidate (not
+    /// bound by discovery, which the configuration's check refuses) is
+    /// `emulator_autostart_instance_unknown`, with its alias.
+    pub(super) fn emulator_start_position(
+        &self,
+        instance_id: InstanceId,
+        alias: &str,
+        at: impl Into<Location>,
+    ) -> RuntimeHostResult<Option<usize>> {
+        let at = at.into();
+        if !self.start_emulator_in_effect(instance_id)? {
+            return Ok(None);
+        }
+        self.emulator_start_candidates(at)?
+            .iter()
+            .position(|(candidate, _)| *candidate == instance_id)
+            .map(Some)
+            .ok_or_else(|| {
+                RuntimeHostError::request(
+                    HostCode::EmulatorAutostartInstanceUnknown,
+                    at,
+                    RuntimeErrorCode::InvalidRequest,
+                )
+                .with_outcome_values(|outcome| outcome.alias(alias))
+            })
     }
 
     /// emu-watch (R3): one autostart claim, marked `watch`, for the configured instance at
@@ -734,8 +830,11 @@ impl HostShared {
     /// claim: its binding is no longer pending); PAUSE-AUTO (0.12.34, Alice's ruling 117 A and
     /// ruling 112): for every claim (a daemon start's, an idle wake's, the watch's restart and
     /// recognition), what holds an automatic start now (`automatic_start_hold`, the instance's own
-    /// scheduling pause), so a claim queued before the pause began never passes it; the last of
-    /// these checks runs just before the Start or the recognition.
+    /// scheduling pause), so a claim queued before the pause began never passes it; Workflow #429
+    /// R-3 (register §1.272): for every claim that would start the emulator (not a recognition),
+    /// the instance's `start_emulator` in effect, so a claim requested while it was on starts
+    /// nothing once it is off. The last of these checks runs just before the Start or the
+    /// recognition.
     fn autostart_hold_ends(
         &self,
         pending: &PendingAutostart,
@@ -773,9 +872,17 @@ impl HostShared {
                 return Ok(Some(HoldEnd::Running));
             }
         }
-        Ok(self
-            .automatic_start_hold(&pending.instance_alias, HostLocation::RunEmulatorAutostart)?
-            .map(HoldEnd::Held))
+        if let Some(hold) =
+            self.automatic_start_hold(&pending.instance_alias, HostLocation::RunEmulatorAutostart)?
+        {
+            return Ok(Some(HoldEnd::Held(hold)));
+        }
+        // Workflow #429 R-3: a claim that would start the emulator reads the instance's
+        // `start_emulator` in effect once more; a recognition starts nothing and reads it not.
+        if !pending.recognize && !self.start_emulator_in_effect(pending.instance_id)? {
+            return Ok(Some(HoldEnd::StartOff));
+        }
+        Ok(None)
     }
 
     /// PAUSE-AUTO (0.12.34, Alice's ruling 117 A; WATCH-P's ruling 112): the one place where an
@@ -882,7 +989,23 @@ impl HostShared {
                     SkippedStart::DaemonStart
                 };
                 recorded = self.first_start_skip(start, pending.instance_id, hold)?;
-                start_skip_outcome(start, alias, hold)
+                start_skip_outcome(start, alias, hold.reason)
+            }
+            // Workflow #429 R-3 (register §1.272): the start the value in effect no longer asks
+            // for. An idle wake's is spent, not owed again (the woken instance is active again
+            // once it is free, its emulator left as it is); the watch's restart gives its place in
+            // the bound back. Recorded each time: the claim ends here once.
+            HoldEnd::StartOff => {
+                let start = if pending.idle_wake {
+                    SkippedStart::IdleWake
+                } else if pending.watch {
+                    self.refund_watch_request(WatchKind::Restart, pending.instance_id)?;
+                    SkippedStart::Watch(WatchKind::Restart)
+                } else {
+                    SkippedStart::DaemonStart
+                };
+                recorded = true;
+                start_skip_outcome(start, alias, WatchSkipReason::StartEmulatorOff)
             }
             HoldEnd::Unread(cause) => kind(
                 Outcome::new(HostCode::EmulatorAutostartFailed)
