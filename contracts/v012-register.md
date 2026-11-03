@@ -6470,6 +6470,44 @@ behind the writer's commits, and the writer no longer stops for them.
 **Rollback** (to 0.12.37). Nothing persisted changes. 0.12.37 resolves on the writer thread
 again.
 
+### 1.268 Slice HS-4 (0.12.39): the Nemu input's reset, long tap and swipe (Workflow #402; design `rd-1031/backend-switch/model-backend-switch.md` §4.2, §4.4, §5 and §7 row HS-4; the coordinator's ruling on board #402 6609804982, all three now; coordinator work order `rd-1031/backend-switch/brief-hs-4.md`)
+
+[actinglab-capabilities.md](actinglab-capabilities.md) (the `touch_backends` gestures) and
+[nemu-owned-resource-close.md](nemu-owned-resource-close.md) (the HS-4 paragraph, the reset)
+are the contract. The number 1.268 is the coordinator's. No persisted ledger shape, wire shape,
+configuration key or outcome code is new or changed.
+
+**What.** The Nemu input performed only the tap and the three segmented drags, on a frame the
+Runtime captured; its `tap`, `long_tap`, `swipe`, `key`, `text` and `reset` answered unsupported,
+and the host's Nemu gate refused every other action `nemu_input_capability_unsupported` (design
+§4.4). That refused the reset a client owes after its cancelled direct run, which an instance
+pause waits for, and every pack long press and plain drag. One declaration now says what the
+Nemu input does with each action (`NemuInputSupport`: on the step's frame, without a frame, or
+not at all); the host's gate and the kernel's Nemu session follow it.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| HS4-1 | the reset on a Nemu input: a contact whose lift was not confirmed (pressed, or lifted without a confirmed answer) is lifted once with the finger up event, else nothing is called; it needs no frame and runs under the reset's own input check (its lease, its deadline); the host's gate and the kernel admit it without a frame | behaviour | HS-4 | device | `since` 0.12.39; `hs4_nemu_reset_releases_unconfirmed_contact`, `hs4_nemu_reset_noop_when_released` (device `gate_hs4`), `hs4_cancelled_run_reset_succeeds_on_nemu` (host `gate_hs4`); a lift the device does not confirm fails the reset as Unconfirmed, which fences that one instance (#403) as any unconfirmed contact does |
+| HS4-2 | the long tap on a Nemu input: the press, the hold of its duration and the release, through the tap's events: on the step's committed frame, under its geometry fence and its deadline (design §4.2 items 4 and 5) | behaviour | HS-4 | device | `since` 0.12.39; `hs4_nemu_long_tap_in_frame`; without a frame the host refuses it `nemu_input_frame_required`, as the tap |
+| HS4-3 | the swipe on a Nemu input: the press at its start, moves along the straight line to its end, one per 16 ms (at most 60) evenly timed, their waits summing to its duration, and the release, bound as the long tap | behaviour | HS-4 | device | `since` 0.12.39; `hs4_nemu_swipe_in_frame` |
+| HS4-4 | `key` and `text` on a Nemu input | unchanged: refused `nemu_input_capability_unsupported` | — | — | |
+| HS4-5 | the capability table of an instance whose input is `nemu_ipc` claims `input.segmented_swipe` (performed before, never claimed), keeps `input.tap`, `input.long_tap`, `input.swipe` and `input.reset` (claimed before, now performed) and refuses `input.key` and `input.text`; the Lab's `touch_backends` lists `long_tap` and `swipe` for `nemu_ipc` | capability evidence and contract text agree with the code | HS-4 | — | `hs4_capability_profile_matches_view` (`provider::gate_hs4`, each input row against `NemuInputSupport`); `l4_capabilities_list_the_four_touch_backends_with_the_gestures_each_performs` adapted (its `nemu_ipc` list) |
+| HS4-6 | every input of a package's run names its step's frame (design §5), so `nemu_input_frame_required` is left for inputs from outside packages | guard, no behaviour change | HS-4 | — | `hs4_pack_inputs_always_carry_frame` (kernel `gate_hs4`): a page graph's box tap, box long press, drag, vertical-brake drag and path drag, and a step plan's point tap, box long press and drag, all blind; a scan select is not run there (its tap and drags name the scan's latest observation, which the same committed-frame lookup builds) |
+
+**Interface.** No step for 0.12.39 ([component-interfaces.md](component-interfaces.md)):
+`runtime-client`, `ledger`, `package`, `runtime-outcomes` and `actingd-config` do not change. The
+input actions, receipts, events and codes are the ones already declared; only which of them a
+Nemu instance performs changes, and no other party negotiates that.
+
+**What changes live.** Nothing until an instance's input is `nemu_ipc` (design §1.5: every
+production instance's input is `adb_shell_input`; §7: HS-4 acts only on a Nemu-touch instance).
+Other inputs pass the same paths as before. On such an instance the client's reset after
+a cancelled run, `actingctl reset` and the Lab's `reset` complete, and pack long presses and plain
+drags run.
+
+**Rollback** (to 0.12.38). Nothing persisted changes. 0.12.38 refuses the three on a Nemu
+instance again.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

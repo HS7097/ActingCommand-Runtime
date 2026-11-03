@@ -46,6 +46,14 @@ A failed restore is unconfirmed, keeps the lock and is the session's cached fail
 reported again by its close. Library unload stays after the stdio close, outside any
 redirection, as before.
 
+HS-4 (#402, since 0.12.39; `v012-register.md` §1.268): the input's reset is a release
+call too. It needs no frame and reads no display: a contact whose lift was not confirmed
+(pressed, or lifted without a confirmed answer) is lifted once with the finger up event
+on the connection's current display, under the reset's own input check; a confirmed
+lift releases the contact, an unconfirmed one fails the reset as Unconfirmed and keeps
+the contact so. Any other contact is left as it is and no native call is made. The
+close's final lift is unchanged.
+
 Workflow #411 A36a: the process-level stdio lock is one gate for the whole process, so
 at most one vendor stdio redirect is active at a time, across all threads and
 sessions. A start or resume waits for the holder at most 3 s; a longer wait fails with

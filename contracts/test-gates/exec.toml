@@ -1861,6 +1861,18 @@ tests = [
 ]
 incident = ["#406"]
 
+# HS-4 (#402, 0.12.39; design rd-1031/backend-switch/model-backend-switch.md §4.2, §4.4, §5; register §1.268; no persisted ledger shape, configuration key or outcome code): the Nemu input's reset lifts a contact whose lift was not confirmed (pressed, or lifted without a confirmed answer) once, with no frame, and the next gesture is admitted; a lift the device does not confirm fails the reset as unconfirmed; it calls nothing for a contact never pressed or released; the long tap is the press, the hold of its duration and the release, the swipe the press, evenly timed moves along the line to its end (one per 16 ms, the waits summing to its duration) and the release, both on the step's frame under its geometry fence (no frame, another size, an earlier display generation or a point outside the frame is refused before any press) and its deadline (the gesture and the final lift's reserve); every input of a package's run (a page graph's box tap, box long press, drag, vertical-brake drag and path drag, a step plan's point tap, box long press and drag, all blind) names a frame the runtime committed before it
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-device::lib::capture::nemu_input::gate_hs4::hs4_nemu_reset_releases_unconfirmed_contact",
+    "actingcommand-device::lib::capture::nemu_input::gate_hs4::hs4_nemu_reset_noop_when_released",
+    "actingcommand-device::lib::capture::nemu_input::gate_hs4::hs4_nemu_long_tap_in_frame",
+    "actingcommand-device::lib::capture::nemu_input::gate_hs4::hs4_nemu_swipe_in_frame",
+    "actingcommand-execution-kernel::lib::contained_task::gate_hs4::hs4_pack_inputs_always_carry_frame",
+]
+incident = ["#402 HS-4"]
+
 # Workflow #406 T4 (0.12.x; register §1.138; no persisted ledger shape: Lab outputs, Lab file members and the MCP argument only; plan-405-406 Q14, Q20; Alice 2026-10-19 Lab principle): an offline run (package dry-run, replay) draws as the kernel, each step from the action seed SHA-256 derives from the run's seed (--seed, else 0), the step index and the operation label, with the touch keys of the root configuration the Lab reads (its touch section over the embedded defaults) and no landing history (center_hotspot_normal_v1), uniform and named xorshift64_uniform_rect_v1 without a touch section; would_click and each replayed effect carry the sampling evidence, the result the seed, and a replay given the reported seed repeats every point; given a seed, the Lab presses a box at the point drawn from it (tap-target through the input port, offline do --scene), not the centre; actinglab's reader and the Lab bundle read single_touch_path_drag_v1, its offline projection element is gesture_not_projectable (do: lab_element_unavailable), offline observe lists its edge with input null, the Lab port refuses it, and an offline run reports its generated path in would_click; a recording declares a path drag in its click rectangle, record stop generates it and checks its path inside the box, and a recorded tap's point_rule names how the Lab pressed (the draw with its sampling, or rect_center)
 [[gate]]
 key = "112"
