@@ -692,7 +692,18 @@ starts no ladder: on the rung before any lease, recorded as the rung's failure (
 category `recovery_ladder`, the detail as native detail); in the home entry with no
 `EntryRecoveryPackageAdmitted`, as `EntryTargetDisposition { FailClosed }` and the
 task terminal, the detail on a runtime lifecycle failure record after the terminal as under
-"Failure detail" below. The package found at the registry's entry must declare that entry's
+"Failure detail" below. A request's own recovery package (`--recovery-package`), which the home
+entry runs in place of the registry's, is judged by the same rule (#433 RH-1, since 0.12.39,
+[v012-register.md](v012-register.md) §1.269): its `scheduling_outcome` is allowed and ignored
+exactly when a return-home layer's is, without a designated operation and without the other
+declarations admission accepts only with a `scheduling_outcome` that the table refuses (resource
+readings or adjustments, a select step with `on_empty`, stage `end_pages`, a keyed `on_max_runs`
+or `on_guard_refused`); its other checks are unchanged (no stability termination, post-admission
+OCR, OCR fields or `prerequisite_package_id`). Otherwise it is refused before it runs, as before,
+with `contained_task_home_recovery_package_incompatible`, with no input and no
+`EntryRecoveryPackageAdmitted`, as `EntryTargetDisposition { FailClosed }` and the task terminal.
+On both paths the recovery package's `scheduling_outcome` is not mapped or recorded: the run's
+scheduling disposition is its own package's alone, and only a `busy` end (below) reads it. The package found at the registry's entry must declare that entry's
 `package_id` (`contained_task_prerequisite_mismatch` otherwise, before it runs). In the home entry
 its `EntryRecovery*` facts carry `role: return_home`. A game root that is broken when the home
 entry needs it closes the entry with the root's own code (`standard_pack_root_invalid` or
@@ -709,7 +720,8 @@ return-home package, `page_id` the page it ended on, `outcome_key` the mapping's
 `EntryRecoveryCompleted`, as `EntryTargetDisposition { FailClosed }` and the task terminal: the
 instance shows an activity still in progress, so neither the recheck nor a navigation follows,
 and no trigger item of the defaults matches the code, so no ladder starts. A request's own
-recovery package declares no `scheduling_outcome`, so only the registry's package can end so. A page-graph package whose
+recovery package that declares such a mapping ends the run so too, its `package_id` in the
+outcome (#433 RH-1: before, it could declare no `scheduling_outcome`). A page-graph package whose
 declared final pages hold no page of the required entry is refused before it runs, with no input
 and no `EntryRecoveryPackageAdmitted`, as `contained_task_home_recovery_terminal_outside_entry`
 (Workflow #411 A16); the `linear_steps` package is not compared there either. With a request binding both

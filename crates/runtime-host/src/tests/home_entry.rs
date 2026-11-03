@@ -427,10 +427,19 @@ fn explicit_home_entry_runs_one_bound_recovery_then_starts_target() {
         let mut entry = archive.by_index(index).unwrap();
         let name = entry.name().to_owned();
         let mut value: serde_json::Value = serde_json::from_reader(&mut entry).unwrap();
+        // #433 RH-1: a `scheduling_outcome` without a designated operation is allowed and ignored
+        // here, as for the configured return-home package; one with a designated operation still
+        // makes the package incompatible.
         if name == "resources/operations/task/task.json" {
-            value["scheduling_outcome"] = serde_json::json!({"mappings":[{
-                "outcome_key":"at_home","effect":"no_designated_effect","terminal_pages":["home"]
-            }]});
+            value["scheduling_outcome"] = serde_json::json!({
+                "designated_operation":"return_home",
+                "mappings":[
+                    {"outcome_key":"returned","effect":"designated_effect_completed",
+                     "terminal_pages":["home"]},
+                    {"outcome_key":"at_home","effect":"no_designated_effect",
+                     "terminal_pages":["home"]}
+                ]
+            });
         }
         package.start_file(name, FileOptions::default()).unwrap();
         serde_json::to_writer(&mut package, &value).unwrap();
