@@ -83,7 +83,11 @@ built: Nemu touch without `nemu_app_index` passes check-config and a start.
   `info_unavailable` (no MuMuManager to read through, a failed or expired run, a non-zero exit, an
   errcode envelope) or `info_malformed` (not UTF-8, not JSON, over the output bound, or no known
   `state`). Only that instance's open fails (#419); a refusal is not kept, so the next open reads
-  again.
+  again. A preparation (start, emulator control, resume, self-check) records the refusal as every
+  failed open (`backend.open_observed`, the `backend.selfcheck.*` facts, `device.self_check` with
+  `paired_backend_open_failed`) and, though it acquired nothing, with the `runtime.failed` record of
+  stage `runtime_lifecycle_connection_preparation` that a failed open with released resources gets:
+  that record's outcome carries the cause and its problem.
 - **The resolution is kept** in the registry entry, in memory only, for the entry's MuMu index,
   package and root: a later paired open reads nothing. A rebinding after emulator control
   (`rebind_discovered_endpoint`) drops it, and so does a paired open that fails `display_missing`;
