@@ -42,6 +42,25 @@ The manifest reports the kind of an instance that names `device` as the paramete
 `instance.<instance id>.device_kind` (section `instance`, not settable, read at assembly); an
 instance without `device` has no such row, and no row ever holds a serial.
 
+## Backends
+
+#402 HS-1 ([v012-register.md](v012-register.md) §1.267; since 0.12.39). The manifest reports every
+device instance's backends as `instance.<instance id>.touch_backend` and
+`instance.<instance id>.capture_backend` (section `instance`, by the device layer's own names, not
+settable until HS-2 brings the switch); a fixture has neither. Which backends each kind has is the
+rule above (an emulator: every touch backend, every capture backend but `scrcpy`; a handset: no
+`nemu_ipc`, no `droidcast_raw`), and Nemu touch works only beside Nemu capture. actingd applies it
+to the file (`device_config_invalid` with `backend_kind_unsupported`;
+`nemu_input_requires_paired_capture`); the configuration's whole-instance check applies the same
+rule, which the host fills in from the device layer, to the values in effect, and so to an
+instruction from HS-2 on (`config_value_invalid` with `backend_kind_unsupported` or
+`backend_pair_required`; a fixture has no backend at all; [runtime-config.md](runtime-config.md),
+"Backends").
+
+`nemu_app_index` (`actingd-config` revision 26): an emulator entry may name it whatever its
+backends; it is checked whenever named (`nemu_app_index_invalid`) and used only by Nemu touch, which
+no longer needs it in the file. A handset still names none.
+
 ## The private binding file
 
 `<state root>\private\device-bindings.json`, read-only for the Runtime:

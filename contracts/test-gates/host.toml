@@ -571,7 +571,7 @@ tests = [
 ]
 incident = ["#429 R-2"]
 
-# Workflow #429 R-4 (0.12.36; brief rd-1031/brief-r4.md; register §1.239; contracts/runtime-config.md, "ConfigureSettings", "Restore at start" and "Console tiers"; design rd-1029/429-A-runtime.md A.6 rules 2, 3, 5, 7 and 8), on the fixed clock: a ConfigureSettings at the settings' current version applies and its receipt carries the new version, another one, at which the next change applies (T1); at another version it is Denied fact_observation_version_conflict with fact_key host.config_overrides and current_version the version now, which a codes-mode receipt keeps, recorded as command.rejected only, with nothing changed: value, config.parameters, host.config_overrides, version (T2); without expected_version the last writer wins after another client's change (T3); over the shipped configuration one change of each key the console shows that an instruction sets, and a clear, leaves every other key's value in effect, source and settable and every other instruction row as it was (T4); ui_tier key by key against the contract table, every other key hidden, the table's rows key-table rows, six advanced of at most eight (T5); a fixed sample of a later release's host.config_overrides, one known key and one this build does not have: the start drops the unknown into StartReport.instructions_dropped with config_override_dropped and restores the known (T6); the runtime fact snapshot answers the last receipt's version, also after a restart over the same file (T7)
+# Workflow #429 R-4 (0.12.36; brief rd-1031/brief-r4.md; register §1.239; contracts/runtime-config.md, "ConfigureSettings", "Restore at start" and "Console tiers"; design rd-1029/429-A-runtime.md A.6 rules 2, 3, 5, 7 and 8), on the fixed clock: a ConfigureSettings at the settings' current version applies and its receipt carries the new version, another one, at which the next change applies (T1); at another version it is Denied fact_observation_version_conflict with fact_key host.config_overrides and current_version the version now, which a codes-mode receipt keeps, recorded as command.rejected only, with nothing changed: value, config.parameters, host.config_overrides, version (T2); without expected_version the last writer wins after another client's change (T3); over the shipped configuration one change of each key the console shows that an instruction sets, and a clear, leaves every other key's value in effect, source and settable and every other instruction row as it was (T4); ui_tier key by key against the contract table, every other key hidden, the table's rows key-table rows, six advanced of at most eight (T5; eight since #402 HS-1 adds the two backend rows); a fixed sample of a later release's host.config_overrides, one known key and one this build does not have: the start drops the unknown into StartReport.instructions_dropped with config_override_dropped and restores the known (T6); the runtime fact snapshot answers the last receipt's version, also after a restart over the same file (T7)
 [[gate]]
 coverage = "Y"
 tests = [
@@ -584,6 +584,24 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_387_d1b::r4_t7_the_snapshot_answers_the_last_receipt_s_version_also_after_a_restart",
 ]
 incident = ["#429 R-4"]
+
+# #402 HS-1 (0.12.39; brief rd-1031/backend-switch/brief-hs-1.md; register §1.267; contracts/runtime-config.md, "Key table", "Backends", "ConfigureSettings", "Restore at start" and "Console tiers"; contracts/device-binding.md, "Backends"; actingd-config revision 26): each device instance's touch_backend and capture_backend are rows of the per-instance section by the device layer's own names, explicit and not settable, and a fixture has neither; an instruction on either is config_key_not_settable until HS-2; the whole-instance check, with the backends each kind has as the host fills them in from the device layer, refuses a handset's nemu_ipc and droidcast_raw and an emulator's scrcpy (backend_kind_unsupported) and Nemu touch beside another capture (backend_pair_required), and any backend of a fixture; a request naming a backend key beside another key or another instance's backend key is backend_switch_not_alone; a start drops the restored backend values an instance's check refuses and keeps its other values; both rows are advanced, which fills the eight; actingd assembles Nemu touch without nemu_app_index and an index beside any other backend, still refusing Nemu touch beside another capture (nemu_input_requires_paired_capture), an index out of range and a handset's index
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_hs1::hs1_backend_rows_in_manifest",
+    "actingcommand-runtime-config::lib::gate_hs1::hs1_backend_rows_read_only_until_hs2",
+    "actingcommand-runtime-host::lib::tests::gate_hs1::hs1_handset_nemu_refused_kind",
+    "actingcommand-runtime-host::lib::tests::gate_hs1::hs1_emulator_scrcpy_refused_kind",
+    "actingcommand-runtime-config::lib::gate_hs1::hs1_nemu_touch_without_nemu_capture_refused_pair",
+    "actingcommand-runtime-config::lib::gate_hs1::hs1_fixture_backend_instruction_refused",
+    "actingcommand-runtime-config::lib::gate_hs1::hs1_backend_change_not_alone_refused",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_hs1::hs1_nemu_touch_without_app_index_assembles",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_hs1::hs1_app_index_with_adb_touch_assembles",
+    "actingcommand-runtime-config::lib::gate_hs1::hs1_ui_tier_backend_rows_advanced",
+    "actingcommand-runtime-config::lib::gate_hs1::hs1_restore_drops_pair_breaking_rows",
+]
+incident = ["#402 HS-1"]
 
 # The recovery ladder by configuration: the section's whole-section check at start and through an instruction, what the default trigger items match, the record shapes, the rules that stay in code and the five that switch, direction one's count, and a routine failure that climbs by its trigger item, its rungs and the snapshot it was admitted with (Workflow #387 D1c)
 [[gate]]

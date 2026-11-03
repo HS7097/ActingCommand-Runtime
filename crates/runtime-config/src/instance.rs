@@ -38,7 +38,12 @@
 //! §1.249) adds `execution.capture.still_limit_ms`, in the entry's `execution` member, default the
 //! `execution` section's key of the same name, settable. LOAD-3 (register §1.260) adds
 //! `execution.loading.mode`, in the entry's `execution` member, no default of its own (the
-//! section's is in effect), settable.
+//! section's is in effect), settable. #402 HS-1 (register §1.267, design HS-M §2.1) adds
+//! `touch_backend` and `capture_backend`, the entry's existing members, which a device instance's
+//! entry always names and a fixture's never does: default `none`, not settable until HS-2 brings
+//! the switch; their whole-instance check takes each kind of device's backends from the check
+//! context the host fills in, and a request that names one names only the backend keys of one
+//! instance.
 
 use crate::codes::ConfigValueProblem;
 use crate::display_safe_area;
@@ -56,7 +61,7 @@ use crate::table::{
     DefaultSource, FilePath, KeyName, KeyRange, KeyRow, NotSettable, Settable, ValueType,
     instance_key,
 };
-use actingcommand_contract::{FactScalar, InstanceStuckRecovery};
+use actingcommand_contract::{ConfigSettingChange, FactScalar, InstanceStuckRecovery};
 
 /// The member that turns the stuck-recovery ladder on or off for one instance.
 pub const STUCK_RECOVERY: &str = "stuck_recovery";
@@ -76,6 +81,28 @@ pub const START_EMULATOR: &str = "start_emulator";
 /// entry's `recovery_ladder_profile`; it comes before the `recovery_ladder` section's
 /// `kind_profiles` and must name one of its `profiles`.
 pub const RECOVERY_LADDER_PROFILE: &str = "recovery_ladder_profile";
+/// #402 HS-1 (HS-M §2.1): the instance's touch backend, the entry's `touch_backend`.
+pub const TOUCH_BACKEND: &str = "touch_backend";
+/// #402 HS-1: the instance's capture backend, the entry's `capture_backend`.
+pub const CAPTURE_BACKEND: &str = "capture_backend";
+/// #402 HS-1: the values of [`TOUCH_BACKEND`], the device layer's explicit touch backends by
+/// their own names (`auto` and `auto-fastest` are none: every instance names its backend).
+pub const TOUCH_BACKEND_TOKENS: &[&str] = &["adb_shell_input", "maatouch", "minitouch", "nemu_ipc"];
+/// #402 HS-1: the values of [`CAPTURE_BACKEND`], the device layer's explicit capture backends.
+pub const CAPTURE_BACKEND_TOKENS: &[&str] = &["adb", "droidcast_raw", "nemu_ipc", "scrcpy"];
+/// #402 HS-1: Nemu IPC, a word of both lists; Nemu touch works only beside Nemu capture.
+const NEMU_IPC: &str = "nemu_ipc";
+/// The [`DEVICE_KIND`] of a handset.
+const HANDSET: &str = "handset";
+
+/// #402 HS-1 (HS-M §2.1; register §1.267): the instance's two backends. A device instance's
+/// entry always names both and a fixture's names neither (actingd refuses the rest), so they have
+/// no default. Not settable until HS-2 brings the switch (the switch is HS-2): actingd reads them
+/// once at assembly, when it builds the instance's registration.
+const BACKEND_ROWS: [KeyRow; 2] = [
+    backend_row(TOUCH_BACKEND, TOUCH_BACKEND_TOKENS),
+    backend_row(CAPTURE_BACKEND, CAPTURE_BACKEND_TOKENS),
+];
 
 pub(crate) static ROWS: &[KeyRow] = &[
     KeyRow {
@@ -114,6 +141,9 @@ pub(crate) static ROWS: &[KeyRow] = &[
         reader: "RD-1b",
         since: "0.12.0",
     },
+    // #402 HS-1: the device's two backends, beside its kind.
+    BACKEND_ROWS[0],
+    BACKEND_ROWS[1],
     KeyRow {
         name: KeyName::PerInstance(RECOGNITION_PACKAGE),
         file_path: FilePath::InstanceMemberAt("recognition_package.package"),
@@ -260,6 +290,185 @@ const fn random_delay_row(member: &'static str, value_type: ValueType, range: Ke
         reader: "#405",
         since: "0.12.0",
     }
+}
+
+/// #402 HS-1: one of the instance's two backend members, a word of `tokens`.
+const fn backend_row(member: &'static str, tokens: &'static [&'static str]) -> KeyRow {
+    KeyRow {
+        name: KeyName::PerInstance(member),
+        file_path: FilePath::InstanceMember,
+        value_type: ValueType::String,
+        range: KeyRange::Tokens(tokens),
+        default: DefaultSource::None,
+        settable: Settable::No(NotSettable::ReadAtAssembly),
+        reader: "HS-1",
+        since: "0.12.39",
+    }
+}
+
+/// #402 HS-1 (HS-M §2.1): the backends one kind of device has, by their place in
+/// [`TOUCH_BACKEND_TOKENS`] and [`CAPTURE_BACKEND_TOKENS`]. The host fills it in from the device
+/// layer's own rule, since this crate depends on the contract only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeviceBackends {
+    touch: [bool; TOUCH_BACKEND_TOKENS.len()],
+    capture: [bool; CAPTURE_BACKEND_TOKENS.len()],
+}
+
+impl DeviceBackends {
+    /// No backend at all: a fixture's, and each kind's until the caller fills the rules in.
+    pub const NONE: Self = Self {
+        touch: [false; TOUCH_BACKEND_TOKENS.len()],
+        capture: [false; CAPTURE_BACKEND_TOKENS.len()],
+    };
+
+    /// The backends of the two lists that `touch` and `capture` admit, each asked once per word.
+    pub fn admitting(touch: impl Fn(&str) -> bool, capture: impl Fn(&str) -> bool) -> Self {
+        Self {
+            touch: std::array::from_fn(|at| {
+                TOUCH_BACKEND_TOKENS.get(at).copied().is_some_and(&touch)
+            }),
+            capture: std::array::from_fn(|at| {
+                CAPTURE_BACKEND_TOKENS
+                    .get(at)
+                    .copied()
+                    .is_some_and(&capture)
+            }),
+        }
+    }
+
+    /// Whether this kind of device has the touch backend `name`.
+    pub fn has_touch(&self, name: &str) -> bool {
+        admits(TOUCH_BACKEND_TOKENS, &self.touch, name)
+    }
+
+    /// Whether this kind of device has the capture backend `name`.
+    pub fn has_capture(&self, name: &str) -> bool {
+        admits(CAPTURE_BACKEND_TOKENS, &self.capture, name)
+    }
+}
+
+/// Whether the word `name` of `tokens` is one `admitted` marks.
+fn admits(tokens: &[&str], admitted: &[bool], name: &str) -> bool {
+    tokens
+        .iter()
+        .zip(admitted)
+        .any(|(token, admitted)| *admitted && *token == name)
+}
+
+/// #402 HS-1 (HS-M §2.1): the backends each kind of device has, the table the whole-instance
+/// backend check reads. A fixture has none; that is the check's own rule, not the host's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BackendKindRules {
+    /// An emulator's: an instance whose entry names no `device`, or `device.kind` `emulator`.
+    pub emulator: DeviceBackends,
+    /// A handset's: an instance whose `device_kind` is `handset`.
+    pub handset: DeviceBackends,
+}
+
+impl BackendKindRules {
+    /// No backend on any kind: the rules of a check context nobody filled in, which refuse every
+    /// backend in effect rather than pass one unchecked.
+    pub const NONE: Self = Self {
+        emulator: DeviceBackends::NONE,
+        handset: DeviceBackends::NONE,
+    };
+}
+
+/// #402 HS-1: whether `row` is one of the two backend rows.
+pub(crate) fn is_backend_row(row: &KeyRow) -> bool {
+    BACKEND_ROWS.iter().any(|backend| backend.name == row.name)
+}
+
+/// #402 HS-1: the instance id `key` names when it is one of the two backend keys.
+fn backend_instance(key: &str) -> Option<&str> {
+    BACKEND_ROWS
+        .iter()
+        .find_map(|row| row.matches(key).flatten())
+}
+
+/// #402 HS-1 (HS-M §2.1 "一次只切一台"): a request that names a backend key names only the
+/// backend keys of that one instance (one or both), so that all of it or none of it is one switch
+/// of one device. Otherwise the first key that is not one of them is `config_value_invalid`
+/// (`backend_switch_not_alone`), the other key or the other instance's backend key.
+pub(crate) fn check_backend_change(changes: &[ConfigSettingChange]) -> Result<(), ConfigFailure> {
+    let Some(instance) = changes
+        .iter()
+        .find_map(|change| backend_instance(&change.key))
+    else {
+        return Ok(());
+    };
+    match changes
+        .iter()
+        .find(|change| backend_instance(&change.key) != Some(instance))
+    {
+        Some(other) => Err(ConfigFailure::invalid_value(
+            other.key.clone(),
+            ConfigValueProblem::BackendSwitchNotAlone,
+        )),
+        None => Ok(()),
+    }
+}
+
+/// #402 HS-1 (HS-M §2.1): the whole-instance backend check of `instance`, on its two backends in
+/// effect. Its kind of device gives the backends it may have: none for a fixture (an instance whose
+/// file layer names neither backend, `file_names_backends` false: actingd requires both of a
+/// device instance and refuses both on a fixture), the handset's of `rules` for an instance whose
+/// `device_kind` is `handset`, the emulator's otherwise. Another backend is `config_value_invalid`
+/// (`backend_kind_unsupported`) for its key; touch `nemu_ipc` beside another capture backend is
+/// `backend_pair_required` for the touch key (Nemu capture beside any touch backend is free). An
+/// instance with neither backend in effect is not checked.
+pub(crate) fn check_backends(
+    instance: &str,
+    value: impl Fn(&str) -> Option<FactScalar>,
+    file_names_backends: bool,
+    rules: &BackendKindRules,
+) -> Result<(), ConfigFailure> {
+    let touch_key = instance_key(instance, TOUCH_BACKEND);
+    let capture_key = instance_key(instance, CAPTURE_BACKEND);
+    let name = |key: &str| match value(key) {
+        None => Ok(None),
+        Some(FactScalar::String(name)) => Ok(Some(name)),
+        Some(_) => Err(ConfigFailure::invalid_value(
+            key,
+            ConfigValueProblem::WrongType,
+        )),
+    };
+    let touch = name(&touch_key)?;
+    let capture = name(&capture_key)?;
+    if touch.is_none() && capture.is_none() {
+        return Ok(());
+    }
+    let handset = matches!(
+        value(&instance_key(instance, DEVICE_KIND)),
+        Some(FactScalar::String(kind)) if kind == HANDSET
+    );
+    let backends = match (file_names_backends, handset) {
+        (false, _) => DeviceBackends::NONE,
+        (true, true) => rules.handset,
+        (true, false) => rules.emulator,
+    };
+    let unsupported =
+        |key: &str| ConfigFailure::invalid_value(key, ConfigValueProblem::BackendKindUnsupported);
+    if touch
+        .as_deref()
+        .is_some_and(|touch| !backends.has_touch(touch))
+    {
+        return Err(unsupported(&touch_key));
+    }
+    if capture
+        .as_deref()
+        .is_some_and(|capture| !backends.has_capture(capture))
+    {
+        return Err(unsupported(&capture_key));
+    }
+    if touch.as_deref() == Some(NEMU_IPC) && capture.as_deref() != Some(NEMU_IPC) {
+        return Err(ConfigFailure::invalid_value(
+            touch_key,
+            ConfigValueProblem::BackendPairRequired,
+        ));
+    }
+    Ok(())
 }
 
 /// The whole-section check of one instance (§5.3): its two stuck-recovery members together form

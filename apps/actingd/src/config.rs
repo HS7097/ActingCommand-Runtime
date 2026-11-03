@@ -74,6 +74,9 @@ mod gate_store_fg2;
 // Test-only: Workflow #432 AGT-1a, the `agent_wake` section's keys, row and refusals.
 #[cfg(test)]
 mod gate_agt_1a;
+// Test-only: #402 HS-1, the instances' backend rows and `nemu_app_index` as revision 26 reads it.
+#[cfg(test)]
+mod gate_hs1;
 
 const CONFIG_SCHEMA_VERSION: &str = "actingcommand.actingd.config.v1";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
@@ -809,6 +812,11 @@ struct InstanceConfig {
     /// Discovery binding key: the exact MuMu instance name. At most one key may be set.
     #[serde(default)]
     instance_name: Option<String>,
+    /// The MuMu application clone a Nemu touch drives (0 is the main application). #402 HS-1:
+    /// an emulator entry may name it whatever its backends, and Nemu touch no longer needs it.
+    // Interface anchor `actingd-config` revision 26: Runtime 0.12.38 refuses an entry whose Nemu
+    // touch leaves it out (`nemu_paired_input_configuration_missing`) or whose other touch backend
+    // names it (`nemu_app_index_requires_paired_input`).
     #[serde(default)]
     nemu_app_index: Option<u32>,
     #[serde(default)]
@@ -1514,6 +1522,46 @@ impl ActingdConfigFile {
                 serde_json::to_value(&instance.execution)
                     .map_err(|_| ActingdCode::ConfigManifestInvalid.code())?,
             );
+            // #402 HS-1: a device instance's backends are reported as
+            // `instance.<id>.touch_backend` and `.capture_backend` by the device layer's own
+            // names (an alias such as `adb` for touch is `adb_shell_input`). An automatic choice or
+            // a name the device layer does not read is refused below by the backend's own code
+            // (`touch_backend_must_be_explicit`, `touch_backend_invalid`, ...), and a fixture
+            // names none (`fixture_device_fields_forbidden`).
+            if instance.fixture_backend.is_none() {
+                let explicit_touch = instance
+                    .touch_backend
+                    .as_deref()
+                    .and_then(|name| TouchBackendChoice::parse(name).ok())
+                    .filter(|choice| {
+                        !matches!(
+                            choice,
+                            TouchBackendChoice::Auto | TouchBackendChoice::AutoFastest
+                        )
+                    });
+                if let Some(choice) = explicit_touch {
+                    members.insert(
+                        actingcommand_runtime_config::TOUCH_BACKEND.to_owned(),
+                        serde_json::Value::String(choice.as_str().to_owned()),
+                    );
+                }
+                let explicit_capture = instance
+                    .capture_backend
+                    .as_deref()
+                    .and_then(|name| CaptureBackendChoice::parse(name).ok())
+                    .filter(|choice| {
+                        !matches!(
+                            choice,
+                            CaptureBackendChoice::Auto | CaptureBackendChoice::AutoFastest
+                        )
+                    });
+                if let Some(choice) = explicit_capture {
+                    members.insert(
+                        actingcommand_runtime_config::CAPTURE_BACKEND.to_owned(),
+                        serde_json::Value::String(choice.as_str().to_owned()),
+                    );
+                }
+            }
             // Workflow #398 RD-1b: `device.kind` is reported as `instance.<id>.device_kind`.
             if let Some(device) = &instance.device {
                 members.insert(
@@ -1777,10 +1825,14 @@ impl ActingdConfigFile {
         let (process_priority, agent_wake_row) =
             actingcommand_runtime_config::EffectiveConfig::from_manifest(&manifest)
                 .and_then(|effective| {
-                    effective.check(&actingcommand_runtime_config::CheckContext::new(
-                        host.scheduler().maximum_client_heartbeat_interval_ms,
-                        actingcommand_runtime_host::recovery_ladder_device_bounds(),
-                    ))?;
+                    // #402 HS-1: with the backends each kind of device has, as the host's.
+                    effective.check(
+                        &actingcommand_runtime_config::CheckContext::new(
+                            host.scheduler().maximum_client_heartbeat_interval_ms,
+                            actingcommand_runtime_host::recovery_ladder_device_bounds(),
+                        )
+                        .with_backends(actingcommand_runtime_host::backend_kind_rules()),
+                    )?;
                     // STORE-FG-2: a game is never its own store.
                     effective
                         .store_foreground()?
@@ -2432,20 +2484,27 @@ impl InstanceConfig {
             return Err(ActingdCode::InstanceConfigInvalid.code());
         }
         let (requested, capture_requested) = self.backend_choices()?;
-        let nemu_app_index = match (requested, self.nemu_app_index) {
-            (TouchBackendChoice::NemuIpc, Some(index))
-                if capture_requested == CaptureBackendChoice::NemuIpc =>
-            {
-                Some(
-                    actingcommand_device::NemuAppIndex::try_from(index)
-                        .map_err(|_| ActingdCode::NemuAppIndexInvalid.code())?,
-                )
-            }
+        // #402 HS-1 (`actingd-config` revision 26): an emulator entry may name `nemu_app_index`
+        // whatever its backends, and Nemu touch no longer needs it in the file. The index is
+        // checked whenever the entry names it and is used only by Nemu touch, which still needs
+        // Nemu capture beside it (`nemu_input_requires_paired_capture`, the registry's own
+        // refusal). From HS-3 the Runtime resolves a missing index when it opens the paired
+        // session; until then the registry still requires it (`nemu_app_index_missing`).
+        let nemu_app_index = self
+            .nemu_app_index
+            .map(|index| {
+                actingcommand_device::NemuAppIndex::try_from(index)
+                    .map_err(|_| ActingdCode::NemuAppIndexInvalid.code())
+            })
+            .transpose()?;
+        let nemu_app_index = match (requested, capture_requested) {
+            (TouchBackendChoice::NemuIpc, CaptureBackendChoice::NemuIpc) => nemu_app_index,
             (TouchBackendChoice::NemuIpc, _) => {
-                return Err(ActingdCode::NemuPairedInputConfigurationMissing.code());
+                return Err(
+                    actingcommand_runtime_host::HostCode::NemuInputRequiresPairedCapture.code(),
+                );
             }
-            (_, Some(_)) => return Err(SharedCode::NemuAppIndexRequiresPairedInput.code()),
-            (_, None) => None,
+            _ => None,
         };
         let application_id = self
             .application_id

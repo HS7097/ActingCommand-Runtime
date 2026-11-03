@@ -731,7 +731,7 @@
       "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "A device instance that pairs Nemu touch with Nemu capture names a nemu_app_index outside the range the Nemu input accepts. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "description": "A device instance that pairs Nemu touch with Nemu capture names a nemu_app_index outside the range the Nemu input accepts (since 0.12.39, #402 HS-1, an emulator instance whatever its backends, as it may name the index with any of them). check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
       "common_causes": "A negative index or one copied from another tool's numbering.",
       "handling": "Set nemu_app_index to a valid index. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
     },
@@ -743,11 +743,13 @@
       "uncertain": false,
       "values": {},
       "review": "settled",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.0",
-      "description": "A device instance selects Nemu touch without Nemu capture or without nemu_app_index; Nemu touch works only paired with Nemu capture. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "retired_in": "0.12.39",
+      "replaced_by": "nemu_input_requires_paired_capture",
+      "description": "Retired (#402 HS-1, actingd-config revision 26). A device instance selected Nemu touch without Nemu capture or without nemu_app_index; Nemu touch works only paired with Nemu capture. Since 0.12.39 Nemu touch no longer needs nemu_app_index in the file, and Nemu touch beside another capture backend is refused as nemu_input_requires_paired_capture.",
       "common_causes": "touch_backend switched to Nemu while capture_backend stayed another backend, or nemu_app_index left out.",
-      "handling": "Use Nemu capture and set nemu_app_index together with Nemu touch, or choose another touch backend. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
+      "handling": "None in 0.12.39 and later: the code is no longer emitted."
     },
     "instance_registration_invalid": {
       "category": "error",

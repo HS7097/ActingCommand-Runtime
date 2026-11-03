@@ -10039,7 +10039,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports nemu input requires paired capture.",
+      "description": "The Runtime host reports nemu input requires paired capture: a registration selects Nemu touch beside a capture backend other than Nemu. Since 0.12.39 (#402 HS-1, actingd-config revision 26) actingd refuses such an instance entry with it too, at stage config_assemble in check-config and before the ledger opens at a start.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

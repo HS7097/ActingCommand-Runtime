@@ -435,7 +435,8 @@ impl HostShared {
     }
 
     /// The facts of other crates the configuration's whole-section checks read (§5.3): the
-    /// scheduler's heartbeat bound in effect and the device layer's bounds (Workflow #387 D1c).
+    /// scheduler's heartbeat bound in effect, the device layer's bounds (Workflow #387 D1c) and
+    /// (#402 HS-1) the backends each kind of device has.
     fn config_check(&self) -> RuntimeHostResult<CheckContext> {
         let maximum_client_heartbeat_interval_ms =
             lock(&self.scheduler, ConfigHostLocation::ReadRuntimeConfig)?
@@ -444,7 +445,8 @@ impl HostShared {
         Ok(CheckContext::new(
             maximum_client_heartbeat_interval_ms,
             super::recovery_ladder::recovery_ladder_device_bounds(),
-        ))
+        )
+        .with_backends(backend_kind_rules()))
     }
 
     /// Workflow #387 D1c: the `recovery_ladder` section in effect, read and checked once per
@@ -1417,6 +1419,32 @@ impl HostShared {
             ),
         )
         .map(|_| ())
+    }
+}
+
+/// #402 HS-1 (HS-M §2.1): the backends each kind of device has, by the device layer's own rule
+/// (`TouchBackendChoice::allowed_on`, `CaptureBackendChoice::allowed_on`, which actingd's device
+/// check applies to the file too): an emulator has every touch backend and every capture backend
+/// but `scrcpy`; a handset has no `nemu_ipc` and no `droidcast_raw`. The configuration's
+/// whole-instance backend check reads them from its check context, since
+/// `actingcommand-runtime-config` depends on the contract only; a fixture has none, by the check's
+/// own rule.
+pub fn backend_kind_rules() -> actingcommand_runtime_config::BackendKindRules {
+    let backends_of = |kind: actingcommand_device::DeviceKind| {
+        actingcommand_runtime_config::DeviceBackends::admitting(
+            |name| {
+                actingcommand_device::TouchBackendChoice::parse(name)
+                    .is_ok_and(|choice| choice.allowed_on(kind))
+            },
+            |name| {
+                actingcommand_device::CaptureBackendChoice::parse(name)
+                    .is_ok_and(|choice| choice.allowed_on(kind))
+            },
+        )
+    };
+    actingcommand_runtime_config::BackendKindRules {
+        emulator: backends_of(actingcommand_device::DeviceKind::Emulator),
+        handset: backends_of(actingcommand_device::DeviceKind::Handset),
     }
 }
 
