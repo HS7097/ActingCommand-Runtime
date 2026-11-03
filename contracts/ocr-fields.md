@@ -109,7 +109,10 @@ the previous recovery decision remains the original fact.
 
 The Host's existing hash-bound recovery call uses `run_entry_recovery`, which checks
 `is_entry_recovery_compatible` before using the same interpreter. Compatible recovery
-packages have no scheduling outcome, stability or post-admission OCR/fields declaration.
+packages have no stability or post-admission OCR/fields declaration and no prerequisite
+package; their scheduling outcome is judged as the configured return-home package's is (#433
+RH-1, since 0.12.39): allowed and ignored without a designated operation
+(`contracts/linear-steps.md`, "Ladder and page-graph home entry").
 This restricted call keeps the recovery package's existing entry applicability; it exposes
 no general entry-skip option or CLI/RPC operation. The Host still owns the exact hash,
 instance and lease binding, actual Home terminal result, subsequent recheck and combined

@@ -352,7 +352,8 @@ packages"); otherwise the run fails with
 the page the recovery package ended on (`page_id`) and that package (`package_id`).
 A return-home package that ended on a mapping it marks `busy` ends the run with
 `contained_task_entry_busy` instead (#411 B37; `contracts/linear-steps.md`, "Ladder
-and page-graph home entry").
+and page-graph home entry"), and so does a request's own recovery package, whose
+`scheduling_outcome` is judged as the return-home package's is (#433 RH-1).
 A recovery package whose declared final pages hold no page of the set is refused
 before it runs, with no input and no `EntryRecoveryPackageAdmitted`, as
 `contained_task_home_recovery_terminal_outside_entry` with the same values (`page_id`

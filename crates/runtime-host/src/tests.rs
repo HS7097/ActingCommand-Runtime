@@ -199,6 +199,9 @@ mod gate_373_nav5;
 // #411 B37 (A35-S4, host keys 162 and 163), register §1.169: a home entry's return-home layer or
 // a navigation recovery chain step that ends busy ends the run with `contained_task_entry_busy`.
 mod gate_411_b37_entry;
+// #433 RH-1, register §1.269: a request's own entry recovery package is judged as the configured
+// return-home package is (its `scheduling_outcome` without a designated operation ignored).
+mod gate_433_rh1;
 // Workflow #373 NAV-6: shared interrupt pages and the standard-pack root reader.
 mod gate_373_nav6;
 // Workflow #357 DB-1: the shared tables of a standard-pack game root at startup and in

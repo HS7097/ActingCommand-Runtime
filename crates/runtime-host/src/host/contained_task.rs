@@ -8890,6 +8890,9 @@ impl HostShared {
                 ));
             }
         } else if !recovery.is_entry_recovery_compatible() {
+            // #433 RH-1: a request's own recovery package's `scheduling_outcome` is judged by the
+            // configured package's rule (allowed and ignored without a designated operation); the
+            // run's scheduling disposition maps its own package's only, on both paths.
             return fail_contained_task_entry(
                 runtime,
                 SharedCode::ContainedTaskHomeRecoveryPackageIncompatible.as_str(),

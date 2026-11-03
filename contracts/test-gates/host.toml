@@ -2081,6 +2081,17 @@ tests = [
 ]
 incident = ["#411 A35", "#411 B37"]
 
+# #433 RH-1 (0.12.39; register §1.269 RH1-1, RH1-2; board #433 A2): a request's own entry recovery package is judged by the configured return-home package's rule: its scheduling_outcome without a designated operation is admitted and the package runs, a designated one is still refused before any input with contained_task_home_recovery_package_incompatible; one package bound by the request and named by the game root with no binding is admitted on both paths or refused on both (each with its own code); while it runs nothing of its scheduling_outcome is mapped or recorded (no scheduling disposition on the run's terminal, its outcome key in no record and not in the receipt)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_433_rh1::entry_recovery_accepts_a_scheduling_outcome_without_a_designated_operation",
+    "actingcommand-runtime-host::lib::tests::gate_433_rh1::entry_recovery_still_refuses_a_designated_scheduling_outcome",
+    "actingcommand-runtime-host::lib::tests::gate_433_rh1::entry_recovery_and_configured_return_home_judge_one_package_alike",
+    "actingcommand-runtime-host::lib::tests::gate_433_rh1::entry_recovery_ignores_the_recovery_packages_scheduling_outcome",
+]
+incident = ["#433 A2"]
+
 # Workflow #411 B1 (slice BT-B1; register §1.163 B1-3 and §1.153 LR-5, LR-6, first writer; B-train plan §2.1 items 2 and 3, Q6, test row T2 of §5.3; the host family is outside the slice's row: 300 + 10 x 4, wave-3 frame): a value test whose agreement of three frames reads 100, 100 and 180 leaves its side unread, so its page does not match and the run fails; the run's task diagnostic stream carries the side's problem no_agreement and one agreement_sample row per frame, as registered
 [[gate]]
 key = "340"

@@ -3527,10 +3527,13 @@ impl PreparedContainedTask {
         })
     }
 
-    /// A package that declares a prerequisite package is never an entry recovery package: the
-    /// home entry recovery path would ignore the declaration (Workflow #336 L2b).
-    pub const fn is_entry_recovery_compatible(&self) -> bool {
-        self.scheduling_outcome.is_none()
+    /// Whether the package may run as a request's own entry recovery package. A package that
+    /// declares a prerequisite package is never one: the home entry recovery path would ignore
+    /// the declaration (Workflow #336 L2b). #433 RH-1: its `scheduling_outcome` is judged by the
+    /// rule of the configured return-home package's, allowed and ignored without a designated
+    /// operation (`scheduling_outcome_incompatibility`).
+    pub fn is_entry_recovery_compatible(&self) -> bool {
+        self.scheduling_outcome_incompatibility().is_none()
             && self.control.stability_termination.is_none()
             && self.post_admission_ocr.is_none()
             && self.post_admission_fields.is_none()
@@ -3714,7 +3717,21 @@ impl PreparedContainedTask {
             Some("stability_termination")
         } else if self.post_admission_ocr.is_some() || self.post_admission_fields.is_some() {
             Some("post_admission_ocr")
-        } else if self.program.resource_readings.is_some() {
+        } else {
+            self.scheduling_outcome_incompatibility()
+        }
+    }
+
+    /// #433 RH-1 (board #433 A2, register §1.269): the one rule an entry layer's
+    /// `scheduling_outcome` is judged by, for a prerequisite or return-home layer (the configured
+    /// return-home package too) and a request's own entry recovery package alike: the first
+    /// declaration that admission accepts only together with a `scheduling_outcome` and that
+    /// keeps the package from running as a layer (resource readings and adjustments, a select
+    /// step with `on_empty`, stage `end_pages`, a keyed `on_max_runs` or `on_guard_refused`, a
+    /// designated scheduling operation), or `None`. A `scheduling_outcome` without any of them is
+    /// allowed there and ignored: the run's scheduling disposition maps its own package's only.
+    fn scheduling_outcome_incompatibility(&self) -> Option<&'static str> {
+        if self.program.resource_readings.is_some() {
             Some("resource_readings")
         } else if self.program.resource_adjustments.is_some() {
             Some("resource_adjustments")

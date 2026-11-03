@@ -6508,6 +6508,47 @@ drags run.
 **Rollback** (to 0.12.38). Nothing persisted changes. 0.12.38 refuses the three on a Nemu
 instance again.
 
+### 1.269 Slice RH-1 (0.12.39): an entry recovery package is judged as the configured return-home package is (#433 A2, board comment 6611839697: three manual runs on production refused on 11-03 and 11-04; coordinator work order `rd-1031/brief-rh-1.md`)
+
+[linear-steps.md](linear-steps.md) ("Ladder and page-graph home entry"), [ocr-fields.md](ocr-fields.md)
+(the recovery call) and [README.md](README.md) ("Entry page sets", the busy end) are the
+contract. The number 1.269 is the coordinator's. No persisted ledger shape, wire shape,
+configuration key or outcome code is new or changed.
+
+**What.** The home entry judged one package two ways. The registry's return-home package (the
+configured path) passes the checks of a return-home chain layer, which allow and ignore a
+`scheduling_outcome` without a designated operation; a request's own recovery package
+(`--recovery-package`, the entry recovery path) had to declare no `scheduling_outcome` at all
+(`PreparedContainedTask::is_entry_recovery_compatible`). So a standard pack's return-home package,
+which declares one for the scheduler, was accepted when the registry named it and refused with
+`contained_task_home_recovery_package_incompatible`, before any input, when a manual run named it.
+Both paths now read one rule, `PreparedContainedTask::scheduling_outcome_incompatibility`: the
+first declaration that admission accepts only together with a `scheduling_outcome` and that keeps
+a package from running as a layer (resource readings or adjustments, a select step with
+`on_empty`, stage `end_pages`, a keyed `on_max_runs` or `on_guard_refused`, a designated
+operation). The chain's check (`prerequisite_incompatibility`) calls it where those checks stood,
+so its reasons and their order are unchanged; the entry recovery check calls it in place of "no
+`scheduling_outcome`", which had refused all of them, so it stays as strict for each. Its other
+conditions are unchanged.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| RH1-1 | a request's own recovery package whose `scheduling_outcome` declares no designated operation (and none of the declarations above): admitted, run and rechecked as any compatible recovery package | looser run-time rule (existing shapes) | RH-1 | RH-1 | `since` 0.12.39; `entry_recovery_accepts_a_scheduling_outcome_without_a_designated_operation`, `entry_recovery_and_configured_return_home_judge_one_package_alike` (`gate_433_rh1`): one package bound by the request and named by the game root is admitted on both paths, or refused on both |
+| RH1-2 | a request's own recovery package whose `scheduling_outcome` declares a designated operation or one of the declarations above; one with a stability termination, post-admission OCR or fields, or a prerequisite package | unchanged: refused before it runs with `contained_task_home_recovery_package_incompatible` (the configured path keeps `contained_task_prerequisite_incompatible`) | — | — | `entry_recovery_still_refuses_a_designated_scheduling_outcome`; `explicit_home_entry_runs_one_bound_recovery_then_starts_target` (`home_entry`) adapted: the package it shows refused now declares a designated operation (it declared a `scheduling_outcome` without one, which RH1-1 admits) |
+| RH1-3 | the recovery package's `scheduling_outcome` while it runs as an entry recovery | as on the configured path: not mapped or recorded, the run's scheduling disposition being its own package's alone; a `busy` mapping the run ended on ends it with `contained_task_entry_busy` (§1.169 B37E-2, whose "only the registry's package can end so" no longer holds) | RH-1 | — | `entry_recovery_ignores_the_recovery_packages_scheduling_outcome` (`gate_433_rh1`): no scheduling disposition on the run's terminal, the recovery package's outcome key in no record and not in the receipt |
+
+**Interface.** No step for 0.12.39 ([component-interfaces.md](component-interfaces.md)): no
+package, wire, ledger, outcome or configuration shape changes. The packages concerned are
+admissible already; only which of them the home entry runs as a request's recovery package
+changes, and a Runtime of 0.12.38 refuses such a binding loudly, with the code it always used.
+
+**What changes live.** A manual run that names a standard pack's return-home package (its
+`scheduling_outcome` without a designated operation) as its recovery package runs it, instead of
+failing before any input. A run that binds no recovery package is unchanged.
+
+**Rollback** (to 0.12.38). Nothing persisted changes. 0.12.38 refuses such a recovery package
+again.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
