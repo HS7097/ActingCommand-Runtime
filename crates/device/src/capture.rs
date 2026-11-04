@@ -41,7 +41,7 @@ mod scrcpy;
 pub use nemu_input::{
     InputCheckPhase, InputCheckStop, InputExecutionContext, InputOperationCheck, NemuAppIndex,
     NemuApplicationTarget, NemuFrameGeometry, NemuInputConfig, NemuInputSupport, NemuIpcSession,
-    NemuSessionBackends, nemu_application_state_source,
+    NemuSessionBackends, nemu_application_state_source, nemu_paired_display,
 };
 pub use scrcpy::{SCRCPY_SERVER_SHA256, SCRCPY_SERVER_VERSION, ScrcpyBackend, ScrcpyConfig};
 
@@ -97,6 +97,15 @@ pub trait CaptureBackend {
         &mut self,
         authority: DeviceCloseAuthority,
     ) -> DeviceResult<DeviceResourceCloseOutcome>;
+
+    /// #402 HS-5a (design `rd-1031/backend-switch/model-hs5.md` §4.2): the close of a backend its
+    /// open acquired and never handed over, by that open, after it failed (its first frame, its
+    /// memory admission, its probe cache). A backend whose close needs the current ResourceClose
+    /// witness only once it is handed over closes here what it acquired itself; every other
+    /// backend closes as `close_once(LocalOnly)`.
+    fn close_unhanded(&mut self) -> DeviceResult<DeviceResourceCloseOutcome> {
+        self.close_once(DeviceCloseAuthority::LocalOnly)
+    }
 
     fn vendor_stdio(&self) -> &[VendorStdioCapture] {
         &[]
@@ -1304,11 +1313,13 @@ fn probe_or_cached_capture_backend(
     }
 }
 
+/// The close of a backend an open acquired and failed before it handed it over (#402 HS-5a:
+/// `CaptureBackend::close_unhanded`), merged into the open's failure.
 fn close_capture_backend_after_error(
     mut backend: Box<dyn CaptureBackend>,
     primary: DeviceError,
 ) -> DeviceError {
-    match backend.close_once(DeviceCloseAuthority::LocalOnly) {
+    match backend.close_unhanded() {
         Ok(outcome) => primary.with_close_outcome(&outcome),
         Err(cleanup) => {
             if cleanup.resource_quiescence() == Some(DeviceResourceQuiescence::Unconfirmed) {
@@ -1505,13 +1516,26 @@ impl CaptureBackend for PrimedCaptureBackend {
         &mut self,
         authority: DeviceCloseAuthority,
     ) -> DeviceResult<DeviceResourceCloseOutcome> {
+        self.close_inner(|inner| inner.close_once(authority))
+    }
+
+    /// #402 HS-5a: an open that failed after its prime (its probe cache) closes the backend it
+    /// primed as the backend's own opener.
+    fn close_unhanded(&mut self) -> DeviceResult<DeviceResourceCloseOutcome> {
+        self.close_inner(|inner| inner.close_unhanded())
+    }
+}
+
+impl PrimedCaptureBackend {
+    fn close_inner(
+        &mut self,
+        close: impl FnOnce(&mut dyn CaptureBackend) -> DeviceResult<DeviceResourceCloseOutcome>,
+    ) -> DeviceResult<DeviceResourceCloseOutcome> {
         if let Some(result) = &self.close_result {
             return result.clone();
         }
         let local_count = u16::from(self.primed.take().is_some());
-        let result = self
-            .inner
-            .close_once(authority)
+        let result = close(self.inner.as_mut())
             .map(|outcome| outcome.combine(DeviceResourceCloseOutcome::confirmed(local_count)))
             .map_err(|error| {
                 let error = if error.resource_quiescence().is_none() {
@@ -2076,7 +2100,8 @@ impl NemuIpcBackend {
         let (frame_width, frame_height) = match worker.probe_resolution() {
             Ok(resolution) => resolution,
             Err(primary) => {
-                return match worker.shutdown_once(DeviceCloseAuthority::LocalOnly) {
+                // #402 HS-5a (R1): the backend was never handed over; its opener closes it.
+                return match worker.release_unhanded() {
                     Ok(outcome) => Err(primary.with_close_outcome(&outcome)),
                     Err(cleanup) => {
                         let unconfirmed = cleanup.resource_quiescence()
@@ -2133,8 +2158,31 @@ enum NemuIpcCommand {
     Shutdown {
         authority: DeviceCloseAuthority,
         input_check: Option<Arc<dyn InputOperationCheck>>,
+        /// #402 HS-5a (R1): the opener closes a backend it has not handed over, after its open
+        /// failed (`NemuCloser::Opener`); otherwise the holder closes it under `authority`.
+        unhanded: bool,
         response: mpsc::Sender<DeviceResult<DeviceResourceCloseOutcome>>,
     },
+}
+
+/// #402 HS-5a (design `rd-1031/backend-switch/model-hs5.md` §4.2): who closes a Nemu connection.
+#[derive(Clone)]
+enum NemuCloser {
+    /// The holder of a backend that was handed over (or the worker itself), under its
+    /// authority. R2: the disconnect needs the current ResourceClose witness.
+    Holder(DeviceCloseAuthority),
+    /// The opener of a backend it has not handed over, whose open failed: its cleanup is local
+    /// (`DeviceCloseAuthority::LocalOnly`).
+    Opener,
+}
+
+impl NemuCloser {
+    fn authority(&self) -> DeviceCloseAuthority {
+        match self {
+            Self::Holder(authority) => authority.clone(),
+            Self::Opener => DeviceCloseAuthority::LocalOnly,
+        }
+    }
 }
 
 struct NemuCapturedFrame {
@@ -2275,15 +2323,21 @@ impl NemuIpcWorker {
                         NemuIpcCommand::Shutdown {
                             authority,
                             input_check,
+                            unhanded,
                             response,
                         } => {
+                            let closer = if unhanded {
+                                NemuCloser::Opener
+                            } else {
+                                NemuCloser::Holder(authority.clone())
+                            };
                             let result = worker_state_result(&mut state, |state| {
                                 state.close_input_contact(
-                                    authority.clone(),
+                                    authority,
                                     input_check.as_deref(),
                                     &worker_poisoned,
                                 )?;
-                                state.close(authority)
+                                state.close_by(closer)
                             });
                             drop(input_check);
                             closed = true;
@@ -2466,6 +2520,21 @@ impl NemuIpcWorker {
         authority: DeviceCloseAuthority,
         input_check: Option<Arc<dyn InputOperationCheck>>,
     ) -> DeviceResult<DeviceResourceCloseOutcome> {
+        self.shutdown_as(authority, input_check, false)
+    }
+
+    /// #402 HS-5a (R1): the opener's close of a worker whose open failed before it handed the
+    /// backend over (`NemuCloser::Opener`), under `LocalOnly`.
+    fn release_unhanded(&mut self) -> DeviceResult<DeviceResourceCloseOutcome> {
+        self.shutdown_as(DeviceCloseAuthority::LocalOnly, None, true)
+    }
+
+    fn shutdown_as(
+        &mut self,
+        authority: DeviceCloseAuthority,
+        input_check: Option<Arc<dyn InputOperationCheck>>,
+        unhanded: bool,
+    ) -> DeviceResult<DeviceResourceCloseOutcome> {
         if let Some(result) = &self.close_result {
             return result.clone();
         }
@@ -2493,6 +2562,7 @@ impl NemuIpcWorker {
             .send(NemuIpcCommand::Shutdown {
                 authority,
                 input_check,
+                unhanded,
                 response: tx,
             })
             .is_err()
@@ -2716,7 +2786,8 @@ impl NemuIpcWorkerState {
             frame_width: 0,
             frame_height: 0,
             vendor_stdio: VendorStdioLog::default(),
-            input,
+            // #402 HS-5a: the configured display is the connection's main display.
+            input: input.map(|input| input.with_main_display(display_id)),
         };
         let acquired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             state.stdio_session = Some(VendorStdioSession::start()?);
@@ -3033,15 +3104,27 @@ impl NemuIpcWorkerState {
         })
     }
 
+    /// The holder's disconnect under `authority` (the owned-close test's).
+    #[cfg(all(test, windows))]
     fn disconnect(
         &mut self,
         authority: DeviceCloseAuthority,
         resolve: impl FnOnce(&Self) -> DeviceResult<NemuDisconnect>,
     ) -> DeviceResult<()> {
+        self.disconnect_by(NemuCloser::Holder(authority), resolve)
+    }
+
+    /// The disconnect of the owned connection by `closer` (#402 HS-5a, design `model-hs5.md`
+    /// §4.2).
+    fn disconnect_by(
+        &mut self,
+        closer: NemuCloser,
+        resolve: impl FnOnce(&Self) -> DeviceResult<NemuDisconnect>,
+    ) -> DeviceResult<()> {
         if self.connect_id <= 0 {
             return Ok(());
         }
-        if authority.resource_close_witness().is_none() {
+        if closer.authority().resource_close_witness().is_none() {
             return Err(DeviceError::fatal(
                 "Nemu IPC disconnect requires current fenced device-write authority",
             )
@@ -3097,12 +3180,27 @@ impl NemuIpcWorkerState {
         &mut self,
         authority: DeviceCloseAuthority,
     ) -> DeviceResult<DeviceResourceCloseOutcome> {
+        self.close_by(NemuCloser::Holder(authority))
+    }
+
+    fn close_by(&mut self, closer: NemuCloser) -> DeviceResult<DeviceResourceCloseOutcome> {
+        self.close_with(closer, |state| unsafe {
+            state.symbol::<NemuDisconnect>(b"nemu_disconnect\0")
+        })
+    }
+
+    /// The close by `closer`, its disconnect resolved by `resolve` (the library's
+    /// `nemu_disconnect`; a test's in-process callback): the owned connection, the vendor stdio
+    /// session, then the library.
+    fn close_with(
+        &mut self,
+        closer: NemuCloser,
+        resolve: impl FnOnce(&Self) -> DeviceResult<NemuDisconnect>,
+    ) -> DeviceResult<DeviceResourceCloseOutcome> {
         let mut resource_count = u16::from(self.connect_id > 0)
             .saturating_add(u16::from(self.stdio_session.is_some()))
             .saturating_add(u16::from(self.library.is_some()));
-        self.disconnect(authority, |state| unsafe {
-            state.symbol::<NemuDisconnect>(b"nemu_disconnect\0")
-        })?;
+        self.disconnect_by(closer, resolve)?;
         let mut failure = None;
         let mut stdio_observations = Vec::new();
         if let Some(stdio) = self.stdio_session.as_mut() {
@@ -3222,6 +3320,23 @@ impl CaptureBackend for NemuIpcBackend {
         }
         let result = match self.worker.as_mut() {
             Some(worker) => worker.shutdown_once(authority),
+            None => Ok(DeviceResourceCloseOutcome::confirmed(0)),
+        };
+        if result.is_ok() {
+            self.worker.take();
+        }
+        self.close_result = Some(result.clone());
+        result
+    }
+
+    /// #402 HS-5a (R1): a capture-only open whose first frame failed closes its worker as the
+    /// worker's opener.
+    fn close_unhanded(&mut self) -> DeviceResult<DeviceResourceCloseOutcome> {
+        if let Some(result) = &self.close_result {
+            return result.clone();
+        }
+        let result = match self.worker.as_mut() {
+            Some(worker) => worker.release_unhanded(),
             None => Ok(DeviceResourceCloseOutcome::confirmed(0)),
         };
         if result.is_ok() {
