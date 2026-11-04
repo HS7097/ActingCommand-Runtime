@@ -196,7 +196,10 @@ DA-3.
   the run with no input. It replaces `contained_task_frame_resolution_mismatch`, retired (§0.2
   C10). Recognition, its regions and its lengths stay in base pixels on the scale frame; the frames
   of one observation keep one map (`recognition_sample_geometry_changed`, and for a candidate
-  sample `candidate_sample_page_or_geometry_changed`).
+  sample `candidate_sample_page_or_geometry_changed`). In a page graph's step confirmation and
+  a step plan's wait after an input or an application effect, such an observation ends as a frame
+  that did not confirm the step and the wait goes on in its window (#402 HS-5d, since 0.12.40;
+  [application-lifecycle.md](application-lifecycle.md)).
 - **Evidence.** A recognition record's frame size is the device frame's; each recognised target's
   region is the device box that covers it (outward, section 5). The task diagnostic stream's rows
   keep scale-frame pixels in this slice.

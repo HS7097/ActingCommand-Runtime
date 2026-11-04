@@ -33,8 +33,8 @@ use super::{
     MAX_DECLARED_INTERVAL_MS, MAX_STEP_TIMEOUT_MS, MAX_STEPS, MAX_TASK_TIMEOUT_MS, PaceClock,
     PageCandidates, PageObservation, PostAdmissionOcrCollector, PreparedContainedTask,
     RecheckedInput, SampleRetries, StepPacing, TaskControl, TaskOperation, TaskProgram,
-    budget_elapsed_since, budget_now, budget_observation_now, pace_pause, paced_step,
-    resolve_page_reference, runtime_touch_choice, sample_budget_invalid, selection,
+    budget_elapsed_since, budget_now, budget_observation_now, is_geometry_change, pace_pause,
+    paced_step, resolve_page_reference, runtime_touch_choice, sample_budget_invalid, selection,
     step_point_draw,
 };
 use crate::RunOperationPolicy;
@@ -2196,6 +2196,50 @@ impl PreparedContainedTask {
             let observation =
                 match self.linear_observe_scene(runtime, candidates, timing, Some(&mut *loading)) {
                     Ok(observation) => observation,
+                    // #402 HS-5d (register §1.279): after an input or an application effect, an
+                    // observation whose frames did not keep one geometry (a paired Nemu
+                    // session's display that moved from the main display to the application's
+                    // between them, HS-5a D3) ends as a frame on which no awaited page passed,
+                    // and the wait goes on in its budget: its check and the pause before the next
+                    // observation, as after any such frame.
+                    Err(failure)
+                        if matches!(purpose, LinearWaitPurpose::AfterInput)
+                            && is_geometry_change(&failure) =>
+                    {
+                        missed = true;
+                        backoff.reset();
+                        let now = budget_now(runtime, pace);
+                        if now.saturating_duration_since(started) >= budget {
+                            if !rounds.another(runtime, Some((pace, deadline))) {
+                                return Ok(Err(None));
+                            }
+                            started = now;
+                            window_started = budget_observation_now(runtime, pace);
+                            missed = false;
+                        }
+                        let boundary = purpose.boundary();
+                        let identity = runtime.task_boundary_identity(boundary);
+                        let wait_started = runtime.monotonic_now();
+                        let now = pace.budget(wait_started);
+                        pace_pause(
+                            runtime,
+                            pace,
+                            backoff
+                                .interval()
+                                .min(budget.saturating_sub(now.saturating_duration_since(started)))
+                                .min(deadline.saturating_duration_since(now)),
+                        );
+                        let wait_ended = runtime.monotonic_now();
+                        runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
+                            boundary,
+                            identity,
+                            context: timing,
+                            started: wait_started,
+                            ended: wait_ended,
+                            succeeded: true,
+                        });
+                        continue;
+                    }
                     Err(failure) => {
                         retries.retry(runtime, failure, budget)?;
                         started = budget_now(runtime, pace);

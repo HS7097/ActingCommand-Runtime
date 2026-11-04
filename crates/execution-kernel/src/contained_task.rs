@@ -37,7 +37,7 @@ use actingcommand_contract::{
 use capture_cadence::{CaptureBackoff, MAX_DECLARED_INTERVAL_MS, StillLimitReached};
 use loading::{Charge, FrameRow, LoadingAllowance, LoadingFrame, LoadingLimit};
 use observation_window::{InputRecheck, RecheckedInput};
-use sample_retry::{ExtraRounds, SampleRetries};
+use sample_retry::{ExtraRounds, SampleRetries, is_geometry_change};
 use still_wait::StillUnrecognised;
 use timing::PaceClock;
 use wait_step::{HeldFrame, HeldPage};
@@ -300,6 +300,9 @@ mod display_gate;
 // test): the gate at the six capture entries.
 #[cfg(test)]
 mod gate_392_da2a;
+// #402 HS-5d (register §1.279): the arrival wait goes on across a display's change.
+#[cfg(test)]
+mod gate_hs5d;
 pub use actingcommand_selection_policy::LoadedTable;
 use actingcommand_selection_policy::SelectionPolicy;
 pub use capture_cadence::CaptureCadence;
@@ -7971,6 +7974,50 @@ impl PreparedContainedTask {
             let observation =
                 match self.capture_page_loading(runtime, ocr_collector, timing, loading) {
                     Ok(observation) => observation,
+                    // #402 HS-5d (register §1.279): an observation whose frames did not keep one
+                    // geometry (a paired Nemu session's display that moved from the main display
+                    // to the application's between them, HS-5a D3) ends as a frame that did not
+                    // confirm the step, and the wait goes on in its window: the window's check
+                    // and the pause before the next observation, as after any such frame.
+                    Err(failure) if is_geometry_change(&failure) => {
+                        last_frame_page = None;
+                        missed = true;
+                        still.observation_ended(runtime);
+                        backoff.reset();
+                        let now = budget_now(runtime, pace);
+                        if now.saturating_duration_since(started) >= still.limit(runtime, timeout) {
+                            if !rounds.another(runtime, Some((pace, task_deadline))) {
+                                break;
+                            }
+                            started = now;
+                            window_started = budget_observation_now(runtime, pace);
+                            missed = false;
+                            still.new_window(runtime);
+                        }
+                        let remaining = still
+                            .limit(runtime, timeout)
+                            .saturating_sub(budget_elapsed_since(runtime, pace, started));
+                        let boundary =
+                            actingcommand_contract::TaskTimingBoundary::PostconditionWait;
+                        let identity = runtime.task_boundary_identity(boundary);
+                        let wait_started = runtime.monotonic_now();
+                        let now = pace.budget(wait_started);
+                        still.pause(
+                            runtime,
+                            backoff.interval().min(remaining),
+                            task_deadline.saturating_duration_since(now),
+                        );
+                        let wait_ended = runtime.monotonic_now();
+                        runtime.observe_task_boundary(ContainedTaskBoundaryTiming {
+                            boundary,
+                            identity,
+                            context: timing,
+                            started: wait_started,
+                            ended: wait_ended,
+                            succeeded: true,
+                        });
+                        continue;
+                    }
                     Err(failure) => {
                         retries.retry(runtime, failure, timeout)?;
                         started = budget_now(runtime, pace);
