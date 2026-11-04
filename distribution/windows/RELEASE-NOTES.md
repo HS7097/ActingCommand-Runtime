@@ -9,6 +9,105 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.40
+
+本版是 v0.12.39 之后合并的 3 个 PR、4 片：HS-L、HS-5c、HS-5a 和 HS-5b（一个 PR）。先说部署：接口声明都不变（账本仍是 [3, 6]），部署不用带
+`--accept-ledger-one-way`，计划里也没有 `ledger_verify` 这一步；装上以后能退回 v0.12.39，条件见下面的退回。没有新键，默认值文件没改。
+**本版自己不改任何实例的后端。** 运行上要知道的是这几处：
+
+- **应用没在跑时，Nemu 触控的实例也能用了**（HS-5a、HS-5b）。以前：11-04 一台实例在线切到 Nemu 触控和截图以后应用被停，客户端跑启动包时，
+  配对会话的第一帧就以 `display_missing` 打开失败，失败的打开又放不掉自己连上的 Nemu 连接，这台被围栏、转人工等待。现在应用在不在跑不再是打开的条件，
+  和 adb 触控一样：
+  - 配对会话找不到应用包的显示时截主显示（配置的 `display_id`，就是只截图的 Nemu 会话截的那块，截到的是桌面），直到应用的显示出现；之后的帧来自包的显示，
+    会话不换。显示出现、消失或换号（包括主显示 0 换成包的显示 0）时，之前所有帧的几何作废，不会在另一块显示的帧上决定点按。所以应用没跑时，识别、
+    应用入口（启动包拉起应用）、自检和复查都照常。
+  - 应用还没到前台时的点按，由已有的前台检查拒绝（`application_not_foreground` 或 `application_foreground_unknown`），什么都不按、不围栏；从没按下的接触点
+    复位什么都不调用。
+  - 没写 `nemu_app_index` 时，MuMuManager 的 `app info` 读到 `stopped` 也取 0（和 `running` 一样）；取到的编号只有重新绑定才清，打开失败、应用停下或启动都不清。
+    `not_installed`、读不到、回答格式不对照旧以 `nemu_app_index_problem` 具名拒绝。
+  - 打开在连上之后、交出后端之前失败（分辨率探测、第一帧、内存准入、探测缓存）时，打开者在 `LocalOnly` 下断开自己连上、没按过键的连接，这次打开以资源
+    已确认失败，只让打开它的那次工作失败，不围栏；断开本身失败照旧是未确认，照旧围住这一台。只截图的 Nemu 会话也一样：Nemu 截图配 `adb` 触控的实例，
+    第一帧失败以前会围住这台，现在不会。
+  - 配对会话不再报 `display_missing`（`capture_open_cause`），也不再报 `application_not_running`（`nemu_app_index_problem`）；两个词留在词表里，结果码目录的
+    说明写了 0.12.40 起停发。
+- **切回原后端是一种补救**（HS-5c）：被自己的后端打开失败围住的实例可以切换后端，不用先自检，比如
+  `actingctl config clear instance.<instance id>.touch_backend instance.<instance id>.capture_backend` 两个后端键都清回文件值（MCP `ac_config_set`、控制台的
+  「恢复为文件值」、Lab 的 `session backend --clear` 也一样）。放行的围栏原因只有三种：`input_backend_open_failed`、`capture_backend_open_failed`、
+  `paired_backend_open_failed`，入口和准入锁下各核一次。别的原因（没确认抬起的接触点、adb 子进程或管道、应用后端、会话连死两次、截图操作失败、
+  其他包容失败）照旧拒 `backend_switch_refused`（`instance_fenced`）；恢复阶梯拿着这台时认领照旧等不到，拒 `instance_busy`。围栏怎么结束：新后端的准备
+  自检通过就解除（记 `instance_resources_fence_lifted`，链接这次切换的请求），人工等待随之结束，然后才提交；新后端没过、恢复的原后端自检过了，围栏也解
+  （`open_failed`）；两边都没过（`restore_failed`），围栏、人工等待、已做的复查次数和下次复查时间原样不动。
+- **Lab 也能设后端**（HS-L）：`actinglab --instance <alias> session backend [--touch <name>] [--capture <name>] [--clear]`。先读 Status 取这台的实例 id（别名没注册
+  是 `instance_not_found`），再在 `lab` 通道上发一个 `ConfigureSettings`（经 MCP 或控制台转发时带 `via`），两个都给就放在同一个请求里；`--clear` 把两个键都
+  退回文件值，这本身也是一次切换，不能和另外两个一起用。等回执的时长是 `runtime-client` 对后端键算的那个（133 秒加 IO 余量），Lab 自己不算。
+  - 成功打印 `{instance, instance_id, settings, config_version}`。被拒时错误码是回执的顶层码：`config_value_invalid`、`config_key_unknown`、
+    `config_key_not_settable` 退出 2，其余（如 `backend_switch_refused`）退出 4；`details` 带 `config_key`、`config_value_problem` 或 `backend_switch_problem`、
+    `receipt_state` 和整个结果（含原因链）。没有回执的失败照 Lab 原来的映射（`runtime_not_running`、`device_error`）。
+  - 写法不对（没有选项、`--clear` 配别的、重复、不认识的选项或多余的词）在连接之前以 `validation_failed` 拒；`--dry-run` 也在连接之前拒（`dry_run_unsupported`）。
+  - 没有只在 Lab 里生效的后端，每台实例只有一个状态。`session instance list` 和 `session instance registry` 多一列 `runtime_backends`（从 Runtime 读的生效后端
+    和来源，不读 Lab 文件），列表旁边是 `runtime_backends_read`。Lab 命令从 141 条变成 142 条。
+- **生产实例的触控仍是 `adb_shell_input`**：本版不改任何实例的后端。总览在真实例上核过冷路径（应用停着时打开、启动包拉起应用）以后，再逐台切换。
+
+配置：接口修订都不变：`actingd-config` 仍是 [5, 26]，`ledger` 仍是 [3, 6]，`package` 仍是 [3, 6]，`runtime-client` 仍是 [3, 5]，`install-selection` 仍是 [1, 1]，
+`install-control` 仍是 [0, 1]，`runtime-outcomes` 仍是 [1, 1]。`component-interfaces.json` 和 `contracts/component-interfaces.md` 自 v0.12.39 没改，四片的登记
+（§1.275 到 §1.278）都写不升：没有新请求、成员、记录、键、码或词。
+
+- 没有新键，键表、默认值文件和配置示例都没改，部署计划的默认值对比是空的。
+- 结果码：没有新码、新位置、新值键或新词，结果码目录仍是 3889 个码、1740 个位置。停发的两个词（`capture_open_cause` 的 `display_missing`、
+  `nemu_app_index_problem` 的 `application_not_running`）不退役：词表的词没有退役这一说，目录只在它们的说明里写了 0.12.40 起不再报；`paired_backend_open_failed`
+  和 `nemu_app_index_missing` 的说明也照改，签名不变。没有新定稿或退役的条目，所以本版的发布文件是空的。
+- 账本：不升，没有新记录形状。HS-5c 的解除用的是已有的 `instance_resources_fence_lifted`，只是链接的是切换的请求；HS-L 的读取是 Status 和
+  `RuntimeFactSnapshot`，什么都不记。
+- 程序文件：workspace 成员、Runtime 包和 Tools 包的文件清单都和 v0.12.39 一样；`apps/actingctl`、`apps/actingd` 自 v0.12.39 没改，MCP 工具仍是 41 个。
+
+升级时要知道的：
+
+- 不用 `--accept-ledger-one-way`（按安装工具的代码核过）：两边的 `ledger` 都是 [3, 6]，`previous_max_in_next`（6 在 [3, 6] 里）和 `one_way`
+  （R\*.max 6 不大于 Rp.max 6）都过；带上也不改判断。现行和目标的 `ledger` 相同，所以计划里没有 `ledger_verify`，apply 不读账本。
+- 安装命令的代码自 v0.12.39 没有改，v0.12.39 的安装工具判的边和本版一样。本版的 check-config 读现行配置照常通过（没有新键、新成员）；包的边在单一位置根上
+  只有 `pack_declaration_unknown` 警告。
+- 部署的自动回退和 `install undo` 这次可以用：接口边都过，回退门的配置一项也过（见下面的退回）。
+
+退回 v0.12.39（按安装工具的代码核过）：
+
+- 安装工具允许退回，不用 `--accept-ledger-one-way`。`ledger` 两边都是 [3, 6]：`previous_max_in_next`（Rp.max 6 在 R\* [3, 6] 里）和 `one_way` 都过。
+  `runtime-client` 两边都是 [3, 5]，`installer_meets_previous`、`installer_meets_next` 都过；`install-control`、`runtime-outcomes` 两边相同；`package` 两边都是
+  [3, 6]，`bundle_max_in_next` 在单一位置根上只有 `pack_declaration_unknown` 警告；`actingd-config` 两边都是 [5, 26]，配置里没有 v0.12.39 不认得的键
+  （`installer_knows_keys`）。部署的自动回退、`rollback plan|apply`、`install undo` 走的是同一组边和同一个回退门。
+- 回退门其余几项：v0.12.39 自己的读者读部署之后写的账本页（`ledger_readability`，只对本版替换掉的那个构建算，就是 v0.12.39；账本没有新形状，读得了）；
+  v0.12.39 在这个根上最近一次打开在它的期限减余量之内；现行配置过 v0.12.39 的 check-config（没有新键、新成员）。
+- 拒绝的只有这些：退到 v0.12.39 之前（v0.12.38 及更早，`ledger` 上限 5），`previous_max_in_next` 不过（6 不在 [3, 5] 里），带不带标志都以 `interface_edge` 拒绝，
+  和 v0.12.39 一节一样；退到不是本版替换掉的构建，`ledger_readability` 不过，以 `rollback_gate_failed` 结束。
+- 落盘的东西都不挡：账本没有新形状；`host.config_overrides` 里在线设的后端键是 v0.12.39 认得的键，启动时照常恢复；围栏和取到的 Nemu 编号只在内存里；
+  Lab 文件没有新成员。
+- 退回以后：应用没跑时，Nemu 触控的实例又会像 11-04 那样以 `display_missing` 打开失败并被围住，围着时切换又被 `instance_fenced` 拒，`stopped` 又以
+  `application_not_running` 拒；Nemu 截图的打开失败又会围住那台；Lab 没有 `session backend`，实例列表没有 `runtime_backends`。所以已经有实例切到 Nemu
+  触控时，退回之前先在本版上把它切回（`config clear` 两个后端键）。
+- 客户端和 Runtime 的配对（`runtime-client` 本版和 v0.12.39 都是 [3, 5]；`apps/actingctl` 自 v0.12.39 没改）：
+  - v0.12.39 的安装工具装本版：照常，不带 `--accept-ledger-one-way`。它的安装代码和本版一样：`ledger` 两条边都过、没有 `ledger_verify`；它的声明 I 是
+    `runtime-client` [3, 5]，和 Rp [3, 5]、R\* [3, 5] 都有交集（`installer_meets_previous`、`installer_meets_next`），`install-control` [0, 1] 相同，
+    `runtime-outcomes` 1 在它的 [1, 1] 里，现行配置没有它不认识的键（`installer_knows_keys`），本版的 check-config 收现行配置（`next_check_config`）。
+    从本版的构建目录跑本版的安装工具，结果相同。
+  - 控制台（按 `contracts/install-cli.md` 的 UI 边）：生产根是单一位置根，里面没装控制台；`actingctl install` 的更新和回退计划不算控制台的边（`ui_edges`
+    现在只有闸门测试在算，R-15d 以后才进计划）。照边算：钉 v0.12.39 的 UI v0.12.7、v0.12.8（`actingd-config` [5, 26]、`ledger` [3, 6]、`runtime-client` [3, 5]、
+    `runtime-outcomes` [1, 1]）对本版全过：`installer_ui_next_common`（26 三方共有）、`ledger` 的 `previous_max_in_ui` 和 `next_max_in_ui`（6 在 [3, 6] 里）、
+    `ui_meets_next`、`runtime-outcomes` 的 `next_max_in_ui`。从根外跑的这两个控制台连本版：请求、回执、Status、设置列表和账本页的形状都没变，照常。被自己的
+    后端打开失败围住的实例，设置页的「恢复为文件值」现在直接能切回；控制台要不要改掉「先自检」的提示，由 UI 频道定（#429）。
+  - 钉 v0.12.39 的 actingctl、MCP 和 actinglab 连本版：线上形状都没变，照常；钉 v0.12.39 的 actinglab 没有 `session backend`。
+
+运行上的变化：
+
+- Lab 设后端（HS-L）：`actinglab session backend` 走 CLI、MCP、控制台同一个 `ConfigureSettings`；实例列表多 `runtime_backends` 一列；Lab 命令 142 条。
+- 围栏下切回（HS-5c）：自己的后端打开失败造成的围栏放行切换，新后端或恢复的原后端自检通过就解围栏、结束人工等待；其余围栏照旧 `instance_fenced`。
+- 配对会话截主显示（HS-5a）：应用没跑时截主显示、不报 `display_missing`，显示换了作废旧帧几何；打开失败放掉自己连上的连接，不围栏（只截图的 Nemu 会话也一样）。
+- 编号读取（HS-5b）：`stopped` 取 0，不再报 `application_not_running`；取到的编号只在重新绑定时清。
+
+本版合并的 PR：
+
+- #1516 HS-L（#402）：`actinglab --instance <alias> session backend [--touch] [--capture] [--clear]`，在 `lab` 通道上发和 CLI 同一个 `ConfigureSettings`，等待时长取 `runtime-client` 的；拒绝以回执的码退出 2 或 4；`session instance list`、`registry` 多一列 `runtime_backends`；Lab 命令 142 条。
+- #1518 HS-5c（#402）：切换的控制门读围栏原因，`input_backend_open_failed`、`capture_backend_open_failed`、`paired_backend_open_failed` 三种放行，候选自检通过就由现有的准备解围栏、结束人工等待；候选和恢复都没过时围栏原样；其余原因照旧 `instance_fenced`。
+- #1519 HS-5a、HS-5b（#402）：配对会话没有包的显示就截主显示，显示换了作废帧几何；打开失败时打开者放掉自己连上、没按过的连接；`app info` 的 `stopped` 取 0，编号只在重新绑定时清；`display_missing`（配对会话）和 `application_not_running` 停发；HS-3 的两个测试按要求改换并记进退役门表。
+
 ## v0.12.39
 
 本版是 v0.12.38 之后合并的 8 个 PR：HS-4、HS-1、RH-1、HS-2、BX-1、HS-3、R-3、HS-2b。先说部署：账本的声明从 [3, 5] 改为 [3, 6]（HS-2b），
