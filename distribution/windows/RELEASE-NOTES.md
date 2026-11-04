@@ -9,6 +9,159 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.39
+
+本版是 v0.12.38 之后合并的 8 个 PR：HS-4、HS-1、RH-1、HS-2、BX-1、HS-3、R-3、HS-2b。先说部署：账本的声明从 [3, 5] 改为 [3, 6]（HS-2b），
+这一步是单向的；没有新键，默认值文件没改。**本版自己不改任何实例的后端**：只有操作员设了后端键才会切换。运行上要知道的是这几处：
+
+- **账本升到修订 6，只能往前修**（HS-2b）。修订 6 是修订 5 加上运行中切换后端的记录 `device.backend_switched`。部署（`actingctl install update plan`、
+  `update apply`）要带 `--accept-ledger-one-way`，计划多一步账本校验 `ledger_verify`；装上本版以后，安装工具拒绝退回 v0.12.38，部署自己的自动回退和
+  `install undo` 也一样被拒，**不论有没有切换过后端**（见下面的升级和退回）。出了问题只能往前修。读这个 Runtime 账本的控制台要建在修订 6 的读者上
+  （控制台的下一个构建，钉 v0.12.39）；更早的控制台（UI v0.12.6、v0.12.5，`ledger` [3, 5]）账本窗口读到含切换记录的那一页会失败，指示灯、卡片、
+  设置页和实时画面不受影响（UI 频道 11-04 的判读，见配对）。
+- **实例的触控和截图后端现在可以在运行中换**（HS-1、HS-2）。键是 `instance.<instance id>.touch_backend`（`adb_shell_input`、`maatouch`、`minitouch`、
+  `nemu_ipc`）和 `instance.<instance id>.capture_backend`（`adb`、`droidcast_raw`、`nemu_ipc`、`scrcpy`），就是配置条目里原有的两个成员。用
+  `actingctl config set instance.<id>.touch_backend=… instance.<id>.capture_backend=…` 和 `config clear`、MCP `ac_config_set`（带后端键要 operator 档，
+  否则 `tier_not_enabled`，`required_tier` 为 `operator`）；控制台的设置页等它提供这两行以后走的也是这一条路。一次请求只能改一台的后端键（夹带别的键或
+  别台的后端键：`config_value_invalid`，`backend_switch_not_alone`）；设备种类没有这个后端（模拟器不能 `scrcpy`，真机不能 `nemu_ipc`、`droidcast_raw`，
+  夹具一个都没有）是 `backend_kind_unsupported`，Nemu 触控不配 Nemu 截图是 `backend_pair_required`。
+  - 切换要等这台空下来，最多等 3 秒（`CONNECTION_PREPARATION_CLAIM_WAIT_MS`，常量）：跑着的任务（停在两步之间也算）、恢复阶梯、客户端租约、Lab 操作、
+    自检或模拟器控制 3 秒后还占着它，就拒绝，不往后推。暂停算边界：要在任务中途切，先暂停这台、等它排空、切、再恢复。
+  - 拒绝是 `backend_switch_refused`，带 `backend_switch_problem`：`instance_busy`（3 秒内没空下来，原因 `lease_queue_expired` 带 `holder_kind`）、
+    `player_held`（玩家持有；R-7b 之前不会出现）、`instance_fenced`（#403 围栏围着，自检通过才解）、`endpoint_unavailable`（模拟器没开，或真机没绑定）、
+    `open_failed`（新后端没打开或自检没过，原来的已经恢复，原因是失败那一步的码）、`restore_failed`（新的没打开，原来的也没恢复）。
+  - 切换失败时关掉新后端、换回原来的后端再准备一次，所以失败的切换留下的是原来的后端；原来的也打不开时，只有这一台不可用（它的自检失败），别的实例不受影响。
+  - 只有切换成功才记 `host.config_overrides`、`config.parameters.instance` 和新记录 `device.backend_switched`；被拒的切换什么都不提交。带后端键的请求，客户端
+    等回执最多 `BACKEND_SWITCH_WAIT_MS`（133 秒，HS-2b）加 IO 余量。这是切换最坏的情况，各步上界照顺序相加：认领 3 秒、关原来的会话 30 秒、准备新后端 30 秒、
+    提交写账本 10 秒、关新后端 30 秒、恢复原后端的准备 30 秒。所以要用本版的 actingctl 或 MCP 来切。
+  - 等完还没拿到回执（`runtime_receipt_timeout`），结果是「未确认」，不是「没生效」：切换可能还在跑，也可能在客户端不等以后提交了（`config_version` 只在提交时变）。
+    再发之前先重读设置的 `config_version` 和这台实例 Status 里的 `activity`（切换在跑时是带这次 `request_id` 的 `selfcheck`）：版本变了、生效的是要的后端，
+    就是切好了；活动还是这次请求，就是还在切，过一会儿再读。`ledger_observer.writer_reply_timeout_ms` 设得比默认 10 秒大，或者会话关得比额度慢时，切换可能
+    比这个等待还久，规矩一样。
+  - 重启以后在线设的后端照样恢复，在准备实例之前写进注册表；恢复的后端打不开，这台就不可用，不会悄悄退回文件里的值，要人 `config clear`（这本身也是一次切换）。
+  - **切之前先升级控制台**：账本里一旦有 `device.backend_switched`，建在修订 5 读者上的控制台（UI v0.12.6、v0.12.5）账本窗口读到这一页会失败，钉 v0.12.38
+    或更早契约的 actingctl、MCP 和 actinglab 读带载荷的事件页也解不开（见配对）。所以先把控制台换成钉 v0.12.39 的构建，再切。
+- **Nemu 触控补上复位、长按和普通拖动**（HS-4）：复位只在接触点没确认抬起时抬一次，不要帧（抬起没得到确认就以 Unconfirmed 失败，照旧由 #403 围住这一台）；
+  长按是按下、按住、抬起；拖动沿直线每 16 ms 移一次（最多 60 次）再抬起。长按和拖动带这一步的帧，受几何围栏和时限约束，和点击一样。取消直接运行之后欠的
+  那次复位、`actingctl reset`、Lab 的 `reset`，以及包里的长按和普通拖动，在 Nemu 触控的实例上不再被拒，包不用改；`key`、`text` 仍是
+  `nemu_input_capability_unsupported`。生产实例的触控都是 `adb_shell_input`，所以在有人把某台切到 Nemu 触控之前什么都不变。
+- **`nemu_app_index`**（HS-1、HS-3）：触控和截图都写 `nemu_ipc` 的配置条目不用再写它（v0.12.38 以 `nemu_paired_input_configuration_missing` 拒收这种文件）。
+  没写时，Runtime 在打开配对会话之前读一次 `MuMuManager control -v <MuMu 序号> app info -pkg <application_id>`（最多 10 秒，算在这次准备的时间里）：
+  `running` 取 0（主应用）；包没装、应用没在跑、读不到、回答不是文档里的格式，都拒绝打开，`paired_backend_open_failed`，原因 `nemu_app_index_missing` 带
+  `nemu_app_index_problem`（`package_not_installed`、`application_not_running`、`info_unavailable`、`info_malformed`），只有这一台打不开。取到的编号只在内存里，
+  重新绑定或打开以 `display_missing` 失败时清掉；真机从不读 MuMuManager。文件写了编号就用文件的，什么都不读。模拟器条目现在不论后端是什么都可以写编号
+  （写了就查范围，只有 Nemu 触控用它）；Nemu 触控配别的截图，改以 `nemu_input_requires_paired_capture` 拒收。这条 MuMuManager 读取还没在真实例上用过，
+  第一次用先在实验实例上核。
+- **`start_emulator` 在运行中可改**（R-3）：`actingctl config set instance.<id>.start_emulator=true|false`、`config clear`、MCP `ac_config_set`（observer 档）
+  或控制台。只有经发现绑定的实例能设 `true`，夹具、真机、按端口绑定的实例以 `config_value_invalid`（`discovery_binding_required`）拒绝。改这个值本身不启动、
+  也不停止任何模拟器：守护启动时的自动拉起、模拟器看守的重启、IDLE-1 `stop_emulator` 之后的唤醒，都在下一次决定时读生效值，各自的认领在 Start 之前再读
+  一次，值是关的就不启动（`emulator_autostart_skipped`，`skip_reason` 为 `start_emulator_off`）。实例暂停期间照旧不自动拉起它的模拟器（裁定 117 A），动手前
+  再核一次暂停。`idle.action` 为 `stop_emulator` 的实例仍要求 `start_emulator` 为 `true`，所以在这种实例上关掉它要同一条请求里改 `idle.action`。
+- **请求自带的入口恢复包**（RH-1）和配置的回主页包按同一条规矩判：只声明了 `scheduling_outcome`、没有指定操作（也没有资源读数和调整、`on_empty`、阶段
+  `end_pages`、带键的 `on_max_runs` / `on_guard_refused`）的包，用 `--recovery-package` 点名时不再以 `contained_task_home_recovery_package_incompatible` 拒绝。
+  它的 `scheduling_outcome` 不起作用，运行的调度处置只取运行自己的包；其余条件和拒绝码不变。
+
+配置：`actingd-config` 从 [5, 25] 改为 [5, 26]（HS-1：模拟器条目不论后端都可以写 `nemu_app_index`，Nemu 触控不再要求它；HS-2、HS-3、R-3 都不再升，
+两个后端成员和 `start_emulator` 本来就是条目的成员，指令行也不是文件形状）；`ledger` 从 [3, 5] 改为 [3, 6]（HS-2b：HS-2 的记录 `device.backend_switched`）；
+`package` 仍是 [3, 6]，`runtime-client` 仍是 [3, 5]（请求和回执的形状没变，HS-2b 只改了客户端等回执的时长），`install-selection` 仍是 [1, 1]，
+`install-control` 仍是 [0, 1]，`runtime-outcomes` 仍是 [1, 1]（新码、新词都是修订 1 里的增量）。`component-interfaces.json`、`contracts/component-interfaces.md`
+的 `actingd-config` 26 一行和 `ledger` 6 一行、架构测试三处一致。
+
+- 没有新键，默认值文件和配置示例都没改，部署计划的默认值对比是空的。修订 26 读得了修订 5 到 25 的配置文件，没有例外。
+- 键表里变了的行：`instance.<instance id>.touch_backend`、`instance.<instance id>.capture_backend` 两行是新的（`since` 0.12.39，没有默认值，可在线改，
+  控制台档位 `advanced`；`advanced` 从 6 个变成 8 个，满了）；`instance.<instance id>.start_emulator` 从不可设改成可设（读者 R-3，`since` 仍是 0.12.0，
+  档位仍是 `daily`）。每台写了明确后端的设备实例，`config.parameters.instance` 多两行，按设备层的名字报（文件写触控 `adb` 报 `adb_shell_input`）；
+  所以本版第一次启动时设置的版本号会变一次，控制台之前拿到的版本号被拒（`fact_observation_version_conflict`），重读设置就好。
+- 结果码：新码 1 个（`backend_switch_refused`），新位置 2 个（`switch_instance_backends`、`apply_restored_backends`），新值键 2 个（`backend_switch_problem`、
+  `nemu_app_index_problem`），新词表 2 个（`backend_switch_problem` 6 个词、`nemu_app_index_problem` 4 个词）。已有词表加词：`config_value_problem` 4 个
+  （`backend_kind_unsupported`、`backend_pair_required`、`backend_switch_not_alone`、`discovery_binding_required`），`claim_kind` 的 `backend_switch`，
+  `emulator_autostart_skip_reason` 的 `start_emulator_off`，`event_action` 的 `device.backend_switched`；`nemu_app_index_missing` 多可选值
+  `nemu_app_index_problem`。退役 2 个，都是 `retired_in` 0.12.39：`nemu_paired_input_configuration_missing`（`replaced_by` `nemu_input_requires_paired_capture`）
+  和 `nemu_app_index_requires_paired_input`。结果码目录从 3888 个码、1738 个位置变成 3889 个、1740 个；本版的发布文件列的就是这两个退役的码。
+- 账本：`ledger` 6 是 5 加上 `runtime.lifecycle_observed` 的封闭动作 `device.backend_switched` 和它的载荷（`instance_alias`、触控和截图各一个
+  `{from, to}`、可选的 `nemu_app_index` 和封闭词表 `nemu_app_index_source`（`file`、`resolved`）、`session_generation` 和审计，拒收不认识的成员），只在切换
+  成功时写。别的片加的都不进读者核的封闭词表：认领种类 `backend_switch` 只在内存里，进账本只是结果值 `holder_kind`；`start_emulator_off`、两个新的问题词表和
+  增删的码，读者只核拼写。SQLite 格式 2、`actingcommand.event.v3`、记录类型、表、索引和每个视图的类型表都不变，没有迁移，也不用新的状态根，修订 3 到 5 的
+  账本照常读。声明 [3, 5] 的 Runtime（v0.12.38 及更早）解不开修订 6 的记录（`corrupt_ledger_record`），所以不论写没写过，都拒绝退回到它（见退回）。
+  HS-2 当初把这条记录当成像 `device.self_check` 那样的增量，不升修订；`device.self_check` 随第一批打 tag 的 Runtime 发出，早于接口表，属于修订 1，不是先例。
+- 程序文件：workspace 成员、Runtime 包和 Tools 包的文件清单都和 v0.12.38 一样。BX-1 只是 `actingcommand-runtime-config` 导出的免打扰条目解析和序列化
+  函数（`BlackoutListKey`、`BlackoutEntry::parse`、`parse_list`、`to_json`、`list_json`），给控制台用，拒绝和配置检查的一样；Runtime 的行为不变。
+
+升级时要知道的：
+
+- 账本单向（HS-2b，按安装工具的代码和 HS-2b 的安装测试核过）：`update plan`、`update apply` 不带 `--accept-ledger-one-way` 时，`ledger` 的 `one_way` 边
+  不过（R\*.max 6 大于 Rp.max 5），以 `interface_edge` 拒绝，不过的只有这一行，什么都不改；带上以后 `previous_max_in_next`（5 在 [3, 6] 里）和 `one_way`
+  都过，计划的 `notice.rollback_window_bounded` 是 true，操作的 `acknowledged` 记下 `accept_ledger_one_way`。
+- 账本校验：现行和目标的 `ledger` 范围不同，所以 apply 多一步 `ledger_verify`：`--stop` 停下 Runtime 之后、换任何文件之前，用本版的
+  `actingcommand-actingd.exe ledger-maintenance verify --config <root>\actingd.config.json` 做启动时那一套有界检查（`verified-sqlite-bounded`，最新
+  `ledger_observer.open_verify_tail_records` 条逐条认证），期限是 `install.child.ledger_verify_timeout_ms`（默认 1800000）。现行账本只有修订 3 到 5 的记录，本版
+  读得了。不过或到期限时怎么办，和 v0.12.36 一节的账本校验一样：什么文件都没换，但 Runtime 已经停了、hold 还在。
+- 没有自动回退：部署的新 Runtime 起来以后检查不过时，部署自己的自动回退先按回退算一次计划，计划的 `ledger` 边不过（见下面的退回），以 `rollback_gate_failed`
+  （`rollback_gate_parts` 是 `interface_edges`）结束，新构建和 hold 都留着。起过本版 Runtime 的操作，`install undo` 也按回退判，同一条边拒绝；没起过 Runtime 的
+  未完成操作照旧能撤销。出了问题只能往前修。
+- 安装命令的代码自 v0.12.38 没有改（只加了 HS-2b 的安装测试），v0.12.38 的安装工具判的边和本版一样。本版的 check-config 读现行配置照常通过（现行配置没有
+  Nemu 触控，Nemu 截图配 `adb` 触控照旧允许，也没写 `nemu_app_index`）；包的边在单一位置根上只有 `pack_declaration_unknown` 警告；没有新键，部署计划的默认值
+  对比是空的。
+- 第一次真切后端之前：先把控制台换成钉 v0.12.39 的构建，用本版的 actingctl 或 MCP 来切。Nemu 触控配对第一次不写编号，先在实验实例上核 MuMuManager 的那次读取。
+
+退回 v0.12.38（按安装工具的代码和 HS-2b 的安装测试核过）：
+
+- 安装工具拒绝退回。本版声明 `ledger` [3, 6]，v0.12.38 声明 [3, 5]。`rollback plan`、`rollback apply` 的 `ledger` 边 `previous_max_in_next` 要求现行构建的
+  Rp.max 落在目标的 R\* 里：6 不在 [3, 5] 里，这条边不过，两条命令都在算回退门之前就以 `interface_edge` 拒绝，不过的只有这一行，什么都不改。带不带
+  `--accept-ledger-one-way` 都一样：它只放行升级方向的 `one_way` 边（HS-2b 的安装测试两种都核了）。这只看两边的声明，和账本里有没有 `device.backend_switched`
+  无关；v0.12.38 及更早的版本声明的 `ledger` 上限都不到 6，一样被拒。
+- 同一条边挡住部署的自动回退和起过本版 Runtime 以后的 `install undo`（见上面的升级）；v0.12.38 的 actingctl 跑的是同一份安装代码，判的也一样。
+- 为什么要这样（只作记录，不是操作步骤）：v0.12.38 的载荷里没有 `device.backend_switched`，切换成功过一次以后，这条记录还在最新的
+  `ledger_observer.open_verify_tail_records` 条（默认 4096）里时 v0.12.38 打不开账本，读到含它的页也整页失败，回退门的 `ledger_readability` 也不过。发版前核过的
+  另外两处也一并记下：在线设过的后端键和 `start_emulator` 的行，v0.12.38 启动时逐行丢掉（`config_override_dropped`），照常启动；触控、截图都是 `nemu_ipc`
+  却没写 `nemu_app_index` 的配置文件，v0.12.38 以 `nemu_paired_input_configuration_missing` 拒收。手工放回旧程序不在保证内（测试阶段不做旧版兼容）。
+- v0.12.38 一节的退回条件是退回 v0.12.37 的条件；本版连 v0.12.38 都退不回去，它们不适用。
+- 客户端和 Runtime 的配对（`runtime-client` 本版、v0.12.38 和 v0.12.37 都是 [3, 5]；`apps/actingctl` 自 v0.12.38 只改了 `ac_config_set` 带后端键要 operator 档
+  和 HS-2b 的安装测试，MCP 工具仍是 41 个）：
+  - v0.12.38 的安装工具装本版：照常，**要带 `--accept-ledger-one-way`**。它的安装代码和本版一样：不带标志 `one_way` 不过、带上就过，`previous_max_in_next`
+    （5 在 [3, 6] 里）过，计划有 `ledger_verify`，跑的是本版构建里的 `ledger-maintenance verify`。它的声明 I 是 `runtime-client` [3, 5]，和 Rp [3, 5]、
+    R\* [3, 5] 都有交集（`installer_meets_previous`、`installer_meets_next`），`install-control` [0, 1] 相同，`runtime-outcomes` 1 在它的 [1, 1] 里，现行配置
+    没有它不认识的键（`installer_knows_keys`），本版的 check-config 收现行配置（`next_check_config`）。从本版的构建目录跑本版的安装工具，结果相同。
+  - 控制台（按 `contracts/component-interfaces.md` 的边）：生产根是单一位置根，里面没装控制台；`actingctl install` 的更新和回退计划不算控制台的边（`ui_edges`
+    现在只有闸门测试在算，根里有 UI 成员、R-15d 以后才进计划），所以 v0.12.38 和本版的安装工具都不核它。照边算：UI v0.12.6（`actingd-config` [5, 25]、
+    `ledger` [3, 5]、`runtime-client` [3, 5]、`runtime-outcomes` [1, 1]）和 UI v0.12.5（`actingd-config` [5, 24]，其余相同）对本版只有 `ledger` 的
+    `next_max_in_ui` 不过（R\*.max 6 不在 [3, 5] 里）；Rp.max 5 在里面，`actingd-config` 三方有公共修订，`runtime-client` 有交集，`runtime-outcomes` 1 在 [1, 1] 里。
+    从根外跑的这两个控制台连本版：请求和回执照常；账本窗口读到含 `device.backend_switched` 的那一页会失败，指示灯、卡片、设置页和实时画面不受影响（UI 频道
+    11-04 的判读）。所以控制台要换成建在修订 6 读者上的构建（钉 v0.12.39，`ledger` 含 6）。设置页上，UI v0.12.6 钉的 `ui_tier` 不认两个后端键，当作 `hidden`，
+    不显示；`start_emulator` 照旧在 `daily` 里。
+  - 钉 v0.12.38 的 actingctl、MCP 和 actinglab 连本版：设置列表的形状没变，`config.parameters.instance` 每行仍是 `key`、`value`、`source`、`settable`，两行新的
+    后端行和 `settable` 变成 true 的 `start_emulator` 行都解得开；新码 `backend_switch_refused` 在回执里是开放的字符串，也解得开。要注意的两处：
+    - 它们发带后端键的 `ConfigureSettings` 只按普通请求等回执（IO 超时，默认 5 秒），切换没答完就报超时，而切换可能照样提交，所以不要用旧客户端切；
+      超时以后照上面「未确认」的规矩先重读再说。
+    - 切换成功过以后，读到 `device.backend_switched` 的事件页或订阅帧，`forensic` 投影的 actingctl `events` 和 MCP `ac_events`、`lab` 投影的 actinglab 都解不开
+      （只有 `cli`、`concise` 投影不带载荷）。
+  - 钉 v0.12.37 的 actingctl、MCP 和 actinglab 连本版：和钉 v0.12.38 的一样。
+  - 本版的 actingctl 和 MCP 连 v0.12.38 的 Runtime（部署切换的几秒里）：照常；带后端键的 `config set` 和 `ac_config_set` 拿到 `config_key_unknown`，
+    设 `start_emulator` 拿到 `config_key_not_settable`。
+
+运行上的变化：
+
+- Nemu 触控的动作（HS-4）：复位、长按、普通拖动在 Nemu 触控上执行，`key`、`text` 仍不支持；能力表补上声明 `input.segmented_swipe`。
+- 后端两行（HS-1）：每台设备实例的触控、截图后端是两行设置（`advanced`），带整实例检查；`actingd-config` [5, 26]，`nemu_app_index` 放宽。
+- 入口恢复包（RH-1）：请求自带的恢复包和配置的回主页包按同一条规矩判，只声明 `scheduling_outcome` 的不再被拒。
+- 运行中切换后端（HS-2）：带后端键的 `ConfigureSettings` 先切设备再提交，记 `device.backend_switched`；被拒是 `backend_switch_refused`，失败恢复原后端。
+- 免打扰条目（BX-1）：解析和序列化导出给客户端，Runtime 不变。
+- 配对编号（HS-3）：没写 `nemu_app_index` 时，打开配对会话前读一次 MuMuManager 的 `app info -pkg`，读不出来以 `nemu_app_index_problem` 具名拒绝。
+- 自动启动模拟器（R-3）：`start_emulator` 在线可改，只限发现绑定的实例；每个自动启动在决定时读生效值。
+- 账本修订 6（HS-2b）：`ledger` [3, 6]，部署要带 `--accept-ledger-one-way`、多一步 `ledger_verify`，装上后退不回 v0.12.38；切换的回执最多等 133 秒，等完没有
+  回执算未确认，先重读 `config_version` 和实例的 `activity` 再决定重发。
+
+本版合并的 PR：
+
+- #1509 HS-4（#402）：Nemu 触控的复位（接触点没确认抬起才抬一次，不要帧）、长按和普通拖动（带这一步的帧，受几何围栏和时限约束）；`NemuInputSupport` 一份声明，主机闸门和内核都按它走；能力表和 Lab 清单照实写。
+- #1508 HS-1（#402）：`instance.<instance id>.touch_backend`、`.capture_backend` 两行（`advanced`），整实例后端检查（`backend_kind_unsupported`、`backend_pair_required`、`backend_switch_not_alone`），启动恢复丢掉破坏检查的后端值；`nemu_app_index` 放宽，`nemu_paired_input_configuration_missing` 退役。`actingd-config` [5, 26]。
+- #1510 RH-1（#433）：请求自带的入口恢复包和配置的回主页包共用 `scheduling_outcome_incompatibility`，只声明 `scheduling_outcome` 的恢复包不再被拒，它的调度结果不起作用。
+- #1511 HS-2（#402）：运行中切换实例的触控和截图后端：认领 `backend_switch` 最多等 3 秒、控制门、关会话、换注册、按「切换」目的准备，成功才提交并记 `device.backend_switched`，失败恢复原后端；`backend_switch_refused`；客户端回执等待 `BACKEND_SWITCH_WAIT_MS`；`ac_config_set` 带后端键要 operator 档。
+- #1513 BX-1（#429）：`BlackoutListKey`、`BlackoutEntry::parse`、`parse_list`、`to_json`、`list_json` 导出给客户端，配置检查和客户端共用一份实现。
+- #1512 HS-3（#402）：配对会话打开时没写 `nemu_app_index` 就读一次 MuMuManager 的 `app info -pkg`，`running` 取 0，其余以 `nemu_app_index_problem` 具名拒绝；编号缓存在注册项里；`nemu_app_index_requires_paired_input` 退役。
+- #1514 R-3（#429）：`instance.<instance id>.start_emulator` 在线可改（只限发现绑定的实例，`discovery_binding_required`），守护启动、看守重启和 IDLE-1 唤醒都读生效值，`start_emulator_off`。
+- #1517 HS-2b（#402）：HS-2 的记录 `device.backend_switched`（动作、载荷和词表 `nemu_app_index_source`）定为账本修订 6，声明 `ledger` [3, 6]，更新要带 `--accept-ledger-one-way`、回退被拒；`BACKEND_SWITCH_WAIT_MS` 改成切换各步上界之和 133 秒（新契约常量 `LEDGER_WRITER_REPLY_WAIT_MS` 10 秒，账本的默认值取它，值不变），等完没回执算未确认、先重读；新安装测试核更新和回退两边。
+
 ## v0.12.38
 
 本版是 v0.12.37 之后合并的 5 个 PR：LOAD-4、AGT-2b、LOAD-4b、R-12、RA-1。先说部署：账本的声明不变（仍是 [3, 5]），部署不用带
