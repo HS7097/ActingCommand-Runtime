@@ -636,6 +636,16 @@ tests = [
 ]
 incident = ["#402 HS-2b"]
 
+# #402 HS-5c (0.12.40; brief rd-1031/backend-switch/brief-hs-5c.md; register §1.278; contracts/runtime-config.md, "Switching an instance's backends"; contracts/emulator-control.md, "Resource fence"; design rd-1031/backend-switch/model-hs5.md §4.5, §5.2, §6 row HS-5c, with the coordinator's answer to §8 Q3): a fence whose cause is the instance's own backend open that failed (input_backend_open_failed, capture_backend_open_failed, paired_backend_open_failed) lets a backend switch through, at the entry and under the admission guard; config clear of an instance on its Nemu pair, fenced by paired_backend_open_failed and waiting for a person, commits, its candidate's passing self-check lifting the fence (one resource_fence_lifted of instance_resources_fence_lifted carried by the clear's request, its proof the candidate's preparation, before device.backend_switched) and ending the wait, the other instance untouched; a candidate that fails while the previous backends fail again is restore_failed with both causes, and the fence, its cause, since, wait for a person, rechecks and next recheck stay as they were; every other cause still refuses instance_fenced (HS-2's hs2_fenced_instance_refuses, unchanged)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_hs5c::hs5_switch_passes_open_failure_fence_and_lifts",
+    "actingcommand-runtime-host::lib::tests::gate_hs5c::hs5_switch_back_failing_keeps_fence",
+    "actingcommand-runtime-host::lib::tests::gate_hs2::hs2_fenced_instance_refuses",
+]
+incident = ["#402 HS-5c"]
+
 # #402 HS-3 (0.12.39; brief rd-1031/backend-switch/brief-hs-3.md; register §1.271; contracts/device-binding.md, "Backends"; contracts/emulator-control.md, "Application state read"; contracts/actingd-check-config.md, "Discovery-bound instances"; design rd-1031/backend-switch/model-backend-switch.md §4.1, §4.5): the registry builds Nemu touch without nemu_app_index; a paired open takes the file's index whatever the backends and reads nothing, else reads MuMuManager control -v <index> app info -pkg <package> once through the binding's MuMuManager and index (a fake answering the documented document through the device's parser): running resolves 0, not_installed and stopped refuse the open (paired_backend_open_failed caused by nemu_app_index_missing with nemu_app_index_problem package_not_installed, application_not_running), an expired read info_unavailable with its own stage, another document info_malformed, and a refusal is not kept; the resolution is reused until a rebinding and dropped after an open that finds no display; a handset never reads MuMuManager (#402 HS-5b, 0.12.40, register §1.277: stopped resolves index 0 and only a rebinding drops the resolution; hs3_stopped_refused_named and hs3_display_missing_clears_cache left this row, the HS-5b row holds their replacements)
 [[gate]]
 coverage = "Y"

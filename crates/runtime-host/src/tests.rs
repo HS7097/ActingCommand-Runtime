@@ -133,6 +133,9 @@ mod gate_hs1;
 // #402 HS-2 (register §1.270): an instance's touch and capture backends switched while the
 // Runtime runs, and restored at start.
 mod gate_hs2;
+// #402 HS-5c (register §1.278): a backend switch passes a fence its instance's own backend open
+// caused, and the candidate's passing self-check lifts it.
+mod gate_hs5c;
 // #402 HS-3 (register §1.271): a paired Nemu open without `nemu_app_index` resolves it from
 // MuMuManager's read of the application's state (a fake read), named when it cannot.
 mod gate_hs3;

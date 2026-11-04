@@ -19,11 +19,16 @@
 //! Only a preparation of the instance whose self-check passes proves the close and lifts the
 //! fence (`instance_resources_fence_lifted`): the ladder's re-preparation after an
 //! application or emulator restart, or a person's resume, emulator start or restart, or
-//! self-check. The kernel forgets its record of the unconfirmed close once the instance is
-//! fenced, so that such a preparation can open a fresh session, and the owner journal keeps
-//! the owner's resources `in_use` while any fence holds instead of retaining the whole owner:
-//! a restart prepares and self-checks the fenced instance again, as every start does, and no
-//! other instance is affected.
+//! self-check. #402 HS-5c (register §1.278): so does the candidate's preparation of a backend
+//! switch, which a fence lets through when its cause is the instance's own backend open that
+//! failed (`input_backend_open_failed`, `capture_backend_open_failed`,
+//! `paired_backend_open_failed`); the lift record carries the switch's request. A candidate
+//! that fails, and a restore of the previous backends that fails too, leave the fence, its
+//! wait for a person and its rechecks as they were. The kernel forgets its record of the
+//! unconfirmed close once the instance is fenced, so that such a preparation can open a fresh
+//! session, and the owner journal keeps the owner's resources `in_use` while any fence holds
+//! instead of retaining the whole owner: a restart prepares and self-checks the fenced instance
+//! again, as every start does, and no other instance is affected.
 //!
 //! An unconfirmed failure that names no registered instance, or that comes with a ledger
 //! failure, still retains the owner and ends the whole Runtime, as before. So does every
@@ -500,6 +505,20 @@ impl HostShared {
             HostLocation::ReadInstanceResourceFence,
         )?
         .contains_key(&instance_id))
+    }
+
+    /// #402 HS-5c: the cause of `instance_id`'s fence (the code of the failure that fenced it),
+    /// in any stage; `None` when it is not fenced.
+    pub(super) fn resource_fence_cause(
+        &self,
+        instance_id: InstanceId,
+    ) -> RuntimeHostResult<Option<CodeStr>> {
+        Ok(lock(
+            &self.resource_fences,
+            HostLocation::ReadInstanceResourceFence,
+        )?
+        .get(&instance_id)
+        .map(|fence| fence.cause.clone()))
     }
 
     /// Whether any instance is fenced: the owner's resources then stay `in_use`.
