@@ -9,6 +9,101 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.41
+
+本版是 v0.12.40 之后合并的 1 个 PR：#407 PERF-READ。先说部署：`runtime-client` 从 [3, 5] 升到 [3, 6]，其余接口声明都不变（账本仍是 [3, 6]），部署不用带
+`--accept-ledger-one-way`，计划里也没有 `ledger_verify` 这一步；v0.12.40 的安装工具装本版照常，它不读性能状态（见下面的配对）；装上以后能退回 v0.12.40，
+条件见下面的退回。没有新键，默认值文件没改。运行上要知道的是这几处：
+
+- **性能读数现在说得出 Runtime 的内存去了哪里、视觉请求等了多久**（PERF-READ）。`actingctl perf-status` 和 `ac_overview` 的 `performance` 块多两个成员：
+  - `memory`，Runtime 进程自己的内存和各块各归谁：
+    - `process`：进程自己的私有字节 `private_bytes`（和 `Get-Process` 的私有内存是同一个数）、工作集、峰值工作集，在各块读完之后才采样。
+    - `frame_stores`：现在活着的截图帧存储（每个运行、只读观察、Lab 观察和监视探针各持一个）有几个，在内存里一共存了多少字节、多少帧，最大的一个多少字节；
+      按各存储自己的记账。
+    - `vision_models`：已经载入的视觉模型（`ocr` 或 `nn`），每个带载入前后私有字节的增量 `load_private_bytes`（载入期间别的线程分配的也算进去；采样失败、
+      或者引擎不是它自己载的就不写）。没有模型时不显示。
+    - `ledger_capture`：账本采集队列内存段的字节数和条数。
+    - `packages`：在跑的运行里已经量出主包的个数，和这些包的字节合计（任务计时的 `package_load_bytes`）。
+    - `facts`：实例事实库和 Runtime 事实库的条数（是条数，不是字节）。
+  - `vision`：每个视觉模型自 Runtime 启动以来的请求数、推理次数，等模型锁的时间和在引擎里推理的时间，各有合计和最长（微秒）。载入两边都不算；等锁超时的
+    请求没有推理，所以平均推理时间要按 `inferences` 算。没有模型被请求过时不显示。
+  - 全部从内存读，不读也不写账本。
+  - `process` 在两种情况下缺省，绝不显示成 0：进程采样失败（警告 `perf_memory_unavailable`，原因是采样器的码）；各块的字节加起来超过私有字节（同一个警告，
+    带 `actual_bytes` 各块之和、`limit_bytes` 私有字节；几个模型同时载入、增量互相算进去时可能碰到）。这时各块照常显示，这条警告排在最前面。有 `process`
+    时各块之和不超过私有字节是形状规则，违反的答复是 `invalid_performance_status`。
+  - 为什么：#407 的性能工作进了 0.12，每一处改动都要用这些读数量改前和改后；以前只有 `Get-Process` 的一个总数，说不出内存在谁手里、视觉慢在等锁还是在推理。
+- **读这个状态的程序要和 Runtime 一起换**：`max` 低于 6 的读者读到带新成员的答复会以 `runtime_receipt_decode_failed` 失败并锁住连接，配对检查照样通过；
+  本版每次都填 `memory`，所以这样的读者根本读不了 `PerformanceStatus`，其余读法不变。Runtime 没法只对这样的读者省掉新成员：请求 v4、回执 v2 的 schema
+  字串不变，请求里不带修订号。同一构建的 actingctl（含 MCP 服务和看门狗）和 actinglab 随 Runtime 一起换；安装工具、看门狗、actinglab 和现有的控制台都不读它
+  （见下面的配对）。
+
+配置：接口修订只有 `runtime-client` 一处升：[3, 5] 改为 [3, 6]，`min` 不变（`contracts/component-interfaces.md` 的修订 6，登记 §1.280、§3 W23；
+`distribution/windows/component-interfaces.json` 同改）。其余都不变：`actingd-config` 仍是 [5, 26]，`ledger` 仍是 [3, 6]，`package` 仍是 [3, 6]，
+`install-selection` 仍是 [1, 1]，`install-control` 仍是 [0, 1]，`runtime-outcomes` 仍是 [1, 1]。
+
+- 没有新键，键表、默认值文件和配置示例都没改，部署计划的默认值对比是空的。
+- 结果码：新码 `perf_memory_unavailable`（warning，`since` 0.12.41，值键有 `actual_bytes`、`limit_bytes`）；`performance_memory_status_failed` 和
+  `performance_memory_structure_invalid` 的说明补上了进程计数，签名不变。结果码目录从 3889 个码变成 3890 个，位置仍是 1740 个。新码还没定稿（`review` 待定），
+  也没有退役的条目，所以本版的发布文件是空的。
+- 账本：不升，没有新记录形状；新读数都不进账本。
+- 程序文件：workspace 成员、Runtime 包和 Tools 包的文件清单都和 v0.12.40 一样；`apps/actingctl` 只改了 `ac_overview` 的说明（写上 `memory`、`vision`），
+  MCP 工具仍是 41 个；`apps/actingd` 给视觉提供者装上私有字节的采样。
+
+升级时要知道的（按安装工具的代码核过；安装命令的代码自 v0.12.40 只改了一个测试文件，下面的行号在 v0.12.40 和本版相同）：
+
+- 不用 `--accept-ledger-one-way`：两边的 `ledger` 都是 [3, 6]，`previous_max_in_next` 和 `one_way` 都过（`apps/actingctl/src/install/plan.rs` 282–294）；
+  现行和目标的 `ledger` 相同，所以计划里没有 `ledger_verify`，apply 不读账本。
+- `runtime-client` 的边：安装工具自己的声明 I 编在程序里（`install/host.rs` 25），v0.12.40 的是 [3, 5]，和 Rp [3, 5]、R\* [3, 6] 都有交集，
+  `installer_meets_previous`、`installer_meets_next` 都过（`plan.rs` 308–323，交集判断在 234–236）。`install-control` [0, 1] 相同，`runtime-outcomes` 1 在
+  它的 [1, 1] 里，现行配置没有它不认识的键（`installer_knows_keys`），本版的 check-config 收现行配置（`next_check_config`）。
+- **v0.12.40 的安装工具不发 `PerformanceStatus`。** 它连 Runtime 只有一处 `connect`（`install/runtime.rs` 178），经它发的只有 Status（210）、
+  `RuntimeFactSnapshot`（238）、`ScheduleExplanation`（271）、暂停（339）、恢复（370）、关闭（387）和 `StartReport`（417）；守卫、启动后检查和
+  `install status` 都只走这几样。存活检查是看门狗的 `live_owner`（`watchdog/observe.rs` 573–592），只连接、读 runtime-info。它跑的子程序是 actingd 的
+  `check-config`、`ledger-maintenance verify` 和 actingledger 的读页（`install/programs.rs` 186、293、332、426），都不碰这个读。所以启动后检查照常，不会因为
+  新成员解码失败。
+- 整个仓里发这个请求的只有 `runtime-client` 的 `performance_status()`（`crates/runtime-client/src/client.rs` 1320–1325），它唯一的调用者是
+  `apps/actingctl/src/overview.rs` 650–659 的 `performance_block`，用在 `perf-status`（`apps/actingctl/src/main.rs` 688）和概览的 `performance` 块
+  （`overview.rs` 434–452；`actingctl overview` 经 `main.rs` 252，MCP `ac_overview` 经 `mcp/observer.rs` 103）。actinglab、MCP 入口和看门狗都不调它。
+- 部署的自动回退和 `install undo` 这次可以用：接口边都过，回退门的配置一项也过（见下面的退回）。
+
+退回 v0.12.40（按安装工具的代码核过）：
+
+- 安装工具允许退回，不用 `--accept-ledger-one-way`。`ledger` 两边都是 [3, 6]：`previous_max_in_next`（Rp.max 6 在 R\* [3, 6] 里）和 `one_way` 都过。
+  `runtime-client`：本版的安装工具 I 是 [3, 6]，和 Rp [3, 6]、R\* [3, 5] 都有交集（用 v0.12.40 的安装工具 I [3, 5] 也都过），`installer_meets_previous`、
+  `installer_meets_next` 都过；`install-control`、`runtime-outcomes` 两边相同；`package` 两边都是 [3, 6]，`bundle_max_in_next` 在单一位置根上只有
+  `pack_declaration_unknown` 警告；`actingd-config` 两边都是 [5, 26]，配置里没有 v0.12.40 不认得的键（`installer_knows_keys`）。部署的自动回退、
+  `rollback plan|apply`、`install undo` 走的是同一组边和同一个回退门（`install/update.rs` 378 起）。
+- 回退门其余几项：v0.12.40 自己的读者读部署之后写的账本页（`ledger_readability`，只对本版替换掉的那个构建算，就是 v0.12.40；账本没有新形状，读得了）；
+  v0.12.40 在这个根上最近一次打开在它的期限减余量之内；现行配置过 v0.12.40 的 check-config（没有新键）。
+- 拒绝的只有这些：退到 v0.12.38 及更早（`ledger` 上限 5），`previous_max_in_next` 不过（6 不在 [3, 5] 里），带不带标志都以 `interface_edge` 拒绝；
+  退到不是本版替换掉的构建（比如 v0.12.39），`ledger_readability` 不过，以 `rollback_gate_failed` 结束。
+- 落盘的东西都不挡：新读数只在内存里，没有账本记录、键或文件。
+- 退回以后：`perf-status` 和 `ac_overview` 的 `performance` 块没有 `memory`、`vision`；本版的读者读 v0.12.40 的答复照常（两个成员都是可选的）。
+- 客户端和 Runtime 的配对（`runtime-client` 本版 [3, 6]，v0.12.40 [3, 5]）：
+  - v0.12.40 的安装工具装本版：照常，见上面的升级。从本版的构建目录跑本版的安装工具，结果相同。
+  - 看门狗（`actingctl watchdog`，计划任务跑 Tools 包里的 `actingwatch`）、MCP 服务（`actingctl mcp-serve`）和 actinglab 是同一个构建，安装工具把 Runtime
+    和 Tools 两半一起换，它们随 Runtime 一起更新。看门狗和 actinglab 不读这个状态；MCP 的 `ac_overview` 读。稳定入口在安装核验完整以后、两次调用之间换到新的
+    actingctl 子进程；换之前那一小段，旧子进程的 `ac_overview` 读 `performance` 会以 `runtime_receipt_decode_failed` 失败：答复带这条警告和 `incomplete`、
+    没有 `performance` 块，连接已经锁住，同一次里排在它后面的 `fact_refresh` 也读不到；MCP 服务丢掉锁住的连接，下一次调用重连（`mcp/runtime.rs` 275–287），
+    其余块照常。
+  - 控制台（按 `contracts/install-cli.md` 的 UI 边）：UI v0.12.7、v0.12.8 钉的都是 v0.12.39，它们的 `acui-setup` 声明 `actingd-config` [5, 26]、`ledger` [3, 6]、
+    `runtime-client` [3, 5]、`runtime-outcomes` [1, 1]。照边算对本版全过：`installer_ui_next_common`（26 三方共有）、`ledger` 的 `previous_max_in_ui` 和
+    `next_max_in_ui`（6 在 [3, 6] 里）、`ui_meets_next`（[3, 5] 和 [3, 6] 有交集）、`runtime-outcomes` 的 `next_max_in_ui`。这两个版本的源码里没有
+    `PerformanceStatus`，也不调 `performance_status()`（按两个 tag 的源码查过），所以连本版照常：请求、回执、Status、设置列表和账本页的形状都没变。生产根
+    是单一位置根，里面没装控制台；`actingctl install` 的计划不算控制台的边（`ui_edges` 现在只有闸门测试在算）。
+  - 钉 v0.12.40 或更早的 actingctl、MCP（在根外跑的那份）连本版：`perf-status` 和 `ac_overview` 的 `performance` 以 `runtime_receipt_decode_failed` 失败，
+    其余照常；钉 v0.12.40 的 actinglab 照常。
+
+运行上的变化：
+
+- 性能读数（PERF-READ）：每次状态读多拿几把短锁、采一次进程；每个帧存储的记账变化和每个视觉请求多拿一把短锁；每次载入模型采两次私有字节。
+
+本版合并的 PR：
+
+- #1524 PERF-READ（#407）：`PerformanceStatus` 多 `memory`（进程自己的私有字节、工作集和峰值；活着的截图帧存储；已载的视觉模型和载入增量；账本采集队列；
+  在跑运行的包；两个事实库的条数）和 `vision`（每个模型的请求、推理、等锁和推理时间，合计和最长）；警告 `perf_memory_unavailable`；`runtime-client`
+  [3, 6]；全从内存读，不碰账本；新测试四个，没有新键。
+
 ## v0.12.40
 
 本版是 v0.12.39 之后合并的 4 个 PR、5 片：HS-L、HS-5c、HS-5a 和 HS-5b（一个 PR）、HS-5d。先说部署：接口声明都不变（账本仍是 [3, 6]），部署不用带
