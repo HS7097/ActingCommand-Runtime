@@ -7244,7 +7244,11 @@ commit before the fix with `recognition_sample_geometry_changed`. Adapted (HS5D-
 tests whose arrival needs a second frame inside the package's window run on a manual Runtime clock
 (the ladder's at the policy fixture's time, as the other manual-clock ladder tests do; the startup
 package's at 1 000 ms), whose time only the kernel's own waits move, so the window is spent only by
-the 10 ms between two frames and the display follows the count of captures. Their `wait_until`
+the 10 ms between two frames and the display follows the count of captures. In the ladder's test
+each paired open also takes one millisecond (fix 1): its instance is a policy instance on a device
+endpoint, whose start's preparation withholds `session.instance.available` and publishes the seed
+again once the open's self-check passes, and a clock that stood between the two refused the seed
+`fact_observation_not_newer`, so the start failed. Their `wait_until`
 polls only bound a hang (120 s) and decide nothing. The other `gate_hs5` tests need no second frame
 inside a window: with `display_delay` 0 the arrival's first frame is the destination's, and a frame
 that reaches it ends the wait whatever the time.

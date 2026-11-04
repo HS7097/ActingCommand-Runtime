@@ -107,6 +107,8 @@ struct Device {
     commands: Mutex<Vec<(ApplicationLifecycleAction, usize)>>,
     /// While set, a paired open fails with it after the index is resolved.
     open_failure: Mutex<Option<DeviceError>>,
+    /// While set, every paired open takes a millisecond of this manual Runtime clock.
+    clock: Mutex<Option<Arc<ManualRuntimeClock>>>,
 }
 
 impl Device {
@@ -197,6 +199,9 @@ impl FakePairedDevice for Paired {
         instance_alias: &str,
         memory: Option<&actingcommand_device::FrameMemoryBudget>,
     ) -> DeviceResult<()> {
+        if let Some(clock) = self.device.clock.lock().expect("clock").as_ref() {
+            clock.advance(1);
+        }
         self.device.opened.store(false, Ordering::Release);
         match self.registry.open_nemu_session(instance_alias, memory) {
             Ok(_) => Ok(()),
@@ -1185,6 +1190,14 @@ fn hs5_scheduled_run_application_entry_without_application() {
 // `page_confirmation_failed` (the CI of #1521). Here only the kernel's own waits move the clock,
 // 10 ms between two frames, and the fake's display follows the count of captures since the
 // start, so the frames and the window are the same on every run.
+//
+// #402 HS-5d fix 1: and each paired open takes the clock's millisecond. The instance is a policy
+// instance on a device endpoint, so the start's preparation first withholds its
+// `session.instance.available` (`backend_selfcheck:unchecked`) and, once the open's self-check
+// passes, publishes the configured seed again; a clock that did not move between the two gave the
+// seed the withdrawal's time, and the fact store refused it (`fact_observation_not_newer`, the
+// start failed). The open is on the preparing thread between the two, so the seed is a
+// millisecond later on every run; an open inside a rung's window spends that millisecond of it.
 #[test]
 fn hs5_ladder_application_rung_opens_after_entry() {
     let root = TempDir::new().expect("tempdir");
@@ -1194,13 +1207,15 @@ fn hs5_ladder_application_rung_opens_after_entry() {
         &neutral_contained_task_package(true),
         &neutral_non_home_start_contained_task_package(true),
     );
+    let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
     let host_config = host_config
-        .with_runtime_clock(Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0)))
+        .with_runtime_clock(clock.clone())
         .with_startup_packages(BTreeMap::from([(
             POLICY_INSTANCE_ALIAS.to_owned(),
             ContainedTaskRequest::new(entry.display().to_string()).expect("startup package"),
         )]));
     let a = Node::new(POLICY_INSTANCE_ALIAS, TouchBackendChoice::NemuIpc, true);
+    *a.device.clock.lock().expect("clock") = Some(clock);
     *a.device.page.lock().expect("page") = Some(STUCK);
     a.device.display_delay.store(1, Ordering::Release);
     let host = RuntimeHost::start(
