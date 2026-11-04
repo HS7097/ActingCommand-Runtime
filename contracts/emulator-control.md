@@ -725,9 +725,15 @@ which is the ladder's job, as for `contained_task_page_unknown`; it starts the l
   the key; the emulator restart rung prepares it in its readiness wait. Only a preparation whose
   self-check passes proves the close and lifts the fence (`resource_fence_lifted`, naming that
   preparation); a person's resume (allowed while the instance is fenced without a pause),
-  emulator start or restart, or self-check lifts it the same way. A ladder that ends with the
-  instance still fenced, or a fence no ladder may take, leaves the instance waiting for a person
-  (`Status`: `resource_fence.awaiting_person`). The fence is memory only: a restart prepares and
+  emulator start or restart, or self-check lifts it the same way. #402 HS-5c (since 0.12.40,
+  [v012-register.md](v012-register.md) §1.278): so does a backend switch's preparation of its
+  candidate backends, or of the previous ones it restores, on an instance whose fence's cause is
+  its own backend open that failed (`input_backend_open_failed`, `capture_backend_open_failed`,
+  `paired_backend_open_failed`), which lets the switch through; the lift record carries the
+  switch's request ([runtime-config.md](runtime-config.md), "Switching an instance's backends").
+  A fence of any other cause still refuses the switch (`instance_fenced`). A ladder that ends
+  with the instance still fenced, or a fence no ladder may take, leaves the instance waiting for a
+  person (`Status`: `resource_fence.awaiting_person`). The fence is memory only: a restart prepares and
   self-checks the instance again, as every start does. Unconfirmed resources that no single
   registered instance owns, and ledger failures, still retain the owner and end the Runtime. So
   does any unconfirmed close once the Runtime is shutting down (a requested shutdown, or after a
@@ -750,8 +756,9 @@ which is the ladder's job, as for `contained_task_page_unknown`; it starts the l
   (warning; `attempts`, `limit_count`, the self-check's `failure_code` when it named one, and the
   next recheck's `next_occurrence_unix_ms`, absent after the last) and the instance stays fenced
   and waiting. After the last recheck the instance waits for a person with no further recheck,
-  until the fence is lifted (a person's resume, emulator start or restart, or self-check) and a
-  later fence begins a new wait. `Status` shows the wait as `resource_fence.person_wait`
+  until the fence is lifted (a person's resume, emulator start or restart, or self-check; or,
+  for a fence its own backend open caused, a backend switch, #402 HS-5c) and a later fence begins
+  a new wait. `Status` shows the wait as `resource_fence.person_wait`
   (`since_unix_ms`, `recheck_attempts`, `recheck_max_attempts`, `next_recheck_unix_ms`, absent
   while a recheck runs, after the last one and while the recheck is off); `ac_overview` shows the
   same member in the instance's row.
