@@ -49,8 +49,9 @@ fn failed(edges: &[Edge]) -> Vec<(&'static str, &'static str)> {
 
 #[test]
 fn r0b_the_build_declares_runtime_client_three_to_four() {
-    // Workflow #432 AGT-1b (register §1.246) raises `max` to 5; the floor this test is about stays.
-    assert_eq!(own_speaks().get("runtime-client"), Some(&[3, 5]));
+    // Workflow #432 AGT-1b (register §1.246) raises `max` to 5 and #407 PERF-READ (§1.280) to 6;
+    // the floor this test is about stays.
+    assert_eq!(own_speaks().get("runtime-client"), Some(&[3, 6]));
 }
 
 #[test]
@@ -80,7 +81,7 @@ fn r0b_a_console_at_three_or_four_pairs_and_one_whose_max_is_two_is_refused() {
             "result": "fail",
             "parties": [
                 {"party": "U*", "source": "manifest", "range": [2, 2]},
-                {"party": "R*", "source": "manifest", "range": [3, 5]},
+                {"party": "R*", "source": "manifest", "range": [3, 6]},
             ],
         })
     );

@@ -1796,8 +1796,8 @@ impl InstanceFactStore {
         Ok(offsets)
     }
 
-    #[cfg(test)]
-    fn active_count(&self) -> usize {
+    /// The active records (#407 PERF-READ: the performance status's `facts.instance_facts`).
+    pub(crate) fn active_count(&self) -> usize {
         self.active.len()
     }
 }

@@ -8,8 +8,9 @@ use actingcommand_device::{Frame, FrameMemoryBudget, FrameMemoryCharge, PixelFor
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
@@ -166,6 +167,8 @@ pub struct FrameStoreConfig {
     memory_source: Option<MemorySampleSource>,
     /// #411 A67-R: the watch told of every budget built from this configuration.
     floor_watch: Option<Arc<BudgetFloorWatch>>,
+    /// #407 PERF-READ: the registry every store opened with this configuration joins.
+    residency: Option<Arc<FrameStoreResidency>>,
 }
 
 impl Default for FrameStoreConfig {
@@ -182,6 +185,7 @@ impl Default for FrameStoreConfig {
             floor_mem_bytes: DEFAULT_FLOOR_MEM_BYTES,
             memory_source: None,
             floor_watch: None,
+            residency: None,
         }
     }
 }
@@ -230,6 +234,13 @@ impl FrameStoreConfig {
     /// configurations.
     pub fn with_floor_watch(mut self, watch: Arc<BudgetFloorWatch>) -> Self {
         self.floor_watch = Some(watch);
+        self
+    }
+
+    /// #407 PERF-READ: every store opened with this configuration joins `residency` for its
+    /// life and publishes its resident bytes and frames there.
+    pub fn with_residency(mut self, residency: Arc<FrameStoreResidency>) -> Self {
+        self.residency = Some(residency);
         self
     }
 
@@ -310,6 +321,103 @@ impl BudgetFloorWatch {
         Ok(std::mem::take(&mut *self.entered.lock().map_err(|_| {
             CliError::device("frame store floor watch poisoned")
         })?))
+    }
+}
+
+/// #407 PERF-READ: the capture frame stores alive now that were opened with a configuration
+/// carrying this registry ([`FrameStoreConfig::with_residency`]), each with the bytes and frames
+/// it holds in memory by its own accounting. A store joins at its open, publishes after each
+/// change of its accounting and leaves when it is dropped; the performance status reads the sum.
+#[derive(Debug, Default)]
+pub struct FrameStoreResidency {
+    next_id: AtomicU64,
+    stores: Mutex<BTreeMap<u64, StoreResidency>>,
+}
+
+/// One store's resident bytes and frames, as it last published them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct StoreResidency {
+    resident_bytes: u64,
+    resident_frames: u64,
+}
+
+/// #407 PERF-READ: the frame stores of one [`FrameStoreResidency`] now: how many, their resident
+/// bytes and frames summed, and the resident bytes of the largest one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FrameStoreResidencyTotals {
+    pub stores: u64,
+    pub resident_bytes: u64,
+    pub resident_frames: u64,
+    pub largest_resident_bytes: u64,
+}
+
+impl FrameStoreResidency {
+    /// The stores alive now, summed. A poisoned registry is refused, never read as empty.
+    pub fn totals(&self) -> CliOutcome<FrameStoreResidencyTotals> {
+        let stores = self
+            .stores
+            .lock()
+            .map_err(|_| CliError::device("frame store residency poisoned"))?;
+        Ok(stores.values().fold(
+            FrameStoreResidencyTotals {
+                stores: stores.len() as u64,
+                ..FrameStoreResidencyTotals::default()
+            },
+            |totals, store| FrameStoreResidencyTotals {
+                resident_bytes: totals.resident_bytes.saturating_add(store.resident_bytes),
+                resident_frames: totals.resident_frames.saturating_add(store.resident_frames),
+                largest_resident_bytes: totals.largest_resident_bytes.max(store.resident_bytes),
+                ..totals
+            },
+        ))
+    }
+
+    fn join(registry: &Arc<Self>) -> ResidencyEntry {
+        let id = registry.next_id.fetch_add(1, Ordering::Relaxed);
+        registry
+            .stores
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(id, StoreResidency::default());
+        ResidencyEntry {
+            registry: Arc::clone(registry),
+            id,
+        }
+    }
+}
+
+/// A store's place in its [`FrameStoreResidency`], left when the store is dropped. A poisoned
+/// registry is still updated (its values are plain numbers), so a store never stays counted after
+/// it is gone; the next [`FrameStoreResidency::totals`] refuses the registry all the same.
+struct ResidencyEntry {
+    registry: Arc<FrameStoreResidency>,
+    id: u64,
+}
+
+impl ResidencyEntry {
+    fn publish(&self, resident_bytes: u64, resident_frames: u64) {
+        if let Some(store) = self
+            .registry
+            .stores
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get_mut(&self.id)
+        {
+            *store = StoreResidency {
+                resident_bytes,
+                resident_frames,
+            };
+        }
+    }
+}
+
+impl Drop for ResidencyEntry {
+    fn drop(&mut self) {
+        self.registry
+            .stores
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.id);
     }
 }
 
@@ -623,6 +731,10 @@ pub struct FrameStore {
     fixture_capacity_limit: Option<u64>,
     budget: MemoryBudget,
     resident_bytes: u64,
+    /// #407 PERF-READ: the entries whose pixels are held in memory (`FrameStorage::Resident`).
+    resident_frames: u64,
+    /// #407 PERF-READ: this store's place in its configuration's residency registry.
+    residency: Option<ResidencyEntry>,
     memory: FrameMemoryBudget,
     memory_config: Arc<Mutex<FrameStoreConfig>>,
     payload_bytes: u64,
@@ -659,6 +771,7 @@ impl FrameStore {
                 .map(|budget| budget.budget_bytes)
                 .map_err(|error| actingcommand_device::DeviceError::fatal(error.to_string()))
         });
+        let residency = config.residency.as_ref().map(FrameStoreResidency::join);
         Ok(Self {
             config,
             #[cfg(test)]
@@ -667,6 +780,8 @@ impl FrameStore {
             fixture_capacity_limit: None,
             budget,
             resident_bytes: 0,
+            resident_frames: 0,
+            residency,
             memory,
             memory_config,
             payload_bytes: 0,
@@ -955,6 +1070,7 @@ impl FrameStore {
             spill_failed: false,
             memory_metadata,
         };
+        self.resident_frames = self.resident_frames.saturating_add(1);
         self.add_estimate(entry.resident_estimate);
         self.entries.push(entry);
         let index = self.entries.len() - 1;
@@ -1426,6 +1542,7 @@ impl FrameStore {
         let estimate = self.entries[index].resident_estimate;
         self.entries[index].storage = FrameStorage::Artifact(material);
         self.entries[index].storage_state = FrameStorageState::Artifact;
+        self.resident_frames = self.resident_frames.saturating_sub(1);
         self.replace_resident_estimate(
             index,
             ResidentEstimate {
@@ -1480,14 +1597,18 @@ impl FrameStore {
         let metadata = self.entries[index].resident_estimate.metadata;
         let released =
             match std::mem::replace(&mut self.entries[index].storage, FrameStorage::Dropped) {
-                FrameStorage::Resident(_) | FrameStorage::Artifact(_) => self
-                    .replace_resident_estimate(
+                storage @ (FrameStorage::Resident(_) | FrameStorage::Artifact(_)) => {
+                    if matches!(storage, FrameStorage::Resident(_)) {
+                        self.resident_frames = self.resident_frames.saturating_sub(1);
+                    }
+                    self.replace_resident_estimate(
                         index,
                         ResidentEstimate {
                             metadata,
                             ..ResidentEstimate::default()
                         },
-                    ),
+                    )
+                }
                 FrameStorage::Dropped => 0,
             };
         self.entries[index].thumb.values = Vec::new();
@@ -1564,6 +1685,14 @@ impl FrameStore {
         self.encoder_workspace_reserved_bytes = self
             .encoder_workspace_reserved_bytes
             .saturating_add(estimate.encoder_workspace);
+        self.publish_residency();
+    }
+
+    /// #407 PERF-READ: hands the store's resident bytes and frames to its residency registry.
+    fn publish_residency(&self) {
+        if let Some(entry) = &self.residency {
+            entry.publish(self.resident_bytes, self.resident_frames);
+        }
     }
 
     fn replace_resident_estimate(&mut self, index: usize, estimate: ResidentEstimate) -> u64 {
@@ -1586,6 +1715,7 @@ impl FrameStore {
         self.encoder_workspace_reserved_bytes = self
             .encoder_workspace_reserved_bytes
             .saturating_sub(estimate.encoder_workspace);
+        self.publish_residency();
     }
 
     fn is_key_frame(&self, input: &FrameStoreFrameInput) -> bool {

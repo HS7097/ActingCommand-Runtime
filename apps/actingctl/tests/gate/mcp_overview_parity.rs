@@ -781,7 +781,8 @@ fn assert_rows(side: &str, answer: &Value) {
 // #385 P-m): each read takes them from its own clock. #411 A42: so does each row's window with
 // no run in it. #422 P29: and the performance read's ledger_read_pages, since each overview reads
 // its own run block through the ledger's reader pool, so the second read counts more pages by
-// design.
+// design. #407 PERF-READ: and its memory, the process's counters and its owners' parts at the
+// moment of each read.
 fn without_window_start(answer: &Value) -> Value {
     let mut answer = answer.clone();
     if let Some(window) = answer.get_mut("run_window").and_then(Value::as_object_mut) {
@@ -804,6 +805,7 @@ fn without_window_start(answer: &Value) -> Value {
     if let Some(performance) = answer.get_mut("performance").and_then(Value::as_object_mut) {
         performance.remove("observed_at_unix_ms");
         performance.remove("ledger_read_pages");
+        performance.remove("memory");
     }
     answer
 }

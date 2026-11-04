@@ -2847,6 +2847,11 @@ actingcommand_contract::outcome_codes! {
         /// Warning. A learned baseline is held at its clamp (keys `signal_kind`, `baseline_us`,
         /// `limit_us`; optional `instance_id`).
         BaselineClamped => "perf_baseline_clamped": warning / none,
+        /// Warning. #407 PERF-READ: the status read shows no `memory.process`, never a zero in
+        /// its place: the process's own memory sample failed (caused by the sampler's failure),
+        /// or the parts read beside it claimed more than its private bytes (keys `actual_bytes`,
+        /// the parts, and `limit_bytes`, the private bytes).
+        MemoryUnavailable => "perf_memory_unavailable": warning / none,
     }
 }
 

@@ -40,6 +40,28 @@ pub fn sample_physical_memory() -> Result<PhysicalMemorySample, Code> {
     }
 }
 
+/// #407 PERF-READ: this process's own memory counters, in bytes: its private bytes (the commit
+/// charge only it holds), its working set and its peak working set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OwnProcessMemory {
+    pub private_bytes: u64,
+    pub working_set_bytes: u64,
+    pub peak_working_set_bytes: u64,
+}
+
+/// #407 PERF-READ: reads this process's own memory counters (on Windows `GetProcessMemoryInfo` on
+/// itself, extended counters); a platform without them answers `performance_sampler_unsupported`.
+pub fn sample_own_process_memory() -> Result<OwnProcessMemory, Code> {
+    #[cfg(windows)]
+    {
+        windows::sample_own_process_memory()
+    }
+    #[cfg(not(windows))]
+    {
+        Err(HostMetricsCode::PerformanceSamplerUnsupported.code())
+    }
+}
+
 /// Resolve the current binding without taking another free-space sample.
 pub fn capacity_volume(path: &Path) -> Result<String, CapacityUnavailable> {
     capacity::volume(path)

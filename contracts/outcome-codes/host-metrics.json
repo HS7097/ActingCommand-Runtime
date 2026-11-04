@@ -177,7 +177,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A host performance sample failed: the memory status structure size does not fit the API.",
+      "description": "A host performance sample failed: the memory status structure size, or (Workflow #407 PERF-READ) that of the process memory counters, does not fit the API.",
       "common_causes": "TBD",
       "handling": "TBD"
     },
@@ -197,7 +197,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A host performance sample failed: the physical memory status could not be read.",
+      "description": "A host performance sample failed: the physical memory status, or (Workflow #407 PERF-READ) the Runtime process's own memory counters, could not be read.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

@@ -829,6 +829,20 @@ pub trait VisionProvider: fmt::Debug + Send + Sync {
         &self,
         request: NnProviderRequest<'_>,
     ) -> Result<NnProviderResult, VisionProviderError>;
+
+    /// #407 PERF-READ (register §1.280): the models loaded now, each with the growth of the
+    /// process's private bytes across its load, read from memory without waiting for a model in
+    /// use. A provider that keeps no such account answers none.
+    fn loaded_models(&self) -> Vec<actingcommand_contract::VisionModelMemoryStatus> {
+        Vec::new()
+    }
+
+    /// #407 PERF-READ (register §1.280): each model's requests since the start, their waits for
+    /// the model's lock and their inference times, read from memory without waiting for a model
+    /// in use. A provider that keeps no such account answers none.
+    fn model_timings(&self) -> Vec<actingcommand_contract::VisionModelTimingStatus> {
+        Vec::new()
+    }
 }
 
 pub trait AssetResolver: fmt::Debug + Send + Sync {

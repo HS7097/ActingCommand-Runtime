@@ -1063,6 +1063,9 @@ impl PacingShadow {
             warnings,
             // #422 W1-8 (P29): the host's status read adds the ledger's pages.
             ledger_read_pages: None,
+            // #407 PERF-READ: the host's status read adds the memory parts and the vision times.
+            memory: None,
+            vision: Vec::new(),
         }
     }
 }

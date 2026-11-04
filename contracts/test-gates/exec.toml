@@ -132,6 +132,14 @@ tests = [
 ]
 incident = []
 
+# PERF-READ (#407, 0.12.41; brief rd-1031/perf-407/brief-perf-read.md; design rd-1031/perf-407/model-perf-012.md section 2; register section 1.280): the vision adapter times each request's wait for its model's lock apart from its engine's inference, on its own clock, and sums them per model with the longest; a load is in neither
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::provider::tests::vision_timing_separates_lock_wait_from_inference",
+]
+incident = ["#407 PERF-READ"]
+
 # Template match
 [[gate]]
 key = "16"

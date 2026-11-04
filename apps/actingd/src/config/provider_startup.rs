@@ -617,6 +617,13 @@ fn assemble_vision_provider(
             },
         )
     })?;
+    // #407 PERF-READ (register §1.280): each model load is measured by the process's private
+    // bytes before and after it; a failed sample leaves that load's growth unknown (absent).
+    let provider = provider.with_private_bytes_sampler(Arc::new(|| {
+        actingcommand_host_metrics::sample_own_process_memory()
+            .ok()
+            .map(|memory| memory.private_bytes)
+    }));
     startup.record(backend, Observation::Completed { stage })?;
     Ok(Arc::new(provider))
 }

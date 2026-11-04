@@ -146,12 +146,200 @@ impl LedgerReadPagesStatus {
     }
 }
 
+/// #407 PERF-READ (register §1.280; since 0.12.41): the most vision models one status lists, in
+/// `memory.vision_models` and in `vision` each.
+pub const MAX_PERFORMANCE_STATUS_VISION_MODELS: usize = 256;
+/// The longest `model_ref` a vision row carries (the kernel's own bound).
+const MAX_VISION_MODEL_REF_BYTES: usize = 4_096;
+
+/// #407 PERF-READ: the Runtime process's own memory counters, in bytes (on Windows
+/// `GetProcessMemoryInfo` on itself): private bytes, working set and peak working set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProcessMemoryStatus {
+    pub private_bytes: u64,
+    pub working_set_bytes: u64,
+    pub peak_working_set_bytes: u64,
+}
+
+/// #407 PERF-READ: the capture frame stores alive now (one per run, read-only observation, Lab
+/// observation and monitor probe that holds one): how many, the bytes and frames they hold in
+/// memory, summed, and the resident bytes of the largest one. Each store's own accounting.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrameStoresMemoryStatus {
+    pub stores: u64,
+    pub resident_bytes: u64,
+    pub resident_frames: u64,
+    pub largest_resident_bytes: u64,
+}
+
+impl FrameStoresMemoryStatus {
+    /// No store holds nothing; the largest store is within the sum.
+    fn valid(&self) -> bool {
+        if self.stores == 0 {
+            return *self == Self::default();
+        }
+        self.largest_resident_bytes <= self.resident_bytes
+    }
+}
+
+/// #407 PERF-READ: the kind of a vision model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VisionModelKind {
+    Ocr,
+    Nn,
+}
+
+/// #407 PERF-READ: one vision model loaded now: its `model_ref`, its kind and the growth of the
+/// process's private bytes across its load (after less before, so an allocation of another
+/// thread meanwhile counts too), absent when either sample failed or the engine was built before
+/// the provider (not loaded by it).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VisionModelMemoryStatus {
+    pub model_ref: String,
+    pub kind: VisionModelKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load_private_bytes: Option<u64>,
+}
+
+/// #407 PERF-READ: the ledger's capture queue now: the bytes and the records of its memory
+/// segment (the records' measured size, as its watermarks count them).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LedgerCaptureMemoryStatus {
+    pub bytes: u64,
+    pub entries: u64,
+}
+
+/// #407 PERF-READ: the runs running now whose preparation measured their main package, and the
+/// bytes those packages hold in memory, summed (each the task timing's `package_load_bytes`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackagesMemoryStatus {
+    pub runs: u64,
+    pub resident_bytes: u64,
+}
+
+impl PackagesMemoryStatus {
+    fn valid(&self) -> bool {
+        self.runs > 0 || self.resident_bytes == 0
+    }
+}
+
+/// #407 PERF-READ: the entries of the two fact stores now: the instance facts active and the
+/// Runtime's own facts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FactStoresMemoryStatus {
+    pub instance_facts: u64,
+    pub runtime_facts: u64,
+}
+
+/// #407 PERF-READ (register §1.280; since 0.12.41): the Runtime process's memory and the parts
+/// its owners hold, all read from memory. `process` is absent, never zero, when its sample
+/// failed or when the parts would claim more than it (the status then carries the warning
+/// `perf_memory_unavailable`). With `process`, the parts' bytes
+/// (frame stores, vision model loads, the capture queue, packages) never exceed its private
+/// bytes. Fact stores are counted in entries, not bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeMemoryStatus {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process: Option<ProcessMemoryStatus>,
+    pub frame_stores: FrameStoresMemoryStatus,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vision_models: Vec<VisionModelMemoryStatus>,
+    pub ledger_capture: LedgerCaptureMemoryStatus,
+    pub packages: PackagesMemoryStatus,
+    pub facts: FactStoresMemoryStatus,
+}
+
+impl RuntimeMemoryStatus {
+    /// The bytes the named parts claim: the frame stores' resident bytes, each loaded vision
+    /// model's load growth, the capture queue's bytes and the running packages' bytes; `None` on
+    /// overflow.
+    pub fn parts_bytes(&self) -> Option<u64> {
+        self.vision_models
+            .iter()
+            .filter_map(|model| model.load_private_bytes)
+            .try_fold(
+                self.frame_stores
+                    .resident_bytes
+                    .checked_add(self.ledger_capture.bytes)?
+                    .checked_add(self.packages.resident_bytes)?,
+                u64::checked_add,
+            )
+    }
+
+    fn valid(&self) -> bool {
+        let process_valid = self.process.is_none_or(|process| {
+            process.working_set_bytes <= process.peak_working_set_bytes
+                && self
+                    .parts_bytes()
+                    .is_some_and(|parts| parts <= process.private_bytes)
+        });
+        let mut models = BTreeSet::new();
+        process_valid
+            && self.parts_bytes().is_some()
+            && self.frame_stores.valid()
+            && self.packages.valid()
+            && self.vision_models.len() <= MAX_PERFORMANCE_STATUS_VISION_MODELS
+            && self.vision_models.iter().all(|model| {
+                valid_model_ref(&model.model_ref)
+                    && models.insert((model.kind, model.model_ref.as_str()))
+            })
+    }
+}
+
+/// #407 PERF-READ (register §1.280; since 0.12.41): one vision model's requests since the
+/// Runtime started, from memory: the requests that waited for its lock, the inferences its engine
+/// ran, and, in microseconds, the time they waited for its lock and the time its engine took,
+/// summed and the longest. A load is neither: it is counted in neither time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VisionModelTimingStatus {
+    pub model_ref: String,
+    pub kind: VisionModelKind,
+    pub requests: u64,
+    pub inferences: u64,
+    pub lock_wait_total_us: u64,
+    pub lock_wait_longest_us: u64,
+    pub inference_total_us: u64,
+    pub inference_longest_us: u64,
+}
+
+impl VisionModelTimingStatus {
+    /// An inference followed a request; a longest time is within its sum; no request, no time.
+    fn valid(&self) -> bool {
+        valid_model_ref(&self.model_ref)
+            && self.inferences <= self.requests
+            && self.lock_wait_longest_us <= self.lock_wait_total_us
+            && self.inference_longest_us <= self.inference_total_us
+            && (self.requests > 0 || self.lock_wait_total_us == 0)
+            && (self.inferences > 0 || self.inference_total_us == 0)
+    }
+}
+
+/// A vision row's `model_ref`: a bounded logical name, never a host path.
+fn valid_model_ref(model_ref: &str) -> bool {
+    !model_ref.trim().is_empty()
+        && model_ref.len() <= MAX_VISION_MODEL_REF_BYTES
+        && !model_ref.contains(['/', '\\', ':'])
+        && !model_ref.chars().any(char::is_control)
+}
+
 /// The answer of `PerformanceStatus`: the mode in effect and, for `full`, the phase; whether the
 /// learning view caps the normal one; the monitor's health; the host row; one row per registered
 /// instance; and the measurement's warnings now (`perf_probe_unavailable` for a host probe that
 /// could not run, `perf_baseline_clamped` for a baseline held at its bound). #422 W1-8 (P29):
 /// `ledger_read_pages`, the ledger reader pool's pages and their times, absent when the Runtime's
-/// ledger has no reader pool.
+/// ledger has no reader pool. #407 PERF-READ (§1.280, since 0.12.41; `runtime-client` 6):
+/// `memory`, the process's memory and the parts its owners hold, and `vision`, each vision
+/// model's lock waits and inference times since the start (absent while no model was asked);
+/// `perf_memory_unavailable` among the warnings when `memory.process` is absent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimePerformanceStatus {
@@ -168,20 +356,32 @@ pub struct RuntimePerformanceStatus {
     pub warnings: Vec<Outcome>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ledger_read_pages: Option<LedgerReadPagesStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<RuntimeMemoryStatus>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vision: Vec<VisionModelTimingStatus>,
 }
 
 impl RuntimePerformanceStatus {
     /// The shape rules: responsiveness within 10 000 basis points, shares within 1 000, factors
     /// never below 1 000, a share of 0 exactly at S4, a phase only under `full`, each instance
-    /// once by a valid alias, every warning a warning, the bounds above, and (#422 W1-8) the
-    /// ledger's page times in order.
+    /// once by a valid alias, every warning a warning, the bounds above, (#422 W1-8) the
+    /// ledger's page times in order, and (#407 PERF-READ) the memory parts within the process's
+    /// private bytes, each vision model once per kind with its times in order.
     pub fn validate(&self) -> RuntimeContractResult<()> {
         let invalid = || RuntimeContractError::new(RuntimeContractCode::InvalidPerformanceStatus);
         let host = &self.host;
         let responsiveness_valid =
             |value: Option<u16>| value.is_none_or(|value| value <= MAX_RESPONSIVENESS_BP);
+        let mut timed = BTreeSet::new();
         if self.observed_at_unix_ms == 0
             || self.ledger_read_pages.is_some_and(|pages| !pages.valid())
+            || self.memory.as_ref().is_some_and(|memory| !memory.valid())
+            || self.vision.len() > MAX_PERFORMANCE_STATUS_VISION_MODELS
+            || !self
+                .vision
+                .iter()
+                .all(|model| model.valid() && timed.insert((model.kind, model.model_ref.as_str())))
             || self.pacing_phase.is_some() && self.pacing_mode != PerformancePacingMode::Full
             || !responsiveness_valid(host.host_responsiveness_bp)
             || !responsiveness_valid(Some(host.responsiveness_bp))
