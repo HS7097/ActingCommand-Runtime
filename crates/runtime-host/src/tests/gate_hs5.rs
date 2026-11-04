@@ -782,7 +782,33 @@ fn self_check(host: &RuntimeHost, alias: &str, connection: u64) -> SchedulingRes
     selfcheck.clone()
 }
 
-/// `actingctl resume` of `alias`: the self-check its reconnect made.
+/// `actingctl pause` of `alias`, as the operator sends it before a resume (a resume needs the
+/// instance paused): it completes.
+fn pause(host: &RuntimeHost, alias: &str, connection: u64) {
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let receipt = send(
+        host,
+        &runtime_request(
+            &ids,
+            RuntimeOperation::PauseScheduling {
+                scope: SchedulingPauseScope::Instance {
+                    instance_alias: alias.to_owned(),
+                },
+                pause_reason: actingcommand_contract::SchedulingPauseReason::new("hs5_check")
+                    .expect("pause reason"),
+                drain_timeout_ms: 1_000,
+            },
+        ),
+        connection,
+    );
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{receipt:?}"
+    );
+}
+
+/// `actingctl resume` of `alias` (paused before): the self-check its reconnect made.
 fn resume(host: &RuntimeHost, alias: &str, connection: u64) -> SchedulingResumeSelfCheck {
     let ids = IdentifierIssuer::new().expect("identifier issuer");
     let receipt = send(
@@ -927,6 +953,7 @@ fn hs5_preparations_pass_without_application() {
         [true],
         "the start's self-check passes"
     );
+    pause(&host, A, 5110);
     assert_passed(&resume(&host, A, 5111));
     assert_eq!(a.device.reads(), 1, "the index was read once and kept");
     assert!(
@@ -1336,7 +1363,7 @@ fn hs5_lab_observe_and_do_without_application() {
     );
     assert_eq!(
         observed.state(),
-        RuntimeReceiptState::Completed,
+        RuntimeReceiptState::Observed,
         "{observed:?}"
     );
     assert!(

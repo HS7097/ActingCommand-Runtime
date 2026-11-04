@@ -149,6 +149,10 @@ fn hs5_main_display_frame_presses_main_display() {
 /// A connection the open made (`connect_id`), its vendor stdio session started, no library
 /// loaded (the in-process callback stands for `nemu_disconnect`), with the paired input of HS-4's
 /// fake device or none (a capture-only open).
+///
+/// Its session holds the process-wide vendor stdio redirect (A36a) from here until it is closed,
+/// so a test holds one connection at a time and closes it before it makes the next, as every
+/// other test that starts the session does.
 fn connection(connect_id: i32, paired: bool) -> NemuIpcWorkerState {
     NemuIpcWorkerState {
         library: None,
@@ -214,20 +218,21 @@ fn hs5_returned_backend_local_close_still_refused() {
     unsafe extern "C" fn released(_id: i32) {
         CALLS.fetch_add(1, Ordering::SeqCst);
     }
-    let pressed = || {
-        let mut state = connection(43, true);
-        state.input.as_mut().expect("the paired input").contact = Contact::Released;
-        (NemuCloser::Opener, state)
-    };
+    // One connection at a time: the second is made only after the first is closed (see
+    // `connection`).
     let closes = [
         (
             NemuCloser::Holder(DeviceCloseAuthority::LocalOnly),
-            connection(42, true),
+            42,
+            false,
         ),
-        pressed(),
+        (NemuCloser::Opener, 43, true),
     ];
-    for (closer, mut state) in closes {
-        let connect_id = state.connect_id;
+    for (closer, connect_id, pressed) in closes {
+        let mut state = connection(connect_id, true);
+        if pressed {
+            state.input.as_mut().expect("the paired input").contact = Contact::Released;
+        }
         let error = state
             .close_with(closer, |_| Ok(released as NemuDisconnect))
             .expect_err("the disconnect needs the ResourceClose witness");
