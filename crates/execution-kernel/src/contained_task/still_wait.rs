@@ -104,6 +104,16 @@ impl StillUnrecognised {
         self.credit = Duration::ZERO;
     }
 
+    /// #402 HS-5d (register §1.279): an observation of the wait ended without a frame the wait
+    /// could judge (its frames did not keep one geometry) and the wait goes on in the same
+    /// window: the stretch up to now is settled, the frames are not known, so the wait is paced
+    /// again; the window keeps its start and its credit.
+    pub(super) fn observation_ended<R: ContainedTaskRuntime>(&mut self, runtime: &mut R) {
+        self.settle(runtime);
+        self.previous = None;
+        self.since = None;
+    }
+
     /// The wait starts a new window of its limit (an extra round, #385 P-k): the window counts
     /// from its start; the wait's frames go on.
     pub(super) fn new_window<R: ContainedTaskRuntime>(&mut self, runtime: &mut R) {

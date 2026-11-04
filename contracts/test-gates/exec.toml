@@ -1886,6 +1886,16 @@ tests = [
 ]
 incident = ["#402 HS-5a"]
 
+# #402 HS-5d (0.12.40; brief rd-1031/backend-switch/brief-hs-5d-flake.md; design rd-1031/backend-switch/model-hs5.md §4.1 D3; register §1.279; no persisted ledger shape, configuration key or outcome code): the arrival wait after an application effect goes on across the display's change from the main display to the application's (on a device the paired session's geometry moves on, D3; here the frames' size changes, the geometry a scripted frame carries), under a target consensus of two frames 100 ms apart on the scripted clock: with the change before the wait's first frame, inside its first observation, between two observations or inside a later one, a page graph's application entry run as a host package and a step plan's application entry both arrive on home; an observation whose frames did not keep one geometry (recognition_sample_geometry_changed) ends as a frame that did not confirm the step, and the wait takes its next observation in the same window after the same pause; when every observation straddles the change the wait ends where its 1 000 ms window ends, with its own code (page_confirmation_failed, contained_task_linear_application_unconfirmed) and limit_ms 1000
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_hs5d::hs5d_graph_arrival_goes_on_across_the_display_change",
+    "actingcommand-execution-kernel::lib::contained_task::gate_hs5d::hs5d_linear_arrival_goes_on_across_the_display_change",
+    "actingcommand-execution-kernel::lib::contained_task::gate_hs5d::hs5d_a_window_of_changes_ends_the_wait_with_its_own_code",
+]
+incident = ["#402 HS-5d"]
+
 # Workflow #406 T4 (0.12.x; register §1.138; no persisted ledger shape: Lab outputs, Lab file members and the MCP argument only; plan-405-406 Q14, Q20; Alice 2026-10-19 Lab principle): an offline run (package dry-run, replay) draws as the kernel, each step from the action seed SHA-256 derives from the run's seed (--seed, else 0), the step index and the operation label, with the touch keys of the root configuration the Lab reads (its touch section over the embedded defaults) and no landing history (center_hotspot_normal_v1), uniform and named xorshift64_uniform_rect_v1 without a touch section; would_click and each replayed effect carry the sampling evidence, the result the seed, and a replay given the reported seed repeats every point; given a seed, the Lab presses a box at the point drawn from it (tap-target through the input port, offline do --scene), not the centre; actinglab's reader and the Lab bundle read single_touch_path_drag_v1, its offline projection element is gesture_not_projectable (do: lab_element_unavailable), offline observe lists its edge with input null, the Lab port refuses it, and an offline run reports its generated path in would_click; a recording declares a path drag in its click rectangle, record stop generates it and checks its path inside the box, and a recorded tap's point_rule names how the Lab pressed (the draw with its sampling, or rect_center)
 [[gate]]
 key = "112"

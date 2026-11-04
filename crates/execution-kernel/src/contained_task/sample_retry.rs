@@ -155,6 +155,20 @@ pub(super) fn is_timeout<E>(failure: &ContainedTaskRunError<E>) -> bool {
     matches!(failure, ContainedTaskRunError::Task(error) if timeout_code(error).is_some())
 }
 
+/// #402 HS-5d (register §1.279): whether `failure` is an observation whose frames did not keep
+/// one geometry (`recognition_sample_geometry_changed`), as when a paired Nemu session's display
+/// moves from the main display to the application's between them (HS-5a D3). The arrival and
+/// confirmation waits end that observation and go on; it is no sampling timeout and takes no
+/// retry.
+pub(super) fn is_geometry_change<E>(failure: &ContainedTaskRunError<E>) -> bool {
+    matches!(
+        failure,
+        ContainedTaskRunError::Task(error)
+            if error.code().as_str()
+                == ExecutionKernelCode::RecognitionSampleGeometryChanged.as_str()
+    )
+}
+
 /// The sampling timeout `error` is, if it is one.
 fn timeout_code(error: &ContainedTaskError) -> Option<ExecutionKernelCode> {
     TIMEOUTS
