@@ -1398,9 +1398,10 @@ presses, and an input that still names a frame of the closed session is refused
 **The steps.** (1) The request is checked under the settings' gate, as every `ConfigureSettings`
 is (the version, the keys, the values, the instance's backend check), and the gate is left. (2) The
 claim. (3) Under the instance's admission guard, without the settings' gate (a status read is not
-blocked): the control gates (a player's hold, a #403 fence, a pending endpoint or an unbound
-handset; the first two are also read before the claim, which then is not taken); the instance's
-kept session closes through the fenced close path; the registration takes the new backends with
+blocked): the control gates (a player's hold, a #403 fence a switch does not remedy, a pending
+endpoint or an unbound handset; the first two are also read before the claim, which then is not
+taken); the instance's kept session closes through the fenced close path; the registration takes
+the new backends with
 its own checks (both explicit, one target, Nemu touch only beside Nemu capture) and recomputes the
 instance's capability table, merged with the provider's rows; a connection preparation on the
 switch's key opens and self-checks them, reading the emulator status first, as a self-check does,
@@ -1424,7 +1425,7 @@ open is.
 |---|---|---|---|
 | `instance_busy` | the claim was not granted within its wait | `lease_queue_expired` (`holder_kind`, `timeout_ms`) | Denied |
 | `player_held` | a player holds the instance | `player_hold_active` | Denied |
-| `instance_fenced` | a #403 fence holds it (a self-check lifts it); also a kept session whose close the fence then took | `instance_resources_fenced` | Denied (Failed for the close) |
+| `instance_fenced` | a #403 fence holds it (a self-check lifts it) whose cause a switch does not remedy: since 0.12.40 (#402 HS-5c) a fence its own backend open caused lets the switch through ("A fence a switch remedies" below); also a kept session whose close the fence then took | `instance_resources_fenced` | Denied (Failed for the close) |
 | `endpoint_unavailable` | its endpoint is pending (the emulator is stopped) or its handset is not bound | — | Denied |
 | `open_failed` | the new backends did not open or failed their self-check; the previous ones are back | the failing step's code (`input_backend_open_failed`, `capture_backend_open_failed` with `capture_open_cause`, `paired_backend_open_failed`, a check or close code; #402 HS-3: a paired open that resolved no Nemu application index has `nemu_app_index_missing` with `nemu_app_index_problem` as its own cause, [device-binding.md](device-binding.md), "Backends") | Failed |
 | `restore_failed` | the new backends failed and the previous ones did not open again: the instance is unavailable (its failed self-check withholds it), no other instance is touched (#419) | both failures, the candidate's then the restore's | Failed |
@@ -1433,6 +1434,27 @@ A refused `host.config_overrides` keeps its own refusal, `host_config_overrides_
 (Failed), after the device's restore; a restore that failed then is its `note`. A value, a kind, a
 pair or a mix of keys stays `config_value_invalid` (Denied). Each refusal is the command's
 `command.rejected` and nothing else is recorded but the opens it made.
+
+**A fence a switch remedies** (#402 HS-5c, [v012-register.md](v012-register.md) §1.278; design
+HS-5 §4.5; since 0.12.40). A #403 fence whose cause (`resource_fence.cause`) is the
+instance's own backend open that failed, `input_backend_open_failed`,
+`capture_backend_open_failed` or `paired_backend_open_failed`, in any stage, lets the switch
+through at both reads of the control gates: other backends are its remedy (a person clears the
+keys back to the file's backends, or names others). The switch then runs its steps as on a free
+instance; a recovery ladder that holds the instance still makes its claim wait and refuse
+(`instance_busy`). The candidate's passing self-check lifts the fence on its way, as every
+passing preparation does ([emulator-control.md](emulator-control.md), "Resource fence": one
+`resource_fence_lifted` of `instance_resources_fence_lifted`, carrying the switch's request and
+naming the candidate's preparation), which ends a wait for a person, before the commit. A failed
+candidate restores the previous backends as above: their passing self-check lifts the fence too
+(`open_failed`); a restore that fails as well (`restore_failed`) leaves the fence, its wait for a
+person, its rechecks so far and the next one's time as they were. A refused `host.config_overrides`
+after a lift restores the previous backends as above and does not fence the instance again (only
+new unconfirmed resources would). Every other cause still refuses the switch
+(`instance_fenced`), because other backends do not remedy it: an input contact left unconfirmed,
+an adb child or pipe left unconfirmed (every backend shares adb), the application backend, a
+session that died twice, a failed capture operation (`capture_backend_operation_failed`), any
+other contained failure. No code, key, word or member is new.
 
 **The wait.** A client waits `BACKEND_SWITCH_WAIT_MS` plus its IO margin for the receipt of a
 `ConfigureSettings` that names a backend key (`runtime-client`'s receipt wait;

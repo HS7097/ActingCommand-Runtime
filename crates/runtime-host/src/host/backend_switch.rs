@@ -11,6 +11,14 @@
 //!   switch (`instance_busy`), never defers it. A player's hold refuses it at the entry
 //!   (`player_held`); under the admission guard a #403 fence (`instance_fenced`) and a pending
 //!   endpoint or an unbound handset (`endpoint_unavailable`) refuse it.
+//! - **The fence a switch remedies** (#402 HS-5c, design `rd-1031/backend-switch/model-hs5.md`
+//!   §4.5; register §1.278). A fence whose cause is the instance's own backend open that failed
+//!   (`input_backend_open_failed`, `capture_backend_open_failed`, `paired_backend_open_failed`)
+//!   lets the switch through, at the entry and under the admission guard: other backends are its
+//!   remedy. The candidate's passing self-check lifts it on the existing path
+//!   (`prepare_connection_attempt`: `instance_resources_fence_lifted`, linked to the switch's
+//!   request); a failing candidate and a failing restore leave it, its wait for a person and its
+//!   rechecks as they were. Every other cause still refuses the switch (`instance_fenced`).
 //! - **The order** (§3.2, §3.3). The kept session closes, the registration takes the new
 //!   backends (`ExecutionKernel::switch_instance_backends`, the registration's own checks), and a
 //!   connection preparation opens and self-checks them on the switch's key
@@ -31,7 +39,9 @@ use super::resource_fence::resource_fence_error;
 use super::selfcheck_emulator::EmulatorStatusRead;
 use super::*;
 use crate::codes::{BackendSwitchProblem, ConfigHostLocation, HostCode, HostLocation};
-use actingcommand_contract::codes::RuntimeErrorCode;
+use crate::error::spelled;
+use actingcommand_contract::codes::{DeviceSelfCheckFailure, RuntimeErrorCode};
+use actingcommand_contract::outcome::CodeStr;
 use actingcommand_contract::{
     ConfigSettingChange, DeviceBackendChange, DeviceBackendSwitched, InstanceGate,
     NemuAppIndexSource, RecoveryTriggerStage,
@@ -87,6 +97,24 @@ fn refused(instance_alias: &str, problem: BackendSwitchProblem) -> RuntimeHostEr
     })
 }
 
+/// #402 HS-5c (design `rd-1031/backend-switch/model-hs5.md` §4.5 and the coordinator's answer to
+/// its §8 Q3): whether a fence of this `cause` lets a switch through. Only the instance's own
+/// backend open that failed (its input, capture or paired Nemu open) is remedied by other
+/// backends. A cause a switch does not remedy keeps refusing it: an unconfirmed contact (the
+/// previous backend must lift it), an adb child or pipe (every backend shares adb), the
+/// application backend, a session dead twice, a failed capture operation, any other contained
+/// failure.
+fn fence_remedied_by_switch(cause: &CodeStr) -> bool {
+    spelled(
+        cause.as_str(),
+        &[
+            DeviceSelfCheckFailure::InputBackendOpenFailed.code(),
+            DeviceSelfCheckFailure::CaptureBackendOpenFailed.code(),
+            DeviceSelfCheckFailure::PairedBackendOpenFailed.code(),
+        ],
+    )
+}
+
 /// A refusal `refused` with the failure behind it, when there is one.
 fn caused(error: RuntimeHostError, cause: Option<Outcome>) -> RuntimeHostError {
     match cause {
@@ -131,9 +159,10 @@ impl HostShared {
             plan,
         } = request;
         let instance_alias = plan.instance_alias.as_str();
-        // §3.1: a player's hold refuses at the entry, as it refuses a self-check; a fence or an
-        // unavailable endpoint, whose key the switch would wait for in vain, too. The gates are
-        // read again under the admission guard once the claim is granted (step 3.1).
+        // §3.1: a player's hold refuses at the entry, as it refuses a self-check; a fence a switch
+        // does not remedy (#402 HS-5c) or an unavailable endpoint, whose key the switch would
+        // wait for in vain, too. The gates are read again under the admission guard once the
+        // claim is granted (step 3.1).
         if let Some(error) = self.switch_gate(&plan)? {
             return Err(self.refuse_settings(links, error, RuntimeReceiptState::Denied));
         }
@@ -317,8 +346,9 @@ impl HostShared {
     }
 
     /// The control gates of a switch (design HS-M §3.1, §3.2 step 3.1), read under the
-    /// instance's admission guard: a player's hold, a #403 fence, a pending endpoint or an
-    /// unbound handset. `None`: the switch may go on.
+    /// instance's admission guard: a player's hold, a #403 fence a switch does not remedy
+    /// (#402 HS-5c: `fence_remedied_by_switch`), a pending endpoint or an unbound handset.
+    /// `None`: the switch may go on.
     fn switch_gate(&self, plan: &BackendSwitchPlan) -> RuntimeHostResult<Option<RuntimeHostError>> {
         let instance_alias = plan.instance_alias.as_str();
         if self.player_holds(instance_alias)? {
@@ -327,7 +357,9 @@ impl HostShared {
                     .with_caused_by(Outcome::new(HostCode::PlayerHoldActive).alias(instance_alias)),
             ));
         }
-        if self.resource_fenced(plan.instance_id)? {
+        if let Some(cause) = self.resource_fence_cause(plan.instance_id)?
+            && !fence_remedied_by_switch(&cause)
+        {
             return Ok(Some(
                 refused(instance_alias, BackendSwitchProblem::InstanceFenced).with_caused_by(
                     resource_fence_error(
@@ -587,21 +619,51 @@ impl RuntimeHost {
     /// capture backend (as ISO-M's containment tests fence one), which the fence's record names
     /// as its cause.
     pub(crate) fn fence_instance_for_test(&self, instance_alias: &str) -> RuntimeHostResult<()> {
+        self.fence_instance_with_cause_for_test(
+            instance_alias,
+            actingcommand_contract::codes::SharedCode::CaptureBackendOperationFailed.code(),
+            RuntimeErrorCode::CaptureFailed,
+        )
+        .map(|_| ())
+    }
+
+    /// #402 HS-5c: fences `instance_alias` as a failure of its own work with the code `cause`
+    /// does (an instance fault, which the fence's record names as its cause) and hands the fence
+    /// to a person, as the lease sweep hands a fence no ladder may take: the instance waits for a
+    /// person, its first recheck due one interval from now.
+    pub(crate) fn fence_instance_awaiting_person_for_test(
+        &self,
+        instance_alias: &str,
+        cause: Code,
+    ) -> RuntimeHostResult<()> {
+        let location = crate::codes::test_spellings::TestLocation::FenceInstanceForTest;
+        let instance_id = self.fence_instance_with_cause_for_test(
+            instance_alias,
+            cause,
+            RuntimeErrorCode::BackendOpenFailed,
+        )?;
+        self.shared_ref(location)?
+            .resource_fence_awaits_person(instance_id)
+    }
+
+    /// Fences `instance_alias` (#403) for an instance fault with the code `cause`, projected as
+    /// `runtime_code`; returns the fenced instance.
+    fn fence_instance_with_cause_for_test(
+        &self,
+        instance_alias: &str,
+        cause: Code,
+        runtime_code: RuntimeErrorCode,
+    ) -> RuntimeHostResult<InstanceId> {
         let location = crate::codes::test_spellings::TestLocation::FenceInstanceForTest;
         let shared = self.shared_ref(location)?;
         let instance_id = shared
             .resolve_instance(instance_alias)
             .map_err(|failure| *failure.error)?
             .instance_id();
-        let failure = RuntimeHostError::instance_fault(
-            actingcommand_contract::codes::SharedCode::CaptureBackendOperationFailed,
-            location,
-            RuntimeErrorCode::CaptureFailed,
-            instance_id,
-        );
+        let failure = RuntimeHostError::instance_fault(cause, location, runtime_code, instance_id);
         shared
             .fence_contained_failure(&failure, instance_id, shared.events.system_links()?)?
-            .map(|_| ())
+            .map(|_| instance_id)
             .ok_or_else(|| {
                 RuntimeHostError::fatal(
                     crate::codes::test_spellings::TestCode::TestInstanceMissing,

@@ -7034,6 +7034,62 @@ switch, with HS-2's boundary, refusals and records.
 **Rollback** (to 0.12.39). Nothing persisted is new; an earlier actinglab has no `session backend`
 and lists no `runtime_backends`.
 
+### 1.278 Slice HS-5c (0.12.40): a backend switch passes a fence its instance's own backend open caused, as the remedy (#402; production on 2026-11-04 12:3x, board #402 6621962566: an instance fenced by its own failed Nemu paired open could not be switched back to its file's backends, `backend_switch_refused` `instance_fenced`; design `rd-1031/backend-switch/model-hs5.md` §1.3, §4.5, §4.6, §5.2 and §6 row HS-5c, with the coordinator's answer to its §8 Q3; coordinator work order `rd-1031/backend-switch/brief-hs-5c.md`)
+
+[runtime-config.md](runtime-config.md) ("Switching an instance's backends": the `instance_fenced`
+row and "A fence a switch remedies") and [emulator-control.md](emulator-control.md) ("Resource
+fence", what lifts a fence) are the contract, with the module note of `host/resource_fence.rs`.
+The number 1.278 is the coordinator's (HS-5a and HS-5b, the device layer and the HS-3 read, take
+§1.276 and §1.277 in a pull request written beside this one). It builds on HS-2 (§1.270), whose
+gates, steps, restore and refusals it keeps, and on #403 and #411 A38, whose fence, lift and wait
+for a person it uses unchanged.
+
+**What.** The switch's control gates (at the entry and again under the admission guard) read the
+fence's cause. A fence caused by the instance's own backend open that failed,
+`input_backend_open_failed`, `capture_backend_open_failed` or `paired_backend_open_failed`, in any
+stage, lets the switch through; every other cause refuses it as before (`instance_fenced`): an
+unconfirmed contact, an adb child or pipe, the application backend (A46), a session dead twice
+(ISO-2b), a failed capture operation, any other contained failure (the coordinator's answer to Q3:
+those three only). A ladder that holds the instance still makes the switch's claim wait and refuse
+(`instance_busy`). The fence ends on the existing path: the candidate's preparation, whose passing
+self-check lifts it in `prepare_connection_attempt` (`instance_resources_fence_lifted`, the lift
+record carrying the switch's request and naming that preparation), which ends a wait for a person,
+before the commit. A failed candidate restores the previous backends (HS-2 step 5), whose passing
+self-check lifts the fence too; when they fail again (`restore_failed`) the fence, its wait for a
+person, its rechecks so far and the next one's time stay as they were.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| HS5C-1 | a fence of cause `input_backend_open_failed`, `capture_backend_open_failed` or `paired_backend_open_failed` passes the switch's gates | behaviour of `switch_gate` (`fence_remedied_by_switch`; the fence's cause read by `resource_fence_cause`) | HS-5c | the host | no code, key, vocabulary word, member or record is new; `hs5_switch_passes_open_failure_fence_and_lifts`; HS-2's `hs2_fenced_instance_refuses` (cause `capture_backend_operation_failed`, unchanged) still refuses |
+| HS5C-2 | the switch's passing candidate lifts the fence | the existing lift of a passing preparation (`resource_fence_lifted`, `instance_resources_fence_lifted`) on the switch's request | HS-5c | the host | a failing candidate and a failing restore leave the fence and its wait as they were; `hs5_switch_back_failing_keeps_fence` |
+
+**Tests** (gate row in `host.toml`, "#402 HS-5c"): the two of the work order, in
+`tests::gate_hs5c`, over HS-2's fake provider (a switch replaces its registered backends; an input
+open fails while its touch backend is one a test names) on a manual Runtime clock, the fenced
+instance's stuck recovery off; the row also names `hs2_fenced_instance_refuses`, the counter-case.
+None adapted. A test helper, `fence_instance_awaiting_person_for_test`, fences an instance for an
+instance fault with the open's code (as `fence_instance_for_test` does with a capture operation's)
+and hands the fence to a person as the lease sweep does with a fence no ladder may take.
+
+**Where it differs from the design's letter.** (a) The tests are in `gate_hs5c.rs`, not the
+design's `gate_hs5.rs`, which HS-5a and HS-5b write in their own pull request. (b)
+`hs5_switch_back_failing_keeps_fence`: the design's §5.2 row names `open_failed`, but that receipt
+means the previous backends opened again, whose passing self-check lifts the fence (§4.5); a
+candidate that fails while the fence stays is `restore_failed`, which the test asserts. Its fence's
+cause is `input_backend_open_failed` (an instance on another touch backend by instruction), so the
+two tests cover two of the three causes.
+
+**Interface.** No step for 0.12.40 ([component-interfaces.md](component-interfaces.md)):
+`runtime-client`, `actingd-config`, `ledger`, `package` and `runtime-outcomes` do not move.
+
+**What changes live.** An instance fenced by its own backend open (on production, a Nemu paired
+open) can be switched, by `actingctl config clear`, `ac_config_set` or the console's 恢复为文件值,
+without a self-check first; the console may stop telling the person to self-check before such a
+switch (#429, the UI channel's). Every other fence refuses as before.
+
+**Rollback** (to 0.12.39). Nothing persisted is new; an earlier build refuses the switch on every
+fence (`instance_fenced`), as before.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
