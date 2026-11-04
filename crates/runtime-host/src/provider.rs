@@ -17,13 +17,13 @@ use actingcommand_contract::{
     InstanceId, MAX_INSTANCE_ALIAS_BYTES, RuntimeErrorCode,
 };
 use actingcommand_device::{
-    Adb, AdbConfig, CaptureBackend, CaptureBackendChoice, CaptureBackendConfig, CaptureOpenCause,
-    DeviceError, DeviceErrorCategory, DeviceErrorDiagnosticMessage, DeviceErrorSensitivity,
-    DeviceLocation, DeviceResult, DeviceTarget, InputBackend, MumuApplicationState,
-    MumuDiscoveryReport, NemuAppIndex, NemuAppIndexProblem, NemuApplicationTarget, NemuInputConfig,
-    NemuIpcSession, NemuResolutionReason, NemuSessionBackends, PreparedSegmentedSwipePlan,
-    TouchBackendChoice, TouchBackendConfig, create_touch_backend_for_fenced_input,
-    discover_mumu_instances, mumu_state_wait,
+    Adb, AdbConfig, CaptureBackend, CaptureBackendChoice, CaptureBackendConfig, DeviceError,
+    DeviceErrorCategory, DeviceErrorDiagnosticMessage, DeviceErrorSensitivity, DeviceLocation,
+    DeviceResult, DeviceTarget, InputBackend, MumuApplicationState, MumuDiscoveryReport,
+    NemuAppIndex, NemuAppIndexProblem, NemuApplicationTarget, NemuInputConfig, NemuIpcSession,
+    NemuResolutionReason, NemuSessionBackends, PreparedSegmentedSwipePlan, TouchBackendChoice,
+    TouchBackendConfig, create_touch_backend_for_fenced_input, discover_mumu_instances,
+    mumu_state_wait,
 };
 use actingcommand_device::{AdbDeviceStateShell, DeviceStateShell};
 use actingcommand_device::{AdbTrackDevices, DeviceSerial, TrackDevicesEvent, TrackDevicesStopper};
@@ -74,8 +74,8 @@ type NemuSessionOpener = Arc<
 >;
 
 /// #402 HS-3 (design HS-M §4.1): the application index a paired Nemu open resolves to when the
-/// configuration names none and `MuMuManager` reports the application running: the main
-/// application, not a clone (the frozen capture bench used it too).
+/// configuration names none and `MuMuManager` reports the application running (#402 HS-5b: or
+/// stopped): the main application, not a clone (the frozen capture bench used it too).
 const RESOLVED_NEMU_APP_INDEX: u32 = 0;
 
 /// The typed, serde-free assembly the daemon hands the registry: every instance it registers,
@@ -428,8 +428,8 @@ struct EntryEndpoint {
     capabilities: EmulatorCapabilityProfile,
     /// #402 HS-3 (design HS-M §4.1, "the cache"): the Nemu application index a paired open
     /// resolved from `MuMuManager` when the configuration names none, for the entry's MuMu index,
-    /// package and root, in memory only. A rebinding drops it, and so does a paired open that
-    /// found no display for the package; the next paired open reads again.
+    /// package and root, in memory only. Only a rebinding drops it (#402 HS-5b, HS3-4: the
+    /// application stopping or starting keeps it); the next paired open then reads again.
     resolved_nemu_app_index: Option<NemuAppIndex>,
 }
 
@@ -796,7 +796,8 @@ impl ExecutionBackendEntry {
             })?;
         }
         // #402 HS-3 (design HS-M §4.1): the file's index wins; without one the index resolved
-        // before holds until a rebinding or a missing display, else `MuMuManager` is read once.
+        // before holds until a rebinding (#402 HS-5b, HS3-4: only a rebinding drops it; the
+        // application stopping or starting does not), else `MuMuManager` is read once.
         let app_index = match (self.nemu_app_index, resolved) {
             (Some(index), _) | (None, Some(index)) => index,
             (None, None) => {
@@ -820,17 +821,7 @@ impl ExecutionBackendEntry {
             },
             memory,
         )
-        .map_err(|error| {
-            // An open that found no display for the package drops the resolution: the next
-            // paired open reads the application's state again.
-            if error
-                .capture_open_failure()
-                .is_some_and(|failure| failure.cause == CaptureOpenCause::DisplayMissing)
-            {
-                self.endpoint().resolved_nemu_app_index = None;
-            }
-            actingcommand_device::observe_open_failure(nemu_pair_open_report(), error)
-        })
+        .map_err(|error| actingcommand_device::observe_open_failure(nemu_pair_open_report(), error))
         .map(|mut pair| {
             pair.backend.input = Box::new(DeviceRegistryInputDiagnosticBackend::new(
                 pair.backend.input,
@@ -842,10 +833,12 @@ impl ExecutionBackendEntry {
 
     /// #402 HS-3 (design HS-M §4.1 item 2): the application index of a paired open whose
     /// configuration names none, from one bounded `control -v <index> app info -pkg <package>`
-    /// read through `source`: `running` is the main application's index; `not_installed`,
-    /// `stopped`, a read that gave no answer and one that answered another document refuse the
-    /// open, the problem named on the error (`nemu_app_index_problem`). A handset is refused
-    /// before anything is read.
+    /// read through `source`: `running` is the main application's index, and so is `stopped`
+    /// (#402 HS-5b, design `model-hs5.md` §4.3: the index is the MuMu clone's, whether the
+    /// application runs or not, and a paired session without the application's display takes
+    /// the main display); `not_installed`, a read that gave no answer and one that answered
+    /// another document refuse the open, the problem named on the error
+    /// (`nemu_app_index_problem`). A handset is refused before anything is read.
     fn resolve_nemu_app_index(
         &self,
         source: ApplicationStateSource,
@@ -879,14 +872,9 @@ impl ExecutionBackendEntry {
             instance_index,
             self.application_id.as_str(),
         ) {
-            Ok(MumuApplicationState::Running) => NemuAppIndex::try_from(RESOLVED_NEMU_APP_INDEX),
-            Ok(MumuApplicationState::Stopped) => Err(refused(
-                NemuAppIndexProblem::ApplicationNotRunning,
-                format!(
-                    "Nemu application index unresolved: MuMuManager reports package {} installed and not running on MuMu instance {instance_index}",
-                    self.application_id
-                ),
-            )),
+            Ok(MumuApplicationState::Running | MumuApplicationState::Stopped) => {
+                NemuAppIndex::try_from(RESOLVED_NEMU_APP_INDEX)
+            }
             Ok(MumuApplicationState::NotInstalled) => Err(refused(
                 NemuAppIndexProblem::PackageNotInstalled,
                 format!(

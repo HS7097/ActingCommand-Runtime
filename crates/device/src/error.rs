@@ -493,7 +493,9 @@ impl DeviceErrorContext {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaptureOpenCause {
     /// The display of the instance's application package does not exist: the application is
-    /// not running (a Nemu display lookup by package answered no display).
+    /// not running (a Nemu display lookup by package answered no display). #402 HS-5a: since
+    /// 0.12.40 no paired session reports it; one without its package's display takes the main
+    /// display (`nemu_paired_display`).
     DisplayMissing,
     /// The connection to the emulator instance failed (a Nemu connect answered no handle).
     ConnectionFailed,
@@ -515,8 +517,8 @@ pub struct CaptureOpenFailure {
 pub enum NemuAppIndexProblem {
     /// `MuMuManager` reports the package not installed on the instance.
     PackageNotInstalled,
-    /// `MuMuManager` reports the package installed but not running: the paired session looks
-    /// its display up by package, which a stopped application has none of.
+    /// `MuMuManager` reports the package installed but not running. #402 HS-5b: since 0.12.40
+    /// never reported; `stopped` resolves the index as `running` does.
     ApplicationNotRunning,
     /// The read gave no answer: no `MuMuManager` to read through, a failed or expired run, a
     /// non-zero exit or an error envelope.

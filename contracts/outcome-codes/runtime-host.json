@@ -9940,9 +9940,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "A paired Nemu open (touch and capture nemu_ipc) found no Nemu application index to open with. Since 0.12.39 (#402 HS-3) the registry no longer refuses to build without one: when the configuration names no nemu_app_index, the Runtime reads MuMuManager's control -v <index> app info -pkg <package> once before the paired session opens, and a running application resolves index 0. This code is then the caused_by link of paired_backend_open_failed, with nemu_app_index_problem: package_not_installed, application_not_running, info_unavailable or info_malformed. Only that instance's open fails.",
-      "common_causes": "The instance's application is not installed or not running when the paired session opens (right after an emulator start, before the startup package launched it); MuMuManager did not answer within 10 s, exited non-zero or answered another document.",
-      "handling": "Start the application (the startup package does after an emulator start) and run a self-check; install it if it is missing. To drive an application clone, name nemu_app_index in the configuration: the file's value wins and nothing is read."
+      "description": "A paired Nemu open (touch and capture nemu_ipc) found no Nemu application index to open with. Since 0.12.39 (#402 HS-3) the registry no longer refuses to build without one: when the configuration names no nemu_app_index, the Runtime reads MuMuManager's control -v <index> app info -pkg <package> once before the paired session opens, and a running application resolves index 0; since 0.12.40 (#402 HS-5b) a stopped one does too. This code is then the caused_by link of paired_backend_open_failed, with nemu_app_index_problem: package_not_installed, info_unavailable or info_malformed (application_not_running is no longer reported since 0.12.40). Only that instance's open fails.",
+      "common_causes": "The instance's application is not installed when the paired session opens; MuMuManager did not answer within 10 s, exited non-zero or answered another document.",
+      "handling": "Install the application if it is missing and run a self-check; check that MuMuManager answers. To drive an application clone, name nemu_app_index in the configuration: the file's value wins and nothing is read."
     },
     "nemu_application_identity_invalid": {
       "category": "error",

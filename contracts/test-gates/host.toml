@@ -646,20 +646,42 @@ tests = [
 ]
 incident = ["#402 HS-5c"]
 
-# #402 HS-3 (0.12.39; brief rd-1031/backend-switch/brief-hs-3.md; register §1.271; contracts/device-binding.md, "Backends"; contracts/emulator-control.md, "Application state read"; contracts/actingd-check-config.md, "Discovery-bound instances"; design rd-1031/backend-switch/model-backend-switch.md §4.1, §4.5): the registry builds Nemu touch without nemu_app_index; a paired open takes the file's index whatever the backends and reads nothing, else reads MuMuManager control -v <index> app info -pkg <package> once through the binding's MuMuManager and index (a fake answering the documented document through the device's parser): running resolves 0, not_installed and stopped refuse the open (paired_backend_open_failed caused by nemu_app_index_missing with nemu_app_index_problem package_not_installed, application_not_running), an expired read info_unavailable with its own stage, another document info_malformed, and a refusal is not kept; the resolution is reused until a rebinding and dropped after an open that finds no display; a handset never reads MuMuManager
+# #402 HS-3 (0.12.39; brief rd-1031/backend-switch/brief-hs-3.md; register §1.271; contracts/device-binding.md, "Backends"; contracts/emulator-control.md, "Application state read"; contracts/actingd-check-config.md, "Discovery-bound instances"; design rd-1031/backend-switch/model-backend-switch.md §4.1, §4.5): the registry builds Nemu touch without nemu_app_index; a paired open takes the file's index whatever the backends and reads nothing, else reads MuMuManager control -v <index> app info -pkg <package> once through the binding's MuMuManager and index (a fake answering the documented document through the device's parser): running resolves 0, not_installed and stopped refuse the open (paired_backend_open_failed caused by nemu_app_index_missing with nemu_app_index_problem package_not_installed, application_not_running), an expired read info_unavailable with its own stage, another document info_malformed, and a refusal is not kept; the resolution is reused until a rebinding and dropped after an open that finds no display; a handset never reads MuMuManager (#402 HS-5b, 0.12.40, register §1.277: stopped resolves index 0 and only a rebinding drops the resolution; hs3_stopped_refused_named and hs3_display_missing_clears_cache left this row, the HS-5b row holds their replacements)
 [[gate]]
 coverage = "Y"
 tests = [
     "actingcommand-runtime-host::lib::tests::gate_hs3::hs3_running_package_resolves_zero",
     "actingcommand-runtime-host::lib::tests::gate_hs3::hs3_file_index_wins",
     "actingcommand-runtime-host::lib::tests::gate_hs3::hs3_not_installed_refused_named",
-    "actingcommand-runtime-host::lib::tests::gate_hs3::hs3_stopped_refused_named",
     "actingcommand-runtime-host::lib::tests::gate_hs3::hs3_reader_timeout_refused_named",
     "actingcommand-runtime-host::lib::tests::gate_hs3::hs3_cache_reused_until_rebind",
-    "actingcommand-runtime-host::lib::tests::gate_hs3::hs3_display_missing_clears_cache",
     "actingcommand-runtime-host::lib::tests::gate_hs3::hs3_handset_never_reads_manager",
 ]
 incident = ["#402 HS-3"]
+
+# #402 HS-5b (0.12.40; brief rd-1031/backend-switch/brief-hs-5ab.md; design rd-1031/backend-switch/model-hs5.md §1, §2, §4.3, §4.4, §5.2; register §1.277, which changed HS-3's HS3-2, HS3-3 and HS3-4; no persisted ledger shape, configuration key or outcome code): a Nemu-touch instance whose application does not run behaves as an adb-touch one, on a fake device whose paired open goes through a real registry entry (its app info read and cache) and the device layer's paired display (HS-5a): the morning of 11-04 (a switch to Nemu touch while the application ran, one app info read, a warm run, ApplicationLifecycle stop, a person's run of the startup package) completes, its first frame the main display's, the frames after its application effect the package's display's, nothing fenced, app info read once; a start's, a resume's and an emulator restart's preparations pass; a fence that waits for a person (paired_backend_open_failed) is lifted by its recheck (instance_resources_fence_recheck_passed) and a person's self-check passes; a person's, a lease-queued and a scheduled run of an application entry package complete; the ladder's application restart rung and the host's own startup package take their first frame from the main display and the next from the package's display on one session; a tap is refused application_not_foreground by the foreground gate and the reset completes; the switch to Nemu commits with nemu_app_index 0 from resolved; the Lab's observe gets a frame and its do is refused by the foreground gate; a read-only observation gets a frame; MuMuManager's stopped resolves index 0 (replaces hs3_stopped_refused_named) and only a rebinding drops the resolution, an application stop, a display_missing open and a start keeping it (replaces hs3_display_missing_clears_cache); an open that failed after connecting and released its connection fails only the run and the self-check, an unconfirmed one still fences; another instance is untouched
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_hs5::hs5_morning_sequence_client_startup_after_stop",
+    "actingcommand-runtime-host::lib::tests::gate_hs5::hs5_preparations_pass_without_application",
+    "actingcommand-runtime-host::lib::tests::gate_hs5::hs5_selfcheck_and_recheck_pass_without_application",
+    "actingcommand-runtime-host::lib::tests::gate_hs5::hs5_direct_run_application_entry_without_application",
+    "actingcommand-runtime-host::lib::tests::gate_hs5::hs5_leased_run_application_entry_without_application",
+    "actingcommand-runtime-host::lib::tests::gate_hs5::hs5_scheduled_run_application_entry_without_application",
+    "actingcommand-runtime-host::lib::tests::gate_hs5::hs5_ladder_application_rung_opens_after_entry",
+    "actingcommand-runtime-host::lib::tests::gate_hs5::hs5_startup_package_opens_after_entry",
+    "actingcommand-runtime-host::lib::tests::gate_hs5::hs5_pointer_input_before_application_refused_by_foreground_gate",
+    "actingcommand-runtime-host::lib::tests::gate_hs5::hs5_switch_to_nemu_without_application_commits",
+    "actingcommand-runtime-host::lib::tests::gate_hs5::hs5_lab_observe_and_do_without_application",
+    "actingcommand-runtime-host::lib::tests::gate_hs5::hs5_readonly_observe_without_application",
+    "actingcommand-runtime-host::lib::tests::gate_hs5::hs5_stopped_resolves_zero",
+    "actingcommand-runtime-host::lib::tests::gate_hs5::hs5_resolution_kept_across_application_stop",
+    "actingcommand-runtime-host::lib::tests::gate_hs5::hs5_open_failure_after_connect_fails_only_the_run",
+    "actingcommand-runtime-host::lib::tests::gate_hs5::hs5_unconfirmed_open_still_fences",
+    "actingcommand-runtime-host::lib::tests::gate_hs5::hs5_other_instances_untouched",
+]
+incident = ["#402 HS-5b"]
 
 # #402 HS-L (0.12.40; brief rd-1031/backend-switch/brief-hs-l.md; register §1.275; contracts/runtime-config.md, "Switching an instance's backends" and "The Lab"; contracts/runtime-interface.md, actinglab's table; contracts/actinglab-dry-run.md; contracts/actinglab-capabilities.md; design rd-1031/backend-switch/model-backend-switch.md §2.2, §3.1, §7 row HS-L): actinglab --instance <alias> session backend [--touch <name>] [--capture <name>] [--clear] sends one ConfigureSettings on the lab channel naming the instance's backend keys (both in one request when both are named, so the registration takes them in one switch) and prints the receipt's settings in effect and config_version; --clear names both without a value and the file's backends come back, which is a switch, and beside --touch or --capture it is refused before anything is sent; a refusal prints the receipt's top code with its problem word, key, receipt state and whole outcome and exits non-zero (config_value_invalid backend_pair_required with nemu_input_requires_paired_capture, exit 2, nothing switched; backend_switch_refused open_failed with input_backend_open_failed after the previous backends came back, exit 4); after a switch a frame held from the closed session is refused input_frame_unavailable and the next do observes first and presses on its own frame; session instance list's runtime_backends is the Runtime's backends in effect with their source and runtime_backends_read the read's config_version, beside the file's columns
 [[gate]]

@@ -141,6 +141,41 @@ pub(super) struct FakeState {
     // #402 HS-3: while set, a paired Nemu open fails with this error, as the device registry's
     // refusal of a paired open does; unset, the instance has no paired session, as before.
     nemu_open_error: std::sync::Mutex<Option<DeviceError>>,
+    // #402 HS-5: while set, the instance's paired session and its application as `paired`
+    // answers them (`FakePairedDevice`); the fake's own backends serve a paired session it opens.
+    paired: std::sync::Mutex<Option<Arc<dyn FakePairedDevice>>>,
+}
+
+/// #402 HS-5 (design `rd-1031/backend-switch/model-hs5.md` §5.2): the paired Nemu session of a
+/// fake instance and the application it runs, as a test models them (`gate_hs5`). The fake
+/// provider asks it for the instance's paired open, its backend switch, its resolved
+/// application index and each capture, and tells it each application command.
+pub(super) trait FakePairedDevice: Send + Sync {
+    /// The paired open of `instance_alias`: `Ok` when it opened or the instance has no paired
+    /// session (the fake's own backends serve the session either way), else its failure.
+    fn open(
+        &self,
+        instance_alias: &str,
+        memory: Option<&actingcommand_device::FrameMemoryBudget>,
+    ) -> DeviceResult<()>;
+    /// The registration takes these backends; the application index the configuration names.
+    fn switch(
+        &self,
+        instance_alias: &str,
+        touch: actingcommand_device::TouchBackendChoice,
+        capture: actingcommand_device::CaptureBackendChoice,
+    ) -> DeviceResult<Option<u32>>;
+    /// The application index the last paired open resolved (`resolved_nemu_app_index`).
+    fn resolved_index(&self, instance_alias: &str) -> Option<u32>;
+    /// An application command reached the device.
+    fn application(&self, action: ApplicationLifecycleAction);
+    /// A capture of the session: fails as the paired session's capture fails.
+    fn capture(&self) -> DeviceResult<()>;
+}
+
+/// The paired device of `state`, when a test set one.
+fn paired_device(state: &FakeState) -> Option<Arc<dyn FakePairedDevice>> {
+    state.paired.lock().expect("fake paired device").clone()
 }
 
 /// Workflow #373 NAV-6: a frame script of [`FakeState`].
@@ -363,6 +398,10 @@ impl CaptureBackend for FakeCapture {
             thread::sleep(Duration::from_millis(capture_delay_ms));
         }
         let capture_number = self.state.capture_count.fetch_add(1, Ordering::AcqRel) + 1;
+        // #402 HS-5: a paired session's capture looks its application's display up first.
+        if let Some(paired) = paired_device(&self.state) {
+            paired.capture()?;
+        }
         if self.state.fail_capture.load(Ordering::Acquire)
             || self.state.fail_capture_on.load(Ordering::Acquire) == capture_number
         {
@@ -1213,6 +1252,11 @@ impl ExecutionBackendProvider for FakeProvider {
             .entries
             .get(instance_alias)
             .ok_or_else(|| DeviceError::fatal("fake instance is not registered"))?;
+        // #402 HS-5: a paired device's registration takes them too, with its own checks.
+        let index = match paired_device(&entry.state) {
+            Some(paired) => paired.switch(instance_alias, touch, capture)?,
+            None => None,
+        };
         let (touch, capture) = (touch.as_str().to_owned(), capture.as_str().to_owned());
         entry.state.switches.lock().expect("fake switches").push((
             touch.clone(),
@@ -1220,7 +1264,13 @@ impl ExecutionBackendProvider for FakeProvider {
             entry.state.open_count.load(Ordering::Acquire),
         ));
         *entry.state.backends.lock().expect("fake backends") = Some((touch, capture));
-        Ok(None)
+        Ok(index)
+    }
+
+    // #402 HS-5: a paired device's resolution; otherwise none, as before.
+    fn resolved_nemu_app_index(&self, instance_alias: &str) -> Option<u32> {
+        let entry = self.entries.get(instance_alias)?;
+        paired_device(&entry.state)?.resolved_index(instance_alias)
     }
 
     fn vision_provider(&self) -> Option<Arc<dyn VisionProvider>> {
@@ -1228,13 +1278,22 @@ impl ExecutionBackendProvider for FakeProvider {
     }
 
     // #402 HS-3: a paired open fails with the error set for it; otherwise there is none.
+    // #402 HS-5: a paired device answers the open; the fake's own backends serve a session it
+    // opened.
     fn open_nemu_session(
         &self,
         instance_alias: &str,
-        _memory: Option<&actingcommand_device::FrameMemoryBudget>,
+        memory: Option<&actingcommand_device::FrameMemoryBudget>,
     ) -> DeviceResult<
         Option<actingcommand_device::OpenedBackend<actingcommand_device::NemuSessionBackends>>,
     > {
+        if let Some(paired) = self
+            .entries
+            .get(instance_alias)
+            .and_then(|entry| paired_device(&entry.state))
+        {
+            return paired.open(instance_alias, memory).map(|()| None);
+        }
         let error = self.entries.get(instance_alias).and_then(|entry| {
             entry
                 .state
@@ -1669,7 +1728,7 @@ impl ExecutionBackendProvider for FakeProvider {
         &self,
         _witness: &actingcommand_contract::FencedWrite,
         instance_alias: &str,
-        _action: ApplicationLifecycleAction,
+        action: ApplicationLifecycleAction,
     ) -> DeviceResult<()> {
         let entry = self
             .entries
@@ -1688,6 +1747,10 @@ impl ExecutionBackendProvider for FakeProvider {
         if entry.state.fail_application.load(Ordering::Acquire) {
             Err(DeviceError::fatal("private application failure"))
         } else {
+            // #402 HS-5: the paired device's application starts or stops.
+            if let Some(paired) = paired_device(&entry.state) {
+                paired.application(action);
+            }
             Ok(())
         }
     }

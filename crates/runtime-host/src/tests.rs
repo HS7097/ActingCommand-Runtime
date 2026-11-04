@@ -139,6 +139,9 @@ mod gate_hs5c;
 // #402 HS-3 (register §1.271): a paired Nemu open without `nemu_app_index` resolves it from
 // MuMuManager's read of the application's state (a fake read), named when it cannot.
 mod gate_hs3;
+// #402 HS-5b (register §1.277): a Nemu-touch instance whose application does not run behaves as
+// an adb-touch one (the paired open, its index read and the host's flows, on a fake device).
+mod gate_hs5;
 // #407 PF-2 (0.12.37), register §1.252: `RecognitionStarted`'s two commits are observed stage by
 // stage.
 mod gate_407_pf2;

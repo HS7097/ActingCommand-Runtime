@@ -18,9 +18,12 @@
 
 use super::*;
 
-const WIDTH: u32 = 400;
-const HEIGHT: u32 = 300;
-const DISPLAY: i32 = 2;
+pub(super) const WIDTH: u32 = 400;
+pub(super) const HEIGHT: u32 = 300;
+/// The application package's display, as Nemu answers it.
+pub(super) const DISPLAY: i32 = 2;
+/// #402 HS-5a: the connection's main display.
+pub(super) const MAIN_DISPLAY: i32 = 0;
 const COMMAND_TIMEOUT_MS: u64 = 12_000;
 // The reserve the deadline keeps for the final lift: min(shutdown, command) timeout.
 const SHUTDOWN_TIMEOUT_MS: u64 = 1_000;
@@ -29,7 +32,7 @@ const REMAINING_MS: u64 = 5_000;
 
 /// A native call or a wait the fake device saw, in order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Call {
+pub(super) enum Call {
     Down(i32, i32),
     Up,
     Wait(u64),
@@ -44,17 +47,24 @@ impl InputOperationCheck for Remaining {
     }
 }
 
-struct FakeDevice {
-    input: Option<NemuInputState>,
-    display: i32,
-    size: (u32, u32),
+pub(super) struct FakeDevice {
+    pub(super) input: Option<NemuInputState>,
+    /// The display the native calls address.
+    pub(super) display: i32,
+    /// #402 HS-5a: what Nemu answers for the application package's display (negative: none),
+    /// and the connection's main display.
+    pub(super) package_display: i32,
+    pub(super) main_display: i32,
+    pub(super) size: (u32, u32),
     // What the native finger up returns; 0 confirms the lift.
     up_code: i32,
-    calls: Vec<Call>,
+    pub(super) calls: Vec<Call>,
+    /// #402 HS-5a: the display each native contact call addressed, in order.
+    pub(super) touched_displays: Vec<i32>,
 }
 
 impl FakeDevice {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let application = NemuApplicationTarget::new(
             "neutral.application",
             NemuAppIndex::try_from(0_u32).expect("application index"),
@@ -66,15 +76,18 @@ impl FakeDevice {
             tap_hold: Duration::from_millis(50),
         };
         Self {
-            input: Some(NemuInputState::new(application, config)),
+            input: Some(NemuInputState::new(application, config).with_main_display(MAIN_DISPLAY)),
             display: DISPLAY,
+            package_display: DISPLAY,
+            main_display: MAIN_DISPLAY,
             size: (WIDTH, HEIGHT),
             up_code: 0,
             calls: Vec::new(),
+            touched_displays: Vec::new(),
         }
     }
 
-    fn input(&self) -> &NemuInputState {
+    pub(super) fn input(&self) -> &NemuInputState {
         self.input.as_ref().expect("the paired input")
     }
 
@@ -84,7 +97,7 @@ impl FakeDevice {
 
     /// The geometry of a frame the connection captures now, as the worker records it with the
     /// frame (`input_geometry`).
-    fn frame(&self) -> Arc<NemuFrameGeometry> {
+    pub(super) fn frame(&self) -> Arc<NemuFrameGeometry> {
         let input = self.input();
         Arc::new(NemuFrameGeometry {
             owner: Arc::clone(&input.owner),
@@ -105,11 +118,25 @@ impl NemuTouchPort for FakeDevice {
         self.display
     }
 
+    fn touch_set_display(&mut self, display: i32) {
+        self.display = display;
+    }
+
+    fn touch_main_display(&self) -> i32 {
+        self.main_display
+    }
+
+    fn touch_package_display(&mut self) -> DeviceResult<i32> {
+        Ok(self.package_display)
+    }
+
+    /// #402 HS-5a: the display is resolved as the worker resolves it, then the frame's size.
     fn touch_resolution(
         &mut self,
-        _context: &InputExecutionContext,
-        _stopped: &AtomicBool,
+        context: &InputExecutionContext,
+        stopped: &AtomicBool,
     ) -> DeviceResult<(u32, u32)> {
+        resolve_display(self, Some((context, stopped)))?;
         Ok(self.size)
     }
 
@@ -122,6 +149,7 @@ impl NemuTouchPort for FakeDevice {
     }
 
     fn touch_native(&mut self, call: NemuTouchCall) -> DeviceResult<i32> {
+        self.touched_displays.push(self.display);
         Ok(match call {
             NemuTouchCall::Down(x, y) => {
                 self.calls.push(Call::Down(x, y));
@@ -152,14 +180,14 @@ impl NemuTouchPort for FakeDevice {
 }
 
 /// The context of a step's input: its frame's geometry, if any, and its check.
-fn context(geometry: Option<Arc<NemuFrameGeometry>>) -> InputExecutionContext {
+pub(super) fn context(geometry: Option<Arc<NemuFrameGeometry>>) -> InputExecutionContext {
     InputExecutionContext {
         geometry,
         check: Arc::new(Remaining(Duration::from_millis(REMAINING_MS))),
     }
 }
 
-fn running() -> AtomicBool {
+pub(super) fn running() -> AtomicBool {
     AtomicBool::new(false)
 }
 

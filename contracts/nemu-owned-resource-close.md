@@ -46,6 +46,23 @@ A failed restore is unconfirmed, keeps the lock and is the session's cached fail
 reported again by its close. Library unload stays after the stdio close, outside any
 redirection, as before.
 
+### The opener's own connection
+
+HS-5a (#402, since 0.12.40; `v012-register.md` §1.276; design R1–R3). The close authority
+above is the holder's: once an open has handed its backend over (it returned it), the
+disconnect needs the current ResourceClose witness, and `LocalOnly` leaves the connection
+open and Unconfirmed, as before (R2). Before that, an open that fails after `nemu_connect`
+returned a handle (its resolution probe, the paired session's or a capture-only session's
+first frame, its memory admission, its probe cache) closes the backend as its opener, under
+`LocalOnly`, and that close calls `nemu_disconnect` for the connection the open made itself,
+provided nothing was pressed on it (no paired input, or a contact that never started): the
+handle is retired, the stdio session and the library close as above, and the open fails with
+its resources confirmed, so only the work that opened it fails (#411 A7) and nothing is
+fenced. An adb open's failure ends the child it started the same way. A disconnect that fails
+(its symbol, its stdio restore, a worker that timed out or stays stuck) keeps its real cause
+and stays Unconfirmed, and the instance is fenced as before (R3, Workflow #403); a connection
+something was pressed on is never released this way.
+
 HS-4 (#402, since 0.12.39; `v012-register.md` §1.268): the input's reset is a release
 call too. It needs no frame and reads no display: a contact whose lift was not confirmed
 (pressed, or lifted without a confirmed answer) is lifted once with the finger up event

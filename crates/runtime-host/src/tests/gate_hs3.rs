@@ -5,10 +5,14 @@
 //! `brief-hs-3.md`): a paired Nemu open whose configuration names no `nemu_app_index` resolves
 //! one itself. The file's index wins; otherwise the registry reads `MuMuManager control -v <index>
 //! app info -pkg <package>` once before the paired session opens: `running` is index 0;
-//! `not_installed`, `stopped` and a read that gives no answer refuse the open, named
+//! `not_installed` and a read that gives no answer refuse the open, named
 //! (`paired_backend_open_failed` caused by `nemu_app_index_missing` with its
 //! `nemu_app_index_problem`). The resolution stays in the registry entry, in memory, until a
-//! rebinding or an open that finds no display; a handset never reads `MuMuManager`.
+//! rebinding; a handset never reads `MuMuManager`. #402 HS-5b (register §1.277) changed HS3-2,
+//! HS3-3 and HS3-4: `stopped` resolves index 0 as `running` does, and only a rebinding drops the
+//! resolution (`gate_hs5`, `hs5_stopped_resolves_zero` and
+//! `hs5_resolution_kept_across_application_stop`, replace `hs3_stopped_refused_named` and
+//! `hs3_display_missing_clears_cache`).
 //!
 //! Nothing here runs `MuMuManager`, adb or the Nemu library: the read is a fake answering the
 //! vendor's documented document through the device layer's own parser (or failing as an expired
@@ -21,29 +25,29 @@ use crate::codes::HostCode;
 use actingcommand_contract::{BackendObservationStatus, BackendOpenEntry, RuntimePayload};
 use actingcommand_device::codes::DeviceStage;
 use actingcommand_device::{
-    AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureOpenCause, CaptureOpenFailure,
-    DeviceTarget, FrameMemoryBudget, MaaTouchConfig, MumuApplicationState, NemuAppIndex,
-    NemuAppIndexProblem, NemuApplicationTarget, NemuInputConfig, NemuSessionBackends,
-    OpenedBackend, TouchBackendChoice, TouchBackendConfig, mumu_instance_port,
+    AdbConfig, CaptureBackendChoice, CaptureBackendConfig, DeviceTarget, FrameMemoryBudget,
+    MaaTouchConfig, MumuApplicationState, NemuAppIndex, NemuAppIndexProblem, NemuApplicationTarget,
+    NemuInputConfig, NemuSessionBackends, OpenedBackend, TouchBackendChoice, TouchBackendConfig,
+    mumu_instance_port,
 };
 use serde_json::{Value, json};
 use std::sync::Mutex;
 
-const ALIAS: &str = "hs3.instance";
+pub(super) const ALIAS: &str = "hs3.instance";
 const HANDSET: &str = "hs3.handset";
-const PACKAGE: &str = "neutral.application";
+pub(super) const PACKAGE: &str = "neutral.application";
 const MUMU_MANAGER: &str = "neutral-mumu-manager";
 const INDEX: u16 = 3;
 const PAIRED_OPEN_FAILED: &str = "paired_backend_open_failed";
 
 /// Every `app info -pkg` read the fake `MuMuManager` answered: the manager, the index, the package.
-type Reads = Arc<Mutex<Vec<(PathBuf, u16, String)>>>;
+pub(super) type Reads = Arc<Mutex<Vec<(PathBuf, u16, String)>>>;
 /// The application index of every paired open the fake opener was handed.
-type Opened = Arc<Mutex<Vec<u32>>>;
+pub(super) type Opened = Arc<Mutex<Vec<u32>>>;
 
 /// A registration with touch `touch` and Nemu capture, bound through discovery to `INDEX` on its
 /// base port (so the CAP-IDX port check reads nothing), as actingd assembles a discovered instance.
-fn registration(touch: TouchBackendChoice) -> ExecutionBackendRegistration {
+pub(super) fn registration(touch: TouchBackendChoice) -> ExecutionBackendRegistration {
     let target = DeviceTarget {
         port: mumu_instance_port(INDEX).expect("base port"),
         ..DeviceTarget::default()
@@ -86,7 +90,7 @@ fn answering(
 
 /// A fake paired open: records the application index it is handed and fails with `failure()`,
 /// opening no device.
-fn opener(
+pub(super) fn opener(
     opened: Opened,
     failure: impl Fn() -> DeviceError + Send + Sync + 'static,
 ) -> impl Fn(
@@ -108,24 +112,13 @@ fn opener(
 }
 
 /// The fake open's failure that is not a missing display (a test has no device).
-fn no_device() -> DeviceError {
+pub(super) fn no_device() -> DeviceError {
     DeviceError::fatal("fixture paired open: no device in a test")
-}
-
-/// The fake open's failure as a Nemu display lookup that found no display for the package.
-fn display_missing() -> DeviceError {
-    DeviceError::fatal("fixture Nemu application display query failed").with_capture_open_failure(
-        CaptureOpenFailure {
-            cause: CaptureOpenCause::DisplayMissing,
-            application_id: Some(PACKAGE.to_owned()),
-            instance_index: Some(i64::from(INDEX)),
-        },
-    )
 }
 
 /// A registry of `registration` whose `MuMuManager` answers `document` and whose paired open
 /// fails with `failure()`.
-fn answering_registry(
+pub(super) fn answering_registry(
     registration: ExecutionBackendRegistration,
     document: Value,
     failure: impl Fn() -> DeviceError + Send + Sync + 'static,
@@ -140,23 +133,23 @@ fn answering_registry(
 }
 
 /// The paired open of `alias`, which every fake here ends in a failure.
-fn open_fails(registry: &ExecutionBackendRegistry, alias: &str) -> DeviceError {
+pub(super) fn open_fails(registry: &ExecutionBackendRegistry, alias: &str) -> DeviceError {
     let Err(error) = registry.open_nemu_session(alias, None) else {
         panic!("the fake paired open never succeeds");
     };
     error
 }
 
-fn read_count(reads: &Reads) -> usize {
+pub(super) fn read_count(reads: &Reads) -> usize {
     reads.lock().expect("reads").len()
 }
 
-fn opened_indices(opened: &Opened) -> Vec<u32> {
+pub(super) fn opened_indices(opened: &Opened) -> Vec<u32> {
     opened.lock().expect("opened").clone()
 }
 
 /// The one read the fake `MuMuManager` answered: the binding's manager and index, the package.
-fn assert_one_read(reads: &Reads) {
+pub(super) fn assert_one_read(reads: &Reads) {
     assert_eq!(
         *reads.lock().expect("reads"),
         vec![(PathBuf::from(MUMU_MANAGER), INDEX, PACKAGE.to_owned())]
@@ -245,7 +238,7 @@ fn hs3_running_package_resolves_zero() {
     assert_one_read(&reads);
     assert_eq!(opened_indices(&opens), vec![0]);
     assert_eq!(error.nemu_app_index_problem(), None, "{error:?}");
-    // The resolution is the entry's (a failure other than a missing display keeps it).
+    // The resolution is the entry's (the open's failure keeps it).
     assert_eq!(registry.resolved_nemu_app_index(ALIAS), Some(0));
 }
 
@@ -313,26 +306,6 @@ fn hs3_not_installed_refused_named() {
     assert_eq!(read_count(&reads), 2);
     // The host names it under the failed paired open.
     assert_eq!(host_names(error), Some(json!("package_not_installed")));
-}
-
-#[test]
-fn hs3_stopped_refused_named() {
-    let (registry, reads, opens) = answering_registry(
-        registration(TouchBackendChoice::NemuIpc),
-        json!({"state": "stopped"}),
-        no_device,
-    );
-
-    let error = open_fails(&registry, ALIAS);
-
-    assert_refused(&error, NemuAppIndexProblem::ApplicationNotRunning);
-    assert_one_read(&reads);
-    assert!(
-        opened_indices(&opens).is_empty(),
-        "nothing opens without an index"
-    );
-    assert_eq!(registry.resolved_nemu_app_index(ALIAS), None);
-    assert_eq!(host_names(error), Some(json!("application_not_running")));
 }
 
 #[test]
@@ -408,27 +381,6 @@ fn hs3_cache_reused_until_rebind() {
     open_fails(&registry, ALIAS);
     assert_eq!(read_count(&reads), 2);
     assert_eq!(opened_indices(&opens), vec![0, 0, 0]);
-}
-
-#[test]
-fn hs3_display_missing_clears_cache() {
-    let (registry, reads, opens) = answering_registry(
-        registration(TouchBackendChoice::NemuIpc),
-        json!({"state": "running"}),
-        display_missing,
-    );
-
-    let error = open_fails(&registry, ALIAS);
-
-    // The open's own failure is kept (A50's cause), and the resolution is dropped.
-    assert_eq!(
-        error.capture_open_failure().map(|failure| failure.cause),
-        Some(CaptureOpenCause::DisplayMissing)
-    );
-    assert_eq!(registry.resolved_nemu_app_index(ALIAS), None);
-    open_fails(&registry, ALIAS);
-    assert_eq!(read_count(&reads), 2);
-    assert_eq!(opened_indices(&opens), vec![0, 0]);
 }
 
 #[test]

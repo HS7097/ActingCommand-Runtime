@@ -14,7 +14,11 @@ The pointer is always the instance configuration's `application_id`: one instanc
 application, assigned by a person or an agent, and packages never carry a package name. ADB is
 the baseline for all three (`am force-stop`, `monkey ... LAUNCHER`, `dumpsys activity
 activities`): a Nemu paired session, when one is open, neither starts applications nor
-answers the foreground question, and `device.connected` stays the only health anchor.
+answers the foreground question, and `device.connected` stays the only health anchor. A
+paired session does not need the application running (#402 HS-5a, since 0.12.40;
+[device-binding.md](device-binding.md), "Backends"): while the application's package has no
+display it captures the main display (the desktop, as an adb session does), and the frames
+after the application starts come from the package's display, the session unchanged.
 
 Before the application write, Host holds the instance's existing admission mutex
 and prepares its retained Session through the original resource-close owner. A
