@@ -8,6 +8,9 @@ use std::ffi::{CString, c_char};
 // HS-4 (#402): the reset, the long tap and the swipe of the Nemu input, on a fake device.
 #[cfg(test)]
 mod gate_hs4;
+// HS-5a (#402): the paired session without its application's display, and the opener's close.
+#[cfg(test)]
+mod gate_hs5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NemuAppIndex(i32);

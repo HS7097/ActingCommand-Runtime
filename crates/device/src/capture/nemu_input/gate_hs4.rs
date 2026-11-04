@@ -59,6 +59,8 @@ pub(super) struct FakeDevice {
     // What the native finger up returns; 0 confirms the lift.
     up_code: i32,
     pub(super) calls: Vec<Call>,
+    /// #402 HS-5a: the display each native contact call addressed, in order.
+    pub(super) touched_displays: Vec<i32>,
 }
 
 impl FakeDevice {
@@ -81,6 +83,7 @@ impl FakeDevice {
             size: (WIDTH, HEIGHT),
             up_code: 0,
             calls: Vec::new(),
+            touched_displays: Vec::new(),
         }
     }
 
@@ -154,6 +157,7 @@ impl NemuTouchPort for FakeDevice {
     }
 
     fn touch_native(&mut self, call: NemuTouchCall) -> DeviceResult<i32> {
+        self.touched_displays.push(self.display);
         Ok(match call {
             NemuTouchCall::Down(x, y) => {
                 self.calls.push(Call::Down(x, y));
