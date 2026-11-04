@@ -33,8 +33,10 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 /// The client's allowance for the device-session close of a hand-back (R-7a §3.1): added to the
-/// acquire's receipt wait and its receipt-read deadline only. No source bounds the close; R-7b
-/// measures it on a fake device and sets the value. Changing it changes no wire shape.
+/// acquire's receipt wait and its receipt-read deadline, and (#402 HS-2b, register §1.274) twice
+/// to `BACKEND_SWITCH_WAIT_MS`, once for each of the switch's two session closes. No source bounds
+/// the close; R-7b measures it on a fake device and sets the value. Changing it changes no wire
+/// shape.
 pub const PLAYER_HOLD_CLOSE_ALLOWANCE_MS: u64 = 30_000;
 
 /// Closed bounds of `AcquirePlayerHold.drain_timeout_ms`, those of an instance pause's drain.

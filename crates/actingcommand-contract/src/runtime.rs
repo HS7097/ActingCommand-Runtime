@@ -139,12 +139,37 @@ pub const CONNECTION_PREPARATION_WAIT_MS: u64 = 30_000;
 /// refused `lease_queue_expired`. A client adds it to `CONNECTION_PREPARATION_WAIT_MS` and its
 /// IO timeout for the receipt of either (W-3).
 pub const CONNECTION_PREPARATION_CLAIM_WAIT_MS: u64 = 3_000;
-/// #402 HS-2 (design HS-M §2.2, §8 item 10; register §1.270): the longest the Runtime takes to
-/// answer a `ConfigureSettings` that switches an instance's backends: the switch claim's wait in
-/// the instance's queue, the candidate backends' connection preparation and the preparation that
-/// restores the previous backends after a failed candidate. A client adds its IO timeout.
-pub const BACKEND_SWITCH_WAIT_MS: u64 =
-    CONNECTION_PREPARATION_CLAIM_WAIT_MS + 2 * CONNECTION_PREPARATION_WAIT_MS;
+/// #402 HS-2b (register §1.274): how long one reply of the Runtime's ledger writer takes at most,
+/// at the default of `ledger_observer.writer_reply_timeout_ms` (10 s, contracts/ledger-observer.md
+/// §15); an append that waits longer fails (`writer_response_timeout`). The ledger's own default
+/// (`GlobalLedger::REPLY_TIMEOUT`) is this value. A Runtime configured above it can answer later
+/// than a wait built on it; such a client's result is unconfirmed, never "not applied".
+pub const LEDGER_WRITER_REPLY_WAIT_MS: u64 = 10_000;
+/// #402 HS-2 (design HS-M §2.2, §8 item 10; register §1.270), made the switch's worst case by
+/// HS-2b (register §1.274): the longest the Runtime takes to answer a `ConfigureSettings` that
+/// switches an instance's backends, the sum of its steps' bounds in their order:
+/// - `CONNECTION_PREPARATION_CLAIM_WAIT_MS` (3 s): the switch claim's wait in the queue;
+/// - `PLAYER_HOLD_CLOSE_ALLOWANCE_MS` (30 s): the kept session's close before the candidate. No
+///   source bounds a session close (the kernel waits for the session's worker without a
+///   deadline); this is the contract's existing allowance for one (R-7a §3.1);
+/// - `CONNECTION_PREPARATION_WAIT_MS` (30 s): the candidate backends' connection preparation;
+/// - `LEDGER_WRITER_REPLY_WAIT_MS` (10 s): the commit's ledger write, its `host.config_overrides`
+///   record at the writer's reply bound, whose refusal the restore follows. A commit whose record
+///   is written writes three more records, each within the same bound (30 s), and restores
+///   nothing: the two restore terms below (60 s) exceed them;
+/// - `PLAYER_HOLD_CLOSE_ALLOWANCE_MS` (30 s): the candidate's close before the restore;
+/// - `CONNECTION_PREPARATION_WAIT_MS` (30 s): the preparation that restores the previous backends.
+///
+/// 133 s in all. A client adds its IO timeout, the margin of every receipt wait (the request's
+/// own `command.received` and terminal record are not counted, as for every request). A client
+/// whose wait runs out holds an unconfirmed result and re-reads before it sends again
+/// (contracts/runtime-config.md, "Switching an instance's backends", "The wait").
+pub const BACKEND_SWITCH_WAIT_MS: u64 = CONNECTION_PREPARATION_CLAIM_WAIT_MS
+    + PLAYER_HOLD_CLOSE_ALLOWANCE_MS
+    + CONNECTION_PREPARATION_WAIT_MS
+    + LEDGER_WRITER_REPLY_WAIT_MS
+    + PLAYER_HOLD_CLOSE_ALLOWANCE_MS
+    + CONNECTION_PREPARATION_WAIT_MS;
 
 /// #402 HS-2 (register §1.270): whether `key` is one of an instance's two backend keys,
 /// `instance.<instance id>.touch_backend` or `instance.<instance id>.capture_backend`, the keys a
