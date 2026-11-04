@@ -18,7 +18,13 @@ answers the foreground question, and `device.connected` stays the only health an
 paired session does not need the application running (#402 HS-5a, since 0.12.40;
 [device-binding.md](device-binding.md), "Backends"): while the application's package has no
 display it captures the main display (the desktop, as an adb session does), and the frames
-after the application starts come from the package's display, the session unchanged.
+after the application starts come from the package's display, the session unchanged. The
+arrival wait goes on across that change (#402 HS-5d, since 0.12.40): an observation whose frames
+do not keep one geometry (`recognition_sample_geometry_changed`: a target consensus's frames on
+both sides of the change) ends as a frame that did not confirm the step, in a page graph's step
+confirmation and in a step plan's wait after an input or an application effect, and the wait
+takes its next observation in the same window, after the same pause; a window it spends ends
+the wait with the wait's own code, as before.
 
 Before the application write, Host holds the instance's existing admission mutex
 and prepares its retained Session through the original resource-close owner. A

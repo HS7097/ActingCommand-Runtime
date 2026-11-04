@@ -7187,6 +7187,84 @@ switch (#429, the UI channel's). Every other fence refuses as before.
 **Rollback** (to 0.12.39). Nothing persisted is new; an earlier build refuses the switch on every
 fence (`instance_fenced`), as before.
 
+### 1.279 Slice HS-5d (0.12.40): the arrival wait goes on across the display's change, and two HS-5b tests run on a manual Runtime clock (#402; `hs5_ladder_application_rung_opens_after_entry` passed in the CI of #1519 and failed in the CI of #1521 on the same code; coordinator work order `rd-1031/backend-switch/brief-hs-5d-flake.md`)
+
+[application-lifecycle.md](application-lifecycle.md) (the paired session's paragraph) and
+[display-adapter.md](display-adapter.md) (the frames of one observation) are the contract. The
+number 1.279 is the coordinator's. It builds on HS-5a (§1.276, D3) and changes two tests of HS-5b
+(§1.277). No outcome code, key, member or record is new.
+
+**Why the test failed.** The failed run's rungs were return home (`contained_task_page_unknown`),
+application restart (`page_confirmation_failed`) and emulator restart (skipped, no emulator
+control). The restart rung's startup package, `gate_hs5`'s application entry package, restarts the
+application before any capture; its arrival wait is the step's confirmation, whose window is the
+package's step timeout (600 ms) on the Runtime clock, the system clock in that test. The fake's
+package display comes up on the second capture after the start (`display_delay` 1), counted in
+captures, not in time, and the fake's frames keep one geometry. The rung recovers only when that
+second frame is taken inside the window. The work around the first frame (the rung run's first
+capture, its frame and geometry records, the test thread reading the whole ledger every 20 ms
+while it waits for the ladder's end, a loaded runner) can spend the 600 ms; the wait then ends on
+the first frame (`after_page=<unrecognized>`), `page_confirmation_failed`. Thread timing decided
+it; the code under test was the same in both runs. That failure is the test's own.
+
+**The product's race.** Every capture of a paired Nemu session resolves its display first (HS-5a
+D1–D4): while the package has no display it captures the main display; once it has one, the next
+capture takes it, and the change of source invalidates the input state (D3: the geometry
+generation goes up by one). The capture still returns its frame, with the new generation in its
+input geometry. What the confirmation did with it:
+
+- An observation of one frame (a pack without target consensus): nothing. The confirmation judges
+  each frame by its page; a frame of the main display is a frame that did not confirm, and the
+  wait takes its next frame in its window. The generation is read only by the Nemu input's
+  geometry fence, which refuses an input sent on a frame of an earlier generation; an arrival
+  wait sends no input. So the switch alone never ended the wait with `page_confirmation_failed`.
+- An observation of several frames (a pack with target consensus): its frames must keep one
+  geometry (DA-2a C11; the frames' input geometry, generation included, and their map). When the
+  switch fell between two of its frames the observation ended `recognition_sample_geometry_changed`,
+  which is no sampling timeout and was not retried: the run failed with it. Whether it did
+  depended on when the package's display came up against the observation's sampling: a race in
+  the product, on Nemu-touch instances whose pack declares target consensus (none of the
+  resource repositories' packs read for this slice declares one).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| HS5D-1 | in a page graph's step confirmation (`await_postcondition_after`: every step's, an application effect's arrival included) and in a step plan's wait after an input or an application effect (`linear_wait`, purpose `AfterInput`), an observation that ends `recognition_sample_geometry_changed` is a frame that did not confirm: no page, the wait's window check and the pause before the next observation as after any such frame, the same window (its start and its credit kept) | behaviour | HS-5d | the kernel | `gate_hs5d`; no other wait changes: an entry wait, a retry decision, a run of optional steps (`linear_wait_set`, never after an application effect: `optional_restart_segment_end`), the settled path, an observation window and the Lab's online observations keep failing with the code; a sampling timeout keeps its observe-only retries |
+| HS5D-2 | `hs5_ladder_application_rung_opens_after_entry` and `hs5_startup_package_opens_after_entry` on a `ManualRuntimeClock` | test change | HS-5d | — | what they assert is unchanged; their gate row is HS-5b's |
+
+**Tests.** New (exec gate row "#402 HS-5d"), in `contained_task::gate_hs5d` on the scripted runtime
+and clock (EXEC-I3): the kernel sees the display's change only as frames of another geometry, so
+the main display's frames are 2x1 (the desktop) and the application's 4x2 (home; a pure scale of the
+2x1 package), the one geometry a scripted frame carries; home needs two frames 100 ms apart. With
+the change before the wait's first frame, inside its first observation, between two observations
+and inside a later one, a page graph's application entry run as a host package and a step plan's
+application entry arrive on home; when every observation straddles the change, the wait ends where
+its 1 000 ms window ends, with `page_confirmation_failed` and `contained_task_linear_application_unconfirmed`
+and `limit_ms` 1000. Red first: the cases inside an observation and the straddling one fail on the
+commit before the fix with `recognition_sample_geometry_changed`. Adapted (HS5D-2): the two host
+tests whose arrival needs a second frame inside the package's window run on a manual Runtime clock
+(the ladder's at the policy fixture's time, as the other manual-clock ladder tests do; the startup
+package's at 1 000 ms), whose time only the kernel's own waits move, so the window is spent only by
+the 10 ms between two frames and the display follows the count of captures. Their `wait_until`
+polls only bound a hang (120 s) and decide nothing. The other `gate_hs5` tests need no second frame
+inside a window: with `display_delay` 0 the arrival's first frame is the destination's, and a frame
+that reaches it ends the wait whatever the time.
+
+**Where it differs from the work order's letter.** (a) The work order names the ladder's test; the
+startup package's has the same window and second frame, so it changes the same way. (b) The kernel
+tests put the change in the frames' size, not in a Nemu generation: a `NemuFrameGeometry` can only
+be built inside the device layer, and the kernel reads both through the one check that ends the
+observation.
+
+**Interface.** No step for 0.12.40: nothing persisted, requested or configured is new.
+
+**What changes live.** On a Nemu-touch instance whose pack declares target consensus, an
+application's start (a startup package, a ladder rung, a run's application entry) or any step's
+confirmation no longer fails when the display moves between two frames of one observation; the
+wait goes on and its window decides. Everything else is as in 0.12.39.
+
+**Rollback** (to 0.12.39). Nothing persisted; an earlier build ends such a run with
+`recognition_sample_geometry_changed`.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
