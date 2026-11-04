@@ -1,5 +1,6 @@
 use crate::instance_resolution::resolve_instance_id_for_flags;
 use crate::runtime_slice_cli;
+use crate::session_backend::RuntimeBackendRead;
 use crate::state_roots::runtime_state_root;
 use crate::{
     CaptureBackendChoice, CliError, CliOutcome, FlagArgs, GlobalOptions, InstanceConfig,
@@ -83,13 +84,24 @@ pub(super) fn run_session_status(global: &GlobalOptions, args: &[String]) -> Cli
     runtime_session_adapter::run_status(global, args)
 }
 
-fn session_instance_registry_contract(config: &UserConfig) -> CliOutcome<Value> {
+/// #402 HS-L: each entry's `runtime_backends` is read from the Runtime (`runtime`), never from
+/// this file; `effective` stays the file's reading.
+fn session_instance_registry_contract(
+    config: &UserConfig,
+    runtime: &RuntimeBackendRead,
+) -> CliOutcome<Value> {
     let instances = config
         .instances
         .iter()
-        .map(|(id, instance)| session_instance_registry_entry(id, instance))
+        .map(|(id, instance)| {
+            session_instance_registry_entry(id, instance).map(|mut entry| {
+                entry["runtime_backends"] = runtime.column(id);
+                entry
+            })
+        })
         .collect::<CliOutcome<Vec<_>>>()?;
     Ok(json!({
+        "runtime_backends_read": runtime.summary(),
         "schema_version": "session.instance_registry.v0.1",
         "source": "user_config",
         "available": true,
@@ -211,19 +223,26 @@ pub(super) fn run_session_instance(global: &GlobalOptions, args: &[String]) -> C
     reject_legacy_session_routing(&flags)?;
     let config = read_user_config()?;
     match action {
-        "list" => Ok(json!({
-            "instances": config.instances.iter().map(|(id, instance)| json!({
-                "id": id,
-                "serial_configured": instance.serial.is_some(),
-                "device_label": device_label(id, instance),
-                "game": instance.game,
-                "server": instance.server,
-                "package": instance.package,
-                "adb_path": instance.adb_path,
-                "capture_backend": instance.capture_backend
-            })).collect::<Vec<_>>()
-        })),
-        "registry" => session_instance_registry_contract(&config),
+        // #402 HS-L: the column `runtime_backends` is the Runtime's touch and capture backends in
+        // effect for the instance of that alias; `capture_backend` stays this file's.
+        "list" => {
+            let runtime = RuntimeBackendRead::now();
+            Ok(json!({
+                "instances": config.instances.iter().map(|(id, instance)| json!({
+                    "id": id,
+                    "serial_configured": instance.serial.is_some(),
+                    "device_label": device_label(id, instance),
+                    "game": instance.game,
+                    "server": instance.server,
+                    "package": instance.package,
+                    "adb_path": instance.adb_path,
+                    "capture_backend": instance.capture_backend,
+                    "runtime_backends": runtime.column(id)
+                })).collect::<Vec<_>>(),
+                "runtime_backends_read": runtime.summary()
+            }))
+        }
+        "registry" => session_instance_registry_contract(&config, &RuntimeBackendRead::now()),
         "connect" | "health" | "keep-alive" | "reconnect" => Err(CliError::not_implemented(
             "actinglab_device_authority_retired",
             format!(

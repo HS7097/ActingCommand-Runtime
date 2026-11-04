@@ -609,7 +609,11 @@ SelfCheckInstance) on the Lab channel, which step 5 would refuse from U-6
 (`channel_request_refused`), so R-14, which closes this gate, must settle the rule "the Lab
 channel takes no general instruction" for them. Workflow #429 R-7a (register §1.233): the same
 holds for `AcquirePlayerHold` and `ReleasePlayerHold`, and by Alice's ruling 135 (every formal
-channel may begin and end a hold) R-14 must let the Lab channel take these two.
+channel may begin and end a hold) R-14 must let the Lab channel take these two. #402 HS-L (register
+§1.275, since 0.12.40): actinglab's `session backend` sends a `ConfigureSettings` on the Lab channel
+whose changes name only one instance's backend keys (design HS-M §2.2: CLI, MCP, the console and the
+Lab change the one setting), so R-14 must let the Lab channel take a `ConfigureSettings` of that
+shape too; no other `ConfigureSettings` comes from it.
 
 ### Before U-6
 
@@ -910,10 +914,11 @@ Both console connections bind `ui`; from U-6 both send `(User, Ui)`.
 |---|---|---|
 | tap, swipe, long-tap, key, text, `touch-probe`, `session recover`, the stream's input forwarding | leases, Input | option two |
 | `session app`, `session instance app …` | ApplicationLifecycle | general (Workflow #429 R-0; option two before) |
+| `session backend [--touch <name>] [--capture <name>] [--clear]` (#402 HS-L, since 0.12.40) | Status, then one ConfigureSettings naming only the instance's backend keys ([runtime-config.md](runtime-config.md), "Switching an instance's backends", "The Lab") | general read; general instruction (the Lab channel's exception, section The gate's decision (from U-6)) |
 | `tap-target`, `navigate`, `ensure`, `do`, `lab run`, `runtime reset` | Lab operation, Input, manual run, reset | option two |
 | capture commands, `runtime observe` | ObserveReadonly, CaptureSequence | general read (pinned `Lab`) |
 | `observe --capture` | ObserveContainedPage | option one |
-| `status`, `session status`, `lab status`, `lab watch`, `lab receipt`, `run summary` | general reads | general |
+| `status`, `session status`, `lab status`, `lab watch`, `lab receipt`, `run summary`; `session instance list` and `session instance registry` for their `runtime_backends` column (#402 HS-L: Status, RuntimeFactSnapshot) | general reads | general |
 | `lab signatures match`, `lab debug-package`, `lab export-evidence`, `recognize-artifact` | package-tool reads | option one |
 | the resource-authoring session | RecordAuthoringEvent | option one |
 | `lab signatures register`, `retire`, `lab unpin`, the debug session's events | signatures, pin release, RecordDebugEvent | option two |

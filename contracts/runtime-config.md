@@ -1390,7 +1390,10 @@ control that holds the instance longer refuses it; the switch is never deferred.
 is a boundary: the claim passes the paused instance's closed gate, so a person who wants to switch
 mid-task pauses the instance, lets it drain, switches, and resumes it (the resume's reconnect
 self-checks the new backends once more). Between two Lab operations is a boundary too; a frame the
-Lab held from the old session is no longer committed, so the Lab observes again.
+Lab held from the old session is no longer committed, so the Lab observes again (#402 HS-L: the Lab
+keeps no Runtime frame between two commands, every online `do` observes the instance before it
+presses, and an input that still names a frame of the closed session is refused
+`input_frame_unavailable`).
 
 **The steps.** (1) The request is checked under the settings' gate, as every `ConfigureSettings`
 is (the version, the keys, the values, the instance's backend check), and the gate is left. (2) The
@@ -1467,8 +1470,37 @@ file.
 **Channels.** `actingctl config set instance.<id>.touch_backend=… instance.<id>.capture_backend=…`
 and `config clear` (the CLI); MCP `ac_config_set`, which needs the operator tier for a change of a
 backend key (`tier_not_enabled` otherwise; every other change stays observer); the console's
-settings page ("The console's device backends group" below); the Lab's `session backend` (HS-L).
-There is one state per instance: no backend holds for a Lab session only.
+settings page ("The console's device backends group" below); the Lab's `session backend` (HS-L,
+below). There is one state per instance: no backend holds for a Lab session only.
+
+**The Lab** (#402 HS-L, [v012-register.md](v012-register.md) §1.275; design HS-M §2.2 and §7 row
+HS-L; since 0.12.40). `actinglab --instance <alias> session backend [--touch <name>]
+[--capture <name>] [--clear]` takes the instance's id from the Runtime's `Status` (an alias it does
+not register is `instance_not_found`) and sends one `ConfigureSettings` on the `lab` channel, with
+`via` when MCP or the console forwarded the work (actinglab's `--via`,
+[runtime-interface.md](runtime-interface.md), "Binding"): `--touch` and `--capture` name
+`instance.<instance id>.touch_backend` and `.capture_backend` with the given names (both in the one
+request when both are given), `--clear` names both without a value, back to the file's values, which
+is itself a switch, and takes neither of the others. The request carries no `expected_version`, as
+`config set`'s does not. The receipt wait is the one `runtime-client`'s `configure_settings` takes
+for a backend key ("The wait" above); the Lab computes none of its own. Each option is given at most
+once; the names are the Runtime's to judge. A completed switch answers `{instance, instance_id,
+settings, config_version}` (`settings` the receipt's, each changed key in effect with its source). A
+refusal with a receipt is the command's failure with the receipt's top code as its `code` (exit 2
+for `config_value_invalid`, `config_key_unknown` and `config_key_not_settable`, exit 4 otherwise),
+`details` `{instance, outcome, config_key?, config_value_problem?, backend_switch_problem?,
+receipt_state, runtime_outcome}` (`runtime_outcome` the whole outcome with its causes); a failure
+without a receipt is reported as every Runtime-backed Lab command reports it (`runtime_not_running`,
+`device_error`). `--dry-run` refuses it (`dry_run_unsupported`) before any connection. `tier_not_enabled`
+does not apply: no MCP tool forwards it. The Lab's instance listing, `session instance list` and
+`session instance registry`, gains the column `runtime_backends`, read from the Runtime (`Status` and
+`RuntimeFactSnapshot`'s `config.parameters.instance`), never from the Lab's file: per listed
+instance whose id is a registered alias `{registered: true, instance_id, touch_backend,
+capture_backend}`, each `{value, source}` or null when the Runtime reports no row of the key;
+`{registered: false}` otherwise; and beside the list `runtime_backends_read`, `{read: true,
+config_version}` or, when the Runtime could not be read, `{read: false, error: {code, message}}`
+with every column null. The file's own columns (`capture_backend`, the registry's `effective`) are
+unchanged.
 
 ## Starting an instance's emulator (#429 R-3)
 

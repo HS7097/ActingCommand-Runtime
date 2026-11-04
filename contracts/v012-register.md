@@ -6980,6 +6980,60 @@ to 133 s plus the IO margin. Nothing else.
 **Rollback** (to 0.12.38). Refused by `actingctl install` whether or not a switch was ever made
 (§1.270, **Rollback**, corrected).
 
+### 1.275 Slice HS-L (0.12.40): the Lab sets an instance's touch and capture backends through the same `ConfigureSettings` (#402; Alice's words of 2026-11-03 11:4x, 「这个东西必须得被CLI、MCP或者是Lab/UI指定并且可以热更改」; design `rd-1031/backend-switch/model-backend-switch.md` §2.2, §3.1 and §7 row HS-L; coordinator work order `rd-1031/backend-switch/brief-hs-l.md`)
+
+[runtime-config.md](runtime-config.md) ("Switching an instance's backends": the boundary and "The
+Lab"), [runtime-interface.md](runtime-interface.md) (actinglab's table, the R-14 note under "The
+gate's decision"), [actinglab-dry-run.md](actinglab-dry-run.md) and
+[actinglab-capabilities.md](actinglab-capabilities.md) are the contract. The number 1.275 is the
+coordinator's (HS-2b takes §1.274). It builds on HS-2 (§1.270), whose request, switch, refusals and
+receipt wait it uses unchanged.
+
+**What.** `actinglab --instance <alias> session backend [--touch <name>] [--capture <name>]
+[--clear]` reads the instance's id from `Status` and sends one `ConfigureSettings` on the Lab
+channel (with `via` when forwarded) through `runtime-client`'s `configure_settings`, whose receipt
+wait for a backend key is the client's: the named backend keys, both in the one request when both
+are named; `--clear` both without a value, back to the file's values, itself a switch. It prints the
+receipt (`settings`, `config_version`); a refusal prints the receipt's top code with its problem
+word (`config_value_problem`, `backend_switch_problem`), the key, the receipt's state and the whole
+outcome, and exits non-zero. There is no Lab-only backend. The Lab keeps no Runtime frame between
+two commands: every online `do` observes first, and a frame of the closed session that a client
+still names is refused `input_frame_unavailable` (HS-2's own rule). `session instance list` and
+`session instance registry` gain the column `runtime_backends`, read from the Runtime, beside the
+file's columns.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| HSL-1 | `session backend [--touch <name>] [--capture <name>] [--clear]` on `--instance <alias>` | actinglab command (dispatch `session backend`; capability `running_runtime`, `device`, `unverified`; dry run `refused`, `dry_run_unsupported`) | HS-L | the person, or a counter forwarding with `--via` | no request kind, member or code is new: Status, then the existing `ConfigureSettings`; an unregistered alias is `instance_not_found`; a bare line, `--clear` beside another option, a repeated option, an unknown option or a word is `validation_failed` before any connection; `ratchet/actinglab_commands.json` gains the command (142) |
+| HSL-2 | the success answer `{instance, instance_id, settings, config_version}` | actinglab output (data members) | HS-L | actinglab | `settings` is the receipt's `ConfiguredSetting` list as `config set` prints it; `hsl_session_backend_sends_configure_settings`, `hsl_session_backend_clear_returns_file_values` |
+| HSL-3 | a refusal: `code` the receipt's top code (exit 2 for `config_value_invalid`, `config_key_unknown`, `config_key_not_settable`, 4 otherwise), `details` `{instance, outcome, config_key?, config_value_problem?, backend_switch_problem?, receipt_state, runtime_outcome}` | actinglab output (error members) | HS-L | actinglab | a failure without a receipt keeps the Lab's mapping (`runtime_not_running`, `device_error`); `tier_not_enabled` does not arise (no MCP tool forwards the command); `hsl_refusal_printed_with_problem` |
+| HSL-4 | `runtime_backends` per listed instance (`{registered: true, instance_id, touch_backend, capture_backend}`, each `{value, source}` or null; `{registered: false}`; null when unread) and `runtime_backends_read` (`{read: true, config_version}` or `{read: false, error: {code, message}}`) on `session instance list` and `session instance registry` | actinglab output (data members) | HS-L | actinglab | read by Status and RuntimeFactSnapshot (`config.parameters.instance`), general reads that record nothing; both commands stay `offline` and `available`; the file's `capture_backend` and the registry's `effective` are unchanged |
+
+**Tests** (gate row in `host.toml`, "#402 HS-L"): the three of the work order and one for `--clear`,
+in actinglab (`gate_402_hsl`): a Runtime host over one fake instance whose registration takes the
+backends a switch names and whose input open fails for a named touch backend, the file layer's two
+backend rows in its manifest, no device and no sleep. None adapted.
+
+**Where it differs from the brief's letter.** (a) "Lab drops the frame references it holds": the Lab
+holds none between commands (each online `do` runs one Lab operation whose before frame the Runtime
+captures on the instance first), so nothing is dropped; `hsl_stale_frame_reobserved_after_switch`
+shows a frame held from before the switch refused `input_frame_unavailable` and the next `do`
+pressing on its own new frame. (b) The listing's column is on both `session instance list` and
+`session instance registry` (the design's 「实例登记表」), joined by the Lab file's instance id, which
+the Lab's Runtime-backed commands take as the Runtime alias.
+
+**Interface.** No step for 0.12.40 ([component-interfaces.md](component-interfaces.md)):
+`runtime-client`, `actingd-config`, `ledger`, `package` and `runtime-outcomes` do not move; no
+request kind, member, record, configuration key or code is new. The Lab channel's gate (U-6, R-14)
+must take this `ConfigureSettings` ([runtime-interface.md](runtime-interface.md)); until then nothing
+is refused by channel.
+
+**What changes live.** Nothing until a person runs the command: it is one more entry to HS-2's
+switch, with HS-2's boundary, refusals and records.
+
+**Rollback** (to 0.12.39). Nothing persisted is new; an earlier actinglab has no `session backend`
+and lists no `runtime_backends`.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

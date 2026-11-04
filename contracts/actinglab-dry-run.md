@@ -243,8 +243,9 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `session response` | no_effect | | retired |
 | `session request-state` | no_effect | | retired |
 | `session monitor-policy` | mixed | | `status`: no_effect; `set`, `clear`: refused, `dry_run_unsupported`, action name, flag parsing and legacy flags first (the `set` value checks run only on a real invocation), alternative `session monitor-policy status` |
-| `session instance` | mixed | | `list`, `registry` and the retired verbs: no_effect; `app <launch\|stop\|force-stop\|restart>`: refused as `session app` |
+| `session instance` | mixed | | `list`, `registry` and the retired verbs: no_effect (#402 HS-L: `list` and `registry` read the Runtime's backends in effect for their `runtime_backends` column, a read); `app <launch\|stop\|force-stop\|restart>`: refused as `session app` |
 | `session app` | refused | `dry_run_unsupported` | the verb, legacy routing flags, `--package`, configuration read and instance resolution, verb validity; alternative `session status --diagnostics`; `details` carry `action` and `instance` |
+| `session backend` | refused | `dry_run_unsupported` | the options (`--touch <name>`, `--capture <name>` or `--clear` alone, each once, no other option or word) and `--instance`; alternative `session instance list`, whose `runtime_backends` column reads the backends in effect; `details` carry `instance` and `change` `{touch, capture, clear}` (#402 HS-L, since 0.12.40) |
 | `session capture` | mixed | | as `capture` |
 | `session stream` | preview | `capture_dry_run` | the `check` form (its own entry `session stream check`): no_effect |
 | `session recover` | preview | `executed_false` | the `--stale-capture` form (its own entry): no_effect |
