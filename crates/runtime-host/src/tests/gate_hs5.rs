@@ -1177,6 +1177,14 @@ fn hs5_scheduled_run_application_entry_without_application() {
 // application before any capture, and its package's display comes up a frame later. The rung's
 // first frame is the main display's, the next the package's display's, on one session, and the
 // rung recovers.
+//
+// #402 HS-5d (register §1.279): on a manual Runtime clock. The rung's arrival wait is the entry
+// package's step window (600 ms) on the Runtime clock. On the system clock the work around the
+// rung's first frame (its capture, the frame's records, the test thread reading the ledger) could
+// spend the window before the second frame was taken, and the rung failed
+// `page_confirmation_failed` (the CI of #1521). Here only the kernel's own waits move the clock,
+// 10 ms between two frames, and the fake's display follows the count of captures since the
+// start, so the frames and the window are the same on every run.
 #[test]
 fn hs5_ladder_application_rung_opens_after_entry() {
     let root = TempDir::new().expect("tempdir");
@@ -1186,10 +1194,12 @@ fn hs5_ladder_application_rung_opens_after_entry() {
         &neutral_contained_task_package(true),
         &neutral_non_home_start_contained_task_package(true),
     );
-    let host_config = host_config.with_startup_packages(BTreeMap::from([(
-        POLICY_INSTANCE_ALIAS.to_owned(),
-        ContainedTaskRequest::new(entry.display().to_string()).expect("startup package"),
-    )]));
+    let host_config = host_config
+        .with_runtime_clock(Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0)))
+        .with_startup_packages(BTreeMap::from([(
+            POLICY_INSTANCE_ALIAS.to_owned(),
+            ContainedTaskRequest::new(entry.display().to_string()).expect("startup package"),
+        )]));
     let a = Node::new(POLICY_INSTANCE_ALIAS, TouchBackendChoice::NemuIpc, true);
     *a.device.page.lock().expect("page") = Some(STUCK);
     a.device.display_delay.store(1, Ordering::Release);
@@ -1226,6 +1236,9 @@ fn hs5_ladder_application_rung_opens_after_entry() {
 // §2 row 6: the host's own run of the startup package, the application not running: the
 // application effect comes first, its package's display a frame later; the first frame is the
 // main display's, the next the package's display's, on one session, and the package completes.
+//
+// #402 HS-5d (register §1.279): on a manual Runtime clock, for the reason the ladder's test above
+// gives: its arrival wait also needs the second frame inside the package's 600 ms step window.
 #[test]
 fn hs5_startup_package_opens_after_entry() {
     let root = TempDir::new().expect("tempdir");
@@ -1233,10 +1246,12 @@ fn hs5_startup_package_opens_after_entry() {
     let a = Node::new(A, TouchBackendChoice::NemuIpc, false);
     a.device.display_delay.store(1, Ordering::Release);
     let host = RuntimeHost::start(
-        config(&root).with_startup_packages(BTreeMap::from([(
-            A.to_owned(),
-            ContainedTaskRequest::new(package.display().to_string()).expect("startup package"),
-        )])),
+        config(&root)
+            .with_runtime_clock(Arc::new(ManualRuntimeClock::new(1_000, 0)))
+            .with_startup_packages(BTreeMap::from([(
+                A.to_owned(),
+                ContainedTaskRequest::new(package.display().to_string()).expect("startup package"),
+            )])),
         Arc::new(provider(&[&a])),
     )
     .expect("runtime host");

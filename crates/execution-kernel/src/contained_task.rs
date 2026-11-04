@@ -300,6 +300,9 @@ mod display_gate;
 // test): the gate at the six capture entries.
 #[cfg(test)]
 mod gate_392_da2a;
+// #402 HS-5d (register §1.279): the arrival wait goes on across a display's change.
+#[cfg(test)]
+mod gate_hs5d;
 pub use actingcommand_selection_policy::LoadedTable;
 use actingcommand_selection_policy::SelectionPolicy;
 pub use capture_cadence::CaptureCadence;
