@@ -115,11 +115,14 @@ fn gate_perf_status_without_actingd_exits_1_with_the_runtime_s_absence() {
     assert!(line.get("host").is_none(), "{line}");
 }
 
-// The status without the time of its read: each read takes it from the Runtime's clock.
+// The status without the time of its read: each read takes it from the Runtime's clock. #407
+// PERF-READ: nor its memory, the process's counters and its owners' parts at the moment of each
+// read.
 fn without_read_time(status: &Value) -> Value {
     let mut status = status.clone();
     if let Some(members) = status.as_object_mut() {
         members.remove("observed_at_unix_ms");
+        members.remove("memory");
     }
     status
 }

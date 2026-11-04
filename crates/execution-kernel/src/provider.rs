@@ -5,7 +5,8 @@ use crate::{ExecutionKernelError, ExecutionKernelResult};
 pub use actingcommand_contract::ExecutionBackendProvenance;
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::{
-    ApplicationLifecycleAction, EmulatorInstanceAction, FencedWrite, InstanceId, MonitorObservation,
+    ApplicationLifecycleAction, EmulatorInstanceAction, FencedWrite, InstanceId,
+    MonitorObservation, VisionModelKind, VisionModelMemoryStatus, VisionModelTimingStatus,
 };
 use actingcommand_device::{
     CaptureBackend, DeviceError, DeviceErrorCategory, DeviceErrorSensitivity, DeviceResult, Frame,
@@ -102,6 +103,86 @@ struct SlotCell<E: ?Sized> {
     counted: bool,
 }
 
+/// #407 PERF-READ: a monotonic clock in microseconds, which a request's lock wait and inference
+/// are timed on.
+pub type VisionTimingClock = Arc<dyn Fn() -> u64 + Send + Sync>;
+
+/// #407 PERF-READ: the process's private bytes now, `None` when the sample failed; read before
+/// and after each model load.
+pub type PrivateBytesSampler = Arc<dyn Fn() -> Option<u64> + Send + Sync>;
+
+/// The provider's clock: microseconds since the provider was made.
+fn monotonic_clock() -> VisionTimingClock {
+    let origin = Instant::now();
+    Arc::new(move || u64::try_from(origin.elapsed().as_micros()).unwrap_or(u64::MAX))
+}
+
+/// #407 PERF-READ: one model's account, beside its lock so the status read never waits for an
+/// inference: whether an engine is in the slot (with its load's private-bytes growth when it was
+/// measured), and its requests since the start.
+#[derive(Debug, Default)]
+struct ModelStats {
+    loaded: Option<Option<u64>>,
+    requests: u64,
+    inferences: u64,
+    lock_wait_total_us: u64,
+    lock_wait_longest_us: u64,
+    inference_total_us: u64,
+    inference_longest_us: u64,
+}
+
+/// #407 PERF-READ: one request's times on one model. Started before the request waits for the
+/// model's lock, `locked` once it holds it, `inference` around the engine's call; a load between
+/// the two is in neither time. Dropped, it adds the request to the model's account once, however
+/// the request ended (a lock wait that timed out counts until the drop).
+struct RequestTiming<'a> {
+    stats: &'a Mutex<ModelStats>,
+    clock: &'a VisionTimingClock,
+    started_us: u64,
+    lock_wait_us: Option<u64>,
+    inference_us: Option<u64>,
+}
+
+impl<'a> RequestTiming<'a> {
+    fn start(stats: &'a Mutex<ModelStats>, clock: &'a VisionTimingClock) -> Self {
+        Self {
+            stats,
+            clock,
+            started_us: clock(),
+            lock_wait_us: None,
+            inference_us: None,
+        }
+    }
+
+    fn locked(&mut self) {
+        self.lock_wait_us = Some((self.clock)().saturating_sub(self.started_us));
+    }
+
+    fn inference<R>(&mut self, call: impl FnOnce() -> R) -> R {
+        let started_us = (self.clock)();
+        let result = call();
+        self.inference_us = Some((self.clock)().saturating_sub(started_us));
+        result
+    }
+}
+
+impl Drop for RequestTiming<'_> {
+    fn drop(&mut self) {
+        let lock_wait_us = self
+            .lock_wait_us
+            .unwrap_or_else(|| (self.clock)().saturating_sub(self.started_us));
+        let mut stats = self.stats.lock().unwrap_or_else(PoisonError::into_inner);
+        stats.requests = stats.requests.saturating_add(1);
+        stats.lock_wait_total_us = stats.lock_wait_total_us.saturating_add(lock_wait_us);
+        stats.lock_wait_longest_us = stats.lock_wait_longest_us.max(lock_wait_us);
+        if let Some(inference_us) = self.inference_us {
+            stats.inferences = stats.inferences.saturating_add(1);
+            stats.inference_total_us = stats.inference_total_us.saturating_add(inference_us);
+            stats.inference_longest_us = stats.inference_longest_us.max(inference_us);
+        }
+    }
+}
+
 /// One model: its own lock serialises its load and its inferences, never another model's.
 struct ModelSlot<E: ?Sized, S> {
     model_ref: String,
@@ -111,6 +192,8 @@ struct ModelSlot<E: ?Sized, S> {
     verified_sha256: OnceLock<String>,
     cell: Mutex<SlotCell<E>>,
     last_used: AtomicU64,
+    /// #407 PERF-READ: a leaf lock, never held across a load or an inference.
+    stats: Mutex<ModelStats>,
 }
 
 type OcrSlot = ModelSlot<dyn OcrEngine + Send, OcrModelSpec>;
@@ -132,6 +215,11 @@ impl<E: ?Sized, S> ModelSlot<E, S> {
                 counted: false,
             }),
             last_used: AtomicU64::new(0),
+            // Built before the provider: in memory, its load not measured here.
+            stats: Mutex::new(ModelStats {
+                loaded: Some(None),
+                ..ModelStats::default()
+            }),
         }
     }
 
@@ -148,7 +236,53 @@ impl<E: ?Sized, S> ModelSlot<E, S> {
                 counted: false,
             }),
             last_used: AtomicU64::new(0),
+            stats: Mutex::new(ModelStats::default()),
         }
+    }
+
+    /// #407 PERF-READ: an engine is in the slot now, its load's private-bytes growth `growth`.
+    fn note_loaded(&self, growth: Option<u64>) {
+        self.stats
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .loaded = Some(growth);
+    }
+
+    /// #407 PERF-READ: the slot's engine left memory (unloaded or retired).
+    fn note_unloaded(&self) {
+        self.stats
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .loaded = None;
+    }
+
+    /// #407 PERF-READ: the slot's loaded engine as the status shows it, when one is in memory.
+    fn loaded_status(&self, kind: VisionModelKind) -> Option<VisionModelMemoryStatus> {
+        let growth = self
+            .stats
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .loaded?;
+        Some(VisionModelMemoryStatus {
+            model_ref: self.model_ref.clone(),
+            kind,
+            load_private_bytes: growth,
+        })
+    }
+
+    /// #407 PERF-READ: the slot's requests as the status shows them, once it had one.
+    fn timing_status(&self, kind: VisionModelKind) -> Option<VisionModelTimingStatus> {
+        let stats = self.stats.lock().unwrap_or_else(PoisonError::into_inner);
+        (stats.requests > 0).then(|| VisionModelTimingStatus {
+            model_ref: self.model_ref.clone(),
+            kind,
+            requests: stats.requests,
+            inferences: stats.inferences,
+            lock_wait_total_us: stats.lock_wait_total_us,
+            lock_wait_longest_us: stats.lock_wait_longest_us,
+            inference_total_us: stats.inference_total_us,
+            inference_longest_us: stats.inference_longest_us,
+        })
     }
 
     /// Refuses a request whose identity differs from the admitted or the verified one.
@@ -209,9 +343,25 @@ pub struct VisionFfiProvider {
     invalid: BTreeMap<String, String>,
     loader: Option<Arc<dyn VisionModelLoader>>,
     loaded: Mutex<usize>,
+    /// #407 PERF-READ: the clock a request's lock wait and inference are timed on.
+    clock: VisionTimingClock,
+    /// #407 PERF-READ: the process's private bytes, sampled around each load; none, no growth.
+    private_bytes: Option<PrivateBytesSampler>,
 }
 
 impl VisionFfiProvider {
+    /// #407 PERF-READ: each model load is measured by the process's private bytes before and
+    /// after it (`sampler`); the status shows the growth beside the loaded model.
+    pub fn with_private_bytes_sampler(mut self, sampler: PrivateBytesSampler) -> Self {
+        self.private_bytes = Some(sampler);
+        self
+    }
+
+    /// The process's private bytes now, when a sampler is set and its sample succeeded.
+    fn sample_private_bytes(&self) -> Option<u64> {
+        self.private_bytes.as_ref().and_then(|sample| sample())
+    }
+
     /// A provider over already-built engines, one per capability.
     pub fn new(
         ocr: Option<(Box<dyn OcrEngine + Send>, VisionModelIdentity)>,
@@ -242,6 +392,8 @@ impl VisionFfiProvider {
             invalid: BTreeMap::new(),
             loader: None,
             loaded: Mutex::new(0),
+            clock: monotonic_clock(),
+            private_bytes: None,
         })
     }
 
@@ -285,6 +437,8 @@ impl VisionFfiProvider {
                 .collect(),
             loader: Some(loader),
             loaded: Mutex::new(0),
+            clock: monotonic_clock(),
+            private_bytes: None,
         })
     }
 
@@ -335,7 +489,10 @@ impl VisionFfiProvider {
         slot.require(model_sha256, "OCR")?;
         let started = Instant::now();
         let deadline = deadline_after(started, timeout_ms, "OCR")?;
+        // #407 PERF-READ: declared before the lock's guard, so it records after the lock is free.
+        let mut timing = RequestTiming::start(&slot.stats, &self.clock);
         let mut cell = lock_until(&slot.cell, deadline, "OCR", model_ref)?;
+        timing.locked();
         let mut waited = started.elapsed();
         if let Some(reason) = &cell.retired {
             return Err(VisionProviderError::new(
@@ -362,12 +519,16 @@ impl VisionFfiProvider {
                 .engine
                 .as_deref_mut()
                 .ok_or_else(|| unavailable("OCR"))?;
-            catch_unwind(AssertUnwindSafe(|| call(engine, remaining)))
+            timing.inference(|| catch_unwind(AssertUnwindSafe(|| call(engine, remaining))))
         };
         match outcome {
             Ok(result) => result.map(|value| (value, identity)).map_err(map_ffi_error),
             Err(_) => {
-                self.retire(&mut *cell, "OCR engine was retired after a provider panic");
+                self.retire(
+                    slot,
+                    &mut *cell,
+                    "OCR engine was retired after a provider panic",
+                );
                 Err(VisionProviderError::new(
                     VisionProviderErrorCode::Internal,
                     "OCR engine panicked and was retired",
@@ -395,18 +556,21 @@ impl VisionFfiProvider {
             }
         };
         self.reserve_loaded_model()?;
+        let before = self.sample_private_bytes();
         match loader.load_ocr(spec, model_sha256, &session_id, deadline) {
             Ok(OcrModelLoad::Loaded {
                 engine,
                 model_sha256: actual,
                 waited_on_others,
             }) => {
+                let after = self.sample_private_bytes();
                 if !slot.verify(&actual) {
                     self.release_loaded_model();
                     return Err(self.changed_on_disk(slot, cell, &actual));
                 }
                 cell.engine = Some(engine);
                 cell.counted = true;
+                slot.note_loaded(load_growth(before, after));
                 Ok(waited_on_others)
             }
             Ok(OcrModelLoad::Mismatch {
@@ -442,18 +606,21 @@ impl VisionFfiProvider {
             return Err(unavailable("NN"));
         };
         self.reserve_loaded_model()?;
+        let before = self.sample_private_bytes();
         match loader.load_nn(spec, model_sha256, deadline) {
             Ok(NnModelLoad::Loaded {
                 engine,
                 model_sha256: actual,
                 waited_on_others,
             }) => {
+                let after = self.sample_private_bytes();
                 if !slot.verify(&actual) {
                     self.release_loaded_model();
                     return Err(self.changed_on_disk(slot, cell, &actual));
                 }
                 cell.engine = Some(engine);
                 cell.counted = true;
+                slot.note_loaded(load_growth(before, after));
                 Ok(waited_on_others)
             }
             Ok(NnModelLoad::Mismatch {
@@ -491,13 +658,14 @@ impl VisionFfiProvider {
                 .get()
                 .map_or("an unverified identity", String::as_str)
         );
-        self.retire(cell, &reason);
+        self.retire(slot, cell, &reason);
         VisionProviderError::new(VisionProviderErrorCode::Unavailable, reason)
     }
 
-    fn retire<E: ?Sized>(&self, cell: &mut SlotCell<E>, reason: &str) {
+    fn retire<E: ?Sized, S>(&self, slot: &ModelSlot<E, S>, cell: &mut SlotCell<E>, reason: &str) {
         cell.engine = None;
         cell.retired = Some(reason.to_string());
+        slot.note_unloaded();
         if cell.counted {
             cell.counted = false;
             self.release_loaded_model();
@@ -564,10 +732,18 @@ fn unload_if_idle<E: ?Sized, S>(slot: &ModelSlot<E, S>) -> bool {
         Ok(mut cell) if cell.counted && cell.engine.is_some() => {
             cell.engine = None;
             cell.counted = false;
+            slot.note_unloaded();
             true
         }
         _ => false,
     }
+}
+
+/// #407 PERF-READ: the growth of the process's private bytes across a load, `after` less
+/// `before` (never below zero: memory another thread released meanwhile hides growth, never
+/// makes it negative); unknown when either sample failed.
+fn load_growth(before: Option<u64>, after: Option<u64>) -> Option<u64> {
+    Some(after?.saturating_sub(before?))
 }
 
 impl fmt::Debug for VisionFfiProvider {
@@ -675,7 +851,10 @@ impl RecognitionVisionProvider for VisionFfiProvider {
         let frame = crop_frame(request.frame, request.region)?;
         let started = Instant::now();
         let deadline = deadline_after(started, request.timeout_ms, "NN")?;
+        // #407 PERF-READ: declared before the lock's guard, so it records after the lock is free.
+        let mut timing = RequestTiming::start(&slot.stats, &self.clock);
         let mut cell = lock_until(&slot.cell, deadline, "NN", request.model_ref)?;
+        timing.locked();
         let mut waited = started.elapsed();
         if let Some(reason) = &cell.retired {
             return Err(VisionProviderError::new(
@@ -707,12 +886,16 @@ impl RecognitionVisionProvider for VisionFfiProvider {
                 .engine
                 .as_deref_mut()
                 .ok_or_else(|| unavailable("NN"))?;
-            catch_unwind(AssertUnwindSafe(|| engine.classify(ffi_request)))
+            timing.inference(|| catch_unwind(AssertUnwindSafe(|| engine.classify(ffi_request))))
         };
         let result = match outcome {
             Ok(result) => result.map_err(map_ffi_error)?,
             Err(_) => {
-                self.retire(&mut *cell, "NN engine was retired after a provider panic");
+                self.retire(
+                    slot,
+                    &mut *cell,
+                    "NN engine was retired after a provider panic",
+                );
                 return Err(VisionProviderError::new(
                     VisionProviderErrorCode::Internal,
                     "NN engine panicked and was retired",
@@ -730,6 +913,32 @@ impl RecognitionVisionProvider for VisionFfiProvider {
                 })
                 .collect(),
         })
+    }
+
+    /// #407 PERF-READ: the OCR models, then the NN models, whose engine is in memory now.
+    fn loaded_models(&self) -> Vec<VisionModelMemoryStatus> {
+        let ocr = self
+            .ocr
+            .values()
+            .filter_map(|slot| slot.loaded_status(VisionModelKind::Ocr));
+        let nn = self
+            .nn
+            .values()
+            .filter_map(|slot| slot.loaded_status(VisionModelKind::Nn));
+        ocr.chain(nn).collect()
+    }
+
+    /// #407 PERF-READ: the OCR models, then the NN models, that had a request since the start.
+    fn model_timings(&self) -> Vec<VisionModelTimingStatus> {
+        let ocr = self
+            .ocr
+            .values()
+            .filter_map(|slot| slot.timing_status(VisionModelKind::Ocr));
+        let nn = self
+            .nn
+            .values()
+            .filter_map(|slot| slot.timing_status(VisionModelKind::Nn));
+        ocr.chain(nn).collect()
     }
 }
 
@@ -2051,6 +2260,63 @@ mod tests {
             "complete": true
         }))
         .expect("fixture attestation")
+    }
+
+    /// #407 PERF-READ (register §1.280): a request's wait for its model's lock and its engine's
+    /// inference are timed apart, on the provider's clock, and summed per model with their
+    /// longest. The clock is scripted: each request reads it when it starts, when it holds the
+    /// lock, and before and after the engine's call.
+    #[test]
+    fn vision_timing_separates_lock_wait_from_inference() {
+        let mut provider = VisionFfiProvider::new(
+            Some((
+                Box::new(StaticOcrEngine {
+                    backend: VisionBackendKind::FastDeployPpocr,
+                    warnings: Vec::new(),
+                }),
+                identity("PP-OCRv6_medium", 'a'),
+            )),
+            None,
+        )
+        .expect("provider");
+        let readings = Arc::new(Mutex::new(std::collections::VecDeque::from([
+            // The first request: 300 µs for the lock, 700 µs in the engine.
+            100_u64, 400, 400, 1_100,
+            // The second: 50 µs for the lock, 10 µs between the lock and the call, 2 000 µs in
+            // the engine.
+            2_000, 2_050, 2_060, 4_060,
+        ])));
+        let script = Arc::clone(&readings);
+        provider.clock = Arc::new(move || {
+            script
+                .lock()
+                .expect("scripted clock")
+                .pop_front()
+                .expect("a scripted reading")
+        });
+        assert!(provider.model_timings().is_empty(), "no request yet");
+
+        for _ in 0..2 {
+            RecognitionVisionProvider::read_text(&provider, ocr_request()).expect("OCR read");
+        }
+
+        assert!(
+            readings.lock().expect("scripted clock").is_empty(),
+            "four readings per request"
+        );
+        assert_eq!(
+            provider.model_timings(),
+            vec![VisionModelTimingStatus {
+                model_ref: "PP-OCRv6_medium".to_owned(),
+                kind: VisionModelKind::Ocr,
+                requests: 2,
+                inferences: 2,
+                lock_wait_total_us: 350,
+                lock_wait_longest_us: 300,
+                inference_total_us: 2_700,
+                inference_longest_us: 2_000,
+            }]
+        );
     }
 
     struct RecordingNnEngine {

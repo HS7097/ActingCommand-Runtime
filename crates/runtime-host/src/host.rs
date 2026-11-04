@@ -211,6 +211,8 @@ mod ladder_busy_hold;
 mod lease;
 mod lifecycle;
 mod material_read;
+// #407 PERF-READ: the performance status's memory parts and vision times, from their owners.
+mod memory_status;
 mod monitor_control;
 mod nemu_input;
 // Workflow #373 NAV-5: the entry gate's full-match routing.
@@ -665,6 +667,10 @@ pub struct RuntimeHostConfig {
     /// host's physical memory.
     #[cfg(test)]
     capture_memory_sample_for_test: Option<actingcommand_artifact_store::MemorySample>,
+    /// #407 PERF-READ, test only: the process memory sampler the status read uses in place of
+    /// the Runtime's own counters.
+    #[cfg(test)]
+    process_memory_for_test: Option<memory_status::ProcessMemorySampler>,
 }
 
 /// Workflow #369 S6c, test only: a scripted connectivity read.
@@ -736,7 +742,20 @@ impl RuntimeHostConfig {
             agent_forward_for_test: None,
             #[cfg(test)]
             capture_memory_sample_for_test: None,
+            #[cfg(test)]
+            process_memory_for_test: None,
         }
+    }
+
+    /// #407 PERF-READ, test only: the performance status read samples the process's memory with
+    /// `sampler` in place of the Runtime's own counters.
+    #[cfg(test)]
+    pub(crate) fn with_process_memory_for_test(
+        mut self,
+        sampler: memory_status::ProcessMemorySampler,
+    ) -> Self {
+        self.process_memory_for_test = Some(sampler);
+        self
     }
 
     /// #411 A67-R, test only: every capture frame store reads `sample` in place of the host's
@@ -1889,6 +1908,14 @@ impl RuntimeHost {
                 )
             })),
             frame_store_floor: Arc::default(),
+            frame_store_residency: Arc::default(),
+            #[cfg(not(test))]
+            process_memory: memory_status::live_process_memory(),
+            #[cfg(test)]
+            process_memory: config
+                .process_memory_for_test
+                .clone()
+                .unwrap_or_else(memory_status::live_process_memory),
             #[cfg(test)]
             capture_memory_sample_for_test: config.capture_memory_sample_for_test,
             governance_write_gate: Mutex::new(()),
@@ -2997,6 +3024,74 @@ impl RuntimeHost {
     ) -> RuntimeHostResult<()> {
         self.shared_ref(crate::codes::test_spellings::TestLocation::RecordConfigOverridesForTest)?
             .record_config_overrides_for_test(rows)
+    }
+
+    /// #407 PERF-READ, test only: a capture frame store opened with the configuration every
+    /// capture frame store of the host has, so it joins the host's residency registry while it
+    /// lives.
+    #[cfg(test)]
+    pub(crate) fn open_capture_frame_store_for_test(
+        &self,
+        root: &std::path::Path,
+    ) -> RuntimeHostResult<actingcommand_artifact_store::FrameStore> {
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::InstanceClaimsForTest)?;
+        actingcommand_artifact_store::FrameStore::new(
+            root.to_path_buf(),
+            shared.capture_frame_store_config(),
+        )
+        .map_err(RuntimeHostError::artifact)
+    }
+
+    /// #407 PERF-READ, test only: what the owners hold now, read from them directly: the
+    /// capture queue's memory bytes and records, the instance facts active and the Runtime's
+    /// own facts.
+    #[cfg(test)]
+    pub(crate) fn memory_owner_readings_for_test(
+        &self,
+    ) -> RuntimeHostResult<(
+        actingcommand_contract::LedgerCaptureMemoryStatus,
+        actingcommand_contract::FactStoresMemoryStatus,
+    )> {
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::InstanceClaimsForTest)?;
+        let capture = shared.ledger.capture_status();
+        let facts = actingcommand_contract::FactStoresMemoryStatus {
+            instance_facts: lock(&shared.facts, HostLocation::ReadPerformanceStatus)?.active_count()
+                as u64,
+            runtime_facts: lock(&shared.runtime_facts, HostLocation::ReadPerformanceStatus)?.len()
+                as u64,
+        };
+        Ok((
+            actingcommand_contract::LedgerCaptureMemoryStatus {
+                bytes: capture.memory_bytes,
+                entries: capture.memory_records,
+            },
+            facts,
+        ))
+    }
+
+    /// #407 PERF-READ, test only: tracks a run as running with its main package measured at
+    /// `bytes` (see `HostShared::track_running_package_for_test`).
+    #[cfg(test)]
+    pub(crate) fn track_running_package_for_test(
+        &self,
+        request_id: RequestId,
+        instance_id: InstanceId,
+        bytes: u64,
+    ) -> RuntimeHostResult<()> {
+        self.shared_ref(crate::codes::test_spellings::TestLocation::InstanceClaimsForTest)?
+            .track_running_package_for_test(request_id, instance_id, bytes)
+    }
+
+    /// #407 PERF-READ, test only: ends what `track_running_package_for_test` tracked.
+    #[cfg(test)]
+    pub(crate) fn untrack_running_package_for_test(
+        &self,
+        request_id: RequestId,
+    ) -> RuntimeHostResult<()> {
+        self.shared_ref(crate::codes::test_spellings::TestLocation::InstanceClaimsForTest)?
+            .untrack_running_package_for_test(request_id)
     }
 
     /// Workflow #387 D1c (§3.7): holds every instance back from performance release, or lets
@@ -5597,6 +5692,12 @@ struct HostShared {
     /// preparation and the sweep record the warnings of the budgets that entered the floor
     /// (`record_frame_store_floor_entries`).
     frame_store_floor: Arc<actingcommand_artifact_store::BudgetFloorWatch>,
+    /// #407 PERF-READ: the registry every capture frame store the host opens joins for its life
+    /// (`capture_frame_store_config`); the performance status reads its sum.
+    frame_store_residency: Arc<actingcommand_artifact_store::FrameStoreResidency>,
+    /// #407 PERF-READ: the process's own memory counters, sampled at each performance status
+    /// read.
+    process_memory: memory_status::ProcessMemorySampler,
     /// #411 A67-R, test only: see [`RuntimeHostConfig::with_capture_memory_sample_for_test`].
     #[cfg(test)]
     capture_memory_sample_for_test: Option<actingcommand_artifact_store::MemorySample>,

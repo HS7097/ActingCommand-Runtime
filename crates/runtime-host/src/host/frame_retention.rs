@@ -31,13 +31,15 @@ use crate::{RuntimeHostError, RuntimeHostResult, events::RuntimeEvents};
 
 impl super::HostShared {
     /// The configuration of every capture frame store the host opens: the host's physical memory
-    /// sample, and (#411 A67-R) the host's one floor watch, so the budgets of all of them enter
-    /// and leave the floor together.
+    /// sample, (#411 A67-R) the host's one floor watch, so the budgets of all of them enter and
+    /// leave the floor together, and (#407 PERF-READ) the host's one residency registry, which
+    /// each store joins for its life so the performance status reads their sum.
     pub(super) fn capture_frame_store_config(
         &self,
     ) -> actingcommand_artifact_store::FrameStoreConfig {
         let config = actingcommand_artifact_store::FrameStoreConfig::default()
-            .with_floor_watch(Arc::clone(&self.frame_store_floor));
+            .with_floor_watch(Arc::clone(&self.frame_store_floor))
+            .with_residency(Arc::clone(&self.frame_store_residency));
         #[cfg(test)]
         if let Some(sample) = self.capture_memory_sample_for_test {
             return config.with_memory_source(

@@ -3172,6 +3172,16 @@ tests = [
 ]
 incident = ["#422 W1-8"]
 
+# PERF-READ (#407, 0.12.41; brief rd-1031/perf-407/brief-perf-read.md; design rd-1031/perf-407/model-perf-012.md sections 1.1, 2 and 5.1; register section 1.280): PerformanceStatus shows memory, each part its owner's own reading (the capture frame stores the host opened, joining at their open and leaving when dropped; the vision provider's loaded models and times; the capture queue; the running runs' measured packages; the two fact stores) beside the process's counters; a failed process sample leaves memory.process absent, never zero, with perf_memory_unavailable caused by the sampler's failure; and the parts never claim more than the private bytes (the process is absent with perf_memory_unavailable naming both, and the shape rules refuse a status that shows both)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_407_perf_read::perf_status_memory_parts_come_from_their_owners",
+    "actingcommand-runtime-host::lib::tests::gate_407_perf_read::a_failed_process_sample_is_absent_with_its_warning_not_zero",
+    "actingcommand-runtime-host::lib::tests::gate_407_perf_read::perf_status_memory_parts_stay_within_private_bytes",
+]
+incident = ["#407 PERF-READ"]
+
 # AGT-1a (Workflow #432, 0.12.37; design rd-1031/agt/model-agt-v2.md section 10; register section 1.245; contracts/agent-wake.md): the agent_wake section has no default and is whole or absent, its caps fit the rows kept, its quiet windows use the blackout rules and its settable keys are the design's table; the message counts its header, cuts only the alias and refuses a channel below its floor; the body is bounded, read-only and codes only; the channel registry refuses bad names and paths; and the client words stay in crates/agent-forward.
 [[gate]]
 coverage = "Y"

@@ -106,7 +106,10 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   status denies unknown members), so [3, 4]. Workflow #432 AGT-1b (0.12.37, register §1.246)
 ///   raises `max` to 5: the request kind `AgentWakeTest`, its result and the status member
 ///   `agent_wake`, which is absent with no `agent_wake` section; every earlier request is answered
-///   as before, so [3, 5].
+///   as before, so [3, 5]. Workflow #407 PERF-READ (0.12.41, register §1.280) raises `max` to 6:
+///   the `PerformanceStatus` answer's members `memory` and `vision`, which a reader whose `max` is
+///   below 6 refuses (the status denies unknown members); no request changes and every earlier
+///   request is answered as before, so [3, 6].
 /// - `runtime-outcomes` [1, 1]: the new interface of model-378 §10.
 const V0120: &[(&str, [u64; 2])] = &[
     ("actingd-config", [5, 26]),
@@ -114,7 +117,7 @@ const V0120: &[(&str, [u64; 2])] = &[
     ("install-selection", [1, 1]),
     ("ledger", [3, 6]),
     ("package", [3, 6]),
-    ("runtime-client", [3, 5]),
+    ("runtime-client", [3, 6]),
     ("runtime-outcomes", [1, 1]),
 ];
 

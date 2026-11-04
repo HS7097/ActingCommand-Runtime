@@ -273,7 +273,26 @@ takes the factor of the new mode. `full` is set only in the configuration file.
   `ledger_read_pages {pages, total_ms, longest_ms, last_ms}`, the view pages the ledger's
   reader pool read since the Runtime started and their summed, longest and last time in
   milliseconds, read from the ledger's memory without a writer command; it is absent without a
-  reader pool.
+  reader pool. #407 PERF-READ (register §1.280, W23, since 0.12.41; `runtime-client` 6): two
+  more optional members, read from memory, nothing in the ledger:
+  - `memory`: `process {private_bytes, working_set_bytes, peak_working_set_bytes}`, the
+    Runtime process's own counters (Windows `GetProcessMemoryInfo` on itself), sampled after the
+    parts; `frame_stores {stores, resident_bytes, resident_frames, largest_resident_bytes}`, the
+    capture frame stores alive now by their own accounting (every store the host opens joins
+    one registry at its open and leaves it when dropped); `vision_models [{model_ref, kind,
+    load_private_bytes?}]`, the vision models loaded now, each with the growth of the private
+    bytes across its load (absent when a sample failed); `ledger_capture {bytes, entries}`, the
+    capture queue's memory segment; `packages {runs, resident_bytes}`, the running runs' measured
+    main packages (`package_load_bytes`); `facts {instance_facts, runtime_facts}`, entries. The
+    parts' bytes never exceed `private_bytes`. `process` is absent, never zero, when its sample
+    failed or the parts would claim more than it; the warning `perf_memory_unavailable` says
+    which (caused by the sampler's failure, or `actual_bytes` the parts and `limit_bytes` the
+    private bytes), first among the warnings.
+  - `vision [{model_ref, kind, requests, inferences, lock_wait_total_us, lock_wait_longest_us,
+    inference_total_us, inference_longest_us}]`: per vision model since the start, the requests
+    that waited for its lock and the engine calls, with the time spent waiting for the lock and
+    the time in the engine, summed and longest, in microseconds; a load is in neither. Absent
+    while no model was asked.
 - **GPU.** The GPU utilisation is summed per engine type and the busiest type counts
   (`performance.pressure.gpu_aggregate = max_engine_type`, the default); `sum` keeps the earlier
   sum of every engine.

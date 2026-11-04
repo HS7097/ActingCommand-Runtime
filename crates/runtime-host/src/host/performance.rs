@@ -583,16 +583,26 @@ impl HostShared {
 
     /// `RuntimeOperation::PerformanceStatus` (Workflow #385 P-m, PERF §4.6; register §1.61
     /// W15): the shadow measurement's rows, read from memory. Nothing is read from or appended
-    /// to the ledger.
+    /// to the ledger. #407 PERF-READ (§1.280): with the memory parts by owner and the vision
+    /// times, read before the performance lock, the last lock the status read takes.
     pub(super) fn performance_status_read(&self) -> Result<OperationSuccess, RequestFailure> {
         let settings = self.performance_measurement()?;
         let instances = self.pacing_instances()?;
         let now = self.clock.sample()?.unix_ms;
+        let mut memory_warnings = Vec::new();
+        let memory = self.memory_status(&mut memory_warnings)?;
+        let vision = self.vision_timings();
         let mut status = lock(&self.performance, HostLocation::ReadPerformanceStatus)?
             .pacing_status(now, &settings, &instances);
         // #422 W1-8 (P29; QR-1 review L-4 follow-up): the ledger reader pool's pages and their
         // times, read from the ledger's memory without a writer command; absent without a pool.
         status.ledger_read_pages = self.ledger.reader_pool_pages().map(ledger_read_pages);
+        status.memory = Some(memory);
+        status.vision = vision;
+        // The memory's warning first, so the bound on warnings never drops it.
+        memory_warnings.append(&mut status.warnings);
+        memory_warnings.truncate(actingcommand_contract::MAX_PERFORMANCE_STATUS_WARNINGS);
+        status.warnings = memory_warnings;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: None,

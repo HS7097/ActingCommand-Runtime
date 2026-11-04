@@ -10929,3 +10929,33 @@ impl HostShared {
         Ok(None)
     }
 }
+
+/// #407 PERF-READ, test only: a run tracked as running whose preparation measured its main
+/// package at `bytes`, as a running run's control is, so the performance status counts it; and
+/// its end.
+#[cfg(test)]
+impl HostShared {
+    pub(super) fn track_running_package_for_test(
+        &self,
+        request_id: RequestId,
+        instance_id: InstanceId,
+        bytes: u64,
+    ) -> RuntimeHostResult<()> {
+        let control = Arc::new(ContainedRunControl::new(request_id, instance_id, false));
+        control.note_package_load(PackageLoad {
+            elapsed_ms: 1,
+            bytes,
+        });
+        lock(&self.contained_runs, HostLocation::ReadActiveContainedRuns)?
+            .insert(request_id, control);
+        Ok(())
+    }
+
+    pub(super) fn untrack_running_package_for_test(
+        &self,
+        request_id: RequestId,
+    ) -> RuntimeHostResult<()> {
+        lock(&self.contained_runs, HostLocation::ReadActiveContainedRuns)?.remove(&request_id);
+        Ok(())
+    }
+}

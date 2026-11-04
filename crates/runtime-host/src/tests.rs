@@ -546,6 +546,10 @@ mod gate_422_idle_ov;
 // #422 W1-8: Status, MonitorStatus and RuntimeFactSnapshot read the published ledger head and
 // answer while the writer is held (P30); PerformanceStatus shows the reader pool's pages (P29).
 mod gate_w1_8;
+// #407 PERF-READ: PerformanceStatus shows the memory parts from their owners and the vision
+// times; a failed process sample is absent with its warning; the parts stay within the private
+// bytes.
+mod gate_407_perf_read;
 // #421 S2-IF: `StartReport` names an instruction kept over a changed default base-changed and
 // restored, never dropped; a key gone or superseded is dropped.
 mod gate_421_s2if;

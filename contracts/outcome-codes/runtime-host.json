@@ -21793,6 +21793,28 @@
       "common_causes": "The configured initial baseline of the signal is far from what the host or the backend really takes.",
       "handling": "Look at the calm values and set performance.responsiveness initial_baseline_us of that signal (per backend) nearer to them, or widen baseline.clamp_min_milli or clamp_max_milli."
     },
+    "perf_memory_unavailable": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "actual_bytes": "optional",
+        "limit_bytes": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.41",
+      "description": "The status read (PerformanceStatus) shows no memory.process, never a zero in its place: the Runtime process's own memory sample failed (caused by the sampler's failure), or the memory parts read beside it claimed more than its private bytes (actual_bytes the parts, limit_bytes the private bytes). The parts are shown all the same (Workflow #407 PERF-READ).",
+      "common_causes": "The platform has no process memory counters, the operating system refused the read, or a part's own accounting (a frame store, a vision model load measured while another thread allocated) counts more than the process holds at the moment of the read.",
+      "handling": "Nothing to repair in the Runtime: it is a measurement. Read the status again; if the parts keep claiming more than the private bytes, report the reading with the parts."
+    },
     "device_thermal_hold": {
       "category": "warning",
       "ladder_class": "planned_stop",

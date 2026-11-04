@@ -33,15 +33,18 @@ use windows_sys::Win32::System::Performance::{
     PdhAddEnglishCounterW, PdhCloseQuery, PdhCollectQueryData, PdhGetFormattedCounterArrayW,
     PdhGetFormattedCounterValue, PdhOpenQueryW,
 };
-use windows_sys::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+use windows_sys::Win32::System::ProcessStatus::{
+    K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX,
+};
 use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 use windows_sys::Win32::System::Threading::{
-    GetExitCodeProcess, GetProcessInformation, GetProcessIoCounters, GetProcessTimes,
-    GetSystemTimes, IO_COUNTERS, OpenProcess, PROCESS_PROTECTION_LEVEL_INFORMATION,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ, PROTECTION_LEVEL_ANTIMALWARE_LIGHT,
-    PROTECTION_LEVEL_AUTHENTICODE, PROTECTION_LEVEL_CODEGEN_LIGHT, PROTECTION_LEVEL_LSA_LIGHT,
-    PROTECTION_LEVEL_PPL_APP, PROTECTION_LEVEL_WINDOWS, PROTECTION_LEVEL_WINDOWS_LIGHT,
-    PROTECTION_LEVEL_WINTCB, PROTECTION_LEVEL_WINTCB_LIGHT, ProcessProtectionLevelInfo,
+    GetCurrentProcess, GetExitCodeProcess, GetProcessInformation, GetProcessIoCounters,
+    GetProcessTimes, GetSystemTimes, IO_COUNTERS, OpenProcess,
+    PROCESS_PROTECTION_LEVEL_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
+    PROTECTION_LEVEL_ANTIMALWARE_LIGHT, PROTECTION_LEVEL_AUTHENTICODE,
+    PROTECTION_LEVEL_CODEGEN_LIGHT, PROTECTION_LEVEL_LSA_LIGHT, PROTECTION_LEVEL_PPL_APP,
+    PROTECTION_LEVEL_WINDOWS, PROTECTION_LEVEL_WINDOWS_LIGHT, PROTECTION_LEVEL_WINTCB,
+    PROTECTION_LEVEL_WINTCB_LIGHT, ProcessProtectionLevelInfo,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId,
@@ -444,6 +447,33 @@ pub(super) fn sample_physical_memory() -> Result<super::PhysicalMemorySample, Co
         Ok(super::PhysicalMemorySample {
             total_bytes: status.ullTotalPhys,
             available_bytes: status.ullAvailPhys,
+        })
+    }
+}
+
+/// #407 PERF-READ: `GetProcessMemoryInfo` on this process with the extended counters, whose
+/// `PrivateUsage` is the process's private bytes.
+pub(super) fn sample_own_process_memory() -> Result<super::OwnProcessMemory, Code> {
+    let size = u32::try_from(size_of::<PROCESS_MEMORY_COUNTERS_EX>())
+        .map_err(|_| HostMetricsCode::PerformanceMemoryStructureInvalid.code())?;
+    // SAFETY: PROCESS_MEMORY_COUNTERS_EX is initialized with its documented byte size, which
+    // `cb` passes, so the API fills the extended counters; the current process's pseudo handle
+    // needs no closing.
+    unsafe {
+        let mut memory: PROCESS_MEMORY_COUNTERS_EX = zeroed();
+        memory.cb = size;
+        if K32GetProcessMemoryInfo(
+            GetCurrentProcess(),
+            (&raw mut memory).cast::<PROCESS_MEMORY_COUNTERS>(),
+            size,
+        ) == 0
+        {
+            return Err(HostMetricsCode::PerformanceMemoryStatusFailed.code());
+        }
+        Ok(super::OwnProcessMemory {
+            private_bytes: memory.PrivateUsage as u64,
+            working_set_bytes: memory.WorkingSetSize as u64,
+            peak_working_set_bytes: memory.PeakWorkingSetSize as u64,
         })
     }
 }
