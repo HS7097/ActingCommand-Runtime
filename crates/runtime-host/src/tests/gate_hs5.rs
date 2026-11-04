@@ -25,24 +25,42 @@
 //! Android has the launcher in front and the screen is the desktop, which no package knows. No
 //! device, adb, `MuMuManager` or emulator is touched; names, indices and ports are made up.
 
+use super::gate_387_d1c::ladder_manifest;
 use super::gate_403::{fence_records, status_fence};
-use super::instance_workers::all_events;
+use super::gate_hs3::{self as hs3, Opened, Reads};
+use super::instance_workers::{
+    admit_ladder_run, all_events, ladder_setup_with_packages, phases, rung_outcomes,
+    wait_for_ladder_end, wait_until,
+};
 use super::*;
+use crate::codes::HostCode;
+use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
-    ConfigParameter, ConfigParameterSource, ConfigSettingChange, DeviceBackendSwitchedPayload,
-    FactScalar, NemuAppIndexSource, RuntimeConfigManifest, RuntimePayload,
+    ConfigParameter, ConfigParameterSource, ConfigSettingChange, ContainedLabOperationRequest,
+    ContainedObservationRequest, DeviceBackendSwitchedPayload, EmulatorInstanceAction, FactScalar,
+    LabOperationSelection, LabOperationStage, LabProjectionHint, NemuAppIndexSource,
+    ObservationFramePlan, RecoveryRung, RecoveryRungOutcome, RuntimeConfigManifest,
+    RuntimeLifecyclePhase, RuntimePayload, SchedulingPauseScope, SchedulingResumeSelfCheck,
+    StartupPackageDisposition,
 };
 use actingcommand_device::{
-    AdbConfig, CaptureBackendChoice, CaptureBackendConfig, DeviceTarget, MaaTouchConfig,
-    TouchBackendChoice, TouchBackendConfig, mumu_instance_port, nemu_paired_display,
+    AdbConfig, CaptureBackendChoice, CaptureBackendConfig, CaptureOpenCause, CaptureOpenFailure,
+    DeviceResourceQuiescence, DeviceTarget, MaaTouchConfig, TouchBackendChoice, TouchBackendConfig,
+    mumu_instance_port, nemu_paired_display,
 };
 use actingcommand_execution_kernel::DiscoveredInstanceBinding;
+use actingcommand_runtime_client::{RuntimeChannel, RuntimeClient, RuntimeClientConfig};
 use actingcommand_runtime_config::{CAPTURE_BACKEND, TOUCH_BACKEND, instance_key};
 use serde_json::{Value, json};
 use std::sync::Mutex;
 use std::sync::atomic::AtomicI32;
 
 const A: &str = "hs5.instance.a";
+const B: &str = "hs5.instance.b";
+const PAIRED_OPEN_FAILED: &str = "paired_backend_open_failed";
+const NOT_FOREGROUND: &str = "application_not_foreground";
+/// A page the application shows that no package knows.
+const STUCK: [u8; 3] = [0, 128, 0];
 /// The application every instance is assigned (the fake provider's).
 const APPLICATION: &str = "neutral.application";
 /// What Android has in front while the application does not run.
@@ -656,5 +674,924 @@ fn hs5_morning_sequence_client_startup_after_stop() {
         a.device.opens()
     );
     assert_unfenced(&host, A);
+    host.close().expect("close host");
+}
+
+// ---- More of the host's ways in.
+
+/// A host of `nodes` on the real Runtime clock; with `endpoints`, each instance has a bound ADB
+/// endpoint of its own, so the start prepares it.
+fn start(root: &TempDir, nodes: &[&Node], endpoints: bool) -> RuntimeHost {
+    let provider = provider(nodes);
+    let provider = if endpoints {
+        provider.with_device_endpoints()
+    } else {
+        provider
+    };
+    RuntimeHost::start(config(root), Arc::new(provider)).expect("runtime host")
+}
+
+/// A paired open that acquired its connection and could not release it (the 11-04 open, before
+/// HS-5a): unconfirmed.
+fn unreleased_open() -> DeviceError {
+    DeviceError::fatal("fixture paired open: its own connection stayed open")
+        .with_resource_summary(DeviceResourceQuiescence::Unconfirmed, 1)
+}
+
+/// A paired open that failed after its connection and released it (HS-5a R1): confirmed.
+fn released_open() -> DeviceError {
+    DeviceError::fatal(
+        "fixture paired open: it failed after connecting and released the connection",
+    )
+    .with_resource_summary(DeviceResourceQuiescence::Confirmed, 1)
+}
+
+/// The preparations of `instance` that finished so far, in ledger order: whether each passed.
+fn preparations(host: &RuntimeHost, instance: InstanceId) -> Vec<bool> {
+    phases(&all_events(host))
+        .into_iter()
+        .filter(|(event, _)| event.links().instance_id() == Some(&instance))
+        .filter_map(|(_, phase)| match phase {
+            RuntimeLifecyclePhase::InstancePreparationFinished { outcome, .. } => {
+                Some(outcome.is_none())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn ladder_started(host: &RuntimeHost) -> bool {
+    phases(&all_events(host))
+        .iter()
+        .any(|(_, phase)| matches!(phase, RuntimeLifecyclePhase::RecoveryLadderStarted { .. }))
+}
+
+/// The outcomes of the fence lifts so far.
+fn lifts(host: &RuntimeHost) -> Vec<Outcome> {
+    phases(&all_events(host))
+        .into_iter()
+        .filter_map(|(_, phase)| match phase {
+            RuntimeLifecyclePhase::ResourceFenceLifted { outcome, .. } => Some(outcome),
+            _ => None,
+        })
+        .collect()
+}
+
+/// How many contained tasks ended (completed, failed or cancelled), and how many completed.
+fn task_ends(host: &RuntimeHost) -> (usize, usize) {
+    let events = all_events(host);
+    let ended = events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.event_type(),
+                EventType::TaskCompleted | EventType::TaskFailed | EventType::TaskCancelled
+            )
+        })
+        .count();
+    let completed = events
+        .iter()
+        .filter(|event| event.event_type() == EventType::TaskCompleted)
+        .count();
+    (ended, completed)
+}
+
+fn assert_passed(selfcheck: &SchedulingResumeSelfCheck) {
+    assert!(
+        selfcheck.capture.ok && selfcheck.touch.ok && selfcheck.failure_code.is_none(),
+        "{selfcheck:?}"
+    );
+}
+
+/// `actingctl selfcheck` of `alias`.
+fn self_check(host: &RuntimeHost, alias: &str, connection: u64) -> SchedulingResumeSelfCheck {
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let receipt = send(
+        host,
+        &runtime_request(
+            &ids,
+            RuntimeOperation::SelfCheckInstance {
+                instance_alias: alias.to_owned(),
+            },
+        ),
+        connection,
+    );
+    let Some(RuntimeResult::InstanceSelfChecked { selfcheck, .. }) = receipt.result() else {
+        panic!("a self-check result: {receipt:?}");
+    };
+    selfcheck.clone()
+}
+
+/// `actingctl resume` of `alias`: the self-check its reconnect made.
+fn resume(host: &RuntimeHost, alias: &str, connection: u64) -> SchedulingResumeSelfCheck {
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let receipt = send(
+        host,
+        &runtime_request(
+            &ids,
+            RuntimeOperation::ResumeScheduling {
+                scope: SchedulingPauseScope::Instance {
+                    instance_alias: alias.to_owned(),
+                },
+                expected: None,
+            },
+        ),
+        connection,
+    );
+    let Some(RuntimeResult::SchedulingResumed {
+        selfcheck: Some(selfcheck),
+        ..
+    }) = receipt.result()
+    else {
+        panic!("an instance resume with its self-check: {receipt:?}");
+    };
+    selfcheck.clone()
+}
+
+/// `actingctl emulator <action>` of `alias`.
+fn control_emulator(
+    host: &RuntimeHost,
+    alias: &str,
+    action: EmulatorInstanceAction,
+    connection: u64,
+) -> RuntimeReceipt {
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    send(
+        host,
+        &runtime_request(
+            &ids,
+            RuntimeOperation::ControlEmulatorInstance {
+                instance_alias: alias.to_owned(),
+                action,
+            },
+        ),
+        connection,
+    )
+}
+
+/// A request from the Lab (`actinglab`).
+fn lab_request(operation: RuntimeOperation) -> RuntimeRequest {
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    RuntimeRequest::new(
+        ids.mint_request_id().expect("request id"),
+        ids.mint_correlation_id().expect("correlation id"),
+        None,
+        EventActor::Lab,
+        EventSource::Lab,
+        unix_ms_now().expect("wall clock"),
+        operation,
+    )
+    .expect("runtime request")
+}
+
+/// `actinglab do --tap 1,0 --package <package>` on `alias`: the operation's failure, if any.
+fn lab_tap(root: &TempDir, alias: &str, package: &Path) -> Option<(String, LabOperationStage)> {
+    let lab = RuntimeClient::connect(RuntimeClientConfig::new(
+        root.path(),
+        RuntimeChannel::Lab,
+        EventActor::Lab,
+        EventSource::Lab,
+    ))
+    .expect("Lab client");
+    let verified = lab
+        .begin_debug_session()
+        .expect("debug session")
+        .run_contained_lab_operation(
+            alias,
+            ContainedLabOperationRequest {
+                package_path: package.display().to_string(),
+                selection: LabOperationSelection::Coordinates {
+                    action: InputAction::Tap { x: 1, y: 0 },
+                },
+                projection_hint: LabProjectionHint {
+                    sequence: None,
+                    content_sha256: None,
+                },
+                after: None,
+            },
+            ObservationFramePlan::SINGLE,
+        )
+        .expect("the Lab client verifies the operation");
+    let failure = verified
+        .operation()
+        .record
+        .failure
+        .as_ref()
+        .map(|failure| (failure.code.clone(), failure.stage));
+    drop(lab);
+    failure
+}
+
+/// The application command `action`'s captures after it: the first one's display, and the
+/// first one of the package's display, each with the paired opens before it.
+fn captures_after(device: &Device, action: ApplicationLifecycleAction) -> Vec<(i32, usize)> {
+    let index = device
+        .commands()
+        .iter()
+        .position(|(command, _)| *command == action)
+        .expect("the application command");
+    around_command(device, index).1
+}
+
+/// After the application's start: the first frame is the main display's, a later one the
+/// package's display's, and no paired open came between them (one session).
+fn assert_main_then_package(after: &[(i32, usize)]) {
+    assert_eq!(
+        after.first().map(|capture| capture.0),
+        Some(MAIN_DISPLAY),
+        "the first frame after the start: {after:?}"
+    );
+    let package = after
+        .iter()
+        .find(|capture| capture.0 == PACKAGE_DISPLAY)
+        .expect("a frame of the package's display");
+    assert_eq!(
+        package.1, after[0].1,
+        "no paired open between the two frames: {after:?}"
+    );
+}
+
+// §2 rows 1–3: a start's preparation, a resume's reconnect and an emulator restart's
+// preparation, the application not running: each self-check passes, the instance is usable,
+// nothing is fenced and no ladder starts.
+#[test]
+fn hs5_preparations_pass_without_application() {
+    let root = TempDir::new().expect("tempdir");
+    let a = Node::new(A, TouchBackendChoice::NemuIpc, false);
+    let host = start(&root, &[&a], true);
+    wait_until("the start's preparation", || {
+        !preparations(&host, a.id).is_empty()
+    });
+    assert_eq!(
+        preparations(&host, a.id),
+        [true],
+        "the start's self-check passes"
+    );
+    assert_passed(&resume(&host, A, 5111));
+    assert_eq!(a.device.reads(), 1, "the index was read once and kept");
+    assert!(
+        a.device
+            .opens()
+            .iter()
+            .all(|open| *open == (0, Some(MAIN_DISPLAY))),
+        "every open took the main display: {:?}",
+        a.device.opens()
+    );
+    assert!(!ladder_started(&host));
+    assert!(!a.device.running(), "nothing started the application");
+    assert_unfenced(&host, A);
+    host.close().expect("close host");
+
+    let root = TempDir::new().expect("tempdir");
+    let a = Node::new(A, TouchBackendChoice::NemuIpc, false);
+    let host = start(&root, &[&a], false);
+    bind_fake_emulator(&host, A, a.id, &a.state);
+    let before = preparations(&host, a.id).len();
+    let restarted = control_emulator(&host, A, EmulatorInstanceAction::Restart, 5112);
+    assert_eq!(
+        restarted.state(),
+        RuntimeReceiptState::Completed,
+        "{restarted:?}"
+    );
+    wait_until("the restart's preparation", || {
+        preparations(&host, a.id).len() > before
+    });
+    assert_eq!(
+        preparations(&host, a.id)[before..].to_vec(),
+        vec![true],
+        "the restart's self-check passes"
+    );
+    assert!(!ladder_started(&host));
+    assert_unfenced(&host, A);
+    host.close().expect("close host");
+}
+
+// §2 row 4: a person's run fenced the instance (its paired open could not release its
+// connection) and it waits for a person. With the application still not running, the fence's
+// recheck passes and lifts it (`instance_resources_fence_recheck_passed`), and a person's
+// self-check passes too.
+#[test]
+fn hs5_selfcheck_and_recheck_pass_without_application() {
+    let root = TempDir::new().expect("tempdir");
+    let a = Node::new(A, TouchBackendChoice::NemuIpc, false);
+    let clock = Arc::new(ManualRuntimeClock::new(1_000, 0));
+    let host = RuntimeHost::start(
+        config(&root)
+            .with_runtime_clock(clock.clone())
+            .with_config_manifest(ladder_manifest(json!({
+                "fence_recheck": {"interval_ms": 60_000, "max_attempts": 3}
+            }))),
+        Arc::new(provider(&[&a])),
+    )
+    .expect("runtime host");
+    let package = app_entry_package(&root);
+    *a.device.open_failure.lock().expect("open failure") = Some(unreleased_open());
+    let fenced = direct_run(&host, A, &package, 5121);
+    assert_eq!(
+        fenced.outcome().code().as_str(),
+        HostCode::InstanceResourcesFenced.as_str(),
+        "{fenced:?}"
+    );
+    let fence = status_fence(&host, A).expect("the fence");
+    assert!(fence.awaiting_person, "{fence:?}");
+    assert_eq!(fence.cause.as_str(), PAIRED_OPEN_FAILED);
+    *a.device.open_failure.lock().expect("open failure") = None;
+
+    let next = fence
+        .person_wait
+        .and_then(|wait| wait.next_recheck_unix_ms)
+        .expect("a next recheck");
+    clock.advance(next.saturating_sub(clock.sample().expect("manual clock").unix_ms));
+    host.fence_recheck_tick_for_test().expect("sweep tick");
+    wait_until("the fence's lift", || !lifts(&host).is_empty());
+    let lifted = lifts(&host);
+    let [outcome] = lifted.as_slice() else {
+        panic!("one lift: {lifted:#?}");
+    };
+    assert_eq!(
+        outcome.code().as_str(),
+        HostCode::InstanceResourcesFenceRecheckPassed.as_str()
+    );
+    assert_eq!(status_fence(&host, A), None);
+    assert!(!a.device.running(), "the recheck started no application");
+
+    assert_passed(&self_check(&host, A, 5122));
+    assert_eq!(status_fence(&host, A), None);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+// §2 row 5 (the morning's kind of run): a person's run of the application entry package, the
+// application not running. Its first frame is the main display's (the desktop, no page), the
+// application effect starts the application, and the run arrives on home on the package's
+// display. Nothing is fenced.
+#[test]
+fn hs5_direct_run_application_entry_without_application() {
+    let root = TempDir::new().expect("tempdir");
+    let a = Node::new(A, TouchBackendChoice::NemuIpc, false);
+    let host = start(&root, &[&a], false);
+    let package = app_entry_package(&root);
+
+    assert_completed_on_home(&direct_run(&host, A, &package, 5131));
+
+    let (before, after) = around_command(&a.device, 0);
+    assert_eq!(before, Some(MAIN_DISPLAY), "{:?}", a.device.captures());
+    assert!(
+        !after.is_empty() && after.iter().all(|capture| capture.0 == PACKAGE_DISPLAY),
+        "{after:?}"
+    );
+    assert_eq!(
+        a.state.application_count.load(Ordering::Acquire),
+        1,
+        "one application effect"
+    );
+    assert_eq!(a.device.reads(), 1);
+    assert_unfenced(&host, A);
+    host.close().expect("close host");
+}
+
+// §2 row 5, a client's lease: the run waits behind the client's lease and runs once the client
+// gives it back, as above.
+#[test]
+fn hs5_leased_run_application_entry_without_application() {
+    let root = TempDir::new().expect("tempdir");
+    let a = Node::new(A, TouchBackendChoice::NemuIpc, false);
+    let host = start(&root, &[&a], false);
+    let package = app_entry_package(&root);
+    let mut holder = TestClient::connect(&host);
+    let (_, token) = holder.acquire(A);
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let run = runtime_request(
+        &ids,
+        RuntimeOperation::run_contained_task(
+            A,
+            ids.mint_holder_id().expect("holder"),
+            ContainedTaskRequest::new(package.display().to_string()).expect("task request"),
+        ),
+    );
+    let release = holder.request(RuntimeOperation::ReleaseLease { token });
+
+    let receipt = thread::scope(|scope| {
+        let waiting = scope.spawn(|| {
+            host.process_request_for_test(&run, ConnectionId::new(5141).expect("connection"))
+        });
+        wait_until("the run queued behind the client's lease", || {
+            !host
+                .query_persisted_events_for_test(EventQuery {
+                    event_type: Some(EventType::SchedulerQueued),
+                    request_id: Some(run.request_id()),
+                    ..EventQuery::default()
+                })
+                .expect("queued run")
+                .is_empty()
+        });
+        assert_eq!(
+            holder.send(&release).state(),
+            RuntimeReceiptState::Completed
+        );
+        waiting
+            .join()
+            .expect("the waiting run")
+            .expect("the run's receipt")
+    });
+
+    assert_completed_on_home(&receipt);
+    let (before, after) = around_command(&a.device, 0);
+    assert_eq!(before, Some(MAIN_DISPLAY), "{:?}", a.device.captures());
+    assert!(
+        after.iter().any(|capture| capture.0 == PACKAGE_DISPLAY),
+        "{after:?}"
+    );
+    assert_unfenced(&host, A);
+    drop(holder);
+    host.close().expect("close host");
+}
+
+// §2 row 5, a scheduled run: the policy's run of the application entry package, the application
+// not running, completes as a person's does; no ladder starts.
+#[test]
+fn hs5_scheduled_run_application_entry_without_application() {
+    let root = TempDir::new().expect("tempdir");
+    let entry = fs::read(app_entry_package(&root)).expect("the package's bytes");
+    let (host_config, request) = ladder_setup_with_packages(
+        root.path(),
+        &entry,
+        &neutral_non_home_start_contained_task_package(true),
+    );
+    let a = Node::new(POLICY_INSTANCE_ALIAS, TouchBackendChoice::NemuIpc, false);
+    let host = RuntimeHost::start(
+        host_config,
+        Arc::new(provider(&[&a]).with_device_endpoints()),
+    )
+    .expect("runtime host");
+    wait_until("the start's preparation", || {
+        !preparations(&host, a.id).is_empty()
+    });
+    let context = admit_ladder_run(&host, &request);
+
+    let receipt = host
+        .run_scheduled_contained_task(&context, &request)
+        .expect("the scheduled run");
+
+    assert_completed_on_home(&receipt);
+    let (before, after) = around_command(&a.device, 0);
+    assert_eq!(before, Some(MAIN_DISPLAY), "{:?}", a.device.captures());
+    assert!(
+        after.iter().any(|capture| capture.0 == PACKAGE_DISPLAY),
+        "{after:?}"
+    );
+    assert!(!ladder_started(&host), "no ladder");
+    assert_unfenced(&host, POLICY_INSTANCE_ALIAS);
+    host.close().expect("close host");
+}
+
+// §2 row 6: the ladder's application restart rung. The application shows a page no package
+// knows, so the scheduled run and the return-home rung fail; the restart rung starts the
+// application before any capture, and its package's display comes up a frame later. The rung's
+// first frame is the main display's, the next the package's display's, on one session, and the
+// rung recovers.
+#[test]
+fn hs5_ladder_application_rung_opens_after_entry() {
+    let root = TempDir::new().expect("tempdir");
+    let entry = app_entry_package(&root);
+    let (host_config, request) = ladder_setup_with_packages(
+        root.path(),
+        &neutral_contained_task_package(true),
+        &neutral_non_home_start_contained_task_package(true),
+    );
+    let host_config = host_config.with_startup_packages(BTreeMap::from([(
+        POLICY_INSTANCE_ALIAS.to_owned(),
+        ContainedTaskRequest::new(entry.display().to_string()).expect("startup package"),
+    )]));
+    let a = Node::new(POLICY_INSTANCE_ALIAS, TouchBackendChoice::NemuIpc, true);
+    *a.device.page.lock().expect("page") = Some(STUCK);
+    a.device.display_delay.store(1, Ordering::Release);
+    let host = RuntimeHost::start(
+        host_config,
+        Arc::new(provider(&[&a]).with_device_endpoints()),
+    )
+    .expect("runtime host");
+    wait_until("the start's preparation", || {
+        !preparations(&host, a.id).is_empty()
+    });
+    let context = admit_ladder_run(&host, &request);
+    host.run_scheduled_contained_task(&context, &request)
+        .expect_err("the scheduled run fails on a page no package knows");
+    wait_for_ladder_end(&host, POLICY_INSTANCE_ALIAS);
+
+    let rungs = rung_outcomes(&all_events(&host));
+    assert!(
+        rungs.contains(&(
+            RecoveryRung::ApplicationRestart,
+            RecoveryRungOutcome::Recovered,
+            None
+        )),
+        "{rungs:?}"
+    );
+    assert_main_then_package(&captures_after(
+        &a.device,
+        ApplicationLifecycleAction::Restart,
+    ));
+    assert_unfenced(&host, POLICY_INSTANCE_ALIAS);
+    host.close().expect("close host");
+}
+
+// §2 row 6: the host's own run of the startup package, the application not running: the
+// application effect comes first, its package's display a frame later; the first frame is the
+// main display's, the next the package's display's, on one session, and the package completes.
+#[test]
+fn hs5_startup_package_opens_after_entry() {
+    let root = TempDir::new().expect("tempdir");
+    let package = app_entry_package(&root);
+    let a = Node::new(A, TouchBackendChoice::NemuIpc, false);
+    a.device.display_delay.store(1, Ordering::Release);
+    let host = RuntimeHost::start(
+        config(&root).with_startup_packages(BTreeMap::from([(
+            A.to_owned(),
+            ContainedTaskRequest::new(package.display().to_string()).expect("startup package"),
+        )])),
+        Arc::new(provider(&[&a])),
+    )
+    .expect("runtime host");
+
+    assert_eq!(
+        host.schedule_startup_package_for_test(A)
+            .expect("schedule the startup package"),
+        StartupPackageDisposition::Scheduled
+    );
+    wait_until("the startup package's end", || task_ends(&host).0 > 0);
+
+    assert_eq!(task_ends(&host), (1, 1), "the startup package completed");
+    assert_main_then_package(&captures_after(
+        &a.device,
+        ApplicationLifecycleAction::Restart,
+    ));
+    assert_unfenced(&host, A);
+    host.close().expect("close host");
+}
+
+// §2 row 7, §4.4: a tap while the application does not run is refused by the foreground gate
+// (`application_not_foreground`, nothing pressed, nothing fenced), as on adb touch; the reset
+// completes.
+#[test]
+fn hs5_pointer_input_before_application_refused_by_foreground_gate() {
+    let root = TempDir::new().expect("tempdir");
+    let a = Node::new(A, TouchBackendChoice::NemuIpc, false);
+    let host = start(&root, &[&a], false);
+    let package = app_entry_package(&root);
+
+    assert_eq!(
+        lab_tap(&root, A, &package),
+        Some((NOT_FOREGROUND.to_owned(), LabOperationStage::Input))
+    );
+    assert!(
+        a.state
+            .input_actions
+            .lock()
+            .expect("input actions")
+            .is_empty(),
+        "nothing was pressed"
+    );
+    assert_unfenced(&host, A);
+
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let reset = send(
+        &host,
+        &runtime_request(
+            &ids,
+            RuntimeOperation::safe_reset(A, ids.mint_holder_id().expect("holder")),
+        ),
+        5171,
+    );
+    assert_eq!(reset.state(), RuntimeReceiptState::Completed, "{reset:?}");
+    assert!(
+        matches!(
+            reset.result(),
+            Some(RuntimeResult::SafeResetCompleted { .. })
+        ),
+        "{reset:?}"
+    );
+    assert_eq!(
+        *a.state.input_actions.lock().expect("input actions"),
+        [InputAction::Reset],
+        "only the reset reached the device"
+    );
+    assert!(!a.device.running());
+    assert_unfenced(&host, A);
+    host.close().expect("close host");
+}
+
+// §2 row 8: the switch of an instance to Nemu touch and capture while its application does not
+// run: the candidate's paired open reads `stopped`, resolves index 0, takes the main display,
+// and the switch commits with the index's source `resolved`.
+#[test]
+fn hs5_switch_to_nemu_without_application_commits() {
+    let root = TempDir::new().expect("tempdir");
+    let a = Node::new(A, TouchBackendChoice::AdbShellInput, false);
+    let host = RuntimeHost::start(
+        config(&root).with_config_manifest(manifest(a.rows("adb_shell_input"))),
+        Arc::new(provider(&[&a])),
+    )
+    .expect("runtime host");
+
+    let receipt = switch_to_nemu(&host, &a, 5181);
+
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{receipt:?}"
+    );
+    let [record]: [DeviceBackendSwitchedPayload; 1] = switched_records(&host)
+        .try_into()
+        .expect("one switch record");
+    assert_eq!(record.nemu_app_index(), Some(0));
+    assert_eq!(
+        record.nemu_app_index_source(),
+        Some(NemuAppIndexSource::Resolved)
+    );
+    assert_eq!(a.device.reads(), 1);
+    assert_eq!(a.device.opens(), [(0, Some(MAIN_DISPLAY))]);
+    assert!(!a.device.running());
+    assert_unfenced(&host, A);
+    host.close().expect("close host");
+}
+
+// §2 row 9: the Lab, the application not running: `observe --capture --package` gets a frame
+// (the main display's, no page); `do --tap` is refused by the foreground gate; nothing is fenced.
+#[test]
+fn hs5_lab_observe_and_do_without_application() {
+    let root = TempDir::new().expect("tempdir");
+    let a = Node::new(A, TouchBackendChoice::NemuIpc, false);
+    let host = start(&root, &[&a], false);
+    let package = app_entry_package(&root);
+
+    let observed = send(
+        &host,
+        &lab_request(RuntimeOperation::ObserveContainedPage {
+            instance_alias: A.to_owned(),
+            request: ContainedObservationRequest::new(package.display().to_string(), Vec::new())
+                .expect("observation request"),
+        }),
+        5191,
+    );
+    assert_eq!(
+        observed.state(),
+        RuntimeReceiptState::Completed,
+        "{observed:?}"
+    );
+    assert!(
+        matches!(
+            observed.result(),
+            Some(RuntimeResult::ContainedPageObserved { .. })
+        ),
+        "{observed:?}"
+    );
+    assert_eq!(
+        a.device.captures().first().map(|capture| capture.0),
+        Some(MAIN_DISPLAY)
+    );
+    assert_eq!(
+        lab_tap(&root, A, &package),
+        Some((NOT_FOREGROUND.to_owned(), LabOperationStage::Input))
+    );
+    assert!(
+        a.state
+            .input_actions
+            .lock()
+            .expect("input actions")
+            .is_empty()
+    );
+    assert_unfenced(&host, A);
+    host.close().expect("close host");
+}
+
+// §2 row 10: a read-only observation (the console's single-frame refresh), the application not
+// running: it gets a frame, the main display's; nothing is fenced.
+#[test]
+fn hs5_readonly_observe_without_application() {
+    let root = TempDir::new().expect("tempdir");
+    let a = Node::new(A, TouchBackendChoice::NemuIpc, false);
+    let host = start(&root, &[&a], false);
+    let mut client = TestClient::connect(&host);
+    let observe = client.request(RuntimeOperation::ObserveReadonly {
+        instance_alias: A.to_owned(),
+    });
+
+    let receipt = client.send(&observe);
+
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{receipt:?}"
+    );
+    assert!(
+        matches!(
+            receipt.result(),
+            Some(RuntimeResult::ReadonlyObservationCompleted { .. })
+        ),
+        "{receipt:?}"
+    );
+    assert_eq!(
+        a.device.captures().first().map(|capture| capture.0),
+        Some(MAIN_DISPLAY)
+    );
+    assert_unfenced(&host, A);
+    drop(client);
+    host.close().expect("close host");
+}
+
+// HS-5b (§4.3, HS3-2, HS3-3): `MuMuManager` reads the package `stopped`: the paired open gets
+// index 0 as for `running`, and the resolution is the entry's. Replaces
+// `hs3_stopped_refused_named`.
+#[test]
+fn hs5_stopped_resolves_zero() {
+    let (registry, reads, opens) = hs3::answering_registry(
+        hs3::registration(TouchBackendChoice::NemuIpc),
+        json!({"state": "stopped"}),
+        hs3::no_device,
+    );
+
+    let error = hs3::open_fails(&registry, hs3::ALIAS);
+
+    assert_eq!(error.nemu_app_index_problem(), None, "{error:?}");
+    hs3::assert_one_read(&reads);
+    assert_eq!(hs3::opened_indices(&opens), vec![0]);
+    assert_eq!(registry.resolved_nemu_app_index(hs3::ALIAS), Some(0));
+}
+
+/// A paired open failure as one without the package's display reported it before 0.12.40.
+fn display_missing() -> DeviceError {
+    DeviceError::fatal("fixture Nemu application display query failed").with_capture_open_failure(
+        CaptureOpenFailure {
+            cause: CaptureOpenCause::DisplayMissing,
+            application_id: Some(hs3::PACKAGE.to_owned()),
+            instance_index: Some(i64::from(INDEX)),
+        },
+    )
+}
+
+// HS-5b (§4.3, HS3-4): only a rebinding drops the resolution. The application stops (and an
+// open reports no display for its package), starts again: no further read; a rebinding drops it
+// and the next open reads again. Replaces `hs3_display_missing_clears_cache`.
+#[test]
+fn hs5_resolution_kept_across_application_stop() {
+    let running = Arc::new(AtomicBool::new(true));
+    let reads = Reads::default();
+    let opens = Opened::default();
+    let answered = Arc::clone(&running);
+    let counted = Arc::clone(&reads);
+    let registry = ExecutionBackendRegistry::new([hs3::registration(TouchBackendChoice::NemuIpc)])
+        .expect("registry")
+        .with_application_state_reader(move |manager, index, package| {
+            counted
+                .lock()
+                .expect("reads")
+                .push((manager.to_path_buf(), index, package.to_owned()));
+            let state = if answered.load(Ordering::Acquire) {
+                "running"
+            } else {
+                "stopped"
+            };
+            actingcommand_device::parse_application_state(
+                &json!({ "state": state }),
+                index,
+                package,
+            )
+        })
+        .with_nemu_session_opener(hs3::opener(Arc::clone(&opens), display_missing));
+
+    hs3::open_fails(&registry, hs3::ALIAS);
+    hs3::assert_one_read(&reads);
+
+    running.store(false, Ordering::Release);
+    let error = hs3::open_fails(&registry, hs3::ALIAS);
+    assert_eq!(
+        error.capture_open_failure().map(|failure| failure.cause),
+        Some(CaptureOpenCause::DisplayMissing)
+    );
+    assert_eq!(registry.resolved_nemu_app_index(hs3::ALIAS), Some(0));
+    running.store(true, Ordering::Release);
+    hs3::open_fails(&registry, hs3::ALIAS);
+    assert_eq!(
+        hs3::read_count(&reads),
+        1,
+        "the application's stop and start keep it"
+    );
+    assert_eq!(hs3::opened_indices(&opens), vec![0, 0, 0]);
+
+    running.store(false, Ordering::Release);
+    registry
+        .rebind_discovered_endpoint(
+            hs3::ALIAS,
+            Some(mumu_instance_port(INDEX).expect("base port")),
+        )
+        .expect("rebind after a start");
+    assert_eq!(registry.resolved_nemu_app_index(hs3::ALIAS), None);
+    hs3::open_fails(&registry, hs3::ALIAS);
+    assert_eq!(hs3::read_count(&reads), 2, "a rebinding drops it");
+    assert_eq!(registry.resolved_nemu_app_index(hs3::ALIAS), Some(0));
+}
+
+// §5.2: a paired open that fails after it connected and released what it acquired (HS-5a R1)
+// fails only the run (#411 A7) and the self-check; nothing is fenced.
+#[test]
+fn hs5_open_failure_after_connect_fails_only_the_run() {
+    let root = TempDir::new().expect("tempdir");
+    let a = Node::new(A, TouchBackendChoice::NemuIpc, false);
+    let host = start(&root, &[&a], false);
+    let package = app_entry_package(&root);
+    *a.device.open_failure.lock().expect("open failure") = Some(released_open());
+
+    let receipt = direct_run(&host, A, &package, 5201);
+
+    assert_ne!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{receipt:?}"
+    );
+    assert!(
+        !receipt.error_projection().expect("the run's failure").fatal,
+        "{receipt:?}"
+    );
+    let selfcheck = self_check(&host, A, 5202);
+    assert_eq!(
+        selfcheck.failure_code.as_deref(),
+        Some(PAIRED_OPEN_FAILED),
+        "{selfcheck:?}"
+    );
+    assert_unfenced(&host, A);
+    host.close().expect("close host");
+}
+
+// §5.2, Workflow #403 unchanged: a paired open whose own resources stay unconfirmed (a worker
+// that timed out) fences its instance; a person's run then waits for a person.
+#[test]
+fn hs5_unconfirmed_open_still_fences() {
+    let root = TempDir::new().expect("tempdir");
+    let a = Node::new(A, TouchBackendChoice::NemuIpc, false);
+    let host = start(&root, &[&a], false);
+    let package = app_entry_package(&root);
+    *a.device.open_failure.lock().expect("open failure") = Some(unreleased_open());
+
+    let receipt = direct_run(&host, A, &package, 5211);
+
+    assert_eq!(
+        receipt.outcome().code().as_str(),
+        HostCode::InstanceResourcesFenced.as_str(),
+        "{receipt:?}"
+    );
+    let events = all_events(&host);
+    let fences = fence_records(&events);
+    let [(record, _)] = fences.as_slice() else {
+        panic!("one fence record: {fences:#?}");
+    };
+    assert_eq!(record.links().instance_id(), Some(&a.id));
+    let fence = status_fence(&host, A).expect("the fence");
+    assert_eq!(fence.cause.as_str(), PAIRED_OPEN_FAILED);
+    assert!(fence.awaiting_person, "{fence:?}");
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close host");
+}
+
+// #419: while one instance goes through these sequences (a run of its application entry
+// without its application, then a fence), the other's session, self-check facts, queue and
+// availability are untouched, and its own work runs.
+#[test]
+fn hs5_other_instances_untouched() {
+    let root = TempDir::new().expect("tempdir");
+    let a = Node::new(A, TouchBackendChoice::NemuIpc, false);
+    let b = Node::new(B, TouchBackendChoice::NemuIpc, false);
+    let host = start(&root, &[&a, &b], false);
+    let package = app_entry_package(&root);
+
+    assert_completed_on_home(&direct_run(&host, A, &package, 5221));
+    let stopped = application(&host, A, ApplicationLifecycleAction::Stop, 5222);
+    assert_eq!(
+        stopped.state(),
+        RuntimeReceiptState::Completed,
+        "{stopped:?}"
+    );
+    *a.device.open_failure.lock().expect("open failure") = Some(unreleased_open());
+    let fenced = direct_run(&host, A, &package, 5223);
+    assert_eq!(
+        fenced.outcome().code().as_str(),
+        HostCode::InstanceResourcesFenced.as_str(),
+        "{fenced:?}"
+    );
+
+    assert!(b.device.opens().is_empty(), "{:?}", b.device.opens());
+    assert!(b.device.captures().is_empty());
+    assert!(b.device.commands().is_empty());
+    assert_eq!(b.device.reads(), 0);
+    assert!(preparations(&host, b.id).is_empty(), "no self-check of B");
+    assert_eq!(status_fence(&host, B), None);
+    assert_eq!(
+        host.instance_claims_for_test(B).expect("claims"),
+        (None, Vec::new())
+    );
+    assert_passed(&self_check(&host, B, 5224));
+    assert_completed_on_home(&direct_run(&host, B, &package, 5225));
+    assert!(status_fence(&host, A).is_some(), "A stays fenced");
+    assert!(host.fatal_error().expect("runtime health").is_none());
     host.close().expect("close host");
 }

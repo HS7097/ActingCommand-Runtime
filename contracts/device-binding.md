@@ -76,23 +76,24 @@ built: Nemu touch without `nemu_app_index` passes check-config and a start.
   discovery-bound instance reads through its binding's MuMuManager and index; an instance bound by
   HOST:PORT through the one MuMuManager under the MuMu root its capture resolves and the index the
   capture names or derives from the port. `running` resolves index 0, the main application (source
-  `resolved`). Every other answer refuses the paired open, `paired_backend_open_failed`, with
-  `nemu_app_index_missing` as its `caused_by` and that cause's `nemu_app_index_problem`:
-  `package_not_installed` (`not_installed`), `application_not_running` (`stopped`: the paired session
-  looks the package's display up, which an application that does not run has none of),
-  `info_unavailable` (no MuMuManager to read through, a failed or expired run, a non-zero exit, an
-  errcode envelope) or `info_malformed` (not UTF-8, not JSON, over the output bound, or no known
-  `state`). Only that instance's open fails (#419); a refusal is not kept, so the next open reads
-  again. A preparation (start, emulator control, resume, self-check) records the refusal as every
+  `resolved`), and since #402 HS-5b (0.12.40, register §1.277) so does `stopped`: the index is the
+  MuMu clone's whether the application runs or not, and a paired session without its package's
+  display takes the main display (HS-5, below). Every other answer refuses the paired open,
+  `paired_backend_open_failed`, with `nemu_app_index_missing` as its `caused_by` and that cause's
+  `nemu_app_index_problem`: `package_not_installed` (`not_installed`), `info_unavailable` (no
+  MuMuManager to read through, a failed or expired run, a non-zero exit, an errcode envelope) or
+  `info_malformed` (not UTF-8, not JSON, over the output bound, or no known `state`).
+  `application_not_running` stays in the vocabulary and is no longer reported since 0.12.40. Only
+  that instance's open fails (#419); a refusal is not kept, so the next open reads again. A preparation (start, emulator control, resume, self-check) records the refusal as every
   failed open (`backend.open_observed`, the `backend.selfcheck.*` facts, `device.self_check` with
   `paired_backend_open_failed`) and, though it acquired nothing, with the `runtime.failed` record of
   stage `runtime_lifecycle_connection_preparation` that a failed open with released resources gets:
   that record's outcome carries the cause and its problem.
 - **The resolution is kept** in the registry entry, in memory only, for the entry's MuMu index,
-  package and root: a later paired open reads nothing. A rebinding after emulator control
-  (`rebind_discovered_endpoint`) drops it, and so does a paired open that fails `display_missing`;
-  the next paired open reads again. With the multi-Nemu gate closing the session at every lease end,
-  an emulator start usually costs one read.
+  package and root: a later paired open reads nothing. Only a rebinding after emulator control
+  (`rebind_discovered_endpoint`) drops it (since #402 HS-5b: an open that fails, the application
+  stopping or starting keep it); the next paired open reads again. With the multi-Nemu gate closing
+  the session at every lease end, an emulator start usually costs one read.
 - **A handset never reads MuMuManager**: its kinds of backends have no Nemu, and the registry
   refuses a paired open on a handset before any read (`info_unavailable`).
 
@@ -108,6 +109,35 @@ backends through the existing bounded opens. A handset's switch offers only its 
 kind rule above), so it never touches Nemu or MuMuManager. Since HS-3 (above) a switch to Nemu touch
 opens with the file's index, or resolves one at the candidate's paired open; its
 `device.backend_switched` names the index with `nemu_app_index_source` `file` or `resolved`.
+
+#402 HS-5 ([v012-register.md](v012-register.md) §1.276 HS-5a, §1.277 HS-5b; since 0.12.40). A
+Nemu-touch instance whose application does not run behaves as an adb-touch one: whether the
+application runs is not an open's condition.
+
+- **The paired session's display.** Before every capture, every resolution probe and every touch
+  the paired session looks its package's display up (`nemu_get_display_id`). With one it addresses
+  that display; without one (the application does not run, or its display is not up yet) it
+  addresses the main display, the one a capture-only Nemu session captures (the configured
+  `display_id`, 0), and captures the desktop as an adb session does; the lookup fails nothing and
+  no paired session reports `display_missing` any more. A display that appears, goes or changes,
+  also from the main display 0 to the package's display 0, invalidates the geometry of every
+  earlier frame, so no touch is decided on a frame of another display; the session itself stays,
+  so a run keeps its geometry producer. Application commands still invalidate the display, and the
+  geometry fence, deadlines and the unconfirmed-contact rules are unchanged.
+- **An open that fails releases what it made.** An open that fails after it connected (its
+  resolution probe, its first frame, its memory admission) and before it handed its backend over
+  releases the connection it made itself under `LocalOnly`, nothing having been pressed on it; the
+  open then fails with its resources confirmed (#411 A7: only the work that opened it fails), not
+  fenced ([nemu-owned-resource-close.md](nemu-owned-resource-close.md), "The opener's own
+  connection").
+- **The index read**: `stopped` resolves 0 and only a rebinding drops the resolution (HS-3, above).
+- **Pointer input** while the application does not run meets the foreground gate first, as on adb
+  touch: `application_not_foreground` (or `application_foreground_unknown`), nothing pressed,
+  nothing fenced ([application-lifecycle.md](application-lifecycle.md), "The foreground gate"). The
+  reset of a contact never pressed calls nothing.
+
+No record, key, code or word is added; the switch's refusal no longer names `display_missing` or
+`application_not_running`, and a switch to Nemu touch no longer needs the application running.
 
 ## The private binding file
 

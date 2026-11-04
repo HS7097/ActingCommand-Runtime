@@ -1873,6 +1873,19 @@ tests = [
 ]
 incident = ["#402 HS-4"]
 
+# #402 HS-5a (0.12.40; brief rd-1031/backend-switch/brief-hs-5ab.md; design rd-1031/backend-switch/model-hs5.md §4.1, §4.2, §5.1; register §1.276; no persisted ledger shape, configuration key or outcome code): a paired Nemu session looks its package's display up before every capture and touch (NemuTouchPort, HS-4's fake answering the package's display); without one (the application does not run) it takes the main display, the one a capture-only session captures, its resolution probe succeeds and no display_missing is reported (D1, D2); the package's display appearing (from the main display 0 to the package's 0 too, or another number) or going moves the display generation on, and a touch decided on a frame of the other display is refused before any native call (D3); a tap on a frame of the main display presses and lifts there; an open that failed before it handed its backend over releases the connection it made itself, nothing pressed on it, under LocalOnly: one disconnect, the handle retired, confirmed (R1); a backend handed over closed under LocalOnly, or an opener's close after a touch, calls no disconnect and stays unconfirmed (R2)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-device::lib::capture::nemu_input::gate_hs5::hs5_no_package_display_uses_main_display",
+    "actingcommand-device::lib::capture::nemu_input::gate_hs5::hs5_package_display_appearing_bumps_generation",
+    "actingcommand-device::lib::capture::nemu_input::gate_hs5::hs5_package_display_lost_bumps_generation",
+    "actingcommand-device::lib::capture::nemu_input::gate_hs5::hs5_main_display_frame_presses_main_display",
+    "actingcommand-device::lib::capture::nemu_input::gate_hs5::hs5_failed_open_releases_its_connection",
+    "actingcommand-device::lib::capture::nemu_input::gate_hs5::hs5_returned_backend_local_close_still_refused",
+]
+incident = ["#402 HS-5a"]
+
 # Workflow #406 T4 (0.12.x; register §1.138; no persisted ledger shape: Lab outputs, Lab file members and the MCP argument only; plan-405-406 Q14, Q20; Alice 2026-10-19 Lab principle): an offline run (package dry-run, replay) draws as the kernel, each step from the action seed SHA-256 derives from the run's seed (--seed, else 0), the step index and the operation label, with the touch keys of the root configuration the Lab reads (its touch section over the embedded defaults) and no landing history (center_hotspot_normal_v1), uniform and named xorshift64_uniform_rect_v1 without a touch section; would_click and each replayed effect carry the sampling evidence, the result the seed, and a replay given the reported seed repeats every point; given a seed, the Lab presses a box at the point drawn from it (tap-target through the input port, offline do --scene), not the centre; actinglab's reader and the Lab bundle read single_touch_path_drag_v1, its offline projection element is gesture_not_projectable (do: lab_element_unavailable), offline observe lists its edge with input null, the Lab port refuses it, and an offline run reports its generated path in would_click; a recording declares a path drag in its click rectangle, record stop generates it and checks its path inside the box, and a recorded tap's point_rule names how the Lab pressed (the draw with its sampling, or rect_center)
 [[gate]]
 key = "112"

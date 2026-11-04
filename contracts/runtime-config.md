@@ -1810,7 +1810,7 @@ the one new code and the words above.
   | `backend_switch_refused`, `player_held` | 你正在玩这台，交还后再切 |
   | `backend_switch_refused`, `instance_fenced` | 这台被围栏了，先自检 |
   | `backend_switch_refused`, `endpoint_unavailable` | 模拟器没开，或真机没绑定 |
-  | `backend_switch_refused`, `open_failed` | 新后端没打开，已保留原来的, with the cause: `input_backend_open_failed`, `capture_backend_open_failed`, `paired_backend_open_failed` (the last two with `capture_open_cause`: `display_missing`, the application is not running; `connection_failed`; `other`; the paired one's own cause may be `nemu_app_index_missing` with `nemu_app_index_problem`: `package_not_installed`, `application_not_running`, `info_unavailable`, `info_malformed`) |
+  | `backend_switch_refused`, `open_failed` | 新后端没打开，已保留原来的, with the cause: `input_backend_open_failed`, `capture_backend_open_failed`, `paired_backend_open_failed` (the last two with `capture_open_cause`: `display_missing`, the application is not running; `connection_failed`; `other`; the paired one's own cause may be `nemu_app_index_missing` with `nemu_app_index_problem`: `package_not_installed`, `application_not_running`, `info_unavailable`, `info_malformed`; since 0.12.40 a paired open reports neither `display_missing` nor `application_not_running`, #402 HS-5, [device-binding.md](device-binding.md), "Backends") |
   | `backend_switch_refused`, `restore_failed` | 新的没打开，原来的也没恢复，这台暂时不可用, with both failures; suggest a self-check |
   | `host_config_overrides_persist_failed` | 没写进记录，已回退 |
   | `tier_not_enabled` | MCP only: the operator tier is not enabled |

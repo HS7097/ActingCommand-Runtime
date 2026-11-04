@@ -206,3 +206,19 @@ test = "actingcommand-runtime-host::lib::tests::gate_idle1p::idle1p_m1_a_stop_em
 ruling = "Alice 117 A (10-31 13:22: a paused instance's emulator is started neither by the daemon-start autostart nor by the IDLE-1 wake); Workflow #386 PAUSE-AUTO"
 reason = "Renamed with the requirement it pins: under a pause the wake is no longer queued and does not start the emulator; the test keeps its point, the startup package runs once after the resume."
 covered_by = "actingcommand-runtime-host::lib::tests::gate_idle1p::idle1p_m1_a_stop_emulator_wake_a_pause_holds_queues_the_startup_package_after_the_resume, in the same host.toml row."
+
+# #402 HS-5b (register §1.277; design rd-1031/backend-switch/model-hs5.md §4.3, §5.2): HS-3's two
+# tests whose requirements HS-5b changed (HS3-2, HS3-3, HS3-4).
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_hs3::hs3_stopped_refused_named"
+ruling = "#402 HS-5b (coordinator's brief-hs-5ab.md, answer Q2: keep the read, stopped resolves 0)"
+reason = "MuMuManager's stopped no longer refuses the paired open (application_not_running): it resolves index 0 as running does, and a paired session without the application's display takes the main display (HS-5a)."
+covered_by = "actingcommand-runtime-host::lib::tests::gate_hs5::hs5_stopped_resolves_zero, in the HS-5b host.toml row; not_installed and an unreadable answer stay refused (hs3_not_installed_refused_named, hs3_reader_timeout_refused_named)."
+
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_hs3::hs3_display_missing_clears_cache"
+ruling = "#402 HS-5b (coordinator's brief-hs-5ab.md, design model-hs5.md §4.3: only a rebinding clears the resolution)"
+reason = "An open that found no display for the package no longer drops the resolved application index; no paired session reports display_missing since HS-5a, and the application stopping or starting keeps the index."
+covered_by = "actingcommand-runtime-host::lib::tests::gate_hs5::hs5_resolution_kept_across_application_stop, in the HS-5b host.toml row; hs3_cache_reused_until_rebind keeps the rebinding rule."

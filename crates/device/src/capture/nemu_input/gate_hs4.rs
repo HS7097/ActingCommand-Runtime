@@ -130,14 +130,6 @@ impl NemuTouchPort for FakeDevice {
         Ok(self.package_display)
     }
 
-    fn touch_display_missing(&self) -> crate::CaptureOpenFailure {
-        crate::CaptureOpenFailure {
-            cause: CaptureOpenCause::DisplayMissing,
-            application_id: None,
-            instance_index: None,
-        }
-    }
-
     /// #402 HS-5a: the display is resolved as the worker resolves it, then the frame's size.
     fn touch_resolution(
         &mut self,

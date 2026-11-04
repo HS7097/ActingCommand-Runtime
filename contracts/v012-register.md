@@ -6771,6 +6771,12 @@ with the resource side before production runs it.
 Nemu touch or names it beside another touch backend (§1.267, rollback), so remove such an index, or
 write Nemu touch with its index, first.
 
+**Changed since.** HS-5b (§1.277, 0.12.40) changed HS3-2, HS3-3 and HS3-4: `stopped` resolves index
+0 as `running` does (`application_not_running` is no longer reported), and only a rebinding drops the
+resolution (the `display_missing` drop is gone); `hs3_stopped_refused_named` and
+`hs3_display_missing_clears_cache` left the gate map for `hs5_stopped_resolves_zero` and
+`hs5_resolution_kept_across_application_stop`.
+
 ### 1.272 Slice R-3 (0.12.39): `start_emulator` changed online, and read in effect by every automatic emulator start (Workflow #429 A.2 R-3, board row 「`start_emulator` 在线修改」, depending on 「配置、监视及有效暂停 / 持有规则」, acceptance 「启动 / 监视 / 唤醒重读与整节校验」; Alice's ruling 117 A of 10-31; for the console's UI-3e1-b, the automatic rules on the rescue bar; coordinator work order `rd-1031/brief-r3.md`)
 
 [runtime-config.md](runtime-config.md) ("Key table", "Starting an instance's emulator",
@@ -7033,6 +7039,97 @@ switch, with HS-2's boundary, refusals and records.
 
 **Rollback** (to 0.12.39). Nothing persisted is new; an earlier actinglab has no `session backend`
 and lists no `runtime_backends`.
+
+### 1.276 Slice HS-5a (0.12.40): a paired Nemu session without its application's display takes the main display, and a failed open releases its own connection (#402; the production failure of 2026-11-04 12:3x, board #402 6621962566; Alice's 「现在就可以换」 of 11-04 12:3x; design `rd-1031/backend-switch/model-hs5.md` §1, §3, §4.1, §4.2, §4.6, §5.1 and §6 row HS-5a, with the coordinator's answers Q1, Q4 and Q5; coordinator work order `rd-1031/backend-switch/brief-hs-5ab.md`)
+
+[device-binding.md](device-binding.md) ("Backends", HS-5), [nemu-owned-resource-close.md](nemu-owned-resource-close.md)
+("The opener's own connection"), [application-lifecycle.md](application-lifecycle.md) (its opening
+paragraph) and the catalog's `capture_open_cause` `display_missing` are the contract. The number
+1.276 is the coordinator's. It builds on HS-4 (§1.268), whose fake device it extends.
+
+**What.** The paired session looks its package's display up before every capture, every resolution
+probe and every touch, as before; without one it now takes the main display (the configured
+`display_id`, the one a capture-only session captures) instead of failing `display_missing` (D1, D2),
+so an open, a self-check and a run's first frame capture the desktop while the application does not
+run, as with adb. A display that appears, goes or changes, also only by its source (main 0, then the
+package's 0), invalidates every earlier frame's geometry (D3); the rest is unchanged (D4). An open
+that fails after `nemu_connect` and before it hands its backend over (its resolution probe, its
+first frame, its memory admission, its probe cache) releases the connection it made itself under
+`LocalOnly` when nothing was pressed on it, and fails confirmed (R1); a handed-over backend's
+`LocalOnly` close stays refused (R2), a failed disconnect stays unconfirmed (R3).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| HS5a-1 | the paired display: the package's display, else the main display; a change of display or of its source invalidates the frame geometry | behaviour | HS-5a | the device layer | `nemu_paired_display` (pub, also the host tests' model of a paired open), `resolve_display` through `NemuTouchPort` (`touch_package_display`, `touch_main_display`, `touch_set_display`); `hs5_no_package_display_uses_main_display`, `hs5_package_display_appearing_bumps_generation`, `hs5_package_display_lost_bumps_generation`, `hs5_main_display_frame_presses_main_display` |
+| HS5a-2 | `display_missing` (`capture_open_cause`) no longer reported by a paired session | vocabulary use | HS-5a | — | the word stays in the vocabulary; the catalog's description says so |
+| HS5a-3 | the opener's close of a backend it never handed over (`CaptureBackend::close_unhanded`, default `close_once(LocalOnly)`; the Nemu worker's `NemuCloser::Opener`): `nemu_disconnect` for its own connection under `LocalOnly` when nothing was pressed on it | close authority (#191, #403) | HS-5a | the device layer | the three open paths (`new_with_input`'s probe, the paired open's first frame, a capture-only open's prime and probe cache); `hs5_failed_open_releases_its_connection`; R2 `hs5_returned_backend_local_close_still_refused` |
+
+**Tests** (gate row in `exec.toml`, "#402 HS-5a"): the six of design §5.1, in the device crate
+(`capture::nemu_input::gate_hs5`) on HS-4's fake device, which answers the package's display; the
+close tests run the worker's own close with an in-process callback for `nemu_disconnect`. HS-4's fake
+device resolves its display through the same function (its assertions unchanged). Red first:
+`hs5_no_package_display_uses_main_display` and `hs5_failed_open_releases_its_connection` (with the
+other three of D1–D3) fail on the commit before the fix.
+
+**Where it differs from the design's letter.** (a) A failed display lookup (its symbol, its vendor
+output) now invalidates the geometry too, where before only an absent display did. (b) The capture-only
+open's release covers its probe cache's failure as well as its first frame's (one helper,
+`close_capture_backend_after_error`). (c) The main display lives in the paired input's state, set
+from the configured `display_id` when the worker loads.
+
+**Interface.** No step for 0.12.40 ([component-interfaces.md](component-interfaces.md)): no record,
+member, key, code or word is new; `ledger` stays at revision 6 (Q5: no display-source member).
+
+**What changes live.** Only instances whose touch is `nemu_ipc` (production: all `adb_shell_input`
+until the coordinator switches them). The release rule also covers a capture-only Nemu open whose
+first frame fails after it connected (design §1.4), which fenced its instance before.
+
+**Rollback** (to 0.12.39). Nothing persisted; 0.12.39 fails the paired open while the application
+does not run again.
+
+### 1.277 Slice HS-5b (0.12.40): the application index read and the host's flows of a Nemu-touch instance whose application does not run (#402; the same failure and words as §1.276; design `rd-1031/backend-switch/model-hs5.md` §1, §2, §4.3, §4.4, §5.2 and §6 row HS-5b, with the coordinator's answers Q2 and Q4; coordinator work order `rd-1031/backend-switch/brief-hs-5ab.md`)
+
+[device-binding.md](device-binding.md) ("Backends", HS-3 and HS-5) and the catalog's
+`nemu_app_index_problem` `application_not_running`, `nemu_app_index_missing` and
+`paired_backend_open_failed` are the contract. The number 1.277 is the coordinator's. It changes
+HS-3 (§1.271): HS3-2, HS3-3 and HS3-4.
+
+**What.** `MuMuManager`'s `stopped` resolves index 0 as `running` does (Q2: the read stays;
+`not_installed` and an unreadable answer stay refused, named, never fenced), and only a rebinding
+drops the resolution: the drop after a `display_missing` open is gone, and the application stopping
+or starting keeps it. With HS-5a, every place that opens a session (a start's, a resume's or an
+emulator control's preparation, a self-check, a fence's recheck, a person's, a lease-queued or a
+scheduled run, a ladder rung, the host's startup package, the Lab, a read-only observation, a backend
+switch) opens it while the application does not run. Pointer input then meets the foreground gate
+first (Q4, no new code).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| HS5b-1 | `stopped` → index 0 (`nemu_app_index_source` `resolved`) | behaviour (changes HS3-2) | HS-5b | the registry | `hs5_stopped_resolves_zero` (replaces `hs3_stopped_refused_named`); `hs5_switch_to_nemu_without_application_commits` |
+| HS5b-2 | `application_not_running` (`nemu_app_index_problem`) no longer reported | vocabulary use (changes HS3-3) | HS-5b | — | the word stays; the catalog says so |
+| HS5b-3 | the resolution dropped only by `rebind_discovered_endpoint` | rule (changes HS3-4) | HS-5b | the registry | `hs5_resolution_kept_across_application_stop` (replaces `hs3_display_missing_clears_cache`) |
+
+**Tests** (gate row in `host.toml`, "#402 HS-5b"): the design's §5.2 rows but the two of HS-5c, in
+runtime-host (`gate_hs5`): the fake provider gains a paired device (`FakePairedDevice`) whose open
+goes through a real registry entry of the instance (its read answering the fake application's state
+through the device layer's parser, its cache) and a fake open that asks `nemu_paired_display` which
+display it takes; the fake provider's own backends serve a session it opened, and each capture asks
+again. Red first: `hs5_morning_sequence_client_startup_after_stop` fails on the commit before the fix.
+Adapted: none; `hs3_stopped_refused_named` and `hs3_display_missing_clears_cache` were replaced
+([ci/retired-gates.toml](../ci/retired-gates.toml)).
+
+**Where it differs from the design's letter.** (a) The paired session's views are the fake
+provider's independent backends, so "the session unchanged" is checked as no paired open between the
+first frame and the package's display's. (b) "A client's lease" is a run queued behind a client's
+lease. (c) The foreground gate's tap is the Lab's `do --tap`, which observes before it presses; a
+reset of a never-pressed Nemu contact calling nothing is HS-4's device test.
+
+**Interface.** No step for 0.12.40: nothing persisted, requested or configured is new.
+
+**What changes live.** As §1.276: Nemu-touch instances only.
+
+**Rollback** (to 0.12.39). Nothing persisted; 0.12.39 refuses `stopped` again and drops the
+resolution after a `display_missing` open.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

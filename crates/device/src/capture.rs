@@ -2172,7 +2172,8 @@ enum NemuCloser {
     /// authority. R2: the disconnect needs the current ResourceClose witness.
     Holder(DeviceCloseAuthority),
     /// The opener of a backend it has not handed over, whose open failed: its cleanup is local
-    /// (`DeviceCloseAuthority::LocalOnly`).
+    /// (`DeviceCloseAuthority::LocalOnly`), and R1 lets it release the connection it made itself
+    /// when nothing was pressed on it, as an adb open's failure ends the child it started.
     Opener,
 }
 
@@ -3115,7 +3116,10 @@ impl NemuIpcWorkerState {
     }
 
     /// The disconnect of the owned connection by `closer` (#402 HS-5a, design `model-hs5.md`
-    /// §4.2).
+    /// §4.2). R2: a holder's needs the current ResourceClose witness; `LocalOnly` leaves the
+    /// connection open and unconfirmed. R1: the opener of a backend it never handed over
+    /// releases the connection it made itself under `LocalOnly`, when nothing was pressed on it.
+    /// R3: a disconnect that fails (its symbol, its vendor output) stays unconfirmed.
     fn disconnect_by(
         &mut self,
         closer: NemuCloser,
@@ -3124,7 +3128,8 @@ impl NemuIpcWorkerState {
         if self.connect_id <= 0 {
             return Ok(());
         }
-        if closer.authority().resource_close_witness().is_none() {
+        let opener_release = matches!(closer, NemuCloser::Opener) && self.connection_unpressed();
+        if !opener_release && closer.authority().resource_close_witness().is_none() {
             return Err(DeviceError::fatal(
                 "Nemu IPC disconnect requires current fenced device-write authority",
             )

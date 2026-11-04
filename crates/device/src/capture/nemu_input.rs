@@ -57,19 +57,36 @@ impl NemuApplicationTarget {
     }
 }
 
-/// #402 HS-5a (design `rd-1031/backend-switch/model-hs5.md` §4.1): the display a paired Nemu
-/// session addresses once Nemu answered `package_display` for its application's package
-/// (`nemu_get_display_id`; negative when the package has no display). The paired session's
-/// captures and touches go to the display this returns; the host's tests model a paired open with
-/// it. #411 A50: a package without a display fails the lookup (the application is not running).
-pub fn nemu_paired_display(package_display: i32, _main_display: i32) -> DeviceResult<i32> {
-    if package_display < 0 {
-        return Err(DeviceError::fatal(format!(
-            "Nemu application display query failed with code {package_display}"
-        ))
-        .input_parameter_failure());
+/// #402 HS-5a (design `rd-1031/backend-switch/model-hs5.md` §4.1, D1 and D2): the display a
+/// paired Nemu session addresses once Nemu answered `package_display` for its application's
+/// package (`nemu_get_display_id`; negative when the package has no display): that display (D1),
+/// else the main display `main_display`, the one a capture-only session captures (D2: the
+/// application does not run, and the session captures the desktop, as an adb one does). The
+/// paired session's captures and touches go to the display this returns; the host's tests model a
+/// paired open with it. A display id is never negative: a negative main display is refused, as
+/// the capture refuses it.
+pub fn nemu_paired_display(package_display: i32, main_display: i32) -> DeviceResult<i32> {
+    let display = if package_display >= 0 {
+        package_display
+    } else {
+        main_display
+    };
+    if display < 0 {
+        return Err(
+            DeviceError::fatal(format!("Nemu IPC main display id {display} is negative"))
+                .input_parameter_failure(),
+        );
     }
-    Ok(package_display)
+    Ok(display)
+}
+
+/// #402 HS-5a (D1–D3): where a paired session's display came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DisplaySource {
+    /// The application package's own display (`nemu_get_display_id`).
+    Package,
+    /// The main display: the package had none.
+    Main,
 }
 
 /// #402 HS-3 (design HS-M §4.1 item 3): the `MuMuManager.exe` and the MuMu index through which a
@@ -623,6 +640,9 @@ pub(super) struct NemuInputState {
     /// #402 HS-5a: the connection's main display, the one a capture-only session captures
     /// (`NemuIpcConfig::display_id`).
     main_display: i32,
+    /// #402 HS-5a (D3): where the display the last resolution took came from; a change of it
+    /// invalidates as a change of the display's number does. An invalidation keeps it.
+    source: Option<DisplaySource>,
 }
 
 impl NemuInputState {
@@ -636,6 +656,7 @@ impl NemuInputState {
             size: None,
             contact: Contact::NotStarted,
             main_display: 0,
+            source: None,
         }
     }
 
@@ -689,6 +710,14 @@ impl NemuIpcWorkerState {
             input.invalidate()?;
         }
         Ok(())
+    }
+
+    /// #402 HS-5a (R1): nothing was pressed on this connection: a capture-only one, or a paired
+    /// one whose contact never started.
+    pub(super) fn connection_unpressed(&self) -> bool {
+        self.input
+            .as_ref()
+            .is_none_or(|input| input.contact == Contact::NotStarted)
     }
 
     /// The display a paired connection's next capture or touch addresses (`resolve_display`);
@@ -829,8 +858,6 @@ trait NemuTouchPort {
     /// #402 HS-5a: asks Nemu for the display of the application's package, with the vendor
     /// output around the call: its id, negative when the package has none.
     fn touch_package_display(&mut self) -> DeviceResult<i32>;
-    /// #411 A50: the cause a failed display lookup names, with the connection's identities.
-    fn touch_display_missing(&self) -> crate::CaptureOpenFailure;
     /// Resolves the application's display and reads its size, checking the input first.
     fn touch_resolution(
         &mut self,
@@ -885,10 +912,6 @@ impl NemuTouchPort for NemuIpcWorkerState {
         let display = unsafe { query(self.connect_id, application_id, app_index) };
         self.record_vendor_stdio_snapshot()?;
         Ok(display)
-    }
-
-    fn touch_display_missing(&self) -> crate::CaptureOpenFailure {
-        self.capture_open_failure(CaptureOpenCause::DisplayMissing)
     }
 
     fn touch_resolution(
@@ -947,10 +970,12 @@ impl NemuTouchPort for NemuIpcWorkerState {
 
 /// #402 HS-5a (design `model-hs5.md` §4.1): looks the display of the application's package up
 /// (`touch_package_display`) and selects the display the paired session addresses from then on
-/// ([`nemu_paired_display`]); a display other than the last one invalidates the geometry of every
-/// earlier frame (`NemuInputState::invalidate`). A lookup that fails invalidates it too. A
-/// capture-only connection resolves nothing. Every capture, every resolution probe and every
-/// touch resolves first.
+/// ([`nemu_paired_display`]): the package's display when it has one (D1), else the main display
+/// (D2), which fails nothing. D3: a display other than the last one, or the same number from the
+/// other source (the main display 0, then the package's display 0), invalidates the geometry of
+/// every earlier frame (`NemuInputState::invalidate`), so no touch is decided on a frame of
+/// another display. A lookup that fails invalidates it too. A capture-only connection resolves
+/// nothing. Every capture, every resolution probe and every touch resolves first (D4).
 fn resolve_display<P: NemuTouchPort>(
     port: &mut P,
     context: Option<(&InputExecutionContext, &AtomicBool)>,
@@ -963,18 +988,25 @@ fn resolve_display<P: NemuTouchPort>(
     }
     let main = port.touch_main_display();
     let chosen = port.touch_package_display().and_then(|package| {
-        nemu_paired_display(package, main)
-            .map_err(|error| error.with_capture_open_failure(port.touch_display_missing()))
+        let source = if package >= 0 {
+            DisplaySource::Package
+        } else {
+            DisplaySource::Main
+        };
+        nemu_paired_display(package, main).map(|display| (display, source))
     });
     let input = port.touch_input().ok_or_else(unsupported)?;
-    let display = match chosen {
-        Ok(display) => display,
+    let (display, source) = match chosen {
+        Ok(chosen) => chosen,
         Err(error) => return merge_input_snapshot(Err(error), input.invalidate()),
     };
-    if input.display.is_some_and(|previous| previous != display) {
+    if input.display.is_some_and(|previous| previous != display)
+        || input.source.is_some_and(|previous| previous != source)
+    {
         input.invalidate()?;
     }
     input.display = Some(display);
+    input.source = Some(source);
     port.touch_set_display(display);
     Ok(())
 }

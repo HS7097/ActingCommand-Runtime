@@ -1588,8 +1588,8 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
 
     /// #402 HS-3 (design HS-M §4.1; register §1.271): the Nemu application index the provider
     /// resolved for the instance when it last opened its paired session, the configuration naming
-    /// none, while that resolution holds (it is dropped at a rebinding and after an open that
-    /// found no display). `None` when the configuration names the index (which
+    /// none, while that resolution holds (#402 HS-5b: only a rebinding drops it). `None` when the
+    /// configuration names the index (which
     /// [`Self::switch_instance_backends`] returns), when the touch backend is not Nemu IPC, or
     /// when nothing is resolved. Reads memory only. Providers without Nemu keep this default.
     fn resolved_nemu_app_index(&self, _instance_alias: &str) -> Option<u32> {
