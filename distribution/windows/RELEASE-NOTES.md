@@ -11,7 +11,7 @@ and artifact names bind the complete source SHA.
 
 ## v0.12.40
 
-本版是 v0.12.39 之后合并的 3 个 PR、4 片：HS-L、HS-5c、HS-5a 和 HS-5b（一个 PR）。先说部署：接口声明都不变（账本仍是 [3, 6]），部署不用带
+本版是 v0.12.39 之后合并的 4 个 PR、5 片：HS-L、HS-5c、HS-5a 和 HS-5b（一个 PR）、HS-5d。先说部署：接口声明都不变（账本仍是 [3, 6]），部署不用带
 `--accept-ledger-one-way`，计划里也没有 `ledger_verify` 这一步；装上以后能退回 v0.12.39，条件见下面的退回。没有新键，默认值文件没改。
 **本版自己不改任何实例的后端。** 运行上要知道的是这几处：
 
@@ -30,6 +30,11 @@ and artifact names bind the complete source SHA.
     第一帧失败以前会围住这台，现在不会。
   - 配对会话不再报 `display_missing`（`capture_open_cause`），也不再报 `application_not_running`（`nemu_app_index_problem`）；两个词留在词表里，结果码目录的
     说明写了 0.12.40 起停发。
+  - 换显示时到达等待接着等（HS-5d）。以前：包声明了目标共识时，一次观察要取两帧以上；主显示换成应用的显示（几何代号加一）正好落在这几帧之间，
+    这次观察就以 `recognition_sample_geometry_changed` 结束、不重试，整次运行失败（启动包、阶梯的应用重启级、运行的应用入口和任何一步的确认都可能碰上）。
+    现在页面图的步骤确认和步骤计划在点按或应用效果之后的等待，把这样的观察当成一帧没确认的，在同一窗口里、隔同样的间隔接着观察；窗口用完照旧以等待自己的码
+    结束（`page_confirmation_failed`、`contained_task_linear_application_unconfirmed`）。只取一帧的观察本来就不受换显示影响；其他等待（入口等待、可选步骤、
+    Lab 的在线观察等）照旧以这个码失败。三个资源仓的包目前都没声明目标共识，生产上还没碰到。
 - **切回原后端是一种补救**（HS-5c）：被自己的后端打开失败围住的实例可以切换后端，不用先自检，比如
   `actingctl config clear instance.<instance id>.touch_backend instance.<instance id>.capture_backend` 两个后端键都清回文件值（MCP `ac_config_set`、控制台的
   「恢复为文件值」、Lab 的 `session backend --clear` 也一样）。放行的围栏原因只有三种：`input_backend_open_failed`、`capture_backend_open_failed`、
@@ -49,8 +54,8 @@ and artifact names bind the complete source SHA.
 - **生产实例的触控仍是 `adb_shell_input`**：本版不改任何实例的后端。总览在真实例上核过冷路径（应用停着时打开、启动包拉起应用）以后，再逐台切换。
 
 配置：接口修订都不变：`actingd-config` 仍是 [5, 26]，`ledger` 仍是 [3, 6]，`package` 仍是 [3, 6]，`runtime-client` 仍是 [3, 5]，`install-selection` 仍是 [1, 1]，
-`install-control` 仍是 [0, 1]，`runtime-outcomes` 仍是 [1, 1]。`component-interfaces.json` 和 `contracts/component-interfaces.md` 自 v0.12.39 没改，四片的登记
-（§1.275 到 §1.278）都写不升：没有新请求、成员、记录、键、码或词。
+`install-control` 仍是 [0, 1]，`runtime-outcomes` 仍是 [1, 1]。`component-interfaces.json` 和 `contracts/component-interfaces.md` 自 v0.12.39 没改，五片的登记
+（§1.275 到 §1.279）都写不升：没有新请求、成员、记录、键、码或词。
 
 - 没有新键，键表、默认值文件和配置示例都没改，部署计划的默认值对比是空的。
 - 结果码：没有新码、新位置、新值键或新词，结果码目录仍是 3889 个码、1740 个位置。停发的两个词（`capture_open_cause` 的 `display_missing`、
@@ -81,7 +86,8 @@ and artifact names bind the complete source SHA.
 - 落盘的东西都不挡：账本没有新形状；`host.config_overrides` 里在线设的后端键是 v0.12.39 认得的键，启动时照常恢复；围栏和取到的 Nemu 编号只在内存里；
   Lab 文件没有新成员。
 - 退回以后：应用没跑时，Nemu 触控的实例又会像 11-04 那样以 `display_missing` 打开失败并被围住，围着时切换又被 `instance_fenced` 拒，`stopped` 又以
-  `application_not_running` 拒；Nemu 截图的打开失败又会围住那台；Lab 没有 `session backend`，实例列表没有 `runtime_backends`。所以已经有实例切到 Nemu
+  `application_not_running` 拒；Nemu 截图的打开失败又会围住那台；声明了目标共识的包，一次观察的几帧跨过换显示又以 `recognition_sample_geometry_changed`
+  让运行失败；Lab 没有 `session backend`，实例列表没有 `runtime_backends`。所以已经有实例切到 Nemu
   触控时，退回之前先在本版上把它切回（`config clear` 两个后端键）。
 - 客户端和 Runtime 的配对（`runtime-client` 本版和 v0.12.39 都是 [3, 5]；`apps/actingctl` 自 v0.12.39 没改）：
   - v0.12.39 的安装工具装本版：照常，不带 `--accept-ledger-one-way`。它的安装代码和本版一样：`ledger` 两条边都过、没有 `ledger_verify`；它的声明 I 是
@@ -101,12 +107,14 @@ and artifact names bind the complete source SHA.
 - 围栏下切回（HS-5c）：自己的后端打开失败造成的围栏放行切换，新后端或恢复的原后端自检通过就解围栏、结束人工等待；其余围栏照旧 `instance_fenced`。
 - 配对会话截主显示（HS-5a）：应用没跑时截主显示、不报 `display_missing`，显示换了作废旧帧几何；打开失败放掉自己连上的连接，不围栏（只截图的 Nemu 会话也一样）。
 - 编号读取（HS-5b）：`stopped` 取 0，不再报 `application_not_running`；取到的编号只在重新绑定时清。
+- 换显示时接着等（HS-5d）：包声明目标共识时，一次观察的几帧跨过换显示不再让运行失败，当成一帧没确认的、在同一窗口里接着等；目前没有包声明目标共识。
 
 本版合并的 PR：
 
 - #1516 HS-L（#402）：`actinglab --instance <alias> session backend [--touch] [--capture] [--clear]`，在 `lab` 通道上发和 CLI 同一个 `ConfigureSettings`，等待时长取 `runtime-client` 的；拒绝以回执的码退出 2 或 4；`session instance list`、`registry` 多一列 `runtime_backends`；Lab 命令 142 条。
 - #1518 HS-5c（#402）：切换的控制门读围栏原因，`input_backend_open_failed`、`capture_backend_open_failed`、`paired_backend_open_failed` 三种放行，候选自检通过就由现有的准备解围栏、结束人工等待；候选和恢复都没过时围栏原样；其余原因照旧 `instance_fenced`。
 - #1519 HS-5a、HS-5b（#402）：配对会话没有包的显示就截主显示，显示换了作废帧几何；打开失败时打开者放掉自己连上、没按过的连接；`app info` 的 `stopped` 取 0，编号只在重新绑定时清；`display_missing`（配对会话）和 `application_not_running` 停发；HS-3 的两个测试按要求改换并记进退役门表。
+- #1522 HS-5d（#402）：页面图的步骤确认和步骤计划在点按或应用效果之后的等待，遇到 `recognition_sample_geometry_changed` 当成一帧没确认的、在同一窗口里接着等；`gate_hs5` 的阶梯应用重启级和启动包两个测试改用手动时钟（#1521 的 CI 红在前一个，是测试自己的竞态）；没有新码、新键、新成员。
 
 ## v0.12.39
 
