@@ -9,6 +9,94 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.42
+
+本版是 v0.12.41 之后合并的 1 个 PR：#402 HS-5e。先说部署：接口声明都不变（账本仍是 [3, 6]），部署不用带 `--accept-ledger-one-way`，计划里也没有
+`ledger_verify` 这一步；v0.12.41 的安装工具装本版照常，本版没有它要发或要读的新东西（见下面的升级）；装上以后能退回 v0.12.41，条件见下面的退回。没有新键，
+默认值文件没改。运行上要知道的只有这一处：
+
+- **Lab 里被前台检查拒掉的点按现在读作「未执行」，不再是「结果未定」**（HS-5e）。点按或别的指针输入，在应用不在前台（`application_not_foreground`）或读不出
+  前台（`application_foreground_unknown`）时由前台检查拒绝。这个检查在唯一的输入入口里、写下输入意图之前，所以这种情况下**设备上什么都没有发出去**。以前 Lab
+  只要输入调用一返回，就把效果记成 `indeterminate`，只有输入的结果事件才会改它，而被拒的输入从来不写结果事件；于是记录说一个从没按下的点按「结果未定」，
+  `do --capture --record` 把它当成结果未定的点按记下，这一步一直开着。
+  - 现在：记录的 `input_returned` 为 false，效果 `not_performed`，没有输入意图、动作和输入事件；失败照旧在 `input` 阶段、码照旧，回执照旧是 `failed`。`do` 的答复
+    是 `executed: false`、`effect: not_performed`；`do --capture --record` 什么都不记，返回这次操作的错误，和别的没执行的输入一样，不再留下开着的一步。声明操作
+    （`do --operation`）的每次尝试都一样，整个操作的效果仍是各次尝试的合计。
+  - 三条都满足才这样记：拒绝码是上面两个之一；账本里没有这次输入的意图；返回的终点是本动作自己那条效果为 `not_performed` 的 `command.rejected`。前台检查
+    围住实例的那种拒绝（报的是围栏的码）和意图写下以后的任何失败都不算，照旧。
+  - **已经发出去、结果不明的输入照旧读作「结果未定」**：`input_returned` 为 true，效果 `indeterminate`，等输入的结果事件来定。
+  - **任务运行从来不受影响**：任务的效果不读这条路径；以前记成 `indeterminate` 时，也没有因此围栏过实例。
+  - 合同 `contracts/contained-lab-operation.md` 写清了 `input_returned` 的边界：输入到了设备的输入路径、写下意图以后才为 true，在那之前的拒绝留 false、效果
+    `not_performed`（登记 §1.281）。这是已有字段的边界，不是新含义，旧读者本来就接受（见下面的配对）。
+
+配置：接口修订都不变：`actingd-config` 仍是 [5, 26]，`ledger` 仍是 [3, 6]，`package` 仍是 [3, 6]，`runtime-client` 仍是 [3, 6]，`install-selection` 仍是 [1, 1]，
+`install-control` 仍是 [0, 1]，`runtime-outcomes` 仍是 [1, 1]。`distribution/windows/component-interfaces.json` 和 `contracts/component-interfaces.md` 自 v0.12.41
+没改；登记 §1.281 写不升：记录的形状和每个词都没变，新出现的组合（`input_returned` false、`not_performed`、没有意图）是旧校验器本来就收的。
+
+- 没有新键，键表、默认值文件和配置示例都没改，部署计划的默认值对比是空的。
+- 结果码：没有新码、新位置、新值键或新词，结果码目录仍是 3890 个码、1740 个位置；没有新定稿或退役的条目，所以本版的发布文件是空的。
+- 账本：不升，没有新记录形状。这种 Lab 请求最后那条 `command.rejected` 的效果从 `indeterminate` 变成 `not_performed`，是已有的词。
+- 程序文件：workspace 成员、Runtime 包和 Tools 包的文件清单都和 v0.12.41 一样；只改了 `crates/runtime-host`（Lab 操作和它的测试），`apps/actingctl`、
+  `apps/actingd`、`apps/actinglab`、`crates/runtime-client` 和合同 crate 自 v0.12.41 都没改，MCP 工具仍是 41 个。
+
+升级时要知道的（按安装工具的代码核过；`apps/actingctl` 自 v0.12.41 没改，下面的行号在 v0.12.41 和本版相同）：
+
+- 不用 `--accept-ledger-one-way`：两边的 `ledger` 都是 [3, 6]，`previous_max_in_next` 和 `one_way` 都过（`apps/actingctl/src/install/plan.rs` 281–294）；
+  现行和目标的 `ledger` 相同，所以计划里没有 `ledger_verify`（`plan.rs` 908），apply 不读账本。
+- `runtime-client` 的边：安装工具自己的声明 I 编在程序里（`install/host.rs` 24–25），v0.12.41 的是 [3, 6]，和 Rp [3, 6]、R\* [3, 6] 都有交集，
+  `installer_meets_previous`、`installer_meets_next` 都过（`plan.rs` 308–323，交集判断在 234–236）。`install-control` [0, 1] 相同，`runtime-outcomes` 1 在
+  它的 [1, 1] 里，现行配置没有它不认识的键（`installer_knows_keys`），本版的 check-config 收现行配置（`next_check_config`）。
+- **v0.12.41 的安装工具没有新东西要发或要读。** 它连 Runtime 只有一处 `connect`（`install/runtime.rs` 178），经它发的只有 Status（210）、
+  `RuntimeFactSnapshot`（239）、`ScheduleExplanation`（272）、暂停（340）、恢复（371）、关闭（387）和 `StartReport`（417），都不是 Lab 操作，答复的形状也都没变；
+  守卫、启动后检查和 `install status` 都只走这几样。
+- 部署的自动回退和 `install undo` 这次可以用：接口边都过，回退门的配置一项也过（见下面的退回）。
+
+退回 v0.12.41（按安装工具的代码核过）：
+
+- 安装工具允许退回，不用 `--accept-ledger-one-way`。`ledger` 两边都是 [3, 6]：`previous_max_in_next`（Rp.max 6 在 R\* [3, 6] 里）和 `one_way` 都过。
+  `runtime-client` 两边都是 [3, 6]，安装工具 I [3, 6] 和两边都有交集，`installer_meets_previous`、`installer_meets_next` 都过；`install-control`、
+  `runtime-outcomes` 两边相同；`package` 两边都是 [3, 6]，`bundle_max_in_next` 在单一位置根上只有 `pack_declaration_unknown` 警告；`actingd-config` 两边都是
+  [5, 26]，配置里没有 v0.12.41 不认得的键（`installer_knows_keys`）。部署的自动回退、`rollback plan|apply`、`install undo` 走的是同一组边和同一个回退门
+  （`install/update.rs` 378 起）。
+- 回退门其余几项：v0.12.41 自己的读者读部署之后写的账本页（`ledger_readability`，`update.rs` 395–432，只对本版替换掉的那个构建算，就是 v0.12.41；账本没有
+  新形状，读得了）；v0.12.41 在这个根上最近一次打开在它的期限减余量之内（433–484）；现行配置过 v0.12.41 的 check-config（485–498，没有新键）。
+- 拒绝的只有这些：退到 v0.12.38 及更早（`ledger` 上限 5），`previous_max_in_next` 不过（6 不在 [3, 5] 里），带不带标志都以 `interface_edge` 拒绝；
+  退到不是本版替换掉的构建（比如 v0.12.40），`ledger_readability` 不过，以 `rollback_gate_failed` 结束。
+- 落盘的东西都不挡。本版写下的 Lab 记录（`input_returned` false、`not_performed`、没有意图）退回后：v0.12.41 的 Runtime 不读回 Lab 记录（只在
+  `crates/runtime-host/src/host/lab_operation.rs` 226–227 写）；v0.12.41 的 actinglab 在 `resource restore` 里读它，照下面的配对收下，当成缺口。没有新键、新文件；
+  本版对这一步什么都不记，所以也没有录制草稿要清。
+- 退回以后：被前台检查拒掉的 Lab 点按又读作 `indeterminate`，`do --capture --record` 又会把它当成结果未定的点按记下、留着那一步。
+- 客户端和 Runtime 的配对（行号在 v0.12.40、v0.12.41 和本版相同：合同 crate、`runtime-client`、`apps/actinglab`、`crates/ledger-forensics` 自 v0.12.40 没改）：
+  - v0.12.41 的安装工具装本版：照常，见上面的升级。从本版的构建目录跑本版的安装工具，结果相同。
+  - **v0.12.41 及更早的 actinglab 在线 `do`** 读本版的答复：收下。`runtime-client` 先验回执（`crates/actingcommand-contract/src/runtime.rs` 6449–6450 调记录的
+    `validate`）：`input_returned` 为 false 时只要求没有意图、没有输入事件、效果 `not_performed`（`crates/actingcommand-contract/src/runtime/lab_operation.rs`
+    574–577；声明操作的每次尝试 758–761，整个记录和最后一次尝试一致 801–813），记录都满足；「返回了输入却没有结果事件就得是 `indeterminate`」那条（578–581、
+    762–764）只管返回了的输入，不适用。再过共享校验器：动作事件只按记录的 `input_action_id` 去查（`crates/runtime-client/src/client/lab_operation.rs` 198–205），
+    没有就是空的；`lab_operation_evidence.rs` 631–635（没报意图就不许有意图和动作事件）、702–718（没有输入事件时不许有后帧，只有返回了的输入才查失败阶段）、
+    932–936（最后的 `command.rejected` 带记录的效果 `not_performed`）都过。然后 actinglab 答 `executed: false`（`apps/actinglab/src/lab2_cli/operation.rs`
+    127–131）；带 `--record` 时效果是 `not_performed`、有失败，什么都不记（186–197），返回这次操作的错误（198–203）。这几条规则记录一侧自 v0.1.0、尝试一侧自
+    v0.12.10 就在，0.12 系列的 actinglab 都收。
+  - **v0.12.41 及更早的 actinglab 离线 `resource restore`**：读到这条记录照常解码（`apps/actinglab/src/resource_restore.rs` 204–206），过同一个校验器（348），
+    恢复草稿时把它记成缺口 `input_not_committed`、`lab_input_failed`（`crates/resource-tooling/src/resource_restore.rs` 356–360、364–369），不生成转移，和它以前的
+    `indeterminate` 写法得到的一样；整次恢复不会因为它失败。
+  - 控制台 UI v0.12.9（钉 v0.12.40，`Cargo.toml` 39–44 的 `232b3ed8`；`acui-setup` 声明 `actingd-config` [5, 26]、`ledger` [3, 6]、`runtime-client` [3, 5]、
+    `runtime-outcomes` [1, 1]）：接口自 v0.12.41 没变，照边算对本版和对 v0.12.41 一样全过。它的源码里没有 Lab 操作的请求；它的取证读 Lab 记录只认 schema 字串
+    （`crates/ledger-forensics/src/task_records.rs` 266–283，`verified_legacy`，原样显示文档），不检查成员，所以显示新记录照常。
+  - actingctl（含看门狗）不解码 Lab 记录（测试以外的代码里没有 `LabOperationRecord`），它读事件时看到的 `command.rejected` 带 `not_performed`，是已有的词，照常。
+  - MCP：`ac_lab_do` 跑安装里的 `<root>\tools\actinglab.exe`，原样转它的数据（`apps/actingctl/src/mcp/lab.rs` 3–4、721），所以答的就是 actinglab 答的：
+    `executed: false`、`effect: not_performed`，失败照旧是 `lab_tool_failed`。
+  - 钉 v0.12.41 或更早的 actingctl、MCP（在根外跑的那份）和 actinglab 连本版：线上形状都没变，照常。
+
+运行上的变化：
+
+- Lab 被前台检查拒掉的点按（HS-5e）：答复和记录读作未执行，`--record` 不记；判断只比对已经读到的返回终点，不多读账本；任务运行不变。
+
+本版合并的 PR：
+
+- #1526 HS-5e（#402）：前台检查在写下输入意图之前拒掉的 Lab 点按（`application_not_foreground`、`application_foreground_unknown`）记 `input_returned` false、
+  效果 `not_performed`，不再是 `indeterminate`，单次点按和多次尝试两条路径都改；已经发出、结果不明的照旧 `indeterminate`；合同写清 `input_returned` 的边界；
+  不升接口（旧校验器本来就收这个组合）；改造一个测试、新增一个，没有新码、新键。
+
 ## v0.12.41
 
 本版是 v0.12.40 之后合并的 1 个 PR：#407 PERF-READ。先说部署：`runtime-client` 从 [3, 5] 升到 [3, 6]，其余接口声明都不变（账本仍是 [3, 6]），部署不用带
