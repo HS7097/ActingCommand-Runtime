@@ -49,7 +49,9 @@ use actingcommand_device::{
     mumu_instance_port, nemu_paired_display,
 };
 use actingcommand_execution_kernel::DiscoveredInstanceBinding;
-use actingcommand_runtime_client::{RuntimeChannel, RuntimeClient, RuntimeClientConfig};
+use actingcommand_runtime_client::{
+    RuntimeChannel, RuntimeClient, RuntimeClientConfig, VerifiedLabOperation,
+};
 use actingcommand_runtime_config::{CAPTURE_BACKEND, TOUCH_BACKEND, instance_key};
 use serde_json::{Value, json};
 use std::sync::Mutex;
@@ -877,6 +879,17 @@ fn lab_request(operation: RuntimeOperation) -> RuntimeRequest {
 
 /// `actinglab do --tap 1,0 --package <package>` on `alias`: the operation's failure, if any.
 fn lab_tap(root: &TempDir, alias: &str, package: &Path) -> Option<(String, LabOperationStage)> {
+    lab_tap_verified(root, alias, package)
+        .operation()
+        .record
+        .failure
+        .as_ref()
+        .map(|failure| (failure.code.clone(), failure.stage))
+}
+
+/// The same tap, as the Lab client verified it (`verify_lab_operation_evidence`, the shared
+/// verifier, over the request's native events and artifacts).
+fn lab_tap_verified(root: &TempDir, alias: &str, package: &Path) -> VerifiedLabOperation {
     let lab = RuntimeClient::connect(RuntimeClientConfig::new(
         root.path(),
         RuntimeChannel::Lab,
@@ -903,14 +916,8 @@ fn lab_tap(root: &TempDir, alias: &str, package: &Path) -> Option<(String, LabOp
             ObservationFramePlan::SINGLE,
         )
         .expect("the Lab client verifies the operation");
-    let failure = verified
-        .operation()
-        .record
-        .failure
-        .as_ref()
-        .map(|failure| (failure.code.clone(), failure.stage));
     drop(lab);
-    failure
+    verified
 }
 
 /// The application command `action`'s captures after it: the first one's display, and the
@@ -1289,7 +1296,11 @@ fn hs5_startup_package_opens_after_entry() {
 
 // §2 row 7, §4.4: a tap while the application does not run is refused by the foreground gate
 // (`application_not_foreground`, nothing pressed, nothing fenced), as on adb touch; the reset
-// completes.
+// completes. #402 HS-5e (register §1.281, the W5 case of 11-05): the refusal came before any
+// input intent, so the Lab record says the tap never reached its input: receipt `failed`,
+// `input_returned` false, effect `not_performed`, no intent, action or input event. The Lab
+// client's shared verifier accepts the record (`lab_tap_verified`), the final command event's
+// `not_performed` included.
 #[test]
 fn hs5_pointer_input_before_application_refused_by_foreground_gate() {
     let root = TempDir::new().expect("tempdir");
@@ -1297,9 +1308,25 @@ fn hs5_pointer_input_before_application_refused_by_foreground_gate() {
     let host = start(&root, &[&a], false);
     let package = app_entry_package(&root);
 
+    let verified = lab_tap_verified(&root, A, &package);
+    let record = &verified.operation().record;
     assert_eq!(
-        lab_tap(&root, A, &package),
-        Some((NOT_FOREGROUND.to_owned(), LabOperationStage::Input))
+        record
+            .failure
+            .as_ref()
+            .map(|failure| (failure.code.as_str(), failure.stage)),
+        Some((NOT_FOREGROUND, LabOperationStage::Input))
+    );
+    assert_eq!(verified.receipt().state(), RuntimeReceiptState::Failed);
+    assert!(!record.input_returned, "the tap never reached its input");
+    assert_eq!(record.effect, EffectDisposition::NotPerformed);
+    assert_eq!(
+        (
+            record.input_action_id,
+            record.input_intent,
+            record.input_event
+        ),
+        (None, None, None)
     );
     assert!(
         a.state
@@ -1334,6 +1361,52 @@ fn hs5_pointer_input_before_application_refused_by_foreground_gate() {
         "only the reset reached the device"
     );
     assert!(!a.device.running());
+    assert_unfenced(&host, A);
+    host.close().expect("close host");
+}
+
+// #402 HS-5e (register §1.281): a Lab tap that passed the foreground check and was sent, whose
+// result the device could not tell (the input backend failed after the input intent), still
+// reads as before: receipt `failed` at stage `input`, `input_returned` true, its intent, action
+// and `input.failed` recorded, effect `indeterminate`; the Lab client's shared verifier accepts it.
+#[test]
+fn hs5e_sent_input_with_unknown_result_stays_indeterminate() {
+    let root = TempDir::new().expect("tempdir");
+    let a = Node::new(A, TouchBackendChoice::AdbShellInput, true);
+    let host = start(&root, &[&a], false);
+    let package = app_entry_package(&root);
+    *a.state
+        .input_error_once
+        .lock()
+        .expect("one-shot input error") = Some(
+        DeviceError::transient("fixture tap sent; the device did not answer")
+            .with_diagnostic(
+                DeviceErrorCategory::Protocol,
+                actingcommand_device::codes::DeviceStage::AdbInputBoundsValidate.location(),
+            )
+            .with_diagnostic_context(
+                "adb_shell_input",
+                actingcommand_device::codes::DeviceLocation::InputTap,
+                DeviceErrorSensitivity::Sensitive,
+            ),
+    );
+
+    let verified = lab_tap_verified(&root, A, &package);
+    let record = &verified.operation().record;
+    let failure = record.failure.as_ref().expect("the tap failed");
+    assert_eq!(failure.stage, LabOperationStage::Input, "{failure:?}");
+    assert_ne!(failure.code, NOT_FOREGROUND, "{failure:?}");
+    assert_eq!(verified.receipt().state(), RuntimeReceiptState::Failed);
+    assert!(record.input_returned, "the tap reached its input");
+    assert!(record.input_action_id.is_some());
+    assert!(record.input_intent.is_some());
+    assert!(record.input_event.is_some(), "its input.failed");
+    assert_eq!(record.effect, EffectDisposition::Indeterminate);
+    let sent = a.state.input_actions.lock().expect("input actions").clone();
+    assert!(
+        matches!(sent.as_slice(), [InputAction::Tap { .. }]),
+        "the tap was sent: {sent:?}"
+    );
     assert_unfenced(&host, A);
     host.close().expect("close host");
 }

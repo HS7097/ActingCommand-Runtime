@@ -683,6 +683,15 @@ tests = [
 ]
 incident = ["#402 HS-5b"]
 
+# #402 HS-5e (0.12.42; brief rd-1031/backend-switch/brief-hs-5e.md with the coordinator's decision of 11-05 (the input_returned:false route); register §1.281; contracts/contained-lab-operation.md, the input-returned flag; no interface revision, outcome code, key or persisted shape): a Lab tap the foreground check refused before any input intent (application_not_foreground, the W5 case) is a failed receipt at stage input whose record says it never reached its input (input_returned false, effect not_performed, no intent, action or input event) and the Lab client's shared verifier accepts it (hs5_pointer_input_before_application_refused_by_foreground_gate, adapted); a tap that passed the check and was sent, whose input backend failed after the intent, still reads input_returned true with its intent and input.failed and effect indeterminate
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_hs5::hs5_pointer_input_before_application_refused_by_foreground_gate",
+    "actingcommand-runtime-host::lib::tests::gate_hs5::hs5e_sent_input_with_unknown_result_stays_indeterminate",
+]
+incident = ["#402 HS-5e"]
+
 # #402 HS-L (0.12.40; brief rd-1031/backend-switch/brief-hs-l.md; register §1.275; contracts/runtime-config.md, "Switching an instance's backends" and "The Lab"; contracts/runtime-interface.md, actinglab's table; contracts/actinglab-dry-run.md; contracts/actinglab-capabilities.md; design rd-1031/backend-switch/model-backend-switch.md §2.2, §3.1, §7 row HS-L): actinglab --instance <alias> session backend [--touch <name>] [--capture <name>] [--clear] sends one ConfigureSettings on the lab channel naming the instance's backend keys (both in one request when both are named, so the registration takes them in one switch) and prints the receipt's settings in effect and config_version; --clear names both without a value and the file's backends come back, which is a switch, and beside --touch or --capture it is refused before anything is sent; a refusal prints the receipt's top code with its problem word, key, receipt state and whole outcome and exits non-zero (config_value_invalid backend_pair_required with nemu_input_requires_paired_capture, exit 2, nothing switched; backend_switch_refused open_failed with input_backend_open_failed after the previous backends came back, exit 4); after a switch a frame held from the closed session is refused input_frame_unavailable and the next do observes first and presses on its own frame; session instance list's runtime_backends is the Runtime's backends in effect with their source and runtime_backends_read the read's config_version, beside the file's columns
 [[gate]]
 coverage = "Y"
