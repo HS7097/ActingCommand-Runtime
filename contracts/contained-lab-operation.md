@@ -163,7 +163,12 @@ The terminal record includes that exact prepared record and verified artifact,
 the input-returned flag, native InputIntent/action ID and outcome event ID/sequence, the native
 EffectDisposition, after frame/projection if available, and a typed failure
 stage/code/native event reference. A secondary ordinary release failure is
-retained separately. Each frame states whether its token remained valid after
+retained separately. The input-returned flag (a record's `input_returned`, and each declared
+attempt's) is true only once the input reached the device input path and wrote its
+InputIntent; a refusal before that write, the foreground check's `application_not_foreground`
+or `application_foreground_unknown` with its own `command.rejected` (effect `not_performed`,
+[application-lifecycle.md](application-lifecycle.md)), leaves it false with effect
+`not_performed` and the failure at stage `input` (#402 HS-5e, since 0.12.42). Each frame states whether its token remained valid after
 capture. Frame IDs come from the existing issuer; no task/run/frame identity is
 invented for a missing stage.
 

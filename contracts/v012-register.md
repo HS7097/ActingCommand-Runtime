@@ -7333,6 +7333,68 @@ load samples the private bytes twice. Nothing is read from or written to the led
 **Rollback** (to 0.12.40). Nothing persisted; 0.12.40 answers without the members, which a reader
 of this build reads as absent.
 
+### 1.281 Slice HS-5e (0.12.42): a Lab pointer input the foreground check refused before its intent never reached its input (#402; the W5 case of the HS-5 window on 11-05, #5 on 0.12.41: a Lab tap refused `application_not_foreground` with no input intent read effect `indeterminate`; investigation `rd-1031/backend-switch/w5-investigation.md`; coordinator work order `rd-1031/backend-switch/brief-hs-5e.md` with the coordinator's decision of 11-05, the `input_returned: false` route)
+
+[contained-lab-operation.md](contained-lab-operation.md) (the input-returned flag, in the terminal
+record's paragraph) is the contract. 1.281 was the next free number on the base `e3440565`.
+
+**Why.** The foreground check sits in the one input path before the input's intent is written
+(`HostShared::input` calls `require_foreground_application` before it drafts the `input.intent`);
+its refusal is the input's own `command.rejected` with effect `not_performed` plus the
+`runtime.failed` record ([application-lifecycle.md](application-lifecycle.md)). The Lab set
+`input_returned` true and the effect `indeterminate` as soon as the input call came back, and only
+an `input.committed` or `input.failed` changed the effect, which a refusal before the intent never
+writes. So the record said "result undetermined" of a tap that was never pressed, and
+`do --capture --record` recorded it as an undetermined click and left its step open
+([lab-recording.md](lab-recording.md)).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| HS5E-1 | a Lab operation's `input_returned` and `effect` (the record's, and each declared attempt's) | behaviour (no shape change) | HS-5e | HS-5e | when the input fails with `application_not_foreground` or `application_foreground_unknown` (the foreground check's refusals, both before the intent write), no `input.intent` of the request after the floor exists, and the returned terminal is this action's own `command.rejected` with effect `not_performed`, the attempt (and so the record) has `input_returned` false, effect `not_performed`, no intent, action or input event, and its failure at stage `input`; a declared operation's effect stays the aggregate of its attempts. Not included: a refusal the check fenced (an adb failure with unconfirmed cleanup fails with the fence's code), `application_store_not_allowed` (a Lab operation never taps a store: `InputForeground::Assigned`), and every failure after the intent, which keeps `input_returned` true and `indeterminate` until an outcome event resolves it |
+| HS5E-2 | the input-returned flag | contract sentence | HS-5e | — | true only once the input reached the device input path and wrote its intent; a refusal before that write leaves it false with effect `not_performed` |
+
+**Tests.** Host row "#402 HS-5e" (`gate_hs5`, the fake device of HS-5b): adapted
+`hs5_pointer_input_before_application_refused_by_foreground_gate` (the W5 case: receipt `failed`,
+failure `application_not_foreground` at `input`, `input_returned` false, effect `not_performed`, no
+intent, action or input event; the Lab client's shared verifier accepts the record, its final
+command event's `not_performed` included; HS-5b's assertions unchanged); new
+`hs5e_sent_input_with_unknown_result_stays_indeterminate` (an adb-touch instance whose application
+runs: the tap passes the check, is sent, and its input backend fails with a transient error, so
+`input.failed` carries `indeterminate`: receipt `failed` at `input`, `input_returned` true, intent,
+action and input event present, effect `indeterminate`, verified by the same client). The helper
+`lab_tap` now reads `lab_tap_verified`; neither test sleeps or reads the clock.
+
+**Interface.** No step for 0.12.42: the record's shape and every word are unchanged, and the new
+combination is one every earlier reader already accepts, so no reader of an earlier build refuses
+an answer or a stored record. The record validator of the contract crate (on `e3440565`,
+`crates/actingcommand-contract/src/runtime/lab_operation.rs` lines 574–577 for the record and
+758–761 for an attempt) requires, with `input_returned` false, no intent, no input event and effect
+`not_performed`, which the record keeps; the rule of lines 578–581 and 762–764 (a returned input
+without an outcome event is `indeterminate`) is not met, because the input did not return. The
+shared verifier (`lab_operation_evidence.rs` lines 631–635: no reported intent means no intent and
+no action events; lines 702–718: only a returned input's failure stage is checked) and the
+receipt's validation (`runtime.rs`, the `ContainedLabOperation` arm) take it as they take any
+failure before input; the final `command.rejected` carries `not_performed`, an existing word. The
+readers checked: actinglab of 0.12.41 (online `do`, through `runtime-client`'s receipt validation
+and verifier; offline `resource restore`, through the same verifier), the MCP (`ac_lab_do` runs the
+install's actinglab), actingctl (reads events only) and the console of UI v0.12.9 (pins 0.12.40;
+sends no Lab operation; its forensics reads a Lab terminal record by its schema string only):
+none refuses it. `ledger` stays [3, 6] and `runtime-client` [3, 6].
+
+**Where it differs from the work order's letter.** The work order kept `input_returned` true and
+had the validator, the verifier and the contract accept `not_performed` beside it; that
+combination is one an earlier reader refuses (`invalid_lab_operation_record`, the lines above), so
+it would have been an interface step. By the coordinator's decision the record states the
+boundary of `input_returned` instead, and the validator and the verifier are unchanged.
+
+**What changes live.** A Lab `do` (and `do --operation`) refused by the foreground check answers
+`executed: false`, `effect: not_performed`, with its failure as before; `do --capture --record`
+records nothing for it and returns the operation's error, as for any input that was not
+performed. Task runs are unchanged (their effect never read this path).
+
+**Rollback** (to 0.12.41). Nothing new persisted; 0.12.41 writes such a refusal `indeterminate`
+again, and reads this build's records as failures before input.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

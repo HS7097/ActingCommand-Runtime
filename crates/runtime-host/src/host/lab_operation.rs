@@ -284,12 +284,14 @@ impl HostShared {
                 }
                 Err(failure) => (failure.terminal, Some(failure)),
             };
+            let foreground_refused = input_failure.as_ref().is_some_and(foreground_refusal);
             record.input_returned = true;
             record.effect = EffectDisposition::Indeterminate;
             if let Err(mut evidence_failure) = self.resolve_lab_input_evidence(
                 &mut record,
                 input_terminal,
                 input_failure.is_some(),
+                foreground_refused,
             ) {
                 if let Some(original_failure) = input_failure {
                     evidence_failure.error =
@@ -1007,6 +1009,7 @@ impl HostShared {
         record: &mut LabOperationRecord,
         returned_terminal: Option<TerminalEvent>,
         input_failed: bool,
+        foreground_refused: bool,
     ) -> Result<(), RequestFailure> {
         let prepared = &record.prepared;
         let evidence = self.resolve_lab_input(
@@ -1020,7 +1023,15 @@ impl HostShared {
             (0, record.prepared_artifact.verified.sequence),
             returned_terminal,
             input_failed,
+            foreground_refused,
         )?;
+        // #402 HS-5e: an input the foreground check refused before its intent never reached its
+        // input; the record says so, as for any failure before input.
+        if evidence.not_reached {
+            record.input_returned = false;
+            record.effect = EffectDisposition::NotPerformed;
+            return Ok(());
+        }
         if let Some(action_id) = evidence.action_id {
             record.input_action_id = Some(action_id);
         }
@@ -1041,13 +1052,17 @@ impl HostShared {
     /// `intent_floor`), the one `InputCommitted` or `InputFailed` of its physical action, and the
     /// check of the terminal the input returned. LR-10 (#412 B-3 S2): an attempt of a declared
     /// operation reads from after the previous attempt's events, as an element press reads the
-    /// request's one input.
+    /// request's one input. #402 HS-5e: with `foreground_refused` (the input failed with a
+    /// `foreground_refusal`), no intent and a returned terminal that is this action's own
+    /// `command.rejected` with effect `not_performed`, the input never reached its input
+    /// (`not_reached`).
     fn resolve_lab_input(
         &self,
         identity: &LabInputIdentity,
         (query_after, intent_floor): (u64, u64),
         returned_terminal: Option<TerminalEvent>,
         input_failed: bool,
+        foreground_refused: bool,
     ) -> Result<LabInputEvidence, RequestFailure> {
         let identity_matches = |event: &PersistedEvent| {
             event.links().request_id() == Some(&identity.request_id)
@@ -1174,6 +1189,11 @@ impl HostShared {
                     HostCode::LabReturnedInputTerminalMismatch,
                 ));
             }
+            evidence.not_reached = foreground_refused
+                && intents.is_empty()
+                && event.event_type() == EventType::CommandRejected
+                && Some(event.payload().action()) == identity.action
+                && event.payload().effect_disposition() == Some(EffectDisposition::NotPerformed);
         }
         if let Some(outcome) = outcome {
             let effect = outcome
@@ -1508,6 +1528,21 @@ struct LabInputEvidence {
     intent: Option<TerminalEvent>,
     event: Option<TerminalEvent>,
     effect: Option<EffectDisposition>,
+    /// #402 HS-5e: the foreground check refused the input before its intent was written: it
+    /// never reached its input (`input_returned` false, effect `not_performed`).
+    not_reached: bool,
+}
+
+/// #402 HS-5e (register §1.281): a refusal of the foreground check
+/// (`HostShared::require_foreground_application`), which `HostShared::input` makes before it
+/// writes the input's intent: `application_not_foreground` or `application_foreground_unknown`,
+/// its terminal the input's own `command.rejected` with effect `not_performed`. A refusal the
+/// check fenced fails with the fence's code and is not one; nor is any failure after the intent.
+fn foreground_refusal(failure: &RequestFailure) -> bool {
+    let code = failure.error.code();
+    failure.terminal.is_some()
+        && (code == HostCode::ApplicationNotForeground.as_str()
+            || code == HostCode::ApplicationForegroundUnknown.as_str())
 }
 
 /// The page a failed step attempt finished on when its last frame matched none (the kernel's
@@ -1783,6 +1818,7 @@ impl LabOperationRuntime<'_> {
             .and_then(|previous| self.attempts.get(previous))
             .and_then(|previous| previous.input_event.or(previous.input_intent))
             .map_or(prepared_sequence, |event| event.sequence);
+        let foreground_refused = input_failure.as_ref().is_some_and(foreground_refusal);
         let evidence = self.host.resolve_lab_input(
             &LabInputIdentity {
                 request_id: self.prepared.request_id,
@@ -1794,6 +1830,7 @@ impl LabOperationRuntime<'_> {
             (floor, floor),
             returned,
             input_failure.is_some(),
+            foreground_refused,
         );
         let attempt = &mut self.attempts[index];
         attempt.input_returned = true;
@@ -1815,6 +1852,12 @@ impl LabOperationRuntime<'_> {
                 return Err(evidence_failure);
             }
         };
+        // #402 HS-5e: an attempt whose input the foreground check refused before its intent never
+        // reached its input.
+        if evidence.not_reached {
+            attempt.input_returned = false;
+            attempt.effect = EffectDisposition::NotPerformed;
+        }
         attempt.input_action_id = evidence.action_id;
         attempt.input_intent = evidence.intent;
         attempt.input_event = evidence.event;
