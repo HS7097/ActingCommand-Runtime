@@ -1257,7 +1257,8 @@ pub struct SceneEvaluation<'a> {
     text_reads: RefCell<text_locate::TextReads>,
     /// The clock an anchor search reads its time limit from.
     search_clock: fn() -> std::time::Instant,
-    /// Workflow #396 REC-2: the transforms of the regions unique templates search in.
+    /// Workflow #396 REC-2: the transforms of the regions exact template searches search in
+    /// (Workflow #404 FS-1: a `repeated_anchor` anchor's enumeration too).
     spectra: RefCell<recognition::RegionSpectra>,
     /// Workflow #396 REC-6: the OCR targets whose provider observation an evaluation here keeps
     /// by target, for the field or reading collection of the same frame.
@@ -6999,8 +7000,8 @@ mod tests {
                 .collect()
         }
 
-        /// Reads the start instant for the anchor search and its checks before rows 0..=10, then
-        /// a time past the 5 s limit.
+        /// Reads the start instant for the anchor search and its checks before rows 0..=10 of the
+        /// score map's sums, then a time past the 5 s limit.
         fn clock_past_row_ten() -> Instant {
             thread_local! {
                 static START: Instant = Instant::now();
@@ -7113,11 +7114,12 @@ mod tests {
                 Category::Error
             );
             assert_eq!(incomplete.item(), "anchor");
-            // Rows 0..=10 hold the two upper markers.
+            // Workflow #404 FS-1: the anchor is scored on the exact score map, whose sums pass
+            // the limit at row 11, before any position is taken.
             assert_eq!(
                 incomplete.detail(),
                 format!(
-                    "stage={} timeout_ms=5000 count=2",
+                    "stage={} timeout_ms=5000 count=0",
                     RecognitionPackLocation::CandidateSearchRepeatedAnchor.as_str()
                 )
             );

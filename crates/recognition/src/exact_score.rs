@@ -19,11 +19,16 @@
 //! Workflow #396 REC-5: a template that declares scale factors is resampled by each
 //! ([`crate::resample`]) and searched over the same region, one map per factor sharing the
 //! region's transforms and one search limit ([`ScaledScoreMaps`]).
+//!
+//! Workflow #404 FS-1: the whole-region enumeration of a `repeated_anchor` anchor takes every
+//! position of these maps at or above its threshold ([`ScaledScoreMaps::matches_at_least`]) and
+//! suppresses overlaps across the factors ([`ScaledScoreMaps::suppress_overlaps`]), both within
+//! the same search limit.
 
 use super::{
     IntegralImages, MatchMetric, RecognitionError, RecognitionResult, TemplateMask, TemplateMatch,
     TemplateMatchDeadline, TemplateMatchSelection, TemplateMatchTimingStage, TemplateStats,
-    normalize_ncc_score, score_from_sums,
+    normalize_ncc_score, overlap_suppresses, score_from_sums,
 };
 use image::{GrayImage, Luma};
 use realfft::{ComplexToReal, RealFftPlanner, RealToComplex};
@@ -543,6 +548,102 @@ impl ScaledScoreMaps {
     ) -> RecognitionResult<Option<ScaledMatch>> {
         second_of(&self.maps, best, margin_milli, accept)
     }
+
+    /// Workflow #404 FS-1: every position over every factor whose normalized score reaches
+    /// `threshold` and that `accept` admits, map by map in the declared order of the factors and
+    /// row-major in each; `accept` is asked in that order, for those positions only. Each row
+    /// counts against the search limit.
+    pub fn matches_at_least(
+        &self,
+        threshold: f32,
+        mut accept: impl FnMut(ScaledMatch) -> RecognitionResult<bool>,
+    ) -> RecognitionResult<Vec<ScaledMatch>> {
+        if !threshold.is_finite() || !(0.0..=1.0).contains(&threshold) {
+            return Err(RecognitionError::fatal(
+                "template threshold must be in 0..=1",
+            ));
+        }
+        let mut found = Vec::new();
+        for map in &self.maps {
+            for (y, row) in map
+                .raw_scores
+                .chunks_exact(map.columns as usize)
+                .enumerate()
+            {
+                map.deadline.check(map.label(), map.stage)?;
+                for (x, raw_score) in row.iter().copied().enumerate() {
+                    if normalize_ncc_score(raw_score) < threshold {
+                        continue;
+                    }
+                    let candidate =
+                        map.scaled_candidate(y * map.columns as usize + x, raw_score)?;
+                    if accept(candidate)? {
+                        found.push(candidate);
+                    }
+                }
+            }
+            map.deadline.check(map.label(), map.stage)?;
+        }
+        Ok(found)
+    }
+
+    /// Workflow #404 FS-1: `matches`, positions of these maps, taken greedily by normalized score
+    /// descending, then the earlier factor, then `y`, then `x`. A match is suppressed when
+    /// `1000 * intersection > suppress_iou_milli * union` with one already taken, over the
+    /// resampled boxes in integer arithmetic, so one object found at several factors is taken
+    /// once and `0` suppresses any overlap. The sort and every match's suppression count against
+    /// the search limit: the limit is checked before and after the sort, before each match and
+    /// after the last.
+    pub fn suppress_overlaps(
+        &self,
+        matches: Vec<ScaledMatch>,
+        suppress_iou_milli: u16,
+    ) -> RecognitionResult<Vec<ScaledMatch>> {
+        if suppress_iou_milli > 999 {
+            return Err(RecognitionError::fatal(
+                "template overlap suppression must be in 0..=999 milli",
+            ));
+        }
+        let Some(first) = self.maps.first() else {
+            return Err(RecognitionError::fatal(
+                "a scaled template search needs at least one factor",
+            ));
+        };
+        let (deadline, label, stage) = (&first.deadline, first.label(), first.stage);
+        // Each match with the declared position of its factor; the factors are distinct.
+        let mut ranked = matches
+            .into_iter()
+            .map(|found| {
+                let factor = self
+                    .maps
+                    .iter()
+                    .position(|map| map.scale_milli == found.scale_milli)
+                    .unwrap_or(self.maps.len());
+                (factor, found)
+            })
+            .collect::<Vec<_>>();
+        deadline.check(label, stage)?;
+        ranked.sort_by(|(a_factor, a), (b_factor, b)| {
+            b.matched
+                .score
+                .total_cmp(&a.matched.score)
+                .then(a_factor.cmp(b_factor))
+                .then(a.matched.y.cmp(&b.matched.y))
+                .then(a.matched.x.cmp(&b.matched.x))
+        });
+        deadline.check(label, stage)?;
+        let mut taken: Vec<ScaledMatch> = Vec::new();
+        for (_, candidate) in ranked {
+            deadline.check(label, stage)?;
+            if !taken.iter().any(|taken| {
+                overlap_suppresses(&taken.matched, &candidate.matched, suppress_iou_milli)
+            }) {
+                taken.push(candidate);
+            }
+        }
+        deadline.check(label, stage)?;
+        Ok(taken)
+    }
 }
 
 /// The highest raw score of `maps`; equal raw scores keep the earlier map, then the earlier
@@ -886,3 +987,8 @@ mod mask_tests;
 #[cfg(test)]
 #[path = "exact_score_scale_tests.rs"]
 mod scale_tests;
+
+// Workflow #404 FS-1.
+#[cfg(test)]
+#[path = "exact_score_all_tests.rs"]
+mod all_tests;

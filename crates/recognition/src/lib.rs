@@ -177,14 +177,17 @@ pub struct TemplateMatchSelection {
     pub accepted: Option<TemplateMatch>,
 }
 
-/// The result of [`Scene::match_template_all`] (Workflow #308, `repeated_anchor` layouts).
+/// The result of [`Scene::match_template_all`] (Workflow #308, `repeated_anchor` layouts) and,
+/// with each match's factor, of [`Scene::match_template_all_scaled`] (Workflow #404 FS-1).
 #[derive(Debug, Clone, PartialEq)]
-pub enum TemplateSearch {
+pub enum TemplateSearch<M = TemplateMatch> {
     /// Every accepted match after overlap suppression, in acceptance order: score descending,
-    /// then `y` ascending, then `x` ascending.
-    Complete(Vec<TemplateMatch>),
-    /// The search reached its time limit before it had scored its last row. Nothing partial is
-    /// returned; `found` counts the positions that had passed the threshold and the predicate.
+    /// then the earlier declared factor, then `y` ascending, then `x` ascending.
+    Complete(Vec<M>),
+    /// The search reached its time limit before it had taken its last match: while it scored
+    /// the positions, collected the matches, sorted them or suppressed overlaps. Nothing partial
+    /// is returned; `found` counts the positions that had passed the threshold and the predicate
+    /// by then.
     Incomplete { found: usize, limit: Duration },
 }
 
@@ -502,15 +505,9 @@ impl Scene {
     }
 
     /// Every position of the template in `region` whose score reaches `threshold` and that
-    /// `accept` admits, after overlap suppression.
-    ///
-    /// Each position is scored exactly as the exact path of
-    /// [`Scene::match_template_with_filter`] scores it, never through the downsampled pyramid.
-    /// The candidates are taken greedily by score descending, then `y`, then `x`; a candidate is
-    /// suppressed when `1000 * intersection > suppress_iou_milli * union` with a match already
-    /// taken, in integer arithmetic, so `0` suppresses any overlap. The search checks its 5 s
-    /// limit before every row and after the last one, and reports a search that ran out of time
-    /// as [`TemplateSearch::Incomplete`].
+    /// `accept` admits, after overlap suppression: [`Scene::match_template_all_scaled`] with no
+    /// mask and the declared template alone (factor 1000), its own region transforms and the
+    /// system's monotonic clock.
     pub fn match_template_all(
         &self,
         template_png: &[u8],
@@ -518,31 +515,63 @@ impl Scene {
         metric: MatchMetric,
         threshold: f32,
         suppress_iou_milli: u16,
-        accept: impl FnMut(TemplateMatch) -> RecognitionResult<bool>,
+        mut accept: impl FnMut(TemplateMatch) -> RecognitionResult<bool>,
     ) -> RecognitionResult<TemplateSearch> {
-        self.match_template_all_with_clock(
-            template_png,
-            region,
-            metric,
-            threshold,
-            suppress_iou_milli,
-            accept,
-            Instant::now,
+        Ok(
+            match self.match_template_all_scaled(
+                template_png,
+                region,
+                metric,
+                None,
+                &[resample::SCALE_IDENTITY_MILLI],
+                threshold,
+                suppress_iou_milli,
+                |found| accept(found.matched),
+                &mut RegionSpectra::default(),
+                &SearchClock::system(),
+            )? {
+                TemplateSearch::Complete(matches) => TemplateSearch::Complete(
+                    matches.into_iter().map(|found| found.matched).collect(),
+                ),
+                TemplateSearch::Incomplete { found, limit } => {
+                    TemplateSearch::Incomplete { found, limit }
+                }
+            },
         )
     }
 
-    /// [`Scene::match_template_all`] reading its time limit from `now`.
+    /// Workflow #404 FS-1: every match of `template_png` in `region` (the whole frame when
+    /// `None`), resampled by each of `factors_milli` (1000: as declared) and, with `mask`,
+    /// scoring only the template pixels it selects, after overlap suppression across the
+    /// factors.
+    ///
+    /// Every position is scored on the exact score map of each factor
+    /// ([`Scene::exact_score_maps`]): the cheaper of the direct and the transform engine, with
+    /// the direct scorer's scores bit for bit, never through the downsampled pyramid. A
+    /// position is a match when its normalized score reaches `threshold` and `accept` admits it;
+    /// `accept` is asked map by map in the order of the factors, row-major in each
+    /// ([`ScaledScoreMaps::matches_at_least`]). The matches are taken greedily by score
+    /// descending, then the earlier factor, then `y`, then `x`, and a match is suppressed when
+    /// `1000 * intersection > suppress_iou_milli * union` with one already taken, over the
+    /// resampled boxes in integer arithmetic ([`ScaledScoreMaps::suppress_overlaps`]): one object
+    /// found at several factors is one match, and `0` suppresses any overlap. Scoring,
+    /// collecting, sorting and suppressing count against one 5 s limit read on `clock`; a search
+    /// that runs out of it is [`TemplateSearch::Incomplete`], never a partial list. The region's
+    /// transforms are kept in `spectra` and shared by every factor.
     #[allow(clippy::too_many_arguments)]
-    pub fn match_template_all_with_clock(
+    pub fn match_template_all_scaled(
         &self,
         template_png: &[u8],
         region: Option<Rect>,
         metric: MatchMetric,
+        mask: Option<TemplateMask>,
+        factors_milli: &[u32],
         threshold: f32,
         suppress_iou_milli: u16,
-        mut accept: impl FnMut(TemplateMatch) -> RecognitionResult<bool>,
-        mut now: impl FnMut() -> Instant,
-    ) -> RecognitionResult<TemplateSearch> {
+        mut accept: impl FnMut(ScaledMatch) -> RecognitionResult<bool>,
+        spectra: &mut RegionSpectra,
+        clock: &SearchClock,
+    ) -> RecognitionResult<TemplateSearch<ScaledMatch>> {
         if !threshold.is_finite() || !(0.0..=1.0).contains(&threshold) {
             return Err(RecognitionError::fatal(
                 "template threshold must be in 0..=1",
@@ -553,55 +582,41 @@ impl Scene {
                 "template overlap suppression must be in 0..=999 milli",
             ));
         }
-        let (search, template, offset_x, offset_y) =
-            self.prepare_template_match(template_png, region)?;
-        let stats = TemplateStats::new(&template, metric)?;
-        let integrals = IntegralImages::new(&search);
-        let window = SearchWindow::full(&search, &template);
-        let started = now();
-        let mut found = Vec::new();
-        for y in window.min_y..=window.max_y {
-            if now().saturating_duration_since(started) > TEMPLATE_MATCH_TIMEOUT {
-                return Ok(TemplateSearch::Incomplete {
-                    found: found.len(),
-                    limit: TEMPLATE_MATCH_TIMEOUT,
-                });
-            }
-            for x in window.min_x..=window.max_x {
-                let raw_score = score_window(&search, &stats, &integrals, metric, x, y);
-                let candidate = template_match_from_candidate(
-                    MatchCandidate { x, y, raw_score },
-                    &template,
-                    offset_x,
-                    offset_y,
-                )?;
-                if candidate.score >= threshold && accept(candidate)? {
-                    found.push(candidate);
-                }
-            }
+        let incomplete = |found| TemplateSearch::Incomplete {
+            found,
+            limit: TEMPLATE_MATCH_TIMEOUT,
+        };
+        // Only a passed limit carries timing; every other error stays an error.
+        let maps = match self.exact_score_maps(
+            template_png,
+            region,
+            metric,
+            TemplateMatchTimingStage::Exact,
+            mask,
+            factors_milli,
+            spectra,
+            clock,
+        ) {
+            Ok(maps) => maps,
+            Err(error) if error.timing().is_some() => return Ok(incomplete(0)),
+            Err(error) => return Err(error),
+        };
+        let mut found = 0_usize;
+        let matches = match maps.matches_at_least(threshold, |candidate| {
+            let admitted = accept(candidate)?;
+            found += usize::from(admitted);
+            Ok(admitted)
+        }) {
+            Ok(matches) => matches,
+            Err(error) if error.timing().is_some() => return Ok(incomplete(found)),
+            Err(error) => return Err(error),
+        };
+        let found = matches.len();
+        match maps.suppress_overlaps(matches, suppress_iou_milli) {
+            Ok(taken) => Ok(TemplateSearch::Complete(taken)),
+            Err(error) if error.timing().is_some() => Ok(incomplete(found)),
+            Err(error) => Err(error),
         }
-        if now().saturating_duration_since(started) > TEMPLATE_MATCH_TIMEOUT {
-            return Ok(TemplateSearch::Incomplete {
-                found: found.len(),
-                limit: TEMPLATE_MATCH_TIMEOUT,
-            });
-        }
-        found.sort_by(|a, b| {
-            b.score
-                .total_cmp(&a.score)
-                .then(a.y.cmp(&b.y))
-                .then(a.x.cmp(&b.x))
-        });
-        let mut accepted: Vec<TemplateMatch> = Vec::new();
-        for candidate in found {
-            if !accepted
-                .iter()
-                .any(|taken| overlap_suppresses(taken, &candidate, suppress_iou_milli))
-            {
-                accepted.push(candidate);
-            }
-        }
-        Ok(TemplateSearch::Complete(accepted))
     }
 
     /// Workflow #396 REC-5: the exact score maps of `template_png` resampled by each of

@@ -148,7 +148,7 @@ field:
 | The fields of the layout's kind, of the right JSON types: `id`, `page_id`, `kind` and `features`, with `slots` for `fixed_slots`, or `anchor`, `max_instances`, `order`, `instance_rect`, `click` and the optional `suppress_iou_milli` and `readable_band` for `repeated_anchor`. Unknown fields and fields of the other kind are refused. | the field | gate |
 | The ID matches `^[a-z0-9][a-z0-9_./-]{0,63}$`. | `/candidate_layouts/i/id` | gate |
 | The kind is `fixed_slots` or `repeated_anchor`. | `/candidate_layouts/i/kind` | gate |
-| 1 to 8 features `{name, value}`, with distinct names matching `^[a-z][a-z0-9_]{0,31}$` and a value of `passed`, `measure_milli`, `identity` or `ocr_integer`. A feature may add its own `target` (a string) and `offset` (`{x, y}` integers), both or neither; every `repeated_anchor` feature declares both. | `…/features`, `…/features/j/name`, `…/features/j/value`, `…/features/j/target`, `…/features/j/offset` | gate |
+| 1 to 8 features `{name, value}`, with distinct names matching `^[a-z][a-z0-9_]{0,31}$` and a value of `passed`, `measure_milli`, `identity`, `ocr_integer` or (Workflow #404 FS-2, since 0.12.43) `anchor_milli`. A feature may add its own `target` (a string) and `offset` (`{x, y}` integers), both or neither; every `repeated_anchor` feature declares both, except an `anchor_milli` feature, which declares neither (`UnknownField` at the `target` or `offset` it names). Only a `repeated_anchor` layout declares `anchor_milli` (`InvalidValue` at `…/features/j/value` in a `fixed_slots` layout). | `…/features`, `…/features/j/name`, `…/features/j/value`, `…/features/j/target`, `…/features/j/offset` | gate |
 | A `fixed_slots` layout has 1 to 64 slots `{rect, click, targets}`. | `/candidate_layouts/i/slots` | gate |
 | `rect` and `click` are integer rectangles with a non-negative origin and a positive size, entirely inside the task's `coordinate_space`. | `…/slots/k/rect`, `…/slots/k/click` (a field's type or sign at `…/x` and so on) | gate |
 | Each `targets` key is a declared feature that reads no target of its own, and each value a string. | `…/slots/k/targets/<name>` | gate |
@@ -159,6 +159,7 @@ field:
 | Each slot target is a `template`, `color`, `color_digest`, `composite`, `ocr` or `nn` target of the derived pack; a `measure_milli` feature never reads a composite. Every layout of the selected tasks needs its targets in the same build, as a check does. | `…/slots/k/targets/<name>` | parser |
 | A feature's own `target` is a `template`, `color`, `color_digest` or `ocr` target of the derived pack: an `nn` or `composite` feature cannot be read at an offset. | `…/features/j/target` | parser |
 | A `repeated_anchor` layout's `anchor` is a `template` target of the derived pack. | `/candidate_layouts/i/anchor` | parser |
+| Workflow #404 FS-2: an `anchor_milli` feature derives as `{name, value}`; the parser refuses it in a `fixed_slots` layout and with a `target`, as the gate does (`InvalidValue`). | `…/features/j/value`, `…/features/j/target` | parser |
 | The same layout ID with an identical derived definition, repeated by several tasks, is kept once; any other reuse of the ID is refused at the entry that reuses it. Layout IDs have their own namespace, separate from target IDs. | `/candidate_layouts/i/id` | parser |
 
 The derived layout keeps the source's structure, with two normalizations: `page_id` becomes the
@@ -222,6 +223,19 @@ relative to the match's top-left corner:
   projection, and a search that runs out of its 5 s limit fails with
   `candidate_search_incomplete` ([candidate-projection.md](candidate-projection.md), section
   Generation).
+- Workflow #404 FS-1 (since 0.12.43): every position of the anchor's region, `full_frame`
+  included, is scored on the exact score map, never through the downsampled pyramid. The
+  anchor may declare a `mask` and `scales` as any template target does
+  ([resource-declarations.md](resource-declarations.md), sections Task schema `0.9` template
+  masks and multi-scale templates): only the pixels the mask selects are scored, each factor is
+  searched on its own map, and the matches of every factor are merged before they are ordered
+  and suppressed, so one object found at several factors is one instance. An instance's
+  `instance_rect`, `click` and each feature's `offset` scale with the factor its match hit,
+  `(|v| × f + 500) div 1000` with the sign of `v`, a width or height at least 1; the target a
+  feature reads keeps its own size. A select over a scan refuses an anchor that declares
+  `scales` (section Select over a scan).
+- Workflow #404 FS-2 (since 0.12.43): a feature `{"name", "value": "anchor_milli"}` reads no
+  target: it carries the instance's own anchor match score (section Feature values).
 - `readable_band` is an absolute rectangle; absent, it is the whole frame. An instance is
   actionable, and its features are evaluated, only when its `instance_rect` and its `click`
   both lie inside the band. Any other instance keeps its anchor position and rectangles in the
@@ -334,9 +348,10 @@ Each failure message starts with the pointer of the offending field.
 | The kind is `fixed_slots` or `repeated_anchor`, and the layout declares only its own kind's fields; a `fixed_slots` layout declares no `readable_band`. | `/candidate_layouts/i/kind`, the field |
 | 1 to 8 features, with distinct names matching `^[a-z][a-z0-9_]{0,31}$`. | `/candidate_layouts/i/features`, `…/features/j/name` |
 | A `fixed_slots` layout has 1 to 64 slots; a `repeated_anchor` layout has none. | `/candidate_layouts/i/slots` |
-| A `repeated_anchor` anchor is a raw `template` target with a static search region; a `color_check`, when it declares one, is `template_relative`. | `/candidate_layouts/i/anchor` |
+| A `repeated_anchor` anchor is a raw `template` target with a static search region; a `color_check`, when it declares one, is `template_relative`. Since 0.12.43 (Workflow #404 FS-1) it may declare `mask` and `scales`. | `/candidate_layouts/i/anchor` |
 | `max_instances` is 1 to 64, `order` is declared, `suppress_iou_milli` is 0 to 999, `instance_rect` and `click` have a positive size, and `readable_band` has a non-negative origin and a positive size and lies inside `coordinate_space`. | `…/max_instances`, `…/order`, `…/suppress_iou_milli`, `…/instance_rect`, `…/click`, `…/readable_band` |
-| Every `repeated_anchor` feature reads a target at an offset. Its consensus samples one frame only, so its samples may differ in jitter and template metric but never in frame: a scan cannot capture further frames. | `…/features/j`, `…/features/j/consensus` |
+| Every `repeated_anchor` feature reads a target at an offset, except an `anchor_milli` feature (Workflow #404 FS-2), which reads none. Its consensus samples one frame only, so its samples may differ in jitter and template metric but never in frame: a scan cannot capture further frames. | `…/features/j`, `…/features/j/consensus` |
+| Workflow #404 FS-2: only a `repeated_anchor` layout declares an `anchor_milli` feature, and it declares no `target` or `offset`; it takes no `identity`, `integer` or `consensus` either. | `…/features/j/value`, `…/features/j` |
 | A feature's `target` and `offset` appear together. The target exists, is raw, and is a `template`, `color`, `color_digest` or `ocr` target with a rectangle region; a template's `color_check` is `template_relative`; an identity or `ocr_integer` feature reads OCR, and an icon identity reads its template pool instead. | `…/features/j`, `…/features/j/target`, `…/features/j/identity` |
 | The region a feature reads at an offset, for each of its samples, lies inside the `instance_rect`, or inside each slot's `rect`; a slot's `targets` never map such a feature. | `…/features/j/offset`, `…/slots/k`, `…/slots/k/targets/<name>` |
 | `rect` and `click` have a non-negative origin and a positive size and lie entirely inside `coordinate_space`. | `…/slots/k/rect`, `…/slots/k/click` |
@@ -374,6 +389,12 @@ resource readings use as well ([resource-readings.md](resource-readings.md)); ev
 is widened from `f32` to `f64` before it is multiplied. An OCR result without a confidence or an
 NN result without a selected score has no measure and no confidence: its `measure_milli` feature
 is absent and its `confidence` is `null`; no value is defaulted.
+
+Workflow #404 FS-2 (since 0.12.43): an `anchor_milli` feature of a `repeated_anchor` layout
+reads no target. It is an integer, `floor(score × 1000)` of the instance's own anchor match
+(the normalized score of the position and factor the enumeration took, widened to `f64`), and
+its `confidence` is the same value. Like every feature it is carried only by an actionable
+instance. A policy reads it as `integer`, in the domain 0..=1000.
 
 ## Select step
 
@@ -499,7 +520,7 @@ task. Each refusal names its file and the JSON pointer of the offending field:
 | The document is at most 512 KiB, decodes as a selection-policy document, has an unambiguous canonical form (no floats, no unsafe integers, no duplicate keys) and validates, in that order. | the document | the policy |
 | Each `gate_id` and `term_id` is a token (lowercase ASCII letters, digits, `_`, `.`, `:`, `-`), the form of the `rule_id` a selection reason carries (`InvalidValue`). | `/gates/<j>/gate_id`, `/scoring/<k>/term_id` | the policy |
 | `applies_to.candidate_layout_id` is the step's `layout_id`. | `/applies_to/candidate_layout_id` | the policy |
-| Each `fields[j]` names a feature of the layout and is `boolean` for a `passed` feature, `integer` for a `measure_milli` or `ocr_integer` feature. A layout feature the document does not read is allowed. | `/fields/<j>/name`, `/fields/<j>/value_type` | the policy |
+| Each `fields[j]` names a feature of the layout and is `boolean` for a `passed` feature, `integer` for a `measure_milli`, `ocr_integer` or (Workflow #404 FS-2) `anchor_milli` feature. A layout feature the document does not read is allowed. | `/fields/<j>/name`, `/fields/<j>/value_type` | the policy |
 | `selection.required_count` is `1`. | `/selection/required_count` | the policy |
 
 A select step whose policy declares more than one candidate is a multi select (Workflow #357,
@@ -531,6 +552,9 @@ extent on the axis:
 - the layout is `repeated_anchor` with an `instance_rect`, `identity_feature` names one of its
   identity features, its `unknown_identity` is `reject`, and its consensus samples one frame
   only;
+- Workflow #404 FS-1 (since 0.12.43): its anchor declares no `scales` (detail `scan
+  anchor=scaled`): a scan tracks its instances and their signatures at the declared offsets
+  from each match, unscaled; an anchor's `mask` is taken;
 - the policy's last tie-break key is `candidate_id lowest_first`, so that rows with the same
   business ID never end `ambiguous` and the first one seen wins;
 - `signature` has 1–8 columns and 1–8 rows, and its rectangle lies inside `instance_rect`;
@@ -548,8 +572,9 @@ extent on the axis:
 - `start.check`, `end.check` and every page check of a page flip are targets of the pack.
 
 For a step that declares `scan` or `on_empty`, every field the policy reads has a domain the
-layout gives it: a `passed` feature boolean, a `measure_milli` feature 0..=1000, an
-`ocr_integer` feature its declared range, and the step's identity feature its entries. An
+layout gives it: a `passed` feature boolean, a `measure_milli` or (Workflow #404 FS-2)
+`anchor_milli` feature 0..=1000, an `ocr_integer` feature its declared range, and the step's
+identity feature its entries. An
 identity field other than the step's identity feature is refused, because one hypothesis fixes
 one identity.
 
@@ -647,7 +672,8 @@ One attempt of a single-frame select runs, before any input:
    context is the instance alias with the game and server of the instance's configured policy
    identity, or of the package's `control.json` when none is configured.
 3. The policy is evaluated over P1's actionable candidates, each feature a field of its name (a
-   `passed` feature a boolean, a `measure_milli` or `ocr_integer` feature an integer), with the
+   `passed` feature a boolean, a `measure_milli`, `ocr_integer` or `anchor_milli` feature an
+   integer), with the
    snapshot's facts at that instant.
 4. When the outcome is `selected` (one candidate), and, for a step that declares `on_empty`, no
    unknown instance blocks it (rules 2 and 3, section Select over a scan), a confirmation frame

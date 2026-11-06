@@ -694,11 +694,22 @@ schema `0.9` unique matches): the three sums stay exact integers, summed directl
 cross-correlations rounded to integers. Its search keeps the five-second limit; past it,
 evaluation fails with `target_match_search_incomplete` at the stage `target_match_exact`
 (`target_match_unique` when the target also declares `unique`). The mask holds wherever the
-target is evaluated (page rules, guards, clicks, OCR anchors, checks, `target_consensus` and
-candidate layout slots) and combines with `color_check` and `unique`. A `repeated_anchor` anchor
-and a candidate layout feature read at an offset are searched over every template pixel, so a
-masked template is refused in either role when the evaluator is built; template-region batch
-evaluation refuses a masked target too.
+target is evaluated (page rules, guards, clicks, OCR anchors, checks, `target_consensus`,
+candidate layout slots and, since 0.12.43 (Workflow #404 FS-1), a `repeated_anchor` layout's
+anchor, whose enumeration scores the masked pixels at every position on the exact score map) and
+combines with `color_check` and `unique`. A candidate layout feature read at an offset is
+searched over every template pixel, so a masked template is refused in that role when the
+evaluator is built; template-region batch evaluation refuses a masked target too.
+
+For resource authors: a page rule scores every position of its template exactly, whatever the
+search's size, only when the template declares `mask`, `unique` or `scales`, a
+`template_relative` `color_check` or `luma_floor`; without them a search above the coarse-search
+size (50,000,000 multiply-adds, any template of 8×8 pixels or more over a whole 1280×720 frame)
+takes the downsampled pyramid, which may miss a match that a
+`repeated_anchor` layout's exact enumeration of the same template finds, so a whole-frame
+marker that a page rule and a layout share declares `mask` (or `scales`, or a
+`template_relative` `color_check`; a layout's anchor may declare neither `unique` nor
+`luma_floor`).
 
 Task schema `0.9` `verify_templates[]` entries take `color_check` as `anchors[]` entries do:
 absolute or `template_relative`, with an optional `max_distance` (`template-relative-color.md`).
@@ -806,9 +817,14 @@ target row carry the factor as the template's `scale_milli`; a target without `s
 none.
 
 A target that declares `scales` is refused when the evaluator is built as a `target_consensus`
-target (each frame would take its own factor), as a `repeated_anchor` anchor or as a candidate
-layout feature read at an offset (both search the template as declared), and template-region
-batch evaluation refuses it too. Where a package is admitted with its bytes, every resampled
+target (each frame would take its own factor) or as a candidate layout feature read at an
+offset (it searches the template as declared), and template-region batch evaluation refuses it
+too. Since 0.12.43 (Workflow #404 FS-1) a `repeated_anchor` layout's anchor may declare it: the
+enumeration searches every factor, merges their matches and suppresses overlaps across them,
+and each instance's `instance_rect`, `click` and feature offsets scale with the factor its
+match hit, as the lengths above do ([selection-graph.md](selection-graph.md), section Pack
+schema `0.7`); a select over a scan refuses such an anchor. Where a package is admitted with
+its bytes, every resampled
 template keeps at least 4 pixels a side (`TEMPLATE_SCALED_MIN_SIDE`, a contract constant) and
 fits its region (its rectangle, or the coordinate space for `full_frame`), with
 `resource_declaration_invalid` (`InvalidValue`) at `/targets/<i>/scales/factors_milli/<k>`

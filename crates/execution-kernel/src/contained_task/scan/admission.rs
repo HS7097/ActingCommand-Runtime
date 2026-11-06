@@ -8,7 +8,7 @@
 use super::{AxisRect, DeclaredAdvance, DeclaredRect, DeclaredReposition, Moves, ScanDeclaration};
 use actingcommand_contract::{CandidateLayoutKind, CandidateRect, ScanAxis};
 use actingcommand_recognition_pack::{
-    CandidateLayout, RecognitionEvaluator, UnknownIdentityHandling,
+    CandidateLayout, RecognitionEvaluator, RecognitionTarget, UnknownIdentityHandling,
 };
 use actingcommand_selection_policy::{SelectionPolicy, SortDirection, TieBreakKey};
 
@@ -56,6 +56,16 @@ impl ScanDeclaration {
         let refused = |detail: &str| Some(format!("scan {detail}"));
         if layout.kind != CandidateLayoutKind::RepeatedAnchor {
             return refused("layout=not_repeated_anchor");
+        }
+        // Workflow #404 FS-1: a scan tracks its instances and their signatures at the declared
+        // offsets from each match, unscaled, so its anchor may not declare `scales` (a mask
+        // changes no geometry and is taken).
+        if evaluator.pack().targets.iter().any(|target| {
+            matches!(target, RecognitionTarget::Template(template)
+                if Some(template.id.as_str()) == layout.anchor.as_deref()
+                    && template.scales.is_some())
+        }) {
+            return refused("anchor=scaled");
         }
         if !layout
             .features

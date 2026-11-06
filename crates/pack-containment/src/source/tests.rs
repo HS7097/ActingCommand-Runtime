@@ -625,6 +625,152 @@ fn candidate_layout_gate_refuses_each_repeated_anchor_rule_at_its_pointer() {
     }
 }
 
+/// Workflow #404 FS-2: any template asset; the recognition pack's rules read none.
+#[derive(Debug)]
+struct AnyAsset;
+
+impl actingcommand_recognition_pack::AssetResolver for AnyAsset {
+    fn read_asset(
+        &self,
+        _path: &str,
+    ) -> actingcommand_recognition_pack::RecognitionPackResult<Vec<u8>> {
+        Ok(Vec::new())
+    }
+}
+
+/// Workflow #404 FS-2: `anchor_milli`, the score of a `repeated_anchor` instance's own anchor
+/// match, is a feature of a `repeated_anchor` layout that reads no target; the declaration gate,
+/// the derivation and the derived recognition pack refuse it on fixed slots and with a target.
+#[test]
+fn anchor_milli_refused_on_fixed_slots_and_with_a_target() {
+    let with_feature = |feature: Value| {
+        let mut layout = anchored_layout();
+        layout["features"] = json!([feature]);
+        layout
+    };
+    let fixed_slots = json!({
+        "id": "layout/slots", "page_id": "list_page", "kind": "fixed_slots",
+        "features": [{"name": "match", "value": "anchor_milli"}],
+        "slots": [{"rect": {"x": 0, "y": 0, "width": 8, "height": 8},
+                   "click": {"x": 0, "y": 0, "width": 8, "height": 8},
+                   "targets": {}}]
+    });
+    let accepted = with_feature(json!({"name": "match", "value": "anchor_milli"}));
+    let targeted = with_feature(json!({"name": "match", "value": "anchor_milli",
+                                       "target": "state/row_open", "offset": {"x": 0, "y": 0}}));
+    let offset_only =
+        with_feature(json!({"name": "match", "value": "anchor_milli", "offset": {"x": 0, "y": 0}}));
+
+    // The declaration gate.
+    declaration_file_requests(&[anchored_bundle(accepted.clone())])
+        .expect("an anchor_milli feature of a repeated_anchor layout passes the gate");
+    for (layout, pointer, reason) in [
+        (
+            fixed_slots.clone(),
+            "/candidate_layouts/0/features/0/value",
+            ResourceDeclarationReason::InvalidValue,
+        ),
+        (
+            targeted.clone(),
+            "/candidate_layouts/0/features/0/target",
+            ResourceDeclarationReason::UnknownField,
+        ),
+        (
+            offset_only,
+            "/candidate_layouts/0/features/0/offset",
+            ResourceDeclarationReason::UnknownField,
+        ),
+    ] {
+        let error = declaration_file_requests(&[anchored_bundle(layout)]).expect_err(pointer);
+        assert_eq!(error.code, "resource_declaration_invalid");
+        let issue = declaration_issue(error);
+        assert_eq!((issue.field_path.as_str(), issue.reason), (pointer, reason));
+    }
+
+    // The derivation keeps the feature as {name, value}, and refuses it on fixed slots and with a
+    // target.
+    let targets = HashMap::from([
+        (
+            "ui/row_marker".to_string(),
+            json!({"type": "template", "id": "ui/row_marker"}),
+        ),
+        (
+            "state/row_open".to_string(),
+            json!({"type": "color", "id": "state/row_open"}),
+        ),
+    ]);
+    let derived = derive_candidate_layouts(&targets, &[anchored_bundle(accepted)], "fixture")
+        .expect("derived layout");
+    assert_eq!(
+        derived[0]["features"],
+        json!([{"name": "match", "value": "anchor_milli"}])
+    );
+    for (layout, pointer) in [
+        (fixed_slots, "/candidate_layouts/0/features/0/value"),
+        (targeted, "/candidate_layouts/0/features/0/target"),
+    ] {
+        let error = derive_candidate_layouts(&targets, &[anchored_bundle(layout)], "fixture")
+            .expect_err(pointer);
+        assert_eq!(declaration_issue(error).field_path, pointer);
+    }
+
+    // The derived recognition pack.
+    let pack = |layout: Value| {
+        json!({
+            "schema_version": "0.7",
+            "coordinate_space": {"width": 96, "height": 72},
+            "targets": [
+                {"type": "template", "id": "ui/row_marker", "template_path": "assets/marker.png",
+                 "region": "full_frame", "threshold": 0.95},
+                {"type": "color", "id": "state/row_open",
+                 "region": {"x": 0, "y": 0, "width": 4, "height": 4}, "expected": [0, 200, 0]}
+            ],
+            "candidate_layouts": [layout]
+        })
+    };
+    let evaluator = |layout: Value| {
+        actingcommand_recognition_pack::RecognitionEvaluator::with_asset_resolver(
+            actingcommand_recognition_pack::load_pack_from_json_str(&pack(layout).to_string())
+                .expect("the pack loads"),
+            std::sync::Arc::new(AnyAsset),
+        )
+    };
+    evaluator(json!({
+        "id": "layout/rows", "page_id": "list_page", "kind": "repeated_anchor",
+        "anchor": "ui/row_marker", "max_instances": 4, "order": "top_to_bottom",
+        "instance_rect": {"x": -2, "y": -2, "width": 40, "height": 12},
+        "click": {"x": 10, "y": 0, "width": 20, "height": 6},
+        "features": [{"name": "match", "value": "anchor_milli"}]
+    }))
+    .expect("an anchor_milli feature of a repeated_anchor layout is admitted");
+    for (layout, message) in [
+        (
+            json!({
+                "id": "layout/slots", "page_id": "list_page", "kind": "fixed_slots",
+                "features": [{"name": "match", "value": "anchor_milli"}],
+                "slots": [{"rect": {"x": 0, "y": 0, "width": 8, "height": 8},
+                           "click": {"x": 0, "y": 0, "width": 8, "height": 8},
+                           "targets": {}}]
+            }),
+            "/candidate_layouts/0/features/0/value: anchor_milli is the score of a repeated_anchor instance's anchor match",
+        ),
+        (
+            json!({
+                "id": "layout/rows", "page_id": "list_page", "kind": "repeated_anchor",
+                "anchor": "ui/row_marker", "max_instances": 4, "order": "top_to_bottom",
+                "instance_rect": {"x": -2, "y": -2, "width": 40, "height": 12},
+                "click": {"x": 10, "y": 0, "width": 20, "height": 6},
+                "features": [{"name": "match", "value": "anchor_milli",
+                              "target": "state/row_open", "offset": {"x": 0, "y": 0}}]
+            }),
+            "/candidate_layouts/0/features/0: an anchor_milli feature reads no target and takes no offset",
+        ),
+    ] {
+        let error = evaluator(layout).expect_err(message);
+        assert!(error.message().contains(message), "{}", error.message());
+    }
+}
+
 // Workflow #390 lpbox (exec key 76; Alice 10-09: pack taps use click boxes): a source long press
 // declares its click box with both `width` and `height`, or its point as the contract already
 // allowed; the navigation projection and a guard synthesized from the click keep the box, and

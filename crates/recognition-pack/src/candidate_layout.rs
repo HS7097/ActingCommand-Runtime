@@ -8,9 +8,11 @@
 //! rectangle an input may be sampled in, and which existing recognition target each declared
 //! feature reads in that slot. A `repeated_anchor` layout declares one anchor template instead:
 //! every accepted match of the anchor on the frame is an instance, whose rectangle, click and
-//! feature regions lie at declared offsets from the match. An instance is actionable, and its
-//! features are evaluated, only when its rectangle and its click lie inside the layout's
-//! readable band, the whole frame by default. A feature of either kind may read one target at
+//! feature regions lie at declared offsets from the match (Workflow #404 FS-1: scaled by the
+//! factor the match's template was resampled by; FS-2: an `anchor_milli` feature carries the
+//! match's own score). An instance is actionable, and its features are evaluated, only when its
+//! rectangle and its click lie inside the layout's readable band, the whole frame by default. A
+//! feature of either kind may read one target at
 //! an `offset` from its instance's origin. [`SceneEvaluation::project_candidates`] evaluates
 //! those targets on one scene and returns the contract projection with its sealed hash; the
 //! in-task select step, the online observation and the offline Lab share this one entry, so the
@@ -25,10 +27,10 @@ use crate::{
     OcrSharedReadEvidence, OcrTarget, PackCoordinateSpace, PackPoint, PackRect, PackRegion,
     RecognitionEvaluator, RecognitionPack, RecognitionPackError, RecognitionPackErrorCode,
     RecognitionPackResult, RecognitionTarget, SCHEMA_0_7, SceneEvaluation, TargetEvaluation,
-    TargetKind, TemplateEvaluation, TemplateRelativeRegion, UnsupportedRecognitionTarget,
-    ValueTestPart, ocr_verdict, primitive_error, provider_error, provider_region, rect_is_within,
-    reject_unknown_fields, resolve_template_relative_region, target_region, template_message,
-    validate_ocr_result, validate_rect_shape, validate_region_within_coordinate_space,
+    TargetKind, TemplateEvaluation, UnsupportedRecognitionTarget, ValueTestPart, ocr_verdict,
+    primitive_error, provider_error, provider_region, rect_is_within, reject_unknown_fields,
+    target_region, template_message, validate_ocr_result, validate_rect_shape,
+    validate_region_within_coordinate_space,
 };
 use actingcommand_contract::ResourceDeclarationReason;
 use actingcommand_contract::candidate_projection::{
@@ -281,10 +283,11 @@ pub enum CandidateOrder {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TargetSearch {
     /// Every accepted match after overlap suppression, in acceptance order: score descending,
-    /// then `y`, then `x`.
+    /// then the earlier declared factor, then `y`, then `x`.
     Complete(Vec<TemplateEvaluation>),
-    /// The search reached its time limit; nothing partial is returned. `found` counts the
-    /// positions that had passed the threshold and the relative color check by then.
+    /// The search reached its time limit, while it scored, ordered or suppressed; nothing
+    /// partial is returned. `found` counts the positions that had passed the threshold and the
+    /// relative color check by then.
     Incomplete { found: usize, timeout_ms: u64 },
 }
 
@@ -378,6 +381,10 @@ pub enum CandidateFeatureValue {
     MeasureMilli,
     Identity,
     OcrInteger,
+    /// Workflow #404 FS-2: a `repeated_anchor` instance's own anchor match score in integer
+    /// milli, rounded down; it reads no target and takes no offset. `package` revision 7
+    /// (`contracts/component-interfaces.md`).
+    AnchorMilli,
 }
 
 /// One slot of a `fixed_slots` layout.
@@ -689,6 +696,8 @@ impl SceneEvaluation<'_> {
                         y: slot.rect.y,
                     },
                     slot: Some(slot),
+                    scale_milli: actingcommand_recognition::resample::SCALE_IDENTITY_MILLI,
+                    anchor_milli: None,
                 })
                 .collect::<Vec<_>>(),
             CandidateLayoutKind::RepeatedAnchor => {
@@ -728,7 +737,8 @@ impl SceneEvaluation<'_> {
             // An instance that is not actionable carries no features.
             for feature in layout.features.iter().filter(|_| instance.actionable) {
                 let samples = layout.feature_samples(feature);
-                let placement = layout.feature_placement(feature, instance.origin)?;
+                let placement =
+                    layout.feature_placement(feature, instance.origin, instance.scale_milli)?;
                 let mut observed = Vec::with_capacity(samples.len());
                 for sample in &samples {
                     let mut evaluate = |target_id: &str,
@@ -829,11 +839,33 @@ impl SceneEvaluation<'_> {
                         evaluations.insert(key, result.clone());
                         Ok(result)
                     };
-                    let (value, input) = if let Some(identity) = &feature.identity
+                    let (value, input) = if feature.value == CandidateFeatureValue::AnchorMilli {
+                        // Workflow #404 FS-2: the instance's own anchor match score, which is
+                        // its confidence too; no target is read.
+                        let milli = instance.anchor_milli.ok_or_else(|| {
+                            CandidateProjectionFailure::new(
+                                CANDIDATE_FEATURE_FAILED,
+                                "features",
+                                format!(
+                                    "layout_id={} feature={} has no anchor match",
+                                    layout.id, feature.name
+                                ),
+                            )
+                        })?;
+                        let value = CandidateFeature::Integer {
+                            value: milli,
+                            confidence: Some(milli),
+                        };
+                        (
+                            Some(value.clone()),
+                            CandidateRecognitionInput::Scalar { value: Some(value) },
+                        )
+                    } else if let Some(identity) = &feature.identity
                         && matches!(
                             identity.recognition,
                             CandidateIdentityRecognition::IconTemplates { .. }
-                        ) {
+                        )
+                    {
                         let templates = instance
                             .slot
                             .and_then(|slot| slot.identity_templates.get(&feature.name))
@@ -975,10 +1007,15 @@ impl SceneEvaluation<'_> {
     ///
     /// The target's region is the search region, and its threshold and a `template_relative`
     /// color check apply to every position; a color check at a fixed rectangle cannot follow
-    /// the matches and is refused. Positions are scored exactly, never through the downsampled
-    /// pyramid, and overlapping positions are suppressed by `suppress_iou_milli`
-    /// ([`actingcommand_recognition::Scene::match_template_all`]). A search that runs out of its
-    /// time limit is [`TargetSearch::Incomplete`], never a partial list.
+    /// the matches and is refused. Workflow #404 FS-1: every position is scored on the exact
+    /// score map, never through the downsampled pyramid, with the target's `mask` (only the
+    /// pixels it selects) and at each of its `scales` (one map per factor); the matches of every
+    /// factor are merged, ordered and suppressed together by `suppress_iou_milli`, and the
+    /// relative color region scales with the factor a position matched at
+    /// ([`actingcommand_recognition::Scene::match_template_all_scaled`]). Scoring, ordering and
+    /// suppression count against one 5 s limit read on this context's anchor search clock; a
+    /// search that runs out of it is [`TargetSearch::Incomplete`], never a partial list. A match
+    /// of a target that declares `scales` carries the factor as its `scale_milli`.
     pub fn evaluate_target_all(
         &self,
         target_id: &str,
@@ -1007,31 +1044,10 @@ impl SceneEvaluation<'_> {
                 target.id
             )));
         }
-        // Workflow #396 REC-7: this search scores every template pixel, so it never takes a
-        // masked template (admission refuses one as an anchor).
-        if target.mask.is_some() {
-            return Err(RecognitionPackError::fatal(format!(
-                "instance anchor '{}' declares mask, which a repeated_anchor search does not score",
-                target.id
-            )));
-        }
-        // Workflow #396 REC-5: nor does it resample a template (admission refuses one as an
-        // anchor).
-        if target.scales.is_some() {
-            return Err(RecognitionPackError::fatal(format!(
-                "instance anchor '{}' declares scales, which a repeated_anchor search does not search",
-                target.id
-            )));
-        }
         let relative = match &target.color_check {
-            None => None,
+            None => false,
             Some(check) => match &check.region {
-                PackRegion::TemplateRelative(TemplateRelativeRegion::TemplateRelative {
-                    offset,
-                    width,
-                    height,
-                    ..
-                }) => Some((check, *offset, *width, *height)),
+                PackRegion::TemplateRelative(_) => true,
                 _ => {
                     return Err(RecognitionPackError::fatal(format!(
                         "instance anchor '{}' declares a color_check that is not template_relative",
@@ -1056,57 +1072,50 @@ impl SceneEvaluation<'_> {
             .threshold
             .unwrap_or(evaluator.pack.defaults.template_threshold);
         let scene = self.scene;
+        // Workflow #404 FS-1: the anchor's mask and factors, as every exact search reads them.
+        let mask = crate::template_mask::scored_mask(&evaluator.pack.schema_version, target);
+        let factors = crate::template_scales::searched_factors(target);
         let search = scene
-            .match_template_all_with_clock(
+            .match_template_all_scaled(
                 &template_png,
                 region,
                 evaluator.default_match_metric(),
+                mask,
+                &factors,
                 threshold,
                 suppress_iou_milli,
                 |candidate| {
-                    let Some((check, offset, width, height)) = relative else {
+                    if !relative {
                         return Ok(true);
-                    };
-                    match resolve_template_relative_region(
-                        scene,
-                        PackPoint {
-                            x: candidate.x,
-                            y: candidate.y,
-                        },
-                        offset,
-                        width,
-                        height,
-                    ) {
-                        // Workflow #411 B3: any declared color qualifies the position.
-                        Ok(region) => {
-                            let color = evaluator.measure_color(
-                                scene,
-                                region,
-                                check.expected,
-                                check.alternatives.as_deref(),
-                                check.max_distance,
-                            )?;
-                            Ok(color.distance <= color.max_distance)
-                        }
-                        Err(_) => Ok(false),
                     }
+                    // Workflow #411 B3: any declared color qualifies the position; REC-5: the
+                    // color region scales with the factor; an unresolved region does not
+                    // qualify it.
+                    let (color, _) = evaluator.relative_color_at(
+                        scene,
+                        target,
+                        candidate.matched,
+                        candidate.scale_milli,
+                    )?;
+                    Ok(color.is_some_and(|color| color.distance <= color.max_distance))
                 },
-                self.search_clock,
+                &mut self.spectra.borrow_mut(),
+                &actingcommand_recognition::SearchClock::new(self.search_clock),
             )
             .map_err(|err| primitive_error(&target.id, err))?;
         Ok(match search {
             actingcommand_recognition::TemplateSearch::Complete(matches) => TargetSearch::Complete(
                 matches
                     .into_iter()
-                    .map(|matched| TemplateEvaluation {
-                        x: matched.x,
-                        y: matched.y,
-                        width: matched.width,
-                        height: matched.height,
-                        raw_score: matched.raw_score,
-                        score: matched.score,
+                    .map(|found| TemplateEvaluation {
+                        x: found.matched.x,
+                        y: found.matched.y,
+                        width: found.matched.width,
+                        height: found.matched.height,
+                        raw_score: found.matched.raw_score,
+                        score: found.matched.score,
                         threshold,
-                        scale_milli: None,
+                        scale_milli: target.scales.as_ref().map(|_| found.scale_milli),
                         luma: None,
                     })
                     .collect(),
@@ -1180,10 +1189,16 @@ impl SceneEvaluation<'_> {
                     x: matched.x,
                     y: matched.y,
                 };
-                let (Some(rect), Some(click)) = (
-                    offset_rect(origin, instance_rect),
-                    offset_rect(origin, click),
-                ) else {
+                // Workflow #404 FS-1: the declared rectangles scale with the factor the anchor
+                // matched at (REC-5's rounding).
+                let scale_milli = matched
+                    .scale_milli
+                    .unwrap_or(actingcommand_recognition::resample::SCALE_IDENTITY_MILLI);
+                let placed = |declared: PackRect| {
+                    crate::template_scales::scaled_rect(declared, scale_milli)
+                        .and_then(|scaled| offset_rect(origin, scaled))
+                };
+                let (Some(rect), Some(click)) = (placed(instance_rect), placed(click)) else {
                     return Err(CandidateProjectionFailure::new(
                         INVALID_CANDIDATE_PROJECTION,
                         "rect",
@@ -1196,6 +1211,9 @@ impl SceneEvaluation<'_> {
                     actionable: rect_is_within(rect, band) && rect_is_within(click, band),
                     origin,
                     slot: None,
+                    scale_milli,
+                    // Workflow #404 FS-2: the match's own score, rounded down.
+                    anchor_milli: Some(floor_milli(anchor, matched.score)?),
                 })
             })
             .collect()
@@ -1518,13 +1536,17 @@ impl SceneEvaluation<'_> {
 }
 
 /// One instance of a projection: its rectangles, whether it is actionable, the origin its
-/// offset features are read from, and its slot (`fixed_slots` only).
+/// offset features are read from, and its slot (`fixed_slots` only). Workflow #404: a
+/// `repeated_anchor` instance also has the factor its anchor matched at, which scales its
+/// feature offsets (FS-1), and its anchor match score in milli (FS-2).
 struct LayoutInstance<'l> {
     rect: CandidateRect,
     click: CandidateRect,
     actionable: bool,
     origin: PackPoint,
     slot: Option<&'l CandidateSlot>,
+    scale_milli: u32,
+    anchor_milli: Option<i64>,
 }
 
 /// `rect`, relative to `origin`, in frame coordinates; `None` when a coordinate overflows.
@@ -1648,20 +1670,21 @@ impl CandidateLayout {
     }
 
     /// Where `feature` reads its own target for an instance at `origin`: `origin` plus the
-    /// feature's offset; `None` for a feature without one.
+    /// feature's offset, scaled (Workflow #404 FS-1) by the factor `scale_milli` the instance's
+    /// anchor matched at; `None` for a feature without one.
     fn feature_placement(
         &self,
         feature: &CandidateFeatureDeclaration,
         origin: PackPoint,
+        scale_milli: u32,
     ) -> Result<Option<PackPoint>, CandidateProjectionFailure> {
         let (Some(_), Some(offset)) = (&feature.target, feature.offset) else {
             return Ok(None);
         };
-        match origin
-            .x
-            .checked_add(offset.x)
-            .zip(origin.y.checked_add(offset.y))
-        {
+        let scaled = actingcommand_recognition::resample::scale_signed(offset.x, scale_milli).zip(
+            actingcommand_recognition::resample::scale_signed(offset.y, scale_milli),
+        );
+        match scaled.and_then(|(dx, dy)| origin.x.checked_add(dx).zip(origin.y.checked_add(dy))) {
             Some((x, y)) => Ok(Some(PackPoint { x, y })),
             None => Err(CandidateProjectionFailure::new(
                 INVALID_CANDIDATE_PROJECTION,
@@ -1966,6 +1989,13 @@ fn feature_value(
                 },
             )
         }
+        // Workflow #404 FS-2: taken from the instance's anchor match, never from a target.
+        CandidateFeatureValue::AnchorMilli => {
+            return Err(CandidateProjectionFailure::unmeasurable(
+                evaluation,
+                "is a target, which an anchor_milli feature does not read",
+            ));
+        }
     })
 }
 
@@ -2147,14 +2177,20 @@ pub(crate) fn validate_candidate_layouts_wire(value: &Value) -> RecognitionPackR
                 if let Some(value) = feature.get("value")
                     && !matches!(
                         value.as_str(),
-                        Some("passed" | "measure_milli" | "identity" | "ocr_integer")
+                        Some(
+                            "passed"
+                                | "measure_milli"
+                                | "identity"
+                                | "ocr_integer"
+                                | "anchor_milli"
+                        )
                     )
                 {
                     return Err(declaration(
                         format!("{feature_pointer}/value"),
                         ResourceDeclarationReason::InvalidValue,
                         format!(
-                            "{feature_pointer}/value {value} is not passed, measure_milli, identity or ocr_integer"
+                            "{feature_pointer}/value {value} is not passed, measure_milli, identity, ocr_integer or anchor_milli"
                         ),
                     ));
                 }
@@ -2328,6 +2364,20 @@ pub(crate) fn validate_candidate_layouts(pack: &RecognitionPack, errors: &mut Ve
                 ));
             }
             let feature_pointer = format!("{pointer}/features/{feature_index}");
+            // Workflow #404 FS-2: the score of an instance's own anchor match, which only a
+            // `repeated_anchor` instance has; it reads no target.
+            if feature.value == CandidateFeatureValue::AnchorMilli {
+                if layout.kind != CandidateLayoutKind::RepeatedAnchor {
+                    errors.push(format!(
+                        "{feature_pointer}/value: anchor_milli is the score of a repeated_anchor instance's anchor match; a fixed_slots layout has no anchor"
+                    ));
+                }
+                if feature.target.is_some() || feature.offset.is_some() {
+                    errors.push(format!(
+                        "{feature_pointer}: an anchor_milli feature reads no target and takes no offset"
+                    ));
+                }
+            }
             match (&feature.target, feature.offset) {
                 (None, None) => {}
                 (Some(target_id), Some(_)) => validate_placed_feature(
@@ -2816,8 +2866,10 @@ fn validate_fixed_slots_fields(layout: &CandidateLayout, pointer: &str, errors: 
 /// A `repeated_anchor` layout: a static template anchor, 1..=64 instances, an order, a
 /// suppression of 0..=999 milli, non-empty instance and click rectangles, a readable band
 /// inside the coordinate space, no slots, features that each read a target at an offset whose
-/// regions lie inside the instance rectangle, and same-frame consensus only (a scan layout
-/// cannot capture further frames, Workflow #308 S0 section 1.8).
+/// regions lie inside the instance rectangle (Workflow #404 FS-2: an `anchor_milli` feature
+/// reads none), and same-frame consensus only (a scan layout cannot capture further frames,
+/// Workflow #308 S0 section 1.8). Workflow #404 FS-1: the anchor may declare `mask` and
+/// `scales`.
 fn validate_repeated_anchor(
     pack: &RecognitionPack,
     targets: &HashMap<&str, &RecognitionTarget>,
@@ -2906,7 +2958,10 @@ fn validate_repeated_anchor(
     }
     for (feature_index, feature) in layout.features.iter().enumerate() {
         let feature_pointer = format!("{pointer}/features/{feature_index}");
-        if feature.target.is_none() || feature.offset.is_none() {
+        // Workflow #404 FS-2: an `anchor_milli` feature reads its instance's anchor match.
+        if feature.value != CandidateFeatureValue::AnchorMilli
+            && (feature.target.is_none() || feature.offset.is_none())
+        {
             errors.push(format!(
                 "{feature_pointer}: a repeated_anchor feature reads a target at an offset"
             ));
@@ -3044,3 +3099,8 @@ mod shared_read_tests;
 #[cfg(test)]
 #[path = "gate_411_b2.rs"]
 mod gate_411_b2;
+
+// Workflow #404 FS-1, FS-2.
+#[cfg(test)]
+#[path = "anchor_search_tests.rs"]
+mod anchor_search_tests;

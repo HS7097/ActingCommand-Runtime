@@ -7395,6 +7395,92 @@ performed. Task runs are unchanged (their effect never read this path).
 **Rollback** (to 0.12.41). Nothing new persisted; 0.12.41 writes such a refusal `indeterminate`
 again, and reads this build's records as failures before input.
 
+### 1.282 Slice FS-1 (0.12.43): a `repeated_anchor` anchor enumerated on the exact score map, with its `mask` and `scales` (Workflow #404; Alice's request of 2026-11-06 12:1x on board #407 6675989893, which brings #404's full-image search into 0.12; design `rd-1031/perf-407/model-gpu0-404.md` §0 item 5, §2.1–§2.6 and §3 row FS-1; coordinator work order `rd-1031/perf-407/brief-fs12.md`)
+
+[selection-graph.md](selection-graph.md) (Pack schema `0.7`, Rules, Select over a scan),
+[candidate-projection.md](candidate-projection.md) (Generation, steps 3 and 4) and
+[resource-declarations.md](resource-declarations.md) (the anchor sentences of the template mask
+and multi-scale sections, and the sentence for resource authors) are the contract. 1.282 was the
+next free number on the base `b9b3cac5`.
+
+**Why.** The enumeration scored every window with the direct `f64` scorer, about 1 to 7 s for a
+48 to 96 px template over a whole 1280×720 frame (design §2.5), so a whole-frame anchor met the
+5 s limit; it refused an anchor that declared `mask` or `scales`; and its sort and suppression ran
+after its last clock reading.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| FS1-1 | `Scene::match_template_all_scaled`, `ScaledScoreMaps::matches_at_least`, `ScaledScoreMaps::suppress_overlaps`, `TemplateSearch<M = TemplateMatch>` (`crates/recognition`) | crate API | FS-1 | — | every position on the exact score map of each factor (the cheaper of the direct and the transform engine, the direct scorer's scores bit for bit); the matches of every factor merged; taken by score descending, the earlier declared factor, `y`, `x`; the existing greedy suppression over the resampled boxes; scoring, collecting, sorting and suppression all read one 5 s clock, the limit checked before and after the sort, before each match's suppression and after the last. `match_template_all_with_clock` is gone; `match_template_all` keeps its signature (no mask, factor 1000) |
+| FS1-2 | `SceneEvaluation::evaluate_target_all` | behaviour | FS-1 | — | reads the anchor's mask and factors as every exact search does; a `template_relative` color region scales with the factor (REC-5's `relative_color_at`); the frame's region transforms are shared with the frame's other exact searches; a match of a target that declares `scales` carries `scale_milli` |
+| FS1-3 | a `repeated_anchor` anchor that declares `mask` or `scales` | pack format, **`package` [3, 7]** | FS-1 | resource side | `since` 0.12.43; the refusals of REC-7 and REC-5 at `/candidate_layouts/<i>/anchor` and the two run-time refusals in `evaluate_target_all` are removed; admission (`admit_template_assets`) checks the anchor's mask and resampled sizes as any template's. `unique` and `luma_floor` stay refused for an anchor |
+| FS1-4 | an instance's `rect`, `click` and feature `offset`s | behaviour | FS-1 | — | scaled by the factor the match hit, `(|v| × f + 500) div 1000` with the sign of `v`, a width or height at least 1 (REC-5); unchanged at 1000; a feature's target keeps its own size |
+| FS1-5 | `candidate_search_incomplete`, its `count` | value meaning | FS-1 | — | the positions that had passed the threshold and the color check when the clock ran out: `0` while the maps are summed, every one when it runs out in the sort or the suppression |
+| FS1-6 | a select over a scan whose layout's anchor declares `scales` | refusal | FS-1 | admission | `contained_task_select_invalid`, detail `scan anchor=scaled`: a scan tracks its instances and signatures at unscaled offsets; a masked anchor is taken |
+| FS1-7 | the sentence for resource authors | contract sentence | FS-1 | — | a page rule scores every position exactly only with `mask`, `unique`, `scales`, a `template_relative` `color_check` or `luma_floor`; otherwise a search above the coarse-search size (50,000,000 multiply-adds) takes the pyramid, so a shared whole-frame marker declares `mask` (an anchor may not declare `unique`) |
+
+**Tests.** Exec row "#404 FS-1": `an_unmasked_unscaled_anchor_projects_byte_identical_to_the_direct_scorer`
+(the enumeration as it was, by the direct scorer, is the oracle inside the test; both dot engines),
+`a_full_frame_anchor_uses_the_transform_engine`, `masked_and_scaled_anchors_enumerate_on_the_exact_map`
+(the exact search of each copy alone is the oracle), `one_object_across_scales_is_one_instance` and
+`sorting_and_suppression_count_against_the_search_limit` (a counting clock past the limit at its
+last reading only). Adapted: `repeated_anchor_overflow_and_search_limit_fail_without_a_partial_set`
+(the clock past the limit at row 11 now fails while the score map's sums are taken, before any
+position: `count=0` where the per-row direct enumeration found 2) and `component_interfaces.rs`'
+`V0120` (`package` [3, 7]). The pinned candidate-set hash of
+`repeated_anchor_projects_every_instance_with_edge_and_band_actionability` is unchanged.
+
+**Interface.** `package` rises once for 0.12.43 to [3, 7] (§6), shared with §1.283; a pack
+without these declarations keeps its revision. `ledger` does not move: see §1.283.
+
+**What changes live.** An anchor without `mask` or `scales` gives the same matches, scores,
+order and projection bytes as before; a large region is summed by the transform engine, so a
+whole-frame anchor finishes inside its limit. A search past its limit names fewer found
+positions (above).
+
+**Rollback** (to 0.12.42). Nothing persisted changes. A pack whose anchor declares `mask` or
+`scales` is refused when 0.12.42 validates its recognition pack; a bundle that declares `package`
+[7, 7] is refused earlier by the `package` edge.
+
+### 1.283 Slice FS-2 (0.12.43): the candidate layout feature value `anchor_milli` (Workflow #404; the same request and design as §1.282, §2.2, §2.4 and §3 row FS-2; coordinator work order `rd-1031/perf-407/brief-fs12.md`)
+
+[selection-graph.md](selection-graph.md) (Source declaration, Pack schema `0.7`, Rules, Feature
+values, the policy and scan rules) and [candidate-projection.md](candidate-projection.md) (Shape,
+Generation step 4) are the contract.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| FS2-1 | feature `{"name", "value": "anchor_milli"}` | pack format, `package` 7 (shared with §1.282) | FS-2 | resource side | `since` 0.12.43; `repeated_anchor` only, with no `target`, `offset`, `identity`, `integer` or `consensus`. Refused: the declaration gate, `InvalidValue` at `…/features/<j>/value` in a `fixed_slots` layout and `UnknownField` at the `target` or `offset` it names; the parser, `InvalidValue` at the same pointers; the recognition pack's rules, at `…/features/<j>/value` and `…/features/<j>` |
+| FS2-2 | the projected feature | behaviour | FS-2 | the producer | `{"type": "integer", "value": floor(score × 1000), "confidence": the same}` of the instance's own anchor match; actionable instances only; no recognition evidence |
+| FS2-3 | a policy field over it | admission | FS-2 | — | `integer` (`check_policy`); a scan's bound domain 0..=1000 (`bound_inputs`) |
+| FS2-4 | `task.selection_evaluated` | **unchanged** | — | FS-2 | an integer feature is an existing shape |
+
+**Tests.** Exec row "#404 FS-2": `anchor_milli_carries_the_match_score_floor_milli` (each copy's
+exact search alone is the oracle) and `anchor_milli_refused_on_fixed_slots_and_with_a_target` (the
+gate, the parser and the recognition pack). No test adapted.
+
+**Interface.** `package` 7 as §1.282. `ledger` stays [3, 6]; the records and readers checked on
+`b9b3cac5`:
+
+- `task.selection_evaluated` embeds the step's projection (`TaskSelectionProjection` v1 and the
+  scan's v2, and the projections of a confirmation, `crates/actingcommand-contract/src/event/payload/task_selection.rs`):
+  `anchor_milli` reaches it as `CandidateFeature::Integer {value, confidence}`, and a scaled
+  instance's rectangles as `CandidateRect`, both existing shapes; the layout and its feature
+  declarations reach no record (the contract crate has no feature-value vocabulary), and the
+  anchor search writes no diagnostic row (a feature target's row keeps REC-5's optional
+  `scale_milli`, §1.50).
+- actinglab reads records and observations through the same contract crate; actingctl reads
+  events only; the MCP passes the payloads through (`ac_events`) and runs the install's actinglab
+  for Lab tools; the console of UI v0.12.9 pins Runtime v0.12.40 (`232b3ed8`), whose
+  `CandidateFeature` already has `Integer`, so it decodes the record. None refuses it.
+
+**Codes and keys.** None new: reused `candidate_search_incomplete`,
+`candidate_projection_budget_exceeded`, `candidate_feature_failed`, `invalid_candidate_projection`,
+`resource_declaration_invalid` and `contained_task_select_invalid`. No configuration key: no
+tunable appears.
+
+**Rollback** (to 0.12.42). A pack that declares `anchor_milli` is refused by 0.12.42's declaration
+gate and wire check; nothing persisted changes.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -7592,7 +7678,7 @@ K27 asserts the declaration. Every moving interface rises once for the release.
 | `actingd-config` | [5, 5] | §5: every key it lists as parsed (not `execution.defaults.*`, see there); the removals of PKG-S4 §1.55 P4-3 and NAV-3a §1.67 N3A-3, which no v0.12.0 reader accepts. Workflow #411 B15 R3 raises it to [5, 6] in v0.12.3 (§1.113 B15C-4): revision 6 adds the remedy keys, and a revision-5 file is still read. Workflow #406 T12 raises it to [5, 7] in #406's release (§1.136 T12-5): revision 7 adds the `touch` section, and revision-5 and revision-6 files are still read. #411 A38 raises it to [5, 8] (§1.148 A38-7): revision 8 adds `recovery_ladder.fence_recheck`, and revisions 5 to 7 are still read. #411 A51 adds `ledger_observer.read_budget_ms` and `close_timeout_ms` to the same revision 8 (§1.151 A51-4). #411 B37 (A35-S1) adds `recovery_ladder.busy` to the same revision 8 (§1.152 B37-5). The 0.12.x release after v0.12.9 raises it to [5, 9] (§1.168 A35-5): revision 9 adds that release's configuration keys (#411 A35: `recovery_ladder.busy.screen`), and revisions 5 to 8 are still read. P0-LO raises it to [5, 10] in v0.12.11: revision 10 adds `ledger_observer.open_timeout_ms` and `open_warn_ratio_milli`, and revisions 5 to 9 are still read. #411 A64, #411 A66, PERF-B1 and SCH-M ED-1 raise it to [5, 11] in v0.12.12: revision 11 adds `host_claims.run_end_grace_ms` (A64, ruling C-43), the `watchdog` section (`start_window_ms`, A66), the `execution` section (`capture.max_interval_ms`, `capture.backoff_enabled`, `capture.idle_ceiling_ms`; PERF-B1, §1.177 B1-2) and SCH-M ED-1's `scheduling.expected_runtime.*` (also per instance) and `scheduling.fact_refresh.expected_duration_ms` (§1.178 ED1-3), and revisions 5 to 10 are still read. IDLE-1 (Alice's ruling 41) raises it to [5, 12] in the release after v0.12.12: revision 12 adds the `idle` section (`action`, `min_gap_ms`, `close_app_wake_lead_ms`, `stop_emulator_wake_lead_ms`) and an instance entry's `idle` member; ROUT-L RL-1b (same release, §1.185 RL1B-1, RL1B-2) adds to revision 12 the `standard_packs` keys `check_interval_ms` and `cached_generations` and a `policy` section without `catalog` (composer mode), #422 LN-5 `ledger_observer.history_page_rows` and #422 LN-TUNE `ledger_observer.writer_reply_timeout_ms`; and revisions 5 to 11 are still read. #422 LN-8 raises it to [5, 13] in the release after v0.12.13: revision 13 adds `ledger_observer.open_verify_tail_records`, and revisions 5 to 12 are still read. #422 LN-WS raises it to [5, 14] in v0.12.15 (§1.194): revision 14 adds `ledger_observer.read_check_vm_steps` and `history_scan_rows`, and revisions 5 to 13 are still read Workflow #392 DA-4b-D (Alice's ruling 69) raises it to [5, 15] in v0.12.16 (§1.195 DA4bD-2): revision 15 adds the `display_safe_area` section (`directory`, `check_interval_ms`, `model`) and an instance entry's `display_safe_area` member (`model`), and revisions 5 to 14 are still read. #422 LN-7c Q raises it to [5, 16] in v0.12.17 (§1.196 LN7CQ-1 to LN7CQ-3): revision 16 adds the top-level `frame_retention_evidence_max_age_days` and `ledger_observer.frame_query_steps_per_second` and `frame_query_chunk_frames`, and revisions 5 to 15 are still read. Workflow #421 INST-1 raises it to [5, 17] in v0.12.18: revision 17 adds the `install` section (the tunables of `actingctl install`, [install-cli.md](install-cli.md)), and revisions 5 to 16 are still read |
 | `ledger` | [3, 3] | A3 §1.9, SH-1, SR-2a reads, D1 ladder records, L4a §1.19, AO-1 dump import §1.26, AO-2 index table §1.38, U-2's G14 members §1.46, PKG-S2 and PKG-S3 removals (§2), NAV-6 §1.12, #403 §1.13, D1b §1.14, A2-P §1.15, SH-2 §1.25, OCR-CONF §1.8 V1, M-357b DB-3s §1.66. Workflow #411 BT-LR raises it to [3, 4] once for the 0.12.x B train (§1.153, Alice 2026-10-20): revision 4 adds the train's shapes, and a revision-3 ledger is still read. Workflow 114-A raises it to [3, 5] in 0.12.36 (§1.236): revision 5 adds `policy.not_run_changed` with its payloads and the ledger's own copies, shapes only, and revision-3 and revision-4 ledgers are still read. #402 HS-2b raises it to [3, 6] in 0.12.39 (§1.274): revision 6 adds HS-2's closed action `device.backend_switched` with its payload and the vocabulary `nemu_app_index_source`, and revision-3 to revision-5 ledgers are still read; SS-9's own raise (§1.212) takes the next revision of a later release |
 | `runtime-client` | [2, 2] | §3 W1–W4, W8–W12, W14, W15, W17 (AO-4q, MCP-4, D1b, SH-1, A4, U-1, RD-3, MCP-2, P-m, D2-S5); A2-P's wire spellings §1.15; 九处-1's status member `emulator_state` §1.91 N1-1. `runtime-client` 3 comes with its own later release (§3 W5–W7 and W13: MCP-19, AO-4, AO-8 with MCP-9b's `startup` and `host` in W7, SR-6b's `not_running` in W13; re-check 10-14, §1.25). Runtime v0.12.x serves the read `ScheduleExplanation` (§3 W5) under revision 2: only actingctl and MCP of the same Runtime send it and every revision-2 shape is unchanged; revision 3 includes it. #411 A51's page limit `read_budget` (§1.151 A51-1) is folded into revision 2 as §1.91 N1-1 was. Workflow #429 R-0 raises it to [2, 3] in 0.12.30 (§1.213 R0-7, §3 W21): revision 3 is revision 2 plus the workbench's shapes (R-0c's `PackScheduleView` included, §1.216 R0C-3), W5 and `StartReport` (§1.216 R0C-4); W6, W7 and W13 are not built and take a later revision. Workflow #429 R-7a raises it to [2, 4] in 0.12.35 (§1.233, §3 W22): revision 4 is revision 3 plus the player hold's shapes; R-7b raises `min` to 4. Workflow #429 R-0b raises `min` to 3 in 0.12.36 (§1.238): it fills `RuntimeInstanceStatus.activity`, so [3, 4]. Workflow #407 PERF-READ raises `max` to 6 in 0.12.41 (§1.280, §3 W23; revision 5 is AGT-1b's, §1.246): revision 6 adds `PerformanceStatus`'s `memory` and `vision`, so [3, 6] |
-| `package` | [3, 3] | PKG-S1; PKG-S5 §1.64 P5-1 with M-357a TB12 §1.65; D2-S2 §1.28 DS6; D2-S3 §1.39 D34; READ-1 §1.54 RE1; the NAV-3a follow-up §1.73 N3F-1; REC-6 §1.29 R6-2; REC-8 §1.35 R8-1; OUT-1 §1.40 O1-1; EXEC-2 §1.41 EX1; OUT-2 §1.48 O2-1; REC-5 §1.50 R5-2; EXEC-1 §1.57 EC1. M-357a TB1 and TB6 (DB-1, DB-2) and M-357b MS6–MS10 (DB-3a1, DB-3a2, DB-3b) bump it once more in the 0.12.x release that carries them, once only when they share a release. Workflow #411 B15's `remedy` (a `task.json` mapping member) and `provides` (a `control.json` member) ride revision 4 (writer R1, §1.110 B15-10), raised once in their release by its first slice that needs it. Workflow #406 T3 raises it to [3, 5] in #406's release (§1.137 T3-7): revision 5 adds the click `single_touch_path_drag_v1`, and revision-3 and revision-4 packs are still read. Workflow #357 DB-2 raises it to [3, 6] in 0.12.37 for TB1 and TB6, DB-1 having left it as it was (§1.244); M-357b MS6–MS10 need no second raise if they share that release |
+| `package` | [3, 3] | PKG-S1; PKG-S5 §1.64 P5-1 with M-357a TB12 §1.65; D2-S2 §1.28 DS6; D2-S3 §1.39 D34; READ-1 §1.54 RE1; the NAV-3a follow-up §1.73 N3F-1; REC-6 §1.29 R6-2; REC-8 §1.35 R8-1; OUT-1 §1.40 O1-1; EXEC-2 §1.41 EX1; OUT-2 §1.48 O2-1; REC-5 §1.50 R5-2; EXEC-1 §1.57 EC1. M-357a TB1 and TB6 (DB-1, DB-2) and M-357b MS6–MS10 (DB-3a1, DB-3a2, DB-3b) bump it once more in the 0.12.x release that carries them, once only when they share a release. Workflow #411 B15's `remedy` (a `task.json` mapping member) and `provides` (a `control.json` member) ride revision 4 (writer R1, §1.110 B15-10), raised once in their release by its first slice that needs it. Workflow #406 T3 raises it to [3, 5] in #406's release (§1.137 T3-7): revision 5 adds the click `single_touch_path_drag_v1`, and revision-3 and revision-4 packs are still read. Workflow #357 DB-2 raises it to [3, 6] in 0.12.37 for TB1 and TB6, DB-1 having left it as it was (§1.244); M-357b MS6–MS10 need no second raise if they share that release. Workflow #404 FS-1 and FS-2 raise it to [3, 7] once in 0.12.43 (§1.282 FS1-3, §1.283 FS2-1): revision 7 adds a `repeated_anchor` anchor's `mask` and `scales` and the feature value `anchor_milli`, and revision-3 to revision-6 packs are still read; #404 FS-3 (`confirm: "track"`) needs no second raise if it shares that release |
 | `runtime-outcomes` | [1, 1] (new) | A5 §1.16, A6a §1.37 |
 | `install-control` | [0, 1] (unchanged) | model-378 §16 A-7 dropped revision 2 (`carried`) from v0.12.0; U-4 raises it to [0, 2] in 0.12.x |
 | `install-selection` | [1, 1] (unchanged) | — |

@@ -674,8 +674,9 @@ fn read_policy(bytes: &[u8]) -> Result<SelectionPolicy, String> {
 }
 
 /// The document applies to `layout`: it names the layout, reads only features the layout
-/// declares with their type (`passed` as boolean, `measure_milli` as integer), and requires
-/// exactly one candidate. A document that reads a record list through `keyed_fact` needs a
+/// declares with their type (`passed` as boolean, `measure_milli`, `ocr_integer` and, Workflow
+/// #404 FS-2, `anchor_milli` as integer), and requires exactly one candidate. A document that
+/// reads a record list through `keyed_fact` needs a
 /// layout that rejects unknown identities, so the evaluator never meets an unknown key. Workflow
 /// #357 DB-2 (K3): so does a document that declares a shared table, and each `table` read keys
 /// its rows by the layout's identity field. Admission reads the document only, never a table.
@@ -694,7 +695,11 @@ fn check_policy(policy: &SelectionPolicy, layout: &CandidateLayout) -> Result<()
         match (feature.map(|feature| feature.value), &field.value_type) {
             (Some(CandidateFeatureValue::Passed), ValueType::Boolean)
             | (
-                Some(CandidateFeatureValue::MeasureMilli | CandidateFeatureValue::OcrInteger),
+                Some(
+                    CandidateFeatureValue::MeasureMilli
+                    | CandidateFeatureValue::OcrInteger
+                    | CandidateFeatureValue::AnchorMilli,
+                ),
                 ValueType::Integer,
             ) => {}
             (Some(CandidateFeatureValue::Identity), ValueType::EnumString { allowed })
