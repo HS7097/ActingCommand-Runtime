@@ -1847,20 +1847,16 @@ fn failed_edges(answer: &super::Answer) -> Vec<(String, String)> {
 }
 
 // #402 HS-2b (register §1.274; contracts/component-interfaces.md, the `ledger` row of revision 6):
-// this build declares `ledger` [3, 6] (read from the declaration it carries in its manifests,
-// `host.rs`'s `OWN_DECLARATION`, the same file), the build before it [3, 5]. The update from the
+// a build that declares `ledger` [3, 6] (HS-2b's own range; Workflow #404 FS-3, register §1.284,
+// raised this build's to [3, 7], which K27 pins), the build before it [3, 5]. The update from the
 // [3, 5] build needs `--accept-ledger-one-way`: without it the plan is refused `interface_edge`
 // with the one failed row `one_way`, with it the update is planned and applied. The rollback from
-// this build to the [3, 5] build is refused `interface_edge`, flag or not, with the one failed row
-// `previous_max_in_next` (Rp.max 6 is not in R* [3, 5]); no ledger record is needed for it.
+// the [3, 6] build to the [3, 5] build is refused `interface_edge`, flag or not, with the one
+// failed row `previous_max_in_next` (Rp.max 6 is not in R* [3, 5]); no ledger record is needed for
+// it.
 #[test]
 fn hs2b_ledger_six_needs_the_one_way_flag_and_refuses_the_rollback_to_five() {
-    let own: Value = serde_json::from_str(include_str!(
-        "../../../../distribution/windows/component-interfaces.json"
-    ))
-    .expect("the build's declaration is JSON");
-    let six = own["speaks"]["ledger"].clone();
-    assert_eq!(six, json!([3, 6]), "this build's `ledger` range");
+    let six = json!([3, 6]);
     let temp = TempDir::new().expect("tempdir");
     let host = FakeHost::new(&temp.path().join("work"));
     let mut five = BuildSpec::new(C1);

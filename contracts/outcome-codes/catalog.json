@@ -734,6 +734,14 @@
       "type": "vocab:identity_state",
       "description": "How a confirmed or expected business identity differed from the chosen one (Workflow #308 SEL-L4b)."
     },
+    "confirm": {
+      "type": "vocab:selection_confirm",
+      "description": "How the failed select step confirms its choice on its confirmation frame, as its select.confirm declares it (Workflow #404 FS-3, since 0.12.43)."
+    },
+    "shift_px": {
+      "type": "integer",
+      "description": "The Chebyshev distance in pixels between the anchor match origins of the choice on the step's frame and of the choice on its confirmation frame (Workflow #404 FS-3, since 0.12.43)."
+    },
     "agent_channel": {
       "type": "name",
       "description": "A registered channel's name, at most 16 Unicode scalars with no control character (Workflow #432)."
@@ -3660,6 +3668,14 @@
         },
         "no_choice": {
           "description": "The choice_of step chose nothing in this run."
+        }
+      }
+    },
+    "selection_confirm": {
+      "description": "How a select step confirms its choice on its confirmation frame, as its select.confirm declares it (Workflow #404 FS-3).",
+      "tokens": {
+        "track": {
+          "description": "The confirmation frame is decided again and its choice stands when its anchor match origin lies within the step's track_px of the evaluated choice's."
         }
       }
     },

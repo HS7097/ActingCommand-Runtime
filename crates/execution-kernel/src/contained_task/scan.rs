@@ -42,8 +42,8 @@ pub(super) use online::RuntimeScanSource;
 pub(super) use online::run_scan;
 pub use online::{dry_run_scan, dry_run_scan_with_tables, replay_scan, replay_scan_with_tables};
 pub(super) use select::{
-    IdentityState, ScanSelectEnd, ScanSelection, bound_inputs, decision_blocking, record_bound,
-    result_blocked,
+    IdentityState, ScanSelectEnd, ScanSelection, SelectionKind, bound_inputs, decision_blocking,
+    record_bound, result_blocked,
 };
 
 use super::{ClickRect, ContainedTaskError, ContainedTaskRunError};

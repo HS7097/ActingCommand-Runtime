@@ -101,8 +101,13 @@ A select step confirms its choice on a second frame by this hash. Because it cov
 feature value, one that declares `confirm: "decision"` (Workflow #411 B4) compares the two
 frames' decision hashes instead, which cover the actionable candidates' IDs, click rectangles
 and verdict statuses, the selected IDs and the outcome key, and no feature value
-([selection-graph.md](selection-graph.md), section Confirming by the decision). The
-candidate-set hash itself is unchanged.
+([selection-graph.md](selection-graph.md), section Confirming by the decision). One over a
+`repeated_anchor` layout that declares `confirm: "track"` (Workflow #404 FS-3, since 0.12.43)
+decides the second frame again and finds its choice there by the distance between the two
+choices' anchor match origins, within the step's `track_px` ([selection-graph.md](selection-graph.md),
+section Confirming by tracking); the producer hands each instance's origin beside the
+projection, and no origin enters the projection or its hash. The candidate-set hash itself is
+unchanged.
 
 ## Budgets
 
@@ -233,6 +238,11 @@ scene and the admitted pack, nothing else; the layouts it reads are declared as 
    the recognition error, with its PP-OCR reports and region evidence, travels with the
    failure. No partial projection is returned.
 7. `CandidateProjection::new` checks the candidates, seals the hash and checks the byte budget.
+   Workflow #404 FS-3: `project_candidates_placed` (and `…_with_samples`) returns the same
+   projection with each candidate's origin, in candidate order: the anchor match's top-left
+   corner of a `repeated_anchor` instance, a slot rectangle's origin for `fixed_slots`. The
+   origins are for a select step's confirmation by tracking only; they are not part of the
+   projection.
 
 ## Consumers
 
