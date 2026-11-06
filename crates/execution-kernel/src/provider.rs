@@ -1089,15 +1089,21 @@ fn map_ocr_execution_evidence(
         ));
     }
     let provider_kind = |provider| match provider {
-        OnnxExecutionProvider::Cpu => OcrExecutionProviderKind::Cpu,
-        OnnxExecutionProvider::Cuda => OcrExecutionProviderKind::Cuda,
+        OnnxExecutionProvider::Cpu => Ok(OcrExecutionProviderKind::Cpu),
+        OnnxExecutionProvider::Cuda => Ok(OcrExecutionProviderKind::Cuda),
+        // Workflow #407 GPU-0a (experiment branch only): DirectML exists for the vision EP
+        // bench; the Runtime admits no DirectML execution evidence.
+        OnnxExecutionProvider::Directml => Err(VisionProviderError::new(
+            VisionProviderErrorCode::InvalidResponse,
+            "OCR execution attestation names DirectML, which the Runtime does not admit",
+        )),
     };
     Ok(OcrProviderExecutionEvidence {
         invocation_id: attestation.invocation_id.as_str().to_string(),
         session_id: attestation.session.session_id().as_str().to_string(),
         session_generation: attestation.session.generation(),
-        requested_provider: provider_kind(key.requested_backend()),
-        resolved_provider: provider_kind(attestation.resolved_execution_provider),
+        requested_provider: provider_kind(key.requested_backend())?,
+        resolved_provider: provider_kind(attestation.resolved_execution_provider)?,
         requested_cuda_ordinal: key.requested_cuda_device().map(|device| device.ordinal),
         requested_cuda_identity: key
             .requested_cuda_device()

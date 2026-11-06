@@ -74,6 +74,10 @@ pub const ALLOW_LIST: &[AllowEntry] = &[
         "tools/outcome-guard",
         "standing: the guard itself, not a result path",
     ),
+    member(
+        "tools/vision-ep-bench",
+        "Workflow #407 GPU-0a experiment, branch never merged",
+    ),
     // A2c bridges: channels of the ledger, runtime-state, runtime-database, artifact-store and
     // the two ledger-forensics members that stay strings until the slice the reason names
     // removes the entry (brief-a2bcd.md; brief-a2a.md A2a-9).

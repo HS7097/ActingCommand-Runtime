@@ -470,6 +470,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "actingcommand-vision-ep-bench"
+version = "0.1.0"
+dependencies = [
+ "actingcommand-host-metrics",
+ "actingcommand-ppocr-onnx-json-provider",
+ "actingcommand-recognition",
+ "actingcommand-vision-ffi",
+ "image",
+ "ort",
+ "serde",
+ "serde_json",
+ "windows-sys",
+]
+
+[[package]]
 name = "actingcommand-vision-ffi"
 version = "0.1.0"
 dependencies = [

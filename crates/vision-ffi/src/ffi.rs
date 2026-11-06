@@ -122,10 +122,16 @@ where
                     failed_path: path.clone(),
                     reason: reason.clone(),
                 };
-                return Err(runtime_closure_error(format!(
+                let failure = runtime_closure_error(format!(
                     "failed to establish native OCR runtime-library closure at {}: {reason}; the process closure is permanently poisoned",
                     path.display()
-                )));
+                ));
+                // Workflow #407 GPU-0c (experiment branch only): the Win32 code and system
+                // message of the failed load travel with the error.
+                return Err(match error.library_load() {
+                    Some(load) => failure.with_library_load(load.clone()),
+                    None => failure,
+                });
             }
         }
     }
@@ -146,17 +152,47 @@ fn runtime_closure_error(message: impl Into<String>) -> VisionFfiError {
     )
 }
 
+/// Workflow #407 GPU-0d (experiment branch only): checks every library ONNX Runtime loads
+/// itself, then establishes the closure of `declared_paths`. A library ONNX Runtime loads is
+/// never handed to `load`: one that is missing, has another pinned digest or is also declared
+/// for preloading fails by its path before anything is loaded, and the closure stays as it was.
+#[cfg(any(windows, test))]
+fn establish_checked_runtime_library_closure_with<H, F>(
+    closure: &Mutex<RuntimeLibraryClosureState<H>>,
+    declared_paths: &[PathBuf],
+    onnxruntime_loaded: &[crate::OnnxRuntimeLoadedLibrary],
+    load: F,
+) -> VisionFfiResult<()>
+where
+    F: FnMut(&Path) -> VisionFfiResult<H>,
+{
+    for library in onnxruntime_loaded {
+        if declared_paths.contains(&library.path) {
+            return Err(runtime_closure_error(format!(
+                "{} is loaded by ONNX Runtime itself and must not be in the native OCR runtime-library closure",
+                library.path.display()
+            )));
+        }
+        library.check()?;
+    }
+    establish_runtime_library_closure_with(closure, declared_paths, load)
+}
+
 /// Loads the declared ONNX Runtime library closure once per process, in order, with
 /// `LoadLibraryExW` and the released search flags; the handles stay loaded for the process
 /// lifetime. The same closure is idempotent; a different one, or any retry after a failed
-/// load, is refused until restart.
+/// load, is refused until restart. Workflow #407 GPU-0d (experiment branch only): the libraries
+/// ONNX Runtime loads itself (`onnxruntime_loaded`, the CUDA provider) are checked first and
+/// never loaded here; ONNX Runtime loads them when their execution provider is registered.
 #[cfg(windows)]
 pub fn establish_process_runtime_library_closure(
     declared_paths: &[PathBuf],
+    onnxruntime_loaded: &[crate::OnnxRuntimeLoadedLibrary],
 ) -> VisionFfiResult<()> {
-    establish_runtime_library_closure_with(
+    establish_checked_runtime_library_closure_with(
         &PROCESS_RUNTIME_LIBRARY_CLOSURE,
         declared_paths,
+        onnxruntime_loaded,
         load_process_runtime_library,
     )
 }
@@ -164,6 +200,7 @@ pub fn establish_process_runtime_library_closure(
 #[cfg(not(windows))]
 pub fn establish_process_runtime_library_closure(
     _declared_paths: &[std::path::PathBuf],
+    _onnxruntime_loaded: &[crate::OnnxRuntimeLoadedLibrary],
 ) -> VisionFfiResult<()> {
     Ok(())
 }
@@ -178,13 +215,136 @@ fn load_process_runtime_library(path: &Path) -> VisionFfiResult<Arc<Library>> {
         WindowsLibrary::load_with_flags(path, PROCESS_RUNTIME_LIBRARY_LOAD_FLAGS)
     }
     .map_err(|error| {
+        // Workflow #407 GPU-0c (experiment branch only): libloading's own text is only
+        // "LoadLibraryExW failed"; the Win32 code and its system message are its source.
+        let load = crate::NativeLibraryLoadFailure::from_loader_error(
+            path.display().to_string(),
+            Some(PROCESS_RUNTIME_LIBRARY_LOAD_FLAGS),
+            &error,
+        );
         runtime_closure_error(format!(
-            "failed to load native OCR runtime library {} with LoadLibraryExW flags 0x{:08x}: {error}",
+            "failed to load native OCR runtime library {} with LoadLibraryExW flags 0x{:08x}: {error}: {load}",
             path.display(),
             PROCESS_RUNTIME_LIBRARY_LOAD_FLAGS
         ))
+        .with_library_load(load)
     })?;
     Ok(Arc::new(library.into()))
+}
+
+/// Workflow #407 GPU-0e (experiment branch only): the folder [`add_process_dll_search_directory`]
+/// made part of the process's default DLL search; set once per process.
+#[cfg(windows)]
+static PROCESS_DLL_SEARCH_DIRECTORY: Mutex<Option<PathBuf>> = Mutex::new(None);
+/// `SetDefaultDllDirectories`: the application folder, the folders added with `AddDllDirectory`
+/// and System32, in that order.
+#[cfg(windows)]
+const LOAD_LIBRARY_SEARCH_DEFAULT_DIRS: u32 = 0x0000_1000;
+
+/// Workflow #407 GPU-0e (experiment branch only): makes `directory` part of the process's
+/// default DLL search, for the libraries the runtime's own libraries load later by bare name
+/// (cuDNN 9 loads its sub-libraries, `cudnn_graph64_9.dll` and the others, that way at first
+/// use). `AddDllDirectory` adds the folder;
+/// `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS)` makes every later load that
+/// passes no `LOAD_LIBRARY_SEARCH_*` flag search the application folder, the added folder and
+/// System32 (no longer the current folder, the Windows folder or `PATH`); `AddDllDirectory`
+/// alone reaches only loads that pass `LOAD_LIBRARY_SEARCH_USER_DIRS`.
+/// A load that passes its own `LOAD_LIBRARY_SEARCH_*` flags, as the runtime-library closure's
+/// do, is not affected, and the setting applies to this process only (`SetDllDirectoryW`, the
+/// other documented way, keeps one slot any component can replace and also changes the search
+/// of child processes). Once per process: the same folder again is a no-op; another folder
+/// fails until restart. A failed call fails with its Win32 error, and a folder added before
+/// `SetDefaultDllDirectories` failed is removed again.
+#[cfg(windows)]
+pub fn add_process_dll_search_directory(directory: &Path) -> VisionFfiResult<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn AddDllDirectory(new_directory: *const u16) -> *mut c_void;
+        fn RemoveDllDirectory(cookie: *mut c_void) -> i32;
+        fn SetDefaultDllDirectories(directory_flags: u32) -> i32;
+    }
+
+    if !directory.is_absolute() {
+        return Err(runtime_closure_error(format!(
+            "the DLL search folder of the native OCR runtime must be absolute: {}",
+            directory.display()
+        )));
+    }
+    let mut current = PROCESS_DLL_SEARCH_DIRECTORY.lock().map_err(|_| {
+        runtime_closure_error(
+            "the process DLL search folder state is poisoned; restart is required",
+        )
+    })?;
+    if let Some(current) = &*current {
+        return if current == directory {
+            Ok(())
+        } else {
+            Err(runtime_closure_error(format!(
+                "the process DLL search already holds {}; refusing {}; restart is required",
+                current.display(),
+                directory.display()
+            )))
+        };
+    }
+    let wide: Vec<u16> = directory
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    // SAFETY: `wide` is a NUL-terminated UTF-16 path that outlives the call.
+    let cookie = unsafe { AddDllDirectory(wide.as_ptr()) };
+    if cookie.is_null() {
+        let error = std::io::Error::last_os_error();
+        return Err(runtime_closure_error(format!(
+            "AddDllDirectory({}) failed: {}",
+            directory.display(),
+            win32_error_text(&error)
+        )));
+    }
+    // SAFETY: the documented flag value; no pointer is passed.
+    if unsafe { SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS) } == 0 {
+        let error = std::io::Error::last_os_error();
+        // SAFETY: `cookie` is the non-null value AddDllDirectory returned above, removed once.
+        let removed = if unsafe { RemoveDllDirectory(cookie) } != 0 {
+            "the added folder was removed again".to_string()
+        } else {
+            format!(
+                "RemoveDllDirectory failed too: {}",
+                win32_error_text(&std::io::Error::last_os_error())
+            )
+        };
+        return Err(runtime_closure_error(format!(
+            "SetDefaultDllDirectories(0x{LOAD_LIBRARY_SEARCH_DEFAULT_DIRS:08x}) failed after AddDllDirectory({}): {}; {removed}",
+            directory.display(),
+            win32_error_text(&error)
+        )));
+    }
+    *current = Some(directory.to_path_buf());
+    Ok(())
+}
+
+#[cfg(not(windows))]
+pub fn add_process_dll_search_directory(_directory: &std::path::Path) -> VisionFfiResult<()> {
+    Ok(())
+}
+
+/// `Win32 error <n> (0x…): <system message>`, or the error's own text without a code.
+#[cfg(windows)]
+fn win32_error_text(error: &std::io::Error) -> String {
+    match error.raw_os_error() {
+        Some(code) => {
+            let text = error.to_string();
+            let message = text
+                .strip_suffix(&format!(" (os error {code})"))
+                .unwrap_or(&text)
+                .trim()
+                .to_string();
+            format!("Win32 error {code} (0x{:08X}): {message}", code as u32)
+        }
+        None => format!("no Win32 error reported: {error}"),
+    }
 }
 
 /// Issues the next process-unique OCR session identity.
@@ -507,14 +667,18 @@ fn load_library(module: &'static str, path: impl AsRef<OsStr>) -> VisionFfiResul
     // SAFETY: loading a dynamic library is the required FFI boundary. The
     // handle is retained in the backend so loaded symbols cannot outlive it.
     let library = unsafe { Library::new(path) }.map_err(|err| {
+        // Workflow #407 GPU-0c (experiment branch only): the OS error behind the loader's text.
+        let load =
+            crate::NativeLibraryLoadFailure::from_loader_error(path.to_string_lossy(), None, &err);
         VisionFfiError::fatal_with_code(
             VisionFfiErrorCode::ProviderUnavailable,
             module,
             format!(
-                "failed to load FFI library {}: {err}",
+                "failed to load FFI library {}: {err}: {load}",
                 path.to_string_lossy()
             ),
         )
+        .with_library_load(load)
     })?;
     Ok(Arc::new(library))
 }
@@ -768,6 +932,131 @@ mod tests {
         assert_eq!(dropped.load(Ordering::SeqCst), 0);
     }
 
+    /// Workflow #407 GPU-0d: a CUDA runtime's closure preloads the provider bridge and ONNX
+    /// Runtime only. The CUDA provider is checked where the runtime declares it, with its digest
+    /// when one is pinned, and never loaded; ONNX Runtime loads it once its provider bridge is
+    /// set up. A provider that is missing, has another digest or is declared for preloading
+    /// fails by its path before anything is loaded.
+    #[test]
+    fn the_cuda_closure_checks_the_provider_file_without_loading_it() {
+        use crate::OnnxExecutionProvider;
+
+        const PROVIDER_BYTES: &[u8] = b"synthetic CUDA provider";
+        let bridge = crate::ONNXRUNTIME_SHARED_PROVIDERS_LIBRARY;
+        let onnxruntime = crate::ONNXRUNTIME_LIBRARY;
+        let cuda = crate::ONNXRUNTIME_CUDA_PROVIDER_LIBRARY;
+        let root = synthetic_vision_root(
+            "provider-present",
+            &[
+                (bridge, b"synthetic provider bridge".as_slice()),
+                (onnxruntime, b"synthetic onnxruntime".as_slice()),
+                (cuda, PROVIDER_BYTES),
+            ],
+        );
+        let ort = root.join(crate::VISION_RUNTIME_DIRECTORY);
+        let provider = ort.join(cuda);
+        let spec =
+            crate::VisionRuntimeSpec::from_vision_root(&root, OnnxExecutionProvider::Cuda, None)
+                .expect("a CUDA runtime with its provider file");
+        assert_eq!(
+            spec.runtime_library_closure,
+            vec![ort.join(bridge), ort.join(onnxruntime)]
+        );
+        assert_eq!(
+            spec.onnxruntime_loaded_libraries,
+            vec![crate::OnnxRuntimeLoadedLibrary {
+                path: provider.clone(),
+                expected_sha256: None,
+            }]
+        );
+
+        let mut pinned = spec.onnxruntime_loaded_libraries.clone();
+        pinned[0].expected_sha256 = Some(crate::sha256_hex(PROVIDER_BYTES));
+        for libraries in [spec.onnxruntime_loaded_libraries.clone(), pinned.clone()] {
+            let closure = Mutex::new(RuntimeLibraryClosureState::Uninitialized);
+            let mut loaded = Vec::new();
+            establish_checked_runtime_library_closure_with(
+                &closure,
+                &spec.runtime_library_closure,
+                &libraries,
+                |path| {
+                    loaded.push(path.to_path_buf());
+                    Ok(TestRuntimeHandle {
+                        _path: path.to_path_buf(),
+                        dropped: Arc::new(AtomicUsize::new(0)),
+                    })
+                },
+            )
+            .expect("the closure establishes without loading the provider");
+            assert_eq!(loaded, spec.runtime_library_closure);
+            assert!(!loaded.contains(&provider));
+            match &*closure.lock().expect("closure state") {
+                RuntimeLibraryClosureState::Ready { identity, .. } => {
+                    assert_eq!(identity, &spec.runtime_library_closure);
+                }
+                _ => panic!("closure must be ready"),
+            }
+        }
+
+        let mut wrong_digest = pinned;
+        wrong_digest[0].expected_sha256 = Some("0".repeat(64));
+        let mut preloaded = spec.runtime_library_closure.clone();
+        preloaded.push(provider.clone());
+        let missing_root = synthetic_vision_root(
+            "provider-missing",
+            &[
+                (bridge, b"synthetic provider bridge".as_slice()),
+                (onnxruntime, b"synthetic onnxruntime".as_slice()),
+            ],
+        );
+        let missing_provider = missing_root
+            .join(crate::VISION_RUNTIME_DIRECTORY)
+            .join(cuda);
+        let refusal = crate::VisionRuntimeSpec::from_vision_root(
+            &missing_root,
+            OnnxExecutionProvider::Cuda,
+            None,
+        )
+        .expect_err("a CUDA runtime without its provider file fails");
+        assert!(
+            refusal
+                .message()
+                .contains(&missing_provider.display().to_string()),
+            "{}",
+            refusal.message()
+        );
+        let missing = vec![crate::OnnxRuntimeLoadedLibrary {
+            path: missing_provider.clone(),
+            expected_sha256: None,
+        }];
+        for (declared, libraries, named) in [
+            (&spec.runtime_library_closure, &wrong_digest, &provider),
+            (&preloaded, &spec.onnxruntime_loaded_libraries, &provider),
+            (&spec.runtime_library_closure, &missing, &missing_provider),
+        ] {
+            let closure = Mutex::new(RuntimeLibraryClosureState::Uninitialized);
+            let err = establish_checked_runtime_library_closure_with(
+                &closure,
+                declared,
+                libraries,
+                |_| -> VisionFfiResult<TestRuntimeHandle> {
+                    panic!("nothing loads before every provider check passes")
+                },
+            )
+            .expect_err("the provider check fails");
+            assert_eq!(err.code(), VisionFfiErrorCode::ProviderUnavailable);
+            assert!(
+                err.message().contains(&named.display().to_string()),
+                "{}",
+                err.message()
+            );
+            assert!(matches!(
+                &*closure.lock().expect("closure state"),
+                RuntimeLibraryClosureState::Uninitialized
+            ));
+        }
+    }
+
     #[cfg(windows)]
     #[test]
     fn windows_runtime_closure_uses_only_released_loadlibraryex_flags() {
@@ -798,6 +1087,19 @@ mod tests {
             absolute_test_path("cudnn64_9.dll"),
             absolute_test_path("cudnn_ops64_9.dll"),
         ]
+    }
+
+    /// Workflow #407 GPU-0d: a vision root under the system temp folder, unique to this process
+    /// and `name`, whose `ort\` holds `files`.
+    fn synthetic_vision_root(name: &str, files: &[(&str, &[u8])]) -> PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("actingcommand-gpu0d-{}-{name}", std::process::id()));
+        let ort = root.join(crate::VISION_RUNTIME_DIRECTORY);
+        std::fs::create_dir_all(&ort).expect("synthetic runtime folder");
+        for (file, bytes) in files {
+            std::fs::write(ort.join(file), bytes).expect("synthetic runtime library");
+        }
+        root
     }
 
     fn absolute_test_path(name: &str) -> PathBuf {

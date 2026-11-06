@@ -5,11 +5,11 @@
 //! model input exactly, NCHW or NHWC, pixels divided by 255) and positional labels, now with
 //! the session built once per model and kept by the Runtime's model cache.
 
-use super::{ENGINE_MODULE, frame_channels};
+use super::{ENGINE_MODULE, ProviderSessionPlan, cuda_provider, directml_provider, frame_channels};
 use actingcommand_onnx_provider_support::InferenceWatchdog;
 use actingcommand_vision_ffi::{
-    NnClassificationResult, NnEngine, NnInferenceRequest, NnLabel, VisionBackendKind,
-    VisionFfiError, VisionFfiErrorCode, VisionFfiResult, VisionFrame,
+    NnClassificationResult, NnEngine, NnInferenceRequest, NnLabel, OnnxExecutionProvider,
+    VisionBackendKind, VisionFfiError, VisionFfiErrorCode, VisionFfiResult, VisionFrame,
 };
 use ort::session::{RunOptions, Session};
 use ort::value::{Tensor, TensorElementType, ValueType};
@@ -89,30 +89,72 @@ impl NnEngine for OnnxClassifyModel {
 }
 
 /// Builds the classifier session from the verified bytes: CPU, or CUDA on the resolved device
-/// with CPU fallback disabled.
+/// with CPU fallback disabled (unless the plan allows it, Workflow #407 GPU-0e).
 pub(crate) fn load_session(
     model: &[u8],
     path: &Path,
-    cuda_ordinal: Option<i32>,
+    plan: &ProviderSessionPlan,
 ) -> Result<Session, String> {
     let builder = Session::builder()
         .map_err(|err| format!("failed to create ONNXRuntime session builder: {err}"))?
-        .with_intra_threads(1)
+        .with_intra_threads(usize::from(plan.tuning.intra_threads))
         .map_err(|err| format!("failed to configure ONNXRuntime intra threads: {err}"))?;
-    let mut builder = match cuda_ordinal {
-        None => builder,
-        Some(ordinal) => builder
-            .with_execution_providers([ort::ep::CUDA::default()
-                .with_device_id(ordinal)
-                .build()
-                .error_on_failure()])
-            .map_err(|err| {
-                format!(
-                    "failed to register required CUDA execution provider for device {ordinal}; CPU/DirectML/CoreML fallback is disabled: {err}"
-                )
-            })?
-            .with_disable_cpu_fallback()
-            .map_err(|err| format!("failed to disable ONNXRuntime CPU fallback: {err}"))?,
+    let mut builder = match plan.resolved_execution_provider {
+        OnnxExecutionProvider::Cpu => builder,
+        OnnxExecutionProvider::Cuda => {
+            let ordinal = plan.cuda_ordinal.ok_or_else(|| {
+                "CUDA classifier session plan is missing the resolved device ordinal".to_string()
+            })?;
+            // Workflow #407 GPU-0e (experiment branch only): as the OCR sessions' CUDA branch,
+            // CPU fallback stays disabled unless the plan allows it.
+            let fallback = if plan.cpu_fallback_disabled {
+                "CPU/DirectML/CoreML fallback is disabled"
+            } else {
+                "CPU fallback is allowed; DirectML/CoreML fallback is disabled"
+            };
+            let builder = builder
+                .with_execution_providers([cuda_provider(ordinal, &plan.tuning)])
+                .map_err(|err| {
+                    format!(
+                        "failed to register required CUDA execution provider for device {ordinal}; {fallback}: {err}"
+                    )
+                })?;
+            if plan.cpu_fallback_disabled {
+                builder
+                    .with_disable_cpu_fallback()
+                    .map_err(|err| format!("failed to disable ONNXRuntime CPU fallback: {err}"))?
+            } else {
+                builder
+            }
+        }
+        // Workflow #407 GPU-0a (experiment branch only): as the OCR sessions' DirectML branch;
+        // GPU-0c: CPU fallback stays disabled unless the plan allows it.
+        OnnxExecutionProvider::Directml => {
+            let device = plan.directml_device.ok_or_else(|| {
+                "DirectML classifier session plan is missing its DXGI adapter index (unset or beyond i32)"
+                    .to_string()
+            })?;
+            let builder = builder
+                .with_memory_pattern(false)
+                .map_err(|err| format!("failed to disable the DirectML memory pattern: {err}"))?
+                .with_parallel_execution(false)
+                .map_err(|err| {
+                    format!("failed to select sequential execution for DirectML: {err}")
+                })?
+                .with_execution_providers([directml_provider(device)])
+                .map_err(|err| {
+                    format!(
+                        "failed to register the DirectML execution provider for adapter {device}: {err}"
+                    )
+                })?;
+            if plan.cpu_fallback_disabled {
+                builder
+                    .with_disable_cpu_fallback()
+                    .map_err(|err| format!("failed to disable ONNXRuntime CPU fallback: {err}"))?
+            } else {
+                builder
+            }
+        }
     };
     builder.commit_from_memory(model).map_err(|err| {
         format!(

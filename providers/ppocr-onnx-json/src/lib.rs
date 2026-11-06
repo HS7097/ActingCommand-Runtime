@@ -15,15 +15,17 @@ use actingcommand_vision_ffi::{
     ChannelOrder, DetectorResize, NnModelLoad, NnModelSpec, PpocrCtcParams, SpaceClass,
 };
 use actingcommand_vision_ffi::{
-    CudaDeviceIdentity, OCR_EXECUTION_ATTESTATION_SCHEMA_VERSION, OcrBlockMode, OcrDetectionCount,
-    OcrEngine, OcrExecutionAttestation, OcrFallbackPolicy, OcrInferenceOutput, OcrInferenceRequest,
-    OcrInferenceRequestView, OcrInferenceResult, OcrInvocationId, OcrLineMerge, OcrModelLoad,
-    OcrModelSpec, OcrProviderBuildIdentity, OcrRuntimeBuildIdentity, OcrSessionBinding,
-    OcrSessionId, OcrSessionKey, OcrSessionKeyParts, OcrTextBlock, OnnxExecutionProvider,
-    VisionBackendKind, VisionFfiError, VisionFfiErrorCode, VisionFfiResult, VisionFrameView,
-    VisionModelLoader, VisionPixelFormat, VisionRect, VisionRuntimeSpec, enumerate_cuda_devices,
-    establish_process_runtime_library_closure, next_ocr_invocation_id, ocr_engine_binding_sha256,
-    onnxruntime_version_string, ppocr_model_set_sha256, sha256_file_hex, sha256_hex,
+    CudaConvAlgorithmSearch, CudaDeviceIdentity, OCR_EXECUTION_ATTESTATION_SCHEMA_VERSION,
+    OcrBlockMode, OcrDetectionCount, OcrEngine, OcrExecutionAttestation, OcrFallbackPolicy,
+    OcrInferenceOutput, OcrInferenceRequest, OcrInferenceRequestView, OcrInferenceResult,
+    OcrInvocationId, OcrLineMerge, OcrModelLoad, OcrModelSpec, OcrProviderBuildIdentity,
+    OcrProviderOptions, OcrRuntimeBuildIdentity, OcrSessionBinding, OcrSessionId, OcrSessionKey,
+    OcrSessionKeyParts, OcrTextBlock, OnnxExecutionProvider, OrtSessionTuning, VisionBackendKind,
+    VisionFfiError, VisionFfiErrorCode, VisionFfiResult, VisionFrameView, VisionModelLoader,
+    VisionPixelFormat, VisionRect, VisionRuntimeSpec, add_process_dll_search_directory,
+    enumerate_cuda_devices, establish_process_runtime_library_closure, next_ocr_invocation_id,
+    ocr_engine_binding_sha256, onnxruntime_version_string, ppocr_model_set_sha256, sha256_file_hex,
+    sha256_hex,
 };
 use actingcommand_vision_ffi::{
     PPOCR_MAX_DIAGNOSTIC_REPORTS, PpocrCpuAssignedNodeDiagnostic as CpuAssignedNodeDiagnostic,
@@ -39,6 +41,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, TryLockError};
 use std::time::{Duration, Instant};
 
+pub mod bench;
 mod nn;
 
 const NODE_PLACEMENT_DIAGNOSTIC_ENV: &str = "ACTINGCOMMAND_PPOCR_NODE_PLACEMENT_DIAGNOSTIC";
@@ -73,18 +76,18 @@ struct ProviderSessionPlan {
     registered_execution_providers: Vec<OnnxExecutionProvider>,
     cpu_ep_registered: bool,
     cpu_fallback_disabled: bool,
+    /// Workflow #407 GPU-0a (experiment branch only): the DXGI adapter index of a DirectML
+    /// session; set from the runtime by [`Self::with_runtime_options`].
+    directml_device: Option<i32>,
+    /// Workflow #407 GPU-0a (experiment branch only): the session tuning knobs; the default is
+    /// the production session.
+    tuning: OrtSessionTuning,
 }
 
 impl ProviderSessionPlan {
     fn from_key(key: &OcrSessionKey) -> Result<Self, String> {
         match key.requested_backend() {
-            OnnxExecutionProvider::Cpu => Ok(Self {
-                resolved_execution_provider: OnnxExecutionProvider::Cpu,
-                cuda_ordinal: None,
-                registered_execution_providers: vec![OnnxExecutionProvider::Cpu],
-                cpu_ep_registered: true,
-                cpu_fallback_disabled: false,
-            }),
+            OnnxExecutionProvider::Cpu => Ok(Self::for_backend(OnnxExecutionProvider::Cpu, None)),
             OnnxExecutionProvider::Cuda => {
                 let ordinal = key
                     .resolved_cuda_device()
@@ -92,16 +95,89 @@ impl ProviderSessionPlan {
                     .ordinal;
                 let ordinal = i32::try_from(ordinal)
                     .map_err(|_| "CUDA OCR ordinal exceeds i32 range".to_string())?;
-                Ok(Self {
-                    resolved_execution_provider: OnnxExecutionProvider::Cuda,
-                    cuda_ordinal: Some(ordinal),
-                    registered_execution_providers: vec![OnnxExecutionProvider::Cuda],
-                    cpu_ep_registered: false,
-                    cpu_fallback_disabled: true,
-                })
+                Ok(Self::for_backend(
+                    OnnxExecutionProvider::Cuda,
+                    Some(ordinal),
+                ))
+            }
+            OnnxExecutionProvider::Directml => {
+                Ok(Self::for_backend(OnnxExecutionProvider::Directml, None))
             }
         }
     }
+
+    /// The plan of one execution provider: CPU registers the CPU EP; CUDA and DirectML register
+    /// only their own provider and disable CPU fallback.
+    fn for_backend(backend: OnnxExecutionProvider, cuda_ordinal: Option<i32>) -> Self {
+        let cpu = backend == OnnxExecutionProvider::Cpu;
+        Self {
+            resolved_execution_provider: backend,
+            cuda_ordinal,
+            registered_execution_providers: vec![backend],
+            cpu_ep_registered: cpu,
+            cpu_fallback_disabled: !cpu,
+            directml_device: None,
+            tuning: OrtSessionTuning::default(),
+        }
+    }
+
+    /// Workflow #407 GPU-0a (experiment branch only): the DirectML adapter and the tuning knobs
+    /// of `runtime`. An adapter index beyond `i32` stays unset, so the session load refuses it.
+    fn with_runtime_options(mut self, runtime: &VisionRuntimeSpec) -> Self {
+        self.directml_device = runtime
+            .directml_device_id
+            .and_then(|device| i32::try_from(device).ok());
+        self.tuning = runtime.session_tuning;
+        // Workflow #407 GPU-0c: a DirectML plan may allow CPU fallback; GPU-0e: so may a CUDA
+        // plan, by its own knob. No other plan changes, and the CPU EP stays unregistered:
+        // ONNX Runtime adds it itself for the nodes it places there.
+        let fallback_allowed = match self.resolved_execution_provider {
+            OnnxExecutionProvider::Cpu => false,
+            OnnxExecutionProvider::Cuda => self.tuning.cuda_cpu_fallback,
+            OnnxExecutionProvider::Directml => self.tuning.directml_cpu_fallback,
+        };
+        if fallback_allowed {
+            self.cpu_fallback_disabled = false;
+        }
+        self
+    }
+}
+
+/// Workflow #407 GPU-0a (experiment branch only): the provider options a session key folds into
+/// its digest.
+fn provider_options(runtime: &VisionRuntimeSpec) -> OcrProviderOptions {
+    OcrProviderOptions {
+        directml_device: runtime.directml_device_id,
+        tuning: runtime.session_tuning,
+    }
+}
+
+/// Workflow #407 GPU-0a (experiment branch only): the CUDA provider of `ordinal` with the plan's
+/// knobs; the default knobs register it exactly as production does.
+fn cuda_provider(ordinal: i32, tuning: &OrtSessionTuning) -> ort::ep::ExecutionProviderDispatch {
+    let provider = ort::ep::CUDA::default().with_device_id(ordinal);
+    let provider = if tuning.cuda_is_default() {
+        provider
+    } else {
+        provider
+            .with_conv_algorithm_search(match tuning.cuda_conv_algorithm_search {
+                CudaConvAlgorithmSearch::Exhaustive => {
+                    ort::ep::cuda::ConvAlgorithmSearch::Exhaustive
+                }
+                CudaConvAlgorithmSearch::Heuristic => ort::ep::cuda::ConvAlgorithmSearch::Heuristic,
+                CudaConvAlgorithmSearch::Default => ort::ep::cuda::ConvAlgorithmSearch::Default,
+            })
+            .with_tf32(tuning.cuda_tf32)
+    };
+    provider.build().error_on_failure()
+}
+
+/// Workflow #407 GPU-0a (experiment branch only): the DirectML provider on DXGI adapter `device`.
+fn directml_provider(device: i32) -> ort::ep::ExecutionProviderDispatch {
+    ort::ep::DirectML::default()
+        .with_device_id(device)
+        .build()
+        .error_on_failure()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -360,24 +436,29 @@ impl VisionModelLoader for PpocrCtcLoader {
         }
         let dictionary = parse_dictionary(&dictionary, &model.dictionary_path).map_err(failure)?;
         let (facts, waited_on_others) = runtime_facts(&self.runtime, wait_deadline)?;
-        let key = OcrSessionKey::from_parts(OcrSessionKeyParts {
-            engine_binding_sha256: ocr_engine_binding_sha256(
-                &facts.executable_sha256,
-                &facts.onnxruntime_sha256,
-                &model.description_sha256,
-            ),
-            runtime_library_path: facts.onnxruntime_library.to_string_lossy().into_owned(),
-            runtime_library_sha256: facts.onnxruntime_sha256.clone(),
-            onnxruntime_version: facts.onnxruntime_version.clone(),
-            model_ref: model.model_ref.clone(),
-            model_sha256: model_sha256.clone(),
-            requested_backend: self.runtime.execution_provider,
-            requested_cuda_device: self.runtime.cuda_device.clone(),
-            resolved_cuda_device: facts.resolved_cuda_device.clone(),
-        })?;
+        let key = OcrSessionKey::from_parts_with_options(
+            OcrSessionKeyParts {
+                engine_binding_sha256: ocr_engine_binding_sha256(
+                    &facts.executable_sha256,
+                    &facts.onnxruntime_sha256,
+                    &model.description_sha256,
+                ),
+                runtime_library_path: facts.onnxruntime_library.to_string_lossy().into_owned(),
+                runtime_library_sha256: facts.onnxruntime_sha256.clone(),
+                onnxruntime_version: facts.onnxruntime_version.clone(),
+                model_ref: model.model_ref.clone(),
+                model_sha256: model_sha256.clone(),
+                requested_backend: self.runtime.execution_provider,
+                requested_cuda_device: self.runtime.cuda_device.clone(),
+                resolved_cuda_device: facts.resolved_cuda_device.clone(),
+            },
+            &provider_options(&self.runtime),
+        )?;
         let binding = OcrSessionBinding::new(session_id.clone(), 1, key);
         binding.validate()?;
-        let plan = ProviderSessionPlan::from_key(binding.key()).map_err(failure)?;
+        let plan = ProviderSessionPlan::from_key(binding.key())
+            .map_err(failure)?
+            .with_runtime_options(&self.runtime);
         let mut diagnostics = Vec::new();
         let recognizer = load_ort_session(
             &recognizer,
@@ -429,7 +510,9 @@ impl VisionModelLoader for PpocrCtcLoader {
                     .map_err(|_| failure("the resolved CUDA ordinal exceeds the i32 range"))
             })
             .transpose()?;
-        let session = nn::load_session(&bytes, &model.model_path, cuda_ordinal).map_err(failure)?;
+        let plan = ProviderSessionPlan::for_backend(self.runtime.execution_provider, cuda_ordinal)
+            .with_runtime_options(&self.runtime);
+        let session = nn::load_session(&bytes, &model.model_path, &plan).map_err(failure)?;
         Ok(NnModelLoad::Loaded {
             engine: Box::new(nn::OnnxClassifyModel::new(session)),
             model_sha256,
@@ -756,13 +839,16 @@ fn establish_runtime(spec: &VisionRuntimeSpec) -> VisionFfiResult<RuntimeFacts> 
             library.display()
         )));
     }
-    establish_process_runtime_library_closure(&spec.runtime_library_closure)?;
-    let onnxruntime_version = onnxruntime_version_string(library)?;
-    ORT_RUNTIME.ensure(library).map_err(unavailable)?;
-    let executable = std::env::current_exe().map_err(|error| {
-        unavailable(format!("the running executable cannot be located: {error}"))
-    })?;
-    let executable_sha256 = sha256_file_hex(ENGINE_MODULE, &executable)?;
+    // Workflow #407 GPU-0d (experiment branch only): the libraries ONNX Runtime loads itself (the
+    // CUDA provider) are checked here and loaded by ONNX Runtime when the provider is registered.
+    establish_process_runtime_library_closure(
+        &spec.runtime_library_closure,
+        &spec.onnxruntime_loaded_libraries,
+    )?;
+    // Workflow #407 GPU-0e (experiment branch only): the CUDA device inventory (the engine's own
+    // load of the CUDA driver by bare name) runs before the runtime folder joins the process's
+    // default DLL search, so that load resolves as it did; the folder joins it before ONNX
+    // Runtime is initialised, so cuDNN's own later loads of its sub-libraries find them there.
     let (resolved_cuda_device, cuda_driver_version) = match spec.execution_provider {
         OnnxExecutionProvider::Cpu => {
             if spec.cuda_device.is_some() {
@@ -770,6 +856,18 @@ fn establish_runtime(spec: &VisionRuntimeSpec) -> VisionFfiResult<RuntimeFacts> 
                     VisionFfiErrorCode::InvalidRequest,
                     ENGINE_MODULE,
                     "a CPU OCR configuration must not include a CUDA device selector",
+                ));
+            }
+            (None, None)
+        }
+        // Workflow #407 GPU-0a (experiment branch only): the adapter is a DXGI index; DirectML
+        // has no driver inventory of its own here (the bench lists the DXGI adapters).
+        OnnxExecutionProvider::Directml => {
+            if spec.cuda_device.is_some() || spec.directml_device_id.is_none() {
+                return Err(VisionFfiError::fatal_with_code(
+                    VisionFfiErrorCode::InvalidRequest,
+                    ENGINE_MODULE,
+                    "a DirectML OCR configuration requires a DXGI adapter index and no CUDA device selector",
                 ));
             }
             (None, None)
@@ -789,6 +887,22 @@ fn establish_runtime(spec: &VisionRuntimeSpec) -> VisionFfiResult<RuntimeFacts> 
             )
         }
     };
+    if let Some(directory) = &spec.dll_search_directory {
+        if spec.execution_provider != OnnxExecutionProvider::Cuda {
+            return Err(VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::InvalidRequest,
+                ENGINE_MODULE,
+                "only a CUDA runtime changes the process's DLL search; CPU and DirectML keep it as it is",
+            ));
+        }
+        add_process_dll_search_directory(directory)?;
+    }
+    let onnxruntime_version = onnxruntime_version_string(library)?;
+    ORT_RUNTIME.ensure(library).map_err(unavailable)?;
+    let executable = std::env::current_exe().map_err(|error| {
+        unavailable(format!("the running executable cannot be located: {error}"))
+    })?;
+    let executable_sha256 = sha256_file_hex(ENGINE_MODULE, &executable)?;
     Ok(RuntimeFacts {
         onnxruntime_library: library.clone(),
         onnxruntime_version,
@@ -947,51 +1061,204 @@ fn load_ort_session(
 ) -> Result<Session, String> {
     let diagnostic_requested =
         node_placement_diagnostic_requested(plan, node_placement_diagnostic)?;
-    match plan.resolved_execution_provider {
-        OnnxExecutionProvider::Cpu => Session::builder()
-            .map_err(|err| format!("failed to create ONNXRuntime session builder: {err}"))?
-            .with_intra_threads(1)
-            .map_err(|err| format!("failed to configure ONNXRuntime intra threads: {err}"))?
-            .commit_from_memory(model)
-            .map_err(|err| {
-                format!(
-                    "failed to load CPU-only PPOCR ONNX model {}: {err}",
-                    path.display()
-                )
-            }),
-        OnnxExecutionProvider::Cuda => {
-            let ordinal = plan.cuda_ordinal.ok_or_else(|| {
-                "CUDA OCR session plan is missing the resolved device ordinal".to_string()
-            })?;
-            if diagnostic_requested {
-                capture_cuda_node_placement(model, path, ordinal, role, diagnostics)?;
-            }
-            Session::builder()
-                .map_err(|err| format!("failed to create ONNXRuntime session builder: {err}"))?
-                .with_intra_threads(1)
-                .map_err(|err| format!("failed to configure ONNXRuntime intra threads: {err}"))?
-                .with_execution_providers([
-                    ort::ep::CUDA::default()
-                        .with_device_id(ordinal)
-                        .build()
-                        .error_on_failure(),
-                ])
-                .map_err(|err| {
-                    format!(
-                        "failed to register required CUDA execution provider for device {ordinal}; CPU/DirectML/CoreML fallback is disabled: {err}"
-                    )
-                })?
-                .with_disable_cpu_fallback()
-                .map_err(|err| format!("failed to disable PPOCR CPU fallback: {err}"))?
-                .commit_from_memory(model)
-                .map_err(|err| {
-                    format!(
-                        "failed to load CUDA PPOCR ONNX model {} on device {ordinal}: {err}",
-                        path.display()
-                    )
-                })
+    if diagnostic_requested {
+        let ordinal = plan.cuda_ordinal.ok_or_else(|| {
+            "CUDA OCR session plan is missing the resolved device ordinal".to_string()
+        })?;
+        capture_cuda_node_placement(model, path, ordinal, role, diagnostics)?;
+    }
+    commit_ort_session(model, path, plan, None).map_err(|failure| failure.to_string())
+}
+
+/// Workflow #407 GPU-0c (experiment branch only): one failed step of building an ONNX Runtime
+/// session, with ONNX Runtime's own status kept whole (its error code and its full message).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OrtStepFailure {
+    step: String,
+    /// ONNX Runtime's error code; none for a step that is not an ONNX Runtime call.
+    ort_code: Option<ort::ErrorCode>,
+    /// ONNX Runtime's status message, verbatim, with its causes.
+    ort_message: Option<String>,
+}
+
+impl OrtStepFailure {
+    fn ort<R>(step: impl Into<String>, error: &ort::Error<R>) -> Self {
+        let mut message = error.message().to_string();
+        let mut source = std::error::Error::source(error);
+        while let Some(cause) = source {
+            message.push_str("; caused by: ");
+            message.push_str(&cause.to_string());
+            source = std::error::Error::source(cause);
+        }
+        Self {
+            step: step.into(),
+            ort_code: Some(error.code()),
+            ort_message: Some(message),
         }
     }
+
+    fn plain(step: impl Into<String>) -> Self {
+        Self {
+            step: step.into(),
+            ort_code: None,
+            ort_message: None,
+        }
+    }
+}
+
+impl std::fmt::Display for OrtStepFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.step)?;
+        if let Some(message) = &self.ort_message {
+            write!(f, ": {message}")?;
+        }
+        if let Some(code) = &self.ort_code {
+            write!(f, " (ONNX Runtime error code {code:?})")?;
+        }
+        Ok(())
+    }
+}
+
+/// Workflow #407 GPU-0c (experiment branch only): the session builder of `plan` with every
+/// option the engine sets before the model, so the engine's sessions and the bench's
+/// node-placement sessions cannot differ. CUDA disables CPU fallback unless the plan allows it
+/// (Workflow #407 GPU-0e); DirectML needs the memory pattern off and sequential execution (one
+/// session never runs concurrently: the engine's `&mut` session guarantees that) and disables
+/// CPU fallback unless the plan allows it.
+fn configured_session_builder(
+    plan: &ProviderSessionPlan,
+) -> Result<ort::session::builder::SessionBuilder, OrtStepFailure> {
+    let builder = Session::builder()
+        .map_err(|err| OrtStepFailure::ort("failed to create ONNXRuntime session builder", &err))?
+        .with_intra_threads(usize::from(plan.tuning.intra_threads))
+        .map_err(|err| {
+            OrtStepFailure::ort("failed to configure ONNXRuntime intra threads", &err)
+        })?;
+    match plan.resolved_execution_provider {
+        OnnxExecutionProvider::Cpu => Ok(builder),
+        OnnxExecutionProvider::Cuda => {
+            let ordinal = plan.cuda_ordinal.ok_or_else(|| {
+                OrtStepFailure::plain(
+                    "CUDA OCR session plan is missing the resolved device ordinal",
+                )
+            })?;
+            let fallback = if plan.cpu_fallback_disabled {
+                "CPU/DirectML/CoreML fallback is disabled"
+            } else {
+                "CPU fallback is allowed; DirectML/CoreML fallback is disabled"
+            };
+            let builder = builder
+                .with_execution_providers([cuda_provider(ordinal, &plan.tuning)])
+                .map_err(|err| {
+                    OrtStepFailure::ort(
+                        format!(
+                            "failed to register required CUDA execution provider for device {ordinal}; {fallback}"
+                        ),
+                        &err,
+                    )
+                })?;
+            // A CUDA plan disables CPU fallback unless its tuning allows it (Workflow #407
+            // GPU-0e, `cuda_cpu_fallback`); the bench's node-placement twin of a failed strict
+            // session clears it too, to name the nodes ONNX Runtime put on the CPU.
+            if plan.cpu_fallback_disabled {
+                builder.with_disable_cpu_fallback().map_err(|err| {
+                    OrtStepFailure::ort("failed to disable PPOCR CPU fallback", &err)
+                })
+            } else {
+                Ok(builder)
+            }
+        }
+        OnnxExecutionProvider::Directml => {
+            let device = plan.directml_device.ok_or_else(|| {
+                OrtStepFailure::plain(
+                    "DirectML OCR session plan is missing its DXGI adapter index (unset or beyond i32)",
+                )
+            })?;
+            let fallback = if plan.cpu_fallback_disabled {
+                "CPU fallback is disabled"
+            } else {
+                "CPU fallback is allowed"
+            };
+            let builder = builder
+                .with_memory_pattern(false)
+                .map_err(|err| {
+                    OrtStepFailure::ort("failed to disable the DirectML memory pattern", &err)
+                })?
+                .with_parallel_execution(false)
+                .map_err(|err| {
+                    OrtStepFailure::ort("failed to select sequential execution for DirectML", &err)
+                })?
+                .with_execution_providers([directml_provider(device)])
+                .map_err(|err| {
+                    OrtStepFailure::ort(
+                        format!(
+                            "failed to register the DirectML execution provider for adapter {device}; {fallback}"
+                        ),
+                        &err,
+                    )
+                })?;
+            if plan.cpu_fallback_disabled {
+                builder.with_disable_cpu_fallback().map_err(|err| {
+                    OrtStepFailure::ort("failed to disable PPOCR CPU fallback", &err)
+                })
+            } else {
+                Ok(builder)
+            }
+        }
+    }
+}
+
+/// Workflow #407 GPU-0c (experiment branch only): builds `plan`'s session from `model`. With a
+/// `logger`, the session also logs to it at verbose level (the bench's node-placement read).
+fn commit_ort_session(
+    model: &[u8],
+    path: &Path,
+    plan: &ProviderSessionPlan,
+    logger: Option<ort::logging::LoggerFunction>,
+) -> Result<Session, OrtStepFailure> {
+    let mut builder = configured_session_builder(plan)?;
+    if let Some(logger) = logger {
+        builder = builder
+            .with_logger(logger)
+            .map_err(|err| OrtStepFailure::ort("failed to set the session logger", &err))?
+            .with_log_level(LogLevel::Verbose)
+            .map_err(|err| OrtStepFailure::ort("failed to set verbose session logging", &err))?
+            .with_log_verbosity(0)
+            .map_err(|err| OrtStepFailure::ort("failed to bound the verbose session log", &err))?;
+    }
+    builder.commit_from_memory(model).map_err(|err| {
+        let what = match plan.resolved_execution_provider {
+            OnnxExecutionProvider::Cpu => {
+                format!(
+                    "failed to load CPU-only PPOCR ONNX model {}",
+                    path.display()
+                )
+            }
+            // Workflow #407 GPU-0e: a strict CUDA session keeps its text; one that allows CPU
+            // fallback says so.
+            OnnxExecutionProvider::Cuda => format!(
+                "failed to load CUDA PPOCR ONNX model {} on device {}{}",
+                path.display(),
+                plan.cuda_ordinal.unwrap_or_default(),
+                if plan.cpu_fallback_disabled {
+                    ""
+                } else {
+                    " (CPU fallback allowed)"
+                }
+            ),
+            OnnxExecutionProvider::Directml => format!(
+                "failed to load DirectML PPOCR ONNX model {} on adapter {} ({})",
+                path.display(),
+                plan.directml_device.unwrap_or_default(),
+                if plan.cpu_fallback_disabled {
+                    "CPU fallback disabled"
+                } else {
+                    "CPU fallback allowed"
+                }
+            ),
+        };
+        OrtStepFailure::ort(what, &err)
+    })
 }
 
 fn capture_cuda_node_placement(

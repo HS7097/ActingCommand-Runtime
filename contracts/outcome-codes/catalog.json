@@ -11774,6 +11774,7 @@
     "ppocr-onnx-json-provider": "providers/ppocr-onnx-json",
     "actinglab-architecture": "tools/actinglab-architecture",
     "outcome-guard": "tools/outcome-guard",
+    "vision-ep-bench": "tools/vision-ep-bench",
     "display-adapter": "crates/display-adapter",
     "mcp-entry": "apps/mcp-entry",
     "actingcommand-entry": "apps/actingcommand-entry"

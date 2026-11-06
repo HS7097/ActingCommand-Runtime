@@ -227,10 +227,55 @@ impl OcrSessionKey {
     /// Builds and validates the key of one in-process OCR session; the provider options digest
     /// is derived from the execution provider choice exactly as for a manifest session.
     pub fn from_parts(parts: OcrSessionKeyParts) -> VisionFfiResult<Self> {
+        Self::from_parts_with_options(parts, &OcrProviderOptions::default())
+    }
+
+    /// Workflow #407 GPU-0a (experiment branch only): [`Self::from_parts`] with the session
+    /// options beyond the execution provider (the DirectML adapter, the tuning knobs) folded
+    /// into the provider options digest. A DirectML key needs its adapter index.
+    pub fn from_parts_with_options(
+        parts: OcrSessionKeyParts,
+        options: &OcrProviderOptions,
+    ) -> VisionFfiResult<Self> {
+        if (parts.requested_backend == OnnxExecutionProvider::Directml)
+            != options.directml_device.is_some()
+        {
+            return Err(VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::InvalidRequest,
+                "ocr_session_key",
+                "a DirectML session needs its adapter index, and only a DirectML session has one",
+            ));
+        }
+        if options.tuning.intra_threads == 0 {
+            return Err(VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::InvalidRequest,
+                "ocr_session_key",
+                "an OCR session needs at least one intra-op thread",
+            ));
+        }
+        if options.tuning.directml_cpu_fallback
+            && parts.requested_backend != OnnxExecutionProvider::Directml
+        {
+            return Err(VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::InvalidRequest,
+                "ocr_session_key",
+                "only a DirectML session may allow CPU fallback",
+            ));
+        }
+        if options.tuning.cuda_cpu_fallback
+            && parts.requested_backend != OnnxExecutionProvider::Cuda
+        {
+            return Err(VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::InvalidRequest,
+                "ocr_session_key",
+                "only a CUDA session may allow CUDA CPU fallback",
+            ));
+        }
         let provider_options_sha256 = ppocr_provider_options_sha256(
             parts.requested_backend,
             parts.requested_cuda_device.as_ref(),
             parts.resolved_cuda_device.as_ref(),
+            options,
         );
         let key = Self {
             provider_library_sha256: parts.engine_binding_sha256,
@@ -323,6 +368,15 @@ impl OcrSessionKey {
                         VisionFfiErrorCode::InvalidRequest,
                         "ocr_session_key",
                         "CPU session must not contain CUDA selector or resolved CUDA identity",
+                    ));
+                }
+            }
+            OnnxExecutionProvider::Directml => {
+                if self.requested_cuda_device.is_some() || self.resolved_cuda_device.is_some() {
+                    return Err(VisionFfiError::fatal_with_code(
+                        VisionFfiErrorCode::InvalidRequest,
+                        "ocr_session_key",
+                        "DirectML session must not contain CUDA selector or resolved CUDA identity",
                     ));
                 }
             }
@@ -462,6 +516,83 @@ pub struct OcrExecutionAttestation {
 pub enum OnnxExecutionProvider {
     Cpu,
     Cuda,
+    /// Workflow #407 GPU-0a (experiment branch `exp/407-gpu0-bench` only, never merged): the
+    /// DirectML execution provider on the DXGI adapter `VisionRuntimeSpec::directml_device_id`
+    /// names. Only the vision EP bench builds it; actingd's configuration refuses it.
+    Directml,
+}
+
+/// Workflow #407 GPU-0a (experiment branch only): cuDNN's convolution algorithm search of a
+/// CUDA session (`cudnn_conv_algo_search`). ONNX Runtime's default is `Exhaustive`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CudaConvAlgorithmSearch {
+    Exhaustive,
+    Heuristic,
+    Default,
+}
+
+impl CudaConvAlgorithmSearch {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Exhaustive => "exhaustive",
+            Self::Heuristic => "heuristic",
+            Self::Default => "default",
+        }
+    }
+}
+
+/// Workflow #407 GPU-0a (experiment branch only): the tuning knobs of an engine's ONNX Runtime
+/// sessions. [`Default`] is exactly the production session: one intra-op thread, cuDNN's
+/// exhaustive convolution search and TF32 on (ONNX Runtime's CUDA defaults).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OrtSessionTuning {
+    /// Intra-op threads of every session (`SetIntraOpNumThreads`), at least 1.
+    pub intra_threads: u16,
+    /// CUDA sessions only.
+    pub cuda_conv_algorithm_search: CudaConvAlgorithmSearch,
+    /// CUDA sessions only (`use_tf32`).
+    pub cuda_tf32: bool,
+    /// Workflow #407 GPU-0c: DirectML sessions only. When set, ONNX Runtime may place the nodes
+    /// DirectML cannot run on its CPU execution provider; the default keeps CPU fallback
+    /// disabled, as for every GPU session.
+    pub directml_cpu_fallback: bool,
+    /// Workflow #407 GPU-0e: CUDA sessions only. When set, ONNX Runtime may place the nodes CUDA
+    /// cannot run on its CPU execution provider; the default keeps CPU fallback disabled, as
+    /// production's CUDA sessions do. It is no provider registration knob, so
+    /// [`Self::cuda_is_default`] does not read it.
+    pub cuda_cpu_fallback: bool,
+}
+
+impl Default for OrtSessionTuning {
+    fn default() -> Self {
+        Self {
+            intra_threads: 1,
+            cuda_conv_algorithm_search: CudaConvAlgorithmSearch::Exhaustive,
+            cuda_tf32: true,
+            directml_cpu_fallback: false,
+            cuda_cpu_fallback: false,
+        }
+    }
+}
+
+impl OrtSessionTuning {
+    /// True when every CUDA knob is ONNX Runtime's default, so a CUDA session registers the
+    /// provider exactly as production does.
+    pub fn cuda_is_default(&self) -> bool {
+        self.cuda_conv_algorithm_search == CudaConvAlgorithmSearch::Exhaustive && self.cuda_tf32
+    }
+}
+
+/// Workflow #407 GPU-0a (experiment branch only): the session options of an OCR session key
+/// beyond its execution provider and CUDA device, folded into `provider_options_sha256`. The
+/// default adds nothing to the digest, so a production key keeps its digest.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct OcrProviderOptions {
+    /// The DXGI adapter index of a DirectML session.
+    pub directml_device: Option<u32>,
+    pub tuning: OrtSessionTuning,
 }
 
 pub fn ppocr_model_content_sha256(
@@ -517,15 +648,50 @@ fn ppocr_provider_options_sha256(
     backend: OnnxExecutionProvider,
     selector: Option<&CudaDeviceSelector>,
     resolved: Option<&CudaDeviceIdentity>,
+    options: &OcrProviderOptions,
 ) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"actingcommand.ppocr-provider-options.v1\0");
     hasher.update(match backend {
         OnnxExecutionProvider::Cpu => b"cpu".as_slice(),
         OnnxExecutionProvider::Cuda => b"cuda".as_slice(),
+        OnnxExecutionProvider::Directml => b"directml".as_slice(),
     });
     hasher.update(b"\0strict_no_fallback\0true\0intra_threads\0");
-    hasher.update(b"1\0");
+    hasher.update(options.tuning.intra_threads.to_string().as_bytes());
+    hasher.update(b"\0");
+    // Workflow #407 GPU-0a (experiment branch only): the knobs a production key never sets are
+    // hashed only when they are set, so the default options keep the production digest.
+    if !options.tuning.cuda_is_default() {
+        hasher.update(b"cuda_conv_algorithm_search\0");
+        hasher.update(
+            options
+                .tuning
+                .cuda_conv_algorithm_search
+                .as_str()
+                .as_bytes(),
+        );
+        hasher.update(b"\0cuda_tf32\0");
+        hasher.update(if options.tuning.cuda_tf32 {
+            b"true".as_slice()
+        } else {
+            b"false".as_slice()
+        });
+        hasher.update(b"\0");
+    }
+    if let Some(device) = options.directml_device {
+        hasher.update(b"directml_device\0");
+        hasher.update(device.to_string().as_bytes());
+        hasher.update(b"\0directml_memory_pattern\0false\0directml_execution\0sequential\0");
+    }
+    // Workflow #407 GPU-0c (experiment branch only): hashed only when set, as above.
+    if options.tuning.directml_cpu_fallback {
+        hasher.update(b"directml_cpu_fallback\0true\0");
+    }
+    // Workflow #407 GPU-0e (experiment branch only): hashed only when set, as above.
+    if options.tuning.cuda_cpu_fallback {
+        hasher.update(b"cuda_cpu_fallback\0true\0");
+    }
     if let Some(selector) = selector {
         hasher.update(b"requested_ordinal\0");
         hasher.update(selector.ordinal.to_string().as_bytes());
