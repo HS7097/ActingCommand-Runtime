@@ -128,11 +128,14 @@ fn an_unmasked_unscaled_anchor_projects_byte_identical_to_the_direct_scorer() {
     let mut frame = noise.image(200, 150);
     let large = noise.image(18, 12);
     let small = noise.image(5, 4);
-    // Whole copies of both templates, and one copy of the large one cut by the region's edge.
-    for (x, y) in [(30, 20), (140, 100), (60, 110)] {
+    // Whole copies of both templates inside the region at an `x` the predicate below admits, so
+    // every combination has copies the direct scorer finds; one copy of the large one at an `x`
+    // it refuses; one copy of the large one cut by the region's edge; one of the small one
+    // outside the region.
+    for (x, y) in [(31, 20), (140, 100), (61, 110)] {
         image::imageops::replace(&mut frame, &large, x, y);
     }
-    for (x, y) in [(100, 30), (12, 80)] {
+    for (x, y) in [(101, 30), (12, 80)] {
         image::imageops::replace(&mut frame, &small, x, y);
     }
     let scene = gray_scene(&frame);
