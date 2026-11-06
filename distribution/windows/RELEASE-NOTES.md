@@ -9,6 +9,142 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.43
+
+本版是 v0.12.42 之后合并的 2 个 PR：#404 FS-1 + FS-2（#1528）和 FS-3 + FS-2b（#1530）。先说部署：`package` 从 [3, 6] 升到 [3, 7]，`ledger` 从 [3, 6]
+升到 [3, 7]，**账本这一步是单向的**：部署要带 `--accept-ledger-one-way`，计划多一步 `ledger_verify`；装上本版以后安装工具拒绝退回 v0.12.42，不论有没有包
+用过新的确认方式（见下面的升级和退回）。没有新键，默认值文件没改。运行上要知道的是这几处：
+
+- **包现在可以在整张图（或一个区域）里找出一个锚点的每一处匹配，带遮罩、按几个比例找，按 `anchor_milli` 排序，点下选中的那一个；确认帧上它挪了位置，也能
+  找回来再点**（FS-1、FS-2、FS-2b、FS-3）。
+  - 整帧多匹配（`repeated_anchor` 版面）改在精确分数图上枚举：直算和变换（FFT）两种引擎取更便宜的一种，分数和直算逐位相同，不走金字塔粗搜。锚点现在可以带
+    `mask` 和 `scales`（以前准入拒收）；各比例的匹配合在一起排序（分数降序，同分时声明在前的比例优先，再按 `(y, x)`）、去重叠，同一个对象在不同比例下只算
+    一个实例；实例框、点击框和特征偏移按匹配到的比例缩放（取整照 REC-5）。
+  - 打分、收集、排序和去重叠共用 5 秒的搜索时限：超时是 `candidate_search_incomplete`，去重后超过 `max_instances` 是 `candidate_projection_budget_exceeded`，
+    都不给残缺的列表。
+  - 新特征值 `anchor_milli`：实例自己的锚点匹配分（千分，向下取整），只用在 `repeated_anchor` 版面上，不读目标、不带 `offset`；选择策略把它当整数读，门、
+    打分和同分排序都能用（FS-2b 补上源声明门这一处，以前读它的策略加载不了）。
+  - select 步可以声明 `confirm: "track"` 加 `track_px`（1–64）：确认帧 F2 用同一份事实快照、同一时刻再决定一次；F2 选中的那一个和原来选中的那一个，锚点
+    匹配原点的切比雪夫距离不超过 `track_px`，就记 `tracked`，点 F2 上那一个的点击框（绑定 F2）；否则记 `track_lost`，在任何输入之前以
+    `selection_decision_mismatch` 失败，带 `confirm`（`track`）和 `shift_px`，F2 谁都没选时带 `selection_kind`。只收 `repeated_anchor` 版面上的单帧 select：
+    `track_px` 缺了或越界、`track_px` 没配 `track`、`track` 配 `scan` 或 `fixed_slots`，都以 `contained_task_select_invalid` 拒收。默认的确认
+    （`candidate_set`）和 `decision` 不变。
+  - **`track`、`anchor_milli` 和锚点的 `mask`、`scales` 都要包声明 `package` 7**（用了它们的包，bundle 声明 `package` [7, 7]）；更早的读者拒收这样的包
+    （见配对）。
+- **现有的包照旧**：没带 `mask`、`scales` 的锚点投影和以前逐字节相同（钉住的候选集哈希没改）；以前会撞上 5 秒上限的整帧搜索，现在可能做得完。扫描（`scan`）
+  选择新拒收带 `scales` 的锚点（明细 `scan anchor=scaled`），以前锚点本来就不能带 `scales`，现有包不受影响。超时的 `candidate_search_incomplete` 里，`count`
+  现在可能是 0（先算完分数图再取位置）。
+- **账本升到修订 7，只能往前修**（FS-3）。修订 7 是 6 加上 `task.selection_evaluated` 的两种确认 `tracked` 和 `track_lost`。**只有声明了
+  `confirm: "track"` 的 select 步才写它们**，没有这种包就一条都不写；但安装工具按两个构建声明的范围判，账本里也不记修订号，所以部署一完成就退不回
+  v0.12.42。读这个 Runtime 账本的控制台要建在修订 7 的读者上：UI v0.12.9（钉 v0.12.40，`ledger` [3, 6]）的账本窗口读到含这种记录的那一页会失败。所以
+  **在任何声明 `track` 的包运行之前，先把控制台换成钉 0.12.43 或更新、`ledger` 上限至少 7 的构建**（见配对）。
+
+配置：接口修订两处升，都按代码和 `contracts/component-interfaces.md` 核过：`package` [3, 6] 改为 [3, 7]（FS-1、FS-2 升一次，FS-3 的 `confirm: "track"`、
+`track_px` 也进修订 7，不再升，FS-2b 也不升；登记 §1.282、§1.283、§1.284、§1.285），`ledger` [3, 6] 改为 [3, 7]（FS-3，登记 §1.284）。`distribution/windows/component-interfaces.json`、
+合同表里 `package` 7 和 `ledger` 7 两行、架构测试 K27（`tools/actinglab-architecture/tests/component_interfaces.rs`）三处一致。其余都不变：`actingd-config`
+仍是 [5, 26]，`runtime-client` 仍是 [3, 6]，`install-selection` 仍是 [1, 1]，`install-control` 仍是 [0, 1]，`runtime-outcomes` 仍是 [1, 1]。
+
+- 没有新键，键表、默认值文件和配置示例都没改，部署计划的默认值对比是空的。
+- 结果码：没有新码、新位置。`selection_decision_mismatch`（待定稿）多三个可选值 `confirm`、`shift_px`、`selection_kind`，说明和处理补上 track 一段；键表多
+  `confirm`（词表 `selection_confirm`）和 `shift_px`（整数）；新词表 `selection_confirm`，只有 `track`；`candidate_search_incomplete` 只改了说明。结果码目录
+  仍是 3890 个码、1740 个位置；没有新定稿或退役的条目，所以本版的发布文件是空的。
+- 账本：`ledger` 7 是 6 加上确认 `tracked {candidate_set_sha256, decision_sha256, shift_px, projection?}` 和
+  `track_lost {candidate_set_sha256, decision_sha256, shift_px?, projection?}`，拒收不认识的成员；读者只收 v1 的 `repeated_anchor` 投影、没有 `multi_select`、
+  64 位十六进制哈希、`tracked` 的 `shift_px` 不超过 64（`crates/actingcommand-contract/src/event/payload/task_selection.rs` 358–375，校验 1239–1281）。别的片加的
+  都不进读者核的形状：`anchor_milli` 是已有的整数特征，缩放后的实例框是已有的矩形，锚点原点不进记录，`confirm`、`shift_px` 和 `selection_confirm` 读者只核
+  拼写。SQLite 格式 2、`actingcommand.event.v3`、记录类型、表、索引和每个视图的类型表都不变，没有迁移，也不用新的状态根，修订 3 到 6 的账本照常读。
+- 程序文件：workspace 成员、Runtime 包和 Tools 包的文件清单都和 v0.12.42 一样。`apps/actingctl` 只改了 HS-2b 的安装测试（改用 [3, 6] 的夹具，断言不变），
+  `apps/actinglab`、`crates/runtime-client`、`crates/ledger`、`crates/ledger-forensics` 自 v0.12.42 没改；合同 crate 只改了 `task_selection.rs` 和键表；
+  MCP 工具仍是 41 个。
+
+升级时要知道的（按安装工具的代码核过；安装命令的代码自 v0.12.42 只改了一个测试文件，下面的行号在 v0.12.42 和本版相同）：
+
+- 账本单向：`update plan`、`update apply` 不带 `--accept-ledger-one-way` 时，`ledger` 的 `one_way` 边不过（R\*.max 7 大于 Rp.max 6，
+  `apps/actingctl/src/install/plan.rs` 288–294），以 `interface_edge` 拒绝（1019–1031），不过的只有这一行，什么都不改；带上以后 `previous_max_in_next`
+  （6 在 [3, 7] 里，282–287）和 `one_way` 都过，计划的 `notice.rollback_window_bounded` 是 true（197、214–220），计划文件的 `inputs` 记下
+  `accept_ledger_one_way`（955–961）。
+- 账本校验：现行和目标的 `ledger` 范围不同，所以计划有 `ledger_verify`（908），apply 把它排在所有换文件的步骤之前（`install/update.rs` 527–533），跑的是
+  本版构建里的 `actingcommand-actingd.exe ledger-maintenance verify --config <root>\actingd.config.json`（update.rs 829–833，`install/programs.rs` 293–306），
+  期限是 `install.child.ledger_verify_timeout_ms`（默认 1800000）。现行账本只有修订 3 到 6 的记录，本版读得了。不过或到期限时怎么办，和 v0.12.39 一节的账本
+  校验一样：什么文件都没换，但 Runtime 已经停了、hold 还在。
+- 没有自动回退：部署的新 Runtime 起来以后检查不过时，部署自己的自动回退先按回退算一次计划（`install/deploy.rs` 715–733，不带标志），`ledger` 边不过（见下面的
+  退回），以 `rollback_gate_failed`（`rollback_gate_parts` 是 `interface_edges`，709–714）结束，新构建和 hold 都留着。起过本版 Runtime 的操作，`install undo`
+  也按回退判（`install/undo.rs` 177–188；边在 324–356，用 `plan.rs` 376–396 的 `rollback_edges`，不带标志），同一条边以 `interface_edge` 拒绝；没起过 Runtime
+  的未完成操作照旧能撤销。出了问题只能往前修。
+- 其余的边都过：`runtime-client` 两边都是 [3, 6]，安装工具自己的声明 I 编在程序里（`install/host.rs` 23–25，就是它构建里的 `component-interfaces.json`），
+  v0.12.42 的 I 是 [3, 6]，`installer_meets_previous`、`installer_meets_next` 都过（`plan.rs` 308–323，交集在 234–236）；`install-control` [0, 1] 相同，
+  `runtime-outcomes` 1 在 I 的 [1, 1] 里（295–307）；`package` 的 `bundle_max_in_next` 在单一位置根上只有 `pack_declaration_unknown` 警告（325–348）；现行
+  配置没有它不认识的键（`installer_knows_keys`，353–369），本版的 check-config 收现行配置（`next_check_config`，895–907）。
+- **v0.12.42 的安装工具没有新东西要发或要读**：它连 Runtime 发的请求和读到的答复形状都没变（`runtime-client` 自 v0.12.42 没改，合同 crate 只多了
+  select 记录的两个确认词和两个结果值键，都只在声明 `track` 的包运行时出现，部署时还没有）；账本校验跑的是本版构建里的程序。从本版的构建目录跑本版的安装工具，结果相同。
+
+退回 v0.12.42（按安装工具的代码和 HS-2b 的安装测试核过）：
+
+- 安装工具拒绝退回。本版声明 `ledger` [3, 7]，v0.12.42 声明 [3, 6]。`rollback plan`、`rollback apply` 的 `previous_max_in_next` 要求现行构建的 Rp.max 落在
+  目标的 R\* 里（`plan.rs` 282–287）：7 不在 [3, 6] 里，这条边不过，两条命令都在算回退门之前就以 `interface_edge` 拒绝（1019–1031），不过的只有这一行，
+  什么都不改。带不带 `--accept-ledger-one-way` 都一样：它只放行 `one_way`（288–294；退回方向 6 不大于 7，这条本来就过）。HS-2b 的安装测试
+  （`install/gate_inst1_update.rs` 1857–1915）在 [3, 5] 和 [3, 6] 两个构建上钉的就是这两件：更新缺标志只有 `one_way` 不过，退回带不带标志都只有
+  `previous_max_in_next` 不过；判法只看两个范围，本版的 [3, 6] 和 [3, 7] 走同一段代码。
+- **账本里不记修订号，所以部署一完成就退不回去**：安装工具判的是两个构建清单里声明的范围（`plan.rs` 728–737 的 `speaks()`），不读账本；账本的写者元数据只有
+  schema、owner、pid、在不在写和起止时间（`crates/ledger/src/global/read_only.rs` 61–68），SQLite 格式和事件 schema 都没变（合同表 `ledger` 7 一行）。所以
+  刚部署完、一条修订 7 的记录都还没写时，退回也一样被拒；有没有包用过 `track` 都一样。
+- 同一条边挡住部署的自动回退和起过本版 Runtime 以后的 `install undo`（见上面的升级）；v0.12.42 的 actingctl 跑的是同一份安装代码，判的也一样。
+- 为什么要这样（只作记录，不是操作步骤）：v0.12.42 的合同 crate 里 `TaskSelectionConfirmation` 是按 `kind` 打标签、`deny_unknown_fields`、没有兜底的封闭
+  枚举（`task_selection.rs` 245–347，v0.12.40 到 v0.12.42 相同），解不开 `tracked`、`track_lost`；它的账本逐条认证时解码失败就是 `corrupt_ledger_record`
+  （`crates/ledger/src/global/sqlite.rs` 4138–4144）。这种记录在最新的 `ledger_observer.open_verify_tail_records` 条里时 v0.12.42 起不来，含它的页整页失败，
+  回退门的 `ledger_readability` 也不过。
+- v0.12.42 一节的退回条件是退回 v0.12.41 的条件；本版连 v0.12.42 都退不回去，它们不适用。
+- 客户端和 Runtime 的配对（`crates/runtime-client`、`crates/ledger`、`crates/ledger-forensics`、`apps/actinglab` 自 v0.12.42 没改，合同 crate 的事件部分自
+  v0.12.40 到 v0.12.42 没改，所以下面旧读者的行号在 v0.12.40、v0.12.42 和本版相同）：
+  - v0.12.42 的安装工具装本版：照常，**要带 `--accept-ledger-one-way`**，计划有 `ledger_verify`，见上面的升级。
+  - **本版自己的读者**：Runtime（打开账本、`ledger-maintenance verify`、回退门的读页）、actinglab、actingctl 和 MCP 都经本版的合同 crate 解码，认得两个新词。
+  - **本版不写修订 7 的记录，除非有包声明了 `track`**：`tracked`、`track_lost` 只在 `crates/execution-kernel/src/contained_task/selection.rs` 1864、1877 构造，
+    都在 `SelectConfirm::Track` 分支里（1823），这个分支只在准入记下的 `confirm` 是 `track` 时走（1742）；`confirm` 没写时是 `candidate_set`（214–215），准入
+    只在 `repeated_anchor` 单帧 select 上、带合法 `track_px` 时收 `track`（`track_refusal` 476–491，在 404 调用）。所以控制台和旧读者只有在这种包运行以后才会
+    碰到这种记录。
+  - **actinglab ≤ v0.12.42 在线**：它的 Lab 操作只按自己的请求、关联、租约和动作查事件（`crates/runtime-client/src/client/lab_operation.rs` 178–215），任务的
+    select 记录不在里面，`do` 照常。它读到含修订 7 记录的事件页时（`lab`、`forensic` 等带载荷的投影；只有 `cli`、`concise` 不带载荷，
+    `crates/ledger/src/global/projection.rs` 440），回执按它的合同 crate 解不开，以 `runtime_receipt_decode_failed` 失败，连接作废
+    （`crates/runtime-client/src/ipc.rs` 228–233）。本地检查声明 `package` 7 的包（`package check`，`apps/actinglab/src/package_cli.rs` 64）在 v0.12.42 的门里
+    被拒：select 的 `track_px` 不在它认的成员里（`crates/pack-containment/src/source/declarations.rs` 1036），`confirm` 只认 `candidate_set` 和 `decision`
+    （1098–1099），特征值不认 `anchor_milli`（2246），锚点带 `mask`、`scales` 准入拒收，搜索里也拒（`crates/recognition-pack/src/candidate_layout.rs`
+    1010–1025）。
+  - **actinglab ≤ v0.12.42 离线 `resource restore`**：开账本时读并认证每一条记录（`apps/actinglab/src/resource_restore.rs` 117–128 →
+    `crates/ledger/src/global/evidence.rs` 922–923 → `sqlite.rs` 1979–1994），账本里只要有一条修订 7 的记录，就以 `corrupt_ledger_record`（`sqlite.rs`
+    5555–5561）整次失败，报 `resource restore ledger: …`；没有这种记录时照常。所以声明 `track` 的包跑过以后，离线恢复要用本版的 actinglab。
+  - **控制台 UI v0.12.9**（`Cargo.toml` 39–44 把合同、账本、取证、`runtime-client`、配置和内核 crate 都钉在 `232b3ed8`，即 v0.12.40；
+    `crates/acui-setup/component-interfaces.json` 声明 `actingd-config` [5, 26]、`ledger` [3, 6]、`runtime-client` [3, 5]、`runtime-outcomes` [1, 1]）：
+    - 修订 7 的记录：它用 `ui` 投影读事件页（`crates/acui-source/src/lib.rs` 921，另有 225、971 和 `workbench/preview.rs` 537）。`ui` 投影带公开载荷
+      （Runtime 的 `projection.rs` 452–455），公开载荷里就是整条 select 记录，确认原样保留，只把原因削成码（`crates/actingcommand-contract/src/event/payload.rs`
+      13329–13330、5303 起），它钉的合同 crate 解不开 `tracked`、`track_lost`，这一页以 `runtime_receipt_decode_failed` 失败。没有声明 `track` 的包运行过，
+      账本里就没有这种记录，控制台照常；别的请求和回执的形状自 v0.12.42 都没变。
+    - 照边算（合同表的 U\* 行；`actingctl install` 的计划不算控制台的边，`plan.rs` 424 的 `ui_edges` 只有闸门测试调用）：`ledger` 的 `next_max_in_ui` 不过
+      （7 不在 [3, 6] 里），`previous_max_in_ui` 过（6 在里面）；`runtime-client` [3, 5] 和 [3, 6] 有交集，`actingd-config` 26 三方共有，`runtime-outcomes` 1
+      在 [1, 1] 里。生产根是单一位置根，里面没装控制台。
+    - 声明 `package` 7 的包：控制台不准入包。它构建的 workspace（`Cargo.toml` 2–13）里没有用执行内核的代码，唯一用它的 `crates/acui-setup/src/maintenance.rs`
+      14 在 workspace 之外，不构建。
+    - 所以控制台要换成建在修订 7 读者上的构建（钉 0.12.43 或更新、`ledger` 上限至少 7），再让声明 `track` 的包运行。
+  - **actingctl**：生产根里的 actingctl（含看门狗和 MCP 服务）和 Runtime 是同一个构建，随部署一起换，认得新词；看门狗只连接、读 runtime-info
+    （`apps/actingctl/src/watchdog/observe.rs` 572–591），不读事件页。钉 v0.12.42 或更早的 actingctl（在根外跑的那份）读到含修订 7 记录的事件页时，带载荷的
+    投影以 `runtime_receipt_decode_failed` 失败（`ipc.rs` 228–233），`cli`、`concise` 投影照常。
+  - **MCP**：Lab 工具（`ac_lab_do`、`ac_pack_check` 等）跑安装里的 `<root>\tools\actinglab.exe`（`apps/actingctl/src/mcp/lab.rs` 3–4），部署以后就是本版的
+    actinglab，认得新包和新记录；`ac_events`、`ac_run_evidence` 和 actingctl 一样走 `runtime-client`。钉 v0.12.42 或更早的 MCP（根外那份）和同版的 actingctl、
+    actinglab 一样：读到这种记录的页失败，检查这种包被拒。
+
+运行上的变化：
+
+- 整帧搜索和跟踪确认（#404 FS-1 到 FS-3）：`repeated_anchor` 的整帧多匹配改在精确分数图上做，现有包结果不变；账本修订 7，部署带 `--accept-ledger-one-way`、
+  多 `ledger_verify`，装上后退不回 v0.12.42；声明 `track` 的包运行之前先换控制台。
+
+本版合并的 PR：
+
+- #1528 FS-1 + FS-2（#404）：`repeated_anchor` 的整帧多匹配改在精确分数图上枚举（直算或 FFT，取更便宜的），锚点收 `mask` 和 `scales`，各比例合并、排序和
+  去重叠都算进 5 秒时限，超时或超上限都不截断；扫描准入拒收带 `scales` 的锚点；特征值 `anchor_milli`，只收 `repeated_anchor`；`package` [3, 7]；新测试 7 个，
+  改造 2 个，没有新码、新键。
+- #1530 FS-3 + FS-2b（#404）：`repeated_anchor` 上的单帧 select 可以 `confirm: "track"` 加 `track_px`（1–64），F2 再决定一次、`track_px` 内找回就点 c2 的点击框
+  （`tracked`），否则输入前失败（`track_lost`，复用 `selection_decision_mismatch`，新值 `confirm`、`shift_px`、`selection_kind`，新词表 `selection_confirm`）；
+  选择策略可以读 `anchor_milli`（源声明门和内核一起收）；`ledger` [3, 7]；新测试 4 个，改造 HS-2b 的安装测试和 K27 两处。
+
 ## v0.12.42
 
 本版是 v0.12.41 之后合并的 1 个 PR：#402 HS-5e。先说部署：接口声明都不变（账本仍是 [3, 6]），部署不用带 `--accept-ledger-one-way`，计划里也没有
