@@ -26,7 +26,8 @@ pub const MAX_CPU_THREADS: u16 = 64;
 pub enum Command {
     /// Print the DXGI adapters (and nothing else) as JSON on stdout.
     ListAdapters,
-    Run(RunOptions),
+    /// Boxed: the options are far larger than the data-less `ListAdapters`.
+    Run(Box<RunOptions>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,7 +166,7 @@ pub fn parse_args(args: &[String]) -> Result<Command, BenchError> {
         Some(label) => (*label).to_owned(),
         None => default_label(execution_provider, device, &tuning),
     };
-    Ok(Command::Run(RunOptions {
+    Ok(Command::Run(Box::new(RunOptions {
         vision_root,
         models_dir,
         execution_provider,
@@ -177,7 +178,7 @@ pub fn parse_args(args: &[String]) -> Result<Command, BenchError> {
         out: PathBuf::from(required("--out")?),
         label,
         baseline: values.get("--baseline").map(|path| PathBuf::from(*path)),
-    }))
+    })))
 }
 
 /// The variant name of design §1.2 when no `--label` is given, e.g. `cpu-1t`, `cuda0-default`,

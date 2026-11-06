@@ -30,7 +30,7 @@ fn main() {
                 )),
             }
         }
-        Command::Run(options) => options,
+        Command::Run(options) => *options,
     };
     if let Err(error) = run::check_footprint(&options) {
         fail(&error);
