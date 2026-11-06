@@ -833,7 +833,12 @@ fn establish_runtime(spec: &VisionRuntimeSpec) -> VisionFfiResult<RuntimeFacts> 
             library.display()
         )));
     }
-    establish_process_runtime_library_closure(&spec.runtime_library_closure)?;
+    // Workflow #407 GPU-0d (experiment branch only): the libraries ONNX Runtime loads itself (the
+    // CUDA provider) are checked here and loaded by ONNX Runtime when the provider is registered.
+    establish_process_runtime_library_closure(
+        &spec.runtime_library_closure,
+        &spec.onnxruntime_loaded_libraries,
+    )?;
     let onnxruntime_version = onnxruntime_version_string(library)?;
     ORT_RUNTIME.ensure(library).map_err(unavailable)?;
     let executable = std::env::current_exe().map_err(|error| {

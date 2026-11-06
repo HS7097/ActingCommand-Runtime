@@ -152,17 +152,47 @@ fn runtime_closure_error(message: impl Into<String>) -> VisionFfiError {
     )
 }
 
+/// Workflow #407 GPU-0d (experiment branch only): checks every library ONNX Runtime loads
+/// itself, then establishes the closure of `declared_paths`. A library ONNX Runtime loads is
+/// never handed to `load`: one that is missing, has another pinned digest or is also declared
+/// for preloading fails by its path before anything is loaded, and the closure stays as it was.
+#[cfg(any(windows, test))]
+fn establish_checked_runtime_library_closure_with<H, F>(
+    closure: &Mutex<RuntimeLibraryClosureState<H>>,
+    declared_paths: &[PathBuf],
+    onnxruntime_loaded: &[crate::OnnxRuntimeLoadedLibrary],
+    load: F,
+) -> VisionFfiResult<()>
+where
+    F: FnMut(&Path) -> VisionFfiResult<H>,
+{
+    for library in onnxruntime_loaded {
+        if declared_paths.contains(&library.path) {
+            return Err(runtime_closure_error(format!(
+                "{} is loaded by ONNX Runtime itself and must not be in the native OCR runtime-library closure",
+                library.path.display()
+            )));
+        }
+        library.check()?;
+    }
+    establish_runtime_library_closure_with(closure, declared_paths, load)
+}
+
 /// Loads the declared ONNX Runtime library closure once per process, in order, with
 /// `LoadLibraryExW` and the released search flags; the handles stay loaded for the process
 /// lifetime. The same closure is idempotent; a different one, or any retry after a failed
-/// load, is refused until restart.
+/// load, is refused until restart. Workflow #407 GPU-0d (experiment branch only): the libraries
+/// ONNX Runtime loads itself (`onnxruntime_loaded`, the CUDA provider) are checked first and
+/// never loaded here; ONNX Runtime loads them when their execution provider is registered.
 #[cfg(windows)]
 pub fn establish_process_runtime_library_closure(
     declared_paths: &[PathBuf],
+    onnxruntime_loaded: &[crate::OnnxRuntimeLoadedLibrary],
 ) -> VisionFfiResult<()> {
-    establish_runtime_library_closure_with(
+    establish_checked_runtime_library_closure_with(
         &PROCESS_RUNTIME_LIBRARY_CLOSURE,
         declared_paths,
+        onnxruntime_loaded,
         load_process_runtime_library,
     )
 }
@@ -170,6 +200,7 @@ pub fn establish_process_runtime_library_closure(
 #[cfg(not(windows))]
 pub fn establish_process_runtime_library_closure(
     _declared_paths: &[std::path::PathBuf],
+    _onnxruntime_loaded: &[crate::OnnxRuntimeLoadedLibrary],
 ) -> VisionFfiResult<()> {
     Ok(())
 }
@@ -786,6 +817,131 @@ mod tests {
         assert_eq!(dropped.load(Ordering::SeqCst), 0);
     }
 
+    /// Workflow #407 GPU-0d: a CUDA runtime's closure preloads the provider bridge and ONNX
+    /// Runtime only. The CUDA provider is checked where the runtime declares it, with its digest
+    /// when one is pinned, and never loaded; ONNX Runtime loads it once its provider bridge is
+    /// set up. A provider that is missing, has another digest or is declared for preloading
+    /// fails by its path before anything is loaded.
+    #[test]
+    fn the_cuda_closure_checks_the_provider_file_without_loading_it() {
+        use crate::OnnxExecutionProvider;
+
+        const PROVIDER_BYTES: &[u8] = b"synthetic CUDA provider";
+        let bridge = crate::ONNXRUNTIME_SHARED_PROVIDERS_LIBRARY;
+        let onnxruntime = crate::ONNXRUNTIME_LIBRARY;
+        let cuda = crate::ONNXRUNTIME_CUDA_PROVIDER_LIBRARY;
+        let root = synthetic_vision_root(
+            "provider-present",
+            &[
+                (bridge, b"synthetic provider bridge".as_slice()),
+                (onnxruntime, b"synthetic onnxruntime".as_slice()),
+                (cuda, PROVIDER_BYTES),
+            ],
+        );
+        let ort = root.join(crate::VISION_RUNTIME_DIRECTORY);
+        let provider = ort.join(cuda);
+        let spec =
+            crate::VisionRuntimeSpec::from_vision_root(&root, OnnxExecutionProvider::Cuda, None)
+                .expect("a CUDA runtime with its provider file");
+        assert_eq!(
+            spec.runtime_library_closure,
+            vec![ort.join(bridge), ort.join(onnxruntime)]
+        );
+        assert_eq!(
+            spec.onnxruntime_loaded_libraries,
+            vec![crate::OnnxRuntimeLoadedLibrary {
+                path: provider.clone(),
+                expected_sha256: None,
+            }]
+        );
+
+        let mut pinned = spec.onnxruntime_loaded_libraries.clone();
+        pinned[0].expected_sha256 = Some(crate::sha256_hex(PROVIDER_BYTES));
+        for libraries in [spec.onnxruntime_loaded_libraries.clone(), pinned.clone()] {
+            let closure = Mutex::new(RuntimeLibraryClosureState::Uninitialized);
+            let mut loaded = Vec::new();
+            establish_checked_runtime_library_closure_with(
+                &closure,
+                &spec.runtime_library_closure,
+                &libraries,
+                |path| {
+                    loaded.push(path.to_path_buf());
+                    Ok(TestRuntimeHandle {
+                        _path: path.to_path_buf(),
+                        dropped: Arc::new(AtomicUsize::new(0)),
+                    })
+                },
+            )
+            .expect("the closure establishes without loading the provider");
+            assert_eq!(loaded, spec.runtime_library_closure);
+            assert!(!loaded.contains(&provider));
+            match &*closure.lock().expect("closure state") {
+                RuntimeLibraryClosureState::Ready { identity, .. } => {
+                    assert_eq!(identity, &spec.runtime_library_closure);
+                }
+                _ => panic!("closure must be ready"),
+            }
+        }
+
+        let mut wrong_digest = pinned;
+        wrong_digest[0].expected_sha256 = Some("0".repeat(64));
+        let mut preloaded = spec.runtime_library_closure.clone();
+        preloaded.push(provider.clone());
+        let missing_root = synthetic_vision_root(
+            "provider-missing",
+            &[
+                (bridge, b"synthetic provider bridge".as_slice()),
+                (onnxruntime, b"synthetic onnxruntime".as_slice()),
+            ],
+        );
+        let missing_provider = missing_root
+            .join(crate::VISION_RUNTIME_DIRECTORY)
+            .join(cuda);
+        let refusal = crate::VisionRuntimeSpec::from_vision_root(
+            &missing_root,
+            OnnxExecutionProvider::Cuda,
+            None,
+        )
+        .expect_err("a CUDA runtime without its provider file fails");
+        assert!(
+            refusal
+                .message()
+                .contains(&missing_provider.display().to_string()),
+            "{}",
+            refusal.message()
+        );
+        let missing = vec![crate::OnnxRuntimeLoadedLibrary {
+            path: missing_provider.clone(),
+            expected_sha256: None,
+        }];
+        for (declared, libraries, named) in [
+            (&spec.runtime_library_closure, &wrong_digest, &provider),
+            (&preloaded, &spec.onnxruntime_loaded_libraries, &provider),
+            (&spec.runtime_library_closure, &missing, &missing_provider),
+        ] {
+            let closure = Mutex::new(RuntimeLibraryClosureState::Uninitialized);
+            let err = establish_checked_runtime_library_closure_with(
+                &closure,
+                declared,
+                libraries,
+                |_| -> VisionFfiResult<TestRuntimeHandle> {
+                    panic!("nothing loads before every provider check passes")
+                },
+            )
+            .expect_err("the provider check fails");
+            assert_eq!(err.code(), VisionFfiErrorCode::ProviderUnavailable);
+            assert!(
+                err.message().contains(&named.display().to_string()),
+                "{}",
+                err.message()
+            );
+            assert!(matches!(
+                &*closure.lock().expect("closure state"),
+                RuntimeLibraryClosureState::Uninitialized
+            ));
+        }
+    }
+
     #[cfg(windows)]
     #[test]
     fn windows_runtime_closure_uses_only_released_loadlibraryex_flags() {
@@ -816,6 +972,19 @@ mod tests {
             absolute_test_path("cudnn64_9.dll"),
             absolute_test_path("cudnn_ops64_9.dll"),
         ]
+    }
+
+    /// Workflow #407 GPU-0d: a vision root under the system temp folder, unique to this process
+    /// and `name`, whose `ort\` holds `files`.
+    fn synthetic_vision_root(name: &str, files: &[(&str, &[u8])]) -> PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("actingcommand-gpu0d-{}-{name}", std::process::id()));
+        let ort = root.join(crate::VISION_RUNTIME_DIRECTORY);
+        std::fs::create_dir_all(&ort).expect("synthetic runtime folder");
+        for (file, bytes) in files {
+            std::fs::write(ort.join(file), bytes).expect("synthetic runtime library");
+        }
+        root
     }
 
     fn absolute_test_path(name: &str) -> PathBuf {

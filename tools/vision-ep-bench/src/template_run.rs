@@ -45,7 +45,7 @@ use actingcommand_recognition::{
     ExactScoreMap, MatchMetric, RecognitionError, RegionSpectra, ScaledScoreMaps, Scene,
     SearchClock, TemplateMask, TemplateMatchTimingStage, TemplateSearch,
 };
-use actingcommand_vision_ffi::sha256_hex;
+use actingcommand_vision_ffi::{OnnxExecutionProvider, sha256_hex};
 use image::{GrayImage, ImageFormat};
 use ort::session::{Session, SessionOutputs};
 use ort::value::Tensor;
@@ -110,7 +110,7 @@ pub(crate) fn measure(
     run::mark(report, monitor, "after_template_workload")?;
 
     run::phase(report, watcher, "ort_init");
-    let (_runtime, plan) = run::initialise(options, cuda_selector, report, monitor)?;
+    let (runtime, plan) = run::initialise(options, cuda_selector, report, monitor)?;
 
     report.template = Some(TemplateSection {
         frame_width: width,
@@ -193,6 +193,11 @@ pub(crate) fn measure(
                 failures.join(", ")
             ),
         ));
+    }
+    // Workflow #407 GPU-0d: after the CUDA sessions, the provider and the NVIDIA libraries come
+    // from the runtime's own folder (a failed case is reported first, above).
+    if runtime.execution_provider == OnnxExecutionProvider::Cuda {
+        run::check_runtime_modules(&runtime, &report.modules, "at the end of the run")?;
     }
     Ok(())
 }

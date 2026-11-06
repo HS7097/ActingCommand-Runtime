@@ -149,6 +149,10 @@ pub struct RuntimeSection {
     pub onnxruntime_sha256: String,
     pub onnxruntime_build_info: String,
     pub runtime_library_closure: Vec<String>,
+    /// Workflow #407 GPU-0d: the libraries ONNX Runtime loads itself (for CUDA, the provider),
+    /// checked and never preloaded; absent for CPU and DirectML.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub onnxruntime_loaded_libraries: Vec<String>,
     pub cuda_driver_version: Option<u32>,
     pub resolved_cuda_device: Option<CudaDeviceIdentity>,
     pub registered_execution_providers: Vec<OnnxExecutionProvider>,

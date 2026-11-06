@@ -18,8 +18,8 @@ use crate::consistency::{self, BaselineReport};
 use crate::error::{BenchCode, BenchError};
 use crate::report::{
     BenchIdentity, BlockOutput, CPU_EXECUTION_PROVIDER, ColdSection, CounterStatus, CudaSection,
-    EngineSection, HostSection, MemoryMark, ModelPlacement, ModelRow, REPORT_SCHEMA, RawSection,
-    Report, ReportStatus, RequestOutput, RequestRecord, RuntimeSection, SafetySection,
+    EngineSection, HostSection, MemoryMark, ModelPlacement, ModelRow, ModuleRecord, REPORT_SCHEMA,
+    RawSection, Report, ReportStatus, RequestOutput, RequestRecord, RuntimeSection, SafetySection,
     ShapeSummary, ShapeTiming, Variant, WorkloadSection,
 };
 use crate::safety::{SafetyLimits, SafetyMonitor};
@@ -315,6 +315,12 @@ fn measure(
     })?;
     report.cold.first_session_us = Some(micros(started.elapsed()));
     mark(report, monitor, "after_first_session_raw_detector")?;
+    // Workflow #407 GPU-0d: ONNX Runtime loaded the CUDA provider while it built the first
+    // session; the provider and the NVIDIA libraries come from the runtime's own folder.
+    if runtime.execution_provider == OnnxExecutionProvider::Cuda {
+        report.modules = win::loaded_modules()?;
+        check_runtime_modules(&runtime, &report.modules, "after the first session")?;
+    }
     let started = Instant::now();
     let mut raw_recognizer =
         engine_bench::build_session(recognizer_model.1, recognizer_model.2, &plan).map_err(
@@ -574,6 +580,9 @@ fn measure(
 
     phase(report, watcher, "modules");
     report.modules = win::loaded_modules()?;
+    if runtime.execution_provider == OnnxExecutionProvider::Cuda {
+        check_runtime_modules(&runtime, &report.modules, "at the end of the run")?;
+    }
     if !placement_unread.is_empty() {
         phase(report, watcher, "placement");
         return Err(BenchError::new(
@@ -687,6 +696,11 @@ pub(crate) fn initialise(
             .iter()
             .map(|path| path.display().to_string())
             .collect(),
+        onnxruntime_loaded_libraries: runtime
+            .onnxruntime_loaded_libraries
+            .iter()
+            .map(|library| library.path.display().to_string())
+            .collect(),
         cuda_driver_version: facts.cuda_driver_version,
         resolved_cuda_device: facts.resolved_cuda_device.clone(),
         registered_execution_providers: plan.registered_execution_providers().to_vec(),
@@ -694,6 +708,98 @@ pub(crate) fn initialise(
         cpu_fallback_disabled: plan.cpu_fallback_disabled(),
     });
     Ok((runtime, plan))
+}
+
+/// Workflow #407 GPU-0d: once a CUDA session exists, every library ONNX Runtime loads itself (the
+/// CUDA provider) is loaded from its declared path, and every loaded module named like a DLL of
+/// the runtime's folder (`ort\`: the NVIDIA libraries the provider imports or loads later, ONNX
+/// Runtime and its bridge) is loaded from that folder. A library that is not loaded, or a module
+/// from any other folder, is `bench_runtime_unavailable` naming the paths.
+pub(crate) fn check_runtime_modules(
+    runtime: &VisionRuntimeSpec,
+    modules: &[ModuleRecord],
+    when: &str,
+) -> Result<(), BenchError> {
+    let unavailable = |detail: String| {
+        BenchError::new(
+            BenchCode::RuntimeUnavailable,
+            format!("the CUDA runtime modules {when}: {detail}"),
+        )
+    };
+    let folder = runtime.onnxruntime_library.parent().ok_or_else(|| {
+        unavailable(format!(
+            "the ONNX Runtime library {} has no folder",
+            runtime.onnxruntime_library.display()
+        ))
+    })?;
+    let listing_error = |error: std::io::Error| {
+        unavailable(format!("{} cannot be listed: {error}", folder.display()))
+    };
+    let mut shipped = BTreeSet::new();
+    for entry in std::fs::read_dir(folder).map_err(listing_error)? {
+        let name = entry
+            .map_err(listing_error)?
+            .file_name()
+            .to_string_lossy()
+            .to_lowercase();
+        if name.ends_with(".dll") {
+            shipped.insert(name);
+        }
+    }
+    let not_loaded: Vec<String> = runtime
+        .onnxruntime_loaded_libraries
+        .iter()
+        .filter(|library| {
+            !modules
+                .iter()
+                .any(|module| same_path(Path::new(&module.path), &library.path))
+        })
+        .map(|library| library.path.display().to_string())
+        .collect();
+    let foreign: Vec<&str> = modules
+        .iter()
+        .filter(|module| {
+            let path = Path::new(&module.path);
+            path.file_name()
+                .is_some_and(|name| shipped.contains(&name.to_string_lossy().to_lowercase()))
+                && !path
+                    .parent()
+                    .is_some_and(|parent| same_path(parent, folder))
+        })
+        .map(|module| module.path.as_str())
+        .collect();
+    let mut problems = Vec::new();
+    if !not_loaded.is_empty() {
+        problems.push(format!("not loaded: {}", not_loaded.join(", ")));
+    }
+    if !foreign.is_empty() {
+        problems.push(format!(
+            "loaded from outside {}: {}",
+            folder.display(),
+            foreign.join(", ")
+        ));
+    }
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(unavailable(problems.join("; ")))
+    }
+}
+
+/// Whether two paths name the same file or folder: equal as absolute paths with letters compared
+/// without case, as Windows compares them, or equal once canonicalised.
+fn same_path(left: &Path, right: &Path) -> bool {
+    let key = |path: &Path| {
+        strip_verbatim(std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()))
+            .to_string_lossy()
+            .trim_end_matches(['\\', '/'])
+            .to_lowercase()
+    };
+    key(left) == key(right)
+        || matches!(
+            (left.canonicalize(), right.canonicalize()),
+            (Ok(left), Ok(right)) if left == right
+        )
 }
 
 /// The DXGI adapters, the DirectML adapter and the CUDA device; the CUDA selector of a CUDA run.
