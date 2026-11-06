@@ -1075,8 +1075,8 @@ fn load_ort_session(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct OrtStepFailure {
     step: String,
-    /// `ort::ErrorCode`, as `Debug` spells it; none for a step that is not an ONNX Runtime call.
-    ort_code: Option<String>,
+    /// ONNX Runtime's error code; none for a step that is not an ONNX Runtime call.
+    ort_code: Option<ort::ErrorCode>,
     /// ONNX Runtime's status message, verbatim, with its causes.
     ort_message: Option<String>,
 }
@@ -1092,7 +1092,7 @@ impl OrtStepFailure {
         }
         Self {
             step: step.into(),
-            ort_code: Some(format!("{:?}", error.code())),
+            ort_code: Some(error.code()),
             ort_message: Some(message),
         }
     }
@@ -1113,7 +1113,7 @@ impl std::fmt::Display for OrtStepFailure {
             write!(f, ": {message}")?;
         }
         if let Some(code) = &self.ort_code {
-            write!(f, " (ONNX Runtime error code {code})")?;
+            write!(f, " (ONNX Runtime error code {code:?})")?;
         }
         Ok(())
     }

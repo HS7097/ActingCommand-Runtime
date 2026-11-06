@@ -360,9 +360,10 @@ pub fn decode_hex(text: &str) -> Result<Vec<u8>, BenchError> {
     if !text.len().is_multiple_of(2) {
         return Err(invalid("hexadecimal text has an odd length"));
     }
-    text.as_bytes()
-        .chunks_exact(2)
-        .map(|pair| match (digit(pair[0]), digit(pair[1])) {
+    let (pairs, _) = text.as_bytes().as_chunks::<2>();
+    pairs
+        .iter()
+        .map(|&[first, second]| match (digit(first), digit(second)) {
             (Some(high), Some(low)) => Ok((high << 4) | low),
             _ => Err(invalid(
                 "hexadecimal text holds a character outside 0-9 and a-f",

@@ -22,7 +22,7 @@ use crate::report::{
     REPORT_SCHEMA, RawSection, Report, ReportStatus, RequestOutput, RequestRecord, RuntimeSection,
     SafetySection, ShapeSummary, ShapeTiming, Variant, WorkloadSection,
 };
-use crate::safety::{SafetyLimits, SafetyMonitor};
+use crate::safety::SafetyMonitor;
 use crate::stats::percentiles;
 use crate::template_run;
 use crate::watch::{FailureSink, Watcher};
@@ -79,10 +79,11 @@ pub fn empty_report(options: &RunOptions) -> Report {
             process_id: win::current_process_id(),
         },
         safety: SafetySection {
-            limits: SafetyLimits::default(),
+            limits: options.safety_limits,
             priority_class_expected: win::BELOW_NORMAL_CLASS,
             priority_class_read_back: None,
             preflight: None,
+            own_private_bytes_peak: None,
         },
         host: HostSection::default(),
         workload: None,
@@ -216,9 +217,11 @@ pub fn write_report(out: &Path, report: &Report) -> Result<(), BenchError> {
 pub fn run(options: &RunOptions, report: &mut Report) -> Result<(), BenchError> {
     report.phase_at_failure = Some("preflight".to_owned());
     report.safety.priority_class_read_back = Some(win::set_below_normal_priority()?);
-    let limits = SafetyLimits::default();
+    let limits = options.safety_limits;
     let mut monitor = SafetyMonitor::new(limits, OsMemoryReader);
-    report.safety.preflight = Some(monitor.preflight()?);
+    let preflight = monitor.preflight();
+    report.safety.own_private_bytes_peak = monitor.own_private_bytes_peak();
+    report.safety.preflight = Some(preflight?);
     let watcher = Watcher::start(
         limits,
         FailureSink {
@@ -231,9 +234,18 @@ pub fn run(options: &RunOptions, report: &mut Report) -> Result<(), BenchError> 
         BenchMode::Ocr => measure(options, report, &watcher, &mut monitor),
         BenchMode::Template => template_run::measure(options, report, &watcher, &mut monitor),
     };
+    // GPU-0f: the peak over the main thread's readings (the one that broke the cap included),
+    // then over the watcher's samples too.
+    report.safety.own_private_bytes_peak = monitor.own_private_bytes_peak();
     let finished = watcher.finish();
     match finished {
         Ok((phases, counters)) => {
+            report.safety.own_private_bytes_peak = report
+                .safety
+                .own_private_bytes_peak
+                .into_iter()
+                .chain(phases.iter().map(|phase| phase.own_private_bytes_max))
+                .max();
             report.phases = phases;
             report.gpu_counters = counters;
         }
@@ -808,7 +820,7 @@ fn runtime_module_problems(
         .iter()
         .filter(|module| {
             let path = Path::new(&module.path);
-            file_name(*module).is_some_and(|name| {
+            file_name(module).is_some_and(|name| {
                 shipped.contains(&name.to_lowercase()) || is_cudnn9_library(&name)
             }) && !path
                 .parent()
@@ -818,7 +830,7 @@ fn runtime_module_problems(
         .collect();
     let cudnn_modules: Vec<String> = modules
         .iter()
-        .filter(|module| file_name(*module).is_some_and(|name| is_cudnn9_library(&name)))
+        .filter(|module| file_name(module).is_some_and(|name| is_cudnn9_library(&name)))
         .map(|module| module.path.clone())
         .collect();
     let mut problems = Vec::new();

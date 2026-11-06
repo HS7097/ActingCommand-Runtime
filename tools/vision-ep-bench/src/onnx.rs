@@ -503,10 +503,10 @@ fn read_tensor(bytes: &[u8]) -> Result<InitializerDescription, BenchError> {
                         "a float initializer's raw_data is not a whole number of floats",
                     ));
                 }
-                tensor.values.extend(
-                    raw.chunks_exact(4)
-                        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])),
-                );
+                let (floats, _) = raw.as_chunks::<4>();
+                tensor
+                    .values
+                    .extend(floats.iter().map(|bytes| f32::from_le_bytes(*bytes)));
             }
             _ => {}
         }

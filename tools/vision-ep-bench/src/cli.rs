@@ -7,11 +7,11 @@
 //!     [--cpu-threads <n>] [--cuda-conv-search exhaustive|heuristic] [--cuda-tf32 on|off]
 //!     [--cuda-cpu-fallback on|off] [--directml-cpu-fallback on|off]
 //!     --workload <json> [--warmup 3] [--reps 20] --out <json>
-//!     [--models-dir <dir>] [--label <name>] [--baseline <json>]
+//!     [--models-dir <dir>] [--label <name>] [--baseline <json>] [--private-bytes-cap-gib 3]
 //! ac-vision-ep-bench --mode template --vision-root <dir> --ep cpu|cuda|directml [--device <n>]
 //!     [--cpu-threads <n>] [--cuda-conv-search exhaustive|heuristic] [--cuda-tf32 on|off]
 //!     --workload <json> [--warmup 3] [--reps 1] [--direct-enumeration on|off] --out <json>
-//!     [--label <name>]
+//!     [--label <name>] [--private-bytes-cap-gib 3]
 //! ac-vision-ep-bench --list-adapters
 //! ac-vision-ep-bench --probe-dlls <ort dir>
 //! ```
@@ -32,8 +32,12 @@
 //! frame (`template_run.rs`); there `--reps` counts the repetitions per frame, and
 //! `--direct-enumeration off` skips today's direct enumeration, which does not depend on the
 //! execution provider and takes up to 5 s per search.
+//!
+//! Workflow #407 GPU-0f: `--private-bytes-cap-gib <n>` (both modes, any EP; 1..=16, default 3)
+//! sets the bench's own private-bytes cap; the host floors stay as they are.
 
 use crate::error::{BenchCode, BenchError};
+use crate::safety::{DEFAULT_PRIVATE_BYTES_CAP_GIB, PRIVATE_BYTES_CAP_GIB_RANGE, SafetyLimits};
 use actingcommand_vision_ffi::{CudaConvAlgorithmSearch, OnnxExecutionProvider, OrtSessionTuning};
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -78,9 +82,12 @@ pub struct RunOptions {
     pub baseline: Option<PathBuf>,
     /// Template mode: whether today's direct enumeration runs.
     pub direct_enumeration: bool,
+    /// GPU-0f: the memory limits in force, the private-bytes cap from `--private-bytes-cap-gib`.
+    pub safety_limits: SafetyLimits,
 }
 
 const VALUE_FLAGS: &[&str] = &[
+    "--private-bytes-cap-gib",
     "--mode",
     "--direct-enumeration",
     "--vision-root",
@@ -265,6 +272,18 @@ pub fn parse_args(args: &[String]) -> Result<Command, BenchError> {
     if reps == 0 {
         return Err(cli("--reps must be at least 1"));
     }
+    let private_bytes_cap_gib = values
+        .get("--private-bytes-cap-gib")
+        .map(|value| parse_number::<u64>("--private-bytes-cap-gib", value))
+        .transpose()?
+        .unwrap_or(DEFAULT_PRIVATE_BYTES_CAP_GIB);
+    if !PRIVATE_BYTES_CAP_GIB_RANGE.contains(&private_bytes_cap_gib) {
+        return Err(cli(format!(
+            "--private-bytes-cap-gib must be in {}..={}",
+            PRIVATE_BYTES_CAP_GIB_RANGE.start(),
+            PRIVATE_BYTES_CAP_GIB_RANGE.end()
+        )));
+    }
     let models_dir = values
         .get("--models-dir")
         .map_or_else(|| vision_root.join("models"), |dir| PathBuf::from(*dir));
@@ -287,6 +306,7 @@ pub fn parse_args(args: &[String]) -> Result<Command, BenchError> {
         label,
         baseline: values.get("--baseline").map(|path| PathBuf::from(*path)),
         direct_enumeration,
+        safety_limits: SafetyLimits::with_private_bytes_cap_gib(private_bytes_cap_gib),
     })))
 }
 

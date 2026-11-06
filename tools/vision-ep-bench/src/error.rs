@@ -137,7 +137,7 @@ impl From<&BenchOrtFailure> for OrtStatus {
     fn from(failure: &BenchOrtFailure) -> Self {
         Self {
             step: failure.step.clone(),
-            code: failure.ort_code.clone(),
+            code: failure.ort_code.map(|code| format!("{code:?}")),
             message: failure.ort_message.clone(),
         }
     }

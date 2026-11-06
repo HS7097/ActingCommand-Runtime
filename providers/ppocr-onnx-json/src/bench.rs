@@ -106,8 +106,8 @@ impl BenchSessionPlan {
 pub struct BenchOrtFailure {
     /// What the engine was doing, as its own error text words it.
     pub step: String,
-    /// `ort::ErrorCode` as `Debug` spells it; none for a step that is no ONNX Runtime call.
-    pub ort_code: Option<String>,
+    /// ONNX Runtime's error code; none for a step that is no ONNX Runtime call.
+    pub ort_code: Option<ort::ErrorCode>,
     /// ONNX Runtime's status message, verbatim, with its causes.
     pub ort_message: Option<String>,
 }
@@ -127,7 +127,7 @@ impl std::fmt::Display for BenchOrtFailure {
             write!(f, ": {message}")?;
         }
         if let Some(code) = &self.ort_code {
-            write!(f, " (ONNX Runtime error code {code})")?;
+            write!(f, " (ONNX Runtime error code {code:?})")?;
         }
         Ok(())
     }
@@ -207,12 +207,71 @@ pub fn node_placement(model: &[u8], path: &Path, plan: &BenchSessionPlan) -> Ben
             providers: Vec::new(),
             cpu_nodes: Vec::new(),
             session_failure,
-            log_error: Some(log_error),
+            log_error: Some(log_error.to_string()),
         },
     }
 }
 
-type PlacementRead = Result<(Vec<(String, usize)>, Vec<(String, String)>), String>;
+/// Workflow #407 GPU-0f: why no whole node placement could be read from ONNX Runtime's log.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PlacementLogError {
+    LogPoisoned,
+    NoSection,
+    NoProvider,
+    /// A provider summary that does not read as `[<EP>]. Number of nodes: <n>`.
+    UnreadableSummary {
+        line: String,
+    },
+    /// A per-node line that does not read as `<op type> (<node name>)`.
+    UnreadableNode {
+        provider: String,
+        line: String,
+    },
+    /// The next provider summary came while per-node lines of this provider were still due.
+    GroupEndedEarly {
+        provider: String,
+        due: usize,
+    },
+    /// The log ended while per-node lines of this provider were still due.
+    GroupIncomplete {
+        provider: String,
+        due: usize,
+    },
+    TooManyCpuNodes,
+}
+
+impl std::fmt::Display for PlacementLogError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LogPoisoned => f.write_str("the node-placement log mutex is poisoned"),
+            Self::NoSection => f.write_str("ONNX Runtime logged no `Node placements` section"),
+            Self::NoProvider => {
+                f.write_str("ONNX Runtime's `Node placements` section named no execution provider")
+            }
+            Self::UnreadableSummary { line } => write!(
+                f,
+                "a provider summary does not read as `[<EP>]. Number of nodes: <n>`: {line}"
+            ),
+            Self::UnreadableNode { provider, line } => write!(
+                f,
+                "a per-node line of {provider} does not read as `<op type> (<node name>)`: {line}"
+            ),
+            Self::GroupEndedEarly { provider, due } => write!(
+                f,
+                "the placement group of {provider} ended {due} per-node lines early"
+            ),
+            Self::GroupIncomplete { provider, due } => write!(
+                f,
+                "the placement group of {provider} is missing {due} per-node lines"
+            ),
+            Self::TooManyCpuNodes => {
+                f.write_str("more CPU-placed nodes than the placement read keeps")
+            }
+        }
+    }
+}
+
+type PlacementRead = Result<(Vec<(String, usize)>, Vec<(String, String)>), PlacementLogError>;
 
 fn placement_session(
     model: &[u8],
@@ -224,9 +283,7 @@ fn placement_session(
     let logger: LoggerFunction = Arc::new(
         move |_: LogLevel, _: &str, _: &str, _: &str, message: &str| match sink.lock() {
             Ok(mut log) => log.record(message),
-            Err(poisoned) => poisoned
-                .into_inner()
-                .fail("the node-placement log mutex is poisoned"),
+            Err(poisoned) => poisoned.into_inner().fail(PlacementLogError::LogPoisoned),
         },
     );
     let session = commit_ort_session(model, path, plan, Some(logger));
@@ -234,7 +291,7 @@ fn placement_session(
     drop(session);
     let read = match log.lock() {
         Ok(mut log) => std::mem::take(&mut *log).finish(),
-        Err(_) => Err("the node-placement log mutex is poisoned".to_owned()),
+        Err(_) => Err(PlacementLogError::LogPoisoned),
     };
     (read, session_failure)
 }
@@ -249,7 +306,7 @@ struct PlacementLog {
     /// The provider whose per-node lines follow, and how many are still due.
     open: Option<(usize, usize)>,
     cpu_nodes: Vec<(String, String)>,
-    failure: Option<String>,
+    failure: Option<PlacementLogError>,
 }
 
 impl PlacementLog {
@@ -276,10 +333,10 @@ impl PlacementLog {
                 continue;
             };
             if let Some((index, due)) = self.open {
-                self.fail(format!(
-                    "the placement group of {} ended {due} per-node lines early",
-                    self.providers[index].0
-                ));
+                self.fail(PlacementLogError::GroupEndedEarly {
+                    provider: self.providers[index].0.clone(),
+                    due,
+                });
                 return;
             }
             let parsed = rest
@@ -293,10 +350,9 @@ impl PlacementLog {
                         .map(|count| (provider, count))
                 });
             let Some((provider, count)) = parsed else {
-                self.fail(format!(
-                    "a provider summary does not read as `[<EP>]. Number of nodes: <n>`: {}",
-                    bounded(message)
-                ));
+                self.fail(PlacementLogError::UnreadableSummary {
+                    line: bounded(message),
+                });
                 return;
             };
             self.providers.push((provider.to_owned(), count));
@@ -314,16 +370,15 @@ impl PlacementLog {
             .and_then(|(op, rest)| rest.strip_suffix(')').map(|name| (op, name)))
             .filter(|(op, _)| !op.is_empty());
         let Some((op, name)) = node else {
-            self.fail(format!(
-                "a per-node line of {} does not read as `<op type> (<node name>)`: {}",
-                self.providers[index].0,
-                bounded(message)
-            ));
+            self.fail(PlacementLogError::UnreadableNode {
+                provider: self.providers[index].0.clone(),
+                line: bounded(message),
+            });
             return;
         };
         if self.providers[index].0 == CPU_EXECUTION_PROVIDER {
             if self.cpu_nodes.len() >= PLACEMENT_MAX_NODES {
-                self.fail("more CPU-placed nodes than the placement read keeps");
+                self.fail(PlacementLogError::TooManyCpuNodes);
                 return;
             }
             self.cpu_nodes.push((op.to_owned(), name.to_owned()));
@@ -331,9 +386,9 @@ impl PlacementLog {
         self.open = (due > 1).then_some((index, due - 1));
     }
 
-    fn fail(&mut self, message: impl Into<String>) {
+    fn fail(&mut self, error: PlacementLogError) {
         if self.failure.is_none() {
-            self.failure = Some(message.into());
+            self.failure = Some(error);
         }
         self.open = None;
     }
@@ -343,18 +398,16 @@ impl PlacementLog {
             return Err(failure);
         }
         if !self.saw_header {
-            return Err("ONNX Runtime logged no `Node placements` section".to_owned());
+            return Err(PlacementLogError::NoSection);
         }
         if self.providers.is_empty() {
-            return Err(
-                "ONNX Runtime's `Node placements` section named no execution provider".to_owned(),
-            );
+            return Err(PlacementLogError::NoProvider);
         }
         if let Some((index, due)) = self.open {
-            return Err(format!(
-                "the placement group of {} is missing {due} per-node lines",
-                self.providers[index].0
-            ));
+            return Err(PlacementLogError::GroupIncomplete {
+                provider: self.providers[index].0.clone(),
+                due,
+            });
         }
         Ok((self.providers, self.cpu_nodes))
     }

@@ -535,7 +535,7 @@ fn a_failed_provider_load_keeps_its_error_code_and_text() {
         step:
             "failed to load DirectML PPOCR ONNX model rec.onnx on adapter 0 (CPU fallback disabled)"
                 .to_owned(),
-        ort_code: Some("GenericFailure".to_owned()),
+        ort_code: Some(ort::ErrorCode::GenericFailure),
         ort_message: Some(ort_message.to_owned()),
     };
     let error = BenchError::from_ort(
@@ -765,4 +765,86 @@ fn a_cuda_session_with_fallback_on_allows_cpu_nodes_and_off_refuses_them() {
                 .expect_err("only a CUDA key carries the CUDA knob");
         assert_eq!(error.code(), VisionFfiErrorCode::InvalidRequest, "{error}");
     }
+}
+
+/// Workflow #407 GPU-0f: `--private-bytes-cap-gib <n>` (an integer in 1..=16, default 3) sets the
+/// bench's own private-bytes cap and nothing else (the host floors stay at 4 GiB to start and
+/// 2.5 GiB to run); the report records the cap in force, and the monitor stops one byte above it.
+#[test]
+fn the_private_bytes_cap_follows_the_option_and_defaults_to_three_gib() {
+    use actingcommand_vision_ep_bench::cli::{Command, parse_args};
+
+    const GIB: u64 = 1 << 30;
+    let parse = |extra: &[&str]| {
+        let args: Vec<String> = [
+            "--vision-root",
+            r"C:\bench\rt-gpu",
+            "--ep",
+            "cuda",
+            "--device",
+            "0",
+            "--workload",
+            "w.json",
+            "--out",
+            "o.json",
+        ]
+        .iter()
+        .chain(extra.iter())
+        .map(|arg| (*arg).to_owned())
+        .collect();
+        parse_args(&args)
+    };
+    let options = |extra: &[&str]| match parse(extra) {
+        Ok(Command::Run(options)) => *options,
+        other => panic!("{extra:?} parsed to {other:?}"),
+    };
+
+    // No option: 3 GiB, the 10-24 rule's limits unchanged.
+    let default = options(&[]);
+    assert_eq!(default.safety_limits.own_private_bytes_cap, 3 * GIB);
+    assert_eq!(default.safety_limits, SafetyLimits::default());
+
+    // The option sets the cap alone.
+    for gib in [1_u64, 3, 8, 16] {
+        let text = gib.to_string();
+        let limits = options(&["--private-bytes-cap-gib", text.as_str()]).safety_limits;
+        assert_eq!(limits.own_private_bytes_cap, gib * GIB, "{gib} GiB");
+        assert_eq!(
+            limits.host_available_floor_at_start_bytes,
+            4 * GIB,
+            "{gib} GiB"
+        );
+        assert_eq!(limits.host_available_floor_bytes, 5 * GIB / 2, "{gib} GiB");
+    }
+    for refused in ["0", "17", "8.5", "-1", "eight"] {
+        let error = parse(&["--private-bytes-cap-gib", refused]).expect_err(refused);
+        assert_eq!(error.code, BenchCode::CliInvalid, "{refused}: {error}");
+    }
+
+    // The report records the cap in force.
+    let eight = options(&["--private-bytes-cap-gib", "8"]);
+    #[cfg(windows)]
+    {
+        use actingcommand_vision_ep_bench::run::empty_report;
+        let cap = |options: &actingcommand_vision_ep_bench::cli::RunOptions| {
+            serde_json::to_value(empty_report(options)).expect("the report serialises")["safety"]
+                ["limits"]["own_private_bytes_cap"]
+                .as_u64()
+        };
+        assert_eq!(cap(&eight), Some(8 * GIB));
+        assert_eq!(cap(&default), Some(3 * GIB));
+    }
+
+    // The monitor applies it: exactly 8 GiB runs, one byte more stops, and the peak keeps the
+    // reading that broke the cap.
+    let mut monitor = SafetyMonitor::new(
+        eight.safety_limits,
+        FakeReader::new(&[(16 * GIB, 8 * GIB), (16 * GIB, 8 * GIB + 1)]),
+    );
+    assert!(monitor.check().is_ok(), "exactly 8 GiB is within the cap");
+    assert_eq!(
+        monitor.check().expect_err("above the cap").code,
+        BenchCode::PrivateBytesExceeded
+    );
+    assert_eq!(monitor.own_private_bytes_peak(), Some(8 * GIB + 1));
 }

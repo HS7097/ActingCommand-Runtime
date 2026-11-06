@@ -96,10 +96,14 @@ pub struct BenchIdentity {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SafetySection {
+    /// The limits in force (GPU-0f: the private-bytes cap follows `--private-bytes-cap-gib`).
     pub limits: SafetyLimits,
     pub priority_class_expected: u32,
     pub priority_class_read_back: Option<u32>,
     pub preflight: Option<MemoryReading>,
+    /// Workflow #407 GPU-0f: the most private bytes any reading showed, the main thread's
+    /// checks (the one that broke the cap included) and the watcher's samples.
+    pub own_private_bytes_peak: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]

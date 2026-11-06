@@ -64,10 +64,19 @@ struct StopReport<'a> {
     phase_at_failure: &'a str,
     stopped_by: &'static str,
     variant: &'a Variant,
+    /// Workflow #407 GPU-0f: the limits in force and the most private bytes the watcher read
+    /// (the reading that broke the cap included), as the full report's `safety` names them.
+    safety: StopSafety,
+}
+
+#[derive(Serialize)]
+struct StopSafety {
+    limits: SafetyLimits,
+    own_private_bytes_peak: Option<u64>,
 }
 
 impl FailureSink {
-    fn stop(&self, error: &BenchError, phase: &str) -> ! {
+    fn stop(&self, error: &BenchError, phase: &str, safety: StopSafety) -> ! {
         let report = StopReport {
             schema: REPORT_SCHEMA,
             status: "failed",
@@ -75,6 +84,7 @@ impl FailureSink {
             phase_at_failure: phase,
             stopped_by: "watcher",
             variant: &self.variant,
+            safety,
         };
         let written = serde_json::to_vec_pretty(&report)
             .map_err(|error| error.to_string())
@@ -226,7 +236,14 @@ fn watch(shared: &Shared, limits: SafetyLimits, sink: &FailureSink) {
         let phase = lock(&shared.phase).clone();
         let reading = match monitor.check() {
             Ok(reading) => reading,
-            Err(error) => sink.stop(&error, &phase),
+            Err(error) => sink.stop(
+                &error,
+                &phase,
+                StopSafety {
+                    limits,
+                    own_private_bytes_peak: monitor.own_private_bytes_peak(),
+                },
+            ),
         };
         let gpus = gpu
             .as_ref()

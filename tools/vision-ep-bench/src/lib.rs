@@ -29,6 +29,9 @@
 //! name), the bench checks after the first session, after the first inference and at the end that
 //! every cuDNN library loaded comes from that folder, and CUDA may allow CPU fallback
 //! (`--cuda-cpu-fallback on`), recorded with its node placement as DirectML's is.
+//!
+//! Workflow #407 GPU-0f: the private-bytes cap is `--private-bytes-cap-gib <n>` (default 3), and
+//! the report and the watcher's stop report record the cap in force and the peak private bytes.
 
 pub mod cli;
 pub mod consistency;

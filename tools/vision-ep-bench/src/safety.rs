@@ -4,11 +4,20 @@
 //! host has less than 4 GiB available, and stops when the host falls below 2.5 GiB or its own
 //! private bytes exceed 3 GiB. The readings come through [`MemoryReader`], so the rule is tested
 //! with fake readers; the bench's watcher thread applies it to the real counters.
+//!
+//! Workflow #407 GPU-0f: the private-bytes cap is `--private-bytes-cap-gib <n>` (1..=16, default
+//! 3); a CUDA context with cuDNN and cuBLAS holds more host memory than 3 GiB. The host floors do
+//! not change.
 
 use crate::error::{BenchCode, BenchError};
 use serde::Serialize;
 
 const GIB: u64 = 1 << 30;
+
+/// The private-bytes cap when `--private-bytes-cap-gib` is not given, in GiB.
+pub const DEFAULT_PRIVATE_BYTES_CAP_GIB: u64 = 3;
+/// The caps `--private-bytes-cap-gib` accepts, in GiB.
+pub const PRIVATE_BYTES_CAP_GIB_RANGE: std::ops::RangeInclusive<u64> = 1..=16;
 
 /// The three memory limits, in bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -28,7 +37,17 @@ impl Default for SafetyLimits {
         Self {
             host_available_floor_at_start_bytes: 4 * GIB,
             host_available_floor_bytes: 5 * GIB / 2,
-            own_private_bytes_cap: 3 * GIB,
+            own_private_bytes_cap: DEFAULT_PRIVATE_BYTES_CAP_GIB * GIB,
+        }
+    }
+}
+
+impl SafetyLimits {
+    /// The default limits with a private-bytes cap of `gib` GiB (the host floors unchanged).
+    pub fn with_private_bytes_cap_gib(gib: u64) -> Self {
+        Self {
+            own_private_bytes_cap: gib.saturating_mul(GIB),
+            ..Self::default()
         }
     }
 }
@@ -52,15 +71,26 @@ pub trait MemoryReader {
 pub struct SafetyMonitor<R> {
     limits: SafetyLimits,
     reader: R,
+    /// GPU-0f: the most private bytes any reading showed, the one that broke the cap included.
+    own_private_bytes_peak: Option<u64>,
 }
 
 impl<R: MemoryReader> SafetyMonitor<R> {
     pub fn new(limits: SafetyLimits, reader: R) -> Self {
-        Self { limits, reader }
+        Self {
+            limits,
+            reader,
+            own_private_bytes_peak: None,
+        }
     }
 
     pub fn limits(&self) -> SafetyLimits {
         self.limits
+    }
+
+    /// The most private bytes read so far (none before the first whole reading).
+    pub fn own_private_bytes_peak(&self) -> Option<u64> {
+        self.own_private_bytes_peak
     }
 
     /// The start check: the host must have at least the start floor available, and the
@@ -86,10 +116,16 @@ impl<R: MemoryReader> SafetyMonitor<R> {
     }
 
     fn read(&mut self) -> Result<MemoryReading, BenchError> {
-        Ok(MemoryReading {
+        let reading = MemoryReading {
             host_available_bytes: self.reader.host_available_bytes()?,
             own_private_bytes: self.reader.own_private_bytes()?,
-        })
+        };
+        self.own_private_bytes_peak = Some(
+            self.own_private_bytes_peak
+                .unwrap_or(0)
+                .max(reading.own_private_bytes),
+        );
+        Ok(reading)
     }
 
     fn apply_running_limits(&self, reading: MemoryReading) -> Result<MemoryReading, BenchError> {
