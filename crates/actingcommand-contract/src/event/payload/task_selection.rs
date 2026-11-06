@@ -48,6 +48,9 @@ pub const TASK_SELECTION_MIN_DECLARED_COUNT: u32 = 2;
 pub const TASK_SELECTION_MAX_DECLARED_COUNT: u32 = 16;
 /// The largest free-slot reading a multi-select record carries (M-357b §3.6).
 pub const TASK_SELECTION_MAX_FREE_SLOTS: u32 = 65_535;
+/// Workflow #404 FS-3: the largest `track_px` a select step declares (`confirm: "track"`,
+/// 1..=64), so the largest `shift_px` a `tracked` confirmation carries.
+pub const TASK_SELECTION_MAX_TRACK_PX: u32 = 64;
 
 /// M-357b §3.4 and rule M8: the decision-level reason a combination quota left unfilled.
 /// DB-3a2 registers the code in its owner's registry, which this crate does not link, so the
@@ -235,7 +238,8 @@ impl TaskSelectionMarkExpectation {
 /// A confirmation is attempted exactly when the outcome is `selected` and nothing blocks it
 /// (path rule 7). `matched` and `mismatched` carry the confirmation frame's candidate-set hash
 /// and belong to a single-frame select (v1), as do `decision_matched` and `decision_mismatched`
-/// (ledger revision 4, a select that confirms by its decision); `identity_matched`,
+/// (ledger revision 4, a select that confirms by its decision) and `tracked` and `track_lost`
+/// (ledger revision 7, a select that confirms by tracking its choice); `identity_matched`,
 /// `identity_unconfirmed` and `reposition_failed` belong to a scan select (v2).
 ///
 /// A multi select (M-357b §5.1) adds six variants. `pick_matched`, `mark_unconfirmed` and
@@ -341,6 +345,31 @@ pub enum TaskSelectionConfirmation {
     DecisionMismatched {
         candidate_set_sha256: String,
         decision_sha256: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        projection: Option<Box<CandidateProjection>>,
+    },
+    /// Ledger revision 7 (Workflow #404 FS-3, register §1.284): a single-frame select that
+    /// confirms by tracking (`select.confirm: track`) projected and decided F2 again, F2's
+    /// decision selected one candidate, and its anchor match origin lies `shift_px` (the
+    /// Chebyshev distance, at most the step's `track_px`) from the evaluated choice's; the tap goes
+    /// into that candidate's click box on F2. `decision_sha256` is F2's decision hash (as for
+    /// `decision_matched`), `candidate_set_sha256` F2's candidate-set hash and `projection` F2's
+    /// projection, as for `matched`.
+    Tracked {
+        candidate_set_sha256: String,
+        decision_sha256: String,
+        shift_px: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        projection: Option<Box<CandidateProjection>>,
+    },
+    /// Ledger revision 7 (register §1.284): as `tracked`, but F2's decision selected no
+    /// candidate (`shift_px` absent) or one farther than the step's `track_px` (`shift_px` its
+    /// distance); no input follows.
+    TrackLost {
+        candidate_set_sha256: String,
+        decision_sha256: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shift_px: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         projection: Option<Box<CandidateProjection>>,
     },
@@ -645,6 +674,14 @@ impl TaskSelectionRecord {
         | TaskSelectionConfirmation::DecisionMismatched {
             projection: Some(projection),
             ..
+        }
+        | TaskSelectionConfirmation::Tracked {
+            projection: Some(projection),
+            ..
+        }
+        | TaskSelectionConfirmation::TrackLost {
+            projection: Some(projection),
+            ..
         } = &self.confirmation
         {
             projection
@@ -777,10 +814,11 @@ impl TaskSelectionRecord {
     }
 
     /// Path rule 7: a confirmation is attempted ⇔ R selected and B none. A v2 record never
-    /// records `matched`, `mismatched` or a decision variant (ledger revision 4), a v1 record
-    /// never one of the three scan variants, and `identity_matched` names the selected
-    /// candidate. A single select never records a multi-select variant or a tap check's
-    /// reposition stage; a multi select's confirmation follows its picks (M-357b M2–M5).
+    /// records `matched`, `mismatched`, a decision variant (ledger revision 4) or a track variant
+    /// (ledger revision 7), a v1 record never one of the three scan variants, and
+    /// `identity_matched` names the selected candidate. A single select never records a
+    /// multi-select variant or a tap check's reposition stage; a multi select's confirmation
+    /// follows its picks (M-357b M2–M5).
     fn validate_confirmation(
         &self,
         blocking_none: bool,
@@ -805,6 +843,8 @@ impl TaskSelectionRecord {
             | TaskSelectionConfirmation::DecisionMismatched { .. } => {
                 self.validate_decision_comparison()
             }
+            TaskSelectionConfirmation::Tracked { .. }
+            | TaskSelectionConfirmation::TrackLost { .. } => self.validate_track_comparison(),
             TaskSelectionConfirmation::IdentityMatched { candidate_id, .. } => {
                 if !scan || self.selected.first() != Some(candidate_id) {
                     return Err(invalid("confirmation"));
@@ -1048,6 +1088,8 @@ impl TaskSelectionRecord {
             | TaskSelectionConfirmation::Mismatched { .. }
             | TaskSelectionConfirmation::DecisionMatched { .. }
             | TaskSelectionConfirmation::DecisionMismatched { .. }
+            | TaskSelectionConfirmation::Tracked { .. }
+            | TaskSelectionConfirmation::TrackLost { .. }
             | TaskSelectionConfirmation::TapMarked { .. }
             | TaskSelectionConfirmation::PicksConfirmed { .. }
             | TaskSelectionConfirmation::PicksStopped { .. } => false,
@@ -1076,6 +1118,8 @@ impl TaskSelectionRecord {
             | TaskSelectionConfirmation::Mismatched { .. }
             | TaskSelectionConfirmation::DecisionMatched { .. }
             | TaskSelectionConfirmation::DecisionMismatched { .. }
+            | TaskSelectionConfirmation::Tracked { .. }
+            | TaskSelectionConfirmation::TrackLost { .. }
             | TaskSelectionConfirmation::IdentityMatched { .. }
             | TaskSelectionConfirmation::IdentityUnconfirmed { .. }
             | TaskSelectionConfirmation::PickMatched { .. }
@@ -1170,6 +1214,56 @@ impl TaskSelectionRecord {
             _ => return Err(invalid("confirmation")),
         };
         if !is_candidate_set_sha256(candidate_set_sha256)
+            || !is_candidate_set_sha256(decision_sha256)
+        {
+            return Err(invalid("confirmation"));
+        }
+        if let Some(projection) = projection {
+            projection.validate_decoded().map_err(projection_error)?;
+            if projection.candidate_set_sha256() != candidate_set_sha256
+                || projection.layout_id() != self.layout_id
+                || projection.page_id() != self.page_id
+            {
+                return Err(invalid("confirmation"));
+            }
+        }
+        Ok(())
+    }
+
+    /// Ledger revision 7 (Workflow #404 FS-3, register §1.284): a `tracked` or `track_lost`
+    /// belongs to a single-frame select (a v1 projection of a `repeated_anchor` layout; a multi
+    /// select keeps its own picks), carries two hashes of 64 lowercase hex digits and an
+    /// embedded F2 projection that seals its candidate-set hash, of the same layout and page;
+    /// a `tracked` shift is at most [`TASK_SELECTION_MAX_TRACK_PX`]. The decision hash and the
+    /// shift are the writer's; a reader checks their grammar and bound and never recomputes them.
+    fn validate_track_comparison(&self) -> Result<(), SanitizationError> {
+        let TaskSelectionProjection::V1(evaluated) = &self.projection else {
+            return Err(invalid("confirmation"));
+        };
+        let (candidate_set_sha256, decision_sha256, projection, shift_holds) =
+            match &self.confirmation {
+                TaskSelectionConfirmation::Tracked {
+                    candidate_set_sha256,
+                    decision_sha256,
+                    shift_px,
+                    projection,
+                } => (
+                    candidate_set_sha256,
+                    decision_sha256,
+                    projection,
+                    *shift_px <= TASK_SELECTION_MAX_TRACK_PX,
+                ),
+                TaskSelectionConfirmation::TrackLost {
+                    candidate_set_sha256,
+                    decision_sha256,
+                    projection,
+                    ..
+                } => (candidate_set_sha256, decision_sha256, projection, true),
+                _ => return Err(invalid("confirmation")),
+            };
+        if evaluated.layout_kind() != crate::CandidateLayoutKind::RepeatedAnchor
+            || !shift_holds
+            || !is_candidate_set_sha256(candidate_set_sha256)
             || !is_candidate_set_sha256(decision_sha256)
         {
             return Err(invalid("confirmation"));

@@ -25,10 +25,18 @@
 //! selected IDs and the outcome key; a feature value that changes without changing the decision no
 //! longer stops the tap. Without it (`"candidate_set"`, the default) the candidate sets compare as
 //! before.
+//!
+//! Workflow #404 FS-3 (design `model-gpu0-404.md` §2.3, §2.4; ledger revision 7, register
+//! §1.284): a single-frame select over a `repeated_anchor` layout may declare `confirm: "track"`
+//! with `track_px` (1..=64). Its confirmation frame is decided again as for `"decision"`, and the
+//! choice stands when that decision selects one candidate whose anchor match origin lies within
+//! `track_px` (Chebyshev) of the evaluated choice's; the tap then goes into that candidate's click
+//! box on the confirmation frame, so a target that moved between the two frames is still tapped
+//! where it now is.
 
 use super::scan::{
     Bound, RuntimeScanSource, ScanDeclaration, ScanSelectEnd, ScanSelection, ScanSession,
-    bound_inputs, decision_blocking, record_bound, result_blocked,
+    SelectionKind, bound_inputs, decision_blocking, record_bound, result_blocked,
 };
 use super::{
     ClickRect, ContainedTaskError, ContainedTaskGuardOutcome, ContainedTaskRunError,
@@ -42,18 +50,18 @@ use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Code, Outcome};
 use actingcommand_contract::{
     CandidateFeature, CandidateLayoutKind, CandidateProjection, CandidateRect, InputAction,
-    InputSamplingEvidence, InstanceFactSnapshot, PolicyReasonRecord, TaskSelectionBlocking,
-    TaskSelectionConfirmation, TaskSelectionGateResult, TaskSelectionOutcome, TaskSelectionPolicy,
-    TaskSelectionRecord, TaskSelectionTermResult, TaskSelectionUnknownCheck, TaskSelectionVerdict,
-    validate_candidate_layout_id,
+    InputSamplingEvidence, InstanceFactSnapshot, PolicyReasonRecord, TASK_SELECTION_MAX_TRACK_PX,
+    TaskSelectionBlocking, TaskSelectionConfirmation, TaskSelectionGateResult,
+    TaskSelectionOutcome, TaskSelectionPolicy, TaskSelectionRecord, TaskSelectionTermResult,
+    TaskSelectionUnknownCheck, TaskSelectionVerdict, validate_candidate_layout_id,
 };
 use actingcommand_device::Frame;
 use actingcommand_pack_containment::LoadedBundle;
 use actingcommand_recognition::Scene;
 use actingcommand_recognition_pack::{
     CandidateFeatureValue, CandidateIdentityDeclaration, CandidateIdentityRecognition,
-    CandidateLayout, MAX_IDENTITY_TEMPLATES, PackRegion, RecognitionEvaluator, RecognitionTarget,
-    TargetKind, UnknownIdentityHandling,
+    CandidateLayout, MAX_IDENTITY_TEMPLATES, PackPoint, PackRegion, RecognitionEvaluator,
+    RecognitionTarget, TargetKind, UnknownIdentityHandling,
 };
 use actingcommand_selection_policy::{
     Candidate, CandidateStatus, CandidateVerdict, DecisionReason, GateUnknownHandling,
@@ -121,7 +129,8 @@ pub struct SelectionDryRun {
     pub policy_override: bool,
 }
 
-/// The `select` of a task operation: `{layout_id, policy: {path}, scan?, on_empty?, confirm?}`.
+/// The `select` of a task operation: `{layout_id, policy: {path}, scan?, on_empty?, confirm?,
+/// track_px?}`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct TaskSelect {
@@ -138,6 +147,11 @@ pub(super) struct TaskSelect {
     /// [`SelectConfirm::CandidateSet`]. A member of `package` revision 6.
     #[serde(default)]
     confirm: Option<SelectConfirm>,
+    /// Workflow #404 FS-3: how far, in pixels, the choice's anchor match may move between the
+    /// two frames of a step that declares `confirm: "track"`, which needs it (1..=64). A member
+    /// of `package` revision 7.
+    #[serde(default)]
+    track_px: Option<u32>,
 }
 
 /// Workflow #411 B4 (b-plan §2.4, D3): what a single-frame select compares on its confirmation
@@ -151,6 +165,19 @@ pub(super) enum SelectConfirm {
     /// F2 is projected and decided again with the same fact snapshot and instant, and its
     /// decision hash equals the decision's (`decision_matched` / `decision_mismatched`).
     Decision,
+    /// Workflow #404 FS-3: F2 is projected and decided again as for `Decision`, and its choice
+    /// stands when it is one candidate whose anchor match origin lies within the step's
+    /// `track_px` of the evaluated choice's (`tracked` / `track_lost`); only on a
+    /// `repeated_anchor` layout, never beside `scan`.
+    Track,
+}
+
+actingcommand_contract::outcome_vocabulary! {
+    /// Workflow #404 FS-3: the confirmation a failed single-frame select declared, as its
+    /// `selection_decision_mismatch` names it (the vocabulary `selection_confirm`).
+    enum ConfirmValue: "selection_confirm" {
+        Track => "track",
+    }
 }
 
 /// A select step's `on_empty` (Workflow #308 SEL-L4b, S0 §1.4): `{outcome_key}`.
@@ -222,6 +249,8 @@ pub(super) struct PreparedSelect {
     identity_feature: Option<String>,
     /// Workflow #411 B4: the admitted `confirm` of a single-frame select.
     confirm: SelectConfirm,
+    /// Workflow #404 FS-3: the admitted `track_px` of a step that confirms by tracking.
+    track_px: Option<u32>,
 }
 
 impl PreparedSelect {
@@ -255,14 +284,16 @@ impl PreparedSelect {
             on_empty_key: None,
             identity_feature: None,
             confirm: SelectConfirm::default(),
+            track_px: None,
         }
     }
 
     /// Workflow #411 B4: [`Self::for_test`] for the operation's declared `select`, with its
-    /// layout and the `confirm` admission takes from it.
+    /// layout and the `confirm` (Workflow #404 FS-3: and `track_px`) admission takes from it.
     pub(super) fn for_test_declared(select: &TaskSelect, policy: SelectionPolicy) -> Self {
         Self {
             confirm: select.confirm(),
+            track_px: select.track_px,
             ..Self::for_test(&select.layout_id, policy)
         }
     }
@@ -368,6 +399,11 @@ pub(super) fn prepare_select_steps(
             .map_err(|reason| failure(SELECT_POLICY_INVALID, format!("policy={path} {reason}")))?;
         check_policy(&policy, layout)
             .map_err(|reason| failure(SELECT_POLICY_MISMATCH, format!("policy={path} {reason}")))?;
+        // Workflow #404 FS-3: `confirm: "track"` and its `track_px` (1..=64) come together, on a
+        // single-frame select over a `repeated_anchor` layout, and nowhere else.
+        if let Some(detail) = track_refusal(select, layout) {
+            return Err(failure(SELECT_INVALID, detail));
+        }
         // Workflow #308 SEL-L4b: the static checks of a scan (S0 §2.1) and the admission of
         // `on_empty` (§1.4 (a), (b) and §1.2); the route's terminal for `on_empty` is the
         // coverage or phase check's, and the post-admission refusals are the task's.
@@ -426,10 +462,32 @@ pub(super) fn prepare_select_steps(
             on_empty_key: select.on_empty_key().map(str::to_owned),
             identity_feature,
             confirm: select.confirm(),
+            track_px: select.track_px,
         };
         operation.prepared_select = Some(Box::new(prepared));
     }
     validate_expect_identities(program, control, evaluator)
+}
+
+/// Workflow #404 FS-3: why admission refuses a step's `confirm: "track"` or `track_px`, if it
+/// does: `track_px` without `track`, `track` without `track_px` or with one outside
+/// 1..=[`TASK_SELECTION_MAX_TRACK_PX`], `track` beside `scan` (a scan confirms the chosen
+/// identity) or on a layout that is not `repeated_anchor` (a slot does not move).
+fn track_refusal(select: &TaskSelect, layout: &CandidateLayout) -> Option<String> {
+    let track = select.confirm() == SelectConfirm::Track;
+    match (track, select.track_px) {
+        (false, None) => None,
+        (false, Some(_)) => Some("track_px=declared confirm=not_track".to_owned()),
+        (true, None) => Some("confirm=track track_px=absent".to_owned()),
+        (true, Some(track_px)) if !(1..=TASK_SELECTION_MAX_TRACK_PX).contains(&track_px) => Some(
+            format!("confirm=track track_px={track_px} range=1..={TASK_SELECTION_MAX_TRACK_PX}"),
+        ),
+        (true, Some(_)) if select.scan.is_some() => Some("confirm=track scan=declared".to_owned()),
+        (true, Some(_)) if layout.kind != CandidateLayoutKind::RepeatedAnchor => {
+            Some("confirm=track layout=not_repeated_anchor".to_owned())
+        }
+        (true, Some(_)) => None,
+    }
 }
 
 /// The layout's one identity feature, when it declares exactly one (Workflow #308 SEL-L4b): the
@@ -789,9 +847,19 @@ fn project(
     scene: &Scene,
     layout_id: &str,
 ) -> Result<CandidateProjection, ContainedTaskError> {
+    project_placed(evaluator, scene, layout_id).map(|(projection, _)| projection)
+}
+
+/// Workflow #404 FS-3: [`project`] with each candidate's origin, in candidate order (the anchor
+/// match's top-left corner of a `repeated_anchor` instance).
+fn project_placed(
+    evaluator: &RecognitionEvaluator,
+    scene: &Scene,
+    layout_id: &str,
+) -> Result<(CandidateProjection, Vec<PackPoint>), ContainedTaskError> {
     evaluator
         .scene_context(scene)
-        .project_candidates(layout_id)
+        .project_candidates_placed(layout_id)
         .map_err(|failure| {
             ContainedTaskError::with_detail(failure.code(), failure.detail())
                 .with_ppocr_diagnostics(
@@ -801,6 +869,32 @@ fn project(
                         .unwrap_or_default(),
                 )
         })
+}
+
+/// Workflow #404 FS-3: the Chebyshev distance in pixels between the anchor match origins of
+/// `candidate_id` in one projection and `tracked_id` in another, each found by its instance
+/// index in its own origins.
+fn anchor_shift(
+    (projection, origins): (&CandidateProjection, &[PackPoint]),
+    candidate_id: &str,
+    (tracked, tracked_origins): (&CandidateProjection, &[PackPoint]),
+    tracked_id: &str,
+) -> Result<u32, ContainedTaskError> {
+    let origin = |projection: &CandidateProjection, origins: &[PackPoint], id: &str| {
+        projection
+            .candidate(id)
+            .and_then(|candidate| usize::try_from(candidate.instance_index).ok())
+            .and_then(|index| origins.get(index).copied())
+            .ok_or_else(|| {
+                ContainedTaskError::with_detail(
+                    SELECTION_EVALUATION_FAILED,
+                    format!("selected candidate {id} has no anchor match origin"),
+                )
+            })
+    };
+    let from = origin(projection, origins, candidate_id)?;
+    let to = origin(tracked, tracked_origins, tracked_id)?;
+    Ok(from.x.abs_diff(to.x).max(from.y.abs_diff(to.y)))
 }
 
 /// The evaluator's decision over the actionable candidates of `projection`, each feature a
@@ -1092,13 +1186,34 @@ impl PreparedContainedTask {
         deadline: Instant,
     ) -> Result<(CandidateProjection, Option<PageObservation>), ContainedTaskRunError<R::Error>>
     {
+        self.project_transaction_placed(runtime, operation, first, layout, timing, deadline)
+            .map(|(projection, _, last)| (projection, last))
+    }
+
+    /// Workflow #404 FS-3: [`Self::project_transaction`] with each candidate's origin, in
+    /// candidate order, on the frame the projection was taken on (the anchor match's top-left
+    /// corner of a `repeated_anchor` instance).
+    #[allow(clippy::type_complexity)]
+    fn project_transaction_placed<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        operation: &TaskOperation,
+        first: &PageObservation,
+        layout: &CandidateLayout,
+        timing: ContainedTaskTimingContext,
+        deadline: Instant,
+    ) -> Result<
+        (CandidateProjection, Vec<PackPoint>, Option<PageObservation>),
+        ContainedTaskRunError<R::Error>,
+    > {
         let enhanced = layout.has_consensus()
             || layout
                 .features
                 .iter()
                 .any(|feature| feature.identity.is_some() || feature.integer.is_some());
         if !enhanced {
-            return Ok((project(&self.evaluator, &first.scene, &layout.id)?, None));
+            let (projection, origins) = project_placed(&self.evaluator, &first.scene, &layout.id)?;
+            return Ok((projection, origins, None));
         }
         // Workflow #386 SR-1 (scheduling model §2.1): the deadline is compared on the
         // observation clock; past it the candidate sampling timed out. #385 P-k (performance
@@ -1209,7 +1324,7 @@ impl PreparedContainedTask {
         // #385 P-k: the recognition pack compares its sample deadline with the wall clock, so it
         // is handed the wall instant the budget deadline falls on.
         let pack_deadline = super::wall_deadline_now(runtime, pace, deadline);
-        let projection = self.evaluator.scene_context(scenes[scenes.len() - 1]).with_sample_deadline(pack_deadline).project_candidates_with_samples(
+        let projection = self.evaluator.scene_context(scenes[scenes.len() - 1]).with_sample_deadline(pack_deadline).project_candidates_placed_with_samples(
             &layout.id, &scenes, &mut |target, result, started, ended| {
                 let measured = super::ContainedTaskEvaluationTiming {
                     elapsed_us: super::observe_instant_span(started, ended), budget_before: timing.budget_at(started),
@@ -1233,7 +1348,7 @@ impl PreparedContainedTask {
             )
             .into());
         }
-        let projection = projection.map_err(|failure| {
+        let (projection, origins) = projection.map_err(|failure| {
             ContainedTaskError::with_detail(failure.code(), failure.detail())
                 .with_ppocr_diagnostics(
                     failure
@@ -1243,7 +1358,7 @@ impl PreparedContainedTask {
                 )
         })?;
         check_deadline(super::budget_observation_now(runtime, pace))?;
-        Ok((projection, frames.pop()))
+        Ok((projection, origins, frames.pop()))
     }
 
     /// One attempt of a select step on its step frame `observation`. A failure before the
@@ -1305,8 +1420,14 @@ impl PreparedContainedTask {
                 .into());
             }
         }
-        let (projection, _) =
-            self.project_transaction(runtime, operation, observation, layout, timing, deadline)?;
+        let (projection, origins, _) = self.project_transaction_placed(
+            runtime,
+            operation,
+            observation,
+            layout,
+            timing,
+            deadline,
+        )?;
         let (snapshot, now_unix_ms) = self.pinned_state(runtime, operation, step_index)?;
         // The rows of the record lists the document declares, which `keyed_fact` reads; every
         // other record list stays unusable, so a document without one hashes as before.
@@ -1369,7 +1490,11 @@ impl PreparedContainedTask {
                 let (confirmation, selected) = self.confirm(
                     runtime,
                     operation,
-                    (&projection, &decision, (&facts, &tables, now_unix_ms)),
+                    (
+                        (&projection, &origins),
+                        &decision,
+                        (&facts, &tables, now_unix_ms),
+                    ),
                     candidate_id,
                     timing,
                     deadline,
@@ -1420,13 +1545,21 @@ impl PreparedContainedTask {
     /// again with the evaluated `decision`'s facts and instant, and compares the two decision
     /// hashes instead ([`decision_hash`]); a failure of that decision is `capture_failed` with
     /// its code, as a projection failure of the frame is.
+    ///
+    /// Workflow #404 FS-3: a step that declares `confirm: track` decides the frame's projection
+    /// again in the same way and confirms the candidate that decision selects when its anchor
+    /// match origin lies within the step's `track_px` of `candidate_id`'s in `projection`
+    /// (`origins` holds each evaluated candidate's): the tap goes into that candidate's click box
+    /// on the frame (`tracked`). Otherwise the step fails `selection_decision_mismatch` with
+    /// `confirm` `track` and the distance `shift_px`, or `selection_kind` when the frame's
+    /// decision selected nobody (`track_lost`).
     #[allow(clippy::too_many_arguments)]
     fn confirm<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
         operation: &TaskOperation,
-        (projection, decision, (facts, tables, now_unix_ms)): (
-            &CandidateProjection,
+        ((projection, origins), decision, (facts, tables, now_unix_ms)): (
+            (&CandidateProjection, &[PackPoint]),
             &SelectionDecision,
             (&SelectionFactSnapshot, &SelectionTables, u64),
         ),
@@ -1530,64 +1663,66 @@ impl PreparedContainedTask {
             .evaluator
             .candidate_layout(&prepared.layout_id)
             .ok_or_else(|| ContainedTaskError::new(SELECT_INVALID))?;
-        let confirmed =
-            match self.project_transaction(runtime, operation, &frame, layout, timing, deadline) {
-                Ok((confirmed, last)) => {
-                    if let Some(last) = last {
-                        frame = last;
-                        guard = match operation.guard_outcome(
-                            &self.control,
-                            &frame,
-                            &self.evaluator,
-                            runtime,
-                            Some(timing),
-                        ) {
-                            Ok((guard, _)) => guard,
-                            Err(ContainedTaskRunError::Task(error)) => {
-                                return Ok((
-                                    TaskSelectionConfirmation::GuardFailed {
-                                        outcome: outcome_of(&error),
-                                    },
-                                    Err(error.into()),
-                                ));
-                            }
-                            Err(error) => return Err(error),
-                        };
-                    }
-                    confirmed
+        let (confirmed, confirmed_origins) = match self
+            .project_transaction_placed(runtime, operation, &frame, layout, timing, deadline)
+        {
+            Ok((confirmed, confirmed_origins, last)) => {
+                if let Some(last) = last {
+                    frame = last;
+                    guard = match operation.guard_outcome(
+                        &self.control,
+                        &frame,
+                        &self.evaluator,
+                        runtime,
+                        Some(timing),
+                    ) {
+                        Ok((guard, _)) => guard,
+                        Err(ContainedTaskRunError::Task(error)) => {
+                            return Ok((
+                                TaskSelectionConfirmation::GuardFailed {
+                                    outcome: outcome_of(&error),
+                                },
+                                Err(error.into()),
+                            ));
+                        }
+                        Err(error) => return Err(error),
+                    };
                 }
-                Err(ContainedTaskRunError::Task(error)) => {
-                    return Ok((
-                        TaskSelectionConfirmation::CaptureFailed {
-                            outcome: outcome_of(&error),
-                        },
-                        Err(error.into()),
-                    ));
-                }
-                Err(ContainedTaskRunError::NonfatalOperation(error)) => {
-                    return Ok((
-                        TaskSelectionConfirmation::CaptureFailed {
-                            outcome: Outcome::new(SELECTION_CONFIRMATION_CAPTURE_FAILED),
-                        },
-                        Err(ContainedTaskRunError::NonfatalOperation(error)),
-                    ));
-                }
-                Err(ContainedTaskRunError::Boundary(error))
-                    if R::classify_error(&error) == ContainedTaskRuntimeErrorClass::Fatal =>
-                {
-                    return Ok((
-                        TaskSelectionConfirmation::CaptureFailed {
-                            outcome: Outcome::new(SELECTION_CONFIRMATION_CAPTURE_FAILED),
-                        },
-                        Err(ContainedTaskRunError::Boundary(error)),
-                    ));
-                }
-                Err(error) => return Err(error),
-            };
+                (confirmed, confirmed_origins)
+            }
+            Err(ContainedTaskRunError::Task(error)) => {
+                return Ok((
+                    TaskSelectionConfirmation::CaptureFailed {
+                        outcome: outcome_of(&error),
+                    },
+                    Err(error.into()),
+                ));
+            }
+            Err(ContainedTaskRunError::NonfatalOperation(error)) => {
+                return Ok((
+                    TaskSelectionConfirmation::CaptureFailed {
+                        outcome: Outcome::new(SELECTION_CONFIRMATION_CAPTURE_FAILED),
+                    },
+                    Err(ContainedTaskRunError::NonfatalOperation(error)),
+                ));
+            }
+            Err(ContainedTaskRunError::Boundary(error))
+                if R::classify_error(&error) == ContainedTaskRuntimeErrorClass::Fatal =>
+            {
+                return Ok((
+                    TaskSelectionConfirmation::CaptureFailed {
+                        outcome: Outcome::new(SELECTION_CONFIRMATION_CAPTURE_FAILED),
+                    },
+                    Err(ContainedTaskRunError::Boundary(error)),
+                ));
+            }
+            Err(error) => return Err(error),
+        };
         let candidate_set_sha256 = confirmed.candidate_set_sha256().to_owned();
         let evidence =
             (!confirmed.recognition_evidence().is_empty()).then(|| Box::new(confirmed.clone()));
-        let confirmation = match prepared.confirm {
+        // The confirmation, and the candidate of the confirmation frame the tap goes to.
+        let (confirmation, tapped) = match prepared.confirm {
             SelectConfirm::CandidateSet => {
                 if candidate_set_sha256 != projection.candidate_set_sha256() {
                     return Ok((
@@ -1606,10 +1741,13 @@ impl PreparedContainedTask {
                         .into()),
                     ));
                 }
-                TaskSelectionConfirmation::Matched {
-                    candidate_set_sha256,
-                    projection: evidence,
-                }
+                (
+                    TaskSelectionConfirmation::Matched {
+                        candidate_set_sha256,
+                        projection: evidence,
+                    },
+                    candidate_id.to_owned(),
+                )
             }
             // Workflow #411 B4 (b-plan §2.4): F2 decided again with the decision's facts and
             // instant; only the decisions compare, never the feature values.
@@ -1653,18 +1791,89 @@ impl PreparedContainedTask {
                         .into()),
                     ));
                 }
-                TaskSelectionConfirmation::DecisionMatched {
-                    candidate_set_sha256,
-                    decision_sha256,
-                    projection: evidence,
+                (
+                    TaskSelectionConfirmation::DecisionMatched {
+                        candidate_set_sha256,
+                        decision_sha256,
+                        projection: evidence,
+                    },
+                    candidate_id.to_owned(),
+                )
+            }
+            // Workflow #404 FS-3: F2 decided again as for `Decision`; its choice stands for the
+            // evaluated one when its anchor match origin lies within `track_px`, and the tap
+            // follows it into its click box on F2.
+            SelectConfirm::Track => {
+                let track_px = prepared
+                    .track_px
+                    .ok_or_else(|| ContainedTaskError::new(SELECT_INVALID))?;
+                let tracked = decide(
+                    &prepared.policy,
+                    tables,
+                    layout,
+                    &confirmed,
+                    facts,
+                    now_unix_ms,
+                )
+                .and_then(|again| {
+                    let decision_sha256 = decision_hash(&confirmed, &again)?;
+                    let shift = match chosen(&again)? {
+                        Some(tracked_id) => Some((
+                            tracked_id.to_owned(),
+                            anchor_shift(
+                                (projection, origins),
+                                candidate_id,
+                                (&confirmed, &confirmed_origins),
+                                tracked_id,
+                            )?,
+                        )),
+                        None => None,
+                    };
+                    Ok((SelectionKind::of(&again.outcome), decision_sha256, shift))
+                });
+                let (kind, decision_sha256, shift) = match tracked {
+                    Ok(tracked) => tracked,
+                    Err(error) => {
+                        return Ok((
+                            TaskSelectionConfirmation::CaptureFailed {
+                                outcome: outcome_of(&error),
+                            },
+                            Err(error.into()),
+                        ));
+                    }
+                };
+                match shift {
+                    Some((tracked_id, shift_px)) if shift_px <= track_px => (
+                        TaskSelectionConfirmation::Tracked {
+                            candidate_set_sha256,
+                            decision_sha256,
+                            shift_px,
+                            projection: evidence,
+                        },
+                        tracked_id,
+                    ),
+                    shift => {
+                        let shift_px = shift.map(|(_, shift_px)| shift_px);
+                        let error =
+                            track_lost(&operation.id, kind, shift_px, track_px, &decision_sha256);
+                        return Ok((
+                            TaskSelectionConfirmation::TrackLost {
+                                candidate_set_sha256,
+                                decision_sha256,
+                                shift_px,
+                                projection: evidence,
+                            },
+                            Err(error.into()),
+                        ));
+                    }
                 }
             }
         };
         // Equal hashes, of the candidate sets or of the decisions, cover every actionable
         // candidate's ID and click rectangle, so the confirmation frame's rectangle is the
-        // evaluated one.
+        // evaluated one; a tracked choice is the confirmation frame's own candidate.
         let selected: Result<SelectedCandidate, ContainedTaskRunError<R::Error>> = confirmed
-            .candidate(candidate_id)
+            .candidate(&tapped)
             .map(|candidate| SelectedCandidate {
                 guard,
                 click: ClickRect {
@@ -1685,12 +1894,41 @@ impl PreparedContainedTask {
             .ok_or_else(|| {
                 ContainedTaskError::with_detail(
                     SELECTION_EVALUATION_FAILED,
-                    format!("selected candidate {candidate_id} is not in the projection"),
+                    format!("selected candidate {tapped} is not in the projection"),
                 )
                 .into()
             });
         Ok((confirmation, selected))
     }
+}
+
+/// Workflow #404 FS-3: the failure of a step that confirms by tracking, before any input:
+/// `selection_decision_mismatch` with `confirm` `track` and the distance `shift_px` of the
+/// confirmation frame's choice, or `selection_kind`, the kind of its decision, when it chose
+/// nobody.
+fn track_lost(
+    operation_id: &str,
+    kind: SelectionKind,
+    shift_px: Option<u32>,
+    track_px: u32,
+    decision_sha256: &str,
+) -> ContainedTaskError {
+    let outcome = Outcome::new(SELECTION_DECISION_MISMATCH).confirm(ConfirmValue::Track);
+    let (outcome, detail) = match shift_px {
+        Some(shift_px) => (
+            outcome.shift_px(shift_px),
+            format!(
+                "operation={operation_id} confirm=track shift_px={shift_px} track_px={track_px} confirmation={decision_sha256}"
+            ),
+        ),
+        None => (
+            outcome.selection_kind(kind),
+            format!(
+                "operation={operation_id} confirm=track selection_kind={kind} confirmation={decision_sha256}"
+            ),
+        ),
+    };
+    ContainedTaskError::with_detail(SELECTION_DECISION_MISMATCH, detail).with_values(outcome)
 }
 
 impl PreparedContainedTask {
@@ -2506,6 +2744,7 @@ mod tests {
             on_empty_key: None,
             identity_feature: None,
             confirm: SelectConfirm::CandidateSet,
+            track_px: None,
         }));
         let mut pack: actingcommand_recognition_pack::RecognitionPack =
             serde_json::from_value(serde_json::json!({

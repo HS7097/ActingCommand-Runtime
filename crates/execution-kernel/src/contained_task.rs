@@ -221,6 +221,10 @@ mod gate_e5_select;
 // #411 B4, slice BT-B4 (exec key 165): a single-frame select step confirms by its decision.
 #[cfg(test)]
 mod gate_411_bt_b4;
+// Workflow #404 FS-3 (register §1.284): a single-frame select step confirms by tracking its
+// choice within `track_px` and taps it where the confirmation frame shows it.
+#[cfg(test)]
+mod gate_404_fs3;
 // Workflow #390 lpbox (exec key 76): a long press takes a click box.
 #[cfg(test)]
 mod gate_390_lpbox;

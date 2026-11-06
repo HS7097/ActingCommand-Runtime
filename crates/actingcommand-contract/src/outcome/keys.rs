@@ -202,6 +202,9 @@ outcome_keys! {
     outcome_key: token,
     selection_blocking: vocab(selection_blocking),
     identity_state: vocab(identity_state),
+    // Workflow #404 FS-3: a select step that confirms by tracking its choice.
+    confirm: vocab(selection_confirm),
+    shift_px: integer,
     pause_reason: name,
     // Workflow #432 AGT-1b: a delivery failure of the Runtime's message to a registered channel.
     agent_channel: name,

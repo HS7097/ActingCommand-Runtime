@@ -628,7 +628,7 @@ tests = [
 ]
 incident = ["#402 HS-2"]
 
-# #402 HS-2b (0.12.39; brief rd-1031/backend-switch/brief-hs-2b.md; register §1.274; contracts/component-interfaces.md, the `ledger` row of revision 6; contracts/runtime-config.md, "Switching an instance's backends", "The wait"): HS-2's record device.backend_switched is ledger revision 6, so this build declares ledger [3, 6]: the update from a [3, 5] build needs --accept-ledger-one-way (one_way otherwise) and the rollback to it is refused, flag or not (previous_max_in_next, Rp [3, 6], R* [3, 5]); the switch's receipt wait is the sum of its named terms (the claim, two session closes, two preparations and the commit's ledger write, 133 s; HS-2's hs2_client_timeout_covers_switch, adapted, holds it)
+# #402 HS-2b (0.12.39; brief rd-1031/backend-switch/brief-hs-2b.md; register §1.274; contracts/component-interfaces.md, the `ledger` row of revision 6; contracts/runtime-config.md, "Switching an instance's backends", "The wait"): HS-2's record device.backend_switched is ledger revision 6, so a build that declares ledger [3, 6] (this build's own range is [3, 7] since #404 FS-3, register §1.284, pinned by K27): the update from a [3, 5] build needs --accept-ledger-one-way (one_way otherwise) and the rollback to it is refused, flag or not (previous_max_in_next, Rp [3, 6], R* [3, 5]); the switch's receipt wait is the sum of its named terms (the claim, two session closes, two preparations and the commit's ledger write, 133 s; HS-2's hs2_client_timeout_covers_switch, adapted, holds it)
 [[gate]]
 coverage = "Y"
 tests = [

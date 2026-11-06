@@ -7458,8 +7458,8 @@ Generation step 4) are the contract.
 exact search alone is the oracle) and `anchor_milli_refused_on_fixed_slots_and_with_a_target` (the
 gate, the parser and the recognition pack). No test adapted.
 
-**Interface.** `package` 7 as §1.282. `ledger` stays [3, 6]; the records and readers checked on
-`b9b3cac5`:
+**Interface.** `package` 7 as §1.282. `ledger` stays [3, 6] for FS-2 (FS-3 raises it to [3, 7] in
+the same release for its own records, §1.284); the records and readers checked on `b9b3cac5`:
 
 - `task.selection_evaluated` embeds the step's projection (`TaskSelectionProjection` v1 and the
   scan's v2, and the projections of a confirmation, `crates/actingcommand-contract/src/event/payload/task_selection.rs`):
@@ -7480,6 +7480,77 @@ tunable appears.
 
 **Rollback** (to 0.12.42). A pack that declares `anchor_milli` is refused by 0.12.42's declaration
 gate and wire check; nothing persisted changes.
+
+### 1.284 Slice FS-3 (0.12.43): `confirm: "track"`, a select that finds its moving choice again on the confirmation frame (Workflow #404; the same request and design as §1.282, §2.3, §2.4, §2.6 and §3 row FS-3; coordinator work order `rd-1031/perf-407/brief-fs3.md`)
+
+[selection-graph.md](selection-graph.md) (Select step, Execution, Confirming by tracking, Records),
+[candidate-projection.md](candidate-projection.md) (Candidate-set hash, Generation step 7) and
+[component-interfaces.md](component-interfaces.md) (the `ledger` row of revision 7, the `package`
+row of revision 7) are the contract. 1.284 was the next free number on the base `d478560c`.
+
+**Why.** FS-1 and FS-2 (§1.282, §1.283) find every copy of a marker on the whole frame. A marker
+that moves between the step's frame F1 and its confirmation frame F2 could still never be tapped:
+both confirmations compare hashes that cover the click rectangles, so the move fails them.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| FS3-1 | a select step's `confirm: "track"` and `track_px` (1..=64) | pack format, `package` 7 (shared with §1.282, §1.283) | FS-3 | resource side | `since` 0.12.43; a single-frame select over a `repeated_anchor` layout only. Admission (`contained_task_select_invalid`) refuses `track_px` without `track`, `track` without `track_px`, a `track_px` outside 1..=64 (the contract constant `TASK_SELECTION_MAX_TRACK_PX`), `track` beside `scan` and `track` on `fixed_slots`, each detail naming its rule; the source gate takes the value `track` and an unsigned `track_px` |
+| FS3-2 | the confirmation by tracking | behaviour | FS-3 | the kernel | F2 is decided again with the same snapshot and instant; F2's one selected candidate stands for F1's when the Chebyshev distance between their anchor match origins is at most `track_px`, and the tap goes into its own click box on F2, bound to F2. The default confirmation and `"decision"` are unchanged |
+| FS3-3 | `SceneEvaluation::project_candidates_placed`, `…_placed_with_samples` (`crates/recognition-pack`) | crate API | FS-3 | — | the projection with each candidate's origin (anchor match top-left, or slot origin) in candidate order; the origins enter no hash and no record; `project_candidates` and `…_with_samples` keep their signatures |
+| FS3-4 | `TaskSelectionConfirmation::Tracked {candidate_set_sha256, decision_sha256, shift_px, projection?}`, `::TrackLost {candidate_set_sha256, decision_sha256, shift_px?, projection?}` | **`ledger` revision 7** (closed vocabulary, new members) | FS-3 | the kernel | `tracked`: shift at most `track_px`; `track_lost`: no choice (`shift_px` absent) or one farther. The reader takes them only on a v1 projection of a `repeated_anchor` layout without `multi_select`, with 64-hex hashes and a `tracked` shift at most 64 |
+| FS3-5 | `selection_decision_mismatch` values `confirm` (vocabulary `selection_confirm`: `track`), `shift_px` (integer), `selection_kind` | outcome values (optional) | FS-3 | the kernel | the failure of `track_lost`, before any input: `confirm` `track` with `shift_px`, or with `selection_kind` when F2's decision chose nobody; new keys `confirm`, `shift_px` and vocabulary `selection_confirm` in the catalog; no new code |
+| FS3-6 | `ledger` [3, 7] | interface declaration | FS-3 | — | one way, as revisions 4 to 6 |
+
+**Tests.** Exec row "#404 FS-3": `a_moved_choice_within_track_px_taps_its_f2_click` (a move of
+exactly `track_px` is `tracked` and tapped inside c2's click box on F2, the projections of each
+frame being the oracle; the same move under the default confirmation is still `mismatched`),
+`a_choice_beyond_track_px_fails_before_input` (one pixel beyond, and no choice at all: `track_lost`,
+`selection_decision_mismatch` with its values, no intent, no input) and
+`track_refused_on_fixed_slots_and_scan` (both bounds admitted; the five refusals). Adapted:
+`the_runtime_declares_each_v0120_interface_revision_once` (actinglab-architecture, K27; its `ledger`
+[3, 6] becomes [3, 7]) and `hs2b_ledger_six_needs_the_one_way_flag_and_refuses_the_rollback_to_five`
+(actingctl, the INST-1 update gate; it read this build's own range and pinned it at [3, 6], which
+this slice raises; it now declares HS-2b's [3, 6] build as a fixture, its edges unchanged). One
+struct literal of `selection.rs`'s own tests gains `track_px: None`; no assertion changes.
+
+**Codes and keys.** No new code: reused `selection_decision_mismatch` (optional values `confirm`,
+`shift_px` and `selection_kind` added, its text extended; still pending),
+`contained_task_select_invalid` and `selection_evaluation_failed`. New outcome keys `confirm`
+(vocabulary `selection_confirm`, one word `track`) and `shift_px` (integer). No configuration
+key: `track_px` is the package's declaration of how far its target moves between two frames, and
+its bound 64 a contract constant (`TASK_SELECTION_MAX_TRACK_PX`).
+
+**Interface.** `ledger` [3, 6] → [3, 7] (FS3-6), one way; `package` stays [3, 7] (FS3-1 rides
+revision 7). `runtime-client`, `actingd-config`, `runtime-outcomes` and the install interfaces do
+not move: no request, receipt or configuration key changes, and the outcome keys are values.
+The readers checked on `d478560c`, and what each does with a revision-7 ledger:
+
+- The Runtime itself (ledger open, `ledger-maintenance verify`, the rollback gate's
+  `ledger_readability`) and actinglab (its record readers, `recognition_regression` among them),
+  actingctl (`events`, `diagnose`, `overview` and `run_evidence`, all `QueryEvents` pages through
+  `runtime-client`) and the MCP (`ac_events` and `ac_run_evidence` read the same pages; its Lab
+  tools run the install's actinglab) of this build decode `task.selection_evaluated` through this
+  build's contract crate, which knows both kinds. An earlier build of any of them (0.12.42 and before) refuses the record:
+  `TaskSelectionConfirmation` is internally tagged and has no catch-all, so a page that holds one
+  fails whole, and an earlier Runtime's start fails while the record is among its newest
+  `open_verify_tail_records`.
+- The console of UI v0.12.9 pins Runtime `232b3ed8` (v0.12.40) for its contract, ledger,
+  ledger-forensics and runtime-client crates (its `Cargo.toml`, read on the UI's `v0.12.9` tag), so
+  it refuses any page that holds such a record, and its acsetup declares `ledger` [3, 6]: by the
+  contract its U\* edge `next_max_in_ui` (R\*.max 7 not in [3, 6]) fails. `actingctl install` does
+  not compute U\* rows in its plans yet (`plan.rs`, `ui_edges`, gate tests only), so the deploy
+  plan does not catch it: the console must move to a UI that pins Runtime 0.12.43 or later and
+  declares `ledger` max 7 before a pack that declares `confirm: "track"` runs.
+
+**What changes live.** Nothing for a pack without `confirm: "track"`: its confirmations, records
+and taps are as before. The deploy of 0.12.43 over 0.12.42 needs `--accept-ledger-one-way` (R\*.max
+7 > Rp.max 6, `one_way`), and its plan carries `ledger_verify`; `previous_max_in_next` passes (6 in
+[3, 7]). The install's one-way rules are unchanged.
+
+**Rollback** (to 0.12.42). Refused by `actingctl install`, flag or not (`previous_max_in_next`:
+Rp.max 7 not in R\* [3, 6]), whether or not a step ever confirmed by tracking; 0.12.42 is not
+taught to read the record (Alice 10-11: no compatibility work for old versions). A pack that
+declares `confirm: "track"` or `track_px` is refused by 0.12.42's declaration gate.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
@@ -7676,9 +7747,9 @@ K27 asserts the declaration. Every moving interface rises once for the release.
 | Interface | v0.12.0 | Sources in this register |
 |---|---|---|
 | `actingd-config` | [5, 5] | §5: every key it lists as parsed (not `execution.defaults.*`, see there); the removals of PKG-S4 §1.55 P4-3 and NAV-3a §1.67 N3A-3, which no v0.12.0 reader accepts. Workflow #411 B15 R3 raises it to [5, 6] in v0.12.3 (§1.113 B15C-4): revision 6 adds the remedy keys, and a revision-5 file is still read. Workflow #406 T12 raises it to [5, 7] in #406's release (§1.136 T12-5): revision 7 adds the `touch` section, and revision-5 and revision-6 files are still read. #411 A38 raises it to [5, 8] (§1.148 A38-7): revision 8 adds `recovery_ladder.fence_recheck`, and revisions 5 to 7 are still read. #411 A51 adds `ledger_observer.read_budget_ms` and `close_timeout_ms` to the same revision 8 (§1.151 A51-4). #411 B37 (A35-S1) adds `recovery_ladder.busy` to the same revision 8 (§1.152 B37-5). The 0.12.x release after v0.12.9 raises it to [5, 9] (§1.168 A35-5): revision 9 adds that release's configuration keys (#411 A35: `recovery_ladder.busy.screen`), and revisions 5 to 8 are still read. P0-LO raises it to [5, 10] in v0.12.11: revision 10 adds `ledger_observer.open_timeout_ms` and `open_warn_ratio_milli`, and revisions 5 to 9 are still read. #411 A64, #411 A66, PERF-B1 and SCH-M ED-1 raise it to [5, 11] in v0.12.12: revision 11 adds `host_claims.run_end_grace_ms` (A64, ruling C-43), the `watchdog` section (`start_window_ms`, A66), the `execution` section (`capture.max_interval_ms`, `capture.backoff_enabled`, `capture.idle_ceiling_ms`; PERF-B1, §1.177 B1-2) and SCH-M ED-1's `scheduling.expected_runtime.*` (also per instance) and `scheduling.fact_refresh.expected_duration_ms` (§1.178 ED1-3), and revisions 5 to 10 are still read. IDLE-1 (Alice's ruling 41) raises it to [5, 12] in the release after v0.12.12: revision 12 adds the `idle` section (`action`, `min_gap_ms`, `close_app_wake_lead_ms`, `stop_emulator_wake_lead_ms`) and an instance entry's `idle` member; ROUT-L RL-1b (same release, §1.185 RL1B-1, RL1B-2) adds to revision 12 the `standard_packs` keys `check_interval_ms` and `cached_generations` and a `policy` section without `catalog` (composer mode), #422 LN-5 `ledger_observer.history_page_rows` and #422 LN-TUNE `ledger_observer.writer_reply_timeout_ms`; and revisions 5 to 11 are still read. #422 LN-8 raises it to [5, 13] in the release after v0.12.13: revision 13 adds `ledger_observer.open_verify_tail_records`, and revisions 5 to 12 are still read. #422 LN-WS raises it to [5, 14] in v0.12.15 (§1.194): revision 14 adds `ledger_observer.read_check_vm_steps` and `history_scan_rows`, and revisions 5 to 13 are still read Workflow #392 DA-4b-D (Alice's ruling 69) raises it to [5, 15] in v0.12.16 (§1.195 DA4bD-2): revision 15 adds the `display_safe_area` section (`directory`, `check_interval_ms`, `model`) and an instance entry's `display_safe_area` member (`model`), and revisions 5 to 14 are still read. #422 LN-7c Q raises it to [5, 16] in v0.12.17 (§1.196 LN7CQ-1 to LN7CQ-3): revision 16 adds the top-level `frame_retention_evidence_max_age_days` and `ledger_observer.frame_query_steps_per_second` and `frame_query_chunk_frames`, and revisions 5 to 15 are still read. Workflow #421 INST-1 raises it to [5, 17] in v0.12.18: revision 17 adds the `install` section (the tunables of `actingctl install`, [install-cli.md](install-cli.md)), and revisions 5 to 16 are still read |
-| `ledger` | [3, 3] | A3 §1.9, SH-1, SR-2a reads, D1 ladder records, L4a §1.19, AO-1 dump import §1.26, AO-2 index table §1.38, U-2's G14 members §1.46, PKG-S2 and PKG-S3 removals (§2), NAV-6 §1.12, #403 §1.13, D1b §1.14, A2-P §1.15, SH-2 §1.25, OCR-CONF §1.8 V1, M-357b DB-3s §1.66. Workflow #411 BT-LR raises it to [3, 4] once for the 0.12.x B train (§1.153, Alice 2026-10-20): revision 4 adds the train's shapes, and a revision-3 ledger is still read. Workflow 114-A raises it to [3, 5] in 0.12.36 (§1.236): revision 5 adds `policy.not_run_changed` with its payloads and the ledger's own copies, shapes only, and revision-3 and revision-4 ledgers are still read. #402 HS-2b raises it to [3, 6] in 0.12.39 (§1.274): revision 6 adds HS-2's closed action `device.backend_switched` with its payload and the vocabulary `nemu_app_index_source`, and revision-3 to revision-5 ledgers are still read; SS-9's own raise (§1.212) takes the next revision of a later release |
+| `ledger` | [3, 3] | A3 §1.9, SH-1, SR-2a reads, D1 ladder records, L4a §1.19, AO-1 dump import §1.26, AO-2 index table §1.38, U-2's G14 members §1.46, PKG-S2 and PKG-S3 removals (§2), NAV-6 §1.12, #403 §1.13, D1b §1.14, A2-P §1.15, SH-2 §1.25, OCR-CONF §1.8 V1, M-357b DB-3s §1.66. Workflow #411 BT-LR raises it to [3, 4] once for the 0.12.x B train (§1.153, Alice 2026-10-20): revision 4 adds the train's shapes, and a revision-3 ledger is still read. Workflow 114-A raises it to [3, 5] in 0.12.36 (§1.236): revision 5 adds `policy.not_run_changed` with its payloads and the ledger's own copies, shapes only, and revision-3 and revision-4 ledgers are still read. #402 HS-2b raises it to [3, 6] in 0.12.39 (§1.274): revision 6 adds HS-2's closed action `device.backend_switched` with its payload and the vocabulary `nemu_app_index_source`, and revision-3 to revision-5 ledgers are still read; SS-9's own raise (§1.212) takes the next revision of a later release. Workflow #404 FS-3 raises it to [3, 7] in 0.12.43 (§1.284 FS3-4, FS3-6): revision 7 adds the select confirmations `tracked` and `track_lost`, and revision-3 to revision-6 ledgers are still read; one way, so the deploy over 0.12.42 takes `--accept-ledger-one-way` and the rollback to it is refused |
 | `runtime-client` | [2, 2] | §3 W1–W4, W8–W12, W14, W15, W17 (AO-4q, MCP-4, D1b, SH-1, A4, U-1, RD-3, MCP-2, P-m, D2-S5); A2-P's wire spellings §1.15; 九处-1's status member `emulator_state` §1.91 N1-1. `runtime-client` 3 comes with its own later release (§3 W5–W7 and W13: MCP-19, AO-4, AO-8 with MCP-9b's `startup` and `host` in W7, SR-6b's `not_running` in W13; re-check 10-14, §1.25). Runtime v0.12.x serves the read `ScheduleExplanation` (§3 W5) under revision 2: only actingctl and MCP of the same Runtime send it and every revision-2 shape is unchanged; revision 3 includes it. #411 A51's page limit `read_budget` (§1.151 A51-1) is folded into revision 2 as §1.91 N1-1 was. Workflow #429 R-0 raises it to [2, 3] in 0.12.30 (§1.213 R0-7, §3 W21): revision 3 is revision 2 plus the workbench's shapes (R-0c's `PackScheduleView` included, §1.216 R0C-3), W5 and `StartReport` (§1.216 R0C-4); W6, W7 and W13 are not built and take a later revision. Workflow #429 R-7a raises it to [2, 4] in 0.12.35 (§1.233, §3 W22): revision 4 is revision 3 plus the player hold's shapes; R-7b raises `min` to 4. Workflow #429 R-0b raises `min` to 3 in 0.12.36 (§1.238): it fills `RuntimeInstanceStatus.activity`, so [3, 4]. Workflow #407 PERF-READ raises `max` to 6 in 0.12.41 (§1.280, §3 W23; revision 5 is AGT-1b's, §1.246): revision 6 adds `PerformanceStatus`'s `memory` and `vision`, so [3, 6] |
-| `package` | [3, 3] | PKG-S1; PKG-S5 §1.64 P5-1 with M-357a TB12 §1.65; D2-S2 §1.28 DS6; D2-S3 §1.39 D34; READ-1 §1.54 RE1; the NAV-3a follow-up §1.73 N3F-1; REC-6 §1.29 R6-2; REC-8 §1.35 R8-1; OUT-1 §1.40 O1-1; EXEC-2 §1.41 EX1; OUT-2 §1.48 O2-1; REC-5 §1.50 R5-2; EXEC-1 §1.57 EC1. M-357a TB1 and TB6 (DB-1, DB-2) and M-357b MS6–MS10 (DB-3a1, DB-3a2, DB-3b) bump it once more in the 0.12.x release that carries them, once only when they share a release. Workflow #411 B15's `remedy` (a `task.json` mapping member) and `provides` (a `control.json` member) ride revision 4 (writer R1, §1.110 B15-10), raised once in their release by its first slice that needs it. Workflow #406 T3 raises it to [3, 5] in #406's release (§1.137 T3-7): revision 5 adds the click `single_touch_path_drag_v1`, and revision-3 and revision-4 packs are still read. Workflow #357 DB-2 raises it to [3, 6] in 0.12.37 for TB1 and TB6, DB-1 having left it as it was (§1.244); M-357b MS6–MS10 need no second raise if they share that release. Workflow #404 FS-1 and FS-2 raise it to [3, 7] once in 0.12.43 (§1.282 FS1-3, §1.283 FS2-1): revision 7 adds a `repeated_anchor` anchor's `mask` and `scales` and the feature value `anchor_milli`, and revision-3 to revision-6 packs are still read; #404 FS-3 (`confirm: "track"`) needs no second raise if it shares that release |
+| `package` | [3, 3] | PKG-S1; PKG-S5 §1.64 P5-1 with M-357a TB12 §1.65; D2-S2 §1.28 DS6; D2-S3 §1.39 D34; READ-1 §1.54 RE1; the NAV-3a follow-up §1.73 N3F-1; REC-6 §1.29 R6-2; REC-8 §1.35 R8-1; OUT-1 §1.40 O1-1; EXEC-2 §1.41 EX1; OUT-2 §1.48 O2-1; REC-5 §1.50 R5-2; EXEC-1 §1.57 EC1. M-357a TB1 and TB6 (DB-1, DB-2) and M-357b MS6–MS10 (DB-3a1, DB-3a2, DB-3b) bump it once more in the 0.12.x release that carries them, once only when they share a release. Workflow #411 B15's `remedy` (a `task.json` mapping member) and `provides` (a `control.json` member) ride revision 4 (writer R1, §1.110 B15-10), raised once in their release by its first slice that needs it. Workflow #406 T3 raises it to [3, 5] in #406's release (§1.137 T3-7): revision 5 adds the click `single_touch_path_drag_v1`, and revision-3 and revision-4 packs are still read. Workflow #357 DB-2 raises it to [3, 6] in 0.12.37 for TB1 and TB6, DB-1 having left it as it was (§1.244); M-357b MS6–MS10 need no second raise if they share that release. Workflow #404 FS-1 and FS-2 raise it to [3, 7] once in 0.12.43 (§1.282 FS1-3, §1.283 FS2-1): revision 7 adds a `repeated_anchor` anchor's `mask` and `scales` and the feature value `anchor_milli`, and revision-3 to revision-6 packs are still read; #404 FS-3 adds a select step's `confirm: "track"` and `track_px` to revision 7 in the same release (§1.284 FS3-1), no second raise |
 | `runtime-outcomes` | [1, 1] (new) | A5 §1.16, A6a §1.37 |
 | `install-control` | [0, 1] (unchanged) | model-378 §16 A-7 dropped revision 2 (`carried`) from v0.12.0; U-4 raises it to [0, 2] in 0.12.x |
 | `install-selection` | [1, 1] (unchanged) | — |

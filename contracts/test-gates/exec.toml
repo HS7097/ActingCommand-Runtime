@@ -2760,3 +2760,13 @@ tests = [
     "actingcommand-pack-containment::lib::source::tests::anchor_milli_refused_on_fixed_slots_and_with_a_target",
 ]
 incident = ["#404 FS-2"]
+
+# Workflow #404 FS-3 (0.12.43; register §1.284; ledger revision 7; brief rd-1031/perf-407/brief-fs3.md; design rd-1031/perf-407/model-gpu0-404.md §2.3, §2.4, §3 row FS-3): a single-frame select over a repeated_anchor layout that declares confirm track with track_px decides its confirmation frame again with the same fact snapshot and instant; a choice whose anchor match origin moved by at most track_px (Chebyshev) records tracked with shift_px and F2's hashes and is tapped inside its own click box on F2, while the default confirmation still refuses the same move; a choice farther than track_px, or none, records track_lost and fails selection_decision_mismatch with confirm track and shift_px or selection_kind before any intent or input; admission refuses track or track_px on fixed slots, beside scan, out of 1..=64, or one without the other, with contained_task_select_invalid
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::gate_404_fs3::a_moved_choice_within_track_px_taps_its_f2_click",
+    "actingcommand-execution-kernel::lib::contained_task::gate_404_fs3::a_choice_beyond_track_px_fails_before_input",
+    "actingcommand-execution-kernel::lib::contained_task::gate_404_fs3::track_refused_on_fixed_slots_and_scan",
+]
+incident = ["#404 FS-3"]

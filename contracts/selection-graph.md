@@ -453,6 +453,18 @@ listed is present (section Ending empty), and lets the `expect_after` of any ope
   scan=declared`). The source gate refuses a `confirm` that is no string (`InvalidType`) or
   another string (`InvalidValue`) at `/operations/<i>/select/confirm`; `null` is absent. The
   member belongs to `package` revision 6.
+- Workflow #404 FS-3 (since 0.12.43, register §1.284): a single-frame select over a
+  `repeated_anchor` layout may declare `confirm: "track"` with `track_px`, an integer
+  1..=64: the choice is found again on the confirmation frame within `track_px` pixels and
+  tapped where that frame shows it (section Confirming by tracking). Admission refuses either
+  member anywhere else with `contained_task_select_invalid`, its detail naming the rule:
+  `track_px` without `track` (`track_px=declared confirm=not_track`), `track` without
+  `track_px` (`confirm=track track_px=absent`), a `track_px` outside 1..=64
+  (`confirm=track track_px=<n> range=1..=64`), `track` beside `scan`
+  (`confirm=track scan=declared`) and `track` on a `fixed_slots` layout
+  (`confirm=track layout=not_repeated_anchor`). The source gate takes the value `track` and
+  refuses a `track_px` that is no unsigned integer (`InvalidType` at
+  `/operations/<i>/select/track_px`); `null` is absent. Both belong to `package` revision 7.
 - The `expect_after` of any operation may add `expect_identity: {"target_id", "choice_of"}`,
   or from SEL-L4b-T `expect_identity: {"choice_of", "templates": [{"id", "target_id"}]}`
   (section Expected identity).
@@ -681,13 +693,15 @@ One attempt of a single-frame select runs, before any input:
    the `CapturePage` timing boundary, but it feeds neither the stability sampling nor the
    post-admission OCR collector. F2 must be the step's page, the step's guard must pass on F2,
    and the projection P2 of F2 must hash to H1 (a step that declares `confirm: "decision"`
-   compares the decisions instead, section Confirming by the decision).
+   compares the decisions instead, section Confirming by the decision; one that declares
+   `confirm: "track"` finds its choice again on P2, section Confirming by tracking).
 5. The decision is recorded once as `task.selection_evaluated` (section Records). A step that
    declares `on_empty` adds `unknown_check` to its v1 record.
 6. On a match, one tap is sampled inside the chosen candidate's `click` rectangle (taken from
-   P2, equal to P1's since the hashes are equal) as a `rect` click is sampled, with the step's
-   action seed. `task.effect_intent` records it and the input follows, bound to F2's committed
-   input frame.
+   P2, equal to P1's since the hashes are equal; for `confirm: "track"`, the click of the
+   candidate found again on P2) as a `rect` click is sampled, with the step's action seed.
+   `task.effect_intent` records it and the input follows, bound to F2's committed input
+   frame.
 7. The step's `expect_after` is awaited as for every step.
 
 Any outcome other than `selected` (`empty`, `insufficient`, `ambiguous`, `unknown`) is the v1
@@ -721,6 +735,8 @@ before its tap, so its failures follow other rules (section Select over a scan).
 | P2 hashes differently | `selection_projection_mismatch` | `mismatched` |
 | `confirm: "decision"`: F2 cannot be decided, or its decision hash cannot be formed | that failure's code (`selection_evaluation_failed`) | `capture_failed` with that code |
 | `confirm: "decision"`: F2's decision hashes differently | `selection_decision_mismatch` | `decision_mismatched` |
+| `confirm: "track"`: F2 cannot be decided, its decision hash cannot be formed, or its choice has no anchor match origin | that failure's code (`selection_evaluation_failed`) | `capture_failed` with that code |
+| `confirm: "track"`: F2's decision selects nobody, or a candidate farther than `track_px` | `selection_decision_mismatch`, values `confirm` `track` and `selection_kind` (nobody) or `shift_px` (too far) | `track_lost` |
 | The record exceeds 64 KiB or is invalid | `selection_record_too_large`, or the record's own validation code | none |
 
 A failure before the decision writes no `task.selection_evaluated` record, because the record
@@ -780,6 +796,41 @@ The decision of record is P1's in either case; the record keeps F2's candidate-s
 F2's decision hash in its confirmation, and P1's decision hash equals the latter exactly when the
 confirmation is `decision_matched`. A step without `confirm`, or with `"candidate_set"`,
 compares and records as before.
+
+### Confirming by tracking
+
+Workflow #404 FS-3 (since 0.12.43; register §1.284; ledger revision 7). A target that moves
+between F1 and F2, such as a marker on a figure that walks around, never confirms by the
+candidate set or by the decision, because both hashes cover the click rectangles. A
+single-frame select over a `repeated_anchor` layout that declares `confirm: "track"` with
+`track_px` finds its choice again on F2 instead:
+
+1. Steps 1 to 3 run on F1 as in section Execution: P1 is projected and decided, and its one
+   selected candidate is c1. F2's capture, page and guard checks and projection P2 run as
+   there too.
+2. P2 is decided again by the step's policy with the same instance fact snapshot and the same
+   instant as P1, over P2's actionable candidates; its decision hash is formed over P2 as in
+   section Confirming by the decision.
+3. When that decision is `selected` with one candidate c2, the shift is the Chebyshev distance
+   in pixels, `max(|x1 − x2|, |y1 − y2|)`, between the anchor match origins of c1 and c2: the
+   top-left corner of the anchor match each instance was placed at (candidate-projection.md,
+   Generation step 3), on F1 and on F2. The origins are the producer's and enter no hash and no
+   record.
+4. A shift of at most `track_px` records `tracked` (section Records) and the tap of step 6
+   follows inside **c2's** `click` rectangle on P2, bound to F2. c2's ID may differ from c1's:
+   the numbering follows the declared order on each frame.
+5. Otherwise (F2's decision selects nobody, or the shift is above `track_px`) the step records
+   `track_lost` and fails `selection_decision_mismatch` before any input, as every other
+   failure of a single-frame select does. Its values are `confirm` `track` with `shift_px`, the shift, or,
+   when F2's decision selected nobody, `selection_kind`, its kind. A failure of F2's decision,
+   of its hash or of an origin records `capture_failed` with that failure's code, as a
+   projection failure of F2 does.
+
+The decision of record is P1's: `selected` keeps c1. F2's choice is identified by its decision
+hash, which covers F2's selected ID. Only one frame pair is compared (F1 and F2); no target is
+followed across more frames, and the step taps once. `track_px` is part of the package, not a
+configuration key: how far a target may move between two frames is a property of what the
+package shows.
 
 ### Select over a scan
 
@@ -1090,6 +1141,8 @@ The record has the shape of a `policy.*` decision: identity hashes and a complet
 | `mismatched` `{candidate_set_sha256}` | It hashes differently; no input follows. |
 | `decision_matched` `{candidate_set_sha256, decision_sha256}` | A step with `confirm: "decision"` (ledger revision 4, register §1.153 LR-1; written since §1.166): the confirmation frame's decision hashes like the evaluated decision. `candidate_set_sha256` is the confirmation frame's own and may differ from the evaluated projection's; `decision_sha256` is its decision hash (section Confirming by the decision). |
 | `decision_mismatched` `{candidate_set_sha256, decision_sha256}` | As `decision_matched`, but the confirmation frame's decision hashes differently; no input follows. |
+| `tracked` `{candidate_set_sha256, decision_sha256, shift_px}` | A step with `confirm: "track"` (ledger revision 7, Workflow #404 FS-3, register §1.284): the confirmation frame's decision selected one candidate whose anchor match origin lies `shift_px` (0..=`track_px`, so at most 64) from the evaluated choice's; the tap goes into that candidate's click box on the confirmation frame. `candidate_set_sha256` and `decision_sha256` are the confirmation frame's own (section Confirming by tracking). |
+| `track_lost` `{candidate_set_sha256, decision_sha256, shift_px?}` | As `tracked`, but the confirmation frame's decision selected nobody (`shift_px` absent) or a candidate farther than `track_px` (`shift_px` its shift); no input follows. |
 | `page_changed` | The confirmation frame is not the step's page. |
 | `guard_failed` `{code}` | The step's guard failed on the confirmation frame. |
 | `capture_failed` `{code}` | The confirmation frame could not be captured. |
@@ -1211,6 +1264,10 @@ A record is checked when it is written and when it is read:
   and nothing otherwise; `selected` has a positive count and `insufficient` fewer survivors
   than required;
 - `matched` carries the projection's hash and `mismatched` a different 64-hex hash;
+- `tracked` and `track_lost` (ledger revision 7) belong to a record without `multi_select`
+  whose projection is v1 of a `repeated_anchor` layout, carry two 64-hex hashes and, like the
+  other confirmations, an optional embedded projection that seals the first; a `tracked`
+  `shift_px` is at most 64; neither the decision hash nor the shift is recomputed;
 - reason codes and confirmation codes are tokens, reason details text of at most 1024 bytes,
   the decision chain holds 1–128 reasons, as for a policy dispatch; labels and IDs are at most
   256 bytes without control characters.

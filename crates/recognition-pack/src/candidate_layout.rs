@@ -556,7 +556,21 @@ impl SceneEvaluation<'_> {
         &self,
         layout_id: &str,
     ) -> Result<CandidateProjection, CandidateProjectionFailure> {
-        self.project_candidates_with_samples(layout_id, &[self.scene], &mut |_, _, _, _| Ok(()))
+        self.project_candidates_placed(layout_id)
+            .map(|(projection, _)| projection)
+    }
+
+    /// Workflow #404 FS-3: [`Self::project_candidates`] with each candidate's origin, in
+    /// candidate order: the top-left corner of a `repeated_anchor` instance's anchor match, or a
+    /// slot rectangle's origin. The origins are not part of the projection: they enter no hash
+    /// and no record.
+    pub fn project_candidates_placed(
+        &self,
+        layout_id: &str,
+    ) -> Result<(CandidateProjection, Vec<PackPoint>), CandidateProjectionFailure> {
+        self.project_candidates_placed_with_samples(layout_id, &[self.scene], &mut |_, _, _, _| {
+            Ok(())
+        })
     }
 
     /// The supplied scenes are one observation transaction, oldest first. A caller incapable
@@ -573,6 +587,24 @@ impl SceneEvaluation<'_> {
             Instant,
         ) -> Result<(), CandidateProjectionFailure>,
     ) -> Result<CandidateProjection, CandidateProjectionFailure> {
+        self.project_candidates_placed_with_samples(layout_id, scenes, record)
+            .map(|(projection, _)| projection)
+    }
+
+    /// Workflow #404 FS-3: [`Self::project_candidates_with_samples`] with each candidate's
+    /// origin, as [`Self::project_candidates_placed`] gives it; a `repeated_anchor` instance's
+    /// origin is its match on this context's scene, the one its instances are enumerated on.
+    pub fn project_candidates_placed_with_samples(
+        &self,
+        layout_id: &str,
+        scenes: &[&crate::Scene],
+        record: &mut impl FnMut(
+            &str,
+            &RecognitionPackResult<TargetEvaluation>,
+            Instant,
+            Instant,
+        ) -> Result<(), CandidateProjectionFailure>,
+    ) -> Result<(CandidateProjection, Vec<PackPoint>), CandidateProjectionFailure> {
         let evaluator = self.evaluator;
         let layout = evaluator.candidate_layout(layout_id).ok_or_else(|| {
             CandidateProjectionFailure::new(
@@ -997,6 +1029,10 @@ impl SceneEvaluation<'_> {
             candidates,
         )
         .and_then(|projection| projection.with_recognition_evidence(evidence))
+        .map(|projection| {
+            let origins = instances.iter().map(|instance| instance.origin).collect();
+            (projection, origins)
+        })
         .map_err(CandidateProjectionFailure::from)
     }
 }

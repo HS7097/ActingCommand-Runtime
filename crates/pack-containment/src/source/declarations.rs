@@ -1021,8 +1021,8 @@ impl Declaration<'_> {
     /// still carry is ignored, Workflow #336 PKG-S2). The step is guarded and confirmed: it
     /// declares its `guard` and its `expect_after`, and is never an unguarded trusted
     /// coordinate. Whether the layout and the policy fit the task is checked with the policy
-    /// document (`select_policy`). It may also declare `scan`, `on_empty` and (Workflow #411 B4)
-    /// `confirm`.
+    /// document (`select_policy`). It may also declare `scan`, `on_empty`, (Workflow #411 B4)
+    /// `confirm` and (Workflow #404 FS-3) `track_px`.
     fn select_step(
         &self,
         operation: &Map<String, Value>,
@@ -1033,7 +1033,14 @@ impl Declaration<'_> {
         let select = self.object(
             value,
             &select_pointer,
-            &["layout_id", "policy", "scan", "on_empty", "confirm"],
+            &[
+                "layout_id",
+                "policy",
+                "scan",
+                "on_empty",
+                "confirm",
+                "track_px",
+            ],
         )?;
         let layout_pointer = child(&select_pointer, "layout_id");
         let layout_id = self.required(select, &select_pointer, "layout_id")?;
@@ -1091,13 +1098,22 @@ impl Declaration<'_> {
         }
         // Workflow #411 B4 (b-plan §2.4; package revision 6): how a single-frame select
         // confirms, `candidate_set` (the default) or `decision`; Runtime admission refuses
-        // `decision` beside `scan` (D3).
+        // `decision` beside `scan` (D3). Workflow #404 FS-3 (package revision 7): or `track`.
         if let Some(confirm) = select.get("confirm").filter(|value| !value.is_null()) {
             let confirm_pointer = child(&select_pointer, "confirm");
             self.string(confirm, &confirm_pointer)?;
-            if !matches!(confirm.as_str(), Some("candidate_set" | "decision")) {
+            if !matches!(
+                confirm.as_str(),
+                Some("candidate_set" | "decision" | "track")
+            ) {
                 return Err(self.error(&confirm_pointer, ResourceDeclarationReason::InvalidValue));
             }
+        }
+        // Workflow #404 FS-3 (package revision 7): `track`'s distance, an unsigned integer;
+        // Runtime admission checks its range and that it comes with `track` on a single-frame
+        // select over a `repeated_anchor` layout.
+        if let Some(track_px) = select.get("track_px").filter(|value| !value.is_null()) {
+            self.unsigned(track_px, &child(&select_pointer, "track_px"))?;
         }
         Ok(())
     }

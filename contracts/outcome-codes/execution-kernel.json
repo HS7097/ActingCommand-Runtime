@@ -2658,6 +2658,9 @@
       "layer": "kernel",
       "uncertain": false,
       "values": {
+        "confirm": "optional",
+        "shift_px": "optional",
+        "selection_kind": "optional",
         "operation": "optional",
         "runtime_code": "optional",
         "host_halted": "optional",
@@ -2667,9 +2670,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.10",
-      "description": "The confirmation frame of a select step that confirms by its decision (select.confirm decision) led to a different decision than the frame it was chosen on: the actionable candidates' IDs, click boxes or statuses, the selected candidate or the outcome key differ. No input was made.",
-      "common_causes": "The list moved or changed between the two frames.",
-      "handling": "Retry on the next frame; if it repeats, the layout's rows are unstable."
+      "description": "The confirmation frame of a select step that confirms by its decision (select.confirm decision) led to a different decision than the frame it was chosen on: the actionable candidates' IDs, click boxes or statuses, the selected candidate or the outcome key differ. Workflow #404 FS-3 (since 0.12.43): for a step that confirms by tracking (select.confirm track, confirm track), the confirmation frame's decision selected no candidate (selection_kind names its kind) or one whose anchor match origin lies farther than the step's track_px from the chosen one's (shift_px, the Chebyshev distance in pixels). No input was made.",
+      "common_causes": "The list moved or changed between the two frames; for confirm track, the target moved farther than track_px, left the frame, or another candidate now ranks first.",
+      "handling": "Retry on the next frame; if it repeats, the layout's rows are unstable. For confirm track, compare shift_px with track_px: a target that moves this far between two frames needs a larger track_px."
     },
     "selection_confirmation_capture_failed": {
       "category": "error",
