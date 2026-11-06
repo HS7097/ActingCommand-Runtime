@@ -17,8 +17,10 @@
 // step's guard on the second (green), and at most one 8 x 6 noise marker, the layout's anchor,
 // wherever a case puts it. The policy chooses exactly one candidate by its `anchor_milli` match
 // score, so each frame's decision chooses the marker that frame shows, and nobody on a frame
-// without one. The runtime's clock is a counter that only its pauses advance.
+// without one. The runtime's clock is the scripted runtime's (EXEC-I3), which only its pauses
+// advance.
 
+use super::tests::scripted::{ScriptedFrame, ScriptedRuntime};
 use super::*;
 use actingcommand_contract::{
     CandidateProjection, CandidateRect, InstanceFactContext, InstanceFactSnapshot,
@@ -108,14 +110,14 @@ enum Event {
 }
 
 // The Runtime as the kernel sees it: it shows F1 until the select step reads its fact snapshot,
-// then F2 until the first input, then `terminal`.
+// then F2 until the first input, then `terminal`. Its clock is a scripted runtime's, which plays
+// no frame of this run.
 struct Device {
     first: Screen,
     confirmation: Screen,
     state_read: bool,
     inputs: usize,
-    epoch: Instant,
-    elapsed: Duration,
+    clock: ScriptedRuntime,
     events: Vec<Event>,
 }
 
@@ -126,8 +128,7 @@ impl Device {
             confirmation,
             state_read: false,
             inputs: 0,
-            epoch: Instant::now(),
-            elapsed: Duration::ZERO,
+            clock: ScriptedRuntime::new(vec![vec![ScriptedFrame::rgb(1, 1, &[BACKGROUND])]]),
             events: Vec::new(),
         }
     }
@@ -221,11 +222,11 @@ impl ContainedTaskRuntime for Device {
     }
 
     fn monotonic_now(&mut self) -> Instant {
-        self.epoch + self.elapsed
+        self.clock.monotonic_now()
     }
 
     fn pause(&mut self, duration: Duration) {
-        self.elapsed += duration;
+        self.clock.pause(duration);
     }
 }
 

@@ -1171,6 +1171,18 @@ type Attempted<E> = (
     Result<SelectAttempt, ContainedTaskRunError<E>>,
 );
 
+/// What a single-frame select step evaluated, as its confirmation frame is checked against it:
+/// the projection with each candidate's anchor match origin (`origins`, in candidate order;
+/// Workflow #404 FS-3), the decision, and the facts, tables and instant it was decided with.
+struct Evaluated<'a> {
+    projection: &'a CandidateProjection,
+    origins: &'a [PackPoint],
+    decision: &'a SelectionDecision,
+    facts: &'a SelectionFactSnapshot,
+    tables: &'a SelectionTables,
+    now_unix_ms: u64,
+}
+
 impl PreparedContainedTask {
     /// The layout's projection on `first` as a select step takes it: candidate sampling and
     /// its budget against `deadline`, every candidate evaluation recorded. A scan session
@@ -1489,11 +1501,14 @@ impl PreparedContainedTask {
                 let (confirmation, selected) = self.confirm(
                     runtime,
                     operation,
-                    (
-                        (&projection, &origins),
-                        &decision,
-                        (&facts, &tables, now_unix_ms),
-                    ),
+                    Evaluated {
+                        projection: &projection,
+                        origins: &origins,
+                        decision: &decision,
+                        facts: &facts,
+                        tables: &tables,
+                        now_unix_ms,
+                    },
                     candidate_id,
                     timing,
                     deadline,
@@ -1557,11 +1572,14 @@ impl PreparedContainedTask {
         &self,
         runtime: &mut R,
         operation: &TaskOperation,
-        ((projection, origins), decision, (facts, tables, now_unix_ms)): (
-            (&CandidateProjection, &[PackPoint]),
-            &SelectionDecision,
-            (&SelectionFactSnapshot, &SelectionTables, u64),
-        ),
+        Evaluated {
+            projection,
+            origins,
+            decision,
+            facts,
+            tables,
+            now_unix_ms,
+        }: Evaluated<'_>,
         candidate_id: &str,
         timing: ContainedTaskTimingContext,
         deadline: Instant,
