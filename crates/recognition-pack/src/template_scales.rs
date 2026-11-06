@@ -9,9 +9,10 @@
 //! searched over the target's region on the exact score map; the highest score wins, an equal one
 //! the earlier factor. The match's box is the resampled template's, and the factor it hit at
 //! (`scale_milli`) scales the package lengths that hang on the match: a relative color region, a
-//! `template_relative` OCR region and a click `offset`, each `(v * factor + 500) div 1000` with
-//! the sign of `v`, a width or height at least 1. Factors describe the interface's own zoom in the
-//! package's base coordinates, never a device resolution.
+//! `template_relative` OCR region, a click `offset` and (Workflow #404 FS-1) a `repeated_anchor`
+//! instance's `instance_rect`, `click` and feature offsets, each `(v * factor + 500) div 1000`
+//! with the sign of `v`, a width or height at least 1. Factors describe the interface's own zoom
+//! in the package's base coordinates, never a device resolution.
 
 use crate::*;
 use actingcommand_contract::ResourceDeclarationReason;
@@ -61,6 +62,28 @@ pub(crate) fn scaled_relative(
         resample::scale_signed(width, scale_milli)?.max(1),
         resample::scale_signed(height, scale_milli)?.max(1),
     ))
+}
+
+/// Workflow #404 FS-1: a rectangle relative to a match of a template resampled by
+/// `scale_milli`, scaled as the declaration's lengths scale: its origin and size, each
+/// `(|v| * factor + 500) div 1000` with the sign of `v`, a width or height at least 1; `None`
+/// when a length leaves the `i32` range.
+pub(crate) fn scaled_rect(rect: PackRect, scale_milli: u32) -> Option<PackRect> {
+    let (offset, width, height) = scaled_relative(
+        OcrRegionOffset {
+            x: rect.x,
+            y: rect.y,
+        },
+        rect.width,
+        rect.height,
+        scale_milli,
+    )?;
+    Some(PackRect {
+        x: offset.x,
+        y: offset.y,
+        width,
+        height,
+    })
 }
 
 /// The wire shape of a schema 0.7 `scales` object on the target at `index`:
@@ -143,8 +166,9 @@ pub(crate) fn validate_scales_wire(
 /// The declaration rules of `scales` on a parsed pack (the wire shape is checked by
 /// [`validate_scales_wire`] when the pack is loaded from JSON): schema 0.7, 1 to 4 distinct
 /// factors from 500 to 2000. A target that declares them is never a `target_consensus` target
-/// (each frame would take its own factor), a `repeated_anchor` anchor or a candidate layout
-/// feature read at an offset (both search the template as declared).
+/// (each frame would take its own factor) or a candidate layout feature read at an offset (it
+/// searches the template as declared). Workflow #404 FS-1: a `repeated_anchor` anchor may
+/// declare them; its enumeration searches every factor.
 pub(crate) fn validate_scales_declarations(pack: &RecognitionPack, errors: &mut Vec<String>) {
     let mut scaled = HashSet::new();
     for (index, target) in pack.targets.iter().enumerate() {
@@ -186,13 +210,6 @@ pub(crate) fn validate_scales_declarations(pack: &RecognitionPack, errors: &mut 
         }
     }
     for (layout_index, layout) in pack.candidate_layouts.iter().enumerate() {
-        if let Some(anchor) = layout.anchor.as_deref()
-            && scaled.contains(anchor)
-        {
-            errors.push(format!(
-                "/candidate_layouts/{layout_index}/anchor: template '{anchor}' declares scales, which a repeated_anchor anchor does not search"
-            ));
-        }
         for (feature_index, feature) in layout.features.iter().enumerate() {
             if let (Some(target_id), Some(_)) = (&feature.target, feature.offset)
                 && scaled.contains(target_id.as_str())

@@ -16,7 +16,8 @@ actingcommand_contract::outcome_codes! {
         CandidateSampleRecordFailed => "candidate_sample_record_failed": error / none,
         // Workflow #308 list selector L1 (begin).
         /// The anchor search of a `repeated_anchor` layout reached its time limit before it had
-        /// scored every row of its region; no partial candidate set is returned (keys `stage`,
+        /// taken its matches (Workflow #404 FS-1: scoring its region on the exact score map,
+        /// sorting or suppressing); no partial candidate set is returned (keys `stage`,
         /// `timeout_ms`, `count`: the positions found by then).
         CandidateSearchIncomplete => "candidate_search_incomplete": error / budget_or_permission,
         // Workflow #308 list selector L1 (end).

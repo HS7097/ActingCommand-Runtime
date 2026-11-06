@@ -2768,9 +2768,10 @@ fn validate_check_members(targets: &HashMap<String, Value>, bundles: &[Bundle]) 
 /// a target of the derived pack that can be evaluated, and a `measure_milli` feature never
 /// reads a composite. A feature's own target, read at an offset, is a template, color,
 /// color_digest or OCR target (an `nn` or composite feature cannot move), and a
-/// `repeated_anchor` layout's anchor is a template. As for OCR targets, the same layout ID
-/// with an identical derived definition is kept once; any other reuse of the ID is refused at
-/// the reusing entry.
+/// `repeated_anchor` layout's anchor is a template. Workflow #404 FS-2: an `anchor_milli`
+/// feature belongs to a `repeated_anchor` layout and reads no target. As for OCR targets, the
+/// same layout ID with an identical derived definition is kept once; any other reuse of the ID
+/// is refused at the reusing entry.
 fn derive_candidate_layouts(
     targets: &HashMap<String, Value>,
     bundles: &[Bundle],
@@ -2806,11 +2807,28 @@ fn derive_candidate_layouts(
                     ),
                 ));
             }
+            let anchored = required_string(layout, "kind")? == "repeated_anchor";
             let mut features = Vec::new();
             let mut values = HashMap::new();
             for (feature_index, feature) in array_field(layout, "features").iter().enumerate() {
                 let name = required_string(feature, "name")?;
                 let value = required_string(feature, "value")?;
+                // Workflow #404 FS-2: an `anchor_milli` feature derives as `{name, value}`: the
+                // score of a `repeated_anchor` instance's own anchor match, with no target.
+                if value == "anchor_milli" {
+                    if !anchored {
+                        return Err(refuse(
+                            &format!("features/{feature_index}/value"),
+                            "an anchor_milli feature needs a repeated_anchor layout's anchor",
+                        ));
+                    }
+                    if feature.get("target").is_some() {
+                        return Err(refuse(
+                            &format!("features/{feature_index}/target"),
+                            "an anchor_milli feature reads no target",
+                        ));
+                    }
+                }
                 values.insert(name.clone(), value.clone());
                 let mut generated = ordered_object([
                     ("name", Value::String(name)),
@@ -2855,7 +2873,7 @@ fn derive_candidate_layouts(
                 }
                 features.push(generated);
             }
-            if required_string(layout, "kind")? == "repeated_anchor" {
+            if anchored {
                 let anchor = required_string(layout, "anchor")?;
                 if targets
                     .get(&anchor)

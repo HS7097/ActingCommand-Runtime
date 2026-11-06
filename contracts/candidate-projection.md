@@ -49,7 +49,9 @@ positive width and height; its origin is signed because an instance at the frame
 start outside it.
 
 A scalar feature is `{"type": "boolean"|"integer", "value": …, "confidence": …}`. A `passed` feature
-is a boolean; a `measure_milli` feature is an integer. `confidence` is the backend's own
+is a boolean; a `measure_milli` feature is an integer, and so (Workflow #404 FS-2, since 0.12.43)
+is an `anchor_milli` feature, the instance's own anchor match score, whose `confidence` is its
+value. `confidence` is the backend's own
 confidence in integer milli for template, OCR and NN targets (the same value as their
 measure), and `null` for color, color digest and composite targets. v1 does not hand
 `confidence` to the evaluator.
@@ -182,31 +184,44 @@ scene and the admitted pack, nothing else; the layouts it reads are declared as 
    `true`, and the slot's `rect` and `click`.
 
    A `repeated_anchor` layout enumerates its anchor instead
-   (`SceneEvaluation::evaluate_target_all`). Every position of the anchor template in its
-   region is scored exactly, as the joint template and color search scores it, never through the
-   downsampled pyramid; a position is a match when its score reaches the anchor's threshold and
-   its `template_relative` color check, when it declares one, passes there. The matches are
-   taken greedily by score descending, then `y`, then `x`, and a match is suppressed when
-   `1000 × intersection > suppress_iou_milli × union` with one already taken (integer
-   arithmetic; `0`, the default, suppresses any overlap). The search checks its 5 s limit before
-   each row; when it runs out it fails with `candidate_search_incomplete` (values `stage`
-   `candidate_search_repeated_anchor`, `timeout_ms` 5000 and `count`, the positions found by
-   then) and returns no partial set. More matches than `max_instances` fail with
-   `candidate_projection_budget_exceeded` (`candidates`); nothing is truncated. The matches are
-   numbered by `order`: `top_to_bottom` by (`y`, `x`), `left_to_right` by (`x`, `y`). Match
-   `k` becomes candidate `{layout_id}#{k:02}`, whose `rect` and `click` are the declared
-   `instance_rect` and `click` placed at the match's top-left corner. It is actionable when both
-   lie inside the readable band; otherwise it keeps its rectangles, carries no features and is
-   never evaluated.
+   (`SceneEvaluation::evaluate_target_all`). Since 0.12.43 (Workflow #404 FS-1) every position
+   of the anchor template in its region, `full_frame` included, is scored on the exact score map
+   (`Scene::match_template_all_scaled`): the cheaper of the direct and the transform (FFT)
+   engine, with the direct scorer's scores bit for bit, never through the downsampled pyramid.
+   An anchor that declares a `mask` scores only the template pixels it selects; one that
+   declares `scales` is searched at each factor on its own map over the same region. A position
+   is a match when its score reaches the anchor's threshold and its `template_relative` color
+   check, when it declares one, passes there, the color region scaled by the factor. The
+   matches of every factor are merged and taken greedily by score descending, then the earlier
+   declared factor, then `y`, then `x`; a match is suppressed when
+   `1000 × intersection > suppress_iou_milli × union` with one already taken, over the
+   resampled templates' boxes (integer arithmetic; `0`, the default, suppresses any overlap), so
+   one object found at several factors is one match. Scoring, collecting, sorting and
+   suppression all count against the one 5 s limit; when it runs out the projection fails with
+   `candidate_search_incomplete` (values `stage` `candidate_search_repeated_anchor`, `timeout_ms`
+   5000 and `count`, the positions that had passed the threshold and the color check by then:
+   `0` while the maps are summed) and returns no partial set. More matches than
+   `max_instances` after suppression fail with `candidate_projection_budget_exceeded`
+   (`candidates`); nothing is truncated. The matches are numbered by `order`: `top_to_bottom`
+   by (`y`, `x`), `left_to_right` by (`x`, `y`). Match `k` becomes candidate
+   `{layout_id}#{k:02}`, whose `rect` and `click` are the declared `instance_rect` and `click`,
+   scaled by the factor the match hit (`(|v| × f + 500) div 1000` with the sign of `v`, a width
+   or height at least 1; unchanged at 1000), placed at the match's top-left corner. It is
+   actionable when both lie inside the readable band; otherwise it keeps its rectangles,
+   carries no features and is never evaluated.
 4. For each declared feature of an actionable candidate, in declaration order, that reads a
    target, the target is evaluated through the frame's scene evaluation, the same one pages
    use; each distinct target is evaluated once per projection, and a template reuses the
    frame's template result. A feature that declares its own `target` reads it with its region
    moved to the instance origin (the slot rectangle's origin, or the anchor match's top-left
    corner) plus `offset`, keeping the target's own size; a template read this way goes through
-   the template region evaluation of the recognition pack. The feature takes the target's
-   `passed` verdict as a boolean or its `measure_milli` as an integer, with the target's
-   `confidence`, as the table in selection-graph.md defines.
+   the template region evaluation of the recognition pack. The `offset` of a `repeated_anchor`
+   feature scales with the factor its instance's match hit, as the instance's rectangles do.
+   The feature takes the target's `passed` verdict as a boolean or its `measure_milli` as an
+   integer, with the target's `confidence`, as the table in selection-graph.md defines. An
+   `anchor_milli` feature (Workflow #404 FS-2) reads no target: it is the integer
+   `floor(score × 1000)` of the instance's own anchor match, with that value as its
+   `confidence`.
 5. A measure or confidence the backend does not give is absent: a `measure_milli` feature of
    an OCR result without a confidence, or of an NN result without a selected score, is left out
    of the candidate, and a `passed` feature then carries `confidence` `null`. Nothing is

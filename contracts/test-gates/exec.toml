@@ -2739,3 +2739,24 @@ tests = [
     "actingcommand-resource-tooling::lib::gate_373_navt::store_fg1_s8_1_a_store_step_tapping_a_point_or_a_rect_gets_one_warning",
 ]
 incident = []
+
+# Workflow #404 FS-1 (0.12.43; register §1.282; brief rd-1031/perf-407/brief-fs12.md; design rd-1031/perf-407/model-gpu0-404.md §2.2, §3 row FS-1): a repeated_anchor anchor is enumerated on the exact score map: without mask or scales it gives the matches the direct scorer gives, bit for bit, on both dot engines; a full-frame anchor is summed by the transform engine; a masked anchor declared at two factors is admitted and its instances stand at the exact matches with instance_rect, click and feature offsets scaled by the factor each hit; one object found at several factors is one instance; and sorting and suppression count against the 5 s search limit, a search past it failing with candidate_search_incomplete and every position found
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-recognition::lib::exact_score::all_tests::an_unmasked_unscaled_anchor_projects_byte_identical_to_the_direct_scorer",
+    "actingcommand-recognition::lib::exact_score::all_tests::a_full_frame_anchor_uses_the_transform_engine",
+    "actingcommand-recognition-pack::lib::candidate_layout::anchor_search_tests::masked_and_scaled_anchors_enumerate_on_the_exact_map",
+    "actingcommand-recognition-pack::lib::candidate_layout::anchor_search_tests::one_object_across_scales_is_one_instance",
+    "actingcommand-recognition-pack::lib::candidate_layout::anchor_search_tests::sorting_and_suppression_count_against_the_search_limit",
+]
+incident = ["#404 FS-1"]
+
+# Workflow #404 FS-2 (0.12.43; register §1.283; brief rd-1031/perf-407/brief-fs12.md; design rd-1031/perf-407/model-gpu0-404.md §2.2, §3 row FS-2): an anchor_milli feature carries each actionable repeated_anchor instance's own anchor match score in milli, rounded down, as an integer whose confidence is the same value; the declaration gate, the parser and the recognition pack refuse it in a fixed_slots layout and with a target
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-recognition-pack::lib::candidate_layout::anchor_search_tests::anchor_milli_carries_the_match_score_floor_milli",
+    "actingcommand-pack-containment::lib::source::tests::anchor_milli_refused_on_fixed_slots_and_with_a_target",
+]
+incident = ["#404 FS-2"]

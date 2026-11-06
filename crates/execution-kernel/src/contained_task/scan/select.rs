@@ -127,10 +127,11 @@ impl std::fmt::Display for BoundInputsRefusal {
 }
 
 /// The upper-bound inputs of a select step (S0 §3.3): every policy field's domain, built from
-/// the layout (`passed` boolean, `measure_milli` 0..=1000, `ocr_integer` its declared range, the
-/// identity feature the identity itself), and the identities a position without a Known one may
-/// hold: the identity feature's domain, or one neutral hypothesis when no field carries an
-/// identity. Another identity field is refused, because one hypothesis fixes one identity.
+/// the layout (`passed` boolean, `measure_milli` and `anchor_milli` 0..=1000, `ocr_integer` its
+/// declared range, the identity feature the identity itself), and the identities a position
+/// without a Known one may hold: the identity feature's domain, or one neutral hypothesis when
+/// no field carries an identity. Another identity field is refused, because one hypothesis fixes
+/// one identity.
 pub(in crate::contained_task) fn bound_inputs(
     layout: &CandidateLayout,
     policy: &SelectionPolicy,
@@ -145,7 +146,10 @@ pub(in crate::contained_task) fn bound_inputs(
             .ok_or_else(|| format!("field={} undeclared", field.name))?;
         let domain = match feature.value {
             CandidateFeatureValue::Passed => FieldDomain::Boolean,
-            CandidateFeatureValue::MeasureMilli => FieldDomain::Integer { min: 0, max: 1000 },
+            // Workflow #404 FS-2: an anchor match score in milli, as a template measure.
+            CandidateFeatureValue::MeasureMilli | CandidateFeatureValue::AnchorMilli => {
+                FieldDomain::Integer { min: 0, max: 1000 }
+            }
             CandidateFeatureValue::OcrInteger => {
                 let integer = feature
                     .integer

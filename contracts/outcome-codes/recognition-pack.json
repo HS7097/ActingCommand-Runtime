@@ -140,7 +140,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The anchor search of a repeated_anchor candidate layout reached its time limit (timeout_ms, 5000) before it had scored every row of the anchor's search region; count is the number of positions that had passed the threshold and the relative color check by then. No partial candidate set is returned, so the projection, and the select step or observation that asked for it, fails. operation, optional, is the caller's location; A2d left the callers' failure detail as text, so none adds it yet.",
+      "description": "The anchor search of a repeated_anchor candidate layout reached its time limit (timeout_ms, 5000) before it had taken its matches: while it scored the anchor's search region on the exact score map, at each factor the anchor declares, or (since 0.12.43, Workflow #404 FS-1) while it sorted the matches or suppressed their overlaps; count is the number of positions that had passed the threshold and the relative color check by then. No partial candidate set is returned, so the projection, and the select step or observation that asked for it, fails. operation, optional, is the caller's location; A2d left the callers' failure detail as text, so none adds it yet.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

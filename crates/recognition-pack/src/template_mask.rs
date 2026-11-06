@@ -128,8 +128,9 @@ pub(crate) fn validate_mask_wire(
 
 /// The mask rules of a parsed pack (the wire shape is checked by [`validate_mask_wire`] when the
 /// pack is loaded from JSON): schema `0.7` scores only a gray range whose `lower` does not exceed
-/// its `upper`. A `repeated_anchor` anchor and a candidate layout feature read at an offset are
-/// searched over every template pixel, so neither may name a masked template.
+/// its `upper`. A candidate layout feature read at an offset is searched over every template
+/// pixel, so it may not name a masked template. Workflow #404 FS-1: a `repeated_anchor` anchor
+/// may; its enumeration scores the masked pixels on the exact score map.
 pub(crate) fn validate_mask_declarations(pack: &RecognitionPack, errors: &mut Vec<String>) {
     if pack.schema_version != SCHEMA_0_7 {
         return;
@@ -155,13 +156,6 @@ pub(crate) fn validate_mask_declarations(pack: &RecognitionPack, errors: &mut Ve
         })
     };
     for (layout_index, layout) in pack.candidate_layouts.iter().enumerate() {
-        if let Some(anchor) = layout.anchor.as_deref()
-            && masked(anchor)
-        {
-            errors.push(format!(
-                "/candidate_layouts/{layout_index}/anchor: template '{anchor}' declares mask, which a repeated_anchor anchor does not score"
-            ));
-        }
         for (feature_index, feature) in layout.features.iter().enumerate() {
             if let (Some(target_id), Some(_)) = (&feature.target, feature.offset)
                 && masked(target_id.as_str())

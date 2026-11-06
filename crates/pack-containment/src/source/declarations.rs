@@ -2137,9 +2137,11 @@ impl Declaration<'_> {
     /// `order`, an optional `suppress_iou_milli` of 0..=999, an `instance_rect` and a `click`
     /// relative to the anchor match (a signed origin and a positive size), and an optional
     /// `readable_band` inside the coordinate space; each of its features reads a target at an
-    /// offset. A field of the other kind is unknown. Whether the page is one the task declares,
-    /// and whether each target exists in the derived pack with a kind the feature can read, is
-    /// checked while the pack is derived.
+    /// offset, except (Workflow #404 FS-2) an `anchor_milli` feature, which only a
+    /// `repeated_anchor` layout declares and which names no `target` or `offset`. A field of the
+    /// other kind is unknown. Whether the page is one the task declares, and whether each target
+    /// exists in the derived pack with a kind the feature can read, is checked while the pack is
+    /// derived.
     fn candidate_layouts(&self, value: &Value, pointer: &str, frame: [u64; 2]) -> CliOutcome<()> {
         for (index, layout) in self.array(value, pointer)?.iter().enumerate() {
             let pointer = child(pointer, &index.to_string());
@@ -2243,11 +2245,32 @@ impl Declaration<'_> {
                 self.string(value, &value_pointer)?;
                 if !matches!(
                     value.as_str(),
-                    Some("passed" | "measure_milli" | "identity" | "ocr_integer")
+                    Some("passed" | "measure_milli" | "identity" | "ocr_integer" | "anchor_milli")
                 ) {
                     return Err(self.error(&value_pointer, ResourceDeclarationReason::InvalidValue));
                 }
-                if anchored || feature.contains_key("target") || feature.contains_key("offset") {
+                if value.as_str() == Some("anchor_milli") {
+                    // Workflow #404 FS-2: the score of a `repeated_anchor` instance's own anchor
+                    // match; a `fixed_slots` layout has no anchor, and the feature reads no
+                    // target.
+                    if !anchored {
+                        return Err(
+                            self.error(&value_pointer, ResourceDeclarationReason::InvalidValue)
+                        );
+                    }
+                    if let Some(field) = ["target", "offset"]
+                        .into_iter()
+                        .find(|field| feature.contains_key(*field))
+                    {
+                        return Err(self.error(
+                            &child(&feature_pointer, field),
+                            ResourceDeclarationReason::UnknownField,
+                        ));
+                    }
+                } else if anchored
+                    || feature.contains_key("target")
+                    || feature.contains_key("offset")
+                {
                     self.string(
                         self.required(feature, &feature_pointer, "target")?,
                         &child(&feature_pointer, "target"),
