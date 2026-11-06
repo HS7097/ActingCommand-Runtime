@@ -1,0 +1,144 @@
+name: Vision EP bench build
+
+# Workflow #407 GPU-0a (experiment branch exp/407-gpu0-bench only, never merged): the exact-SHA
+# Windows build of the vision execution-provider bench `ac-vision-ep-bench`, in a workflow of its
+# own so windows-remote-build.yml stays exactly as on main, as the #402 capture bench's
+# capture-bench.yml does. The bench is no release binary and is in no release package; nothing is
+# downloaded here besides the Rust toolchain and the crates Cargo.lock pins. Its logic tests stay
+# in ci.yml's `bench` job.
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact 40-character lowercase commit SHA to build
+        required: true
+        type: string
+
+concurrency:
+  group: vision-ep-bench-${{ github.event.pull_request.number || inputs.source_sha || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Resolve exact source SHA
+        id: source
+        shell: pwsh
+        env:
+          DISPATCH_SOURCE_SHA: ${{ inputs.source_sha }}
+          PULL_REQUEST_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sourceSha = switch ($env:GITHUB_EVENT_NAME) {
+            'workflow_dispatch' { $env:DISPATCH_SOURCE_SHA }
+            'pull_request' { $env:PULL_REQUEST_SOURCE_SHA }
+            default { throw "unsupported workflow event: $env:GITHUB_EVENT_NAME" }
+          }
+          if (-not [regex]::IsMatch(
+              $sourceSha,
+              '\A[0-9a-f]{40}\z',
+              [Text.RegularExpressions.RegexOptions]::CultureInvariant
+          )) {
+            throw 'source SHA must be exactly 40 lowercase hexadecimal characters'
+          }
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "source_sha=$sourceSha"
+
+      - name: Check out exact source SHA
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ steps.source.outputs.source_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify checked-out commit
+        shell: pwsh
+        env:
+          EXPECTED_SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actualHead = (& git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0) {
+            throw "git rev-parse HEAD failed with exit code $LASTEXITCODE"
+          }
+          if (-not [string]::Equals(
+              $actualHead,
+              $env:EXPECTED_SOURCE_SHA,
+              [StringComparison]::Ordinal
+          )) {
+            throw "checked-out commit mismatch: expected $env:EXPECTED_SOURCE_SHA, actual $actualHead"
+          }
+
+      - name: Configure stable MSVC Rust toolchain
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & rustup toolchain install stable --profile minimal --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) {
+            throw "rustup toolchain install failed with exit code $LASTEXITCODE"
+          }
+          & rustup default stable
+          if ($LASTEXITCODE -ne 0) {
+            throw "rustup default failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Build vision EP bench
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & cargo build --locked --release --target x86_64-pc-windows-msvc `
+            -p actingcommand-vision-ep-bench --bin ac-vision-ep-bench
+          if ($LASTEXITCODE -ne 0) {
+            throw "vision EP bench cargo build failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Stage vision EP bench artifact
+        id: bench_stage
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $source = Join-Path $PWD 'target\x86_64-pc-windows-msvc\release\ac-vision-ep-bench.exe'
+          if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+            throw "expected build output is missing: $source"
+          }
+          $script = Join-Path $PWD 'tools\vision-ep-bench\run-variants.ps1'
+          if (-not (Test-Path -LiteralPath $script -PathType Leaf)) {
+            throw "expected variant script is missing: $script"
+          }
+          $name = "actingcommand-vision-ep-bench-$env:SOURCE_SHA"
+          $dir = Join-Path $env:RUNNER_TEMP $name
+          New-Item -ItemType Directory -Path $dir | Out-Null
+          Copy-Item -LiteralPath $source -Destination (Join-Path $dir 'ac-vision-ep-bench.exe')
+          Copy-Item -LiteralPath $script -Destination (Join-Path $dir 'run-variants.ps1')
+          $files = foreach ($file in @('ac-vision-ep-bench.exe', 'run-variants.ps1')) {
+            $path = Join-Path $dir $file
+            [ordered]@{
+              file = $file
+              size_bytes = (Get-Item -LiteralPath $path).Length
+              sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+          }
+          $manifest = [ordered]@{
+            commit_sha = $env:SOURCE_SHA
+            files = @($files)
+            never_released = $true
+          }
+          [IO.File]::WriteAllText((Join-Path $dir 'BENCH-MANIFEST.json'), ($manifest | ConvertTo-Json -Depth 4), [Text.UTF8Encoding]::new($false))
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "name=$name"
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "dir=$dir"
+
+      - name: Upload vision EP bench artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.bench_stage.outputs.name }}
+          path: ${{ steps.bench_stage.outputs.dir }}
+          if-no-files-found: error
+          retention-days: 7

@@ -10,8 +10,8 @@
 //! metadata and descriptions; model files are read and hashed by the engine on first use.
 
 use crate::{
-    CudaDeviceSelector, NnEngine, OcrEngine, OcrSessionId, OnnxExecutionProvider, VisionFfiError,
-    VisionFfiErrorCode, VisionFfiResult,
+    CudaDeviceSelector, NnEngine, OcrEngine, OcrSessionId, OnnxExecutionProvider, OrtSessionTuning,
+    VisionFfiError, VisionFfiErrorCode, VisionFfiResult,
 };
 use actingcommand_contract::outcome::{IoOp, Outcome};
 use serde::{Deserialize, Serialize};
@@ -32,6 +32,9 @@ pub const VISION_RUNTIME_DIRECTORY: &str = "ort";
 pub const ONNXRUNTIME_LIBRARY: &str = "onnxruntime.dll";
 pub const ONNXRUNTIME_SHARED_PROVIDERS_LIBRARY: &str = "onnxruntime_providers_shared.dll";
 pub const ONNXRUNTIME_CUDA_PROVIDER_LIBRARY: &str = "onnxruntime_providers_cuda.dll";
+/// Workflow #407 GPU-0a (experiment branch only): the DirectML library a DirectML runtime loads
+/// from `ort\`, before `onnxruntime.dll`, so the system's own older copy is never used.
+pub const DIRECTML_LIBRARY: &str = "DirectML.dll";
 
 const MODULE: &str = "vision_models";
 const MAX_DESCRIPTION_BYTES: u64 = 64 * 1024;
@@ -51,12 +54,20 @@ pub struct VisionRuntimeSpec {
     pub expected_onnxruntime_sha256: Option<String>,
     pub execution_provider: OnnxExecutionProvider,
     pub cuda_device: Option<CudaDeviceSelector>,
+    /// Workflow #407 GPU-0a (experiment branch only): the DXGI adapter index (`EnumAdapters1`
+    /// order) of a DirectML runtime; `None` for every other provider.
+    pub directml_device_id: Option<u32>,
+    /// Workflow #407 GPU-0a (experiment branch only): the session tuning knobs; the default is
+    /// the production session.
+    pub session_tuning: OrtSessionTuning,
 }
 
 impl VisionRuntimeSpec {
     /// The ONNX Runtime of a vision root: `ort\onnxruntime_providers_shared.dll` when present,
-    /// then `ort\onnxruntime.dll` and, for CUDA, `ort\onnxruntime_providers_cuda.dll`, loaded
-    /// in that order. Only file metadata is read; a required library that is missing fails.
+    /// then, for DirectML, `ort\DirectML.dll`, then `ort\onnxruntime.dll` and, for CUDA,
+    /// `ort\onnxruntime_providers_cuda.dll`, loaded in that order. Only file metadata is read;
+    /// a required library that is missing fails. The DirectML adapter and the tuning knobs are
+    /// set by the caller (Workflow #407 GPU-0a, experiment branch only).
     pub fn from_vision_root(
         vision_root: &Path,
         execution_provider: OnnxExecutionProvider,
@@ -68,6 +79,16 @@ impl VisionRuntimeSpec {
         let shared = directory.join(ONNXRUNTIME_SHARED_PROVIDERS_LIBRARY);
         if runtime_file(&shared)? {
             runtime_library_closure.push(shared);
+        }
+        if execution_provider == OnnxExecutionProvider::Directml {
+            let directml = directory.join(DIRECTML_LIBRARY);
+            if !runtime_file(&directml)? {
+                return Err(runtime_unavailable(format!(
+                    "{} is missing; it is required for execution_provider directml",
+                    directml.display()
+                )));
+            }
+            runtime_library_closure.push(directml);
         }
         if !runtime_file(&onnxruntime_library)? {
             return Err(runtime_unavailable(format!(
@@ -92,6 +113,8 @@ impl VisionRuntimeSpec {
             expected_onnxruntime_sha256: None,
             execution_provider,
             cuda_device,
+            directml_device_id: None,
+            session_tuning: OrtSessionTuning::default(),
         })
     }
 }

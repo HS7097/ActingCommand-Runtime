@@ -542,6 +542,9 @@ fn vision_report(
         "execution_provider": match vision.execution_provider() {
             OnnxExecutionProvider::Cpu => "cpu",
             OnnxExecutionProvider::Cuda => "cuda",
+            // Workflow #407 GPU-0a (experiment branch only): the configuration refuses it at
+            // config_assemble, so a listed vision root never names it.
+            OnnxExecutionProvider::Directml => "directml",
         },
         "onnxruntime_library": inventory.runtime.onnxruntime_library.to_string_lossy(),
         "ocr_models": inventory

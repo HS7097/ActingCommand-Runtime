@@ -37,6 +37,7 @@ members = [
     "providers/ppocr-onnx-json",
     "tools/actinglab-architecture",
     "tools/outcome-guard",
+    "tools/vision-ep-bench",
 ]
 resolver = "3"
 
