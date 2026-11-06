@@ -122,10 +122,16 @@ where
                     failed_path: path.clone(),
                     reason: reason.clone(),
                 };
-                return Err(runtime_closure_error(format!(
+                let failure = runtime_closure_error(format!(
                     "failed to establish native OCR runtime-library closure at {}: {reason}; the process closure is permanently poisoned",
                     path.display()
-                )));
+                ));
+                // Workflow #407 GPU-0c (experiment branch only): the Win32 code and system
+                // message of the failed load travel with the error.
+                return Err(match error.library_load() {
+                    Some(load) => failure.with_library_load(load.clone()),
+                    None => failure,
+                });
             }
         }
     }
@@ -178,11 +184,19 @@ fn load_process_runtime_library(path: &Path) -> VisionFfiResult<Arc<Library>> {
         WindowsLibrary::load_with_flags(path, PROCESS_RUNTIME_LIBRARY_LOAD_FLAGS)
     }
     .map_err(|error| {
+        // Workflow #407 GPU-0c (experiment branch only): libloading's own text is only
+        // "LoadLibraryExW failed"; the Win32 code and its system message are its source.
+        let load = crate::NativeLibraryLoadFailure::from_loader_error(
+            path.display().to_string(),
+            Some(PROCESS_RUNTIME_LIBRARY_LOAD_FLAGS),
+            &error,
+        );
         runtime_closure_error(format!(
-            "failed to load native OCR runtime library {} with LoadLibraryExW flags 0x{:08x}: {error}",
+            "failed to load native OCR runtime library {} with LoadLibraryExW flags 0x{:08x}: {error}: {load}",
             path.display(),
             PROCESS_RUNTIME_LIBRARY_LOAD_FLAGS
         ))
+        .with_library_load(load)
     })?;
     Ok(Arc::new(library.into()))
 }
@@ -507,14 +521,18 @@ fn load_library(module: &'static str, path: impl AsRef<OsStr>) -> VisionFfiResul
     // SAFETY: loading a dynamic library is the required FFI boundary. The
     // handle is retained in the backend so loaded symbols cannot outlive it.
     let library = unsafe { Library::new(path) }.map_err(|err| {
+        // Workflow #407 GPU-0c (experiment branch only): the OS error behind the loader's text.
+        let load =
+            crate::NativeLibraryLoadFailure::from_loader_error(path.to_string_lossy(), None, &err);
         VisionFfiError::fatal_with_code(
             VisionFfiErrorCode::ProviderUnavailable,
             module,
             format!(
-                "failed to load FFI library {}: {err}",
+                "failed to load FFI library {}: {err}: {load}",
                 path.to_string_lossy()
             ),
         )
+        .with_library_load(load)
     })?;
     Ok(Arc::new(library))
 }

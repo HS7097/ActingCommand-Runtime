@@ -115,13 +115,14 @@ pub(crate) fn load_session(
                 .with_disable_cpu_fallback()
                 .map_err(|err| format!("failed to disable ONNXRuntime CPU fallback: {err}"))?
         }
-        // Workflow #407 GPU-0a (experiment branch only): as the OCR sessions' DirectML branch.
+        // Workflow #407 GPU-0a (experiment branch only): as the OCR sessions' DirectML branch;
+        // GPU-0c: CPU fallback stays disabled unless the plan allows it.
         OnnxExecutionProvider::Directml => {
             let device = plan.directml_device.ok_or_else(|| {
                 "DirectML classifier session plan is missing its DXGI adapter index (unset or beyond i32)"
                     .to_string()
             })?;
-            builder
+            let builder = builder
                 .with_memory_pattern(false)
                 .map_err(|err| format!("failed to disable the DirectML memory pattern: {err}"))?
                 .with_parallel_execution(false)
@@ -131,11 +132,16 @@ pub(crate) fn load_session(
                 .with_execution_providers([directml_provider(device)])
                 .map_err(|err| {
                     format!(
-                        "failed to register required DirectML execution provider for adapter {device}; CPU fallback is disabled: {err}"
+                        "failed to register the DirectML execution provider for adapter {device}: {err}"
                     )
-                })?
-                .with_disable_cpu_fallback()
-                .map_err(|err| format!("failed to disable ONNXRuntime CPU fallback: {err}"))?
+                })?;
+            if plan.cpu_fallback_disabled {
+                builder
+                    .with_disable_cpu_fallback()
+                    .map_err(|err| format!("failed to disable ONNXRuntime CPU fallback: {err}"))?
+            } else {
+                builder
+            }
         }
     };
     builder.commit_from_memory(model).map_err(|err| {

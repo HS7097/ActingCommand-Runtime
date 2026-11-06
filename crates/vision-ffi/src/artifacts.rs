@@ -253,6 +253,15 @@ impl OcrSessionKey {
                 "an OCR session needs at least one intra-op thread",
             ));
         }
+        if options.tuning.directml_cpu_fallback
+            && parts.requested_backend != OnnxExecutionProvider::Directml
+        {
+            return Err(VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::InvalidRequest,
+                "ocr_session_key",
+                "only a DirectML session may allow CPU fallback",
+            ));
+        }
         let provider_options_sha256 = ppocr_provider_options_sha256(
             parts.requested_backend,
             parts.requested_cuda_device.as_ref(),
@@ -536,6 +545,10 @@ pub struct OrtSessionTuning {
     pub cuda_conv_algorithm_search: CudaConvAlgorithmSearch,
     /// CUDA sessions only (`use_tf32`).
     pub cuda_tf32: bool,
+    /// Workflow #407 GPU-0c: DirectML sessions only. When set, ONNX Runtime may place the nodes
+    /// DirectML cannot run on its CPU execution provider; the default keeps CPU fallback
+    /// disabled, as for every GPU session.
+    pub directml_cpu_fallback: bool,
 }
 
 impl Default for OrtSessionTuning {
@@ -544,6 +557,7 @@ impl Default for OrtSessionTuning {
             intra_threads: 1,
             cuda_conv_algorithm_search: CudaConvAlgorithmSearch::Exhaustive,
             cuda_tf32: true,
+            directml_cpu_fallback: false,
         }
     }
 }
@@ -654,6 +668,10 @@ fn ppocr_provider_options_sha256(
         hasher.update(b"directml_device\0");
         hasher.update(device.to_string().as_bytes());
         hasher.update(b"\0directml_memory_pattern\0false\0directml_execution\0sequential\0");
+    }
+    // Workflow #407 GPU-0c (experiment branch only): hashed only when set, as above.
+    if options.tuning.directml_cpu_fallback {
+        hasher.update(b"directml_cpu_fallback\0true\0");
     }
     if let Some(selector) = selector {
         hasher.update(b"requested_ordinal\0");

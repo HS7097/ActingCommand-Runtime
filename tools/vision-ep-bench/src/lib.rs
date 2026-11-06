@@ -16,17 +16,27 @@
 //! with the CPU exact score map, today's direct enumeration and a generated ONNX `Conv` graph on
 //! the process's execution provider, with the float path's error and recall. The graph encoder
 //! (`onnx.rs`) and the float score and recall logic (`template.rs`) are platform neutral.
+//!
+//! Workflow #407 GPU-0c makes the GPU variants measurable: no failure drops ONNX Runtime's
+//! status or a library load's Win32 code (`error.rs`); `--probe-dlls` names the dependency a
+//! runtime DLL fails to load on (`probe.rs`, with the import-table reader `pe.rs`); DirectML may
+//! allow CPU fallback (`--directml-cpu-fallback on`), and every GPU run records where ONNX
+//! Runtime placed each model's nodes, read from its verbose session log (`report.rs`
+//! `ModelPlacement`).
 
 pub mod cli;
 pub mod consistency;
 pub mod error;
 pub mod onnx;
+pub mod pe;
 pub mod report;
 pub mod safety;
 pub mod stats;
 pub mod template;
 pub mod workload;
 
+#[cfg(windows)]
+pub mod probe;
 #[cfg(windows)]
 pub mod run;
 #[cfg(windows)]

@@ -3,6 +3,7 @@
 //! The bench's logic tests (Workflow #407 GPU-0a work order item 8; GPU-0b item 4): CI runs them
 //! without a GPU, a model or a frame.
 
+use actingcommand_ppocr_onnx_json_provider::bench::BenchOrtFailure;
 use actingcommand_vision_ep_bench::error::{BenchCode, BenchError};
 use actingcommand_vision_ep_bench::onnx::{
     ConvGraph, ConvKernel, ConvOutputKind, ELEMENT_FLOAT, INPUT_NAME, IR_VERSION,
@@ -17,6 +18,7 @@ use actingcommand_vision_ep_bench::template::{
 use actingcommand_vision_ep_bench::workload::{
     RequestKind, WORKLOAD_SCHEMA, WorkloadBlocks, WorkloadRect, parse_workload,
 };
+use actingcommand_vision_ffi::{NativeLibraryLoadFailure, VisionFfiError, VisionFfiErrorCode};
 use std::collections::VecDeque;
 
 #[test]
@@ -454,4 +456,109 @@ fn recall_counts_exact_matches_above_threshold_minus_margin() {
         }
     );
     assert_eq!(none.recall(), None);
+}
+
+/// Workflow #407 GPU-0c work order item 5. A failed load keeps the Win32 code and its system
+/// message, and a refused session keeps ONNX Runtime's status code and full message, in the
+/// report's JSON and in the stderr line, even when the surrounding sentence leaves them out.
+#[test]
+fn a_failed_provider_load_keeps_its_error_code_and_text() {
+    /// A loader error as libloading's: its own text names only the call, the OS error is its
+    /// source.
+    #[derive(Debug)]
+    struct FakeLoaderError(std::io::Error);
+    impl std::fmt::Display for FakeLoaderError {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("LoadLibraryExW failed")
+        }
+    }
+    impl std::error::Error for FakeLoaderError {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    // ERROR_MOD_NOT_FOUND, and its system message as this platform renders it.
+    let rendered = std::io::Error::from_raw_os_error(126).to_string();
+    let system_message = rendered
+        .strip_suffix(" (os error 126)")
+        .expect("an OS error renders its code")
+        .trim()
+        .to_owned();
+    assert!(!system_message.is_empty());
+    let library = r"C:\bench\rt-gpu\ort\provider_gpu.dll";
+    let loader = FakeLoaderError(std::io::Error::from_raw_os_error(126));
+    let load = NativeLibraryLoadFailure::from_loader_error(library, Some(0x900), &loader);
+    assert_eq!(
+        load,
+        NativeLibraryLoadFailure {
+            library: library.to_owned(),
+            load_flags: Some(0x900),
+            win32_error: Some(126),
+            system_message: system_message.clone(),
+        }
+    );
+
+    // The vision error's own sentence stops at the loader's text, as before GPU-0c.
+    let vision = VisionFfiError::fatal_with_code(
+        VisionFfiErrorCode::ProviderUnavailable,
+        "fastdeploy_ppocr",
+        format!("failed to load native OCR runtime library {library}: {loader}"),
+    )
+    .with_library_load(load);
+    let error = BenchError::from_vision(
+        BenchCode::RuntimeUnavailable,
+        "ONNX Runtime initialisation",
+        &vision,
+    );
+    let json = serde_json::to_value(&error).expect("the error serialises");
+    assert_eq!(json["code"], "bench_runtime_unavailable");
+    assert_eq!(json["library_load"]["library"], library);
+    assert_eq!(json["library_load"]["load_flags"], 0x900);
+    assert_eq!(json["library_load"]["win32_error"], 126);
+    assert_eq!(
+        json["library_load"]["system_message"],
+        system_message.as_str()
+    );
+    assert!(json["ort_status"].is_null());
+    let stderr = error.to_string();
+    assert!(
+        stderr.starts_with("bench_runtime_unavailable: ONNX Runtime initialisation: "),
+        "{stderr}"
+    );
+    assert!(stderr.contains("Win32 error 126 (0x0000007E)"), "{stderr}");
+    assert!(stderr.contains(&system_message), "{stderr}");
+
+    // A session ONNX Runtime refused: its status stays verbatim.
+    let ort_message = "This session contains graph nodes that are assigned to the default CPU EP, but fallback to CPU EP has been explicitly disabled by the user.";
+    let failure = BenchOrtFailure {
+        step:
+            "failed to load DirectML PPOCR ONNX model rec.onnx on adapter 0 (CPU fallback disabled)"
+                .to_owned(),
+        ort_code: Some("GenericFailure".to_owned()),
+        ort_message: Some(ort_message.to_owned()),
+    };
+    let error = BenchError::from_ort(
+        BenchCode::SessionFailed,
+        "the raw recognizer session",
+        &failure,
+    );
+    let json = serde_json::to_value(&error).expect("the error serialises");
+    assert_eq!(json["code"], "bench_session_failed");
+    assert_eq!(json["ort_status"]["step"], failure.step.as_str());
+    assert_eq!(json["ort_status"]["code"], "GenericFailure");
+    assert_eq!(json["ort_status"]["message"], ort_message);
+    assert!(json["library_load"].is_null());
+    let message = json["message"].as_str().expect("a message");
+    assert!(message.contains(ort_message), "{message}");
+    let stderr = error.to_string();
+    assert!(stderr.contains(ort_message), "{stderr}");
+    assert!(stderr.contains("GenericFailure"), "{stderr}");
+
+    // An error whose sentence lost the status still prints it on stderr.
+    let mut bare = error.clone();
+    bare.message = "the raw recognizer session".to_owned();
+    let stderr = bare.to_string();
+    assert!(stderr.contains(ort_message), "{stderr}");
+    assert!(stderr.contains("GenericFailure"), "{stderr}");
 }

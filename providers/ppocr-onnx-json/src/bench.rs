@@ -6,16 +6,18 @@
 //! here changes what the engine does; actingd never calls it.
 
 use super::{
-    ENGINE_MODULE, PpocrModelRole, ProviderSessionPlan, failure, frame_region_to_detection_tensor,
-    frame_region_to_recognition_tensor, load_ort_session, runtime_facts,
+    CPU_EXECUTION_PROVIDER, ENGINE_MODULE, OrtStepFailure, ProviderSessionPlan, commit_ort_session,
+    failure, frame_region_to_detection_tensor, frame_region_to_recognition_tensor, runtime_facts,
     select_detection_input_shape, select_recognition_input_shape,
 };
 use actingcommand_vision_ffi::{
     CudaDeviceIdentity, OnnxExecutionProvider, PpocrCtcParams, VisionFfiError, VisionFfiErrorCode,
     VisionFfiResult, VisionFrameView, VisionRect, VisionRuntimeSpec,
 };
+use ort::logging::{LogLevel, LoggerFunction};
 use ort::session::Session;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 /// The process's ONNX Runtime facts, as the engine established them.
@@ -99,27 +101,275 @@ impl BenchSessionPlan {
     }
 }
 
-/// Which PP-OCR model a raw session holds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BenchModelRole {
-    Detector,
-    Recognizer,
+/// Workflow #407 GPU-0c: a failed session build, with ONNX Runtime's own status kept whole.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BenchOrtFailure {
+    /// What the engine was doing, as its own error text words it.
+    pub step: String,
+    /// `ort::ErrorCode` as `Debug` spells it; none for a step that is no ONNX Runtime call.
+    pub ort_code: Option<String>,
+    /// ONNX Runtime's status message, verbatim, with its causes.
+    pub ort_message: Option<String>,
+}
+
+fn bench_failure(failure: OrtStepFailure) -> BenchOrtFailure {
+    BenchOrtFailure {
+        step: failure.step,
+        ort_code: failure.ort_code,
+        ort_message: failure.ort_message,
+    }
+}
+
+impl std::fmt::Display for BenchOrtFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.step)?;
+        if let Some(message) = &self.ort_message {
+            write!(f, ": {message}")?;
+        }
+        if let Some(code) = &self.ort_code {
+            write!(f, " (ONNX Runtime error code {code})")?;
+        }
+        Ok(())
+    }
 }
 
 /// Builds one session from `model` with the engine's own session builder for `plan` (no
-/// node-placement diagnostic).
+/// node-placement diagnostic); a failure keeps ONNX Runtime's status whole.
 pub fn build_session(
     model: &[u8],
     path: &Path,
     plan: &BenchSessionPlan,
-    role: BenchModelRole,
-) -> VisionFfiResult<Session> {
-    let role = match role {
-        BenchModelRole::Detector => PpocrModelRole::Detector,
-        BenchModelRole::Recognizer => PpocrModelRole::Recognizer,
+) -> Result<Session, BenchOrtFailure> {
+    commit_ort_session(model, path, &plan.0, None).map_err(bench_failure)
+}
+
+/// Workflow #407 GPU-0c: where ONNX Runtime placed one model's nodes, read from ONNX Runtime's
+/// own verbose session log (the `Node placements` section it logs once the graph is
+/// partitioned, before its CPU-fallback check) of a session built with the plan's exact options
+/// plus a verbose logger. No inference runs; the session is dropped at once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BenchPlacement {
+    /// `same_options`, or `fallback_allowed_twin` when the same-options session failed without
+    /// logging a whole placement and a twin with CPU fallback allowed was read instead.
+    pub read_from: &'static str,
+    /// Every execution provider ONNX Runtime named, with its node count, in log order.
+    pub providers: Vec<(String, usize)>,
+    /// The nodes ONNX Runtime placed on its CPU execution provider: (operator type, node name).
+    pub cpu_nodes: Vec<(String, String)>,
+    /// The same-options session's failure, when it did not commit.
+    pub session_failure: Option<BenchOrtFailure>,
+    /// Why no whole placement could be read; none when it was.
+    pub log_error: Option<String>,
+}
+
+/// The most per-node lines the placement read keeps.
+const PLACEMENT_MAX_NODES: usize = 65_536;
+
+/// Reads the node placement of `model` under `plan` (see [`BenchPlacement`]).
+pub fn node_placement(model: &[u8], path: &Path, plan: &BenchSessionPlan) -> BenchPlacement {
+    let (read, session_failure) = placement_session(model, path, &plan.0);
+    match read {
+        Ok((providers, cpu_nodes)) => BenchPlacement {
+            read_from: "same_options",
+            providers,
+            cpu_nodes,
+            session_failure,
+            log_error: None,
+        },
+        Err(log_error) if session_failure.is_some() && plan.0.cpu_fallback_disabled => {
+            let mut twin = plan.0.clone();
+            twin.cpu_fallback_disabled = false;
+            let (twin_read, twin_failure) = placement_session(model, path, &twin);
+            match (twin_read, twin_failure) {
+                (Ok((providers, cpu_nodes)), _) => BenchPlacement {
+                    read_from: "fallback_allowed_twin",
+                    providers,
+                    cpu_nodes,
+                    session_failure,
+                    log_error: None,
+                },
+                (Err(twin_error), twin_failure) => BenchPlacement {
+                    read_from: "same_options",
+                    providers: Vec::new(),
+                    cpu_nodes: Vec::new(),
+                    session_failure,
+                    log_error: Some(format!(
+                        "{log_error}; the fallback-allowed twin: {twin_error}{}",
+                        twin_failure
+                            .map(|failure| format!(" (its session: {failure})"))
+                            .unwrap_or_default()
+                    )),
+                },
+            }
+        }
+        Err(log_error) => BenchPlacement {
+            read_from: "same_options",
+            providers: Vec::new(),
+            cpu_nodes: Vec::new(),
+            session_failure,
+            log_error: Some(log_error),
+        },
+    }
+}
+
+type PlacementRead = Result<(Vec<(String, usize)>, Vec<(String, String)>), String>;
+
+fn placement_session(
+    model: &[u8],
+    path: &Path,
+    plan: &ProviderSessionPlan,
+) -> (PlacementRead, Option<BenchOrtFailure>) {
+    let log = Arc::new(Mutex::new(PlacementLog::default()));
+    let sink = Arc::clone(&log);
+    let logger: LoggerFunction = Arc::new(
+        move |_: LogLevel, _: &str, _: &str, _: &str, message: &str| match sink.lock() {
+            Ok(mut log) => log.record(message),
+            Err(poisoned) => poisoned
+                .into_inner()
+                .fail("the node-placement log mutex is poisoned"),
+        },
+    );
+    let session = commit_ort_session(model, path, plan, Some(logger));
+    let session_failure = session.as_ref().err().cloned().map(bench_failure);
+    drop(session);
+    let read = match log.lock() {
+        Ok(mut log) => std::mem::take(&mut *log).finish(),
+        Err(_) => Err("the node-placement log mutex is poisoned".to_owned()),
     };
-    let mut diagnostics = Vec::new();
-    load_ort_session(model, path, &plan.0, role, None, &mut diagnostics).map_err(failure)
+    (read, session_failure)
+}
+
+/// ONNX Runtime's verbose `Node placements` section: `All nodes placed on [<EP>]. Number of
+/// nodes: <n>` for one provider, or per provider `Node(s) placed on [<EP>]. Number of nodes: <n>`
+/// followed by one `<op type> (<node name>)` line per node.
+#[derive(Debug, Default)]
+struct PlacementLog {
+    saw_header: bool,
+    providers: Vec<(String, usize)>,
+    /// The provider whose per-node lines follow, and how many are still due.
+    open: Option<(usize, usize)>,
+    cpu_nodes: Vec<(String, String)>,
+    failure: Option<String>,
+}
+
+impl PlacementLog {
+    fn record(&mut self, message: &str) {
+        if self.failure.is_some() {
+            return;
+        }
+        let message = message.trim();
+        if message == "Node placements" {
+            *self = Self {
+                saw_header: true,
+                ..Self::default()
+            };
+            return;
+        }
+        if !self.saw_header {
+            return;
+        }
+        for (prefix, detailed) in [
+            ("All nodes placed on [", false),
+            ("Node(s) placed on [", true),
+        ] {
+            let Some(rest) = message.strip_prefix(prefix) else {
+                continue;
+            };
+            if let Some((index, due)) = self.open {
+                self.fail(format!(
+                    "the placement group of {} ended {due} per-node lines early",
+                    self.providers[index].0
+                ));
+                return;
+            }
+            let parsed = rest
+                .split_once("]. Number of nodes: ")
+                .filter(|(provider, _)| !provider.is_empty())
+                .and_then(|(provider, count)| {
+                    count
+                        .trim()
+                        .parse::<usize>()
+                        .ok()
+                        .map(|count| (provider, count))
+                });
+            let Some((provider, count)) = parsed else {
+                self.fail(format!(
+                    "a provider summary does not read as `[<EP>]. Number of nodes: <n>`: {}",
+                    bounded(message)
+                ));
+                return;
+            };
+            self.providers.push((provider.to_owned(), count));
+            if detailed && count > 0 {
+                self.open = Some((self.providers.len() - 1, count));
+            }
+            return;
+        }
+        let Some((index, due)) = self.open else {
+            return;
+        };
+        // A node ONNX Runtime inserted may have an empty name; its operator type is never empty.
+        let node = message
+            .split_once(" (")
+            .and_then(|(op, rest)| rest.strip_suffix(')').map(|name| (op, name)))
+            .filter(|(op, _)| !op.is_empty());
+        let Some((op, name)) = node else {
+            self.fail(format!(
+                "a per-node line of {} does not read as `<op type> (<node name>)`: {}",
+                self.providers[index].0,
+                bounded(message)
+            ));
+            return;
+        };
+        if self.providers[index].0 == CPU_EXECUTION_PROVIDER {
+            if self.cpu_nodes.len() >= PLACEMENT_MAX_NODES {
+                self.fail("more CPU-placed nodes than the placement read keeps");
+                return;
+            }
+            self.cpu_nodes.push((op.to_owned(), name.to_owned()));
+        }
+        self.open = (due > 1).then_some((index, due - 1));
+    }
+
+    fn fail(&mut self, message: impl Into<String>) {
+        if self.failure.is_none() {
+            self.failure = Some(message.into());
+        }
+        self.open = None;
+    }
+
+    fn finish(self) -> PlacementRead {
+        if let Some(failure) = self.failure {
+            return Err(failure);
+        }
+        if !self.saw_header {
+            return Err("ONNX Runtime logged no `Node placements` section".to_owned());
+        }
+        if self.providers.is_empty() {
+            return Err(
+                "ONNX Runtime's `Node placements` section named no execution provider".to_owned(),
+            );
+        }
+        if let Some((index, due)) = self.open {
+            return Err(format!(
+                "the placement group of {} is missing {due} per-node lines",
+                self.providers[index].0
+            ));
+        }
+        Ok((self.providers, self.cpu_nodes))
+    }
+}
+
+fn bounded(message: &str) -> String {
+    const LIMIT: usize = 256;
+    if message.len() <= LIMIT {
+        return format!("{message:?}");
+    }
+    let mut end = LIMIT;
+    while !message.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{:?}…", &message[..end])
 }
 
 /// One input tensor exactly as the engine builds it for a request.

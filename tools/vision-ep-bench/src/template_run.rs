@@ -39,9 +39,7 @@ use crate::template::{
 use crate::watch::Watcher;
 use crate::win;
 use crate::workload::{TemplateMetric, TemplateSearchSpec, Workload, WorkloadTemplate, decode_hex};
-use actingcommand_ppocr_onnx_json_provider::bench::{
-    self as engine_bench, BenchModelRole, BenchSessionPlan,
-};
+use actingcommand_ppocr_onnx_json_provider::bench::{self as engine_bench, BenchSessionPlan};
 use actingcommand_recognition::resample::{self, SCALE_IDENTITY_MILLI};
 use actingcommand_recognition::{
     ExactScoreMap, MatchMetric, RecognitionError, RegionSpectra, ScaledScoreMaps, Scene,
@@ -452,10 +450,14 @@ fn run_case(
         &bytes,
         Path::new(&format!("generated:{label}")),
         context.plan,
-        // The role only names the engine's node-placement diagnostic, which stays off here.
-        BenchModelRole::Detector,
     )
-    .map_err(|error| run::session_error(&format!("the Conv graph session of {label}"), &error))?;
+    .map_err(|failure| {
+        BenchError::from_ort(
+            BenchCode::SessionFailed,
+            &format!("the Conv graph session of {label}"),
+            &failure,
+        )
+    })?;
     let session_build_us = run::micros(started.elapsed());
     let mut conv = ConvSearch {
         session,
@@ -807,12 +809,21 @@ impl ConvSearch {
             .map(|value| f32::from(*value))
             .collect();
         let tensor = Tensor::from_array((self.input_shape.clone(), input.into_boxed_slice()))
-            .map_err(|error| inference_error(format!("the Conv input tensor: {error}")))?;
+            .map_err(|error| {
+                BenchError::from_ort_error(
+                    BenchCode::InferenceFailed,
+                    "the Conv input tensor",
+                    &error,
+                )
+            })?;
         let run_started = Instant::now();
-        let outputs = self
-            .session
-            .run(ort::inputs![&tensor])
-            .map_err(|error| inference_error(format!("the Conv graph run failed: {error}")))?;
+        let outputs = self.session.run(ort::inputs![&tensor]).map_err(|error| {
+            BenchError::from_ort_error(
+                BenchCode::InferenceFailed,
+                "the Conv graph run failed",
+                &error,
+            )
+        })?;
         let run_us = run::micros(run_started.elapsed());
         let window = (!self.masked).then(|| WindowSums::new(frame));
         let total: usize = self
@@ -877,9 +888,11 @@ fn output_values<'o>(
         .get(name)
         .ok_or_else(|| inference_error(format!("the Conv graph returned no output {name}")))?;
     let (shape, values) = value.try_extract_tensor::<f32>().map_err(|error| {
-        inference_error(format!(
-            "the Conv output {name} is not an f32 tensor: {error}"
-        ))
+        BenchError::from_ort_error(
+            BenchCode::InferenceFailed,
+            &format!("the Conv output {name} is not an f32 tensor"),
+            &error,
+        )
     })?;
     if values.len() != count {
         return Err(inference_error(format!(
@@ -891,11 +904,11 @@ fn output_values<'o>(
     Ok(values)
 }
 
-fn prefixed(label: &str, frame: &str, error: BenchError) -> BenchError {
-    BenchError::new(
-        error.code,
-        format!("{label} frame {frame}: {}", error.message),
-    )
+/// Workflow #407 GPU-0c: the prefix keeps everything else of the error (its ONNX Runtime status
+/// and library load).
+fn prefixed(label: &str, frame: &str, mut error: BenchError) -> BenchError {
+    error.message = format!("{label} frame {frame}: {}", error.message);
+    error
 }
 
 fn search_error(what: &str, error: &RecognitionError) -> BenchError {

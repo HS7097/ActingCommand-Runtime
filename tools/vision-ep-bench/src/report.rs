@@ -5,11 +5,12 @@
 
 use crate::cli::BenchMode;
 use crate::consistency::ConsistencySection;
-use crate::error::BenchError;
+use crate::error::{BenchError, OrtStatus};
 use crate::safety::{MemoryReading, SafetyLimits};
 use crate::stats::Percentiles;
 use crate::template::{ExactEngine, RecallCounts};
 use crate::workload::{RequestKind, TemplateMetric, WorkloadBlocks, WorkloadMask, WorkloadRect};
+use actingcommand_ppocr_onnx_json_provider::bench::BenchPlacement;
 use actingcommand_vision_ffi::{CudaDeviceIdentity, OnnxExecutionProvider, OrtSessionTuning};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -47,6 +48,9 @@ pub struct Report {
     pub phases: Vec<PhaseStats>,
     pub gpu_counters: CounterStatus,
     pub consistency: Option<ConsistencySection>,
+    /// Workflow #407 GPU-0c: where ONNX Runtime placed each model's nodes, for a CUDA or
+    /// DirectML run in OCR mode (empty for the CPU and for template mode).
+    pub placement: Vec<ModelPlacement>,
     /// Workflow #407 GPU-0b: the template mode's rows (`--mode template`); the OCR sections
     /// above stay empty in that mode.
     pub template: Option<TemplateSection>,
@@ -302,6 +306,102 @@ pub struct ModuleRecord {
     pub path: String,
     pub file_version: Option<String>,
 }
+
+/// Workflow #407 GPU-0c: where ONNX Runtime placed one model's nodes. Read from ONNX Runtime's
+/// own verbose session log (its `Node placements` section, logged once the graph is partitioned
+/// and optimised, so DirectML's fused nodes count as one each, and before the CPU-fallback
+/// check), of a session built with the variant's exact options plus a verbose logger; no
+/// inference runs on it.
+#[derive(Debug, Clone, Serialize)]
+pub struct ModelPlacement {
+    /// `det` or `rec`.
+    pub model: &'static str,
+    /// Always `ort_verbose_session_log`.
+    pub source: &'static str,
+    /// `same_options`, or `fallback_allowed_twin` when the variant's own session failed without
+    /// logging a whole placement and a twin with CPU fallback allowed was read instead.
+    pub read_from: &'static str,
+    /// Every execution provider ONNX Runtime named, with its node count, in log order.
+    pub providers: Vec<ProviderNodes>,
+    /// Nodes on any execution provider but the CPU's.
+    pub non_cpu_nodes: usize,
+    /// Nodes on ONNX Runtime's CPU execution provider (`CPUExecutionProvider`).
+    pub cpu_nodes: usize,
+    /// The CPU-placed nodes per operator type.
+    pub cpu_op_types: BTreeMap<String, usize>,
+    pub cpu_node_list: Vec<PlacedNode>,
+    /// The variant's own session failure (a strict variant with CPU-placed nodes), with ONNX
+    /// Runtime's status whole.
+    pub session_failure: Option<OrtStatus>,
+    /// Why no whole placement could be read; none when it was.
+    pub log_error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProviderNodes {
+    pub provider: String,
+    pub nodes: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PlacedNode {
+    pub op_type: String,
+    pub name: String,
+}
+
+impl ModelPlacement {
+    /// The report row of `model` from the engine's placement read.
+    pub fn from_read(model: &'static str, read: BenchPlacement) -> Self {
+        let cpu_nodes: usize = read
+            .providers
+            .iter()
+            .filter(|(provider, _)| provider == CPU_EXECUTION_PROVIDER)
+            .map(|(_, nodes)| nodes)
+            .sum();
+        let non_cpu_nodes: usize = read
+            .providers
+            .iter()
+            .filter(|(provider, _)| provider != CPU_EXECUTION_PROVIDER)
+            .map(|(_, nodes)| nodes)
+            .sum();
+        let mut cpu_op_types = BTreeMap::new();
+        for (op_type, _) in &read.cpu_nodes {
+            *cpu_op_types.entry(op_type.clone()).or_insert(0) += 1;
+        }
+        Self {
+            model,
+            source: "ort_verbose_session_log",
+            read_from: read.read_from,
+            providers: read
+                .providers
+                .into_iter()
+                .map(|(provider, nodes)| ProviderNodes { provider, nodes })
+                .collect(),
+            non_cpu_nodes,
+            cpu_nodes,
+            cpu_op_types,
+            cpu_node_list: read
+                .cpu_nodes
+                .into_iter()
+                .map(|(op_type, name)| PlacedNode { op_type, name })
+                .collect(),
+            session_failure: read.session_failure.as_ref().map(OrtStatus::from),
+            log_error: read.log_error,
+        }
+    }
+
+    /// `Op×n, …` of the CPU-placed nodes.
+    pub fn cpu_op_summary(&self) -> String {
+        self.cpu_op_types
+            .iter()
+            .map(|(op_type, count)| format!("{op_type}×{count}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+/// ONNX Runtime's name of its CPU execution provider.
+pub const CPU_EXECUTION_PROVIDER: &str = "CPUExecutionProvider";
 
 /// Workflow #407 GPU-0b: whole-frame template search (design §1.2 "模板匹配", §2.5). Every
 /// template runs without and with its mask, once per scale set: one case each. All times are

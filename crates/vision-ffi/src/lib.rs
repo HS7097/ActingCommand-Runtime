@@ -75,6 +75,85 @@ pub struct VisionFfiError {
     /// revision 3: a startup refusal records it as its `caused_by` link).
     #[serde(skip)]
     os_cause: Option<Outcome>,
+    /// Workflow #407 GPU-0c (experiment branch only): the native library load behind the error,
+    /// with its Win32 code and system message.
+    #[serde(skip)]
+    library_load: Option<Box<NativeLibraryLoadFailure>>,
+}
+
+/// Workflow #407 GPU-0c (experiment branch `exp/407-gpu0-bench` only, never merged): a native
+/// library the OS refused to load, with the Win32 error `GetLastError` reported and its system
+/// message, kept apart from the sentence around them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeLibraryLoadFailure {
+    /// The library as it was asked for (an absolute path for the runtime closure).
+    pub library: String,
+    /// The `LoadLibraryExW` flags, when the caller passed explicit ones.
+    pub load_flags: Option<u32>,
+    /// The Win32 error code; none when the system reported no error.
+    pub win32_error: Option<u32>,
+    /// The system message of that code (as `std::io::Error` renders it, without its
+    /// `(os error N)` suffix), or the loader's own text when the system reported no error.
+    pub system_message: String,
+}
+
+impl NativeLibraryLoadFailure {
+    /// The failure of `library` from the OS error behind it.
+    pub fn from_os_error(
+        library: impl Into<String>,
+        load_flags: Option<u32>,
+        error: &std::io::Error,
+    ) -> Self {
+        let text = error.to_string();
+        let system_message = match error.raw_os_error() {
+            Some(code) => text
+                .strip_suffix(&format!(" (os error {code})"))
+                .unwrap_or(&text)
+                .trim()
+                .to_string(),
+            None => text,
+        };
+        Self {
+            library: library.into(),
+            load_flags,
+            win32_error: error.raw_os_error().map(|code| code as u32),
+            system_message,
+        }
+    }
+
+    /// The failure of `library` from a loader error: its OS error source when it has one, else
+    /// the loader's own text.
+    pub fn from_loader_error(
+        library: impl Into<String>,
+        load_flags: Option<u32>,
+        error: &(dyn Error + 'static),
+    ) -> Self {
+        match error
+            .source()
+            .and_then(|source| source.downcast_ref::<std::io::Error>())
+        {
+            Some(os) => Self::from_os_error(library, load_flags, os),
+            None => Self {
+                library: library.into(),
+                load_flags,
+                win32_error: None,
+                system_message: error.to_string(),
+            },
+        }
+    }
+}
+
+impl fmt::Display for NativeLibraryLoadFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.win32_error {
+            Some(code) => write!(
+                f,
+                "Win32 error {code} (0x{code:08X}): {}",
+                self.system_message
+            ),
+            None => write!(f, "no Win32 error reported: {}", self.system_message),
+        }
+    }
 }
 
 impl VisionFfiError {
@@ -94,6 +173,7 @@ impl VisionFfiError {
             message: message.into(),
             ppocr_diagnostics: Vec::new(),
             os_cause: None,
+            library_load: None,
         }
     }
 
@@ -131,6 +211,18 @@ impl VisionFfiError {
     /// The OS failure behind the error, when an OS or file-system call raised it.
     pub fn os_cause(&self) -> Option<&Outcome> {
         self.os_cause.as_ref()
+    }
+
+    /// Workflow #407 GPU-0c (experiment branch only): this error with the native library load
+    /// that raised it.
+    pub fn with_library_load(mut self, failure: NativeLibraryLoadFailure) -> Self {
+        self.library_load = Some(Box::new(failure));
+        self
+    }
+
+    /// Workflow #407 GPU-0c (experiment branch only): the native library load behind the error.
+    pub fn library_load(&self) -> Option<&NativeLibraryLoadFailure> {
+        self.library_load.as_deref()
     }
 }
 

@@ -8,7 +8,7 @@ fn main() {
     use actingcommand_vision_ep_bench::cli::{Command, parse_args};
     use actingcommand_vision_ep_bench::error::{BenchCode, BenchError};
     use actingcommand_vision_ep_bench::report::ReportStatus;
-    use actingcommand_vision_ep_bench::{run, win};
+    use actingcommand_vision_ep_bench::{probe, run, win};
     use std::time::Instant;
 
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -28,6 +28,28 @@ fn main() {
                     BenchCode::OutputUnwritable,
                     format!("the adapter list does not serialise: {error}"),
                 )),
+            }
+        }
+        // Workflow #407 GPU-0c: the probe prints whatever it probed, then fails loud.
+        Command::ProbeDlls(folder) => {
+            let (report, result) = probe::probe(&folder);
+            if let Some(report) = report {
+                match serde_json::to_string_pretty(&report) {
+                    Ok(text) => println!("{text}"),
+                    Err(error) => {
+                        if let Err(probe_error) = &result {
+                            eprintln!("ac-vision-ep-bench: {probe_error}");
+                        }
+                        fail(&BenchError::new(
+                            BenchCode::OutputUnwritable,
+                            format!("the DLL probe does not serialise: {error}"),
+                        ))
+                    }
+                }
+            }
+            match result {
+                Ok(()) => return,
+                Err(error) => fail(&error),
             }
         }
         Command::Run(options) => *options,

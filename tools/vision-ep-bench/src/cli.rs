@@ -12,11 +12,17 @@
 //!     --workload <json> [--warmup 3] [--reps 1] [--direct-enumeration on|off] --out <json>
 //!     [--label <name>]
 //! ac-vision-ep-bench --list-adapters
+//! ac-vision-ep-bench --probe-dlls <ort dir>
 //! ```
 //!
 //! `--device` is the CUDA ordinal for `cuda` and the DXGI adapter index for `directml`; `cpu`
 //! takes none. The CUDA knobs belong to `cuda` only. `--baseline` names the `cpu-1t` report the
 //! consistency section compares with.
+//!
+//! Workflow #407 GPU-0c: `--directml-cpu-fallback on|off` (default `off`, `directml` only) lets
+//! ONNX Runtime place the nodes DirectML cannot run on its CPU execution provider. `--probe-dlls`
+//! loads every DLL of one runtime folder with the engine's `LoadLibraryExW` flags and names the
+//! dependency a failing one misses (`probe.rs`); it stands alone, as `--list-adapters` does.
 //!
 //! Workflow #407 GPU-0b: `--mode template` searches the workload's templates over every whole
 //! frame (`template_run.rs`); there `--reps` counts the repetitions per frame, and
@@ -46,6 +52,8 @@ pub enum BenchMode {
 pub enum Command {
     /// Print the DXGI adapters (and nothing else) as JSON on stdout.
     ListAdapters,
+    /// Workflow #407 GPU-0c: load every DLL of the folder and print the probe as JSON on stdout.
+    ProbeDlls(PathBuf),
     /// Boxed: the options are far larger than the data-less `ListAdapters`.
     Run(Box<RunOptions>),
 }
@@ -78,6 +86,7 @@ const VALUE_FLAGS: &[&str] = &[
     "--cpu-threads",
     "--cuda-conv-search",
     "--cuda-tf32",
+    "--directml-cpu-fallback",
     "--workload",
     "--warmup",
     "--reps",
@@ -90,6 +99,16 @@ const VALUE_FLAGS: &[&str] = &[
 pub fn parse_args(args: &[String]) -> Result<Command, BenchError> {
     if args.len() == 1 && args[0] == "--list-adapters" {
         return Ok(Command::ListAdapters);
+    }
+    if args.first().map(String::as_str) == Some("--probe-dlls") {
+        return match args {
+            [_, folder] if !folder.trim().is_empty() => {
+                Ok(Command::ProbeDlls(PathBuf::from(folder)))
+            }
+            _ => Err(cli(
+                "--probe-dlls takes exactly one folder and stands alone",
+            )),
+        };
     }
     let mut values = BTreeMap::<&str, &str>::new();
     let mut index = 0;
@@ -197,6 +216,20 @@ pub fn parse_args(args: &[String]) -> Result<Command, BenchError> {
             other => return Err(cli(format!("--cuda-tf32 {other:?} is not on or off"))),
         };
     }
+    if let Some(value) = values.get("--directml-cpu-fallback") {
+        if execution_provider != OnnxExecutionProvider::Directml {
+            return Err(cli("--directml-cpu-fallback belongs to --ep directml only"));
+        }
+        tuning.directml_cpu_fallback = match *value {
+            "on" => true,
+            "off" => false,
+            other => {
+                return Err(cli(format!(
+                    "--directml-cpu-fallback {other:?} is not on or off"
+                )));
+            }
+        };
+    }
     let warmup = values
         .get("--warmup")
         .map(|value| parse_number::<u32>("--warmup", value))
@@ -239,7 +272,7 @@ pub fn parse_args(args: &[String]) -> Result<Command, BenchError> {
 }
 
 /// The variant name of design §1.2 when no `--label` is given, e.g. `cpu-1t`, `cuda0-default`,
-/// `cuda0-tuned`, `dml1`.
+/// `cuda0-tuned`, `dml1`, `dml1-fallback`.
 pub fn default_label(
     execution_provider: OnnxExecutionProvider,
     device: Option<u32>,
@@ -252,6 +285,9 @@ pub fn default_label(
             format!("cuda{device}-default")
         }
         OnnxExecutionProvider::Cuda => format!("cuda{device}-tuned"),
+        OnnxExecutionProvider::Directml if tuning.directml_cpu_fallback => {
+            format!("dml{device}-fallback")
+        }
         OnnxExecutionProvider::Directml => format!("dml{device}"),
     }
 }

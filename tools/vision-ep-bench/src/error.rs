@@ -3,6 +3,8 @@
 //! The bench's named failures. Every failure ends the process with a non-zero exit status and,
 //! once `--out` is known, a report whose `status` is `failed` and whose `error` names the code.
 
+use actingcommand_ppocr_onnx_json_provider::bench::BenchOrtFailure;
+use actingcommand_vision_ffi::{NativeLibraryLoadFailure, VisionFfiError};
 use serde::{Serialize, Serializer};
 use std::fmt;
 
@@ -49,6 +51,9 @@ pub enum BenchCode {
     /// Workflow #407 GPU-0b: an exact score map or the direct enumeration failed for another
     /// reason than its time limit.
     TemplateSearchFailed,
+    /// Workflow #407 GPU-0c: ONNX Runtime's node placement of a GPU session could not be read
+    /// from its verbose session log.
+    PlacementUnread,
 }
 
 impl BenchCode {
@@ -73,6 +78,7 @@ impl BenchCode {
             Self::OutputUnwritable => "bench_output_unwritable",
             Self::GraphInvalid => "bench_graph_invalid",
             Self::TemplateSearchFailed => "bench_template_search_failed",
+            Self::PlacementUnread => "bench_placement_unread",
         }
     }
 
@@ -103,10 +109,38 @@ impl Serialize for BenchCode {
 }
 
 /// A named failure with its detail.
+///
+/// Workflow #407 GPU-0c: nothing behind a failure is dropped. A failure ONNX Runtime raised
+/// keeps ONNX Runtime's status whole (`ort_status`), and a failed native library load keeps the
+/// library, its `LoadLibraryExW` flags, the Win32 `GetLastError` code and its system message
+/// (`library_load`); both are in the report's JSON and in the stderr line ([`fmt::Display`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BenchError {
     pub code: BenchCode,
     pub message: String,
+    pub ort_status: Option<Box<OrtStatus>>,
+    pub library_load: Option<Box<NativeLibraryLoadFailure>>,
+}
+
+/// Workflow #407 GPU-0c: ONNX Runtime's own status of a failed call.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OrtStatus {
+    /// What the bench or the engine was doing.
+    pub step: String,
+    /// `ort::ErrorCode` as `Debug` spells it; none for a step that is no ONNX Runtime call.
+    pub code: Option<String>,
+    /// ONNX Runtime's status message, verbatim.
+    pub message: Option<String>,
+}
+
+impl From<&BenchOrtFailure> for OrtStatus {
+    fn from(failure: &BenchOrtFailure) -> Self {
+        Self {
+            step: failure.step.clone(),
+            code: failure.ort_code.clone(),
+            message: failure.ort_message.clone(),
+        }
+    }
 }
 
 impl BenchError {
@@ -114,13 +148,67 @@ impl BenchError {
         Self {
             code,
             message: message.into(),
+            ort_status: None,
+            library_load: None,
         }
+    }
+
+    /// A failure the vision boundary raised while `what`: its text, and the native library load
+    /// behind it when there is one.
+    pub fn from_vision(code: BenchCode, what: &str, error: &VisionFfiError) -> Self {
+        let mut bench = Self::new(code, format!("{what}: {error}"));
+        bench.library_load = error.library_load().cloned().map(Box::new);
+        bench
+    }
+
+    /// A failed ONNX Runtime session build while `what`: its text, and ONNX Runtime's status.
+    pub fn from_ort(code: BenchCode, what: &str, failure: &BenchOrtFailure) -> Self {
+        let mut bench = Self::new(code, format!("{what}: {failure}"));
+        bench.ort_status = Some(Box::new(OrtStatus::from(failure)));
+        bench
+    }
+
+    /// A failed ONNX Runtime call while `what`, from the `ort` error itself.
+    pub fn from_ort_error<R>(code: BenchCode, what: &str, error: &ort::Error<R>) -> Self {
+        let status = OrtStatus {
+            step: what.to_owned(),
+            code: Some(format!("{:?}", error.code())),
+            message: Some(error.message().to_owned()),
+        };
+        let mut bench = Self::new(
+            code,
+            format!(
+                "{what}: {} (ONNX Runtime error code {:?})",
+                error.message(),
+                error.code()
+            ),
+        );
+        bench.ort_status = Some(Box::new(status));
+        bench
     }
 }
 
 impl fmt::Display for BenchError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}: {}", self.code, self.message)
+        write!(formatter, "{}: {}", self.code, self.message)?;
+        // The message normally carries both already; they are appended when it does not.
+        if let Some(status) = &self.ort_status
+            && let Some(message) = &status.message
+            && !self.message.contains(message.as_str())
+        {
+            write!(formatter, " [ONNX Runtime status: {message}")?;
+            if let Some(code) = &status.code {
+                write!(formatter, ", error code {code}")?;
+            }
+            formatter.write_str("]")?;
+        }
+        if let Some(load) = &self.library_load {
+            let text = load.to_string();
+            if !self.message.contains(text.as_str()) {
+                write!(formatter, " [loading {}: {text}]", load.library)?;
+            }
+        }
+        Ok(())
     }
 }
 

@@ -17,10 +17,10 @@ use crate::cli::{BenchMode, RunOptions};
 use crate::consistency::{self, BaselineReport};
 use crate::error::{BenchCode, BenchError};
 use crate::report::{
-    BenchIdentity, BlockOutput, ColdSection, CounterStatus, CudaSection, EngineSection,
-    HostSection, MemoryMark, ModelRow, REPORT_SCHEMA, RawSection, Report, ReportStatus,
-    RequestOutput, RequestRecord, RuntimeSection, SafetySection, ShapeSummary, ShapeTiming,
-    Variant, WorkloadSection,
+    BenchIdentity, BlockOutput, CPU_EXECUTION_PROVIDER, ColdSection, CounterStatus, CudaSection,
+    EngineSection, HostSection, MemoryMark, ModelPlacement, ModelRow, REPORT_SCHEMA, RawSection,
+    Report, ReportStatus, RequestOutput, RequestRecord, RuntimeSection, SafetySection,
+    ShapeSummary, ShapeTiming, Variant, WorkloadSection,
 };
 use crate::safety::{SafetyLimits, SafetyMonitor};
 use crate::stats::percentiles;
@@ -33,7 +33,7 @@ use crate::workload::{
 };
 use actingcommand_ppocr_onnx_json_provider::PpocrCtcLoader;
 use actingcommand_ppocr_onnx_json_provider::bench::{
-    self as engine_bench, BenchInput, BenchModelRole, BenchSessionPlan,
+    self as engine_bench, BenchInput, BenchOrtFailure, BenchSessionPlan,
 };
 use actingcommand_vision_ffi::{
     CudaDeviceSelector, OcrBlockMode, OcrEngine, OcrInferenceRequestView, OcrInferenceResult,
@@ -96,6 +96,7 @@ pub fn empty_report(options: &RunOptions) -> Report {
         phases: Vec::new(),
         gpu_counters: CounterStatus::default(),
         consistency: None,
+        placement: Vec::new(),
         template: None,
         modules: Vec::new(),
         wall_clock_us: 0,
@@ -141,7 +142,7 @@ pub fn check_footprint(options: &RunOptions) -> Result<(), BenchError> {
     Ok(())
 }
 
-fn refuse_production_path(what: &str, path: &Path) -> Result<(), BenchError> {
+pub(crate) fn refuse_production_path(what: &str, path: &Path) -> Result<(), BenchError> {
     if is_under(path, Path::new(PRODUCTION_INSTALL_ROOT)) {
         return Err(BenchError::new(
             BenchCode::FootprintRefused,
@@ -291,26 +292,76 @@ fn measure(
     let (runtime, plan) = initialise(options, cuda_selector, report, monitor)?;
 
     phase(report, watcher, "raw_sessions");
+    let detector_model = (
+        "det",
+        model.detector.as_slice(),
+        model.detector_path.as_path(),
+    );
+    let recognizer_model = (
+        "rec",
+        model.recognizer.as_slice(),
+        model.spec.recognizer_path.as_path(),
+    );
     let started = Instant::now();
-    let mut raw_detector = engine_bench::build_session(
-        &model.detector,
-        &model.detector_path,
-        &plan,
-        BenchModelRole::Detector,
-    )
-    .map_err(|error| session_error("the raw detector session", &error))?;
+    let mut raw_detector = engine_bench::build_session(detector_model.1, detector_model.2, &plan)
+        .map_err(|failure| {
+        failed_session(
+            report,
+            &plan,
+            detector_model,
+            "the raw detector session",
+            &failure,
+        )
+    })?;
     report.cold.first_session_us = Some(micros(started.elapsed()));
     mark(report, monitor, "after_first_session_raw_detector")?;
     let started = Instant::now();
-    let mut raw_recognizer = engine_bench::build_session(
-        &model.recognizer,
-        &model.spec.recognizer_path,
-        &plan,
-        BenchModelRole::Recognizer,
-    )
-    .map_err(|error| session_error("the raw recognizer session", &error))?;
+    let mut raw_recognizer =
+        engine_bench::build_session(recognizer_model.1, recognizer_model.2, &plan).map_err(
+            |failure| {
+                failed_session(
+                    report,
+                    &plan,
+                    recognizer_model,
+                    "the raw recognizer session",
+                    &failure,
+                )
+            },
+        )?;
     report.cold.second_session_us = Some(micros(started.elapsed()));
     mark(report, monitor, "after_second_session_raw_recognizer")?;
+
+    // Workflow #407 GPU-0c: where ONNX Runtime placed each model's nodes, after the timed cold
+    // sessions so the placement sessions do not warm them.
+    let mut placement_unread = Vec::new();
+    if options.execution_provider != OnnxExecutionProvider::Cpu {
+        phase(report, watcher, "placement");
+        for (name, bytes, path) in [detector_model, recognizer_model] {
+            let placement =
+                ModelPlacement::from_read(name, engine_bench::node_placement(bytes, path, &plan));
+            if let Some(log_error) = &placement.log_error {
+                placement_unread.push(format!("{name}: {log_error}"));
+            } else if let Some(failure) = &placement.session_failure {
+                placement_unread.push(format!(
+                    "{name}: the placement session failed although the raw session built: {}",
+                    failure.message.as_deref().unwrap_or(&failure.step)
+                ));
+            }
+            eprintln!(
+                "ac-vision-ep-bench: {} {name} placement: {} on non-CPU providers, {} on {CPU_EXECUTION_PROVIDER}{}",
+                options.label,
+                placement.non_cpu_nodes,
+                placement.cpu_nodes,
+                if placement.cpu_nodes > 0 {
+                    format!(" ({})", placement.cpu_op_summary())
+                } else {
+                    String::new()
+                }
+            );
+            report.placement.push(placement);
+        }
+        mark(report, monitor, "after_placement")?;
+    }
 
     phase(report, watcher, "raw_detector");
     let mut detector_inputs = BTreeMap::<String, (String, BenchInput, usize)>::new();
@@ -523,7 +574,70 @@ fn measure(
 
     phase(report, watcher, "modules");
     report.modules = win::loaded_modules()?;
+    if !placement_unread.is_empty() {
+        phase(report, watcher, "placement");
+        return Err(BenchError::new(
+            BenchCode::PlacementUnread,
+            format!(
+                "every measurement finished, but ONNX Runtime's node placement could not be read: {}",
+                placement_unread.join("; ")
+            ),
+        ));
+    }
     Ok(())
+}
+
+/// Workflow #407 GPU-0c: the named failure of a raw session that did not build, with ONNX
+/// Runtime's status whole. For a GPU variant the model's node placement is read and recorded
+/// too, and the error names the nodes ONNX Runtime put on its CPU execution provider (why a
+/// strict session fails).
+fn failed_session(
+    report: &mut Report,
+    plan: &BenchSessionPlan,
+    (name, bytes, path): (&'static str, &[u8], &Path),
+    what: &str,
+    failure: &BenchOrtFailure,
+) -> BenchError {
+    /// The CPU-placed nodes the error names one by one (the report lists them all).
+    const NAMED_NODES: usize = 24;
+    let mut error = BenchError::from_ort(BenchCode::SessionFailed, what, failure);
+    if plan.execution_provider() == OnnxExecutionProvider::Cpu {
+        return error;
+    }
+    let placement =
+        ModelPlacement::from_read(name, engine_bench::node_placement(bytes, path, plan));
+    if placement.cpu_nodes > 0 {
+        let named: Vec<String> = placement
+            .cpu_node_list
+            .iter()
+            .take(NAMED_NODES)
+            .map(|node| format!("{} ({})", node.op_type, node.name))
+            .collect();
+        error.message.push_str(&format!(
+            "; ONNX Runtime placed {} of the {} nodes of {name} on {CPU_EXECUTION_PROVIDER} ({}; read from {}): {}{}",
+            placement.cpu_nodes,
+            placement.cpu_nodes + placement.non_cpu_nodes,
+            placement.cpu_op_summary(),
+            placement.read_from,
+            named.join(", "),
+            if placement.cpu_node_list.len() > named.len() {
+                ", …"
+            } else {
+                ""
+            }
+        ));
+    } else if let Some(log_error) = &placement.log_error {
+        error.message.push_str(&format!(
+            "; the node placement of {name} could not be read: {log_error}"
+        ));
+    } else {
+        error.message.push_str(&format!(
+            "; ONNX Runtime placed none of the {} nodes of {name} on {CPU_EXECUTION_PROVIDER}",
+            placement.non_cpu_nodes
+        ));
+    }
+    report.placement.push(placement);
+    error
 }
 
 /// The bench's own executable and its digest.
@@ -865,9 +979,10 @@ fn time_raw(
     let shape = shape_text(&input.shape);
     let tensor = Tensor::from_array((input.shape.clone(), input.data.clone().into_boxed_slice()))
         .map_err(|error| {
-        BenchError::new(
+        BenchError::from_ort_error(
             BenchCode::InferenceFailed,
-            format!("the {shape} input tensor: {error}"),
+            &format!("the {shape} input tensor"),
+            &error,
         )
     })?;
     monitor.check()?;
@@ -900,9 +1015,10 @@ fn time_raw(
 
 fn run_raw(session: &mut Session, tensor: &Tensor<f32>, shape: &str) -> Result<(), BenchError> {
     let outputs = session.run(ort::inputs![tensor]).map_err(|error| {
-        BenchError::new(
+        BenchError::from_ort_error(
             BenchCode::InferenceFailed,
-            format!("raw session.run on {shape} failed: {error}"),
+            &format!("raw session.run on {shape} failed"),
+            &error,
         )
     })?;
     drop(outputs);
@@ -1016,14 +1132,15 @@ pub(crate) fn micros(duration: Duration) -> u64 {
     u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
 }
 
+// Workflow #407 GPU-0c: every conversion keeps the library load behind a vision error.
 fn runtime_error(what: &str, error: &VisionFfiError) -> BenchError {
-    BenchError::new(BenchCode::RuntimeUnavailable, format!("{what}: {error}"))
+    BenchError::from_vision(BenchCode::RuntimeUnavailable, what, error)
 }
 
 pub(crate) fn session_error(what: &str, error: &VisionFfiError) -> BenchError {
-    BenchError::new(BenchCode::SessionFailed, format!("{what}: {error}"))
+    BenchError::from_vision(BenchCode::SessionFailed, what, error)
 }
 
 fn inference_error(what: &str, error: &VisionFfiError) -> BenchError {
-    BenchError::new(BenchCode::InferenceFailed, format!("{what}: {error}"))
+    BenchError::from_vision(BenchCode::InferenceFailed, what, error)
 }
