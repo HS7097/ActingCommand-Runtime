@@ -532,7 +532,7 @@ task. Each refusal names its file and the JSON pointer of the offending field:
 | The document is at most 512 KiB, decodes as a selection-policy document, has an unambiguous canonical form (no floats, no unsafe integers, no duplicate keys) and validates, in that order. | the document | the policy |
 | Each `gate_id` and `term_id` is a token (lowercase ASCII letters, digits, `_`, `.`, `:`, `-`), the form of the `rule_id` a selection reason carries (`InvalidValue`). | `/gates/<j>/gate_id`, `/scoring/<k>/term_id` | the policy |
 | `applies_to.candidate_layout_id` is the step's `layout_id`. | `/applies_to/candidate_layout_id` | the policy |
-| Each `fields[j]` names a feature of the layout and is `boolean` for a `passed` feature, `integer` for a `measure_milli`, `ocr_integer` or (Workflow #404 FS-2) `anchor_milli` feature. A layout feature the document does not read is allowed. | `/fields/<j>/name`, `/fields/<j>/value_type` | the policy |
+| Each `fields[j]` names a feature of the layout and is `boolean` for a `passed` feature, `integer` for a `measure_milli`, `ocr_integer` or (Workflow #404 FS-2) `anchor_milli` feature; an `anchor_milli` field only on a `repeated_anchor` layout, the one kind that carries it (the gate takes it since FS-2b, register §1.285; on any other layout it is a field typed unlike its feature). A layout feature the document does not read is allowed. | `/fields/<j>/name`, `/fields/<j>/value_type` | the policy |
 | `selection.required_count` is `1`. | `/selection/required_count` | the policy |
 
 A select step whose policy declares more than one candidate is a multi select (Workflow #357,

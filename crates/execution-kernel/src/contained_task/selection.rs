@@ -753,13 +753,12 @@ fn check_policy(policy: &SelectionPolicy, layout: &CandidateLayout) -> Result<()
         match (feature.map(|feature| feature.value), &field.value_type) {
             (Some(CandidateFeatureValue::Passed), ValueType::Boolean)
             | (
-                Some(
-                    CandidateFeatureValue::MeasureMilli
-                    | CandidateFeatureValue::OcrInteger
-                    | CandidateFeatureValue::AnchorMilli,
-                ),
+                Some(CandidateFeatureValue::MeasureMilli | CandidateFeatureValue::OcrInteger),
                 ValueType::Integer,
             ) => {}
+            // Workflow #404 FS-2b: on the one layout kind that carries the feature.
+            (Some(CandidateFeatureValue::AnchorMilli), ValueType::Integer)
+                if layout.kind == CandidateLayoutKind::RepeatedAnchor => {}
             (Some(CandidateFeatureValue::Identity), ValueType::EnumString { allowed })
                 if feature
                     .and_then(|feature| feature.identity.as_ref())

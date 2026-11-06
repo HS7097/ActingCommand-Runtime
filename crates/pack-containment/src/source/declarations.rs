@@ -3233,6 +3233,9 @@ fn select_policy(
                 ),
             ));
         }
+        // Workflow #404 FS-2b: an `anchor_milli` feature is an integer field like a measure, on
+        // the one layout kind that carries it.
+        let repeated_anchor = layout.get("kind").and_then(Value::as_str) == Some("repeated_anchor");
         for (field_index, field) in policy.fields.iter().enumerate() {
             let feature = super::array_field(layout, "features")
                 .iter()
@@ -3243,6 +3246,7 @@ fn select_policy(
             match (feature, &field.value_type) {
                 (Some("passed"), ValueType::Boolean)
                 | (Some("measure_milli" | "ocr_integer"), ValueType::Integer) => {}
+                (Some("anchor_milli"), ValueType::Integer) if repeated_anchor => {}
                 (Some("identity"), ValueType::EnumString { allowed }) => {
                     let declaration = super::array_field(layout, "features")
                         .iter()
@@ -3281,7 +3285,7 @@ fn select_policy(
                     return Err(refuse(
                         &format!("/fields/{field_index}/value_type"),
                         format!(
-                            "feature '{}' of candidate layout '{layout_id}' is {value}: a passed feature is boolean and a measure_milli feature integer",
+                            "feature '{}' of candidate layout '{layout_id}' is {value}: a passed feature is boolean, and a measure_milli, ocr_integer or (repeated_anchor only) anchor_milli feature integer",
                             field.name
                         ),
                     ));
@@ -4742,6 +4746,81 @@ mod tests {
         )
         .expect_err("a key field that is not the layout's identity field");
         assert_eq!(error.code, "resource_declaration_invalid");
+    }
+
+    /// Workflow #404 FS-2b (register §1.285): a document that reads the layout's `anchor_milli`
+    /// feature as an integer, in a gate, a scoring term and the tie-break (the match score
+    /// descending, then the candidate ID), is admitted for a `repeated_anchor` layout, and the
+    /// same document is refused for a `fixed_slots` layout, which cannot carry the feature, with
+    /// the refusal of a field typed unlike its feature.
+    #[test]
+    fn a_select_policy_reading_anchor_milli_is_admitted_on_repeated_anchor() {
+        let task = Declaration {
+            file: Path::new("tasks/marker-task/task.json"),
+            schema: Some("0.9"),
+        };
+        let requested = PathBuf::from("tasks/marker-task").join("policies/markers.json");
+        let field = serde_json::json!({"source": "field", "field": "match"});
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "schema_version": "actingcommand.selection-policy.v1",
+            "policy_id": "policy-markers",
+            "applies_to": {"candidate_layout_id": "layout/markers", "outcome_keys": {
+                "selected": "marker-selected", "empty": "marker-empty",
+                "insufficient": "marker-insufficient", "ambiguous": "marker-ambiguous",
+                "unknown": "marker-unknown"}},
+            "fields": [{"name": "match", "value_type": {"type": "integer"}}],
+            "facts": [],
+            "gates": [{"gate_id": "gate-match",
+                       "predicate": {"kind": "integer_at_least", "value": field.clone(),
+                                     "threshold": 900},
+                       "on_unknown": {"kind": "drop_candidate"}}],
+            "scoring": [{"term_id": "term-match", "value": field.clone(),
+                         "transform": {"kind": "identity"}, "weight_milli": 1_000,
+                         "on_unknown": {"kind": "drop_candidate"}}],
+            "selection": {"mode": "exactly_one", "required_count": 1},
+            "tie_break": [{"kind": "value", "value": field, "direction": "highest_first"},
+                          {"kind": "candidate_id", "direction": "lowest_first"}]
+        }))
+        .expect("policy bytes");
+        let bundle = |layout: Value| Bundle {
+            task_id: "marker-task".to_owned(),
+            dir: PathBuf::from("tasks/marker-task"),
+            data: serde_json::json!({
+                "game": "game-a",
+                "operations": [{"id": "choose", "from": "room", "select": {
+                    "layout_id": "layout/markers",
+                    "policy": {"path": "policies/markers.json"}}}],
+                "candidate_layouts": [layout]
+            }),
+        };
+        let features = serde_json::json!([{"name": "match", "value": "anchor_milli"}]);
+        let anchored = bundle(serde_json::json!({
+            "id": "layout/markers", "page_id": "room", "kind": "repeated_anchor",
+            "anchor": "ui/marker", "max_instances": 8, "order": "top_to_bottom",
+            "instance_rect": {"x": 0, "y": 0, "width": 8, "height": 6},
+            "click": {"x": 2, "y": 1, "width": 4, "height": 4},
+            "features": features.clone()
+        }));
+        select_policy(&task, &anchored, &requested, &requested, &bytes)
+            .expect("a repeated_anchor layout admits a document that reads anchor_milli");
+
+        let slots = bundle(serde_json::json!({
+            "id": "layout/markers", "page_id": "room", "kind": "fixed_slots",
+            "features": features,
+            "slots": [{"rect": {"x": 0, "y": 0, "width": 8, "height": 6},
+                       "click": {"x": 2, "y": 1, "width": 4, "height": 4},
+                       "targets": {}}]
+        }));
+        let error = select_policy(&task, &slots, &requested, &requested, &bytes)
+            .expect_err("a fixed_slots layout cannot carry anchor_milli");
+        assert_eq!(error.code, "resource_declaration_invalid");
+        let issue = error.details.expect("declaration issue");
+        assert_eq!(
+            issue["declaration_file"],
+            "tasks/marker-task/policies/markers.json"
+        );
+        assert_eq!(issue["field_path"], "/fields/0/value_type");
+        assert_eq!(issue["reason"], "invalid_value");
     }
 
     /// Coordinator ruling 5 on Workflow #378 A2-P: a gate or term id becomes a selection

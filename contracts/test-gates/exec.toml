@@ -2770,3 +2770,11 @@ tests = [
     "actingcommand-execution-kernel::lib::contained_task::gate_404_fs3::track_refused_on_fixed_slots_and_scan",
 ]
 incident = ["#404 FS-3"]
+
+# Workflow #404 FS-2b (0.12.43; register §1.285; the coordinator's follow-up to brief rd-1031/perf-407/brief-fs3.md): the source gate's select_policy admits a selection policy that reads a repeated_anchor layout's anchor_milli feature as an integer field, in a gate, a scoring term and the tie-break, and refuses the same document on a fixed_slots layout with resource_declaration_invalid at /fields/0/value_type
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-pack-containment::lib::source::declarations::tests::a_select_policy_reading_anchor_milli_is_admitted_on_repeated_anchor",
+]
+incident = ["#404 FS-2b"]

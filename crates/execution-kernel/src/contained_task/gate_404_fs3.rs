@@ -15,9 +15,9 @@
 // Every package is a synthetic `neutral` package of 96 x 72 frames, admitted through
 // `PreparedContainedTask::load`: the page on the first pixel (red `home`, blue `terminal`), the
 // step's guard on the second (green), and at most one 8 x 6 noise marker, the layout's anchor,
-// wherever a case puts it. The policy chooses exactly one candidate, so each frame's decision
-// chooses the marker that frame shows, and nobody on a frame without one. The runtime's clock is
-// a counter that only its pauses advance.
+// wherever a case puts it. The policy chooses exactly one candidate by its `anchor_milli` match
+// score, so each frame's decision chooses the marker that frame shows, and nobody on a frame
+// without one. The runtime's clock is a counter that only its pauses advance.
 
 use super::*;
 use actingcommand_contract::{
@@ -308,8 +308,10 @@ fn task(layout: Value, select: Value) -> Value {
     })
 }
 
-// The policy over `layout_id`: exactly one actionable candidate, whichever it is. It reads no
-// field: the frames show one marker at most, so the anchor's own threshold decides the choice.
+// The policy over `layout_id`: exactly one actionable candidate, ranked as the design's §2.2
+// writes it for interchangeable markers: the match score `match` descending (an `anchor_milli`
+// feature on the markers; Workflow #404 FS-2b admits a document that reads it), then the
+// candidate ID. The anchor's own threshold decides which positions are markers at all.
 fn policy(layout_id: &str) -> Value {
     json!({
         "schema_version": "actingcommand.selection-policy.v1",
@@ -320,12 +322,16 @@ fn policy(layout_id: &str) -> Value {
                              "insufficient": "marker_insufficient",
                              "ambiguous": "marker_ambiguous", "unknown": "marker_unknown"}
         },
-        "fields": [],
+        "fields": [{"name": "match", "value_type": {"type": "integer"}}],
         "facts": [],
         "gates": [],
         "scoring": [],
         "selection": {"mode": "exactly_one", "required_count": 1},
-        "tie_break": [{"kind": "candidate_id", "direction": "lowest_first"}]
+        "tie_break": [
+            {"kind": "value", "value": {"source": "field", "field": "match"},
+             "direction": "highest_first"},
+            {"kind": "candidate_id", "direction": "lowest_first"}
+        ]
     })
 }
 

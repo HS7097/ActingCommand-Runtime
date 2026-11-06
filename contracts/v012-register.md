@@ -7481,6 +7481,10 @@ tunable appears.
 **Rollback** (to 0.12.42). A pack that declares `anchor_milli` is refused by 0.12.42's declaration
 gate and wire check; nothing persisted changes.
 
+**Forward.** FS2-3 was built in the kernel's `check_policy` only: the source gate's
+`select_policy` still refused a document field over an `anchor_milli` feature, so no pack whose
+policy reads it loaded. FS-2b (§1.285) fixes the gate in the same release.
+
 ### 1.284 Slice FS-3 (0.12.43): `confirm: "track"`, a select that finds its moving choice again on the confirmation frame (Workflow #404; the same request and design as §1.282, §2.3, §2.4, §2.6 and §3 row FS-3; coordinator work order `rd-1031/perf-407/brief-fs3.md`)
 
 [selection-graph.md](selection-graph.md) (Select step, Execution, Confirming by tracking, Records),
@@ -7551,6 +7555,28 @@ and taps are as before. The deploy of 0.12.43 over 0.12.42 needs `--accept-ledge
 Rp.max 7 not in R\* [3, 6]), whether or not a step ever confirmed by tracking; 0.12.42 is not
 taught to read the record (Alice 10-11: no compatibility work for old versions). A pack that
 declares `confirm: "track"` or `track_px` is refused by 0.12.42's declaration gate.
+
+### 1.285 Slice FS-2b (0.12.43): a selection policy may read `anchor_milli` (Workflow #404; found while building §1.284; coordinator's follow-up to `rd-1031/perf-407/brief-fs3.md`, 11-06 14:5x)
+
+**What.** FS-2 (§1.283 FS2-3) admitted a policy field over an `anchor_milli` feature in the
+kernel's `check_policy` but not in the source gate's `select_policy`
+(`crates/pack-containment/src/source/declarations.rs`), which refused it at
+`/fields/<j>/value_type` (`resource_declaration_invalid`, `InvalidValue`); the gate runs at every
+load, so a pack whose policy read the feature, as the design's §2.2 tie-break does, could not run.
+Now both take it as an integer field, like a measure, in gates, scoring and the tie-break, on a
+`repeated_anchor` layout only; on any other layout both refuse it with the existing refusal of a
+field typed unlike its feature (in practice the layout's own `anchor_milli` is refused first).
+[selection-graph.md](selection-graph.md) (the policy rows of the select step's source rules) is
+the contract.
+
+**Tests.** `a_select_policy_reading_anchor_milli_is_admitted_on_repeated_anchor` (the gate, exec
+row "#404 FS-2b"). The FS-3 tests of §1.284 keep their names and now read `anchor_milli` in the
+§2.2 tie-break (score descending, then candidate ID), through the gate and admission.
+
+**Interface.** None: `package` stays [3, 7] (the shape is FS-2's revision 7) and `ledger` stays
+[3, 7]. No code, key or configuration key.
+
+**Rollback.** As §1.283.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
