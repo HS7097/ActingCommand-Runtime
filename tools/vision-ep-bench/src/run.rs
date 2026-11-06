@@ -9,8 +9,11 @@
 //! (the raw detector, which creates the CUDA context or the DirectML device), the second session
 //! (the raw recognizer), the raw detector's first run per input shape, the engine's load and its
 //! first read of every request (the first full-frame read builds the engine's detector session).
+//!
+//! Workflow #407 GPU-0b: `--mode template` shares the preflight, the watcher, the host facts, the
+//! workload and ONNX Runtime initialisation, and measures in `template_run.rs` instead.
 
-use crate::cli::RunOptions;
+use crate::cli::{BenchMode, RunOptions};
 use crate::consistency::{self, BaselineReport};
 use crate::error::{BenchCode, BenchError};
 use crate::report::{
@@ -21,6 +24,7 @@ use crate::report::{
 };
 use crate::safety::{SafetyLimits, SafetyMonitor};
 use crate::stats::percentiles;
+use crate::template_run;
 use crate::watch::{FailureSink, Watcher};
 use crate::win::{self, OsMemoryReader};
 use crate::workload::{
@@ -50,7 +54,7 @@ pub const PRODUCTION_INSTALL_ROOT: &str = r"F:\AC";
 /// How long ONNX Runtime initialisation and a model load may wait for another initialisation.
 const LOAD_WAIT: Duration = Duration::from_secs(600);
 
-type Monitor = SafetyMonitor<OsMemoryReader>;
+pub(crate) type Monitor = SafetyMonitor<OsMemoryReader>;
 
 /// The report before anything ran: the variant, the bench identity and the safety limits.
 pub fn empty_report(options: &RunOptions) -> Report {
@@ -60,6 +64,7 @@ pub fn empty_report(options: &RunOptions) -> Report {
         error: None,
         phase_at_failure: None,
         variant: Variant {
+            mode: options.mode,
             label: options.label.clone(),
             execution_provider: options.execution_provider,
             device: options.device,
@@ -91,6 +96,7 @@ pub fn empty_report(options: &RunOptions) -> Report {
         phases: Vec::new(),
         gpu_counters: CounterStatus::default(),
         consistency: None,
+        template: None,
         modules: Vec::new(),
         wall_clock_us: 0,
     }
@@ -219,7 +225,10 @@ pub fn run(options: &RunOptions, report: &mut Report) -> Result<(), BenchError> 
         },
         "preflight",
     )?;
-    let measured = measure(options, report, &watcher, &mut monitor);
+    let measured = match options.mode {
+        BenchMode::Ocr => measure(options, report, &watcher, &mut monitor),
+        BenchMode::Template => template_run::measure(options, report, &watcher, &mut monitor),
+    };
     let finished = watcher.finish();
     match finished {
         Ok((phases, counters)) => {
@@ -234,12 +243,16 @@ pub fn run(options: &RunOptions, report: &mut Report) -> Result<(), BenchError> 
     Ok(())
 }
 
-fn phase(report: &mut Report, watcher: &Watcher, name: &str) {
+pub(crate) fn phase(report: &mut Report, watcher: &Watcher, name: &str) {
     report.phase_at_failure = Some(name.to_owned());
     watcher.phase(name);
 }
 
-fn mark(report: &mut Report, monitor: &mut Monitor, name: &str) -> Result<(), BenchError> {
+pub(crate) fn mark(
+    report: &mut Report,
+    monitor: &mut Monitor,
+    name: &str,
+) -> Result<(), BenchError> {
     let reading = monitor.check()?;
     report.memory.push(MemoryMark {
         mark: name.to_owned(),
@@ -263,12 +276,7 @@ fn measure(
     monitor: &mut Monitor,
 ) -> Result<(), BenchError> {
     phase(report, watcher, "host");
-    if let Ok(executable) = std::env::current_exe() {
-        report.bench.executable_sha256 = std::fs::read(&executable)
-            .ok()
-            .map(|bytes| sha256_hex(&bytes));
-        report.bench.executable = Some(executable.display().to_string());
-    }
+    record_executable(report);
     let cuda_selector = host_facts(options, report)?;
 
     phase(report, watcher, "workload");
@@ -280,40 +288,7 @@ fn measure(
     let model = read_model(options, &workload, report)?;
 
     phase(report, watcher, "ort_init");
-    let mut runtime = VisionRuntimeSpec::from_vision_root(
-        &options.vision_root,
-        options.execution_provider,
-        cuda_selector,
-    )
-    .map_err(|error| runtime_error("the vision root's ONNX Runtime", &error))?;
-    if options.execution_provider == OnnxExecutionProvider::Directml {
-        runtime.directml_device_id = options.device;
-    }
-    runtime.session_tuning = options.tuning;
-    mark(report, monitor, "before_ort_init")?;
-    let started = Instant::now();
-    let facts = engine_bench::initialise_runtime(&runtime, Instant::now() + LOAD_WAIT)
-        .map_err(|error| runtime_error("ONNX Runtime initialisation", &error))?;
-    report.cold.ort_init_us = Some(micros(started.elapsed()));
-    mark(report, monitor, "after_ort_init")?;
-    let plan = BenchSessionPlan::for_runtime(&runtime, &facts)
-        .map_err(|error| runtime_error("the session plan", &error))?;
-    report.runtime = Some(RuntimeSection {
-        onnxruntime_library: facts.onnxruntime_library.display().to_string(),
-        onnxruntime_version: facts.onnxruntime_version.clone(),
-        onnxruntime_sha256: facts.onnxruntime_sha256.clone(),
-        onnxruntime_build_info: facts.onnxruntime_build_info.clone(),
-        runtime_library_closure: runtime
-            .runtime_library_closure
-            .iter()
-            .map(|path| path.display().to_string())
-            .collect(),
-        cuda_driver_version: facts.cuda_driver_version,
-        resolved_cuda_device: facts.resolved_cuda_device.clone(),
-        registered_execution_providers: plan.registered_execution_providers().to_vec(),
-        cpu_ep_registered: plan.cpu_ep_registered(),
-        cpu_fallback_disabled: plan.cpu_fallback_disabled(),
-    });
+    let (runtime, plan) = initialise(options, cuda_selector, report, monitor)?;
 
     phase(report, watcher, "raw_sessions");
     let started = Instant::now();
@@ -551,8 +526,64 @@ fn measure(
     Ok(())
 }
 
+/// The bench's own executable and its digest.
+pub(crate) fn record_executable(report: &mut Report) {
+    if let Ok(executable) = std::env::current_exe() {
+        report.bench.executable_sha256 = std::fs::read(&executable)
+            .ok()
+            .map(|bytes| sha256_hex(&bytes));
+        report.bench.executable = Some(executable.display().to_string());
+    }
+}
+
+/// ONNX Runtime for this process: the vision root's runtime with the variant's DirectML adapter
+/// and tuning, initialised as the engine initialises it, and the engine's session plan; fills
+/// the runtime section and the initialisation time.
+pub(crate) fn initialise(
+    options: &RunOptions,
+    cuda_selector: Option<CudaDeviceSelector>,
+    report: &mut Report,
+    monitor: &mut Monitor,
+) -> Result<(VisionRuntimeSpec, BenchSessionPlan), BenchError> {
+    let mut runtime = VisionRuntimeSpec::from_vision_root(
+        &options.vision_root,
+        options.execution_provider,
+        cuda_selector,
+    )
+    .map_err(|error| runtime_error("the vision root's ONNX Runtime", &error))?;
+    if options.execution_provider == OnnxExecutionProvider::Directml {
+        runtime.directml_device_id = options.device;
+    }
+    runtime.session_tuning = options.tuning;
+    mark(report, monitor, "before_ort_init")?;
+    let started = Instant::now();
+    let facts = engine_bench::initialise_runtime(&runtime, Instant::now() + LOAD_WAIT)
+        .map_err(|error| runtime_error("ONNX Runtime initialisation", &error))?;
+    report.cold.ort_init_us = Some(micros(started.elapsed()));
+    mark(report, monitor, "after_ort_init")?;
+    let plan = BenchSessionPlan::for_runtime(&runtime, &facts)
+        .map_err(|error| runtime_error("the session plan", &error))?;
+    report.runtime = Some(RuntimeSection {
+        onnxruntime_library: facts.onnxruntime_library.display().to_string(),
+        onnxruntime_version: facts.onnxruntime_version.clone(),
+        onnxruntime_sha256: facts.onnxruntime_sha256.clone(),
+        onnxruntime_build_info: facts.onnxruntime_build_info.clone(),
+        runtime_library_closure: runtime
+            .runtime_library_closure
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect(),
+        cuda_driver_version: facts.cuda_driver_version,
+        resolved_cuda_device: facts.resolved_cuda_device.clone(),
+        registered_execution_providers: plan.registered_execution_providers().to_vec(),
+        cpu_ep_registered: plan.cpu_ep_registered(),
+        cpu_fallback_disabled: plan.cpu_fallback_disabled(),
+    });
+    Ok((runtime, plan))
+}
+
 /// The DXGI adapters, the DirectML adapter and the CUDA device; the CUDA selector of a CUDA run.
-fn host_facts(
+pub(crate) fn host_facts(
     options: &RunOptions,
     report: &mut Report,
 ) -> Result<Option<CudaDeviceSelector>, BenchError> {
@@ -625,7 +656,7 @@ fn host_facts(
     }
 }
 
-fn read_workload(path: &Path, report: &mut Report) -> Result<Workload, BenchError> {
+pub(crate) fn read_workload(path: &Path, report: &mut Report) -> Result<Workload, BenchError> {
     let bytes = std::fs::read(path).map_err(|error| {
         BenchError::new(
             BenchCode::WorkloadInvalid,
@@ -662,26 +693,35 @@ fn read_baseline(path: &Path) -> Result<BaselineReport, BenchError> {
     consistency::parse_baseline(&text)
 }
 
+/// A frame's PNG bytes, read from outside the production install root and checked against the
+/// digest the workload records.
+pub(crate) fn read_frame_png(frame: &WorkloadFrame) -> Result<Vec<u8>, BenchError> {
+    refuse_production_path("frame", &frame.path)?;
+    let bytes = std::fs::read(&frame.path)
+        .map_err(|error| frame_invalid(frame, format!("cannot be read: {error}")))?;
+    let digest = sha256_hex(&bytes);
+    if digest != frame.sha256 {
+        return Err(frame_invalid(
+            frame,
+            format!("SHA-256 is {digest}, the workload records {}", frame.sha256),
+        ));
+    }
+    Ok(bytes)
+}
+
+pub(crate) fn frame_invalid(frame: &WorkloadFrame, message: String) -> BenchError {
+    BenchError::new(
+        BenchCode::FrameInvalid,
+        format!("frame {} ({}): {message}", frame.id, frame.path.display()),
+    )
+}
+
 /// Every frame, checked against its digest and size and decoded to RGB.
 fn load_frames(workload: &Workload) -> Result<Vec<VisionFrame>, BenchError> {
     let mut frames = Vec::with_capacity(workload.frames.len());
     for frame in &workload.frames {
-        refuse_production_path("frame", &frame.path)?;
-        let invalid = |message: String| {
-            BenchError::new(
-                BenchCode::FrameInvalid,
-                format!("frame {} ({}): {message}", frame.id, frame.path.display()),
-            )
-        };
-        let bytes = std::fs::read(&frame.path)
-            .map_err(|error| invalid(format!("cannot be read: {error}")))?;
-        let digest = sha256_hex(&bytes);
-        if digest != frame.sha256 {
-            return Err(invalid(format!(
-                "SHA-256 is {digest}, the workload records {}",
-                frame.sha256
-            )));
-        }
+        let invalid = |message: String| frame_invalid(frame, message);
+        let bytes = read_frame_png(frame)?;
         let decoded = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
             .map_err(|error| invalid(format!("is no readable PNG: {error}")))?
             .to_rgb8();
@@ -972,7 +1012,7 @@ fn shape_text(shape: &[i64]) -> String {
         .join("x")
 }
 
-fn micros(duration: Duration) -> u64 {
+pub(crate) fn micros(duration: Duration) -> u64 {
     u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
 }
 
@@ -980,7 +1020,7 @@ fn runtime_error(what: &str, error: &VisionFfiError) -> BenchError {
     BenchError::new(BenchCode::RuntimeUnavailable, format!("{what}: {error}"))
 }
 
-fn session_error(what: &str, error: &VisionFfiError) -> BenchError {
+pub(crate) fn session_error(what: &str, error: &VisionFfiError) -> BenchError {
     BenchError::new(BenchCode::SessionFailed, format!("{what}: {error}"))
 }
 

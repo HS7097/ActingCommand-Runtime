@@ -11,17 +11,26 @@
 //!
 //! The logic the tests pin (percentiles, the workload schema, the memory stops) is platform
 //! neutral; the samplers and the run are Windows only.
+//!
+//! Workflow #407 GPU-0b adds the template mode (`--mode template`): whole-frame template search
+//! with the CPU exact score map, today's direct enumeration and a generated ONNX `Conv` graph on
+//! the process's execution provider, with the float path's error and recall. The graph encoder
+//! (`onnx.rs`) and the float score and recall logic (`template.rs`) are platform neutral.
 
 pub mod cli;
 pub mod consistency;
 pub mod error;
+pub mod onnx;
 pub mod report;
 pub mod safety;
 pub mod stats;
+pub mod template;
 pub mod workload;
 
 #[cfg(windows)]
 pub mod run;
+#[cfg(windows)]
+pub mod template_run;
 #[cfg(windows)]
 pub mod watch;
 #[cfg(windows)]

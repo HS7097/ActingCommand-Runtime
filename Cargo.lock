@@ -475,6 +475,7 @@ version = "0.1.0"
 dependencies = [
  "actingcommand-host-metrics",
  "actingcommand-ppocr-onnx-json-provider",
+ "actingcommand-recognition",
  "actingcommand-vision-ffi",
  "image",
  "ort",

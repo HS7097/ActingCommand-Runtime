@@ -3,11 +3,13 @@
 //! The report one bench process writes to `--out` (design §1.2: every cell has its numbers or a
 //! named failure). All times are microseconds, all memory is bytes.
 
+use crate::cli::BenchMode;
 use crate::consistency::ConsistencySection;
 use crate::error::BenchError;
 use crate::safety::{MemoryReading, SafetyLimits};
 use crate::stats::Percentiles;
-use crate::workload::{RequestKind, WorkloadBlocks, WorkloadRect};
+use crate::template::{ExactEngine, RecallCounts};
+use crate::workload::{RequestKind, TemplateMetric, WorkloadBlocks, WorkloadMask, WorkloadRect};
 use actingcommand_vision_ffi::{CudaDeviceIdentity, OnnxExecutionProvider, OrtSessionTuning};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -45,12 +47,16 @@ pub struct Report {
     pub phases: Vec<PhaseStats>,
     pub gpu_counters: CounterStatus,
     pub consistency: Option<ConsistencySection>,
+    /// Workflow #407 GPU-0b: the template mode's rows (`--mode template`); the OCR sections
+    /// above stay empty in that mode.
+    pub template: Option<TemplateSection>,
     pub modules: Vec<ModuleRecord>,
     pub wall_clock_us: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Variant {
+    pub mode: BenchMode,
     pub label: String,
     pub execution_provider: OnnxExecutionProvider,
     /// The CUDA ordinal or the DXGI adapter index.
@@ -295,4 +301,149 @@ pub struct CounterStatus {
 pub struct ModuleRecord {
     pub path: String,
     pub file_version: Option<String>,
+}
+
+/// Workflow #407 GPU-0b: whole-frame template search (design §1.2 "模板匹配", §2.5). Every
+/// template runs without and with its mask, once per scale set: one case each. All times are
+/// microseconds over every frame (and every repetition), after the warm-up.
+#[derive(Debug, Clone, Serialize)]
+pub struct TemplateSection {
+    pub frame_width: u32,
+    pub frame_height: u32,
+    pub frames: Vec<String>,
+    /// Whether today's direct enumeration ran (`--direct-enumeration`).
+    pub direct_enumeration: bool,
+    pub suppress_iou_milli: u16,
+    /// ε = this × the case's largest |Δ|.
+    pub margin_factor: f64,
+    pub templates: Vec<TemplateRecord>,
+    pub cases: Vec<TemplateCaseRecord>,
+    /// Cases that ended with a named failure; the run then fails after the last case.
+    pub failed_cases: Vec<TemplateCaseFailure>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TemplateRecord {
+    pub id: String,
+    pub size_class_px: u32,
+    pub source: String,
+    pub sha256: String,
+    pub width: u32,
+    pub height: u32,
+    pub metric: TemplateMetric,
+    pub threshold: f32,
+    pub mask: WorkloadMask,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TemplateCaseFailure {
+    pub case: String,
+    pub error: BenchError,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TemplateCaseRecord {
+    /// `<template>/<unmasked|masked>/<scales>`.
+    pub case: String,
+    pub template_id: String,
+    pub masked: bool,
+    pub scales_milli: Vec<u32>,
+    pub scales: Vec<ScaledTemplateRecord>,
+    /// Positions of one frame over every scale.
+    pub positions_per_frame: u64,
+    pub exact_map: ExactMapRow,
+    pub direct_enumeration: DirectEnumerationRow,
+    pub conv: ConvRow,
+    pub accuracy: AccuracyRow,
+    /// The first repetition on each frame.
+    pub frames: Vec<TemplateFrameRecord>,
+}
+
+/// One scale of a case: the resampled template and its positions in one frame.
+#[derive(Debug, Clone, Serialize)]
+pub struct ScaledTemplateRecord {
+    pub scale_milli: u32,
+    pub width: u32,
+    pub height: u32,
+    pub positions: u64,
+    /// The pixels scored (all of them without a mask).
+    pub scored_pixels: u64,
+    /// The engine the exact map sums with (the recognition crate's rule, see
+    /// `template::exact_map_engine`).
+    pub exact_map_engine: ExactEngine,
+}
+
+/// The CPU exact score map: `Scene::exact_score_map` (one scale) or `Scene::exact_score_maps`
+/// (several), with the production 5 s limit on the system clock and a fresh `RegionSpectra` per
+/// search, so the region's transforms are part of every sample.
+#[derive(Debug, Clone, Serialize)]
+pub struct ExactMapRow {
+    pub call: &'static str,
+    pub warm: Option<Percentiles>,
+    /// Searches the 5 s limit stopped (their time is still a sample).
+    pub incomplete: u64,
+}
+
+/// Today's direct enumeration: `Scene::match_template_all` (no mask, one scale per search; a
+/// case of several scales runs one search per resampled template, each with its own 5 s limit),
+/// every position admitted, overlap suppression as the workload says.
+#[derive(Debug, Clone, Serialize)]
+pub struct DirectEnumerationRow {
+    /// `measured`, or `skipped: <why>`.
+    pub status: String,
+    pub searches_per_frame: usize,
+    /// One frame's searches together.
+    pub warm: Option<Percentiles>,
+    pub complete: u64,
+    /// Searches the 5 s limit stopped.
+    pub incomplete: u64,
+    /// Matches after suppression (complete searches) or found before the stop (incomplete ones).
+    pub matches: u64,
+}
+
+/// The generated Conv graph on this run's execution provider.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConvRow {
+    pub graph_bytes: usize,
+    pub graph_sha256: String,
+    pub nodes: usize,
+    pub outputs: usize,
+    /// The session of the generated graph, built with the engine's session plan.
+    pub session_build_us: u64,
+    /// The first prefilter of the session (frame 0), before the warm-up.
+    pub first_run_us: u64,
+    /// `session.run` alone.
+    pub run: Option<Percentiles>,
+    /// The input tensor, `session.run`, and the CPU assembly of every float score (the window
+    /// sums of an unmasked case included); the keep test against `threshold − ε` is counted
+    /// after the run, once ε is known.
+    pub prefilter: Option<Percentiles>,
+    /// The process CPU time of the prefilter.
+    pub prefilter_cpu: Option<Percentiles>,
+}
+
+/// Design §2.5: the float path against the exact map, over the first repetition of every frame.
+#[derive(Debug, Clone, Serialize)]
+pub struct AccuracyRow {
+    /// The largest |exact − float| of the raw scores.
+    pub max_abs_delta: f64,
+    /// ε = `margin_factor` × `max_abs_delta`.
+    pub margin: f64,
+    pub counts: RecallCounts,
+    /// `recalled / exact_matches`; none without an exact match.
+    pub recall: Option<f64>,
+    pub kept_per_frame: Option<Percentiles>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TemplateFrameRecord {
+    pub frame_id: String,
+    pub exact_map_us: u64,
+    pub exact_map_incomplete: bool,
+    pub direct_us: Option<u64>,
+    pub direct_incomplete: Option<bool>,
+    pub conv_run_us: u64,
+    pub prefilter_us: u64,
+    pub max_abs_delta: f64,
+    pub counts: RecallCounts,
 }

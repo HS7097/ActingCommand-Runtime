@@ -24,6 +24,8 @@ path = "src/main.rs"
 [dependencies]
 actingcommand-host-metrics = { workspace = true }
 actingcommand-ppocr-onnx-json-provider = { workspace = true }
+# Workflow #407 GPU-0b: the template mode's exact score map and direct enumeration.
+actingcommand-recognition = { workspace = true }
 actingcommand-vision-ffi = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png"] }
 ort = { version = "2.0.0-rc.12", default-features = false, features = [

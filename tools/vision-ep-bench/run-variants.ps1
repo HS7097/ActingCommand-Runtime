@@ -21,10 +21,20 @@ exist: nothing is ever overwritten. A variant that fails does not stop the other
 exits 1 when any variant failed. A requested variant whose root or device is missing is refused
 before anything runs.
 
+Workflow #407 GPU-0b: -Mode template runs the bench's template mode (--mode template) with a
+workload that carries template_search (workload-gpu0b.json). Reps then defaults to 1 (repetitions
+per frame), no models folder or baseline is passed, and today's direct enumeration, which does not
+depend on the execution provider, runs in cpu-1t only (--direct-enumeration off elsewhere).
+
 .EXAMPLE
 .\run-variants.ps1 -Exe .\ac-vision-ep-bench.exe -Workload .\workload-gpu0a.json `
   -OutDir .\out\round1-idle -CpuVisionRoot .\rt-cpu -CudaVisionRoot .\rt-cuda12 `
   -DmlVisionRoot .\rt-dml -ModelsDir .\models -CudaDevice 0 -DmlNvidiaDevice 0 -DmlRadeonDevice 1
+
+.EXAMPLE
+.\run-variants.ps1 -Mode template -Exe .\ac-vision-ep-bench.exe -Workload .\workload-gpu0b.json `
+  -OutDir .\out\round1-idle-template -CpuVisionRoot .\rt-cpu -CudaVisionRoot .\rt-cuda12 `
+  -DmlVisionRoot .\rt-dml -CudaDevice 0 -DmlNvidiaDevice 0 -DmlRadeonDevice 1
 #>
 [CmdletBinding()]
 param(
@@ -40,11 +50,15 @@ param(
     [int] $DmlRadeonDevice = -1,
     [int] $Warmup = 3,
     [int] $Reps = 20,
-    [string[]] $Variants = @('cpu-1t', 'cpu-4t', 'cuda-default', 'cuda-tuned', 'dml-3090ti', 'dml-radeon')
+    [string[]] $Variants = @('cpu-1t', 'cpu-4t', 'cuda-default', 'cuda-tuned', 'dml-3090ti', 'dml-radeon'),
+    [ValidateSet('ocr', 'template')][string] $Mode = 'ocr'
 )
 
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
+if ($Mode -eq 'template' -and -not $PSBoundParameters.ContainsKey('Reps')) {
+    $Reps = 1
+}
 
 $table = [ordered]@{
     'cpu-1t'       = @{ Root = $CpuVisionRoot; Device = -2; Extra = @('--ep', 'cpu') }
@@ -114,16 +128,18 @@ foreach ($label in $Variants) {
     $entry = $table[$label]
     $out = Join-Path $OutDir "$label.json"
     $log = Join-Path $OutDir "$label.log"
-    $arguments = @('--vision-root', $entry.Root) + $entry.Extra
+    $arguments = @('--mode', $Mode, '--vision-root', $entry.Root) + $entry.Extra
     if ($entry.Device -ge 0) {
         $arguments += @('--device', [string]$entry.Device)
     }
-    if (-not [string]::IsNullOrWhiteSpace($ModelsDir)) {
+    if ($Mode -eq 'template') {
+        $arguments += @('--direct-enumeration', $(if ($label -eq 'cpu-1t') { 'on' } else { 'off' }))
+    } elseif (-not [string]::IsNullOrWhiteSpace($ModelsDir)) {
         $arguments += @('--models-dir', $ModelsDir)
     }
     $arguments += @('--workload', $Workload, '--warmup', [string]$Warmup, '--reps', [string]$Reps, '--out', $out, '--label', $label)
     $comparedWith = $null
-    if ($label -ne 'cpu-1t' -and (Test-Path -LiteralPath $baseline -PathType Leaf)) {
+    if ($Mode -eq 'ocr' -and $label -ne 'cpu-1t' -and (Test-Path -LiteralPath $baseline -PathType Leaf)) {
         $baselineStatus = (Get-Content -LiteralPath $baseline -Raw | ConvertFrom-Json).status
         if ($baselineStatus -eq 'ok') {
             $arguments += @('--baseline', $baseline)
@@ -163,6 +179,7 @@ foreach ($label in $Variants) {
 
 $index = [ordered]@{
     schema = 'actingcommand.vision-ep-bench.index/1'
+    mode = $Mode
     exe = $Exe
     workload = $Workload
     warmup = $Warmup

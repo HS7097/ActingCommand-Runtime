@@ -3,24 +3,44 @@
 //! The command line (design §1.5 item 1):
 //!
 //! ```text
-//! ac-vision-ep-bench --vision-root <dir> --ep cpu|cuda|directml [--device <n>]
+//! ac-vision-ep-bench [--mode ocr] --vision-root <dir> --ep cpu|cuda|directml [--device <n>]
 //!     [--cpu-threads <n>] [--cuda-conv-search exhaustive|heuristic] [--cuda-tf32 on|off]
 //!     --workload <json> [--warmup 3] [--reps 20] --out <json>
 //!     [--models-dir <dir>] [--label <name>] [--baseline <json>]
+//! ac-vision-ep-bench --mode template --vision-root <dir> --ep cpu|cuda|directml [--device <n>]
+//!     [--cpu-threads <n>] [--cuda-conv-search exhaustive|heuristic] [--cuda-tf32 on|off]
+//!     --workload <json> [--warmup 3] [--reps 1] [--direct-enumeration on|off] --out <json>
+//!     [--label <name>]
 //! ac-vision-ep-bench --list-adapters
 //! ```
 //!
 //! `--device` is the CUDA ordinal for `cuda` and the DXGI adapter index for `directml`; `cpu`
 //! takes none. The CUDA knobs belong to `cuda` only. `--baseline` names the `cpu-1t` report the
 //! consistency section compares with.
+//!
+//! Workflow #407 GPU-0b: `--mode template` searches the workload's templates over every whole
+//! frame (`template_run.rs`); there `--reps` counts the repetitions per frame, and
+//! `--direct-enumeration off` skips today's direct enumeration, which does not depend on the
+//! execution provider and takes up to 5 s per search.
 
 use crate::error::{BenchCode, BenchError};
 use actingcommand_vision_ffi::{CudaConvAlgorithmSearch, OnnxExecutionProvider, OrtSessionTuning};
+use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 /// The most intra-op threads the bench accepts.
 pub const MAX_CPU_THREADS: u16 = 64;
+
+/// What one process measures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BenchMode {
+    /// GPU-0a: the OCR model, raw sessions and the production engine.
+    Ocr,
+    /// GPU-0b: whole-frame template search, CPU exact map against the generated Conv graph.
+    Template,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -32,6 +52,7 @@ pub enum Command {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunOptions {
+    pub mode: BenchMode,
     pub vision_root: PathBuf,
     pub models_dir: PathBuf,
     pub execution_provider: OnnxExecutionProvider,
@@ -43,9 +64,13 @@ pub struct RunOptions {
     pub out: PathBuf,
     pub label: String,
     pub baseline: Option<PathBuf>,
+    /// Template mode: whether today's direct enumeration runs.
+    pub direct_enumeration: bool,
 }
 
 const VALUE_FLAGS: &[&str] = &[
+    "--mode",
+    "--direct-enumeration",
     "--vision-root",
     "--models-dir",
     "--ep",
@@ -88,6 +113,33 @@ pub fn parse_args(args: &[String]) -> Result<Command, BenchError> {
             .get(flag)
             .copied()
             .ok_or_else(|| cli(format!("{flag} is required")))
+    };
+    let mode = match values.get("--mode").copied() {
+        None | Some("ocr") => BenchMode::Ocr,
+        Some("template") => BenchMode::Template,
+        Some(other) => return Err(cli(format!("--mode {other:?} is not ocr or template"))),
+    };
+    let mode_flags: &[&str] = match mode {
+        BenchMode::Ocr => &["--direct-enumeration"],
+        BenchMode::Template => &["--models-dir", "--baseline"],
+    };
+    if let Some(flag) = mode_flags.iter().find(|flag| values.contains_key(**flag)) {
+        return Err(cli(format!(
+            "{flag} does not belong to --mode {}",
+            match mode {
+                BenchMode::Ocr => "ocr",
+                BenchMode::Template => "template",
+            }
+        )));
+    }
+    let direct_enumeration = match values.get("--direct-enumeration").copied() {
+        None | Some("on") => true,
+        Some("off") => false,
+        Some(other) => {
+            return Err(cli(format!(
+                "--direct-enumeration {other:?} is not on or off"
+            )));
+        }
     };
     let vision_root = PathBuf::from(required("--vision-root")?);
     let execution_provider = match required("--ep")? {
@@ -154,7 +206,10 @@ pub fn parse_args(args: &[String]) -> Result<Command, BenchError> {
         .get("--reps")
         .map(|value| parse_number::<u32>("--reps", value))
         .transpose()?
-        .unwrap_or(20);
+        .unwrap_or(match mode {
+            BenchMode::Ocr => 20,
+            BenchMode::Template => 1,
+        });
     if reps == 0 {
         return Err(cli("--reps must be at least 1"));
     }
@@ -167,6 +222,7 @@ pub fn parse_args(args: &[String]) -> Result<Command, BenchError> {
         None => default_label(execution_provider, device, &tuning),
     };
     Ok(Command::Run(Box::new(RunOptions {
+        mode,
         vision_root,
         models_dir,
         execution_provider,
@@ -178,6 +234,7 @@ pub fn parse_args(args: &[String]) -> Result<Command, BenchError> {
         out: PathBuf::from(required("--out")?),
         label,
         baseline: values.get("--baseline").map(|path| PathBuf::from(*path)),
+        direct_enumeration,
     })))
 }
 

@@ -4,6 +4,11 @@
 //! the engine. A generator script outside this repository writes it from the offline truth set;
 //! the bench reads only this file and the PNG frames it names. Every object refuses members it
 //! does not define.
+//!
+//! Workflow #407 GPU-0b: a workload may also carry `template_search`, the templates the template
+//! mode searches over every whole frame (design §1.2 "模板匹配"). Each template's PNG travels
+//! inside the workload as hexadecimal text with its SHA-256, so the bench still reads nothing but
+//! this file and the frames.
 
 use crate::error::{BenchCode, BenchError};
 use serde::{Deserialize, Serialize};
@@ -14,8 +19,10 @@ use std::path::PathBuf;
 pub const WORKLOAD_SCHEMA: &str = "actingcommand.vision-ep-bench.workload/1";
 /// The engine's request timeout ceiling (`vision-ffi`'s `MAX_REQUEST_TIMEOUT_MS`).
 pub const MAX_REQUEST_TIMEOUT_MS: u64 = 60_000;
+/// The largest template scale factor the workload accepts, in milli.
+pub const MAX_TEMPLATE_SCALE_MILLI: u32 = 4_000;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Workload {
     pub schema: String,
@@ -24,6 +31,59 @@ pub struct Workload {
     /// Free text about where the workload came from (generator, sources, commits).
     #[serde(default)]
     pub provenance: BTreeMap<String, String>,
+    /// Workflow #407 GPU-0b: what the template mode searches; the OCR mode ignores it.
+    #[serde(default)]
+    pub template_search: Option<TemplateSearchSpec>,
+}
+
+/// Workflow #407 GPU-0b: the templates of the template mode and the scale sets each one runs
+/// with (every template runs without and with its mask, once per scale set).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TemplateSearchSpec {
+    /// E.g. `[[1000], [900, 1000, 1100]]`: one scale, and three scales.
+    pub scale_sets_milli: Vec<Vec<u32>>,
+    /// The overlap suppression of today's direct enumeration (`match_template_all`).
+    pub suppress_iou_milli: u16,
+    pub templates: Vec<WorkloadTemplate>,
+}
+
+/// One template PNG of a resource repository.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkloadTemplate {
+    pub id: String,
+    /// The size class of design §1.2 the template stands for (about 24, 48, 96 or 160 px).
+    pub size_class_px: u32,
+    /// Where the PNG came from (repository, commit, path), for the record.
+    pub source: String,
+    pub sha256: String,
+    pub width: u32,
+    pub height: u32,
+    pub metric: TemplateMetric,
+    /// The threshold of the template's own declaration; a position whose exact score reaches it
+    /// is a match.
+    pub threshold: f32,
+    /// The gray range the masked runs score.
+    pub mask: WorkloadMask,
+    /// The PNG's bytes as lowercase hexadecimal text.
+    pub png_hex: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TemplateMetric {
+    CcorrNormed,
+    CcoeffNormed,
+}
+
+/// A pack's `{"type": "range", "lower", "upper"}` mask: template pixels of a gray value in
+/// `lower..=upper` are scored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkloadMask {
+    pub lower: u8,
+    pub upper: u8,
 }
 
 /// The one OCR model the workload's requests name, by folder and content identity.
@@ -211,6 +271,9 @@ impl Workload {
                 }
             }
         }
+        if let Some(spec) = &self.template_search {
+            spec.validate()?;
+        }
         Ok(())
     }
 
@@ -228,6 +291,84 @@ impl Workload {
         }
         (full, roi)
     }
+}
+
+impl TemplateSearchSpec {
+    fn validate(&self) -> Result<(), BenchError> {
+        if self.scale_sets_milli.is_empty() {
+            return Err(invalid("template_search.scale_sets_milli is empty"));
+        }
+        for set in &self.scale_sets_milli {
+            let distinct: BTreeSet<u32> = set.iter().copied().collect();
+            if set.is_empty()
+                || distinct.len() != set.len()
+                || set
+                    .iter()
+                    .any(|factor| *factor == 0 || *factor > MAX_TEMPLATE_SCALE_MILLI)
+            {
+                return Err(invalid(format!(
+                    "template_search scale set {set:?} must hold distinct factors in 1..={MAX_TEMPLATE_SCALE_MILLI}"
+                )));
+            }
+        }
+        if self.suppress_iou_milli > 999 {
+            return Err(invalid(
+                "template_search.suppress_iou_milli must be in 0..=999",
+            ));
+        }
+        if self.templates.is_empty() {
+            return Err(invalid("template_search.templates is empty"));
+        }
+        let mut ids = BTreeSet::new();
+        for template in &self.templates {
+            let place = format!("template {:?}", template.id);
+            if template.id.trim().is_empty() || !ids.insert(template.id.as_str()) {
+                return Err(invalid(format!("{place}: id is empty or repeated")));
+            }
+            if !is_sha256(&template.sha256) {
+                return Err(invalid(format!(
+                    "{place}: sha256 is not 64 lowercase hexadecimal characters"
+                )));
+            }
+            if template.width == 0 || template.height == 0 {
+                return Err(invalid(format!("{place}: size is zero")));
+            }
+            if !template.threshold.is_finite()
+                || template.threshold <= 0.0
+                || template.threshold > 1.0
+            {
+                return Err(invalid(format!("{place}: threshold must be in (0, 1]")));
+            }
+            if template.mask.lower > template.mask.upper {
+                return Err(invalid(format!("{place}: mask lower exceeds upper")));
+            }
+            if template.png_hex.is_empty() {
+                return Err(invalid(format!("{place}: png_hex is empty")));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The bytes of lowercase hexadecimal text (a template's `png_hex`).
+pub fn decode_hex(text: &str) -> Result<Vec<u8>, BenchError> {
+    let digit = |byte: u8| match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        _ => None,
+    };
+    if !text.len().is_multiple_of(2) {
+        return Err(invalid("hexadecimal text has an odd length"));
+    }
+    text.as_bytes()
+        .chunks_exact(2)
+        .map(|pair| match (digit(pair[0]), digit(pair[1])) {
+            (Some(high), Some(low)) => Ok((high << 4) | low),
+            _ => Err(invalid(
+                "hexadecimal text holds a character outside 0-9 and a-f",
+            )),
+        })
+        .collect()
 }
 
 pub fn is_sha256(value: &str) -> bool {

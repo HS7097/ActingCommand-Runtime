@@ -43,6 +43,12 @@ pub enum BenchCode {
     BaselineInvalid,
     /// The report could not be written.
     OutputUnwritable,
+    /// Workflow #407 GPU-0b: a generated ONNX graph is malformed, or a model does not read back
+    /// as one.
+    GraphInvalid,
+    /// Workflow #407 GPU-0b: an exact score map or the direct enumeration failed for another
+    /// reason than its time limit.
+    TemplateSearchFailed,
 }
 
 impl BenchCode {
@@ -65,6 +71,8 @@ impl BenchCode {
             Self::InferenceFailed => "bench_inference_failed",
             Self::BaselineInvalid => "bench_baseline_invalid",
             Self::OutputUnwritable => "bench_output_unwritable",
+            Self::GraphInvalid => "bench_graph_invalid",
+            Self::TemplateSearchFailed => "bench_template_search_failed",
         }
     }
 
