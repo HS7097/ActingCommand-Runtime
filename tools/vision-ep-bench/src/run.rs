@@ -17,10 +17,10 @@ use crate::cli::{BenchMode, RunOptions};
 use crate::consistency::{self, BaselineReport};
 use crate::error::{BenchCode, BenchError};
 use crate::report::{
-    BenchIdentity, BlockOutput, CPU_EXECUTION_PROVIDER, ColdSection, CounterStatus, CudaSection,
-    EngineSection, HostSection, MemoryMark, ModelPlacement, ModelRow, ModuleRecord, REPORT_SCHEMA,
-    RawSection, Report, ReportStatus, RequestOutput, RequestRecord, RuntimeSection, SafetySection,
-    ShapeSummary, ShapeTiming, Variant, WorkloadSection,
+    BenchIdentity, BlockOutput, CPU_EXECUTION_PROVIDER, ColdSection, CounterStatus,
+    CudaModuleCheck, CudaSection, EngineSection, HostSection, MemoryMark, ModelPlacement, ModelRow,
+    REPORT_SCHEMA, RawSection, Report, ReportStatus, RequestOutput, RequestRecord, RuntimeSection,
+    SafetySection, ShapeSummary, ShapeTiming, Variant, WorkloadSection,
 };
 use crate::safety::{SafetyLimits, SafetyMonitor};
 use crate::stats::percentiles;
@@ -99,6 +99,7 @@ pub fn empty_report(options: &RunOptions) -> Report {
         placement: Vec::new(),
         template: None,
         modules: Vec::new(),
+        cuda_module_checks: Vec::new(),
         wall_clock_us: 0,
     }
 }
@@ -319,7 +320,7 @@ fn measure(
     // session; the provider and the NVIDIA libraries come from the runtime's own folder.
     if runtime.execution_provider == OnnxExecutionProvider::Cuda {
         report.modules = win::loaded_modules()?;
-        check_runtime_modules(&runtime, &report.modules, "after the first session")?;
+        check_runtime_modules(&runtime, report, "after the first session")?;
     }
     let started = Instant::now();
     let mut raw_recognizer =
@@ -389,7 +390,7 @@ fn measure(
                 .2 += 1;
         }
     }
-    for (source, input, regions) in detector_inputs.values() {
+    for (index, (source, input, regions)) in detector_inputs.values().enumerate() {
         let timing = time_raw(
             &mut raw_detector,
             input,
@@ -399,6 +400,12 @@ fn measure(
             monitor,
         )?;
         report.raw.detector.push(timing);
+        // Workflow #407 GPU-0e: cuDNN loads its sub-libraries by bare name at first use; after
+        // the first inference every cuDNN library loaded comes from the runtime's own folder.
+        if index == 0 && runtime.execution_provider == OnnxExecutionProvider::Cuda {
+            report.modules = win::loaded_modules()?;
+            check_runtime_modules(&runtime, report, "after the first inference")?;
+        }
     }
     mark(report, monitor, "after_raw_detector")?;
 
@@ -581,7 +588,7 @@ fn measure(
     phase(report, watcher, "modules");
     report.modules = win::loaded_modules()?;
     if runtime.execution_provider == OnnxExecutionProvider::Cuda {
-        check_runtime_modules(&runtime, &report.modules, "at the end of the run")?;
+        check_runtime_modules(&runtime, report, "at the end of the run")?;
     }
     if !placement_unread.is_empty() {
         phase(report, watcher, "placement");
@@ -701,6 +708,10 @@ pub(crate) fn initialise(
             .iter()
             .map(|library| library.path.display().to_string())
             .collect(),
+        dll_search_directory: runtime
+            .dll_search_directory
+            .as_ref()
+            .map(|directory| directory.display().to_string()),
         cuda_driver_version: facts.cuda_driver_version,
         resolved_cuda_device: facts.resolved_cuda_device.clone(),
         registered_execution_providers: plan.registered_execution_providers().to_vec(),
@@ -714,12 +725,44 @@ pub(crate) fn initialise(
 /// CUDA provider) is loaded from its declared path, and every loaded module named like a DLL of
 /// the runtime's folder (`ort\`: the NVIDIA libraries the provider imports or loads later, ONNX
 /// Runtime and its bridge) is loaded from that folder. A library that is not loaded, or a module
-/// from any other folder, is `bench_runtime_unavailable` naming the paths.
+/// from any other folder, is `bench_runtime_unavailable` naming the paths. Workflow #407 GPU-0e:
+/// so is every loaded `cudnn*64_9.dll`, whether the folder ships one of that name or not (cuDNN
+/// loads its sub-libraries by bare name); the check reads `report.modules` and records itself,
+/// with the cuDNN libraries loaded, in `report.cuda_module_checks`.
 pub(crate) fn check_runtime_modules(
     runtime: &VisionRuntimeSpec,
-    modules: &[ModuleRecord],
+    report: &mut Report,
     when: &str,
 ) -> Result<(), BenchError> {
+    let (cudnn_modules, problems) = runtime_module_problems(runtime, &report.modules, when)?;
+    report.cuda_module_checks.push(CudaModuleCheck {
+        when: when.to_owned(),
+        cudnn_modules,
+        problems: problems.clone(),
+    });
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(BenchError::new(
+            BenchCode::RuntimeUnavailable,
+            format!("the CUDA runtime modules {when}: {}", problems.join("; ")),
+        ))
+    }
+}
+
+/// Whether a module file name is one of cuDNN 9's libraries (`cudnn64_9.dll`,
+/// `cudnn_graph64_9.dll`, …), compared without case.
+fn is_cudnn9_library(file_name: &str) -> bool {
+    let name = file_name.to_lowercase();
+    name.starts_with("cudnn") && name.ends_with("64_9.dll")
+}
+
+/// The loaded cuDNN libraries and the problems [`check_runtime_modules`] names.
+fn runtime_module_problems(
+    runtime: &VisionRuntimeSpec,
+    modules: &[crate::report::ModuleRecord],
+    when: &str,
+) -> Result<(Vec<String>, Vec<String>), BenchError> {
     let unavailable = |detail: String| {
         BenchError::new(
             BenchCode::RuntimeUnavailable,
@@ -756,17 +799,27 @@ pub(crate) fn check_runtime_modules(
         })
         .map(|library| library.path.display().to_string())
         .collect();
+    let file_name = |module: &crate::report::ModuleRecord| {
+        Path::new(&module.path)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+    };
     let foreign: Vec<&str> = modules
         .iter()
         .filter(|module| {
             let path = Path::new(&module.path);
-            path.file_name()
-                .is_some_and(|name| shipped.contains(&name.to_string_lossy().to_lowercase()))
-                && !path
-                    .parent()
-                    .is_some_and(|parent| same_path(parent, folder))
+            file_name(*module).is_some_and(|name| {
+                shipped.contains(&name.to_lowercase()) || is_cudnn9_library(&name)
+            }) && !path
+                .parent()
+                .is_some_and(|parent| same_path(parent, folder))
         })
         .map(|module| module.path.as_str())
+        .collect();
+    let cudnn_modules: Vec<String> = modules
+        .iter()
+        .filter(|module| file_name(*module).is_some_and(|name| is_cudnn9_library(&name)))
+        .map(|module| module.path.clone())
         .collect();
     let mut problems = Vec::new();
     if !not_loaded.is_empty() {
@@ -779,11 +832,7 @@ pub(crate) fn check_runtime_modules(
             foreign.join(", ")
         ));
     }
-    if problems.is_empty() {
-        Ok(())
-    } else {
-        Err(unavailable(problems.join("; ")))
-    }
+    Ok((cudnn_modules, problems))
 }
 
 /// Whether two paths name the same file or folder: equal as absolute paths with letters compared

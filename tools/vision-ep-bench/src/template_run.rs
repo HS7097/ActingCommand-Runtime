@@ -147,6 +147,7 @@ pub(crate) fn measure(
     };
     let mut total = 0_usize;
     let mut failures = Vec::new();
+    let mut inference_checked = false;
     for template in &templates {
         for masked in [false, true] {
             for scales in &spec.scale_sets_milli {
@@ -154,6 +155,7 @@ pub(crate) fn measure(
                 let label = case_label(&template.spec.id, masked, scales);
                 run::phase(report, watcher, &format!("template {label}"));
                 let outcome = run_case(&context, template, masked, scales, &label, monitor);
+                let ran = outcome.is_ok();
                 let Some(section) = report.template.as_mut() else {
                     return Err(BenchError::new(
                         BenchCode::OutputUnwritable,
@@ -171,6 +173,16 @@ pub(crate) fn measure(
                         });
                     }
                     Err(error) => return Err(error),
+                }
+                // Workflow #407 GPU-0e: after the first case that ran its Conv graph, every
+                // cuDNN library loaded comes from the runtime's own folder.
+                if ran
+                    && !inference_checked
+                    && runtime.execution_provider == OnnxExecutionProvider::Cuda
+                {
+                    inference_checked = true;
+                    report.modules = win::loaded_modules()?;
+                    run::check_runtime_modules(&runtime, report, "after the first inference")?;
                 }
                 run::mark(report, monitor, &format!("after_template {label}"))?;
             }
@@ -197,7 +209,7 @@ pub(crate) fn measure(
     // Workflow #407 GPU-0d: after the CUDA sessions, the provider and the NVIDIA libraries come
     // from the runtime's own folder (a failed case is reported first, above).
     if runtime.execution_provider == OnnxExecutionProvider::Cuda {
-        run::check_runtime_modules(&runtime, &report.modules, "at the end of the run")?;
+        run::check_runtime_modules(&runtime, report, "at the end of the run")?;
     }
     Ok(())
 }

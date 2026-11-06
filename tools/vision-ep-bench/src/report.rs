@@ -55,7 +55,23 @@ pub struct Report {
     /// above stay empty in that mode.
     pub template: Option<TemplateSection>,
     pub modules: Vec<ModuleRecord>,
+    /// Workflow #407 GPU-0e: a CUDA run's module checks (after the first session, after the
+    /// first inference, at the end of the run), each with the cuDNN libraries loaded by then;
+    /// empty for CPU and DirectML.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub cuda_module_checks: Vec<CudaModuleCheck>,
     pub wall_clock_us: u64,
+}
+
+/// Workflow #407 GPU-0e: one check of a CUDA run's loaded modules.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CudaModuleCheck {
+    pub when: String,
+    /// Every loaded `cudnn*64_9.dll`, by its full path.
+    pub cudnn_modules: Vec<String>,
+    /// What failed the check (a module loaded from outside the runtime folder, a library ONNX
+    /// Runtime loads itself that is not loaded); empty when it passed.
+    pub problems: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -153,6 +169,10 @@ pub struct RuntimeSection {
     /// checked and never preloaded; absent for CPU and DirectML.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub onnxruntime_loaded_libraries: Vec<String>,
+    /// Workflow #407 GPU-0e: the folder the engine made part of the process's default DLL
+    /// search (for CUDA, the runtime folder); absent for CPU and DirectML.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dll_search_directory: Option<String>,
     pub cuda_driver_version: Option<u32>,
     pub resolved_cuda_device: Option<CudaDeviceIdentity>,
     pub registered_execution_providers: Vec<OnnxExecutionProvider>,

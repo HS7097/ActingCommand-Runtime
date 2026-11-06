@@ -89,7 +89,7 @@ impl NnEngine for OnnxClassifyModel {
 }
 
 /// Builds the classifier session from the verified bytes: CPU, or CUDA on the resolved device
-/// with CPU fallback disabled.
+/// with CPU fallback disabled (unless the plan allows it, Workflow #407 GPU-0e).
 pub(crate) fn load_session(
     model: &[u8],
     path: &Path,
@@ -105,15 +105,27 @@ pub(crate) fn load_session(
             let ordinal = plan.cuda_ordinal.ok_or_else(|| {
                 "CUDA classifier session plan is missing the resolved device ordinal".to_string()
             })?;
-            builder
+            // Workflow #407 GPU-0e (experiment branch only): as the OCR sessions' CUDA branch,
+            // CPU fallback stays disabled unless the plan allows it.
+            let fallback = if plan.cpu_fallback_disabled {
+                "CPU/DirectML/CoreML fallback is disabled"
+            } else {
+                "CPU fallback is allowed; DirectML/CoreML fallback is disabled"
+            };
+            let builder = builder
                 .with_execution_providers([cuda_provider(ordinal, &plan.tuning)])
                 .map_err(|err| {
                     format!(
-                        "failed to register required CUDA execution provider for device {ordinal}; CPU/DirectML/CoreML fallback is disabled: {err}"
+                        "failed to register required CUDA execution provider for device {ordinal}; {fallback}: {err}"
                     )
-                })?
-                .with_disable_cpu_fallback()
-                .map_err(|err| format!("failed to disable ONNXRuntime CPU fallback: {err}"))?
+                })?;
+            if plan.cpu_fallback_disabled {
+                builder
+                    .with_disable_cpu_fallback()
+                    .map_err(|err| format!("failed to disable ONNXRuntime CPU fallback: {err}"))?
+            } else {
+                builder
+            }
         }
         // Workflow #407 GPU-0a (experiment branch only): as the OCR sessions' DirectML branch;
         // GPU-0c: CPU fallback stays disabled unless the plan allows it.

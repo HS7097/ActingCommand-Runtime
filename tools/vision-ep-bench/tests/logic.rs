@@ -562,3 +562,207 @@ fn a_failed_provider_load_keeps_its_error_code_and_text() {
     assert!(stderr.contains(ort_message), "{stderr}");
     assert!(stderr.contains("GenericFailure"), "{stderr}");
 }
+
+/// Workflow #407 GPU-0e: `--cuda-cpu-fallback on` gives a CUDA session a plan that lets ONNX
+/// Runtime put the nodes CUDA cannot run on its CPU execution provider; `off`, the default,
+/// keeps CPU fallback disabled, as production's CUDA sessions have it. The knob belongs to CUDA
+/// alone: on the command line, in the session key (its digest changes only when it is set) and
+/// in the plan (DirectML's own knob does not open a CUDA plan, nor CUDA's a DirectML one).
+#[test]
+fn a_cuda_session_with_fallback_on_allows_cpu_nodes_and_off_refuses_them() {
+    use actingcommand_ppocr_onnx_json_provider::bench::{BenchRuntimeFacts, BenchSessionPlan};
+    use actingcommand_vision_ep_bench::cli::{Command, parse_args};
+    use actingcommand_vision_ffi::{
+        CudaDeviceIdentity, CudaDeviceSelector, OcrProviderOptions, OcrSessionKey,
+        OcrSessionKeyParts, OnnxExecutionProvider, OrtSessionTuning, VisionRuntimeSpec,
+    };
+    use std::path::PathBuf;
+
+    const IDENTITY: &str = "cuda-uuid:11111111111111111111111111111111";
+    let parse = |extra: &[&str]| {
+        let args: Vec<String> = [
+            "--vision-root",
+            r"C:\bench\rt-gpu",
+            "--workload",
+            "w.json",
+            "--out",
+            "o.json",
+        ]
+        .iter()
+        .chain(extra.iter())
+        .map(|arg| (*arg).to_owned())
+        .collect();
+        parse_args(&args)
+    };
+    let run = |extra: &[&str]| match parse(extra) {
+        Ok(Command::Run(options)) => (options.tuning, options.label),
+        other => panic!("{extra:?} parsed to {other:?}"),
+    };
+
+    // The command line: off by default, `off` and `on` as asked, CUDA only.
+    let strict_cuda = ["--ep", "cuda", "--device", "0"];
+    let (default_tuning, default_label) = run(&strict_cuda);
+    assert!(!default_tuning.cuda_cpu_fallback);
+    assert_eq!(default_tuning, OrtSessionTuning::default());
+    assert_eq!(default_label, "cuda0-default");
+    let (off, off_label) = run(&[&strict_cuda[..], &["--cuda-cpu-fallback", "off"][..]].concat());
+    assert!(!off.cuda_cpu_fallback);
+    assert_eq!(off_label, "cuda0-default");
+    let (on, on_label) = run(&[&strict_cuda[..], &["--cuda-cpu-fallback", "on"][..]].concat());
+    assert!(on.cuda_cpu_fallback);
+    assert!(!on.directml_cpu_fallback);
+    assert!(on.cuda_is_default());
+    assert_eq!(on_label, "cuda0-default-fallback");
+    let (tuned_on, tuned_label) = run(&[
+        &strict_cuda[..],
+        &[
+            "--cuda-conv-search",
+            "heuristic",
+            "--cuda-tf32",
+            "off",
+            "--cuda-cpu-fallback",
+            "on",
+        ][..],
+    ]
+    .concat());
+    assert!(tuned_on.cuda_cpu_fallback);
+    assert_eq!(tuned_label, "cuda0-tuned-fallback");
+    for refused in [
+        &["--ep", "cpu", "--cuda-cpu-fallback", "on"][..],
+        &[
+            "--ep",
+            "directml",
+            "--device",
+            "1",
+            "--cuda-cpu-fallback",
+            "on",
+        ][..],
+        &[
+            "--ep",
+            "cuda",
+            "--device",
+            "0",
+            "--cuda-cpu-fallback",
+            "yes",
+        ][..],
+        &[
+            "--ep",
+            "cuda",
+            "--device",
+            "0",
+            "--directml-cpu-fallback",
+            "on",
+        ][..],
+    ] {
+        let error = parse(refused).expect_err("refused");
+        assert_eq!(error.code, BenchCode::CliInvalid, "{refused:?}: {error}");
+    }
+
+    // The plan: with fallback on a CUDA session registers CUDA alone and leaves CPU fallback
+    // allowed, so ONNX Runtime may place nodes on its CPU EP; off keeps it disabled.
+    let runtime = |execution_provider: OnnxExecutionProvider, tuning: OrtSessionTuning| {
+        let ort = PathBuf::from(r"C:\bench\rt-gpu\ort");
+        VisionRuntimeSpec {
+            onnxruntime_library: ort.join("onnxruntime.dll"),
+            runtime_library_closure: vec![ort.join("onnxruntime.dll")],
+            expected_onnxruntime_sha256: None,
+            execution_provider,
+            cuda_device: (execution_provider == OnnxExecutionProvider::Cuda).then(|| {
+                CudaDeviceSelector {
+                    ordinal: 0,
+                    expected_stable_identity: IDENTITY.to_owned(),
+                }
+            }),
+            directml_device_id: (execution_provider == OnnxExecutionProvider::Directml)
+                .then_some(1),
+            session_tuning: tuning,
+            onnxruntime_loaded_libraries: Vec::new(),
+            dll_search_directory: None,
+        }
+    };
+    let device = CudaDeviceIdentity {
+        ordinal: 0,
+        stable_identity: IDENTITY.to_owned(),
+        pci_bus_id: Some("0000:01:00.0".to_owned()),
+    };
+    let facts = |execution_provider: OnnxExecutionProvider| BenchRuntimeFacts {
+        onnxruntime_library: PathBuf::from(r"C:\bench\rt-gpu\ort\onnxruntime.dll"),
+        onnxruntime_version: "1.24.0-test".to_owned(),
+        onnxruntime_sha256: "d".repeat(64),
+        executable_sha256: "e".repeat(64),
+        resolved_cuda_device: (execution_provider == OnnxExecutionProvider::Cuda)
+            .then(|| device.clone()),
+        cuda_driver_version: (execution_provider == OnnxExecutionProvider::Cuda).then_some(13_000),
+        onnxruntime_build_info: "test build".to_owned(),
+    };
+    let plan = |execution_provider: OnnxExecutionProvider, tuning: OrtSessionTuning| {
+        BenchSessionPlan::for_runtime(
+            &runtime(execution_provider, tuning),
+            &facts(execution_provider),
+        )
+        .expect("a plan")
+    };
+    let cuda = OnnxExecutionProvider::Cuda;
+    for (tuning, allows) in [
+        (on, true),
+        (tuned_on, true),
+        (off, false),
+        (default_tuning, false),
+    ] {
+        let built = plan(cuda, tuning);
+        assert_eq!(built.execution_provider(), cuda);
+        assert_eq!(built.registered_execution_providers(), [cuda]);
+        assert!(!built.cpu_ep_registered());
+        assert_eq!(built.cpu_fallback_disabled(), !allows, "{tuning:?}");
+    }
+    let directml_knob = OrtSessionTuning {
+        directml_cpu_fallback: true,
+        ..OrtSessionTuning::default()
+    };
+    assert!(plan(cuda, directml_knob).cpu_fallback_disabled());
+    assert!(plan(OnnxExecutionProvider::Directml, on).cpu_fallback_disabled());
+    assert!(!plan(OnnxExecutionProvider::Directml, directml_knob).cpu_fallback_disabled());
+
+    // The session key: only a CUDA key may carry the knob, and only a set knob changes the
+    // digest, so the strict key keeps production's digest.
+    let parts = |backend: OnnxExecutionProvider| OcrSessionKeyParts {
+        engine_binding_sha256: "e".repeat(64),
+        runtime_library_path: "onnxruntime.dll".to_owned(),
+        runtime_library_sha256: "d".repeat(64),
+        onnxruntime_version: "1.24.0-test".to_owned(),
+        model_ref: "test-ocr-model".to_owned(),
+        model_sha256: "a".repeat(64),
+        requested_backend: backend,
+        requested_cuda_device: (backend == cuda).then(|| CudaDeviceSelector {
+            ordinal: 0,
+            expected_stable_identity: IDENTITY.to_owned(),
+        }),
+        resolved_cuda_device: (backend == cuda).then(|| device.clone()),
+    };
+    let options = |directml_device: Option<u32>, tuning: OrtSessionTuning| OcrProviderOptions {
+        directml_device,
+        tuning,
+    };
+    let production = OcrSessionKey::from_parts(parts(cuda)).expect("a strict CUDA key");
+    let strict = OcrSessionKey::from_parts_with_options(parts(cuda), &options(None, off))
+        .expect("a strict CUDA key");
+    let allowing = OcrSessionKey::from_parts_with_options(parts(cuda), &options(None, on))
+        .expect("a CUDA key that allows CPU fallback");
+    assert_eq!(
+        strict.provider_options_sha256(),
+        production.provider_options_sha256()
+    );
+    assert_ne!(
+        allowing.provider_options_sha256(),
+        strict.provider_options_sha256()
+    );
+    for (backend, directml_device) in [
+        (OnnxExecutionProvider::Cpu, None),
+        (OnnxExecutionProvider::Directml, Some(1)),
+    ] {
+        let error =
+            OcrSessionKey::from_parts_with_options(parts(backend), &options(directml_device, on))
+                .expect_err("only a CUDA key carries the CUDA knob");
+        assert_eq!(error.code(), VisionFfiErrorCode::InvalidRequest, "{error}");
+    }
+}

@@ -5,6 +5,7 @@
 //! ```text
 //! ac-vision-ep-bench [--mode ocr] --vision-root <dir> --ep cpu|cuda|directml [--device <n>]
 //!     [--cpu-threads <n>] [--cuda-conv-search exhaustive|heuristic] [--cuda-tf32 on|off]
+//!     [--cuda-cpu-fallback on|off] [--directml-cpu-fallback on|off]
 //!     --workload <json> [--warmup 3] [--reps 20] --out <json>
 //!     [--models-dir <dir>] [--label <name>] [--baseline <json>]
 //! ac-vision-ep-bench --mode template --vision-root <dir> --ep cpu|cuda|directml [--device <n>]
@@ -23,6 +24,9 @@
 //! ONNX Runtime place the nodes DirectML cannot run on its CPU execution provider. `--probe-dlls`
 //! loads every DLL of one runtime folder with the engine's `LoadLibraryExW` flags and names the
 //! dependency a failing one misses (`probe.rs`); it stands alone, as `--list-adapters` does.
+//!
+//! Workflow #407 GPU-0e: `--cuda-cpu-fallback on|off` (default `off`, `cuda` only) mirrors it for
+//! CUDA: ONNX Runtime may place the nodes CUDA cannot run on its CPU execution provider.
 //!
 //! Workflow #407 GPU-0b: `--mode template` searches the workload's templates over every whole
 //! frame (`template_run.rs`); there `--reps` counts the repetitions per frame, and
@@ -87,6 +91,7 @@ const VALUE_FLAGS: &[&str] = &[
     "--cuda-conv-search",
     "--cuda-tf32",
     "--directml-cpu-fallback",
+    "--cuda-cpu-fallback",
     "--workload",
     "--warmup",
     "--reps",
@@ -230,6 +235,20 @@ pub fn parse_args(args: &[String]) -> Result<Command, BenchError> {
             }
         };
     }
+    if let Some(value) = values.get("--cuda-cpu-fallback") {
+        if execution_provider != OnnxExecutionProvider::Cuda {
+            return Err(cli("--cuda-cpu-fallback belongs to --ep cuda only"));
+        }
+        tuning.cuda_cpu_fallback = match *value {
+            "on" => true,
+            "off" => false,
+            other => {
+                return Err(cli(format!(
+                    "--cuda-cpu-fallback {other:?} is not on or off"
+                )));
+            }
+        };
+    }
     let warmup = values
         .get("--warmup")
         .map(|value| parse_number::<u32>("--warmup", value))
@@ -272,7 +291,7 @@ pub fn parse_args(args: &[String]) -> Result<Command, BenchError> {
 }
 
 /// The variant name of design §1.2 when no `--label` is given, e.g. `cpu-1t`, `cuda0-default`,
-/// `cuda0-tuned`, `dml1`, `dml1-fallback`.
+/// `cuda0-tuned`, `cuda0-default-fallback`, `dml1`, `dml1-fallback`.
 pub fn default_label(
     execution_provider: OnnxExecutionProvider,
     device: Option<u32>,
@@ -281,10 +300,19 @@ pub fn default_label(
     let device = device.map(|device| device.to_string()).unwrap_or_default();
     match execution_provider {
         OnnxExecutionProvider::Cpu => format!("cpu-{}t", tuning.intra_threads),
-        OnnxExecutionProvider::Cuda if tuning.cuda_is_default() => {
-            format!("cuda{device}-default")
-        }
-        OnnxExecutionProvider::Cuda => format!("cuda{device}-tuned"),
+        OnnxExecutionProvider::Cuda => format!(
+            "cuda{device}-{}{}",
+            if tuning.cuda_is_default() {
+                "default"
+            } else {
+                "tuned"
+            },
+            if tuning.cuda_cpu_fallback {
+                "-fallback"
+            } else {
+                ""
+            }
+        ),
         OnnxExecutionProvider::Directml if tuning.directml_cpu_fallback => {
             format!("dml{device}-fallback")
         }

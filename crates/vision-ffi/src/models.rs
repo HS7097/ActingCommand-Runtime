@@ -66,6 +66,12 @@ pub struct VisionRuntimeSpec {
     /// loaded before ONNX Runtime has set up its provider bridge, the CUDA provider's
     /// initialisation fails (Win32 error 1114).
     pub onnxruntime_loaded_libraries: Vec<OnnxRuntimeLoadedLibrary>,
+    /// Workflow #407 GPU-0e (experiment branch only): the folder the engine makes part of the
+    /// process's default DLL search before ONNX Runtime is initialised (for CUDA, `ort\`), for
+    /// the libraries the runtime's own libraries load later by bare name: cuDNN 9 loads its
+    /// sub-libraries (`cudnn_graph64_9.dll` and the others) that way at first use. `None` for
+    /// CPU and DirectML, whose search stays as it is.
+    pub dll_search_directory: Option<PathBuf>,
 }
 
 /// Workflow #407 GPU-0d (experiment branch only): a library ONNX Runtime loads itself; the
@@ -104,7 +110,8 @@ impl VisionRuntimeSpec {
     /// The ONNX Runtime of a vision root: `ort\onnxruntime_providers_shared.dll` when present,
     /// then, for DirectML, `ort\DirectML.dll`, then `ort\onnxruntime.dll`, loaded in that order.
     /// For CUDA, `ort\onnxruntime_providers_cuda.dll` must be there too; ONNX Runtime loads it
-    /// itself (Workflow #407 GPU-0d). Only file metadata is read; a required library that is
+    /// itself (Workflow #407 GPU-0d), and `ort\` is the runtime's DLL search folder (Workflow
+    /// #407 GPU-0e). Only file metadata is read; a required library that is
     /// missing fails. The DirectML adapter and the tuning knobs are set by the caller (Workflow
     /// #407 GPU-0a, experiment branch only).
     pub fn from_vision_root(
@@ -137,6 +144,7 @@ impl VisionRuntimeSpec {
         }
         runtime_library_closure.push(onnxruntime_library.clone());
         let mut onnxruntime_loaded_libraries = Vec::new();
+        let mut dll_search_directory = None;
         if execution_provider == OnnxExecutionProvider::Cuda {
             let cuda = directory.join(ONNXRUNTIME_CUDA_PROVIDER_LIBRARY);
             if !runtime_file(&cuda)? {
@@ -152,6 +160,9 @@ impl VisionRuntimeSpec {
                 path: cuda,
                 expected_sha256: None,
             });
+            // Workflow #407 GPU-0e (experiment branch only): cuDNN loads its sub-libraries by
+            // bare name from the process's default DLL search; the runtime folder joins it.
+            dll_search_directory = Some(directory.clone());
         }
         Ok(Self {
             onnxruntime_library,
@@ -162,6 +173,7 @@ impl VisionRuntimeSpec {
             directml_device_id: None,
             session_tuning: OrtSessionTuning::default(),
             onnxruntime_loaded_libraries,
+            dll_search_directory,
         })
     }
 }

@@ -232,6 +232,121 @@ fn load_process_runtime_library(path: &Path) -> VisionFfiResult<Arc<Library>> {
     Ok(Arc::new(library.into()))
 }
 
+/// Workflow #407 GPU-0e (experiment branch only): the folder [`add_process_dll_search_directory`]
+/// made part of the process's default DLL search; set once per process.
+#[cfg(windows)]
+static PROCESS_DLL_SEARCH_DIRECTORY: Mutex<Option<PathBuf>> = Mutex::new(None);
+/// `SetDefaultDllDirectories`: the application folder, the folders added with `AddDllDirectory`
+/// and System32, in that order.
+#[cfg(windows)]
+const LOAD_LIBRARY_SEARCH_DEFAULT_DIRS: u32 = 0x0000_1000;
+
+/// Workflow #407 GPU-0e (experiment branch only): makes `directory` part of the process's
+/// default DLL search, for the libraries the runtime's own libraries load later by bare name
+/// (cuDNN 9 loads its sub-libraries, `cudnn_graph64_9.dll` and the others, that way at first
+/// use). `AddDllDirectory` adds the folder;
+/// `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS)` makes every later load that
+/// passes no `LOAD_LIBRARY_SEARCH_*` flag search the application folder, the added folder and
+/// System32 (no longer the current folder, the Windows folder or `PATH`); `AddDllDirectory`
+/// alone reaches only loads that pass `LOAD_LIBRARY_SEARCH_USER_DIRS`.
+/// A load that passes its own `LOAD_LIBRARY_SEARCH_*` flags, as the runtime-library closure's
+/// do, is not affected, and the setting applies to this process only (`SetDllDirectoryW`, the
+/// other documented way, keeps one slot any component can replace and also changes the search
+/// of child processes). Once per process: the same folder again is a no-op; another folder
+/// fails until restart. A failed call fails with its Win32 error, and a folder added before
+/// `SetDefaultDllDirectories` failed is removed again.
+#[cfg(windows)]
+pub fn add_process_dll_search_directory(directory: &Path) -> VisionFfiResult<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn AddDllDirectory(new_directory: *const u16) -> *mut c_void;
+        fn RemoveDllDirectory(cookie: *mut c_void) -> i32;
+        fn SetDefaultDllDirectories(directory_flags: u32) -> i32;
+    }
+
+    if !directory.is_absolute() {
+        return Err(runtime_closure_error(format!(
+            "the DLL search folder of the native OCR runtime must be absolute: {}",
+            directory.display()
+        )));
+    }
+    let mut current = PROCESS_DLL_SEARCH_DIRECTORY.lock().map_err(|_| {
+        runtime_closure_error(
+            "the process DLL search folder state is poisoned; restart is required",
+        )
+    })?;
+    if let Some(current) = &*current {
+        return if current == directory {
+            Ok(())
+        } else {
+            Err(runtime_closure_error(format!(
+                "the process DLL search already holds {}; refusing {}; restart is required",
+                current.display(),
+                directory.display()
+            )))
+        };
+    }
+    let wide: Vec<u16> = directory
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    // SAFETY: `wide` is a NUL-terminated UTF-16 path that outlives the call.
+    let cookie = unsafe { AddDllDirectory(wide.as_ptr()) };
+    if cookie.is_null() {
+        let error = std::io::Error::last_os_error();
+        return Err(runtime_closure_error(format!(
+            "AddDllDirectory({}) failed: {}",
+            directory.display(),
+            win32_error_text(&error)
+        )));
+    }
+    // SAFETY: the documented flag value; no pointer is passed.
+    if unsafe { SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS) } == 0 {
+        let error = std::io::Error::last_os_error();
+        // SAFETY: `cookie` is the non-null value AddDllDirectory returned above, removed once.
+        let removed = if unsafe { RemoveDllDirectory(cookie) } != 0 {
+            "the added folder was removed again".to_string()
+        } else {
+            format!(
+                "RemoveDllDirectory failed too: {}",
+                win32_error_text(&std::io::Error::last_os_error())
+            )
+        };
+        return Err(runtime_closure_error(format!(
+            "SetDefaultDllDirectories(0x{LOAD_LIBRARY_SEARCH_DEFAULT_DIRS:08x}) failed after AddDllDirectory({}): {}; {removed}",
+            directory.display(),
+            win32_error_text(&error)
+        )));
+    }
+    *current = Some(directory.to_path_buf());
+    Ok(())
+}
+
+#[cfg(not(windows))]
+pub fn add_process_dll_search_directory(_directory: &std::path::Path) -> VisionFfiResult<()> {
+    Ok(())
+}
+
+/// `Win32 error <n> (0x…): <system message>`, or the error's own text without a code.
+#[cfg(windows)]
+fn win32_error_text(error: &std::io::Error) -> String {
+    match error.raw_os_error() {
+        Some(code) => {
+            let text = error.to_string();
+            let message = text
+                .strip_suffix(&format!(" (os error {code})"))
+                .unwrap_or(&text)
+                .trim()
+                .to_string();
+            format!("Win32 error {code} (0x{:08X}): {message}", code as u32)
+        }
+        None => format!("no Win32 error reported: {error}"),
+    }
+}
+
 /// Issues the next process-unique OCR session identity.
 pub fn next_ocr_session_id() -> VisionFfiResult<OcrSessionId> {
     next_sequence(&NEXT_OCR_SESSION_SEQUENCE, "OCR session").map(OcrSessionId::from_sequence)

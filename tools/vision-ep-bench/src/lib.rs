@@ -23,6 +23,12 @@
 //! allow CPU fallback (`--directml-cpu-fallback on`), and every GPU run records where ONNX
 //! Runtime placed each model's nodes, read from its verbose session log (`report.rs`
 //! `ModelPlacement`).
+//!
+//! Workflow #407 GPU-0e: for CUDA the engine makes the runtime folder part of the process's
+//! default DLL search before ONNX Runtime is initialised (cuDNN 9 loads its sub-libraries by bare
+//! name), the bench checks after the first session, after the first inference and at the end that
+//! every cuDNN library loaded comes from that folder, and CUDA may allow CPU fallback
+//! (`--cuda-cpu-fallback on`), recorded with its node placement as DirectML's is.
 
 pub mod cli;
 pub mod consistency;

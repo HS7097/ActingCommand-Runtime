@@ -22,9 +22,10 @@ use actingcommand_vision_ffi::{
     OcrProviderOptions, OcrRuntimeBuildIdentity, OcrSessionBinding, OcrSessionId, OcrSessionKey,
     OcrSessionKeyParts, OcrTextBlock, OnnxExecutionProvider, OrtSessionTuning, VisionBackendKind,
     VisionFfiError, VisionFfiErrorCode, VisionFfiResult, VisionFrameView, VisionModelLoader,
-    VisionPixelFormat, VisionRect, VisionRuntimeSpec, enumerate_cuda_devices,
-    establish_process_runtime_library_closure, next_ocr_invocation_id, ocr_engine_binding_sha256,
-    onnxruntime_version_string, ppocr_model_set_sha256, sha256_file_hex, sha256_hex,
+    VisionPixelFormat, VisionRect, VisionRuntimeSpec, add_process_dll_search_directory,
+    enumerate_cuda_devices, establish_process_runtime_library_closure, next_ocr_invocation_id,
+    ocr_engine_binding_sha256, onnxruntime_version_string, ppocr_model_set_sha256, sha256_file_hex,
+    sha256_hex,
 };
 use actingcommand_vision_ffi::{
     PPOCR_MAX_DIAGNOSTIC_REPORTS, PpocrCpuAssignedNodeDiagnostic as CpuAssignedNodeDiagnostic,
@@ -127,10 +128,15 @@ impl ProviderSessionPlan {
             .directml_device_id
             .and_then(|device| i32::try_from(device).ok());
         self.tuning = runtime.session_tuning;
-        // Workflow #407 GPU-0c: a DirectML plan may allow CPU fallback; no other plan changes.
-        if self.resolved_execution_provider == OnnxExecutionProvider::Directml
-            && self.tuning.directml_cpu_fallback
-        {
+        // Workflow #407 GPU-0c: a DirectML plan may allow CPU fallback; GPU-0e: so may a CUDA
+        // plan, by its own knob. No other plan changes, and the CPU EP stays unregistered:
+        // ONNX Runtime adds it itself for the nodes it places there.
+        let fallback_allowed = match self.resolved_execution_provider {
+            OnnxExecutionProvider::Cpu => false,
+            OnnxExecutionProvider::Cuda => self.tuning.cuda_cpu_fallback,
+            OnnxExecutionProvider::Directml => self.tuning.directml_cpu_fallback,
+        };
+        if fallback_allowed {
             self.cpu_fallback_disabled = false;
         }
         self
@@ -839,12 +845,10 @@ fn establish_runtime(spec: &VisionRuntimeSpec) -> VisionFfiResult<RuntimeFacts> 
         &spec.runtime_library_closure,
         &spec.onnxruntime_loaded_libraries,
     )?;
-    let onnxruntime_version = onnxruntime_version_string(library)?;
-    ORT_RUNTIME.ensure(library).map_err(unavailable)?;
-    let executable = std::env::current_exe().map_err(|error| {
-        unavailable(format!("the running executable cannot be located: {error}"))
-    })?;
-    let executable_sha256 = sha256_file_hex(ENGINE_MODULE, &executable)?;
+    // Workflow #407 GPU-0e (experiment branch only): the CUDA device inventory (the engine's own
+    // load of the CUDA driver by bare name) runs before the runtime folder joins the process's
+    // default DLL search, so that load resolves as it did; the folder joins it before ONNX
+    // Runtime is initialised, so cuDNN's own later loads of its sub-libraries find them there.
     let (resolved_cuda_device, cuda_driver_version) = match spec.execution_provider {
         OnnxExecutionProvider::Cpu => {
             if spec.cuda_device.is_some() {
@@ -883,6 +887,22 @@ fn establish_runtime(spec: &VisionRuntimeSpec) -> VisionFfiResult<RuntimeFacts> 
             )
         }
     };
+    if let Some(directory) = &spec.dll_search_directory {
+        if spec.execution_provider != OnnxExecutionProvider::Cuda {
+            return Err(VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::InvalidRequest,
+                ENGINE_MODULE,
+                "only a CUDA runtime changes the process's DLL search; CPU and DirectML keep it as it is",
+            ));
+        }
+        add_process_dll_search_directory(directory)?;
+    }
+    let onnxruntime_version = onnxruntime_version_string(library)?;
+    ORT_RUNTIME.ensure(library).map_err(unavailable)?;
+    let executable = std::env::current_exe().map_err(|error| {
+        unavailable(format!("the running executable cannot be located: {error}"))
+    })?;
+    let executable_sha256 = sha256_file_hex(ENGINE_MODULE, &executable)?;
     Ok(RuntimeFacts {
         onnxruntime_library: library.clone(),
         onnxruntime_version,
@@ -1101,9 +1121,10 @@ impl std::fmt::Display for OrtStepFailure {
 
 /// Workflow #407 GPU-0c (experiment branch only): the session builder of `plan` with every
 /// option the engine sets before the model, so the engine's sessions and the bench's
-/// node-placement sessions cannot differ. CUDA keeps CPU fallback disabled; DirectML needs the
-/// memory pattern off and sequential execution (one session never runs concurrently: the
-/// engine's `&mut` session guarantees that) and disables CPU fallback unless the plan allows it.
+/// node-placement sessions cannot differ. CUDA disables CPU fallback unless the plan allows it
+/// (Workflow #407 GPU-0e); DirectML needs the memory pattern off and sequential execution (one
+/// session never runs concurrently: the engine's `&mut` session guarantees that) and disables
+/// CPU fallback unless the plan allows it.
 fn configured_session_builder(
     plan: &ProviderSessionPlan,
 ) -> Result<ort::session::builder::SessionBuilder, OrtStepFailure> {
@@ -1121,18 +1142,24 @@ fn configured_session_builder(
                     "CUDA OCR session plan is missing the resolved device ordinal",
                 )
             })?;
+            let fallback = if plan.cpu_fallback_disabled {
+                "CPU/DirectML/CoreML fallback is disabled"
+            } else {
+                "CPU fallback is allowed; DirectML/CoreML fallback is disabled"
+            };
             let builder = builder
                 .with_execution_providers([cuda_provider(ordinal, &plan.tuning)])
                 .map_err(|err| {
                     OrtStepFailure::ort(
                         format!(
-                            "failed to register required CUDA execution provider for device {ordinal}; CPU/DirectML/CoreML fallback is disabled"
+                            "failed to register required CUDA execution provider for device {ordinal}; {fallback}"
                         ),
                         &err,
                     )
                 })?;
-            // Every CUDA plan disables CPU fallback; only the bench's node-placement twin of a
-            // failed strict session clears it, to name the nodes ONNX Runtime put on the CPU.
+            // A CUDA plan disables CPU fallback unless its tuning allows it (Workflow #407
+            // GPU-0e, `cuda_cpu_fallback`); the bench's node-placement twin of a failed strict
+            // session clears it too, to name the nodes ONNX Runtime put on the CPU.
             if plan.cpu_fallback_disabled {
                 builder.with_disable_cpu_fallback().map_err(|err| {
                     OrtStepFailure::ort("failed to disable PPOCR CPU fallback", &err)
@@ -1207,10 +1234,17 @@ fn commit_ort_session(
                     path.display()
                 )
             }
+            // Workflow #407 GPU-0e: a strict CUDA session keeps its text; one that allows CPU
+            // fallback says so.
             OnnxExecutionProvider::Cuda => format!(
-                "failed to load CUDA PPOCR ONNX model {} on device {}",
+                "failed to load CUDA PPOCR ONNX model {} on device {}{}",
                 path.display(),
-                plan.cuda_ordinal.unwrap_or_default()
+                plan.cuda_ordinal.unwrap_or_default(),
+                if plan.cpu_fallback_disabled {
+                    ""
+                } else {
+                    " (CPU fallback allowed)"
+                }
             ),
             OnnxExecutionProvider::Directml => format!(
                 "failed to load DirectML PPOCR ONNX model {} on adapter {} ({})",

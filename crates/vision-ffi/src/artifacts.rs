@@ -262,6 +262,15 @@ impl OcrSessionKey {
                 "only a DirectML session may allow CPU fallback",
             ));
         }
+        if options.tuning.cuda_cpu_fallback
+            && parts.requested_backend != OnnxExecutionProvider::Cuda
+        {
+            return Err(VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::InvalidRequest,
+                "ocr_session_key",
+                "only a CUDA session may allow CUDA CPU fallback",
+            ));
+        }
         let provider_options_sha256 = ppocr_provider_options_sha256(
             parts.requested_backend,
             parts.requested_cuda_device.as_ref(),
@@ -549,6 +558,11 @@ pub struct OrtSessionTuning {
     /// DirectML cannot run on its CPU execution provider; the default keeps CPU fallback
     /// disabled, as for every GPU session.
     pub directml_cpu_fallback: bool,
+    /// Workflow #407 GPU-0e: CUDA sessions only. When set, ONNX Runtime may place the nodes CUDA
+    /// cannot run on its CPU execution provider; the default keeps CPU fallback disabled, as
+    /// production's CUDA sessions do. It is no provider registration knob, so
+    /// [`Self::cuda_is_default`] does not read it.
+    pub cuda_cpu_fallback: bool,
 }
 
 impl Default for OrtSessionTuning {
@@ -558,6 +572,7 @@ impl Default for OrtSessionTuning {
             cuda_conv_algorithm_search: CudaConvAlgorithmSearch::Exhaustive,
             cuda_tf32: true,
             directml_cpu_fallback: false,
+            cuda_cpu_fallback: false,
         }
     }
 }
@@ -672,6 +687,10 @@ fn ppocr_provider_options_sha256(
     // Workflow #407 GPU-0c (experiment branch only): hashed only when set, as above.
     if options.tuning.directml_cpu_fallback {
         hasher.update(b"directml_cpu_fallback\0true\0");
+    }
+    // Workflow #407 GPU-0e (experiment branch only): hashed only when set, as above.
+    if options.tuning.cuda_cpu_fallback {
+        hasher.update(b"cuda_cpu_fallback\0true\0");
     }
     if let Some(selector) = selector {
         hasher.update(b"requested_ordinal\0");
