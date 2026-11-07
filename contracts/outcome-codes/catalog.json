@@ -5547,6 +5547,9 @@
         },
         "placement_unread": {
           "description": "The node placement of a DirectML session could not be read in full."
+        },
+        "inference_failed": {
+          "description": "ONNX Runtime's run of a DirectML session failed (the device was removed or reset); the model is built again, and when the first run after that fails too, the model runs on the CPU (Workflow #407 GPU-1 E)."
         }
       }
     },

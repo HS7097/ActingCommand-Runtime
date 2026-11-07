@@ -7840,6 +7840,48 @@ Runtime's evidence, rows and status are unchanged.
 **C rollback** (to 0.12.43). Nothing persisted that a reader of 0.12.43 cannot read: a
 `directml` OCR row is free text of the same shape.
 
+#### Slice GPU-1 E (0.12.44): the rebuild after a failed GPU run
+
+Design §7 row E and §9 Q8 (the coordinator chose to do E); coordinator work order
+`rd-1031/perf-407/brief-gpu1e.md`; on main `f9178458` (slices A, D, B1, B2 and C merged). The
+contract is [vision-model-folders.md](vision-model-folders.md) ("Fallback to the CPU", "After a
+failed run").
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| GE-1 | a failed run of a DirectML session (any ONNX Runtime error of the run, not the watchdog's timeout) is the engine's `ProviderUnavailable`, `DirectML cannot be used (inference_failed): <the run's message>; <what the next load does>`; a CPU or CUDA session's failed run keeps `ProviderFailure` and its message | behaviour | GPU-1 E | the engine | design §9 Q8 (the device was removed or reset); `ProviderInvokeError::Run` keeps ONNX Runtime's status beside the message; a run error that is no device fault counts too, so it also builds the model again and, failing again, moves it to the CPU |
+| GE-2 | the kernel unloads, never retires, an OCR engine that answers `ProviderUnavailable` while the execution status of its load (B2's `OcrModelLoad::Loaded.execution`, read since C fix 2) names a provider other than the CPU: its place among the loaded models is freed, its status leaves with it, and the next request loads the model again | behaviour | GPU-1 E | — | an engine on the CPU, one without an execution status, an NN engine and every other failure keep today's behaviour; a panic still retires; under `refuse` a detector whose adapter no longer resolves (B2's `ProviderUnavailable`) now unloads its model too, so GB1-7's "until the model is loaded again" is the next request |
+| GE-3 | each DirectML model's GPU-run history, `sound`, `rebuilt` or on the CPU with its warning, kept by model reference and content for the life of the process (`GPU_RUNS` in the engine) across the model's loads | in-process state | GPU-1 E | the engine | a failed DirectML run makes a sound model `rebuilt`; the first invocation of the rebuilt model decides: a success makes it sound again, a failed run under `gpu_fallback` `cpu` puts it on the CPU, under `refuse` it stays `rebuilt`; a timeout, or a failure that is no run, changes nothing |
+| GE-4 | a load of a model on the CPU after GE-3 runs it whole on the CPU (B2's `directml` key without a resolved adapter, `cpu_model`, `fallback_observed` true) with that one warning, every load until the process ends; every other load starts on B2's route, so a rebuild resolves its adapter again and falls back as B2 does | behaviour | GPU-1 E | the engine | the status shows the warning while the model is loaded (C fix 2) |
+| GE-5 | the `gpu_unavailable_reason` token `inference_failed`; GE-4's warning `vision_gpu_unavailable` carries it with `execution_provider` `directml`, `gpu_fallback` `cpu`, `model_name` and ONNX Runtime's status of the second failed run as its `caused_by` link | vocabulary token, outcome | GPU-1 E | the engine | no new code or key |
+
+**E tests.** New: exec row "#407 GPU-1 E" (`gate_407_gpu1e`, a fake ONNX Runtime that writes the
+verbose placement log, failed runs with a fake ONNX Runtime status, fake adapters; no GPU, no
+ONNX Runtime, no sleep): `a_failed_gpu_run_rebuilds_the_model_once_then_falls_back`. No existing
+test changed.
+
+**E interface.** None: `actingd-config` 27, `ledger` 7, `runtime-client` 6, `package` 7,
+`runtime-outcomes` 1. The history, the failed run and the unload stay in-process; the warning
+reaches only the status, as B2's do; the token is spelling (design §6.2).
+
+**Where E differs from its work order's letter.** (a) No token of `gpu_unavailable_reason` names a
+failed run, and the code rule prefers a value of the one domain code to a new code, so
+`inference_failed` is added in `crates/vision-ffi/src/codes.rs`, the catalog's vocabulary and
+`vision_gpu_unavailable`'s description, outside the two files the design names. (b) The kernel
+is told by the engine's existing `ProviderUnavailable` from an engine on a GPU, not by a new
+member: `VisionFfiErrorCode` and the `OcrEngine` trait (vision-ffi) stay as they are, and a failed
+run is the engine's only call-time `ProviderUnavailable` besides B2's detector under `refuse`
+(GE-2). (c) The named test drives the engine's half (its load route, its sessions and the
+history) over fakes; the kernel's half (GE-2) has no test of its own, since the work order names
+one test and the kernel's tests cannot build the engine. (d) "Until the process ends" is the
+process's history (a `static`, as B2's process route is), not the loader's. (e) The contract's
+"Fallback to the CPU" gains the bullet "After a failed run". (f) A CUDA engine never answers
+`ProviderUnavailable` at call time, so CUDA is unchanged (design §9 Q9).
+
+**What E changes live.** Nothing until a configuration names `directml`; production stays `cpu`.
+
+**E rollback** (to 0.12.43). Nothing persisted.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
