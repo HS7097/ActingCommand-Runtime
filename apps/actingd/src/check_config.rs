@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
-use actingcommand_contract::outcome::Record;
+use actingcommand_contract::outcome::{FileState, Record, VocabularyToken};
 use actingcommand_contract::{
     ConfigParameter, FactScalar, InstanceResourcePackage, RuntimeConfigManifest,
 };
@@ -11,8 +11,11 @@ use actingcommand_runtime_host::{
     ExecutionBackendRegistry, ResolvedAdbEndpoint, ResolvedInstanceEndpoint, RuntimeHostConfig,
     inspect_standard_packs, preview_policy_catalog_transition, preview_standard_pack_schedule,
 };
-use actingcommand_vision_ffi::{InvalidModelFolder, OnnxExecutionProvider, VisionListingCode};
+use actingcommand_vision_ffi::{
+    GpuFallback, GpuUnavailableReason, InvalidModelFolder, OnnxExecutionProvider, VisionListingCode,
+};
 use config::InstanceBindingKey;
+use serde::Serialize;
 use serde_json::json;
 
 /// Workflow #378 A6a (model section 7.4): check-config v2, `{schema_version, outcome, report?}`.
@@ -134,29 +137,13 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
     })?;
     // Workflow #360: the vision root listed exactly as startup lists it; no model file is
     // read. A folder that breaks the folder rule fails this check, though startup would
-    // only record it.
-    let vision = match provider.vision() {
-        None => None,
+    // only record it. Workflow #407 GPU-1 D: a `directml` section's adapters and runtime pin,
+    // with a `vision_gpu_unavailable` note when DirectML cannot be used.
+    let (vision, vision_notes) = match provider.vision() {
+        None => (None, Vec::new()),
         Some(vision) => {
-            let inventory = vision.inspect().map_err(|refused| {
-                let outcome = Outcome::new(refused.code);
-                let outcome = match refused.cause.clone() {
-                    Some(cause) => outcome.caused_by(cause),
-                    None => outcome,
-                };
-                staged(
-                    ActingdError::refused(refused.code, outcome)
-                        .with_detail(refused.message.clone()),
-                    ActingdLocation::ConfigVision,
-                )
-            })?;
-            if !inventory.listing.invalid.is_empty() {
-                return Err(staged(
-                    vision_folders_refused(&inventory.listing.invalid),
-                    ActingdLocation::ConfigVision,
-                ));
-            }
-            Some(vision_report(vision, &inventory))
+            let (report, notes) = check_vision(vision)?;
+            (Some(report), notes)
         }
     };
     let modes = provider.modes();
@@ -248,6 +235,7 @@ pub(super) fn run(arguments: Vec<std::ffi::OsString>) -> Result<Reported, Acting
     };
     let (mut report, mut notes) = summarize(&config_path, &checked, &resource_packages)
         .map_err(|(code, stage)| staged(ActingdError::config(code), stage))?;
+    notes.extend(vision_notes);
     // Workflow #384 D2-S2: the bound recognition package of each instance that names one, and
     // the readers missing for the catalog's realistic facts.
     if let Some(instances) = report["instances"].as_array_mut() {
@@ -532,6 +520,143 @@ fn policy_plan_report(preview: &CatalogPreview) -> serde_json::Value {
     })
 }
 
+/// The check-config stage `config_vision` (Workflow #360; Workflow #407 GPU-1 D): the vision
+/// root inspected exactly as startup inspects it, its report, and what it notes. A refusal of
+/// the root, or a model folder that breaks the folder rule, fails the check. For a `directml`
+/// section the report's `directml` lists every DXGI adapter and the one the identity resolves
+/// to, and a section DirectML cannot run (no single physical adapter with the identity, or
+/// `ort\DirectML.dll` off the pin) is one `vision_gpu_unavailable` note at stage
+/// `config_vision`, never a refusal (design §1.4).
+pub(super) fn check_vision(
+    vision: &config::ConfiguredVision,
+) -> Result<(serde_json::Value, Vec<Outcome>), ActingdError> {
+    let inventory = vision.inspect().map_err(|refused| {
+        staged(
+            ActingdError::refused(refused.code, refused.outcome())
+                .with_detail(refused.message.clone()),
+            ActingdLocation::ConfigVision,
+        )
+    })?;
+    if !inventory.listing.invalid.is_empty() {
+        return Err(staged(
+            vision_folders_refused(&inventory.listing.invalid),
+            ActingdLocation::ConfigVision,
+        ));
+    }
+    let mut report = vision_report(vision, &inventory);
+    let mut notes = Vec::new();
+    if let (Some(directml), Some(library)) = (vision.directml(), &inventory.directml_library) {
+        let finding = directml.find(library);
+        report["directml"] = serde_json::to_value(directml_report(directml, library, &finding))
+            .map_err(|_| {
+                staged(
+                    ActingdError::process(ActingdCode::CheckConfigReportEncodeFailed),
+                    ActingdLocation::ConfigVision,
+                )
+            })?;
+        notes.extend(finding.warning(ActingdLocation::ConfigVision));
+    }
+    Ok((report, notes))
+}
+
+/// A vocabulary token in a report, written as its token.
+struct Token<T>(T);
+
+impl<T: VocabularyToken> Serialize for Token<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.0.token())
+    }
+}
+
+/// Workflow #407 GPU-1 D (design §6.3): `vision.directml`, what a `directml` section finds before
+/// ONNX Runtime is initialised.
+#[derive(Serialize)]
+struct DirectmlReport {
+    expected_identity: String,
+    gpu_fallback: Token<GpuFallback>,
+    /// Every DXGI adapter, in `EnumAdapters1` order.
+    adapters: Vec<DirectmlAdapterReport>,
+    /// The adapter the identity resolves to; `null` when none does.
+    resolved: Option<DirectmlResolvedReport>,
+    /// Why DirectML cannot be used; `null` when it can.
+    unavailable_reason: Option<Token<GpuUnavailableReason>>,
+    /// The three pinned runtime files; ONNX Runtime's two are always `ok` in a report (any
+    /// other state refuses the root).
+    runtime_pin: DirectmlRuntimePinReport,
+    /// NN models run on the CPU under `directml` (design §9 Q7).
+    nn_execution_provider: Token<OnnxExecutionProvider>,
+}
+
+/// One DXGI adapter as the listing observed it.
+#[derive(Serialize)]
+struct DirectmlAdapterReport {
+    dxgi_index: u32,
+    identity: String,
+    /// Valid until the next boot; an observation, never compared.
+    luid: String,
+    physical: bool,
+    software: bool,
+    indirect_display: bool,
+    paravirtualized: bool,
+    /// `bus:device.function`, `null` when the kernel did not give it.
+    pci_address: Option<String>,
+}
+
+#[derive(Serialize)]
+struct DirectmlResolvedReport {
+    dxgi_index: u32,
+    luid: String,
+}
+
+#[derive(Serialize)]
+struct DirectmlRuntimePinReport {
+    onnxruntime: Token<FileState>,
+    providers_shared: Token<FileState>,
+    directml: Token<FileState>,
+}
+
+fn directml_report(
+    directml: &config::ConfiguredDirectml,
+    library: &actingcommand_vision_ffi::PinnedFileCheck,
+    finding: &config::DirectmlFinding,
+) -> DirectmlReport {
+    DirectmlReport {
+        expected_identity: directml.device().expected_identity.clone(),
+        gpu_fallback: Token(directml.gpu_fallback()),
+        adapters: finding
+            .resolution
+            .adapters
+            .iter()
+            .map(|adapter| DirectmlAdapterReport {
+                dxgi_index: adapter.dxgi_index,
+                identity: adapter.identity(),
+                luid: adapter.luid.to_string(),
+                physical: adapter.physical(),
+                software: adapter.software(),
+                indirect_display: adapter.indirect_display(),
+                paravirtualized: adapter.paravirtualized(),
+                pci_address: adapter.pci_address().map(|address| address.to_string()),
+            })
+            .collect(),
+        resolved: finding
+            .resolution
+            .decision
+            .as_ref()
+            .ok()
+            .map(|adapter| DirectmlResolvedReport {
+                dxgi_index: adapter.dxgi_index,
+                luid: adapter.luid.to_string(),
+            }),
+        unavailable_reason: finding.unavailable().map(Token),
+        runtime_pin: DirectmlRuntimePinReport {
+            onnxruntime: Token(FileState::Ok),
+            providers_shared: Token(FileState::Ok),
+            directml: Token(library.state),
+        },
+        nn_execution_provider: Token(OnnxExecutionProvider::Cpu),
+    }
+}
+
 /// The vision root as listed: its path, execution provider and every model folder.
 fn vision_report(
     vision: &config::ConfiguredVision,
@@ -539,12 +664,7 @@ fn vision_report(
 ) -> serde_json::Value {
     json!({
         "root": inventory.root.to_string_lossy(),
-        "execution_provider": match vision.execution_provider() {
-            OnnxExecutionProvider::Cpu => "cpu",
-            OnnxExecutionProvider::Cuda => "cuda",
-            // Workflow #407 GPU-1 A: the configuration admits `directml` from GPU-1 D on.
-            OnnxExecutionProvider::Directml => "directml",
-        },
+        "execution_provider": vision.execution_provider().as_str(),
         "onnxruntime_library": inventory.runtime.onnxruntime_library.to_string_lossy(),
         "ocr_models": inventory
             .listing

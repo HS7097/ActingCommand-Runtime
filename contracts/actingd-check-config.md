@@ -491,7 +491,8 @@ The members of `report`:
   instance uses that adb.
 - `vision` is always present: `null` without a `vision` section, otherwise
   the listed vision root `{ root, execution_provider, onnxruntime_library,
-  ocr_models, nn_models }` (see "Vision root").
+  ocr_models, nn_models }`, and for `execution_provider` `directml` also
+  `directml` (Workflow #407 GPU-1 D; see "Vision root").
 - `standard_packs` is always present (Workflow #373 NAV-6): `{ root,
   root_problem, games }`, `root` `null` without a `standard_packs` section (see
   "Standard packs").
@@ -534,6 +535,10 @@ What the check noted is not a member of `report`: each is one `note` link of
 - Workflow #373 NAV-6: the root's problem when the standard-pack root itself
   cannot be listed, then the problem of each broken game root (see "Standard
   packs");
+- Workflow #407 GPU-1 D: for a `directml` section DirectML cannot run, one
+  `vision_gpu_unavailable` (warning, values `execution_provider`,
+  `gpu_unavailable_reason`, `gpu_fallback`, `stage` `config_vision`; see
+  "DirectML" under "Vision root");
 - Workflow #384 D2-S2: one `fact_reader_missing` (warning, values
   `instance_id`, `fact_key`, `task_id`) per realistic fact a catalog task reads
   in an instance's scope that the instance's reader does not mark, or that an
@@ -711,7 +716,8 @@ Workflow #360 replaces `vision_provider_manifest` with the optional top-level
 "vision":{"execution_provider":"cpu"}
 ```
 
-`execution_provider` is `cpu` or `cuda`; `cuda` requires `cuda_device
+`execution_provider` is `cpu`, `cuda` or (since 0.12.44, see "DirectML" below)
+`directml`; `cuda` requires `cuda_device
 { ordinal, expected_stable_identity }` and `cpu` refuses it
 (`vision_config_invalid`, stage `config_assemble`). `root` is optional: without it the
 vision root is `<install root>\vision` when the daemon runs from an install
@@ -741,6 +747,72 @@ On success `vision` reports the canonical `root`, the `execution_provider`, the
 entries `{ model_ref, layout, detector, description_sha256, languages }`
 (`layout` `flat` or `nested`, `detector` whether a detector is present) and
 `nn_models` entries `{ model_ref, description_sha256, languages }`.
+
+### DirectML (`actingd-config` revision 27)
+
+Workflow #407 GPU-1 D (Runtime 0.12.44; design `rd-1031/perf-407/design-gpu1.md`
+§1.2, §1.4, §2.5, §6.3; register §1.286) adds `execution_provider`
+`directml`, which names one DXGI adapter by its stable identity
+([vision-model-folders.md](vision-model-folders.md), "DirectML runtime"):
+
+```json
+"vision":{"execution_provider":"directml","directml_device":{"expected_identity":"dxgi-pci:1234:5678:9abcdef0:01"},"gpu_fallback":"cpu"}
+```
+
+`directml_device` is required for `directml` and refused for `cpu` and
+`cuda`; `directml` refuses a `cuda_device`; `gpu_fallback` (`cpu`, the
+default, or `refuse`) is refused beside `cpu` and `cuda`; `expected_identity`
+is `dxgi-pci:` and lowercase hexadecimal of 4, 4, 8 and 2 digits, and the
+device names no DXGI index or LUID (an unknown member, `config_decode_failed`).
+Each other broken rule is `vision_config_invalid` at stage `config_assemble`.
+The section takes effect at the next Runtime start: it is no key of the
+configuration key table and no setting a running Runtime changes.
+
+For `directml` the check, like a start, requires ONNX Runtime's DirectML build
+as pinned: `ort\onnxruntime.dll` and `ort\onnxruntime_providers_shared.dll`
+are hashed against the pin, and one that is missing, differs or cannot be read
+fails with `vision_runtime_unavailable` (stage `config_vision`, the file as
+`path`, the OS failure as its link). Then it lists every DXGI adapter and
+resolves the configured identity exactly as the engine does, and hashes
+`ort\DirectML.dll`. Neither fails the check: when DirectML cannot be used (no
+adapter with the identity, `adapter_missing`; only indirect-display, software or
+paravirtualized copies, `adapter_not_physical`; two or more physical ones,
+`adapter_ambiguous`; `DirectML.dll` missing, `directml_library_missing`, or
+off the pin or unreadable, `directml_library_mismatch`), the passed outcome
+carries one `note` link `vision_gpu_unavailable` with `execution_provider`,
+`gpu_unavailable_reason`, `gpu_fallback` and stage `config_vision`. The
+library's reason is named before the adapter's.
+
+`vision.directml` reports what was found:
+
+```json
+{"expected_identity":"dxgi-pci:1234:5678:9abcdef0:01","gpu_fallback":"cpu",
+ "adapters":[{"dxgi_index":0,"identity":"dxgi-pci:1234:5678:9abcdef0:01","luid":"0x0000000000014ad3","physical":true,"software":false,"indirect_display":false,"paravirtualized":false,"pci_address":"01:00.0"}],
+ "resolved":{"dxgi_index":0,"luid":"0x0000000000014ad3"},"unavailable_reason":null,
+ "runtime_pin":{"onnxruntime":"ok","providers_shared":"ok","directml":"ok"},
+ "nn_execution_provider":"cpu"}
+```
+
+`adapters` lists every adapter in `EnumAdapters1` order with its identity, its
+LUID (valid until the next boot, never compared), whether it is physical and
+why not, and its PCI location (`bus:device.function`, `null` when the kernel
+gave none). `resolved` is the adapter the identity resolves to, `null` when
+none does; `unavailable_reason` is the note's reason, `null` without a note;
+`runtime_pin` gives each pinned file's `file_state` (the two ONNX Runtime files
+are always `ok` in a passed report); NN models run on the CPU under `directml`
+(`nn_execution_provider`). The first OCR model load of the running Runtime
+resolves the adapter again, and that decision is the one in effect.
+
+A start does the same: it records two `provider.startup` bindings beside the
+runtime closure, `execution_provider` (configured `directml`, resolved
+`directml`, or, when DirectML cannot be used, `cpu` under `gpu_fallback` `cpu`
+and `none` under `refuse`) and `directml_adapter` (configured the expected
+identity, resolved `<identity>;index=<n>;luid=<luid>` or `none`), and the
+closure it records is the DirectML one (`DirectML.dll` right before
+`onnxruntime.dll`) only when DirectML can be used. When it cannot, the start
+goes on and writes the one warning `vision_gpu_unavailable` (stage
+`vision_startup`) as actingd's daemon lines on stderr; the warning is no ledger
+record.
 
 ## Instance resource package
 

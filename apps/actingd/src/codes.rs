@@ -242,6 +242,9 @@ actingcommand_contract::outcome_locations! {
         ConfigAssemble => "config_assemble",
         ConfigVision => "config_vision",
         ConfigValidate => "config_validate",
+        /// Workflow #407 GPU-1 D: the stage of a `vision_gpu_unavailable` warning found while
+        /// provider startup resolved the configured DirectML adapter.
+        VisionStartup => "vision_startup",
         /// check-config stage: admitting the resource packages (Workflow #378 A6a: was
         /// `resource_package`, which is also the report's member name).
         ResourcePackage => "config_resource_package",

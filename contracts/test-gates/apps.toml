@@ -1221,3 +1221,15 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_422_ov24k::overview_block_comes_from_the_one_status_read",
 ]
 incident = ["#432 AGT-1b"]
+
+# Workflow #407 GPU-1 D (0.12.44; register §1.286; brief rd-1031/perf-407/brief-gpu1d.md; design rd-1031/perf-407/design-gpu1.md §1.2, §1.4, §2.5, §6.1 and §7 row D; actingd-config revision 27): the vision section admits execution_provider directml only with a directml_device whose expected_identity is a well-formed dxgi-pci identity and without a cuda_device, refuses the device beside cpu or cuda (vision_config_invalid), and the device naming a DXGI index or a LUID does not decode; gpu_fallback is cpu when absent, takes cpu or refuse with directml, is refused beside cpu or cuda and refuses another word; a directml root whose onnxruntime.dll is off the runtime pin fails check-config at config_vision with vision_runtime_unavailable naming the file as path and refuses the start, while the same root under cpu passes; over a fake adapter source and a fixture pin, a start whose identity no adapter has records execution_provider directml→cpu, directml_adapter <identity>→none and the CPU closure, and writes one vision_gpu_unavailable warning (adapter_missing, gpu_fallback cpu, stage vision_startup) as its WARN and OUTCOME lines, while a resolving one records directml, <identity>;index=0;luid=<luid> and the DirectML closure and writes nothing; check-config's vision.directml lists every adapter in DXGI order with its physical, software, indirect-display and paravirtualized flags and PCI location, the one the identity resolves to (index 0 among its copies), the pinned files' states and nn_execution_provider cpu, and notes one vision_gpu_unavailable at config_vision when no adapter has the identity or DirectML.dll is missing or off the pin
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_407_gpu1d::directml_config_requires_its_device_and_refuses_it_elsewhere",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_407_gpu1d::gpu_fallback_is_admitted_only_with_directml_and_defaults_to_cpu",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_407_gpu1d::a_missing_adapter_at_startup_records_cpu_and_one_warning",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_407_gpu1d::a_runtime_off_the_pin_fails_check_config_with_vision_runtime_unavailable",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_407_gpu1d::check_config_lists_every_adapter_and_the_one_it_resolves",
+]
+incident = ["#407 GPU-1 D"]
