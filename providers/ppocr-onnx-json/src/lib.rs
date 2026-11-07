@@ -13,18 +13,18 @@
 use actingcommand_onnx_provider_support::{InferenceWatchdog, OrtRuntimeInitializer};
 use actingcommand_vision_ffi::{
     AdapterSource, CudaDeviceIdentity, DIRECTML_RUNTIME_PIN, DirectmlDeviceIdentity,
-    DirectmlDeviceSelector, DirectmlUnavailable, FileState, GpuUnavailableReason,
+    DirectmlDeviceSelector, DirectmlUnavailable, FileState, GpuFallback, GpuUnavailableReason,
     OCR_EXECUTION_ATTESTATION_SCHEMA_VERSION, OcrBlockMode, OcrDetectionCount, OcrEngine,
-    OcrExecutionAttestation, OcrFallbackPolicy, OcrInferenceOutput, OcrInferenceRequest,
-    OcrInferenceRequestView, OcrInferenceResult, OcrInvocationId, OcrLineMerge, OcrModelLoad,
-    OcrModelSpec, OcrProviderBuildIdentity, OcrRuntimeBuildIdentity, OcrSessionBinding,
-    OcrSessionId, OcrSessionKey, OcrSessionKeyParts, OcrTextBlock, OnnxExecutionProvider,
-    ResolvedDirectmlAdapter, SystemAdapterSource, VisionBackendKind, VisionFfiError,
-    VisionFfiErrorCode, VisionFfiResult, VisionFrameView, VisionModelLoader, VisionPixelFormat,
-    VisionRect, VisionRuntimeSpec, enumerate_cuda_devices,
-    establish_process_runtime_library_closure, next_ocr_invocation_id, ocr_engine_binding_sha256,
-    onnxruntime_version_string, ppocr_model_set_sha256, resolve_directml_adapter, sha256_file_hex,
-    sha256_hex,
+    OcrExecutionAttestation, OcrExecutionStatus, OcrFallbackPolicy, OcrInferenceOutput,
+    OcrInferenceRequest, OcrInferenceRequestView, OcrInferenceResult, OcrInvocationId,
+    OcrLineMerge, OcrModelExecution, OcrModelLoad, OcrModelSpec, OcrProviderBuildIdentity,
+    OcrRuntimeBuildIdentity, OcrSessionBinding, OcrSessionId, OcrSessionKey, OcrSessionKeyParts,
+    OcrTextBlock, OnnxExecutionProvider, Outcome, ResolvedDirectmlAdapter, SystemAdapterSource,
+    VisionBackendKind, VisionFfiError, VisionFfiErrorCode, VisionFfiResult, VisionFrameView,
+    VisionGpuCode, VisionModelLoader, VisionPixelFormat, VisionRect, VisionRuntimeSpec,
+    enumerate_cuda_devices, establish_process_runtime_library_closure, next_ocr_invocation_id,
+    ocr_engine_binding_sha256, onnxruntime_status, onnxruntime_version_string,
+    ppocr_model_set_sha256, resolve_directml_adapter, sha256_file_hex, sha256_hex,
 };
 use actingcommand_vision_ffi::{
     ChannelOrder, DetectorResize, NnModelLoad, NnModelSpec, PpocrCtcParams, SpaceClass,
@@ -50,6 +50,9 @@ use std::time::{Duration, Instant};
 // Workflow #407 GPU-1 B1: DirectML sessions and their node placement, over a fake ONNX Runtime.
 #[cfg(test)]
 mod gate_407_gpu1b1;
+// Workflow #407 GPU-1 B2: the whole-model fallback to the CPU, over a fake ONNX Runtime.
+#[cfg(test)]
+mod gate_407_gpu1b2;
 mod nn;
 
 const NODE_PLACEMENT_DIAGNOSTIC_ENV: &str = "ACTINGCOMMAND_PPOCR_NODE_PLACEMENT_DIAGNOSTIC";
@@ -89,9 +92,21 @@ struct RuntimeFacts {
     executable_sha256: String,
     resolved_cuda_device: Option<CudaDeviceIdentity>,
     cuda_driver_version: Option<u32>,
-    /// Workflow #407 GPU-1 B1: the adapter the first DirectML model load resolved; every later
-    /// session build must resolve the same identity (design §1.4).
-    resolved_directml_adapter: Option<ResolvedDirectmlAdapter>,
+    /// Workflow #407 GPU-1 B2: what a `directml` configuration's process runs, decided once when
+    /// its runtime was initialised; `None` for every other provider.
+    directml: Option<ProcessRoute>,
+}
+
+/// Workflow #407 GPU-1 B2 (design §1.4, §2.3): what the process of a `directml` configuration
+/// runs, decided once at its runtime initialisation and kept until it restarts.
+#[derive(Debug, Clone)]
+enum ProcessRoute {
+    /// DirectML is in the closure: the adapter the first model load resolved, whose identity every
+    /// later session build must resolve (B1).
+    Directml(ResolvedDirectmlAdapter),
+    /// DirectML could not be used under `gpu_fallback` `cpu`: the closure is the CPU one and every
+    /// model runs on the CPU; the one warning of that fallback, with no `model_name`.
+    Cpu(Outcome),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -142,12 +157,22 @@ impl ProviderSessionPlan {
             // Runtime may place the nodes DirectML cannot run on its CPU provider, which it adds
             // itself: CPU fallback stays allowed and the CPU provider is not registered.
             OnnxExecutionProvider::Directml => {
-                let index = key
-                    .resolved_directml_device()
-                    .ok_or_else(|| {
-                        "DirectML OCR session key is missing its resolved adapter".to_string()
-                    })?
-                    .dxgi_index;
+                // Workflow #407 GPU-1 B2 (design §2.3, §2.4): a DirectML key without a resolved
+                // adapter is a model that DirectML could not be used for under `gpu_fallback`
+                // `cpu`. The whole model runs on the CPU, as a CPU plan does, and attests the
+                // fallback policy `cpu_model`.
+                let Some(device) = key.resolved_directml_device() else {
+                    return Ok(Self {
+                        resolved_execution_provider: OnnxExecutionProvider::Cpu,
+                        cuda_ordinal: None,
+                        directml_device_id: None,
+                        registered_execution_providers: vec![OnnxExecutionProvider::Cpu],
+                        cpu_ep_registered: true,
+                        cpu_fallback_disabled: false,
+                        fallback_policy: OcrFallbackPolicy::CpuModel,
+                    });
+                };
+                let index = device.dxgi_index;
                 let device_id = i32::try_from(index)
                     .map_err(|_| "DirectML adapter index exceeds i32 range".to_string())?;
                 Ok(Self {
@@ -521,6 +546,11 @@ fn node_placement_diagnostic_requested(
     match plan.resolved_execution_provider {
         OnnxExecutionProvider::Directml => Ok(true),
         OnnxExecutionProvider::Cuda => Ok(value.is_some()),
+        // Workflow #407 GPU-1 B2: a model that fell back from DirectML to the CPU has no placement
+        // to read; the variable its DirectML configuration may carry stays met.
+        OnnxExecutionProvider::Cpu if plan.fallback_policy == OcrFallbackPolicy::CpuModel => {
+            Ok(false)
+        }
         OnnxExecutionProvider::Cpu if value.is_some() => Err(format!(
             "{NODE_PLACEMENT_DIAGNOSTIC_ENV} is valid only for an explicit CUDA OCR session; a DirectML OCR session always reads its node placement"
         )),
@@ -560,10 +590,11 @@ impl VisionModelLoader for PpocrCtcLoader {
             .map(|path| read_model_file(path, "detector").map(|bytes| sha256_hex(&bytes)))
             .transpose()?;
         let recognizer = read_model_file(&model.recognizer_path, "recognizer")?;
+        let recognizer_sha256 = sha256_hex(&recognizer);
         let dictionary = read_model_file(&model.dictionary_path, "dictionary")?;
         let model_sha256 = ppocr_model_set_sha256(
             detector_sha256.as_deref(),
-            &sha256_hex(&recognizer),
+            &recognizer_sha256,
             &sha256_hex(&dictionary),
             None,
         )?;
@@ -572,89 +603,74 @@ impl VisionModelLoader for PpocrCtcLoader {
         }
         let dictionary = parse_dictionary(&dictionary, &model.dictionary_path).map_err(failure)?;
         let (facts, waited_on_others) = runtime_facts(&self.runtime, wait_deadline)?;
-        // Workflow #407 GPU-1 B1 (design §1.4): every DirectML session build resolves its adapter
-        // again; the model's sessions are bound to the identity and the index of this build.
-        let adapter = self
-            .runtime
-            .directml
-            .as_ref()
-            .map(|directml| {
-                resolve_session_adapter(
-                    &SystemAdapterSource,
-                    &directml.device,
-                    facts
-                        .resolved_directml_adapter
-                        .as_ref()
-                        .map(|first| first.identity.as_str()),
-                    None,
-                )
-            })
-            .transpose()
-            .map_err(SessionBuildFailure::into_error)?;
-        let key = OcrSessionKey::from_parts(OcrSessionKeyParts {
-            engine_binding_sha256: ocr_engine_binding_sha256(
-                &facts.executable_sha256,
-                &facts.onnxruntime_sha256,
-                &model.description_sha256,
-            ),
-            runtime_library_path: facts.onnxruntime_library.to_string_lossy().into_owned(),
-            runtime_library_sha256: facts.onnxruntime_sha256.clone(),
-            onnxruntime_version: facts.onnxruntime_version.clone(),
-            model_ref: model.model_ref.clone(),
-            model_sha256: model_sha256.clone(),
-            requested_backend: self.runtime.execution_provider,
-            requested_cuda_device: self.runtime.cuda_device.clone(),
-            resolved_cuda_device: facts.resolved_cuda_device.clone(),
-            requested_directml_device: self
+        let basis = RouteBasis {
+            session_id: session_id.clone(),
+            parts: OcrSessionKeyParts {
+                engine_binding_sha256: ocr_engine_binding_sha256(
+                    &facts.executable_sha256,
+                    &facts.onnxruntime_sha256,
+                    &model.description_sha256,
+                ),
+                runtime_library_path: facts.onnxruntime_library.to_string_lossy().into_owned(),
+                runtime_library_sha256: facts.onnxruntime_sha256.clone(),
+                onnxruntime_version: facts.onnxruntime_version.clone(),
+                model_ref: model.model_ref.clone(),
+                model_sha256: model_sha256.clone(),
+                requested_backend: self.runtime.execution_provider,
+                requested_cuda_device: self.runtime.cuda_device.clone(),
+                resolved_cuda_device: facts.resolved_cuda_device.clone(),
+                requested_directml_device: self
+                    .runtime
+                    .directml
+                    .as_ref()
+                    .map(|directml| directml.device.clone()),
+                resolved_directml_device: None,
+            },
+            gpu_fallback: self
                 .runtime
                 .directml
                 .as_ref()
-                .map(|directml| directml.device.clone()),
-            resolved_directml_device: adapter.as_ref().map(ResolvedDirectmlAdapter::device),
-        })?;
-        let binding = OcrSessionBinding::new(session_id.clone(), 1, key);
-        binding.validate()?;
-        let plan = ProviderSessionPlan::from_key(binding.key()).map_err(failure)?;
+                .map(|directml| directml.gpu_fallback),
+        };
+        // Workflow #407 GPU-1 B1, B2 (design §1.4, §2.3): every DirectML session build resolves
+        // its adapter again, and a model whose adapter or session cannot be used moves to the CPU
+        // under `gpu_fallback` `cpu`.
+        let route = initial_route(&basis, facts.directml.as_ref(), &SystemAdapterSource)?;
         let mut diagnostics = Vec::new();
-        let recognizer = load_session_with(
+        let sessions = ModelSessions::load(
             &mut OrtSessions,
-            &SessionRequest {
-                model: &recognizer,
-                path: &model.recognizer_path,
-                role: PpocrModelRole::Recognizer,
-                adapter: adapter.as_ref(),
+            basis,
+            route,
+            ModelInput {
+                bytes: &recognizer,
+                path: model.recognizer_path.as_path(),
             },
-            &plan,
-            self.node_placement_diagnostic.as_deref(),
+            self.node_placement_diagnostic.clone(),
             &mut diagnostics,
         )
-        .map_err(|error| {
-            error
-                .into_error()
-                .with_ppocr_diagnostics(diagnostics.clone())
-        })?;
-        require_recognizer_classes(&recognizer.session, dictionary.len(), &model.model_ref)
-            .map_err(|error| failure(error).with_ppocr_diagnostics(diagnostics.clone()))?;
+        .map_err(|error| error.with_ppocr_diagnostics(diagnostics.clone()))?;
+        require_recognizer_classes(
+            &sessions.recognizer.session,
+            dictionary.len(),
+            &model.model_ref,
+        )
+        .map_err(|error| failure(error).with_ppocr_diagnostics(diagnostics.clone()))?;
+        let execution = sessions.status.clone();
         Ok(OcrModelLoad::Loaded {
             engine: Box::new(PpocrCtcModel {
-                binding,
-                plan,
+                sessions,
                 cuda_driver_version: facts.cuda_driver_version,
                 dictionary,
                 params: model.description.ppocr_params(),
-                recognizer: recognizer.session,
-                placements: RolePlacements {
-                    recognizer: recognizer.cpu_nodes,
-                    detector: None,
-                },
-                detector: None,
+                recognizer_path: model.recognizer_path.clone(),
+                recognizer_sha256,
                 detector_path: model.detector_path.clone(),
                 detector_sha256,
-                node_placement_diagnostic: self.node_placement_diagnostic.clone(),
                 pending_diagnostics: diagnostics,
             }),
             model_sha256,
             waited_on_others,
+            execution,
         })
     }
 
@@ -670,20 +686,37 @@ impl VisionModelLoader for PpocrCtcLoader {
             return Ok(NnModelLoad::Mismatch { model_sha256 });
         }
         let (facts, waited_on_others) = runtime_facts(&self.runtime, wait_deadline)?;
-        let cuda_ordinal = facts
-            .resolved_cuda_device
-            .as_ref()
-            .map(|device| {
-                i32::try_from(device.ordinal)
-                    .map_err(|_| failure("the resolved CUDA ordinal exceeds the i32 range"))
-            })
-            .transpose()?;
-        let session = nn::load_session(&bytes, &model.model_path, cuda_ordinal).map_err(failure)?;
+        let provider = nn_session_provider(self.runtime.execution_provider, facts)?;
+        let session = nn::load_session(&bytes, &model.model_path, provider).map_err(failure)?;
         Ok(NnModelLoad::Loaded {
             engine: Box::new(nn::OnnxClassifyModel::new(session)),
             model_sha256,
             waited_on_others,
         })
+    }
+}
+
+/// The provider of a classifier session: CUDA on the resolved device for `cuda`, else the CPU.
+/// Workflow #407 GPU-1 B2 (design §9 Q7): a classifier runs on the CPU under `directml` too,
+/// whatever the process's OCR route is, and that is no fallback and has no warning; its node
+/// placement has no report to go to.
+fn nn_session_provider(
+    requested: OnnxExecutionProvider,
+    facts: &RuntimeFacts,
+) -> VisionFfiResult<nn::NnSessionProvider> {
+    match requested {
+        OnnxExecutionProvider::Cpu | OnnxExecutionProvider::Directml => {
+            Ok(nn::NnSessionProvider::Cpu)
+        }
+        OnnxExecutionProvider::Cuda => {
+            let device = facts
+                .resolved_cuda_device
+                .as_ref()
+                .ok_or_else(|| failure("a CUDA classifier session has no resolved CUDA device"))?;
+            let device_id = i32::try_from(device.ordinal)
+                .map_err(|_| failure("the resolved CUDA ordinal exceeds the i32 range"))?;
+            Ok(nn::NnSessionProvider::Cuda { device_id })
+        }
     }
 }
 
@@ -725,22 +758,317 @@ fn check_class_count(classes: usize, dictionary_entries: usize) -> Result<(), St
 /// One loaded `ppocr-ctc` model: the recognizer session, the verified dictionary and, after
 /// the first full-frame request, the detector session.
 struct PpocrCtcModel {
-    binding: OcrSessionBinding,
-    plan: ProviderSessionPlan,
+    /// The sessions, the route they run on and the model's execution status.
+    sessions: ModelSessions<Session>,
     cuda_driver_version: Option<u32>,
     dictionary: Vec<String>,
     /// The effective preprocessing and decoding parameters of the model's description.
     params: PpocrCtcParams,
-    recognizer: Session,
-    /// Workflow #407 GPU-1 B1: the CPU-placed node count of each built session whose node
-    /// placement was read, for the attestation's `fallback_observed`.
-    placements: RolePlacements,
-    detector: Option<Session>,
+    /// Workflow #407 GPU-1 B2: the recognizer file and the hash verified when the model was
+    /// loaded, from which a detector's fallback rebuilds the recognizer on the CPU.
+    recognizer_path: PathBuf,
+    recognizer_sha256: String,
     detector_path: Option<PathBuf>,
     detector_sha256: Option<String>,
-    node_placement_diagnostic: Option<String>,
     /// Session-load diagnostics, returned with the next request's result or error.
     pending_diagnostics: PpocrDiagnostics,
+}
+
+/// Workflow #407 GPU-1 B2: one model file a session is built from: its verified bytes and its
+/// path (for messages).
+#[derive(Debug, Clone, Copy)]
+struct ModelInput<'a> {
+    bytes: &'a [u8],
+    path: &'a Path,
+}
+
+impl<'a> ModelInput<'a> {
+    /// The build of this file in `role`, on `adapter` for a DirectML session.
+    fn request(
+        self,
+        role: PpocrModelRole,
+        adapter: Option<&'a ResolvedDirectmlAdapter>,
+    ) -> SessionRequest<'a> {
+        SessionRequest {
+            model: self.bytes,
+            path: self.path,
+            role,
+            adapter,
+        }
+    }
+}
+
+/// Workflow #407 GPU-1 B2: what the route of one model is derived from: its session identity, the
+/// key parts its configuration requests (no resolved DirectML adapter) and, for `directml`, what
+/// a DirectML failure does.
+#[derive(Debug, Clone)]
+struct RouteBasis {
+    session_id: OcrSessionId,
+    parts: OcrSessionKeyParts,
+    /// `Some` exactly for a `directml` configuration.
+    gpu_fallback: Option<GpuFallback>,
+}
+
+/// Workflow #407 GPU-1 B2: the route one model's sessions run on: their binding and plan, the
+/// adapter of a DirectML route, and where the model runs for the Runtime's status.
+#[derive(Debug, Clone)]
+struct ModelRoute {
+    binding: OcrSessionBinding,
+    plan: ProviderSessionPlan,
+    adapter: Option<ResolvedDirectmlAdapter>,
+    execution: OcrModelExecution,
+}
+
+impl RouteBasis {
+    /// The route at session `generation`: on `adapter` for a DirectML route; without one, on the
+    /// configured provider, or for `directml` on the CPU after the fallback whose warning is
+    /// `warning` (every fallback has one).
+    fn route(
+        &self,
+        generation: u64,
+        adapter: Option<ResolvedDirectmlAdapter>,
+        warning: Option<Outcome>,
+    ) -> VisionFfiResult<ModelRoute> {
+        if self.gpu_fallback.is_some() && adapter.is_none() && warning.is_none() {
+            return Err(VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::Internal,
+                ENGINE_MODULE,
+                "a DirectML model's CPU route has no fallback warning",
+            ));
+        }
+        let mut parts = self.parts.clone();
+        parts.resolved_directml_device = adapter.as_ref().map(ResolvedDirectmlAdapter::device);
+        let binding = OcrSessionBinding::new(
+            self.session_id.clone(),
+            generation,
+            OcrSessionKey::from_parts(parts)?,
+        );
+        binding.validate()?;
+        let plan = ProviderSessionPlan::from_key(binding.key()).map_err(failure)?;
+        let execution = OcrModelExecution {
+            requested: self.parts.requested_backend,
+            actual: plan.resolved_execution_provider,
+            warning,
+        };
+        Ok(ModelRoute {
+            binding,
+            plan,
+            adapter,
+            execution,
+        })
+    }
+
+    /// What `failure` of a session build does (design §2.3): a DirectML failure under
+    /// `gpu_fallback` `cpu` moves the whole model to the CPU, at session `generation`, with one
+    /// warning that names the model; under `refuse`, and for a failure that names no DirectML
+    /// reason (a CPU or CUDA session, or one of the CPU route), the failure stands and fails the
+    /// request, and the next request tries again.
+    fn fallback(
+        &self,
+        generation: u64,
+        failure: SessionBuildFailure,
+    ) -> VisionFfiResult<ModelRoute> {
+        let warning = match self.gpu_fallback {
+            Some(GpuFallback::Cpu) => {
+                failure.warning(GpuFallback::Cpu, Some(self.parts.model_ref.as_str()))
+            }
+            Some(GpuFallback::Refuse) | None => None,
+        };
+        match warning {
+            Some(warning) => self.route(generation, None, Some(warning)),
+            None => Err(failure.into_error()),
+        }
+    }
+}
+
+/// The route a model load starts on (design §1.4, §2.3): the configured provider for `cpu` and
+/// `cuda`. For `directml`: the CPU when the process fell back at its runtime initialisation,
+/// with that fallback's one warning; else DirectML on the adapter this build resolves, whose
+/// identity must be the first load's. An adapter that does not resolve is a session that cannot
+/// be built ([`RouteBasis::fallback`]).
+fn initial_route(
+    basis: &RouteBasis,
+    process: Option<&ProcessRoute>,
+    adapters: &dyn AdapterSource,
+) -> VisionFfiResult<ModelRoute> {
+    match (process, basis.parts.requested_directml_device.as_ref()) {
+        (None, None) => basis.route(1, None, None),
+        (Some(ProcessRoute::Cpu(warning)), Some(_)) => basis.route(1, None, Some(warning.clone())),
+        (Some(ProcessRoute::Directml(first)), Some(selector)) => {
+            match resolve_session_adapter(adapters, selector, Some(first.identity.as_str()), None) {
+                Ok(adapter) => basis.route(1, Some(adapter), None),
+                Err(unusable) => basis.fallback(1, unusable),
+            }
+        }
+        (Some(_), None) | (None, Some(_)) => Err(VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::Internal,
+            ENGINE_MODULE,
+            "the process's DirectML route and the OCR model's configuration disagree",
+        )),
+    }
+}
+
+/// Workflow #407 GPU-1 B2: the reports of sessions a fallback replaced are dropped. After a
+/// whole-model fallback no session of the model runs on DirectML, so every DirectML report this
+/// call still holds is of a replaced session; the sessions in use (CPU) read no placement.
+fn drop_replaced_reports(diagnostics: &mut PpocrDiagnostics) {
+    diagnostics
+        .retain(|report| report.accelerated_execution_provider != DIRECTML_EXECUTION_PROVIDER);
+}
+
+/// Workflow #407 GPU-1 B2: the sessions of one model on its route and the model's live execution
+/// status; generic over the session so the logic tests build them from a fake ONNX Runtime.
+struct ModelSessions<S> {
+    basis: RouteBasis,
+    route: ModelRoute,
+    recognizer: BuiltSession<S>,
+    /// Built on the first full-frame request.
+    detector: Option<BuiltSession<S>>,
+    node_placement_diagnostic: Option<String>,
+    status: OcrExecutionStatus,
+}
+
+impl<S> ModelSessions<S> {
+    /// Loads the model's recognizer on `route` (design §2.3). A DirectML recognizer that cannot be
+    /// built under `gpu_fallback` `cpu` moves the model to the CPU once: the failed attempt's
+    /// report is dropped, the recognizer is built on the CPU and the status carries the
+    /// fallback's one warning. Under `refuse` the load fails.
+    fn load<B: SessionBuilds<Session = S>>(
+        builds: &mut B,
+        basis: RouteBasis,
+        route: ModelRoute,
+        recognizer: ModelInput<'_>,
+        node_placement_diagnostic: Option<String>,
+        diagnostics: &mut PpocrDiagnostics,
+    ) -> VisionFfiResult<Self> {
+        let role = PpocrModelRole::Recognizer;
+        let npd = node_placement_diagnostic.as_deref();
+        let first = load_session_with(
+            builds,
+            &recognizer.request(role, route.adapter.as_ref()),
+            &route.plan,
+            npd,
+            diagnostics,
+        );
+        let (route, built) = match first {
+            Ok(built) => (route, built),
+            Err(unusable) => {
+                let route = basis.fallback(route.binding.generation(), unusable)?;
+                drop_replaced_reports(diagnostics);
+                let built = load_session_with(
+                    builds,
+                    &recognizer.request(role, None),
+                    &route.plan,
+                    npd,
+                    diagnostics,
+                )
+                .map_err(|cpu| cpu.of_cpu_fallback().into_error())?;
+                (route, built)
+            }
+        };
+        let status = OcrExecutionStatus::new(route.execution.clone());
+        Ok(Self {
+            basis,
+            route,
+            recognizer: built,
+            detector: None,
+            node_placement_diagnostic,
+            status,
+        })
+    }
+
+    /// Builds the detector on the model's route, on the first full-frame request (design §1.4,
+    /// §2.3). A DirectML detector resolves its adapter again and must find it at the model's
+    /// index. A DirectML detector that cannot be built under `gpu_fallback` `cpu` moves the whole
+    /// model to the CPU: the recognizer is rebuilt on the CPU from its verified file
+    /// (`read_recognizer`), the detector is built on the CPU, every report of the replaced
+    /// DirectML sessions still in `diagnostics` is dropped, the session generation steps, and the
+    /// status records the fallback's one warning. Nothing changes until both CPU sessions are
+    /// built. Under `refuse` the request fails and the next one tries again.
+    fn build_detector<B: SessionBuilds<Session = S>>(
+        &mut self,
+        builds: &mut B,
+        detector: ModelInput<'_>,
+        adapters: &dyn AdapterSource,
+        read_recognizer: impl FnOnce() -> VisionFfiResult<(Vec<u8>, PathBuf)>,
+        diagnostics: &mut PpocrDiagnostics,
+    ) -> VisionFfiResult<()> {
+        let role = PpocrModelRole::Detector;
+        let npd = self.node_placement_diagnostic.as_deref();
+        let key = self.route.binding.key();
+        let attempt = match (
+            key.requested_directml_device(),
+            key.resolved_directml_device(),
+        ) {
+            (Some(selector), Some(bound)) => {
+                match resolve_session_adapter(adapters, selector, None, Some(bound)) {
+                    Ok(adapter) => load_session_with(
+                        builds,
+                        &detector.request(role, Some(&adapter)),
+                        &self.route.plan,
+                        npd,
+                        diagnostics,
+                    ),
+                    Err(unusable) => Err(unusable),
+                }
+            }
+            _ => load_session_with(
+                builds,
+                &detector.request(role, None),
+                &self.route.plan,
+                npd,
+                diagnostics,
+            ),
+        };
+        let unusable = match attempt {
+            Ok(built) => {
+                self.detector = Some(built);
+                return Ok(());
+            }
+            Err(unusable) => unusable,
+        };
+        let generation = self.route.binding.generation().saturating_add(1);
+        let route = self.basis.fallback(generation, unusable)?;
+        drop_replaced_reports(diagnostics);
+        let (recognizer_bytes, recognizer_path) = read_recognizer()?;
+        let recognizer_input = ModelInput {
+            bytes: &recognizer_bytes,
+            path: &recognizer_path,
+        };
+        let recognizer = load_session_with(
+            builds,
+            &recognizer_input.request(PpocrModelRole::Recognizer, None),
+            &route.plan,
+            npd,
+            diagnostics,
+        )
+        .map_err(|cpu| cpu.of_cpu_fallback().into_error())?;
+        let detector = load_session_with(
+            builds,
+            &detector.request(role, None),
+            &route.plan,
+            npd,
+            diagnostics,
+        )
+        .map_err(|cpu| cpu.of_cpu_fallback().into_error())?;
+        self.status.set(route.execution.clone());
+        self.route = route;
+        self.recognizer = recognizer;
+        self.detector = Some(detector);
+        Ok(())
+    }
+
+    /// The CPU-placed node count of each built session whose node placement was read, for the
+    /// attestation's `fallback_observed`.
+    fn placements(&self) -> RolePlacements {
+        RolePlacements {
+            recognizer: self.recognizer.cpu_nodes,
+            detector: self
+                .detector
+                .as_ref()
+                .and_then(|detector| detector.cpu_nodes),
+        }
+    }
 }
 
 /// How many nodes of each role's session ONNX Runtime placed on the CPU, when the session's node
@@ -762,14 +1090,18 @@ struct InvocationRoles {
 /// that admits no CPU node (CPU, CUDA); for a DirectML plan, whether a role whose session ran in
 /// the invocation has a node ONNX Runtime placed on the CPU. A region read runs the recognizer; a
 /// full-frame read runs the detector and, for each box it keeps, the recognizer. A DirectML
-/// session that ran without a read placement fails: every DirectML session reads it.
+/// session that ran without a read placement fails: every DirectML session reads it. Workflow
+/// #407 GPU-1 B2: a model that fell back from DirectML runs whole on the CPU, so it observes the
+/// fallback in every invocation.
 fn fallback_observed(
     plan: &ProviderSessionPlan,
     placements: RolePlacements,
     ran: InvocationRoles,
 ) -> VisionFfiResult<Option<bool>> {
-    if plan.fallback_policy != OcrFallbackPolicy::CpuNodes {
-        return Ok(None);
+    match plan.fallback_policy {
+        OcrFallbackPolicy::Forbidden => return Ok(None),
+        OcrFallbackPolicy::CpuModel => return Ok(Some(true)),
+        OcrFallbackPolicy::CpuNodes => {}
     }
     let mut observed = false;
     for (role, role_ran, cpu_nodes) in [
@@ -879,7 +1211,7 @@ impl PpocrCtcModel {
             ReadRoute::Region => {
                 ran.recognizer = true;
                 let decoded = recognize_region(
-                    &mut self.recognizer,
+                    &mut self.sessions.recognizer.session,
                     &self.dictionary,
                     &self.params,
                     frame,
@@ -890,15 +1222,15 @@ impl PpocrCtcModel {
             }
             ReadRoute::Detect { merge_gap_factor } => merge_gap_factor,
         };
-        if self.detector.is_none() {
-            let built = self.load_detector(diagnostics)?;
-            self.placements.detector = built.cpu_nodes;
-            self.detector = Some(built.session);
+        if self.sessions.detector.is_none() {
+            self.load_detector(diagnostics)?;
         }
-        let detector = self
+        let detector = &mut self
+            .sessions
             .detector
             .as_mut()
-            .ok_or_else(|| "PPOCR detector session is unavailable".to_string())?;
+            .ok_or_else(|| "PPOCR detector session is unavailable".to_string())?
+            .session;
         ran.detector = true;
         let detected = detect_text_regions(
             detector,
@@ -913,7 +1245,7 @@ impl PpocrCtcModel {
         for detected_box in &detected {
             ran.recognizer = true;
             let decoded = recognize_region(
-                &mut self.recognizer,
+                &mut self.sessions.recognizer.session,
                 &self.dictionary,
                 &self.params,
                 frame,
@@ -948,54 +1280,34 @@ impl PpocrCtcModel {
     }
 
     /// Builds the detector session on the first full-frame request, from bytes whose hash
-    /// equals the detector hash verified when the model was loaded. A DirectML detector resolves
-    /// its adapter again and must find it at the model's index (design §1.4).
-    fn load_detector(
-        &self,
-        diagnostics: &mut PpocrDiagnostics,
-    ) -> Result<BuiltSession<Session>, SessionBuildFailure> {
+    /// equals the detector hash verified when the model was loaded, on the model's route
+    /// ([`ModelSessions::build_detector`]): a DirectML detector resolves its adapter again and
+    /// must find it at the model's index (design §1.4), and one that cannot be built under
+    /// `gpu_fallback` `cpu` moves the whole model to the CPU (design §2.3).
+    fn load_detector(&mut self, diagnostics: &mut PpocrDiagnostics) -> VisionFfiResult<()> {
         let (Some(path), Some(expected)) = (&self.detector_path, &self.detector_sha256) else {
-            return Err(SessionBuildFailure::plain(format!(
+            return Err(failure(format!(
                 "OCR model '{}' has no detector; a full_frame region needs det.onnx",
-                self.binding.key().model_ref()
+                self.sessions.route.binding.key().model_ref()
             )));
         };
-        let bytes = std::fs::read(path).map_err(|error| {
-            SessionBuildFailure::plain(format!(
-                "failed to read the OCR detector file {}: {error}",
-                path.display()
-            ))
-        })?;
-        let actual = sha256_hex(&bytes);
-        if actual != *expected {
-            return Err(SessionBuildFailure::plain(format!(
-                "OCR detector file {} changed since the model was verified: expected={expected}, actual={actual}; restart is required",
-                path.display()
-            )));
-        }
-        let key = self.binding.key();
-        let adapter = match (
-            key.requested_directml_device(),
-            key.resolved_directml_device(),
-        ) {
-            (Some(selector), Some(bound)) => Some(resolve_session_adapter(
-                &SystemAdapterSource,
-                selector,
-                None,
-                Some(bound),
-            )?),
-            _ => None,
-        };
-        load_session_with(
+        let bytes = read_verified_model_file(path, expected, PpocrModelRole::Detector)?;
+        let (recognizer_path, recognizer_sha256) = (&self.recognizer_path, &self.recognizer_sha256);
+        self.sessions.build_detector(
             &mut OrtSessions,
-            &SessionRequest {
-                model: &bytes,
-                path,
-                role: PpocrModelRole::Detector,
-                adapter: adapter.as_ref(),
+            ModelInput {
+                bytes: &bytes,
+                path: path.as_path(),
             },
-            &self.plan,
-            self.node_placement_diagnostic.as_deref(),
+            &SystemAdapterSource,
+            || {
+                read_verified_model_file(
+                    recognizer_path,
+                    recognizer_sha256,
+                    PpocrModelRole::Recognizer,
+                )
+                .map(|bytes| (bytes, recognizer_path.clone()))
+            },
             diagnostics,
         )
     }
@@ -1005,12 +1317,13 @@ impl PpocrCtcModel {
         invocation_id: OcrInvocationId,
         ran: InvocationRoles,
     ) -> VisionFfiResult<OcrExecutionAttestation> {
-        let key = self.binding.key();
+        let route = &self.sessions.route;
+        let key = route.binding.key();
         Ok(OcrExecutionAttestation {
             schema_version: OCR_EXECUTION_ATTESTATION_SCHEMA_VERSION.to_string(),
             invocation_id,
-            session: self.binding.clone(),
-            resolved_execution_provider: self.plan.resolved_execution_provider,
+            session: route.binding.clone(),
+            resolved_execution_provider: route.plan.resolved_execution_provider,
             provider: OcrProviderBuildIdentity {
                 implementation: ENGINE_IMPLEMENTATION.to_string(),
                 crate_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -1024,14 +1337,39 @@ impl PpocrCtcModel {
                 cuda_runtime_version: None,
                 cudnn_version: None,
             },
-            registered_execution_providers: self.plan.registered_execution_providers.clone(),
-            cpu_ep_registered: self.plan.cpu_ep_registered,
-            cpu_fallback_disabled: self.plan.cpu_fallback_disabled,
-            fallback_policy: self.plan.fallback_policy,
-            fallback_observed: fallback_observed(&self.plan, self.placements, ran)?,
+            registered_execution_providers: route.plan.registered_execution_providers.clone(),
+            cpu_ep_registered: route.plan.cpu_ep_registered,
+            cpu_fallback_disabled: route.plan.cpu_fallback_disabled,
+            fallback_policy: route.plan.fallback_policy,
+            fallback_observed: fallback_observed(&route.plan, self.sessions.placements(), ran)?,
             complete: true,
         })
     }
+}
+
+/// A model file read again for a session built after the load, which must still hash to what
+/// the load verified.
+fn read_verified_model_file(
+    path: &Path,
+    expected: &str,
+    role: PpocrModelRole,
+) -> VisionFfiResult<Vec<u8>> {
+    let bytes = std::fs::read(path).map_err(|error| {
+        failure(format!(
+            "failed to read the OCR {} file {}: {error}",
+            role.as_str(),
+            path.display()
+        ))
+    })?;
+    let actual = sha256_hex(&bytes);
+    if actual != expected {
+        return Err(failure(format!(
+            "OCR {} file {} changed since the model was verified: expected={expected}, actual={actual}; restart is required",
+            role.as_str(),
+            path.display()
+        )));
+    }
+    Ok(bytes)
 }
 
 /// Initialises ONNX Runtime once per process. A request waiting for another request's
@@ -1133,7 +1471,7 @@ fn establish_runtime(spec: &VisionRuntimeSpec) -> VisionFfiResult<RuntimeFacts> 
         executable_sha256,
         resolved_cuda_device,
         cuda_driver_version,
-        resolved_directml_adapter: None,
+        directml: None,
     })
 }
 
@@ -1160,8 +1498,11 @@ fn require_onnxruntime_once(closure: &[PathBuf], library: &Path) -> VisionFfiRes
 /// 5. ONNX Runtime itself, once per process.
 /// 6. The running executable's hash.
 ///
-/// In this slice every failure fails the load whatever `gpu_fallback` says; the CPU fallback of
-/// `gpu_fallback` `cpu` comes with GPU-1 B2.
+/// Workflow #407 GPU-1 B2 (design §1.4): `DirectML.dll` and the adapter decide the process's route
+/// in [`directml_runtime_route`]; under `gpu_fallback` `cpu` a process that cannot use DirectML
+/// loads the CPU closure in step 3 and runs every model on the CPU until it restarts. An ONNX
+/// Runtime or providers library off the pin, or another version, fails whatever `gpu_fallback`
+/// says.
 fn establish_directml_runtime(
     spec: &VisionRuntimeSpec,
     adapters: &dyn AdapterSource,
@@ -1180,15 +1521,8 @@ fn establish_directml_runtime(
             "a DirectML OCR configuration must not include a CUDA device selector",
         ));
     }
-    let closure = spec.directml_runtime_library_closure().ok_or_else(|| {
-        VisionFfiError::fatal_with_code(
-            VisionFfiErrorCode::InvalidRequest,
-            ENGINE_MODULE,
-            "a DirectML OCR runtime has no DirectML closure",
-        )
-    })?;
     let library = &spec.onnxruntime_library;
-    require_onnxruntime_once(&closure, library)?;
+    require_onnxruntime_once(&spec.runtime_library_closure, library)?;
     let pin = &DIRECTML_RUNTIME_PIN;
     let onnxruntime_sha256 = sha256_file_hex(ENGINE_MODULE, library)?;
     let expected = spec
@@ -1203,13 +1537,16 @@ fn establish_directml_runtime(
             pin.onnxruntime.sha256
         )));
     }
-    for path in closure.iter().filter(|path| *path != library) {
-        check_directml_runtime_file(path, &directml.library)?;
+    for path in spec
+        .runtime_library_closure
+        .iter()
+        .filter(|path| *path != library)
+    {
+        check_pinned_runtime_file(path)?;
     }
-    let adapter = resolve_directml_adapter(adapters, &directml.device)
-        .decision
-        .map_err(|none| SessionBuildFailure::from_unavailable(none).into_error())?;
-    establish_process_runtime_library_closure(&closure)?;
+    let route = directml_runtime_route(spec, check_directml_library(&directml.library), adapters)?;
+    require_onnxruntime_once(&route.closure, library)?;
+    establish_process_runtime_library_closure(&route.closure)?;
     let onnxruntime_version = onnxruntime_version_string(library)?;
     if onnxruntime_version != pin.onnxruntime_version {
         return Err(unavailable(format!(
@@ -1230,57 +1567,125 @@ fn establish_directml_runtime(
         executable_sha256,
         resolved_cuda_device: None,
         cuda_driver_version: None,
-        resolved_directml_adapter: Some(adapter),
+        directml: Some(route.process),
     })
 }
 
-/// One closure member of a DirectML runtime other than `onnxruntime.dll`, against the pin: the
-/// runtime's `DirectML.dll` is `directml_library_missing` when absent and
-/// `directml_library_mismatch` when it differs or cannot be read;
-/// `onnxruntime_providers_shared.dll` that is not the pinned file is `ProviderUnavailable`.
-fn check_directml_runtime_file(path: &Path, directml_library: &Path) -> VisionFfiResult<()> {
-    let pin = &DIRECTML_RUNTIME_PIN;
-    let is_directml = path == directml_library;
-    let pinned = if is_directml {
-        &pin.directml
-    } else if path.file_name() == Some(OsStr::new(pin.providers_shared.file_name)) {
-        &pin.providers_shared
-    } else {
+/// Workflow #407 GPU-1 B2: what a DirectML process loads before ONNX Runtime and what it runs.
+#[derive(Debug, Clone)]
+struct DirectmlRuntimeRoute {
+    closure: Vec<PathBuf>,
+    process: ProcessRoute,
+}
+
+/// Workflow #407 GPU-1 B2 (design §1.4, §3): the route of a DirectML process, decided once when its
+/// runtime is initialised; `library` is `ort\DirectML.dll` against the pin. With the library
+/// pinned and the configured adapter resolved, the closure loads `DirectML.dll` right before ONNX
+/// Runtime and the process registers DirectML. Otherwise, under `gpu_fallback` `cpu`, the closure
+/// is the CPU one, `[providers_shared, onnxruntime]` without `DirectML.dll`, and every model of
+/// the process runs on the CPU until it restarts, with the one warning of that fallback; under
+/// `refuse` the initialisation fails (an adapter or library reason is `ProviderUnavailable`) and
+/// the next model load tries again. No other adapter is ever chosen.
+fn directml_runtime_route(
+    spec: &VisionRuntimeSpec,
+    library: Result<(), SessionBuildFailure>,
+    adapters: &dyn AdapterSource,
+) -> VisionFfiResult<DirectmlRuntimeRoute> {
+    let directml = spec.directml.as_ref().ok_or_else(|| {
+        VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::InvalidRequest,
+            ENGINE_MODULE,
+            "a DirectML OCR runtime has no DirectML part",
+        )
+    })?;
+    let usable = library.and_then(|()| {
+        resolve_directml_adapter(adapters, &directml.device)
+            .decision
+            .map_err(SessionBuildFailure::from_unavailable)
+    });
+    let unusable = match usable {
+        Ok(adapter) => {
+            let closure = spec.directml_runtime_library_closure().ok_or_else(|| {
+                VisionFfiError::fatal_with_code(
+                    VisionFfiErrorCode::InvalidRequest,
+                    ENGINE_MODULE,
+                    "a DirectML OCR runtime has no DirectML closure",
+                )
+            })?;
+            return Ok(DirectmlRuntimeRoute {
+                closure,
+                process: ProcessRoute::Directml(adapter),
+            });
+        }
+        Err(unusable) => unusable,
+    };
+    let warning = match directml.gpu_fallback {
+        GpuFallback::Cpu => unusable.warning(GpuFallback::Cpu, None),
+        GpuFallback::Refuse => None,
+    };
+    match warning {
+        Some(warning) => Ok(DirectmlRuntimeRoute {
+            closure: spec.runtime_library_closure.clone(),
+            process: ProcessRoute::Cpu(warning),
+        }),
+        None => Err(unusable.into_error()),
+    }
+}
+
+/// A member of a DirectML runtime's CPU closure other than `onnxruntime.dll` against the pin:
+/// `onnxruntime_providers_shared.dll` that is not the pinned file is `ProviderUnavailable`, with
+/// the OS failure behind an unreadable one.
+fn check_pinned_runtime_file(path: &Path) -> VisionFfiResult<()> {
+    let pinned = &DIRECTML_RUNTIME_PIN.providers_shared;
+    if path.file_name() != Some(OsStr::new(pinned.file_name)) {
         return Err(VisionFfiError::fatal_with_code(
             VisionFfiErrorCode::InvalidRequest,
             ENGINE_MODULE,
             format!("{} is no file of the DirectML runtime pin", path.display()),
         ));
-    };
+    }
     let check = pinned.check(path);
-    let error = match check.state {
-        FileState::Ok => return Ok(()),
-        FileState::Missing if is_directml => SessionBuildFailure::directml(
-            GpuUnavailableReason::DirectmlLibraryMissing,
-            format!("{} is missing", path.display()),
-        )
-        .into_error(),
-        state if is_directml => SessionBuildFailure::directml(
-            GpuUnavailableReason::DirectmlLibraryMismatch,
-            format!(
-                "{} is not the pinned DirectML {} ({state}; the pin is {} B with SHA-256 {})",
-                path.display(),
-                pin.directml_version,
-                pinned.size,
-                pinned.sha256
-            ),
-        )
-        .into_error(),
-        state => unavailable(format!(
-            "{} is not the pinned file of the DirectML runtime ({state}; the pin is {} B with SHA-256 {})",
-            path.display(),
-            pinned.size,
-            pinned.sha256
-        )),
-    };
+    if check.state == FileState::Ok {
+        return Ok(());
+    }
+    let error = unavailable(format!(
+        "{} is not the pinned file of the DirectML runtime ({}; the pin is {} B with SHA-256 {})",
+        path.display(),
+        check.state,
+        pinned.size,
+        pinned.sha256
+    ));
     Err(match check.os_cause {
         Some(cause) => error.with_os_cause(cause),
         None => error,
+    })
+}
+
+/// The runtime's `ort\DirectML.dll` against the pin: `directml_library_missing` when absent,
+/// `directml_library_mismatch` when it differs or cannot be read (with the OS failure).
+fn check_directml_library(library: &Path) -> Result<(), SessionBuildFailure> {
+    let pin = &DIRECTML_RUNTIME_PIN;
+    let check = pin.directml.check(library);
+    let unusable = match check.state {
+        FileState::Ok => return Ok(()),
+        FileState::Missing => SessionBuildFailure::directml(
+            GpuUnavailableReason::DirectmlLibraryMissing,
+            format!("{} is missing", library.display()),
+        ),
+        state => SessionBuildFailure::directml(
+            GpuUnavailableReason::DirectmlLibraryMismatch,
+            format!(
+                "{} is not the pinned DirectML {} ({state}; the pin is {} B with SHA-256 {})",
+                library.display(),
+                pin.directml_version,
+                pin.directml.size,
+                pin.directml.sha256
+            ),
+        ),
+    };
+    Err(SessionBuildFailure {
+        os_cause: check.os_cause,
+        ..unusable
     })
 }
 
@@ -1461,15 +1866,17 @@ fn keep_detected_boxes(
 }
 
 /// Workflow #407 GPU-1 B1: why one session could not be built. A DirectML session's failure
-/// names why DirectML cannot be used (design §2.3), the reason the fallback of GPU-1 B2 records;
-/// in this slice every DirectML failure fails the request. CPU and CUDA failures name none and
-/// keep their messages.
+/// names why DirectML cannot be used (design §2.3), the reason a fallback's warning carries
+/// (GPU-1 B2). CPU and CUDA failures name none and keep their messages.
 #[derive(Debug, Clone)]
 struct SessionBuildFailure {
     reason: Option<GpuUnavailableReason>,
     message: String,
-    /// The failure behind the reason, with its OS cause when there is one.
-    cause: Option<Box<VisionFfiError>>,
+    /// The OS failure behind the reason, when there is one (the adapter listing, the library).
+    os_cause: Option<Outcome>,
+    /// Workflow #407 GPU-1 B2: ONNX Runtime's status behind a DirectML failure, kept whole for
+    /// the fallback warning's link (design §2.3).
+    ort_status: Option<Outcome>,
 }
 
 impl SessionBuildFailure {
@@ -1477,15 +1884,15 @@ impl SessionBuildFailure {
         Self {
             reason: None,
             message: message.into(),
-            cause: None,
+            os_cause: None,
+            ort_status: None,
         }
     }
 
     fn directml(reason: GpuUnavailableReason, message: impl Into<String>) -> Self {
         Self {
             reason: Some(reason),
-            message: message.into(),
-            cause: None,
+            ..Self::plain(message)
         }
     }
 
@@ -1493,18 +1900,38 @@ impl SessionBuildFailure {
     fn step(options: &SessionOptions, reason: GpuUnavailableReason, message: String) -> Self {
         Self {
             reason: options.execution_provider.is_directml().then_some(reason),
-            message,
-            cause: None,
+            ..Self::plain(message)
         }
     }
 
-    /// No adapter for a DirectML session, with the failure behind it.
+    /// No adapter for a DirectML session, with the OS failure behind it.
     fn from_unavailable(unavailable: DirectmlUnavailable) -> Self {
         Self {
             reason: Some(unavailable.reason),
             message: unavailable.to_string(),
-            cause: unavailable.cause.map(Box::new),
+            os_cause: unavailable
+                .cause
+                .as_ref()
+                .and_then(VisionFfiError::os_cause)
+                .cloned(),
+            ort_status: None,
         }
+    }
+
+    /// This failure with ONNX Runtime's status (its error code and its message with its causes)
+    /// kept for a DirectML failure's warning (design §2.3, as GPU-0c's `OrtStepFailure` kept it).
+    fn with_ort_status<R>(mut self, error: &ort::Error<R>) -> Self {
+        if self.reason.is_some() {
+            let mut message = error.message().to_string();
+            let mut source = std::error::Error::source(error);
+            while let Some(cause) = source {
+                message.push_str("; caused by: ");
+                message.push_str(&cause.to_string());
+                source = std::error::Error::source(cause);
+            }
+            self.ort_status = Some(onnxruntime_status(&error.code(), &message));
+        }
+        self
     }
 
     /// The same failure, of the zero-inference shadow that reads the node placement.
@@ -1514,6 +1941,36 @@ impl SessionBuildFailure {
             self.message
         );
         self
+    }
+
+    /// Workflow #407 GPU-1 B2: the failure of a CPU session that replaces DirectML after a
+    /// fallback; it names no DirectML reason and fails the request.
+    fn of_cpu_fallback(self) -> Self {
+        Self::plain(format!(
+            "DirectML could not be used and the CPU session that replaces it failed: {}",
+            self.message
+        ))
+    }
+
+    /// Workflow #407 GPU-1 B2 (design §2.5): the one warning `vision_gpu_unavailable` of falling
+    /// back from this DirectML failure under `gpu_fallback`: its reason, `model_name` for one
+    /// model's fallback (none for the process's), and ONNX Runtime's status or the OS failure
+    /// behind the reason as its `caused_by` link. `None` for a failure that names no DirectML
+    /// reason, which is no reason to fall back.
+    fn warning(&self, gpu_fallback: GpuFallback, model_name: Option<&str>) -> Option<Outcome> {
+        let reason = self.reason?;
+        let warning = Outcome::new(VisionGpuCode::VisionGpuUnavailable)
+            .execution_provider(OnnxExecutionProvider::Directml)
+            .gpu_unavailable_reason(reason)
+            .gpu_fallback(gpu_fallback);
+        let warning = match model_name {
+            Some(model_name) => warning.model_name(model_name),
+            None => warning,
+        };
+        Some(match self.ort_status.as_ref().or(self.os_cause.as_ref()) {
+            Some(link) => warning.caused_by(link.clone()),
+            None => warning,
+        })
     }
 
     /// The engine's error: an adapter or library reason is `ProviderUnavailable`, every other
@@ -1533,8 +1990,8 @@ impl SessionBuildFailure {
             | GpuUnavailableReason::SessionBuildFailed
             | GpuUnavailableReason::PlacementUnread => failure(message),
         };
-        match self.cause.as_deref().and_then(VisionFfiError::os_cause) {
-            Some(cause) => error.with_os_cause(cause.clone()),
+        match self.os_cause {
+            Some(cause) => error.with_os_cause(cause),
             None => error,
         }
     }
@@ -1580,22 +2037,25 @@ impl SessionBuilds for OrtSessions {
                     step(format!(
                         "failed to configure bounded PPOCR node-placement diagnostic: {err}"
                     ))
+                    .with_ort_status(&err)
                 })?
                 .with_log_level(LogLevel::Verbose)
                 .map_err(|err| {
                     step(format!(
                         "failed to enable verbose PPOCR node-placement diagnostic: {err}"
                     ))
+                    .with_ort_status(&err)
                 })?
                 .with_log_verbosity(0)
                 .map_err(|err| {
                     step(format!(
                         "failed to bound PPOCR node-placement diagnostic: {err}"
                     ))
+                    .with_ort_status(&err)
                 })?;
         }
         builder.commit_from_memory(model).map_err(|err| {
-            step(match options.execution_provider {
+            let failed = step(match options.execution_provider {
                 SessionExecutionProvider::Cpu => format!(
                     "failed to load CPU-only PPOCR ONNX model {}: {err}",
                     path.display()
@@ -1608,7 +2068,8 @@ impl SessionBuilds for OrtSessions {
                     "failed to load DirectML PPOCR ONNX model {} on DXGI adapter {device_id} (CPU nodes allowed): {err}",
                     path.display()
                 ),
-            })
+            });
+            failed.with_ort_status(&err)
         })
     }
 }
@@ -1631,6 +2092,7 @@ fn configured_session_builder(
                 failed,
                 format!("failed to create ONNXRuntime session builder: {err}"),
             )
+            .with_ort_status(&err)
         })?
         .with_intra_threads(options.intra_threads)
         .map_err(|err| {
@@ -1638,6 +2100,7 @@ fn configured_session_builder(
                 failed,
                 format!("failed to configure ONNXRuntime intra threads: {err}"),
             )
+            .with_ort_status(&err)
         })?;
     let builder = match options.memory_pattern {
         Some(enabled) => builder.with_memory_pattern(enabled).map_err(|err| {
@@ -1645,6 +2108,7 @@ fn configured_session_builder(
                 failed,
                 format!("failed to set the ONNXRuntime memory pattern to {enabled}: {err}"),
             )
+            .with_ort_status(&err)
         })?,
         None => builder,
     };
@@ -1654,6 +2118,7 @@ fn configured_session_builder(
                 failed,
                 format!("failed to set ONNXRuntime parallel execution to {parallel}: {err}"),
             )
+            .with_ort_status(&err)
         })?,
         None => builder,
     };
@@ -1673,6 +2138,7 @@ fn configured_session_builder(
                         "failed to register required CUDA execution provider for device {device_id}; CPU/DirectML/CoreML fallback is disabled: {err}"
                     ),
                 )
+                .with_ort_status(&err)
             })?,
         SessionExecutionProvider::Directml { device_id } => builder
             .with_execution_providers([
@@ -1688,6 +2154,7 @@ fn configured_session_builder(
                         "failed to register the DirectML execution provider on DXGI adapter {device_id}; CPU nodes are allowed: {err}"
                     ),
                 )
+                .with_ort_status(&err)
             })?,
     };
     if options.cpu_fallback_disabled {
@@ -1696,6 +2163,7 @@ fn configured_session_builder(
                 failed,
                 format!("failed to disable PPOCR CPU fallback: {err}"),
             )
+            .with_ort_status(&err)
         })
     } else {
         Ok(builder)
@@ -2818,9 +3286,9 @@ fn argmax_with_softmax_confidence(row: &[f32]) -> Result<(usize, f32), String> {
 enum ProviderInvokeError {
     Failure(String),
     Timeout(String),
-    /// Workflow #407 GPU-1 B1: a session built on first use (the detector) that could not be
+    /// Workflow #407 GPU-1 B1, B2: a session built on first use (the detector) that could not be
     /// built, with its own code and cause.
-    Session(SessionBuildFailure),
+    Vision(VisionFfiError),
 }
 
 impl ProviderInvokeError {
@@ -2834,7 +3302,7 @@ impl ProviderInvokeError {
             Self::Timeout(message) => {
                 VisionFfiError::fatal_with_code(VisionFfiErrorCode::Timeout, ENGINE_MODULE, message)
             }
-            Self::Session(session) => session.into_error(),
+            Self::Vision(error) => error,
         }
     }
 }
@@ -2845,9 +3313,9 @@ impl From<String> for ProviderInvokeError {
     }
 }
 
-impl From<SessionBuildFailure> for ProviderInvokeError {
-    fn from(session: SessionBuildFailure) -> Self {
-        Self::Session(session)
+impl From<VisionFfiError> for ProviderInvokeError {
+    fn from(error: VisionFfiError) -> Self {
+        Self::Vision(error)
     }
 }
 

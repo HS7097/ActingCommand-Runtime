@@ -156,8 +156,10 @@ admits `execution_provider` `directml` with `directml_device
 { expected_identity }` and `gpu_fallback` (`actingd-config` revision 27;
 [actingd-check-config.md](actingd-check-config.md), "Vision root"); check-config
 and a start hash the pinned files below, list the adapters and resolve the
-identity as "Adapter identity and selection" says. Until the engine's slices
-are in, a running Runtime fails every OCR load of a `directml` section, and a
+identity as "Adapter identity and selection" says. The engine builds DirectML
+sessions (slice B1) and falls back to the CPU (slice B2, "Fallback to the CPU");
+the kernel refuses the execution attestation of a `directml` section, a model
+on the CPU after a fallback included, until slice C admits its evidence. A
 `cpu` section runs as before. The CUDA path of this build is known not to work
 (GPU-0d, GPU-0e).
 
@@ -251,10 +253,44 @@ session (whose report has no `device`) and is still refused for a CPU session.
 
 A DirectML OCR invocation attests the fallback policy `cpu_nodes`, and
 `fallback_observed` says whether a role whose session ran has a CPU-placed node.
-Slice B1 builds these sessions; until slice B2 every DirectML failure (adapter,
-library, provider registration, session build, placement) fails the request,
-whatever `gpu_fallback` says.
 
 `vision_gpu_unavailable` (warning) says that the configured GPU execution
 provider cannot be used, with `gpu_unavailable_reason` and `gpu_fallback`
 (`cpu`: the work goes on on the CPU; `refuse`: OCR requests fail).
+
+### Fallback to the CPU
+
+Slice B2 (design §1.4, §2.3). Under `gpu_fallback` `cpu` (the default):
+
+- **At the runtime initialisation** (the first model load), a `DirectML.dll`
+  that is missing or off the pin, or an adapter that does not resolve, puts the
+  whole process on the CPU until it restarts: its closure is the CPU one,
+  `[onnxruntime_providers_shared.dll, onnxruntime.dll]` without `DirectML.dll`,
+  DirectML is never registered, and every model it loads runs on the CPU with
+  that one warning (no `model_name`). An ONNX Runtime or providers library off
+  the pin, or another version, still fails.
+- **At a session build**, an adapter that does not resolve, a provider that does
+  not register, a session that does not build or a placement that cannot be
+  read moves that model whole to the CPU, once: the failed DirectML session's
+  report is dropped, the model's sessions are built on the CPU, and the model
+  carries one warning that names it (`model_name`), with ONNX Runtime's status
+  (`foreign_vision_error`, `raw_source` `vision`, its error code as `raw_code`
+  and its message as `raw_text`) or the OS failure as its link. A detector that
+  cannot be built on the first full-frame request moves the recognizer too: it
+  is rebuilt on the CPU from its verified file, the reports of the replaced
+  DirectML sessions still held are dropped, and the session generation steps.
+  The model stays on the CPU until it is unloaded; a later load tries DirectML
+  again, and a new fallback is a new warning.
+
+A model on the CPU after a fallback keeps the key that requests `directml`, with
+the selector and no resolved adapter (its provider options digest names the CPU
+model, one intra-op thread), and its invocations attest the resolved provider
+`cpu`, the CPU provider registered, CPU fallback allowed, the fallback policy
+`cpu_model` and `fallback_observed` true. `OcrModelLoad::Loaded` carries the
+model's live execution status (`OcrExecutionStatus`: requested and actual
+provider and the warning), which the engine updates when a detector moves the
+model. Under `refuse` every such failure fails the request as before
+(`ProviderUnavailable` for an adapter or library reason, `ProviderFailure` for
+the others, the message leading with `DirectML cannot be used (<reason>)`), and
+the next request tries again. An NN classifier runs on the CPU under `directml`,
+which is no fallback and has no warning.

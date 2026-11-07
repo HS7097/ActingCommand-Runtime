@@ -2802,6 +2802,17 @@ tests = [
 ]
 incident = ["#407 GPU-1 B1"]
 
+# Workflow #407 GPU-1 B2 (0.12.44; register §1.286; brief rd-1031/perf-407/brief-gpu1b2.md; design rd-1031/perf-407/design-gpu1.md §1.4, §2.3, §2.4, §2.5 and §7 row B2): over a fake ONNX Runtime that refuses the DirectML builds it is told to and fake adapters, under gpu_fallback cpu a DirectML recognizer that cannot be built moves the model to the CPU once (one CPU build, the replaced session's report dropped, a key that requests directml with no resolved adapter, a CPU plan with the fallback policy cpu_model, fallback_observed true, one vision_gpu_unavailable naming the model with ONNX Runtime's status as its foreign_vision_error link), its detector is then built on the CPU without trying DirectML again, and an adapter that does not resolve at a model load does the same; under refuse the load, a detector build (tried again by the next request) and an unresolved adapter fail with DirectML cannot be used (<reason>) and nothing is built on the CPU; a DirectML detector that cannot be built under cpu rebuilds the recognizer on the CPU from its file and builds the detector there, drops both DirectML reports and steps the session generation; an adapter that does not resolve, or a DirectML.dll that is missing, at runtime initialisation keeps DirectML.dll out of the closure ([providers_shared, onnxruntime]) under cpu with one warning that names no model and that every model of the process carries, fails under refuse, and an adapter that resolves puts DirectML.dll right before onnxruntime.dll
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ppocr-onnx-json-provider::lib::gate_407_gpu1b2::a_session_that_cannot_be_built_falls_back_to_cpu_once_under_fallback_cpu",
+    "actingcommand-ppocr-onnx-json-provider::lib::gate_407_gpu1b2::a_session_that_cannot_be_built_fails_the_request_under_refuse",
+    "actingcommand-ppocr-onnx-json-provider::lib::gate_407_gpu1b2::a_detector_that_falls_back_moves_the_whole_model_to_cpu",
+    "actingcommand-ppocr-onnx-json-provider::lib::gate_407_gpu1b2::an_unresolved_adapter_at_runtime_init_keeps_directml_out_of_the_closure",
+]
+incident = ["#407 GPU-1 B2"]
+
 # Workflow #407 GPU-1 C (0.12.44; register §1.286; brief rd-1031/perf-407/brief-gpu1c.md; design rd-1031/perf-407/design-gpu1.md §1.4, §2.4, §2.5 and §7 row C): the recognition pack admits DirectML evidence in exactly two bindings, DirectML on DirectML (CPU EP not registered, CPU fallback neither disabled nor forbidden, observed true or false) and DirectML on the CPU after a whole-model fallback (CPU EP registered, fallback neither disabled nor forbidden, observed true), and refuses every other combination that names DirectML (no observation, forbidden, a wrong CPU EP or fallback flag, resolved on CUDA, a CPU or CUDA request resolved on DirectML, a CPU request with DirectML's fallback, DirectML on the CPU with CPU's strict flags, incomplete); the kernel maps a DirectML attestation to that evidence, and a model on the CPU after the fallback shows the start's one vision_gpu_unavailable warning however many requests it runs, which stays after a failed OCR load and is gone once an OCR load completes
 [[gate]]
 coverage = "Y"

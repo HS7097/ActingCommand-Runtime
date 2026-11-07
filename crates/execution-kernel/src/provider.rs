@@ -579,6 +579,7 @@ impl VisionFfiProvider {
                 engine,
                 model_sha256: actual,
                 waited_on_others,
+                ..
             }) => {
                 let after = self.sample_private_bytes();
                 if !slot.verify(&actual) {
