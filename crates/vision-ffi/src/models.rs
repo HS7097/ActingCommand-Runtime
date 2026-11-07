@@ -10,8 +10,9 @@
 //! metadata and descriptions; model files are read and hashed by the engine on first use.
 
 use crate::{
-    CudaDeviceSelector, NnEngine, OcrEngine, OcrSessionId, OnnxExecutionProvider, VisionFfiError,
-    VisionFfiErrorCode, VisionFfiResult,
+    CudaDeviceSelector, DIRECTML_RUNTIME_PIN, DirectmlDeviceSelector, GpuFallback, NnEngine,
+    OcrEngine, OcrSessionId, OnnxExecutionProvider, VisionFfiError, VisionFfiErrorCode,
+    VisionFfiResult,
 };
 use actingcommand_contract::outcome::{IoOp, Outcome};
 use serde::{Deserialize, Serialize};
@@ -32,6 +33,8 @@ pub const VISION_RUNTIME_DIRECTORY: &str = "ort";
 pub const ONNXRUNTIME_LIBRARY: &str = "onnxruntime.dll";
 pub const ONNXRUNTIME_SHARED_PROVIDERS_LIBRARY: &str = "onnxruntime_providers_shared.dll";
 pub const ONNXRUNTIME_CUDA_PROVIDER_LIBRARY: &str = "onnxruntime_providers_cuda.dll";
+/// Workflow #407 GPU-1: the DirectML library a DirectML runtime loads before ONNX Runtime.
+pub const DIRECTML_LIBRARY: &str = "DirectML.dll";
 
 const MODULE: &str = "vision_models";
 const MAX_DESCRIPTION_BYTES: u64 = 64 * 1024;
@@ -51,17 +54,42 @@ pub struct VisionRuntimeSpec {
     pub expected_onnxruntime_sha256: Option<String>,
     pub execution_provider: OnnxExecutionProvider,
     pub cuda_device: Option<CudaDeviceSelector>,
+    /// Workflow #407 GPU-1 A: the DirectML part of an `execution_provider` `directml` runtime,
+    /// absent for every other provider.
+    pub directml: Option<DirectmlRuntimeSpec>,
+}
+
+/// Workflow #407 GPU-1 A (design §1.2, §3): what a DirectML runtime adds to its vision root's
+/// ONNX Runtime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirectmlRuntimeSpec {
+    /// `ort\DirectML.dll`, by absolute path. Its presence is not required here: a missing or
+    /// unpinned library is a reason to run without DirectML (`directml_library_missing`,
+    /// `directml_library_mismatch`), decided when the runtime is initialised.
+    pub library: PathBuf,
+    /// The adapter the configuration names.
+    pub device: DirectmlDeviceSelector,
+    /// What the process does when DirectML cannot be used.
+    pub gpu_fallback: GpuFallback,
 }
 
 impl VisionRuntimeSpec {
     /// The ONNX Runtime of a vision root: `ort\onnxruntime_providers_shared.dll` when present,
     /// then `ort\onnxruntime.dll` and, for CUDA, `ort\onnxruntime_providers_cuda.dll`, loaded
     /// in that order. Only file metadata is read; a required library that is missing fails.
+    /// A DirectML runtime is built by [`Self::from_vision_root_directml`] and refused here.
     pub fn from_vision_root(
         vision_root: &Path,
         execution_provider: OnnxExecutionProvider,
         cuda_device: Option<CudaDeviceSelector>,
     ) -> VisionFfiResult<Self> {
+        if execution_provider == OnnxExecutionProvider::Directml {
+            return Err(VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::InvalidRequest,
+                MODULE,
+                "execution_provider directml needs its adapter selector: use VisionRuntimeSpec::from_vision_root_directml",
+            ));
+        }
         let directory = vision_root.join(VISION_RUNTIME_DIRECTORY);
         let onnxruntime_library = directory.join(ONNXRUNTIME_LIBRARY);
         let mut runtime_library_closure = Vec::new();
@@ -92,7 +120,62 @@ impl VisionRuntimeSpec {
             expected_onnxruntime_sha256: None,
             execution_provider,
             cuda_device,
+            directml: None,
         })
+    }
+
+    /// Workflow #407 GPU-1 A (design §3, §5): the DirectML runtime of a vision root. Its ONNX
+    /// Runtime is the pinned DirectML build: `ort\onnxruntime_providers_shared.dll` and
+    /// `ort\onnxruntime.dll` are both required, and `expected_onnxruntime_sha256` is the pin's.
+    /// `runtime_library_closure` stays the closure a CPU run loads, `[providers_shared,
+    /// onnxruntime]`, exactly as [`Self::from_vision_root`] builds it for `cpu`;
+    /// [`Self::directml_runtime_library_closure`] is the closure a DirectML run loads. Only file
+    /// metadata is read, and `ort\DirectML.dll` need not exist yet.
+    pub fn from_vision_root_directml(
+        vision_root: &Path,
+        device: DirectmlDeviceSelector,
+        gpu_fallback: GpuFallback,
+    ) -> VisionFfiResult<Self> {
+        device.validate()?;
+        let directory = vision_root.join(VISION_RUNTIME_DIRECTORY);
+        let shared = directory.join(ONNXRUNTIME_SHARED_PROVIDERS_LIBRARY);
+        let onnxruntime_library = directory.join(ONNXRUNTIME_LIBRARY);
+        for library in [&shared, &onnxruntime_library] {
+            if !runtime_file(library)? {
+                return Err(runtime_unavailable(format!(
+                    "{} is missing; it is required for execution_provider directml",
+                    library.display()
+                )));
+            }
+        }
+        Ok(Self {
+            runtime_library_closure: vec![shared, onnxruntime_library.clone()],
+            onnxruntime_library,
+            expected_onnxruntime_sha256: Some(DIRECTML_RUNTIME_PIN.onnxruntime.sha256.to_string()),
+            execution_provider: OnnxExecutionProvider::Directml,
+            cuda_device: None,
+            directml: Some(DirectmlRuntimeSpec {
+                library: directory.join(DIRECTML_LIBRARY),
+                device,
+                gpu_fallback,
+            }),
+        })
+    }
+
+    /// The closure a DirectML run loads (design §3): `ort\DirectML.dll` by absolute path right
+    /// before `onnxruntime.dll`, so that ONNX Runtime's later load of `DirectML.dll` by name
+    /// finds the module already loaded; every other member as in `runtime_library_closure`.
+    /// `None` for a runtime that is not DirectML's. No process DLL search path changes.
+    pub fn directml_runtime_library_closure(&self) -> Option<Vec<PathBuf>> {
+        let directml = self.directml.as_ref()?;
+        let mut closure = Vec::with_capacity(self.runtime_library_closure.len() + 1);
+        for library in &self.runtime_library_closure {
+            if *library == self.onnxruntime_library {
+                closure.push(directml.library.clone());
+            }
+            closure.push(library.clone());
+        }
+        Some(closure)
     }
 }
 
@@ -796,7 +879,7 @@ pub fn sha256_file_hex(module: &'static str, path: &Path) -> VisionFfiResult<Str
     Ok(lower_hex(&hasher.finalize()))
 }
 
-fn lower_hex(bytes: &[u8]) -> String {
+pub(crate) fn lower_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut value = String::with_capacity(bytes.len() * 2);
     for byte in bytes {

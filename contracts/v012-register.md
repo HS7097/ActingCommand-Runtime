@@ -7578,6 +7578,54 @@ row "#404 FS-2b"). The FS-3 tests of §1.284 keep their names and now read `anch
 
 **Rollback.** As §1.283.
 
+### 1.286 Slice GPU-1 A (0.12.44): DirectML adapter selection and the runtime pin (Workflow #407; Alice's approval of 166 in the coordinator window, 「166，批准，按此计划，cuda可以延后」; design `rd-1031/perf-407/design-gpu1.md` §1.2–§1.4, §3, §5, §6.3 and §7 row A, read on main `a322caa4`, with the coordinator's acceptance of its §9 recommendations; coordinator work order `rd-1031/perf-407/brief-gpu1a.md`)
+
+[vision-model-folders.md](vision-model-folders.md) (section "DirectML runtime") is the contract.
+1.286 was the next free number on the base `a322caa4`; the later GPU-1 slices (B1, B2, C, D) add
+their rows here. This slice adds the parts in `actingcommand-vision-ffi` only: nothing selects
+DirectML yet. The configuration still refuses `execution_provider` `directml`
+(`vision_config_invalid`, slice D admits it), the engine refuses a DirectML runtime before it
+loads anything (slices B1 and B2 build its sessions), and the kernel refuses a DirectML execution
+attestation (slice C admits its evidence).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| GA-1 | `OnnxExecutionProvider::Directml` (`directml`), with `as_str` and the `execution_provider` vocabulary token `directml` (the vocabulary now has its `source`, the enum) | in-process type, vocabulary token | GPU-1 A | — | the exhaustive matches outside vision-ffi gain the arm they need, each refusing DirectML: the engine's session plan, its runtime initialisation (before any library loads) and its session builder (ppocr-onnx-json), the kernel's evidence mapping (`InvalidResponse`), and check-config's report spelling (`directml`) |
+| GA-2 | `DirectmlDeviceSelector {expected_identity}` and `DirectmlDeviceIdentity {dxgi_index, identity}`; the identity `dxgi-pci:<vendor>:<device>:<subsys>:<rev>` (lowercase hex of 4, 4, 8 and 2 digits) | in-process types (serde, `deny_unknown_fields`) | GPU-1 A | — | a selector that is no identity is `InvalidRequest`; an index is below 64 |
+| GA-3 | `DxgiAdapter` (index, the four DXGI identity values, `DxgiLuid`, DXGI flags, `KernelAdapterReading` = `Read {D3dkmtAdapterType, pci_address?}` \| `Failed {call, ntstatus}`), `AdapterSource`, `SystemAdapterSource` | observation, behaviour | GPU-1 A | — | DXGI by a minimal vtable (`CreateDXGIFactory1`, `EnumAdapters1`, `GetDesc1`), the kernel type and PCI location by `D3DKMTOpenAdapterFromLuid`, `D3DKMTQueryAdapterInfo` (`KMTQAITYPE_ADAPTERTYPE` 15, `KMTQAITYPE_ADAPTERADDRESS` 6) and `D3DKMTCloseAdapter`; `dxgi.dll` and `gdi32.dll` from System32 only, loaded once and kept; a listing that fails is a `ProviderUnavailable` with the HRESULT as its `foreign_os_error` link; no new dependency |
+| GA-4 | `resolve_directml_adapter(source, selector)` → `DirectmlAdapterResolution {adapters, decision}`, the decision `ResolvedDirectmlAdapter {dxgi_index, identity, luid, pci_address?}` or `DirectmlUnavailable {reason, cause?}` | behaviour | GPU-1 A | — | design §1.3: identity, then physical (render, not software, indirect-display or paravirtualized), then, for two or more, the readable PCI location; exactly one, else `adapter_missing`, `adapter_not_physical` or `adapter_ambiguous`; a failed listing is `adapter_missing` with its failure; the LUID is recorded, never compared; `ResolvedDirectmlAdapter` displays as `<identity>;index=<n>;luid=<luid>` (design §2.5's startup binding) |
+| GA-5 | `VisionRuntimeSpec.directml: Option<DirectmlRuntimeSpec {library, device, gpu_fallback}>`, `VisionRuntimeSpec::from_vision_root_directml(root, device, gpu_fallback)`, `directml_runtime_library_closure()` | in-process type, behaviour | GPU-1 A | — | design §3: `runtime_library_closure` of a DirectML runtime is the CPU closure `[providers_shared, onnxruntime]` (both required), `directml_runtime_library_closure()` is `[providers_shared, ort\DirectML.dll, onnxruntime]` by absolute path; `expected_onnxruntime_sha256` is the pin's; `from_vision_root` keeps its signature and its CPU and CUDA closures and refuses `directml` (`InvalidRequest`); no process DLL search change |
+| GA-6 | `OcrSessionKey` (and `OcrSessionKeyParts`) `requested_directml_device`, `resolved_directml_device`; the provider options digest's DirectML branch | in-process type | GPU-1 A | — | a DirectML key needs both and no CUDA member, the resolved identity equal to the selector's; any other key refuses both; the digest hashes `directml`, CPU nodes allowed, one intra-op thread, memory pattern and parallel execution off (design §2.1), the requested identity and the resolved index and identity, never the LUID; the CPU and CUDA digests are byte for byte unchanged |
+| GA-7 | `DIRECTML_RUNTIME_PIN` (ONNX Runtime 1.24.4, DirectML 1.15.4; `onnxruntime.dll` 17,328,152 B, `onnxruntime_providers_shared.dll` 22,040 B, `DirectML.dll` 18,527,776 B with their SHA-256) and `PinnedRuntimeFile::check` → `PinnedFileCheck {state (file_state), os_cause?}` | constant table, behaviour | GPU-1 A | — | design §5; the check (size, then SHA-256 in 64 KiB chunks) is for slices B1 and D, which call it |
+| GA-8 | `windows-tool-sources.v1.json` components `onnxruntime-directml-1.24.4` and `directml-1.15.4` (`download_zip` from `api.nuget.org`, size, SHA-256 and NuGet's base64 SHA-512, the x64 DLLs and license files allow-listed, `pinned_files` with `vision_root_path`, `task_local_cache_only`) | tool source | GPU-1 A | — | `Test-WindowsRemoteBuildTools.ps1` freezes both entries; README lists them |
+| GA-9 | `vision_gpu_unavailable` (warning, ladder class `none`, `since` 0.12.44, pending; values `execution_provider`, `gpu_unavailable_reason`, `gpu_fallback` required, `stage`, `model_name` optional), the keys `gpu_unavailable_reason` and `gpu_fallback` and their vocabularies (`GpuUnavailableReason`: `adapter_missing`, `adapter_ambiguous`, `adapter_not_physical`, `directml_library_missing`, `directml_library_mismatch`, `provider_register_failed`, `session_build_failed`, `placement_unread`; `GpuFallback`: `cpu` (default), `refuse`, also the future configuration value) | outcome code, keys, vocabularies | GPU-1 A | GPU-1 B2, D | `DirectmlUnavailable::outcome(gpu_fallback)` builds it with the OS failure as its `caused_by` link; the caller adds `stage` and `model_name`; no location is registered here |
+
+**Tests.** New: exec row "#407 GPU-1 A" (`gate_407_gpu1a`, fake adapter sources, placeholder
+libraries, no GPU and no sleep): `an_identity_resolves_the_one_physical_adapter_among_its_copies`,
+`an_identity_on_two_physical_adapters_is_ambiguous`, `a_missing_identity_never_picks_another_adapter`,
+`the_luid_is_observed_never_matched`,
+`a_directml_closure_loads_directml_before_onnxruntime_and_a_cpu_closure_is_unchanged` (through the
+closure loader with a recording fake load) and `the_runtime_pin_equals_the_tool_sources_entries`.
+No existing test changes its assertions; the provider's test helper `test_session_key` names the
+two new key members as absent.
+
+**Interface.** None: `actingd-config` stays 26 (slice D raises it to 27), `ledger` 7,
+`runtime-client` 6, `package` 7, `runtime-outcomes` 1. Nothing persisted changes: the session key
+and the attestation stay in-process, and no record or receipt carries the new code yet.
+
+**Where it differs from the work order's letter.** (a) The DirectML constructor also takes the
+`gpu_fallback` (design §1.2) and the spec carries it, so that slices B2 and D, which run side by
+side, share one constructor. (b) `PinnedRuntimeFile::check` is here for the same reason: slice B1's
+runtime initialisation and slice D's check-config both hash against the pin. (c) The tool sources
+entries carry `pinned_files` (not `distributed_files`: actingd's adb pin reads the one component
+with `distributed_files`), which the pin test compares. (d) The closure loader and its state are
+`pub(crate)` so the closure test drives the loader itself.
+
+**What changes live.** Nothing: no configuration selects DirectML, and no code path lists the
+adapters or reads the pin yet.
+
+**Rollback** (to 0.12.43). Nothing persisted; no configuration names `directml`.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

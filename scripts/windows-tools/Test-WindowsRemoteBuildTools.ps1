@@ -435,6 +435,28 @@ try {
     Assert-True -Condition ([long]$ort.archive.size -eq 280958859) -Message 'ONNX Runtime archive size is not frozen'
     Assert-True -Condition ($ort.archive.sha256 -ceq 'ef3337a0b8184eb8beec310f7c83bd50376b3eefc43aab84ac8e452f6987df0a') -Message 'ONNX Runtime archive SHA-256 is not frozen'
     Assert-True -Condition (@($ort.extract_allowlist).Count -eq 3) -Message 'ONNX Runtime extraction allowlist is not exact'
+    # Workflow #407 GPU-1 A: the DirectML runtime of a vision root (crates/vision-ffi/src/runtime_pin.rs pins the same files).
+    $ortDml = $sourceManifest.components.'onnxruntime-directml-1.24.4'
+    Assert-True -Condition ($ortDml.kind -ceq 'download_zip' -and $ortDml.version -ceq '1.24.4') -Message 'ONNX Runtime DirectML version is not frozen'
+    Assert-True -Condition ($ortDml.archive.url -ceq 'https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime.directml/1.24.4/microsoft.ml.onnxruntime.directml.1.24.4.nupkg') -Message 'ONNX Runtime DirectML source is not the official NuGet package'
+    Assert-True -Condition ([long]$ortDml.archive.size -eq 12458649) -Message 'ONNX Runtime DirectML package size is not frozen'
+    Assert-True -Condition ($ortDml.archive.sha256 -ceq '57e9f11b73437bef7a309496135d4c1f96b1a8e9ddba60013fa27bfc1d788681') -Message 'ONNX Runtime DirectML package SHA-256 is not frozen'
+    Assert-True -Condition ($ortDml.license.redistribution -ceq 'task_local_cache_only') -Message 'ONNX Runtime DirectML must stay a task-local cache'
+    Assert-True -Condition (@($ortDml.extract_allowlist).Count -eq 4) -Message 'ONNX Runtime DirectML extraction allowlist is not exact'
+    $ortDmlPins = @($ortDml.pinned_files)
+    Assert-True -Condition ($ortDmlPins.Count -eq 2) -Message 'ONNX Runtime DirectML must pin exactly two files'
+    Assert-True -Condition ($ortDmlPins[0].path -ceq 'runtimes/win-x64/native/onnxruntime.dll' -and [long]$ortDmlPins[0].size -eq 17328152 -and $ortDmlPins[0].sha256 -ceq 'e7eedec6a6f26dc39dc948276a75ef6d2bee3fff944d874ceed0bbd3b97bff40') -Message 'ONNX Runtime DirectML onnxruntime.dll pin is not frozen'
+    Assert-True -Condition ($ortDmlPins[1].path -ceq 'runtimes/win-x64/native/onnxruntime_providers_shared.dll' -and [long]$ortDmlPins[1].size -eq 22040 -and $ortDmlPins[1].sha256 -ceq '265c8daf29637cb259cac8be9f08f2cd45f3883f0f0e4949cbfddd5b4cbec3b6') -Message 'ONNX Runtime DirectML onnxruntime_providers_shared.dll pin is not frozen'
+    $directml = $sourceManifest.components.'directml-1.15.4'
+    Assert-True -Condition ($directml.kind -ceq 'download_zip' -and $directml.version -ceq '1.15.4') -Message 'DirectML version is not frozen'
+    Assert-True -Condition ($directml.archive.url -ceq 'https://api.nuget.org/v3-flatcontainer/microsoft.ai.directml/1.15.4/microsoft.ai.directml.1.15.4.nupkg') -Message 'DirectML source is not the official NuGet package'
+    Assert-True -Condition ([long]$directml.archive.size -eq 202292617) -Message 'DirectML package size is not frozen'
+    Assert-True -Condition ($directml.archive.sha256 -ceq '4e7cb7ddce8cf837a7a75dc029209b520ca0101470fcdf275c1f49736a3615b9') -Message 'DirectML package SHA-256 is not frozen'
+    Assert-True -Condition ($directml.license.redistribution -ceq 'task_local_cache_only') -Message 'DirectML must stay a task-local cache'
+    Assert-True -Condition (@($directml.extract_allowlist).Count -eq 4) -Message 'DirectML extraction allowlist is not exact'
+    $directmlPins = @($directml.pinned_files)
+    Assert-True -Condition ($directmlPins.Count -eq 1) -Message 'DirectML must pin exactly one file'
+    Assert-True -Condition ($directmlPins[0].path -ceq 'bin/x64-win/DirectML.dll' -and [long]$directmlPins[0].size -eq 18527776 -and $directmlPins[0].sha256 -ceq '9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1') -Message 'DirectML.dll pin is not frozen'
     Assert-True -Condition ($null -eq $sourceManifest.components.PSObject.Properties['provider-v0.3']) -Message 'the retired provider-v0.3 component is still declared'
     Complete-Case -Name $script:CurrentCase
 

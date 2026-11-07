@@ -114,6 +114,94 @@
         "onnxruntime-win-x64-gpu-1.24.4/lib/onnxruntime_providers_cuda.dll"
       ]
     },
+    "onnxruntime-directml-1.24.4": {
+      "kind": "download_zip",
+      "version": "1.24.4",
+      "license": {
+        "id": "MIT",
+        "url": "https://github.com/microsoft/onnxruntime/blob/v1.24.4/LICENSE",
+        "redistribution": "task_local_cache_only"
+      },
+      "archive": {
+        "url": "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime.directml/1.24.4/microsoft.ml.onnxruntime.directml.1.24.4.nupkg",
+        "relative_path": "downloads/microsoft.ml.onnxruntime.directml.1.24.4.nupkg",
+        "size": 12458649,
+        "sha256": "57e9f11b73437bef7a309496135d4c1f96b1a8e9ddba60013fa27bfc1d788681",
+        "official_sha512_base64": "ZjOyv495vhfVXoTJp2utRyn8ir1TFIvCj0B9JP8QZGBXS0oFx+lY7ZCZqSdnVShQX6EtxYi2T3VOtYXcmBTV4A==",
+        "hash_provenance": "size and base64 SHA-512 as NuGet publishes them for Microsoft.ML.OnnxRuntime.DirectML 1.24.4 (registration, then catalog entry https://api.nuget.org/v3/catalog0/data/2026.03.17.21.54.27/microsoft.ml.onnxruntime.directml.1.24.4.json, read 2026-11-06); NuGet publishes no SHA-256, so sha256 is independently computed from the exact NuGet bytes"
+      },
+      "extract_relative_path": "onnxruntime-directml-1.24.4",
+      "max_extract_bytes": 33554432,
+      "max_extract_file_count": 4,
+      "extract_allowlist": [
+        "runtimes/win-x64/native/onnxruntime.dll",
+        "runtimes/win-x64/native/onnxruntime_providers_shared.dll",
+        "LICENSE",
+        "ThirdPartyNotices.txt"
+      ],
+      "required_files": [
+        "runtimes/win-x64/native/onnxruntime.dll",
+        "runtimes/win-x64/native/onnxruntime_providers_shared.dll",
+        "LICENSE",
+        "ThirdPartyNotices.txt"
+      ],
+      "pinned_files": [
+        {
+          "path": "runtimes/win-x64/native/onnxruntime.dll",
+          "vision_root_path": "ort/onnxruntime.dll",
+          "size": 17328152,
+          "sha256": "e7eedec6a6f26dc39dc948276a75ef6d2bee3fff944d874ceed0bbd3b97bff40"
+        },
+        {
+          "path": "runtimes/win-x64/native/onnxruntime_providers_shared.dll",
+          "vision_root_path": "ort/onnxruntime_providers_shared.dll",
+          "size": 22040,
+          "sha256": "265c8daf29637cb259cac8be9f08f2cd45f3883f0f0e4949cbfddd5b4cbec3b6"
+        }
+      ],
+      "placement_note": "Workflow #407 GPU-1 (design rd-1031/perf-407/design-gpu1.md section 5): the DirectML runtime of a vision root. Neither the Runtime package, the Tools package nor the installer carries it; whoever places it copies the pinned_files to their vision_root_path and LICENSE and ThirdPartyNotices.txt to ort/licenses/onnxruntime/. crates/vision-ffi/src/runtime_pin.rs pins the same sizes and SHA-256 (a logic test holds them equal)."
+    },
+    "directml-1.15.4": {
+      "kind": "download_zip",
+      "version": "1.15.4",
+      "license": {
+        "id": "Microsoft-DirectML-License-Terms",
+        "url": "https://www.nuget.org/packages/Microsoft.AI.DirectML/1.15.4/License",
+        "redistribution": "task_local_cache_only"
+      },
+      "archive": {
+        "url": "https://api.nuget.org/v3-flatcontainer/microsoft.ai.directml/1.15.4/microsoft.ai.directml.1.15.4.nupkg",
+        "relative_path": "downloads/microsoft.ai.directml.1.15.4.nupkg",
+        "size": 202292617,
+        "sha256": "4e7cb7ddce8cf837a7a75dc029209b520ca0101470fcdf275c1f49736a3615b9",
+        "official_sha512_base64": "/edn9WkEq8kP1T9l2HKckYq39uPF4ezdR5kI/AK0U1zysIYPerKsubcx1suAm3LD1dTQKFP7j16gIqR7xE7yhQ==",
+        "hash_provenance": "size and base64 SHA-512 as NuGet publishes them for Microsoft.AI.DirectML 1.15.4 (registration, then catalog entry https://api.nuget.org/v3/catalog0/data/2024.10.28.16.43.22/microsoft.ai.directml.1.15.4.json, read 2026-11-06); NuGet publishes no SHA-256, so sha256 is independently computed from the exact NuGet bytes"
+      },
+      "extract_relative_path": "directml-1.15.4",
+      "max_extract_bytes": 33554432,
+      "max_extract_file_count": 4,
+      "extract_allowlist": [
+        "bin/x64-win/DirectML.dll",
+        "LICENSE.txt",
+        "LICENSE-CODE.txt",
+        "ThirdPartyNotices.txt"
+      ],
+      "required_files": [
+        "bin/x64-win/DirectML.dll",
+        "LICENSE.txt",
+        "LICENSE-CODE.txt",
+        "ThirdPartyNotices.txt"
+      ],
+      "pinned_files": [
+        {
+          "path": "bin/x64-win/DirectML.dll",
+          "vision_root_path": "ort/DirectML.dll",
+          "size": 18527776,
+          "sha256": "9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1"
+        }
+      ],
+      "placement_note": "Workflow #407 GPU-1 (design rd-1031/perf-407/design-gpu1.md section 5): DirectML 1.15.4 for a vision root's DirectML runtime, placed beside the onnxruntime-directml-1.24.4 files. Neither the Runtime package, the Tools package nor the installer carries it; whoever places it copies the pinned_files to their vision_root_path and LICENSE.txt, LICENSE-CODE.txt and ThirdPartyNotices.txt to ort/licenses/directml/, under the license terms in LICENSE.txt. crates/vision-ffi/src/runtime_pin.rs pins the same size and SHA-256 (a logic test holds them equal)."
+    },
     "ppocrv6-medium-source": {
       "kind": "download_files",
       "version": "PaddleOCR-v3.7.0",

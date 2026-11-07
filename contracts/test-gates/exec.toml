@@ -2778,3 +2778,16 @@ tests = [
     "actingcommand-pack-containment::lib::source::declarations::tests::a_select_policy_reading_anchor_milli_is_admitted_on_repeated_anchor",
 ]
 incident = ["#404 FS-2b"]
+
+# Workflow #407 GPU-1 A (0.12.44; register §1.286; brief rd-1031/perf-407/brief-gpu1a.md; design rd-1031/perf-407/design-gpu1.md §1.3, §3, §5 and §7 row A): over a fake adapter source, a DirectML identity resolves to the one physical DXGI adapter among its indirect-display, paravirtualized and software copies, at its index of that listing; two physical adapters of one identity are adapter_ambiguous unless exactly one has a PCI location; an absent identity is adapter_missing, one held only by copies adapter_not_physical, a listing that fails adapter_missing with its failure, and no other adapter is ever chosen; the LUID is observed in the resolution and changes no session key or provider options digest; a DirectML runtime's closure loads ort\DirectML.dll by absolute path right before onnxruntime.dll, while the CPU closure stays [providers_shared, onnxruntime] with DirectML.dll beside it; the runtime pin's three files equal the pinned_files of windows-tool-sources.v1.json's onnxruntime-directml-1.24.4 and directml-1.15.4
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-vision-ffi::lib::gate_407_gpu1a::an_identity_resolves_the_one_physical_adapter_among_its_copies",
+    "actingcommand-vision-ffi::lib::gate_407_gpu1a::an_identity_on_two_physical_adapters_is_ambiguous",
+    "actingcommand-vision-ffi::lib::gate_407_gpu1a::a_missing_identity_never_picks_another_adapter",
+    "actingcommand-vision-ffi::lib::gate_407_gpu1a::the_luid_is_observed_never_matched",
+    "actingcommand-vision-ffi::lib::gate_407_gpu1a::a_directml_closure_loads_directml_before_onnxruntime_and_a_cpu_closure_is_unchanged",
+    "actingcommand-vision-ffi::lib::gate_407_gpu1a::the_runtime_pin_equals_the_tool_sources_entries",
+]
+incident = ["#407 GPU-1 A"]

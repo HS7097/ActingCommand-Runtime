@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-use crate::{VisionFfiError, VisionFfiErrorCode, VisionFfiResult};
+use crate::{
+    MAX_DXGI_ADAPTERS, VisionFfiError, VisionFfiErrorCode, VisionFfiResult, is_dxgi_pci_identity,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -193,6 +195,64 @@ impl CudaDeviceInventory {
     }
 }
 
+/// Workflow #407 GPU-1 A (design §1.2, §1.3): the DirectML adapter a configuration asks for, by
+/// its stable identity `dxgi-pci:<vendor>:<device>:<subsys>:<rev>` (lowercase hexadecimal of
+/// 4, 4, 8 and 2 digits). It never names a DXGI index or a LUID: both change between boots.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DirectmlDeviceSelector {
+    pub expected_identity: String,
+}
+
+impl DirectmlDeviceSelector {
+    pub fn validate(&self) -> VisionFfiResult<()> {
+        if is_dxgi_pci_identity(&self.expected_identity) {
+            Ok(())
+        } else {
+            Err(VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::InvalidRequest,
+                "ocr_device_selector",
+                "DirectML expected_identity must be dxgi-pci:<vendor>:<device>:<subsys>:<rev> in lowercase hexadecimal of 4, 4, 8 and 2 digits",
+            ))
+        }
+    }
+}
+
+/// Workflow #407 GPU-1 A: the adapter one DirectML session runs on: its identity and the DXGI
+/// index it had when it was resolved, which ONNX Runtime's DirectML `device_id` names. The
+/// adapter's LUID is an observation of the resolution (`ResolvedDirectmlAdapter`) and never
+/// part of a session's identity.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DirectmlDeviceIdentity {
+    pub dxgi_index: u32,
+    pub identity: String,
+}
+
+impl DirectmlDeviceIdentity {
+    pub fn validate(&self) -> VisionFfiResult<()> {
+        if self.dxgi_index >= MAX_DXGI_ADAPTERS {
+            return Err(VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::InvalidResponse,
+                "ocr_device_inventory",
+                format!(
+                    "DXGI adapter index {} exceeds the bounded adapter range 0..{}",
+                    self.dxgi_index,
+                    MAX_DXGI_ADAPTERS - 1
+                ),
+            ));
+        }
+        if !is_dxgi_pci_identity(&self.identity) {
+            return Err(VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::InvalidResponse,
+                "ocr_device_inventory",
+                "DirectML adapter identity must be dxgi-pci:<vendor>:<device>:<subsys>:<rev>",
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OcrSessionKey {
@@ -205,6 +265,8 @@ pub struct OcrSessionKey {
     requested_backend: OnnxExecutionProvider,
     requested_cuda_device: Option<CudaDeviceSelector>,
     resolved_cuda_device: Option<CudaDeviceIdentity>,
+    requested_directml_device: Option<DirectmlDeviceSelector>,
+    resolved_directml_device: Option<DirectmlDeviceIdentity>,
     provider_options_sha256: String,
 }
 
@@ -221,6 +283,10 @@ pub struct OcrSessionKeyParts {
     pub requested_backend: OnnxExecutionProvider,
     pub requested_cuda_device: Option<CudaDeviceSelector>,
     pub resolved_cuda_device: Option<CudaDeviceIdentity>,
+    /// Workflow #407 GPU-1 A: the DirectML selector and resolved adapter, both only for
+    /// `directml`.
+    pub requested_directml_device: Option<DirectmlDeviceSelector>,
+    pub resolved_directml_device: Option<DirectmlDeviceIdentity>,
 }
 
 impl OcrSessionKey {
@@ -231,6 +297,8 @@ impl OcrSessionKey {
             parts.requested_backend,
             parts.requested_cuda_device.as_ref(),
             parts.resolved_cuda_device.as_ref(),
+            parts.requested_directml_device.as_ref(),
+            parts.resolved_directml_device.as_ref(),
         );
         let key = Self {
             provider_library_sha256: parts.engine_binding_sha256,
@@ -242,6 +310,8 @@ impl OcrSessionKey {
             requested_backend: parts.requested_backend,
             requested_cuda_device: parts.requested_cuda_device,
             resolved_cuda_device: parts.resolved_cuda_device,
+            requested_directml_device: parts.requested_directml_device,
+            resolved_directml_device: parts.resolved_directml_device,
             provider_options_sha256,
         };
         key.validate()?;
@@ -284,6 +354,14 @@ impl OcrSessionKey {
         self.resolved_cuda_device.as_ref()
     }
 
+    pub fn requested_directml_device(&self) -> Option<&DirectmlDeviceSelector> {
+        self.requested_directml_device.as_ref()
+    }
+
+    pub fn resolved_directml_device(&self) -> Option<&DirectmlDeviceIdentity> {
+        self.resolved_directml_device.as_ref()
+    }
+
     pub fn provider_options_sha256(&self) -> &str {
         &self.provider_options_sha256
     }
@@ -316,6 +394,15 @@ impl OcrSessionKey {
             "provider_options_sha256",
             &self.provider_options_sha256,
         )?;
+        if self.requested_backend != OnnxExecutionProvider::Directml
+            && (self.requested_directml_device.is_some() || self.resolved_directml_device.is_some())
+        {
+            return Err(VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::InvalidRequest,
+                "ocr_session_key",
+                "only a DirectML session may contain a DirectML selector or resolved adapter",
+            ));
+        }
         match self.requested_backend {
             OnnxExecutionProvider::Cpu => {
                 if self.requested_cuda_device.is_some() || self.resolved_cuda_device.is_some() {
@@ -350,6 +437,38 @@ impl OcrSessionKey {
                         VisionFfiErrorCode::InvalidRequest,
                         "ocr_session_key",
                         "CUDA session selector and resolved device identity do not match",
+                    ));
+                }
+            }
+            OnnxExecutionProvider::Directml => {
+                if self.requested_cuda_device.is_some() || self.resolved_cuda_device.is_some() {
+                    return Err(VisionFfiError::fatal_with_code(
+                        VisionFfiErrorCode::InvalidRequest,
+                        "ocr_session_key",
+                        "DirectML session must not contain CUDA selector or resolved CUDA identity",
+                    ));
+                }
+                let selector = self.requested_directml_device.as_ref().ok_or_else(|| {
+                    VisionFfiError::fatal_with_code(
+                        VisionFfiErrorCode::InvalidRequest,
+                        "ocr_session_key",
+                        "DirectML session is missing the requested adapter selector",
+                    )
+                })?;
+                let resolved = self.resolved_directml_device.as_ref().ok_or_else(|| {
+                    VisionFfiError::fatal_with_code(
+                        VisionFfiErrorCode::InvalidRequest,
+                        "ocr_session_key",
+                        "DirectML session is missing the resolved adapter",
+                    )
+                })?;
+                selector.validate()?;
+                resolved.validate()?;
+                if selector.expected_identity != resolved.identity {
+                    return Err(VisionFfiError::fatal_with_code(
+                        VisionFfiErrorCode::InvalidRequest,
+                        "ocr_session_key",
+                        "DirectML session selector and resolved adapter identity do not match",
                     ));
                 }
             }
@@ -462,6 +581,28 @@ pub struct OcrExecutionAttestation {
 pub enum OnnxExecutionProvider {
     Cpu,
     Cuda,
+    /// Workflow #407 GPU-1: ONNX Runtime's DirectML execution provider on one DXGI adapter.
+    Directml,
+}
+
+impl OnnxExecutionProvider {
+    /// The provider's spelling: its configuration value and its token of the vocabulary
+    /// `execution_provider`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Cpu => "cpu",
+            Self::Cuda => "cuda",
+            Self::Directml => "directml",
+        }
+    }
+}
+
+impl actingcommand_contract::outcome::VocabularyToken for OnnxExecutionProvider {
+    const VOCABULARY: &'static str = "execution_provider";
+
+    fn token(self) -> &'static str {
+        self.as_str()
+    }
 }
 
 pub fn ppocr_model_content_sha256(
@@ -517,13 +658,19 @@ fn ppocr_provider_options_sha256(
     backend: OnnxExecutionProvider,
     selector: Option<&CudaDeviceSelector>,
     resolved: Option<&CudaDeviceIdentity>,
+    directml_selector: Option<&DirectmlDeviceSelector>,
+    directml_resolved: Option<&DirectmlDeviceIdentity>,
 ) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"actingcommand.ppocr-provider-options.v1\0");
-    hasher.update(match backend {
+    let backend_token = match backend {
         OnnxExecutionProvider::Cpu => b"cpu".as_slice(),
         OnnxExecutionProvider::Cuda => b"cuda".as_slice(),
-    });
+        OnnxExecutionProvider::Directml => {
+            return directml_provider_options_sha256(hasher, directml_selector, directml_resolved);
+        }
+    };
+    hasher.update(backend_token);
     hasher.update(b"\0strict_no_fallback\0true\0intra_threads\0");
     hasher.update(b"1\0");
     if let Some(selector) = selector {
@@ -540,6 +687,32 @@ fn ppocr_provider_options_sha256(
         hasher.update(resolved.stable_identity.as_bytes());
         hasher.update(b"\0resolved_pci\0");
         hasher.update(resolved.pci_bus_id.as_deref().unwrap_or("none").as_bytes());
+        hasher.update(b"\0");
+    }
+    lower_hex(&hasher.finalize())
+}
+
+/// The DirectML branch of the provider options digest (Workflow #407 GPU-1 design §2.1): a
+/// DirectML session lets ONNX Runtime place the nodes DirectML cannot run on the CPU, runs one
+/// intra-op thread, turns the memory pattern and parallel execution off, and runs on the
+/// resolved adapter's DXGI index. The adapter's LUID is no option and is never hashed.
+fn directml_provider_options_sha256(
+    mut hasher: Sha256,
+    selector: Option<&DirectmlDeviceSelector>,
+    resolved: Option<&DirectmlDeviceIdentity>,
+) -> String {
+    hasher.update(b"directml\0cpu_nodes\0allowed\0intra_threads\x001\0");
+    hasher.update(b"memory_pattern\0false\0parallel_execution\0false\0");
+    if let Some(selector) = selector {
+        hasher.update(b"requested_identity\0");
+        hasher.update(selector.expected_identity.as_bytes());
+        hasher.update(b"\0");
+    }
+    if let Some(resolved) = resolved {
+        hasher.update(b"resolved_dxgi_index\0");
+        hasher.update(resolved.dxgi_index.to_string().as_bytes());
+        hasher.update(b"\0resolved_identity\0");
+        hasher.update(resolved.identity.as_bytes());
         hasher.update(b"\0");
     }
     lower_hex(&hasher.finalize())

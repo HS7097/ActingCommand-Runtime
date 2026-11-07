@@ -542,6 +542,8 @@ fn vision_report(
         "execution_provider": match vision.execution_provider() {
             OnnxExecutionProvider::Cpu => "cpu",
             OnnxExecutionProvider::Cuda => "cuda",
+            // Workflow #407 GPU-1 A: the configuration admits `directml` from GPU-1 D on.
+            OnnxExecutionProvider::Directml => "directml",
         },
         "onnxruntime_library": inventory.runtime.onnxruntime_library.to_string_lossy(),
         "ocr_models": inventory

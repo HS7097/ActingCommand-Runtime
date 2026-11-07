@@ -311,6 +311,10 @@ outcome_keys! {
     settings_path: path,
     other_path: path,
     execution_provider: vocab(execution_provider),
+    // Workflow #407 GPU-1 A: why the configured GPU execution provider cannot be used, and
+    // what the process does instead (`vision_gpu_unavailable`).
+    gpu_unavailable_reason: vocab(gpu_unavailable_reason),
+    gpu_fallback: vocab(gpu_fallback),
     folder: vocab(folder),
     format: vocab(format),
     game: name,

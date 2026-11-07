@@ -100,6 +100,11 @@ impl ProviderSessionPlan {
                     cpu_fallback_disabled: true,
                 })
             }
+            // Workflow #407 GPU-1 A adds the provider; this engine builds no DirectML session
+            // until GPU-1 B1.
+            OnnxExecutionProvider::Directml => {
+                Err("this OCR engine builds no DirectML session yet".to_string())
+            }
         }
     }
 }
@@ -374,6 +379,9 @@ impl VisionModelLoader for PpocrCtcLoader {
             requested_backend: self.runtime.execution_provider,
             requested_cuda_device: self.runtime.cuda_device.clone(),
             resolved_cuda_device: facts.resolved_cuda_device.clone(),
+            // Workflow #407 GPU-1 A: no DirectML session is built before GPU-1 B1.
+            requested_directml_device: None,
+            resolved_directml_device: None,
         })?;
         let binding = OcrSessionBinding::new(session_id.clone(), 1, key);
         binding.validate()?;
@@ -733,6 +741,11 @@ fn same_runtime(
 }
 
 fn establish_runtime(spec: &VisionRuntimeSpec) -> VisionFfiResult<RuntimeFacts> {
+    // Workflow #407 GPU-1 A adds the provider; this engine initialises no DirectML runtime
+    // until GPU-1 B1, and refuses one before it loads anything.
+    if spec.execution_provider == OnnxExecutionProvider::Directml {
+        return Err(directml_engine_unavailable());
+    }
     let library = &spec.onnxruntime_library;
     if spec
         .runtime_library_closure
@@ -788,6 +801,7 @@ fn establish_runtime(spec: &VisionRuntimeSpec) -> VisionFfiResult<RuntimeFacts> 
                 Some(inventory.driver_version),
             )
         }
+        OnnxExecutionProvider::Directml => return Err(directml_engine_unavailable()),
     };
     Ok(RuntimeFacts {
         onnxruntime_library: library.clone(),
@@ -852,6 +866,14 @@ fn unavailable(message: impl Into<String>) -> VisionFfiError {
         VisionFfiErrorCode::ProviderUnavailable,
         ENGINE_MODULE,
         message,
+    )
+}
+
+/// Workflow #407 GPU-1 A: a DirectML runtime, which this engine does not initialise before
+/// GPU-1 B1.
+fn directml_engine_unavailable() -> VisionFfiError {
+    unavailable(
+        "this OCR engine initialises no DirectML runtime yet; configure execution_provider cpu",
     )
 }
 
@@ -990,6 +1012,10 @@ fn load_ort_session(
                         path.display()
                     )
                 })
+        }
+        // Workflow #407 GPU-1 A: no plan names DirectML before GPU-1 B1.
+        OnnxExecutionProvider::Directml => {
+            Err("this OCR engine builds no DirectML session yet".to_string())
         }
     }
 }
@@ -2791,6 +2817,8 @@ mod tests {
             requested_backend: backend,
             requested_cuda_device: (backend == OnnxExecutionProvider::Cuda).then_some(selector),
             resolved_cuda_device: resolved,
+            requested_directml_device: None,
+            resolved_directml_device: None,
         })
         .expect("session key")
     }
