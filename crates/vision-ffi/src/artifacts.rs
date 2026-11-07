@@ -455,21 +455,19 @@ impl OcrSessionKey {
                         "DirectML session is missing the requested adapter selector",
                     )
                 })?;
-                let resolved = self.resolved_directml_device.as_ref().ok_or_else(|| {
-                    VisionFfiError::fatal_with_code(
-                        VisionFfiErrorCode::InvalidRequest,
-                        "ocr_session_key",
-                        "DirectML session is missing the resolved adapter",
-                    )
-                })?;
                 selector.validate()?;
-                resolved.validate()?;
-                if selector.expected_identity != resolved.identity {
-                    return Err(VisionFfiError::fatal_with_code(
-                        VisionFfiErrorCode::InvalidRequest,
-                        "ocr_session_key",
-                        "DirectML session selector and resolved adapter identity do not match",
-                    ));
+                // Workflow #407 GPU-1 B2 (design §2.3, §2.4): a DirectML key without a resolved
+                // adapter is a model that DirectML could not be used for and that runs whole on the
+                // CPU (`gpu_fallback` `cpu`).
+                if let Some(resolved) = &self.resolved_directml_device {
+                    resolved.validate()?;
+                    if selector.expected_identity != resolved.identity {
+                        return Err(VisionFfiError::fatal_with_code(
+                            VisionFfiErrorCode::InvalidRequest,
+                            "ocr_session_key",
+                            "DirectML session selector and resolved adapter identity do not match",
+                        ));
+                    }
                 }
             }
         }
@@ -542,6 +540,10 @@ pub enum OcrFallbackPolicy {
     /// the nodes DirectML cannot run on the CPU; the attestation's `fallback_observed` says
     /// whether a role that ran in the invocation has such a node.
     CpuNodes,
+    /// Workflow #407 GPU-1 B2 (design §2.3, §2.4): DirectML could not be used for the model under
+    /// `gpu_fallback` `cpu`, so the whole model runs on the CPU (requested `directml`, resolved
+    /// `cpu`); `fallback_observed` is always true.
+    CpuModel,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -705,8 +707,14 @@ fn directml_provider_options_sha256(
     selector: Option<&DirectmlDeviceSelector>,
     resolved: Option<&DirectmlDeviceIdentity>,
 ) -> String {
-    hasher.update(b"directml\0cpu_nodes\0allowed\0intra_threads\x001\0");
-    hasher.update(b"memory_pattern\0false\0parallel_execution\0false\0");
+    if resolved.is_some() {
+        hasher.update(b"directml\0cpu_nodes\0allowed\0intra_threads\x001\0");
+        hasher.update(b"memory_pattern\0false\0parallel_execution\0false\0");
+    } else {
+        // Workflow #407 GPU-1 B2 (design §2.3): no resolved adapter is a model that DirectML could
+        // not be used for, whose sessions are CPU sessions with one intra-op thread.
+        hasher.update(b"directml\0cpu_model\0intra_threads\x001\0");
+    }
     if let Some(selector) = selector {
         hasher.update(b"requested_identity\0");
         hasher.update(selector.expected_identity.as_bytes());

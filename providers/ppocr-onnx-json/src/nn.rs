@@ -88,20 +88,29 @@ impl NnEngine for OnnxClassifyModel {
     }
 }
 
-/// Builds the classifier session from the verified bytes: CPU, or CUDA on the resolved device
-/// with CPU fallback disabled.
+/// The execution provider of a classifier session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NnSessionProvider {
+    /// ONNX Runtime's CPU provider: for `cpu`, and for `directml` too (Workflow #407 GPU-1 B2,
+    /// design §9 Q7: a classifier never runs on DirectML).
+    Cpu,
+    /// CUDA on the resolved device, with CPU fallback disabled.
+    Cuda { device_id: i32 },
+}
+
+/// Builds the classifier session from the verified bytes on `provider`.
 pub(crate) fn load_session(
     model: &[u8],
     path: &Path,
-    cuda_ordinal: Option<i32>,
+    provider: NnSessionProvider,
 ) -> Result<Session, String> {
     let builder = Session::builder()
         .map_err(|err| format!("failed to create ONNXRuntime session builder: {err}"))?
         .with_intra_threads(1)
         .map_err(|err| format!("failed to configure ONNXRuntime intra threads: {err}"))?;
-    let mut builder = match cuda_ordinal {
-        None => builder,
-        Some(ordinal) => builder
+    let mut builder = match provider {
+        NnSessionProvider::Cpu => builder,
+        NnSessionProvider::Cuda { device_id: ordinal } => builder
             .with_execution_providers([ort::ep::CUDA::default()
                 .with_device_id(ordinal)
                 .build()

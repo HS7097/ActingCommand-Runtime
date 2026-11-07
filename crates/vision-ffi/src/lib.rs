@@ -25,9 +25,12 @@ pub mod models;
 // Workflow #407 GPU-1 A: the pinned DirectML runtime of a vision root.
 pub mod runtime_pin;
 
-use actingcommand_contract::outcome::Outcome;
+use actingcommand_contract::codes::ContractCode;
+use actingcommand_contract::outcome::RawSource;
 // Workflow #407 GPU-1 B1: the state `PinnedRuntimeFile::check` reports, for the engine.
 pub use actingcommand_contract::outcome::FileState;
+// Workflow #407 GPU-1 B2: the engine's fallback warnings and the execution status carry outcomes.
+pub use actingcommand_contract::outcome::Outcome;
 pub use actingcommand_contract::{
     PPOCR_CPU_EXECUTION_PROVIDER, PPOCR_DIAGNOSTIC_RESULT_SCHEMA,
     PPOCR_DIRECTML_EXECUTION_PROVIDER, PPOCR_MAX_BUSINESS_JSON_BYTES,
@@ -162,6 +165,44 @@ impl fmt::Display for VisionFfiError {
 }
 
 impl Error for VisionFfiError {}
+
+/// The longest ONNX Runtime error code kept as a status's `raw_code`.
+const MAX_ONNXRUNTIME_STATUS_CODE_BYTES: usize = 64;
+
+/// Workflow #407 GPU-1 B2 (design §2.3): ONNX Runtime's status behind an engine failure, kept
+/// whole as the foreign link of a `vision_gpu_unavailable` warning: `foreign_vision_error` with
+/// `raw_source` `vision`, ONNX Runtime's error code as `raw_code` (its `Debug` spelling in
+/// snake case, as a token; left out when it does not spell as one) and ONNX Runtime's message
+/// as `raw_text`.
+pub fn onnxruntime_status(status_code: &dyn fmt::Debug, message: &str) -> Outcome {
+    let status = Outcome::new(ContractCode::ForeignVisionError).raw_source(RawSource::Vision);
+    let status = match onnxruntime_status_token(&format!("{status_code:?}")) {
+        Some(token) => status.raw_code(token),
+        None => status,
+    };
+    status.raw_text(message)
+}
+
+/// `RuntimeException` as `runtime_exception`: ASCII letters and digits, an underscore before each
+/// inner capital and for every other character; `None` when nothing or too much is left.
+fn onnxruntime_status_token(spelling: &str) -> Option<String> {
+    let mut token = String::with_capacity(spelling.len() + 4);
+    for character in spelling.chars() {
+        if character.is_ascii_uppercase() {
+            if !token.is_empty() && !token.ends_with('_') {
+                token.push('_');
+            }
+            token.push(character.to_ascii_lowercase());
+        } else if character.is_ascii_lowercase() || character.is_ascii_digit() {
+            token.push(character);
+        } else if !token.is_empty() && !token.ends_with('_') {
+            token.push('_');
+        }
+    }
+    let token = token.trim_end_matches('_');
+    (!token.is_empty() && token.len() <= MAX_ONNXRUNTIME_STATUS_CODE_BYTES)
+        .then(|| token.to_string())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

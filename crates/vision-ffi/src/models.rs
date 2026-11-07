@@ -20,6 +20,7 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 /// Domain separator of the engine binding digest recorded as an OCR execution's
@@ -779,6 +780,61 @@ fn runtime_unavailable(message: impl Into<String>) -> VisionFfiError {
     VisionFfiError::fatal_with_code(VisionFfiErrorCode::ProviderUnavailable, MODULE, message)
 }
 
+/// Workflow #407 GPU-1 B2 (design §2.3, §2.5): where one loaded OCR model runs, for the
+/// Runtime's status.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OcrModelExecution {
+    /// The configuration's execution provider.
+    pub requested: OnnxExecutionProvider,
+    /// The provider the model's sessions run on: `requested`, or `cpu` after a fallback from
+    /// `directml`.
+    pub actual: OnnxExecutionProvider,
+    /// The `vision_gpu_unavailable` warning of the fallback that put the model on `actual`, none
+    /// when it runs as requested. One fallback has one warning: a model's own fallback names the
+    /// model (`model_name`); the process's fallback at its runtime initialisation names none and
+    /// is the same value for every model the process loads, so a status that shows each distinct
+    /// warning once shows that fallback once.
+    pub warning: Option<Outcome>,
+}
+
+impl OcrModelExecution {
+    /// A model that runs on the provider its configuration requests.
+    pub const fn as_requested(provider: OnnxExecutionProvider) -> Self {
+        Self {
+            requested: provider,
+            actual: provider,
+            warning: None,
+        }
+    }
+}
+
+/// Workflow #407 GPU-1 B2: the live [`OcrModelExecution`] of one loaded OCR model, shared by its
+/// engine and the Runtime. The engine replaces it when the model moves to the CPU after its load
+/// (a DirectML detector that cannot be built on the first full-frame request moves the whole
+/// model); the Runtime reads it for its status without waiting for the model's requests, and
+/// drops it with the engine.
+#[derive(Debug, Clone)]
+pub struct OcrExecutionStatus(Arc<Mutex<OcrModelExecution>>);
+
+impl OcrExecutionStatus {
+    pub fn new(execution: OcrModelExecution) -> Self {
+        Self(Arc::new(Mutex::new(execution)))
+    }
+
+    /// The model's execution now.
+    pub fn current(&self) -> OcrModelExecution {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Records where the model runs from now on.
+    pub fn set(&self, execution: OcrModelExecution) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = execution;
+    }
+}
+
 /// The outcome of one OCR model load.
 pub enum OcrModelLoad {
     /// The content identity equals the requested one and the engine is ready.
@@ -788,6 +844,9 @@ pub enum OcrModelLoad {
         /// How long the load waited for locks held by other requests (another request's
         /// ONNX Runtime initialisation); the request's budget pays for it, unlike the load.
         waited_on_others: Duration,
+        /// Workflow #407 GPU-1 B2: where the model runs (requested and actual provider, and the
+        /// fallback's warning), live for as long as the engine is loaded.
+        execution: OcrExecutionStatus,
     },
     /// The files hash to a different content identity; no session was built.
     Mismatch { model_sha256: String },

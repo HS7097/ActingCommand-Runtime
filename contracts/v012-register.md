@@ -7722,6 +7722,51 @@ design left the startup stage's name to be registered as needed. (e) The report 
 **Rollback** (to 0.12.43). Write `"vision": {"execution_provider": "cpu"}` (no revision-27
 member), then roll the Runtime back; nothing persisted needs a reader of 0.12.44.
 
+#### Slice GPU-1 B2 (0.12.44): the engine's whole-model fallback to the CPU (GPU-1a)
+
+Design §1.4, §2.3, §2.4, §2.5, §9 Q7 and §7 row B2; coordinator work order
+`rd-1031/perf-407/brief-gpu1b2.md`; on main `ec2d3ea7` (slices A, D and B1 merged). The contract
+is [vision-model-folders.md](vision-model-folders.md) ("Fallback to the CPU").
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| GB2-1 | `gpu_fallback` in the engine: `cpu` moves a model whose DirectML adapter, provider registration, session build or placement read fails to the CPU, once per load; `refuse` fails the request as B1 did and the next request tries again | behaviour | GPU-1 B2 | — | design §2.3; only a failure that names a `gpu_unavailable_reason` falls back; a CPU or CUDA failure, and the failure of the CPU session that replaces DirectML, fail the request |
+| GB2-2 | the process route at the runtime initialisation: `DirectML.dll` off the pin or missing, or an adapter that does not resolve, gives under `cpu` the CPU closure `[providers_shared, onnxruntime]` (no `DirectML.dll`, DirectML never registered) and one warning without `model_name` that every model of the process carries | behaviour | GPU-1 B2 | — | design §1.4, §3; until the process restarts; an ONNX Runtime or providers library off the pin, or another version, still fails under both modes |
+| GB2-3 | a detector that cannot be built on the first full-frame request moves the whole model: the recognizer is rebuilt on the CPU from its file (hash checked against the load's), the detector is built on the CPU, the session generation steps; nothing changes until both CPU sessions are built | behaviour | GPU-1 B2 | — | design §2.3: one model, one route; the reports of the replaced DirectML sessions still held by the call are dropped (also the failed attempt's at a load) |
+| GB2-4 | `OcrSessionKey` of `directml` with no resolved adapter (a model on the CPU after a fallback); its provider options digest names `directml`, `cpu_model` and one intra-op thread; its plan registers `[cpu]`, the CPU EP registered, CPU fallback allowed; `OcrFallbackPolicy::CpuModel` (`cpu_model`) with `fallback_observed` always true | in-process type | GPU-1 B2 | — | design §2.4 row 4 (`directml` → `cpu`); a DirectML key with an adapter is unchanged (its digest bytes too); `ACTINGCOMMAND_PPOCR_NODE_PLACEMENT_DIAGNOSTIC` stays met for such a model |
+| GB2-5 | `OcrModelExecution {requested, actual, warning?}` and `OcrExecutionStatus` (shared, live: `current`, `set`); `OcrModelLoad::Loaded.execution` | in-process type | GPU-1 B2 | the engine | for the kernel's status (slice C reads it); the engine sets it again when a detector moves the model |
+| GB2-6 | the warning `vision_gpu_unavailable` of one fallback: `execution_provider` `directml`, its `gpu_unavailable_reason`, `gpu_fallback` `cpu`, `model_name` for a model's own fallback, and ONNX Runtime's status as its `caused_by` link (`foreign_vision_error`, `raw_source` `vision`, `raw_code` ONNX Runtime's error code in snake case, `raw_text` its message with its causes) or the OS failure; `onnxruntime_status` in vision-ffi | outcome, in-process | GPU-1 B2 | the engine | no new code, key or vocabulary; no `stage` (see below) |
+| GB2-7 | an NN classifier session under `directml` runs on the CPU (`NnSessionProvider::Cpu`), with no warning | behaviour | GPU-1 B2 | — | design §9 Q7; CUDA needs its resolved device |
+
+**B2 tests.** New: exec row "#407 GPU-1 B2" (`gate_407_gpu1b2`, a fake ONNX Runtime that refuses
+the DirectML builds it is told to with a fake ONNX Runtime status and writes the verbose placement
+log, fake adapters; no GPU, no ONNX Runtime, no sleep):
+`a_session_that_cannot_be_built_falls_back_to_cpu_once_under_fallback_cpu`,
+`a_session_that_cannot_be_built_fails_the_request_under_refuse`,
+`a_detector_that_falls_back_moves_the_whole_model_to_cpu` and
+`an_unresolved_adapter_at_runtime_init_keeps_directml_out_of_the_closure`. No existing test changed.
+
+**B2 interface.** None: `actingd-config` 27, `ledger` 7, `runtime-client` 6, `package` 7,
+`runtime-outcomes` 1. The key, the plan, the attestation and the execution status stay in-process;
+the OCR rows' execution members keep their types (design §6.2).
+
+**Where B2 differs from its work order's letter.** (a) `OcrFallbackPolicy::CpuModel` and the
+DirectML key without a resolved adapter live in `crates/vision-ffi/src/artifacts.rs`, outside the
+files the work order names: design §2.4's whole-model row needs both, and no earlier slice added
+them. (b) The execution status in `OcrModelLoad::Loaded` is a shared live handle, so a detector's
+later fallback reaches the status too; the kernel's one match on `Loaded`
+(`crates/execution-kernel/src/provider.rs`) gains `..` to compile, its behaviour unchanged (slice C
+reads the member). (c) The warnings carry no `stage`: the locations of the runtime initialisation and
+of a session build are not registered, the code's `stage` is optional, and the process's warning
+is told from a model's by `model_name`. (d) The ONNX Runtime status of a failed build is kept as
+GPU-0c's `OrtStepFailure` kept it, through `onnxruntime_status` in `crates/vision-ffi/src/lib.rs`,
+which also re-exports `Outcome` for the engine.
+
+**What B2 changes live.** Nothing: production stays `cpu`, whose sessions, closure and
+attestation are unchanged.
+
+**B2 rollback** (to 0.12.43). Nothing persisted.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
