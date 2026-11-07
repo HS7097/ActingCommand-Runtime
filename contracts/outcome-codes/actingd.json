@@ -221,9 +221,9 @@
       "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "The vision section breaks its rules: execution_provider cuda without a valid cuda_device, cpu with a cuda_device, or an empty root. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
-      "common_causes": "cuda_device left out for cuda, or kept after switching to cpu; root set to an empty string.",
-      "handling": "Name a cuda_device only with cuda, and give root a path or remove it. Fix the configuration and commit it again with acsetup --commit-config; run actingd check-config to confirm before restarting the daemon."
+      "description": "The vision section breaks its rules: execution_provider cuda without a valid cuda_device, cpu with a cuda_device, or an empty root. Since 0.12.44 (Workflow #407 GPU-1 D, actingd-config revision 27) also: execution_provider directml without a directml_device whose expected_identity is dxgi-pci:<vendor>:<device>:<subsys>:<rev> in lowercase hexadecimal of 4, 4, 8 and 2 digits, directml with a cuda_device, a directml_device beside cpu or cuda, or gpu_fallback beside cpu or cuda. check-config refuses at stage config_assemble; a start refuses before the ledger opens.",
+      "common_causes": "cuda_device left out for cuda, or kept after switching to cpu; root set to an empty string; directml_device or gpu_fallback kept after switching from directml to cpu; an adapter identity copied with capitals or without its revision.",
+      "handling": "Name a cuda_device only with cuda, a directml_device and gpu_fallback only with directml, and give root a path or remove it. Fix the configuration and run actingd check-config on it to confirm before restarting the daemon."
     },
     "vision_root_in_program_slot": {
       "category": "error",
@@ -245,13 +245,15 @@
       "owner": "actingd",
       "layer": "config",
       "uncertain": false,
-      "values": {},
+      "values": {
+        "path": "optional"
+      },
       "review": "settled",
       "status": "active",
       "since": "0.12.0",
-      "description": "The vision root lacks a usable ONNX Runtime: ort\\onnxruntime.dll, or for execution_provider cuda the CUDA provider library, is missing or cannot be read. The OS error, when there is one, is the caused_by link. check-config refuses at stage config_vision; a start refuses before the ledger opens.",
-      "common_causes": "An incomplete vision root (the ort folder not copied), cuda configured with a CPU-only runtime, or files removed by antivirus.",
-      "handling": "Restore the ort folder of the vision root (the installer places it), or switch execution_provider to cpu, then run actingd check-config again."
+      "description": "The vision root lacks a usable ONNX Runtime: ort\\onnxruntime.dll, or for execution_provider cuda the CUDA provider library, is missing or cannot be read. Since 0.12.44 (Workflow #407 GPU-1 D) for execution_provider directml also: ort\\onnxruntime.dll or ort\\onnxruntime_providers_shared.dll is missing, cannot be read, or differs from the runtime pin (ONNX Runtime 1.24.4's DirectML build, sizes and SHA-256 in contracts/vision-model-folders.md); path is then the file at fault. ort\\DirectML.dll is no part of it: without it the process runs on the CPU (vision_gpu_unavailable). The OS error, when there is one, is the caused_by link. check-config refuses at stage config_vision; a start refuses before the ledger opens.",
+      "common_causes": "An incomplete vision root (the ort folder not copied), cuda configured with a CPU-only runtime, directml configured with a root whose ort folder holds another ONNX Runtime build, or files removed by antivirus.",
+      "handling": "Restore the ort folder of the vision root (the installer places the CPU runtime; the DirectML runtime is placed by hand from the two pinned NuGet packages), or switch execution_provider to cpu, then run actingd check-config again."
     },
     "catalog_transition_kind_unknown": {
       "category": "error",
@@ -2245,6 +2247,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "The stage of a check-config refusal that arose while validating the assembled host configuration (was the v1 stage token validate)."
+    },
+    "vision_startup": {
+      "owner": "actingd",
+      "layer": "config",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.44",
+      "description": "The stage of a vision_gpu_unavailable warning that provider startup found while it resolved the configured DirectML adapter and checked ort\\DirectML.dll (Workflow #407 GPU-1 D); the start goes on, and the warning is written as actingd's daemon lines."
     },
     "resource_package": {
       "owner": "actingd",

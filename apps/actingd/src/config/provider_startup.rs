@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::codes::ActingdLocation;
 use actingcommand_contract::outcome::Record;
 use actingcommand_contract::{
     DiscoveredInstanceObservation, LifecycleNativeDetail, ProviderBackend, ProviderNativeFailure,
@@ -57,6 +58,7 @@ impl ConfiguredProvider {
                 startup,
                 &vision,
                 node_placement_diagnostic,
+                &mut std::io::stderr(),
             )?)),
         };
         let vision_configured = vision.is_some();
@@ -488,10 +490,18 @@ fn resolve_deferred_instance(
 /// directory entries, file metadata and model descriptions are read; each model is read,
 /// hashed and loaded, and ONNX Runtime initialised, on first use. A folder that breaks the
 /// folder rule is recorded with its reason and fails only the requests that name it.
-fn assemble_vision_provider(
+///
+/// Workflow #407 GPU-1 D (design §1.4, §2.5): a `directml` section also hashes the runtime pin
+/// (an ONNX Runtime off the pin refuses the start), resolves the configured adapter once and
+/// records what the process starts on (`directml_startup`); when DirectML cannot be used, one
+/// `vision_gpu_unavailable` warning is written to `daemon_log` (actingd's stderr) and the start
+/// goes on. The provider always gets the DirectML runtime: the first OCR model load decides
+/// again, and that decision is the one in effect.
+pub(super) fn assemble_vision_provider(
     startup: &mut ProviderStartup<'_>,
     vision: &ConfiguredVision,
     node_placement_diagnostic: Option<String>,
+    daemon_log: &mut dyn std::io::Write,
 ) -> RuntimeHostResult<Arc<dyn RecognitionVisionProvider>> {
     let backend = ProviderBackend::Configured;
     let stage = Stage::PathBinding;
@@ -503,10 +513,7 @@ fn assemble_vision_provider(
             refusal.code.as_str(),
             ProviderNativeFailure {
                 module: "actingd.config".into(),
-                outcome: match refusal.cause {
-                    Some(cause) => Outcome::new(refusal.code).caused_by(cause),
-                    None => Outcome::new(refusal.code),
-                },
+                outcome: refusal.outcome(),
             },
         )
     })?;
@@ -526,7 +533,11 @@ fn assemble_vision_provider(
         &inventory.root,
         &inventory.runtime.onnxruntime_library,
     )?;
-    for (index, library) in inventory.runtime.runtime_library_closure.iter().enumerate() {
+    let closure = match vision.directml() {
+        None => inventory.runtime.runtime_library_closure.clone(),
+        Some(directml) => directml_startup(startup, backend, directml, &inventory, daemon_log)?,
+    };
+    for (index, library) in closure.iter().enumerate() {
         binding(
             startup,
             backend,
@@ -626,6 +637,78 @@ fn assemble_vision_provider(
     }));
     startup.record(backend, Observation::Completed { stage })?;
     Ok(Arc::new(provider))
+}
+
+/// The startup record's word for an execution provider that does not resolve: under
+/// `gpu_fallback` `refuse` the process runs OCR on no provider until DirectML can be used.
+const NO_EXECUTION_PROVIDER: &str = "none";
+
+/// Workflow #407 GPU-1 D (design §1.4, §2.5): a `directml` section at startup. The configured
+/// adapter is resolved once (`ort\DirectML.dll` was hashed against the pin by `inspect`), and two
+/// bindings record what the process starts on: `execution_provider` (configured `directml`,
+/// resolved `directml`, or `cpu` under `gpu_fallback` `cpu` and `none` under `refuse` when
+/// DirectML cannot be used) and `directml_adapter` (configured the expected identity, resolved
+/// `<identity>;index=<n>;luid=<luid>` or `none`). When DirectML cannot be used, the one warning
+/// `vision_gpu_unavailable` (stage `vision_startup`, with the OS failure behind it as its link)
+/// is written to `daemon_log` as actingd's daemon lines and the start goes on; the warning is no
+/// ledger record (design §6.2). Returns the closure the decision loads: the DirectML closure
+/// (`DirectML.dll` right before `onnxruntime.dll`), else the CPU one.
+fn directml_startup(
+    startup: &mut ProviderStartup<'_>,
+    backend: ProviderBackend,
+    directml: &ConfiguredDirectml,
+    inventory: &VisionInventory,
+    daemon_log: &mut dyn std::io::Write,
+) -> RuntimeHostResult<Vec<PathBuf>> {
+    let library = inventory.directml_library.as_ref().ok_or_else(|| {
+        startup.failed(
+            backend,
+            Stage::PathBinding,
+            ActingdCode::VisionRuntimeUnavailable.as_str(),
+            ProviderNativeFailure {
+                module: "actingd.config".into(),
+                outcome: Outcome::new(ActingdCode::VisionRuntimeUnavailable),
+            },
+        )
+    })?;
+    let finding = directml.find(library);
+    let resolved = match (finding.unavailable(), directml.gpu_fallback()) {
+        (None, _) => OnnxExecutionProvider::Directml.as_str(),
+        (Some(_), GpuFallback::Cpu) => OnnxExecutionProvider::Cpu.as_str(),
+        (Some(_), GpuFallback::Refuse) => NO_EXECUTION_PROVIDER,
+    };
+    startup.record(
+        backend,
+        Observation::Binding {
+            field: "execution_provider".into(),
+            configured: OnnxExecutionProvider::Directml.as_str().into(),
+            base: String::new(),
+            resolved: resolved.into(),
+        },
+    )?;
+    startup.record(
+        backend,
+        Observation::Binding {
+            field: "directml_adapter".into(),
+            configured: directml.device().expected_identity.clone(),
+            base: String::new(),
+            resolved: finding
+                .resolution
+                .decision
+                .as_ref()
+                .map_or_else(|_| NO_EXECUTION_PROVIDER.to_owned(), ToString::to_string),
+        },
+    )?;
+    if let Some(warning) = finding.warning(ActingdLocation::VisionStartup) {
+        // A failed write never stops the start (P3 L2): stderr is the last place actingd
+        // reports to.
+        let _unwritten = crate::write_daemon_reports(std::slice::from_ref(&warning), daemon_log);
+        return Ok(inventory.runtime.runtime_library_closure.clone());
+    }
+    Ok(inventory
+        .runtime
+        .directml_runtime_library_closure()
+        .unwrap_or_else(|| inventory.runtime.runtime_library_closure.clone()))
 }
 
 /// A path as recorded text; a path that is not UTF-8 is refused before it is recorded.

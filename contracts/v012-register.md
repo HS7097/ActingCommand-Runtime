@@ -7673,6 +7673,55 @@ adapters or reads the pin yet.
 
 **Rollback** (to 0.12.43). Nothing persisted; no configuration names `directml`.
 
+#### Slice GPU-1 D (0.12.44): the configuration, the startup record and check-config
+
+Design §1.2, §1.4, §2.5, §6.1 and §7 row D; coordinator work order
+`rd-1031/perf-407/brief-gpu1d.md`; on main `614322ee` (slice A merged). The contracts are
+[actingd-check-config.md](actingd-check-config.md) ("Vision root", "DirectML") and
+[component-interfaces.md](component-interfaces.md) (`actingd-config` revision 27).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| GD-1 | `vision.execution_provider` `directml`, `vision.directml_device {expected_identity}`, `vision.gpu_fallback` (`cpu` default, `refuse`) | configuration (**`actingd-config` revision 27**) | GPU-1 D | the person, by file | design §1.2: `directml` needs a valid device and no `cuda_device`; the device and `gpu_fallback` are refused beside `cpu` and `cuda` (`vision_config_invalid`, stage `config_assemble`); the device names no index or LUID (unknown member). No key of the configuration key table, no `ui_tier`: the section takes effect at the next start (the console never writes it, #407 6706839932) |
+| GD-2 | `ConfiguredVision::inspect` of a `directml` section hashes `ort\onnxruntime.dll` and `ort\onnxruntime_providers_shared.dll` against `DIRECTML_RUNTIME_PIN` (A's `PinnedRuntimeFile::check`) and `ort\DirectML.dll` too | behaviour | GPU-1 D | — | design §5: a missing, different or unreadable ONNX Runtime file refuses check-config (`config_vision`) and the start with `vision_runtime_unavailable`, its new optional value `path` the file, the OS failure its link; `DirectML.dll` is only reported (`file_state`) and decides the fallback |
+| GD-3 | `ConfiguredDirectml::find`: the adapter resolution (A's `resolve_directml_adapter` over the adapter source) and why DirectML cannot be used | behaviour | GPU-1 D | — | design §1.4: `DirectML.dll` missing `directml_library_missing`, off the pin or unreadable `directml_library_mismatch` (named before the adapter's reason), else A's `adapter_missing`, `adapter_not_physical` or `adapter_ambiguous`; the warning `vision_gpu_unavailable` with `execution_provider`, `gpu_unavailable_reason`, `gpu_fallback`, the OS failure as its link; never a refusal |
+| GD-4 | `provider.startup` `Binding` fields `execution_provider` (configured `directml`, resolved `directml`, `cpu` or `none`) and `directml_adapter` (configured the identity, resolved `<identity>;index=<n>;luid=<luid>` or `none`); `runtime_library_paths[i]` lists the DirectML closure only when DirectML can be used | ledger record text (free text) | GPU-1 D | actingd's provider startup | design §2.5, §6.2: free-text members, so ledger stays 7; written only for a `directml` section, a `cpu` or `cuda` start records exactly what it did |
+| GD-5 | the startup warning `vision_gpu_unavailable` at stage `vision_startup`, written once as actingd's daemon lines (WARN and OUTCOME) on stderr | daemon lines | GPU-1 D | actingd's provider startup | design §1.4: the start goes on in both `gpu_fallback` modes; no ledger record (design §6.2); the loader still gets the DirectML runtime, whose first OCR load decides again (slices B1, B2) |
+| GD-6 | check-config `vision.directml {expected_identity, gpu_fallback, adapters[{dxgi_index, identity, luid, physical, software, indirect_display, paravirtualized, pci_address}], resolved {dxgi_index, luid}?, unavailable_reason?, runtime_pin {onnxruntime, providers_shared, directml}, nn_execution_provider}` and its `note` `vision_gpu_unavailable` (stage `config_vision`) | report member, note | GPU-1 D | `actingd check-config` | design §6.3; serialised from typed structs (a vocabulary token as its spelling); present only for `directml`, so a `cpu` or `cuda` report is unchanged; `runtime-outcomes` stays 1 |
+| GD-7 | the actingd location `vision_startup` (pending, since 0.12.44); `vision_runtime_unavailable`'s optional value `path`; the descriptions of `vision_config_invalid` and `vision_runtime_unavailable` | outcome location, value, text | GPU-1 D | — | both codes stay settled with their category and ladder class; the new value is optional |
+
+**Tests.** New: apps row "#407 GPU-1 D" (`config::gate_407_gpu1d`, a fake adapter source shaped like
+a card with an indirect-display and a paravirtualized copy, another card and a software adapter,
+all fake identities, and a fixture pin over placeholder files; no GPU, no sleep):
+`directml_config_requires_its_device_and_refuses_it_elsewhere`,
+`gpu_fallback_is_admitted_only_with_directml_and_defaults_to_cpu`,
+`a_missing_adapter_at_startup_records_cpu_and_one_warning` (a started Runtime's ledger and the
+daemon lines), `a_runtime_off_the_pin_fails_check_config_with_vision_runtime_unavailable` (the real
+pin, through `check-config` and a start) and
+`check_config_lists_every_adapter_and_the_one_it_resolves`. Changed:
+`actinglab-architecture`'s `the_runtime_declares_each_v0120_interface_revision_once` pins
+`actingd-config` [5, 27] (the revision step).
+
+**Interface.** `actingd-config` [5, 26] → [5, 27]: additive, Runtime 0.12.43 refuses a file that
+names `directml` or either member, and a file that names none of them keeps its revision.
+`ledger` 7, `runtime-client` 6, `package` 7, `runtime-outcomes` 1 unchanged.
+
+**Where it differs from the work order's letter.** (a) The startup warning reaches the daemon
+lines and check-config's note; perf-status shows it once slice C collects vision warnings (C owns
+runtime-host and the recognition pack, which this slice does not touch), and the first OCR load's
+own warning (slice B2) is the one that stays in effect. (b) Under `gpu_fallback` `refuse` the
+startup binding `execution_provider` resolves to `none` (OCR runs on no provider until DirectML
+can be used); the design names only `directml` and `cpu`. (c) The test seam is the section's
+own pin and adapter source, replaced in tests (`ConfiguredDirectml::set_probe`), so check-config's
+stage is driven as `check_config::check_vision`. (d) The location `vision_startup` is new: the
+design left the startup stage's name to be registered as needed. (e) The report adds
+`nn_execution_provider` for design §6.3's "the report states it" of §9 Q7.
+
+**What changes live.** Nothing until a configuration names `directml`; production stays `cpu`.
+
+**Rollback** (to 0.12.43). Write `"vision": {"execution_provider": "cpu"}` (no revision-27
+member), then roll the Runtime back; nothing persisted needs a reader of 0.12.44.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
