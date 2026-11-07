@@ -2070,6 +2070,12 @@ fn normalize_post_admission_ocr(
     }
 }
 
+/// Workflow #360: a target's reads keep one provider binding for the run. Workflow #407 GPU-1 C
+/// fix 1 (PR #1535): the binding is what stays the same for the target (the provider and its
+/// device, the session, the runtime, the model and the execution flags). `fallback_observed` is
+/// per call (under DirectML it says whether a role that ran in that read had a node on the CPU,
+/// and a detection read that keeps no box runs only the detector), so it stays in each read's
+/// evidence and is not compared here.
 fn same_ocr_stream_binding(
     left: &OcrProviderExecutionEvidence,
     right: &OcrProviderExecutionEvidence,
@@ -2090,7 +2096,6 @@ fn same_ocr_stream_binding(
         && left.cpu_ep_registered == right.cpu_ep_registered
         && left.cpu_fallback_disabled == right.cpu_fallback_disabled
         && left.fallback_forbidden == right.fallback_forbidden
-        && left.fallback_observed == right.fallback_observed
         && left.complete == right.complete
 }
 
@@ -14526,6 +14531,69 @@ mod post_admission_ocr_tests {
             serde_json::to_vec(&first).expect("first report bytes"),
             serde_json::to_vec(&second).expect("second report bytes")
         );
+    }
+
+    /// Workflow #407 GPU-1 C fix 1 (PR #1535; design `rd-1031/perf-407/design-gpu1.md` §2.2,
+    /// §2.4): under DirectML `fallback_observed` is per call. A frame that keeps no box runs only
+    /// the detector (no CPU node, `false`); a frame with a box runs the recognizer too (its CPU
+    /// nodes, `true`). The same target read on both frames is admitted both times, keeps one
+    /// binding, records each read's own observation and the run does not fail.
+    #[test]
+    fn a_directml_target_with_and_without_boxes_keeps_one_binding() {
+        let on_directml = |invocation_id: &str, values: &[String], observed: bool| {
+            let mut observation = provider_observation(invocation_id, values);
+            let execution = observation.execution.as_mut().expect("fixture evidence");
+            execution.requested_provider = OcrExecutionProviderKind::Directml;
+            execution.resolved_provider = OcrExecutionProviderKind::Directml;
+            execution.cpu_ep_registered = false;
+            execution.cpu_fallback_disabled = false;
+            execution.fallback_forbidden = false;
+            execution.fallback_observed = Some(observed);
+            observation
+        };
+        let names = vec!["name-000".to_string()];
+        let provider = Arc::new(EvidenceProvider {
+            observations: Mutex::new(VecDeque::from([
+                on_directml("invocation-detector-only", &[], false),
+                on_directml("invocation-with-recognizer", &names, true),
+            ])),
+            requests: Mutex::new(Vec::new()),
+            calls: AtomicU32::new(0),
+        });
+        let evaluator = evaluator(Arc::clone(&provider));
+        let prepared = prepared(names);
+        let scene = fixture_scene();
+        let mut collector = PostAdmissionOcrCollector::new(Some(&prepared));
+
+        let mut observed = Vec::new();
+        for frame_index in 0..2 {
+            let (observed_index, observation) = collector
+                .observe("neutral", &evaluator, "neutral/target", &scene)
+                .expect("the DirectML read is admitted")
+                .expect("admitted frame");
+            assert_eq!(observed_index, frame_index);
+            let execution = observation.execution.expect("the read's own evidence");
+            assert_eq!(
+                execution.resolved_provider,
+                OcrExecutionProviderKind::Directml
+            );
+            observed.push(execution.fallback_observed);
+        }
+        assert_eq!(observed, [Some(false), Some(true)]);
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            collector.stream_bindings.keys().collect::<Vec<_>>(),
+            ["fixture/ocr"],
+            "one binding for the target"
+        );
+
+        let report = collector
+            .finish()
+            .expect("the run does not fail")
+            .expect("report");
+        assert_eq!(report.frames_collected, 2);
+        assert_eq!(report.items_collected, 1);
+        assert!(report.exact_match);
     }
 
     #[test]

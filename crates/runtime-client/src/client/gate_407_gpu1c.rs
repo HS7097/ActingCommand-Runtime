@@ -76,6 +76,9 @@ fn official_ocr_reads_directml_and_whole_model_fallback_evidence() {
         )
         .expect("a direct observation on DirectML"),
     );
+    // Workflow #407 GPU-1 C fix 1 (PR #1535): `fallback_observed` is per call and not part of
+    // the binding, so the two DirectML targets of one session, observed true and false, share
+    // one binding.
     let executions = project_official_ocr_providers(records).expect("one binding per target");
     let projected = executions
         .iter()
@@ -113,17 +116,7 @@ fn official_ocr_reads_directml_and_whole_model_fallback_evidence() {
                 false,
                 Some(true),
                 false,
-                2,
-            ),
-            (
-                "fixture-model",
-                RuntimeOfficialOcrProviderKind::Directml,
-                RuntimeOfficialOcrProviderKind::Directml,
-                false,
-                false,
-                Some(false),
-                false,
-                1,
+                3,
             ),
         ]
     );

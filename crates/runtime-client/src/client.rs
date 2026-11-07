@@ -5495,7 +5495,14 @@ fn project_official_ocr_providers(
             .iter()
             .position(|(binding, _)| same_official_ocr_provider_binding(binding, &record))
         {
-            Some(group) => group,
+            Some(group) => {
+                // Workflow #407 GPU-1 C fix 1: `fallback_observed` is per call, so the binding
+                // reads it as observed when any of its calls observed it.
+                if record.fallback_observed == Some(true) {
+                    groups[group].0.fallback_observed = Some(true);
+                }
+                group
+            }
             None => {
                 groups.push((record.clone(), Vec::new()));
                 groups.len() - 1
@@ -5539,6 +5546,11 @@ fn project_official_ocr_providers(
         .collect())
 }
 
+/// Workflow #360: a target keeps one provider binding for the run. Workflow #407 GPU-1 C fix 1
+/// (PR #1535): the binding is what stays the same for the target (the provider and its device,
+/// the session, the runtime, the model and the execution flags). `fallback_observed` is per call
+/// (under DirectML it says whether a role that ran in that read had a node on the CPU, and a
+/// detection read that keeps no box runs only the detector), so it is not compared here.
 fn same_official_ocr_provider_binding(
     left: &OcrProviderEvidence,
     right: &OcrProviderEvidence,
@@ -5559,7 +5571,6 @@ fn same_official_ocr_provider_binding(
         && left.cpu_ep_registered == right.cpu_ep_registered
         && left.cpu_fallback_disabled == right.cpu_fallback_disabled
         && left.fallback_forbidden == right.fallback_forbidden
-        && left.fallback_observed == right.fallback_observed
         && left.complete == right.complete
 }
 

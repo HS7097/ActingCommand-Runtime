@@ -2810,3 +2810,11 @@ tests = [
     "actingcommand-execution-kernel::lib::provider::tests::a_model_on_cpu_after_fallback_shows_one_status_warning",
 ]
 incident = ["#407 GPU-1 C"]
+
+# Workflow #407 GPU-1 C fix 1 (0.12.44; register §1.286; brief rd-1031/perf-407/brief-gpu1c-fix1.md; design rd-1031/perf-407/design-gpu1.md §2.2 and §2.4; PR #1535): fallback_observed is per-call evidence and not part of a target's binding; one post-admission OCR target read under DirectML on a frame that keeps no box (detector only, observed false) and on a frame with a box (recognizer too, observed true) is admitted both times, keeps one binding, records each read's own observation, and the run's collection finishes without evidence mismatch
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::post_admission_ocr_tests::a_directml_target_with_and_without_boxes_keeps_one_binding",
+]
+incident = ["#407 GPU-1 C"]

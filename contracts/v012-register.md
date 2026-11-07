@@ -7764,7 +7764,19 @@ fake needs; the host's part is one read in `memory_status.rs` appended in `perfo
 (the kernel's `same_ocr_stream_binding`) and of the official OCR grouping (runtime-client's
 `same_official_ocr_provider_binding`) compares `fallback_observed`, which for DirectML is per
 read: a detect-mode target that keeps no box on one frame (detector only, false) and boxes on
-another (true) reads as two bindings.
+another (true) reads as two bindings. Fix 1 below settles it.
+
+**C fix 1** (coordinator work order `rd-1031/perf-407/brief-gpu1c-fix1.md`, same PR #1535).
+`fallback_observed` stays in each read's evidence (the `ocr` row's `execution`, the observation
+artifact) but is no longer part of the binding equality: `same_ocr_stream_binding` (kernel) and
+`same_official_ocr_provider_binding` (runtime-client) compare only what stays the same for a
+target (provider and device, session, runtime, model, the execution flags). The four bindings
+of GC-2 are unchanged. A `provider_executions` entry's `fallback_observed` is true when any of
+its calls observed it ([ocr-fields.md](ocr-fields.md)); no member is added. Test: new exec row
+"#407 GPU-1 C fix 1", `a_directml_target_with_and_without_boxes_keeps_one_binding` (kernel,
+fixture provider); adapted: `official_ocr_reads_directml_and_whole_model_fallback_evidence`,
+whose two DirectML targets of one session (observed true and false) now read as one binding
+with three calls instead of two bindings. Interface unchanged.
 
 **What C changes live.** Nothing until a configuration names `directml`: a `cpu` or `cuda`
 Runtime's evidence, rows and status are unchanged.
