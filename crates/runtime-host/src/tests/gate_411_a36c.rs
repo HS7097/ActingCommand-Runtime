@@ -47,7 +47,10 @@ fn placement_report() -> Arc<PpocrNodePlacementDiagnostic> {
         model_role: "recognizer".to_owned(),
         diagnostic_scope: "session_initialization_only".to_owned(),
         inference_executed: false,
+        accelerated_execution_provider: "CUDAExecutionProvider".to_owned(),
+        accelerated_node_count: 1,
         cpu_assigned_node_count: 0,
+        device: None,
         nodes: Vec::new(),
     })
 }

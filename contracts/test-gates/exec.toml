@@ -2791,3 +2791,13 @@ tests = [
     "actingcommand-vision-ffi::lib::gate_407_gpu1a::the_runtime_pin_equals_the_tool_sources_entries",
 ]
 incident = ["#407 GPU-1 A"]
+
+# Workflow #407 GPU-1 B1 (0.12.44; register §1.286; brief rd-1031/perf-407/brief-gpu1b1.md; design rd-1031/perf-407/design-gpu1.md §2.1, §2.2, §2.4 and §7 row B1): over a fake ONNX Runtime that writes its verbose placement log and a fake adapter, a DirectML plan registers DirectML alone with CPU fallback allowed and the fallback policy cpu_nodes, its sessions turn the memory pattern and parallel execution off and run on the adapter's DXGI index, and the placement shadow and the session are built from the one same options value, while CPU and CUDA options stay as before; a DirectML load reads the placement of each role into a v2 report (detector 203 DirectML nodes and none on the CPU, recognizer 186 and the two CPU nodes Slice.2 and Concat.2, each with its adapter's identity, index and LUID), the two reports pass as one call's, and fallback_observed is true for every read that runs the recognizer; a placement that cannot be read (no section, a group that ends early, a CPU group not fully listed, a summary that does not read, another accelerated provider) fails the session with placement_unread, builds no session and keeps no report
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ppocr-onnx-json-provider::lib::gate_407_gpu1b1::directml_sessions_turn_off_memory_pattern_and_parallel_execution_and_allow_cpu_nodes",
+    "actingcommand-ppocr-onnx-json-provider::lib::gate_407_gpu1b1::a_directml_load_records_its_placement_per_model_role",
+    "actingcommand-ppocr-onnx-json-provider::lib::gate_407_gpu1b1::an_unreadable_placement_is_a_session_that_cannot_be_built",
+]
+incident = ["#407 GPU-1 B1"]

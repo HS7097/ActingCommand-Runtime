@@ -26,12 +26,16 @@ pub mod models;
 pub mod runtime_pin;
 
 use actingcommand_contract::outcome::Outcome;
+// Workflow #407 GPU-1 B1: the state `PinnedRuntimeFile::check` reports, for the engine.
+pub use actingcommand_contract::outcome::FileState;
 pub use actingcommand_contract::{
-    PPOCR_DIAGNOSTIC_RESULT_SCHEMA, PPOCR_MAX_BUSINESS_JSON_BYTES, PPOCR_MAX_DIAGNOSTIC_JSON_BYTES,
-    PPOCR_MAX_DIAGNOSTIC_NODES, PPOCR_MAX_DIAGNOSTIC_REPORTS, PPOCR_MAX_ENVELOPE_BYTES,
-    PPOCR_MAX_NODE_LOG_BYTES, PPOCR_MAX_REPORT_JSON_BYTES, PPOCR_MAX_RESPONSE_BYTES,
-    PPOCR_NODE_PLACEMENT_RECORD_TYPE, PpocrCpuAssignedNodeDiagnostic, PpocrDiagnostics,
-    PpocrNodePlacementDiagnostic, PpocrNodePlacementReason, validate_ppocr_call_diagnostics,
+    PPOCR_CPU_EXECUTION_PROVIDER, PPOCR_DIAGNOSTIC_RESULT_SCHEMA,
+    PPOCR_DIRECTML_EXECUTION_PROVIDER, PPOCR_MAX_BUSINESS_JSON_BYTES,
+    PPOCR_MAX_DIAGNOSTIC_JSON_BYTES, PPOCR_MAX_DIAGNOSTIC_NODES, PPOCR_MAX_DIAGNOSTIC_REPORTS,
+    PPOCR_MAX_ENVELOPE_BYTES, PPOCR_MAX_NODE_LOG_BYTES, PPOCR_MAX_REPORT_JSON_BYTES,
+    PPOCR_MAX_RESPONSE_BYTES, PPOCR_NODE_PLACEMENT_RECORD_TYPE, PpocrCpuAssignedNodeDiagnostic,
+    PpocrDiagnosticDevice, PpocrDiagnostics, PpocrNodePlacementDiagnostic,
+    PpocrNodePlacementReason, validate_ppocr_call_diagnostics,
 };
 pub use adapters::*;
 pub use artifacts::*;
