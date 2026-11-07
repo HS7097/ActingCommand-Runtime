@@ -701,7 +701,7 @@ fn directml_provider_options_sha256(
     selector: Option<&DirectmlDeviceSelector>,
     resolved: Option<&DirectmlDeviceIdentity>,
 ) -> String {
-    hasher.update(b"directml\0cpu_nodes\0allowed\0intra_threads\01\0");
+    hasher.update(b"directml\0cpu_nodes\0allowed\0intra_threads\x001\0");
     hasher.update(b"memory_pattern\0false\0parallel_execution\0false\0");
     if let Some(selector) = selector {
         hasher.update(b"requested_identity\0");
