@@ -3351,3 +3351,11 @@ tests = [
     "actingcommand-agent-forward::lib::claude::tests::a_registration_clears_the_unanswered_mark",
 ]
 incident = ["#432 AGT-T1b"]
+
+# Workflow #407 GPU-1 C (0.12.44; register §1.286; brief rd-1031/perf-407/brief-gpu1c.md; design rd-1031/perf-407/design-gpu1.md §2.4, §6.2 and §7 row C): the task diagnostic's post-admission OCR row of a DirectML request records requested_provider directml and resolved_provider directml, or cpu after a whole-model fallback, with the evidence's flags as they are (fallback not forbidden, observed) and no CUDA member, and the row round-trips in the ledger's existing free-text members (ledger 7)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::host::task_diagnostic::tests::the_task_diagnostic_records_directml_as_its_provider",
+]
+incident = ["#407 GPU-1 C"]

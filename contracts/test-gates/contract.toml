@@ -828,3 +828,11 @@ tests = [
     "actingcommand-contract::gate::gate_411_bt_key::bt_key_t3_a_keyed_cap_needs_its_one_mapping_and_no_designated_operation_is_capped",
 ]
 incident = ["#411 B16"]
+
+# Workflow #407 GPU-1 C (0.12.44; register §1.286; brief rd-1031/perf-407/brief-gpu1c.md; design rd-1031/perf-407/design-gpu1.md §2.4 and §7 row C; runtime-client stays 6): the official OCR projection reads a run's DirectML evidence in the recognition pack's two bindings, on DirectML observed true or false and on the CPU after a whole-model fallback observed true, one binding per target with requested_provider directml, actual_provider directml or cpu and strict_no_fallback false; every other combination that names DirectML (no observation, forbidden, a wrong CPU EP flag, the fallback not observed, resolved on CUDA, a CPU request resolved on DirectML or with DirectML's fallback) is runtime_official_ocr_provider_evidence_invalid
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-client::lib::client::gate_407_gpu1c::official_ocr_reads_directml_and_whole_model_fallback_evidence",
+]
+incident = ["#407 GPU-1 C"]

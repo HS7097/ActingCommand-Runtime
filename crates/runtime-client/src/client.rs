@@ -76,6 +76,9 @@ pub(crate) use player_hold::player_hold_receipt_waits;
 #[cfg(test)]
 pub(crate) use player_hold::tests_override as player_hold_waits_for_test;
 pub use player_hold::{PreparedPlayerHoldAcquire, PreparedPlayerHoldRelease};
+// Workflow #407 GPU-1 C: official OCR reads DirectML evidence.
+#[cfg(test)]
+mod gate_407_gpu1c;
 
 #[cfg(feature = "test-observation")]
 use crate::test_observation::{
@@ -664,6 +667,9 @@ pub struct RuntimeOfficialOcrProviderEvidence {
 pub enum RuntimeOfficialOcrProviderKind {
     Cpu,
     Cuda,
+    /// Workflow #407 GPU-1 C (design `rd-1031/perf-407/design-gpu1.md` §2.4): ONNX Runtime's
+    /// DirectML execution provider, read in exactly the recognition pack's two bindings.
+    Directml,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -5258,6 +5264,11 @@ fn parse_official_ocr_observation(
     }
 }
 
+/// The recognition pack's four execution bindings (Workflow #407 GPU-1 design §2.4): CPU on CPU
+/// and CUDA on CUDA, fallback forbidden and none observed; DirectML on DirectML (CPU not
+/// registered, fallback neither disabled nor forbidden, observed either way); DirectML on the
+/// CPU after a whole-model fallback (CPU registered, fallback neither disabled nor forbidden,
+/// observed). Every other combination is invalid evidence.
 fn validate_official_ocr_target(
     target_id: &str,
     evidence: &OcrProviderEvidence,
@@ -5268,17 +5279,37 @@ fn validate_official_ocr_target(
             evidence.resolved_provider,
             evidence.cpu_ep_registered,
             evidence.cpu_fallback_disabled,
+            evidence.fallback_forbidden,
+            evidence.fallback_observed,
         ),
         (
             RuntimeOfficialOcrProviderKind::Cpu,
             RuntimeOfficialOcrProviderKind::Cpu,
             true,
             false,
+            true,
+            None,
         ) | (
             RuntimeOfficialOcrProviderKind::Cuda,
             RuntimeOfficialOcrProviderKind::Cuda,
             false,
             true,
+            true,
+            None,
+        ) | (
+            RuntimeOfficialOcrProviderKind::Directml,
+            RuntimeOfficialOcrProviderKind::Directml,
+            false,
+            false,
+            false,
+            Some(_),
+        ) | (
+            RuntimeOfficialOcrProviderKind::Directml,
+            RuntimeOfficialOcrProviderKind::Cpu,
+            true,
+            false,
+            false,
+            Some(true),
         )
     );
     if target_id.trim().is_empty()
@@ -5291,8 +5322,6 @@ fn validate_official_ocr_target(
         || !is_sha256_hex(&evidence.model_sha256)
         || !provider_binding_valid
         || !evidence.complete
-        || !evidence.fallback_forbidden
-        || evidence.fallback_observed.is_some()
     {
         return Err(official_ocr_error(
             ClientCode::RuntimeOfficialOcrProviderEvidenceInvalid,
@@ -5466,7 +5495,14 @@ fn project_official_ocr_providers(
             .iter()
             .position(|(binding, _)| same_official_ocr_provider_binding(binding, &record))
         {
-            Some(group) => group,
+            Some(group) => {
+                // Workflow #407 GPU-1 C fix 1: `fallback_observed` is per call, so the binding
+                // reads it as observed when any of its calls observed it.
+                if record.fallback_observed == Some(true) {
+                    groups[group].0.fallback_observed = Some(true);
+                }
+                group
+            }
             None => {
                 groups.push((record.clone(), Vec::new()));
                 groups.len() - 1
@@ -5510,6 +5546,11 @@ fn project_official_ocr_providers(
         .collect())
 }
 
+/// Workflow #360: a target keeps one provider binding for the run. Workflow #407 GPU-1 C fix 1
+/// (PR #1535): the binding is what stays the same for the target (the provider and its device,
+/// the session, the runtime, the model and the execution flags). `fallback_observed` is per call
+/// (under DirectML it says whether a role that ran in that read had a node on the CPU, and a
+/// detection read that keeps no box runs only the detector), so it is not compared here.
 fn same_official_ocr_provider_binding(
     left: &OcrProviderEvidence,
     right: &OcrProviderEvidence,
@@ -5530,7 +5571,6 @@ fn same_official_ocr_provider_binding(
         && left.cpu_ep_registered == right.cpu_ep_registered
         && left.cpu_fallback_disabled == right.cpu_fallback_disabled
         && left.fallback_forbidden == right.fallback_forbidden
-        && left.fallback_observed == right.fallback_observed
         && left.complete == right.complete
 }
 

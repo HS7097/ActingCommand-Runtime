@@ -592,6 +592,9 @@ impl HostShared {
         let mut memory_warnings = Vec::new();
         let memory = self.memory_status(&mut memory_warnings)?;
         let vision = self.vision_timings();
+        // Workflow #407 GPU-1 C (design §2.5): the vision provider's GPU warnings, from its
+        // memory, before the performance lock.
+        let mut vision_warnings = self.vision_warnings();
         let mut status = lock(&self.performance, HostLocation::ReadPerformanceStatus)?
             .pacing_status(now, &settings, &instances);
         // #422 W1-8 (P29; QR-1 review L-4 follow-up): the ledger reader pool's pages and their
@@ -599,7 +602,9 @@ impl HostShared {
         status.ledger_read_pages = self.ledger.reader_pool_pages().map(ledger_read_pages);
         status.memory = Some(memory);
         status.vision = vision;
-        // The memory's warning first, so the bound on warnings never drops it.
+        // The memory's warning first, then the vision provider's, so the bound on warnings never
+        // drops them.
+        memory_warnings.append(&mut vision_warnings);
         memory_warnings.append(&mut status.warnings);
         memory_warnings.truncate(actingcommand_contract::MAX_PERFORMANCE_STATUS_WARNINGS);
         status.warnings = memory_warnings;

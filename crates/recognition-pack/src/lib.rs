@@ -671,6 +671,10 @@ pub struct OcrProviderResult {
 pub enum OcrExecutionProviderKind {
     Cpu,
     Cuda,
+    /// Workflow #407 GPU-1 C (design `rd-1031/perf-407/design-gpu1.md` §2.4): ONNX Runtime's
+    /// DirectML execution provider, requested by a `directml` vision section; its evidence is
+    /// admitted in exactly two bindings (see `ocr_execution_provider_binding_is_valid`).
+    Directml,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -841,6 +845,16 @@ pub trait VisionProvider: fmt::Debug + Send + Sync {
     /// the model's lock and their inference times, read from memory without waiting for a model
     /// in use. A provider that keeps no such account answers none.
     fn model_timings(&self) -> Vec<actingcommand_contract::VisionModelTimingStatus> {
+        Vec::new()
+    }
+
+    /// Workflow #407 GPU-1 C (design `rd-1031/perf-407/design-gpu1.md` §2.5): the warnings of the
+    /// provider's execution now, each a warning `vision_gpu_unavailable`: one for the process
+    /// while the configured GPU execution provider cannot be used, and one for each model that
+    /// runs on the CPU after a fallback. The status shows what holds now: a warning whose cause
+    /// is gone is no longer handed over. Read from memory without waiting for a model in use. A
+    /// provider without a GPU execution provider answers none.
+    fn execution_warnings(&self) -> Vec<actingcommand_contract::outcome::Outcome> {
         Vec::new()
     }
 }
@@ -2024,8 +2038,6 @@ impl RecognitionEvaluator {
                 || execution.model_sha256 != target.model_sha256
                 || !ocr_execution_provider_binding_is_valid(&execution)
                 || !execution.complete
-                || !execution.fallback_forbidden
-                || execution.fallback_observed.is_some()
             {
                 return Err(RecognitionPackError::fatal_with_code(
                     RecognitionPackErrorCode::VisionProviderInvalidResponse,
@@ -4163,6 +4175,19 @@ fn provider_error(
     .with_ppocr_diagnostics(err.ppocr_diagnostics().clone())
 }
 
+/// The execution bindings an OCR observation's evidence may carry (Workflow #407 GPU-1 design
+/// §2.4; runtime-client's official OCR reads the same four): requested and resolved provider,
+/// whether the CPU execution provider was registered, whether CPU fallback was disabled, whether
+/// fallback was forbidden, and the fallback observed.
+///
+/// - CPU on CPU: CPU registered, fallback not disabled, forbidden, none observed.
+/// - CUDA on CUDA: CPU not registered, fallback disabled, forbidden, none observed.
+/// - DirectML on DirectML (node-level fallback): CPU not registered, fallback not disabled, not
+///   forbidden, and an observation either way (whether a role that ran had a node on the CPU).
+/// - DirectML on the CPU (whole-model fallback): CPU registered, fallback not disabled, not
+///   forbidden, and the fallback observed.
+///
+/// Every other combination is refused.
 fn ocr_execution_provider_binding_is_valid(execution: &OcrProviderExecutionEvidence) -> bool {
     matches!(
         (
@@ -4170,17 +4195,37 @@ fn ocr_execution_provider_binding_is_valid(execution: &OcrProviderExecutionEvide
             execution.resolved_provider,
             execution.cpu_ep_registered,
             execution.cpu_fallback_disabled,
+            execution.fallback_forbidden,
+            execution.fallback_observed,
         ),
         (
             OcrExecutionProviderKind::Cpu,
             OcrExecutionProviderKind::Cpu,
             true,
             false,
+            true,
+            None,
         ) | (
             OcrExecutionProviderKind::Cuda,
             OcrExecutionProviderKind::Cuda,
             false,
             true,
+            true,
+            None,
+        ) | (
+            OcrExecutionProviderKind::Directml,
+            OcrExecutionProviderKind::Directml,
+            false,
+            false,
+            false,
+            Some(_),
+        ) | (
+            OcrExecutionProviderKind::Directml,
+            OcrExecutionProviderKind::Cpu,
+            true,
+            false,
+            false,
+            Some(true),
         )
     )
 }
@@ -5095,6 +5140,121 @@ mod tests {
         let mut fallback_observed = valid_cpu;
         fallback_observed.fallback_observed = Some(true);
         invalid.push(("fallback observed", fallback_observed));
+
+        for (label, execution) in invalid {
+            let error = observation_evaluator(execution)
+                .evaluate_ocr_observation(&scene, "ocr/page")
+                .expect_err(label);
+            assert_eq!(
+                error.code(),
+                RecognitionPackErrorCode::VisionProviderInvalidResponse,
+                "{label}"
+            );
+            assert!(
+                error
+                    .message()
+                    .contains("execution evidence does not match target"),
+                "{label}: {}",
+                error.message()
+            );
+        }
+    }
+
+    /// Workflow #407 GPU-1 C (design `rd-1031/perf-407/design-gpu1.md` §2.4): DirectML evidence
+    /// is admitted in exactly two bindings. On DirectML (node-level fallback) the CPU execution
+    /// provider is not registered, CPU fallback is neither disabled nor forbidden, and the
+    /// observation says either way whether a role that ran had a node on the CPU. On the CPU
+    /// after a whole-model fallback the CPU execution provider is registered, fallback is
+    /// neither disabled nor forbidden, and the fallback is observed. Every other combination
+    /// that names DirectML, and the DirectML flags beside a CPU request, is refused.
+    #[test]
+    fn directml_evidence_admits_its_two_bindings_and_nothing_else() {
+        let scene = Scene::from_rgb8(2, 1, &[0; 6]).expect("scene");
+        let on_directml = |observed: bool| OcrProviderExecutionEvidence {
+            requested_provider: OcrExecutionProviderKind::Directml,
+            resolved_provider: OcrExecutionProviderKind::Directml,
+            cpu_ep_registered: false,
+            cpu_fallback_disabled: false,
+            fallback_forbidden: false,
+            fallback_observed: Some(observed),
+            ..execution_evidence(OcrExecutionProviderKind::Cpu)
+        };
+        let on_cpu_after_fallback = OcrProviderExecutionEvidence {
+            requested_provider: OcrExecutionProviderKind::Directml,
+            resolved_provider: OcrExecutionProviderKind::Cpu,
+            cpu_ep_registered: true,
+            cpu_fallback_disabled: false,
+            fallback_forbidden: false,
+            fallback_observed: Some(true),
+            ..execution_evidence(OcrExecutionProviderKind::Cpu)
+        };
+
+        for (label, execution) in [
+            ("on DirectML with a CPU node", on_directml(true)),
+            ("on DirectML without a CPU node", on_directml(false)),
+            (
+                "on the CPU after a whole-model fallback",
+                on_cpu_after_fallback.clone(),
+            ),
+        ] {
+            let evaluation = observation_evaluator(execution.clone())
+                .evaluate_ocr_observation(&scene, "ocr/page")
+                .expect(label);
+            assert_eq!(evaluation.text, "hello", "{label}");
+            assert_eq!(evaluation.execution, execution, "{label}");
+        }
+
+        let mut invalid = Vec::new();
+        let mut unobserved = on_directml(true);
+        unobserved.fallback_observed = None;
+        invalid.push(("DirectML without an observation", unobserved));
+        let mut forbidden = on_directml(true);
+        forbidden.fallback_forbidden = true;
+        invalid.push(("DirectML with fallback forbidden", forbidden));
+        let mut cpu_registered = on_directml(true);
+        cpu_registered.cpu_ep_registered = true;
+        invalid.push(("DirectML with the CPU EP registered", cpu_registered));
+        let mut disabled = on_directml(true);
+        disabled.cpu_fallback_disabled = true;
+        invalid.push(("DirectML with CPU fallback disabled", disabled));
+        let mut on_cuda = on_directml(true);
+        on_cuda.resolved_provider = OcrExecutionProviderKind::Cuda;
+        invalid.push(("DirectML resolved on CUDA", on_cuda));
+        let mut incomplete = on_directml(true);
+        incomplete.complete = false;
+        invalid.push(("incomplete DirectML evidence", incomplete));
+
+        let mut not_observed = on_cpu_after_fallback.clone();
+        not_observed.fallback_observed = Some(false);
+        invalid.push(("whole-model fallback not observed", not_observed));
+        let mut unobserved = on_cpu_after_fallback.clone();
+        unobserved.fallback_observed = None;
+        invalid.push(("whole-model fallback without an observation", unobserved));
+        let mut forbidden = on_cpu_after_fallback.clone();
+        forbidden.fallback_forbidden = true;
+        invalid.push(("whole-model fallback forbidden", forbidden));
+        let mut cpu_missing = on_cpu_after_fallback.clone();
+        cpu_missing.cpu_ep_registered = false;
+        invalid.push(("whole-model fallback without the CPU EP", cpu_missing));
+        let mut disabled = on_cpu_after_fallback.clone();
+        disabled.cpu_fallback_disabled = true;
+        invalid.push(("whole-model fallback with CPU fallback disabled", disabled));
+
+        let mut cpu_requested = on_cpu_after_fallback;
+        cpu_requested.requested_provider = OcrExecutionProviderKind::Cpu;
+        invalid.push(("a CPU request with DirectML's fallback", cpu_requested));
+        let mut cpu_on_directml = on_directml(true);
+        cpu_on_directml.requested_provider = OcrExecutionProviderKind::Cpu;
+        invalid.push(("a CPU request resolved on DirectML", cpu_on_directml));
+        let mut cuda_on_directml = on_directml(true);
+        cuda_on_directml.requested_provider = OcrExecutionProviderKind::Cuda;
+        invalid.push(("a CUDA request resolved on DirectML", cuda_on_directml));
+        let mut directml_strict = execution_evidence(OcrExecutionProviderKind::Cpu);
+        directml_strict.requested_provider = OcrExecutionProviderKind::Directml;
+        invalid.push((
+            "DirectML on the CPU with CPU's strict flags",
+            directml_strict,
+        ));
 
         for (label, execution) in invalid {
             let error = observation_evaluator(execution)

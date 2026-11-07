@@ -185,10 +185,13 @@ fn ocr_payload(ocr: &actingcommand_recognition_pack::OcrEvaluation) -> TaskDiagn
     }
 }
 
+/// The OCR row's provider spelling. Workflow #407 GPU-1 C (design §6.2): `directml` is one more
+/// value of the free-text members `requested_provider` and `resolved_provider`, so ledger stays 7.
 fn ocr_provider(value: actingcommand_recognition_pack::OcrExecutionProviderKind) -> &'static str {
     match value {
         actingcommand_recognition_pack::OcrExecutionProviderKind::Cpu => "cpu",
         actingcommand_recognition_pack::OcrExecutionProviderKind::Cuda => "cuda",
+        actingcommand_recognition_pack::OcrExecutionProviderKind::Directml => "directml",
     }
 }
 
@@ -1362,6 +1365,90 @@ mod tests {
         let plain = serde_json::to_value(&plain).expect("serialize the evaluation");
         assert!(plain["ocr"].get("preprocess").is_none());
         assert!(plain["ocr"].get("shared_read").is_none());
+    }
+
+    /// Workflow #407 GPU-1 C (design rd-1031/perf-407/design-gpu1.md §2.4, §6.2): a post-admission
+    /// OCR row of a DirectML request records `directml` as its requested provider, and as its
+    /// resolved one on DirectML or `cpu` after a whole-model fallback, with the evidence's flags
+    /// as they are (fallback not forbidden, observed) and no CUDA member; the row round-trips,
+    /// its provider members the free text the ledger's shape already has.
+    #[test]
+    fn the_task_diagnostic_records_directml_as_its_provider() {
+        use actingcommand_recognition_pack::{
+            OcrExecutionProviderKind as Kind, OcrProviderExecutionEvidence,
+        };
+        let evidence = |resolved: Kind| OcrProviderExecutionEvidence {
+            invocation_id: "ocr-invocation-0000000000000001".to_owned(),
+            session_id: "ocr-session-0000000000000001".to_owned(),
+            session_generation: 1,
+            requested_provider: Kind::Directml,
+            resolved_provider: resolved,
+            requested_cuda_ordinal: None,
+            requested_cuda_identity: None,
+            resolved_cuda_ordinal: None,
+            resolved_cuda_identity: None,
+            provider_implementation: "fixture-ocr".to_owned(),
+            provider_binary_sha256: "b".repeat(64),
+            runtime_version: "fixture-runtime".to_owned(),
+            model_ref: "ocr-fixture".to_owned(),
+            model_sha256: "a".repeat(64),
+            cpu_ep_registered: resolved == Kind::Cpu,
+            cpu_fallback_disabled: false,
+            fallback_forbidden: false,
+            fallback_observed: Some(true),
+            complete: true,
+        };
+        for (resolved, spelling) in [(Kind::Directml, "directml"), (Kind::Cpu, "cpu")] {
+            let execution = ocr_execution(&evidence(resolved));
+            assert_eq!(execution.requested_provider, "directml");
+            assert_eq!(execution.resolved_provider, spelling);
+            assert_eq!(execution.cpu_ep_registered, resolved == Kind::Cpu);
+            assert!(!execution.cpu_fallback_disabled);
+            assert!(!execution.fallback_forbidden);
+            assert_eq!(execution.fallback_observed, Some(true));
+            assert!(execution.complete);
+            assert_eq!(
+                (
+                    execution.requested_cuda_ordinal,
+                    execution.requested_cuda_identity.as_deref(),
+                    execution.resolved_cuda_ordinal,
+                    execution.resolved_cuda_identity.as_deref(),
+                ),
+                (None, None, None, None)
+            );
+            let region = rect(40, 120, 600, 480);
+            let row = record(
+                1,
+                None,
+                Payload::Ocr(Box::new(TaskDiagnosticOcrData::Observed {
+                    phase: "post_admission".to_owned(),
+                    target_id: "text/entry".to_owned(),
+                    region: OcrRegionEvidence {
+                        frame_width: 1280,
+                        frame_height: 720,
+                        anchor_target_id: None,
+                        anchor_match: None,
+                        offset: None,
+                        width: region.width,
+                        height: region.height,
+                        roi: Some(region_rect_of(region)),
+                        unresolved: None,
+                    },
+                    raw_text: "ALPHA".to_owned(),
+                    derived_text: "ALPHA".to_owned(),
+                    confidence: Some(0.9),
+                    block_count: 0,
+                    execution: Box::new(execution),
+                })),
+            );
+            assert_eq!(round_trip(&row), row);
+            let encoded = serde_json::to_string(&row).expect("serialize the row");
+            assert!(
+                encoded.contains("\"requested_provider\":\"directml\"")
+                    && encoded.contains(&format!("\"resolved_provider\":\"{spelling}\"")),
+                "{encoded}"
+            );
+        }
     }
 
     // Workflow #396 REC-2: the guard row of a unique target with a second place.

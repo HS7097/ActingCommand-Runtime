@@ -364,6 +364,30 @@ their original evaluators.
 | `artifact` | original ArtifactVerified sequence and projected native artifact reference |
 | `terminal` | interpreter result or original error code; unavailable executed-step counts are null |
 
+A post-admission `ocr` row's `execution` is the provider's execution evidence of
+that read: its invocation and session, `requested_provider` and
+`resolved_provider`, the CUDA selector and identity (CUDA only), the provider and
+runtime identity, the model, and `cpu_ep_registered`, `cpu_fallback_disabled`,
+`fallback_forbidden`, `fallback_observed` and `complete`. Workflow #407 GPU-1 C
+(since 0.12.44; register §1.286; design `rd-1031/perf-407/design-gpu1.md` §2.4,
+§6.2): the provider members are `cpu`, `cuda` or `directml`, and the evidence is
+recorded only in one of four bindings, the recognition pack's (runtime-client's
+official OCR reads the same four):
+
+| requested | resolved | `cpu_ep_registered` | `cpu_fallback_disabled` | `fallback_forbidden` | `fallback_observed` |
+| --- | --- | --- | --- | --- | --- |
+| `cpu` | `cpu` | true | false | true | null |
+| `cuda` | `cuda` | false | true | true | null |
+| `directml` | `directml` | false | false | false | true or false: whether a model role that ran in the read had a node on the CPU |
+| `directml` | `cpu` | true | false | false | true (the whole model on the CPU after a fallback) |
+
+A read whose evidence is any other combination fails as the provider's invalid
+response (`recognition_pack_provider_response_invalid`) and writes its `error` row in place
+of an `ocr` row. `directml` is a new value of the free-text
+members, not a new shape: ledger stays at revision 7. A DirectML read records no
+adapter identity and no node counts; the adapter is in the startup record and the
+node placement in the `DiagnosticJson` placement report.
+
 `executed_steps` is the run owner's count of dispatched logical steps. A dispatched
 step counts even if its guard, input or postcondition fails; retries of that step
 retain its index. It is distinct from physical input count and successful

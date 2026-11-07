@@ -2812,3 +2812,20 @@ tests = [
     "actingcommand-ppocr-onnx-json-provider::lib::gate_407_gpu1b2::an_unresolved_adapter_at_runtime_init_keeps_directml_out_of_the_closure",
 ]
 incident = ["#407 GPU-1 B2"]
+
+# Workflow #407 GPU-1 C (0.12.44; register §1.286; brief rd-1031/perf-407/brief-gpu1c.md; design rd-1031/perf-407/design-gpu1.md §1.4, §2.4, §2.5 and §7 row C): the recognition pack admits DirectML evidence in exactly two bindings, DirectML on DirectML (CPU EP not registered, CPU fallback neither disabled nor forbidden, observed true or false) and DirectML on the CPU after a whole-model fallback (CPU EP registered, fallback neither disabled nor forbidden, observed true), and refuses every other combination that names DirectML (no observation, forbidden, a wrong CPU EP or fallback flag, resolved on CUDA, a CPU or CUDA request resolved on DirectML, a CPU request with DirectML's fallback, DirectML on the CPU with CPU's strict flags, incomplete); the kernel maps a DirectML attestation to that evidence; the start's vision_gpu_unavailable warning stays after a failed OCR load and is gone once an OCR load completes, and (fix 2, brief rd-1031/perf-407/brief-gpu1c-fix2.md) a model on the CPU after the fallback shows the one warning its load hands over in slice B2's OcrExecutionStatus however many requests it runs, a model on DirectML shows none, and a model the engine moves to the CPU after its load shows its one warning from then on
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-recognition-pack::lib::tests::directml_evidence_admits_its_two_bindings_and_nothing_else",
+    "actingcommand-execution-kernel::lib::provider::tests::a_model_on_cpu_after_fallback_shows_one_status_warning",
+]
+incident = ["#407 GPU-1 C"]
+
+# Workflow #407 GPU-1 C fix 1 (0.12.44; register §1.286; brief rd-1031/perf-407/brief-gpu1c-fix1.md; design rd-1031/perf-407/design-gpu1.md §2.2 and §2.4; PR #1535): fallback_observed is per-call evidence and not part of a target's binding; one post-admission OCR target read under DirectML on a frame that keeps no box (detector only, observed false) and on a frame with a box (recognizer too, observed true) is admitted both times, keeps one binding, records each read's own observation, and the run's collection finishes without evidence mismatch
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-execution-kernel::lib::contained_task::post_admission_ocr_tests::a_directml_target_with_and_without_boxes_keeps_one_binding",
+]
+incident = ["#407 GPU-1 C"]

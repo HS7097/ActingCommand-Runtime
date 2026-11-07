@@ -4,6 +4,7 @@ use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
 use crate::{ExecutionKernelError, ExecutionKernelResult};
 pub use actingcommand_contract::ExecutionBackendProvenance;
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
+use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     ApplicationLifecycleAction, EmulatorInstanceAction, FencedWrite, InstanceId,
     MonitorObservation, VisionModelKind, VisionModelMemoryStatus, VisionModelTimingStatus,
@@ -25,11 +26,11 @@ use actingcommand_recognition_pack::{
 };
 use actingcommand_vision_ffi::{
     NnClassificationResult, NnEngine, NnInferenceRequest, NnModelLoad, NnModelSpec, OcrBlockMode,
-    OcrEngine, OcrExecutionAttestation, OcrFallbackPolicy, OcrInferenceRequestView,
-    OcrInferenceResult, OcrLineMerge, OcrModelLoad, OcrModelSpec, OcrSessionId,
-    OnnxExecutionProvider, VisionBackendKind, VisionFfiError, VisionFfiErrorCode, VisionFfiResult,
-    VisionFrame, VisionFrameView, VisionModelListing, VisionModelLoader, VisionPixelFormat,
-    VisionRect, next_ocr_session_id,
+    OcrEngine, OcrExecutionAttestation, OcrExecutionStatus, OcrFallbackPolicy,
+    OcrInferenceRequestView, OcrInferenceResult, OcrLineMerge, OcrModelLoad, OcrModelSpec,
+    OcrSessionId, OnnxExecutionProvider, VisionBackendKind, VisionFfiError, VisionFfiErrorCode,
+    VisionFfiResult, VisionFrame, VisionFrameView, VisionModelListing, VisionModelLoader,
+    VisionPixelFormat, VisionRect, next_ocr_session_id,
 };
 use std::collections::BTreeMap;
 use std::fmt;
@@ -123,6 +124,11 @@ fn monotonic_clock() -> VisionTimingClock {
 #[derive(Debug, Default)]
 struct ModelStats {
     loaded: Option<Option<u64>>,
+    /// Workflow #407 GPU-1 C fix 2 (design §2.5): where the slot's loaded OCR engine runs, as
+    /// its load handed it over (slice B2's `OcrModelLoad::Loaded.execution`), live while the
+    /// engine is in the slot; none for an NN model, an engine built before the provider, or no
+    /// engine.
+    execution: Option<OcrExecutionStatus>,
     requests: u64,
     inferences: u64,
     lock_wait_total_us: u64,
@@ -248,12 +254,35 @@ impl<E: ?Sized, S> ModelSlot<E, S> {
             .loaded = Some(growth);
     }
 
-    /// #407 PERF-READ: the slot's engine left memory (unloaded or retired).
-    fn note_unloaded(&self) {
+    /// Workflow #407 GPU-1 C fix 2 (design §2.5): the loaded engine runs where `execution` says,
+    /// read live until the engine leaves the slot.
+    fn note_execution(&self, execution: OcrExecutionStatus) {
         self.stats
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .loaded = None;
+            .execution = Some(execution);
+    }
+
+    /// #407 PERF-READ: the slot's engine left memory (unloaded or retired); its execution status
+    /// leaves with it (Workflow #407 GPU-1 C fix 2).
+    fn note_unloaded(&self) {
+        let mut stats = self.stats.lock().unwrap_or_else(PoisonError::into_inner);
+        stats.loaded = None;
+        stats.execution = None;
+    }
+
+    /// Workflow #407 GPU-1 C fix 2 (design §2.5): the warning of the fallback the loaded engine
+    /// runs after, now (slice B2's `OcrModelExecution::warning`); none when it runs as requested
+    /// or no engine with an execution status is in the slot. The execution status's own lock is
+    /// taken after this account's is released.
+    fn execution_warning(&self) -> Option<Outcome> {
+        let execution = self
+            .stats
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .execution
+            .clone()?;
+        execution.current().warning
     }
 
     /// #407 PERF-READ: the slot's loaded engine as the status shows it, when one is in memory.
@@ -347,9 +376,23 @@ pub struct VisionFfiProvider {
     clock: VisionTimingClock,
     /// #407 PERF-READ: the process's private bytes, sampled around each load; none, no growth.
     private_bytes: Option<PrivateBytesSampler>,
+    /// Workflow #407 GPU-1 C (design §1.4, §2.5): the warning of a start that found the
+    /// configured GPU execution provider unusable, shown until the first OCR model load
+    /// completes. A leaf lock, never held across a load or an inference.
+    startup_warning: Mutex<Option<Outcome>>,
 }
 
 impl VisionFfiProvider {
+    /// Workflow #407 GPU-1 C (design §1.4, §2.5): the start found the configured GPU execution
+    /// provider unusable (`vision_gpu_unavailable`, as actingd's startup record wrote it). The
+    /// status shows `warning` until the first OCR model load completes: that load initialises
+    /// the runtime and decides again, and its decision is the one in effect. A load that fails
+    /// leaves the warning shown.
+    pub fn with_startup_warning(mut self, warning: Outcome) -> Self {
+        self.startup_warning = Mutex::new(Some(warning));
+        self
+    }
+
     /// #407 PERF-READ: each model load is measured by the process's private bytes before and
     /// after it (`sampler`); the status shows the growth beside the loaded model.
     pub fn with_private_bytes_sampler(mut self, sampler: PrivateBytesSampler) -> Self {
@@ -394,6 +437,7 @@ impl VisionFfiProvider {
             loaded: Mutex::new(0),
             clock: monotonic_clock(),
             private_bytes: None,
+            startup_warning: Mutex::new(None),
         })
     }
 
@@ -439,6 +483,7 @@ impl VisionFfiProvider {
             loaded: Mutex::new(0),
             clock: monotonic_clock(),
             private_bytes: None,
+            startup_warning: Mutex::new(None),
         })
     }
 
@@ -562,7 +607,7 @@ impl VisionFfiProvider {
                 engine,
                 model_sha256: actual,
                 waited_on_others,
-                ..
+                execution,
             }) => {
                 let after = self.sample_private_bytes();
                 if !slot.verify(&actual) {
@@ -572,6 +617,17 @@ impl VisionFfiProvider {
                 cell.engine = Some(engine);
                 cell.counted = true;
                 slot.note_loaded(load_growth(before, after));
+                // Workflow #407 GPU-1 C fix 2 (design §2.5): the status reads where the model runs
+                // from the execution status its load handed over (slice B2), live: the engine
+                // replaces it when it moves the model to the CPU after the load.
+                slot.note_execution(execution);
+                // Workflow #407 GPU-1 C (design §1.4): a completed OCR load initialised the
+                // runtime (or found it initialised) and decided again; the start's warning is
+                // no longer the decision in effect.
+                self.startup_warning
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .take();
                 Ok(waited_on_others)
             }
             Ok(OcrModelLoad::Mismatch {
@@ -941,6 +997,34 @@ impl RecognitionVisionProvider for VisionFfiProvider {
             .filter_map(|slot| slot.timing_status(VisionModelKind::Nn));
         ocr.chain(nn).collect()
     }
+
+    /// Workflow #407 GPU-1 C (design §2.5): the start's GPU warning, until the first OCR model
+    /// load completes, then (fix 2) each distinct warning of the loaded OCR models' execution, as
+    /// their loads handed it over (`OcrModelLoad::Loaded.execution`, slice GPU-1 B2): one for a
+    /// model on the CPU after its own fallback (attested `directml` requested, `cpu` resolved,
+    /// which its evidence carries), one for the process's fallback at its runtime initialisation
+    /// however many models carry it, none for a model on the provider it requested. Each
+    /// model's execution is read live: a model the engine moves to the CPU after its load shows
+    /// its warning from then on, and an unloaded model's warning leaves with its engine.
+    fn execution_warnings(&self) -> Vec<Outcome> {
+        let mut warnings: Vec<Outcome> = self
+            .startup_warning
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .cloned()
+            .collect();
+        for warning in self
+            .ocr
+            .values()
+            .filter_map(|slot| slot.execution_warning())
+        {
+            if !warnings.contains(&warning) {
+                warnings.push(warning);
+            }
+        }
+        warnings
+    }
 }
 
 fn vision_rect(region: PackRect) -> VisionRect {
@@ -1089,21 +1173,19 @@ fn map_ocr_execution_evidence(
             "OCR execution attestation model identity does not match the admitted capability",
         ));
     }
+    // Workflow #407 GPU-1 C (design §2.4): DirectML maps to its own kind; which bindings of it
+    // the evidence may carry is the recognition pack's rule (and runtime-client's).
     let provider_kind = |provider| match provider {
-        OnnxExecutionProvider::Cpu => Ok(OcrExecutionProviderKind::Cpu),
-        OnnxExecutionProvider::Cuda => Ok(OcrExecutionProviderKind::Cuda),
-        // Workflow #407 GPU-1 A adds the provider; its evidence is admitted from GPU-1 C on.
-        OnnxExecutionProvider::Directml => Err(VisionProviderError::new(
-            VisionProviderErrorCode::InvalidResponse,
-            "OCR execution attestation names DirectML, whose execution evidence this build does not admit",
-        )),
+        OnnxExecutionProvider::Cpu => OcrExecutionProviderKind::Cpu,
+        OnnxExecutionProvider::Cuda => OcrExecutionProviderKind::Cuda,
+        OnnxExecutionProvider::Directml => OcrExecutionProviderKind::Directml,
     };
     Ok(OcrProviderExecutionEvidence {
         invocation_id: attestation.invocation_id.as_str().to_string(),
         session_id: attestation.session.session_id().as_str().to_string(),
         session_generation: attestation.session.generation(),
-        requested_provider: provider_kind(key.requested_backend())?,
-        resolved_provider: provider_kind(attestation.resolved_execution_provider)?,
+        requested_provider: provider_kind(key.requested_backend()),
+        resolved_provider: provider_kind(attestation.resolved_execution_provider),
         requested_cuda_ordinal: key.requested_cuda_device().map(|device| device.ordinal),
         requested_cuda_identity: key
             .requested_cuda_device()
@@ -1883,7 +1965,9 @@ pub trait ExecutionBackendProvider: Send + Sync + 'static {
 mod tests {
     use super::*;
     use actingcommand_vision_ffi::{
-        NnLabel, OcrInferenceOutput, OcrInferenceRequest, OcrTextBlock,
+        GpuFallback, GpuUnavailableReason, NnLabel, OcrInferenceOutput, OcrInferenceRequest,
+        OcrModelExecution, OcrModelLayout, OcrTextBlock, VisionGpuCode, VisionModelDescription,
+        VisionModelFamily,
     };
     use serde_json::json;
 
@@ -2323,6 +2407,259 @@ mod tests {
                 inference_longest_us: 2_000,
             }]
         );
+    }
+
+    /// A fake adapter identity (design §1.3's form); no real device.
+    const FAKE_DXGI_IDENTITY: &str = "dxgi-pci:1234:5678:9abcdef0:01";
+
+    /// Workflow #407 GPU-1 C (design §1.4, §2.4, §2.5), fix 2: a model that runs on the CPU
+    /// after the fallback (DirectML requested, the CPU resolved) shows one status warning, the
+    /// `vision_gpu_unavailable` its load hands over in slice B2's execution status
+    /// (`OcrModelLoad::Loaded.execution`), once however many requests it runs, and each
+    /// request's evidence says DirectML was asked for and the CPU ran it, its fallback observed;
+    /// a model on DirectML shows none. The start's warning is the decision in effect until the
+    /// first OCR model load completes: a load that failed leaves it shown, a completed load
+    /// decides again and it is gone. The status reads the execution status live: a model the
+    /// engine moves to the CPU after its load (B2's detector fallback) shows its one warning from
+    /// then on.
+    #[test]
+    fn a_model_on_cpu_after_fallback_shows_one_status_warning() {
+        let warning = Outcome::new(VisionGpuCode::VisionGpuUnavailable)
+            .execution_provider(OnnxExecutionProvider::Directml)
+            .gpu_unavailable_reason(GpuUnavailableReason::AdapterMissing)
+            .gpu_fallback(GpuFallback::Cpu);
+        // B2's warning of one model's own fallback names the model.
+        let fallback = Outcome::new(VisionGpuCode::VisionGpuUnavailable)
+            .execution_provider(OnnxExecutionProvider::Directml)
+            .gpu_unavailable_reason(GpuUnavailableReason::SessionBuildFailed)
+            .gpu_fallback(GpuFallback::Cpu)
+            .model_name("PP-OCRv6_medium");
+        let on_cpu = OcrModelExecution {
+            requested: OnnxExecutionProvider::Directml,
+            actual: OnnxExecutionProvider::Cpu,
+            warning: Some(fallback.clone()),
+        };
+
+        // The load completes with the model on the CPU after its fallback.
+        let loader = Arc::new(ScriptedOcrLoader {
+            loads: Mutex::new(std::collections::VecDeque::from([Some(
+                OcrExecutionStatus::new(on_cpu.clone()),
+            )])),
+        });
+        let provider = scripted_ocr_provider(&loader).with_startup_warning(warning.clone());
+        assert_eq!(provider.execution_warnings(), vec![warning.clone()]);
+        for _ in 0..3 {
+            let evidence = RecognitionVisionProvider::read_text_with_execution_evidence(
+                &provider,
+                ocr_request(),
+            )
+            .expect("attested OCR on the CPU")
+            .execution
+            .expect("execution evidence");
+            assert_eq!(
+                evidence.requested_provider,
+                OcrExecutionProviderKind::Directml
+            );
+            assert_eq!(evidence.resolved_provider, OcrExecutionProviderKind::Cpu);
+            assert!(evidence.cpu_ep_registered);
+            assert!(!evidence.cpu_fallback_disabled);
+            assert!(!evidence.fallback_forbidden);
+            assert_eq!(evidence.fallback_observed, Some(true));
+            assert_eq!(evidence.requested_cuda_ordinal, None);
+            assert_eq!(evidence.resolved_cuda_ordinal, None);
+        }
+        assert_eq!(
+            provider.execution_warnings(),
+            vec![fallback.clone()],
+            "one warning, the model's, never one per request; the completed load ended the start's"
+        );
+        assert!(
+            loader.loads.lock().expect("scripted loads").is_empty(),
+            "one load"
+        );
+
+        // The first load fails as `refuse` makes it, the second completes on DirectML.
+        let on_directml = OcrExecutionStatus::new(OcrModelExecution::as_requested(
+            OnnxExecutionProvider::Directml,
+        ));
+        let loader = Arc::new(ScriptedOcrLoader {
+            loads: Mutex::new(std::collections::VecDeque::from([
+                None,
+                Some(on_directml.clone()),
+            ])),
+        });
+        let provider = scripted_ocr_provider(&loader).with_startup_warning(warning.clone());
+        assert_eq!(provider.execution_warnings(), vec![warning.clone()]);
+        let error =
+            RecognitionVisionProvider::read_text_with_execution_evidence(&provider, ocr_request())
+                .expect_err("the first load fails");
+        assert_eq!(error.code(), VisionProviderErrorCode::Unavailable);
+        assert_eq!(
+            provider.execution_warnings(),
+            vec![warning],
+            "a failed load leaves the start's warning"
+        );
+        let evidence =
+            RecognitionVisionProvider::read_text_with_execution_evidence(&provider, ocr_request())
+                .expect("the second load completes")
+                .execution
+                .expect("execution evidence");
+        assert_eq!(
+            evidence.requested_provider,
+            OcrExecutionProviderKind::Directml
+        );
+        assert_eq!(
+            evidence.resolved_provider,
+            OcrExecutionProviderKind::Directml
+        );
+        assert!(!evidence.cpu_ep_registered);
+        assert!(!evidence.fallback_forbidden);
+        assert_eq!(evidence.fallback_observed, Some(true));
+        assert!(
+            provider.execution_warnings().is_empty(),
+            "the completed load's decision is the one in effect, and a model on DirectML shows none"
+        );
+        // The engine moves the model to the CPU after its load (B2: a DirectML detector that
+        // cannot be built on the first full-frame request moves the whole model).
+        on_directml.set(on_cpu);
+        assert_eq!(
+            provider.execution_warnings(),
+            vec![fallback],
+            "the moved model's one warning, read live"
+        );
+        assert!(
+            loader.loads.lock().expect("scripted loads").is_empty(),
+            "two loads"
+        );
+    }
+
+    /// A provider over one OCR model folder, built through `loader`.
+    fn scripted_ocr_provider(loader: &Arc<ScriptedOcrLoader>) -> VisionFfiProvider {
+        VisionFfiProvider::from_listing(
+            VisionModelListing {
+                ocr: vec![OcrModelSpec {
+                    model_ref: "PP-OCRv6_medium".to_owned(),
+                    layout: OcrModelLayout::Flat,
+                    detector_path: None,
+                    recognizer_path: PathBuf::from("rec.onnx"),
+                    dictionary_path: PathBuf::from("keys.txt"),
+                    description: VisionModelDescription::default_for(VisionModelFamily::PpocrCtc),
+                    description_sha256: "e".repeat(64),
+                }],
+                nn: Vec::new(),
+                invalid: Vec::new(),
+            },
+            Arc::clone(loader) as Arc<dyn VisionModelLoader>,
+        )
+        .expect("provider")
+    }
+
+    /// An OCR loader that fails (`None`) or completes each load in turn, handing over the
+    /// scripted execution status (slice B2's `OcrModelLoad::Loaded.execution`); the engine is
+    /// attested where that status says the model runs.
+    struct ScriptedOcrLoader {
+        loads: Mutex<std::collections::VecDeque<Option<OcrExecutionStatus>>>,
+    }
+
+    impl VisionModelLoader for ScriptedOcrLoader {
+        fn load_ocr(
+            &self,
+            _model: &OcrModelSpec,
+            expected_model_sha256: &str,
+            _session_id: &OcrSessionId,
+            _wait_deadline: Instant,
+        ) -> VisionFfiResult<OcrModelLoad> {
+            let Some(execution) = self
+                .loads
+                .lock()
+                .expect("scripted loads")
+                .pop_front()
+                .expect("a scripted load")
+            else {
+                return Err(VisionFfiError::fatal_with_code(
+                    VisionFfiErrorCode::ProviderUnavailable,
+                    "fixture",
+                    "DirectML cannot be used (adapter_missing)",
+                ));
+            };
+            let resolved = execution.current().actual.as_str();
+            Ok(OcrModelLoad::Loaded {
+                engine: Box::new(AttestedOcrEngine {
+                    attestation: directml_attestation(resolved),
+                }),
+                model_sha256: expected_model_sha256.to_owned(),
+                waited_on_others: Duration::ZERO,
+                execution,
+            })
+        }
+
+        fn load_nn(
+            &self,
+            _model: &NnModelSpec,
+            _expected_model_sha256: &str,
+            _wait_deadline: Instant,
+        ) -> VisionFfiResult<NnModelLoad> {
+            Err(VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::ProviderUnavailable,
+                "fixture",
+                "no NN model in this fixture",
+            ))
+        }
+    }
+
+    /// A DirectML session's attestation (Workflow #407 GPU-1 design §2.4), resolved on
+    /// `resolved`: `directml` (CPU nodes allowed, the CPU execution provider not registered) or
+    /// `cpu` (the whole model on the CPU, as slice B2 attests it: no resolved adapter, the
+    /// fallback policy `cpu_model`). The fallback is observed either way.
+    fn directml_attestation(resolved: &str) -> OcrExecutionAttestation {
+        let on_cpu = resolved == "cpu";
+        serde_json::from_value(json!({
+            "schema_version": "actingcommand.ocr_execution_attestation.v1",
+            "invocation_id": "ocr-invocation-0000000000000001",
+            "session": {
+                "session_id": "ocr-session-0000000000000001",
+                "generation": 1,
+                "key": {
+                    "provider_library_sha256": "b".repeat(64),
+                    "runtime_library_path": "runtime.dll",
+                    "runtime_library_sha256": "c".repeat(64),
+                    "onnxruntime_version": "fixture-runtime",
+                    "model_ref": "PP-OCRv6_medium",
+                    "model_sha256": "a".repeat(64),
+                    "requested_backend": "directml",
+                    "requested_cuda_device": null,
+                    "resolved_cuda_device": null,
+                    "requested_directml_device": {"expected_identity": FAKE_DXGI_IDENTITY},
+                    "resolved_directml_device": if on_cpu {
+                        serde_json::Value::Null
+                    } else {
+                        json!({"dxgi_index": 0, "identity": FAKE_DXGI_IDENTITY})
+                    },
+                    "provider_options_sha256": "d".repeat(64)
+                }
+            },
+            "resolved_execution_provider": resolved,
+            "provider": {
+                "implementation": "actingcommand-ppocr-onnx-json",
+                "crate_version": "0.1.0",
+                "build_git_sha": null,
+                "binary_sha256": "b".repeat(64)
+            },
+            "runtime": {
+                "onnxruntime_version": "fixture-runtime",
+                "onnxruntime_build_info": "fixture",
+                "cuda_driver_version": null,
+                "cuda_runtime_version": null,
+                "cudnn_version": null
+            },
+            "registered_execution_providers": [resolved],
+            "cpu_ep_registered": on_cpu,
+            "cpu_fallback_disabled": false,
+            "fallback_policy": if on_cpu { "cpu_model" } else { "cpu_nodes" },
+            "fallback_observed": true,
+            "complete": true
+        }))
+        .expect("fixture attestation")
     }
 
     struct RecordingNnEngine {
