@@ -2801,3 +2801,12 @@ tests = [
     "actingcommand-ppocr-onnx-json-provider::lib::gate_407_gpu1b1::an_unreadable_placement_is_a_session_that_cannot_be_built",
 ]
 incident = ["#407 GPU-1 B1"]
+
+# Workflow #407 GPU-1 C (0.12.44; register §1.286; brief rd-1031/perf-407/brief-gpu1c.md; design rd-1031/perf-407/design-gpu1.md §1.4, §2.4, §2.5 and §7 row C): the recognition pack admits DirectML evidence in exactly two bindings, DirectML on DirectML (CPU EP not registered, CPU fallback neither disabled nor forbidden, observed true or false) and DirectML on the CPU after a whole-model fallback (CPU EP registered, fallback neither disabled nor forbidden, observed true), and refuses every other combination that names DirectML (no observation, forbidden, a wrong CPU EP or fallback flag, resolved on CUDA, a CPU or CUDA request resolved on DirectML, a CPU request with DirectML's fallback, DirectML on the CPU with CPU's strict flags, incomplete); the kernel maps a DirectML attestation to that evidence, and a model on the CPU after the fallback shows the start's one vision_gpu_unavailable warning however many requests it runs, which stays after a failed OCR load and is gone once an OCR load completes
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-recognition-pack::lib::tests::directml_evidence_admits_its_two_bindings_and_nothing_else",
+    "actingcommand-execution-kernel::lib::provider::tests::a_model_on_cpu_after_fallback_shows_one_status_warning",
+]
+incident = ["#407 GPU-1 C"]

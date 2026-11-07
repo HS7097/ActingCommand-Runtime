@@ -1054,8 +1054,10 @@ warning order:
   `minitouch_local_path`.
 - `ACTINGCOMMAND_PPOCR_NODE_PLACEMENT_DIAGNOSTIC`: sent to the PPOCR ONNX
   provider with each OCR request (`node_placement_diagnostic`, omitted when
-  not injected); the provider still requires exactly `1` and an explicit CUDA
-  session.
+  not injected); the provider requires exactly `1`. A CUDA session reads its
+  node placement only with it; a DirectML session always reads it, so the
+  variable is met there (Workflow #407 GPU-1 B1, design §2.2); a CPU session
+  refuses it.
 
 Precedence is otherwise unchanged: configured `device_paths`, then a
 per-instance `*_local_path`, then the injected variable (flag on only), then

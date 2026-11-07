@@ -265,7 +265,7 @@ takes the factor of the new mode. `full` is set only in the configuration file.
   responsiveness, the curve's stage and factor, both views with their stage, share, `allowed`,
   dwell per stage over the last 24 h and in all and how often each would have stopped work, and
   the stage and factor in effect), and the warnings now (`perf_probe_unavailable`,
-  `perf_baseline_clamped`). A monitor without counters answers its rows at their start with
+  `perf_baseline_clamped`; `vision_gpu_unavailable` below). A monitor without counters answers its rows at their start with
   the health `unavailable`. `actingctl perf-status` prints it; `ac_overview` answers it as its
   block `performance`. Both write each distinct dwell object once, in `dwell`, each view naming
   its 24 h and total dwell by their index there (`dwell_24h_ref`, `dwell_total_ref`; #422
@@ -293,6 +293,14 @@ takes the factor of the new mode. `full` is set only in the configuration file.
     that waited for its lock and the engine calls, with the time spent waiting for the lock and
     the time in the engine, summed and longest, in microseconds; a load is in neither. Absent
     while no model was asked.
+
+  Workflow #407 GPU-1 C (register §1.286, since 0.12.44; `runtime-client` stays 6): the warnings
+  also carry the vision provider's `vision_gpu_unavailable`, read from its memory, after the
+  memory's warning and before the pacing's: one for the process while the configured GPU
+  execution provider cannot be used (the start's, stage `vision_startup`, shown until the first
+  OCR model load completes, whose runtime initialisation decides again), and one for each model
+  on the CPU after a fallback, as the engine's loads hand them over (slice GPU-1 B2). They say
+  what holds now: a warning whose cause is gone is not shown. No node counts are shown (design `rd-1031/perf-407/design-gpu1.md` §9 Q2).
 - **GPU.** The GPU utilisation is summed per engine type and the busiest type counts
   (`performance.pressure.gpu_aggregate = max_engine_type`, the default); `sum` keeps the earlier
   sum of every engine.

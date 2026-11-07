@@ -125,4 +125,16 @@ impl HostShared {
         timings.truncate(MAX_PERFORMANCE_STATUS_VISION_MODELS);
         timings
     }
+
+    /// Workflow #407 GPU-1 C (design rd-1031/perf-407/design-gpu1.md §2.5): the vision provider's
+    /// execution warnings now (`vision_gpu_unavailable`: one for the process while its GPU
+    /// execution provider cannot be used, one for each model on the CPU after a fallback), from
+    /// the provider's memory; none without a provider.
+    pub(super) fn vision_warnings(&self) -> Vec<Outcome> {
+        self.execution
+            .get()
+            .and_then(|kernel| kernel.vision_provider())
+            .map(|provider| provider.execution_warnings())
+            .unwrap_or_default()
+    }
 }

@@ -533,8 +533,8 @@ pub(super) fn assemble_vision_provider(
         &inventory.root,
         &inventory.runtime.onnxruntime_library,
     )?;
-    let closure = match vision.directml() {
-        None => inventory.runtime.runtime_library_closure.clone(),
+    let (closure, startup_warning) = match vision.directml() {
+        None => (inventory.runtime.runtime_library_closure.clone(), None),
         Some(directml) => directml_startup(startup, backend, directml, &inventory, daemon_log)?,
     };
     for (index, library) in closure.iter().enumerate() {
@@ -635,6 +635,12 @@ pub(super) fn assemble_vision_provider(
             .ok()
             .map(|memory| memory.private_bytes)
     }));
+    // Workflow #407 GPU-1 C (design §2.5): the start's GPU warning is the provider's to show in
+    // the performance status, until the first OCR model load decides again.
+    let provider = match startup_warning {
+        Some(warning) => provider.with_startup_warning(warning),
+        None => provider,
+    };
     startup.record(backend, Observation::Completed { stage })?;
     Ok(Arc::new(provider))
 }
@@ -652,14 +658,15 @@ const NO_EXECUTION_PROVIDER: &str = "none";
 /// `vision_gpu_unavailable` (stage `vision_startup`, with the OS failure behind it as its link)
 /// is written to `daemon_log` as actingd's daemon lines and the start goes on; the warning is no
 /// ledger record (design §6.2). Returns the closure the decision loads: the DirectML closure
-/// (`DirectML.dll` right before `onnxruntime.dll`), else the CPU one.
+/// (`DirectML.dll` right before `onnxruntime.dll`), else the CPU one; and (Workflow #407 GPU-1 C)
+/// the warning, which the vision provider shows in the performance status.
 fn directml_startup(
     startup: &mut ProviderStartup<'_>,
     backend: ProviderBackend,
     directml: &ConfiguredDirectml,
     inventory: &VisionInventory,
     daemon_log: &mut dyn std::io::Write,
-) -> RuntimeHostResult<Vec<PathBuf>> {
+) -> RuntimeHostResult<(Vec<PathBuf>, Option<Outcome>)> {
     let library = inventory.directml_library.as_ref().ok_or_else(|| {
         startup.failed(
             backend,
@@ -703,12 +710,18 @@ fn directml_startup(
         // A failed write never stops the start (P3 L2): stderr is the last place actingd
         // reports to.
         let _unwritten = crate::write_daemon_reports(std::slice::from_ref(&warning), daemon_log);
-        return Ok(inventory.runtime.runtime_library_closure.clone());
+        return Ok((
+            inventory.runtime.runtime_library_closure.clone(),
+            Some(warning),
+        ));
     }
-    Ok(inventory
-        .runtime
-        .directml_runtime_library_closure()
-        .unwrap_or_else(|| inventory.runtime.runtime_library_closure.clone()))
+    Ok((
+        inventory
+            .runtime
+            .directml_runtime_library_closure()
+            .unwrap_or_else(|| inventory.runtime.runtime_library_closure.clone()),
+        None,
+    ))
 }
 
 /// A path as recorded text; a path that is not UTF-8 is refused before it is recorded.

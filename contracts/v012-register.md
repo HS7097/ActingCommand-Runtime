@@ -7722,6 +7722,56 @@ design left the startup stage's name to be registered as needed. (e) The report 
 **Rollback** (to 0.12.43). Write `"vision": {"execution_provider": "cpu"}` (no revision-27
 member), then roll the Runtime back; nothing persisted needs a reader of 0.12.44.
 
+#### Slice GPU-1 C (0.12.44): the evidence chain admits `directml`
+
+Design §1.4, §2.4, §2.5, §6.2 and §7 row C; coordinator work order
+`rd-1031/perf-407/brief-gpu1c.md`; on main `ec2d3ea7` (slices A, D and B1 merged), beside slice
+B2. The contracts are [task-diagnostic-stream.md](task-diagnostic-stream.md) (the `ocr` row's
+execution bindings) and [performance-control.md](performance-control.md) (the status read's
+warnings).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| GC-1 | `OcrExecutionProviderKind::Directml` (recognition pack) and `RuntimeOfficialOcrProviderKind::Directml` (runtime-client), both `directml`; the kernel maps `OnnxExecutionProvider::Directml` to it | in-process types, client projection value | GPU-1 C | the kernel's evidence mapping | GA-1's refusal in the kernel is gone; the CUDA members stay CUDA-only, and a DirectML read carries no adapter identity (design §6.2) |
+| GC-2 | the four execution bindings of design §2.4, one rule each in the recognition pack (`ocr_execution_provider_binding_is_valid`) and runtime-client (`validate_official_ocr_target`): `cpu`/`cpu` and `cuda`/`cuda` (forbidden, none observed, as before), `directml`/`directml` (CPU EP not registered, fallback neither disabled nor forbidden, observed either way), `directml`/`cpu` (CPU EP registered, fallback neither disabled nor forbidden, observed true) | evidence rule | GPU-1 C | — | `fallback_forbidden` and `fallback_observed` are now part of the binding instead of two conditions beside it; every other combination is `recognition_pack_provider_response_invalid` (the pack) or `runtime_official_ocr_provider_evidence_invalid` (the client) |
+| GC-3 | the task diagnostic's `ocr` row `execution.requested_provider` and `resolved_provider` value `directml` | ledger record text (free text) | GPU-1 C | the post-admission OCR row | design §6.2: the members are `String`, so ledger stays 7 |
+| GC-4 | `VisionProvider::execution_warnings()` (default: none) and the kernel's answer: `VisionFfiProvider::with_startup_warning(outcome)`, shown until the first OCR model load completes (a failed load leaves it) | in-process behaviour | GPU-1 C | actingd's provider startup (GD-5's warning) | design §1.4: the first OCR load initialises the runtime and decides again, and its decision is the one in effect; a model on the CPU after a fallback adds the warning its load hands over (`OcrModelLoad`, slice B2) |
+| GC-5 | the performance status's `warnings` carry the vision provider's `vision_gpu_unavailable`, after the memory's warning and before the pacing's | status member values | GPU-1 C | `PerformanceStatus` | design §2.5, §9 Q2: no node counts, no new member, so `runtime-client` stays 6; `ac_overview`'s description names the code |
+
+**Tests.** New: exec row "#407 GPU-1 C" (fixture evidence and attestations, a scripted loader, a
+fake adapter identity; no GPU, no ONNX Runtime and no sleep):
+`directml_evidence_admits_its_two_bindings_and_nothing_else` (recognition pack) and
+`a_model_on_cpu_after_fallback_shows_one_status_warning` (kernel); host row "#407 GPU-1 C":
+`the_task_diagnostic_records_directml_as_its_provider`; contract row "#407 GPU-1 C":
+`official_ocr_reads_directml_and_whole_model_fallback_evidence`. No existing test changes; the
+counter-examples of `post_admission_ocr_requires_provider_specific_execution_evidence` still
+fail with the same code and message.
+
+**Interface.** None: `actingd-config` 27 (slice D), `ledger` 7, `runtime-client` 6, `package` 7,
+`runtime-outcomes` 1. No code, key or location is added; `vision_gpu_unavailable` is GA-9's.
+
+**Where C differs from its work order's letter.** (a) The kernel's status shows the start's
+warning; the per-model warnings come with the execution status slice B2 adds to
+`OcrModelLoad::Loaded` (vision-ffi, outside this slice), which the kernel's `load_ocr` takes in
+its `Loaded` arm when B2 and C meet. On this main a completed OCR load runs on what was
+configured (B1 refuses every DirectML failure), so no model is on the CPU after a fallback yet.
+(b) `apps/actingd/src/config/provider_startup.rs` hands slice D's startup warning to the vision
+provider (`directml_startup` also returns it): without it the warning would reach no status.
+(c) `performance-control.md` names the new warning of the status read. (d) The status test
+lives in the kernel: runtime-host does not depend on vision-ffi, whose engine and loader types a
+fake needs; the host's part is one read in `memory_status.rs` appended in `performance.rs`.
+(e) Left as it is, for the coordinator: the per-target binding equality of post-admission OCR
+(the kernel's `same_ocr_stream_binding`) and of the official OCR grouping (runtime-client's
+`same_official_ocr_provider_binding`) compares `fallback_observed`, which for DirectML is per
+read: a detect-mode target that keeps no box on one frame (detector only, false) and boxes on
+another (true) reads as two bindings.
+
+**What C changes live.** Nothing until a configuration names `directml`: a `cpu` or `cuda`
+Runtime's evidence, rows and status are unchanged.
+
+**C rollback** (to 0.12.43). Nothing persisted that a reader of 0.12.43 cannot read: a
+`directml` OCR row is free text of the same shape.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
