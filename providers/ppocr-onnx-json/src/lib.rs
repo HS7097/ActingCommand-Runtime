@@ -214,19 +214,19 @@ struct SessionOptions {
 /// runs sequentially, as DirectML requires (one session never runs concurrently: the model's
 /// `&mut` session and its slot's lock guarantee that), and allows CPU nodes: the recognition
 /// model has nodes only the CPU runs.
-fn session_options(plan: &ProviderSessionPlan) -> Result<SessionOptions, String> {
+fn session_options(plan: &ProviderSessionPlan) -> VisionFfiResult<SessionOptions> {
     let (memory_pattern, parallel_execution, execution_provider) =
         match plan.resolved_execution_provider {
             OnnxExecutionProvider::Cpu => (None, None, SessionExecutionProvider::Cpu),
             OnnxExecutionProvider::Cuda => {
                 let device_id = plan.cuda_ordinal.ok_or_else(|| {
-                    "CUDA OCR session plan is missing the resolved device ordinal".to_string()
+                    failure("CUDA OCR session plan is missing the resolved device ordinal")
                 })?;
                 (None, None, SessionExecutionProvider::Cuda { device_id })
             }
             OnnxExecutionProvider::Directml => {
                 let device_id = plan.directml_device_id.ok_or_else(|| {
-                    "DirectML OCR session plan is missing its adapter's DXGI index".to_string()
+                    failure("DirectML OCR session plan is missing its adapter's DXGI index")
                 })?;
                 (
                     Some(false),
@@ -317,7 +317,7 @@ impl NodePlacementLogCapture {
             }
         } else if let Err(err) = parse_accelerated_node_placement(message) {
             let provider = self.providers[index].0.clone();
-            self.fail(format!("{err} of {provider}"));
+            self.fail(format!("{} of {provider}", err.message()));
             return;
         }
         self.open_group = (due > 1).then_some((index, due - 1));
@@ -468,7 +468,7 @@ fn parse_provider_summary(rest: &str) -> Result<(String, usize), String> {
 
 /// A per-node line of an accelerated provider's group, which is only counted: `<op type> (<node
 /// name>)` with an operator type; a node ONNX Runtime inserted may have an empty name.
-fn parse_accelerated_node_placement(message: &str) -> Result<(), String> {
+fn parse_accelerated_node_placement(message: &str) -> VisionFfiResult<()> {
     let readable = message
         .split_once(" (")
         .is_some_and(|(operator_type, node_name)| {
@@ -477,7 +477,7 @@ fn parse_accelerated_node_placement(message: &str) -> Result<(), String> {
     if readable {
         Ok(())
     } else {
-        Err("malformed ONNX Runtime node-placement entry".to_string())
+        Err(failure("malformed ONNX Runtime node-placement entry"))
     }
 }
 
@@ -767,7 +767,7 @@ fn fallback_observed(
     plan: &ProviderSessionPlan,
     placements: RolePlacements,
     ran: InvocationRoles,
-) -> Result<Option<bool>, String> {
+) -> VisionFfiResult<Option<bool>> {
     if plan.fallback_policy != OcrFallbackPolicy::CpuNodes {
         return Ok(None);
     }
@@ -784,10 +784,10 @@ fn fallback_observed(
             continue;
         }
         let cpu_nodes = cpu_nodes.ok_or_else(|| {
-            format!(
+            failure(format!(
                 "the PPOCR {} session ran without a read node placement",
                 role.as_str()
-            )
+            ))
         })?;
         observed |= cpu_nodes > 0;
     }
@@ -846,9 +846,9 @@ impl OcrEngine for PpocrCtcModel {
         result
             .validate_for(request)
             .map_err(|error| error.with_ppocr_diagnostics(result.ppocr_diagnostics.clone()))?;
-        let attestation = self.attestation(invocation_id, ran).map_err(|error| {
-            failure(error).with_ppocr_diagnostics(result.ppocr_diagnostics.clone())
-        })?;
+        let attestation = self
+            .attestation(invocation_id, ran)
+            .map_err(|error| error.with_ppocr_diagnostics(result.ppocr_diagnostics.clone()))?;
         Ok(OcrInferenceOutput {
             execution_attestation: Some(attestation),
             result,
@@ -1004,7 +1004,7 @@ impl PpocrCtcModel {
         &self,
         invocation_id: OcrInvocationId,
         ran: InvocationRoles,
-    ) -> Result<OcrExecutionAttestation, String> {
+    ) -> VisionFfiResult<OcrExecutionAttestation> {
         let key = self.binding.key();
         Ok(OcrExecutionAttestation {
             schema_version: OCR_EXECUTION_ATTESTATION_SCHEMA_VERSION.to_string(),
@@ -1729,7 +1729,9 @@ fn load_session_with<B: SessionBuilds>(
     node_placement_diagnostic: Option<&str>,
     diagnostics: &mut PpocrDiagnostics,
 ) -> Result<BuiltSession<B::Session>, SessionBuildFailure> {
-    let options = session_options(plan).map_err(SessionBuildFailure::plain)?;
+    // A failure without a reason is the engine's `ProviderFailure`, the code of `session_options`.
+    let options =
+        session_options(plan).map_err(|error| SessionBuildFailure::plain(error.message()))?;
     let device = session_device(&options, request.adapter)?;
     let reads_placement = node_placement_diagnostic_requested(plan, node_placement_diagnostic)
         .map_err(SessionBuildFailure::plain)?;
@@ -1825,6 +1827,7 @@ fn read_node_placement<B: SessionBuilds>(
             state.diagnostic(request.role)
         }
     }
+    .map_err(failure)
     .and_then(|report| complete_placement_report(report, options, device));
     match (read, shadow_failure) {
         (Ok(report), shadow_failure) => {
@@ -1840,9 +1843,10 @@ fn read_node_placement<B: SessionBuilds>(
             options,
             GpuUnavailableReason::PlacementUnread,
             format!(
-                "the node placement of the PPOCR {} model {} cannot be read: {unread}",
+                "the node placement of the PPOCR {} model {} cannot be read: {}",
                 request.role.as_str(),
-                request.path.display()
+                request.path.display(),
+                unread.message()
             ),
         )),
     }
@@ -1867,19 +1871,21 @@ fn complete_placement_report(
     mut report: NodePlacementDiagnostic,
     options: &SessionOptions,
     device: Option<PpocrDiagnosticDevice>,
-) -> Result<NodePlacementDiagnostic, String> {
+) -> VisionFfiResult<NodePlacementDiagnostic> {
     let registered = options
         .execution_provider
         .accelerated_name()
-        .ok_or_else(|| "a CPU session has no node placement to read".to_string())?;
+        .ok_or_else(|| failure("a CPU session has no node placement to read"))?;
     if report.accelerated_execution_provider != registered {
-        return Err(format!(
+        return Err(failure(format!(
             "ONNX Runtime placed nodes on {} but the session registered {registered}",
             report.accelerated_execution_provider
-        ));
+        )));
     }
     report.device = device;
-    report.validate().map_err(|error| error.to_string())?;
+    report
+        .validate()
+        .map_err(|error| failure(error.to_string()))?;
     Ok(report)
 }
 
