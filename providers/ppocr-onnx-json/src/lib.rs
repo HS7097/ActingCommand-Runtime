@@ -12,39 +12,64 @@
 
 use actingcommand_onnx_provider_support::{InferenceWatchdog, OrtRuntimeInitializer};
 use actingcommand_vision_ffi::{
-    ChannelOrder, DetectorResize, NnModelLoad, NnModelSpec, PpocrCtcParams, SpaceClass,
-};
-use actingcommand_vision_ffi::{
-    CudaDeviceIdentity, OCR_EXECUTION_ATTESTATION_SCHEMA_VERSION, OcrBlockMode, OcrDetectionCount,
-    OcrEngine, OcrExecutionAttestation, OcrFallbackPolicy, OcrInferenceOutput, OcrInferenceRequest,
+    AdapterSource, CudaDeviceIdentity, DIRECTML_RUNTIME_PIN, DirectmlDeviceIdentity,
+    DirectmlDeviceSelector, DirectmlUnavailable, FileState, GpuUnavailableReason,
+    OCR_EXECUTION_ATTESTATION_SCHEMA_VERSION, OcrBlockMode, OcrDetectionCount, OcrEngine,
+    OcrExecutionAttestation, OcrFallbackPolicy, OcrInferenceOutput, OcrInferenceRequest,
     OcrInferenceRequestView, OcrInferenceResult, OcrInvocationId, OcrLineMerge, OcrModelLoad,
     OcrModelSpec, OcrProviderBuildIdentity, OcrRuntimeBuildIdentity, OcrSessionBinding,
     OcrSessionId, OcrSessionKey, OcrSessionKeyParts, OcrTextBlock, OnnxExecutionProvider,
-    VisionBackendKind, VisionFfiError, VisionFfiErrorCode, VisionFfiResult, VisionFrameView,
-    VisionModelLoader, VisionPixelFormat, VisionRect, VisionRuntimeSpec, enumerate_cuda_devices,
+    ResolvedDirectmlAdapter, SystemAdapterSource, VisionBackendKind, VisionFfiError,
+    VisionFfiErrorCode, VisionFfiResult, VisionFrameView, VisionModelLoader, VisionPixelFormat,
+    VisionRect, VisionRuntimeSpec, enumerate_cuda_devices,
     establish_process_runtime_library_closure, next_ocr_invocation_id, ocr_engine_binding_sha256,
-    onnxruntime_version_string, ppocr_model_set_sha256, sha256_file_hex, sha256_hex,
+    onnxruntime_version_string, ppocr_model_set_sha256, resolve_directml_adapter, sha256_file_hex,
+    sha256_hex,
 };
 use actingcommand_vision_ffi::{
-    PPOCR_MAX_DIAGNOSTIC_REPORTS, PpocrCpuAssignedNodeDiagnostic as CpuAssignedNodeDiagnostic,
-    PpocrDiagnostics, PpocrNodePlacementDiagnostic as NodePlacementDiagnostic,
-    PpocrNodePlacementReason, validate_ppocr_call_diagnostics,
+    ChannelOrder, DetectorResize, NnModelLoad, NnModelSpec, PpocrCtcParams, SpaceClass,
 };
-use ort::logging::LogLevel;
+use actingcommand_vision_ffi::{
+    PPOCR_CPU_EXECUTION_PROVIDER, PPOCR_DIRECTML_EXECUTION_PROVIDER, PPOCR_MAX_DIAGNOSTIC_REPORTS,
+    PPOCR_NODE_PLACEMENT_RECORD_TYPE, PpocrCpuAssignedNodeDiagnostic as CpuAssignedNodeDiagnostic,
+    PpocrDiagnosticDevice, PpocrDiagnostics,
+    PpocrNodePlacementDiagnostic as NodePlacementDiagnostic, PpocrNodePlacementReason,
+    validate_ppocr_call_diagnostics,
+};
+use ort::logging::{LogLevel, LoggerFunction};
+use ort::session::builder::SessionBuilder;
 use ort::session::{RunOptions, Session};
 use ort::value::{Tensor, TensorElementType, ValueType};
 use std::collections::VecDeque;
+use std::ffi::OsStr;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, TryLockError};
 use std::time::{Duration, Instant};
 
+// Workflow #407 GPU-1 B1: DirectML sessions and their node placement, over a fake ONNX Runtime.
+#[cfg(test)]
+mod gate_407_gpu1b1;
 mod nn;
 
 const NODE_PLACEMENT_DIAGNOSTIC_ENV: &str = "ACTINGCOMMAND_PPOCR_NODE_PLACEMENT_DIAGNOSTIC";
 const MAX_NODE_PLACEMENT_DIAGNOSTIC_NODES: usize = 4_096;
 const MAX_NODE_PLACEMENT_LOG_MESSAGE_BYTES: usize = 4_096;
-const CPU_EXECUTION_PROVIDER: &str = "CPUExecutionProvider";
+const CPU_EXECUTION_PROVIDER: &str = PPOCR_CPU_EXECUTION_PROVIDER;
+/// ONNX Runtime's names of the accelerated providers whose node placement a session reads.
+const CUDA_EXECUTION_PROVIDER: &str = "CUDAExecutionProvider";
+const DIRECTML_EXECUTION_PROVIDER: &str = PPOCR_DIRECTML_EXECUTION_PROVIDER;
+/// The section header of ONNX Runtime's verbose node-placement log.
+const NODE_PLACEMENTS_HEADER: &str = "Node placements";
+/// ONNX Runtime's provider summaries: `All nodes placed on [<EP>]. Number of nodes: <n>` names
+/// the one provider and lists no node; `Node(s) placed on [<EP>]. Number of nodes: <n>` is
+/// followed by one `<op type> (<node name>)` line per node.
+const PROVIDER_SUMMARY_PREFIXES: [(&str, bool); 2] = [
+    ("All nodes placed on [", false),
+    ("Node(s) placed on [", true),
+];
+/// The intra-op threads of every session (design §2.1; the provider options digest hashes it).
+const SESSION_INTRA_THREADS: usize = 1;
 const ENGINE_MODULE: &str = "ppocr_ctc_engine";
 /// Recorded as the execution attestation's provider implementation.
 const ENGINE_IMPLEMENTATION: &str = "actingcommand-ocr-engine/ppocr-ctc";
@@ -64,15 +89,24 @@ struct RuntimeFacts {
     executable_sha256: String,
     resolved_cuda_device: Option<CudaDeviceIdentity>,
     cuda_driver_version: Option<u32>,
+    /// Workflow #407 GPU-1 B1: the adapter the first DirectML model load resolved; every later
+    /// session build must resolve the same identity (design §1.4).
+    resolved_directml_adapter: Option<ResolvedDirectmlAdapter>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ProviderSessionPlan {
     resolved_execution_provider: OnnxExecutionProvider,
     cuda_ordinal: Option<i32>,
+    /// Workflow #407 GPU-1 B1: the DXGI index of a DirectML session's adapter, which ONNX
+    /// Runtime's DirectML `device_id` names.
+    directml_device_id: Option<i32>,
     registered_execution_providers: Vec<OnnxExecutionProvider>,
     cpu_ep_registered: bool,
     cpu_fallback_disabled: bool,
+    /// The attestation's fallback policy (design §2.4): `forbidden` for CPU and CUDA,
+    /// `cpu_nodes` for DirectML.
+    fallback_policy: OcrFallbackPolicy,
 }
 
 impl ProviderSessionPlan {
@@ -81,9 +115,11 @@ impl ProviderSessionPlan {
             OnnxExecutionProvider::Cpu => Ok(Self {
                 resolved_execution_provider: OnnxExecutionProvider::Cpu,
                 cuda_ordinal: None,
+                directml_device_id: None,
                 registered_execution_providers: vec![OnnxExecutionProvider::Cpu],
                 cpu_ep_registered: true,
                 cpu_fallback_disabled: false,
+                fallback_policy: OcrFallbackPolicy::Forbidden,
             }),
             OnnxExecutionProvider::Cuda => {
                 let ordinal = key
@@ -95,18 +131,117 @@ impl ProviderSessionPlan {
                 Ok(Self {
                     resolved_execution_provider: OnnxExecutionProvider::Cuda,
                     cuda_ordinal: Some(ordinal),
+                    directml_device_id: None,
                     registered_execution_providers: vec![OnnxExecutionProvider::Cuda],
                     cpu_ep_registered: false,
                     cpu_fallback_disabled: true,
+                    fallback_policy: OcrFallbackPolicy::Forbidden,
                 })
             }
-            // Workflow #407 GPU-1 A adds the provider; this engine builds no DirectML session
-            // until GPU-1 B1.
+            // Workflow #407 GPU-1 B1 (design §2.1): DirectML alone is registered, and ONNX
+            // Runtime may place the nodes DirectML cannot run on its CPU provider, which it adds
+            // itself: CPU fallback stays allowed and the CPU provider is not registered.
             OnnxExecutionProvider::Directml => {
-                Err("this OCR engine builds no DirectML session yet".to_string())
+                let index = key
+                    .resolved_directml_device()
+                    .ok_or_else(|| {
+                        "DirectML OCR session key is missing its resolved adapter".to_string()
+                    })?
+                    .dxgi_index;
+                let device_id = i32::try_from(index)
+                    .map_err(|_| "DirectML adapter index exceeds i32 range".to_string())?;
+                Ok(Self {
+                    resolved_execution_provider: OnnxExecutionProvider::Directml,
+                    cuda_ordinal: None,
+                    directml_device_id: Some(device_id),
+                    registered_execution_providers: vec![OnnxExecutionProvider::Directml],
+                    cpu_ep_registered: false,
+                    cpu_fallback_disabled: false,
+                    fallback_policy: OcrFallbackPolicy::CpuNodes,
+                })
             }
         }
     }
+}
+
+/// The execution provider one session registers, with its device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionExecutionProvider {
+    /// None: ONNX Runtime runs every node on its CPU provider.
+    Cpu,
+    Cuda {
+        device_id: i32,
+    },
+    /// `device_id` is the adapter's DXGI index.
+    Directml {
+        device_id: i32,
+    },
+}
+
+impl SessionExecutionProvider {
+    /// ONNX Runtime's name of the provider, whose nodes a placement read counts; none for CPU.
+    const fn accelerated_name(self) -> Option<&'static str> {
+        match self {
+            Self::Cpu => None,
+            Self::Cuda { .. } => Some(CUDA_EXECUTION_PROVIDER),
+            Self::Directml { .. } => Some(DIRECTML_EXECUTION_PROVIDER),
+        }
+    }
+
+    const fn is_directml(self) -> bool {
+        matches!(self, Self::Directml { .. })
+    }
+}
+
+/// Workflow #407 GPU-1 B1 (design §2.1): every option the engine sets on an ONNX Runtime
+/// session before its model, as data. [`session_options`] is their one source, and a session and
+/// the zero-inference shadow that reads its node placement are built from the same value, so the
+/// two cannot differ.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SessionOptions {
+    intra_threads: usize,
+    /// `Some(false)` turns ONNX Runtime's memory pattern off; `None` keeps its default.
+    memory_pattern: Option<bool>,
+    /// `Some(false)` runs the graph sequentially; `None` keeps ONNX Runtime's default.
+    parallel_execution: Option<bool>,
+    execution_provider: SessionExecutionProvider,
+    /// Whether ONNX Runtime is forbidden to place a node on its CPU provider.
+    cpu_fallback_disabled: bool,
+}
+
+/// The options of every session of `plan`. CPU and CUDA sessions set what they always have (one
+/// intra-op thread; CUDA forbids CPU nodes). A DirectML session turns the memory pattern off and
+/// runs sequentially, as DirectML requires (one session never runs concurrently: the model's
+/// `&mut` session and its slot's lock guarantee that), and allows CPU nodes: the recognition
+/// model has nodes only the CPU runs.
+fn session_options(plan: &ProviderSessionPlan) -> Result<SessionOptions, String> {
+    let (memory_pattern, parallel_execution, execution_provider) =
+        match plan.resolved_execution_provider {
+            OnnxExecutionProvider::Cpu => (None, None, SessionExecutionProvider::Cpu),
+            OnnxExecutionProvider::Cuda => {
+                let device_id = plan.cuda_ordinal.ok_or_else(|| {
+                    "CUDA OCR session plan is missing the resolved device ordinal".to_string()
+                })?;
+                (None, None, SessionExecutionProvider::Cuda { device_id })
+            }
+            OnnxExecutionProvider::Directml => {
+                let device_id = plan.directml_device_id.ok_or_else(|| {
+                    "DirectML OCR session plan is missing its adapter's DXGI index".to_string()
+                })?;
+                (
+                    Some(false),
+                    Some(false),
+                    SessionExecutionProvider::Directml { device_id },
+                )
+            }
+        };
+    Ok(SessionOptions {
+        intra_threads: SESSION_INTRA_THREADS,
+        memory_pattern,
+        parallel_execution,
+        execution_provider,
+        cpu_fallback_disabled: plan.cpu_fallback_disabled,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,12 +259,20 @@ impl PpocrModelRole {
     }
 }
 
+/// ONNX Runtime's verbose `Node placements` section of one session (design §2.2): one provider
+/// summary per provider (see [`PROVIDER_SUMMARY_PREFIXES`]), in any provider order, each
+/// `Node(s)` summary followed by its per-node lines. The CPU-placed nodes are kept; the nodes of
+/// the accelerated provider are counted. Lines outside the section are ignored. A summary or
+/// per-node line that does not read, a provider named twice, or a group that ends before its
+/// nodes are listed fails the read.
 #[derive(Debug, Default)]
 struct NodePlacementLogCapture {
     saw_placement_header: bool,
-    saw_provider_summary: bool,
-    current_cpu_group: bool,
-    expected_cpu_nodes: Option<usize>,
+    /// Every provider the section named, with its node count, in log order.
+    providers: Vec<(String, usize)>,
+    /// The provider (its index in `providers`) whose per-node lines follow, and how many of
+    /// them are still due.
+    open_group: Option<(usize, usize)>,
     cpu_nodes: Vec<CpuAssignedNodeDiagnostic>,
     failure: Option<String>,
 }
@@ -140,7 +283,7 @@ impl NodePlacementLogCapture {
             return;
         }
         let message = message.trim();
-        if message == "Node placements" {
+        if message == NODE_PLACEMENTS_HEADER {
             *self = Self {
                 saw_placement_header: true,
                 ..Self::default()
@@ -150,92 +293,136 @@ impl NodePlacementLogCapture {
         if !self.saw_placement_header {
             return;
         }
+        if let Some(&(prefix, has_details)) = PROVIDER_SUMMARY_PREFIXES
+            .iter()
+            .find(|(prefix, _)| message.starts_with(prefix))
+        {
+            self.record_provider_summary(message, prefix, has_details);
+            return;
+        }
+        let Some((index, due)) = self.open_group else {
+            return;
+        };
         if message.len() > MAX_NODE_PLACEMENT_LOG_MESSAGE_BYTES {
             self.fail("ONNX Runtime node-placement log message exceeds the diagnostic bound");
             return;
         }
-
-        match parse_provider_summary(message, "All nodes placed on [") {
-            Ok(Some((provider, count))) => {
-                self.record_provider_summary(&provider, count, false);
-                return;
+        if self.providers[index].0 == CPU_EXECUTION_PROVIDER {
+            match parse_node_placement(message) {
+                Ok(node) => self.cpu_nodes.push(node),
+                Err(err) => {
+                    self.fail(err);
+                    return;
+                }
             }
-            Ok(None) => {}
-            Err(err) => {
-                self.fail(err);
-                return;
-            }
-        }
-        match parse_provider_summary(message, "Node(s) placed on [") {
-            Ok(Some((provider, count))) => {
-                self.record_provider_summary(&provider, count, true);
-                return;
-            }
-            Ok(None) => {}
-            Err(err) => {
-                self.fail(err);
-                return;
-            }
-        }
-
-        if !self.current_cpu_group {
+        } else if let Err(err) = parse_accelerated_node_placement(message) {
+            let provider = self.providers[index].0.clone();
+            self.fail(format!("{err} of {provider}"));
             return;
         }
-        let expected = self.expected_cpu_nodes.unwrap_or(0);
-        if self.cpu_nodes.len() >= expected {
-            self.current_cpu_group = false;
-            return;
-        }
-        match parse_node_placement(message) {
-            Ok(node) => self.cpu_nodes.push(node),
-            Err(err) => {
-                self.fail(err);
-                return;
-            }
-        }
-        if self.cpu_nodes.len() == expected {
-            self.current_cpu_group = false;
-        }
+        self.open_group = (due > 1).then_some((index, due - 1));
     }
 
-    fn record_provider_summary(&mut self, provider: &str, count: usize, has_details: bool) {
-        if self.current_cpu_group && self.cpu_nodes.len() != self.expected_cpu_nodes.unwrap_or(0) {
-            self.fail("ONNX Runtime ended the CPU placement group before every node was recorded");
+    fn record_provider_summary(&mut self, message: &str, prefix: &str, has_details: bool) {
+        if message.len() > MAX_NODE_PLACEMENT_LOG_MESSAGE_BYTES {
+            self.fail("ONNX Runtime node-placement log message exceeds the diagnostic bound");
             return;
         }
-        self.saw_provider_summary = true;
+        if let Some((index, _)) = self.open_group {
+            let provider = &self.providers[index].0;
+            let failure = if provider == CPU_EXECUTION_PROVIDER {
+                "ONNX Runtime ended the CPU placement group before every node was recorded"
+                    .to_string()
+            } else {
+                format!(
+                    "ONNX Runtime ended the {provider} placement group before every node was listed"
+                )
+            };
+            self.fail(failure);
+            return;
+        }
+        let (provider, count) = match parse_provider_summary(&message[prefix.len()..]) {
+            Ok(summary) => summary,
+            Err(err) => {
+                self.fail(err);
+                return;
+            }
+        };
+        if self.providers.iter().any(|(named, _)| *named == provider) {
+            self.fail(format!(
+                "ONNX Runtime named {provider} twice in one node-placement section"
+            ));
+            return;
+        }
         if provider == CPU_EXECUTION_PROVIDER {
             if count > MAX_NODE_PLACEMENT_DIAGNOSTIC_NODES {
                 self.fail("ONNX Runtime CPU-assigned node count exceeds the diagnostic bound");
                 return;
             }
-            self.expected_cpu_nodes = Some(count);
-            self.current_cpu_group = has_details && count > 0;
             if !has_details && count > 0 {
                 self.fail(
                     "ONNX Runtime did not emit per-node details for the CPU-only placement group",
                 );
+                return;
             }
-        } else if self.expected_cpu_nodes.is_none() {
-            self.expected_cpu_nodes = Some(0);
-            self.current_cpu_group = false;
         }
+        if has_details && count > 0 {
+            self.open_group = Some((self.providers.len(), count));
+        }
+        self.providers.push((provider, count));
     }
 
+    /// The section as a v2 report of `role`: the one accelerated provider ONNX Runtime named
+    /// with its node count, and the CPU-placed nodes. The caller checks the provider against the
+    /// session's and adds a DirectML session's adapter.
     fn diagnostic(&self, role: PpocrModelRole) -> Result<NodePlacementDiagnostic, String> {
         if let Some(failure) = &self.failure {
             return Err(failure.clone());
         }
-        if !self.saw_placement_header || !self.saw_provider_summary {
+        if !self.saw_placement_header || self.providers.is_empty() {
             return Err(
                 "ONNX Runtime did not emit a complete verbose node-placement section".to_string(),
             );
         }
-        let expected = self.expected_cpu_nodes.unwrap_or(0);
-        if self.cpu_nodes.len() != expected {
+        if let Some((index, due)) = self.open_group {
+            let (provider, count) = &self.providers[index];
+            return Err(if provider == CPU_EXECUTION_PROVIDER {
+                format!(
+                    "ONNX Runtime reported {count} CPU-assigned nodes but emitted details for {}",
+                    self.cpu_nodes.len()
+                )
+            } else {
+                format!(
+                    "ONNX Runtime reported {count} nodes on {provider} but emitted details for {}",
+                    count - due
+                )
+            });
+        }
+        let cpu_assigned_node_count = self
+            .providers
+            .iter()
+            .find(|(provider, _)| provider == CPU_EXECUTION_PROVIDER)
+            .map_or(0, |(_, count)| *count);
+        if self.cpu_nodes.len() != cpu_assigned_node_count {
             return Err(format!(
-                "ONNX Runtime reported {expected} CPU-assigned nodes but emitted details for {}",
+                "ONNX Runtime reported {cpu_assigned_node_count} CPU-assigned nodes but emitted details for {}",
                 self.cpu_nodes.len()
+            ));
+        }
+        let mut accelerated = self
+            .providers
+            .iter()
+            .filter(|(provider, _)| provider != CPU_EXECUTION_PROVIDER);
+        let Some((accelerated_execution_provider, accelerated_node_count)) = accelerated.next()
+        else {
+            return Err(
+                "ONNX Runtime's node-placement section names no accelerated execution provider"
+                    .to_string(),
+            );
+        };
+        if let Some((other, _)) = accelerated.next() {
+            return Err(format!(
+                "ONNX Runtime's node-placement section names {other} besides {accelerated_execution_provider}"
             ));
         }
         let mut nodes = self.cpu_nodes.clone();
@@ -245,11 +432,14 @@ impl NodePlacementLogCapture {
                 .then_with(|| left.operator_type.cmp(&right.operator_type))
         });
         Ok(NodePlacementDiagnostic {
-            record_type: "actingcommand.ppocr_node_placement_diagnostic.v1".to_string(),
+            record_type: PPOCR_NODE_PLACEMENT_RECORD_TYPE.to_string(),
             model_role: role.as_str().to_string(),
             diagnostic_scope: "session_initialization_only".to_string(),
             inference_executed: false,
-            cpu_assigned_node_count: expected,
+            accelerated_execution_provider: accelerated_execution_provider.clone(),
+            accelerated_node_count: *accelerated_node_count,
+            cpu_assigned_node_count,
+            device: None,
             nodes,
         })
     }
@@ -258,14 +448,12 @@ impl NodePlacementLogCapture {
         if self.failure.is_none() {
             self.failure = Some(message.into());
         }
-        self.current_cpu_group = false;
+        self.open_group = None;
     }
 }
 
-fn parse_provider_summary(message: &str, prefix: &str) -> Result<Option<(String, usize)>, String> {
-    let Some(rest) = message.strip_prefix(prefix) else {
-        return Ok(None);
-    };
+/// A provider summary after its prefix: `<EP>]. Number of nodes: <n>`.
+fn parse_provider_summary(rest: &str) -> Result<(String, usize), String> {
     let Some((provider, count)) = rest.split_once("]. Number of nodes: ") else {
         return Err("malformed ONNX Runtime node-placement provider summary".to_string());
     };
@@ -275,7 +463,22 @@ fn parse_provider_summary(message: &str, prefix: &str) -> Result<Option<(String,
     let count = count.parse::<usize>().map_err(|err| {
         format!("invalid ONNX Runtime node-placement provider count {count:?}: {err}")
     })?;
-    Ok(Some((provider.to_string(), count)))
+    Ok((provider.to_string(), count))
+}
+
+/// A per-node line of an accelerated provider's group, which is only counted: `<op type> (<node
+/// name>)` with an operator type; a node ONNX Runtime inserted may have an empty name.
+fn parse_accelerated_node_placement(message: &str) -> Result<(), String> {
+    let readable = message
+        .split_once(" (")
+        .is_some_and(|(operator_type, node_name)| {
+            !operator_type.is_empty() && node_name.ends_with(')')
+        });
+    if readable {
+        Ok(())
+    } else {
+        Err("malformed ONNX Runtime node-placement entry".to_string())
+    }
 }
 
 fn parse_node_placement(message: &str) -> Result<CpuAssignedNodeDiagnostic, String> {
@@ -299,26 +502,30 @@ fn parse_node_placement(message: &str) -> Result<CpuAssignedNodeDiagnostic, Stri
     })
 }
 
-/// `value` is the caller-injected variable value the loader was built with (Workflow #318
-/// cfg3); the engine never reads the environment itself.
+/// Whether a session of `plan` reads its node placement. `value` is the caller-injected variable
+/// value the loader was built with (Workflow #318 cfg3); the engine never reads the environment
+/// itself. A set value must be exactly `1`. A CUDA session reads the placement only when it is
+/// set; a DirectML session always reads it (Workflow #407 GPU-1 design §2.2), so the variable is
+/// met there; a CPU session refuses it.
 fn node_placement_diagnostic_requested(
     plan: &ProviderSessionPlan,
     value: Option<&str>,
 ) -> Result<bool, String> {
-    let Some(value) = value else {
-        return Ok(false);
-    };
-    if value != "1" {
+    if let Some(value) = value
+        && value != "1"
+    {
         return Err(format!(
             "{NODE_PLACEMENT_DIAGNOSTIC_ENV} must be exactly 1 when set"
         ));
     }
-    if plan.resolved_execution_provider != OnnxExecutionProvider::Cuda {
-        return Err(format!(
-            "{NODE_PLACEMENT_DIAGNOSTIC_ENV} is valid only for an explicit CUDA OCR session"
-        ));
+    match plan.resolved_execution_provider {
+        OnnxExecutionProvider::Directml => Ok(true),
+        OnnxExecutionProvider::Cuda => Ok(value.is_some()),
+        OnnxExecutionProvider::Cpu if value.is_some() => Err(format!(
+            "{NODE_PLACEMENT_DIAGNOSTIC_ENV} is valid only for an explicit CUDA OCR session; a DirectML OCR session always reads its node placement"
+        )),
+        OnnxExecutionProvider::Cpu => Ok(false),
     }
-    Ok(true)
 }
 
 /// Builds one `ppocr-ctc` OCR engine per model on first use.
@@ -365,6 +572,25 @@ impl VisionModelLoader for PpocrCtcLoader {
         }
         let dictionary = parse_dictionary(&dictionary, &model.dictionary_path).map_err(failure)?;
         let (facts, waited_on_others) = runtime_facts(&self.runtime, wait_deadline)?;
+        // Workflow #407 GPU-1 B1 (design §1.4): every DirectML session build resolves its adapter
+        // again; the model's sessions are bound to the identity and the index of this build.
+        let adapter = self
+            .runtime
+            .directml
+            .as_ref()
+            .map(|directml| {
+                resolve_session_adapter(
+                    &SystemAdapterSource,
+                    &directml.device,
+                    facts
+                        .resolved_directml_adapter
+                        .as_ref()
+                        .map(|first| first.identity.as_str()),
+                    None,
+                )
+            })
+            .transpose()
+            .map_err(SessionBuildFailure::into_error)?;
         let key = OcrSessionKey::from_parts(OcrSessionKeyParts {
             engine_binding_sha256: ocr_engine_binding_sha256(
                 &facts.executable_sha256,
@@ -379,24 +605,35 @@ impl VisionModelLoader for PpocrCtcLoader {
             requested_backend: self.runtime.execution_provider,
             requested_cuda_device: self.runtime.cuda_device.clone(),
             resolved_cuda_device: facts.resolved_cuda_device.clone(),
-            // Workflow #407 GPU-1 A: no DirectML session is built before GPU-1 B1.
-            requested_directml_device: None,
-            resolved_directml_device: None,
+            requested_directml_device: self
+                .runtime
+                .directml
+                .as_ref()
+                .map(|directml| directml.device.clone()),
+            resolved_directml_device: adapter.as_ref().map(ResolvedDirectmlAdapter::device),
         })?;
         let binding = OcrSessionBinding::new(session_id.clone(), 1, key);
         binding.validate()?;
         let plan = ProviderSessionPlan::from_key(binding.key()).map_err(failure)?;
         let mut diagnostics = Vec::new();
-        let recognizer = load_ort_session(
-            &recognizer,
-            &model.recognizer_path,
+        let recognizer = load_session_with(
+            &mut OrtSessions,
+            &SessionRequest {
+                model: &recognizer,
+                path: &model.recognizer_path,
+                role: PpocrModelRole::Recognizer,
+                adapter: adapter.as_ref(),
+            },
             &plan,
-            PpocrModelRole::Recognizer,
             self.node_placement_diagnostic.as_deref(),
             &mut diagnostics,
         )
-        .map_err(|error| failure(error).with_ppocr_diagnostics(diagnostics.clone()))?;
-        require_recognizer_classes(&recognizer, dictionary.len(), &model.model_ref)
+        .map_err(|error| {
+            error
+                .into_error()
+                .with_ppocr_diagnostics(diagnostics.clone())
+        })?;
+        require_recognizer_classes(&recognizer.session, dictionary.len(), &model.model_ref)
             .map_err(|error| failure(error).with_ppocr_diagnostics(diagnostics.clone()))?;
         Ok(OcrModelLoad::Loaded {
             engine: Box::new(PpocrCtcModel {
@@ -405,7 +642,11 @@ impl VisionModelLoader for PpocrCtcLoader {
                 cuda_driver_version: facts.cuda_driver_version,
                 dictionary,
                 params: model.description.ppocr_params(),
-                recognizer,
+                recognizer: recognizer.session,
+                placements: RolePlacements {
+                    recognizer: recognizer.cpu_nodes,
+                    detector: None,
+                },
                 detector: None,
                 detector_path: model.detector_path.clone(),
                 detector_sha256,
@@ -491,12 +732,66 @@ struct PpocrCtcModel {
     /// The effective preprocessing and decoding parameters of the model's description.
     params: PpocrCtcParams,
     recognizer: Session,
+    /// Workflow #407 GPU-1 B1: the CPU-placed node count of each built session whose node
+    /// placement was read, for the attestation's `fallback_observed`.
+    placements: RolePlacements,
     detector: Option<Session>,
     detector_path: Option<PathBuf>,
     detector_sha256: Option<String>,
     node_placement_diagnostic: Option<String>,
     /// Session-load diagnostics, returned with the next request's result or error.
     pending_diagnostics: PpocrDiagnostics,
+}
+
+/// How many nodes of each role's session ONNX Runtime placed on the CPU, when the session's node
+/// placement was read.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct RolePlacements {
+    recognizer: Option<usize>,
+    detector: Option<usize>,
+}
+
+/// The roles whose sessions ran in one invocation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct InvocationRoles {
+    recognizer: bool,
+    detector: bool,
+}
+
+/// The attestation's `fallback_observed` (Workflow #407 GPU-1 design §2.2, §2.4): none for a plan
+/// that admits no CPU node (CPU, CUDA); for a DirectML plan, whether a role whose session ran in
+/// the invocation has a node ONNX Runtime placed on the CPU. A region read runs the recognizer; a
+/// full-frame read runs the detector and, for each box it keeps, the recognizer. A DirectML
+/// session that ran without a read placement fails: every DirectML session reads it.
+fn fallback_observed(
+    plan: &ProviderSessionPlan,
+    placements: RolePlacements,
+    ran: InvocationRoles,
+) -> Result<Option<bool>, String> {
+    if plan.fallback_policy != OcrFallbackPolicy::CpuNodes {
+        return Ok(None);
+    }
+    let mut observed = false;
+    for (role, role_ran, cpu_nodes) in [
+        (
+            PpocrModelRole::Recognizer,
+            ran.recognizer,
+            placements.recognizer,
+        ),
+        (PpocrModelRole::Detector, ran.detector, placements.detector),
+    ] {
+        if !role_ran {
+            continue;
+        }
+        let cpu_nodes = cpu_nodes.ok_or_else(|| {
+            format!(
+                "the PPOCR {} session ran without a read node placement",
+                role.as_str()
+            )
+        })?;
+        observed |= cpu_nodes > 0;
+    }
+    Ok(Some(observed))
 }
 
 impl OcrEngine for PpocrCtcModel {
@@ -526,8 +821,9 @@ impl OcrEngine for PpocrCtcModel {
         request.validate()?;
         let invocation_id = next_ocr_invocation_id()?;
         let mut diagnostics = std::mem::take(&mut self.pending_diagnostics);
+        let mut ran = InvocationRoles::default();
         let outcome = catch_unwind(AssertUnwindSafe(|| {
-            self.read_region(request, &mut diagnostics)
+            self.read_region(request, &mut diagnostics, &mut ran)
         }));
         let mut result = match outcome {
             Ok(Ok(result)) => result,
@@ -550,18 +846,23 @@ impl OcrEngine for PpocrCtcModel {
         result
             .validate_for(request)
             .map_err(|error| error.with_ppocr_diagnostics(result.ppocr_diagnostics.clone()))?;
+        let attestation = self.attestation(invocation_id, ran).map_err(|error| {
+            failure(error).with_ppocr_diagnostics(result.ppocr_diagnostics.clone())
+        })?;
         Ok(OcrInferenceOutput {
-            execution_attestation: Some(self.attestation(invocation_id)),
+            execution_attestation: Some(attestation),
             result,
         })
     }
 }
 
 impl PpocrCtcModel {
+    /// Reads the request; `ran` records the roles whose sessions ran.
     fn read_region(
         &mut self,
         request: OcrInferenceRequestView<'_>,
         diagnostics: &mut PpocrDiagnostics,
+        ran: &mut InvocationRoles,
     ) -> Result<OcrInferenceResult, ProviderInvokeError> {
         let inference_deadline = Instant::now()
             .checked_add(Duration::from_millis(request.timeout_ms))
@@ -576,6 +877,7 @@ impl PpocrCtcModel {
             self.params.detector.merge_gap_factor,
         ) {
             ReadRoute::Region => {
+                ran.recognizer = true;
                 let decoded = recognize_region(
                     &mut self.recognizer,
                     &self.dictionary,
@@ -589,12 +891,15 @@ impl PpocrCtcModel {
             ReadRoute::Detect { merge_gap_factor } => merge_gap_factor,
         };
         if self.detector.is_none() {
-            self.detector = Some(self.load_detector(diagnostics)?);
+            let built = self.load_detector(diagnostics)?;
+            self.placements.detector = built.cpu_nodes;
+            self.detector = Some(built.session);
         }
         let detector = self
             .detector
             .as_mut()
             .ok_or_else(|| "PPOCR detector session is unavailable".to_string())?;
+        ran.detector = true;
         let detected = detect_text_regions(
             detector,
             &self.params,
@@ -606,6 +911,7 @@ impl PpocrCtcModel {
         let (detected, count) = keep_detected_boxes(detected, self.params.detector.max_boxes);
         let mut blocks = Vec::new();
         for detected_box in &detected {
+            ran.recognizer = true;
             let decoded = recognize_region(
                 &mut self.recognizer,
                 &self.dictionary,
@@ -642,40 +948,65 @@ impl PpocrCtcModel {
     }
 
     /// Builds the detector session on the first full-frame request, from bytes whose hash
-    /// equals the detector hash verified when the model was loaded.
-    fn load_detector(&self, diagnostics: &mut PpocrDiagnostics) -> Result<Session, String> {
+    /// equals the detector hash verified when the model was loaded. A DirectML detector resolves
+    /// its adapter again and must find it at the model's index (design §1.4).
+    fn load_detector(
+        &self,
+        diagnostics: &mut PpocrDiagnostics,
+    ) -> Result<BuiltSession<Session>, SessionBuildFailure> {
         let (Some(path), Some(expected)) = (&self.detector_path, &self.detector_sha256) else {
-            return Err(format!(
+            return Err(SessionBuildFailure::plain(format!(
                 "OCR model '{}' has no detector; a full_frame region needs det.onnx",
                 self.binding.key().model_ref()
-            ));
+            )));
         };
         let bytes = std::fs::read(path).map_err(|error| {
-            format!(
+            SessionBuildFailure::plain(format!(
                 "failed to read the OCR detector file {}: {error}",
                 path.display()
-            )
+            ))
         })?;
         let actual = sha256_hex(&bytes);
         if actual != *expected {
-            return Err(format!(
+            return Err(SessionBuildFailure::plain(format!(
                 "OCR detector file {} changed since the model was verified: expected={expected}, actual={actual}; restart is required",
                 path.display()
-            ));
+            )));
         }
-        load_ort_session(
-            &bytes,
-            path,
+        let key = self.binding.key();
+        let adapter = match (
+            key.requested_directml_device(),
+            key.resolved_directml_device(),
+        ) {
+            (Some(selector), Some(bound)) => Some(resolve_session_adapter(
+                &SystemAdapterSource,
+                selector,
+                None,
+                Some(bound),
+            )?),
+            _ => None,
+        };
+        load_session_with(
+            &mut OrtSessions,
+            &SessionRequest {
+                model: &bytes,
+                path,
+                role: PpocrModelRole::Detector,
+                adapter: adapter.as_ref(),
+            },
             &self.plan,
-            PpocrModelRole::Detector,
             self.node_placement_diagnostic.as_deref(),
             diagnostics,
         )
     }
 
-    fn attestation(&self, invocation_id: OcrInvocationId) -> OcrExecutionAttestation {
+    fn attestation(
+        &self,
+        invocation_id: OcrInvocationId,
+        ran: InvocationRoles,
+    ) -> Result<OcrExecutionAttestation, String> {
         let key = self.binding.key();
-        OcrExecutionAttestation {
+        Ok(OcrExecutionAttestation {
             schema_version: OCR_EXECUTION_ATTESTATION_SCHEMA_VERSION.to_string(),
             invocation_id,
             session: self.binding.clone(),
@@ -696,10 +1027,10 @@ impl PpocrCtcModel {
             registered_execution_providers: self.plan.registered_execution_providers.clone(),
             cpu_ep_registered: self.plan.cpu_ep_registered,
             cpu_fallback_disabled: self.plan.cpu_fallback_disabled,
-            fallback_policy: OcrFallbackPolicy::Forbidden,
-            fallback_observed: None,
+            fallback_policy: self.plan.fallback_policy,
+            fallback_observed: fallback_observed(&self.plan, self.placements, ran)?,
             complete: true,
-        }
+        })
     }
 }
 
@@ -741,25 +1072,11 @@ fn same_runtime(
 }
 
 fn establish_runtime(spec: &VisionRuntimeSpec) -> VisionFfiResult<RuntimeFacts> {
-    // Workflow #407 GPU-1 A adds the provider; this engine initialises no DirectML runtime
-    // until GPU-1 B1, and refuses one before it loads anything.
     if spec.execution_provider == OnnxExecutionProvider::Directml {
-        return Err(directml_engine_unavailable());
+        return establish_directml_runtime(spec, &SystemAdapterSource);
     }
     let library = &spec.onnxruntime_library;
-    if spec
-        .runtime_library_closure
-        .iter()
-        .filter(|path| *path == library)
-        .count()
-        != 1
-    {
-        return Err(VisionFfiError::fatal_with_code(
-            VisionFfiErrorCode::InvalidRequest,
-            ENGINE_MODULE,
-            "the ONNX Runtime library must occur exactly once in its runtime-library closure",
-        ));
-    }
+    require_onnxruntime_once(&spec.runtime_library_closure, library)?;
     let onnxruntime_sha256 = sha256_file_hex(ENGINE_MODULE, library)?;
     if let Some(expected) = &spec.expected_onnxruntime_sha256
         && *expected != onnxruntime_sha256
@@ -801,7 +1118,13 @@ fn establish_runtime(spec: &VisionRuntimeSpec) -> VisionFfiResult<RuntimeFacts> 
                 Some(inventory.driver_version),
             )
         }
-        OnnxExecutionProvider::Directml => return Err(directml_engine_unavailable()),
+        OnnxExecutionProvider::Directml => {
+            return Err(VisionFfiError::fatal_with_code(
+                VisionFfiErrorCode::Internal,
+                ENGINE_MODULE,
+                "a DirectML runtime is initialised by its own path",
+            ));
+        }
     };
     Ok(RuntimeFacts {
         onnxruntime_library: library.clone(),
@@ -810,7 +1133,193 @@ fn establish_runtime(spec: &VisionRuntimeSpec) -> VisionFfiResult<RuntimeFacts> 
         executable_sha256,
         resolved_cuda_device,
         cuda_driver_version,
+        resolved_directml_adapter: None,
     })
+}
+
+fn require_onnxruntime_once(closure: &[PathBuf], library: &Path) -> VisionFfiResult<()> {
+    if closure.iter().filter(|path| *path == library).count() == 1 {
+        Ok(())
+    } else {
+        Err(VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::InvalidRequest,
+            ENGINE_MODULE,
+            "the ONNX Runtime library must occur exactly once in its runtime-library closure",
+        ))
+    }
+}
+
+/// Workflow #407 GPU-1 B1 (design §3): a DirectML runtime initialises in this order.
+/// 1. The pin: `onnxruntime.dll` and `onnxruntime_providers_shared.dll` must be the pinned files
+///    (`ProviderUnavailable`), and so must `DirectML.dll` (`directml_library_missing`,
+///    `directml_library_mismatch`).
+/// 2. The adapter the configuration names (DXGI and the kernel's adapter type, from System32).
+/// 3. The closure `[providers_shared, DirectML.dll, onnxruntime]`, by absolute path; the process
+///    DLL search is not changed.
+/// 4. The version ONNX Runtime reports, which must be the pin's.
+/// 5. ONNX Runtime itself, once per process.
+/// 6. The running executable's hash.
+///
+/// In this slice every failure fails the load whatever `gpu_fallback` says; the CPU fallback of
+/// `gpu_fallback` `cpu` comes with GPU-1 B2.
+fn establish_directml_runtime(
+    spec: &VisionRuntimeSpec,
+    adapters: &dyn AdapterSource,
+) -> VisionFfiResult<RuntimeFacts> {
+    let directml = spec.directml.as_ref().ok_or_else(|| {
+        VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::InvalidRequest,
+            ENGINE_MODULE,
+            "a DirectML OCR runtime has no DirectML part: use VisionRuntimeSpec::from_vision_root_directml",
+        )
+    })?;
+    if spec.cuda_device.is_some() {
+        return Err(VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::InvalidRequest,
+            ENGINE_MODULE,
+            "a DirectML OCR configuration must not include a CUDA device selector",
+        ));
+    }
+    let closure = spec.directml_runtime_library_closure().ok_or_else(|| {
+        VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::InvalidRequest,
+            ENGINE_MODULE,
+            "a DirectML OCR runtime has no DirectML closure",
+        )
+    })?;
+    let library = &spec.onnxruntime_library;
+    require_onnxruntime_once(&closure, library)?;
+    let pin = &DIRECTML_RUNTIME_PIN;
+    let onnxruntime_sha256 = sha256_file_hex(ENGINE_MODULE, library)?;
+    let expected = spec
+        .expected_onnxruntime_sha256
+        .as_deref()
+        .unwrap_or(pin.onnxruntime.sha256);
+    if onnxruntime_sha256 != pin.onnxruntime.sha256 || onnxruntime_sha256 != expected {
+        return Err(unavailable(format!(
+            "ONNX Runtime library {} is not the pinned DirectML build of ONNX Runtime {}: expected={}, actual={onnxruntime_sha256}",
+            library.display(),
+            pin.onnxruntime_version,
+            pin.onnxruntime.sha256
+        )));
+    }
+    for path in closure.iter().filter(|path| *path != library) {
+        check_directml_runtime_file(path, &directml.library)?;
+    }
+    let adapter = resolve_directml_adapter(adapters, &directml.device)
+        .decision
+        .map_err(|none| SessionBuildFailure::from_unavailable(none).into_error())?;
+    establish_process_runtime_library_closure(&closure)?;
+    let onnxruntime_version = onnxruntime_version_string(library)?;
+    if onnxruntime_version != pin.onnxruntime_version {
+        return Err(unavailable(format!(
+            "ONNX Runtime library {} reports version {onnxruntime_version}; the DirectML runtime pin is {}",
+            library.display(),
+            pin.onnxruntime_version
+        )));
+    }
+    ORT_RUNTIME.ensure(library).map_err(unavailable)?;
+    let executable = std::env::current_exe().map_err(|error| {
+        unavailable(format!("the running executable cannot be located: {error}"))
+    })?;
+    let executable_sha256 = sha256_file_hex(ENGINE_MODULE, &executable)?;
+    Ok(RuntimeFacts {
+        onnxruntime_library: library.clone(),
+        onnxruntime_version,
+        onnxruntime_sha256,
+        executable_sha256,
+        resolved_cuda_device: None,
+        cuda_driver_version: None,
+        resolved_directml_adapter: Some(adapter),
+    })
+}
+
+/// One closure member of a DirectML runtime other than `onnxruntime.dll`, against the pin: the
+/// runtime's `DirectML.dll` is `directml_library_missing` when absent and
+/// `directml_library_mismatch` when it differs or cannot be read;
+/// `onnxruntime_providers_shared.dll` that is not the pinned file is `ProviderUnavailable`.
+fn check_directml_runtime_file(path: &Path, directml_library: &Path) -> VisionFfiResult<()> {
+    let pin = &DIRECTML_RUNTIME_PIN;
+    let is_directml = path == directml_library;
+    let pinned = if is_directml {
+        &pin.directml
+    } else if path.file_name() == Some(OsStr::new(pin.providers_shared.file_name)) {
+        &pin.providers_shared
+    } else {
+        return Err(VisionFfiError::fatal_with_code(
+            VisionFfiErrorCode::InvalidRequest,
+            ENGINE_MODULE,
+            format!("{} is no file of the DirectML runtime pin", path.display()),
+        ));
+    };
+    let check = pinned.check(path);
+    let error = match check.state {
+        FileState::Ok => return Ok(()),
+        FileState::Missing if is_directml => SessionBuildFailure::directml(
+            GpuUnavailableReason::DirectmlLibraryMissing,
+            format!("{} is missing", path.display()),
+        )
+        .into_error(),
+        state if is_directml => SessionBuildFailure::directml(
+            GpuUnavailableReason::DirectmlLibraryMismatch,
+            format!(
+                "{} is not the pinned DirectML {} ({state}; the pin is {} B with SHA-256 {})",
+                path.display(),
+                pin.directml_version,
+                pinned.size,
+                pinned.sha256
+            ),
+        )
+        .into_error(),
+        state => unavailable(format!(
+            "{} is not the pinned file of the DirectML runtime ({state}; the pin is {} B with SHA-256 {})",
+            path.display(),
+            pinned.size,
+            pinned.sha256
+        )),
+    };
+    Err(match check.os_cause {
+        Some(cause) => error.with_os_cause(cause),
+        None => error,
+    })
+}
+
+/// Workflow #407 GPU-1 B1 (design §1.4): the adapter of one DirectML session build, resolved
+/// again for this build. Its identity must be the one the first model load resolved
+/// (`first_identity`), and a session of a model already loaded (`bound`) must find its adapter
+/// at the model's index. The LUID is recorded, never compared.
+fn resolve_session_adapter(
+    source: &dyn AdapterSource,
+    selector: &DirectmlDeviceSelector,
+    first_identity: Option<&str>,
+    bound: Option<&DirectmlDeviceIdentity>,
+) -> Result<ResolvedDirectmlAdapter, SessionBuildFailure> {
+    let adapter = resolve_directml_adapter(source, selector)
+        .decision
+        .map_err(SessionBuildFailure::from_unavailable)?;
+    if let Some(first) = first_identity
+        && adapter.identity != first
+    {
+        return Err(SessionBuildFailure::directml(
+            GpuUnavailableReason::AdapterMissing,
+            format!(
+                "this build resolved the DirectML adapter {} but the first model load resolved {first}; restart is required",
+                adapter.identity
+            ),
+        ));
+    }
+    if let Some(bound) = bound
+        && (adapter.identity != bound.identity || adapter.dxgi_index != bound.dxgi_index)
+    {
+        return Err(SessionBuildFailure::directml(
+            GpuUnavailableReason::AdapterMissing,
+            format!(
+                "the model's DirectML adapter {} at DXGI index {} resolved as {} at DXGI index {}; the model is bound to its index until it is loaded again",
+                bound.identity, bound.dxgi_index, adapter.identity, adapter.dxgi_index
+            ),
+        ));
+    }
+    Ok(adapter)
 }
 
 fn lock_until<'a, T>(
@@ -866,14 +1375,6 @@ fn unavailable(message: impl Into<String>) -> VisionFfiError {
         VisionFfiErrorCode::ProviderUnavailable,
         ENGINE_MODULE,
         message,
-    )
-}
-
-/// Workflow #407 GPU-1 A: a DirectML runtime, which this engine does not initialise before
-/// GPU-1 B1.
-fn directml_engine_unavailable() -> VisionFfiError {
-    unavailable(
-        "this OCR engine initialises no DirectML runtime yet; configure execution_provider cpu",
     )
 }
 
@@ -959,131 +1460,427 @@ fn keep_detected_boxes(
     (boxes, count)
 }
 
-fn load_ort_session(
-    model: &[u8],
-    path: &Path,
-    plan: &ProviderSessionPlan,
-    role: PpocrModelRole,
-    node_placement_diagnostic: Option<&str>,
-    diagnostics: &mut PpocrDiagnostics,
-) -> Result<Session, String> {
-    let diagnostic_requested =
-        node_placement_diagnostic_requested(plan, node_placement_diagnostic)?;
-    match plan.resolved_execution_provider {
-        OnnxExecutionProvider::Cpu => Session::builder()
-            .map_err(|err| format!("failed to create ONNXRuntime session builder: {err}"))?
-            .with_intra_threads(1)
-            .map_err(|err| format!("failed to configure ONNXRuntime intra threads: {err}"))?
-            .commit_from_memory(model)
-            .map_err(|err| {
-                format!(
-                    "failed to load CPU-only PPOCR ONNX model {}: {err}",
-                    path.display()
-                )
-            }),
-        OnnxExecutionProvider::Cuda => {
-            let ordinal = plan.cuda_ordinal.ok_or_else(|| {
-                "CUDA OCR session plan is missing the resolved device ordinal".to_string()
-            })?;
-            if diagnostic_requested {
-                capture_cuda_node_placement(model, path, ordinal, role, diagnostics)?;
-            }
-            Session::builder()
-                .map_err(|err| format!("failed to create ONNXRuntime session builder: {err}"))?
-                .with_intra_threads(1)
-                .map_err(|err| format!("failed to configure ONNXRuntime intra threads: {err}"))?
-                .with_execution_providers([
-                    ort::ep::CUDA::default()
-                        .with_device_id(ordinal)
-                        .build()
-                        .error_on_failure(),
-                ])
-                .map_err(|err| {
-                    format!(
-                        "failed to register required CUDA execution provider for device {ordinal}; CPU/DirectML/CoreML fallback is disabled: {err}"
-                    )
-                })?
-                .with_disable_cpu_fallback()
-                .map_err(|err| format!("failed to disable PPOCR CPU fallback: {err}"))?
-                .commit_from_memory(model)
-                .map_err(|err| {
-                    format!(
-                        "failed to load CUDA PPOCR ONNX model {} on device {ordinal}: {err}",
-                        path.display()
-                    )
-                })
+/// Workflow #407 GPU-1 B1: why one session could not be built. A DirectML session's failure
+/// names why DirectML cannot be used (design §2.3), the reason the fallback of GPU-1 B2 records;
+/// in this slice every DirectML failure fails the request. CPU and CUDA failures name none and
+/// keep their messages.
+#[derive(Debug, Clone)]
+struct SessionBuildFailure {
+    reason: Option<GpuUnavailableReason>,
+    message: String,
+    /// The failure behind the reason, with its OS cause when there is one.
+    cause: Option<Box<VisionFfiError>>,
+}
+
+impl SessionBuildFailure {
+    fn plain(message: impl Into<String>) -> Self {
+        Self {
+            reason: None,
+            message: message.into(),
+            cause: None,
         }
-        // Workflow #407 GPU-1 A: no plan names DirectML before GPU-1 B1.
-        OnnxExecutionProvider::Directml => {
-            Err("this OCR engine builds no DirectML session yet".to_string())
+    }
+
+    fn directml(reason: GpuUnavailableReason, message: impl Into<String>) -> Self {
+        Self {
+            reason: Some(reason),
+            message: message.into(),
+            cause: None,
+        }
+    }
+
+    /// One failed step of building a session with `options`: `reason` only for DirectML.
+    fn step(options: &SessionOptions, reason: GpuUnavailableReason, message: String) -> Self {
+        Self {
+            reason: options.execution_provider.is_directml().then_some(reason),
+            message,
+            cause: None,
+        }
+    }
+
+    /// No adapter for a DirectML session, with the failure behind it.
+    fn from_unavailable(unavailable: DirectmlUnavailable) -> Self {
+        Self {
+            reason: Some(unavailable.reason),
+            message: unavailable.to_string(),
+            cause: unavailable.cause.map(Box::new),
+        }
+    }
+
+    /// The same failure, of the zero-inference shadow that reads the node placement.
+    fn of_placement_shadow(mut self) -> Self {
+        self.message = format!(
+            "the zero-inference node-placement session failed: {}",
+            self.message
+        );
+        self
+    }
+
+    /// The engine's error: an adapter or library reason is `ProviderUnavailable`, every other
+    /// failure `ProviderFailure`; a DirectML failure's message leads with its reason.
+    fn into_error(self) -> VisionFfiError {
+        let Some(reason) = self.reason else {
+            return failure(self.message);
+        };
+        let message = format!("DirectML cannot be used ({reason}): {}", self.message);
+        let error = match reason {
+            GpuUnavailableReason::AdapterMissing
+            | GpuUnavailableReason::AdapterAmbiguous
+            | GpuUnavailableReason::AdapterNotPhysical
+            | GpuUnavailableReason::DirectmlLibraryMissing
+            | GpuUnavailableReason::DirectmlLibraryMismatch => unavailable(message),
+            GpuUnavailableReason::ProviderRegisterFailed
+            | GpuUnavailableReason::SessionBuildFailed
+            | GpuUnavailableReason::PlacementUnread => failure(message),
+        };
+        match self.cause.as_deref().and_then(VisionFfiError::os_cause) {
+            Some(cause) => error.with_os_cause(cause.clone()),
+            None => error,
         }
     }
 }
 
-fn capture_cuda_node_placement(
-    model: &[u8],
-    path: &Path,
-    ordinal: i32,
-    role: PpocrModelRole,
-    diagnostics: &mut PpocrDiagnostics,
-) -> Result<(), String> {
-    if diagnostics.len() >= PPOCR_MAX_DIAGNOSTIC_REPORTS {
-        return Err("PPOCR invocation diagnostic report bound exceeded".to_string());
+/// Builds ONNX Runtime sessions from [`SessionOptions`]: [`OrtSessions`] in the engine; the logic
+/// tests give a fake that writes ONNX Runtime's log lines into the placement logger it is given.
+trait SessionBuilds {
+    type Session;
+
+    /// Builds a session of `model` with exactly `options`. With `placement_logger` the session
+    /// also logs verbosely into it: the zero-inference shadow that reads the node placement.
+    fn build(
+        &mut self,
+        model: &[u8],
+        path: &Path,
+        options: &SessionOptions,
+        placement_logger: Option<LoggerFunction>,
+    ) -> Result<Self::Session, SessionBuildFailure>;
+}
+
+/// ONNX Runtime's sessions.
+struct OrtSessions;
+
+impl SessionBuilds for OrtSessions {
+    type Session = Session;
+
+    fn build(
+        &mut self,
+        model: &[u8],
+        path: &Path,
+        options: &SessionOptions,
+        placement_logger: Option<LoggerFunction>,
+    ) -> Result<Session, SessionBuildFailure> {
+        let step = |message: String| {
+            SessionBuildFailure::step(options, GpuUnavailableReason::SessionBuildFailed, message)
+        };
+        let mut builder = configured_session_builder(options)?;
+        if let Some(logger) = placement_logger {
+            builder = builder
+                .with_logger(logger)
+                .map_err(|err| {
+                    step(format!(
+                        "failed to configure bounded PPOCR node-placement diagnostic: {err}"
+                    ))
+                })?
+                .with_log_level(LogLevel::Verbose)
+                .map_err(|err| {
+                    step(format!(
+                        "failed to enable verbose PPOCR node-placement diagnostic: {err}"
+                    ))
+                })?
+                .with_log_verbosity(0)
+                .map_err(|err| {
+                    step(format!(
+                        "failed to bound PPOCR node-placement diagnostic: {err}"
+                    ))
+                })?;
+        }
+        builder.commit_from_memory(model).map_err(|err| {
+            step(match options.execution_provider {
+                SessionExecutionProvider::Cpu => format!(
+                    "failed to load CPU-only PPOCR ONNX model {}: {err}",
+                    path.display()
+                ),
+                SessionExecutionProvider::Cuda { device_id } => format!(
+                    "failed to load CUDA PPOCR ONNX model {} on device {device_id}: {err}",
+                    path.display()
+                ),
+                SessionExecutionProvider::Directml { device_id } => format!(
+                    "failed to load DirectML PPOCR ONNX model {} on DXGI adapter {device_id} (CPU nodes allowed): {err}",
+                    path.display()
+                ),
+            })
+        })
     }
-    diagnostics
-        .try_reserve(1)
-        .map_err(|error| format!("PPOCR diagnostic result allocation failed: {error}"))?;
-    let capture = Arc::new(Mutex::new(NodePlacementLogCapture::default()));
-    let logger_capture = Arc::clone(&capture);
-    let shadow_session = Session::builder()
-        .map_err(|err| format!("failed to create ONNXRuntime diagnostic session builder: {err}"))?
-        .with_intra_threads(1)
-        .map_err(|err| format!("failed to configure ONNXRuntime diagnostic threads: {err}"))?
-        .with_logger(Arc::new(move |_, _, _, _, message| {
-            match logger_capture.lock() {
-                Ok(mut state) => state.record(message),
-                Err(poisoned) => poisoned
-                    .into_inner()
-                    .fail("PPOCR node-placement diagnostic mutex is poisoned"),
-            }
-        }))
+}
+
+/// Ported from `configured_session_builder` of the GPU-0c experiment (`exp/407-gpu0-bench`
+/// `f9ba0c47`): ONNX Runtime's session builder with every option of `options` set, the one
+/// place that sets them. A CPU session sets one intra-op thread; a CUDA session also registers
+/// CUDA and disables CPU fallback, as before. A DirectML session turns the memory pattern off,
+/// runs sequentially and registers DirectML on its adapter, and never disables CPU fallback.
+fn configured_session_builder(
+    options: &SessionOptions,
+) -> Result<SessionBuilder, SessionBuildFailure> {
+    let step = |reason: GpuUnavailableReason, message: String| {
+        SessionBuildFailure::step(options, reason, message)
+    };
+    let failed = GpuUnavailableReason::SessionBuildFailed;
+    let builder = Session::builder()
         .map_err(|err| {
-            format!("failed to configure bounded PPOCR node-placement diagnostic: {err}")
-        })?
-        .with_log_level(LogLevel::Verbose)
-        .map_err(|err| format!("failed to enable verbose PPOCR node-placement diagnostic: {err}"))?
-        .with_log_verbosity(0)
-        .map_err(|err| format!("failed to bound PPOCR node-placement diagnostic: {err}"))?
-        .with_execution_providers([
-            ort::ep::CUDA::default()
-                .with_device_id(ordinal)
-                .build()
-                .error_on_failure(),
-        ])
-        .map_err(|err| {
-            format!(
-                "failed to register diagnostic CUDA execution provider for device {ordinal}: {err}"
+            step(
+                failed,
+                format!("failed to create ONNXRuntime session builder: {err}"),
             )
         })?
-        .commit_from_memory(model)
+        .with_intra_threads(options.intra_threads)
         .map_err(|err| {
-            format!(
-                "failed to initialize zero-inference CUDA PPOCR placement diagnostic for {} on device {ordinal}: {err}",
-                path.display()
+            step(
+                failed,
+                format!("failed to configure ONNXRuntime intra threads: {err}"),
             )
         })?;
-    let diagnostic = match capture.lock() {
-        Ok(state) => state.diagnostic(role),
+    let builder = match options.memory_pattern {
+        Some(enabled) => builder.with_memory_pattern(enabled).map_err(|err| {
+            step(
+                failed,
+                format!("failed to set the ONNXRuntime memory pattern to {enabled}: {err}"),
+            )
+        })?,
+        None => builder,
+    };
+    let builder = match options.parallel_execution {
+        Some(parallel) => builder.with_parallel_execution(parallel).map_err(|err| {
+            step(
+                failed,
+                format!("failed to set ONNXRuntime parallel execution to {parallel}: {err}"),
+            )
+        })?,
+        None => builder,
+    };
+    let builder = match options.execution_provider {
+        SessionExecutionProvider::Cpu => builder,
+        SessionExecutionProvider::Cuda { device_id } => builder
+            .with_execution_providers([
+                ort::ep::CUDA::default()
+                    .with_device_id(device_id)
+                    .build()
+                    .error_on_failure(),
+            ])
+            .map_err(|err| {
+                step(
+                    GpuUnavailableReason::ProviderRegisterFailed,
+                    format!(
+                        "failed to register required CUDA execution provider for device {device_id}; CPU/DirectML/CoreML fallback is disabled: {err}"
+                    ),
+                )
+            })?,
+        SessionExecutionProvider::Directml { device_id } => builder
+            .with_execution_providers([
+                ort::ep::DirectML::default()
+                    .with_device_id(device_id)
+                    .build()
+                    .error_on_failure(),
+            ])
+            .map_err(|err| {
+                step(
+                    GpuUnavailableReason::ProviderRegisterFailed,
+                    format!(
+                        "failed to register the DirectML execution provider on DXGI adapter {device_id}; CPU nodes are allowed: {err}"
+                    ),
+                )
+            })?,
+    };
+    if options.cpu_fallback_disabled {
+        builder.with_disable_cpu_fallback().map_err(|err| {
+            step(
+                failed,
+                format!("failed to disable PPOCR CPU fallback: {err}"),
+            )
+        })
+    } else {
+        Ok(builder)
+    }
+}
+
+/// One session to build: the model's bytes, its file (for messages), its role and, for
+/// DirectML, the adapter this build resolved.
+struct SessionRequest<'a> {
+    model: &'a [u8],
+    path: &'a Path,
+    role: PpocrModelRole,
+    adapter: Option<&'a ResolvedDirectmlAdapter>,
+}
+
+/// A built session and, when its node placement was read, how many of its nodes ONNX Runtime
+/// placed on the CPU.
+struct BuiltSession<S> {
+    session: S,
+    cpu_nodes: Option<usize>,
+}
+
+/// Builds one session of `plan` (Workflow #407 GPU-1 B1, design §2.1, §2.2). Its options come
+/// from [`session_options`] alone. A session that reads its node placement (DirectML always,
+/// CUDA when the diagnostic is requested) first builds the zero-inference shadow of
+/// [`read_node_placement`] from the same options; its report joins `diagnostics`.
+fn load_session_with<B: SessionBuilds>(
+    builds: &mut B,
+    request: &SessionRequest<'_>,
+    plan: &ProviderSessionPlan,
+    node_placement_diagnostic: Option<&str>,
+    diagnostics: &mut PpocrDiagnostics,
+) -> Result<BuiltSession<B::Session>, SessionBuildFailure> {
+    let options = session_options(plan).map_err(SessionBuildFailure::plain)?;
+    let device = session_device(&options, request.adapter)?;
+    let reads_placement = node_placement_diagnostic_requested(plan, node_placement_diagnostic)
+        .map_err(SessionBuildFailure::plain)?;
+    let cpu_nodes = if reads_placement {
+        Some(read_node_placement(
+            builds,
+            request,
+            &options,
+            device,
+            diagnostics,
+        )?)
+    } else {
+        None
+    };
+    let session = builds.build(request.model, request.path, &options, None)?;
+    Ok(BuiltSession { session, cpu_nodes })
+}
+
+/// The adapter a DirectML session's report names: the one this build resolved, which must be
+/// at the DXGI index the session registers.
+fn session_device(
+    options: &SessionOptions,
+    adapter: Option<&ResolvedDirectmlAdapter>,
+) -> Result<Option<PpocrDiagnosticDevice>, SessionBuildFailure> {
+    match (options.execution_provider, adapter) {
+        (SessionExecutionProvider::Directml { device_id }, Some(adapter)) => {
+            if u32::try_from(device_id).ok() != Some(adapter.dxgi_index) {
+                return Err(SessionBuildFailure::directml(
+                    GpuUnavailableReason::AdapterMissing,
+                    format!(
+                        "the DirectML adapter {} resolved at DXGI index {} but the session names index {device_id}",
+                        adapter.identity, adapter.dxgi_index
+                    ),
+                ));
+            }
+            Ok(Some(PpocrDiagnosticDevice {
+                identity: adapter.identity.clone(),
+                dxgi_index: adapter.dxgi_index,
+                luid: adapter.luid.to_string(),
+            }))
+        }
+        (SessionExecutionProvider::Directml { .. }, None) => Err(SessionBuildFailure::plain(
+            "a DirectML session build has no resolved adapter",
+        )),
+        (_, None) => Ok(None),
+        (_, Some(_)) => Err(SessionBuildFailure::plain(
+            "only a DirectML session build names a DirectML adapter",
+        )),
+    }
+}
+
+/// Reads where ONNX Runtime places the request's nodes under `options` (design §2.2): a
+/// zero-inference shadow session built from exactly `options` with a verbose logger, dropped
+/// before the session itself is built; no inference runs. A whole placement, checked against
+/// the provider the session registers, joins `diagnostics` as one v2 report, also when the
+/// shadow failed after logging it (a CUDA session refuses its CPU nodes only once they are
+/// placed): the shadow's failure is then the session's. A shadow that built but logged no whole
+/// placement is a session that cannot be built (`placement_unread`). Returns the CPU-placed node
+/// count.
+fn read_node_placement<B: SessionBuilds>(
+    builds: &mut B,
+    request: &SessionRequest<'_>,
+    options: &SessionOptions,
+    device: Option<PpocrDiagnosticDevice>,
+    diagnostics: &mut PpocrDiagnostics,
+) -> Result<usize, SessionBuildFailure> {
+    if diagnostics.len() >= PPOCR_MAX_DIAGNOSTIC_REPORTS {
+        return Err(SessionBuildFailure::plain(
+            "PPOCR invocation diagnostic report bound exceeded",
+        ));
+    }
+    diagnostics.try_reserve(1).map_err(|error| {
+        SessionBuildFailure::plain(format!(
+            "PPOCR diagnostic result allocation failed: {error}"
+        ))
+    })?;
+    let capture = Arc::new(Mutex::new(NodePlacementLogCapture::default()));
+    // A shadow that was built is dropped here, before anything else is built.
+    let shadow_failure = builds
+        .build(
+            request.model,
+            request.path,
+            options,
+            Some(placement_logger(&capture)),
+        )
+        .err()
+        .map(SessionBuildFailure::of_placement_shadow);
+    let read = match capture.lock() {
+        Ok(state) => state.diagnostic(request.role),
         Err(poisoned) => {
             let mut state = poisoned.into_inner();
             state.fail("PPOCR node-placement diagnostic mutex is poisoned");
-            state.diagnostic(role)
+            state.diagnostic(request.role)
         }
-    }?;
-    diagnostic.validate().map_err(|error| error.to_string())?;
-    diagnostics.push(Arc::new(diagnostic));
-    drop(shadow_session);
-    Ok(())
+    }
+    .and_then(|report| complete_placement_report(report, options, device));
+    match (read, shadow_failure) {
+        (Ok(report), shadow_failure) => {
+            let cpu_nodes = report.cpu_assigned_node_count;
+            diagnostics.push(Arc::new(report));
+            match shadow_failure {
+                Some(failure) => Err(failure),
+                None => Ok(cpu_nodes),
+            }
+        }
+        (Err(_), Some(failure)) => Err(failure),
+        (Err(unread), None) => Err(SessionBuildFailure::step(
+            options,
+            GpuUnavailableReason::PlacementUnread,
+            format!(
+                "the node placement of the PPOCR {} model {} cannot be read: {unread}",
+                request.role.as_str(),
+                request.path.display()
+            ),
+        )),
+    }
+}
+
+/// The verbose logger of a placement read: every message goes to `capture`.
+fn placement_logger(capture: &Arc<Mutex<NodePlacementLogCapture>>) -> LoggerFunction {
+    let sink = Arc::clone(capture);
+    Arc::new(
+        move |_: LogLevel, _: &str, _: &str, _: &str, message: &str| match sink.lock() {
+            Ok(mut state) => state.record(message),
+            Err(poisoned) => poisoned
+                .into_inner()
+                .fail("PPOCR node-placement diagnostic mutex is poisoned"),
+        },
+    )
+}
+
+/// A read report checked against the session: ONNX Runtime must have placed the accelerated
+/// nodes on the provider the session registered, and a DirectML report names its adapter.
+fn complete_placement_report(
+    mut report: NodePlacementDiagnostic,
+    options: &SessionOptions,
+    device: Option<PpocrDiagnosticDevice>,
+) -> Result<NodePlacementDiagnostic, String> {
+    let registered = options
+        .execution_provider
+        .accelerated_name()
+        .ok_or_else(|| "a CPU session has no node placement to read".to_string())?;
+    if report.accelerated_execution_provider != registered {
+        return Err(format!(
+            "ONNX Runtime placed nodes on {} but the session registered {registered}",
+            report.accelerated_execution_provider
+        ));
+    }
+    report.device = device;
+    report.validate().map_err(|error| error.to_string())?;
+    Ok(report)
 }
 
 fn recognize_region(
@@ -2015,6 +2812,9 @@ fn argmax_with_softmax_confidence(row: &[f32]) -> Result<(usize, f32), String> {
 enum ProviderInvokeError {
     Failure(String),
     Timeout(String),
+    /// Workflow #407 GPU-1 B1: a session built on first use (the detector) that could not be
+    /// built, with its own code and cause.
+    Session(SessionBuildFailure),
 }
 
 impl ProviderInvokeError {
@@ -2028,6 +2828,7 @@ impl ProviderInvokeError {
             Self::Timeout(message) => {
                 VisionFfiError::fatal_with_code(VisionFfiErrorCode::Timeout, ENGINE_MODULE, message)
             }
+            Self::Session(session) => session.into_error(),
         }
     }
 }
@@ -2035,6 +2836,12 @@ impl ProviderInvokeError {
 impl From<String> for ProviderInvokeError {
     fn from(message: String) -> Self {
         Self::Failure(message)
+    }
+}
+
+impl From<SessionBuildFailure> for ProviderInvokeError {
+    fn from(session: SessionBuildFailure) -> Self {
+        Self::Session(session)
     }
 }
 
@@ -2119,6 +2926,13 @@ mod tests {
         assert_eq!(diagnostic.model_role, "recognizer");
         assert_eq!(diagnostic.diagnostic_scope, "session_initialization_only");
         assert!(!diagnostic.inference_executed);
+        // Workflow #407 GPU-1 B1: the v2 report counts the accelerated provider's nodes too.
+        assert_eq!(
+            diagnostic.accelerated_execution_provider,
+            "CUDAExecutionProvider"
+        );
+        assert_eq!(diagnostic.accelerated_node_count, 2);
+        assert_eq!(diagnostic.device, None);
         assert_eq!(diagnostic.cpu_assigned_node_count, 2);
         assert_eq!(diagnostic.nodes[0].node_name, "gather_0");
         assert_eq!(diagnostic.nodes[0].operator_type, "Gather");
@@ -2133,8 +2947,9 @@ mod tests {
         let json = serde_json::to_value(diagnostic).expect("diagnostic JSON");
         assert_eq!(
             json["record_type"],
-            "actingcommand.ppocr_node_placement_diagnostic.v1"
+            "actingcommand.ppocr_node_placement_diagnostic.v2"
         );
+        assert_eq!(json["accelerated_node_count"], 2);
         assert_eq!(json["nodes"].as_array().expect("nodes").len(), 2);
     }
 
@@ -2167,6 +2982,13 @@ mod tests {
         assert_eq!(diagnostic.model_role, "detector");
         assert_eq!(diagnostic.diagnostic_scope, "session_initialization_only");
         assert!(!diagnostic.inference_executed);
+        // Workflow #407 GPU-1 B1: the v2 report counts the accelerated provider's nodes too.
+        assert_eq!(diagnostic.record_type, PPOCR_NODE_PLACEMENT_RECORD_TYPE);
+        assert_eq!(
+            diagnostic.accelerated_execution_provider,
+            "CUDAExecutionProvider"
+        );
+        assert_eq!(diagnostic.accelerated_node_count, 9);
         assert_eq!(diagnostic.cpu_assigned_node_count, 0);
         assert!(diagnostic.nodes.is_empty());
     }

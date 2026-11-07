@@ -538,6 +538,10 @@ impl From<&OcrSessionBinding> for OcrSessionIdentity {
 #[serde(rename_all = "snake_case")]
 pub enum OcrFallbackPolicy {
     Forbidden,
+    /// Workflow #407 GPU-1 B1 (design §2.1, §2.4): a DirectML session lets ONNX Runtime place
+    /// the nodes DirectML cannot run on the CPU; the attestation's `fallback_observed` says
+    /// whether a role that ran in the invocation has such a node.
+    CpuNodes,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

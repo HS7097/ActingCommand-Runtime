@@ -7599,6 +7599,53 @@ attestation (slice C admits its evidence).
 | GA-7 | `DIRECTML_RUNTIME_PIN` (ONNX Runtime 1.24.4, DirectML 1.15.4; `onnxruntime.dll` 17,328,152 B, `onnxruntime_providers_shared.dll` 22,040 B, `DirectML.dll` 18,527,776 B with their SHA-256) and `PinnedRuntimeFile::check` → `PinnedFileCheck {state (file_state), os_cause?}` | constant table, behaviour | GPU-1 A | — | design §5; the check (size, then SHA-256 in 64 KiB chunks) is for slices B1 and D, which call it |
 | GA-8 | `windows-tool-sources.v1.json` components `onnxruntime-directml-1.24.4` and `directml-1.15.4` (`download_zip` from `api.nuget.org`, size, SHA-256 and NuGet's base64 SHA-512, the x64 DLLs and license files allow-listed, `pinned_files` with `vision_root_path`, `task_local_cache_only`) | tool source | GPU-1 A | — | `Test-WindowsRemoteBuildTools.ps1` freezes both entries; README lists them |
 | GA-9 | `vision_gpu_unavailable` (warning, ladder class `none`, `since` 0.12.44, pending; values `execution_provider`, `gpu_unavailable_reason`, `gpu_fallback` required, `stage`, `model_name` optional), the keys `gpu_unavailable_reason` and `gpu_fallback` and their vocabularies (`GpuUnavailableReason`: `adapter_missing`, `adapter_ambiguous`, `adapter_not_physical`, `directml_library_missing`, `directml_library_mismatch`, `provider_register_failed`, `session_build_failed`, `placement_unread`; `GpuFallback`: `cpu` (default), `refuse`, also the future configuration value) | outcome code, keys, vocabularies | GPU-1 A | GPU-1 B2, D | `DirectmlUnavailable::outcome(gpu_fallback)` builds it with the OS failure as its `caused_by` link; the caller adds `stage` and `model_name`; no location is registered here |
+| GB1-1 | the session plan of a DirectML key: registered `[directml]`, the CPU EP not registered, CPU fallback allowed, `directml_device_id` the resolved adapter's DXGI index, fallback policy `cpu_nodes` | in-process type | GPU-1 B1 | — | design §2.1; the CPU and CUDA plans are unchanged and carry the policy `forbidden` |
+| GB1-2 | `SessionOptions {intra_threads, memory_pattern?, parallel_execution?, execution_provider (cpu \| cuda {device_id} \| directml {device_id}), cpu_fallback_disabled}` from `session_options(plan)`, their one source; `configured_session_builder(options)` (ported from GPU-0c `configured_session_builder`, `exp/407-gpu0-bench` `f9ba0c47`) sets them | in-process data, behaviour | GPU-1 B1 | — | CPU: one intra-op thread; CUDA: also CUDA on its ordinal and CPU fallback disabled (both as before); DirectML: one thread, memory pattern off, sequential execution, DirectML on the DXGI index, CPU fallback never disabled; a placement shadow and its session are built from the same value |
+| GB1-3 | the node placement read: before each DirectML session (always) and each CUDA session (only under `ACTINGCOMMAND_PPOCR_NODE_PLACEMENT_DIAGNOSTIC` `1`, which a DirectML session accepts as met and a CPU session still refuses) a zero-inference shadow with a verbose logger is built and dropped; the `Node placements` section is read per provider group in any order (CPU nodes listed, the accelerated provider's counted, a node without a name admitted there); a whole placement is checked against the registered provider and recorded, also when the shadow failed after logging it | behaviour | GPU-1 B1 | — | design §2.2; a shadow that built without a whole placement (no section, a group that ends early, a CPU group not fully listed, a summary that does not read, another or a second accelerated provider) is a session that cannot be built, `placement_unread`; only lines of the section are bound to 4 KiB |
+| GB1-4 | report `actingcommand.ppocr_node_placement_diagnostic.v2`: `PpocrNodePlacementDiagnostic` adds `accelerated_execution_provider`, `accelerated_node_count` and `device: PpocrDiagnosticDevice {identity, dxgi_index, luid}?`; `PPOCR_CPU_EXECUTION_PROVIDER`, `PPOCR_DIRECTML_EXECUTION_PROVIDER`, `PPOCR_MAX_EXECUTION_PROVIDER_NAME_BYTES` (64), `PPOCR_MAX_DEVICE_FIELD_BYTES` (64) | report shape (the content of the existing `DiagnosticJson` artifact) | GPU-1 B1 | — | `validate`: the provider is ASCII letters and digits, at most 64 B, never the CPU provider; `device` is present exactly for `DmlExecutionProvider`, its identity and LUID ASCII letters, digits, `:` and `-`, at most 64 B each; a CUDA report has no device; at most two reports per call as before |
+| GB1-5 | `OcrFallbackPolicy::CpuNodes` (`cpu_nodes`); a DirectML attestation carries it with `fallback_observed` = whether a role whose session ran in the invocation has a CPU-placed node | in-process type | GPU-1 B1 | — | design §2.4; CPU and CUDA attestations keep `forbidden` and no observation; a region read runs the recognizer, a full-frame read the detector and, per box kept, the recognizer |
+| GB1-6 | `establish_runtime` of `directml` in design §3's order: `onnxruntime.dll` equal to the pin (and to `expected_onnxruntime_sha256`), `onnxruntime_providers_shared.dll` and `DirectML.dll` checked with `PinnedRuntimeFile::check`, the adapter resolved, the closure `[providers_shared, DirectML.dll, onnxruntime]` loaded, the version equal to `1.24.4`, ONNX Runtime initialised, the executable hashed; `RuntimeFacts` keeps the resolved adapter | behaviour | GPU-1 B1 | — | an ONNX Runtime or providers library off the pin, or another version, is `ProviderUnavailable`; `DirectML.dll` absent is `directml_library_missing`, different or unreadable `directml_library_mismatch`; the CPU and CUDA paths are unchanged |
+| GB1-7 | every DirectML session build resolves its adapter again: the model load (recognizer) binds the session key to that build's identity and index; the detector, built on the first full-frame request, must find its adapter at the model's index; every build's identity must be the first load's; the LUID is recorded in the report, never compared | behaviour | GPU-1 B1 | — | design §1.4; a moved index is `adapter_missing` until the model is loaded again |
+| GB1-8 | `SessionBuildFailure {reason?, message, cause?}`: a DirectML failure names its `gpu_unavailable_reason` (the adapter and library reasons are `ProviderUnavailable`, `provider_register_failed`, `session_build_failed` and `placement_unread` are `ProviderFailure`; the message leads with `DirectML cannot be used (<reason>)`; the adapter listing's OS cause is kept) | in-process type | GPU-1 B1 | GPU-1 B2 | CPU and CUDA failures name no reason and keep their messages; the reason is what B2's warning `vision_gpu_unavailable` will carry |
+
+**Slice GPU-1 B1 (0.12.44): the engine's DirectML sessions and their node placement (coordinator work order `rd-1031/perf-407/brief-gpu1b1.md`; design §2.1, §2.2, §2.4, §3 and §7 row B1).** The engine (`actingcommand-ppocr-onnx-json-provider`) now initialises a DirectML runtime and builds
+DirectML sessions. In this slice every DirectML failure fails the request whatever `gpu_fallback`
+says: the CPU fallback of `gpu_fallback` `cpu` is slice B2. The configuration still refuses
+`directml` (slice D) and the kernel still refuses a DirectML attestation (slice C), so nothing
+selects these paths yet.
+
+**B1 tests.** New: exec row "#407 GPU-1 B1" (`gate_407_gpu1b1`, a fake ONNX Runtime that writes the
+verbose placement log into the logger it is given, a fake adapter, no GPU, no ONNX Runtime and no
+sleep): `directml_sessions_turn_off_memory_pattern_and_parallel_execution_and_allow_cpu_nodes`,
+`a_directml_load_records_its_placement_per_model_role` (detector 203/0 and recognizer 186/2, two
+v2 reports, `fallback_observed` true) and `an_unreadable_placement_is_a_session_that_cannot_be_built`.
+Changed, as the work order allows: `node_placement_diagnostic_records_exact_cpu_nodes_without_inference`
+(record type v2; it also asserts the accelerated provider `CUDAExecutionProvider` with its 2 nodes
+and no device) and `node_placement_diagnostic_reports_all_cuda_without_cpu_nodes` (record type
+v2; `CUDAExecutionProvider` with its 9 nodes); the fixture report of
+`crates/runtime-host/src/tests/gate_411_a36c.rs` gains the new members, its assertions unchanged.
+
+**B1 interface.** None: `actingd-config` 26, `ledger` 7, `runtime-client` 6, `package` 7,
+`runtime-outcomes` 1. The v2 report is the content of the existing `DiagnosticJson` artifact,
+which the ledger records by its metadata only and no reader decodes (design §6.2); the attestation
+stays in-process.
+
+**Where B1 differs from its work order's letter.** (a) The v2 report also carries the DirectML
+`device` design §2.2 names, so the fixture literal of `gate_411_a36c.rs` gains three members
+(`device: None` besides the two counts' members). (b) All session options come from one function
+for CUDA too: the CUDA diagnostic's shadow now has the CUDA session's options (CPU fallback
+disabled) instead of a lenient twin. A CUDA session with CPU nodes then fails in its shadow, and
+the placement ONNX Runtime logged before refusing them is still recorded with that failure, as the
+lenient twin's report was with the session's failure before. (c) `fallback_observed` follows the
+roles whose sessions ran, so a full-frame read that keeps no box (detector only) observes none.
+(d) The engine names `FileState`, `PpocrDiagnosticDevice` and the two provider-name constants
+through new re-exports in `crates/vision-ffi/src/lib.rs`, and the tests live in the new gate file
+`providers/ppocr-onnx-json/src/gate_407_gpu1b1.rs`.
+
+**What B1 changes live.** Nothing: no configuration selects DirectML. A CPU session, its attestation
+and its closure are unchanged; a CUDA node-placement diagnostic writes a v2 report.
+
+**B1 rollback** (to 0.12.43). Nothing persisted that a reader decodes.
 
 **Tests.** New: exec row "#407 GPU-1 A" (`gate_407_gpu1a`, fake adapter sources, placeholder
 libraries, no GPU and no sleep): `an_identity_resolves_the_one_physical_adapter_among_its_copies`,

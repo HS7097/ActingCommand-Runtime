@@ -213,6 +213,42 @@ path is never changed. A run on the CPU loads exactly the closure of earlier
 releases, `[onnxruntime_providers_shared.dll, onnxruntime.dll]`, whether or not
 `DirectML.dll` lies beside them.
 
+A DirectML runtime initialises on the first model load, in this order: the
+three files against the pin, the adapter, the closure, the version (`1.24.4`),
+ONNX Runtime, the executable's hash. An ONNX Runtime or providers library off
+the pin, or another version, fails with `ProviderUnavailable`; a missing or
+different `DirectML.dll` is `directml_library_missing` or
+`directml_library_mismatch`.
+
+### Sessions and node placement
+
+A DirectML session registers DirectML alone on the adapter's DXGI index, with
+one intra-op thread, the memory pattern off and sequential execution, and lets
+ONNX Runtime place the nodes DirectML cannot run on its CPU provider (the
+recognition model has such nodes). Every session build resolves the adapter
+again: the model load binds the model to that build's identity and index, and
+the detector, built on the first full-frame request, must find its adapter at
+that index (`adapter_missing` otherwise, until the model is loaded again).
+
+Before each DirectML session, the engine builds a zero-inference shadow
+session with exactly the same options and a verbose log, reads ONNX Runtime's
+`Node placements` section from it and drops it. The placement becomes one
+report `actingcommand.ppocr_node_placement_diagnostic.v2` per model role:
+`accelerated_execution_provider` (`DmlExecutionProvider`) with
+`accelerated_node_count`, `cpu_assigned_node_count` with each CPU-placed node,
+and `device {identity, dxgi_index, luid}`; it is archived as a `DiagnosticJson`
+artifact with the next request's result, as the CUDA diagnostic's report is. A
+placement that cannot be read whole is a session that cannot be built
+(`placement_unread`). `ACTINGCOMMAND_PPOCR_NODE_PLACEMENT_DIAGNOSTIC`, still
+`1` only, is met for a DirectML session, still turns the read on for a CUDA
+session (whose report has no `device`) and is still refused for a CPU session.
+
+A DirectML OCR invocation attests the fallback policy `cpu_nodes`, and
+`fallback_observed` says whether a role whose session ran has a CPU-placed node.
+Slice B1 builds these sessions; until slice B2 every DirectML failure (adapter,
+library, provider registration, session build, placement) fails the request,
+whatever `gpu_fallback` says.
+
 `vision_gpu_unavailable` (warning) says that the configured GPU execution
 provider cannot be used, with `gpu_unavailable_reason` and `gpu_fallback`
 (`cpu`: the work goes on on the CPU; `refuse`: OCR requests fail).
