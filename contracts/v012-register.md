@@ -7823,6 +7823,17 @@ fixture provider); adapted: `official_ocr_reads_directml_and_whole_model_fallbac
 whose two DirectML targets of one session (observed true and false) now read as one binding
 with three calls instead of two bindings. Interface unchanged.
 
+**C fix 2** (coordinator work order `rd-1031/perf-407/brief-gpu1c-fix2.md`, same PR #1535; main
+`c8ffe627` with slice B2 merged in). Settles (a): the kernel's `load_ocr` keeps the
+`OcrExecutionStatus` of `OcrModelLoad::Loaded` (GB2-5) beside the loaded model and drops it
+with the engine; `execution_warnings` shows the start's warning (GC-4, unchanged), then each
+distinct `warning` of the loaded OCR models' execution, read live: one for a model on the CPU
+after its own fallback, one for the process's fallback however many models carry it, none for a
+model on DirectML. Test: `a_model_on_cpu_after_fallback_shows_one_status_warning` now loads its
+model through a scripted loader that hands over B2's execution status (a model on the CPU after
+a fallback, attested as B2 attests it, and one the engine moves to the CPU after its load)
+instead of the start's warning standing in for the model's. Interface unchanged.
+
 **What C changes live.** Nothing until a configuration names `directml`: a `cpu` or `cuda`
 Runtime's evidence, rows and status are unchanged.
 
