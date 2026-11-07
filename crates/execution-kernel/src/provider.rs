@@ -285,6 +285,20 @@ impl<E: ?Sized, S> ModelSlot<E, S> {
         execution.current().warning
     }
 
+    /// Workflow #407 GPU-1 E: whether the loaded engine runs on a GPU now, as the execution status
+    /// its load handed over says (a provider other than the CPU); false for an engine without
+    /// one (an NN model, an engine built before the provider). The execution status's own lock
+    /// is taken after this account's is released.
+    fn runs_on_gpu(&self) -> bool {
+        let execution = self
+            .stats
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .execution
+            .clone();
+        execution.is_some_and(|execution| execution.current().actual != OnnxExecutionProvider::Cpu)
+    }
+
     /// #407 PERF-READ: the slot's loaded engine as the status shows it, when one is in memory.
     fn loaded_status(&self, kind: VisionModelKind) -> Option<VisionModelMemoryStatus> {
         let growth = self
@@ -567,7 +581,18 @@ impl VisionFfiProvider {
             timing.inference(|| catch_unwind(AssertUnwindSafe(|| call(engine, remaining))))
         };
         match outcome {
-            Ok(result) => result.map(|value| (value, identity)).map_err(map_ffi_error),
+            Ok(Ok(value)) => Ok((value, identity)),
+            Ok(Err(error)) => {
+                // Workflow #407 GPU-1 E (design §7 row E, §9 Q8): an engine on a GPU whose
+                // provider became unavailable while it ran (the device was removed or reset) is
+                // unloaded, not kept: the next request loads the model again, which resolves its
+                // adapter again and falls back as its configuration says. Every other failure,
+                // and every failure of an engine on the CPU, keeps the engine as before.
+                if error.code() == VisionFfiErrorCode::ProviderUnavailable && slot.runs_on_gpu() {
+                    self.unload(slot, &mut *cell);
+                }
+                Err(map_ffi_error(error))
+            }
             Err(_) => {
                 self.retire(
                     slot,
@@ -720,8 +745,15 @@ impl VisionFfiProvider {
     }
 
     fn retire<E: ?Sized, S>(&self, slot: &ModelSlot<E, S>, cell: &mut SlotCell<E>, reason: &str) {
-        cell.engine = None;
+        self.unload(slot, cell);
         cell.retired = Some(reason.to_string());
+    }
+
+    /// The slot's engine leaves memory and its place among the loaded models is free; unlike
+    /// [`Self::retire`], the slot stays usable and its next request loads the model again
+    /// (Workflow #407 GPU-1 E).
+    fn unload<E: ?Sized, S>(&self, slot: &ModelSlot<E, S>, cell: &mut SlotCell<E>) {
+        cell.engine = None;
         slot.note_unloaded();
         if cell.counted {
             cell.counted = false;

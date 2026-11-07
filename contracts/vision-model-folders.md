@@ -281,6 +281,18 @@ Slice B2 (design §1.4, §2.3). Under `gpu_fallback` `cpu` (the default):
   DirectML sessions still held are dropped, and the session generation steps.
   The model stays on the CPU until it is unloaded; a later load tries DirectML
   again, and a new fallback is a new warning.
+- **After a failed run** (slice E, design §9 Q8), a DirectML session whose run
+  fails (any ONNX Runtime error of the run, not its timeout: the device was
+  removed or reset) fails the request with `ProviderUnavailable`, `DirectML
+  cannot be used (inference_failed)`, and the kernel unloads the engine instead
+  of keeping it, so the model's next request builds it again: its adapter is
+  resolved again and the session-build rule above applies. When the first
+  invocation of that rebuilt model fails the same way, the model runs whole on
+  the CPU from its next load until the process ends, with one warning that names
+  it (`inference_failed`, ONNX Runtime's status as its link); a rebuilt model
+  whose first invocation succeeds is sound again. The kernel unloads an engine
+  its load reported on a GPU whenever it answers `ProviderUnavailable`, so under
+  `refuse` a detector whose adapter no longer resolves unloads its model too.
 
 A model on the CPU after a fallback keeps the key that requests `directml`, with
 the selector and no resolved adapter (its provider options digest names the CPU
@@ -292,5 +304,7 @@ provider and the warning), which the engine updates when a detector moves the
 model. Under `refuse` every such failure fails the request as before
 (`ProviderUnavailable` for an adapter or library reason, `ProviderFailure` for
 the others, the message leading with `DirectML cannot be used (<reason>)`), and
-the next request tries again. An NN classifier runs on the CPU under `directml`,
+the next request tries again; a failed run builds the model again on the next
+request every time. A model on the CPU, and every other failure, keeps its
+engine as before. An NN classifier runs on the CPU under `directml`,
 which is no fallback and has no warning.

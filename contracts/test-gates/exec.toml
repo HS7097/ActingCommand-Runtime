@@ -2829,3 +2829,11 @@ tests = [
     "actingcommand-execution-kernel::lib::contained_task::post_admission_ocr_tests::a_directml_target_with_and_without_boxes_keeps_one_binding",
 ]
 incident = ["#407 GPU-1 C"]
+
+# Workflow #407 GPU-1 E (0.12.44; register §1.286; brief rd-1031/perf-407/brief-gpu1e.md; design rd-1031/perf-407/design-gpu1.md §7 row E and §9 Q8): over a fake ONNX Runtime and fake adapters, a failed run of a model on DirectML is ProviderUnavailable, DirectML cannot be used (inference_failed), the code on which the kernel unloads an engine on a GPU, and the next load builds the model again, resolving its adapter again (at its new DXGI index); when the first run after that rebuild fails too, under gpu_fallback cpu every later load runs the whole model on the CPU (DirectML not tried, cpu_model, fallback_observed true) with one vision_gpu_unavailable that names the model with ONNX Runtime's status as its link, until the process ends; a rebuilt model whose first invocation succeeds is sound again, so a later failure builds it again once more; a rebuild whose adapter no longer resolves falls back as B2 does; a timeout or a failure that is no run, a failed run of a model on the CPU and of a cpu configuration keep their errors (Timeout, ProviderFailure with the message as before) and change nothing; under refuse every failed run builds the model again and it never moves to the CPU
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ppocr-onnx-json-provider::lib::gate_407_gpu1e::a_failed_gpu_run_rebuilds_the_model_once_then_falls_back",
+]
+incident = ["#407 GPU-1 E"]
