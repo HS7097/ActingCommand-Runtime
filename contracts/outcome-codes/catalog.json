@@ -1197,6 +1197,14 @@
       "type": "vocab:execution_provider",
       "description": "A vision execution provider."
     },
+    "gpu_unavailable_reason": {
+      "type": "vocab:gpu_unavailable_reason",
+      "description": "Why the configured GPU execution provider cannot be used (Workflow #407 GPU-1 A)."
+    },
+    "gpu_fallback": {
+      "type": "vocab:gpu_fallback",
+      "description": "What the process does when the configured GPU execution provider cannot be used: the value of vision.gpu_fallback (Workflow #407 GPU-1 A)."
+    },
     "folder": {
       "type": "vocab:folder",
       "description": "A shell folder."
@@ -5492,12 +5500,69 @@
     },
     "execution_provider": {
       "description": "A vision execution provider.",
+      "source": {
+        "file": "crates/vision-ffi/src/artifacts.rs",
+        "enum": "OnnxExecutionProvider"
+      },
       "tokens": {
         "cpu": {
           "description": "CPU."
         },
         "cuda": {
           "description": "CUDA."
+        },
+        "directml": {
+          "description": "DirectML on one DXGI adapter (Workflow #407 GPU-1)."
+        }
+      }
+    },
+    "gpu_unavailable_reason": {
+      "description": "Why the configured GPU execution provider cannot be used: the value of vision_gpu_unavailable (Workflow #407 GPU-1 A, design rd-1031/perf-407/design-gpu1.md sections 1.3, 2.3 and 2.5).",
+      "review": "pending",
+      "source": {
+        "file": "crates/vision-ffi/src/codes.rs",
+        "enum": "GpuUnavailableReason"
+      },
+      "tokens": {
+        "adapter_missing": {
+          "description": "No DXGI adapter has the configured identity, or the adapters cannot be listed."
+        },
+        "adapter_ambiguous": {
+          "description": "Two or more physical adapters have the configured identity, and their PCI locations do not single one out."
+        },
+        "adapter_not_physical": {
+          "description": "Adapters have the configured identity, but each is an indirect-display, software or paravirtualized copy, or its kernel adapter type could not be read."
+        },
+        "directml_library_missing": {
+          "description": "The vision root's ort\\DirectML.dll is missing."
+        },
+        "directml_library_mismatch": {
+          "description": "The vision root's ort\\DirectML.dll differs from the runtime pin."
+        },
+        "provider_register_failed": {
+          "description": "ONNX Runtime refused to register the DirectML execution provider (no driver, no Direct3D 12 device, not enough memory)."
+        },
+        "session_build_failed": {
+          "description": "ONNX Runtime could not build a session on the DirectML execution provider."
+        },
+        "placement_unread": {
+          "description": "The node placement of a DirectML session could not be read in full."
+        }
+      }
+    },
+    "gpu_fallback": {
+      "description": "What the process does when the configured GPU execution provider cannot be used: the value of vision.gpu_fallback, cpu when absent (Workflow #407 GPU-1 A, design rd-1031/perf-407/design-gpu1.md sections 1.2 and 2.3).",
+      "review": "pending",
+      "source": {
+        "file": "crates/vision-ffi/src/codes.rs",
+        "enum": "GpuFallback"
+      },
+      "tokens": {
+        "cpu": {
+          "description": "The model runs on the CPU, with one warning."
+        },
+        "refuse": {
+          "description": "OCR requests fail as they did before the fallback existed."
         }
       }
     },

@@ -10,13 +10,20 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+// Workflow #407 GPU-1 A: the DXGI adapters and the one a DirectML configuration names.
+pub mod adapters;
 pub mod artifacts;
 pub mod codes;
 pub mod ffi;
+// Workflow #407 GPU-1 A: adapter selection, the DirectML closure and the runtime pin.
+#[cfg(test)]
+mod gate_407_gpu1a;
 // Test plan v2.2 E-1 G9 (exec key 25): the model folder listing.
 #[cfg(test)]
 mod gate_e1;
 pub mod models;
+// Workflow #407 GPU-1 A: the pinned DirectML runtime of a vision root.
+pub mod runtime_pin;
 
 use actingcommand_contract::outcome::Outcome;
 pub use actingcommand_contract::{
@@ -26,10 +33,12 @@ pub use actingcommand_contract::{
     PPOCR_NODE_PLACEMENT_RECORD_TYPE, PpocrCpuAssignedNodeDiagnostic, PpocrDiagnostics,
     PpocrNodePlacementDiagnostic, PpocrNodePlacementReason, validate_ppocr_call_diagnostics,
 };
+pub use adapters::*;
 pub use artifacts::*;
-pub use codes::VisionListingCode;
+pub use codes::{GpuFallback, GpuUnavailableReason, VisionGpuCode, VisionListingCode};
 pub use ffi::*;
 pub use models::*;
+pub use runtime_pin::*;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt;

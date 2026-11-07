@@ -10,7 +10,11 @@ daemon live in one vision root; a recognition pack names a model by
 <vision root>\
   ort\onnxruntime.dll                    required when `vision` is configured
   ort\onnxruntime_providers_shared.dll   optional; loaded first when present
+                                         (required for execution_provider directml)
   ort\onnxruntime_providers_cuda.dll     required for execution_provider cuda
+  ort\DirectML.dll                       execution_provider directml only; see "DirectML runtime"
+  ort\licenses\onnxruntime\, ort\licenses\directml\
+                                         the DirectML runtime's license files; not read
   models\<name>\                         one folder per model; <name> is its model_ref
 ```
 
@@ -141,3 +145,74 @@ target's `timeout_ms`; the model's own load does not.
 An OCR recognizer's output class count must be the dictionary size plus one
 (the CTC blank) or plus two (the blank and the space class); any other count
 fails the load naming both counts.
+
+## DirectML runtime
+
+Workflow #407 GPU-1 (design `rd-1031/perf-407/design-gpu1.md`, register §1.286).
+Slice A brings the parts below into the engine's boundary crate; the
+configuration that selects `directml` comes with slice D and the engine's
+DirectML sessions with slices B1 and B2. Until then the configuration refuses
+`directml` (`vision_config_invalid`) and every OCR request runs as before.
+The CUDA path of this build is known not to work (GPU-0d, GPU-0e).
+
+### Pinned files
+
+A DirectML runtime is ONNX Runtime 1.24.4's DirectML build with DirectML
+1.15.4, pinned in `crates/vision-ffi/src/runtime_pin.rs`:
+
+| File under `ort\` | Size (B) | SHA-256 | Source |
+|---|---|---|---|
+| `onnxruntime.dll` | 17,328,152 | `e7eedec6a6f26dc39dc948276a75ef6d2bee3fff944d874ceed0bbd3b97bff40` | NuGet `Microsoft.ML.OnnxRuntime.DirectML` 1.24.4, `runtimes/win-x64/native/` |
+| `onnxruntime_providers_shared.dll` | 22,040 | `265c8daf29637cb259cac8be9f08f2cd45f3883f0f0e4949cbfddd5b4cbec3b6` | the same package |
+| `DirectML.dll` | 18,527,776 | `9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1` | NuGet `Microsoft.AI.DirectML` 1.15.4, `bin/x64-win/` |
+
+The same sizes and digests are the `pinned_files` of the components
+`onnxruntime-directml-1.24.4` and `directml-1.15.4` in
+`scripts/windows-tools/windows-tool-sources.v1.json`, which reproduce the files
+from the official NuGet URLs; a logic test holds the two equal. The pin is no
+setting. The Runtime package, the Tools package and the installer do not carry
+these files: whoever places them copies them, and each package's license files
+to `ort\licenses\onnxruntime\` and `ort\licenses\directml\`. The ONNX Runtime
+of a DirectML runtime must be the pinned one (`expected_onnxruntime_sha256` is
+the pin's); `onnxruntime_providers_shared.dll` is required beside it.
+
+### Adapter identity and selection
+
+The configuration names one DXGI adapter by its stable identity
+`dxgi-pci:<vendor>:<device>:<subsys>:<rev>`: the `VendorId`, `DeviceId`,
+`SubSysId` and `Revision` of `DXGI_ADAPTER_DESC1` in lowercase hexadecimal of 4,
+4, 8 and 2 digits. It never names a DXGI index or a LUID, which change between
+boots. Each resolution:
+
+1. lists every adapter with `CreateDXGIFactory1` and `EnumAdapters1`, in that
+   order, which is the order ONNX Runtime's DirectML `device_id` indexes, and
+   reads each adapter's kernel type (`D3DKMT_ADAPTERTYPE`) and PCI location
+   (`D3DKMT_ADAPTERADDRESS`) by its LUID; `dxgi.dll` and `gdi32.dll` are loaded
+   from System32 only;
+2. keeps the adapters with the configured identity;
+3. of those, keeps the physical ones: the kernel type was read, it supports
+   rendering, and it is neither a software, an indirect-display nor a
+   paravirtualized device (a software adapter by DXGI's flag counts too);
+4. when two or more remain, keeps those whose PCI location could be read;
+5. requires exactly one, and hands its index in this listing to ONNX Runtime.
+
+No adapter with the identity is `adapter_missing` (a listing that cannot be read
+too), only copies `adapter_not_physical`, and more than one `adapter_ambiguous`.
+Another adapter is never used in place of the configured one. The resolution
+records every adapter it listed and, for the chosen one, its identity, index and
+LUID; the LUID is an observation only and is never compared. A DirectML OCR
+session is bound to the identity and the index (`OcrSessionKey`, and the
+provider options digest), not to the LUID.
+
+### Loading
+
+A DirectML run loads, by absolute path, `ort\onnxruntime_providers_shared.dll`,
+then `ort\DirectML.dll`, then `ort\onnxruntime.dll`: ONNX Runtime later asks for
+`DirectML.dll` by name and finds the module already loaded. The process DLL search
+path is never changed. A run on the CPU loads exactly the closure of earlier
+releases, `[onnxruntime_providers_shared.dll, onnxruntime.dll]`, whether or not
+`DirectML.dll` lies beside them.
+
+`vision_gpu_unavailable` (warning) says that the configured GPU execution
+provider cannot be used, with `gpu_unavailable_reason` and `gpu_fallback`
+(`cpu`: the work goes on on the CPU; `refuse`: OCR requests fail).

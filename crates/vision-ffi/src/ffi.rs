@@ -24,7 +24,7 @@ static NEXT_OCR_SESSION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static NEXT_OCR_INVOCATION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(any(windows, test))]
-enum RuntimeLibraryClosureState<H> {
+pub(crate) enum RuntimeLibraryClosureState<H> {
     Uninitialized,
     Ready {
         identity: Vec<PathBuf>,
@@ -63,7 +63,7 @@ fn require_same_runtime_library_closure(
 }
 
 #[cfg(any(windows, test))]
-fn establish_runtime_library_closure_with<H, F>(
+pub(crate) fn establish_runtime_library_closure_with<H, F>(
     closure: &Mutex<RuntimeLibraryClosureState<H>>,
     declared_paths: &[PathBuf],
     mut load: F,

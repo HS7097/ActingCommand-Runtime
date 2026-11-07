@@ -106,6 +106,19 @@ on drive `D:`. Component selection is explicit:
   `onnxruntime_providers_shared.dll`, and `onnxruntime_providers_cuda.dll` under
   fixed file-count and byte bounds. It does not infer or copy CUDA/cuDNN/driver
   files from `PATH`, System32, or another cache.
+- `onnxruntime-directml-1.24.4` and `directml-1.15.4` (Workflow #407 GPU-1)
+  download the official NuGet packages `Microsoft.ML.OnnxRuntime.DirectML` 1.24.4
+  and `Microsoft.AI.DirectML` 1.15.4 from `api.nuget.org` (size and SHA-256 pinned;
+  NuGet's published SHA-512 is recorded as `official_sha512_base64`) and extract
+  only the x64 `onnxruntime.dll` and `onnxruntime_providers_shared.dll`, the x64
+  `DirectML.dll`, and each package's license files. These are the DirectML runtime
+  of a vision root: neither the Runtime package, the Tools package nor the
+  installer carries them. Whoever places them copies each `pinned_files` entry to
+  its `vision_root_path` under the vision root and the license files to
+  `ort\licenses\onnxruntime\` and `ort\licenses\directml\`
+  (`contracts/vision-model-folders.md`). The sizes and SHA-256 of `pinned_files`
+  equal the runtime pin in `crates/vision-ffi/src/runtime_pin.rs` (a logic test
+  holds them equal, and `Test-WindowsRemoteBuildTools.ps1` freezes both entries).
 - `mumu-nemu-installed` records metadata for one explicit installed root and
   `nx_device` version. Vendor files remain in place and are never copied or run.
 
