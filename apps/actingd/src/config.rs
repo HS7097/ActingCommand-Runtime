@@ -31,8 +31,11 @@ use actingcommand_runtime_host::{
     RuntimeHostError, VisionFfiProvider, VisionSpec,
 };
 use actingcommand_vision_ffi::{
-    CudaDeviceSelector, OnnxExecutionProvider, VISION_MODELS_DIRECTORY, VisionListingCode,
-    VisionModelListing, VisionRuntimeSpec, list_vision_models,
+    AdapterSource, CudaDeviceSelector, DIRECTML_RUNTIME_PIN, DirectmlAdapterResolution,
+    DirectmlDeviceSelector, DirectmlRuntimePin, GpuFallback, GpuUnavailableReason,
+    OnnxExecutionProvider, PinnedFileCheck, SystemAdapterSource, VISION_MODELS_DIRECTORY,
+    VISION_RUNTIME_DIRECTORY, VisionGpuCode, VisionListingCode, VisionModelListing,
+    VisionRuntimeSpec, list_vision_models, resolve_directml_adapter,
 };
 use serde::{Deserialize, Deserializer};
 use std::collections::{BTreeMap, BTreeSet};
@@ -77,6 +80,10 @@ mod gate_agt_1a;
 // Test-only: #402 HS-1, the instances' backend rows and `nemu_app_index` as revision 26 reads it.
 #[cfg(test)]
 mod gate_hs1;
+// Test-only: Workflow #407 GPU-1 D, the `directml` vision section (revision 27), its startup
+// record and its check-config report, over a fake adapter source and a fixture runtime pin.
+#[cfg(test)]
+mod gate_407_gpu1d;
 
 const CONFIG_SCHEMA_VERSION: &str = "actingcommand.actingd.config.v1";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
@@ -501,11 +508,26 @@ fn retired_key_present<'de, D: Deserializer<'de>>(deserializer: D) -> Result<boo
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct VisionConfigFile {
-    /// `cpu` or `cuda`, for every OCR and NN model of the process.
+    /// `cpu`, `cuda` or (Workflow #407 GPU-1 D) `directml`, for every OCR and NN model of the
+    /// process.
+    // Interface anchor `actingd-config` revision 27 (contracts/component-interfaces.md): Runtime
+    // 0.12.43 refuses `directml` (an unknown value) and `directml_device` and `gpu_fallback` (the
+    // section denies unknown members); a file that names none of them keeps its revision.
     execution_provider: OnnxExecutionProvider,
-    /// Required for `cuda`, refused for `cpu`.
+    /// Required for `cuda`, refused for `cpu` and `directml`.
     #[serde(default)]
     cuda_device: Option<CudaDeviceSelector>,
+    /// Workflow #407 GPU-1 D (design §1.2): the one DXGI adapter `directml` runs on, by its
+    /// stable identity `dxgi-pci:<vendor>:<device>:<subsys>:<rev>`; required for `directml`,
+    /// refused for `cpu` and `cuda`. It names no DXGI index and no LUID.
+    #[serde(default)]
+    directml_device: Option<DirectmlDeviceSelector>,
+    /// Workflow #407 GPU-1 D (design §1.2): what the process does when DirectML cannot be used,
+    /// `cpu` (the default when absent: the work goes on on the CPU, with one warning) or
+    /// `refuse` (OCR requests fail); only with `directml`. Like the whole section it takes
+    /// effect at the next Runtime start and is no setting a running Runtime changes.
+    #[serde(default)]
+    gpu_fallback: Option<GpuFallback>,
     /// Overrides the default root (`<install root>\vision`, else `<config dir>\vision`); a
     /// relative path resolves against the configuration file's directory.
     #[serde(default)]
@@ -518,11 +540,32 @@ impl VisionConfigFile {
         source_root: &Path,
         install_root: Option<&Path>,
     ) -> Result<ConfiguredVision, Code> {
-        match (self.execution_provider, &self.cuda_device) {
-            (OnnxExecutionProvider::Cpu, None) => {}
-            (OnnxExecutionProvider::Cuda, Some(selector)) if selector.validate().is_ok() => {}
+        // Workflow #407 GPU-1 D (design §1.2): `directml` needs its adapter selector and names
+        // no CUDA selector; `cpu` and `cuda` name neither DirectML member.
+        let directml = match (
+            self.execution_provider,
+            &self.cuda_device,
+            self.directml_device,
+            self.gpu_fallback,
+        ) {
+            (OnnxExecutionProvider::Cpu, None, None, None) => None,
+            (OnnxExecutionProvider::Cuda, Some(selector), None, None)
+                if selector.validate().is_ok() =>
+            {
+                None
+            }
+            (OnnxExecutionProvider::Directml, None, Some(device), gpu_fallback)
+                if device.validate().is_ok() =>
+            {
+                Some(ConfiguredDirectml {
+                    device,
+                    gpu_fallback: gpu_fallback.unwrap_or_default(),
+                    pin: DIRECTML_RUNTIME_PIN,
+                    adapters: Arc::new(SystemAdapterSource),
+                })
+            }
             _ => return Err(ActingdCode::VisionConfigInvalid.code()),
-        }
+        };
         let (configured, base) = match self.root {
             Some(root) if root.as_os_str().is_empty() => {
                 return Err(ActingdCode::VisionConfigInvalid.code());
@@ -539,6 +582,7 @@ impl VisionConfigFile {
             install_root: install_root.map(Path::to_path_buf),
             execution_provider: self.execution_provider,
             cuda_device: self.cuda_device,
+            directml,
         })
     }
 }
@@ -555,6 +599,132 @@ pub(super) struct ConfiguredVision {
     install_root: Option<PathBuf>,
     execution_provider: OnnxExecutionProvider,
     cuda_device: Option<CudaDeviceSelector>,
+    /// Workflow #407 GPU-1 D: the DirectML part of a `directml` section, absent otherwise.
+    directml: Option<ConfiguredDirectml>,
+}
+
+/// Workflow #407 GPU-1 D (design §1.2-§1.4, §5): the DirectML part of a `directml` section, with
+/// what it is checked against: the runtime pin and the system's DXGI adapters (a test gives a
+/// fixture pin and a fake adapter source).
+pub(super) struct ConfiguredDirectml {
+    device: DirectmlDeviceSelector,
+    gpu_fallback: GpuFallback,
+    pin: DirectmlRuntimePin,
+    adapters: Arc<dyn AdapterSource + Send + Sync>,
+}
+
+/// Workflow #407 GPU-1 D (design §1.4, §2.5): what a `directml` section finds before ONNX
+/// Runtime is initialised: every adapter and the one the identity resolves to, and why DirectML
+/// cannot be used when it cannot. Neither startup nor check-config fails on it; the first OCR
+/// model load decides again, and that decision is the one in effect.
+pub(super) struct DirectmlFinding {
+    pub(super) resolution: DirectmlAdapterResolution,
+    /// Why DirectML cannot be used, with its `vision_gpu_unavailable` warning (no `stage` yet);
+    /// `None` when the adapter resolves and `ort\DirectML.dll` is the pinned one.
+    unavailable: Option<(GpuUnavailableReason, Outcome)>,
+}
+
+impl DirectmlFinding {
+    /// Why DirectML cannot be used, `None` when it can.
+    pub(super) fn unavailable(&self) -> Option<GpuUnavailableReason> {
+        self.unavailable.as_ref().map(|(reason, _)| *reason)
+    }
+
+    /// The warning `vision_gpu_unavailable` at `stage`, `None` when DirectML can be used.
+    pub(super) fn warning(&self, stage: crate::codes::ActingdLocation) -> Option<Outcome> {
+        self.unavailable
+            .as_ref()
+            .map(|(_, warning)| warning.clone().stage(stage))
+    }
+}
+
+impl ConfiguredDirectml {
+    pub(super) fn device(&self) -> &DirectmlDeviceSelector {
+        &self.device
+    }
+
+    pub(super) const fn gpu_fallback(&self) -> GpuFallback {
+        self.gpu_fallback
+    }
+
+    /// Test-only: the runtime pin and the adapter source the section is checked against.
+    #[cfg(test)]
+    pub(super) fn set_probe(
+        &mut self,
+        pin: DirectmlRuntimePin,
+        adapters: Arc<dyn AdapterSource + Send + Sync>,
+    ) {
+        self.pin = pin;
+        self.adapters = adapters;
+    }
+
+    /// Design §5: ONNX Runtime's DirectML build under `ort\` must be the pinned one,
+    /// `onnxruntime.dll` and then `onnxruntime_providers_shared.dll`; a file that is missing,
+    /// differs from the pin or cannot be read refuses the root (`vision_runtime_unavailable`
+    /// with the file as `path`, the OS failure as its link). `DirectML.dll` is not checked
+    /// here: without it the process runs on the CPU ([`Self::find`]).
+    fn check_runtime_pin(&self, root: &Path) -> Result<(), VisionRefusal> {
+        let directory = root.join(VISION_RUNTIME_DIRECTORY);
+        for pinned in [&self.pin.onnxruntime, &self.pin.providers_shared] {
+            let path = directory.join(pinned.file_name);
+            let checked = pinned.check(&path);
+            let state = checked.state;
+            if state == actingcommand_contract::outcome::FileState::Ok {
+                continue;
+            }
+            return Err(VisionRefusal {
+                code: ActingdCode::VisionRuntimeUnavailable.code(),
+                message: format!(
+                    "{} is not the pinned file of ONNX Runtime {}'s DirectML build ({state}; the pin is {} B with SHA-256 {}), which execution_provider directml needs",
+                    path.display(),
+                    self.pin.onnxruntime_version,
+                    pinned.size,
+                    pinned.sha256
+                ),
+                cause: checked.os_cause,
+                path: Some(path),
+            });
+        }
+        Ok(())
+    }
+
+    /// Design §1.3, §1.4: resolves the configured adapter over the adapter source and judges
+    /// `ort\DirectML.dll` (`library`, its check against the pin): a library that is missing is
+    /// `directml_library_missing`, one that differs or cannot be read
+    /// `directml_library_mismatch` (with the OS failure as the warning's link), and otherwise
+    /// the adapter resolution decides. The adapters are listed either way.
+    pub(super) fn find(&self, library: &PinnedFileCheck) -> DirectmlFinding {
+        use actingcommand_contract::outcome::FileState;
+        let resolution = resolve_directml_adapter(&*self.adapters, &self.device);
+        let warning = |reason: GpuUnavailableReason| {
+            Outcome::new(VisionGpuCode::VisionGpuUnavailable)
+                .execution_provider(OnnxExecutionProvider::Directml)
+                .gpu_unavailable_reason(reason)
+                .gpu_fallback(self.gpu_fallback)
+        };
+        let unavailable =
+            match library.state {
+                FileState::Missing => {
+                    let reason = GpuUnavailableReason::DirectmlLibraryMissing;
+                    Some((reason, warning(reason)))
+                }
+                FileState::Sha256Mismatch | FileState::Unreadable => {
+                    let reason = GpuUnavailableReason::DirectmlLibraryMismatch;
+                    let outcome = match library.os_cause.clone() {
+                        Some(cause) => warning(reason).caused_by(cause),
+                        None => warning(reason),
+                    };
+                    Some((reason, outcome))
+                }
+                FileState::Ok => resolution.decision.as_ref().err().map(|unavailable| {
+                    (unavailable.reason, unavailable.outcome(self.gpu_fallback))
+                }),
+            };
+        DirectmlFinding {
+            resolution,
+            unavailable,
+        }
+    }
 }
 
 /// What one inspection of the vision root found: the cheap listing startup and
@@ -565,6 +735,9 @@ pub(super) struct VisionInventory {
     pub(super) models_dir: PathBuf,
     pub(super) runtime: VisionRuntimeSpec,
     pub(super) listing: VisionModelListing,
+    /// Workflow #407 GPU-1 D: for a `directml` section, `ort\DirectML.dll` against the runtime
+    /// pin; `None` for every other provider.
+    pub(super) directml_library: Option<PinnedFileCheck>,
 }
 
 /// Why a vision root cannot be used: the classification and its message.
@@ -574,6 +747,25 @@ pub(super) struct VisionRefusal {
     /// The foreign failure behind the refusal, when the OS reported one (ledger revision 3:
     /// the provider startup record carries it as the refusal's `caused_by` link).
     pub(super) cause: Option<Outcome>,
+    /// Workflow #407 GPU-1 D: the runtime file a `vision_runtime_unavailable` names (its `path`),
+    /// when one file is at fault.
+    pub(super) path: Option<PathBuf>,
+}
+
+impl VisionRefusal {
+    /// The refusal's outcome: its code, the file at fault as `path`, the OS failure as its
+    /// `caused_by` link.
+    pub(super) fn outcome(&self) -> Outcome {
+        let outcome = Outcome::new(self.code);
+        let outcome = match &self.path {
+            Some(path) => outcome.path(path),
+            None => outcome,
+        };
+        match self.cause.clone() {
+            Some(cause) => outcome.caused_by(cause),
+            None => outcome,
+        }
+    }
 }
 
 impl ConfiguredVision {
@@ -589,10 +781,24 @@ impl ConfiguredVision {
         self.execution_provider
     }
 
+    /// Workflow #407 GPU-1 D: the DirectML part of a `directml` section.
+    pub(super) fn directml(&self) -> Option<&ConfiguredDirectml> {
+        self.directml.as_ref()
+    }
+
+    /// Test-only: the DirectML part, to give it a fixture pin and a fake adapter source.
+    #[cfg(test)]
+    pub(super) fn directml_mut(&mut self) -> Option<&mut ConfiguredDirectml> {
+        self.directml.as_mut()
+    }
+
     /// Lists the vision root: the root must exist outside the install root's program slots,
     /// `models\` must be readable and hold at least one folder, and `ort\onnxruntime.dll` must
     /// be present (with the CUDA provider library for `cuda`). A folder that breaks the
-    /// folder rule is listed as invalid, not refused.
+    /// folder rule is listed as invalid, not refused. Workflow #407 GPU-1 D (design §5): for
+    /// `directml` ONNX Runtime's DirectML build must be the pinned one (`onnxruntime.dll` and
+    /// `onnxruntime_providers_shared.dll`, both hashed), and `ort\DirectML.dll` is hashed
+    /// against the pin and reported, never refused.
     pub(super) fn inspect(&self) -> Result<VisionInventory, VisionRefusal> {
         let configured = if self.configured.is_absolute() {
             self.configured.clone()
@@ -609,6 +815,7 @@ impl ConfiguredVision {
                 &error,
                 actingcommand_contract::outcome::IoOp::Canonicalize,
             )),
+            path: None,
         })?;
         if let Some(install_root) = &self.install_root
             && ["A", "B"]
@@ -623,6 +830,7 @@ impl ConfiguredVision {
                     install_root.display()
                 ),
                 cause: None,
+                path: None,
             });
         }
         let models_dir = root.join(VISION_MODELS_DIRECTORY);
@@ -630,22 +838,45 @@ impl ConfiguredVision {
             code: VisionListingCode::VisionRootUnavailable.code(),
             message: error.message().to_owned(),
             cause: error.os_cause().cloned(),
+            path: None,
         })?;
-        let runtime = VisionRuntimeSpec::from_vision_root(
-            &root,
-            self.execution_provider,
-            self.cuda_device.clone(),
-        )
-        .map_err(|error| VisionRefusal {
+        let runtime_unavailable = |error: actingcommand_vision_ffi::VisionFfiError| VisionRefusal {
             code: ActingdCode::VisionRuntimeUnavailable.code(),
             message: error.message().to_owned(),
             cause: error.os_cause().cloned(),
-        })?;
+            path: None,
+        };
+        let (runtime, directml_library) = match &self.directml {
+            None => (
+                VisionRuntimeSpec::from_vision_root(
+                    &root,
+                    self.execution_provider,
+                    self.cuda_device.clone(),
+                )
+                .map_err(runtime_unavailable)?,
+                None,
+            ),
+            Some(directml) => {
+                directml.check_runtime_pin(&root)?;
+                let runtime = VisionRuntimeSpec::from_vision_root_directml(
+                    &root,
+                    directml.device.clone(),
+                    directml.gpu_fallback,
+                )
+                .map_err(runtime_unavailable)?;
+                // The file a DirectML run loads before ONNX Runtime (`ort\DirectML.dll`).
+                let library = root
+                    .join(VISION_RUNTIME_DIRECTORY)
+                    .join(directml.pin.directml.file_name);
+                (runtime, Some(directml.pin.directml.check(&library)))
+            }
+        };
         if listing.ocr.is_empty() && listing.nn.is_empty() && listing.invalid.is_empty() {
             return Err(VisionRefusal {
                 code: VisionListingCode::VisionModelsEmpty.code(),
                 message: format!("{} holds no model folder", models_dir.display()),
                 cause: None,
+                path: None,
             });
         }
         Ok(VisionInventory {
@@ -653,6 +884,7 @@ impl ConfiguredVision {
             models_dir,
             runtime,
             listing,
+            directml_library,
         })
     }
 }

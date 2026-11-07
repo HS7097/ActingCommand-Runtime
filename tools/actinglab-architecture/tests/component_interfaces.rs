@@ -77,7 +77,9 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   had no emitter, now needs its time), so [5, 25]. #402 HS-1 (0.12.39, Alice's words of
 ///   2026-11-03 11:4x, register §1.267): revision 26 relaxes `nemu_app_index` (any emulator entry
 ///   may name it, and Nemu touch no longer needs it); revisions 5 to 25 are still read, so
-///   [5, 26].
+///   [5, 26]. Workflow #407 GPU-1 D (0.12.44, Alice's approval of 166, register §1.286): revision
+///   27 adds `vision.execution_provider` `directml` with `vision.directml_device` and
+///   `vision.gpu_fallback`; revisions 5 to 26 are still read, so [5, 27].
 /// - `install-control` stays [0, 1] (model-378 §16 A-7; U-4 raises it in 0.12.x).
 /// - `install-selection` is unchanged (model-378 §10).
 /// - `ledger` [3, 3]: SQLite format 2, `actingcommand.event.v3`; format 1 is refused. Workflow
@@ -118,7 +120,7 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   request is answered as before, so [3, 6].
 /// - `runtime-outcomes` [1, 1]: the new interface of model-378 §10.
 const V0120: &[(&str, [u64; 2])] = &[
-    ("actingd-config", [5, 26]),
+    ("actingd-config", [5, 27]),
     ("install-control", [0, 1]),
     ("install-selection", [1, 1]),
     ("ledger", [3, 7]),

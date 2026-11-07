@@ -289,7 +289,32 @@ or NN targets need the top-level `vision` section, for example
 `<install root>\vision`, else `vision` next to the configuration file) holds
 `ort\onnxruntime.dll` and one folder per model under `models\`, named by the
 `model_ref` the packages use (`contracts/vision-model-folders.md`). The retired
-`vision_provider_manifest` key is refused. Use your existing connection
+`vision_provider_manifest` key is refused. OCR on a GPU through DirectML (Runtime
+0.12.44, `actingd-config` revision 27) is
+`"vision": {"execution_provider": "directml", "directml_device": {"expected_identity": "dxgi-pci:<vendor>:<device>:<subsys>:<rev>"}, "gpu_fallback": "cpu"}`:
+the identity names the one adapter to use (lowercase hexadecimal, as
+`check-config` lists it), and `gpu_fallback` `cpu` (the default) runs OCR on the
+CPU with one warning when that adapter or `ort\DirectML.dll` cannot be used,
+`refuse` fails the OCR requests instead. Its vision root holds ONNX Runtime
+1.24.4's DirectML build and DirectML 1.15.4 under `ort\`, three files whose sizes
+and SHA-256 the Runtime pins (`contracts/vision-model-folders.md`, "DirectML
+runtime"); neither this artifact, the Tools nor the installer carries them, and
+whoever places them keeps the license files beside them. Use a vision root of its
+own for DirectML (for example `<install root>\vision-dml`, named by `root`) and
+leave the CPU root as it is, so that switching back needs no file change. The
+`vision` section takes effect at the next Runtime start and is no setting a
+running Runtime or the console changes. Change it by file: write the candidate
+configuration, check it with
+`.\actingcommand-actingd.exe check-config --config <candidate>` (add
+`--install-root <install root>` when the candidate lies outside the install
+root) and read its `vision.directml` (every adapter, the one the identity
+resolves to, the pinned files, and a `vision_gpu_unavailable` note when DirectML
+cannot be used), then write the candidate as the configuration file the Runtime
+reads (`<install root>\actingd.config.json`) and restart the Runtime only; the
+emulators are not touched.
+`acsetup --commit-config` is not used for this change. To go back, write
+`"vision": {"execution_provider": "cpu"}` the same way and restart the Runtime.
+Use your existing connection
 configuration when those capabilities are required; optional fields must follow
 the same source schema. Provider models,
 SDKs, drivers, device tools and private connection data are separate dependencies

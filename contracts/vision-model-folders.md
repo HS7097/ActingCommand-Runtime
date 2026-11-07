@@ -151,9 +151,15 @@ fails the load naming both counts.
 Workflow #407 GPU-1 (design `rd-1031/perf-407/design-gpu1.md`, register §1.286).
 Slice A brings the parts below into the engine's boundary crate; the
 configuration that selects `directml` comes with slice D and the engine's
-DirectML sessions with slices B1 and B2. Until then the configuration refuses
-`directml` (`vision_config_invalid`) and every OCR request runs as before.
-The CUDA path of this build is known not to work (GPU-0d, GPU-0e).
+DirectML sessions with slices B1 and B2. Since slice D the `vision` section
+admits `execution_provider` `directml` with `directml_device
+{ expected_identity }` and `gpu_fallback` (`actingd-config` revision 27;
+[actingd-check-config.md](actingd-check-config.md), "Vision root"); check-config
+and a start hash the pinned files below, list the adapters and resolve the
+identity as "Adapter identity and selection" says. Until the engine's slices
+are in, a running Runtime fails every OCR load of a `directml` section, and a
+`cpu` section runs as before. The CUDA path of this build is known not to work
+(GPU-0d, GPU-0e).
 
 ### Pinned files
 
