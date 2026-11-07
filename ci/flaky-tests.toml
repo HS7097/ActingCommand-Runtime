@@ -56,5 +56,5 @@ name = "actingcommand-runtime-host::lib::tests::facts::fact_snapshot_catches_up_
 crate = "actingcommand-runtime-host"
 job = "host-lab"
 features = ["actingcommand-runtime-host/fixture-backends"]
-register = "https://github.com/HS7097/ActingCommand-Workflow/issues/71"
+register = "https://github.com/HS7097/ActingCommand-Workflow/issues/71#issuecomment-6713157793"
 status = "cause not located (receipt read timeout under load): first failed in run 42410223015 (PR #1537, host-lab, 2026-11-08 JST), once in 649 CI runs over 14 days; skipped until it is"
