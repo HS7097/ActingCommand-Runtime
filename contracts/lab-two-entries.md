@@ -34,10 +34,10 @@ answers above) wins wherever it differs from its earlier sections; coordinator w
 | LAB-3 | Runtime | the rescue and installation module (section 7): the journal's initiator, no confirmation parameters (section 5), guards that report (section 6) |
 | LAB-4 | Runtime | `crates/watchdog`; `actingwatch.exe` does its own tick |
 | LAB-5 | Runtime | `actinglab-mcp.exe`: tools from the table, no tiers; the MCP entry `g2` |
-| LAB-6 | Runtime | the door of section 2 and the UI list of section 3; the initiator in receipts and G14; `runtime-client` 7, `ledger` 8, `actingd-config` 28 |
-| UI-L1 | UI | the console on `runtime-client` 7: Lab children instead of actingctl, refusals shown, no second press |
+| LAB-6 | Runtime | the door of section 2 and the UI list of section 3; the initiator in receipts, G14 and the `host.config_overrides` rows (section 4.3); `runtime-client` 7, `ledger` 8, `actingd-config` 28 |
+| UI-L1 | UI | the console on `runtime-client` 7: Lab children instead of actingctl, refusals shown, no second press (the stop note stays beside the button, section 6); the settings page shows a row's initiator, else its channel (section 4.3); the READMEs' install line names the rescue module's command |
 | LAB-7 | Runtime | `apps/actingctl` deleted; `install-cli` 2 |
-| UI-L2 | UI | acsetup as the graphical shell of the rescue module |
+| UI-L2 | UI | after UI-2a: acsetup as the graphical shell of the rescue module; its `status`, `discover`, `shutdown`, `check-config` and `ledger verify` through actinglab, and no `install-transition` |
 
 ## 1 Words
 
@@ -167,9 +167,9 @@ No roles, users or tokens. It equals the table's `ui_kinds` (section 9), which L
   output are the CLI's and MCP's.
 - **Not through this entry.** The console's cold ledger read (so it reads the ledger while
   actingd is stopped), and the Lab processes it starts (section 4.2): the launcher's `up` and
-  `unlock`, the settings page's `packs` and `alive`, acsetup's `status`, `discover`, `shutdown`,
-  `check-config` and `ledger verify` (UI-L1), and `new` and `deploy` (UI-L2). Those are `lab`
-  requests.
+  `unlock`, the settings page's `packs` and `alive` (UI-L1), and acsetup's `status`, `discover`,
+  `shutdown`, `check-config`, `ledger verify`, `new` and `deploy` (UI-L2, after UI-2a). Those are
+  `lab` requests.
 - The authoring workbench (#346) does not use this entry either: it drives
   `actinglab serve --stdio`, and its device operations are `lab` requests (section 4.2). The UI's
   permissions cover the console's entry only.
@@ -216,6 +216,18 @@ One string, compared byte for byte (UTF-8), from a closed list of six (Alice's a
   in place of `via`; so does the player hold's source (`PlayerHoldSource` and its ledger copy).
   Effect records gain no member: who sent a request is found through its request id in its G14
   record, as today (LAB-6).
+  - **Settings overrides.** Each `host.config_overrides` row
+    ([runtime-config.md](runtime-config.md), "Facts"; register G4 and U2-5) gains `initiator`,
+    written beside `channel` by every `ConfigureSettings` (LAB-6). LAB-6 writes `channel` `lab` or
+    `ui` only, so the channel alone would show every Lab module as "经 Lab" on the UI's settings
+    page, where it shows "经命令行" or "经 MCP" today. The settings page shows a row's initiator
+    where it has one, else its channel (UI-L1).
+  - **Rows written before LAB-6** (the coordinator's ruling). Production may hold them, written
+    through MCP for example, and the first start after the LAB-6 deploy must not stop on them.
+    Such a row is restored as written, without `initiator`. The restore check keeps accepting the
+    four channel values it accepts today (`cli`, `mcp`, `ui`, `lab`). An `initiator`, when
+    present, must be one of the six words of section 4.1; otherwise the start stops with
+    `host_config_overrides_fact_invalid`, as for a bad channel. LAB-6 writes only `lab` or `ui`.
 - **Offline.** The installation journal `install\operations\op-<ms>.json`
   ([install-cli.md](install-cli.md), "Documents") gains `initiator`, written before the first step,
   for every rescue operation that writes a journal: all irreversible ones and those that journal
@@ -270,7 +282,9 @@ Alice's answer 4. From LAB-3, in the rescue module:
   preconditions, the writer lock and an unfinished operation (`current.json`), the interface checks
   and the rollback gate, and the checks of an operation's inputs.
 - **The console** (UI-L1): the buttons that stop or restart an emulator or restart a game act on
-  one press.
+  one press. The note the second press shows today when stopping an emulator stays, shown beside
+  the button as plain text: it says the emulator will be started again (the UI channel calls it
+  「看护会拉起」). It asks nothing and is not a confirmation.
 
 ## 7 The rescue and installation module
 
