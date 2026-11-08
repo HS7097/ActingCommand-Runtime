@@ -56,6 +56,10 @@ actingcommand_contract::outcome_vocabulary! {
         SessionBuildFailed => "session_build_failed",
         /// The node placement of a DirectML session could not be read in full.
         PlacementUnread => "placement_unread",
+        /// Workflow #407 GPU-1 E: ONNX Runtime's run of a DirectML session failed (the device was
+        /// removed or reset); the model is built again, and when the first run after that fails
+        /// too, the model runs on the CPU.
+        InferenceFailed => "inference_failed",
     }
 }
 

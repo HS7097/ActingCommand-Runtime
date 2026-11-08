@@ -40,11 +40,11 @@ use ort::logging::{LogLevel, LoggerFunction};
 use ort::session::builder::SessionBuilder;
 use ort::session::{RunOptions, Session};
 use ort::value::{Tensor, TensorElementType, ValueType};
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::ffi::OsStr;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, TryLockError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, TryLockError};
 use std::time::{Duration, Instant};
 
 // Workflow #407 GPU-1 B1: DirectML sessions and their node placement, over a fake ONNX Runtime.
@@ -53,6 +53,9 @@ mod gate_407_gpu1b1;
 // Workflow #407 GPU-1 B2: the whole-model fallback to the CPU, over a fake ONNX Runtime.
 #[cfg(test)]
 mod gate_407_gpu1b2;
+// Workflow #407 GPU-1 E: the rebuild after a failed GPU run, over a fake ONNX Runtime.
+#[cfg(test)]
+mod gate_407_gpu1e;
 mod nn;
 
 const NODE_PLACEMENT_DIAGNOSTIC_ENV: &str = "ACTINGCOMMAND_PPOCR_NODE_PLACEMENT_DIAGNOSTIC";
@@ -83,6 +86,9 @@ const OFFICIAL_FLOOR_WIDTH_ABOVE: usize = 320;
 static ORT_RUNTIME: OrtRuntimeInitializer = OrtRuntimeInitializer::new();
 static RUNTIME_FACTS: OnceLock<RuntimeFacts> = OnceLock::new();
 static RUNTIME_INIT: Mutex<()> = Mutex::new(());
+/// Workflow #407 GPU-1 E: the GPU-run history of each model of a `directml` configuration, by
+/// its model reference and content, kept for the life of the process across the model's loads.
+static GPU_RUNS: Mutex<BTreeMap<(String, String), GpuRuns>> = Mutex::new(BTreeMap::new());
 
 /// The ONNX Runtime facts established once per process, on the first model build.
 struct RuntimeFacts {
@@ -632,10 +638,22 @@ impl VisionModelLoader for PpocrCtcLoader {
                 .as_ref()
                 .map(|directml| directml.gpu_fallback),
         };
+        // Workflow #407 GPU-1 E (design §7 row E): what the model's DirectML runs showed earlier in
+        // this process; a `cpu` or `cuda` model has none to keep.
+        let gpu_runs = match basis.gpu_fallback {
+            Some(_) => model_gpu_runs(&model.model_ref, &model_sha256),
+            None => GpuRuns::default(),
+        };
         // Workflow #407 GPU-1 B1, B2 (design §1.4, §2.3): every DirectML session build resolves
         // its adapter again, and a model whose adapter or session cannot be used moves to the CPU
-        // under `gpu_fallback` `cpu`.
-        let route = initial_route(&basis, facts.directml.as_ref(), &SystemAdapterSource)?;
+        // under `gpu_fallback` `cpu`; E: a model whose first run after a rebuild failed too stays
+        // on the CPU.
+        let route = load_route(
+            &basis,
+            facts.directml.as_ref(),
+            &SystemAdapterSource,
+            &gpu_runs,
+        )?;
         let mut diagnostics = Vec::new();
         let sessions = ModelSessions::load(
             &mut OrtSessions,
@@ -667,6 +685,7 @@ impl VisionModelLoader for PpocrCtcLoader {
                 detector_path: model.detector_path.clone(),
                 detector_sha256,
                 pending_diagnostics: diagnostics,
+                gpu_runs,
             }),
             model_sha256,
             waited_on_others,
@@ -772,6 +791,8 @@ struct PpocrCtcModel {
     detector_sha256: Option<String>,
     /// Session-load diagnostics, returned with the next request's result or error.
     pending_diagnostics: PpocrDiagnostics,
+    /// Workflow #407 GPU-1 E: the model's GPU-run history, which outlives this engine.
+    gpu_runs: GpuRuns,
 }
 
 /// Workflow #407 GPU-1 B2: one model file a session is built from: its verified bytes and its
@@ -906,6 +927,109 @@ fn initial_route(
             "the process's DirectML route and the OCR model's configuration disagree",
         )),
     }
+}
+
+/// Workflow #407 GPU-1 E (design §7 row E, §9 Q8): the route of one model load. A model whose
+/// first run after a rebuild failed too under `gpu_fallback` `cpu` (`gpu_runs`) runs whole on the
+/// CPU, with that one warning, until the process ends; every other load starts on
+/// [`initial_route`], so a load after a failed run (the rebuild) resolves its adapter again and
+/// falls back as B2 does.
+fn load_route(
+    basis: &RouteBasis,
+    process: Option<&ProcessRoute>,
+    adapters: &dyn AdapterSource,
+    gpu_runs: &GpuRuns,
+) -> VisionFfiResult<ModelRoute> {
+    match gpu_runs.cpu_warning() {
+        Some(warning) => basis.route(1, None, Some(warning)),
+        None => initial_route(basis, process, adapters),
+    }
+}
+
+/// Workflow #407 GPU-1 E (design §7 row E, §9 Q8): what the DirectML runs of one model showed in
+/// this process. It outlives the model's engine, which the kernel unloads when a DirectML run
+/// fails, so the model's next load reads it.
+#[derive(Debug, Clone, Default)]
+enum GpuRunHistory {
+    /// No DirectML run of the model failed since its last invocation on DirectML succeeded.
+    #[default]
+    Sound,
+    /// A DirectML run failed and the engine was unloaded: the next load builds the model again,
+    /// and the first invocation of that build decides.
+    Rebuilt,
+    /// The first invocation after a rebuild failed too under `gpu_fallback` `cpu`: every load of
+    /// the model runs it whole on the CPU until the process ends, with this one warning.
+    OnCpu(Outcome),
+}
+
+/// What a failed DirectML run leaves for the model's next load.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AfterGpuRunFailure {
+    /// The next load builds the model again on its configured route.
+    BuildAgain,
+    /// The next load, and every later one, runs the model on the CPU.
+    CpuUntilRestart,
+}
+
+/// Workflow #407 GPU-1 E: one model's [`GpuRunHistory`], shared by its engines and the process.
+#[derive(Debug, Clone, Default)]
+struct GpuRuns(Arc<Mutex<GpuRunHistory>>);
+
+impl GpuRuns {
+    fn history(&self) -> MutexGuard<'_, GpuRunHistory> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The one warning of a model that runs on the CPU until the process ends, if it does.
+    fn cpu_warning(&self) -> Option<Outcome> {
+        match &*self.history() {
+            GpuRunHistory::OnCpu(warning) => Some(warning.clone()),
+            GpuRunHistory::Sound | GpuRunHistory::Rebuilt => None,
+        }
+    }
+
+    /// An invocation on DirectML succeeded: a rebuilt model is sound again, so a later failed run
+    /// builds it again once more.
+    fn succeeded(&self) {
+        let mut history = self.history();
+        if matches!(*history, GpuRunHistory::Rebuilt) {
+            *history = GpuRunHistory::Sound;
+        }
+    }
+
+    /// A DirectML run failed. A sound model is built again; a rebuilt one whose first invocation
+    /// this was runs on the CPU from now on under `gpu_fallback` `cpu`, with `warning`, and is
+    /// built again under `refuse`.
+    fn failed(
+        &self,
+        gpu_fallback: Option<GpuFallback>,
+        warning: Option<Outcome>,
+    ) -> AfterGpuRunFailure {
+        let mut history = self.history();
+        let next = match (&*history, gpu_fallback, warning) {
+            (GpuRunHistory::OnCpu(warning), _, _) => GpuRunHistory::OnCpu(warning.clone()),
+            (GpuRunHistory::Rebuilt, Some(GpuFallback::Cpu), Some(warning)) => {
+                GpuRunHistory::OnCpu(warning)
+            }
+            _ => GpuRunHistory::Rebuilt,
+        };
+        let after = match next {
+            GpuRunHistory::OnCpu(_) => AfterGpuRunFailure::CpuUntilRestart,
+            GpuRunHistory::Sound | GpuRunHistory::Rebuilt => AfterGpuRunFailure::BuildAgain,
+        };
+        *history = next;
+        after
+    }
+}
+
+/// Workflow #407 GPU-1 E: the process's [`GpuRuns`] of one model, by its reference and content.
+fn model_gpu_runs(model_ref: &str, model_sha256: &str) -> GpuRuns {
+    GPU_RUNS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .entry((model_ref.to_string(), model_sha256.to_string()))
+        .or_default()
+        .clone()
 }
 
 /// Workflow #407 GPU-1 B2: the reports of sessions a fallback replaced are dropped. After a
@@ -1069,6 +1193,53 @@ impl<S> ModelSessions<S> {
                 .and_then(|detector| detector.cpu_nodes),
         }
     }
+
+    /// Workflow #407 GPU-1 E (design §7 row E, §9 Q8): an invocation of the model ran and
+    /// succeeded; on DirectML, a rebuilt model is sound again (`gpu_runs`).
+    fn invocation_succeeded(&self, gpu_runs: &GpuRuns) {
+        if self.route.plan.resolved_execution_provider == OnnxExecutionProvider::Directml {
+            gpu_runs.succeeded();
+        }
+    }
+
+    /// Workflow #407 GPU-1 E (design §7 row E, §9 Q8): the engine's error of an invocation that
+    /// failed with `error`. A failed run of a session on DirectML (ONNX Runtime's error, not the
+    /// watchdog's timeout: the device was removed or reset) is `ProviderUnavailable`, `DirectML
+    /// cannot be used (inference_failed)`, on which the kernel unloads the engine instead of
+    /// keeping it; the model's next request builds it again ([`load_route`]). `gpu_runs` records
+    /// it: when the first invocation after that rebuild fails the same way under `gpu_fallback`
+    /// `cpu`, the model runs whole on the CPU from its next load until the process ends, with one
+    /// warning that names it and carries ONNX Runtime's status as its link; under `refuse` every
+    /// such failure builds the model again. Every other failure, and every failure of a model on
+    /// the CPU or on CUDA, is the engine's error as before.
+    fn invocation_failed(&self, gpu_runs: &GpuRuns, error: ProviderInvokeError) -> VisionFfiError {
+        let run = match error {
+            ProviderInvokeError::Run(run)
+                if self.route.plan.resolved_execution_provider
+                    == OnnxExecutionProvider::Directml =>
+            {
+                run
+            }
+            error => return error.into_ffi_error(),
+        };
+        let mut unusable = SessionBuildFailure {
+            reason: Some(GpuUnavailableReason::InferenceFailed),
+            message: run.message,
+            os_cause: None,
+            ort_status: Some(run.ort_status),
+        };
+        let warning = unusable.warning(GpuFallback::Cpu, Some(self.basis.parts.model_ref.as_str()));
+        let next = match gpu_runs.failed(self.basis.gpu_fallback, warning) {
+            AfterGpuRunFailure::BuildAgain => {
+                "the engine is unloaded and the model's next request builds it again"
+            }
+            AfterGpuRunFailure::CpuUntilRestart => {
+                "the first run after the model was built again failed too, so from its next load it runs on the CPU until the process restarts"
+            }
+        };
+        unusable.message = format!("{}; {next}", unusable.message);
+        unusable.into_error()
+    }
 }
 
 /// How many nodes of each role's session ONNX Runtime placed on the CPU, when the session's node
@@ -1158,9 +1329,15 @@ impl OcrEngine for PpocrCtcModel {
             self.read_region(request, &mut diagnostics, &mut ran)
         }));
         let mut result = match outcome {
-            Ok(Ok(result)) => result,
+            Ok(Ok(result)) => {
+                // Workflow #407 GPU-1 E: the model's sessions ran.
+                self.sessions.invocation_succeeded(&self.gpu_runs);
+                result
+            }
             Ok(Err(error)) => {
-                return Err(error.into_ffi_error().with_ppocr_diagnostics(diagnostics));
+                // Workflow #407 GPU-1 E: a failed DirectML run unloads the engine.
+                let error = self.sessions.invocation_failed(&self.gpu_runs, error);
+                return Err(error.with_ppocr_diagnostics(diagnostics));
             }
             Err(_) => {
                 return Err(VisionFfiError::fatal_with_code(
@@ -1867,7 +2044,8 @@ fn keep_detected_boxes(
 
 /// Workflow #407 GPU-1 B1: why one session could not be built. A DirectML session's failure
 /// names why DirectML cannot be used (design §2.3), the reason a fallback's warning carries
-/// (GPU-1 B2). CPU and CUDA failures name none and keep their messages.
+/// (GPU-1 B2). CPU and CUDA failures name none and keep their messages. Workflow #407 GPU-1 E:
+/// also why a DirectML session's run failed (`inference_failed`).
 #[derive(Debug, Clone)]
 struct SessionBuildFailure {
     reason: Option<GpuUnavailableReason>,
@@ -1922,14 +2100,7 @@ impl SessionBuildFailure {
     /// kept for a DirectML failure's warning (design §2.3, as GPU-0c's `OrtStepFailure` kept it).
     fn with_ort_status<R>(mut self, error: &ort::Error<R>) -> Self {
         if self.reason.is_some() {
-            let mut message = error.message().to_string();
-            let mut source = std::error::Error::source(error);
-            while let Some(cause) = source {
-                message.push_str("; caused by: ");
-                message.push_str(&cause.to_string());
-                source = std::error::Error::source(cause);
-            }
-            self.ort_status = Some(onnxruntime_status(&error.code(), &message));
+            self.ort_status = Some(onnxruntime_error_status(error));
         }
         self
     }
@@ -1973,8 +2144,10 @@ impl SessionBuildFailure {
         })
     }
 
-    /// The engine's error: an adapter or library reason is `ProviderUnavailable`, every other
-    /// failure `ProviderFailure`; a DirectML failure's message leads with its reason.
+    /// The engine's error: an adapter or library reason is `ProviderUnavailable`, and so is a
+    /// failed run (`inference_failed`, Workflow #407 GPU-1 E: the kernel unloads the engine on it);
+    /// every other failure is `ProviderFailure`. A DirectML failure's message leads with its
+    /// reason.
     fn into_error(self) -> VisionFfiError {
         let Some(reason) = self.reason else {
             return failure(self.message);
@@ -1985,7 +2158,8 @@ impl SessionBuildFailure {
             | GpuUnavailableReason::AdapterAmbiguous
             | GpuUnavailableReason::AdapterNotPhysical
             | GpuUnavailableReason::DirectmlLibraryMissing
-            | GpuUnavailableReason::DirectmlLibraryMismatch => unavailable(message),
+            | GpuUnavailableReason::DirectmlLibraryMismatch
+            | GpuUnavailableReason::InferenceFailed => unavailable(message),
             GpuUnavailableReason::ProviderRegisterFailed
             | GpuUnavailableReason::SessionBuildFailed
             | GpuUnavailableReason::PlacementUnread => failure(message),
@@ -1995,6 +2169,19 @@ impl SessionBuildFailure {
             None => error,
         }
     }
+}
+
+/// ONNX Runtime's status of `error`: its error code and its message with its causes, kept whole
+/// for a DirectML failure's warning (design §2.3, as GPU-0c's `OrtStepFailure` kept it).
+fn onnxruntime_error_status<R>(error: &ort::Error<R>) -> Outcome {
+    let mut message = error.message().to_string();
+    let mut source = std::error::Error::source(error);
+    while let Some(cause) = source {
+        message.push_str("; caused by: ");
+        message.push_str(&cause.to_string());
+        source = std::error::Error::source(cause);
+    }
+    onnxruntime_status(&error.code(), &message)
 }
 
 /// Builds ONNX Runtime sessions from [`SessionOptions`]: [`OrtSessions`] in the engine; the logic
@@ -2379,7 +2566,9 @@ fn recognize_region(
             "PPOCR recognizer inference exceeded the configured timeout",
         ));
     }
-    let outputs = outputs.map_err(|err| format!("PPOCR recognizer inference failed: {err}"))?;
+    let outputs = outputs.map_err(|err| {
+        ProviderInvokeError::run(format!("PPOCR recognizer inference failed: {err}"), &err)
+    })?;
     if outputs.len() == 0 {
         return Err("PPOCR recognizer returned no outputs".to_string().into());
     }
@@ -2424,7 +2613,9 @@ fn detect_text_regions(
             "PPOCR detector inference exceeded the configured timeout",
         ));
     }
-    let outputs = outputs.map_err(|err| format!("PPOCR detector inference failed: {err}"))?;
+    let outputs = outputs.map_err(|err| {
+        ProviderInvokeError::run(format!("PPOCR detector inference failed: {err}"), &err)
+    })?;
     if outputs.len() == 0 {
         return Err("PPOCR detector returned no outputs".to_string().into());
     }
@@ -3289,6 +3480,17 @@ enum ProviderInvokeError {
     /// Workflow #407 GPU-1 B1, B2: a session built on first use (the detector) that could not be
     /// built, with its own code and cause.
     Vision(VisionFfiError),
+    /// Workflow #407 GPU-1 E: ONNX Runtime's run of a session failed (not the watchdog's
+    /// timeout); on DirectML the model is built again ([`ModelSessions::invocation_failed`]).
+    Run(SessionRunFailure),
+}
+
+/// Workflow #407 GPU-1 E: a session's failed run: the engine's message, the one a CPU or CUDA
+/// session's failed run always had, and ONNX Runtime's status of it.
+#[derive(Debug)]
+struct SessionRunFailure {
+    message: String,
+    ort_status: Outcome,
 }
 
 impl ProviderInvokeError {
@@ -3296,9 +3498,19 @@ impl ProviderInvokeError {
         Self::Timeout(message.into())
     }
 
+    /// A session's run that failed with `error`, described by `message`.
+    fn run<R>(message: String, error: &ort::Error<R>) -> Self {
+        Self::Run(SessionRunFailure {
+            message,
+            ort_status: onnxruntime_error_status(error),
+        })
+    }
+
     fn into_ffi_error(self) -> VisionFfiError {
         match self {
-            Self::Failure(message) => failure(message),
+            Self::Failure(message) | Self::Run(SessionRunFailure { message, .. }) => {
+                failure(message)
+            }
             Self::Timeout(message) => {
                 VisionFfiError::fatal_with_code(VisionFfiErrorCode::Timeout, ENGINE_MODULE, message)
             }
