@@ -9,6 +9,149 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.44
+
+本版是 v0.12.43 之后合并的 7 个 PR：#407 GPU-1 的六片 A（#1532）、D（#1533）、B1（#1534）、B2（#1536）、C（#1535）、E（#1537），和只改 CI 的 FLK-08（#1538）。
+先说部署：`actingd-config` 从 [5, 26] 升到 [5, 27]，其余接口声明都不变（账本仍是 [3, 7]），部署不用带 `--accept-ledger-one-way`，计划里也没有 `ledger_verify`
+这一步；v0.12.43 的安装工具装本版照常（见下面的升级）；装上以后能退回 v0.12.43，只要配置文件里还没写修订 27 的三样东西（见下面的退回）。没有新键，默认值文件
+没改。运行上要知道的是这几处：
+
+- **OCR 可以跑在 DirectML 的 GPU 上，默认关**（GPU-1）。配置文件不改，OCR 和 v0.12.43 逐字节相同，照旧跑 CPU：`cpu` 的运行库闭包、会话选项、会话键摘要和执行
+  证明都没变，不枚举显卡、不核钉表，启动记录也和以前一样。本版的 Runtime 包、Tools 包和安装器都不带 DirectML 的运行库文件（两个包的文件清单和 v0.12.43 一样）。
+- **打开它要一个单独的视觉根，加上配置 `vision` 段里的三样东西**（GPU-1 A、D）：
+  - 视觉根的 `ort\` 放钉住的 DirectML 运行库，三个文件：ONNX Runtime 1.24.4 DirectML 版的 `onnxruntime.dll`（17,328,152 B，SHA-256
+    `e7eedec6a6f26dc39dc948276a75ef6d2bee3fff944d874ceed0bbd3b97bff40`）、`onnxruntime_providers_shared.dll`（22,040 B，
+    `265c8daf29637cb259cac8be9f08f2cd45f3883f0f0e4949cbfddd5b4cbec3b6`）和 DirectML 1.15.4 的 `DirectML.dll`（18,527,776 B，
+    `9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1`），许可文件放在旁边，`models\` 照原来的放。钉表在 `crates/vision-ffi/src/runtime_pin.rs`
+    （`DIRECTML_RUNTIME_PIN`），和 `scripts/windows-tools/windows-tool-sources.v1.json` 的两条来源 `onnxruntime-directml-1.24.4`、`directml-1.15.4`（官方 NuGet 地址
+    和包的大小、哈希）由逻辑测试钉成一致。建议另开一个根（比如 `<install root>\vision-dml`，用 `root` 指过去），CPU 的根原样不动，切回去就不用动文件。
+  - 三样东西：`"execution_provider": "directml"`；`"directml_device": {"expected_identity": "dxgi-pci:<vendor>:<device>:<subsys>:<rev>"}`（小写十六进制，4、4、8、2
+    位，check-config 列出的就是这个写法；不写 DXGI 序号、不写 LUID，写了是未知成员，`config_decode_failed`）；可选的 `"gpu_fallback"`（`cpu`，默认；或 `refuse`）。
+    `directml` 必须带 `directml_device`、不许带 `cuda_device`；`cpu` 和 `cuda` 不许带这两个新成员；违反就是 `vision_config_invalid`（`config_assemble`）。
+  - 这一段在 Runtime 下次启动时生效，不是设置项：不进键表，在线设置改不了它，控制台也不写。照 `INSTALL.md` 改文件：先对候选配置跑
+    `actingcommand-actingd.exe check-config --config <候选>`，看报告里的 `vision.directml`，再把候选写成 `<install root>\actingd.config.json`，只重启 Runtime，模拟器
+    不动；不用 `acsetup --commit-config`。
+  - check-config 对 `directml`：`ort\onnxruntime.dll` 和 `ort\onnxruntime_providers_shared.dll` 按钉表核大小和 SHA-256，缺、不一样或读不了就以
+    `vision_runtime_unavailable` 失败（`config_vision`，带 `path` 和 OS 错误），启动也一样拒绝。然后列出全部 DXGI 适配器，按身份选卡（照 `EnumAdapters1` 的顺序，
+    只留物理卡，去掉间接显示、软件和半虚拟的副本，正好剩一张才用；LUID 只记录、不比对，从不换用别的卡），再核 `ort\DirectML.dll`。报告的 `vision.directml` 是
+    `{expected_identity, gpu_fallback, adapters[…], resolved {dxgi_index, luid}, unavailable_reason, runtime_pin {onnxruntime, providers_shared, directml},
+    nn_execution_provider}`；DirectML 用不了时 check-config 不失败，只带一条 `vision_gpu_unavailable` 的 `note`（`adapter_missing`、`adapter_not_physical`、
+    `adapter_ambiguous`、`directml_library_missing` 或 `directml_library_mismatch`）。NN 模型在 `directml` 下照旧跑 CPU（`nn_execution_provider` 是 `cpu`）。
+- **GPU 用不了时，`gpu_fallback=cpu` 让 OCR 转到 CPU，状态里亮一条 `vision_gpu_unavailable`；`refuse` 则让 OCR 请求失败**（GPU-1 B2、C、D、E）。
+  - 启动时选不到卡或 `DirectML.dll` 不对：照常启动，写一条警告（stage `vision_startup`，在 actingd 的开发日志里），perf-status 的 `warnings` 里显示到第一次 OCR 载入
+    完成。第一次 OCR 载入（运行库初始化）再判一次，以它为准：还是用不了，`cpu` 下整个进程用 CPU 闭包（不载 `DirectML.dll`），一条不带 `model_name` 的警告，直到重启。
+  - 建 DirectML 会话失败（选不到卡、注册不了、建不成、读不出节点分布）：这个模型这次载入整个改到 CPU（每次载入只回退一次），一条带 `model_name` 的警告；检测模型
+    建不成时识别模型也一起挪。
+  - 跑失败（GPU-1 E：设备被移除或重置等 ONNX Runtime 的运行错误，看门狗超时不算）：这次请求失败（`ProviderUnavailable`，`DirectML cannot be used (inference_failed)`），
+    内核卸载这个引擎、不封存，下一次请求重建它（重新选卡，照上面的规则回退）；重建后的第一次调用又失败，这次请求也失败，之后每次载入都整模型跑 CPU，直到进程结束，
+    带一条 `vision_gpu_unavailable`（`inference_failed`）；重建后第一次成功就算恢复，以后再失败再重建一次。
+  - `refuse`：不回退，请求失败（`ProviderUnavailable` 或 `ProviderFailure`，消息以 `DirectML cannot be used (<原因>)` 开头），下一次请求再试；跑失败每次都重建，
+    不挪到 CPU。启动时的那条警告照样显示。
+  - perf-status 的 `warnings`：进程级的一条，加上每个跑在 CPU 上的模型各一条，相同的只列一次；跑在 DirectML 上的模型不显示。MCP `ac_overview` 的说明补上了这个码。
+  - 启动记录（`provider.startup` 的 Binding）多两条：`execution_provider`（配置 `directml`；实际 `directml`，用不了时 `cpu` 下记 `cpu`、`refuse` 下记 `none`）和
+    `directml_adapter`（配置的身份；实际 `<身份>;index=<n>;luid=<luid>` 或 `none`）。能用 DirectML 时，`runtime_library_paths[i]` 列的是 DirectML 的闭包
+    （`DirectML.dll` 排在 `onnxruntime.dll` 前面）。警告本身不进账本。
+  - 证据：OCR 行的执行段是 `directml`/`directml`（CPU EP 不注册，`fallback_observed` 按每次调用记，跑过的模型角色里有 CPU 节点就是 true），或整模型回退以后的
+    `directml`/`cpu`（`fallback_observed` 为 true）；同一个目标的绑定不再比 `fallback_observed`。每次建 DirectML 会话都读节点分布，报告升到
+    `actingcommand.ppocr_node_placement_diagnostic.v2`（加速的 EP、节点数和 `device`），存成已有的 `DiagnosticJson` 诊断件。
+
+配置：接口修订只升一处，按代码和 `contracts/component-interfaces.md` 核过：`actingd-config` [5, 26] 改为 [5, 27]（GPU-1 D，登记 §1.286：`vision.execution_provider`
+的新值 `directml`、新成员 `vision.directml_device` 和可选的 `vision.gpu_fallback`；其余五片都不升）。`distribution/windows/component-interfaces.json`、合同表
+`actingd-config` 27 一行、架构测试（`tools/actinglab-architecture/tests/component_interfaces.rs` 的 `V0120` 表）三处一致。其余都不变（设计 §6.2、§6.3）：`ledger`
+仍是 [3, 7]，`runtime-client` 仍是 [3, 6]，`package` 仍是 [3, 7]，`install-selection` 仍是 [1, 1]，`install-control` 仍是 [0, 1]，`runtime-outcomes` 仍是 [1, 1]。
+
+- 修订 27 读得了修订 5 到 26 的配置文件，没有例外。不写这三样的文件保持原来的修订，v0.12.43 照常读；写了任何一样，v0.12.43 就解不开这个文件（它的
+  `VisionConfigFile` 拒收不认识的成员，`OnnxExecutionProvider` 只有 `cpu`、`cuda`：v0.12.43 的 `apps/actingd/src/config.rs` 501–513、
+  `crates/vision-ffi/src/artifacts.rs` 460–465，报 `config_decode_failed`，同一文件 1240–1241）。
+- 配置键：没有新键。三样都只在 `vision` 段里，`vision` 段不是键表里的键（`crates/runtime-config/src/ui_tier.rs` 15），键表、默认值文件和配置示例都没改，部署
+  计划的默认值对比是空的。
+- 结果码：新码 1 个 `vision_gpu_unavailable`（warning，`ladder_class` none，待定稿，since 0.12.44；必带 `execution_provider`、`gpu_unavailable_reason`、
+  `gpu_fallback`，可带 `stage`、`model_name`）；新值键 2 个（`gpu_unavailable_reason`、`gpu_fallback`）；新词表 2 个：`gpu_unavailable_reason` 9 个词
+  （`adapter_missing`、`adapter_ambiguous`、`adapter_not_physical`、`directml_library_missing`、`directml_library_mismatch`、`provider_register_failed`、
+  `session_build_failed`、`placement_unread`、`inference_failed`），`gpu_fallback` 2 个词（`cpu`、`refuse`）；已有词表 `execution_provider` 加 `directml`；新位置 1 个
+  `vision_startup`（actingd，待定稿）；`vision_runtime_unavailable`（已定稿）多可选值 `path`，它和 `vision_config_invalid` 的说明补上 DirectML。没有退役的条目。结果码
+  目录从 3890 个码、1740 个位置变成 3891 个、1741 个；本版的发布文件只有一条：`vision_runtime_unavailable` 多了可选值 `path` 以后的签名。
+- 账本：不升，没有新记录形状。切到 `directml` 以后多出来的都是已有形状里的新值：两条 Binding 的 `field`、`configured`、`resolved` 是自由文本，读者只核长度和非空
+  （`crates/actingcommand-contract/src/event/payload/provider.rs` 72–77、134–143）；OCR 行的 `requested_provider`、`resolved_provider` 是 `String`
+  （`event/artifact.rs` 509–510），`fallback_observed` 是已有的 `Option<bool>`；v2 报告在已有种类的诊断件里，账本只记它的元数据。合同 crate 的事件部分自 v0.12.43
+  没改。
+- 程序文件：workspace 成员、Runtime 包和 Tools 包的文件清单都和 v0.12.43 一样（`.github/workflows/windows-remote-build.yml` 650–669 自 v0.12.43 没改）；没有新依赖，
+  选卡用手写的最小 DXGI 接口和 D3DKMT，`dxgi.dll`、`gdi32.dll` 只从 System32 载入，进程的 DLL 搜索不变。`apps/actingctl` 只改了 MCP `ac_overview` 说明里的一行，
+  MCP 工具仍是 41 个；`apps/actinglab`、`crates/ledger`、`crates/ledger-forensics` 自 v0.12.43 没改；合同 crate 只改了键表（两个键）和节点分布报告 v2。
+
+升级时要知道的（按安装工具的代码核过；`apps/actingctl` 自 v0.12.43 只改了 `mcp/tools.rs` 的一行说明，下面的行号在 v0.12.43 和本版相同）：
+
+- 不用 `--accept-ledger-one-way`：两边的 `ledger` 都是 [3, 7]，`previous_max_in_next`（7 在 [3, 7] 里）和 `one_way`（7 不大于 7）都过
+  （`apps/actingctl/src/install/plan.rs` 281–294），带上也不改判断；现行和目标的 `ledger` 相同，所以计划里没有 `ledger_verify`（908），apply 不读账本。
+- `actingd-config` 升到 27 不挡：没有哪条边比两边的范围。安装工具只算 `installer_knows_keys`（353–369；`vision` 段不在键表和默认值里，`unknown_keys` 不往里查，
+  499–529）和 `next_check_config`（895–907：本版的 check-config 收现行配置，它的 `vision` 是 `cpu`）。
+- 其余的边都过：`runtime-client` 两边都是 [3, 6]，安装工具自己的声明 I 编在程序里（`install/host.rs` 23–25），v0.12.43 的 I 是 [3, 6]，`installer_meets_previous`、
+  `installer_meets_next` 都过（308–323）；`install-control` [0, 1] 相同，`runtime-outcomes` 1 在 I 的 [1, 1] 里（295–307）；`package` 两边都是 [3, 7]，
+  `bundle_max_in_next` 在单一位置根上只有 `pack_declaration_unknown` 警告（325–348）。
+- **v0.12.43 的安装工具没有新东西要发或要读**：它连 Runtime 发的请求和读到的答复形状都没变（`runtime-client` 6 不变；C 只是让官方 OCR 的证据认 `directml`，安装
+  工具不跑任务）。从本版的构建目录跑本版的安装工具，结果相同。
+- 部署的自动回退和 `install undo` 这次可以用：接口边都过，配置还没写修订 27 的成员（刚部署完就是这样），回退门的配置一项也过（见下面的退回）。
+
+退回 v0.12.43（按安装工具的代码核过）：
+
+- 安装工具允许退回，不用 `--accept-ledger-one-way`。`ledger` 两边都是 [3, 7]：`previous_max_in_next` 和 `one_way` 都过（`plan.rs` 281–294）；`runtime-client`
+  两边都是 [3, 6]，I [3, 6] 和两边都有交集；`install-control`、`runtime-outcomes` 两边相同；`package` 两边都是 [3, 7]；`installer_knows_keys` 不查 `vision` 段，有没有
+  新成员都过。部署的自动回退（`install/deploy.rs` 715–733，不带标志）、`rollback plan|apply` 和起过本版 Runtime 以后的 `install undo`（`install/undo.rs` 177–188、
+  324–356）走的是同一组边和同一个回退门（`install/update.rs` 378 起）。
+- `actingd-config` 27 → 26：没有哪条边比两边的范围，挡住退回的是配置的内容。回退门的配置一项（`update.rs` 485–498）让 v0.12.43 的 check-config 读现行配置：`vision`
+  只要写了 `directml`、`directml_device` 或 `gpu_fallback`，v0.12.43 就以 `config_decode_failed` 拒绝（见上面的配置），退回以 `rollback_gate_failed`
+  （`rollback_gate_parts` 含 `config`，check-config 的拒绝是它的链接，`update.rs` 152–173）结束，什么都不改；退回计划本身不先拒，因为退回时 `next_check_config` 不算
+  接口边（`plan.rs` 1019–1025）。**所以切过 DirectML 的，退回之前先把 `vision` 改回 `{"execution_provider": "cpu"}`（两个新成员都删掉）、重启 Runtime，再退回**
+  （设计 §8.3）。没写这三样的配置不用改，生产现在就是这样。
+- 回退门其余几项：v0.12.43 自己的读者读部署之后写的账本页（`ledger_readability`，`update.rs` 395–432，只对本版替换掉的那个构建算，就是 v0.12.43）：账本没有新形状，
+  切过 DirectML 留下的 Binding 和 `directml` 的 OCR 行它也读得了；v0.12.43 在这个根上最近一次打开在它的期限减余量之内（433–484）。
+- 落盘的东西都不挡：没有新键、新文件、新记录形状；DirectML 的视觉根是另一个目录，退回以后不读它。
+- 退回以后：OCR 只能跑 CPU（或 CUDA），不再有 `vision_gpu_unavailable`。
+- 客户端和 Runtime 的配对（`crates/ledger`、`crates/ledger-forensics`、`apps/actinglab` 和合同 crate 的事件部分自 v0.12.43 没改；下面旧读者的行号是 v0.12.43 的）：
+  - v0.12.43 的安装工具装本版：照常，不带标志，见上面的升级。
+  - **本版自己的读者**：Runtime、actinglab、actingctl 和 MCP 都经本版的识别包和 `runtime-client` 读证据，认得 `directml` 的两种绑定。
+  - **actinglab ≤ v0.12.43、actingctl 和 MCP 读本版的账本**：配置还是 `cpu` 时，本版写下的和 v0.12.43 一样，什么都不变。切到 `directml` 以后，事件页、离线
+    `resource restore` 和取证照常：新东西都只是已有形状里的值（见上面的账本）。**只有一处读不了**：钉 v0.12.43 或更早的 `runtime-client` 跑任务、等结果时
+    （actingctl `task-run`、actinglab `lab run`、MCP `ac_run_pack`，都经 `submit_prepared` → `flow_output`，`crates/runtime-client/src/client.rs` 2392–2459、4107），
+    要读运行的 OCR 观察诊断件做官方 OCR 投影；它的执行证据用封闭枚举 `{cpu, cuda}`（664–667，`OcrProviderEvidence` 4213–4217），读到 `requested_provider`
+    为 `directml` 就解不开（`runtime_official_ocr_observation_malformed`，5211–5212），客户端在终点之后报 `runtime_official_ocr_projection_failed_after_terminal`
+    （4116），运行本身已经在 Runtime 里结束。整模型回退到 CPU 以后也一样（`requested_provider` 还是 `directml`）。生产根里的 actingctl（含看门狗和 MCP 服务）和
+    `tools\actinglab.exe` 和 Runtime 是同一个构建，随部署一起换；在根外跑的、钉旧版的那几份要在切换之前先换。
+  - **控制台 UI**（UI 仓 main `c03d18ea`，UI v0.12.10：`Cargo.toml` 39–44 把合同、账本、取证、`runtime-client`、配置和内核 crate 都钉在 `a322caa4`，即 v0.12.43；
+    `crates/acui-setup/component-interfaces.json` 声明 `actingd-config` [5, 26]、`ledger` [3, 7]、`runtime-client` [3, 5]、`runtime-outcomes` [1, 1]）：
+    - 配置文件没写新成员：照边算全过（合同表的 U\* 行：`actingd-config` 三方共同的 5 到 26，`ledger` 7 在 [3, 7] 里，`runtime-client` [3, 5] 和 [3, 6] 有交集，
+      `runtime-outcomes` 1 在 [1, 1] 里；`actingctl install` 的计划不算控制台的边，`plan.rs` 424 的 `ui_edges` 只有闸门测试调用），和连 v0.12.43 一样。
+    - 写了新成员：文件是修订 27，不在控制台声明的 [5, 26] 里，三方协商在这个文件上不成立。实际上控制台不解释 `vision` 段：它构建的 workspace（`Cargo.toml`
+      2–13）把配置当 JSON 读，只查旧的 `vision_provider_manifest`（`crates/acui-installation/src/lib.rs` 74–77），源码里没有 `directml`；它不跑任务（没有
+      `run_contained_task`、`submit_prepared`），画面刷新走 `observe_readonly`（`crates/acui-source/src/workbench/preview.rs` 586–595），那不是任务运行，官方 OCR
+      投影是空的；会做三方协商的 acsetup 在 workspace 之外，不构建。
+    - 所以切换之前没有东西逼着先换控制台；生产根是单一位置根，里面没装控制台，切换照 `INSTALL.md` 改文件，不用 acsetup。控制台换钉 0.12.44、声明 [5, 27]，是为了
+      让它的声明和写了新成员的文件一致。
+
+运行上的变化：
+
+- GPU 上的 OCR（#407 GPU-1）：默认关，配置不改就什么都不变；切到 `directml` 要另开视觉根、写三样配置并重启 Runtime，GPU 用不了时按 `gpu_fallback` 转 CPU 或失败。
+
+本版合并的 PR：
+
+- #1532 GPU-1 A（#407）：`OnnxExecutionProvider::Directml`；按身份 `dxgi-pci:…` 选卡（DXGI 枚举加 D3DKMT 的适配器类型，只认物理卡，LUID 只记不比）；DirectML 运行库
+  钉表 `runtime_pin.rs` 和两条工具来源（加冻结断言）；DirectML 闭包、会话键和摘要的 DirectML 分支；新码 `vision_gpu_unavailable` 和它的两个键、两个词表；新测试
+  6 个，测试辅助函数补两个 `None` 成员。
+- #1533 GPU-1 D（#407）：`vision.directml_device`、`vision.gpu_fallback` 和它们的规则；check-config 和启动按钉表核运行库（`vision_runtime_unavailable` 多 `path`）；
+  启动时选一次卡，写两条 Binding，用不了时一条警告（`vision_startup`）；check-config 的 `vision.directml`；`actingd-config` [5, 27]；`INSTALL.md` 写改文件的做法；
+  新测试 5 个，架构测试的钉值改一处。
+- #1534 GPU-1 B1（#407）：DirectML 会话（关 memory pattern、顺序执行、允许 CPU 节点），影子会话和正式会话的选项出自同一个函数；运行库初始化的 DirectML 顺序；每次
+  建会话都重新选卡；DirectML 每次都读节点分布，报告 v2；执行证明的 `cpu_nodes` 和 `fallback_observed`；本片里 DirectML 失败一律报错；新测试 3 个，改造 2 个（报告
+  v2），`gate_411_a36c.rs` 的字面量补成员。
+- #1536 GPU-1 B2（#407）：`gpu_fallback` 的两种语义；运行库初始化时的进程级 CPU 决定；会话建不成时整模型改 CPU（检测模型连带识别模型）；`OcrModelLoad::Loaded` 带
+  执行状态；NN 在 `directml` 下用 CPU；新测试 4 个，没有新码。
+- #1535 GPU-1 C（#407）：识别包、内核、runtime-host、`runtime-client` 认 `directml` 的两种绑定（`directml`/`directml` 和整模型回退以后的 `directml`/`cpu`）；
+  `fallback_observed` 不进绑定比较（fix 1）；启动警告和各模型的回退警告进 perf-status（fix 2）；MCP `ac_overview` 的说明；新测试 5 个，没有改既有测试。
+- #1537 GPU-1 E（#407）：DirectML 跑失败答 `ProviderUnavailable`（`inference_failed`），内核卸载引擎、下次请求重建；重建后第一次又失败，`cpu` 下整模型改 CPU 直到
+  进程结束；词表 `gpu_unavailable_reason` 加 `inference_failed`；新测试 1 个。
+- #1538 FLK-08：`fact_snapshot_catches_up_with_critical_ledger_events` 挪进不稳定表和不作门禁的 `flaky` 作业（只改 CI；原因没定位到，14 天 649 次运行里失败过
+  1 次）。
+
 ## v0.12.43
 
 本版是 v0.12.42 之后合并的 2 个 PR：#404 FS-1 + FS-2（#1528）和 FS-3 + FS-2b（#1530）。先说部署：`package` 从 [3, 6] 升到 [3, 7]，`ledger` 从 [3, 6]
