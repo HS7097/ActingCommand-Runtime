@@ -7882,6 +7882,85 @@ process's history (a `static`, as B2's process route is), not the loader's. (e) 
 
 **E rollback** (to 0.12.43). Nothing persisted.
 
+### 1.287 Workflow #434 LAB-0 (0.12.x, before 1.00): the Lab and UI two-entry architecture, its ten slices and their order (Alice's words of 2026-11-08 in the coordinator window, 「…转发台下只分两种，一种就是来自 Lab，一种就是来自 UI。」, and her answers of 23:2x on board #434; design `rd-1108/arch-013/design-lab-ui.md` §5.5 with its §7, which wins, read on main `2ea50cf5`; coordinator work order `rd-1108/arch-013/brief-lab0.md`)
+
+[lab-two-entries.md](lab-two-entries.md) is the contract and [lab-operations.json](lab-operations.json)
+the operation table v1; the planned revisions are in
+[component-interfaces.md](component-interfaces.md), "Planned: Workflow #434". 1.287 was the next
+free number on the base `2ea50cf5`; each later slice of #434 adds its rows under this section, as
+GPU-1's slices do under §1.286.
+
+**LAB-0 itself.** Contracts only: the two-entry contract, the operation table v1 (168 operations:
+53 core, 28 debugging, 40 authoring, 47 rescue; 16 of them reserved), the planned interface rows
+and this section. No code, no test, no gate row, no CI file, no key, no code of the outcome
+catalog, and no live revision raised.
+
+**The ten slices** (design §5.5, with §7 applied; all in the 0.12 series, all before 1.00):
+
+| Slice | Repository | Size | What | Depends on | Named tests | Interfaces |
+|---|---|---|---|---|---|---|
+| LAB-0 | Runtime, contracts only | S | the contract, the table v1, the planned rows, this section | — | none | none |
+| LAB-1 | Runtime | L | `crates/lab-ops`: the operation table read from `lab-operations.json`, the default location (contract §9.3), the initiator type (contract §4); actingctl's read and write modules moved in (`overview`, `events`, `run_list`, `run_evidence`, `diagnose`, `facts`, `schedule`, `perf_preset`, `routine_summary`, `remedy`, `devices`, `packs`, `code_lookup`, `capability_gap`, `evidence_read`, `observe_export`) | LAB-0 | `lab_ops_table_complete` (contract §9.2); `lab_ops_locate_defaults`: on a fake installed root, without a root or a state root given, the layer finds both | none |
+| LAB-2 | Runtime | M | the CLI module: short words, output for people, `--json`; `actinglab serve --stdio`; actinglab's debugging and authoring commands on the table; its retired and reserved command words deleted | LAB-1 | `cli_json_matches_op_output`, `cli_short_words_parse`, `serve_answers_same_as_cli` | none |
+| LAB-3 | Runtime | L | the rescue and installation module; `deploy`, `config replace`, `place`, `alive`; the journal's `initiator`; the confirmation parameters gone and `unlock` without one (contract §5); guards that report and `--ack-guard` gone (contract §6, §7 Q4) | LAB-1 | `rescue_without_actingd`: without `runtime-info.json`, `op status`, `up` and `rollback` go through. `irreversible_journal_initiator`: the journals of `deploy`, `rollback`, `clean` and `config replace` carry the initiator, and a confirmation parameter (`--accept-ledger-one-way`, `--ui-confirmed`, `--ack-guard`) is `actingctl_usage_invalid` (`unknown`), the code renamed with LAB-7. `deploy_steps_in_order`: on fake seams, stage → plan → stop → apply → start → alive → release | none: `actingctl install` keeps the `install-cli` 1 face |
+| LAB-4 | Runtime | M | `crates/watchdog`; `actingwatch.exe` with its own tick, `status`, `install` and `uninstall` | — | the watchdog's existing gate tests move with the code (paths only, each listed); `actingwatch_tick_in_process` | none |
+| LAB-5 | Runtime | M | `actinglab-mcp.exe`: tools generated from the table, no tiers; the MCP entry `g2` | LAB-1, LAB-3 | `mcp_tools_from_op_table`: `tools/list` equals the installed modules' operations, with the CLI's parameters. `mcp_entry_g2_child`: the entry starts actinglab-mcp and passes `--client` down | the MCP entry's `entry_protocol` 2 |
+| LAB-6 | Runtime | M | the door: the two entries, the decision, the UI list, the envelope fixed by the channel; the origin gates and the five kinds deleted; receipts and G14 carry `initiator` | LAB-5 | `gate_two_entries`: `lab` takes everything; `ui` refuses a kind off the list with `channel_request_refused` and records a refused write `command.rejected`; an unbound connection gets `channel_binding_missing`; binding `cli` or `mcp` is refused; `ui_allows` equals the table's `ui_kinds`. `ui_settings_within_tiers`: a `hidden` key is refused with its `config_key`. `initiator_in_g14` | `runtime-client` 7, `ledger` 8, `actingd-config` 28 |
+| UI-L1 | UI | M | design §5.3: the pin to LAB-6's merge commit; `packs`, the watchdog status, the start and the unlock through `actinglab --json` children (no `--confirm-resources-released`); acsetup's `status`, `discover`, `shutdown`, `check-config` and `ledger verify` through actinglab, and no `install-transition`; no `RecordClientAction`; the fixed entries forward `actinglab.exe` and `actinglab-mcp.exe`; the command-line tool row gone; refusals shown by code and operation; one press for the buttons that stop or restart an emulator or restart a game (§7 Q4); every Lab child started with `ACTINGCOMMAND_INITIATOR` (contract §4.2) | LAB-6 merged | `tools_run_actinglab`, `setup_without_actingctl` | the UI's `runtime-client` [7, 7], a `ledger` range that holds 8, `install-cli` [2, 2] |
+| LAB-7 | Runtime | M | `apps/actingctl` deleted (actingwatch already stands alone); the manifests, the release flow, the fixed entries and the agent hook's path; actingctl's codes moved into actinglab's fragment; actingd's `--confirm-resources-released` gone; `RecordClientAction` off the UI list | UI-L1 merged | `runtime_manifest_without_actingctl`; the release package check | `install-cli` 2; `install-control` no longer declared; `tools-layout` 5 |
+| UI-L2 | UI | L | design §5.3: acsetup as the graphical shell of the rescue module (a first install calls `new`, an upgrade `deploy`); its own layout, upgrade and generation code deleted; the installer's Lab page as two check boxes, the MCP module and the authoring module | LAB-3, LAB-7 | `setup_drives_lab_install_new` | none |
+
+**Order and deployment** (design §5.5):
+
+1. LAB-1 to LAB-5 only add: actingctl stays and nothing it does changes. They may ship in batches
+   in 0.12.4x. After LAB-3 the coordinator's three hand-run flows
+   (`rd-1031/deploy-v01244/deploy.ps1`, `rd-1027/hotplace-r10/hotplace.ps1`,
+   `rd-1108/dml_switch.ps1`) become `deploy`, `place` and `config replace`.
+2. LAB-6 and LAB-7 go into one Runtime release, deployed with the UI release of UI-L1, which pins
+   LAB-6's merge commit first. So no window has actingctl present while the door refuses its `cli`
+   binding.
+3. UI-L2 last.
+4. All ten come before 1.00 (Alice, 11-08 23:0x: 「…给0.13版本仅留3D相关的支持，其余的全部在0.12系列完成。」,
+   「…0.12系列完成之后，终版我打算直接给它发成1.00版本，结束预览。」). LAB-6 and LAB-7 fix the
+   interface revisions of 1.00; UI-L2 leaves 1.00 one installer.
+
+**Feature slices on the table** (design §5.6): F-BATCH (#410 item 2, `batch`), F-CRASH (#410 item
+4, `crash-log`), F-A11Y (#410 item 5, `a11y`), F-VIEW (#393, `package view export` and `import`),
+F-MPE (#408, `resource import-mpe`, after Alice's ruling on A to F), and the UI's UI-A1 to UI-A3
+(#346, through `actinglab serve`). Each comes after LAB-1, gets its own section when built, and
+opens its `reserved` row of the table. #410 item 3 (MCP's descriptions written once) is LAB-5's.
+
+**LAB-0's interface.** None: `actingd-config` 27, `ledger` 7, `runtime-client` 6, `package` 7,
+`runtime-outcomes` 1, declared [5, 27], [3, 7], [3, 6], [3, 7] and [1, 1] as before.
+
+**Where LAB-0 differs from the design's letter.**
+
+- (a) §7 over the earlier sections: the initiator is one word of six (not `{module, client}`);
+  guards report and `--ack-guard` goes, `foreign_pauses` included (not §2.3's "global pause still
+  refuses"); `lab_module_authoring` stays and means installed, only `lab_module_debugging` retires
+  (not "both keys retire").
+- (b) `MonitorStatus` joins the UI list, so that `status` is one operation on both entries.
+- (c) The table lists, besides §3.1's rows, the current commands §3.1 leaves out
+  (`touch-probe`, `recover`, `watch`, `release verify`, `release stage`, `adopt`, `prepare`, the
+  candidate family `config file …`, `instance add` and `remove`, `pack remove` and `restore`), and
+  operations for the UI list's #429 kinds (`task run`, `task stop`, `pack-schedule`,
+  `pack-schedule set`, `targets edit`), so that every kind on the list belongs to an operation.
+- (d) A refusal carries the code's registered `operation` and the existing `config_key`, not the
+  design's `request_kind` and `key`.
+- (e) An authoring operation that is not installed is refused with actinglab's
+  `lab_command_option_disabled`, not the host's `lab_module_not_installed`.
+- (f) `config file commit`, `pack remove` and `pack restore` are irreversible too, as the same
+  change as `config replace` and `place`.
+- (g) `do`, `ensure` and `wait` are `optional` (they replay offline today), not §3.1's "必".
+- (h) One operation per CLI form; LAB-5 decides how MCP presents a family (contract §13, open
+  point 9).
+- (i) The design's named tests predate §7: none checks that a failing guard no longer refuses, so
+  LAB-3's work order names one.
+
+**Open points** for the coordinator: [lab-two-entries.md](lab-two-entries.md) §13.
+
+**Rollback.** Nothing to roll back: text only.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -238,6 +238,10 @@ v0.12.0 declares ranges that contain these.
 
 ### Planned: `install-control` 2 (Workflow #389 U-4)
 
+Superseded by Workflow #434 ("Planned: Workflow #434" below): the upgrade state is not built,
+LAB-6 deletes `UpgradeState`, `UpgradeStateStatus` and `InstallTransition`, and `install-control`
+retires. The text below is kept as the record of the plan.
+
 Not declared by v0.12.0, which keeps [0, 1]. The Runtime release that carries
 U-4 (0.12.x) declares [0, 2]:
 
@@ -251,6 +255,37 @@ with the installed slot's actingctl, so the first upgrade to a Runtime that
 speaks 2 still closes the old one with revision 1. Against a Runtime that speaks
 2, acsetup ([0, 2], UI U-5) uses only the upgrade state; to stop a Runtime
 outside an installation, `actingctl request-shutdown` stays.
+
+### Planned: Workflow #434 (LAB-6 and LAB-7; [lab-two-entries.md](lab-two-entries.md))
+
+Planned rows, **not in force**: no build declares them. Runtime 0.12.44 declares
+`actingd-config` [5, 27], `ledger` [3, 7] and `runtime-client` [3, 6], and does not declare
+`install-cli` yet (revision 1 from R-15d). LAB-6 turns on the first three, LAB-7 the fourth; both
+go into one Runtime release, paired with the UI release of UI-L1
+([v012-register.md](v012-register.md) §1.287). LAB-0, which writes these rows, raises nothing.
+
+| Interface | Rev | Meaning | Anchor | Slice |
+|---|---|---|---|---|
+| `runtime-client` | 7 | revision 6 plus the two entries ([lab-two-entries.md](lab-two-entries.md) §2, §3, §4): `BindChannel{channel, initiator?}` takes `lab` with `initiator` (required) and `ui` without it, and refuses `cli` and `mcp` (`channel_request_refused`); `ChannelBound{channel, initiator}`; every receipt carries `initiator` beside `channel`, and the player hold's source (`PlayerHoldSource`) carries it in place of `via`; the closed vocabulary of the six initiator words (`UI`, `Lab-CLI`, `Lab-MCP`, `Lab-制包`, `Lab-救急`, `Lab-看门狗`); `ChannelVia` and every `via` removed; the kinds `DeclareGovernanceIdentity`, `RecordApprovalDecision`, `InstallTransition`, `UpgradeState` and `UpgradeStateStatus` removed with their results; the `ui` entry's list (`ui_allows`), whose refusals are `channel_request_refused` with `channel` `ui` (and `config_key` for a setting). A Runtime of revision 7 refuses every revision-6 client (it binds `cli`, `mcp` or `lab` without an initiator, or names `via`), a Runtime of revision 6 cannot read a revision-7 `BindChannel`, and a client of revision 6 cannot read a receipt with `initiator` (both deny unknown members), so the Runtime declares [7, 7] and pairs only with a console of revision 7 (UI-L1); actinglab and actinglab-mcp of the same build speak 7 through the same contract crate | `crates/actingcommand-contract/src/runtime.rs`, `RuntimeOperation::BindChannel`, `RuntimeResult::ChannelBound`; `crates/actingcommand-contract/src/runtime/interface.rs`, `RuntimeChannel`, `ui_allows`; `crates/actingcommand-contract/src/runtime/player_hold.rs`, `PlayerHoldSource`; `distribution/windows/component-interfaces.json` | LAB-6 |
+| `ledger` | 8 | revision 7 plus the optional member `initiator` (the closed vocabulary of the six words) of the command records `command.received`, `command.validated` and `command.rejected`, beside `channel` in their payloads (`ObservationPayload`, `OutcomePayload`, `DiagnosticOutcomePayload`), and of the player hold's ledger copy `NotRunHoldSource`, in place of `via`. From it the Runtime writes `channel` `lab` or `ui` only and no `via`, and still reads `cli`, `mcp` and `via` in records of revisions 3 to 7. SQLite format 2, `actingcommand.event.v3`, the record types, the tables, the indexes and every view's type list are unchanged, so the Runtime reads revision-3 to revision-7 ledgers and declares [3, 8], with no fresh state root and no migration. A Runtime that declares [3, 7] refuses a revision-8 record (the payloads deny unknown members), so going back to it is refused (Rp.max in R\*): the update past it records `one_way: true` in its journal (`--accept-ledger-one-way` is gone, [lab-two-entries.md](lab-two-entries.md) §5) and the rollback below it is refused, whether or not a revision-8 record was written; and the Runtime combines only with a console whose `ledger` range holds 8 | `crates/actingcommand-contract/src/event/payload.rs`, `ObservationPayload`, `OutcomePayload`, `DiagnosticOutcomePayload`; `crates/actingcommand-contract/src/event/payload/not_run.rs`, `NotRunHoldSource`; `distribution/windows/component-interfaces.json` | LAB-6 |
+| `actingd-config` | 28 | revision 27 with the two Lab option keys changed (Alice's answer 2; [lab-two-entries.md](lab-two-entries.md) §8.3): `lab_module_authoring` keeps its shape and now means only that the Lab's authoring module is installed, which the Lab reads and the Runtime decides nothing by; `lab_module_debugging` is retired: still accepted when a boolean, with no effect, noted with the caveat `config_key_retired` (as `install.guard.blocked_windows`, revision 18), and its row leaves the console's tier table. The `install.guard.*` keys keep their shape and become thresholds of a report (guards no longer refuse, [lab-two-entries.md](lab-two-entries.md) §6). No key is added and none refused, so a revision-27 file is a revision-28 file and the Runtime still reads revisions 5 to 27: it declares [5, 28]. The revision marks the changed meaning, which the installer and the console must follow (the installer's Lab page, the console's read-only rows) | `apps/actingd/src/config.rs`, `ActingdConfigFile::lab_module_authoring`, `ActingdConfigFile::lab_module_debugging`; `crates/runtime-config/src/ui_tier.rs`, `UI_TIERS`; `distribution/windows/component-interfaces.json` | LAB-6 |
+| `install-cli` | 2 | the face the UI reads and writes moves from `actingctl install` to the Lab's rescue module ([lab-two-entries.md](lab-two-entries.md) §5 to §7; the `rescue` rows of [lab-operations.json](lab-operations.json)): its command words; one call where revision 1 had plan and apply; no `--plan <id>`, `--accept-ledger-one-way`, `--ui-confirmed`, `--via`, `--known-pause`, `--ack-guard`, `--root` or `--state-root`; guards that report; the journal's `initiator` and `one_way`; the answer members and registered words of revision 1 otherwise. A UI of revision 1 runs `actingctl install`, which LAB-7 deletes, so the Runtime of LAB-7 declares [2, 2] and the UI from UI-L1 [2, 2]. Until LAB-7, `actingctl install` keeps the revision-1 face unchanged beside the rescue module (LAB-3); a Runtime that by then still has not declared revision 1 (R-15d) declares [2, 2] directly | `contracts/install-cli.md`; `contracts/lab-operations.json`; `distribution/windows/component-interfaces.json` | LAB-7 |
+
+Also planned by the same design (§5.2), outside the rows above:
+
+- **`install-control`** retires: `InstallTransition` goes with LAB-6 and the cold protocol's
+  `actingctl request-shutdown --wait` with LAB-7, and the installer is the Lab's rescue module.
+  The release of LAB-7 no longer declares it, and acsetup's per-operation check of it leaves with
+  UI-L1. The planned revision 2 above is not built.
+- **`tools-layout` 5** (derived, never declared): actinglab moves into the runtime member,
+  `actinglab-mcp.exe` is added, and `actingwatch.exe` carries the watchdog itself (LAB-4, LAB-5,
+  LAB-7).
+- **`install-selection`** does not move: only its reader list names actinglab instead of
+  actingctl.
+- **The MCP entry's `entry_protocol`** becomes 2, in `mcp-entry\g2\`, its child
+  `actinglab-mcp.exe` (LAB-5; [install-cli.md](install-cli.md), "The MCP entry").
+- **`install-root`**: whether the journal's `initiator` and `one_way` raise it is LAB-3's to judge
+  ([lab-two-entries.md](lab-two-entries.md) §13, open point 5).
 
 ## Bump rule
 
