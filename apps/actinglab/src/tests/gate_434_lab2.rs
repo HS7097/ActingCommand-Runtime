@@ -22,11 +22,14 @@
 //   steps and marks carry the process's initiator word (§4.2), `ACTINGCOMMAND_INITIATOR` changes
 //   it, a word the variable may not name is refused and nothing is written, and through MCP's
 //   actinglab child (`--via mcp`) the word is `Lab-MCP` (§4.1).
-// - `consumer_command_lines_answer_as_on_main` (fix 1): every command of actinglab's dispatch is
-//   actinglab's own on `main`'s route, and each command line its consumers send (acmodel's
-//   validator, the resource repositories' CI and scripts, the coordinator's hotplace kit, MCP's
-//   `--via mcp` child) prints through `main`'s entry exactly what `main` printed before LAB-2,
-//   with the same exit code, against the same fixture.
+// - `consumer_command_lines_take_the_old_path_unchanged` (fix 1; renamed in fix 2): every command
+//   of actinglab's dispatch is actinglab's own on `main`'s route, its words unchanged, and each
+//   command line its consumers send (acmodel's validator, the resource repositories' CI and
+//   scripts, the coordinator's hotplace kit, MCP's `--via mcp` child) prints through `main`'s
+//   entry exactly what the same line prints through the parse-and-run path without the route
+//   (this build's code of before LAB-2), with the same exit code, against the same fixture, the
+//   request id each run issues masked: the route changes no output. That this output is main's is pinned by the integration goldens
+//   (`tests/golden_protocol.rs`, `tests/consumer_goldens.rs`).
 // Fakes only: an empty configuration in a temporary folder, offline frames and fixtures; no
 // Runtime, no device, no clock, no sleep.
 
@@ -461,8 +464,8 @@ fn square_frame(color: [u8; 3]) -> Vec<u8> {
 }
 
 /// One offline frame of the Lab recording under `lock`, with its colour mark and, with `click`,
-/// the step's click.
-fn mark(lock: &RecordingLock, ocr: &LabOcr, frame: &Path, page: &str, click: bool) {
+/// the step's click; the answer `record mark` prints as its `data`.
+fn mark(lock: &RecordingLock, ocr: &LabOcr, frame: &Path, page: &str, click: bool) -> Value {
     let request = MarkRequest {
         schema_version: LAB_RECORD_MARK_SCHEMA.to_owned(),
         frame: Some(frame.display().to_string()),
@@ -484,8 +487,19 @@ fn mark(lock: &RecordingLock, ocr: &LabOcr, frame: &Path, page: &str, click: boo
         }),
         ..MarkRequest::default()
     };
-    record_mark(lock, &request, false, ocr)
+    let outcome = record_mark(lock, &request, false, ocr)
         .unwrap_or_else(|error| panic!("record mark {page}: {}: {}", error.code, error.message));
+    serde_json::to_value(outcome).expect("the answer of record mark")
+}
+
+/// The `initiator` of each mark an answer of `record mark` lists.
+fn answered_words(answer: &Value) -> Vec<Value> {
+    answer["marks"]
+        .as_array()
+        .expect("the answer's marks")
+        .iter()
+        .map(|mark| mark["initiator"].clone())
+        .collect()
 }
 
 #[test]
@@ -638,7 +652,8 @@ fn recording_steps_and_marks_carry_the_initiator() {
     );
 
     // The Lab recording (`record mark`): each step and mark carries the word of the process that
-    // held the lock when it was added.
+    // held the lock when it was added, and (fix 2) the answer of `record mark` carries the word
+    // the file does.
     let lab_state = temp.path().join("lab-state");
     fs::create_dir_all(&lab_state).unwrap();
     fs::write(
@@ -678,14 +693,41 @@ fn recording_steps_and_marks_carry_the_initiator() {
             },
         )
         .expect("record start");
-        mark(&lock, &ocr, &red, "home", true);
+        let answer = mark(&lock, &ocr, &red, "home", true);
+        assert_eq!(answered_words(&answer), [json!("Lab-救急")], "{answer}");
     }
-    {
-        let word = cli_module::recording_initiator(Some(ChannelVia::Mcp)).expect("Lab-MCP");
-        let lock = RecordingLock::acquire(&lab_state, "neutral.instance", "gate_434_lab2", word)
-            .expect("recording lock");
-        mark(&lock, &ocr, &blue, "list", false);
-    }
+    // MCP's actinglab child (`ac_record_mark`): `--json --via mcp … record mark --request-json …`
+    // through `main`'s entry; its answer is the envelope's `data`.
+    let request = json!({
+        "schema_version": LAB_RECORD_MARK_SCHEMA,
+        "frame": blue.to_str().unwrap(),
+        "add": [{
+            "id": "list_color",
+            "family": "color",
+            "region": {"x": 0, "y": 0, "width": 4, "height": 4}
+        }]
+    })
+    .to_string();
+    let through_mcp = words_of(&[
+        "--json",
+        "--via",
+        "mcp",
+        "--instance",
+        "neutral.instance",
+        "record",
+        "mark",
+        "--state-dir",
+        lab_state.to_str().unwrap(),
+        "--request-json",
+        request.as_str(),
+    ]);
+    let answered = match entry(through_mcp.clone(), true) {
+        Ok(invocation) => run_invocation(invocation),
+        Err(module) => panic!("{through_mcp:?} is actinglab's own command line: {module:?}"),
+    };
+    assert_eq!(answered.exit_code(), 0, "{}", answered.envelope_json());
+    let answer = answered.envelope.data.clone().expect("the answer's data");
+    assert_eq!(answered_words(&answer), [json!("Lab-MCP")], "{answer}");
     let recording: Value = serde_json::from_slice(
         &fs::read(
             lab_state
@@ -723,10 +765,11 @@ fn recording_steps_and_marks_carry_the_initiator() {
     set_missing_config_env();
 }
 
-/// What `main` printed for `line` before LAB-2 (`apps/actinglab/src/main.rs` on main `c76ce040`):
-/// the command line parsed (`json_default` when stdout is no terminal), run, and printed as the
-/// envelope or as the text for people; the printed line and the exit code.
-fn as_on_main(line: &[String], json_default: bool) -> (String, i32) {
+/// What `line` prints through the parse-and-run path without `main`'s route: the command line
+/// parsed (`json_default` when stdout is no terminal), run, and printed as the envelope or as the
+/// text for people, by this build's code (the steps `main` took before LAB-2); the printed line
+/// and the exit code. This build's, not main's: the integration goldens compare with main.
+fn without_the_route(line: &[String], json_default: bool) -> (String, i32) {
     printed(&run_invocation(parse_invocation(
         line.iter().cloned(),
         json_default,
@@ -752,8 +795,41 @@ fn printed(result: &CliResult) -> (String, i32) {
     (text, result.exit_code())
 }
 
+/// `printed` with each request id its run issued (`req-<hex>-<n>`, new in every run, as
+/// `detect-page`'s refusal details carry it) as `<REQ_ID>`: the one member two runs of the same
+/// line never share (fix 2; the protocol goldens mask it the same way). Everything else stays.
+fn run_ids_masked((text, code): (String, i32)) -> (String, i32) {
+    let mut masked = String::with_capacity(text.len());
+    let mut rest = text.as_str();
+    while let Some(start) = rest.find("req-") {
+        masked.push_str(&rest[..start]);
+        let after = &rest[start + "req-".len()..];
+        let hex = after
+            .find(|character: char| !character.is_ascii_hexdigit())
+            .unwrap_or(after.len());
+        let tail = &after[hex..];
+        let digits = tail.strip_prefix('-').map(|number| {
+            number
+                .find(|character: char| !character.is_ascii_digit())
+                .unwrap_or(number.len())
+        });
+        match digits {
+            Some(digits) if hex > 0 && digits > 0 => {
+                masked.push_str("<REQ_ID>");
+                rest = &tail[1 + digits..];
+            }
+            _ => {
+                masked.push_str("req-");
+                rest = after;
+            }
+        }
+    }
+    masked.push_str(rest);
+    (masked, code)
+}
+
 #[test]
-fn consumer_command_lines_answer_as_on_main() {
+fn consumer_command_lines_take_the_old_path_unchanged() {
     let _guard = env_lock();
     unsafe {
         env::remove_var(ENVIRONMENT_VARIABLE);
@@ -947,8 +1023,12 @@ fn consumer_command_lines_answer_as_on_main() {
     ];
     for (line, json_default) in lines {
         let line = words_of(line);
-        let now = through_main(&line, json_default);
-        assert_eq!(now, as_on_main(&line, json_default), "{line:?}");
+        let now = run_ids_masked(through_main(&line, json_default));
+        assert_eq!(
+            now,
+            run_ids_masked(without_the_route(&line, json_default)),
+            "{line:?}"
+        );
         if json_default {
             // The envelope its consumers read: `ok`, and `data` or `error`.
             let envelope: Value = serde_json::from_str(&now.0).expect("the envelope");

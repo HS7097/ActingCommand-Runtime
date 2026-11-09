@@ -297,7 +297,7 @@ fn own_command_line(arguments: &[String]) -> bool {
 }
 
 /// actinglab's commands of one word, as [`execute`] dispatches them (keep the two in step;
-/// `gate_434_lab2::consumer_command_lines_answer_as_on_main` checks every command of
+/// `gate_434_lab2::consumer_command_lines_take_the_old_path_unchanged` checks every command of
 /// `ratchet/actinglab_commands.json`, which the architecture guard keeps equal to [`execute`]).
 const OWN_COMMANDS: [&str; 33] = [
     "help",

@@ -216,19 +216,14 @@ fn open_session_with(lock: &RecordingLock, allow_stopped: bool) -> LabResult<Ses
 }
 
 /// Writes the pending frames and crops, then the recording. A failure names what was
-/// already written; nothing is deleted. Workflow #434 LAB-2: every step and mark this command
-/// added (one whose `initiator` is still empty) is written with the lock holder's initiator word;
-/// those of earlier commands keep theirs.
+/// already written; nothing is deleted. Workflow #434 LAB-2: every step this command added (one
+/// whose `initiator` is still empty) is written with the lock holder's initiator word; those of
+/// earlier commands keep theirs. A mark carries the word from when it is made (`add_marks`, fix 2).
 pub(crate) fn save(session: &mut Session) -> LabResult<Vec<String>> {
     let initiator = session.initiator.clone();
     for step in &mut session.recording.steps {
         if step.initiator.is_empty() {
             step.initiator.clone_from(&initiator);
-        }
-        for mark in &mut step.marks {
-            if mark.initiator.is_empty() {
-                mark.initiator.clone_from(&initiator);
-            }
         }
     }
     let mut written = Vec::new();
@@ -915,6 +910,9 @@ fn add_marks(
             }
         };
         let mut mark = prepared.mark;
+        // Workflow #434 LAB-2 fix 2: the lock holder's initiator word, filled when the mark is
+        // made, so that the answer of `record mark` carries the word the file does.
+        mark.initiator.clone_from(&session.initiator);
         if let (Some(crop), Some(png)) = (mark.crop.as_mut(), prepared.crop_png) {
             if let Some(owner) = assets.get(&crop.asset)
                 && owner != &spec.id
