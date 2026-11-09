@@ -286,7 +286,11 @@ tier are ordered by the ranking and its tie-break, the rules' order in this file
 (since 0.12.32): the evaluator ranks the maintenance tier (the unmarked rules) before the
 business tier (the rules marked `benefit_judged`, "Judged rules" above), whatever their
 `priority`, and the judged business rules by their net benefit per expected millisecond
-([scheduling/README.md](scheduling/README.md), "Net benefit within a tier"). SS-2c (since
+([scheduling/README.md](scheduling/README.md), "Net benefit within a tier"). SS-2f (since
+0.12.45, register §1.288): that net benefit orders one instance's business rules only; across
+instances the business tier goes to the instance least recently dispatched first ("Turns across
+instances" there), so the rules of one game never outrank another game's by their values, and a
+game's own rules keep their order on its instance. SS-2c (since
 0.12.32): a maintenance rule whose package has no maintenance role by the root files declares
 `"maintenance": true` ("Judged rules", "The maintenance declaration"), so that it stays in the
 maintenance tier; its `priority` is still the high value of its tier. When the

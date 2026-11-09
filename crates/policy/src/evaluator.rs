@@ -46,6 +46,9 @@ mod benefit;
 // SS-4 (register §1.231; design rd-1029/design-sch-state.md §4.7; Alice's ruling 105 A): the
 // no-progress guard.
 mod no_progress;
+// SS-2f (register §1.288; Alice's answer K2 to question 137): the business tier's turns across
+// instances.
+mod turns;
 
 use benefit::KnownBenefit;
 pub use blackout::{
@@ -70,6 +73,7 @@ pub use no_progress::{
 };
 pub use rerun::{OwedRerun, OwedReruns};
 use tie_break::TieKey;
+use turns::InstanceTurns;
 
 pub const MAX_EVALUATION_FACTS: usize = 16_384;
 pub const MAX_EVALUATION_OUTCOMES: usize = 16_384;
@@ -1502,6 +1506,8 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         .enumerate()
         .map(|(index, task)| (task.id.as_str(), (index, task)))
         .collect();
+    // SS-2f: each instance's most recent policy dispatch, from the snapshots the round holds.
+    let turns = InstanceTurns::new(&facts.tasks);
     let placement_context = PlacementContext {
         profiles: catalog_bundle.activity.profiles.as_slice(),
         pool_specs: &pool_specs,
@@ -1514,6 +1520,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         last_results: &last_results,
         facts,
         timeline_events: &timeline_events,
+        turns: &turns,
     };
     let mut work = Vec::new();
     let mut candidates = Vec::new();
@@ -1900,7 +1907,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
 
     // SS-2b: the tiers and the net benefit order the round only when the catalog marks a task.
     let tiers = benefit_tiers(catalog);
-    candidates.sort_by(|left, right| allocation_order(left, right, tiers));
+    candidates.sort_by(|left, right| allocation_order(left, right, tiers, &turns));
     // Workflow #411 B41: on an instance where a chain step hands over on its page, the successor
     // is allocated before the candidates that ranked ahead of it. A deferral under one of
     // `successor_waits` (the Runtime's random delay) is part of the successor's dispatch.
@@ -2524,16 +2531,32 @@ fn benefit_tiers(catalog: &CompiledCatalog) -> bool {
 /// So it runs only where nothing else of its instance is chosen, and it takes no shared run
 /// slot and no reserve room from a candidate before it. A round with no released candidate
 /// orders as before.
+///
+/// SS-2f (register §1.288; Alice's answer K2 to question 137; design
+/// `rd-1031/design-acm-price-addendum2.1.md` §5.4): with `tiers`, two business candidates of
+/// different instances go by their instances' `turns` ([`InstanceTurns::order`]): the instance
+/// whose most recent policy dispatch is the earliest first, one never dispatched before every
+/// dispatched one, then the smaller instance id. It comes after the zero tier's place, so among
+/// the promoted, the positive and the released candidates alike; within an instance the order
+/// above stays, and the maintenance tier and a catalog without `tiers` order as before.
 fn allocation_order(
     left: &PlacementCandidate,
     right: &PlacementCandidate,
     tiers: bool,
+    turns: &InstanceTurns<'_>,
 ) -> std::cmp::Ordering {
     let promoted = (right.promoted && !right.zero_tier).cmp(&(left.promoted && !left.zero_tier));
     let value = if tiers {
         promoted
             .then_with(|| left.business.cmp(&right.business))
             .then_with(|| left.zero_tier.cmp(&right.zero_tier))
+            .then_with(|| {
+                if left.business && right.business {
+                    turns.order(&left.instance_id, &right.instance_id)
+                } else {
+                    std::cmp::Ordering::Equal
+                }
+            })
             .then_with(|| left.benefit.is_some().cmp(&right.benefit.is_some()))
             .then_with(|| match (&left.benefit, &right.benefit) {
                 (Some(left), Some(right)) => left.order(right),
@@ -3106,6 +3129,9 @@ struct PlacementContext<'a> {
     /// SS-2: the facts the gates read, after the time-validity projection.
     facts: &'a EvaluationFacts,
     timeline_events: &'a BTreeMap<&'a str, &'a TimelineEvent>,
+    /// SS-2f: each instance's most recent policy dispatch, which orders the business tier across
+    /// instances.
+    turns: &'a InstanceTurns<'a>,
 }
 
 impl PlacementContext<'_> {
@@ -4285,7 +4311,9 @@ fn apply_reserves(
     // The allocation order (the round's own sort), without moving the candidates.
     let tiers = benefit_tiers(catalog);
     let mut order = (0..ranked.len()).collect::<Vec<_>>();
-    order.sort_by(|left, right| allocation_order(&ranked[*left], &ranked[*right], tiers));
+    order.sort_by(|left, right| {
+        allocation_order(&ranked[*left], &ranked[*right], tiers, context.turns)
+    });
     let candidates = order
         .iter()
         .enumerate()

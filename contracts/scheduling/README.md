@@ -896,6 +896,22 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
   one; at least 1), compared exactly as `B·E' > B'·E`; then `affinity` and the tie-break of
   "Ties and chain heads" on integer equality. The handwritten `priority` no longer orders judged
   candidates of one tier. The reserve gate takes each instance's candidates in this order.
+- **Turns across instances** (SS-2f, since 0.12.45; Alice's answer K2 to question 137, 11-02
+  19:4x, design `rd-1031/design-acm-price-addendum2.1.md` §5.4; register §1.288). Each game
+  values its candidates in its own unit, so `B` compares only within one instance. In the
+  business tier two candidates of different instances therefore go by their instances' turns,
+  before every other key of the tier: the instance whose most recent policy dispatch is the
+  earliest first, an instance never dispatched before every dispatched one, and at the same
+  instant (two never dispatched included) the smaller instance id. An instance's most recent
+  policy dispatch is the latest `last_dispatched_unix_ms` of its task snapshots, the recognition
+  maintenance package's (the fact refresh's) included: the snapshots every evaluation already
+  receives, which the Runtime projects from the policy dispatches it admitted, so nothing new is
+  read and no ledger query is added. Within an instance the order above stays (unjudged first,
+  then judged by `B ÷ E`); the turns apply among the promoted candidates and among the released
+  ones of the zero tier ("Within tolerance") too, the zero tier still last.
+  The maintenance tier, "one dispatch per instance", the reserve gate and the shared run limits
+  are unchanged; the round's order stays total. A catalog without `benefit_judged`, or a round
+  with no business candidate, orders as before. No configuration key, no new code or record.
 - **Where it sits.** The gate is part of the score stage: it follows the stage's own deferrals
   and precedes the reserve gate, so a candidate it holds takes no reserve room, and it comes before
   the closure's positions ([../scheduling-blackout.md](../scheduling-blackout.md), "Order of the
@@ -936,7 +952,8 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
     verified worthless is weighed 0) and whose latest run there did not fail is *released*
     (`zero_tier: released`). It takes part in the allocation after every unjudged and every
     positive judged candidate of the business tier, of every instance, a promotion not lifting
-    it; among such candidates `affinity`, the tie-break and the hash decide. So it runs only when
+    it; among such candidates `affinity`, the tie-break and the hash decide (SS-2f: those of
+    different instances by their turns, "Turns across instances"). So it runs only when
     its instance has nothing else chosen, and it takes no shared run slot and no reserve room
     from a candidate before it. Every other gate still applies to it: the reserve gate, the shared
     run limits, every pause and hold, and the no-progress guard ("No-progress guard"), which holds
@@ -1138,7 +1155,9 @@ no value keys and stay developer text.
      one instance). `saturated=1` when a saturating sum clipped the total (the
      unsaturated 128-bit sum differs). SS-2b (since 0.12.32): in a catalog that
      marks a task `benefit_judged`, the tier comes after `promoted` and judged
-     candidates rank by `B ÷ E` within it ("Net benefit within a tier"); a
+     candidates rank by `B ÷ E` within it ("Net benefit within a tier"; SS-2f,
+     since 0.12.45: business candidates of different instances go by their
+     instances' turns first, "Turns across instances"); a
      judged winner's breakdown then ends with ` benefit_milli=<B>
      expected_duration_ms=<E>`, and its outcome carries both as values.
    - SS-2 (since 0.12.32): ` chain_head=<task id>` follows when the candidate
