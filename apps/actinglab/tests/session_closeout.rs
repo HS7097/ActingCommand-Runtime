@@ -21,7 +21,6 @@ fn run_actinglab(
     args: &[&str],
 ) -> Output {
     Command::new(actinglab_binary())
-        .arg("--envelope")
         .args(args)
         .env("ACTINGLAB_CONFIG_PATH", config_path)
         .env("ACTINGCOMMAND_RUNTIME_STATE_ROOT", runtime_root)

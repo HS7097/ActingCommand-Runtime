@@ -120,7 +120,8 @@ fn binding(value: &str) -> CliOutcome<(String, String, String)> {
     })
 }
 
-// Workflow #373 NAV-T (exec key 80), test row NT-3.
+// Workflow #373 NAV-T (exec key 80), test row NT-3. Its game root is also the fixture of the
+// consumer command lines of Workflow #434 LAB-2 fix 1 (`gate_434_lab2`).
 #[cfg(test)]
 #[path = "tests/gate_373_navt.rs"]
-mod gate_373_navt;
+pub(crate) mod gate_373_navt;

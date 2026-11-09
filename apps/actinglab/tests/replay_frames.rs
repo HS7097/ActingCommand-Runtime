@@ -464,7 +464,6 @@ fn write_scan(temp: &TempDir) -> PathBuf {
 
 fn run_actinglab<'a>(temp: &TempDir, args: impl IntoIterator<Item = &'a OsStr>) -> Output {
     Command::new(env!("CARGO_BIN_EXE_actinglab"))
-        .arg("--envelope")
         .args(args)
         .env("ACTINGLAB_CONFIG_PATH", temp.path().join("config.json"))
         .stdin(Stdio::null())

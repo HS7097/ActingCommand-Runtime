@@ -59,7 +59,7 @@ pub(super) fn serves(operation: &Operation) -> bool {
 }
 
 /// The operation `operation` with `params`, as its line.
-pub(super) fn execute(operation: &Operation, params: &Map<String, Value>) -> Exit {
+pub(super) fn answer(operation: &Operation, params: &Map<String, Value>) -> Exit {
     let name = operation.name.as_str();
     // Offline operations: no state root.
     match name {
@@ -582,7 +582,7 @@ fn served(name: &str, params: &Map<String, Value>, client: &RuntimeClient) -> Re
             let mut members = Map::new();
             members.insert(
                 "event_id".to_owned(),
-                serde_json::to_value(&event_id).map_err(|error| output_failed(&error))?,
+                serde_json::to_value(event_id).map_err(|error| output_failed(&error))?,
             );
             cli_line::success(members, &Outcome::new(ActingctlCode::AgentFactsPublished))
         }

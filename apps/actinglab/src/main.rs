@@ -236,14 +236,12 @@ fn main() -> ExitCode {
     actingcommand_runtime_client::set_channel_unsupported_reporter(|outcome| {
         eprintln!("WARN actinglab: {outcome}");
     });
-    // Workflow #434 LAB-2: the CLI module (the operation table's short words, `--json`, `serve
-    // --stdio`), unless the command line asks for the envelope form (`--envelope`, or `--via` from
-    // the MCP server's child), which runs the command words below as before.
-    if !cli_module::envelope_form(&arguments) {
-        return cli_module::main(arguments);
-    }
-    let json_default = !io::stdout().is_terminal();
-    let invocation = parse_invocation(cli_module::without_envelope(arguments), json_default);
+    // Workflow #434 LAB-2 fix 1: the CLI module answers `serve` and the operations it serves
+    // itself; every other command line is actinglab's own, answered below as before LAB-2.
+    let invocation = match entry(arguments, !io::stdout().is_terminal()) {
+        Ok(invocation) => invocation,
+        Err(arguments) => return cli_module::main(arguments),
+    };
     if let Ok(invocation) = &invocation
         && let Some(via) = invocation.global.via
     {
@@ -264,6 +262,115 @@ fn main() -> ExitCode {
         println!("{}", result.human_text());
     }
     ExitCode::from(exit_code as u8)
+}
+
+/// actinglab's own command line, parsed as before LAB-2 (the parser's refusal included), which
+/// `main` runs and prints as before: its output for people, its envelope (`--json`, or stdout
+/// not a terminal) and its exit codes.
+type OwnInvocation = Result<Invocation, (String, bool, CliError)>;
+
+/// What `main` runs for the command line `arguments` (Workflow #434 LAB-2 fix 1, the
+/// coordinator's ruling of 2026-11-10: the slice changes nothing any current consumer of
+/// actinglab gets): actinglab's own invocation, or `Err` with the command line of the CLI
+/// module (`serve`, or an operation it serves itself; `cli_module::route`). `json_default` when
+/// stdout is not a terminal.
+fn entry(arguments: Vec<String>, json_default: bool) -> Result<OwnInvocation, Vec<String>> {
+    match cli_module::route(arguments) {
+        cli_module::Route::Module(arguments) => Err(arguments),
+        cli_module::Route::Own(arguments) => Ok(parse_invocation(arguments, json_default)),
+        cli_module::Route::Refused {
+            command,
+            json,
+            error,
+        } => Ok(Err((command, json || json_default, error))),
+    }
+}
+
+/// Workflow #434 LAB-2 fix 1: whether `arguments` are a command line of actinglab's own commands,
+/// which keep what they answered before LAB-2: one the parser refuses (its refusal, as before), or
+/// one whose command words name a command of [`execute`] ([`own_command`]).
+fn own_command_line(arguments: &[String]) -> bool {
+    match parse_invocation(arguments.iter().cloned(), true) {
+        Ok(invocation) => own_command(&invocation.command),
+        Err(_) => true,
+    }
+}
+
+/// actinglab's commands of one word, as [`execute`] dispatches them (keep the two in step;
+/// `own_commands_follow_the_dispatch` checks them against `ratchet/actinglab_commands.json`, which
+/// the architecture guard keeps equal to [`execute`]).
+const OWN_COMMANDS: [&str; 33] = [
+    "help",
+    "version",
+    "paths",
+    "capabilities",
+    "doctor",
+    "status",
+    "schema",
+    "list",
+    "touch-probe",
+    "tap",
+    "swipe",
+    "long-tap",
+    "key",
+    "text",
+    "capture",
+    "detect",
+    "detect-page",
+    "recognize",
+    "recognize-artifact",
+    "observe",
+    "replay",
+    "recognition-regression",
+    "do",
+    "ensure",
+    "wait",
+    "current-page",
+    "is-visible",
+    "locate",
+    "tap-target",
+    "navigate",
+    "stream",
+    "record",
+    "explain",
+];
+
+/// actinglab's command groups whose every subcommand word is theirs, as [`execute`] dispatches
+/// them: the group answers a word it does not know with its own refusal, as before LAB-2.
+const OWN_GROUPS: [&str; 11] = [
+    "env",
+    "lab",
+    "package",
+    "operation",
+    "control",
+    "scheduling",
+    "resource",
+    "standard-pack",
+    "runtime",
+    "session",
+    "report",
+];
+
+/// The groups whose other words the operation table holds: only these subcommands are
+/// actinglab's own (`run evidence`, `run start`, `run stop` and `user-config <key>` are the
+/// table's).
+const OWN_SUBCOMMANDS: [(&str, &[&str]); 2] = [
+    ("run", &["list", "show", "open", "summary", "export"]),
+    ("user-config", &["get", "set"]),
+];
+
+/// Whether `command`, the command words the parser found, names a command of [`execute`].
+fn own_command(command: &[String]) -> bool {
+    match command {
+        [word] => OWN_COMMANDS.contains(&word.as_str()),
+        [group, sub] => {
+            OWN_GROUPS.contains(&group.as_str())
+                || OWN_SUBCOMMANDS
+                    .iter()
+                    .any(|(own, subs)| *own == group.as_str() && subs.contains(&sub.as_str()))
+        }
+        _ => false,
+    }
 }
 
 type CliOutcome<T> = Result<T, CliError>;

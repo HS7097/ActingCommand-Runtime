@@ -86,7 +86,6 @@ impl Fixture {
 
     fn run(&self, command: &str) -> Output {
         Command::new(env!("CARGO_BIN_EXE_actinglab"))
-            .arg("--envelope")
             .args([
                 "--json",
                 "--resource-root",

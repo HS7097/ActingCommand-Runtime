@@ -2,9 +2,11 @@
 
 //! `actinglab serve --stdio` (Workflow #434 LAB-2; `contracts/lab-two-entries.md` §8.2): a
 //! resident mode of the Lab core. Each line on stdin is one request `{"op": <operation name>,
-//! "params": {…}}`; each gets one answer line on stdout, in order: the JSON line the CLI prints
-//! with `--json` for the same operation and parameters (`{…result, "outcome": …}`, or
-//! `{"outcome": …}` for a refusal). A line that is no such request is answered with its refusal
+//! "params": {…}}`; each gets one answer line on stdout, in order: the line the operation's
+//! `--json` prints for the same parameters (LAB-2 fix 1). For an operation of the CLI module that
+//! is the line `cli_line` builds (`{…result, "outcome": …}`, or `{"outcome": …}` for a refusal);
+//! for one actinglab's own command serves, the envelope (`ok`, `data`, `error`) `actinglab
+//! --json` prints for that command. A line that is no such request is answered with its refusal
 //! (`actingctl_usage_invalid`) and the loop goes on; a developer line goes to stderr as the CLI
 //! writes it. The loop ends with stdin, exit 0; a stdin or stdout that fails ends it with the
 //! developer line `actingctl_output_failed`, exit 1. The operations are the CLI's, and the
@@ -73,7 +75,7 @@ pub(crate) fn serve(
         }
         let exit = match String::from_utf8(bytes.clone()) {
             Ok(line) if line.trim().is_empty() => continue,
-            Ok(line) => answer(table, line.trim_end_matches(['\r', '\n'])),
+            Ok(line) => answer_line(table, line.trim_end_matches(['\r', '\n'])),
             Err(_) => cli_line::failure(
                 &cli_line::usage_invalid(None, ArgumentProblem::NotUtf8),
                 Some(SERVE_USAGE),
@@ -101,9 +103,9 @@ pub(crate) fn serve(
 }
 
 /// The answer to one request line.
-pub(crate) fn answer(table: &OperationTable, line: &str) -> Exit {
+fn answer_line(table: &OperationTable, line: &str) -> Exit {
     match words::from_json(table, line) {
-        Ok(call) => super::execute(table, &call),
+        Ok(call) => super::answer(table, &call),
         Err(refusal) => cli_line::failure(&refusal, Some(SERVE_USAGE)),
     }
 }

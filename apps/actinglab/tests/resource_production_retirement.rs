@@ -27,8 +27,6 @@ fn resource_production_refuses_before_installation_config_and_recording_effects(
     for route in routes {
         for global in [None, Some("--dry-run"), Some("--version")] {
             let mut command = Command::new(env!("CARGO_BIN_EXE_actinglab"));
-            // Workflow #434 LAB-2: the envelope form of the command words.
-            command.arg("--envelope");
             command
                 .env("ACTINGLAB_CONFIG", &config)
                 .env("ACTINGCOMMAND_INSTALL_ROOT", root.path())

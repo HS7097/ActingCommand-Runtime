@@ -1,20 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! The debugging and authoring operations served by actinglab's own commands (Workflow #434
-//! LAB-2; register §1.287, LAB-2 row), and the core operations that are actinglab's own
-//! (`app launch|restart|stop`, its `session app`) and the two `user-config` rows. Each row names
-//! its command in `params_more` (`actinglab <words>`), or below: the operation's words are given
-//! to that command with the row's parameters (the instance as `--instance`) and every further flag
-//! and word as the caller gave it, and the command's answer becomes the line: its data beside
-//! `lab_operation_completed`, or its error's code (relayed: a code the catalog does not list is
-//! `outcome_relay_unregistered` with `raw_code`) with every member of its details beside it and
-//! its message as the developer text. `lab_operation_check_failed` so keeps `req_id`, `effect`,
-//! `executed` and the rest, and exits 1.
+//! The operations actinglab's own commands serve (Workflow #434 LAB-2; register §1.287, LAB-2
+//! row): the debugging and authoring rows, the core rows `app launch|restart|stop` (actinglab's
+//! `session app`) and the two `user-config` rows. Each row names its command in `params_more`
+//! (`actinglab <words>`), or below. The operation's short words are given to that command: its
+//! words, the row's positional words and the further words, then the instance as `--instance`,
+//! the row's options and switches and every further flag as the caller gave it.
+//!
+//! The command answers as it did before LAB-2 (LAB-2 fix 1, the coordinator's ruling of
+//! 2026-11-10): on the command line `main` prints its output and exits with its exit code, and
+//! `serve --stdio` answers the envelope its `--json` prints ([`envelope`]).
 
-use super::words;
-use crate::codes::ActinglabCode;
-use crate::{CliError, CliOutcome};
-use actingcommand_contract::outcome::Outcome;
+use super::{JSON, words};
 use actingcommand_lab_ops::cli_line::{self, Exit};
 use actingcommand_lab_ops::codes::ArgumentProblem;
 use actingcommand_lab_ops::table::{Operation, ParamForm, ParamType};
@@ -45,21 +42,36 @@ fn command_words(operation: &Operation) -> Option<Vec<String>> {
         .map(|(_, words)| words.iter().map(|word| (*word).to_owned()).collect())
 }
 
-/// The operation `operation` with `params`, run by actinglab's command, as its line.
-pub(super) fn execute(operation: &Operation, params: &Map<String, Value>) -> Exit {
-    let Some(arguments) = arguments(operation, params) else {
+/// The answer of `serve --stdio` to `operation` with `params`: the envelope `actinglab --json`
+/// prints for the command line of its command, with that command's exit code.
+pub(super) fn envelope(operation: &Operation, params: &Map<String, Value>) -> Exit {
+    let Some(words) = arguments(operation, params) else {
         return cli_line::failure(
             &cli_line::usage_invalid(Some(operation.name.as_str()), ArgumentProblem::Unknown),
             Some("no command of actinglab serves this operation"),
         );
     };
-    line(run(arguments))
+    let line = std::iter::once(JSON.to_owned()).chain(words);
+    let result = crate::run_invocation(crate::cli_parse::parse_invocation(line, true));
+    let code = u8::try_from(result.exit_code()).unwrap_or(1);
+    match serde_json::from_str::<Value>(&result.envelope_json()) {
+        Ok(envelope) => Exit {
+            line: Ok(envelope),
+            developer: None,
+            code,
+        },
+        Err(error) => Exit {
+            line: Err(format!("the envelope cannot be read back: {error}")),
+            developer: None,
+            code: 1,
+        },
+    }
 }
 
 /// The command line of `operation`: its words, the row's positional words, the further words,
 /// then the instance, the row's options and switches and the further flags. Positional words go
 /// first so that a switch is never followed by one (actinglab reads `--flag word` as a value).
-fn arguments(operation: &Operation, params: &Map<String, Value>) -> Option<Vec<String>> {
+pub(super) fn arguments(operation: &Operation, params: &Map<String, Value>) -> Option<Vec<String>> {
     let mut line = command_words(operation)?;
     let mut flags = Vec::new();
     for param in &operation.params {
@@ -102,55 +114,6 @@ fn arguments(operation: &Operation, params: &Map<String, Value>) -> Option<Vec<S
     }
     line.extend(flags);
     Some(line)
-}
-
-/// actinglab's command run on `arguments`: its data or its error.
-fn run(arguments: Vec<String>) -> CliOutcome<Value> {
-    let invocation =
-        crate::cli_parse::parse_invocation(arguments, true).map_err(|(_, _, error)| error)?;
-    crate::execute(&invocation)
-}
-
-/// The line of a command's answer.
-pub(crate) fn line(answer: CliOutcome<Value>) -> Exit {
-    match answer {
-        Ok(data) => cli_line::success(
-            members(data),
-            &Outcome::new(ActinglabCode::LabOperationCompleted),
-        ),
-        Err(error) => failed(error),
-    }
-}
-
-/// A command's error: its code relayed, every member of its details beside it, and its message
-/// as the developer text; non-zero (exit 1, or 2 for a fatal code).
-fn failed(error: CliError) -> Exit {
-    let outcome = Outcome::relayed(&error.code);
-    let mut members = Map::new();
-    match error.details {
-        Some(Value::Object(details)) if !details.contains_key("outcome") => members.extend(details),
-        Some(Value::Null) | None => {}
-        Some(other) => {
-            members.insert("details".to_owned(), other);
-        }
-    }
-    if !error.blocked_by.is_empty() && !members.contains_key("blocked_by") {
-        members.insert("blocked_by".to_owned(), Value::from(error.blocked_by));
-    }
-    cli_line::finish(Some(members), &outcome, true, Some(&error.message))
-}
-
-/// A command's data as the members of its line: an object's members, or anything else (and an
-/// object with a member named `outcome`, the line's own) under `result`.
-fn members(data: Value) -> Map<String, Value> {
-    match data {
-        Value::Object(members) if !members.contains_key("outcome") => members,
-        other => {
-            let mut members = Map::new();
-            members.insert("result".to_owned(), other);
-            members
-        }
-    }
 }
 
 /// The items of a value given once or repeated.

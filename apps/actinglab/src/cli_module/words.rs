@@ -51,9 +51,10 @@ pub(crate) fn offered(operation: &Operation) -> bool {
         && BUILT_SLICES.contains(&operation.slice.as_str())
 }
 
-/// The call the command line `words` (after the front end's own `--json`) names.
-pub(crate) fn parse(table: &OperationTable, words: &[String]) -> Result<Call, Outcome> {
-    let operation = table
+/// The offered operation whose name begins the command line `words`, the longest; `None` when no
+/// offered name does.
+pub(crate) fn named<'a>(table: &'a OperationTable, words: &[String]) -> Option<&'a Operation> {
+    table
         .operations
         .iter()
         .filter(|operation| offered(operation))
@@ -66,6 +67,11 @@ pub(crate) fn parse(table: &OperationTable, words: &[String]) -> Result<Call, Ou
                     .all(|(own, word)| *own == word.as_str())
         })
         .max_by_key(|operation| operation.name.split(' ').count())
+}
+
+/// The call the command line `words` (after the front end's own `--json`) names.
+pub(crate) fn parse(table: &OperationTable, words: &[String]) -> Result<Call, Outcome> {
+    let operation = named(table, words)
         .ok_or_else(|| usage(words.first().map(String::as_str), ArgumentProblem::Unknown))?;
     let rest = &words[operation.name.split(' ').count()..];
     let mut params = Map::new();

@@ -3,40 +3,50 @@
 //! The CLI module of `actinglab.exe` and `actinglab serve --stdio` (Workflow #434 LAB-2; register
 //! §1.287, "Slice LAB-2"; `contracts/lab-two-entries.md` §4.2, §8.2 and §9.3).
 //!
+//! - **Which command lines** ([`route`]; LAB-2 fix 1, the coordinator's ruling of 2026-11-10:
+//!   this slice changes nothing any current consumer of actinglab gets). The module answers
+//!   `serve` and the operations it serves itself, those that came from actingctl ([`core_ops`]:
+//!   the core rows `lab-ops` serves, and `run start`, `run stop`, `reset` and `drill`). Every
+//!   other command line is actinglab's own and `main` answers it as before LAB-2: its output for
+//!   people, its `--json` envelope (`ok`, `data`, `error`) and its exit codes, with its global
+//!   options anywhere on the line. Two core rows take words actinglab's own commands had before
+//!   LAB-2, `status` and `run show`: on the command line those words stay actinglab's own commands
+//!   until actinglab's commands move to the new output (the contract's open point 10); the rows
+//!   answer through `serve --stdio`. A row actinglab's own command serves under other words
+//!   (`watch` for `lab watch`, `recover` for `session recover`, `user-config [<key>]` for
+//!   `user-config get`, `app launch` for `session app launch` and the like) is given to that
+//!   command in its words ([`engine`]) and answers as it does.
 //! - **Words.** Short words taken from the operation table (`contracts/lab-operations.json`): the
 //!   operations of the core, debugging and authoring modules that LAB-1, LAB-1b and LAB-2 built
 //!   ([`words`]). Every operation offered is a table row. The instance is a positional (an alias,
 //!   an `instance_id` or an ADB port); there is no `--root` and no `--state-root` ([`place`]).
-//! - **Serving.** The core rows by `crates/lab-ops` on the Lab channel ([`core_ops`]); the
-//!   debugging and authoring rows by actinglab's own commands ([`engine`]).
-//! - **Output.** For people by default: one line with the result code (the outcome catalog holds
-//!   no phrase for a code, so the code alone, with its values) and the result's members as a small
-//!   table. `--json` prints the one line `cli_line` builds, `{…result, "outcome": …}`. Exit codes
-//!   0, 1 and 2, by the outcome's category; a refusal exits at least 1.
-//! - **`serve --stdio`.** One `{op, params}` per line on stdin, one answer per line on stdout,
-//!   the same JSON as the CLI's `--json` line for the same operation ([`serve`]).
-//! - **Initiator** (§4.2). `Lab-CLI`, or `Lab-制包` / `Lab-救急` from `ACTINGCOMMAND_INITIATOR`;
-//!   any other value is refused before anything is sent or written. A Lab recording's steps and
-//!   marks carry it (open point 6, the coordinator's ruling).
-//! - **The envelope form** (transitional). `--envelope`, and `--via` (the MCP server's actinglab
-//!   child), run the command words of actinglab before LAB-2 with their envelope and exit codes,
-//!   unchanged, so that every MCP answer and the protocol goldens stay as they are until LAB-5
-//!   builds MCP on the table; the retired and reserved words are gone from it too.
+//! - **Output** of the module's operations. For people by default: one line with the result code
+//!   (the outcome catalog holds no phrase for a code, so the code alone, with its values) and the
+//!   result's members as a small table. `--json` prints the one line `cli_line` builds,
+//!   `{…result, "outcome": …}`. Exit codes 0, 1 and 2, by the outcome's category; a refusal exits
+//!   at least 1.
+//! - **`serve --stdio`.** One `{op, params}` per line on stdin, one answer per line on stdout:
+//!   the line the operation's `--json` prints, the module's line for the module's operations and
+//!   the envelope for actinglab's own commands ([`serve`]).
+//! - **Initiator** (§4.1, §4.2). `Lab-CLI`, or `Lab-制包` / `Lab-救急` from
+//!   `ACTINGCOMMAND_INITIATOR`; any other value is refused before anything is sent or written. A
+//!   Lab recording's steps and marks carry it (open point 6, the coordinator's ruling), and
+//!   `Lab-MCP` when MCP's actinglab child (`--via mcp`) adds them.
 
 mod core_ops;
-pub(crate) mod engine;
+mod engine;
 mod place;
 pub(crate) mod serve;
 pub(crate) mod words;
 
-use crate::codes::ActinglabCode;
-use crate::{CliError, ErrorKind, RUNTIME_STATE_ROOT_ENV};
-use actingcommand_contract::outcome::Outcome;
+use crate::{CliError, ErrorKind};
+use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_lab_ops::cli_line::{self, Exit};
 use actingcommand_lab_ops::codes::{ActingctlCode, ArgumentProblem};
 use actingcommand_lab_ops::initiator::{self, Initiator};
 use actingcommand_lab_ops::table::OperationTable;
-use serde_json::{Map, Value};
+use actingcommand_runtime_client::ChannelVia;
+use serde_json::Value;
 use std::io::{self, Write};
 use std::process::ExitCode;
 use std::sync::OnceLock;
@@ -44,34 +54,118 @@ use words::Call;
 
 /// The name the developer line gives.
 pub(crate) const PROGRAM: &str = "actinglab";
-/// The envelope form's switch (transitional, see the module's description).
-pub(crate) const ENVELOPE: &str = "--envelope";
-/// actinglab's option naming the counter that forwarded the work (the MCP server's child).
-const VIA: &str = "--via";
 /// The front end's switch for the JSON line.
-const JSON: &str = "--json";
-/// The developer text of a command line that names no operation.
+pub(crate) const JSON: &str = "--json";
+/// The word of the resident mode.
+const SERVE: &str = "serve";
+/// The developer text of a command line the module refuses.
 const USAGE: &str = "usage: actinglab [--json] <operation words> [<positionals>] \
-     [--<option> <value>] [--<switch>]; actinglab help lists the operations; \
+     [--<option> <value>] [--<switch>]; contracts/lab-operations.json lists the operations; \
      actinglab serve --stdio answers one {op, params} per line";
 /// The developer text of an `ACTINGCOMMAND_INITIATOR` this process does not take.
 const INITIATOR_TEXT: &str = "ACTINGCOMMAND_INITIATOR takes Lab-制包 or Lab-救急; without it \
      actinglab is Lab-CLI";
 
-/// Whether `arguments` ask for the envelope form: `--envelope`, or `--via` (the MCP server's
-/// actinglab child).
-pub(crate) fn envelope_form(arguments: &[String]) -> bool {
-    arguments
-        .iter()
-        .any(|argument| argument == ENVELOPE || argument == VIA)
+/// What a command line is for (LAB-2 fix 1).
+#[derive(Debug)]
+pub(crate) enum Route {
+    /// `serve`, or an operation this module serves itself: the module's lines.
+    Module(Vec<String>),
+    /// actinglab's own command line, as given or in the words of the row's command: answered by
+    /// `main` as before LAB-2.
+    Own(Vec<String>),
+    /// The short words of a row actinglab's own command serves, refused: the operation's name,
+    /// whether the line asks for `--json`, and actinglab's usage error, answered by `main` as its
+    /// own refusals are.
+    Refused {
+        command: String,
+        json: bool,
+        error: CliError,
+    },
 }
 
-/// `arguments` without the envelope form's switch.
-pub(crate) fn without_envelope(arguments: Vec<String>) -> Vec<String> {
-    arguments
+/// The route of the command line `arguments` (LAB-2 fix 1; see the module's description).
+pub(crate) fn route(arguments: Vec<String>) -> Route {
+    let (json, words) = front_end(arguments.clone());
+    if words.first().map(String::as_str) == Some(SERVE) {
+        return Route::Module(arguments);
+    }
+    let table = table().ok();
+    let named = table.and_then(|table| words::named(table, &words));
+    if let Some(operation) = named
+        && core_ops::serves(operation)
+        && !crate::own_command(&name_words(&operation.name))
+    {
+        return Route::Module(arguments);
+    }
+    if crate::own_command_line(&arguments) {
+        return Route::Own(arguments);
+    }
+    // The table's failure is the module's to report.
+    let Some(table) = table else {
+        return Route::Module(arguments);
+    };
+    let Some(operation) = named.filter(|operation| !core_ops::serves(operation)) else {
+        return Route::Own(arguments);
+    };
+    let refused = |error: CliError| Route::Refused {
+        command: operation.name.clone(),
+        json,
+        error,
+    };
+    let call = match words::parse(table, &words) {
+        Ok(call) => call,
+        Err(refusal) => return refused(refused_words(&operation.name, &refusal)),
+    };
+    match engine::arguments(operation, &call.params) {
+        Some(own) => Route::Own(
+            json.then(|| JSON.to_owned())
+                .into_iter()
+                .chain(own)
+                .collect(),
+        ),
+        None => refused(CliError::usage(format!(
+            "{}: no command of actinglab serves this operation",
+            operation.name
+        ))),
+    }
+}
+
+/// An operation's name as command words.
+fn name_words(name: &str) -> Vec<String> {
+    name.split(' ').map(str::to_owned).collect()
+}
+
+/// actinglab's usage error for the refused short words of the row `name`: the refusal's
+/// `argument` and `argument_problem` in its details.
+fn refused_words(name: &str, refusal: &Outcome) -> CliError {
+    let values = cli_line::outcome_value(refusal, Detail::Full)
+        .get("values")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let shown = |member: &str| {
+        values
+            .get(member)
+            .and_then(Value::as_str)
+            .unwrap_or("?")
+            .to_owned()
+    };
+    CliError::usage(format!(
+        "{name}: {} {}",
+        shown("argument_problem"),
+        shown("argument")
+    ))
+    .with_details(values)
+}
+
+/// The front end's `--json` taken out of `arguments`: whether it was there, and the words.
+pub(crate) fn front_end(arguments: Vec<String>) -> (bool, Vec<String>) {
+    let json = arguments.iter().any(|argument| argument == JSON);
+    let words = arguments
         .into_iter()
-        .filter(|argument| argument != ENVELOPE)
-        .collect()
+        .filter(|argument| argument != JSON)
+        .collect();
+    (json, words)
 }
 
 /// The operation table this build embeds.
@@ -85,10 +179,14 @@ pub(crate) fn table() -> Result<&'static OperationTable, Outcome> {
         .map_err(Clone::clone)
 }
 
-/// The initiator word every step and mark this process adds to a Lab recording carries (§4.2):
+/// The initiator word every step and mark this process adds to a Lab recording carries (§4.1,
+/// §4.2): `Lab-MCP` when MCP's actinglab child runs the command (`via` `mcp`, LAB-2 fix 1), else
 /// `Lab-CLI`, or the `Lab-制包` / `Lab-救急` of `ACTINGCOMMAND_INITIATOR`. Any other value of the
 /// variable is `actingctl_usage_invalid`, and nothing is written.
-pub(crate) fn recording_initiator() -> Result<&'static str, CliError> {
+pub(crate) fn recording_initiator(via: Option<ChannelVia>) -> Result<&'static str, CliError> {
+    if via == Some(ChannelVia::Mcp) {
+        return Ok(Initiator::LabMcp.as_str());
+    }
     Initiator::of_this_lab_process()
         .map(Initiator::as_str)
         .map_err(|_| {
@@ -108,25 +206,15 @@ pub(crate) fn recording_initiator() -> Result<&'static str, CliError> {
 /// The CLI module: one command line (`serve --stdio` included), printed, and its exit code.
 pub(crate) fn main(arguments: Vec<String>) -> ExitCode {
     actingcommand_lab_ops::front::set(actingcommand_lab_ops::front::Front::Actinglab);
-    let json = arguments.iter().any(|argument| argument == JSON);
-    let words = arguments
-        .into_iter()
-        .filter(|argument| argument != JSON)
-        .collect::<Vec<_>>();
-    if words.first().map(String::as_str) == Some("serve") {
+    let (json, words) = front_end(arguments);
+    if words.first().map(String::as_str) == Some(SERVE) {
         return serve::main(&words[1..]);
     }
-    print(&run(&words), json)
+    print(&run_line(&words), json)
 }
 
-/// The exit of one command line (the front end's `--json` taken out).
-pub(crate) fn run(words: &[String]) -> Exit {
-    match words {
-        [] => return help(),
-        [word] if word == "help" => return help(),
-        [word] if word == "--version" => return version(),
-        _ => {}
-    }
+/// The exit of one command line of the module (the front end's `--json` taken out).
+pub(crate) fn run_line(words: &[String]) -> Exit {
     if let Err(exit) = admitted() {
         return exit;
     }
@@ -135,7 +223,7 @@ pub(crate) fn run(words: &[String]) -> Exit {
         Err(outcome) => return cli_line::failure(&outcome, None),
     };
     match words::parse(table, words) {
-        Ok(call) => execute(table, &call),
+        Ok(call) => answer(table, &call),
         Err(refusal) => cli_line::failure(&refusal, Some(USAGE)),
     }
 }
@@ -151,8 +239,9 @@ pub(crate) fn admitted() -> Result<(), Exit> {
         .map_err(|outcome| cli_line::failure(&outcome, Some(INITIATOR_TEXT)))
 }
 
-/// The operation `call` names, run, as its line.
-pub(crate) fn execute(table: &OperationTable, call: &Call) -> Exit {
+/// The answer to `call`: an operation of this module its line; one of actinglab's own commands
+/// serves the envelope its `--json` prints (`serve --stdio`).
+pub(crate) fn answer(table: &OperationTable, call: &Call) -> Exit {
     let Some(operation) = table.operation(&call.name) else {
         return cli_line::failure(
             &cli_line::usage_invalid(Some(call.name.as_str()), ArgumentProblem::Unknown),
@@ -160,60 +249,19 @@ pub(crate) fn execute(table: &OperationTable, call: &Call) -> Exit {
         );
     };
     if core_ops::serves(operation) {
-        return core_ops::execute(operation, &call.params);
+        return core_ops::answer(operation, &call.params);
     }
-    // actinglab's commands read the state root the configuration names, unless the environment
-    // names one.
-    if std::env::var_os(RUNTIME_STATE_ROOT_ENV).is_none()
-        && let Ok(state_root) = place::place().state_root
-    {
-        crate::state_roots::use_located_state_root(state_root);
-    }
-    engine::execute(operation, &call.params)
-}
-
-/// `help`: the operations this program offers, in the table's order.
-fn help() -> Exit {
-    let table = match table() {
-        Ok(table) => table,
-        Err(outcome) => return cli_line::failure(&outcome, None),
-    };
-    let operations = table
-        .operations
-        .iter()
-        .filter(|operation| words::offered(operation))
-        .map(|operation| Value::String(operation.name.clone()))
-        .collect();
-    let mut members = Map::new();
-    members.insert("usage".to_owned(), Value::from(USAGE));
-    members.insert("operations".to_owned(), Value::Array(operations));
-    cli_line::success(members, &Outcome::new(ActinglabCode::LabOperationCompleted))
-}
-
-/// `--version`.
-fn version() -> Exit {
-    let mut members = Map::new();
-    members.insert("name".to_owned(), Value::from(PROGRAM));
-    members.insert(
-        "cli_version".to_owned(),
-        Value::from(env!("CARGO_PKG_VERSION")),
-    );
-    members.insert(
-        "schema_version".to_owned(),
-        Value::from(crate::SCHEMA_VERSION),
-    );
-    cli_line::success(members, &Outcome::new(ActinglabCode::LabOperationCompleted))
+    engine::envelope(operation, &call.params)
 }
 
 /// Prints `exit`: the JSON line with `json`, else the lines for people ([`people`]); then its
 /// developer line on stderr. A line stdout refuses, or one that did not encode, leaves only the
 /// developer line `actingctl_output_failed`, exit 1.
 pub(crate) fn print(exit: &Exit, json: bool) -> ExitCode {
-    let line = match &exit.line {
-        Ok(line) => line,
-        Err(text) => return output_failed(text),
+    let text = match stdout_text(exit, json) {
+        Ok(text) => text,
+        Err(text) => return output_failed(&text),
     };
-    let text = if json { line.to_string() } else { people(line) };
     let written = {
         let stdout = io::stdout();
         let mut writer = stdout.lock();
@@ -226,6 +274,16 @@ pub(crate) fn print(exit: &Exit, json: bool) -> ExitCode {
         eprintln!("{}", developer.line(PROGRAM));
     }
     ExitCode::from(exit.code)
+}
+
+/// What `exit` prints on stdout: its JSON line with `json`, else the lines for people; the
+/// developer text of a line that did not encode.
+pub(crate) fn stdout_text(exit: &Exit, json: bool) -> Result<String, String> {
+    match &exit.line {
+        Ok(line) if json => Ok(line.to_string()),
+        Ok(line) => Ok(people(line)),
+        Err(text) => Err(text.clone()),
+    }
 }
 
 fn output_failed(text: &str) -> ExitCode {

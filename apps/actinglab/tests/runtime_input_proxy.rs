@@ -2707,7 +2707,6 @@ fn run_actinglab_output<const N: usize>(
     arguments: [&str; N],
 ) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_actinglab"))
-        .arg("--envelope")
         .args(arguments)
         .env("ACTINGLAB_CONFIG_PATH", config_path)
         .env("ACTINGCOMMAND_RUNTIME_STATE_ROOT", runtime_root)
@@ -2934,7 +2933,6 @@ fn lab_package_debug_is_a_correlated_runtime_request_without_device_authority() 
         vec!["--unsupported", "value"],
     ] {
         let result = Command::new(env!("CARGO_BIN_EXE_actinglab"))
-            .arg("--envelope")
             .args(["--json", "lab", "watch"])
             .args(invalid)
             .env("ACTINGLAB_CONFIG_PATH", &config_path)
@@ -3172,7 +3170,6 @@ fn production_do_uses_runtime_capture_and_fenced_input() {
     .expect("runtime host");
 
     let output = Command::new(env!("CARGO_BIN_EXE_actinglab"))
-        .arg("--envelope")
         .args([
             "--json",
             "--instance",
@@ -4007,7 +4004,6 @@ fn production_tap_uses_runtime_proxy_without_local_adb_configuration() {
     .expect("runtime host");
 
     let output = Command::new(env!("CARGO_BIN_EXE_actinglab"))
-        .arg("--envelope")
         .args(["--instance", "node.a", "tap", "10", "20"])
         .env("ACTINGLAB_CONFIG_PATH", &config_path)
         .env("ACTINGCOMMAND_RUNTIME_STATE_ROOT", &runtime_root)
@@ -4082,7 +4078,6 @@ fn production_lab_run_routes_device_effects_through_runtime_only() {
     .expect("runtime host");
 
     let output = Command::new(env!("CARGO_BIN_EXE_actinglab"))
-        .arg("--envelope")
         .args([
             "--json",
             "--instance",
@@ -4232,7 +4227,6 @@ fn runtime_finishes_and_rebuilds_lab_run_after_actinglab_client_is_killed() {
     .expect("runtime host");
 
     let mut client_process = Command::new(env!("CARGO_BIN_EXE_actinglab"))
-        .arg("--envelope")
         .args([
             "--json",
             "--instance",
@@ -4592,7 +4586,6 @@ fn rsu1_recognition_regression_replays_the_kept_frames_against_the_original_reco
     )
     .expect("runtime host");
     let output = Command::new(env!("CARGO_BIN_EXE_actinglab"))
-        .arg("--envelope")
         .args([
             "--json",
             "--instance",

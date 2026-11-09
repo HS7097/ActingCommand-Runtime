@@ -1,28 +1,37 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // Workflow #434 LAB-2 (register §1.287, "Slice LAB-2"; contracts/lab-two-entries.md §4.2, §8.2,
-// §9.3 and open points 6 and 7; coordinator work order rd-1108/arch-013/brief-lab2.md): the CLI
-// module of actinglab and `actinglab serve --stdio`.
+// §9.3 and open points 6, 7 and 10; coordinator work orders rd-1108/arch-013/brief-lab2.md and
+// brief-lab2-fix1.md): the CLI module of actinglab and `actinglab serve --stdio`. LAB-2 fix 1 (the
+// coordinator's ruling of 2026-11-10): the slice changes nothing any current consumer of actinglab
+// gets; the module's output is that of the operations it serves itself, those from actingctl.
 // - `cli_short_words_parse`: the short words of the operation table name the operation and its
 //   parameters: the longest name, the instance and the other positionals in order, options and
 //   switches, a source command's further flags and words; words and flags the row does not take,
 //   a reserved row, a row of a slice not built (the rescue module) and actinglab's old
-//   `config get` are refused with `actingctl_usage_invalid` naming the word.
-// - `cli_json_matches_op_output`: the `--json` line of an operation is the operation's output: for
-//   a core row, the line `lab-ops` builds for it; for a row actinglab's own command serves, that
-//   command's data beside `lab_operation_completed`; a failure keeps every member of its details
-//   (`lab_operation_check_failed`: `req_id`, `effect`, `executed` and the rest) and exits 1.
-// - `serve_answers_same_as_cli`: one answer line per request line, the CLI's `--json` line for
-//   the same operation; a request that is no operation is refused and the loop goes on.
+//   `config get` are refused with `actingctl_usage_invalid` naming the word. `main`'s route: the
+//   module's operations and `serve` go to the module, the short words of a row actinglab's own
+//   command serves go to that command in its words.
+// - `cli_json_matches_op_output`: through `main`'s entry, a core word prints its line for people
+//   by default (into a pipe too) and with `--json` the line `lab-ops` builds for it; a row
+//   actinglab's own command serves answers that command's envelope, as its own words do.
+// - `serve_answers_same_as_cli`: one answer line per request line, the line the operation's
+//   `--json` prints (the module's line, or actinglab's envelope); a request that is no operation
+//   is refused and the loop goes on.
 // - `recording_steps_and_marks_carry_the_initiator` (the work order's fourth test): a recording's
-//   steps and marks carry the process's initiator word (§4.2), and `ACTINGCOMMAND_INITIATOR`
-//   changes it; a word the variable may not name is refused and nothing is written.
-// Fakes only: an empty configuration in a temporary folder, offline frames; no Runtime, no
-// device, no clock, no sleep.
+//   steps and marks carry the process's initiator word (§4.2), `ACTINGCOMMAND_INITIATOR` changes
+//   it, a word the variable may not name is refused and nothing is written, and through MCP's
+//   actinglab child (`--via mcp`) the word is `Lab-MCP` (§4.1).
+// - `consumer_command_lines_answer_as_on_main` (fix 1): every command of actinglab's dispatch is
+//   actinglab's own on `main`'s route, and each command line its consumers send (acmodel's
+//   validator, the resource repositories' CI and scripts, the coordinator's hotplace kit, MCP's
+//   `--via mcp` child) prints through `main`'s entry exactly what `main` printed before LAB-2,
+//   with the same exit code, against the same fixture.
+// Fakes only: an empty configuration in a temporary folder, offline frames and fixtures; no
+// Runtime, no device, no clock, no sleep.
 
 use super::*;
-use crate::cli_module::{self, engine, serve, words};
-use crate::codes::ActinglabCode;
+use crate::cli_module::{self, Route, serve, words};
 use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_lab::{
     ClickSpec, LAB_RECORD_MARK_SCHEMA, LabOcr, MarkFamily, MarkRequest, MarkSpec, RecordRect,
@@ -65,13 +74,21 @@ fn refused(line: &[&str]) -> (Value, Value, Value) {
     }
 }
 
+/// The command line `main`'s route gives actinglab's own command, in that command's words.
+fn own_route(line: &[&str]) -> Vec<String> {
+    match cli_module::route(words_of(line)) {
+        Route::Own(own) => own,
+        other => panic!("{line:?} is actinglab's own command line: {other:?}"),
+    }
+}
+
 #[test]
 fn cli_short_words_parse() {
     // The instance is a positional; an option keeps its value as written.
     assert_eq!(
         parsed(&[
             "pause",
-            "BlueArchiveJP",
+            "neutral.a",
             "--reason",
             "hotplace-x",
             "--drain",
@@ -79,7 +96,7 @@ fn cli_short_words_parse() {
         ]),
         (
             "pause".to_owned(),
-            json!({"instance": "BlueArchiveJP", "reason": "hotplace-x", "drain": "300s"})
+            json!({"instance": "neutral.a", "reason": "hotplace-x", "drain": "300s"})
         )
     );
     // The longest name that begins the line; an ADB port names an instance too.
@@ -217,6 +234,53 @@ fn cli_short_words_parse() {
         refused(&["pause", "a", "--reason"]).2,
         json!("value_missing")
     );
+
+    // LAB-2 fix 1, `main`'s route. `serve` and the operations the module serves itself, those
+    // from actingctl, go to the module, `--json` anywhere.
+    for line in [
+        &["serve", "--stdio"][..],
+        &["codes", "actingctl_usage_invalid"],
+        &["--json", "config", "set", "a.b=1"],
+        &["devices"],
+        &["run", "evidence", "req-neutral-0001", "--json"],
+        &["drill", "neutral.a"],
+    ] {
+        match cli_module::route(words_of(line)) {
+            Route::Module(module) => assert_eq!(module, words_of(line)),
+            other => panic!("{line:?} is the module's: {other:?}"),
+        }
+    }
+    // The short words of a row actinglab's own command serves name that command in its words,
+    // the instance as `--instance`, `--json` kept.
+    assert_eq!(own_route(&["watch"]), words_of(&["lab", "watch"]));
+    assert_eq!(
+        own_route(&["--json", "recover", "neutral.a"]),
+        words_of(&["--json", "session", "recover", "--instance", "neutral.a"])
+    );
+    assert_eq!(
+        own_route(&["user-config", "instance.neutral.serial"]),
+        words_of(&["user-config", "get", "instance.neutral.serial"])
+    );
+    assert_eq!(
+        own_route(&["app", "launch", "16384"]),
+        words_of(&["session", "app", "launch", "--instance", "16384"])
+    );
+    // Refused, they are actinglab's own usage error, naming the operation and the word.
+    match cli_module::route(words_of(&["app", "launch"])) {
+        Route::Refused {
+            command,
+            json,
+            error,
+        } => {
+            assert_eq!((command.as_str(), json), ("app launch", false));
+            assert_eq!(error.code, "validation_failed");
+            assert_eq!(
+                error.details,
+                Some(json!({"argument": "<instance>", "argument_problem": "required"}))
+            );
+        }
+        other => panic!("app launch without its instance is refused: {other:?}"),
+    }
 }
 
 #[test]
@@ -225,71 +289,80 @@ fn cli_json_matches_op_output() {
     unsafe {
         env::remove_var(ENVIRONMENT_VARIABLE);
     }
-    // A core row: the line `lab-ops` builds for the operation (actingctl's `codes`), unchanged.
-    let cli = cli_module::run(&words_of(&["codes", "actingctl_usage_invalid"]));
+    // A core row through `main`'s entry: the CLI module, the line `lab-ops` builds for the
+    // operation (actingctl's `codes`), unchanged.
     let served = actingcommand_lab_ops::code_lookup::dispatch(&[
         OsString::from("codes"),
         OsString::from("actingctl_usage_invalid"),
     ])
     .expect("codes is served");
-    let line = cli.line.clone().expect("the CLI's line");
-    assert_eq!(Some(&line), served.line.as_ref().ok());
-    assert_eq!((cli.code, served.code), (0, 0));
-    assert_eq!(line["outcome"]["code"], "outcome_codes_reported");
+    let served_line = served.line.clone().expect("the served line");
+    assert_eq!(served_line["outcome"]["code"], "outcome_codes_reported");
+    for (line, json) in [
+        (&["--json", "codes", "actingctl_usage_invalid"][..], true),
+        (&["codes", "actingctl_usage_invalid"][..], false),
+    ] {
+        // Stdout is no terminal here, as in a pipe.
+        let module = match entry(words_of(line), true) {
+            Err(module) => module,
+            Ok(own) => panic!("{line:?} is the CLI module's, not {own:?}"),
+        };
+        let (asked, words) = cli_module::front_end(module);
+        assert_eq!(asked, json, "{line:?}");
+        let cli = cli_module::run_line(&words);
+        assert_eq!((cli.code, served.code), (0, 0));
+        assert_eq!(cli.line.as_ref().ok(), Some(&served_line));
+        let printed = cli_module::stdout_text(&cli, asked).expect("the printed text");
+        if json {
+            // `--json`: the one line `cli_line` builds.
+            assert_eq!(printed, served_line.to_string());
+        } else {
+            // For people by default, into a pipe too: the code with its values and the result's
+            // members.
+            assert_eq!(printed, cli_module::people(&served_line));
+            assert!(printed.starts_with("outcome_codes_reported"), "{printed}");
+            assert!(
+                serde_json::from_str::<Value>(&printed).is_err(),
+                "{printed}"
+            );
+        }
+    }
 
-    // A row actinglab's own command serves: the command's data beside lab_operation_completed.
+    // A row actinglab's own command serves, named by its short words: that command's envelope,
+    // byte for byte as its own words give it, and its exit code.
     let temp = TempDir::new().unwrap();
     set_config_env(temp.path().join("config.json"));
-    let set = cli_module::run(&words_of(&[
-        "user-config",
-        "set",
-        "instance.neutral.serial",
-        "TESTSERIAL0001",
-    ]));
-    assert_eq!(set.code, 0, "{:?}", set.line);
-    let cli = cli_module::run(&words_of(&["user-config", "instance.neutral.serial"]));
-    let data = crate::execute(
-        &parse_invocation(["user-config", "get", "instance.neutral.serial"], true)
-            .expect("the command's words"),
-    )
-    .expect("the command's data");
-    let Value::Object(members) = data else {
-        panic!("user-config answers an object");
-    };
-    let expected = cli_line::success(members, &Outcome::new(ActinglabCode::LabOperationCompleted));
-    assert_eq!(cli.line.as_ref().ok(), expected.line.as_ref().ok());
-    assert_eq!(cli.code, 0);
-    assert_eq!(cli.line.as_ref().unwrap()["value"], json!("TESTSERIAL0001"));
-    set_missing_config_env();
-
-    // A failure keeps every member of its details beside its code and exits 1 (§9.3).
-    let details = json!({
-        "req_id": "req-neutral-0001",
-        "correlation_id": "corr-neutral-0001",
-        "receipt_state": "completed",
-        "effect": "performed",
-        "executed": true,
-        "failure": null,
-        "client_code": "runtime_lab_diagnostic_budget_mismatch",
-        "client_message": "the client's check failed"
-    });
-    let failed = engine::line(Err(CliError::new(
-        ErrorKind::RuntimeUnavailable,
-        ActinglabCode::LabOperationCheckFailed.as_str(),
-        "the Runtime answered the Lab operation",
-        &[],
-    )
-    .with_details(details.clone())));
-    assert_eq!(failed.code, 1);
-    let line = failed.line.expect("the failure's line");
-    assert_eq!(line["outcome"]["code"], "lab_operation_check_failed");
-    for (member, value) in details.as_object().unwrap() {
-        assert_eq!(&line[member], value, "{member}");
-    }
-    assert!(
-        failed.developer.is_some(),
-        "a failure has its developer line"
+    let set = run_cli(
+        [
+            "--json",
+            "user-config",
+            "set",
+            "instance.neutral.serial",
+            "TESTSERIAL0001",
+        ],
+        true,
     );
+    assert_eq!(set.exit_code(), 0, "{}", set.envelope_json());
+    let short = match entry(
+        words_of(&["--json", "user-config", "instance.neutral.serial"]),
+        true,
+    ) {
+        Ok(invocation) => run_invocation(invocation),
+        Err(module) => {
+            panic!("user-config is actinglab's own command, not the module's {module:?}")
+        }
+    };
+    let own = run_cli(
+        ["--json", "user-config", "get", "instance.neutral.serial"],
+        true,
+    );
+    assert_eq!(short.envelope_json(), own.envelope_json());
+    assert_eq!((short.exit_code(), own.exit_code()), (0, 0));
+    assert_eq!(
+        short.envelope.data.as_ref().unwrap()["value"],
+        json!("TESTSERIAL0001")
+    );
+    set_missing_config_env();
 }
 
 #[test]
@@ -300,6 +373,17 @@ fn serve_answers_same_as_cli() {
     }
     let temp = TempDir::new().unwrap();
     set_config_env(temp.path().join("config.json"));
+    let set = run_cli(
+        [
+            "--json",
+            "user-config",
+            "set",
+            "instance.neutral.serial",
+            "TESTSERIAL0001",
+        ],
+        true,
+    );
+    assert_eq!(set.exit_code(), 0, "{}", set.envelope_json());
     let table = cli_module::table().expect("the operation table");
     let input = [
         r#"{"op": "codes", "params": {"code": "actingctl_usage_invalid"}}"#,
@@ -313,23 +397,31 @@ fn serve_answers_same_as_cli() {
     let mut output = Vec::new();
     let mut developer = Vec::new();
     serve::serve(table, input.as_bytes(), &mut output, &mut developer).expect("the loop ends");
-    let answers = String::from_utf8(output)
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(line).expect("one JSON answer per line"))
-        .collect::<Vec<_>>();
+    let output = String::from_utf8(output).unwrap();
+    let lines = output.lines().collect::<Vec<_>>();
     assert_eq!(
-        answers.len(),
+        lines.len(),
         5,
         "one answer per request, none for the blank line"
     );
-    for (answer, line) in [
-        (&answers[0], &["codes", "actingctl_usage_invalid"][..]),
-        (&answers[1], &["user-config", "instance.neutral.serial"][..]),
-    ] {
-        let cli = cli_module::run(&words_of(line));
-        assert_eq!(Some(answer), cli.line.as_ref().ok(), "{line:?}");
-    }
+    // An operation of the module: the CLI's `--json` line.
+    let cli = cli_module::run_line(&words_of(&["codes", "actingctl_usage_invalid"]));
+    assert_eq!(
+        lines[0],
+        cli_module::stdout_text(&cli, true).expect("the CLI's line")
+    );
+    // An operation actinglab's own command serves: the envelope `actinglab --json` prints for it.
+    let own = run_cli(
+        ["--json", "user-config", "get", "instance.neutral.serial"],
+        true,
+    );
+    assert_eq!(lines[1], own.envelope_json());
+    let answers = lines
+        .iter()
+        .map(|line| serde_json::from_str::<Value>(line).expect("one JSON answer per line"))
+        .collect::<Vec<_>>();
+    assert_eq!(answers[1]["ok"], true);
+    assert_eq!(answers[1]["data"]["value"], "TESTSERIAL0001");
     assert_eq!(answers[2]["outcome"]["code"], "actingctl_usage_invalid");
     assert_eq!(answers[2]["outcome"]["values"]["argument"], "frobnicate");
     assert_eq!(answers[3]["outcome"]["code"], "actingctl_usage_invalid");
@@ -423,6 +515,23 @@ fn recording_steps_and_marks_carry_the_initiator() {
             "{word:?}"
         );
     }
+    // §4.1 (fix 1): through MCP's actinglab child the word is `Lab-MCP`, whatever the variable
+    // says; `--via ui` is no MCP child and keeps §4.2's word.
+    unsafe {
+        env::set_var(ENVIRONMENT_VARIABLE, "Lab-制包");
+    }
+    assert_eq!(
+        cli_module::recording_initiator(Some(ChannelVia::Mcp)).ok(),
+        Some("Lab-MCP")
+    );
+    assert_eq!(
+        cli_module::recording_initiator(Some(ChannelVia::Ui)).ok(),
+        Some("Lab-制包")
+    );
+    unsafe {
+        env::remove_var(ENVIRONMENT_VARIABLE);
+    }
+    assert_eq!(cli_module::recording_initiator(None).ok(), Some("Lab-CLI"));
 
     let temp = TempDir::new().unwrap();
     set_config_env(temp.path().join("config.json"));
@@ -430,30 +539,33 @@ fn recording_steps_and_marks_carry_the_initiator() {
     let state = state_dir.to_str().unwrap().to_owned();
     let frame = temp.path().join("frame.png");
     fs::write(&frame, test_record_frame_png(12, 10)).unwrap();
-    let step = |step_id: &str| {
-        run_cli(
-            [
-                "--json",
-                "--instance",
-                "ak",
-                "session",
-                "record",
-                "step",
-                "--state-dir",
-                state.as_str(),
-                "--kind",
-                "anchor",
-                "--step-id",
-                step_id,
-                "--id",
-                "page/home",
-                "--region",
-                "2,3,4,5",
-                "--frame",
-                frame.to_str().unwrap(),
-            ],
-            true,
-        )
+    // One session step, through the command line's own parsing; `--via mcp` as MCP's child
+    // sends it.
+    let step = |step_id: &str, via_mcp: bool| {
+        let mut line = vec!["--json"];
+        if via_mcp {
+            line.extend(["--via", "mcp"]);
+        }
+        line.extend([
+            "--instance",
+            "neutral.instance",
+            "session",
+            "record",
+            "step",
+            "--state-dir",
+            state.as_str(),
+            "--kind",
+            "anchor",
+            "--step-id",
+            step_id,
+            "--id",
+            "page/home",
+            "--region",
+            "2,3,4,5",
+            "--frame",
+            frame.to_str().unwrap(),
+        ]);
+        run_cli(line, true)
     };
     unsafe {
         env::set_var(ENVIRONMENT_VARIABLE, "Lab-制包");
@@ -462,7 +574,7 @@ fn recording_steps_and_marks_carry_the_initiator() {
         [
             "--json",
             "--instance",
-            "ak",
+            "neutral.instance",
             "session",
             "record",
             "start",
@@ -474,12 +586,19 @@ fn recording_steps_and_marks_carry_the_initiator() {
         true,
     );
     assert_eq!(start.exit_code(), 0, "{}", start.envelope_json());
-    let workbench = step("home-anchor");
+    let workbench = step("home-anchor", false);
     assert_eq!(workbench.exit_code(), 0, "{}", workbench.envelope_json());
+    let through_mcp = step("mcp-anchor", true);
+    assert_eq!(
+        through_mcp.exit_code(),
+        0,
+        "{}",
+        through_mcp.envelope_json()
+    );
     unsafe {
         env::remove_var(ENVIRONMENT_VARIABLE);
     }
-    let command_line = step("mail-anchor");
+    let command_line = step("mail-anchor", false);
     assert_eq!(
         command_line.exit_code(),
         0,
@@ -489,7 +608,7 @@ fn recording_steps_and_marks_carry_the_initiator() {
     unsafe {
         env::set_var(ENVIRONMENT_VARIABLE, "Lab-MCP");
     }
-    let refused = step("other-anchor");
+    let refused = step("other-anchor", false);
     unsafe {
         env::remove_var(ENVIRONMENT_VARIABLE);
     }
@@ -498,7 +617,9 @@ fn recording_steps_and_marks_carry_the_initiator() {
         refused.envelope.error.as_ref().unwrap().code,
         "actingctl_usage_invalid"
     );
-    let steps = command_line.envelope.data.as_ref().unwrap()["record"]["steps"].clone();
+    let last = step("last-anchor", false);
+    assert_eq!(last.exit_code(), 0, "{}", last.envelope_json());
+    let steps = last.envelope.data.as_ref().unwrap()["record"]["steps"].clone();
     assert_eq!(
         steps
             .as_array()
@@ -508,7 +629,9 @@ fn recording_steps_and_marks_carry_the_initiator() {
             .collect::<Vec<_>>(),
         [
             (json!("home-anchor"), json!("Lab-制包")),
+            (json!("mcp-anchor"), json!("Lab-MCP")),
             (json!("mail-anchor"), json!("Lab-CLI")),
+            (json!("last-anchor"), json!("Lab-CLI")),
         ],
         "nothing was written for the refused word"
     );
@@ -537,7 +660,7 @@ fn recording_steps_and_marks_carry_the_initiator() {
     unsafe {
         env::set_var(ENVIRONMENT_VARIABLE, "Lab-救急");
     }
-    let word = cli_module::recording_initiator().expect("Lab-救急");
+    let word = cli_module::recording_initiator(None).expect("Lab-救急");
     unsafe {
         env::remove_var(ENVIRONMENT_VARIABLE);
     }
@@ -557,7 +680,7 @@ fn recording_steps_and_marks_carry_the_initiator() {
         mark(&lock, &ocr, &red, "home", true);
     }
     {
-        let word = cli_module::recording_initiator().expect("Lab-CLI");
+        let word = cli_module::recording_initiator(Some(ChannelVia::Mcp)).expect("Lab-MCP");
         let lock = RecordingLock::acquire(&lab_state, "neutral.instance", "gate_434_lab2", word)
             .expect("recording lock");
         mark(&lock, &ocr, &blue, "list", false);
@@ -593,8 +716,280 @@ fn recording_steps_and_marks_carry_the_initiator() {
         words,
         [
             (json!("Lab-救急"), vec![json!("Lab-救急")]),
-            (json!("Lab-CLI"), vec![json!("Lab-CLI")]),
+            (json!("Lab-MCP"), vec![json!("Lab-MCP")]),
         ]
     );
+    set_missing_config_env();
+}
+
+/// What `main` printed for `line` before LAB-2 (`apps/actinglab/src/main.rs` on main `c76ce040`):
+/// the command line parsed (`json_default` when stdout is no terminal), run, and printed as the
+/// envelope or as the text for people; the printed line and the exit code.
+fn as_on_main(line: &[String], json_default: bool) -> (String, i32) {
+    printed(&run_invocation(parse_invocation(
+        line.iter().cloned(),
+        json_default,
+    )))
+}
+
+/// What `main` prints for `line` now: its entry, then the same run and print.
+fn through_main(line: &[String], json_default: bool) -> (String, i32) {
+    match entry(line.to_vec(), json_default) {
+        Ok(invocation) => printed(&run_invocation(invocation)),
+        Err(module) => {
+            panic!("{line:?} is actinglab's own command line, not the module's {module:?}")
+        }
+    }
+}
+
+fn printed(result: &CliResult) -> (String, i32) {
+    let text = if result.print_json {
+        result.envelope_json()
+    } else {
+        result.human_text()
+    };
+    (text, result.exit_code())
+}
+
+#[test]
+fn consumer_command_lines_answer_as_on_main() {
+    let _guard = env_lock();
+    unsafe {
+        env::remove_var(ENVIRONMENT_VARIABLE);
+    }
+    // Every command of actinglab's dispatch (the snapshot the architecture guard keeps equal to
+    // `execute`) is actinglab's own on `main`'s route, unchanged, with leading global options too.
+    let snapshot: Value = serde_json::from_slice(
+        &fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ratchet/actinglab_commands.json"),
+        )
+        .expect("the command snapshot"),
+    )
+    .expect("the command snapshot parses");
+    let commands = snapshot["commands"].as_array().expect("its commands");
+    assert!(!commands.is_empty());
+    for command in commands {
+        let command = command.as_str().expect("a command");
+        for prefix in [
+            &[][..],
+            &["--json"][..],
+            &["--json", "--run-root", "runs"][..],
+        ] {
+            let line = prefix
+                .iter()
+                .copied()
+                .chain(command.split(' '))
+                .collect::<Vec<_>>();
+            assert_eq!(own_route(&line), words_of(&line), "{line:?}");
+        }
+    }
+
+    let temp = TempDir::new().unwrap();
+    set_config_env(temp.path().join("config.json"));
+    // A resource repository: a declaration and a changed-paths file (Git's `--name-status -z`).
+    let repo_path = temp.path().join("repo");
+    fs::create_dir_all(&repo_path).unwrap();
+    fs::write(
+        repo_path.join("declaration-exclusions.json"),
+        br#"{"schema_version":"actingcommand.declaration-exclusions.v1","directories":["regression"]}"#,
+    )
+    .unwrap();
+    fs::write(
+        repo_path.join("changed.list"),
+        "M\0declaration-exclusions.json\0",
+    )
+    .unwrap();
+    let repo = repo_path.to_str().unwrap();
+    // An installed game root (NAV-T's fixture) for the standard-pack check.
+    let root_path = crate::standard_pack_cli::gate_373_navt::game_root(
+        &temp,
+        crate::standard_pack_cli::gate_373_navt::HOME_TO_SHOP,
+    );
+    let root = root_path.to_str().unwrap();
+    // A package and a scene that do not exist: the commands' own refusals.
+    let package_path = temp.path().join("packs").join("neutral.pack");
+    let package = package_path.to_str().unwrap();
+    let scene_path = temp.path().join("scene.png");
+    let scene = scene_path.to_str().unwrap();
+    let runs_path = temp.path().join("runs");
+    let runs = runs_path.to_str().unwrap();
+
+    let lines: [(&[&str], bool); 14] = [
+        // acmodel's validator (UI `model/src/acmodel/export/validator.py`).
+        (
+            &[
+                "--json",
+                "resource",
+                "validate",
+                "--repo",
+                repo,
+                "--changed-path",
+                "declaration-exclusions.json",
+            ],
+            true,
+        ),
+        // The resource repositories' CI and scripts.
+        (
+            &[
+                "--json",
+                "resource",
+                "validate",
+                "--repo",
+                repo,
+                "--changed-paths-file",
+                "changed.list",
+            ],
+            true,
+        ),
+        (
+            &["--json", "package", "preflight", "--package", package],
+            true,
+        ),
+        (
+            &["--json", "package", "fmt", "--package", package, "--check"],
+            true,
+        ),
+        (&["--json", "standard-pack", "check", "--root", root], true),
+        (
+            &[
+                "--json",
+                "recognize",
+                "--target",
+                "neutral_target",
+                "--package",
+                package,
+                "--scene",
+                scene,
+            ],
+            true,
+        ),
+        (
+            &[
+                "--json",
+                "--verbose",
+                "observe",
+                "--package",
+                package,
+                "--scene",
+                scene,
+            ],
+            true,
+        ),
+        (
+            &[
+                "--json",
+                "detect-page",
+                "--package",
+                package,
+                "--scene",
+                scene,
+            ],
+            true,
+        ),
+        // A leading `--run-root` (one repository's regression script).
+        (
+            &[
+                "--json",
+                "--run-root",
+                runs,
+                "--verbose",
+                "observe",
+                "--scene",
+                scene,
+                "--package",
+                package,
+            ],
+            true,
+        ),
+        (
+            &[
+                "--json",
+                "--run-root",
+                runs,
+                "package",
+                "preflight",
+                "--package",
+                package,
+            ],
+            true,
+        ),
+        // The hotplace kit: no `--json`, stdout redirected; and the same at a terminal.
+        (&["standard-pack", "check", "--root", root], true),
+        (&["standard-pack", "check", "--root", root], false),
+        // MCP's actinglab child (`lab_ops::lab_child`): `--json --via mcp …`, the envelope.
+        (
+            &[
+                "--json",
+                "--via",
+                "mcp",
+                "resource",
+                "validate",
+                "--repo",
+                repo,
+                "--changed-path",
+                "declaration-exclusions.json",
+            ],
+            true,
+        ),
+        (
+            &[
+                "--json",
+                "--via",
+                "mcp",
+                "package",
+                "check",
+                "--package",
+                package,
+            ],
+            true,
+        ),
+    ];
+    for (line, json_default) in lines {
+        let line = words_of(line);
+        let now = through_main(&line, json_default);
+        assert_eq!(now, as_on_main(&line, json_default), "{line:?}");
+        if json_default {
+            // The envelope its consumers read: `ok`, and `data` or `error`.
+            let envelope: Value = serde_json::from_str(&now.0).expect("the envelope");
+            let ok = envelope["ok"].as_bool().expect("ok");
+            assert_eq!(ok, now.1 == 0, "{line:?}: {}", now.0);
+            assert!(
+                envelope.get(if ok { "data" } else { "error" }).is_some(),
+                "{line:?}: {}",
+                now.0
+            );
+        }
+    }
+    // What acmodel and the hotplace kit read of a success.
+    let validated = through_main(&words_of(lines[0].0), true);
+    let validated: Value = serde_json::from_str(&validated.0).unwrap();
+    assert_eq!(
+        validated["data"]["entries"][0]["status"], "valid",
+        "{validated}"
+    );
+    let checked = through_main(&words_of(lines[10].0), true);
+    let checked: Value = serde_json::from_str(&checked.0).unwrap();
+    assert_eq!(checked["data"]["status"], "checked", "{checked}");
+    assert_eq!(checked["data"]["pack_count"], 4, "{checked}");
+
+    // The hotplace kit's offline composition writes its `--out`: `main` parses it as before.
+    let compose = words_of(&[
+        "--json",
+        "standard-pack",
+        "compose",
+        "--root",
+        temp.path().join("packages").to_str().unwrap(),
+        "--instance",
+        "neutral.a=neutral/test",
+        "--out",
+        temp.path().join("composed").to_str().unwrap(),
+    ]);
+    match entry(compose.clone(), true) {
+        Ok(invocation) => assert_eq!(
+            format!("{invocation:?}"),
+            format!("{:?}", parse_invocation(compose.iter().cloned(), true))
+        ),
+        Err(module) => panic!("compose is actinglab's own command, not the module's {module:?}"),
+    }
     set_missing_config_env();
 }
