@@ -14,7 +14,7 @@ use std::process::{Command, Stdio};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 fn powershell_exe() -> PathBuf {
     let system_root = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
@@ -25,7 +25,7 @@ fn powershell_exe() -> PathBuf {
 /// caused by the OS error when PowerShell did not run or its output could not be read, with
 /// `timeout_ms` when it did not finish in time (it is killed), and caused by
 /// `foreign_other_error` with its stderr and exit code when it exited non-zero.
-pub(crate) fn run(
+pub fn run(
     script: &str,
     environment: &[(&str, &std::ffi::OsStr)],
     timeout: Duration,

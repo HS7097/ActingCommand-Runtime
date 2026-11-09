@@ -315,11 +315,11 @@ fn watchdog_install_registers_the_task_and_uninstall_removes_it() {
     }
     let fixture = Fixture::new();
     fs::create_dir_all(fixture.root.join("tools")).expect("tools directory");
-    fs::copy(
-        env!("CARGO_BIN_EXE_actingwatch"),
-        fixture.root.join("tools").join("actingwatch.exe"),
-    )
-    .expect("place the launcher");
+    // Workflow #434 LAB-4: actingwatch is a program of `apps/actingwatch` now, which this package
+    // cannot build; `install` reads only that the launcher is a file, so a stand-in takes its
+    // place (a run the registered task might start before the test removes it starts nothing).
+    fs::write(fixture.root.join("tools").join("actingwatch.exe"), b"")
+        .expect("place the launcher's stand-in");
     fs::copy(
         env!("CARGO_BIN_EXE_actingctl"),
         fixture.root.join("runtime").join("actingctl.exe"),

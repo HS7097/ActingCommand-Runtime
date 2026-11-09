@@ -45,7 +45,7 @@ use super::manifest::{self, Half};
 use super::plan::{self, Loaded, PlanInputs, PlanKind, Planned};
 use super::postcheck;
 use super::programs::{self, Deadline};
-use super::state::{self, OperationKind, Paths};
+use super::state::{self, KindLocation, OperationKind, Paths};
 use super::update;
 use super::{Answer, Flags};
 use crate::codes::{

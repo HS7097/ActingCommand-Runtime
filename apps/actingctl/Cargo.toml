@@ -12,10 +12,8 @@ publish = false
 name = "actingctl"
 path = "src/main.rs"
 
-# Workflow #374: the GUI-subsystem launcher the watchdog's scheduled task runs; std only.
-[[bin]]
-name = "actingwatch"
-path = "src/watch_launcher.rs"
+# Workflow #434 LAB-4: the watchdog's launcher actingwatch (Workflow #374) is `apps/actingwatch`,
+# and it runs the tick itself.
 
 [features]
 default = ["mcp"]
@@ -46,11 +44,16 @@ actingcommand-runtime-config = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+# Workflow #434 LAB-4: `watchdog …`, `start`, `restart` and `install` run the watchdog from its
+# crate, and `install` writes `current.json` through its types.
+actingcommand-watchdog = { workspace = true }
 # Workflow #421 INST-1: `install release verify` and `stage` extract the release zips.
 zip = { workspace = true }
 
 [dev-dependencies]
 actingcommand-artifact-store = { workspace = true }
+# Workflow #434 LAB-4: the install gates read the decision of one task tick (`tick_for_test`).
+actingcommand-watchdog = { workspace = true, features = ["test-hooks"] }
 # Workflow #434 LAB-1: the #422 QR-2b gate builds a diagnosis whose report never started.
 actingcommand-lab-ops = { workspace = true, features = ["test-hooks"] }
 actingcommand-device = { workspace = true }
