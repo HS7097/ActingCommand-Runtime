@@ -106,7 +106,7 @@
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab", "ui"],
-      "requests": ["RuntimeFactSnapshot", "InstanceFactSnapshot"],
+      "requests": ["RuntimeFactSnapshot", "InstanceFactSnapshot", "Status"],
       "source": ["actingctl facts", "actingctl status --config", "MCP ac_facts", "actinglab session instance registry (its backend column)"],
       "slice": "LAB-1",
       "status": "planned"
@@ -141,7 +141,7 @@
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab", "ui"],
-      "requests": ["RoutineSummary"],
+      "requests": ["RoutineSummary", "Status"],
       "source": ["actingctl routine-summary", "MCP ac_routine_summary"],
       "slice": "LAB-1",
       "status": "planned"
@@ -163,7 +163,7 @@
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab", "ui"],
-      "requests": ["QueryEvents"],
+      "requests": ["QueryEvents", "Status"],
       "source": ["actingctl events", "MCP ac_events", "acui: ledger window, online reads (crates/acui-source/src/lib.rs)"],
       "slice": "LAB-1",
       "status": "planned"
@@ -181,7 +181,7 @@
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab", "ui"],
-      "requests": ["QueryEvents"],
+      "requests": ["QueryEvents", "Status"],
       "source": ["actingctl runs", "MCP ac_runs", "actinglab run list"],
       "slice": "LAB-1",
       "status": "planned"
@@ -202,7 +202,8 @@
       "requests": ["QueryEvents"],
       "source": ["MCP ac_get_run", "actinglab lab receipt"],
       "slice": "LAB-1",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-1 moved none of this row's code (its sources stay in actingctl's main.rs and MCP's tools); the slice that builds it on lab-ops is the coordinator's to name (register §1.287, LAB-1 (g))"
     },
     {
       "name": "run evidence",
@@ -217,7 +218,7 @@
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab", "ui"],
-      "requests": ["QueryEvents", "ReadMaterial"],
+      "requests": ["QueryEvents"],
       "source": ["actingctl run evidence", "MCP ac_run_evidence", "actinglab lab evidence"],
       "slice": "LAB-1",
       "status": "planned"
@@ -238,7 +239,8 @@
       "requests": ["ReadMaterial"],
       "source": ["MCP ac_material", "acui: material read (crates/acui-source/src/lib.rs)"],
       "slice": "LAB-1",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-1 moved none of this row's code (its sources stay in actingctl's main.rs and MCP's tools); the slice that builds it on lab-ops is the coordinator's to name (register §1.287, LAB-1 (g))"
     },
     {
       "name": "diagnose",
@@ -253,7 +255,7 @@
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab", "ui"],
-      "requests": ["QueryEvents", "ScheduleExplanation"],
+      "requests": ["QueryEvents", "ScheduleExplanation", "Status", "RuntimeFactSnapshot"],
       "source": ["actingctl diagnose", "MCP ac_diagnose"],
       "slice": "LAB-1",
       "status": "planned"
@@ -272,7 +274,8 @@
       "requests": ["ResourceTargetView"],
       "source": ["MCP ac_resources_list", "MCP ac_targets_get"],
       "slice": "LAB-1",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-1 moved none of this row's code (its sources stay in actingctl's main.rs and MCP's tools); the slice that builds it on lab-ops is the coordinator's to name (register §1.287, LAB-1 (g))"
     },
     {
       "name": "targets set",
@@ -291,7 +294,8 @@
       "requests": ["ApplyResourceTargets"],
       "source": ["MCP ac_targets_set", "actingctl agent-apply-resource-targets"],
       "slice": "LAB-1",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-1 moved none of this row's code (its sources stay in actingctl's main.rs and MCP's tools); the slice that builds it on lab-ops is the coordinator's to name (register §1.287, LAB-1 (g))"
     },
     {
       "name": "targets edit",
@@ -327,7 +331,7 @@
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab", "ui"],
-      "requests": ["InstanceFactSnapshot"],
+      "requests": ["InstanceFactSnapshot", "Status"],
       "source": ["actingctl remedy get", "MCP ac_remedy_get"],
       "slice": "LAB-1",
       "status": "planned"
@@ -345,7 +349,7 @@
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab"],
-      "requests": ["PublishFacts"],
+      "requests": ["PublishFacts", "Status"],
       "source": ["actingctl remedy set", "MCP ac_remedy_set"],
       "slice": "LAB-1",
       "status": "planned"
@@ -361,7 +365,7 @@
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab"],
-      "requests": ["PublishFacts"],
+      "requests": ["PublishFacts", "Status", "InstanceFactSnapshot"],
       "source": ["actingctl remedy lift"],
       "slice": "LAB-1",
       "status": "planned",
@@ -379,7 +383,7 @@
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab", "ui"],
-      "requests": ["ObserveReadonly", "ReadMaterial"],
+      "requests": ["ObserveReadonly", "ReadMaterial", "Status"],
       "source": ["actingctl observe", "actingctl observe --export", "MCP ac_observe", "actinglab capture", "actinglab runtime observe", "acui: preview refresh (crates/acui-source/src/workbench/preview.rs)"],
       "slice": "LAB-1",
       "status": "planned"
@@ -400,7 +404,8 @@
       "requests": ["CaptureSequence"],
       "source": ["actingctl stream", "actinglab stream", "actinglab session stream"],
       "slice": "LAB-1",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-1 moved none of this row's code (its sources stay in actingctl's main.rs and MCP's tools); the slice that builds it on lab-ops is the coordinator's to name (register §1.287, LAB-1 (g))"
     },
     {
       "name": "discover",
@@ -414,7 +419,8 @@
       "requests": ["DiscoverInstances"],
       "source": ["actingctl emulator discover", "acui: instance discovery (crates/acui-source/src/lib.rs)", "acsetup: instance step, through an actingctl child"],
       "slice": "LAB-1",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-1 moved none of this row's code (its sources stay in actingctl's main.rs and MCP's tools); the slice that builds it on lab-ops is the coordinator's to name (register §1.287, LAB-1 (g))"
     },
     {
       "name": "pause",
@@ -432,7 +438,8 @@
       "requests": ["PauseScheduling"],
       "source": ["actingctl pause", "MCP ac_pause", "acui: global pause (crates/acui-source/src/workbench.rs)"],
       "slice": "LAB-1",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-1 moved none of this row's code (its sources stay in actingctl's main.rs and MCP's tools); the slice that builds it on lab-ops is the coordinator's to name (register §1.287, LAB-1 (g))"
     },
     {
       "name": "resume",
@@ -449,7 +456,8 @@
       "requests": ["ResumeScheduling"],
       "source": ["actingctl resume", "MCP ac_resume", "acui: conditional resume (crates/acui-source/src/lib.rs)"],
       "slice": "LAB-1",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-1 moved none of this row's code (its sources stay in actingctl's main.rs and MCP's tools); the slice that builds it on lab-ops is the coordinator's to name (register §1.287, LAB-1 (g))"
     },
     {
       "name": "config",
@@ -483,7 +491,8 @@
       "requests": ["ConfigureSettings"],
       "source": ["actingctl config set", "MCP ac_config_set", "actinglab session backend", "acui: settings and rules (crates/acui-source/src/workbench.rs, workbench/rules.rs)"],
       "slice": "LAB-1",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-1 moved none of this row's code (its sources stay in actingctl's main.rs and MCP's tools); the slice that builds it on lab-ops is the coordinator's to name (register §1.287, LAB-1 (g))"
     },
     {
       "name": "config clear",
@@ -500,7 +509,8 @@
       "requests": ["ConfigureSettings"],
       "source": ["actingctl config clear"],
       "slice": "LAB-1",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-1 moved none of this row's code (its sources stay in actingctl's main.rs and MCP's tools); the slice that builds it on lab-ops is the coordinator's to name (register §1.287, LAB-1 (g))"
     },
     {
       "name": "preset",
@@ -550,7 +560,8 @@
       "requests": ["ConfigureMonitor"],
       "source": ["actingctl monitor-set", "actinglab session monitor-policy"],
       "slice": "LAB-1",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-1 moved none of this row's code (its sources stay in actingctl's main.rs and MCP's tools); the slice that builds it on lab-ops is the coordinator's to name (register §1.287, LAB-1 (g))"
     },
     {
       "name": "monitor clear",
@@ -566,7 +577,8 @@
       "requests": ["ClearMonitor"],
       "source": ["actingctl monitor-clear"],
       "slice": "LAB-1",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-1 moved none of this row's code (its sources stay in actingctl's main.rs and MCP's tools); the slice that builds it on lab-ops is the coordinator's to name (register §1.287, LAB-1 (g))"
     },
     {
       "name": "offset",
@@ -584,7 +596,8 @@
       "requests": ["PublishFacts"],
       "source": ["actingctl task-offset"],
       "slice": "LAB-1",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-1 moved none of this row's code (its sources stay in actingctl's main.rs and MCP's tools); the slice that builds it on lab-ops is the coordinator's to name (register §1.287, LAB-1 (g))"
     },
     {
       "name": "facts publish",
@@ -600,7 +613,8 @@
       "requests": ["PublishFacts"],
       "source": ["actingctl agent-publish-facts"],
       "slice": "LAB-1",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-1 moved none of this row's code (its sources stay in actingctl's main.rs and MCP's tools); the slice that builds it on lab-ops is the coordinator's to name (register §1.287, LAB-1 (g))"
     },
     {
       "name": "evidence read",
@@ -614,7 +628,7 @@
       "irreversible": false,
       "runtime": "required",
       "entries": ["lab"],
-      "requests": ["RecordClientAction"],
+      "requests": ["RecordClientAction", "RuntimeFactSnapshot"],
       "source": ["actingctl evidence confirm-read", "MCP ac_evidence_confirm_read"],
       "slice": "LAB-1",
       "status": "planned"
@@ -634,7 +648,8 @@
       "requests": ["ControlEmulatorInstance"],
       "source": ["actingctl emulator start", "MCP ac_emulator (start)", "acui: rescue bar (crates/acui-source/src/workbench/device.rs)"],
       "slice": "LAB-1",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-1 moved none of this row's code (its sources stay in actingctl's main.rs and MCP's tools); the slice that builds it on lab-ops is the coordinator's to name (register §1.287, LAB-1 (g))"
     },
     {
       "name": "emu stop",
@@ -651,7 +666,8 @@
       "requests": ["ControlEmulatorInstance"],
       "source": ["actingctl emulator stop", "MCP ac_emulator (stop)", "acui: rescue bar (crates/acui-source/src/workbench/device.rs)"],
       "slice": "LAB-1",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-1 moved none of this row's code (its sources stay in actingctl's main.rs and MCP's tools); the slice that builds it on lab-ops is the coordinator's to name (register §1.287, LAB-1 (g))"
     },
     {
       "name": "emu restart",
@@ -668,7 +684,8 @@
       "requests": ["ControlEmulatorInstance"],
       "source": ["actingctl emulator restart", "MCP ac_emulator (restart)", "acui: rescue bar (crates/acui-source/src/workbench/device.rs)"],
       "slice": "LAB-1",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-1 moved none of this row's code (its sources stay in actingctl's main.rs and MCP's tools); the slice that builds it on lab-ops is the coordinator's to name (register §1.287, LAB-1 (g))"
     },
     {
       "name": "emu selfcheck",
@@ -686,7 +703,7 @@
       "source": ["actingctl selfcheck", "acui: rescue bar reconnect and check (crates/acui-source/src/workbench/device.rs)"],
       "slice": "LAB-1",
       "status": "planned",
-      "notes": "MCP gains it"
+      "notes": "MCP gains it; LAB-1 moved none of this row's code (its sources stay in actingctl's main.rs and MCP's tools); the slice that builds it on lab-ops is the coordinator's to name (register §1.287, LAB-1 (g))"
     },
     {
       "name": "app launch",
@@ -703,7 +720,8 @@
       "requests": ["ApplicationLifecycle"],
       "source": ["MCP ac_app (launch)", "actinglab session app launch", "actinglab session instance app launch", "acui: rescue bar game start and restart (crates/acui-source/src/workbench/device.rs)"],
       "slice": "LAB-1",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-1 moved none of this row's code (its sources stay in actingctl's main.rs and MCP's tools); the slice that builds it on lab-ops is the coordinator's to name (register §1.287, LAB-1 (g))"
     },
     {
       "name": "app restart",
@@ -720,7 +738,8 @@
       "requests": ["ApplicationLifecycle"],
       "source": ["MCP ac_app (restart)", "actinglab session app restart", "actinglab session instance app restart", "acui: rescue bar game start and restart (crates/acui-source/src/workbench/device.rs)"],
       "slice": "LAB-1",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-1 moved none of this row's code (its sources stay in actingctl's main.rs and MCP's tools); the slice that builds it on lab-ops is the coordinator's to name (register §1.287, LAB-1 (g))"
     },
     {
       "name": "app stop",
@@ -737,7 +756,8 @@
       "requests": ["ApplicationLifecycle"],
       "source": ["MCP ac_app (stop)", "actinglab session app stop", "actinglab session instance app stop", "actinglab session app force-stop", "actinglab session instance app force-stop"],
       "slice": "LAB-1",
-      "status": "planned"
+      "status": "planned",
+      "notes": "LAB-1 moved none of this row's code (its sources stay in actingctl's main.rs and MCP's tools); the slice that builds it on lab-ops is the coordinator's to name (register §1.287, LAB-1 (g))"
     },
     {
       "name": "shutdown",
@@ -754,7 +774,7 @@
       "source": ["actingctl request-shutdown", "acui: launcher stop (crates/acui-source/src/lib.rs)", "acsetup: request-shutdown, through an actingctl child"],
       "slice": "LAB-1",
       "status": "planned",
-      "notes": "MCP gains it"
+      "notes": "MCP gains it; LAB-1 moved none of this row's code (its sources stay in actingctl's main.rs and MCP's tools); the slice that builds it on lab-ops is the coordinator's to name (register §1.287, LAB-1 (g))"
     },
     {
       "name": "wake-test",
@@ -772,7 +792,7 @@
       "source": ["actingctl agent-wake-test"],
       "slice": "LAB-1",
       "status": "planned",
-      "notes": "MCP gains it (it had no tool before, agent-wake.md)"
+      "notes": "MCP gains it (it had no tool before, agent-wake.md); LAB-1 moved none of this row's code (its sources stay in actingctl's main.rs and MCP's tools); the slice that builds it on lab-ops is the coordinator's to name (register §1.287, LAB-1 (g))"
     },
     {
       "name": "gap",

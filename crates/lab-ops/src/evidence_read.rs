@@ -44,8 +44,8 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-pub(crate) const COMMAND: &str = "evidence";
-pub(crate) const CONFIRM_READ: &str = "confirm-read";
+pub const COMMAND: &str = "evidence";
+pub const CONFIRM_READ: &str = "confirm-read";
 const USAGE: &str = "usage: actingctl evidence confirm-read (--artifact <artifact_id> | --run <run_id>) --state-root <path>";
 /// The `surface_id` of the confirmations the CLI records.
 const CLI_SURFACE: &str = "cli";
@@ -54,19 +54,19 @@ const CLI_CLIENT: &str = "actingctl";
 
 /// What a confirmation names: one capture frame by its artifact id, or a run.
 #[derive(Clone, Copy)]
-pub(crate) enum Target {
+pub enum Target {
     Frame(ArtifactId),
     Run(RunId),
 }
 
 impl Target {
     /// A frame by the canonical text of its artifact id; `None` for any other text.
-    pub(crate) fn frame(text: &str) -> Option<Self> {
+    pub fn frame(text: &str) -> Option<Self> {
         identifier(text).map(Self::Frame)
     }
 
     /// A run by the canonical text of its run id; `None` for any other text.
-    pub(crate) fn run(text: &str) -> Option<Self> {
+    pub fn run(text: &str) -> Option<Self> {
         identifier(text).map(Self::Run)
     }
 
@@ -100,7 +100,7 @@ const DEDUP_ERROR_KEY: &str = "frame_retention_dedup_error";
 const DEDUP_LAB_KEY: &str = "frame_retention_dedup_lab";
 
 /// Why a confirmation was not recorded.
-pub(crate) enum Failure {
+pub enum Failure {
     /// The Runtime refused the request (its receipt's outcome on top), or did not answer.
     Runtime(RuntimeClientError),
     /// The contract refuses the record.
@@ -109,7 +109,7 @@ pub(crate) enum Failure {
 
 impl Failure {
     /// The failure as one outcome (Workflow #378 A5).
-    pub(crate) fn outcome(&self) -> Outcome {
+    pub fn outcome(&self) -> Outcome {
         match self {
             Self::Runtime(error) => error.outcome(),
             Self::Record(error) => Outcome::new(error.code()),
@@ -122,7 +122,7 @@ impl Failure {
 /// event_id, sequence, covers}` of the recorded `client.action`, `covers` counted on
 /// `state_root`; when it cannot be counted, the answer has no `covers` and the outcome beside it
 /// says why (a warning: the confirmation is recorded).
-pub(crate) fn confirm(
+pub fn confirm(
     client: &RuntimeClient,
     surface: &str,
     target: Target,
@@ -235,7 +235,7 @@ fn id_text(id: &impl serde::Serialize) -> String {
 // ---- the CLI
 
 /// The `evidence` command, when it is the first word.
-pub(crate) fn dispatch(arguments: &[OsString], detail: Detail) -> Option<ExitCode> {
+pub fn dispatch(arguments: &[OsString], detail: Detail) -> Option<ExitCode> {
     if arguments.first()?.to_str()? != COMMAND {
         return None;
     }

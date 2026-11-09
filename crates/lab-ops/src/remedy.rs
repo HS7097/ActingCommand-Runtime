@@ -41,29 +41,28 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub(crate) const COMMAND: &str = "remedy";
-pub(crate) const SET: &str = "set";
-pub(crate) const GET: &str = "get";
-pub(crate) const LIFT: &str = "lift";
+pub const COMMAND: &str = "remedy";
+pub const SET: &str = "set";
+pub const GET: &str = "get";
+pub const LIFT: &str = "lift";
 const USAGE: &str = "usage: actingctl remedy set (--instance <alias|instance_id|ADB port> | --game <id>) --rows <file> --state-root <path>\nusage: actingctl remedy get|lift --instance <alias|instance_id|ADB port> --state-root <path>";
 /// `source_detector` of the records the CLI writes.
 const CLI_DETECTOR: &str = "actingctl.remedy";
-/// `source_detector` of the records MCP writes.
-#[cfg(feature = "mcp")]
-pub(crate) const MCP_DETECTOR: &str = "actingctl-mcp.remedy";
+/// `source_detector` of the records MCP writes (actingctl's `mcp` feature reads it).
+pub const MCP_DETECTOR: &str = "actingctl-mcp.remedy";
 /// The largest rows file read: a fact observation's bound.
 const MAX_ROWS_FILE_BYTES: usize = actingcommand_contract::MAX_FACT_OBSERVATION_BYTES;
 
 /// The scope a `set` writes: an instance or a game, never a server (a server id is not
 /// game-qualified).
-pub(crate) enum Target {
+pub enum Target {
     /// An instance's alias, instance_id or ADB port, resolved with one status read.
     Instance(String),
     Game(String),
 }
 
 /// Why a remedy command answered nothing.
-pub(crate) enum Failure {
+pub enum Failure {
     /// The selector names no instance of the Runtime's status, or more than one.
     Selector {
         miss: SelectorMiss,
@@ -79,7 +78,7 @@ pub(crate) enum Failure {
 
 impl Failure {
     /// The failure as one outcome (Workflow #378 A5).
-    pub(crate) fn outcome(&self) -> Outcome {
+    pub fn outcome(&self) -> Outcome {
         match self {
             Self::Selector { miss, selector } => miss.outcome(selector),
             Self::Runtime(error) => error.outcome(),
@@ -91,7 +90,7 @@ impl Failure {
 
 /// The rows of a write from JSON: a list of objects whose members are strings, each member a
 /// field of the row; `None` for anything else. Which rows the Runtime takes is its check.
-pub(crate) fn rows_from_json(value: &Value) -> Option<Vec<BTreeMap<String, FactScalar>>> {
+pub fn rows_from_json(value: &Value) -> Option<Vec<BTreeMap<String, FactScalar>>> {
     value
         .as_array()?
         .iter()
@@ -109,7 +108,7 @@ pub(crate) fn rows_from_json(value: &Value) -> Option<Vec<BTreeMap<String, FactS
 }
 
 /// `set`: the scope's whole list as a new observation now.
-pub(crate) fn set(
+pub fn set(
     client: &RuntimeClient,
     target: &Target,
     rows: Vec<BTreeMap<String, FactScalar>>,
@@ -131,7 +130,7 @@ pub(crate) fn set(
 /// `get`: the `session.remedy.choices` records that apply to the instance `selector` names,
 /// most specific first, and the scope of the one in effect (the most specific not expired at
 /// the read; `null` when none is).
-pub(crate) fn get(client: &RuntimeClient, selector: &str) -> Result<Value, Failure> {
+pub fn get(client: &RuntimeClient, selector: &str) -> Result<Value, Failure> {
     let alias = resolve(client, selector)?;
     let (view, source) = client
         .instance_fact_snapshot(&alias)
@@ -179,11 +178,7 @@ pub(crate) fn get(client: &RuntimeClient, selector: &str) -> Result<Value, Failu
 /// `lift` (model-b15 §7.6 item 2): the instance's own record republished unchanged (its rows,
 /// and its lifetime's length when it has one), or an empty one when it has none, as a new
 /// observation, strictly newer than the one it replaces.
-pub(crate) fn lift(
-    client: &RuntimeClient,
-    selector: &str,
-    detector: &str,
-) -> Result<Value, Failure> {
+pub fn lift(client: &RuntimeClient, selector: &str, detector: &str) -> Result<Value, Failure> {
     let alias = resolve(client, selector)?;
     let (view, _) = client
         .instance_fact_snapshot(&alias)
@@ -320,7 +315,7 @@ struct Parsed {
 }
 
 /// The `remedy` command, when it is the first word.
-pub(crate) fn dispatch(arguments: &[OsString], detail: Detail) -> Option<ExitCode> {
+pub fn dispatch(arguments: &[OsString], detail: Detail) -> Option<ExitCode> {
     if arguments.first()?.to_str()? != COMMAND {
         return None;
     }

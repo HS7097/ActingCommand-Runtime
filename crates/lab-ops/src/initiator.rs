@@ -1,0 +1,122 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
+//! The initiator (Workflow #434; `contracts/lab-two-entries.md` §4.1): the one word that says
+//! where a request or an operation came from, from a closed list of six (Alice's answer 3 of
+//! 2026-11-08: 「只记来自哪个组或者哪个组下的具体模块名就行」). A word is compared byte for byte
+//! (UTF-8) and printed exactly as written; nothing else (no client, session or user) is part of
+//! it. From LAB-6 the six words are a closed vocabulary of `runtime-client` 7 and `ledger` 8.
+
+use crate::cli_line;
+use crate::codes::ArgumentProblem;
+use crate::table::Entry;
+use actingcommand_contract::outcome::Outcome;
+use serde::de::{self, Deserializer};
+use serde::{Deserialize, Serialize, Serializer};
+use std::fmt;
+use std::str::FromStr;
+
+/// Where a request or an operation came from: the group (`UI`) or the Lab module (§4.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Initiator {
+    /// `UI`: the console (acui) on the `ui` entry; fixed by the binding, never declared.
+    Ui,
+    /// `Lab-CLI`: `actinglab.exe` started from a command line, by a person or a script.
+    LabCli,
+    /// `Lab-MCP`: `actinglab-mcp.exe`, for an MCP client.
+    LabMcp,
+    /// `Lab-制包`: the Lab process the UI starts for its authoring workbench
+    /// (`actinglab serve --stdio`).
+    LabAuthoring,
+    /// `Lab-救急`: a Lab process the UI starts outside its workbench (the launcher, acsetup, the
+    /// settings page).
+    LabRescue,
+    /// `Lab-看门狗`: `actingwatch.exe`.
+    LabWatchdog,
+}
+
+impl Initiator {
+    /// The six words, in the contract's order (§4.1).
+    pub const ALL: [Self; 6] = [
+        Self::Ui,
+        Self::LabCli,
+        Self::LabMcp,
+        Self::LabAuthoring,
+        Self::LabRescue,
+        Self::LabWatchdog,
+    ];
+
+    /// The word, exactly as the contract writes it.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ui => "UI",
+            Self::LabCli => "Lab-CLI",
+            Self::LabMcp => "Lab-MCP",
+            Self::LabAuthoring => "Lab-制包",
+            Self::LabRescue => "Lab-救急",
+            Self::LabWatchdog => "Lab-看门狗",
+        }
+    }
+
+    /// The entry a connection with this initiator binds (§2.2): `ui` for `UI`, `lab` for the
+    /// five Lab words.
+    pub const fn entry(self) -> Entry {
+        match self {
+            Self::Ui => Entry::Ui,
+            Self::LabCli
+            | Self::LabMcp
+            | Self::LabAuthoring
+            | Self::LabRescue
+            | Self::LabWatchdog => Entry::Lab,
+        }
+    }
+
+    /// The initiator `word` names, compared byte for byte: no trimming, no case folding. A word
+    /// outside the six is `actingctl_usage_invalid` with `argument_problem` `not_recognised`,
+    /// naming the word as `argument` when a name may hold it.
+    pub fn parse(word: &str) -> Result<Self, Outcome> {
+        Self::ALL
+            .into_iter()
+            .find(|initiator| initiator.as_str() == word)
+            .ok_or_else(|| cli_line::usage_invalid(Some(word), ArgumentProblem::NotRecognised))
+    }
+}
+
+impl fmt::Display for Initiator {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl FromStr for Initiator {
+    type Err = Outcome;
+
+    fn from_str(word: &str) -> Result<Self, Self::Err> {
+        Self::parse(word)
+    }
+}
+
+impl Serialize for Initiator {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for Initiator {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let word = String::deserialize(deserializer)?;
+        Self::ALL
+            .into_iter()
+            .find(|initiator| initiator.as_str() == word)
+            .ok_or_else(|| de::Error::unknown_variant(&word, &WORDS))
+    }
+}
+
+/// The six words, for a decoder's refusal.
+static WORDS: [&str; 6] = [
+    Initiator::Ui.as_str(),
+    Initiator::LabCli.as_str(),
+    Initiator::LabMcp.as_str(),
+    Initiator::LabAuthoring.as_str(),
+    Initiator::LabRescue.as_str(),
+    Initiator::LabWatchdog.as_str(),
+];

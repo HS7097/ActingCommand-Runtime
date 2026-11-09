@@ -13,7 +13,7 @@ use serde_json::json;
 
 /// Why a selector names no single instance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SelectorMiss {
+pub enum SelectorMiss {
     /// No instance has this alias, instance_id or ADB port.
     Unknown,
     /// More than one instance matches it.
@@ -22,7 +22,7 @@ pub(crate) enum SelectorMiss {
 
 impl SelectorMiss {
     /// `instance_unknown` or `instance_ambiguous`.
-    pub(crate) fn code(self) -> Code {
+    pub fn code(self) -> Code {
         match self {
             Self::Unknown => RuntimeErrorCode::InstanceUnknown.code(),
             Self::Ambiguous => ActingctlCode::InstanceAmbiguous.code(),
@@ -31,13 +31,13 @@ impl SelectorMiss {
 
     /// The miss as an outcome (Workflow #378 A5): its code with the selector as given
     /// (`instance_selector`).
-    pub(crate) fn outcome(self, selector: &str) -> Outcome {
+    pub fn outcome(self, selector: &str) -> Outcome {
         Outcome::new(self.code()).instance_selector(selector)
     }
 }
 
 /// The one instance of `instances` whose alias, instance_id or ADB port is `selector`.
-pub(crate) fn select<'s>(
+pub fn select<'s>(
     instances: &'s [RuntimeInstanceStatus],
     selector: &str,
 ) -> Result<&'s RuntimeInstanceStatus, SelectorMiss> {

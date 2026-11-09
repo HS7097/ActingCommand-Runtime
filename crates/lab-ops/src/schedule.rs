@@ -30,13 +30,11 @@ use std::collections::BTreeMap;
 
 /// The configuration key that bounds `not_run` per instance (`contracts/runtime-config.md`,
 /// default 10); its row is in the program fact `config.parameters.scheduling`.
-pub(crate) const DIAGNOSE_ROWS_KEY: &str = "scheduling.not_run.diagnose_rows";
+pub const DIAGNOSE_ROWS_KEY: &str = "scheduling.not_run.diagnose_rows";
 
 /// The `not_running` row of each entry of `explanation`, by the entry's instance alias, verbatim:
 /// the member `overview` adds to the instance row of that alias.
-pub(crate) fn not_running_by_alias(
-    explanation: &RuntimeScheduleExplanation,
-) -> BTreeMap<&str, Value> {
+pub fn not_running_by_alias(explanation: &RuntimeScheduleExplanation) -> BTreeMap<&str, Value> {
     explanation
         .instances
         .iter()
@@ -45,20 +43,20 @@ pub(crate) fn not_running_by_alias(
 }
 
 /// The deferred rows of a diagnosis: the rows listed and how many there are in the answer.
-pub(crate) struct NotRun {
+pub struct NotRun {
     /// Per entry of the answer, in its order, its first rows whose `state` is `deferred`, or
     /// `blocked` by a shared run limit (at most the bound), each the candidate row verbatim with
     /// its `instance_alias`.
-    pub(crate) rows: Vec<Value>,
+    pub rows: Vec<Value>,
     /// Every deferred row of the answer, listed or not.
-    pub(crate) total: usize,
+    pub total: usize,
 }
 
 /// `not_run` of a diagnosis from the two reads it takes: `explanation`, the ScheduleExplanation
 /// read with candidates (of the diagnosed instance, or of every instance), and `facts`, the
 /// RuntimeFactSnapshot whose `config.parameters.scheduling` holds the bound. A read that failed,
 /// or a bound that cannot be read, is one warning each and leaves no `not_run`.
-pub(crate) fn not_run(
+pub fn not_run(
     explanation: Result<RuntimeScheduleExplanation, RuntimeClientError>,
     facts: Result<RuntimeFactSnapshot, RuntimeClientError>,
     warnings: &mut Vec<Warning>,
@@ -118,7 +116,7 @@ fn deferred_rows(explanation: &RuntimeScheduleExplanation, bound: usize) -> NotR
 /// section, as the Runtime records the configuration in effect). A snapshot without the record
 /// or the row is `config_facts_missing`; a record that is no row list, or a row whose value is no
 /// integer of `0..=4294967295`, does not read back (`invalid_fact_snapshot_record`).
-pub(crate) fn diagnose_rows(facts: &RuntimeFactSnapshot) -> Result<usize, Outcome> {
+pub fn diagnose_rows(facts: &RuntimeFactSnapshot) -> Result<usize, Outcome> {
     let missing = || Outcome::new(ActingctlCode::ConfigFactsMissing);
     let unreadable = || Outcome::new(SanitizationCode::InvalidFactSnapshotRecord);
     let key = config_parameters_fact_key(config_parameter_section(DIAGNOSE_ROWS_KEY));

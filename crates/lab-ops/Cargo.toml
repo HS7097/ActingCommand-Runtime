@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+
+[package]
+name = "actingcommand-lab-ops"
+# Workflow #434 LAB-1: actingctl's version, which `evidence confirm-read` records as its client's
+# version (`CARGO_PKG_VERSION`), so that the moved module records what actingctl recorded.
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[features]
+# The #422 QR-2b gate of actingctl's MCP tests builds a diagnosis whose report never started
+# (`diagnose::SuspensionReport::not_started`); actingctl's dev-dependency turns it on.
+test-hooks = []
+
+[dependencies]
+actingcommand-contract = { workspace = true }
+# #422 LN-7c Q: `evidence confirm-read` counts the evidence frames a confirmation covers with the
+# frame cleaner's statements, read-only (`evidence_covers`).
+actingcommand-ledger = { workspace = true }
+# ROUT-L RL-1c (#411): `packs` lists a composer-mode configuration's procedures from the standard
+# packs' `schedule.json` through the composer actingd's scheduler workbench uses; `schedule`
+# reads the policy's codes.
+actingcommand-policy = { workspace = true }
+actingcommand-runtime-client = { workspace = true }
+# `overview` and `perf-preset` read the configuration's sha256 and the key table, `evidence
+# confirm-read` the frame cleaner's defaults.
+actingcommand-runtime-config = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
