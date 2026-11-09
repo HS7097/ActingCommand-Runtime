@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub(crate) const COMMAND: &str = "capability-gap";
+pub const COMMAND: &str = "capability-gap";
 const USAGE: &str = "usage: actingctl capability-gap --capability <text> --why <text>";
 /// The schema of one line of the log.
 const GAP_SCHEMA: &str = "actingcommand.capability-gap.v1";
@@ -33,18 +33,18 @@ const GAP_SCHEMA: &str = "actingcommand.capability-gap.v1";
 const LOG_DIRECTORY: [&str; 2] = ["ActingCommand", "actingctl"];
 const LOG_FILE: &str = "capability-gaps.jsonl";
 /// The longest `capability`, in characters: a short name of what was missing.
-pub(crate) const MAX_CAPABILITY_CHARS: usize = 120;
+pub const MAX_CAPABILITY_CHARS: usize = 120;
 /// The longest `why`, in characters: one or two sentences.
-pub(crate) const MAX_WHY_CHARS: usize = 500;
+pub const MAX_WHY_CHARS: usize = 500;
 
 /// The argument names, both sides (the CLI flags without `--`).
-pub(crate) const CAPABILITY: &str = "capability";
-pub(crate) const WHY: &str = "why";
+pub const CAPABILITY: &str = "capability";
+pub const WHY: &str = "why";
 
 /// What is wrong with a text argument: none when it is a non-blank single line of at most
 /// `max` characters; `value_missing` when it is blank, `not_recognised` when it holds a control
 /// character (a line break included), `out_of_range` when it is longer.
-pub(crate) fn text_problem(text: &str, max: usize) -> Option<ArgumentProblem> {
+pub fn text_problem(text: &str, max: usize) -> Option<ArgumentProblem> {
     if text.trim().is_empty() {
         Some(ArgumentProblem::ValueMissing)
     } else if text.chars().any(char::is_control) {
@@ -59,7 +59,7 @@ pub(crate) fn text_problem(text: &str, max: usize) -> Option<ArgumentProblem> {
 /// The log of this user: `%LOCALAPPDATA%\ActingCommand\actingctl\capability-gaps.jsonl`, or
 /// below `APPDATA` without `LOCALAPPDATA`; `actingctl_capability_gap_write_failed` without a
 /// path when neither is set.
-pub(crate) fn log_path() -> Result<PathBuf, Outcome> {
+pub fn log_path() -> Result<PathBuf, Outcome> {
     let root = std::env::var_os("LOCALAPPDATA")
         .filter(|root| !root.is_empty())
         .or_else(|| std::env::var_os("APPDATA").filter(|root| !root.is_empty()))
@@ -73,7 +73,7 @@ pub(crate) fn log_path() -> Result<PathBuf, Outcome> {
 /// Appends one gap to `log` as one line, `via` `cli` or `mcp`, and answers `{path, gap}`.
 /// A failure is `actingctl_capability_gap_write_failed` with the log's path, caused by the
 /// failure.
-pub(crate) fn record(log: &Path, capability: &str, why: &str, via: &str) -> Result<Value, Outcome> {
+pub fn record(log: &Path, capability: &str, why: &str, via: &str) -> Result<Value, Outcome> {
     let failed = |error: &std::io::Error, op: IoOp, at: &Path| {
         Outcome::new(ActingctlCode::ActingctlCapabilityGapWriteFailed)
             .path(log)
@@ -161,7 +161,7 @@ fn parse(arguments: &[OsString]) -> Result<(String, String), Outcome> {
 }
 
 /// The `capability-gap` command, when it is the first word.
-pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
+pub fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
     if arguments.first()?.to_str()? != COMMAND {
         return None;
     }

@@ -7,7 +7,7 @@
 //! refused and superseded rows come first, then deferred and expired rows, then owed rows.
 //! Every expected value comes from the frozen model.
 
-use super::super::runs::Diagnosis;
+use super::super::runs::{Diagnosis, render_within_budget};
 use super::super::tools::ToolError;
 use crate::diagnose::clock_slot_rows;
 use serde_json::{Value, json};
@@ -189,8 +189,7 @@ fn render(diagnosis: &Diagnosis) -> (Value, Vec<usize>) {
         }
         Ok(page)
     };
-    let result = diagnosis
-        .render_within_budget(page)
+    let result = render_within_budget(diagnosis, page)
         .unwrap_or_else(|error| panic!("ac_diagnose rendering: {}", error.to_value()))
         .result;
     (result, asked.into_inner())

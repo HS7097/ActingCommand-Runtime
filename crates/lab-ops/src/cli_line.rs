@@ -19,7 +19,7 @@ use std::io::{self, Write};
 use std::process::ExitCode;
 
 /// The environment variable that switches actingctl's outcomes to codes only (§7.1).
-pub(crate) const DETAIL_VARIABLE: &str = "ACTINGCOMMAND_DETAIL";
+pub const DETAIL_VARIABLE: &str = "ACTINGCOMMAND_DETAIL";
 /// The longest command-line word a usage outcome names as its `argument` (the key table's name
 /// bound).
 const MAX_ARGUMENT_BYTES: usize = 256;
@@ -27,7 +27,7 @@ const MAX_ARGUMENT_BYTES: usize = 256;
 /// `actingctl_usage_invalid` for one command-line word and what is wrong with it
 /// (`argument_problem`). The word is named as `argument` when it is one a name may hold (at most
 /// 256 bytes, no control character); another word is refused unnamed.
-pub(crate) fn usage_invalid(argument: Option<&str>, problem: ArgumentProblem) -> Outcome {
+pub fn usage_invalid(argument: Option<&str>, problem: ArgumentProblem) -> Outcome {
     let outcome = Outcome::new(ActingctlCode::ActingctlUsageInvalid).argument_problem(problem);
     match argument.filter(|argument| {
         argument.len() <= MAX_ARGUMENT_BYTES && !argument.chars().any(char::is_control)
@@ -39,7 +39,7 @@ pub(crate) fn usage_invalid(argument: Option<&str>, problem: ArgumentProblem) ->
 
 /// The detail `ACTINGCOMMAND_DETAIL` asks for: full when it is unset; `codes` or `full`
 /// otherwise; any other value is refused with `actingctl_usage_invalid` and the variable.
-pub(crate) fn detail() -> Result<Detail, Outcome> {
+pub fn detail() -> Result<Detail, Outcome> {
     match std::env::var_os(DETAIL_VARIABLE) {
         None => Ok(Detail::Full),
         Some(value) => match value.to_str() {
@@ -51,7 +51,7 @@ pub(crate) fn detail() -> Result<Detail, Outcome> {
 }
 
 /// The level word of a developer line (model §7.3: FATAL only for a fatal outcome).
-pub(crate) const fn level(category: Category) -> &'static str {
+pub const fn level(category: Category) -> &'static str {
     match category {
         Category::Success | Category::Info => "INFO",
         Category::Warning => "WARN",
@@ -62,7 +62,7 @@ pub(crate) const fn level(category: Category) -> &'static str {
 
 /// The developer line `<LEVEL> actingctl: <outcome>[ <text>]` on stderr; `text` is developer
 /// English only (a usage line, a foreign detail the outcome does not hold).
-pub(crate) fn developer_line(outcome: &Outcome, text: Option<&str>) {
+pub fn developer_line(outcome: &Outcome, text: Option<&str>) {
     match text {
         Some(text) => eprintln!("{} actingctl: {outcome} {text}", level(outcome.category())),
         None => eprintln!("{} actingctl: {outcome}", level(outcome.category())),
@@ -70,26 +70,26 @@ pub(crate) fn developer_line(outcome: &Outcome, text: Option<&str>) {
 }
 
 /// A successful exit: `{…result, "outcome": …}`.
-pub(crate) fn success(result: Map<String, Value>, outcome: &Outcome) -> ExitCode {
+pub fn success(result: Map<String, Value>, outcome: &Outcome) -> ExitCode {
     finish(Some(result), outcome, false, None)
 }
 
 /// A failed exit: `{"outcome": …}`, then the developer line with `text`.
-pub(crate) fn failure(outcome: &Outcome, text: Option<&str>) -> ExitCode {
+pub fn failure(outcome: &Outcome, text: Option<&str>) -> ExitCode {
     finish(None, outcome, false, text)
 }
 
 /// A refused exit: `{outcome}` and the developer line with `text`, non-zero whatever the top's
 /// category (a refusal the Runtime topped with an info or warning code still failed; A4 part B
 /// L2).
-pub(crate) fn refused(outcome: &Outcome, text: Option<&str>) -> ExitCode {
+pub fn refused(outcome: &Outcome, text: Option<&str>) -> ExitCode {
     finish(None, outcome, true, text)
 }
 
 /// The line of a subcommand whose result holds a Runtime receipt: `refused` is true when that
 /// receipt's state is denied or failed, and the process then exits non-zero whatever the
 /// outcome's category (A4 part B L2).
-pub(crate) fn receipt(result: Map<String, Value>, outcome: &Outcome, refused: bool) -> ExitCode {
+pub fn receipt(result: Map<String, Value>, outcome: &Outcome, refused: bool) -> ExitCode {
     finish(Some(result), outcome, refused, None)
 }
 
@@ -117,7 +117,7 @@ fn finish(
 }
 
 /// The result line: the result's members and `outcome`, the envelope in `detail`.
-pub(crate) fn line(
+pub fn line(
     result: Option<Map<String, Value>>,
     outcome: &Outcome,
     detail: Detail,
@@ -136,20 +136,20 @@ pub(crate) fn line(
 
 /// The exit code of a top outcome of `category` (§7.6): 0 for success, info or warning, 1 for
 /// error, 2 for fatal; a refused or failed receipt (`refused`) exits at least 1 (A4 part B L2).
-pub(crate) fn exit_code(category: Category, refused: bool) -> u8 {
+pub fn exit_code(category: Category, refused: bool) -> u8 {
     category.exit_code().max(u8::from(refused))
 }
 
 /// An outcome as an interface value: its `actingcommand.outcome.v1` envelope in `detail`. An
 /// envelope always serialises; were it ever to fail, the code alone is shown.
-pub(crate) fn outcome_value(outcome: &Outcome, detail: Detail) -> Value {
+pub fn outcome_value(outcome: &Outcome, detail: Detail) -> Value {
     serde_json::to_value(outcome.envelope(detail))
         .unwrap_or_else(|_| Value::String(outcome.code().as_str().to_owned()))
 }
 
 /// A warning beside a result, as the CLI line and MCP both carry it: `{outcome}` (Workflow #378
 /// A5; MCP-0 command table D3: a top-level `warnings` member, present only when not empty).
-pub(crate) fn warning_value(outcome: &Outcome, detail: Detail) -> Value {
+pub fn warning_value(outcome: &Outcome, detail: Detail) -> Value {
     let mut warning = Map::new();
     warning.insert("outcome".to_owned(), outcome_value(outcome, detail));
     Value::Object(warning)
@@ -172,13 +172,13 @@ fn output_failed(text: &str) -> ExitCode {
 }
 
 /// A warning of this process's result line: [`warning_value`] in the process's detail.
-pub(crate) fn warning(outcome: &Outcome) -> Value {
+pub fn warning(outcome: &Outcome) -> Value {
     warning_value(outcome, detail().unwrap_or(Detail::Full))
 }
 
 /// A JSON value as the members of a result line: an object's members, or any other value under
 /// `member`.
-pub(crate) fn members(value: Value, member: &str) -> Map<String, Value> {
+pub fn members(value: Value, member: &str) -> Map<String, Value> {
     match value {
         Value::Object(members) => members,
         other => {

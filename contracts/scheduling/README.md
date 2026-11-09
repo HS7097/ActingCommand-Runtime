@@ -896,7 +896,7 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
   one; at least 1), compared exactly as `B·E' > B'·E`; then `affinity` and the tie-break of
   "Ties and chain heads" on integer equality. The handwritten `priority` no longer orders judged
   candidates of one tier. The reserve gate takes each instance's candidates in this order.
-- **Turns across instances** (SS-2f, since 0.12.45; Alice's answer K2 to question 137, 11-02
+- **Turns across instances** (SS-2f, since 0.12.46; Alice's answer K2 to question 137, 11-02
   19:4x, design `rd-1031/design-acm-price-addendum2.1.md` §5.4; register §1.288). Each game
   values its candidates in its own unit, so `B` compares only within one instance. In the
   business tier two candidates of different instances therefore go by their instances' turns,
@@ -1156,7 +1156,7 @@ no value keys and stay developer text.
      unsaturated 128-bit sum differs). SS-2b (since 0.12.32): in a catalog that
      marks a task `benefit_judged`, the tier comes after `promoted` and judged
      candidates rank by `B ÷ E` within it ("Net benefit within a tier"; SS-2f,
-     since 0.12.45: business candidates of different instances go by their
+     since 0.12.46: business candidates of different instances go by their
      instances' turns first, "Turns across instances"); a
      judged winner's breakdown then ends with ` benefit_milli=<B>
      expected_duration_ms=<E>`, and its outcome carries both as values.

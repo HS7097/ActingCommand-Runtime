@@ -5,7 +5,7 @@
 //! rows of `actingd suspended` whose `instance_id` is the diagnosed instance (every row without
 //! an instance), verbatim, with the members the report gives them, and its description says so.
 
-use super::super::runs::Diagnosis;
+use super::super::runs::{Diagnosis, render_within_budget};
 use super::super::tools::{self, ToolError};
 use crate::diagnose::remedy_rows;
 use serde_json::{Value, json};
@@ -114,12 +114,11 @@ fn b15w2_ac_diagnose_shows_the_instances_stopped_remedies() {
         "every row without an instance"
     );
 
-    let result = diagnosis(kept)
-        .render_within_budget(|_| -> Result<Value, ToolError> {
-            Ok(json!({"events": [], "more": false, "snapshot_ledger_position": 121_000}))
-        })
-        .unwrap_or_else(|error| panic!("ac_diagnose rendering: {}", error.to_value()))
-        .result;
+    let result = render_within_budget(&diagnosis(kept), |_| -> Result<Value, ToolError> {
+        Ok(json!({"events": [], "more": false, "snapshot_ledger_position": 121_000}))
+    })
+    .unwrap_or_else(|error| panic!("ac_diagnose rendering: {}", error.to_value()))
+    .result;
     assert_eq!(result["remedies"], json!([stopped, lifted]), "{result:#}");
     assert!(result.get("remedies_truncated").is_none(), "{result:#}");
 

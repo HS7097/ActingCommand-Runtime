@@ -7901,7 +7901,7 @@ catalog, and no live revision raised.
 |---|---|---|---|---|---|---|
 | LAB-0 | Runtime, contracts only | S | the contract, the table v1, the planned rows, this section | — | none | none |
 | LAB-1 | Runtime | L | `crates/lab-ops`: the operation table read from `lab-operations.json`, the default location (contract §9.3), the initiator type (contract §4); actingctl's read and write modules moved in (`overview`, `events`, `run_list`, `run_evidence`, `diagnose`, `facts`, `schedule`, `perf_preset`, `routine_summary`, `remedy`, `devices`, `packs`, `code_lookup`, `capability_gap`, `evidence_read`, `observe_export`) | LAB-0 | `lab_ops_table_complete` (contract §9.2); `lab_ops_locate_defaults`: on a fake installed root, without a root or a state root given, the layer finds both | none |
-| LAB-2 | Runtime | M | the CLI module: short words, output for people, `--json`; `actinglab serve --stdio`; actinglab's debugging and authoring commands on the table; its retired and reserved command words deleted | LAB-1 | `cli_json_matches_op_output`, `cli_short_words_parse`, `serve_answers_same_as_cli` | none |
+| LAB-2 | Runtime | M | the CLI module: short words, output for people, `--json`; `actinglab serve --stdio`; actinglab's debugging and authoring commands on the table; its retired and reserved command words deleted; the CLI app prints the result and developer lines and `lab-ops` returns them, and the `STDERR_ALLOW_LIST` entry for `crates/lab-ops/src/cli_line.rs` (LAB-1) goes; actinglab registers the overview's watchdog block (`overview::set_watchdog_block`) as actingctl does, unless LAB-4 has merged first (without it the block is null) | LAB-1 | `cli_json_matches_op_output`, `cli_short_words_parse`, `serve_answers_same_as_cli` | none |
 | LAB-3 | Runtime | L | the rescue and installation module; `deploy`, `config replace`, `place`, `alive`; the journal's `initiator`; the confirmation parameters gone and `unlock` without one (contract §5); guards that report and `--ack-guard` gone (contract §6, §7 Q4) | LAB-1 | `rescue_without_actingd`: without `runtime-info.json`, `op status`, `up` and `rollback` go through. `irreversible_journal_initiator`: the journals of `deploy`, `rollback`, `clean` and `config replace` carry the initiator, and a confirmation parameter (`--accept-ledger-one-way`, `--ui-confirmed`, `--ack-guard`) is `actingctl_usage_invalid` (`unknown`), the code renamed with LAB-7. `deploy_steps_in_order`: on fake seams, stage → plan → stop → apply → start → alive → release | none: `actingctl install` keeps the `install-cli` 1 face |
 | LAB-4 | Runtime | M | `crates/watchdog`; `actingwatch.exe` with its own tick, `status`, `install` and `uninstall` | — | the watchdog's existing gate tests move with the code (paths only, each listed); `actingwatch_tick_in_process` | none |
 | LAB-5 | Runtime | M | `actinglab-mcp.exe`: tools generated from the table, no tiers; the MCP entry `g2` | LAB-1, LAB-3 | `mcp_tools_from_op_table`: `tools/list` equals the installed modules' operations, with the CLI's parameters. `mcp_entry_g2_child`: the entry starts actinglab-mcp and passes `--client` down | the MCP entry's `entry_protocol` 2 |
@@ -7961,7 +7961,77 @@ opens its `reserved` row of the table. #410 item 3 (MCP's descriptions written o
 
 **Rollback.** Nothing to roll back: text only.
 
-### 1.288 Slice SS-2f (0.12.45): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
+#### Slice LAB-1 (0.12.x): `crates/lab-ops`, the operation table, the default location and the initiator
+
+Coordinator work order `rd-1108/arch-013/brief-lab1.md`; on main `105570cb` (LAB-0 merged). The
+contract is [lab-two-entries.md](lab-two-entries.md) §4.1, §8 and §9; the table is
+[lab-operations.json](lab-operations.json). LAB-1 only adds: actingctl answers as before (same
+words, output, codes and exit codes), now calling its read and write modules from the new crate.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L1-1 | `crates/lab-ops` (package `actingcommand-lab-ops`, a library; version 0.1.0, actingctl's, which `evidence confirm-read` records as its client's version) | workspace member | LAB-1 | — | tested in the CI job `host-lab`; the outcome catalog's fragment owner `actingctl` names `crates/lab-ops`, the crate that now holds its registry (`codes.rs`), and `apps/actingctl` takes the owner `actingctl-app`, which registers nothing; the fragment `actingctl.json`, its owner name and every entry are unchanged, and the merged catalog holds no fragment map, so the embedded catalog is byte for byte the same |
+| L1-2 | `table::OperationTable` (`initiators`, `modules`, `ui_kinds`, `not_exposed`, `operations`) and its rows `InitiatorRow`, `ModuleRow`, `UiKindRow`, `NotExposedRow`, `Operation`, `Param`, with the vocabularies `ModuleRole`, `RequestClass`, `NotExposedReason`, `OperationModule`, `RuntimeNeed`, `Entry` (`lab`, `ui`), `OperationStatus`, `ParamForm`, `ParamType`; `operation_table()` (the file this build embeds), `read_operation_table(path)`, `OperationTable::parse`, `Operation::mcp_tool`, `request_kind_named`, `request_kind_name` | in-process types, behaviour | LAB-1 | — | contract §9.1: every row member present and none other (`deny_unknown_fields`), the schema `actingcommand.lab-operations.v1`, every request kind one of `RuntimeOperationKind::ALL` by its variant's name (`planned_requests` stay text); a file that cannot be opened or read is `foreign_os_error` with `path` and `io_op`, one over 1 MiB `mcp_file_too_large`, text the decoder refuses `foreign_data_error` with the decoder's message and `path`; no code is added |
+| L1-3 | `initiator::Initiator` (`UI`, `Lab-CLI`, `Lab-MCP`, `Lab-制包`, `Lab-救急`, `Lab-看门狗`): `ALL`, `as_str`, `entry`, `parse`, `Display`, `FromStr`, `Serialize`, `Deserialize` | in-process type | LAB-1 | — | contract §4.1: one closed enum, compared byte for byte and printed as written; a word outside the six is `actingctl_usage_invalid` with `argument` and `argument_problem` `not_recognised` (the decoder's unknown variant inside the table); no wire, record or receipt carries it before LAB-6 |
+| L1-4 | `locate::locate()`, `locate::locate_from(program, process)` → `Location {root, installation, config, state_root}`, `locate::configured_state_root(config)` | behaviour | LAB-1 | — | contract §9.3 and §7: the root of the process's A/B selection (the selection `install\active.json` holds now), else from the program's own place, a kept build `<root>\install\builds\<commit>\runtime\` or `<root>\runtime\` beside `runtime\BUILD-MANIFEST.json`; the configuration is the selection's or `<root>\actingd.config.json`, the state root its absolute `state_root`; refusals `install_root_unresolved` (the program as `path`), the contract's install codes, `install_state_root_unresolved` (`config_path`, and the cause, or the value as `path`); nothing calls it yet (LAB-2, LAB-3) |
+| L1-5 | actingctl's read and write modules `overview`, `events`, `run_list`, `run_evidence`, `diagnose`, `facts`, `schedule`, `perf_preset`, `routine_summary`, `remedy`, `devices`, `packs`, `code_lookup`, `capability_gap`, `evidence_read`, `observe_export`, and the helpers they share `cli_line`, `codes`, `instance_selector`, `material_export`, `child`; from actingctl's `main.rs` the moved commands' arms of `flags_of` (`flags_of` in the crate's root; actingctl's own table asks it for every other word), `read_bounded`, `InputProblem` and `foreign_data_error` | moved code (`git mv`) | LAB-1 | actingctl | `pub(crate)` became `pub`; actingctl imports the modules at its root, so every `crate::<module>` path of actingctl names them unchanged; `actingwatch` takes `ActingctlCode` from the crate instead of including `codes.rs` by path |
+| L1-6 | `overview::WatchdogBlock`, `overview::set_watchdog_block` | in-process seam | LAB-1 | actingctl's `main` (Windows), with its watchdog's `overview_block` | the watchdog stays in actingctl until LAB-4 (`crates/watchdog`); without a reader the `watchdog` block is null, as on a platform without the watchdog |
+| L1-7 | the feature `test-hooks`: `diagnose::SuspensionReport::not_started` | test seam | LAB-1 | actingctl's dev-dependency | the #422 QR-2b gate of actingctl's MCP tests builds a diagnosis whose report never started |
+| L1-8 | the table's `requests` of eleven LAB-1 rows, corrected from the moved code (contract §9.1): `facts`, `summary`, `events`, `runs`, `diagnose`, `remedy`, `remedy set`, `remedy lift` and `frame` add the `Status` read that resolves `<inst>` (`diagnose` also `RuntimeFactSnapshot`, `remedy lift` also `InstanceFactSnapshot`), `evidence read` adds `RuntimeFactSnapshot` (the frames a confirmation covers), and `run evidence` drops `ReadMaterial`, which none of its sources sends | contract table | LAB-1 | — | the schema does not change; every row's `entries` still follows its rule; the 23 LAB-1 rows of (g) gain a note |
+
+**Tests.** New: apps row "#434 LAB-1" (`gate_434_lab1`, the repository's table file, a fake
+single-location root in a temporary folder; no clock, no sleep): `lab_ops_table_complete`
+(contract §9.2) and `lab_ops_locate_defaults` (a program in `runtime\` and one in a kept build
+find the root and the state root with neither given; a program outside any installed root is
+`install_root_unresolved`). Moved with their modules, paths only (their package and target change
+from `actingcommand-actingctl::bin:actingctl::` to `actingcommand-lab-ops::lib::`): the 28 tests of
+the moved files, 27 of them gate map names, each new name in its old row and each old name in
+`ci/retired-gates.toml` with its new name; the list is in the pull request. Changed, paths only:
+`actinglab-architecture`'s `c3b_client_device_authority_stays_behind_runtime` (also reads
+`crates/lab-ops/src`, and checks the new crate's production dependencies as actingctl's) and
+`rd1b_t10_export_archive_and_diagnostics_never_read_the_private_bindings` (the binding writer is
+`crates/lab-ops/src/devices.rs`). `runtime_domain_never_writes_stderr` gains one
+`STDERR_ALLOW_LIST` entry, `crates/lab-ops/src/cli_line.rs` (coordinator's ruling): actingctl's
+developer line (`developer_line`) moved unchanged with `cli_line`, every moved command prints
+through it, and taking that printing out of `lab-ops` is LAB-2's CLI module, which removes the
+entry.
+
+**Interface.** None: `actingd-config` 27, `ledger` 7, `runtime-client` 6, `package` 7,
+`runtime-outcomes` 1. No code, key, location or vocabulary token is added.
+
+**Where LAB-1 differs from its work order's letter.**
+
+- (a) The five helpers the sixteen modules call (`cli_line`, `codes`, `instance_selector`,
+  `material_export`, `child`) and four items of actingctl's `main.rs` moved with them: a crate
+  cannot call back into the program that uses it.
+- (b) The registry `codes.rs` moved, so the catalog header maps the owner `actingctl` to
+  `crates/lab-ops` and gives `apps/actingctl` the new owner `actingctl-app` (every member needs
+  one, G1 checks a registry against its member's owner). LAB-7, which moves actingctl's codes into
+  actinglab's fragment, settles the map again.
+- (c) The `watchdog` block reads actingctl's watchdog through a reader actingctl hands over at its
+  start (L1-6), since the watchdog moves only with LAB-4.
+- (d) The default location also reads a kept build's place, where contract §7 runs the rescue
+  module, beside a slot's and a single-location root's `runtime\`.
+- (e) The moved files' gates on actingctl's feature `mcp` went: `remedy::MCP_DETECTOR` is always
+  compiled, and the dead-code allowances for the items MCP alone reads went with them (a library's
+  public items are never dead code).
+- (f) The crate's version is actingctl's (L1-1).
+- (g) Twenty-three LAB-1 rows have no code among the modules the register's LAB-1 row moves: their
+  sources stay in actingctl's `main.rs` (its `run`) and in MCP's tools: `run show`, `material`,
+  `targets`, `targets set`, `frames`, `discover`, `pause`, `resume`, `config set`, `config
+  clear`, `monitor set`, `monitor clear`, `offset`, `facts publish`, `emu start`, `emu stop`,
+  `emu restart`, `emu selfcheck`, `app launch`, `app restart`, `app stop`, `shutdown` and
+  `wake-test`. Each keeps `slice` `LAB-1` and gains a note saying so; the coordinator names the
+  slice that builds them. `status`, `schedule`, `frame` and `config` are partly moved (their
+  other sources stay in `main.rs` too).
+
+**What LAB-1 changes live.** Nothing a person or the Runtime sees: actingctl's words, lines, codes
+and exits are the moved code's; the table and the location are read by nothing yet.
+
+**LAB-1 rollback** (to the release before it). Nothing persisted: the crate is code, and no
+document, record or configuration key changes.
+
+### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 
 [scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Turns across
 instances"; "Dispatch Decision Record" item 1) and [standard-pack-schedule.md](standard-pack-schedule.md)

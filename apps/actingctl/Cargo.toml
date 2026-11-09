@@ -29,6 +29,9 @@ actingcommand-contract = { workspace = true }
 # #411 P49 (MCP-ENTRY review L4): `mcp-entry list` compares a status file's pid and recorded
 # process creation time with the operating system's (the probe the owner release uses).
 actingcommand-host-metrics = { workspace = true }
+# Workflow #434 LAB-1: actingctl's read and write modules and the helpers they share (the result
+# line, the codes, the instance selector, the material export, the child runner) live there.
+actingcommand-lab-ops = { workspace = true }
 # #422 LN-7c Q: `evidence confirm-read` counts the evidence frames a confirmation covers with the
 # frame cleaner's statements, read-only (`evidence_covers`).
 actingcommand-ledger = { workspace = true }
@@ -48,6 +51,8 @@ zip = { workspace = true }
 
 [dev-dependencies]
 actingcommand-artifact-store = { workspace = true }
+# Workflow #434 LAB-1: the #422 QR-2b gate builds a diagnosis whose report never started.
+actingcommand-lab-ops = { workspace = true, features = ["test-hooks"] }
 actingcommand-device = { workspace = true }
 actingcommand-pack-containment = { workspace = true }
 # Workflow #381 A: the held-start preparation checkpoints and the writer stall gate.

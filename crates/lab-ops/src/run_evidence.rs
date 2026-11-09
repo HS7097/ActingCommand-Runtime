@@ -58,13 +58,13 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-pub(crate) const COMMAND: &str = "run";
-pub(crate) const ACTION: &str = "evidence";
+pub const COMMAND: &str = "run";
+pub const ACTION: &str = "evidence";
 const USAGE: &str = "usage: actingctl run evidence --state-root <path> (--request-id <request_id> | --run-id <run_id>) [--from-step <n>] [--limit <1-100>] [--detail full|summary]";
-pub(crate) const DEFAULT_LIMIT: u64 = 20;
-pub(crate) const MAX_LIMIT: u64 = 100;
+pub const DEFAULT_LIMIT: u64 = 20;
+pub const MAX_LIMIT: u64 = 100;
 /// The largest `from_step`: a step position counts like a step index.
-pub(crate) const MAX_FROM_STEP: u64 = u32::MAX as u64;
+pub const MAX_FROM_STEP: u64 = u32::MAX as u64;
 /// How long the CLI reads a run's records: the bound of the whole read it replaced (#411 A42).
 const CLI_READ_BUDGET: Duration = Duration::from_secs(60);
 /// The record types the evidence folds (#411 A42): a step's start, first input and finish, the
@@ -85,14 +85,14 @@ const EVIDENCE_EVENT_TYPES: [EventType; 8] = [
 
 /// How each step is answered (#411 A42): whole, or as a summary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum StepDetail {
+pub enum StepDetail {
     Full,
     Summary,
 }
 
 impl StepDetail {
     /// `full` or `summary`, as `--detail` and `detail` give it; `None` for any other word.
-    pub(crate) fn parse(text: &str) -> Option<Self> {
+    pub fn parse(text: &str) -> Option<Self> {
         match text {
             "full" => Some(Self::Full),
             "summary" => Some(Self::Summary),
@@ -102,7 +102,7 @@ impl StepDetail {
 
     /// The page length when none is given: a page of summaries holds as many steps as a page
     /// may, so that a long run fits in one page or a few.
-    pub(crate) const fn default_limit(self) -> u64 {
+    pub const fn default_limit(self) -> u64 {
         match self {
             Self::Full => DEFAULT_LIMIT,
             Self::Summary => MAX_LIMIT,
@@ -111,18 +111,18 @@ impl StepDetail {
 }
 
 /// The arguments both sides take, typed (R2; `--request-id` ↔ `handle`, as for `ac_get_run`).
-pub(crate) struct EvidenceRequest {
-    pub(crate) run: RunKey,
+pub struct EvidenceRequest {
+    pub run: RunKey,
     /// The position of the first step to answer, from 0, in the order the run started its steps.
-    pub(crate) from_step: u64,
-    pub(crate) limit: u64,
+    pub from_step: u64,
+    pub limit: u64,
     /// #411 A42: whole steps, or step summaries.
-    pub(crate) detail: StepDetail,
+    pub detail: StepDetail,
 }
 
 /// Why a run's evidence was refused or failed.
 #[derive(Debug)]
-pub(crate) enum Failure {
+pub enum Failure {
     /// A flag or argument is unknown, repeated, missing its value, malformed, out of its range
     /// (`range`) or at odds with another: the CLI flag as given, or the MCP argument's name.
     Argument {
@@ -140,7 +140,7 @@ pub(crate) enum Failure {
 }
 
 impl Failure {
-    pub(crate) fn argument(argument: impl AsRef<OsStr>, problem: ArgumentProblem) -> Self {
+    pub fn argument(argument: impl AsRef<OsStr>, problem: ArgumentProblem) -> Self {
         Self::Argument {
             argument: argument.as_ref().to_string_lossy().into_owned(),
             problem,
@@ -153,7 +153,7 @@ impl Failure {
     /// `range_min` and `range_max` (MCP answers `arguments_invalid` with the same values). A run
     /// nobody has is `run_unknown` with the request_id given and `run_state` `not_found`. A record
     /// that does not encode is `actingctl_output_failed`, caused by the encoder's failure.
-    pub(crate) fn outcome(&self) -> Outcome {
+    pub fn outcome(&self) -> Outcome {
         match self {
             Self::Argument {
                 argument,
@@ -187,7 +187,7 @@ impl Failure {
 
 /// An identifier as its text (also the request and correlation ids of an expired `--wait`,
 /// Workflow #389 MCP-21).
-pub(crate) fn id_text(id: &impl serde::Serialize) -> String {
+pub fn id_text(id: &impl serde::Serialize) -> String {
     match json!(id) {
         Value::String(text) => text,
         other => other.to_string(),
@@ -195,40 +195,40 @@ pub(crate) fn id_text(id: &impl serde::Serialize) -> String {
 }
 
 /// A request_id as `--request-id` or `handle` gives it; `None` when it is none.
-pub(crate) fn parse_request_id(text: &str) -> Option<RequestId> {
+pub fn parse_request_id(text: &str) -> Option<RequestId> {
     serde_json::from_value(json!(text)).ok()
 }
 
 /// A run_id as `--run-id` or `run_id` gives it; `None` when it is none.
-pub(crate) fn parse_run_id(text: &str) -> Option<RunId> {
+pub fn parse_run_id(text: &str) -> Option<RunId> {
     serde_json::from_value(json!(text)).ok()
 }
 
 /// One run's evidence, before rendering: every step of the run in order, and the page asked
 /// for.
-pub(crate) struct Evidence {
+pub struct Evidence {
     /// `request_id`, `run_id`, `task_id`.
-    pub(crate) identity: Map<String, Value>,
-    pub(crate) steps: Vec<StepEvidence>,
-    pub(crate) final_: Value,
-    pub(crate) overlay: Option<Value>,
-    pub(crate) from_step: usize,
-    pub(crate) limit: usize,
+    pub identity: Map<String, Value>,
+    pub steps: Vec<StepEvidence>,
+    pub final_: Value,
+    pub overlay: Option<Value>,
+    pub from_step: usize,
+    pub limit: usize,
     /// #411 A42: how each step of the page is answered.
-    pub(crate) detail: StepDetail,
+    pub detail: StepDetail,
 }
 
 /// What MCP leaves out of a step that alone is over its output budget (#411 A42): its frames
 /// first, then its targets too.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Omit {
+pub enum Omit {
     Frames,
     FramesAndTargets,
 }
 
 impl Evidence {
     /// How many steps the page asked for holds.
-    pub(crate) fn page_len(&self) -> usize {
+    pub fn page_len(&self) -> usize {
         self.steps
             .len()
             .saturating_sub(self.from_step)
@@ -238,14 +238,14 @@ impl Evidence {
     /// The result with the first `kept` steps of the page, each answered as `detail` asks. With
     /// fewer steps than the page holds it is `truncated`; `next_step` is the position after the
     /// last step answered while steps remain after it.
-    pub(crate) fn render(&self, kept: usize) -> Value {
+    pub fn render(&self, kept: usize) -> Value {
         self.render_page(kept, None)
     }
 
     /// The result with the page's first step alone, its `omit` parts left out and referenced
     /// (#411 A42): MCP's answer when that step alone is over the output budget. A summary is
     /// never cut this way.
-    pub(crate) fn render_referenced(&self, omit: Omit) -> Value {
+    pub fn render_referenced(&self, omit: Omit) -> Value {
         self.render_page(1, Some(omit))
     }
 
@@ -280,33 +280,33 @@ impl Evidence {
 
 /// One step as the evidence answers it, in three forms (#411 A42): whole, with its heavy parts
 /// referenced, and as a summary.
-pub(crate) struct StepEvidence {
-    pub(crate) step_index: u32,
+pub struct StepEvidence {
+    pub step_index: u32,
     /// The page it started from.
-    pub(crate) page: String,
+    pub page: String,
     /// The targets of the recognition it decided on, each `{target, matched, box?}`.
-    pub(crate) targets: Vec<Value>,
+    pub targets: Vec<Value>,
     /// Its first input, `{kind, point?, rect?}`.
-    pub(crate) action: Option<Value>,
+    pub action: Option<Value>,
     /// The material refs of the frame it decided on, first when known (`decided_frame`), and of
     /// every frame captured while it ran, each with the sequence of its `artifact.verified`.
-    pub(crate) frames: Vec<(u64, String)>,
+    pub frames: Vec<(u64, String)>,
     /// Whether the first of `frames` is the frame it decided on.
-    pub(crate) decided_frame: bool,
+    pub decided_frame: bool,
     /// The ledger sequences of its first and last record: its recognition, its frames, its
     /// start, its input and its finish.
-    pub(crate) first_sequence: u64,
-    pub(crate) last_sequence: u64,
+    pub first_sequence: u64,
+    pub last_sequence: u64,
     /// When it started and, once it did, finished.
-    pub(crate) started_unix_ms: u64,
-    pub(crate) finished_unix_ms: Option<u64>,
+    pub started_unix_ms: u64,
+    pub finished_unix_ms: Option<u64>,
     /// The run's terminal failure, on the step that was running when the run ended.
-    pub(crate) failure: Option<CodeStr>,
+    pub failure: Option<CodeStr>,
 }
 
 impl StepEvidence {
     /// `{step_index, page, targets, action?, frames}` (command table §4.7).
-    pub(crate) fn full_row(&self) -> Value {
+    pub fn full_row(&self) -> Value {
         let mut row = Map::new();
         row.insert("step_index".to_owned(), json!(self.step_index));
         row.insert("page".to_owned(), json!(self.page));
@@ -323,7 +323,7 @@ impl StepEvidence {
     /// through_sequence}` is the run's ledger stretch that holds them (its
     /// `task.recognition_completed` and `artifact.verified` records, for `ac_events` with the
     /// run's request_id).
-    pub(crate) fn referenced_row(&self, omit: Omit) -> Value {
+    pub fn referenced_row(&self, omit: Omit) -> Value {
         let mut row = Map::new();
         row.insert("step_index".to_owned(), json!(self.step_index));
         row.insert("page".to_owned(), json!(self.page));
@@ -355,7 +355,7 @@ impl StepEvidence {
     /// decided on (its `artifact.verified`; the step's whole answer names its material ref);
     /// `finished: false` when it never finished, and then the run's terminal failure code when
     /// the run ended in it.
-    pub(crate) fn summary_row(&self) -> Value {
+    pub fn summary_row(&self) -> Value {
         let mut row = Map::new();
         row.insert("step_index".to_owned(), json!(self.step_index));
         row.insert("page".to_owned(), json!(self.page));
@@ -396,7 +396,7 @@ impl StepEvidence {
 /// The evidence of the run `request` names, read by `client` until `deadline`: the run is found
 /// as `ac_get_run` finds it, then its records of `EVIDENCE_EVENT_TYPES` are read page by page
 /// and folded as each page arrives (#411 A42).
-pub(crate) fn read(
+pub fn read(
     client: &RuntimeClient,
     request: &EvidenceRequest,
     deadline: Instant,
@@ -448,10 +448,10 @@ pub(crate) fn read(
 }
 
 /// What a run's events show, before paging.
-pub(crate) struct Assembled {
-    pub(crate) steps: Vec<StepEvidence>,
-    pub(crate) final_: Value,
-    pub(crate) overlay: Option<Value>,
+pub struct Assembled {
+    pub steps: Vec<StepEvidence>,
+    pub final_: Value,
+    pub overlay: Option<Value>,
 }
 
 /// One step as its facts record it.
@@ -737,7 +737,7 @@ fn action_value(
 /// Runs `run evidence`; `None` leaves every other command to the CLI, unchanged. One result line
 /// on stdout (Workflow #378 A5): the evidence with `run_evidence_reported`, or `{outcome}` with
 /// the failure (an argument failure's developer line adds the usage) and exit 1.
-pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
+pub fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
     if arguments.first()?.to_str()? != COMMAND || arguments.get(1)?.to_str()? != ACTION {
         return None;
     }

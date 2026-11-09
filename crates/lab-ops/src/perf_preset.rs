@@ -36,13 +36,13 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-pub(crate) const COMMAND: &str = "perf-preset";
-pub(crate) const SET: &str = "set";
-pub(crate) const GET: &str = "get";
+pub const COMMAND: &str = "perf-preset";
+pub const SET: &str = "set";
+pub const GET: &str = "get";
 const USAGE: &str = "usage: actingctl perf-preset set <preset> --state-root <path>\nusage: actingctl perf-preset get --state-root <path>";
 
 /// Why a preset command answered nothing.
-pub(crate) enum Failure {
+pub enum Failure {
     /// The Runtime refused the request (its receipt's outcome on top), or did not answer.
     Runtime(RuntimeClientError),
     /// The snapshot has no `config.parameters.performance` or `.scheduling` record, or no row of
@@ -56,7 +56,7 @@ pub(crate) enum Failure {
 
 impl Failure {
     /// The failure as one outcome (Workflow #378 A5); an unknown name is the CLI's usage error.
-    pub(crate) fn outcome(&self) -> Outcome {
+    pub fn outcome(&self) -> Outcome {
         match self {
             Self::Runtime(error) => error.outcome(),
             Self::Missing => Outcome::new(ActingctlCode::ConfigFactsMissing),
@@ -100,14 +100,14 @@ fn table(parameters: &[ConfigParameter]) -> Result<PresetTable, Failure> {
 }
 
 /// `get`: the current preset and the members it was judged by.
-pub(crate) fn get(client: &RuntimeClient) -> Result<Value, Failure> {
+pub fn get(client: &RuntimeClient) -> Result<Value, Failure> {
     let parameters = in_effect(client)?;
     let table = table(&parameters)?;
     Ok(presets::current_preset(&table, &parameters).answer())
 }
 
 /// `set`: the preset `name`'s members as one `ConfigureSettings`; `{preset, settings}`.
-pub(crate) fn set(client: &RuntimeClient, name: &str) -> Result<Value, Failure> {
+pub fn set(client: &RuntimeClient, name: &str) -> Result<Value, Failure> {
     let parameters = in_effect(client)?;
     let changes = table(&parameters)?
         .get(name)
@@ -129,7 +129,7 @@ struct Parsed {
 }
 
 /// The `perf-preset` command, when it is the first word.
-pub(crate) fn dispatch(arguments: &[OsString], detail: Detail) -> Option<ExitCode> {
+pub fn dispatch(arguments: &[OsString], detail: Detail) -> Option<ExitCode> {
     if arguments.first()?.to_str()? != COMMAND {
         return None;
     }

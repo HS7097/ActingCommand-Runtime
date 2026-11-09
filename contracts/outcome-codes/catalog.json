@@ -11810,7 +11810,8 @@
     ]
   },
   "fragments": {
-    "actingctl": "apps/actingctl",
+    "actingctl": "crates/lab-ops",
+    "actingctl-app": "apps/actingctl",
     "actingd": "apps/actingd",
     "actinglab": "apps/actinglab",
     "actingledger": "apps/ledger-forensics",

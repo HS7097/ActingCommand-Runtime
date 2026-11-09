@@ -24,13 +24,13 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 /// A finished child and everything it wrote.
-pub(crate) struct Captured {
-    pub(crate) status: ExitStatus,
-    pub(crate) stdout: Vec<u8>,
-    pub(crate) stderr: Vec<u8>,
+pub struct Captured {
+    pub status: ExitStatus,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
 }
 
-pub(crate) enum ChildFailure {
+pub enum ChildFailure {
     /// The program could not be started.
     Spawn(io::Error),
     /// Waiting for the child, ending it or reading its output failed.
@@ -48,7 +48,7 @@ impl ChildFailure {
     /// #378 A5). `None` when the child was still running at the deadline, and when a thread
     /// reading its output panicked: that error is actingctl's own (`reader_panicked`), not one
     /// the OS raised.
-    pub(crate) fn os_failure(&self) -> Option<Outcome> {
+    pub fn os_failure(&self) -> Option<Outcome> {
         match self {
             Self::Spawn(error) => Some(Outcome::from_io_error(error, IoOp::Spawn)),
             Self::Io(error) if !reader_panicked(error) => {
@@ -59,7 +59,7 @@ impl ChildFailure {
     }
 
     /// Whether a thread reading the child's output panicked.
-    pub(crate) fn reader_panicked(&self) -> bool {
+    pub fn reader_panicked(&self) -> bool {
         matches!(self, Self::Io(error) if reader_panicked(error))
     }
 }
@@ -85,28 +85,24 @@ fn reader_panicked(error: &io::Error) -> bool {
 
 /// Runs `command` until `deadline`; a child still running then keeps running
 /// ([`ChildFailure::StillRunning`]).
-pub(crate) fn run_captured(command: Command, deadline: Instant) -> Result<Captured, ChildFailure> {
+pub fn run_captured(command: Command, deadline: Instant) -> Result<Captured, ChildFailure> {
     run(command, Some(deadline), AtDeadline::Leave)
 }
 
 /// RL-1c fix 1 (#411 H1): runs `command` until `deadline`; a child still running then is ended
 /// there and reaped ([`ChildFailure::Ended`]).
-pub(crate) fn run_captured_ending(
-    command: Command,
-    deadline: Instant,
-) -> Result<Captured, ChildFailure> {
+pub fn run_captured_ending(command: Command, deadline: Instant) -> Result<Captured, ChildFailure> {
     run(command, Some(deadline), AtDeadline::End)
 }
 
 /// Waits for the child however long it runs (a Lab call's background job).
-#[cfg_attr(not(feature = "mcp"), allow(dead_code))]
-pub(crate) fn run_to_end(command: Command) -> Result<Captured, ChildFailure> {
+pub fn run_to_end(command: Command) -> Result<Captured, ChildFailure> {
     run(command, None, AtDeadline::Leave)
 }
 
 /// Pins a child of an installed process to that installation: the install root and the
 /// selection travel as the launcher's snapshot, and the child starts in the install root.
-pub(crate) fn pin_child(
+pub fn pin_child(
     command: &mut Command,
     installation: Option<&actingcommand_contract::InstalledProcess>,
 ) {
