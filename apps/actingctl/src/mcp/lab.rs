@@ -7,9 +7,10 @@
 //! 3 safety, 4 device, 5 runtime, 6 usage) as `lab_tool_failed {exit_code, req_id?}`, caused
 //! by actinglab's code (`not_implemented` for exit 6) and, when the error has details, by a
 //! `foreign_other_error` from the process holding those details' JSON as `raw_text` (actinglab's
-//! data, until its own outcomes carry them); actinglab's message is its developer text and is
-//! not carried. Any other exit code, or no envelope, is runtime `lab_process_failed`, caused by
-//! a `foreign_other_error` holding the stderr tail.
+//! data, until its own outcomes carry them); Workflow #433 LABDO-1: and, when it has a message,
+//! by a last `foreign_other_error` holding actinglab's message verbatim as `raw_text`. Any other
+//! exit code, or no envelope, is runtime `lab_process_failed`, caused by a `foreign_other_error`
+//! holding the stderr tail (and by the details and the message of an error it printed).
 //!
 //! Each call runs as a background job of this process: answered within the call budget, or
 //! a handle for `ac_get_run`. The child is never killed; the handle lives only in this
@@ -833,6 +834,10 @@ pub(super) fn interpret(captured: &Captured, _what: &str) -> Answer {
     let spelling = lab_error
         .and_then(|error| error.get("code"))
         .and_then(Value::as_str);
+    // Workflow #433 LABDO-1: actinglab's message, kept.
+    let message = lab_error
+        .and_then(|error| error.get("message"))
+        .and_then(Value::as_str);
     let result = match (captured.status.code(), ok, spelling) {
         (Some(0), Some(true), _) => Ok(data.cloned().unwrap_or(Value::Null)),
         (Some(exit @ 2..=6), Some(false), Some(spelling)) => Err(command_failed(
@@ -840,11 +845,13 @@ pub(super) fn interpret(captured: &Captured, _what: &str) -> Answer {
             spelling,
             req_id.as_deref(),
             lab_error.and_then(|error| error.get("details")),
+            message,
         )),
         _ => Err(process_failed(
             captured,
             req_id.as_deref(),
             lab_error.and_then(|error| error.get("details")),
+            message,
         )),
     };
     Answer {
@@ -857,12 +864,16 @@ pub(super) fn interpret(captured: &Captured, _what: &str) -> Answer {
 /// An actinglab error envelope: `lab_tool_failed` with actinglab's exit code (and its req_id),
 /// caused by actinglab's code (its `spelling`), in the class that exit code names; exit 6 is
 /// `not_implemented`. The error's `details`, when it has any, are a second cause (see
-/// [`details_text`]).
+/// [`details_text`]), and its `message` the last (see [`message_text`]). Workflow #433
+/// LABDO-1: so a Lab operation the Runtime answered and the client's check then refused
+/// (`lab_operation_check_failed`, exit 5) is class runtime with its req_id, its details (the
+/// effect among them) and actinglab's message.
 fn command_failed(
     exit: i32,
     spelling: &str,
     req_id: Option<&str>,
     details: Option<&Value>,
+    message: Option<&str>,
 ) -> ToolError {
     let (class, cause) = match exit {
         3 => ("safety", Outcome::relayed(spelling)),
@@ -881,7 +892,27 @@ fn command_failed(
         Some(details) => outcome.caused_by(details),
         None => outcome,
     };
+    let outcome = match message_text(message, Some(exit)) {
+        Some(message) => outcome.caused_by(message),
+        None => outcome,
+    };
     ToolError::outcome(class, outcome)
+}
+
+/// Workflow #433 LABDO-1: the message of an actinglab error envelope, actinglab's own text about
+/// the failure (for a Lab operation, the client's failure after the Runtime answered): a
+/// `foreign_other_error` from the process with that text verbatim as `raw_text` (cut at its
+/// bound, the whole text then going to the diagnostic sink) and actinglab's exit code when it
+/// exited. `None` when the error has no message or an empty one.
+fn message_text(message: Option<&str>, exit: Option<i32>) -> Option<Outcome> {
+    let message = message.filter(|message| !message.is_empty())?;
+    let link = Outcome::new(ContractCode::ForeignOtherError)
+        .raw_source(RawSource::Process)
+        .raw_text(message);
+    Some(match exit {
+        Some(exit) => link.exit_code(exit),
+        None => link,
+    })
 }
 
 /// The details of an actinglab error envelope, actinglab's data about the failure: a
@@ -905,8 +936,14 @@ fn details_text(details: Option<&Value>, exit: Option<i32>) -> Option<Outcome> {
 
 /// actinglab answered no usable envelope (none, an unexpected exit code, or `ok` that does not
 /// match it): runtime `lab_process_failed`, caused by its stderr and, when it printed an error
-/// with details, by those details (see [`details_text`]).
-fn process_failed(captured: &Captured, req_id: Option<&str>, details: Option<&Value>) -> ToolError {
+/// with details, by those details (see [`details_text`]), and with a message by that message
+/// (see [`message_text`]).
+fn process_failed(
+    captured: &Captured,
+    req_id: Option<&str>,
+    details: Option<&Value>,
+    message: Option<&str>,
+) -> ToolError {
     let outcome = Outcome::new(ActingctlCode::LabProcessFailed);
     let outcome = match captured.status.code() {
         Some(exit) => outcome.exit_code(exit),
@@ -919,6 +956,10 @@ fn process_failed(captured: &Captured, req_id: Option<&str>, details: Option<&Va
     let outcome = outcome.caused_by(process_text(captured));
     let outcome = match details_text(details, captured.status.code()) {
         Some(details) => outcome.caused_by(details),
+        None => outcome,
+    };
+    let outcome = match message_text(message, captured.status.code()) {
+        Some(message) => outcome.caused_by(message),
         None => outcome,
     };
     ToolError::outcome("runtime", outcome)
@@ -1807,4 +1848,8 @@ mod tests {
     // #412 Lab B-3 S2 (apps key 92): ac_lab_do passes operation as --operation and refuses its
     // conflicting arguments before any child runs.
     mod gate_412_b3_s2;
+
+    // Workflow #433 LABDO-1: a Lab operation the Runtime answered whose client check then failed
+    // reaches ac_lab_do class runtime, with its req_id, details and actinglab's message.
+    mod gate_433_labdo1;
 }

@@ -315,6 +315,21 @@ impl ScriptedRuntime {
     }
 }
 
+/// Workflow #433 LABDO-1: the error `run_contained_lab_operation` (and its declared operation
+/// form) returns when the Runtime's receipt arrived and the client's check after it failed with
+/// `code`, at the place the check's own failures name; it carries `answer`, the Runtime's answer.
+/// A fake client for the callers' tests answers with it as the real client does.
+pub fn lab_operation_check_failure(
+    code: impl Into<actingcommand_contract::outcome::Code>,
+    answer: crate::LabOperationAnswer,
+) -> crate::RuntimeClientError {
+    crate::RuntimeClientError::fatal(
+        code,
+        crate::codes::ClientLocation::VerifyContainedLabOperation.location(),
+    )
+    .with_lab_operation_answer(answer)
+}
+
 fn accept(
     listener: &TcpListener,
     owner_epoch: OwnerEpoch,

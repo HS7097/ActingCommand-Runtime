@@ -2444,7 +2444,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actinglab answered an error envelope; exit_code is its exit code, its code is the first caused_by link and, when the error has details, a foreign_other_error link (raw_source process) holds those details' JSON as raw_text.",
+      "description": "actinglab answered an error envelope; exit_code is its exit code, its code is the first caused_by link and, when the error has details, a foreign_other_error link (raw_source process) holds those details' JSON as raw_text; when it has a message, a last foreign_other_error link holds actinglab's message verbatim as raw_text (Workflow #433 LABDO-1). req_id is the details' req_id: for lab_operation_check_failed (exit 5) the Lab operation the Runtime answered, whose effect the details carry.",
       "common_causes": "TBD",
       "handling": "TBD"
     },

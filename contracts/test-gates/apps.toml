@@ -1242,3 +1242,12 @@ tests = [
     "actingcommand-lab-ops::lib::gate_434_lab1::lab_ops_locate_defaults",
 ]
 incident = ["#434 LAB-1"]
+
+# Workflow #433 LABDO-1 (board #433 6733194460; brief rd-1109/labdo-exit4/brief-labdo1.md; contracts/lab-two-entries.md section 9.3): an online do --capture whose Runtime receipt arrived and whose runtime client check after it failed answers lab_operation_check_failed, exit 5, with the receipt's req_id, correlation_id and receipt_state, the effect and executed its record reports and the client's code and message, never device_error (exit 4); MCP relays it to ac_lab_do as lab_tool_failed class runtime with that req_id, actinglab's code, its details and its message
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::operation::gate_433_labdo1::lab_do_post_receipt_check_failure_names_effect",
+    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_433_labdo1::lab_do_post_receipt_check_failure_passes_through_mcp",
+]
+incident = ["#433 LABDO-1"]

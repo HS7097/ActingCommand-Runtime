@@ -6,9 +6,10 @@ use actingcommand_contract::outcome::{
     CauseRelation, Code, IoKind, IoOp, Location, Outcome, RawSource, VocabularyToken,
 };
 use actingcommand_contract::{
-    CorrelationId, OwnerEpoch, PlayerHoldAttempt, PlayerHoldDecision, PlayerHoldNext,
-    PlayerHoldSettlement, PlayerHoldSource, RequestId, RuntimeChannel, RuntimeErrorCode,
-    RuntimeErrorProjection, RuntimeInfo, RuntimeReceipt, RuntimeRequest,
+    CorrelationId, EffectDisposition, LabOperationFailure, OwnerEpoch, PlayerHoldAttempt,
+    PlayerHoldDecision, PlayerHoldNext, PlayerHoldSettlement, PlayerHoldSource, RequestId,
+    RuntimeChannel, RuntimeErrorCode, RuntimeErrorProjection, RuntimeInfo, RuntimeReceipt,
+    RuntimeReceiptState, RuntimeRequest, RuntimeResult,
 };
 use serde::Serialize;
 use std::error::Error;
@@ -183,6 +184,43 @@ impl RuntimeReceiptHeaderIo {
     }
 }
 
+/// Workflow #433 LABDO-1: what the Runtime answered a Lab operation with, kept on a failure of a
+/// client check that ran after the receipt arrived (the event queries and the evidence check of
+/// `run_contained_lab_operation`). The Runtime has acted by then: the effect is the one its
+/// operation record reports, and the client's failure does not change it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LabOperationAnswer {
+    /// The receipt's request id.
+    pub request_id: RequestId,
+    /// The receipt's correlation id.
+    pub correlation_id: CorrelationId,
+    /// The receipt's state.
+    pub receipt_state: RuntimeReceiptState,
+    /// The effect the receipt's operation record reports; `None` when the receipt carries no
+    /// Lab operation result.
+    pub effect: Option<EffectDisposition>,
+    /// The operation's own failure, when the record reports one.
+    pub failure: Option<LabOperationFailure>,
+}
+
+impl LabOperationAnswer {
+    /// The answer `receipt` gives: its ids and state, and its Lab operation record's effect and
+    /// failure.
+    pub fn of(receipt: &RuntimeReceipt) -> Self {
+        let record = match receipt.result() {
+            Some(RuntimeResult::ContainedLabOperation { operation }) => Some(&operation.record),
+            _ => None,
+        };
+        Self {
+            request_id: receipt.request_id(),
+            correlation_id: receipt.correlation_id(),
+            receipt_state: receipt.state(),
+            effect: record.map(|record| record.effect),
+            failure: record.and_then(|record| record.failure.clone()),
+        }
+    }
+}
+
 /// The outcome key of the location a request failed at.
 const OPERATION_KEY: &str = "operation";
 
@@ -202,6 +240,9 @@ pub struct RuntimeClientError {
     /// on the three settlement codes (`runtime_player_hold_settled`,
     /// `runtime_player_hold_unconfirmed`, `runtime_operation_unsupported` in rows A7 and R8).
     player_hold: Option<Box<(PlayerHoldSettlement, PlayerHoldAttempt)>>,
+    /// Workflow #433 LABDO-1: the Runtime's answer to a Lab operation whose client check failed
+    /// after the receipt arrived.
+    lab_operation_answer: Option<Box<LabOperationAnswer>>,
 }
 
 impl RuntimeClientError {
@@ -351,6 +392,19 @@ impl RuntimeClientError {
         self
     }
 
+    /// Workflow #433 LABDO-1: the Runtime's answer to the Lab operation this error ended, when
+    /// the receipt arrived and a client check after it failed (`run_contained_lab_operation`,
+    /// `run_contained_lab_declared_operation`); `None` on every other error. The request was
+    /// sent and answered, so it must not be sent again as though it had not run.
+    pub fn lab_operation_answer(&self) -> Option<&LabOperationAnswer> {
+        self.lab_operation_answer.as_deref()
+    }
+
+    pub(crate) fn with_lab_operation_answer(mut self, answer: LabOperationAnswer) -> Self {
+        self.lab_operation_answer = Some(Box::new(answer));
+        self
+    }
+
     /// A validated reply actually received from this Runtime, including refusals without a terminal.
     /// Receiving a reply alone does not establish Ledger commitment or execution.
     pub fn received_receipt(&self) -> Option<&RuntimeReceipt> {
@@ -407,6 +461,7 @@ impl RuntimeClientError {
             received_receipt: None,
             receipt_header_io: None,
             player_hold: None,
+            lab_operation_answer: None,
         }
     }
 
@@ -426,6 +481,7 @@ impl RuntimeClientError {
             received_receipt: None,
             receipt_header_io: None,
             player_hold: None,
+            lab_operation_answer: None,
         }
     }
 
@@ -445,6 +501,7 @@ impl RuntimeClientError {
             received_receipt: None,
             receipt_header_io: None,
             player_hold: None,
+            lab_operation_answer: None,
         }
     }
 
