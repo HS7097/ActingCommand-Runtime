@@ -1257,9 +1257,11 @@ fn cw1_b_a_composition_without_warnings_records_as_before() {
     assert_eq!(bench.events(EventType::CatalogActivated).len(), 2);
 
     // The restarted host evaluates at the fixture's restart instant, after every record of the
-    // first start (board #71, TCLOCK).
+    // first start (board #71, TCLOCK). Its monotonic origin is the shared clock's reading when it
+    // starts, where the last cycle above left it (`INTERVAL_MS`), so its first check reads the
+    // clock there: a monotonic clock never goes back.
     let bench = bench.restart(true);
-    bench.cycle(POLICY_RESTART_UNIX_MS, 0);
+    bench.cycle(POLICY_RESTART_UNIX_MS, INTERVAL_MS);
     assert_eq!(bench.events(EventType::CatalogActivated).len(), 2);
     assert_eq!(registrations(&bench, GAME_A).len(), 2);
     assert!(catalog_warnings_fact(&bench).is_none());
