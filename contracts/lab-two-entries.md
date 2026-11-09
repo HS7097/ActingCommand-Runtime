@@ -1,0 +1,481 @@
+# The Lab and the UI: two entries (Workflow #434)
+
+Workflow #434, 0.12 series, before 1.00. actingd's door takes two kinds of client: the **Lab**,
+which has no permissions, and the **UI**, the one entry with permissions. The CLI and the MCP
+server become modules of the Lab, `actingctl` goes, and the rescue and installation commands join
+the Lab. This document is the contract that slices LAB-1 to LAB-7, UI-L1 and UI-L2 implement; it is
+written by slice LAB-0, which changes no code. A behaviour described here exists only from the
+slice named for it; until then the contracts it replaces stay in force as they are (section 11).
+
+Alice's words (2026-11-08, coordinator window), among others:
+「我计划现在统一一下MCP还有CLI这两个统一并入Lab，作为可拆卸模块并且直连ActingCommand的CTL，CTL处分割出来一个小接口，作为专属UI部分的连接口，Lab不设权限管理，仅对这个UI用的小接口做权限管理，如果是这样呢？」;
+「…CTL这个模块可以直接砍掉，直接接入 acting D这个转发台，也就是转发台下只分两种，一种就是来自 Lab，一种就是来自 UI。」;
+「救急和安装的功能那就直接并入LAB模块。 并且不可逆的操作，直接记发起者即可，不用加参数或者二次确认」.
+Her answers of 23:2x to the design's four questions (board #434): 「1，不开。」;
+「2，可以考虑保留，但是改成有的话就激活制包就行」;
+「3，只记来自哪个组或者哪个组下的具体模块名就行，比如UI比如Lab-MCP或者Lab-CLI，或者Lab-看门狗」;
+「4，可以直接移除」. The coordinator's reading of them (design §7), not her words: no separate
+port for the UI (section 2.1); the authoring
+option stays and only means "installed" (section 8.3); the initiator is one word naming the group
+or the module (section 4); guards and the console's second press go (section 6).
+
+Source: the design `rd-1108/arch-013/design-lab-ui.md` (read on main `2ea50cf5`), whose §7 (the
+answers above) wins wherever it differs from its earlier sections; coordinator work order
+`rd-1108/arch-013/brief-lab0.md`. The operation table v1 is the machine-readable file
+[lab-operations.json](lab-operations.json) (section 9). The slices and their order are in
+[v012-register.md](v012-register.md) §1.287; the planned interface revisions in
+[component-interfaces.md](component-interfaces.md), "Planned: Workflow #434".
+
+| Slice | Repository | What it turns on |
+|---|---|---|
+| LAB-0 | Runtime | this contract, the operation table v1, the planned interface rows, the register section; no code |
+| LAB-1 | Runtime | `crates/lab-ops`: the table, the default location, the initiator type; actingctl's read and write modules moved in |
+| LAB-2 | Runtime | the CLI module: short words, output for people, `--json`, `actinglab serve --stdio`; actinglab's debugging and authoring commands on the table; its retired command words deleted |
+| LAB-3 | Runtime | the rescue and installation module (section 7): the journal's initiator, no confirmation parameters (section 5), guards that report (section 6) |
+| LAB-4 | Runtime | `crates/watchdog`; `actingwatch.exe` does its own tick |
+| LAB-5 | Runtime | `actinglab-mcp.exe`: tools from the table, no tiers; the MCP entry `g2` |
+| LAB-6 | Runtime | the door of section 2 and the UI list of section 3; the initiator in receipts, G14 and the `host.config_overrides` rows (section 4.3); `runtime-client` 7, `ledger` 8, `actingd-config` 28 |
+| UI-L1 | UI | the console on `runtime-client` 7: Lab children instead of actingctl, refusals shown, no second press (the stop note stays beside the button, section 6); the settings page shows a row's initiator, else its channel (section 4.3); the READMEs' install line names the rescue module's command |
+| LAB-7 | Runtime | `apps/actingctl` deleted; `install-cli` 2 |
+| UI-L2 | UI | after UI-2a: acsetup as the graphical shell of the rescue module; its `status`, `discover`, `shutdown`, `check-config` and `ledger verify` through actinglab, and no `install-transition` |
+
+## 1 Words
+
+- **Entry**: one of the two kinds of client the door takes, named by the channel a connection
+  binds: `lab` or `ui`. Both use the one port.
+- **Lab**: the operation layer `crates/lab-ops` and the modules on it (section 8). Its front ends
+  are the CLI (`actinglab.exe`), MCP (`actinglab-mcp.exe`) and the line loop
+  `actinglab serve --stdio`.
+- **Operation**: one row of the operation table: one CLI form, one MCP tool, one serve call
+  (section 9).
+- **Initiator**: the one word that says where a request or an operation came from (section 4).
+- **Irreversible operation**: an operation the table marks `irreversible` (section 5).
+- **Guard**: a row of the guard table of [install-cli.md](install-cli.md), "Guards" (section 6).
+
+## 2 The door
+
+### 2.1 One port
+
+- One loopback TCP door, as today: its address, owner epoch and pid are in the state root's
+  `runtime-info.json`, the frame limit stays 1 MiB, and `HostShared::process_request_observed`
+  stays the one gate. There is no second port (Alice's answer 1): the UI's "small interface" is the
+  UI list of section 3 on the `ui` channel.
+- A channel is a declaration, not authentication ([runtime-interface.md](runtime-interface.md),
+  "Strength of the identity", holds): any local process may bind `lab` and reach every operation.
+  The UI list prevents misuse, such as a console fault sending a debugging operation, not malice.
+
+### 2.2 The handshake
+
+1. `Health` (the owner epoch check), then `BindChannel` once:
+   - `BindChannel{channel: lab, initiator}`, `initiator` one of the Lab words of section 4;
+   - `BindChannel{channel: ui}`, without an initiator: the connection's initiator is `UI`.
+
+   An `initiator` missing on `lab`, present on `ui`, or not a word of section 4 is refused
+   `invalid_bind_channel`.
+2. The answer is `ChannelBound{channel, initiator}`.
+3. `cli` and `mcp` are no longer bound: `BindChannel` with either is Denied
+   `channel_request_refused` (`channel` the value asked, `operation` `bind_channel`), and the
+   connection stays unbound. Ledger records that carry `cli`, `mcp` or `via` stay readable
+   (section 10, `ledger` 8).
+4. A second `BindChannel` on one connection is `channel_binding_exists`, as today.
+5. `via` (`ChannelVia`) leaves the request, the answer and the connection table. The table keeps
+   each connection's channel and initiator in memory only; an entry leaves with its connection;
+   no status read reports it.
+6. The runtime client's three ways of opening a connection keep calling one handshake function,
+   so a reconnect keeps the channel and the initiator.
+
+### 2.3 The gate's decision
+
+From LAB-6, in order; the first match decides. It replaces runtime-interface.md, "The gate's
+decision (from U-6)", which is not built.
+
+1. A handshake kind (`Health`, `BindChannel`): take it.
+2. The connection is not bound: `channel_binding_missing`, in the receipt only.
+3. A retired kind: `channel_request_refused`. No kind is retired once LAB-6 deletes the five of
+   section 2.5; the step stays for the next retirement.
+4. `lab`: take it. No Lab option, block or class is consulted.
+5. `ui`: take it only when its kind is on the UI list (section 3). A `ConfigureSettings` also needs
+   every change's key to have `ui_tier` `daily` or `advanced` and to be settable
+   ([runtime-config.md](runtime-config.md), "Console tiers"). Otherwise
+   `channel_request_refused` with `channel` `ui` and `operation`, and for a setting also
+   `config_key`, the first key refused.
+
+The checks behind the gate do not change, except the origin gates of section 2.4. The Runtime's
+own work (policy dispatch, the recovery ladder, startup packages, emulator autostart, monitor
+capture, pacing, host shutdown handling) is no request and never passes the gate.
+
+### 2.4 The envelope
+
+- The envelope is a fixed function of the channel, and the runtime client is the one place that
+  builds it: `lab` → `(Lab, Lab)`, `ui` → `(User, Ui)`. The Runtime judges a request by its
+  channel, never by its envelope.
+- LAB-6 deletes the origin gates of `RuntimeRequest::validate()` (emulator control, the
+  self-check, the player hold, the agent wake test, the origin exceptions of fact families and the
+  rest); the content and shape rules stay. Whoever sent a request is in its G14 record.
+- Frame pins follow the channel as runtime-interface.md, "Blocks", says: a frame a `lab` request
+  pins is pinned `Lab`, attached to its debug run and kept in `kept\`; a `ui` request's frames are
+  pinned `Explicit`. So a manual run (`run start`) keeps its frames, the direction
+  runtime-interface.md, "Envelope", set; so do `frame` and `frames` from the CLI and MCP, which pin
+  `Explicit` today (open point 3).
+
+### 2.5 What LAB-6 deletes
+
+- The kinds `DeclareGovernanceIdentity`, `RecordApprovalDecision`, `InstallTransition`,
+  `UpgradeState` and `UpgradeStateStatus`, with their results.
+- `ChannelVia` and every `via` member.
+- The Lab options' part in the gate: `lab_module_debugging` retires and `lab_module_authoring`
+  means only "installed" (section 8.3). The host then emits neither `lab_module_not_installed` nor
+  `lab_module_option_disabled` (section 12).
+
+### 2.6 What a refusal answers and records
+
+- The receipt is Denied and its outcome is the specific code with its values, not only
+  `invalid_request`.
+- A refused write is recorded `command.rejected` with its channel and initiator; a refused pure
+  read is only in its receipt; a request on an unbound connection is only in its receipt
+  (runtime-interface.md, "Records").
+- The console shows the code and the operation (Fail Loud, UI-L1) and never sends a refused
+  request again as another kind.
+- No new code (section 12).
+
+## 3 The UI list
+
+A static table `ui_allows(kind) -> bool` in the contract crate, beside `interface_class` (LAB-6).
+No roles, users or tokens. It equals the table's `ui_kinds` (section 9), which LAB-6's
+`gate_two_entries` asserts.
+
+| Kind | Class | Note |
+|---|---|---|
+| `Status`, `RuntimeFactSnapshot`, `ScheduleExplanation`, `StartReport`, `QueryEvents`, `ReadMaterial`, `DiscoverInstances`, `ObserveReadonly` | read | the console sends them today |
+| `MonitorStatus` | read | added to the design's list so that the operation `status` is whole on this entry |
+| `InstanceFactSnapshot`, `PerformanceStatus`, `FactRefreshStatus`, `RoutineSummary`, `ResourceTargetView`, `PackScheduleView`, `CaptureSequence` | read | on the list before the console uses them (#429's shapes) |
+| `PauseScheduling`, `ResumeScheduling`, `ControlEmulatorInstance`, `SelfCheckInstance`, `RequestShutdown` | write | the console sends them today |
+| `ApplicationLifecycle` | write | the console sends it today; the kind acts only on the instance's assigned application |
+| `ConfigureSettings` | write | the console sends it today; every key `daily` or `advanced` and settable (section 2.3) |
+| `RunInstanceTask`, `StopInstanceRun`, `EditPackSchedule`, `EditResourceTarget`, `AcquirePlayerHold`, `ReleasePlayerHold` | write | on the list before they are built (#429 R-5, R-6, R-8, R-13c, R-7b); until then the Runtime answers them `not_implemented` |
+| `RecordClientAction` | write | transitional: the console's button trace, until UI-L1 ships; LAB-7 takes it off the list, since the G14 record's initiator replaces it |
+
+- **Everything else is refused** on `ui`: a run by path, input and leases, stopping a run with the
+  client's reset, reset, Lab operations, the Lab observation page, artifact recognition,
+  signatures, debug packages, evidence export, pin release, drills, pack load and unload, fact
+  publishing (`PublishFact`, `PublishFacts`), the whole resource target document
+  (`ApplyResourceTargets`), monitor settings, the agent wake test, event subscriptions, the project
+  projection, the planning session and the authoring and debug events.
+- **A clean mapping.** Every kind on the list is a request of an operation whose `entries` hold
+  `ui` (section 9). The console builds those requests and reads their answers with `lab-ops`' own
+  types, a Runtime crate it pins as it pins `runtime-client`, so the name, the parameters and the
+  output are the CLI's and MCP's.
+- **Not through this entry.** The console's cold ledger read (so it reads the ledger while
+  actingd is stopped), and the Lab processes it starts (section 4.2): the launcher's `up` and
+  `unlock`, the settings page's `packs` and `alive` (UI-L1), and acsetup's `status`, `discover`,
+  `shutdown`, `check-config`, `ledger verify`, `new` and `deploy` (UI-L2, after UI-2a). Those are
+  `lab` requests.
+- The authoring workbench (#346) does not use this entry either: it drives
+  `actinglab serve --stdio`, and its device operations are `lab` requests (section 4.2). The UI's
+  permissions cover the console's entry only.
+
+## 4 The initiator
+
+### 4.1 The words
+
+One string, compared byte for byte (UTF-8), from a closed list of six (Alice's answer 3):
+
+| Word | Entry | Who |
+|---|---|---|
+| `UI` | `ui` | the console (acui); fixed by the binding, never declared |
+| `Lab-CLI` | `lab` | `actinglab.exe` started from a command line: a person or a script |
+| `Lab-MCP` | `lab` | `actinglab-mcp.exe`, for an MCP client |
+| `Lab-制包` | `lab` | the Lab process the UI starts for its authoring workbench (`actinglab serve --stdio`) |
+| `Lab-救急` | `lab` | a Lab process the UI starts outside its workbench: the launcher, acsetup, the settings page |
+| `Lab-看门狗` | `lab` | `actingwatch.exe` |
+
+- Nothing else is recorded: no client name (the MCP entry's `--client`), no session or agent
+  channel name, no system user. This replaces the design's `initiator {module, client}`.
+- The word names where the request came from, not the module that serves the operation: an
+  authoring or rescue operation typed at a command line is `Lab-CLI`, and through MCP `Lab-MCP`
+  (open point 1).
+- From LAB-6 the six words are a closed vocabulary of `runtime-client` 7 and `ledger` 8; adding or
+  renaming one later raises both (open point 2).
+
+### 4.2 How a process picks its word
+
+- `actinglab-mcp.exe`: `Lab-MCP`. `actingwatch.exe`: `Lab-看门狗`. The console binds `ui`.
+- `actinglab.exe` (the CLI and `serve`): `Lab-CLI`, unless the environment variable
+  `ACTINGCOMMAND_INITIATOR` names `Lab-制包` or `Lab-救急`. The UI sets it for every Lab process it
+  starts: `Lab-制包` for its workbench's `serve`, `Lab-救急` for every other one.
+- Any other value of the variable, `UI`, `Lab-MCP` and `Lab-看门狗` included, is
+  `actingctl_usage_invalid` with `variable` `ACTINGCOMMAND_INITIATOR` (the code moves to actinglab
+  with LAB-7, section 12), and nothing is sent or written.
+- Like the channel, it is a declaration, not authentication.
+
+### 4.3 Where it is recorded
+
+- **Online.** It is bound with the connection (section 2.2), and every request of the connection
+  carries it: the receipt gains `initiator` beside `channel`, in place of `via`; the G14 records
+  `command.received`, `command.validated` and `command.rejected` gain `initiator` beside `channel`,
+  in place of `via`; so does the player hold's source (`PlayerHoldSource` and its ledger copy).
+  Effect records gain no member: who sent a request is found through its request id in its G14
+  record, as today (LAB-6).
+  - **Settings overrides.** Each `host.config_overrides` row
+    ([runtime-config.md](runtime-config.md), "Facts"; register G4 and U2-5) gains `initiator`,
+    written beside `channel` by every `ConfigureSettings` (LAB-6). LAB-6 writes `channel` `lab` or
+    `ui` only, so the channel alone would show every Lab module as "经 Lab" on the UI's settings
+    page, where it shows "经命令行" or "经 MCP" today. The settings page shows a row's initiator
+    where it has one, else its channel (UI-L1).
+  - **Rows written before LAB-6** (the coordinator's ruling). Production may hold them, written
+    through MCP for example, and the first start after the LAB-6 deploy must not stop on them.
+    Such a row is restored as written, without `initiator`. The restore check keeps accepting the
+    four channel values it accepts today (`cli`, `mcp`, `ui`, `lab`). An `initiator`, when
+    present, must be one of the six words of section 4.1; otherwise the start stops with
+    `host_config_overrides_fact_invalid`, as for a bad channel. LAB-6 writes only `lab` or `ui`.
+- **Offline.** The installation journal `install\operations\op-<ms>.json`
+  ([install-cli.md](install-cli.md), "Documents") gains `initiator`, written before the first step,
+  for every rescue operation that writes a journal: all irreversible ones and those that journal
+  today (LAB-3). An operation that then sends requests to a running Runtime binds `lab` with the
+  same word, so its G14 records carry it too.
+- **Recordings.** Each mark and step of a Lab recording carries `initiator` (#350 option B, design
+  §3.4); a step that reaches the device is also in G14. No slice of the order names this yet
+  (open point 6).
+- **The watchdog.** Its starts stay recorded in its own files as today. A request it sends beyond
+  `Health` carries `Lab-看门狗`; today it sends none.
+
+## 5 Irreversible operations
+
+- **The list** is the table's `irreversible: true` rows: `deploy`, `rollback`, `convert`, `clean`,
+  `undo`, `config replace`, `config restore`, `config file commit`, `place`, `pack remove`,
+  `pack restore`, `unlock`, `kept clear` and `resource import-mpe` (the last two reserved).
+- **The rule:** record the initiator (section 4.3), nothing more. No parameter, no second
+  confirmation, no plan id carried back by the caller. A plan id is still computed and journalled,
+  and an operation still applies only the plan it computed under the writer lock. MCP marks these
+  tools `destructiveHint`.
+- **Gone from the rescue module** (LAB-3; `actingctl install` keeps its revision-1 face unchanged
+  until LAB-7 deletes it, so the console of today keeps working):
+  - `--plan <id>` for apply: `deploy`, `rollback`, `config file commit`, `pack remove` and
+    `place` plan and apply in one call, and `--plan` (a switch) asks for the plan only;
+  - `--accept-ledger-one-way`: a one-way update records `one_way: true` in its journal;
+  - `install clean --ui-confirmed <selection> --via ui|cli`;
+  - `--known-pause`: every pause found on an instance is a known pause, kept, and listed in the
+    answer and the journal; `release-hold` hands back only the operation's own hold;
+  - `--ack-guard` (section 6).
+- **`unlock`** passes no confirmation from its caller; it runs `actingd unlock-owner` and records
+  the initiator. actingd's `--confirm-resources-released` goes with LAB-7, once UI-L1 no longer
+  passes it.
+- **Through MCP**, `deploy`, `rollback` and `convert` always run detached: they replace the
+  programs MCP itself runs, so the tool answers the operation id at once and `op status` follows it.
+
+## 6 Guards report, never block
+
+Alice's answer 4. From LAB-3, in the rescue module:
+
+- Every guard row of install-cli.md, "Guards" (`memory`, `schedule_near`, `foreign_pauses`,
+  `ladder_holding`, `adb`; `blocked_window` stays retired) is evaluated and reported as today, and
+  never refuses. A row that fails or is not evaluated is noted, and the operation goes on: the
+  answer carries the warning `install_caveat_noted` with `install_caveat` `guard_failed` (a word
+  LAB-3 adds to the caveat vocabulary; no new code) and the rows as `install_guards`; the journal
+  keeps the rows with the initiator.
+- `--ack-guard` is gone, since nothing is left to acknowledge.
+- `foreign_pauses` reports too: a global pause or another party's pause is listed and kept, never
+  refused. The design's earlier "a global pause still refuses" (§2.3) is superseded by §7.
+- The `memory` row's wait (`install.start.memory_wait_ms`) is a wait, not a refusal: a start still
+  waits up to that long for memory, then goes on and reports the row (open point 4).
+- **Not guards, and still refusing**, because they keep data readable and consistent: the
+  preconditions, the writer lock and an unfinished operation (`current.json`), the interface checks
+  and the rollback gate, and the checks of an operation's inputs.
+- **The console** (UI-L1): the buttons that stop or restart an emulator or restart a game act on
+  one press. The note the second press shows today when stopping an emulator stays, shown beside
+  the button as plain text: it says the emulator will be started again (the UI channel calls it
+  「看护会拉起」). It asks nothing and is not a confirmation.
+
+## 7 The rescue and installation module
+
+- **What moves in** (LAB-3): `actingctl install`, `start` and `restart`, `mcp-config` and
+  `mcp-entry list` (LAB-5), and `agent-channel`. The watchdog's logic becomes `crates/watchdog`
+  and `actingwatch.exe` (LAB-4); `alive`, `watchdog install` and `watchdog uninstall` use it.
+- **Why it works while actingd is stopped.** It runs from
+  `install\builds\<commit>\runtime\actinglab.exe`, as the deploy runs actingctl today, and touches
+  only files, the owner lock, the WMI start and the watchdog.
+- **The composites:** `deploy <tag|commit>` (stage, plan, stop with hold, apply, start, alive,
+  release); `config replace <file>` (guards, stop with hold, backup kept, swap, check-config, start,
+  alive, release; never prints the file); `place <bundle.zip>` (plan, pause the instances bound to
+  the bundle's games, wait until idle, place, re-run, `standard-pack check`, wait for the new
+  composition, resume, check the schedule; the games come from the bundle, no game is named in
+  code); `alive [--wait]`. The download stays outside the Lab.
+- **Without `--root` and `--state-root`:** every rescue operation acts on the root of the
+  `actinglab.exe` that runs it (section 9.3); `new <root>` names the new root. A rehearsal on
+  another root runs that root's own program.
+- The configuration file's candidate (`install config …`) becomes `config file …`, distinct from
+  the run-time settings `config set` and `config clear`.
+
+## 8 The Lab's modules
+
+### 8.1 What can be detached
+
+| Part | Program | Detachable | How |
+|---|---|---|---|
+| Lab core: the operation layer, the CLI, the debugging operations, the rescue module | `actinglab.exe` in the runtime member, where actingctl was | no | the one command line and the one installer; the debugging operations stay with it (Alice's answer 2) |
+| MCP | `actinglab-mcp.exe` and the MCP entry `g2` | yes | not installed, or not registered with a client; the CLI does not depend on it |
+| Authoring | `crates/lab`, through the cargo feature `authoring`, in `actinglab.exe` | yes | `lab_module_authoring` absent or `false` (section 8.3), or a build without the feature |
+| Watchdog | `tools\actingwatch.exe` | its own program | `watchdog uninstall` removes its scheduled task |
+
+The table's `modules` lists them with the module id each operation names (`core`, `debugging`,
+`authoring`, `rescue`) and the front ends (`cli`, `mcp`, `serve`, `watchdog`).
+
+### 8.2 `actinglab serve --stdio`
+
+A resident mode of the Lab core (LAB-2): it reads one `{op, params}` per line on stdin and answers
+one `{result}` or `{outcome}` per line, the operations being the table's. Its users are the MCP
+module and the UI's authoring workbench, so the three front ends share one loop.
+
+### 8.3 The authoring option
+
+- `lab_module_authoring` (optional boolean, absent `false`) stays in the configuration file and
+  means one thing: the authoring module is installed (Alice's answer 2). The Runtime decides
+  nothing by it.
+- The Lab reads it from the selected configuration. `true`, in a build with the feature: the
+  authoring operations are listed and served. Otherwise they are not listed (CLI help, MCP
+  `tools/list`), and a call is refused locally with `lab_command_option_disabled` (`lab_option`
+  `authoring`, `operation` the operation); nothing is sent to the Runtime.
+- `lab_module_debugging` retires (`actingd-config` 28): still accepted when a boolean, with no
+  effect, noted with the caveat `config_key_retired` by the commands that read it, as
+  `install.guard.blocked_windows` is. The debugging operations are always there.
+- Its writers are the rescue module's `new` (`--lab-authoring true|false`) and
+  `config file lab-options --authoring true|false`, and through them the installer's check box
+  (UI-L2). `--lab-debugging` and `--debugging` are refused as unknown options. The console shows
+  the key read only (`advanced`, not settable); the `lab_module_debugging` row leaves the tier table
+  (LAB-6).
+- Installing the MCP module is no key: it is installed when `actinglab-mcp.exe` is and the
+  client's entry is registered (`mcp config`).
+
+## 9 The operation table
+
+### 9.1 The file
+
+[lab-operations.json](lab-operations.json), schema `actingcommand.lab-operations.v1`, is the one
+source of the operations: LAB-1 reads it into `crates/lab-ops`, LAB-2 takes the CLI words from it,
+LAB-5 the MCP tools, and LAB-1's test `lab_ops_table_complete` reads the file itself. Members:
+
+- `initiators`, `modules`: sections 4 and 8.
+- `ui_kinds`: the UI list (section 3), each `{kind, class, console_today, rule?, until?}`.
+- `not_exposed`: every request kind no operation sends, each `{kind, reason, note}`; `reason` is
+  `handshake`, `deleted` (LAB-6 deletes the kind, and its row leaves with it) or `unsent` (no front
+  end sends it today; the `lab` entry still takes it). A table revision gives it an operation when
+  a front end needs it.
+- `operations`: one object per operation:
+
+| Member | Meaning |
+|---|---|
+| `name` | the CLI words, unique; the MCP tool is `ac_` and the name with spaces and `-` as `_`, also unique |
+| `module` | `core`, `debugging`, `authoring` or `rescue` |
+| `params` | each `{name, form, type, required, repeat?, default?, note?}`; `form` is `positional`, `option` or `switch`; an option's CLI flag is `--` and the name with `_` as `-`, its MCP argument the name; positionals keep their order |
+| `params_more` | when present: the source command whose further flags carry over unchanged under the same naming rule; the list above names those the design fixes |
+| `output` | what the operation answers; the CLI's `--json` line, the MCP result and the serve answer are the same JSON |
+| `writes` | whether it changes anything; MCP's `readOnlyHint` is its negation |
+| `irreversible` | section 5; MCP's `destructiveHint` |
+| `runtime` | `required` (refused while actingd is stopped), `optional` (works while it is stopped, does more while it runs) or `offline` (never needs it) |
+| `entries` | `["lab"]`, or `["lab", "ui"]` for a `core` operation whose every request kind is on the UI list (not counting the transitional one) |
+| `requests` | the request kinds it sends, as read from its source; the slice that moves it corrects the row from the code it moves and says so |
+| `planned_requests` | kinds it will send that the contract does not have yet |
+| `source` | the commands, tools, console reads and scripts it replaces (`actingctl …`, `MCP ac_…`, `actinglab …`, `actingd …`, `acui: …`, `acsetup: …`, `script <coordinator workspace path>`) |
+| `new` | for an operation no program has today: the board item it comes from |
+| `slice` | the slice that builds it |
+| `status` | `planned` (built by `slice`) or `reserved` (a position only: it opens with `opens_with`) |
+| `notes` | anything else the row must say |
+
+Parameter types: `instance` (an alias, an `instance_id` or an ADB port), `string`, `integer`,
+`boolean`, `duration` (a number with `ms`, `s`, `m` or `h`), `path`, `file`, `dir`, `json`, `key`,
+`key_value` (`KEY=VALUE`), `list<string>`, `enum:<a|b>`, `request_id`, `operation_id` (`op-<ms>`),
+`material_ref`, `code`, `scope` (an instance or a game), `tag_or_commit`, `sha256`.
+
+### 9.2 What `lab_ops_table_complete` checks (LAB-1)
+
+Names and MCP tool names are unique; every operation has `params`, `output`, `writes`,
+`irreversible`, `runtime`, `entries`, `requests`, `source` or `new`, `slice` and `status`; every
+kind of `RuntimeOperationKind::ALL` is in some operation's `requests` or once in `not_exposed`, and
+every kind the file names exists; `entries` follows its rule; a `reserved` row has `opens_with`.
+
+### 9.3 Defaults and output (LAB-1, LAB-2)
+
+- The instance is a positional (`<inst>`): an alias, an `instance_id` or an ADB port.
+- The root is located from the program's own place (a slot's `…\runtime\actinglab.exe`, or a fixed
+  entry); the state root comes from the selected configuration. There is no `--root` and no
+  `--state-root` (`new` names its new root).
+- Output for people by default: one line with the result code and its short phrase from the
+  outcome catalog, and a small table where needed. `--json` prints the one line `cli_line` prints
+  today. Exit codes stay 0, 1 and 2.
+- MCP lists the operations of the installed modules, with descriptions generated from the table
+  and the shared rules written once in its instructions (#410 item 3); no tiers (`--tier` goes);
+  the 24 KiB answer budget and `handle` with `wait_s` stay as runtime-interface.md,
+  "MCP (counter `mcp`)", has them.
+
+### 9.4 Changing the table
+
+A slice that builds, changes or opens an operation edits its row in the same pull request. A
+`reserved` row becomes `planned` with the slice that opens it. The schema string changes only
+when a member's meaning changes.
+
+## 10 Interfaces
+
+Planned, not in force: [component-interfaces.md](component-interfaces.md), "Planned: Workflow
+#434". LAB-6 raises `runtime-client` to 7, `ledger` to 8 and `actingd-config` to 28; LAB-7
+`install-cli` to 2. `install-control` retires, `tools-layout` becomes 5, `install-selection` does
+not move, and the MCP entry's `entry_protocol` becomes 2 (LAB-5). LAB-0 changes no declaration.
+
+## 11 What this replaces, and from when
+
+| Text | Replaced by | From |
+|---|---|---|
+| runtime-interface.md: the three counters, `via`, the Lab options' gate, "The gate's decision (from U-6)", "Before U-6", "Without the Lab, or with one option", the origin gates, the clean mapping's actingctl and MCP counters | sections 2 and 3 | LAB-6 (the mapping: LAB-2, LAB-5) |
+| runtime-interface.md: the plans U-3 to U-6 and the upgrade state | this contract; they are not built | now (no code follows them) |
+| component-interfaces.md: "Planned: `install-control` 2" | `install-control` retires | now |
+| install-cli.md: "no MCP tool drives it" (also in MCP's instructions) | MCP covers what the CLI covers, rescue included (Alice: 「Lab不设权限管理」) | LAB-5 |
+| install-cli.md: `--plan <id>` for apply, `--accept-ledger-one-way`, `clean --ui-confirmed … --via`, `--known-pause`, `--ack-guard`, guards that refuse | sections 5 and 6 | LAB-3 in the rescue module; LAB-7 for `actingctl install` |
+| install-cli.md, "Lab options": two options | section 8.3 | LAB-3 (writers), LAB-6 (the key) |
+| actingd-unlock-owner.md: `--confirm-resources-released` | section 5 | LAB-7 |
+| #421's body: "plan, then apply with the plan id", "no MCP entry" | sections 5 and 9 | LAB-3, LAB-5 |
+
+Until the slice named, the replaced text stays in force and its code unchanged. LAB-1 to LAB-5
+only add: actingctl stays until LAB-7.
+
+## 12 Codes
+
+No new code. The codes this contract uses:
+
+- `channel_request_refused` (`operation`, `channel`), with `config_key` for a refused setting: an
+  optional value LAB-6 adds to its catalog entry;
+- `channel_binding_missing`, `channel_binding_exists`, `invalid_bind_channel`;
+- `lab_command_option_disabled` (`operation`, `lab_option`) for an authoring operation that is not
+  installed (section 8.3), a local refusal: the design's `lab_module_not_installed` is a host code,
+  and the host no longer judges modules;
+- `actingctl_usage_invalid` (`argument`, `variable`) for a bad option or `ACTINGCOMMAND_INITIATOR`;
+  LAB-7 moves actingctl's codes into actinglab's fragment
+  (`contracts/outcome-codes/actingctl.json` into `actinglab.json`);
+- `install_caveat_noted` with the caveats `guard_failed` (new word, LAB-3) and
+  `config_key_retired`.
+
+After LAB-6 the host emits neither `lab_module_not_installed` nor `lab_module_option_disabled`
+(open point 8).
+
+## 13 Open points
+
+1. **Who is `Lab-制包` and `Lab-救急`.** Section 4.1 records where a request came from: the two
+   words mark Lab processes the UI starts, and an authoring or rescue operation typed at a command
+   line is `Lab-CLI` (through MCP `Lab-MCP`). The other reading, the module that serves the
+   operation, would record every deploy as `Lab-救急` whoever started it. To confirm.
+2. **The final words.** §7 says the module names follow the final list. They become a closed
+   vocabulary with LAB-6; until then a rename changes only this text and the table.
+3. **Frames of `frame` and `frames`.** On the `lab` entry they pin `Lab` and stay in `kept\`
+   (section 2.4), where today's CLI and MCP pin `Explicit`. LAB-6 either keeps that or pins these
+   two by a request member; the design does not say.
+4. **The memory wait.** Section 6 keeps the start's wait for memory as a wait. If the wait should
+   go too, LAB-3 drops it.
+5. **`install-root`.** The journal's `initiator` and `one_way` are members of the installers'
+   private documents; whether they raise `install-root` (the A/B journal v2) is LAB-3's to judge by
+   the bump rule.
+6. **Recordings' initiator.** No slice of the order writes it yet; LAB-2 is the natural one.
+7. **actinglab's own `config get` and `config set`** (its user configuration file) collide with
+   the `config` operations: LAB-2 renames or removes them.
+8. **The two host codes** `lab_module_not_installed` and `lab_module_option_disabled` lose their
+   emitter at LAB-6; whether the catalog retires them is LAB-6's.
+9. **The MCP tool count.** The table has one operation per CLI form (168 in v1), so MCP would list
+   that many tools. LAB-5 may present a family (`record`, `package`, `emu`) as one tool with an
+   `action` argument; the table stays one row per form either way.
