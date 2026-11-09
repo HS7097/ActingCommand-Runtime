@@ -32,17 +32,16 @@ use actingcommand_contract::codes::ReceiptCode;
 use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
     ArtifactId, CONFIG_TOP_LEVEL_SECTION, ClientActionKind, ClientActionRecord, ClientActionValue,
-    EVIDENCE_READ_FRAME_CONTROL, EVIDENCE_READ_RUN_CONTROL, EventActor, EventSource, FactScalar,
-    FactValue, GovernanceIdentityCard, RunId, RuntimeFactRecord, SanitizationError,
+    EVIDENCE_READ_FRAME_CONTROL, EVIDENCE_READ_RUN_CONTROL, FactScalar, FactValue,
+    GovernanceIdentityCard, RunId, RuntimeFactRecord, SanitizationError,
     config_parameters_fact_key,
 };
 use actingcommand_ledger::{EvidenceTarget, FrameRetentionSwitches, evidence_covers};
-use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
+use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
 
 pub const COMMAND: &str = "evidence";
 pub const CONFIRM_READ: &str = "confirm-read";
@@ -235,7 +234,7 @@ fn id_text(id: &impl serde::Serialize) -> String {
 // ---- the CLI
 
 /// The `evidence` command, when it is the first word.
-pub fn dispatch(arguments: &[OsString], detail: Detail) -> Option<ExitCode> {
+pub fn dispatch(arguments: &[OsString], detail: Detail) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != COMMAND {
         return None;
     }
@@ -351,12 +350,7 @@ fn run(
     target: Target,
     detail: Detail,
 ) -> Result<(Value, Option<Outcome>), Failure> {
-    let config = RuntimeClientConfig::new(
-        state_root,
-        actingcommand_runtime_client::RuntimeChannel::Cli,
-        EventActor::Cli,
-        EventSource::Cli,
-    );
+    let config = crate::front::client_config(state_root);
     let config = match detail {
         Detail::Codes => config.with_detail(Detail::Codes),
         Detail::Full => config,

@@ -423,7 +423,8 @@ fn ocr_mark() -> RecordedMark {
             "model_sha256": MODEL_SHA256
         },
         "self_test": {"status": "not_evaluated", "frames": 0, "single_sample": false},
-        "created_at_unix_ms": 1
+        "created_at_unix_ms": 1,
+        "initiator": "Lab-CLI"
     }))
     .expect("an OCR mark")
 }

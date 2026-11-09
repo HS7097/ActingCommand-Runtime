@@ -305,15 +305,6 @@ fn signature_cli_exposes_explicit_operations_and_rejects_invalid_conditions_befo
         }
     }
 
-    #[test]
-    fn scheduler_stub_is_exit_six() {
-        let result = run_cli(["--json", "scheduler", "status"], true);
-        assert_eq!(result.exit_code(), 6);
-        assert_eq!(
-            result.envelope.error.as_ref().unwrap().code,
-            "scheduler_not_available"
-        );
-    }
 
     #[test]
     fn run_summary_capability_is_read_only_and_unverified() {
@@ -368,7 +359,7 @@ fn signature_cli_exposes_explicit_operations_and_rejects_invalid_conditions_befo
         let set = run_cli(
             [
                 "--json",
-                "config",
+                "user-config",
                 "set",
                 "instance.ba.serial",
                 "127.0.0.1:16448",
@@ -376,7 +367,7 @@ fn signature_cli_exposes_explicit_operations_and_rejects_invalid_conditions_befo
             true,
         );
         assert_eq!(set.exit_code(), 0);
-        let get = run_cli(["--json", "config", "get", "instance.ba.serial"], true);
+        let get = run_cli(["--json", "user-config", "get", "instance.ba.serial"], true);
         set_missing_config_env();
 
         assert_eq!(get.exit_code(), 0);
@@ -401,7 +392,7 @@ fn signature_cli_exposes_explicit_operations_and_rejects_invalid_conditions_befo
         let set = run_cli(
             [
                 "--json",
-                "config",
+                "user-config",
                 "set",
                 "instance.ak.package",
                 "com.hypergryph.arknights.bilibili",
@@ -409,7 +400,7 @@ fn signature_cli_exposes_explicit_operations_and_rejects_invalid_conditions_befo
             true,
         );
         assert_eq!(set.exit_code(), 0);
-        let get = run_cli(["--json", "config", "get", "instance.ak.package"], true);
+        let get = run_cli(["--json", "user-config", "get", "instance.ak.package"], true);
         set_missing_config_env();
 
         assert_eq!(get.exit_code(), 0);
@@ -434,7 +425,7 @@ fn signature_cli_exposes_explicit_operations_and_rejects_invalid_conditions_befo
         let adb = run_cli(
             [
                 "--json",
-                "config",
+                "user-config",
                 "set",
                 "instance.ak-b.adb_path",
                 "C:\\Tools\\adb.exe",
@@ -444,16 +435,16 @@ fn signature_cli_exposes_explicit_operations_and_rejects_invalid_conditions_befo
         let backend = run_cli(
             [
                 "--json",
-                "config",
+                "user-config",
                 "set",
                 "instance.ak-b.capture_backend",
                 "nemu_ipc",
             ],
             true,
         );
-        let get_adb = run_cli(["--json", "config", "get", "instance.ak-b.adb_path"], true);
+        let get_adb = run_cli(["--json", "user-config", "get", "instance.ak-b.adb_path"], true);
         let get_backend = run_cli(
-            ["--json", "config", "get", "instance.ak-b.capture_backend"],
+            ["--json", "user-config", "get", "instance.ak-b.capture_backend"],
             true,
         );
         set_missing_config_env();
@@ -492,7 +483,7 @@ fn signature_cli_exposes_explicit_operations_and_rejects_invalid_conditions_befo
         let result = run_cli(
             [
                 "--json",
-                "config",
+                "user-config",
                 "set",
                 "instance.ak-b.capture_backend",
                 "not-a-backend",

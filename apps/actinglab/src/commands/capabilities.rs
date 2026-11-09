@@ -10,22 +10,18 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("version", ["offline"], "available"),
         command_cap("doctor", ["offline"], "available"),
         command_cap("paths", ["offline"], "available"),
-        command_cap("config get", ["offline"], "available"),
-        command_cap("config set", ["offline"], "available"),
+        // Workflow #434 LAB-2 (open point 7): actinglab's own user configuration file.
+        command_cap("user-config get", ["offline"], "available"),
+        command_cap("user-config set", ["offline"], "available"),
         command_cap("schema", ["offline"], "available"),
         command_cap("list", ["offline"], "available"),
         command_cap("capabilities", ["offline"], "available"),
         command_cap("resource validate", ["offline"], "available"),
-        command_cap("resource convert", ["offline"], "retired"),
         command_cap("resource catalog", ["offline", "read_only"], "available"),
         command_cap("resource restore", ["offline"], "available"),
         command_cap("scheduling compile", ["offline", "read_only"], "available"),
         command_cap("scheduling timeline", ["offline", "read_only"], "available"),
         command_cap("resource compile-maa", ["offline"], "available"),
-        command_cap("resource import-alas", ["offline"], "reserved"),
-        command_cap("resource drift-alas", ["offline"], "reserved"),
-        // Workflow #411 RV-1 (O5): the stub is refused with a code that names `resource verify`.
-        command_cap("resource check-release", ["offline"], "retired"),
         // Workflow #411 RV-1: `report_schema` tells a repository wrapper this build can verify.
         resource_verify_capability(),
         command_cap("observe", ["offline", "device_optional"], "available"),
@@ -52,8 +48,6 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
             ["offline", "read_only"],
             "available",
         ),
-        command_cap("package build-task", ["offline"], "retired"),
-        command_cap("package build-pack", ["offline"], "retired"),
         command_cap("package bundle", ["offline"], "available"),
         // Workflow #407 LOAD-1: copies a game's loading pages into its packs, or checks them.
         command_cap("package loading", ["offline"], "available"),
@@ -63,17 +57,11 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("standard-pack compose", ["offline"], "available"),
         command_cap("package fmt", ["offline"], "available"),
         command_cap("package edit", ["offline"], "available"),
-        command_cap("ledger show", ["offline", "read_only"], "retired"),
-        command_cap("ledger events", ["offline", "read_only"], "retired"),
-        command_cap("ledger receipts", ["offline", "read_only"], "retired"),
-        command_cap("ledger diagnose", ["offline", "read_only"], "retired"),
-        command_cap("ledger evidence", ["offline", "read_only"], "retired"),
         command_cap("operation validate", ["offline"], "available"),
         command_cap("operation inspect", ["offline"], "available"),
         command_cap("operation explain", ["offline"], "available"),
         command_cap("status", ["running_runtime"], "available"),
         command_cap("run summary", ["running_runtime", "read_only"], "available"),
-        command_cap("devices", ["device"], "retired"),
         command_cap("touch-probe", ["device"], "available"),
         command_cap("tap", ["device"], "available"),
         command_cap("swipe", ["device"], "available"),
@@ -81,315 +69,20 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("key", ["device"], "available"),
         command_cap("text", ["device"], "available"),
         command_cap("session status", ["running_runtime"], "available"),
-        command_cap("session bootstrap", ["offline"], "retired"),
         command_cap("session throat-policy", ["offline"], "available"),
         command_cap("session capture-policy", ["offline"], "available"),
         command_cap("session record-policy", ["offline"], "available"),
         command_cap("session self-heal-policy", ["offline"], "available"),
-        command_cap("session self-heal-plan", ["offline"], "retired"),
-        command_cap("session phase-c-plan", ["offline"], "retired"),
-        command_cap("session readiness", ["offline"], "retired"),
-        command_cap("session connect-plan", ["offline"], "retired"),
-        command_cap("session stream-plan", ["offline"], "retired"),
-        command_cap("session queue", ["offline"], "retired"),
-        command_cap("session command-check", ["offline"], "retired"),
-        command_cap("session submit-plan", ["offline"], "retired"),
-        command_cap("session validation-plan", ["offline"], "retired"),
-        command_cap("session start", ["offline"], "retired"),
-        command_cap("session stop", ["offline"], "retired"),
-        command_cap("session cleanup", ["offline"], "retired"),
-        command_cap("session journal", ["offline"], "retired"),
-        command_cap("session events", ["offline"], "retired"),
-        command_cap("session events wait", ["offline"], "retired"),
-        command_cap("session response", ["offline"], "retired"),
-        command_cap("session response get", ["offline"], "retired"),
-        command_cap("session response wait", ["offline"], "retired"),
-        command_cap("session request-state", ["offline"], "retired"),
-        command_cap("session request-state get", ["offline"], "retired"),
-        command_cap("session request-state wait", ["offline"], "retired"),
-        command_cap("session request-state list", ["offline"], "retired"),
         command_cap("session contract", ["offline"], "available"),
         command_cap("session api", ["offline"], "available"),
         command_cap("session transport", ["offline"], "available"),
-        command_cap("session transport plan", ["offline"], "retired"),
         command_cap("session transport check", ["offline"], "available"),
         command_cap("session stream", ["running_runtime", "device"], "available"),
         command_cap("session stream check", ["offline"], "available"),
         command_cap("session monitor-policy", ["running_runtime"], "available"),
-        command_cap("session request cancel", ["offline"], "retired"),
-        command_cap("session request status", ["running_runtime"], "retired"),
-        command_cap("session request bootstrap", ["running_runtime"], "retired"),
-        command_cap(
-            "session request throat-policy",
-            ["running_runtime"],
-            "retired",
-        ),
-        command_cap(
-            "session request capture-policy",
-            ["running_runtime"],
-            "retired",
-        ),
-        command_cap(
-            "session request record-policy",
-            ["running_runtime"],
-            "retired",
-        ),
-        command_cap(
-            "session request self-heal-policy",
-            ["running_runtime"],
-            "retired",
-        ),
-        command_cap(
-            "session request self-heal-plan",
-            ["running_runtime"],
-            "retired",
-        ),
-        command_cap(
-            "session request phase-c-plan",
-            ["running_runtime"],
-            "retired",
-        ),
-        command_cap("session request readiness", ["running_runtime"], "retired"),
-        command_cap(
-            "session request connect-plan",
-            ["running_runtime"],
-            "retired",
-        ),
-        command_cap(
-            "session request stream-plan",
-            ["running_runtime"],
-            "retired",
-        ),
-        command_cap("session request queue", ["running_runtime"], "retired"),
-        command_cap(
-            "session request command-check",
-            ["running_runtime"],
-            "retired",
-        ),
-        command_cap(
-            "session request submit-plan",
-            ["running_runtime"],
-            "retired",
-        ),
-        command_cap(
-            "session request validation-plan",
-            ["running_runtime"],
-            "retired",
-        ),
-        command_cap("session request --no-wait", ["running_runtime"], "retired"),
-        command_cap("session request journal", ["running_runtime"], "retired"),
-        command_cap("session request events", ["running_runtime"], "retired"),
-        command_cap(
-            "session request events wait",
-            ["running_runtime"],
-            "retired",
-        ),
-        command_cap("session request response", ["running_runtime"], "retired"),
-        command_cap(
-            "session request response get",
-            ["running_runtime"],
-            "retired",
-        ),
-        command_cap(
-            "session request response wait",
-            ["running_runtime"],
-            "retired",
-        ),
-        command_cap(
-            "session request request-state",
-            ["running_runtime"],
-            "retired",
-        ),
-        command_cap(
-            "session request request-state get",
-            ["running_runtime"],
-            "retired",
-        ),
-        command_cap(
-            "session request request-state wait",
-            ["running_runtime"],
-            "retired",
-        ),
-        command_cap(
-            "session request request-state list",
-            ["running_runtime"],
-            "retired",
-        ),
-        command_cap("session request contract", ["running_runtime"], "retired"),
-        command_cap("session request api", ["running_runtime"], "retired"),
-        command_cap("session request transport", ["running_runtime"], "retired"),
-        command_cap(
-            "session request transport plan",
-            ["running_runtime"],
-            "retired",
-        ),
-        command_cap(
-            "session request transport check",
-            ["running_runtime"],
-            "retired",
-        ),
-        command_cap(
-            "session request capabilities",
-            ["running_runtime"],
-            "retired",
-        ),
-        command_cap(
-            "session request monitor-policy",
-            ["running_runtime"],
-            "retired",
-        ),
-        command_cap("session request devices", ["running_runtime"], "retired"),
-        command_cap("session request record", ["running_runtime"], "retired"),
-        command_cap(
-            "session request capture",
-            ["running_runtime", "device"],
-            "retired",
-        ),
-        command_cap(
-            "session request capture-diagnose",
-            ["running_runtime", "device"],
-            "retired",
-        ),
-        command_cap(
-            "session request stream",
-            ["running_runtime", "device"],
-            "retired",
-        ),
-        command_cap(
-            "session request stream check",
-            ["running_runtime"],
-            "retired",
-        ),
-        command_cap(
-            "session request recognize",
-            ["running_runtime", "device"],
-            "retired",
-        ),
-        command_cap(
-            "session request detect-page",
-            ["running_runtime", "device"],
-            "retired",
-        ),
-        command_cap(
-            "session request current-page",
-            ["running_runtime", "device"],
-            "retired",
-        ),
-        command_cap(
-            "session request is-visible",
-            ["running_runtime", "device"],
-            "retired",
-        ),
-        command_cap(
-            "session request locate",
-            ["running_runtime", "device"],
-            "retired",
-        ),
-        command_cap(
-            "session request monitor",
-            ["running_runtime", "device"],
-            "retired",
-        ),
-        command_cap(
-            "session request monitor-once",
-            ["running_runtime", "device"],
-            "retired",
-        ),
-        command_cap(
-            "session request instance list",
-            ["running_runtime"],
-            "retired",
-        ),
-        command_cap(
-            "session request instance registry",
-            ["running_runtime"],
-            "retired",
-        ),
-        command_cap("session request instance health", ["offline"], "retired"),
-        command_cap(
-            "session request instance keep-alive",
-            ["offline"],
-            "retired",
-        ),
-        command_cap("session request instance connect", ["offline"], "retired"),
-        command_cap("session request instance reconnect", ["offline"], "retired"),
-        command_cap(
-            "session request instance app",
-            ["running_runtime", "device", "lab_lease"],
-            "retired",
-        ),
-        command_cap(
-            "session request app",
-            ["running_runtime", "device", "lab_lease"],
-            "retired",
-        ),
-        command_cap(
-            "session request lab-run",
-            ["running_runtime", "device", "lab_lease"],
-            "retired",
-        ),
-        command_cap(
-            "session request package-run",
-            ["running_runtime", "device", "lab_lease"],
-            "retired",
-        ),
-        command_cap(
-            "session request operation-run",
-            ["running_runtime", "device", "lab_lease"],
-            "retired",
-        ),
-        command_cap(
-            "session request tap",
-            ["running_runtime", "device", "lab_lease"],
-            "retired",
-        ),
-        command_cap(
-            "session request swipe",
-            ["running_runtime", "device", "lab_lease"],
-            "retired",
-        ),
-        command_cap(
-            "session request long-tap",
-            ["running_runtime", "device", "lab_lease"],
-            "retired",
-        ),
-        command_cap(
-            "session request key",
-            ["running_runtime", "device", "lab_lease"],
-            "retired",
-        ),
-        command_cap(
-            "session request text",
-            ["running_runtime", "device", "lab_lease"],
-            "retired",
-        ),
-        command_cap(
-            "session request tap-target",
-            ["running_runtime", "device", "lab_lease"],
-            "retired",
-        ),
-        command_cap(
-            "session request navigate",
-            ["running_runtime", "device", "lab_lease"],
-            "retired",
-        ),
-        command_cap(
-            "session request recover",
-            ["running_runtime", "device", "lab_lease"],
-            "retired",
-        ),
-        command_cap(
-            "session request recover --stale-capture",
-            ["running_runtime", "device"],
-            "retired",
-        ),
         command_cap("session instance", ["offline", "device"], "available"),
         command_cap("session instance list", ["offline"], "available"),
         command_cap("session instance registry", ["offline"], "available"),
-        command_cap("session instance health", ["offline"], "retired"),
-        command_cap("session instance keep-alive", ["offline"], "retired"),
-        command_cap("session instance connect", ["offline"], "retired"),
-        command_cap("session instance reconnect", ["offline"], "retired"),
         command_cap("session instance app", ["device"], "available"),
         command_cap("session instance app launch", ["device"], "available"),
         command_cap("session instance app stop", ["device"], "available"),
@@ -410,11 +103,6 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("session capture diagnose", ["device"], "available"),
         command_cap("session recover", ["device"], "available"),
         command_cap("session recover --stale-capture", ["device"], "available"),
-        command_cap(
-            "session lease run",
-            ["running_runtime", "lab_lease"],
-            "retired",
-        ),
         command_cap("session record", ["offline"], "available"),
         command_cap("session record start", ["offline"], "available"),
         command_cap("session record status", ["offline"], "available"),
@@ -423,9 +111,6 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("session record step", ["offline", "device"], "available"),
         command_cap("session record candidates", ["offline"], "available"),
         command_cap("session record amend", ["offline"], "available"),
-        command_cap("session record build-task", ["offline"], "retired"),
-        command_cap("session record promote", ["offline"], "retired"),
-        command_cap("session record publish", ["offline"], "retired"),
         command_cap("record", ["offline"], "available"),
         command_cap("record start", ["offline"], "available"),
         command_cap("record status", ["offline"], "available"),
@@ -434,9 +119,6 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("record step", ["offline", "device"], "available"),
         command_cap("record candidates", ["offline"], "available"),
         command_cap("record amend", ["offline"], "available"),
-        command_cap("record build-task", ["offline"], "retired"),
-        command_cap("record promote", ["offline"], "retired"),
-        command_cap("record publish", ["offline"], "retired"),
         command_cap("capture --record", ["device"], "available"),
         command_cap("session capture --record", ["device"], "available"),
         command_cap("session app --record", ["device"], "available"),
@@ -456,14 +138,7 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("locate", ["device"], "available"),
         command_cap("tap-target", ["device"], "available"),
         command_cap("navigate", ["device"], "available"),
-        command_cap("monitor --once", ["device"], "retired"),
-        command_cap("monitor", ["device"], "retired"),
         command_cap("stream", ["device"], "available"),
-        command_cap("scheduler status", ["running_runtime"], "reserved"),
-        command_cap("scheduler pause", ["running_runtime"], "reserved"),
-        command_cap("scheduler resume", ["running_runtime"], "reserved"),
-        command_cap("scheduler start", ["running_runtime"], "reserved"),
-        command_cap("scheduler stop", ["running_runtime"], "reserved"),
         command_cap("lab validate", ["offline"], "available"),
         command_cap("lab run", ["device"], "available"),
         command_cap("capture", ["device"], "available"),
@@ -474,11 +149,6 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("detect-page", ["device"], "available"),
         command_cap("recognize", ["device"], "available"),
         command_cap("recognize-artifact", ["running_runtime"], "available"),
-        command_cap(
-            "operation dry-run",
-            ["running_runtime", "device"],
-            "reserved",
-        ),
         command_cap(
             "operation run",
             ["running_runtime", "device", "lab_lease"],
@@ -505,35 +175,10 @@ where
     I::Item: Into<String>,
 {
     let needs = needs.into_iter().map(Into::into).collect::<Vec<String>>();
+    // Workflow #434 LAB-2: the retired and reserved command words are gone from the table above;
+    // `lab arbitrator` is the one retired entry left, `lab2_cli`'s.
     let (status, reason_code) = match status {
-        "retired"
-            if matches!(
-                command,
-                "package build-task"
-                    | "package build-pack"
-                    | "resource convert"
-                    | "record build-task"
-                    | "record promote"
-                    | "record publish"
-                    | "session record build-task"
-                    | "session record promote"
-                    | "session record publish"
-            ) =>
-        {
-            ("retired", "resource_production_retired")
-        }
-        "retired" if command.starts_with("ledger ") => ("retired", "local_ledger_retired"),
-        "retired" if command == "resource check-release" => (
-            "retired",
-            crate::codes::ActinglabCode::ResourceCheckReleaseRetired.as_str(),
-        ),
-        "retired" if command == "devices" || command.starts_with("session instance ") => {
-            ("retired", "actinglab_device_authority_retired")
-        }
         "retired" if command == "lab arbitrator" => ("retired", "legacy_lab2_arbitrator_retired"),
-        "retired" if command == "session transport plan" => {
-            ("retired", "trusted_remote_transport_retired")
-        }
         "retired" => ("retired", "legacy_session_authority_retired"),
         "reserved" => ("reserved", "handler_reserved"),
         "unavailable" => ("unavailable", "lab_lease_required"),

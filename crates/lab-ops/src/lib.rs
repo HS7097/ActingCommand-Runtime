@@ -21,7 +21,8 @@
 
 #![forbid(unsafe_code)]
 
-// Workflow #378 A5: the one result line of every exit.
+// Workflow #378 A5: the one result line of every exit; Workflow #434 LAB-2: built and returned
+// here, printed by the program.
 pub mod cli_line;
 // Workflow #389 MCP-14: `codes` (MCP `ac_outcome_code`), entries of the embedded outcome catalog.
 pub mod code_lookup;
@@ -109,6 +110,12 @@ pub mod wake_test;
 
 // Workflow #434 LAB-1b: the registry of the core operations this crate serves.
 pub mod served;
+
+// Workflow #434 LAB-2: the program whose command lines the moved commands serve (actingctl's CLI
+// channel, or actinglab's Lab channel), and `drill` (actingctl's `ladder-drill`, MCP
+// `ac_ladder_drill`), moved from actingctl so that actinglab's CLI module serves it too.
+pub mod front;
+pub mod ladder_drill;
 
 // Test-only: Workflow #434 LAB-1, the slice's named tests (`lab_ops_table_complete`,
 // `lab_ops_locate_defaults`).

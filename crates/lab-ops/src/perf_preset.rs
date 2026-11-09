@@ -25,16 +25,14 @@ use crate::codes::{ActingctlCode, ArgumentProblem};
 use actingcommand_contract::codes::{ReceiptCode, SanitizationCode};
 use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
-    ConfigParameter, EventActor, EventSource, FactValue, RuntimeFactScope,
-    config_parameters_fact_key,
+    ConfigParameter, FactValue, RuntimeFactScope, config_parameters_fact_key,
 };
-use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
+use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError};
 use actingcommand_runtime_config::performance::presets::{self, PresetTable};
 use actingcommand_runtime_config::{performance, scheduling};
 use serde_json::{Map, Value, json};
 use std::ffi::OsString;
 use std::path::PathBuf;
-use std::process::ExitCode;
 
 pub const COMMAND: &str = "perf-preset";
 pub const SET: &str = "set";
@@ -129,7 +127,7 @@ struct Parsed {
 }
 
 /// The `perf-preset` command, when it is the first word.
-pub fn dispatch(arguments: &[OsString], detail: Detail) -> Option<ExitCode> {
+pub fn dispatch(arguments: &[OsString], detail: Detail) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != COMMAND {
         return None;
     }
@@ -229,12 +227,7 @@ fn parse(arguments: &[OsString]) -> Result<Parsed, Outcome> {
 /// Connects with the CLI's (Cli, Cli) origin and runs the action: its answer and the line's
 /// outcome.
 fn run(parsed: &Parsed, detail: Detail) -> Result<(Value, Outcome), Failure> {
-    let config = RuntimeClientConfig::new(
-        &parsed.state_root,
-        actingcommand_runtime_client::RuntimeChannel::Cli,
-        EventActor::Cli,
-        EventSource::Cli,
-    );
+    let config = crate::front::client_config(&parsed.state_root);
     let config = match detail {
         Detail::Codes => config.with_detail(Detail::Codes),
         Detail::Full => config,

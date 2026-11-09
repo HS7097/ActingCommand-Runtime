@@ -46,6 +46,9 @@ pub(crate) struct SessionRecordStep {
     pub(crate) step_id: String,
     pub(crate) created_at_unix_ms: u64,
     pub(crate) updated_at_unix_ms: u64,
+    /// Workflow #434 LAB-2 (`contracts/lab-two-entries.md` §4.2, §4.3 "Recordings"): the initiator
+    /// word of the process that recorded the step.
+    pub(crate) initiator: String,
     #[serde(flatten)]
     pub(crate) data: SessionRecordStepData,
 }
@@ -337,7 +340,7 @@ fn run_session_record_inner(
     })?;
     let instance_id = resolve_instance_id_for_flags(global, &config, &flags)?;
     let record_path = session_record_path(&state_dir, &instance_id);
-    let record_lock = record_action_lock(action, &state_dir, &instance_id)?;
+    let record_lock = record_action_lock(global, action, &state_dir, &instance_id)?;
     match action {
         "start" => {
             let task_id = flags.required("--task-id")?;
@@ -610,6 +613,7 @@ fn new_session_record_step(
         step_id,
         created_at_unix_ms: current_unix_ms(),
         updated_at_unix_ms: current_unix_ms(),
+        initiator: crate::cli_module::recording_initiator(context.global.via)?.to_owned(),
         data,
     })
 }
@@ -2392,6 +2396,7 @@ fn new_session_record(instance: &str, task_id: &str, flags: &FlagArgs) -> Sessio
 /// R20: every state-writing record action holds the per-instance recording lock for the
 /// whole command; `status` and `candidates` only read.
 fn record_action_lock(
+    global: &GlobalOptions,
     action: &str,
     state_dir: &Path,
     instance_id: &str,
@@ -2399,7 +2404,16 @@ fn record_action_lock(
     if !matches!(action, "start" | "stop" | "mark" | "step" | "amend") {
         return Ok(None);
     }
-    RecordingLock::acquire(state_dir, instance_id, &format!("record {action}")).map(Some)
+    // Workflow #434 LAB-2: every step and mark the command adds carries the process's initiator
+    // (fix 1: `Lab-MCP` through MCP's actinglab child, `--via mcp`).
+    let initiator = crate::cli_module::recording_initiator(global.via)?;
+    RecordingLock::acquire(
+        state_dir,
+        instance_id,
+        &format!("record {action}"),
+        initiator,
+    )
+    .map(Some)
 }
 
 fn held_record_lock(lock: &Option<RecordingLock>) -> CliOutcome<&RecordingLock> {
@@ -2972,7 +2986,10 @@ pub(crate) fn record_flag_begin(
         )
         .with_details(json!({"state_root": state_dir.display().to_string()})));
     }
-    RecordingLock::acquire(&state_dir, &record_instance, command)
+    // Workflow #434 LAB-2: every step and mark the command adds carries the process's initiator
+    // (fix 1: `Lab-MCP` through MCP's actinglab child, `--via mcp`).
+    let initiator = crate::cli_module::recording_initiator(global.via)?;
+    RecordingLock::acquire(&state_dir, &record_instance, command, initiator)
 }
 
 #[cfg(test)]

@@ -250,28 +250,28 @@ fn command(launch: &impl Launch, arguments: &[OsString]) -> ExitCode {
     });
     let word = arguments[0].to_str();
     if !matches!(word, Some("status" | "install" | "uninstall")) {
-        return cli_line::refused(
+        return print(cli_line::refused(
             &cli_line::usage_invalid(word, ArgumentProblem::Unknown),
             Some(USAGE),
-        );
+        ));
     }
     if let Some(extra) = arguments.get(1) {
-        return cli_line::refused(
+        return print(cli_line::refused(
             &cli_line::usage_invalid(extra.to_str(), ArgumentProblem::Unknown),
             Some(USAGE),
-        );
+        ));
     }
     let Some(root) = install_root(launch.current_exe()) else {
-        return cli_line::refused(
+        return print(cli_line::refused(
             &Outcome::new(ActingctlCode::WatchdogLauncherMisplaced),
             None,
-        );
+        ));
     };
     if let Err(error) = actingcommand_contract::process_installation() {
-        return cli_line::refused(&Outcome::new(error.code()), None);
+        return print(cli_line::refused(&Outcome::new(error.code()), None));
     }
     if let Err(outcome) = cli_line::detail() {
-        return cli_line::refused(&outcome, Some(DETAIL_USAGE));
+        return print(cli_line::refused(&outcome, Some(DETAIL_USAGE)));
     }
     let arguments = [
         OsString::from("watchdog"),
@@ -280,6 +280,35 @@ fn command(launch: &impl Launch, arguments: &[OsString]) -> ExitCode {
         root.into_os_string(),
     ];
     ExitCode::from(actingcommand_watchdog::dispatch_exit(&arguments, &stderr_line).unwrap_or(1))
+}
+
+/// Prints an exit `lab-ops` built as `cli_line` printed it before Workflow #434 LAB-2, which
+/// moved the printing into the programs: the line on stdout, then the developer line
+/// `<LEVEL> actingctl: …` on stderr ([`stderr_line`]); a line stdout refuses, or one that did not
+/// encode, leaves only the developer line `actingctl_output_failed`, exit 1.
+fn print(exit: cli_line::Exit) -> ExitCode {
+    let line = match exit.line {
+        Ok(line) => line,
+        Err(text) => return output_failed(&text),
+    };
+    let written = {
+        let stdout = std::io::stdout();
+        let mut writer = stdout.lock();
+        writeln!(writer, "{line}").and_then(|()| writer.flush())
+    };
+    if let Err(error) = written {
+        return output_failed(&error.to_string());
+    }
+    if let Some(developer) = &exit.developer {
+        stderr_line(&developer.outcome, developer.text.as_deref());
+    }
+    ExitCode::from(exit.code)
+}
+
+/// The developer line `actingctl_output_failed` with `text`, exit 1.
+fn output_failed(text: &str) -> ExitCode {
+    stderr_line(&cli_line::Exit::output_failed(), Some(text));
+    ExitCode::FAILURE
 }
 
 /// `<root>` when this program (`executable`) is `<root>\tools\actingwatch.exe`, in its ordinary

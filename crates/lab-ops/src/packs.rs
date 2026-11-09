@@ -48,7 +48,6 @@ use std::fmt;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const COMMAND: &str = "packs";
@@ -1095,7 +1094,7 @@ fn startup_package_id(path: &Path) -> Option<String> {
 /// CLI. It takes no `--state-root`: it never connects to the Runtime (command table D5). One
 /// result line on stdout (Workflow #378 A5): the bindings with `package_bindings_reported`, or
 /// `{outcome}` with the refusal (a flag refusal's developer line adds the usage) and exit 1.
-pub fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
+pub fn dispatch(arguments: &[OsString]) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != COMMAND {
         return None;
     }

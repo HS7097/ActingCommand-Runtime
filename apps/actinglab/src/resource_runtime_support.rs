@@ -68,25 +68,8 @@ pub(super) fn run_resource(
             )?)
             .map_err(|error| CliError::package_invalid(format!("catalog output failed: {error}")))
         }
-        "import-alas" | "drift-alas" => {
-            let alas_root = flags.required_path("--alas-root")?;
-            Ok(json!({
-                "repo": repo.display().to_string(),
-                "resource_root": resource_root.root.display().to_string(),
-                "resource_layout": resource_root.layout,
-                "alas_root": alas_root.display().to_string(),
-                "status": "reserved",
-                "command": sub
-            }))
-        }
-        // Workflow #411 RV-1 (O5): the stub answered `checked` without checking anything.
-        "check-release" => Err(CliError::new(
-            crate::ErrorKind::UsageValidation,
-            crate::codes::ActinglabCode::ResourceCheckReleaseRetired.as_str(),
-            "resource check-release is retired: it reported a check it never made; run \
-             resource verify, which checks the repository's commit as its CI does",
-            &[],
-        )),
+        // Workflow #434 LAB-2: the reserved `import-alas` and `drift-alas` and the retired
+        // `check-release` are gone; `verify` checks a repository commit.
         // Workflow #411 RV-1: one repository commit checked as its CI checks it.
         "verify" => crate::resource_verify::run_resource_verify(global, &flags),
         _ => Err(CliError::usage(format!("unknown resource command: {sub}"))),

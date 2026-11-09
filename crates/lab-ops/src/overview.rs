@@ -70,18 +70,17 @@ use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{Detail, IoOp, Outcome, RawSource};
 use actingcommand_contract::{
     APPLICATION_FOREGROUND_FACT_KEY, CONFIG_CATALOG_FACT_KEY, CONFIG_SELECTION_FACT_KEY,
-    ConfigCatalog, EventActor, EventSource, FactScalar, FactValue, InstalledProcess, InstanceId,
-    RuntimeControlPlaneStatus, RuntimeErrorCode, RuntimeFactRefreshStatus, RuntimeFactScope,
-    RuntimeFactSnapshot, RuntimeInstanceStatus, RuntimeMonitorInstanceStatus,
-    RuntimePerformanceStatus, RuntimeScheduleExplanation,
+    ConfigCatalog, FactScalar, FactValue, InstalledProcess, InstanceId, RuntimeControlPlaneStatus,
+    RuntimeErrorCode, RuntimeFactRefreshStatus, RuntimeFactScope, RuntimeFactSnapshot,
+    RuntimeInstanceStatus, RuntimeMonitorInstanceStatus, RuntimePerformanceStatus,
+    RuntimeScheduleExplanation,
 };
-use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
+use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError};
 use serde_json::{Map, Value, json};
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -1195,7 +1194,7 @@ pub fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>, Outcome> {
 /// Runs `overview`; `None` leaves every other command to the CLI, unchanged. One result line on
 /// stdout (Workflow #378 A5): the overview with `runtime_overview_reported`, or `{outcome}` with
 /// the failure (a flag failure's developer line adds the usage) and exit 1.
-pub fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
+pub fn dispatch(arguments: &[OsString]) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != "overview" {
         return None;
     }
@@ -1221,12 +1220,7 @@ fn run(arguments: &[OsString]) -> Result<Map<String, Value>, Failure> {
         state_root: Some(&state_root),
     };
     let detail = cli_line::detail().unwrap_or(Detail::Full);
-    let client = RuntimeClient::connect(RuntimeClientConfig::new(
-        &state_root,
-        actingcommand_runtime_client::RuntimeChannel::Cli,
-        EventActor::Cli,
-        EventSource::Cli,
-    ));
+    let client = RuntimeClient::connect(crate::front::client_config(&state_root));
     let connection = match &client {
         Ok(client) => Ok(client),
         Err(error) => Err(daemon_error(error, &state_root, detail)),
@@ -1975,12 +1969,7 @@ mod tests {
             "a read that answered warns nothing"
         );
 
-        let Err(error) = RuntimeClient::connect(RuntimeClientConfig::new(
-            "",
-            actingcommand_runtime_client::RuntimeChannel::Cli,
-            EventActor::Cli,
-            EventSource::Cli,
-        )) else {
+        let Err(error) = RuntimeClient::connect(crate::front::client_config("")) else {
             panic!("a client without a state root is refused before any I/O");
         };
         let mut unread = rows();

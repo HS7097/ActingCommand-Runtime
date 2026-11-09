@@ -43,19 +43,16 @@ use crate::material_export;
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{CodeStr, Outcome, RawSource};
 use actingcommand_contract::{
-    ArtifactKind, ArtifactProducer, ArtifactRedactionState, EventActor, EventPayload, EventQuery,
-    EventSource, EventType, FrameId, InputAction, InputSamplingEvidence, ProjectedEvent,
-    ProjectionPayload, ProjectionProfile, RecognizedTarget, RequestId, RunId, TaskPayload,
-    TaskSemanticFact,
+    ArtifactKind, ArtifactProducer, ArtifactRedactionState, EventPayload, EventQuery, EventType,
+    FrameId, InputAction, InputSamplingEvidence, ProjectedEvent, ProjectionPayload,
+    ProjectionProfile, RecognizedTarget, RequestId, RunId, TaskPayload, TaskSemanticFact,
 };
 use actingcommand_runtime_client::{
-    ContainedRunState, RunKey, RunStatusMode, RuntimeClient, RuntimeClientConfig,
-    RuntimeClientError,
+    ContainedRunState, RunKey, RunStatusMode, RuntimeClient, RuntimeClientError,
 };
 use serde_json::{Map, Value, json};
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
-use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 pub const COMMAND: &str = "run";
@@ -737,7 +734,7 @@ fn action_value(
 /// Runs `run evidence`; `None` leaves every other command to the CLI, unchanged. One result line
 /// on stdout (Workflow #378 A5): the evidence with `run_evidence_reported`, or `{outcome}` with
 /// the failure (an argument failure's developer line adds the usage) and exit 1.
-pub fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
+pub fn dispatch(arguments: &[OsString]) -> Option<cli_line::Exit> {
     if arguments.first()?.to_str()? != COMMAND || arguments.get(1)?.to_str()? != ACTION {
         return None;
     }
@@ -752,13 +749,8 @@ pub fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
 
 fn run(arguments: &[OsString]) -> Result<Map<String, Value>, Failure> {
     let (state_root, request) = parse(arguments)?;
-    let client = RuntimeClient::connect(RuntimeClientConfig::new(
-        state_root,
-        actingcommand_runtime_client::RuntimeChannel::Cli,
-        EventActor::Cli,
-        EventSource::Cli,
-    ))
-    .map_err(Failure::Runtime)?;
+    let client = RuntimeClient::connect(crate::front::client_config(state_root))
+        .map_err(Failure::Runtime)?;
     let evidence = read(&client, &request, Instant::now() + CLI_READ_BUDGET)?;
     Ok(cli_line::members(
         evidence.render(evidence.page_len()),

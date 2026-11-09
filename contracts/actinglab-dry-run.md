@@ -204,7 +204,7 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `resource compile-maa` | no_effect | | |
 | `resource` import route of the external-tool data (reserved) | no_effect | | reserved; one of the two inventory entries whose names the C2 genericity guard keeps out of `contracts/` |
 | `resource` drift route of the external-tool data (reserved) | no_effect | | reserved; the other such entry |
-| `resource check-release` | no_effect | | retired (Workflow #411 RV-1): always refused with `resource_check_release_retired` (exit 2), which names `resource verify` |
+| `resource check-release` | no_effect | | retired (Workflow #411 RV-1): refused with `resource_check_release_retired` (exit 2), which names `resource verify`, until 0.12.47; since then (Workflow #434 LAB-2) the word is gone and the code is retired |
 | `resource verify` | refused | `dry_run_unsupported` | flag parsing (Workflow #411 RV-1: it writes its work directory and report); no alternative |
 | `standard-pack check` | no_effect | | reads an installed game root only (Workflow #373 NAV-T) |
 | `standard-pack compose` | refused | `dry_run_unsupported` | flag parsing only (ROUT-L RL-1a: it writes a new directory); alternative `standard-pack check` |
