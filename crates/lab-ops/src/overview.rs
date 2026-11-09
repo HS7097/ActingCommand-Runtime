@@ -639,9 +639,10 @@ fn watchdog_block(place: &Place<'_>, envelope: &dyn Fn(&Outcome) -> Value) -> Va
 }
 
 /// Workflow #434 LAB-1: the reader of the `watchdog` block, `actingctl watchdog status` of an
-/// install root written with `envelope`. The watchdog stays in actingctl until LAB-4 moves it to
-/// `crates/watchdog`, so actingctl hands its reader over at its start ([`set_watchdog_block`]);
-/// on Windows only, where the watchdog runs, as before.
+/// install root written with `envelope`. Since LAB-4 the watchdog is `crates/watchdog`, which
+/// reads actingctl's codes from this crate and so cannot be linked by it: the program hands the
+/// crate's reader (`overview_block`) over at its start ([`set_watchdog_block`]); on Windows only,
+/// where the watchdog runs, as before.
 pub type WatchdogBlock = fn(&Path, &dyn Fn(&Outcome) -> Value) -> Value;
 
 static WATCHDOG_BLOCK: OnceLock<WatchdogBlock> = OnceLock::new();

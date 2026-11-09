@@ -232,7 +232,8 @@ actingcommand_contract::outcome_codes! {
         WatchdogLauncherMisplaced => "watchdog_launcher_misplaced": error / none,
         WatchdogLauncherLogUnavailable => "watchdog_launcher_log_unavailable": error / none,
         WatchdogLauncherWriterLockFailed => "watchdog_launcher_writer_lock_failed": error / none,
-        WatchdogLauncherSpawnFailed => "watchdog_launcher_spawn_failed": error / none,
+        // `watchdog_launcher_spawn_failed` is retired in 0.12.47 (Workflow #434 LAB-4): the
+        // launcher runs the tick itself, so no fixed entry can fail to run.
         // ---- Workflow #378 A5 (end)
         // ---- Workflow #421 INST-0 (begin): `actingctl install`, the command-line installer
         // (contracts/install-cli.md, "Outcome codes"). Folded by ruling 54 (#420 S4): one domain

@@ -134,9 +134,11 @@ the handle or terminating its process releases the OS occupancy.
 
 All six Runtime/Tools binary entrypoints take process-lifetime read occupancy,
 including direct slot entry. The watchdog launcher `actingwatch.exe` is the one
-exception: it reads no slot material and takes no slot occupancy; it only runs the
-fixed entry `<root>\runtime\actingctl.exe`, whose forwarded slot `actingctl.exe`
-takes it. An `InstalledProcess` clone retains shared occupancy
+exception: it takes no process-lifetime occupancy. Since Workflow #434 LAB-4 it no
+longer runs the fixed entry `<root>\runtime\actingctl.exe`: it runs the watchdog's
+tick itself, reads the selection `install\active.json` and the configuration it
+names itself, and on an A/B root holds the selected slot's shared occupancy for the
+tick only, as actingctl's tick did. An `InstalledProcess` clone retains shared occupancy
 with its immutable inputs. MCP children receive the same snapshot and acquire
 their own occupancy for their full process lifetimes, including after MCP exits.
 UI and stable forwarding consumers use this same contract. acsetup must also
@@ -501,12 +503,16 @@ lists what else needs a look (the task missing, disabled or different, an owner 
 held 10 minutes without an answering owner, a failed last start, repeated restarts,
 a formal close no log covers), without changing the exit. `run-once` is one tick;
 run by hand it starts the Runtime through WMI with a hidden window. The task runs
-`<root>\tools\actingwatch.exe` every minute, a GUI-subsystem launcher that opens no
-window and runs `<root>\runtime\actingctl.exe watchdog run-once --root <root>
---from-task` hidden. The launcher exits 1 with its own code when it is not at
-`<root>\tools\actingwatch.exe`, when `<root>\watchdog\` is missing, when the fixed
-entry cannot run and when the writer lock cannot be probed; otherwise it returns the
-tick's code. While acsetup holds the writer lock it does nothing. The
+`<root>\tools\actingwatch.exe` every minute, a GUI-subsystem program that opens no
+window and, since Workflow #434 LAB-4, runs the tick itself (`run-once --root <root>
+--from-task`, in its own process; it no longer starts `<root>\runtime\actingctl.exe`).
+It exits 1 with its own code when it is not at `<root>\tools\actingwatch.exe`, when
+`<root>\watchdog\` is missing and when the writer lock cannot be probed; otherwise it
+returns the tick's code. `<root>\tools\actingwatch.exe status|install|uninstall`
+answers as `actingctl watchdog <word> --root <root>` for its own root; started from a
+console it prints there, but the console does not wait for it: use `start /wait ""
+<root>\tools\actingwatch.exe status` in cmd and read `%ERRORLEVEL%`. While acsetup
+holds the writer lock the task's tick does nothing. The
 other way round, the launcher holds that lock shared for its tick (about a second;
 up to three minutes while a start waits for readiness): an acsetup run that begins
 then stops at once with "Installation/configuration writer is occupied" and changes

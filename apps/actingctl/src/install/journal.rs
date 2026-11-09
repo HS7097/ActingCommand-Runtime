@@ -8,17 +8,19 @@
 
 use super::files;
 use super::host::{Host, Installer};
-use super::state::{self, Current, CurrentState, InstallState, OperationKind, Paths};
+use super::state::{self, Current, CurrentState, InstallState, KindLocation, OperationKind, Paths};
 use crate::codes::{ActingctlCode, InstallLocation, InstallRefusal};
 use actingcommand_contract::outcome::{Detail, Outcome, OutcomeEnvelope};
+// Workflow #434 LAB-4: the operation id's form (`op-<unix_ms>`) moved to `crates/watchdog` with
+// `current.json`, which watchdog row 7a″ reads; `operation_ms` is named here as before.
+use actingcommand_watchdog::install_state::OPERATION_PREFIX;
+pub(crate) use actingcommand_watchdog::install_state::operation_ms;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
 
 pub(crate) const OPERATION_SCHEMA: &str = "actingcommand.install-operation.v1";
-/// The prefix of an operation id, `op-<unix_ms>`.
-const OPERATION_PREFIX: &str = "op-";
 
 /// The kind of a journalled step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -161,15 +163,6 @@ pub(crate) struct Operation<'h> {
 /// `op-<ms>`.
 pub(crate) fn operation_id(ms: u64) -> String {
     format!("{OPERATION_PREFIX}{ms}")
-}
-
-/// The Unix milliseconds an operation id names; `None` for anything else.
-pub(crate) fn operation_ms(operation_id: &str) -> Option<u64> {
-    let digits = operation_id.strip_prefix(OPERATION_PREFIX)?;
-    if digits.is_empty() || digits.len() > 20 || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    digits.parse().ok()
 }
 
 /// The refusal `operation_unfinished` of the command `operation` for the operation

@@ -1112,6 +1112,15 @@ single-location and nothing here runs on it.
   line, the adb pin, `entry_protocol` and the generation folder, the entries' `install-selection`
   range). Candidate Tools whose `platform-tools` bytes differ from the root's refuse
   `platform_tools_changed`: changing adb is a planned event, and Tools never stops the adb server.
+- **`tools\actingwatch.exe` since Workflow #434 LAB-4.** It no longer speaks only through a command
+  line: it runs the watchdog's tick itself, so it reads the selection (`install\active.json`) and
+  the configuration it names itself and sends the Runtime `Health`
+  ([runtime-watchdog.md](runtime-watchdog.md), "Launcher"). A root-fixed actingwatch that only
+  moves forward therefore meets an older Runtime's slot after a rollback: R-15c/d (the A/B root)
+  must add a version-range check for it (the `install-selection`, `actingd-config` and
+  `runtime-client` ranges it speaks against the selected slot's) before an A/B root runs it. Today
+  no A/B root is in use, and a single-location root replaces `runtime\` and `tools\` together, so
+  actingwatch and the Runtime it watches come from one release: no interface revision now.
 
 ### Install selection v2 and the slot document (design §2.3 to §2.6)
 

@@ -18,14 +18,14 @@ use std::time::Duration;
 
 use super::powershell::CREATE_NO_WINDOW;
 
-pub(crate) const INTERVAL: &str = "PT1M";
-pub(crate) const LOGON_TYPE: &str = "InteractiveToken";
-pub(crate) const RUN_LEVEL: &str = "LeastPrivilege";
-pub(crate) const TASK_XML: &str = "task.xml";
+pub const INTERVAL: &str = "PT1M";
+pub const LOGON_TYPE: &str = "InteractiveToken";
+pub const RUN_LEVEL: &str = "LeastPrivilege";
+pub const TASK_XML: &str = "task.xml";
 
 /// `ActingCommand Runtime watchdog <fp12>` in the root folder `\`: the first 12 hex digits of
 /// SHA-256 over the plain install root without trailing separators, lowercased.
-pub(crate) fn task_name(root_plain: &Path) -> String {
+pub fn task_name(root_plain: &Path) -> String {
     let root = root_plain.to_string_lossy();
     let digest = Sha256::digest(root.trim_end_matches(['\\', '/']).to_lowercase().as_bytes());
     let fingerprint = digest
@@ -36,7 +36,7 @@ pub(crate) fn task_name(root_plain: &Path) -> String {
     format!("ActingCommand Runtime watchdog {fingerprint}")
 }
 
-pub(crate) fn launcher(root_plain: &Path) -> PathBuf {
+pub fn launcher(root_plain: &Path) -> PathBuf {
     root_plain.join("tools").join("actingwatch.exe")
 }
 
@@ -89,7 +89,7 @@ fn decode(bytes: &[u8]) -> String {
 
 /// The current user's SID, the task's principal; `watchdog_user_unavailable` caused by
 /// `whoami`'s failure, or by what it printed when that holds no SID.
-pub(crate) fn current_user_sid() -> Result<String, Outcome> {
+pub fn current_user_sid() -> Result<String, Outcome> {
     let unavailable = || Outcome::new(ActingctlCode::WatchdogUserUnavailable);
     let output = run(
         "whoami.exe",
@@ -147,7 +147,7 @@ fn unescape(text: &str) -> String {
 /// `start_boundary` repeating every minute without end, the user's interactive token at the
 /// least privilege, no new instance while one runs, five minutes at most, no battery stops,
 /// no restart on failure, visible in Task Scheduler.
-pub(crate) fn definition_xml(root_plain: &Path, user_sid: &str, start_boundary: &str) -> String {
+pub fn definition_xml(root_plain: &Path, user_sid: &str, start_boundary: &str) -> String {
     let root = escape(&root_plain.display().to_string());
     let command = escape(&launcher(root_plain).display().to_string());
     let user = escape(user_sid);
@@ -206,7 +206,7 @@ pub(crate) fn definition_xml(root_plain: &Path, user_sid: &str, start_boundary: 
 }
 
 /// UTF-16LE with a byte order mark, matching the declared `encoding="UTF-16"`.
-pub(crate) fn utf16le_with_bom(text: &str) -> Vec<u8> {
+pub fn utf16le_with_bom(text: &str) -> Vec<u8> {
     let mut bytes = vec![0xff, 0xfe];
     bytes.extend(text.encode_utf16().flat_map(u16::to_le_bytes));
     bytes
@@ -214,7 +214,7 @@ pub(crate) fn utf16le_with_bom(text: &str) -> Vec<u8> {
 
 /// `schtasks /Create`; a failure is `watchdog_task_register_failed` (`name`) caused by
 /// schtasks' failure.
-pub(crate) fn register(name: &str, xml: &Path) -> Result<(), Outcome> {
+pub fn register(name: &str, xml: &Path) -> Result<(), Outcome> {
     let failed = || Outcome::new(ActingctlCode::WatchdogTaskRegisterFailed).name(name);
     let output = run(
         "schtasks.exe",
@@ -237,7 +237,7 @@ pub(crate) fn register(name: &str, xml: &Path) -> Result<(), Outcome> {
 
 /// `schtasks /Delete`; a failure is `watchdog_task_delete_failed` (`name`) caused by
 /// schtasks' failure.
-pub(crate) fn delete(name: &str) -> Result<(), Outcome> {
+pub fn delete(name: &str) -> Result<(), Outcome> {
     let failed = || Outcome::new(ActingctlCode::WatchdogTaskDeleteFailed).name(name);
     let output = run(
         "schtasks.exe",
@@ -253,26 +253,26 @@ pub(crate) fn delete(name: &str) -> Result<(), Outcome> {
 
 /// The parts of a registered definition the watchdog depends on.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Definition {
-    pub(crate) command: Option<String>,
-    pub(crate) interval: Option<String>,
-    pub(crate) logon_type: Option<String>,
-    pub(crate) run_level: Option<String>,
+pub struct Definition {
+    pub command: Option<String>,
+    pub interval: Option<String>,
+    pub logon_type: Option<String>,
+    pub run_level: Option<String>,
     /// No `<Enabled>false</Enabled>` in the task or its trigger.
-    pub(crate) enabled: bool,
+    pub enabled: bool,
 }
 
 /// The run state Task Scheduler reports, read through the ScheduledTasks module.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct RunState {
+pub struct RunState {
     /// `Ready`, `Running`, `Disabled`, … (the enum's name, not a localised text).
-    pub(crate) state: Option<String>,
-    pub(crate) last_run_time: Option<String>,
-    pub(crate) last_result: Option<u64>,
-    pub(crate) next_run_time: Option<String>,
+    pub state: Option<String>,
+    pub last_run_time: Option<String>,
+    pub last_result: Option<u64>,
+    pub next_run_time: Option<String>,
 }
 
-pub(crate) enum Registration {
+pub enum Registration {
     Absent,
     Present(Definition, RunState),
 }
@@ -282,7 +282,7 @@ pub(crate) enum Registration {
 /// state (`Get-ScheduledTaskInfo`). `schtasks /Query` would print in the console code page.
 /// The names of every other watchdog task in the root folder come along, for `uninstall`.
 /// Every failure is `watchdog_task_query_failed`.
-pub(crate) fn query(name: &str) -> Result<(Registration, Vec<String>), Outcome> {
+pub fn query(name: &str) -> Result<(Registration, Vec<String>), Outcome> {
     const SCRIPT: &str = "$ErrorActionPreference = 'Stop'\n\
         $ProgressPreference = 'SilentlyContinue'\n\
         $all = @(Get-ScheduledTask -TaskPath '\\' -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like 'ActingCommand Runtime watchdog *' })\n\
@@ -310,7 +310,7 @@ pub(crate) fn query(name: &str) -> Result<(Registration, Vec<String>), Outcome> 
 
 /// The query's answer; output that is not JSON is `watchdog_task_query_failed` caused by the
 /// parser's message, output without `exists` (or a task without `xml`) the code alone.
-pub(crate) fn parse_query(output: &str) -> Result<(Registration, Vec<String>), Outcome> {
+pub fn parse_query(output: &str) -> Result<(Registration, Vec<String>), Outcome> {
     let unreadable = || Outcome::new(ActingctlCode::WatchdogTaskQueryFailed);
     let value: Value = serde_json::from_str(output.trim())
         .map_err(|error| unreadable().caused_by(json_failure(&error)))?;
@@ -344,11 +344,11 @@ pub(crate) fn parse_query(output: &str) -> Result<(Registration, Vec<String>), O
 
 /// `schtasks /End`: ends a tick in flight. Its exit code is reported, not judged: a task that
 /// is not running answers non-zero. A schtasks that did not run is the OS's failure.
-pub(crate) fn end(name: &str) -> Result<Option<i32>, Outcome> {
+pub fn end(name: &str) -> Result<Option<i32>, Outcome> {
     run("schtasks.exe", &["/End", "/TN", name].map(OsStr::new)).map(|output| output.status.code())
 }
 
-pub(crate) fn parse_definition(xml: &str) -> Definition {
+pub fn parse_definition(xml: &str) -> Definition {
     Definition {
         command: element(xml, "Command"),
         interval: element(xml, "Interval"),
@@ -368,7 +368,7 @@ fn element(xml: &str, tag: &str) -> Option<String> {
 /// What differs from the definition `install` writes, as the names of the members that differ
 /// (`command`, `interval`, `logon_type`, `run_level`, `disabled`); empty when it matches. The
 /// values themselves are the definition's members.
-pub(crate) fn mismatches(definition: &Definition, root_plain: &Path) -> Vec<&'static str> {
+pub fn mismatches(definition: &Definition, root_plain: &Path) -> Vec<&'static str> {
     let expected = launcher(root_plain).display().to_string();
     let mut differences = Vec::new();
     if !definition

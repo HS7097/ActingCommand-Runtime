@@ -11911,6 +11911,8 @@
     "outcome-guard": "tools/outcome-guard",
     "display-adapter": "crates/display-adapter",
     "mcp-entry": "apps/mcp-entry",
-    "actingcommand-entry": "apps/actingcommand-entry"
+    "actingcommand-entry": "apps/actingcommand-entry",
+    "watchdog": "crates/watchdog",
+    "actingwatch": "apps/actingwatch"
   }
 }

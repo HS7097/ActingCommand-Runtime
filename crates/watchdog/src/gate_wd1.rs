@@ -14,7 +14,9 @@
 //   --config <root>\actingd.config.json` in `<root>`, and its record names no generation;
 // - req. 4: report v2 carries `layout` and `config`, with null `generation` and `slot`;
 // - req. 5: `install` on a single root passes the layout precondition and keeps the launcher's;
-// - req. 6: `actingctl start` / `restart` without `--config` still need an A/B selection;
+// - req. 6: `actingctl start` / `restart` without `--config` still need an A/B selection (its
+//   test, `wd1_start_without_config_still_needs_an_ab_selection`, stays with actingctl's `start`
+//   in `apps/actingctl/src/gate_wd1_start.rs` since Workflow #434 LAB-4);
 // - coordinator decision 5 of 2026-10-18: a deploy that holds `install\writer.lock` exclusively
 //   while it replaces `runtime\` is row 7a: nothing starts.
 // The machine is a fake on the APPS-I3 seams (`start::TickSeams`), as in `gate_382_a4`; a live
@@ -45,8 +47,6 @@ const DAY_MS: u64 = 24 * HOUR_MS;
 // The owner the started Runtime answers as.
 const STARTED_PID: u32 = 4242;
 const STARTED_EPOCH: &str = "epoch_started";
-// `actingctl start`'s developer hint for a root without a selection.
-const NO_SELECTION_HINT: &str = "pass --config <file> to start a root without one";
 
 // Req. 1 and 4: the root resolves as single, with `<root>\actingd.config.json` and the state root
 // that config names; the report of a tick on it says `layout` single and that `config`, and its
@@ -280,25 +280,6 @@ fn wd1_a_root_with_neither_marker_stays_layout_unknown_and_ab_wins_over_single()
             .join("actingd.config.json")
     );
     assert_eq!(installation.state_root, selected_state);
-}
-
-// Req. 6: `actingctl start` (and `restart`) without `--config` on a single-location root keep
-// today's refusal: `watchdog_layout_unknown` with the root as `path` and the hint to pass
-// `--config`.
-#[test]
-fn wd1_start_without_config_still_needs_an_ab_selection() {
-    let single = SingleRoot::new();
-
-    let failed = crate::runtime_start::ab_installation(&single.root)
-        .err()
-        .expect("start without --config refuses a single-location root");
-
-    assert_eq!(failed.outcome.code().as_str(), "watchdog_layout_unknown");
-    assert_eq!(
-        failed.outcome.value("path"),
-        Some(&json!(text(&single.plain)))
-    );
-    assert_eq!(failed.text.as_deref(), Some(NO_SELECTION_HINT));
 }
 
 // Coordinator decision 5 of 2026-10-18 (contract "Observation" item 5, row 7a): a deploy script
