@@ -7901,7 +7901,7 @@ catalog, and no live revision raised.
 |---|---|---|---|---|---|---|
 | LAB-0 | Runtime, contracts only | S | the contract, the table v1, the planned rows, this section | — | none | none |
 | LAB-1 | Runtime | L | `crates/lab-ops`: the operation table read from `lab-operations.json`, the default location (contract §9.3), the initiator type (contract §4); actingctl's read and write modules moved in (`overview`, `events`, `run_list`, `run_evidence`, `diagnose`, `facts`, `schedule`, `perf_preset`, `routine_summary`, `remedy`, `devices`, `packs`, `code_lookup`, `capability_gap`, `evidence_read`, `observe_export`) | LAB-0 | `lab_ops_table_complete` (contract §9.2); `lab_ops_locate_defaults`: on a fake installed root, without a root or a state root given, the layer finds both | none |
-| LAB-2 | Runtime | M | the CLI module: short words, output for people, `--json`; `actinglab serve --stdio`; actinglab's debugging and authoring commands on the table; its retired and reserved command words deleted | LAB-1 | `cli_json_matches_op_output`, `cli_short_words_parse`, `serve_answers_same_as_cli` | none |
+| LAB-2 | Runtime | M | the CLI module: short words, output for people, `--json`; `actinglab serve --stdio`; actinglab's debugging and authoring commands on the table; its retired and reserved command words deleted; the CLI app prints the result and developer lines and `lab-ops` returns them, and the `STDERR_ALLOW_LIST` entry for `crates/lab-ops/src/cli_line.rs` (LAB-1) goes; actinglab registers the overview's watchdog block (`overview::set_watchdog_block`) as actingctl does, unless LAB-4 has merged first (without it the block is null) | LAB-1 | `cli_json_matches_op_output`, `cli_short_words_parse`, `serve_answers_same_as_cli` | none |
 | LAB-3 | Runtime | L | the rescue and installation module; `deploy`, `config replace`, `place`, `alive`; the journal's `initiator`; the confirmation parameters gone and `unlock` without one (contract §5); guards that report and `--ack-guard` gone (contract §6, §7 Q4) | LAB-1 | `rescue_without_actingd`: without `runtime-info.json`, `op status`, `up` and `rollback` go through. `irreversible_journal_initiator`: the journals of `deploy`, `rollback`, `clean` and `config replace` carry the initiator, and a confirmation parameter (`--accept-ledger-one-way`, `--ui-confirmed`, `--ack-guard`) is `actingctl_usage_invalid` (`unknown`), the code renamed with LAB-7. `deploy_steps_in_order`: on fake seams, stage → plan → stop → apply → start → alive → release | none: `actingctl install` keeps the `install-cli` 1 face |
 | LAB-4 | Runtime | M | `crates/watchdog`; `actingwatch.exe` with its own tick, `status`, `install` and `uninstall` | — | the watchdog's existing gate tests move with the code (paths only, each listed); `actingwatch_tick_in_process` | none |
 | LAB-5 | Runtime | M | `actinglab-mcp.exe`: tools generated from the table, no tiers; the MCP entry `g2` | LAB-1, LAB-3 | `mcp_tools_from_op_table`: `tools/list` equals the installed modules' operations, with the CLI's parameters. `mcp_entry_g2_child`: the entry starts actinglab-mcp and passes `--client` down | the MCP entry's `entry_protocol` 2 |
@@ -7990,7 +7990,11 @@ the moved files, 27 of them gate map names, each new name in its old row and eac
 `actinglab-architecture`'s `c3b_client_device_authority_stays_behind_runtime` (also reads
 `crates/lab-ops/src`, and checks the new crate's production dependencies as actingctl's) and
 `rd1b_t10_export_archive_and_diagnostics_never_read_the_private_bindings` (the binding writer is
-`crates/lab-ops/src/devices.rs`).
+`crates/lab-ops/src/devices.rs`). `runtime_domain_never_writes_stderr` gains one
+`STDERR_ALLOW_LIST` entry, `crates/lab-ops/src/cli_line.rs` (coordinator's ruling): actingctl's
+developer line (`developer_line`) moved unchanged with `cli_line`, every moved command prints
+through it, and taking that printing out of `lab-ops` is LAB-2's CLI module, which removes the
+entry.
 
 **Interface.** None: `actingd-config` 27, `ledger` 7, `runtime-client` 6, `package` 7,
 `runtime-outcomes` 1. No code, key, location or vocabulary token is added.

@@ -6,7 +6,7 @@
 //! (every row without an instance), verbatim, and every member it shows is a code, an id or a
 //! hash, never a sentence.
 
-use super::super::runs::Diagnosis;
+use super::super::runs::{Diagnosis, render_within_budget};
 use super::super::tools::ToolError;
 use crate::diagnose::pack_rows;
 use serde_json::{Value, json};
@@ -102,12 +102,11 @@ fn sr3_t13_ac_diagnose_carries_the_instances_suspended_packages_as_codes_and_ids
         "every suspended package without an instance"
     );
 
-    let result = diagnosis(kept)
-        .render_within_budget(|_| -> Result<Value, ToolError> {
-            Ok(json!({"events": [], "more": false, "snapshot_ledger_position": 121_000}))
-        })
-        .unwrap_or_else(|error| panic!("ac_diagnose rendering: {}", error.to_value()))
-        .result;
+    let result = render_within_budget(&diagnosis(kept), |_| -> Result<Value, ToolError> {
+        Ok(json!({"events": [], "more": false, "snapshot_ledger_position": 121_000}))
+    })
+    .unwrap_or_else(|error| panic!("ac_diagnose rendering: {}", error.to_value()))
+    .result;
     assert_eq!(result["packs"], json!([ours]), "{result:#}");
     let mut found = Vec::new();
     strings(&result["packs"], &mut found);

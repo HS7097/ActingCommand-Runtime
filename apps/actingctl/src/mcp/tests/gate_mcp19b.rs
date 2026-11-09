@@ -13,7 +13,7 @@
 //!   diagnosis is incomplete and has no `not_run`.
 
 use super::super::protocol::Era;
-use super::super::runs::Diagnosis;
+use super::super::runs::{Diagnosis, render_within_budget};
 use super::super::schedule::{cut_to_fit, within_budget};
 use super::super::tools::{ToolError, ToolSuccess, call_result};
 use crate::schedule::{self, DIAGNOSE_ROWS_KEY};
@@ -274,7 +274,7 @@ pub(super) fn render(
 ) -> ToolSuccess {
     let mut warnings = Vec::new();
     let not_run = schedule::not_run(Ok(explanation.clone()), Ok(facts), &mut warnings);
-    Diagnosis {
+    let diagnosis = Diagnosis {
         instance: Value::Null,
         since: EVALUATED_AT - 24 * HOUR_MS,
         incomplete: false,
@@ -301,8 +301,8 @@ pub(super) fn render(
         failures_grouped: Vec::new(),
         not_run,
         warnings,
-    }
-    .render_within_budget(|_| -> Result<Value, ToolError> {
+    };
+    render_within_budget(&diagnosis, |_| -> Result<Value, ToolError> {
         Ok(json!({"events": [], "more": false, "snapshot_ledger_position": 121_000}))
     })
     .unwrap_or_else(|error| panic!("ac_diagnose rendering: {}", error.to_value()))
