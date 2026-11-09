@@ -1,0 +1,9 @@
+{
+  "schema_version": "actingcommand.outcome-codes.release.v2",
+  "release": "0.12.47",
+  "codes": {
+    "resource_check_release_retired": {"category": "error", "ladder_class": "none", "review": "pending", "status": "retired", "values": {}},
+    "watchdog_launcher_spawn_failed": {"category": "error", "ladder_class": "none", "review": "pending", "status": "retired", "values": {}}
+  },
+  "locations": {}
+}

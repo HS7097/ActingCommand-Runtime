@@ -27,7 +27,7 @@ ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在安卓模拟�
 | 仓库 | 角色 |
 | --- | --- |
 | [HS7097/ActingCommand](https://github.com/HS7097/ActingCommand) | 伞仓（门面页）：项目族 README、智能体操作手册 `skills/actingcommand/`，以及 Releases 页上的安装向导、各成员发布与可用标准包 |
-| [HS7097/ActingCommand-Runtime](https://github.com/HS7097/ActingCommand-Runtime) | 本仓：常驻运行时（守护进程、命令行、MCP 服务、账本、设备后端）与 Tools（Lab、账本读取器、检查程序、看门狗启动器） |
+| [HS7097/ActingCommand-Runtime](https://github.com/HS7097/ActingCommand-Runtime) | 本仓：常驻运行时（守护进程、命令行、MCP 服务、账本、设备后端）与 Tools（Lab、账本读取器、检查程序、看门狗） |
 | [HS7097/ActingCommand-UI](https://github.com/HS7097/ActingCommand-UI) | 安装向导与监控台，只经运行时 API 与运行时通信 |
 
 各组件各自发版，只在自身有变化时发。能否搭配看各自声明的接口修订（`distribution/windows/component-interfaces.json`、`contracts/component-interfaces.md`），不看版本号是否一致。版本号规则：X 重大或不兼容 . Y 新特性或新覆盖面 . Z 修复（含为修复服务的特性）。
@@ -39,7 +39,7 @@ ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在安卓模拟�
 | zip | 布局 | 内容 |
 | --- | --- | --- |
 | `actingcommand-runtime-<sha>.zip` | `distribution-v1` | `actingcommand-actingd.exe`、`actingctl.exe`、`actingd.config.example.json`、`actingd.defaults.json`（程序内嵌的默认值；配置里只写要改的键）、`INSTALL.md`、`RELEASE-NOTES.md` |
-| `actingcommand-tools-<sha>.zip` | `platform-tools-v3` | `actinglab.exe`、`actingledger.exe`、`actingcommand-vision-provider-check.exe`、看门狗启动器 `actingwatch.exe`，以及 `platform-tools/` 下 Google 官方 Android platform-tools 37.0.1（`adb.exe`、`AdbWinApi.dll`、`AdbWinUsbApi.dll`、`NOTICE.txt`、`source.properties`） |
+| `actingcommand-tools-<sha>.zip` | `platform-tools-v3` | `actinglab.exe`、`actingledger.exe`、`actingcommand-vision-provider-check.exe`、看门狗 `actingwatch.exe`（v0.12.47 起自己跑看门狗的 tick），以及 `platform-tools/` 下 Google 官方 Android platform-tools 37.0.1（`adb.exe`、`AdbWinApi.dll`、`AdbWinUsbApi.dll`、`NOTICE.txt`、`source.properties`） |
 
 视觉模型与 ONNX Runtime 从不随发布：OCR/NN 引擎链接进 `actingcommand-actingd.exe`，模型从 `<vision root>\models\<model_ref>\` 读取；没有模型时，需要 OCR 的识别目标会明确失败。`actingcommand-actingd.exe` 还带着官方 scrcpy server 5.0.1 与 OpenH264，供真机截图后端使用；它们的许可声明在 RELEASE-NOTES.md 里。
 
@@ -142,27 +142,28 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 
 守卫套件位于 `tools/actinglab-architecture/tests/workspace_guards.rs`。Lab 检查保留私有模块归属、helper 可见性和生产调用路径；导入名称解析由 Rust 编译检查承担。具名守卫包括 `c2_runtime_code_contracts_defaults_and_fixtures_are_project_neutral`、`r2f_product_and_authoring_paths_have_no_builtin_game_identity`（中立性扫描）、`workspace_packages_do_not_depend_on_apps`、`contract_dependencies_stay_within_budget`、`actingcommand_contract_has_no_dependency_path_to_actingcommand_ledger`、`all_non_lab_packages_remain_lab_free_with_all_features`、`production_packages_cannot_reach_resource_tooling`、`dependency_metadata_requests_all_features`、`feature_gated_forbidden_dependency_paths_are_detected`。
 
-仓库根的 `ratchet/` 里只有一个棘轮文件：`actinglab_commands.json`（schema `actingcommand.command-inventory.v1`，50 个顶层分派臂 / 142 条命令 / 8 项流水线豁免），由守卫测试 `command_inventory_matches_checked_in_snapshot` 读取。
+仓库根的 `ratchet/` 里只有一个棘轮文件：`actinglab_commands.json`（schema `actingcommand.command-inventory.v1`，46 个顶层分派臂 / 102 条命令 / 3 项流水线豁免），由守卫测试 `command_inventory_matches_checked_in_snapshot` 读取。
 
 共四个工作流：三个 CI 工作流与按需的 `release.yml`。`ci.yml` 在 windows-latest 上运行 `lint` 作业（格式、locked workspace build 和 Clippy `-D warnings`）与七个模块测试作业（`light`、`exec-core`、`exec-tooling`、`ledger`、`host-lab`、`runtime-client`、`apps`）；每个 workspace 成员恰好属于其中一个，由架构守卫 `gate_ci_jobs_cover_every_member` 检查。PR 上，ubuntu 的汇总作业 `gate`（检查名 `rust`）只在这八个作业全绿时通过；推送 `main` 只跑存依赖缓存的五个作业（`lint`、`light`、`exec-core`、`exec-tooling`、`apps`）。`runtime-client` 先跑默认特性，再以 `test-observation` 特性跑 recorder 测试与只在该特性下的轨迹断言。`light` 作业另跑 `outcome-guard merge`，把合并后的码目录上传为 `outcome-codes-<sha>`。`ci/flaky-tests.toml` 里登记的不稳定测试在模块作业里略过，由不挡合并的 `flaky` 作业各跑一次；主线上这张表是空的，也不靠重跑把不稳定测试转绿。`commit-identity-guard.yml` 在 ubuntu-latest 上要求推送或 PR 范围内每个提交的 author **与** committer 邮箱都落在本项目自身身份的精确白名单内（项目三个 GitHub 账号的 noreply 形式、一个注册邮箱地址，以及 GitHub 网页端提交者 `noreply@github.com`），否则失败；`windows-remote-build.yml` 解析并复核一个 40 位小写 SHA，随后 `cargo build --locked --release --target x86_64-pc-windows-msvc`，产出带 `BUILD-MANIFEST.json` 的 Runtime 与 Tools 两份构件；它还用全新的状态根把构建出的 actingd 起停一次（启动冒烟），发布时缺了该版本的结果码快照就停下。它在 PR、推送 `stable`、手动派发与被 `release.yml` 调用时运行，推送 `main` 不触发。`release.yml` 只在手动启动时运行（Actions → release → Run workflow，或 `gh workflow run release.yml -f bump=patch|minor|major [-f version=X.Y.Z] [-f source_sha=<sha>] [-f prerelease=true] [-f dry_run=true]`）：按本仓 Releases 算出下一个 `vX.Y.Z`，对选定的 `main` 提交调用 `windows-remote-build.yml`，把两份构件打成 zip 连同 `SHA256SUMS` 发布为 Release，tag 建在该提交上；勾选 `prerelease`（`-rc.N` 版本总是如此）时发为预发布，不标为 Latest。版本号只存在于 Release 的 tag。
 
 ## Workspace 成员
 
-工作区声明 36 个成员，resolver `3`，工作区声明 edition 2024，全部 `publish = false`。
+工作区声明 38 个成员，resolver `3`，工作区声明 edition 2024，全部 `publish = false`。
 
-### apps（7）
+### apps（8）
 
 | 路径 | 包 | 产物 | 职责 |
 | --- | --- | --- | --- |
 | apps/actingcommand-entry | actingcommand-entry | lib | A/B 安装根固定入口的结果码（`contracts/stable-entry.md`）；两个入口程序加入之前只是放这些码的库 |
-| apps/actingctl | actingcommand-actingctl | bin `actingctl`、`actingwatch` | 面向 correlation 作用域运行时流程的精简生产命令行，以及 MCP 服务（`mcp-serve`、`mcp-config`）与看门狗；`actingwatch` 是看门狗计划任务运行的无窗口启动器 |
+| apps/actingctl | actingcommand-actingctl | bin `actingctl` | 面向 correlation 作用域运行时流程的精简生产命令行，以及 MCP 服务（`mcp-serve`、`mcp-config`）与看门狗的命令（`watchdog …`，取自 `crates/watchdog`） |
 | apps/actingd | actingcommand-actingd | bin `actingcommand-actingd` | 常驻运行时的精简进程适配器 |
-| apps/actinglab | actingcommand-actinglab | bin `actinglab` | 创作与调试侧命令行，50 个顶层分派臂、142 条命令 |
+| apps/actinglab | actingcommand-actinglab | bin `actinglab` | 创作与调试侧命令行，46 个顶层分派臂、102 条命令；它的 CLI 模块用操作表的短词回答从 actingctl 来的操作，`actinglab serve --stdio` 每行答一个 `{op, params}`（Workflow #434 LAB-2） |
+| apps/actingwatch | actingcommand-actingwatch | bin `actingwatch` | 看门狗计划任务从 `<root>\tools\` 运行的无窗口程序：用 `crates/watchdog` 自己跑看门狗的 tick（Workflow #434 LAB-4），并为它所在的根回答 `status`、`install`、`uninstall` |
 | apps/ledger-forensics | actingledger | lib + bin `actingledger` | 账本取证报告、重放与签名目录的只读前端 |
 | apps/mcp-entry | actingcommand-mcp-entry | bin `actingcommand-mcp-entry` | 所有客户端共用的稳定 MCP 入口（随 Tools 发布）：把 JSON-RPC 转给当前的 `actingctl mcp-serve`，并在两次调用之间切到已安装的版本 |
 | apps/vision-provider-check | actingcommand-vision-provider-check | bin | 列出视觉模型文件夹及其内容身份，并从 Runtime 账本读取提供者启动事实；不加载任何模型 |
 
-### crates（26）
+### crates（27）
 
 | 路径 | 包 | 职责 |
 | --- | --- | --- |
@@ -174,7 +175,7 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 | crates/execution-kernel | actingcommand-execution-kernel | 守护进程拥有的执行会话与纯任务/探测决策规划 |
 | crates/host-metrics | actingcommand-host-metrics | 平台性能计数器的安全边界（仅 cfg(windows) 依赖 windows-sys） |
 | crates/lab | actingcommand-lab | 可选的创作与调试适配层；排除后生产仍可构建可运行 |
-| crates/lab-ops | actingcommand-lab-ops | Lab 的操作层（Workflow #434 LAB-1）：把操作表 `contracts/lab-operations.json` 读成带类型的行、发起者的词和默认位置，以及 actingctl 的读写模块，actingctl 从这里调用、行为不变 |
+| crates/lab-ops | actingcommand-lab-ops | Lab 的操作层（Workflow #434 LAB-1、LAB-1b）：把操作表 `contracts/lab-operations.json` 读成带类型的行、发起者的词和默认位置，以及每个核心操作的代码（发请求、整理回答），actingctl、它的 MCP 服务和 actinglab 的 CLI 模块都从这里调用 |
 | crates/ledger | actingcommand-ledger | 全局运行时事件账本的可恢复单写者存储 |
 | crates/ledger-forensics | actingcommand-ledger-forensics | 基于 GlobalLedger 与已验证证据归档的只读取证 |
 | crates/onnx-provider-support | actingcommand-onnx-provider-support | 引擎侧 ORT 生命周期：幂等初始化、可取消看门狗 |
@@ -192,6 +193,7 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 | crates/scheduler | actingcommand-scheduler | 按实例的写入准入、租约生命周期与围栏权限 |
 | crates/selection-policy | actingcommand-selection-policy | 纯选择策略求值器：输入声明文档、有界候选与显式事实，输出确定性选择及理由；另带离线调试 bin `selection-eval` |
 | crates/vision-ffi | actingcommand-vision-ffi | 进程内 OCR/NN 引擎的边界类型、模型文件夹规则与加载器契约 |
+| crates/watchdog | actingcommand-watchdog | Runtime 的看门狗（Workflow #434 LAB-4；只在 Windows 上）：观察和判定、启动、`state.json`、`watchdog.log` 和计划任务，由 `actingwatch.exe` 的 tick 和 `actingctl watchdog …` 运行 |
 
 ### providers（1）
 
@@ -235,7 +237,7 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 
 **稳定入口（v0.12.18）。** 单一位置安装下，所有客户端（Claude Code、Codex、Antigravity、DSH）不再直接启动 `actingctl mcp-serve`，而是启动 `<root>\mcp-entry\g1\actingcommand-mcp-entry.exe --root <root> --client <名字> -- mcp-serve --tier <档位>`。入口把 JSON-RPC 转给一个 `<root>\runtime\actingctl.exe` 子进程，`--` 之后的参数原样传过去；更新之后，它只在两次调用之间、只对核验完整的安装（`actingctl mcp-entry plan`）切到新的子进程，重放客户端的握手，并发出变更通知（旧协议发 `notifications/tools/list_changed`，2026-07-28 协议在 `subscriptions/listen` 流上发同一通知）。旧子进程还持有未读结果的任务或 Lab 句柄时，切换会一直等；子进程在请求进行中退出时，该请求得到 `mcp_entry_outcome_unknown`（用 `ac_get_run` 或 `ac_overview` 查看），绝不重发。客户端第一次改用入口需要重启一次，之后更新不再需要重启。Claude Code 会自己重新拉工具表；Codex 重新加载该服务，Antigravity 在 MCP 管理器里点 Refresh，DSH 通过插件生命周期重新加载、工具白名单保持不变。`actingctl mcp-config --client claude|codex|antigravity|dsh --entry --root <root> --tier <档位>` 打印各客户端的配置片段；`actingctl mcp-entry list --root <root>` 显示每个入口的状态（`<root>\mcp-entry\state\entry-<pid>.json`）。详见 [contracts/install-cli.md](contracts/install-cli.md) 的 “The MCP entry”。
 
-**档位。** `observer` 总是开、也是默认；`operator` 与 `author` 用 `--tier` 打开。`tools/list` 只列出已开档位的工具，未开档位的工具答 `tier_not_enabled`。下表列的是 v0.12.46 的 41 个工具；标 † 的 19 个是 0.12 系列新增的。`ac_config_set` 属 observer 档，但调用里只要有实例的 `touch_backend` 或 `capture_backend`，就会切换那台设备，要 operator 档（v0.12.39）。工具错误是 `{class, outcome}`，`mcp-serve --detail codes|full` 决定每个 outcome 带多少细节。
+**档位。** `observer` 总是开、也是默认；`operator` 与 `author` 用 `--tier` 打开。`tools/list` 只列出已开档位的工具，未开档位的工具答 `tier_not_enabled`。下表列的是 v0.12.47 的 41 个工具；标 † 的 19 个是 0.12 系列新增的。`ac_config_set` 属 observer 档，但调用里只要有实例的 `touch_backend` 或 `capture_backend`，就会切换那台设备，要 operator 档（v0.12.39）。工具错误是 `{class, outcome}`，`mcp-serve --detail codes|full` 决定每个 outcome 带多少细节。
 
 | 档位 | 工具 |
 | --- | --- |

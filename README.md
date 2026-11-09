@@ -27,7 +27,7 @@ ActingCommand Runtime is a resident Rust runtime for running multi-target automa
 | Repository | Role |
 | --- | --- |
 | [HS7097/ActingCommand](https://github.com/HS7097/ActingCommand) | Umbrella (portal) repository: the family README, the agent manual `skills/actingcommand/`, and the Releases page with the setup wizard, the member releases and the available standard packs |
-| [HS7097/ActingCommand-Runtime](https://github.com/HS7097/ActingCommand-Runtime) | This repository: the resident runtime (daemon, CLI, MCP server, ledger, device backends) and the Tools (Lab, ledger reader, checks, watchdog launcher) |
+| [HS7097/ActingCommand-Runtime](https://github.com/HS7097/ActingCommand-Runtime) | This repository: the resident runtime (daemon, CLI, MCP server, ledger, device backends) and the Tools (Lab, ledger reader, checks, watchdog) |
 | [HS7097/ActingCommand-UI](https://github.com/HS7097/ActingCommand-UI) | Setup wizard and monitoring console; talks to the runtime only through its API |
 
 Components are released independently, each only when it has changed. Whether they fit together is decided by the interface revisions each one declares (`distribution/windows/component-interfaces.json`, `contracts/component-interfaces.md`), not by matching version numbers. Versions follow X (major or incompatible) . Y (new features or new coverage) . Z (fixes, including features that serve a fix).
@@ -39,7 +39,7 @@ The current release is **v0.12.10** (pre-release) on this repository's [Releases
 | Zip | Layout | Contents |
 | --- | --- | --- |
 | `actingcommand-runtime-<sha>.zip` | `distribution-v1` | `actingcommand-actingd.exe`, `actingctl.exe`, `actingd.config.example.json`, `actingd.defaults.json` (the defaults the program embeds; a configuration names only the keys it changes), `INSTALL.md`, `RELEASE-NOTES.md` |
-| `actingcommand-tools-<sha>.zip` | `platform-tools-v3` | `actinglab.exe`, `actingledger.exe`, `actingcommand-vision-provider-check.exe`, the watchdog launcher `actingwatch.exe`, and Google's official Android platform-tools 37.0.1 under `platform-tools/` (`adb.exe`, `AdbWinApi.dll`, `AdbWinUsbApi.dll`, `NOTICE.txt`, `source.properties`) |
+| `actingcommand-tools-<sha>.zip` | `platform-tools-v3` | `actinglab.exe`, `actingledger.exe`, `actingcommand-vision-provider-check.exe`, the watchdog `actingwatch.exe` (from v0.12.47 it runs the watchdog's tick itself), and Google's official Android platform-tools 37.0.1 under `platform-tools/` (`adb.exe`, `AdbWinApi.dll`, `AdbWinUsbApi.dll`, `NOTICE.txt`, `source.properties`) |
 
 Vision models and the ONNX Runtime never ship with a release: the OCR/NN engine is linked into `actingcommand-actingd.exe` and reads its models from `<vision root>\models\<model_ref>\`; without them, a target that needs OCR fails explicitly. `actingcommand-actingd.exe` also carries the official scrcpy server 5.0.1 and OpenH264 for the real-device capture backend; their notices are in RELEASE-NOTES.md.
 
@@ -142,27 +142,28 @@ The authoring side is removable: `crates/lab` has exactly one consumer, `apps/ac
 
 The guard suite lives in `tools/actinglab-architecture/tests/workspace_guards.rs`. The Lab checks preserve private module ownership, helper visibility and production call paths; Rust compilation checks import resolution. The named guards include `c2_runtime_code_contracts_defaults_and_fixtures_are_project_neutral`, `r2f_product_and_authoring_paths_have_no_builtin_game_identity` (the neutrality scans), `workspace_packages_do_not_depend_on_apps`, `contract_dependencies_stay_within_budget`, `actingcommand_contract_has_no_dependency_path_to_actingcommand_ledger`, `all_non_lab_packages_remain_lab_free_with_all_features`, `production_packages_cannot_reach_resource_tooling`, `dependency_metadata_requests_all_features` and `feature_gated_forbidden_dependency_paths_are_detected`.
 
-One ratchet file sits in `ratchet/` at the repository root: `actinglab_commands.json` (schema `actingcommand.command-inventory.v1`, 50 top-level dispatch arms / 142 commands / 8 pipeline exemptions), read by the guard test `command_inventory_matches_checked_in_snapshot`.
+One ratchet file sits in `ratchet/` at the repository root: `actinglab_commands.json` (schema `actingcommand.command-inventory.v1`, 46 top-level dispatch arms / 102 commands / 3 pipeline exemptions), read by the guard test `command_inventory_matches_checked_in_snapshot`.
 
 There are four workflows in total: three CI workflows and the on-demand `release.yml`. `ci.yml` runs, on windows-latest, a `lint` job (formatting, a locked workspace build and Clippy `-D warnings`) and seven module test jobs (`light`, `exec-core`, `exec-tooling`, `ledger`, `host-lab`, `runtime-client`, `apps`); every workspace member is in exactly one of them, which the architecture guard `gate_ci_jobs_cover_every_member` checks. On a pull request the ubuntu summary job `gate`, whose check name is `rust`, passes only when all eight are green; a push to `main` runs only the five jobs that save a dependency cache (`lint`, `light`, `exec-core`, `exec-tooling`, `apps`). `runtime-client` runs its default features and then the `test-observation` feature for the recorder tests and the feature-only trace assertions. The `light` job also runs `outcome-guard merge` and uploads the merged catalog as `outcome-codes-<sha>`. Tests registered as flaky in `ci/flaky-tests.toml` are skipped in the module jobs and run once each in the non-gating `flaky` job; the table is empty on main, and a flaky test is never turned green by rerunning. `commit-identity-guard.yml` runs on ubuntu-latest and requires the author **and** committer email of every commit in the pushed or PR range to fall inside an exact allowlist of the project's own identities (the noreply forms of its three GitHub accounts, one registered mailbox address, and the GitHub web committer `noreply@github.com`), failing otherwise. `windows-remote-build.yml` parses and re-checks a 40-character lowercase SHA and then runs `cargo build --locked --release --target x86_64-pc-windows-msvc`, producing the Runtime and Tools artifacts, each with a `BUILD-MANIFEST.json`; it also starts the built actingd once on a fresh state root (boot smoke) and, for a release, stops when the release's outcome-code snapshot is missing. It runs for pull requests, pushes to `stable`, manual dispatch and calls from `release.yml`, not for pushes to `main`. `release.yml` runs only when started by hand (Actions → release → Run workflow, or `gh workflow run release.yml -f bump=patch|minor|major [-f version=X.Y.Z] [-f source_sha=<sha>] [-f prerelease=true] [-f dry_run=true]`): it computes the next `vX.Y.Z` from this repository's Releases, calls `windows-remote-build.yml` for the chosen `main` commit, and publishes the two artifacts as zips with `SHA256SUMS` as a Release whose tag is created on that exact commit; with `prerelease` (always for an `-rc.N` version) it is a pre-release, never marked Latest. The version exists only in the Release tag.
 
 ## Workspace members
 
-The workspace declares 36 members, resolver `3`, a workspace-level edition of 2024, all `publish = false`.
+The workspace declares 38 members, resolver `3`, a workspace-level edition of 2024, all `publish = false`.
 
-### apps (7)
+### apps (8)
 
 | Path | Package | Output | Responsibility |
 | --- | --- | --- | --- |
 | apps/actingcommand-entry | actingcommand-entry | lib | The outcome codes of an A/B install root's fixed entries (`contracts/stable-entry.md`); a library of its codes until the two entry programs are added |
-| apps/actingctl | actingcommand-actingctl | bins `actingctl`, `actingwatch` | Lean production CLI for correlation-scoped runtime flows, the MCP server (`mcp-serve`, `mcp-config`) and the watchdog; `actingwatch` is the windowless launcher the watchdog's scheduled task runs |
+| apps/actingctl | actingcommand-actingctl | bin `actingctl` | Lean production CLI for correlation-scoped runtime flows, the MCP server (`mcp-serve`, `mcp-config`) and the watchdog's commands (`watchdog …`, from `crates/watchdog`) |
 | apps/actingd | actingcommand-actingd | bin `actingcommand-actingd` | Lean process adapter for the resident runtime |
-| apps/actinglab | actingcommand-actinglab | bin `actinglab` | Authoring and debugging CLI, 50 top-level dispatch arms, 142 commands |
+| apps/actinglab | actingcommand-actinglab | bin `actinglab` | Authoring and debugging CLI, 46 top-level dispatch arms, 102 commands; its CLI module answers the operations that came from actingctl in the operation table's short words, and `actinglab serve --stdio` one `{op, params}` per line (Workflow #434 LAB-2) |
+| apps/actingwatch | actingcommand-actingwatch | bin `actingwatch` | The windowless program the watchdog's scheduled task runs from `<root>\tools\`: it runs the watchdog's tick itself from `crates/watchdog` (Workflow #434 LAB-4) and answers `status`, `install` and `uninstall` for its own root |
 | apps/ledger-forensics | actingledger | lib + bin `actingledger` | Read-only front end for ledger forensic reports, replay and the signature catalog |
 | apps/mcp-entry | actingcommand-mcp-entry | bin `actingcommand-mcp-entry` | The stable MCP entry every client starts (Tools half): pipes JSON-RPC to the current `actingctl mcp-serve` and switches it, between calls, to the installed build |
 | apps/vision-provider-check | actingcommand-vision-provider-check | bin | Lists vision model folders and their content identities, and reads provider startup facts from a Runtime ledger; loads no model |
 
-### crates (26)
+### crates (27)
 
 | Path | Package | Responsibility |
 | --- | --- | --- |
@@ -174,7 +175,7 @@ The workspace declares 36 members, resolver `3`, a workspace-level edition of 20
 | crates/execution-kernel | actingcommand-execution-kernel | Daemon-owned execution sessions and pure task/probe decision planning |
 | crates/host-metrics | actingcommand-host-metrics | Safe boundary for platform performance counters (windows-sys only under cfg(windows)) |
 | crates/lab | actingcommand-lab | Optional authoring and debugging adapter layer; production still builds and runs without it |
-| crates/lab-ops | actingcommand-lab-ops | The Lab's operation layer (Workflow #434 LAB-1): the operation table `contracts/lab-operations.json` read into typed rows, the initiator words and the default location, and actingctl's read and write modules, which actingctl calls from here unchanged |
+| crates/lab-ops | actingcommand-lab-ops | The Lab's operation layer (Workflow #434 LAB-1, LAB-1b): the operation table `contracts/lab-operations.json` read into typed rows, the initiator words and the default location, and the code of every core operation (its requests and its answer), which actingctl, its MCP server and actinglab's CLI module call from here |
 | crates/ledger | actingcommand-ledger | Recoverable single-writer storage for the global runtime event ledger |
 | crates/ledger-forensics | actingcommand-ledger-forensics | Read-only forensics over the GlobalLedger and verified evidence archives |
 | crates/onnx-provider-support | actingcommand-onnx-provider-support | Engine-side ORT lifetime: idempotent init, cancellable watchdog |
@@ -192,6 +193,7 @@ The workspace declares 36 members, resolver `3`, a workspace-level edition of 20
 | crates/scheduler | actingcommand-scheduler | Per-instance write admission, lease lifetime and fencing authority |
 | crates/selection-policy | actingcommand-selection-policy | Pure selection-policy evaluator: declared document, bounded candidates and explicit facts in, deterministic choice with reasons out; plus the offline debugging bin `selection-eval` |
 | crates/vision-ffi | actingcommand-vision-ffi | Boundary types, model folder rule and loader contract of the in-process OCR/NN engine |
+| crates/watchdog | actingcommand-watchdog | The Runtime watchdog (Workflow #434 LAB-4; Windows only): what it observes and decides, the starts, `state.json`, `watchdog.log` and the scheduled task, run by `actingwatch.exe`'s tick and by `actingctl watchdog …` |
 
 ### providers (1)
 
@@ -235,7 +237,7 @@ A pack's coordinates are in the resolution it declares (today's standard packs u
 
 **The stable entry (v0.12.18).** On a single-location root every client (Claude Code, Codex, Antigravity, DSH) starts `<root>\mcp-entry\g1\actingcommand-mcp-entry.exe --root <root> --client <name> -- mcp-serve --tier <tiers>` instead of `actingctl mcp-serve`. The entry pipes JSON-RPC to one `<root>\runtime\actingctl.exe` child with the words after `--` unchanged; after an update it switches, between calls and only to a verified complete install (`actingctl mcp-entry plan`), to a new child, replays the client's handshake and sends the change notice (legacy `notifications/tools/list_changed`, or the same notification on a 2026-07-28 `subscriptions/listen` stream). A switch waits while the old child holds job or Lab handles whose results were not read; a request in flight when its child ends gets `mcp_entry_outcome_unknown` (inspect with `ac_get_run` or `ac_overview`) and is never sent again. Moving a client onto the entry needs one client restart; after that an update needs none. Claude Code fetches the new tools by itself; Codex reloads the server, Antigravity uses Refresh in its MCP manager, and DSH reloads its plugin with its tool whitelist unchanged. `actingctl mcp-config --client claude|codex|antigravity|dsh --entry --root <root> --tier <tiers>` prints each client's snippet; `actingctl mcp-entry list --root <root>` shows each entry's status (`<root>\mcp-entry\state\entry-<pid>.json`). Details: [contracts/install-cli.md](contracts/install-cli.md), "The MCP entry".
 
-**Tiers.** `observer` is always on and is the default; `operator` and `author` are enabled with `--tier`. `tools/list` lists only the tools of the enabled tiers, and a tool outside them answers `tier_not_enabled`. The table lists the 41 tools of v0.12.46; the 19 marked † are new in the 0.12 series. `ac_config_set` is an observer tool, but a call that names an instance's `touch_backend` or `capture_backend` switches that device and needs the operator tier (v0.12.39). A tool error is `{class, outcome}`, and `mcp-serve --detail codes|full` sets how much of each outcome it carries.
+**Tiers.** `observer` is always on and is the default; `operator` and `author` are enabled with `--tier`. `tools/list` lists only the tools of the enabled tiers, and a tool outside them answers `tier_not_enabled`. The table lists the 41 tools of v0.12.47; the 19 marked † are new in the 0.12 series. `ac_config_set` is an observer tool, but a call that names an instance's `touch_backend` or `capture_backend` switches that device and needs the operator tier (v0.12.39). A tool error is `{class, outcome}`, and `mcp-serve --detail codes|full` sets how much of each outcome it carries.
 
 | Tier | Tools |
 | --- | --- |
