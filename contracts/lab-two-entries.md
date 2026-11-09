@@ -402,6 +402,18 @@ every kind the file names exists; `entries` follows its rule; a `reserved` row h
 - Output for people by default: one line with the result code and its short phrase from the
   outcome catalog, and a small table where needed. `--json` prints the one line `cli_line` prints
   today. Exit codes stay 0, 1 and 2.
+- **A request the Runtime answered is never a device error** (Workflow #433 LABDO-1, in force
+  from that slice; LAB-2 and LAB-5 keep it). Once the Lab has sent an operation's request and
+  the Runtime has answered it, a failure of a check the client runs after the receipt (its event
+  queries, its evidence check) names the request and its effect: `lab_operation_check_failed`
+  with the receipt's `req_id`, `correlation_id` and `receipt_state`, the `effect` and `executed`
+  its record reports, the record's own `failure`, and the client's `client_code` and
+  `client_message`. It is never `device_error`, and the caller reads the effect before sending
+  the operation again. actinglab exits 5 with it until LAB-2; with LAB-2's three exit codes it
+  exits 1 like every error, so from then on the effect is the lasting signal. MCP answers it in
+  class `runtime` with its `req_id`, actinglab's details and its message (LAB-5 keeps that). A
+  failure the Runtime itself reports in the receipt keeps its own code
+  ([contained-lab-operation.md](contained-lab-operation.md)).
 - MCP lists the operations of the installed modules, with descriptions generated from the table
   and the shared rules written once in its instructions (#410 item 3); no tiers (`--tier` goes);
   the 24 KiB answer budget and `handle` with `wait_s` stay as runtime-interface.md,
@@ -450,7 +462,10 @@ No new code. The codes this contract uses:
   LAB-7 moves actingctl's codes into actinglab's fragment
   (`contracts/outcome-codes/actingctl.json` into `actinglab.json`);
 - `install_caveat_noted` with the caveats `guard_failed` (new word, LAB-3) and
-  `config_key_retired`.
+  `config_key_retired`;
+- `lab_operation_check_failed` (`req_id`, `receipt_state`, `client_code`), actinglab's, for a
+  request the Runtime answered whose client check then failed (section 9.3); Workflow #433
+  LABDO-1 added it, not a slice of this contract.
 
 After LAB-6 the host emits neither `lab_module_not_installed` nor `lab_module_option_disabled`
 (open point 8).

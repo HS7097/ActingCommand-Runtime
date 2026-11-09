@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 use super::*;
+use crate::LabOperationAnswer;
 use crate::codes::{ClientCode, ClientLocation};
 use actingcommand_artifact_store::read_projected_verified;
 use actingcommand_contract::codes::SharedCode;
@@ -226,13 +227,16 @@ impl RuntimeDebugSession {
             })
         })();
         verification.map_err(|error| {
-            match self
+            let error = match self
                 .client
                 .connection(ClientLocation::VerifyLabOperation.location())
             {
                 Ok(mut connection) => connection.latch(error),
                 Err(error) => error,
-            }
+            };
+            // Workflow #433 LABDO-1: the receipt arrived, so the Runtime has acted; the error
+            // carries its answer (the connection latches the bare failure).
+            error.with_lab_operation_answer(LabOperationAnswer::of(&receipt))
         })
     }
 }

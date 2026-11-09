@@ -147,6 +147,16 @@ actingcommand_contract::outcome_codes! {
         /// `pack_operation_id`, `box_x`, `box_y`, `box_width`, `box_height`).
         PackageCheckClickBoxSinglePoint => "package_check_click_box_single_point": warning / none,
         // ---- end of B34
+        // ---- Workflow #433 LABDO-1 (pending): a Lab operation the Runtime answered.
+        /// Error. Online `do --capture` sent its request and the Runtime answered it, then a
+        /// check of the runtime client after the receipt failed (its event queries or its
+        /// evidence check). The operation ran as the receipt reports: the
+        /// details carry the receipt's `req_id`, `correlation_id` and `receipt_state`, the
+        /// `effect` and `executed` its record reports, its `failure` when it reports one, and the
+        /// client's `client_code` and `client_message`. Exit 5 (keys `req_id`, `receipt_state`,
+        /// `client_code`).
+        LabOperationCheckFailed => "lab_operation_check_failed": error / none,
+        // ---- end of LABDO-1
     }
 }
 
