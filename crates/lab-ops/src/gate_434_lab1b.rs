@@ -5,8 +5,9 @@
 //! - `lab_ops_core_rows_served_by_lab_ops`: every `core` row of the operation table file whose
 //!   `slice` is `LAB-1` or `LAB-1b` names a function of this crate that serves it, in the
 //!   registry the crate exposes ([`crate::served`]); and every entry of the registry names such a
-//!   row, once. That an entry names a function, not a constant or another item, the registry
-//!   checks as it compiles.
+//!   row, once. That an entry names something callable (a function, or a `const` or `static` of a
+//!   function-pointer type, or a tuple-struct constructor), not a value constant or another item,
+//!   the registry checks as it compiles.
 
 use crate::served::{SERVED, server};
 use crate::table::{Operation, OperationModule, TABLE_PATH, read_operation_table};
@@ -51,25 +52,22 @@ fn lab_ops_core_rows_served_by_lab_ops() {
 
     let mut registered = BTreeSet::new();
     for served in SERVED {
-        if !registered.insert(served.operation) {
-            violations.push(format!(
-                "the registry names {} more than once",
-                served.operation
-            ));
+        if !registered.insert(served.name) {
+            violations.push(format!("the registry names {} more than once", served.name));
         }
         match table
             .operations
             .iter()
-            .find(|operation| operation.name == served.operation)
+            .find(|operation| operation.name == served.name)
         {
             None => violations.push(format!(
                 "the registry names {} ({}), which is no operation of the table",
-                served.operation, served.function
+                served.name, served.function
             )),
             Some(operation) if !served_here(operation) => violations.push(format!(
                 "the registry names {} ({}), whose row is {:?} of slice {}, not core of LAB-1 or \
                  LAB-1b",
-                served.operation, served.function, operation.module, operation.slice
+                served.name, served.function, operation.module, operation.slice
             )),
             Some(_) => {}
         }

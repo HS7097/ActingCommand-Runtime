@@ -1243,7 +1243,7 @@ tests = [
 ]
 incident = ["#434 LAB-1"]
 
-# Workflow #434 LAB-1b (0.12.46; register §1.287, "Slice LAB-1b"; brief rd-1108/arch-013/brief-lab1b.md; contracts/lab-two-entries.md §8 and §9.1): every core row of the operation table file contracts/lab-operations.json whose slice is LAB-1 or LAB-1b names, in the registry crates/lab-ops exposes (served::SERVED), a function of lab-ops that serves it, and every registry entry names a core row of LAB-1 or LAB-1b of the table, once (an entry that names no function does not compile)
+# Workflow #434 LAB-1b (0.12.47; register §1.287, "Slice LAB-1b"; brief rd-1108/arch-013/brief-lab1b.md; contracts/lab-two-entries.md §8 and §9.1): every core row of the operation table file contracts/lab-operations.json whose slice is LAB-1 or LAB-1b names, in the registry crates/lab-ops exposes (served::SERVED), a function of lab-ops that serves it, and every registry entry names a core row of LAB-1 or LAB-1b of the table, once (an entry whose path is not callable with up to eight parameters does not compile)
 [[gate]]
 coverage = "Y"
 tests = [

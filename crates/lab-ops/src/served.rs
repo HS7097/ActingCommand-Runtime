@@ -12,14 +12,19 @@
 /// One operation and the function of this crate that serves it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Served {
-    /// The operation's name, its CLI words in the table.
-    pub operation: &'static str,
+    /// The operation's name, its CLI words: the `name` of its row in the table.
+    pub name: &'static str,
     /// The serving function, `<module>::<function>` in this crate.
     pub function: &'static str,
 }
 
-/// A function of up to eight parameters, what a registry entry names; `Arguments` is the tuple of
-/// its parameter types. A constant or a static is no function and implements it not.
+/// What a registry entry names: a value whose type implements `Fn` of zero to eight parameters;
+/// `Arguments` is the tuple of their types. A function implements it, and so do a `const` or a `static` of a function-pointer type and a
+/// tuple-struct constructor, so these compile as an entry too. The registry refuses everything
+/// else: a constant or a static of any other type (a value, such as an array of words), a unit
+/// struct, an item that is no value (a module, a type, a trait), a function of more than eight
+/// parameters, and a function generic over a type (`impl Trait` parameters included), whose type
+/// the entry leaves uninferred.
 trait Function<Arguments> {}
 
 /// `Function` for the functions of one arity.
@@ -43,15 +48,17 @@ function_of_arity!(A, B, C, D, E, G);
 function_of_arity!(A, B, C, D, E, G, H);
 function_of_arity!(A, B, C, D, E, G, H, I);
 
-/// Compiles only for a function (see [`Function`]).
+/// Compiles only for a value that implements [`Function`].
 const fn is_function<F: Function<Arguments>, Arguments>(_function: &F) {}
 
-/// `"<operation>" => module::function`: the entry compiles only when the path names a function
-/// of this crate; a constant, a static or another item does not.
+/// `"<name>" => module::function`: the entry compiles only when the path names an item of this
+/// crate that implements [`Function`] (a function; also a `const` or a `static` of a
+/// function-pointer type, or a tuple-struct constructor); a value constant or static, or any other
+/// item, does not.
 macro_rules! served {
-    ($operation:literal => $module:ident :: $function:ident) => {
+    ($name:literal => $module:ident :: $function:ident) => {
         Served {
-            operation: $operation,
+            name: $name,
             function: {
                 is_function(&crate::$module::$function);
                 concat!(stringify!($module), "::", stringify!($function))
@@ -125,10 +132,11 @@ pub const SERVED: &[Served] = &[
     served!("codes" => code_lookup::read_embedded),
 ];
 
-/// The function that serves `operation`; `None` for an operation this crate does not serve.
-pub fn server(operation: &str) -> Option<&'static str> {
+/// The function that serves the operation named `name`; `None` for an operation this crate does
+/// not serve.
+pub fn server(name: &str) -> Option<&'static str> {
     SERVED
         .iter()
-        .find(|served| served.operation == operation)
+        .find(|served| served.name == name)
         .map(|served| served.function)
 }
