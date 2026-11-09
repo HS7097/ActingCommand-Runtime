@@ -8076,7 +8076,7 @@ before it is lifted). Afterwards, when business candidates of several instances 
 shared run slot, it goes to the instance that waited longest, not to the game with the larger
 number.
 
-**Rollback** (to 0.12.44). Nothing is persisted: an older build orders the business tier across
+**Rollback** (to 0.12.45). Nothing is persisted: an older build orders the business tier across
 instances by `B ÷ E` again.
 
 | # | Shape | Kind | Code slice | First writer | Notes |
