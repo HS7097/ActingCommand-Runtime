@@ -19,29 +19,36 @@
 //!   `consume` is the task's declared consumption in thousandths, exact (SS-2g, register
 //!   §1.232: `C = Σ amount × 1000 + Σ expected_amount_milli`; the reserve gate reads
 //!   `⌈C/1000⌉`); `Q_p` is the pool's `valuation.scale`. `P(k,p)`, the cost of consuming pool
-//!   `p`, is `W(k,p)`, discounted for a regenerating pool linearly between the task's reserve
-//!   line on it and its capacity: `P = W·clamp((cap − cur)/(cap − reserve), 0, 1)`, 0 at
-//!   capacity, `W` at the reserve.
+//!   `p`, is `W(k,p)` whatever the pool's fill (SS-2h, register §1.289; Alice's ruling 138 and
+//!   her answer of 11-09 16:39: below the cap nothing is spent for free). SS-2b's linear discount
+//!   `W·clamp((cap − cur)/(cap − reserve), 0, 1)` is retired; a pool that reached its cap is spent
+//!   by the capped spending order ([`super::capped`]).
 //! - **Unknown is never 0.** No declared effect, a pending entry, a pending or missing valuation
-//!   of a pool it touches, or a reading `P` needs that is unknown or expired makes `B` unknown:
-//!   the candidate is not dispatched (`benefit_unknown`), and the known part is never added up.
-//!   An unknown reading also asks the fact refresh for it. A known `B ≤ 0` is not dispatched
-//!   either (`policy_benefit_nonpositive`).
+//!   of a pool it touches, or an unknown or expired reading of a regenerating pool it consumes
+//!   makes `B` unknown: the candidate is not dispatched (`benefit_unknown`), and the known part
+//!   is never added up. An unknown reading also asks the fact refresh for it. A known `B ≤ 0` is
+//!   not dispatched either (`policy_benefit_nonpositive`).
 //! - **The one-way rule.** Nothing here writes a pool weight: the weights are read from the
 //!   resource layer's own term, which reads no task state.
 //! - **The zero band** (SS-2d, register §1.235; Alice's ruling 127, the review's version; design
 //!   `rd-1031/design-acm-price-addendum2.1.md` §7.2 and §7.3). The exact sum `S` (before the
 //!   floor) differs from the model's value at the exported prices by at most
-//!   `ε = Σ_produces [R/(2000·Q) + n·(2W+1)/(4000·Q)] + Σ_consumes σ·[C/(2000·Q) +
+//!   `ε = Σ_produces [R/(2000·Q) + n·(2W+1)/(4000·Q)] + Σ_consumes [C/(2000·Q) +
 //!   m·(2W+1)/(4000·Q)]`: `R` and `C` the per-run production and consumption in thousandths, `n`
 //!   and `m` the pool's `expected_amount_milli` entries in each direction, `W` the weight read
-//!   above, `Q` the scale and `σ` the regenerating share, summed exactly as `S` is. With `|S| ≤ ε`
+//!   above and `Q` the scale, summed exactly as `S` is (SS-2h: the whole `C`, as no share of the
+//!   cost is discounted; SS-2d's regenerating share `σ` is retired with the discount). With `|S| ≤ ε`
 //!   the sign is the rounding's and is not trusted: the candidate is `benefit_within_tolerance`,
 //!   neither positive nor `policy_benefit_nonpositive`. A task marked `benefit_realization` whose
 //!   produced pools include one weighed above 0 and whose latest run did not fail is released
 //!   (`zero_tier: released`) into the last place of its tier ([`super::allocation_order`]); every
 //!   other is deferred (`unmarked`, `no_downstream_value`, `latest_failed`). Outside the band the
 //!   gate is SS-2b's: `B = ⌊S⌋ > 0` is positive, any other known `B` not positive.
+//! - **The pool lines** (SS-2h, register §1.289): between judging and deciding, the gate asks the
+//!   pools' lines ([`super::capped::plan`]). A consumer of a capped pool that its round's order
+//!   tries is kept whatever the sign of its `B` (its own `B` charging only the part of its
+//!   consumption below the stop line); any other consumer of a capped pool is held; a candidate
+//!   that would pass but leave a pool below its hard line is held too.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -49,6 +56,7 @@ use std::collections::BTreeMap;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_selection_policy::UnknownReason;
 
+use super::capped::{self, CappedMemory, Disposition};
 use super::fact_refresh::{self, AffectedCandidate};
 use super::{
     DecisionReason, DetectionSuggestion, EvaluationFacts, InstanceSnapshot, PlacementCandidate,
@@ -82,24 +90,23 @@ pub(super) fn manual_request(task: &TaskSpec) -> bool {
         })
 }
 
-/// A judged candidate's known positive net benefit `B` and the expected duration `E` it is
-/// divided by.
+/// A judged candidate's known net benefit `B` and the expected duration `E` it is divided by:
+/// positive, except for a consumer a capped spending order tries (SS-2h), whose `B` may be any.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct KnownBenefit {
-    /// `B` in milli, floored, at most `i64::MAX`.
+    /// `B` in milli, floored, within the `i64` range.
     pub(super) benefit_milli: i64,
     /// `E`: the duration the utility term divides by, at least 1.
     pub(super) expected_duration_ms: u64,
 }
 
 impl KnownBenefit {
-    /// `Less` when `self` goes first: the higher `B ÷ E`, compared exactly as `B·E' > B'·E` (two
-    /// 64-bit factors never overflow 128 bits).
+    /// `Less` when `self` goes first: the higher `B ÷ E`, compared exactly as `B·E' > B'·E` (a
+    /// 64-bit and a 63-bit factor never overflow 128 bits). SS-2h: signed, so a capped head whose
+    /// `B` is not positive goes after every positive one; two positive ones compare as before.
     pub(super) fn order(&self, other: &Self) -> Ordering {
-        let left =
-            u128::from(self.benefit_milli.unsigned_abs()) * u128::from(other.expected_duration_ms);
-        let right =
-            u128::from(other.benefit_milli.unsigned_abs()) * u128::from(self.expected_duration_ms);
+        let left = i128::from(self.benefit_milli) * i128::from(other.expected_duration_ms);
+        let right = i128::from(other.benefit_milli) * i128::from(self.expected_duration_ms);
         right.cmp(&left)
     }
 
@@ -134,11 +141,14 @@ enum Judgement {
         /// SS-2d: `ε`, the exact rounding bound of `S` (module doc).
         tolerance: ExactSum,
         items: Vec<String>,
-        /// The next step of a regenerating pool it consumes: its cost falls as the pool fills.
+        /// The next step of a regenerating pool it consumes (SS-2h: its cost stays `W` a unit;
+        /// the evaluation still wakes as the pool fills, as before).
         wake_unix_ms: Option<u64>,
         /// SS-2d: a pool it produces is weighed above 0 on the instance (a model price or a
         /// goal's shortfall gives it a use).
         downstream: bool,
+        /// SS-2h: the term of each pool it consumes, in declaration order (each pool once).
+        consumed: Vec<ConsumedTerm>,
     },
     Unknown {
         gap: Gap,
@@ -147,8 +157,27 @@ enum Judgement {
     },
 }
 
+/// SS-2h (register §1.289): one consumed pool's part of a judged candidate's `S` and `ε`, which
+/// the capped spending order takes out again: its value without the pool's cost is `S` plus
+/// `cost`, and that value's bound `ε` less `bound`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ConsumedTerm {
+    pub(super) pool_id: String,
+    /// `C`, the declared consumption in thousandths (SS-2g).
+    pub(super) consumed_milli: u128,
+    /// `W`, the weight the cost reads.
+    pub(super) weight_milli: u64,
+    /// `Q`, the pool's valuation scale.
+    pub(super) scale: u64,
+    /// `C·W/(1000·Q)`, the cost subtracted from `S`, as a reduced fraction.
+    pub(super) cost: (u128, u128),
+    /// `[2C + m·(2W+1)]/(4000·Q)`, the term added to `ε`, as a reduced fraction.
+    pub(super) bound: (u128, u128),
+}
+
 /// An exact signed sum of rational terms, reduced as it goes.
-struct ExactSum {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ExactSum {
     numerator: i128,
     denominator: i128,
 }
@@ -159,6 +188,32 @@ impl ExactSum {
             numerator: 0,
             denominator: 1,
         }
+    }
+
+    /// SS-2h: this sum with one more term; `None` on overflow.
+    pub(super) fn plus(
+        &self,
+        (numerator, denominator): (u128, u128),
+        negative: bool,
+    ) -> Option<Self> {
+        let mut sum = self.clone();
+        sum.add(numerator, denominator, negative)?;
+        Some(sum)
+    }
+
+    /// SS-2h: the sum as a non-negative reduced fraction `(numerator, denominator)`; `None` when
+    /// it is negative.
+    pub(super) fn non_negative(&self) -> Option<(u128, u128)> {
+        Some((
+            u128::try_from(self.numerator).ok()?,
+            self.denominator.unsigned_abs(),
+        ))
+    }
+
+    /// SS-2h: `self > bound` for a bound that is not negative, compared exactly; `None` for a
+    /// negative bound.
+    pub(super) fn exceeds(&self, bound: &Self) -> Option<bool> {
+        Some(self.numerator > 0 && !self.within(bound)?)
     }
 
     fn add(&mut self, numerator: u128, denominator: u128, negative: bool) -> Option<()> {
@@ -180,7 +235,7 @@ impl ExactSum {
     }
 
     /// The floor of the sum.
-    fn floor(&self) -> i128 {
+    pub(super) fn floor(&self) -> i128 {
         self.numerator.div_euclid(self.denominator)
     }
 
@@ -213,7 +268,10 @@ impl ExactSum {
 /// SS-2d: `a/b` against `c/d` (non-negative numerators, positive denominators), exactly and
 /// without a product that could overflow: equal integer parts compare their remainders' reciprocals
 /// the other way round, as the continued fractions of the two ratios do; Euclid's steps end it.
-fn compare_ratios((mut a, mut b): (u128, u128), (mut c, mut d): (u128, u128)) -> Ordering {
+pub(super) fn compare_ratios(
+    (mut a, mut b): (u128, u128),
+    (mut c, mut d): (u128, u128),
+) -> Ordering {
     loop {
         let (left, right) = (a / b, c / d);
         if left != right {
@@ -265,7 +323,7 @@ fn gcd(mut left: u128, mut right: u128) -> u128 {
 
 /// `Π numerators ÷ Π denominators`, reduced while multiplying; `None` on overflow or a zero
 /// denominator.
-fn ratio(numerators: &[u128], denominators: &[u128]) -> Option<(u128, u128)> {
+pub(super) fn ratio(numerators: &[u128], denominators: &[u128]) -> Option<(u128, u128)> {
     let mut numerator = 1_u128;
     let mut denominator = 1_u128;
     for &factor in denominators {
@@ -378,6 +436,7 @@ fn judge(
     let mut seen = Vec::<&str>::new();
     let mut readings = Vec::new();
     let mut wake_unix_ms = None;
+    let mut consumed = Vec::new();
     for effect in &task.consumes {
         if seen.contains(&effect.pool_id.as_str()) {
             continue;
@@ -391,58 +450,46 @@ fn judge(
             crate::resource_targets::declared_consumption_milli(task, &effect.pool_id)?;
         let weight_milli =
             weight(&effect.pool_id).unwrap_or_else(|| u64::from(valuation.base_weight_milli));
-        // The share of `W` a unit consumed costs: 1 for a pool that does not regenerate.
-        let (share_numerator, share_denominator) = match &pool.projection {
-            PoolProjection::NonRegenerating { .. } => (1_u128, 1_u128),
-            PoolProjection::Regenerating(_) => {
-                let Some(reading) = context.pool_values.get(effect.pool_id.as_str()) else {
-                    readings.push(pool);
-                    continue;
-                };
-                let Ok(current) =
-                    project_pool_value(pool, reading.bound, reading.snapshot, context.time.unix_ms)
-                else {
-                    readings.push(pool);
-                    continue;
-                };
-                if let Ok(Some(next)) = next_pool_projection_change(
-                    pool,
-                    reading.bound,
-                    reading.snapshot,
-                    context.time.unix_ms,
-                ) {
-                    wake_unix_ms = min_wake(wake_unix_ms, Some(next));
-                }
-                let capacity = i128::from(reading.bound.capacity());
-                let reserve = task
-                    .reserves
-                    .iter()
-                    .flatten()
-                    .filter(|reserve| reserve.pool_id == effect.pool_id)
-                    .map(|reserve| i128::from(reserve.at_least))
-                    .max()
-                    .unwrap_or(0);
-                discount(capacity, i128::from(current), reserve)
+        // SS-2h (register §1.289): a unit consumed costs its full weight `W` whatever the pool's
+        // fill; SS-2b's linear discount is retired. A regenerating pool still needs its reading,
+        // as before (unknown or expired, `B` is unknown), and wakes the evaluation at its next
+        // step.
+        if let PoolProjection::Regenerating(_) = &pool.projection {
+            let Some(reading) = context.pool_values.get(effect.pool_id.as_str()) else {
+                readings.push(pool);
+                continue;
+            };
+            if project_pool_value(pool, reading.bound, reading.snapshot, context.time.unix_ms)
+                .is_err()
+            {
+                readings.push(pool);
+                continue;
             }
-        };
+            if let Ok(Some(next)) = next_pool_projection_change(
+                pool,
+                reading.bound,
+                reading.snapshot,
+                context.time.unix_ms,
+            ) {
+                wake_unix_ms = min_wake(wake_unix_ms, Some(next));
+            }
+        }
         let (numerator, denominator) = ratio(
-            &[consumed_milli, u128::from(weight_milli), share_numerator],
-            &[u128::from(valuation.scale), 1_000, share_denominator],
+            &[consumed_milli, u128::from(weight_milli)],
+            &[u128::from(valuation.scale), 1_000],
         )
         .ok_or_else(overflow)?;
         sum.add(numerator, denominator, true).ok_or_else(overflow)?;
-        // SS-2d: `σ·[C/(2000·Q) + m·(2W+1)/(4000·Q)]`, SS-2g's thousandths as `C`.
+        // SS-2d: `C/(2000·Q) + m·(2W+1)/(4000·Q)`, SS-2g's thousandths as `C`, the whole of `C`
+        // (SS-2h: no share of it is discounted).
         let rounding = rounding_numerator(
             consumed_milli,
             expected_entries(&task.consumes, &effect.pool_id),
             weight_milli,
         )
         .ok_or_else(overflow)?;
-        let (bound_numerator, bound_denominator) = ratio(
-            &[rounding, share_numerator],
-            &[u128::from(valuation.scale), 4_000, share_denominator],
-        )
-        .ok_or_else(overflow)?;
+        let (bound_numerator, bound_denominator) =
+            ratio(&[rounding], &[u128::from(valuation.scale), 4_000]).ok_or_else(overflow)?;
         tolerance
             .add(bound_numerator, bound_denominator, false)
             .ok_or_else(overflow)?;
@@ -451,6 +498,14 @@ fn judge(
             effect.pool_id,
             numerator.div_ceil(denominator.max(1))
         ));
+        consumed.push(ConsumedTerm {
+            pool_id: effect.pool_id.clone(),
+            consumed_milli,
+            weight_milli,
+            scale: valuation.scale,
+            cost: (numerator, denominator),
+            bound: (bound_numerator, bound_denominator),
+        });
     }
     if let Some(first) = readings.first() {
         let fact_key = match &first.observation {
@@ -478,22 +533,8 @@ fn judge(
         items,
         wake_unix_ms,
         downstream,
+        consumed,
     })
-}
-
-/// The share of the weight a consumed unit of a regenerating pool costs, as a reduced
-/// fraction: `clamp((cap − cur)/(cap − reserve), 0, 1)`. A reserve at or above the capacity
-/// leaves no room between the two lines: the share is 0 at capacity and 1 below it.
-fn discount(capacity: i128, current: i128, reserve: i128) -> (u128, u128) {
-    let room = capacity - reserve;
-    let missing = (capacity - current).max(0);
-    if room <= 0 {
-        return if missing == 0 { (0, 1) } else { (1, 1) };
-    }
-    let missing = missing.min(room);
-    let (numerator, denominator) = (missing.unsigned_abs(), room.unsigned_abs());
-    let common = gcd(numerator, denominator).max(1);
-    (numerator / common, denominator / common)
 }
 
 /// The expected duration `E` the utility term divides by (SCH-M ED-1): the pair's `E` when its
@@ -520,6 +561,13 @@ pub(super) fn expected_duration_ms(candidate: &PlacementCandidate) -> u64 {
 /// SS-2d (register §1.235): three ways for a known `B`. Within its rounding error (`|S| ≤ ε`)
 /// it is `benefit_within_tolerance`: released (`zero_tier`, the allocation's last place in its
 /// tier) or deferred; outside, as before, positive with `B` or `policy_benefit_nonpositive`.
+///
+/// SS-2h (register §1.289): every judged candidate is judged first; the pools' lines then decide
+/// ([`capped::plan`], with the Runtime's `memory` of the capped episodes under `catalog_hash`):
+/// a consumer a capped round tries is kept with its own `B` whatever its sign, another consumer of
+/// a capped pool is held, and a candidate that would pass but leave a pool below its hard line is
+/// held. Without a valued pool nothing changes.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn gate(
     context: &PlacementContext<'_>,
     facts: &EvaluationFacts,
@@ -528,11 +576,13 @@ pub(super) fn gate(
     weights: &BTreeMap<usize, BTreeMap<String, u64>>,
     refreshing: bool,
     affected: &mut Vec<AffectedCandidate>,
+    (memory, catalog_hash): (&mut CappedMemory, &str),
 ) -> PolicyEvaluationResult<Vec<PlacementCandidate>> {
-    let mut kept = Vec::with_capacity(ranked.len());
-    for mut candidate in ranked {
+    // Phase 1: judge every judged candidate.
+    let mut judged = Vec::with_capacity(ranked.len());
+    for candidate in &ranked {
         if !candidate.judged {
-            kept.push(candidate);
+            judged.push(None);
             continue;
         }
         let task = context
@@ -559,6 +609,42 @@ pub(super) fn gate(
         let judgement = judge(task, instance, context, facts, |pool_id| {
             candidate_weights.and_then(|weights| weights.get(pool_id).copied())
         })?;
+        judged.push(Some((task, instance, judgement)));
+    }
+    // Phase 2 (SS-2h): the pools' lines and the capped spending order.
+    let dispositions = {
+        let known = ranked
+            .iter()
+            .zip(&judged)
+            .map(|(candidate, judged)| match judged {
+                Some((
+                    task,
+                    _,
+                    Judgement::Known {
+                        sum,
+                        tolerance,
+                        consumed,
+                        ..
+                    },
+                )) => Some(capped::Known {
+                    candidate,
+                    task,
+                    sum,
+                    tolerance,
+                    consumed,
+                }),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        capped::plan(context, facts, &ranked, &known, work, memory, catalog_hash)?
+    };
+    // Phase 3: decide.
+    let mut kept = Vec::with_capacity(ranked.len());
+    for ((mut candidate, judged), disposition) in ranked.into_iter().zip(judged).zip(dispositions) {
+        let Some((task, instance, judgement)) = judged else {
+            kept.push(candidate);
+            continue;
+        };
         let expected = expected_duration_ms(&candidate);
         let task_work = &mut work[candidate.work_index];
         match judgement {
@@ -568,7 +654,33 @@ pub(super) fn gate(
                 items,
                 wake_unix_ms,
                 downstream,
+                consumed: _,
             } => {
+                let defer = |task_work: &mut TaskWork, reason: DecisionReason| {
+                    task_work.state = SchedulingDecisionState::Deferred;
+                    task_work.reasons.push(reason);
+                    if let Some(wake) = wake_unix_ms.filter(|wake| *wake > context.time.unix_ms) {
+                        task_work.next_wake_unix_ms =
+                            min_wake(task_work.next_wake_unix_ms, Some(wake));
+                    }
+                };
+                // SS-2h: a capped pool's order decides before the sign of `B`.
+                let hold = match disposition {
+                    Disposition::Held(reason) => {
+                        defer(task_work, reason);
+                        continue;
+                    }
+                    Disposition::Member { benefit, slot } => {
+                        candidate.benefit = Some(benefit);
+                        candidate.capped = Some(slot);
+                        if let Some(record) = task_work.record.as_mut() {
+                            record.benefit = Some(benefit);
+                        }
+                        kept.push(candidate);
+                        continue;
+                    }
+                    Disposition::Normal { hold } => hold,
+                };
                 let benefit_milli = saturating_milli(sum.floor());
                 // SS-2d: within its rounding error the sign is not trusted (module doc).
                 let within = sum.within(&tolerance).ok_or_else(|| {
@@ -596,6 +708,11 @@ pub(super) fn gate(
                         &items,
                     ));
                     if matches!(tier, ZeroTier::Released) {
+                        // SS-2h: a released one is held by a pool's lines as a positive one is.
+                        if let Some(hold) = hold {
+                            defer(task_work, hold);
+                            continue;
+                        }
                         // Every later gate applies; the allocation takes it last in its tier.
                         candidate.zero_tier = true;
                         kept.push(candidate);
@@ -609,6 +726,12 @@ pub(super) fn gate(
                     continue;
                 }
                 if benefit_milli > 0 {
+                    // SS-2h: positive, but a pool's lines hold it (its hard line, or a capped
+                    // pool's order).
+                    if let Some(hold) = hold {
+                        defer(task_work, hold);
+                        continue;
+                    }
                     let known = KnownBenefit {
                         benefit_milli,
                         expected_duration_ms: expected,
@@ -661,7 +784,7 @@ pub(super) fn gate(
 }
 
 /// `B` or `ε` in milli as a record value, saturated at the `i64` range.
-fn saturating_milli(value: i128) -> i64 {
+pub(super) fn saturating_milli(value: i128) -> i64 {
     i64::try_from(value).unwrap_or(if value < 0 { i64::MIN } else { i64::MAX })
 }
 

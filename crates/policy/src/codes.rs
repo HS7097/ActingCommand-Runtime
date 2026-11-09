@@ -283,8 +283,53 @@ actingcommand_contract::outcome_codes! {
         /// cycle through the pools they consume and produce.
         RealizationCycle => "realization_cycle": error / none,
         // ---- SS-2d: end ----
+        // ---- SS-2h (pool lines and the capped spending order, `contracts/scheduling/README.md`,
+        // "Pool lines", "Capped spending order"): begin ----
+        /// Info. A dispatch the capped spending order chose: the head of its pool's frozen order
+        /// on the instance (keys `pool_id`, `pool_capacity`, `stop_line`, `hard_line`,
+        /// `capped_episode`, `capped_round`, `capped_rank`, `pool_reading`).
+        CappedSpend => "capped_spend": info / none,
+        /// Info. A judged candidate a pool's lines hold back this round (keys `pool_line_hold`,
+        /// `pool_id`; optional `pool_reading`, `pool_capacity`, `stop_line`, `hard_line`,
+        /// `capped_episode`, `capped_round`, `amount_after`, `task_id`, `gate_code`, `fact_key`,
+        /// `unknown_reason`).
+        PoolLineHeld => "pool_line_held": info / none,
+        /// Error (catalog compile diagnostic). A pool's `stop_line` and `hard_line` break their
+        /// rules: one without the other, the stop line not above the hard line, or a line above
+        /// the pool's capacity.
+        PoolLinesInvalid => "pool_lines_invalid": error / none,
+        // ---- SS-2h: end ----
     }
 }
+
+// ---- SS-2h: begin ----
+actingcommand_contract::outcome_vocabulary! {
+    /// Why a pool's lines hold a judged candidate back (the vocabulary `pool_line_hold`), a value
+    /// of `pool_line_held`.
+    pub enum PoolLineHold: "pool_line_hold" {
+        /// Below the cap: its run would leave the pool below its hard line.
+        WouldCrossHardLine => "would_cross_hard_line",
+        /// Capped: it could not be dispatched when its round's order was frozen, or cannot now
+        /// (`gate_code` its own reason).
+        CappedNotDispatchable => "capped_not_dispatchable",
+        /// Capped, from an episode's second round on: its runs are limited, so only the first
+        /// round takes it.
+        CappedLimitedSpent => "capped_limited_spent",
+        /// Capped: its run, in the round's order, would leave the pool below its hard line.
+        CappedWouldCrossHardLine => "capped_would_cross_hard_line",
+        /// Capped: the round lists no task, so the episode ends.
+        CappedRoundEmpty => "capped_round_empty",
+        /// Capped: another consumer of the pool is the head of the order (`task_id`).
+        CappedNotHead => "capped_not_head",
+        /// The pool's capacity, its reading or a line's fact gives no value, so its lines cannot
+        /// be kept and no capped state is entered.
+        CappedCapUnknown => "capped_cap_unknown",
+        /// The lines read at the evaluation break their rules: the stop line not above the hard
+        /// line, or a line above the capacity or below 0.
+        LinesInvalid => "lines_invalid",
+    }
+}
+// ---- SS-2h: end ----
 
 // ---- SS-2b: begin ----
 actingcommand_contract::outcome_vocabulary! {
@@ -299,8 +344,7 @@ actingcommand_contract::outcome_vocabulary! {
         ValuationPending => "valuation_pending",
         /// A pool the task touches has no valuation for the instance.
         ValuationMissing => "valuation_missing",
-        /// The cost of a regenerating pool the task consumes needs its reading, which is
-        /// unknown or expired.
+        /// A regenerating pool the task consumes has a reading that is unknown or expired.
         ReadingUnknown => "reading_unknown",
     }
 }

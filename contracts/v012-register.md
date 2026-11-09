@@ -8083,6 +8083,120 @@ instances by `B ÷ E` again.
 |---|---|---|---|---|---|
 | SS2f-1 | `allocation_order`: business candidates of different instances by their instances' turns (`InstanceTurns::order`) | behaviour (evaluation) | SS-2f | — | only with `benefit_judged` in the catalog and between two business candidates; total: the instance id breaks a tie |
 
+### 1.289 Slice SS-2h (0.12.46): a pool's stop line and hard line, full price below the cap, and the capped spending order inside the scheduler (Workflow #428; Alice's ruling 138 of 11-07 20:4x, the capped spending order, #428 comment 6706493161, and the planned line of 20:5x, 6706630435; her answers of 11-09 16:39, 「172，A」 and 173's steps; her two water lines of 17:37 and 17:42 and the approval of 17:48, 「幺七三整体直接放行」, #428 comment 6735960127; design `rd-1031/design-c424-redline-1109.md` §1.6 and §4.1 tests 1 to 17, the final version of 11-09 17:5x, read on main `eb1e946d`; coordinator work order `rd-1109/brief-ss2h.md`; it replaces SS-2h-a, Runtime PR #1544, closed unmerged, and SS-2h-b)
+
+[scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Within tolerance",
+the new "Pool lines" and "Capped spending order"), [scheduling/v2/README.md](scheduling/v2/README.md),
+[scheduling/v2/pools.schema.json](scheduling/v2/pools.schema.json),
+[scheduling/v2/tasks.schema.json](scheduling/v2/tasks.schema.json),
+[scheduling/diagnostic.schema.json](scheduling/diagnostic.schema.json),
+[standard-pack-schedule.md](standard-pack-schedule.md) (`requires`, the pool members pass
+through, "The limited mark"), [actingd-check-config.md](actingd-check-config.md) and
+[runtime-config.md](runtime-config.md) (`config.subsystems`) are the contract. The number 1.289 is
+this slice's; §1.288 is SS-2f's.
+
+**What.**
+1. **Full price below the cap.** A judged candidate's consumption costs `W·c` whatever the pool's
+   fill (`evaluator/benefit.rs`, `judge`; SS-2b's `discount` is removed). A regenerating pool it
+   consumes is still read (unknown or expired: `benefit_unknown`, `reading_unknown`) and wakes the
+   evaluation at its next step. SS-2d's `ε` reads the whole `C` (its `σ` is gone). The comparison
+   `B·E' > B'·E` is signed (`KnownBenefit::order`), the same for two positive `B`.
+2. **Two lines.** A V2 pool may write `stop_line` and `hard_line`, both or neither
+   (`PoolSpec::stop_line`, `PoolSpec::hard_line`, `PoolLine::Fact` with CF-5's `FactReference` or
+   `PoolLine::Constant`): the compiler refuses them in V1 (`unknown_field`), a reference by a
+   capacity reference's rules, a constant above 2^53−1 (`limit_exceeded`), and with the new
+   diagnostic `pool_lines_invalid` one without the other, a line above the capacity and a stop
+   line not above the hard line, wherever it can compare them. Without them `S` is the capacity and
+   `H` 0. At each evaluation they are read on each instance (`0 ≤ H < S ≤ cap`, else
+   `lines_invalid`), against the reading less the consumption it does not show yet.
+3. **Below the cap** a judged candidate that would pass and whose run would leave the pool below
+   `H` is held: `pool_line_held` `would_cross_hard_line`. A pool with lines whose cap, reading or a
+   line's fact gives no value holds them with `capped_cap_unknown`.
+4. **The capped spending order** (`evaluator/capped.rs`): at `r ≥ cap` a capped episode begins on
+   the instance (at the start too); each round lists the pool's judged consumers that are
+   candidates now by their value without the pool's cost (above that value's rounding bound;
+   never by their cost; from the second round not `benefit_limited`), freezes them by `V ÷ C`, then
+   task id, and plans from `r` down to `S`, skipping one that would end below `H`; one head at a
+   time is dispatched (`capped_spend`), the reading checked again before each dispatch (a head that
+   would cross `H` ends the round), the next round starting while `r > S`; the episode ends at
+   `r ≤ S < cap`, a round that lists or plans nothing though a consumer is a candidate
+   (`capped_round_empty`; with no candidate at all it waits for its next round), a new catalog
+   generation or unknown lines.
+   The head's block (it and the planned candidates after it that fit above `H`) keeps the head's
+   place in the allocation (`capped::assign_leads`, `OrderView` in `allocation_order`; its `B =
+   V − W·(c − a)`, `a = min(c, max(0, r − S))`), so a more urgent tier goes first; a block
+   candidate a later gate defers yields to the next; the others wait (`capped_not_head`,
+   `capped_limited_spent`, `capped_would_cross_hard_line`, `capped_not_dispatchable` with
+   `gate_code`).
+5. **The memory** `CappedMemory` (episodes, round numbers, frozen orders) is the Runtime's, in
+   memory only like SS-4's: the new entry point `evaluate_with_capped_spending` reads and updates
+   it, and `runtime-host`'s policy host keeps one and calls it each cycle (taken out for the call
+   and put back whatever its result); every other entry point, `evaluate_with_no_progress`
+   included, evaluates with an empty one. Which tasks a round ran is read from the task snapshots.
+   The idle plan counts a decision held by `pool_line_held` neither due nor as a wake of its own
+   (`schedule_explanation.rs`), as one held by the benefit gate.
+6. **`benefit_limited`**, a V2 task boolean (requires `benefit_judged`, else
+   `missing_required_field`); the composer writes it from the `schedule.json` rule member
+   `"limited": true` (`SCHEDULE_RULE_LIMITED_MEMBER`, `BENEFIT_LIMITED_MEMBER`), refuses another
+   value, the mark on a maintenance rule and a rule that writes `benefit_limited` itself.
+7. **The always-on subsystem `pool_lines`**; the composer refuses a `schedule.json` whose pool
+   writes a line while `requires` does not name it (`schedule_invalid` at the member) and copies the
+   members as written.
+
+**Why.** Ruling 138 with 172 A and 173 and the two water lines: at its cap a resource is spent by
+value per unit, down to a stop line, never below a hard line the scheduler keeps; below the cap
+nothing is spent for free. The lines are the model's, a person's or an agent's, never the
+program's. Layout 乙 (design §1.6 item 4) keeps one dispatch at a time and every gate.
+
+**Codes, keys, vocabulary** (policy fragment; all pending, `ladder_class` none): `capped_spend`
+(info), `pool_line_held` (info) with the new vocabulary `pool_line_hold` (`would_cross_hard_line`,
+`capped_not_dispatchable`, `capped_limited_spent`, `capped_would_cross_hard_line`,
+`capped_round_empty`, `capped_not_head`, `capped_cap_unknown`, `lines_invalid`), and the catalog
+diagnostic `pool_lines_invalid` (error). One domain code with a vocabulary carries the design's
+seven holds (§1.6 item 7, provisional names; the outcome-code spec's 10-24 amendment). New keys:
+`pool_capacity`, `stop_line`, `hard_line`, `pool_reading`, `capped_episode`, `capped_round`,
+`capped_rank` (integers) and `pool_line_hold`; reused: `pool_id`, `amount_after`, `task_id`,
+`gate_code`, `fact_key`, `unknown_reason`. New domain prefixes: `capped_` (policy), and policy
+added to `pool_`. The descriptions of `policy_benefit_nonpositive`, `benefit_unknown`, the
+`benefit_gap` token `reading_unknown`, `benefit_milli` and `tolerance_milli` drop the discount.
+
+**Unchanged.** A catalog without a valuation, lines and `benefit_limited` serializes, hashes and
+decides byte for byte as before (no pool takes part without a declared valuation; the neutral
+example keeps its V1 and V2 golden hashes); the reserve gate, the zero tier, SS-2f's turns, the
+shared run limits, every pause, hold, blackout and budget, SS-4, the one-way rule, game neutrality
+and ruling 116's stop. **No configuration key, no persisted ledger shape, no interface revision**:
+`component-interfaces.md`'s bump rule keeps a revision for a change older peers tolerate; the
+members are gated by their subsystem through `requires` (an older Runtime refuses the file), the
+codes are additions to the outcome catalog, and the memory is never persisted.
+
+**What changes live.** Nothing now: no production pool declares a valuation, so no judged
+candidate reaches the cost or a line; no `schedule.json` writes a line or `limited`. With
+valuations (PRICE-4b) a regenerating pool at its cap is spent down to its stop line, which is why
+this slice deploys before the first one (design §4.1, the order).
+
+**Rollback** (to the release before). The ledger and the configuration need nothing. A build
+without SS-2h refuses a pool that writes a line, and a task that writes `benefit_limited`, at its
+reader (`unknown_field`), and does not name `pool_lines`, so its composer refuses such a
+`schedule.json` (`schedule_requires_missing`); it compiles at its start every generation its
+dispatches and decision memories name (§1.225's rollback correction), so first let this build
+activate a generation without them. Rolling back also brings SS-2b's linear discount back for a
+valued regenerating pool.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SS2h-1 | a V2 pool's `stop_line` and `hard_line` (`PoolLine`; schema `v2/pools.schema.json` `poolLine`) | catalog format addition (no ledger shape) | SS-2h | `acmodel bindings apply` (RL-R) | V2 only; both or neither; `pool_lines_invalid`; absent serializes as nothing |
+| SS2h-2 | a V2 task's `benefit_limited`; the `schedule.json` rule member `limited` | catalog format addition | SS-2h | `acmodel bindings apply` (PRICE-4b) | requires `benefit_judged`; the composer's |
+| SS2h-3 | the cost of a judged candidate's consumption, `W·c`; SS-2b's discount retired; SS-2d's `ε` without `σ` | behaviour (evaluation) | SS-2h | the policy evaluator | a regenerating pool still read |
+| SS2h-4 | the hard line below the cap (`would_cross_hard_line`) and the capped spending order (`capped_spend`, `pool_line_held`) | behaviour (evaluation) | SS-2h | the policy evaluator | only valued pools and judged consumers |
+| SS2h-5 | `CappedMemory`, `evaluate_with_capped_spending` | memory only (no shape) | SS-2h | runtime-host policy host | a start or a new catalog generation forgets it |
+| SS2h-6 | `config.subsystems` row `pool_lines` (always on) | new row value of an existing fact (no shape) | SS-2h | actingd | required of a `schedule.json` whose pool writes a line (`POOL_LINES_SUBSYSTEM`, `POOL_LINE_MEMBERS`) |
+
+Tests: `gate_ss2h` (design §4.1 tests 1 to 17; tests 1 and 2 fail on main and pass here). Adapted,
+as the requirement deliberately changes what they pinned: `ss2b_t6` (a full regenerating pool cost
+nothing and half way half its weight; now full price, and at its capacity the task is the head of
+its capped order with `B` −9000) and `ss2d_t15` (a full regenerating pool cost nothing; now it is
+dispatched as the capped head with `B` −9000).
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

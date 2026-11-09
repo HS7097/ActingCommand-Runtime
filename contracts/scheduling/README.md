@@ -868,16 +868,19 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
   weight), `consume(k,p)` the task's declared consumption of the pool (its `consumes` amounts;
   SS-2g, since 0.12.34: in thousandths, `C/1000` exactly, an expected consumption included,
   "Expected quantities (v2)"; the reserve gate reads `⌈C/1000⌉`) and `Q_p` the pool's
-  `valuation.scale`. `P(k,p)`, the cost of consuming pool `p`, is `W(k,p)`, discounted for a
-  regenerating pool between the task's reserve
-  line on it (its `reserves` `at_least`, 0 without one) and its capacity: `P =
-  W·clamp((cap − cur)/(cap − reserve), 0, 1)`, `cur` the pool's projected amount as
-  `resource_projection` reads it: 0 at capacity, `W` at the reserve. A pool that does not
-  regenerate costs `W`. Nothing here writes a pool weight (the one-way rule, SS-1).
+  `valuation.scale`. `P(k,p)`, the cost of consuming pool `p`, is `W(k,p)`, whatever the pool's
+  fill and whether it regenerates or not: the cost of a consumption is `W·c` (SS-2h, since
+  0.12.46, register §1.289; Alice's ruling 138 of 11-07 and her answer of 11-09 16:39: below the
+  cap nothing is spent for free). Until SS-2h a regenerating pool's cost was discounted between
+  the task's reserve line on it and its capacity, `P = W·clamp((cap − cur)/(cap − reserve), 0,
+  1)`; that discount is retired. A pool that reached its cap is spent by the capped spending order
+  ("Capped spending order"), which also gives the head of its order its own `B` (below). Nothing
+  here writes a pool weight (the one-way rule, SS-1).
 - **Unknown is never 0.** A judged candidate whose task declares no `produces` and no `consumes`
   entry, an entry whose `amount` is the pending marker, a pool it touches whose `valuation` is the
   pending marker or absent (for the instance), or a regenerating pool it consumes whose reading is
-  unknown or expired has an unknown `B`: the known part is never added up. It is not dispatched:
+  unknown or expired (still read, as before, though its cost no longer depends on it) has an
+  unknown `B`: the known part is never added up. It is not dispatched:
   deferred with `benefit_unknown` (info; `benefit_gap` `no_effects`, `entry_pending`,
   `valuation_pending`, `valuation_missing` or `reading_unknown`; `pool_id`, and `fact_key` with
   `unknown_reason` for an unknown reading of a fact), no wake of its own. An unknown reading also
@@ -885,7 +888,17 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
   decision then ends with the refresh's reason.
 - **Not positive.** A judged candidate whose known `B ≤ 0` is not dispatched: deferred with
   `policy_benefit_nonpositive` (info; `benefit_milli`, `expected_duration_ms`); a regenerating
-  pool it consumes wakes the evaluation at its next step, its cost falling as it fills.
+  pool it consumes wakes the evaluation at its next step, as before (SS-2h: its cost no longer
+  falls as it fills, but at its cap the capped spending order takes it).
+- **The pools' lines** (SS-2h, since 0.12.46, register §1.289; "Pool lines", "Capped spending
+  order"). After the judgement and before the decision, the lines of every valued pool a judged
+  candidate consumes decide. In a capped pool's round the candidates its order tries pass with
+  their own `B` whatever its sign (the head's `B = V − W·(c − a)`, `a = min(c, max(0, r − S))`,
+  `V` its value without the pool's cost, `c` its consumption, `r` the reading, `S` the stop
+  line), and every other judged consumer of the pool is held (`pool_line_held`); below the cap a
+  candidate that would pass (positive, or released in the zero tier) but whose run would leave a
+  pool below its hard line is held (`pool_line_held`, `would_cross_hard_line`). A `B` that is not
+  positive ranks after every positive one of its tier (the comparison `B·E' > B'·E` is signed).
 - **Ranking, per instance** (catalogs that mark a task; "Dispatch Decision Record" item 1):
   `promoted` first, as before; then the tier, the maintenance tier (every unmarked task, and the
   Runtime's own reading) before the business tier (the marked tasks), as ruling 104 point 1 puts
@@ -933,10 +946,13 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
   "Not positive" above; no configuration key.
   - *The bound.* The exact sum `S` (before the floor) differs from the model's value at the
     exported prices by at most `ε = Σ_produces [R/(2000·Q) + n·(2W+1)/(4000·Q)] +
-    Σ_consumes σ·[C/(2000·Q) + m·(2W+1)/(4000·Q)]`: `R` and `C` the pool's per-run production and
+    Σ_consumes [C/(2000·Q) + m·(2W+1)/(4000·Q)]`: `R` and `C` the pool's per-run production and
     consumption in thousandths (`r(k,p)` and SS-2g's `C`), `n` and `m` its `expected_amount_milli`
-    entries in each direction, `W` the weight `B` reads, `Q` the scale and `σ` the regenerating
-    share of `P`. The two roundings are the exported weight's (half to even, half a milli per
+    entries in each direction, `W` the weight `B` reads and `Q` the scale. SS-2h (register
+    §1.289): the consumption term reads the whole `C`, since no share of the cost is discounted;
+    until then it was multiplied by `σ`, the regenerating share of the retired discount. The
+    capped spending order lists a consumer by its value without the pool's cost against this `ε`
+    without that pool's term ("Capped spending order"). The two roundings are the exported weight's (half to even, half a milli per
     step) and each expected quantity's (half a thousandth). `ε` is an exact rational summed as `S`
     is; an overflow fails the evaluation as the sum's does.
   - *Three ways.* With `|S| ≤ ε` the candidate is *within tolerance*: its sign is the rounding's,
@@ -1695,6 +1711,139 @@ An account's cap is read, never written as a constant (Alice 10-26). Two more V2
 - **Refusals**, each at its pointer, as for a reference of a `fact` predicate: in a V1 document, `unknown_field` at `capacity/type` or `value/type`; a key that is no identifier, `type_mismatch` at `…/fact_key`; N outside -9007199254740991..=9007199254740991, `limit_exceeded` at `…/offset`; a reference that names a `scope`, `unknown_field` at `…/scope`. A `type` other than `fact`, or an N that is no integer, is refused by the reader (`type_mismatch`).
 - **Capability.** A Runtime that reads both forms reports the always-on subsystem `pool_fact_reference` in `config.subsystems` ([`actingd-check-config.md`](../actingd-check-config.md)). A `schedule.json` that writes either must list `pool_fact_reference` in `requires` ([`standard-pack-schedule.md`](../standard-pack-schedule.md)); the composer refuses the file without it, so a Runtime that does not name the subsystem refuses the file (`schedule_requires_missing`) instead of misreading it. An older Runtime given a catalog with either refuses it at its reader.
 - For example, a task due while the projected amount is at least the read capacity less 20: the pool `"capacity": {"type": "fact", "fact_key": "resource.neutral.capacity", "offset": 0}` and the trigger `{"kind": "resource_projection", "pool_id": "pool.neutral", "comparison": "greater_than_or_equal", "value": {"type": "fact", "fact_key": "resource.neutral.capacity", "offset": -20}}`.
+
+## Pool lines (SS-2h)
+
+Since 0.12.46 (register §1.289). Alice's ruling 138 (11-07, Workflow #428 comment 6706493161)
+puts a planned line below a resource's cap, given by the model, a person or an agent, never
+computed by the program; her answer of 11-09 17:37 makes it two water lines, a stop line above a
+hard line, and 17:42 says where they come from (the model, or an estimate from data: for example
+the hard line is the stop line less the costliest run's consumption) and that they constrain the
+scheduler only and are moved from outside over time; 17:48 approved the whole (#428 comment
+6735960127; design `rd-1031/design-c424-redline-1109.md` §1.6).
+
+A V2 pool may write `stop_line` and `hard_line` ([v2/README.md](v2/README.md);
+`actingcommand.scheduling.v2` only), both or neither, each in one of two forms:
+
+- **A fact reference**, the shape of a capacity read from its fact ("Pool fact references"):
+  `{"type": "fact", "fact_key": B, "offset": N}`, the integer the fact B of the pool's own scope
+  holds plus N, read as a capacity fact is (at least the pool's minimum confidence, at least 1,
+  and not past its expiry). Meant as the pool's capacity fact with a negative offset: the read cap
+  less a margin. The Runtime adds the given offset to the fact it reads and computes no line.
+- **A constant**, an integer in `0..=9007199254740991`, the line itself.
+
+- **Without lines** a pool's stop line `S` is its capacity and its hard line `H` is 0 (the
+  research channel's proposal the coordinator approved, design §1.6 item 1): it is spent only at
+  its cap, one run at a time, and has no protection of its own.
+- **At each evaluation** the lines of a valued pool are read on each instance its scope covers and
+  must hold `0 ≤ H < S ≤ cap`. The reading `r` they are checked against is the pool's projected
+  amount less the consumption its reading does not show yet: every task dispatched on the
+  instance at or after the reading's observation, by its declared consumption (the reserve gate's
+  step 3, "Task Reserves").
+- **Below the cap** a judged candidate that would pass the net-benefit gate (a positive `B`, or
+  released in the zero tier) and whose run would leave `r − ⌈C/1000⌉ < H` is not dispatched:
+  deferred with `pool_line_held` (info; `pool_line_hold` `would_cross_hard_line`, `pool_id`,
+  `pool_reading`, `pool_capacity`, `stop_line`, `hard_line`, `amount_after`), waking at a
+  regenerating pool's next step as a not-positive candidate does.
+- **Unknown or invalid.** A pool that writes its lines and whose capacity, reading or a line's fact
+  gives no value enters no capped state, and its judged candidates that would pass are deferred
+  with `pool_line_held` `capped_cap_unknown` (`fact_key`, `unknown_reason` when a fact gives
+  none). Lines read that break `0 ≤ H < S ≤ cap` hold them with `lines_invalid` (`stop_line`,
+  `hard_line`, `pool_capacity`). A pool without lines whose reading is unknown has no hard line to
+  keep: nothing changes for it (as before; a regenerating one is `benefit_unknown` anyway).
+- **Who is held.** The lines constrain the scheduler only (Alice, 17:42): a judged candidate. A
+  manual request, a chain successor that rides with its chain, an unmarked task and the Runtime's
+  own reading are never held by them.
+- **Refusals**, each at its pointer: in a V1 document, `unknown_field` at the member (either form);
+  a reference by a capacity reference's rules at `stop_line/…` or `hard_line/…`; a constant above
+  9007199254740991, `limit_exceeded` at the member; and `pool_lines_invalid` (error) at the member
+  when one is written without the other (at the one written), when a line is above the capacity
+  where the compiler can tell (a constant above a constant capacity, or a reference to the
+  capacity's own fact with a larger offset), and when the stop line is not above the hard line
+  where it can tell (two constants, or two references to one fact by their offsets; at
+  `hard_line`). Lines it cannot compare are checked at each evaluation (above).
+- **Capability.** A Runtime that reads the members reports the always-on subsystem `pool_lines` in
+  `config.subsystems` ([`actingd-check-config.md`](../actingd-check-config.md)). A
+  `schedule.json` whose pool writes either must list `pool_lines` in `requires`
+  ([`standard-pack-schedule.md`](../standard-pack-schedule.md)); the composer refuses the file
+  without it (`schedule_invalid` at the first such member), so a Runtime that does not name the
+  subsystem refuses the file (`schedule_requires_missing`) instead of misreading it. An older
+  Runtime given a catalog with either member refuses it at its reader (`unknown_field`).
+- **Identity.** A pool without the members serializes, and hashes, exactly as before.
+- For example, a pool whose cap is read, its stop line 40 below the cap and its hard line 76 below
+  it: `"capacity": {"type": "fact", "fact_key": "resource.neutral.capacity", "offset": 0}`,
+  `"stop_line": {"type": "fact", "fact_key": "resource.neutral.capacity", "offset": -40}` and
+  `"hard_line": {"type": "fact", "fact_key": "resource.neutral.capacity", "offset": -76}`.
+- A line given for one instance (SS-2h-c, later) will take precedence over the catalog's, and the
+  catalog's over the defaults above.
+
+## Capped spending order (SS-2h)
+
+Since 0.12.46 (register §1.289). Alice's ruling 138 spends a resource at its cap by benefit,
+highest first, the first round with the limited tasks too and later rounds with the repeatable
+ones only; her answer 172 A ranks by the value of a run per unit of the resource; 173 (11-09
+16:39) starts at the cap, at the start of the scheduler too, and freezes the order; 17:37 lists
+only the tasks that can be dispatched now and never lets the cost keep one out before the order;
+17:48 approved the layout inside the scheduler (乙, design §1.6 item 4). Only valued pools (a
+declared `valuation` for the instance) and judged consumers (a `benefit_judged` task of the
+instance that is no manual request and declares a consumption of the pool) take part: a catalog
+without a valuation is untouched.
+
+- **The episode.** When a pool's reading `r` (as in "Pool lines") reaches or exceeds its capacity
+  on an instance, a capped episode begins there; one already above it at a start begins at the
+  first evaluation. It ends once `r ≤ S` and `r < cap`, when a round lists or plans nothing
+  though a consumer is a candidate (`capped_round_empty`, on every consumer's decision), when the
+  catalog generation changes, or when the lines or the reading give no value. While no consumer
+  is a candidate at all (each in its cooldown, running, or held by its own conditions) nothing
+  could be dispatched in any case: the episode waits for its next round. A new episode begins at
+  the cap again; each counts from 1 since the Runtime started (`capped_episode`).
+- **A round** lists the pool's judged consumers that are candidates of the evaluation now (every
+  condition the policy holds passed: the trigger with its counts and preconditions, the feedback
+  stop, the cooldown, the no-progress guard, the placement and the score stage) whose value
+  without the pool's cost `V = S + C·W/(1000·Q)` is above that value's rounding bound (SS-2d's `ε`
+  without the pool's term); never by their cost. From the second round on, a task marked
+  `benefit_limited` ([v2/README.md](v2/README.md)) is not listed. The list is frozen for the round
+  by `V ÷ C`, the higher first (compared exactly), then by task id: a value that changes during the
+  round changes the order at the next round only.
+- **The plan.** From the reading at the round's start, the order is taken in turn: while the
+  accumulated reading `R` is above `S` (or at the cap), a consumer whose run would leave
+  `R − ⌈C/1000⌉ < H` is skipped (`capped_would_cross_hard_line`, `amount_after`) and the next tried;
+  one that fits is planned and `R` falls by its consumption. So the last one may take the reading
+  past the stop line but never below the hard line; with `H = S − (the costliest run)` nothing is
+  skipped.
+- **Dispatch, one at a time** (layout 乙). At each evaluation the head is the first planned
+  consumer the round has not dispatched (a task snapshot whose `last_dispatched_unix_ms` is at or
+  after the round's start counts as dispatched in it) that is a candidate now. Before it is
+  dispatched the reading is read again: when the head would leave `r − ⌈C/1000⌉ < H` the round
+  ends; when every planned one ran it ends too; while `r` is above `S` the next round starts at
+  once. The head and the planned candidates after it that fit above `H` form the pool's block:
+  in the allocation the block stays together at its head's place (its tier, `B ÷ E` and every key
+  after, the head's `B` being `V − W·(c − a)`, `a = min(c, max(0, r − S))`: only the part of the
+  consumption that takes the reading below the stop line costs), and the first of it that every
+  later gate admits (the reserve gate, the shared run limits, every pause, hold, blackout and
+  budget of the Runtime) is dispatched with `capped_spend` (info; `pool_id`, `pool_capacity`,
+  `stop_line`, `hard_line`, `capped_episode`, `capped_round`, `capped_rank` its place in the
+  round's order, `pool_reading`). A block candidate a later gate defers keeps that gate's reason
+  and the next one is tried; one behind the dispatched one, or behind its head when a more urgent
+  candidate took the instance, waits with `pool_line_held` `capped_not_head` (`task_id` the head).
+  A more urgent tier, and a business candidate of a higher `B ÷ E`, go first as always.
+- **The others are held** with `pool_line_held` and the episode's `capped_episode` and
+  `capped_round`: a consumer of the order not in the block (`capped_not_head`, or
+  `capped_would_cross_hard_line` when the plan skipped it), a limited one from the second round on
+  (`capped_limited_spent`), one listed after the order was frozen or of no value without the
+  pool's cost (`capped_not_head` when it would pass, else its own reason), and a consumer that is
+  no candidate of the evaluation (`capped_not_dispatchable`, `gate_code` its own last reason when
+  registered: no run left, a precondition, a cooldown); it is listed again at the next round.
+- **Memory only.** The episodes, their round numbers and frozen orders are the Runtime's
+  (`CappedMemory`, passed to `evaluate_with_capped_spending`), as the no-progress guard's are
+  ("No-progress guard"): no ledger record, state file or decision identity holds them. A start
+  begins with none; a pool still at or above its cap then begins a new episode. Every other entry
+  point evaluates with an empty memory.
+- **Unchanged.** Every other gate and its order, the triggers, the reserves, the shared run
+  limits, pauses, blackouts (a time window is only a blacklist), SS-4, the maintenance tier,
+  SS-2f's turns across instances and the one dispatch per instance. A catalog without a valuation,
+  lines and `benefit_limited` decides, records and hashes byte for byte as before; ruling 116's
+  stop holds (no production pool declares a valuation).
 
 ## Reset exclusions and the task's own last result (Workflow #411 P19)
 

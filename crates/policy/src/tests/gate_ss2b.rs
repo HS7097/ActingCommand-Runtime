@@ -13,8 +13,9 @@
 // - a known `B ≤ 0` is `policy_benefit_nonpositive`, any unknown input `benefit_unknown`; neither
 //   is dispatched, and the known part of a partly known candidate is never added up;
 // - unjudged candidates rank as before; a catalog without a mark decides as before;
-// - consumption costs its weight, a regenerating pool's discounted by its fullness; an expected
-//   amount of 350 milli counts as 0.35;
+// - consumption costs its full weight, a regenerating pool's too whatever its fill (SS-2h, register
+//   §1.289, retired SS-2b's discount by fullness; a pool at its cap is spent by the capped spending
+//   order); an expected amount of 350 milli counts as 0.35;
 // - the pending markers validate in V2 and are refused elsewhere; the composer marks the rules
 //   whose package is not maintenance-role and counts the judged rules' coverage.
 //
@@ -420,10 +421,14 @@ fn ss2b_t5_a_catalog_without_marks_decides_as_before() {
 }
 
 // Test 6: consumption lowers B. A pool that does not regenerate costs its full weight: 2 x 1000
-// - 3 x 100 = 1700. A regenerating pool costs W * clamp((cap - cur) / (cap - reserve), 0, 1):
-// nothing at capacity, W at the reserve line, half way between them half. Ten units of stamina
-// at 1000 milli each against one valued unit: 1000, -9000 and -4000; below the line the share
-// stays 1. A candidate whose B is not positive wakes at the pool's next step.
+// - 3 x 100 = 1700. SS-2h (register §1.289; Alice's ruling 138 and her answer of 11-09 16:39,
+// below the cap nothing is spent for free): a regenerating pool costs its full weight too, whatever
+// its fill. Ten units of stamina at 1000 milli each against one valued unit: -9000 half way (60), at
+// the reserve line (20) and below it (10), not dispatched, waking at the pool's next step. At its
+// capacity (100 of 100, the pool's stop line without lines) the pool is capped: the task is the
+// head of its capped spending order and is dispatched (`capped_spend`), its B -9000 since none of
+// its consumption lies above the stop line. Adapted in SS-2h: until then the linear discount
+// W * clamp((cap - cur) / (cap - reserve), 0, 1) gave 1000 at capacity and -4000 half way.
 #[test]
 fn ss2b_t6_consumption_lowers_the_benefit_by_its_cost() {
     let catalog_plain = catalog(vec![task(
@@ -454,8 +459,18 @@ fn ss2b_t6_consumption_lowers_the_benefit_by_its_cost() {
     let (full, _) = round(&catalog_regen, Vec::new(), at(100), true);
     assert_eq!(dispatched(&full), ["task_regen"], "{full:#?}");
     let breakdown = reason(decision(&full, "task_regen"), "rank_breakdown");
-    assert_eq!(breakdown.outcome.value("benefit_milli"), Some(&json!(1000)));
-    for (amount, expected) in [(20, -9_000), (60, -4_000), (10, -9_000)] {
+    assert_eq!(
+        breakdown.outcome.value("benefit_milli"),
+        Some(&json!(-9_000))
+    );
+    assert!(
+        decision(&full, "task_regen")
+            .reasons
+            .iter()
+            .any(|reason| reason.outcome.is(PolicyCode::CappedSpend)),
+        "{full:#?}"
+    );
+    for (amount, expected) in [(20, -9_000), (60, -9_000), (10, -9_000)] {
         let (evaluation, _) = round(&catalog_regen, Vec::new(), at(amount), true);
         assert!(
             dispatched(&evaluation).is_empty(),

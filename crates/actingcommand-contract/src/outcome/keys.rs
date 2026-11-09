@@ -740,4 +740,15 @@ outcome_keys! {
     // ---- #402 HS-3 (the Nemu application index resolved at the paired open,
     // contracts/device-binding.md "Backends"): why `nemu_app_index_missing` found no index. ----
     nemu_app_index_problem: vocab(nemu_app_index_problem),
+    // ---- SS-2h (pool lines and the capped spending order, contracts/scheduling/README.md "Pool
+    // lines", "Capped spending order"): begin ----
+    pool_capacity: integer,
+    stop_line: integer,
+    hard_line: integer,
+    pool_reading: integer,
+    capped_episode: integer,
+    capped_round: integer,
+    capped_rank: integer,
+    pool_line_hold: vocab(pool_line_hold),
+    // ---- SS-2h: end ----
 }

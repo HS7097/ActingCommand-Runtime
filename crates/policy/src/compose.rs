@@ -16,7 +16,8 @@
 //!    `pool_fact_reference` when a pool's `capacity` or a `resource_projection`'s `value` is one
 //!    (#386 CF-5) and `reset_exclusions` when a timeline event writes `excludes_fact_prefixes`
 //!    (Workflow #411 P19) and `fact_unknown_probe` when a rule's `fact` predicate writes
-//!    `on_unknown` (SS-5), no timeline event invalidating the Runtime's application update fact
+//!    `on_unknown` (SS-5) and `pool_lines` when a pool writes `stop_line` or `hard_line` (SS-2h),
+//!    no timeline event invalidating the Runtime's application update fact
 //!    (UPD-1 fix round 5), and against the subsystems given (when given), its packages checked
 //!    against the registry, and the registry's packages classified. A refused game is reported
 //!    with its game id.
@@ -61,7 +62,7 @@ use crate::canonical::canonical_serialized;
 use crate::{
     ActivityProfile, CatalogDocumentSource, CatalogSources, CompiledCatalog,
     FACT_REFERENCE_SUBSYSTEM, FACT_REFERENCE_TYPE, FACT_UNKNOWN_PROBE_SUBSYSTEM,
-    POOL_FACT_REFERENCE_SUBSYSTEM, PoolSpec, RESET_EXCLUSIONS_SUBSYSTEM,
+    POOL_FACT_REFERENCE_SUBSYSTEM, POOL_LINES_SUBSYSTEM, PoolSpec, RESET_EXCLUSIONS_SUBSYSTEM,
     SCHEDULING_SCHEMA_VERSION_V2, SchedulingDocumentKind, TaskSpec, TimelineEvent,
     compile_composed_catalog,
 };
@@ -199,6 +200,20 @@ pub const BENEFIT_JUDGED_MEMBER: &str = "benefit_judged";
 /// carries the model's realization mark (the `schedule.json` rule member `"realization": true`,
 /// [`SCHEDULE_RULE_REALIZATION_MEMBER`]). A rule never writes it itself.
 pub const BENEFIT_REALIZATION_MEMBER: &str = "benefit_realization";
+
+/// SS-2h (register §1.289): the `schedule.json` rule member `"limited": true`, which only `acmodel
+/// bindings apply` writes from the model (the activity has its own limit, or an income cap counts
+/// it). It is `schedule.json`'s, not a V2 task member: the composer writes the task member
+/// [`BENEFIT_LIMITED_MEMBER`] on the judged rule instead.
+pub const SCHEDULE_RULE_LIMITED_MEMBER: &str = "limited";
+
+/// SS-2h (register §1.289): the task member the composer writes, `true`, on a judged rule that
+/// carries the rule member [`SCHEDULE_RULE_LIMITED_MEMBER`]. A rule never writes it itself.
+pub const BENEFIT_LIMITED_MEMBER: &str = "benefit_limited";
+
+/// SS-2h (register §1.289): the pool members of the two lines, which the composer copies as
+/// written and which require [`POOL_LINES_SUBSYSTEM`].
+pub const POOL_LINE_MEMBERS: [&str; 2] = ["stop_line", "hard_line"];
 
 /// SS-2b (register §1.225; Alice's ruling 116, 「业务覆盖完整」): how far one game's judged rules
 /// (those whose package is not maintenance-role and that do not declare themselves maintenance,
@@ -566,12 +581,18 @@ impl Composed {
             Some(at) => (&rest[..at], &rest[at..]),
             None => (rest, ""),
         };
-        // SS-2d: the composed task's realization member comes from the rule's `realization`.
+        // SS-2d: the composed task's realization member comes from the rule's `realization`;
+        // SS-2h: its limited member from the rule's `limited`.
         let realization_tail;
         let tail = if document == SchedulingDocumentKind::Tasks
             && tail.strip_prefix('/') == Some(BENEFIT_REALIZATION_MEMBER)
         {
             realization_tail = format!("/{SCHEDULE_RULE_REALIZATION_MEMBER}");
+            realization_tail.as_str()
+        } else if document == SchedulingDocumentKind::Tasks
+            && tail.strip_prefix('/') == Some(BENEFIT_LIMITED_MEMBER)
+        {
+            realization_tail = format!("/{SCHEDULE_RULE_LIMITED_MEMBER}");
             realization_tail.as_str()
         } else {
             tail
@@ -838,6 +859,26 @@ fn read_game(
             ),
         ));
     }
+    // SS-2h (register §1.289): likewise a pool that writes `stop_line` or `hard_line`, in either
+    // form.
+    if !schedule
+        .requires
+        .iter()
+        .any(|name| name == POOL_LINES_SUBSYSTEM)
+        && let Some(pointer) = schedule.pools.iter().enumerate().find_map(|(index, pool)| {
+            POOL_LINE_MEMBERS
+                .iter()
+                .find(|member| pool.body.contains_key(**member))
+                .map(|member| format!("/pools/{index}/{member}"))
+        })
+    {
+        return Err(refused(
+            schedule_issue(StandardPackProblem::ScheduleInvalid, pointer),
+            format!(
+                "a pool's stop_line and hard_line need requires to name {POOL_LINES_SUBSYSTEM}"
+            ),
+        ));
+    }
     // UPD-1 fix round 5 (`standard-pack-schedule.md`, "The store update rule"): no timeline event
     // invalidates the Runtime's application update fact. A reset that cleared it would leave the
     // store update rule's trigger reading the key missing (Unknown), so the rule would never run,
@@ -887,6 +928,41 @@ fn read_game(
             ),
         ));
     }
+    // SS-2h (register §1.289): likewise the limited task member is the composer's, written from
+    // the rule member `limited`, which, if written, is `true` and not on a rule that declares
+    // itself maintenance.
+    if let Some(index) = schedule
+        .rules
+        .iter()
+        .position(|rule| rule.body.contains_key(BENEFIT_LIMITED_MEMBER))
+    {
+        return Err(refused(
+            schedule_issue(
+                StandardPackProblem::ScheduleInvalid,
+                format!("/rules/{index}/{BENEFIT_LIMITED_MEMBER}"),
+            ),
+            format!(
+                "{BENEFIT_LIMITED_MEMBER} is the composer's: a rule carries the model's mark as \
+                 {SCHEDULE_RULE_LIMITED_MEMBER}"
+            ),
+        ));
+    }
+    if let Some(index) = schedule.rules.iter().position(|rule| {
+        rule.body
+            .get(SCHEDULE_RULE_LIMITED_MEMBER)
+            .is_some_and(|value| *value != Value::Bool(true) || rule.maintenance)
+    }) {
+        return Err(refused(
+            schedule_issue(
+                StandardPackProblem::ScheduleInvalid,
+                format!("/rules/{index}/{SCHEDULE_RULE_LIMITED_MEMBER}"),
+            ),
+            format!(
+                "{SCHEDULE_RULE_LIMITED_MEMBER}, if written, is true, on a rule that does not \
+                 declare itself maintenance"
+            ),
+        ));
+    }
     if let Some(subsystems) = subsystems
         && let Some((index, name)) = schedule
             .requires
@@ -929,6 +1005,21 @@ fn read_game(
             format!(
                 "{SCHEDULE_RULE_REALIZATION_MEMBER} marks a judged rule only, and this rule's \
                  package is maintenance-role"
+            ),
+        ));
+    }
+    // SS-2h (register §1.289): likewise the limited mark.
+    if let Some(index) = schedule.rules.iter().position(|rule| {
+        rule.body.contains_key(SCHEDULE_RULE_LIMITED_MEMBER) && !judged(rule, &classification)
+    }) {
+        return Err(refused(
+            schedule_issue(
+                StandardPackProblem::ScheduleInvalid,
+                format!("/rules/{index}/{SCHEDULE_RULE_LIMITED_MEMBER}"),
+            ),
+            format!(
+                "{SCHEDULE_RULE_LIMITED_MEMBER} marks a judged rule only, and this rule's package \
+                 is maintenance-role"
             ),
         ));
     }
@@ -1289,6 +1380,11 @@ fn compose_task(rule: &ScheduleRule, alias: &str, copies: &Copies<'_>, judged: b
         )),
     );
     for (name, value) in &rule.body {
+        // SS-2h: the rule member `limited` is `schedule.json`'s; the task carries
+        // `benefit_limited` instead (below).
+        if name == SCHEDULE_RULE_LIMITED_MEMBER {
+            continue;
+        }
         let value = match name.as_str() {
             "trigger" | "feedback_stop" => predicate(value, alias, copies),
             "consumes" | "produces" | "reserves" => pool_references(value, alias, copies),
@@ -1304,6 +1400,10 @@ fn compose_task(rule: &ScheduleRule, alias: &str, copies: &Copies<'_>, judged: b
         // `read_game` refuse it elsewhere).
         if rule.realization {
             task.insert(BENEFIT_REALIZATION_MEMBER.to_owned(), Value::Bool(true));
+        }
+        // SS-2h: so does the limited mark (`read_game` refuses it elsewhere).
+        if rule.body.get(SCHEDULE_RULE_LIMITED_MEMBER) == Some(&Value::Bool(true)) {
+            task.insert(BENEFIT_LIMITED_MEMBER.to_owned(), Value::Bool(true));
         }
     }
     if copies
