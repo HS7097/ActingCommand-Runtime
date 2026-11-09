@@ -8031,6 +8031,58 @@ and exits are the moved code's; the table and the location are read by nothing y
 **LAB-1 rollback** (to the release before it). Nothing persisted: the crate is code, and no
 document, record or configuration key changes.
 
+### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
+
+[scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", "Turns across
+instances"; "Dispatch Decision Record" item 1) and [standard-pack-schedule.md](standard-pack-schedule.md)
+("Two priority tiers") are the contract. It narrows §1.225 (the ranking across instances) and
+§1.235 (3) (the zero tier's order across instances). The number 1.288 is this slice's; SS-2h-a
+and #434 LAB-1 may be in flight beside it.
+
+**What.** In a catalog that marks a task `benefit_judged`, two business candidates of different
+instances are ordered by their instances' turns (`evaluator/turns.rs`, `InstanceTurns`; one more
+key of `allocation_order`), after `promoted`, the tier and the zero tier's place and before every
+other key of the tier: the instance whose most recent policy dispatch is the earliest first, an
+instance never dispatched before every dispatched one, and at the same instant (two never
+dispatched included) the smaller instance id. An instance's most recent policy dispatch is the
+latest `last_dispatched_unix_ms` among its task snapshots (`EvaluationFacts.tasks`, the fact
+refresh's `_fact_refresh` included). Within an instance the key is equal, so the order of §1.225,
+§1.229 and §1.235 stays: unjudged first, then judged by `B ÷ E`, the released zero tier last. The
+reserve gate reads the same order (`apply_reserves`), per instance as before.
+
+**Why.** K2, the design's recommendation, which Alice chose; the design's own reasons, not hers:
+each game's value unit (its `κ`, `prices.unit_milli`) differs, so `B` of two games is not
+comparable, and comparing them by list price is what the 10-30 joint plan warned against; the
+turns fit #427's "five instances run like five players" and change one sort key. The shared run
+limits (`max_concurrent_runs`, the heavy-scene slots) are where the order across instances
+decides, and they are contended on almost every round once scheduling resumes.
+
+**Where the key comes from.** The task snapshots every evaluation already receives: the Runtime
+projects them from the policy dispatches it admitted (`policy_host.rs`,
+`task_runtime_snapshots_of`), one per task and instance with its latest admission. No new read,
+no ledger query (#422), no state file.
+
+**Unchanged.** The maintenance tier and its order, a promotion's place, the zero tier's last place
+behind every positive and unjudged candidate of every instance, "one dispatch per instance", the
+reserve gate, the shared run limits, the benefit gate, the chain handover, the decision records,
+game neutrality. A catalog without `benefit_judged`, or a round with no business candidate,
+decides byte for byte as before. **No configuration key, no new code, no ledger record kind, no
+interface revision**: the evaluator's order is no anchor of
+[component-interfaces.md](component-interfaces.md) (its "Bump rule": no field, record or document
+an older peer reads changes).
+
+**What changes live.** Nothing while ruling 116 holds business dispatch (this slice is placed
+before it is lifted). Afterwards, when business candidates of several instances contend for a
+shared run slot, it goes to the instance that waited longest, not to the game with the larger
+number.
+
+**Rollback** (to 0.12.45). Nothing is persisted: an older build orders the business tier across
+instances by `B ÷ E` again.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| SS2f-1 | `allocation_order`: business candidates of different instances by their instances' turns (`InstanceTurns::order`) | behaviour (evaluation) | SS-2f | — | only with `benefit_judged` in the catalog and between two business candidates; total: the instance id breaks a tie |
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

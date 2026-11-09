@@ -124,4 +124,7 @@ mod tests {
     // SS-2d (0.12.35; register §1.235): a judged candidate within its rounding error is neither
     // positive nor negative; a model-verified realization task may run last in its tier.
     mod gate_ss2d;
+    // SS-2f (0.12.46; register §1.288): the business tier across instances goes to the instance
+    // least recently dispatched first; within an instance the order of before stays.
+    mod gate_ss2f;
 }
