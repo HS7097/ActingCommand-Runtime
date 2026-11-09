@@ -10,6 +10,7 @@ use actingcommand_lab::{
     ClickEffect, ClickGesture, ClickPlan, CommitClickRequest, OpaqueJson, PlanClickRequest,
     PlannedSwipe, RecordPoint, RecordingLock, record_commit_click, record_plan_click,
 };
+use actingcommand_runtime_client::RuntimeClientError;
 
 pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
     reject_mixed_online_and_offline_scene(flags, "do")?;
@@ -102,7 +103,7 @@ pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> 
         let session = begin_runtime_debug_session()?;
         let verified = session
             .run_contained_lab_operation(&instance, request, frames)
-            .map_err(|error| CliError::device(error.to_string()))?;
+            .map_err(lab_operation_call_error)?;
         let operation = verified.operation();
         let record = &operation.record;
         let prepared = &record.prepared;
@@ -207,6 +208,52 @@ pub(super) fn run_contained_lab_do(global: &GlobalOptions, flags: &FlagArgs) -> 
     let result = result.map(arrival_last);
     // The logical publication's generation stays referenced throughout the RPC and validation.
     super::super::contained_resources::finish_package_use(result, reader.close())
+}
+
+/// Workflow #433 LABDO-1: the answer of a Lab operation call (`do --capture`, element,
+/// coordinates or `--operation`) that returned an error. When the Runtime answered the request
+/// and a check of the runtime client after the receipt failed (the error carries the Runtime's
+/// answer), the operation ran as the receipt reports, so it is never a device error:
+/// `lab_operation_check_failed`, exit 5 (a Runtime or state failure), with the receipt's
+/// `req_id`, `correlation_id` and `receipt_state`, the `effect` and `executed` its record reports
+/// (as an answer of `do` states them), the record's `failure` (`null` when it reports none), and
+/// the client's own `client_code` and `client_message`. A call the Runtime refused or never
+/// answered stays a device error, as before.
+fn lab_operation_call_error(error: RuntimeClientError) -> CliError {
+    let Some(answer) = error.lab_operation_answer() else {
+        return CliError::device(error.to_string());
+    };
+    let client_message = error.to_string();
+    let effect = match answer.effect {
+        Some(EffectDisposition::Performed) => "performed",
+        Some(EffectDisposition::NotPerformed) => "not performed",
+        Some(EffectDisposition::Indeterminate) => "indeterminate",
+        None => "unknown (the receipt carries no Lab operation record)",
+    };
+    CliError::new(
+        ErrorKind::RuntimeUnavailable,
+        crate::codes::ActinglabCode::LabOperationCheckFailed.as_str(),
+        format!(
+            "the Runtime answered the Lab operation and reports its effect as {effect}; a check of \
+             the client after the receipt then failed, so do not send it again as though it had \
+             not run: {client_message}"
+        ),
+        &[],
+    )
+    .with_details(json!({
+        "req_id": answer.request_id,
+        "correlation_id": answer.correlation_id,
+        "receipt_state": answer.receipt_state,
+        "effect": answer.effect,
+        "executed": match answer.effect {
+            Some(EffectDisposition::Performed) => Some(true),
+            Some(EffectDisposition::NotPerformed) => Some(false),
+            Some(EffectDisposition::Indeterminate) | None => None,
+        },
+        "failure": answer.failure,
+        "client_code": error.code().as_str(),
+        "client_message": client_message,
+    }))
 }
 
 /// #411 A19: the error a failed online `do` answers, its details the operation's answer. A timed
@@ -314,7 +361,7 @@ fn run_declared_operation(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
         let session = begin_runtime_debug_session()?;
         let verified = session
             .run_contained_lab_declared_operation(&instance, request, frames, task_timeout)
-            .map_err(|error| CliError::device(error.to_string()))?;
+            .map_err(lab_operation_call_error)?;
         let operation = verified.operation();
         let record = &operation.record;
         let prepared = &record.prepared;
@@ -768,3 +815,9 @@ mod gate_lab_l3;
 #[cfg(test)]
 #[path = "../tests/gate_412_b3_s2_exit.rs"]
 mod gate_412_b3_s2_exit;
+
+// Workflow #433 LABDO-1: a Lab operation the Runtime answered whose client check then failed
+// answers `lab_operation_check_failed` with its req_id and effect, exit 5, never `device_error`.
+#[cfg(test)]
+#[path = "../tests/gate_433_labdo1.rs"]
+mod gate_433_labdo1;

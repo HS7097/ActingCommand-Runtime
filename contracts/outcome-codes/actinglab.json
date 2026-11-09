@@ -619,6 +619,24 @@
       "description": "Workflow #411 B34: actinglab package check admitted the package, and an operation's click declares a box of one point: a point click, a long press without a box, or a rect, specific_rect or long-press box of 1x1. pack_operation_id names the operation; box_x, box_y, box_width and box_height the box in the coordinate space of its task (a point click's box is 1x1 at its point). A click located on the frame (target, target_center, offset) and a drag are not judged. The package still passes; one warning per such click.",
       "common_causes": "TBD",
       "handling": "TBD"
+    },
+    "lab_operation_check_failed": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {
+        "req_id": "required",
+        "receipt_state": "required",
+        "client_code": "required"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.45",
+      "description": "Workflow #433 LABDO-1: online actinglab do --capture (an element, coordinates or --operation) sent its Lab operation and the Runtime answered it with a receipt, then a check the runtime client runs after the receipt failed: the event queries of the request, its lease and its actions, or the evidence check of the operation's record against those events and the artifacts they verify. The Runtime acted as its receipt reports, so this is not a device error: the details carry the receipt's req_id, correlation_id and receipt_state, the effect its record reports (performed, not_performed or indeterminate; null when the receipt carries no Lab operation record) with executed, the record's own failure when it reports one, and the client's code (client_code) and message (client_message). Exit 5, the class of a Runtime or state failure. MCP relays it as lab_tool_failed (class runtime) with req_id. Nothing more is written to the ledger by the client.",
+      "common_causes": "The client's evidence check disagrees with what the Runtime recorded for a successful operation (for example runtime_lab_diagnostic_budget_mismatch when an OCR session's placement report was archived under the request); the event query timed out or failed; an artifact could not be read back from the state root.",
+      "handling": "Do not send the operation again as though it had not run: read effect first, and the instance's screen. Report client_code with req_id so the check can be corrected."
     }
   }
 }

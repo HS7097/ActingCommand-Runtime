@@ -33,6 +33,8 @@ sha2 = { workspace = true }
 zip = { workspace = true }
 
 [dev-dependencies]
+# Workflow #433 LABDO-1: the runtime client's fake of a failed check after a Lab receipt.
+actingcommand-runtime-client = { workspace = true, features = ["test-support"] }
 actingcommand-runtime-host = { workspace = true, features = ["fixture-backends"] }
 actingcommand-scheduler = { workspace = true }
 tempfile = "3"

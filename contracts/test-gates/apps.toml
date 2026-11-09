@@ -1233,3 +1233,12 @@ tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::config::gate_407_gpu1d::check_config_lists_every_adapter_and_the_one_it_resolves",
 ]
 incident = ["#407 GPU-1 D"]
+
+# Workflow #433 LABDO-1 (board #433 6733194460; brief rd-1109/labdo-exit4/brief-labdo1.md; contracts/lab-two-entries.md section 9.3): an online do --capture whose Runtime receipt arrived and whose runtime client check after it failed answers lab_operation_check_failed, exit 5, with the receipt's req_id, correlation_id and receipt_state, the effect and executed its record reports and the client's code and message, never device_error (exit 4); MCP relays it to ac_lab_do as lab_tool_failed class runtime with that req_id, actinglab's code, its details and its message
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::lab2_cli::operation::gate_433_labdo1::lab_do_post_receipt_check_failure_names_effect",
+    "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_433_labdo1::lab_do_post_receipt_check_failure_passes_through_mcp",
+]
+incident = ["#433 LABDO-1"]

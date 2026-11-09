@@ -286,7 +286,8 @@ fn gate_interpret_answers_each_actinglab_exit_by_its_class_with_actinglab_s_code
     // exit code names, caused by actinglab's code (not_implemented for exit 6) and by
     // foreign_other_error {raw_source process, raw_text, exit_code} whose raw_text is the
     // error's details as JSON (coordinator ruling 7 on A5: data a consumer reads is kept).
-    // actinglab's message is not carried.
+    // Workflow #433 LABDO-1: actinglab's message is kept, as a last foreign_other_error
+    // {raw_source process, raw_text, exit_code} whose raw_text is the message verbatim.
     let rows = [
         (
             2,
@@ -364,6 +365,10 @@ fn gate_interpret_answers_each_actinglab_exit_by_its_class_with_actinglab_s_code
                     "caused_by".to_owned(),
                     ContractCode::ForeignOtherError.as_str().to_owned()
                 ),
+                (
+                    "caused_by".to_owned(),
+                    ContractCode::ForeignOtherError.as_str().to_owned()
+                ),
             ],
             "exit {code}: {outcome:?}"
         );
@@ -386,10 +391,11 @@ fn gate_interpret_answers_each_actinglab_exit_by_its_class_with_actinglab_s_code
             Some(json!({"req_id": req_id, "step": 3})),
             "exit {code}: the details are not actinglab's: {text}"
         );
-        assert!(
-            !error.to_value().to_string().contains("gate lab message"),
-            "exit {code} carries actinglab's message: {}",
-            error.to_value()
+        assert_eq!(
+            Some(outcome.causes()[2].outcome().values()),
+            json!({"raw_source": "process", "raw_text": "gate lab message", "exit_code": code})
+                .as_object(),
+            "exit {code}: actinglab's message is not kept: {outcome:?}"
         );
     }
 
