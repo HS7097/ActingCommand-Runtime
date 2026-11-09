@@ -39,7 +39,8 @@
 //! The result carries the four documents, the compiled catalog, the manifest (`procedure_ref` →
 //! game, package and directory), each game's classification and the rules digest. Every refusal
 //! is a `standard_pack_root_invalid` problem of the game's `schedule.json` at its JSON pointer: a
-//! compiler diagnostic is mapped back to the rule or item it came from.
+//! compiler diagnostic is mapped back to the rule or item it came from. #428 CW-1: so is each
+//! compile warning the compiled catalog carries ([`StandardPackComposition::compile_warnings`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -48,11 +49,12 @@ use std::fmt;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
-    APPLICATION_UPDATE_REQUIRED_FACT_KEY, BundleMaintenance, SCHEDULE_RULE_REALIZATION_MEMBER,
-    STANDARD_PACK_SCHEDULE_FILE, ScheduleItem, ScheduleMember, ScheduleRule,
-    StandardPackClassification, StandardPackProblem, StandardPackRoot, StandardPackRootIssue,
-    StandardPackSchedule, classify_standard_pack_packages, parse_standard_pack_schedule,
-    standard_pack_maintenance_packages, validate_standard_pack_schedule_references,
+    APPLICATION_UPDATE_REQUIRED_FACT_KEY, BundleMaintenance, CatalogCompileWarning,
+    SCHEDULE_RULE_REALIZATION_MEMBER, STANDARD_PACK_SCHEDULE_FILE, ScheduleItem, ScheduleMember,
+    ScheduleRule, StandardPackClassification, StandardPackProblem, StandardPackRoot,
+    StandardPackRootIssue, StandardPackSchedule, classify_standard_pack_packages,
+    parse_standard_pack_schedule, standard_pack_maintenance_packages,
+    validate_standard_pack_schedule_references,
 };
 use serde::Serialize;
 use serde_json::{Map, Value, json};
@@ -60,7 +62,7 @@ use sha2::{Digest, Sha256};
 
 use crate::canonical::canonical_serialized;
 use crate::{
-    ActivityProfile, CatalogDocumentSource, CatalogSources, CompiledCatalog,
+    ActivityProfile, CatalogDiagnosticCode, CatalogDocumentSource, CatalogSources, CompiledCatalog,
     FACT_REFERENCE_SUBSYSTEM, FACT_REFERENCE_TYPE, FACT_UNKNOWN_PROBE_SUBSYSTEM,
     POOL_FACT_REFERENCE_SUBSYSTEM, POOL_LINES_SUBSYSTEM, PoolSpec, RESET_EXCLUSIONS_SUBSYSTEM,
     SCHEDULING_SCHEMA_VERSION_V2, SchedulingDocumentKind, TaskSpec, TimelineEvent,
@@ -245,6 +247,28 @@ struct UndeclaredRule {
     pool_id: Option<String>,
 }
 
+/// #428 CW-1 (register §1.290): one compile warning of the composed catalog, placed as a refusal
+/// is: the game whose `schedule.json` gave the item it came from, and the pointer in that file. A
+/// warning the composer cannot place in a game's file (none so far: each compile warning is at a
+/// composed item) has no game and keeps its pointer in the composed document.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct StandardPackCompileWarning {
+    pub game_id: Option<String>,
+    pub code: CatalogDiagnosticCode,
+    pub pointer: String,
+}
+
+impl StandardPackCompileWarning {
+    /// The contract's form, the one `config.catalog_warnings` records.
+    pub fn to_contract(&self) -> CatalogCompileWarning {
+        CatalogCompileWarning {
+            warning: self.code.code().as_str().to_owned(),
+            game: self.game_id.clone(),
+            pointer: self.pointer.clone(),
+        }
+    }
+}
+
 /// A composed catalog of the standard packs' rules.
 #[derive(Debug, Clone)]
 pub struct StandardPackComposition {
@@ -267,6 +291,8 @@ pub struct StandardPackComposition {
     /// [`STANDARD_PACK_ESCALATION_WARNING_THRESHOLD`], by game id, with those rules' ids and
     /// thresholds in file order.
     escalations: Vec<(String, Vec<(String, u64)>)>,
+    /// #428 CW-1: the compiled catalog's warnings, placed and each once.
+    compile_warnings: Vec<StandardPackCompileWarning>,
 }
 
 impl StandardPackComposition {
@@ -277,6 +303,14 @@ impl StandardPackComposition {
 
     pub fn compiled(&self) -> &CompiledCatalog {
         &self.compiled
+    }
+
+    /// #428 CW-1 (register §1.290): the compiled catalog's warnings ([`CompiledCatalog::warnings`],
+    /// for example `pool_lines_unvalued`), each placed in its game's `schedule.json` as a refusal
+    /// is, each once (a pool composed for two instances warns at both copies, one place), in the
+    /// order game, code, pointer. Nothing about the composition depends on them.
+    pub fn compile_warnings(&self) -> &[StandardPackCompileWarning] {
+        &self.compile_warnings
     }
 
     /// One entry per `procedure_ref` the composed tasks name, by `procedure_ref`.
@@ -764,6 +798,26 @@ pub fn compose_standard_pack_rules(
             .collect();
         StandardPackComposeFailure { issues }
     })?;
+    // #428 CW-1: the warnings the compiler returns with the catalog, placed as its refusals are.
+    let mut compile_warnings = compiled
+        .warnings()
+        .iter()
+        .map(|diagnostic| {
+            let (game_id, pointer) =
+                composed.locate(diagnostic.source.document, &diagnostic.json_path);
+            let pointer = match game_id {
+                Some(_) => pointer,
+                None => diagnostic.json_path.clone(),
+            };
+            StandardPackCompileWarning {
+                game_id,
+                code: diagnostic.code,
+                pointer,
+            }
+        })
+        .collect::<Vec<_>>();
+    compile_warnings.sort();
+    compile_warnings.dedup();
     let manifest = manifest.into_values().collect::<Vec<_>>();
     let rules_digest =
         rules_digest(&compiled, &manifest).map_err(|issue| StandardPackComposeFailure {
@@ -783,6 +837,7 @@ pub fn compose_standard_pack_rules(
         benefit,
         tier_mismatches: mismatches,
         escalations,
+        compile_warnings,
     })
 }
 

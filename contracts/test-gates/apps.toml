@@ -1259,3 +1259,11 @@ tests = [
     "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_433_labdo1::lab_do_post_receipt_check_failure_passes_through_mcp",
 ]
 incident = ["#433 LABDO-1"]
+
+# #428 CW-1 (0.12.47; register §1.290; brief rd-1110/brief-cw1.md): the catalog block of actingctl overview and ac_overview carries the active composed generation's compile warnings as config.catalog_warnings holds them, compile_warnings {count, codes, items [{warning, game, pointer}]}; without the fact, or with it recorded empty, the block is MCP-9a's byte for byte
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-ops::lib::overview::tests::cw1_the_catalog_block_shows_the_compile_warnings_and_is_unchanged_without_them",
+]
+incident = ["#428 CW-1"]

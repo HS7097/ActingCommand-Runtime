@@ -43,17 +43,18 @@ use super::standard_pack::{RootFailure, read_root_file};
 use super::*;
 use crate::codes::{HostCode, HostLocation};
 use actingcommand_contract::codes::SharedCode;
-use actingcommand_contract::outcome::{IoOp, Outcome};
+use actingcommand_contract::outcome::{IoOp, Outcome, Record};
 use actingcommand_contract::{
-    BundleIndex, BundleMaintenance, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE,
-    STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE,
-    STANDARD_PACK_SCHEDULE_FILE, STANDARD_PACK_TABLES_DIRECTORY, StandardPackRoot,
-    StandardPackRootBytes, read_standard_pack_root,
+    BundleIndex, BundleMaintenance, CONFIG_CATALOG_WARNINGS_FACT_KEY, ConfigCatalogWarnings,
+    STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_INTERRUPTS_FILE,
+    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE,
+    STANDARD_PACK_TABLES_DIRECTORY, StandardPackRoot, StandardPackRootBytes,
+    read_standard_pack_root,
 };
 use actingcommand_policy::{
     CompiledCatalog, STANDARD_PACK_OPERATION_ID, STANDARD_PACKS_CATALOG_ID, StandardPackBinding,
-    StandardPackComposeInput, StandardPackComposition, StandardPackGameFiles,
-    StandardPackRuleIssue, compose_standard_pack_rules,
+    StandardPackCompileWarning, StandardPackComposeInput, StandardPackComposition,
+    StandardPackGameFiles, StandardPackRuleIssue, compose_standard_pack_rules,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -662,26 +663,43 @@ impl HostShared {
                 let Some(sha) = &game.schedule_sha256 else {
                     continue;
                 };
-                if previous_sha.as_ref() == Some(&Some(sha.clone())) {
+                // #428 CW-1: the activation records every compile warning of its composition on
+                // the record of the game whose file gave it, also when that file did not change.
+                let warnings = composition
+                    .compile_warnings()
+                    .iter()
+                    .filter(|warning| warning.game_id.as_deref() == Some(game.game_id.as_str()))
+                    .map(|warning| {
+                        Record::new()
+                            .warning_code(warning.code.code())
+                            .json_pointer(warning.pointer.as_str())
+                    })
+                    .collect::<Vec<_>>();
+                if previous_sha.as_ref() == Some(&Some(sha.clone())) && warnings.is_empty() {
                     continue;
                 }
                 let count = read
                     .get(&game.game_id)
                     .map_or(0, |files| files.root.registry.len());
-                self.record_standard_pack_read(
-                    Outcome::new(HostCode::StandardPackRegistered)
-                        .operation(HostLocation::StandardPackRegister)
-                        .game(game.game_id.as_str())
-                        .count(count)
-                        .schedule_sha256(sha.as_str())
-                        .rules(game.tasks)
-                        .held(game.held.len())
-                        .unclassified(game.unclassified.len()),
-                )?;
+                let registered = Outcome::new(HostCode::StandardPackRegistered)
+                    .operation(HostLocation::StandardPackRegister)
+                    .game(game.game_id.as_str())
+                    .count(count)
+                    .schedule_sha256(sha.as_str())
+                    .rules(game.tasks)
+                    .held(game.held.len())
+                    .unclassified(game.unclassified.len());
+                self.record_standard_pack_read(if warnings.is_empty() {
+                    registered
+                } else {
+                    registered.compile_warnings(warnings)
+                })?;
             }
             state.active_hash = Some(generation.catalog_hash().to_owned());
             state.active = Some(record.clone());
         }
+        // #428 CW-1: the active generation's compile warnings, as the overview shows them.
+        self.record_catalog_warnings(&composition)?;
         // Item 1 of the RL-1a review: a configured reading of a pool no composed game declares
         // is left out of the evaluation; it is recorded once per pool.
         let configured_pools = lock(&self.policy_inputs, HostLocation::ReadPolicyInputs)?
@@ -727,6 +745,34 @@ impl HostShared {
             self.record_standard_pack_read(outcome)?;
         }
         Ok(())
+    }
+
+    /// #428 CW-1 (register §1.290): records `config.catalog_warnings`, the compile warnings of
+    /// `composition`, which the active generation holds (it was just activated, or its rules
+    /// digest is the active one's). Nothing is recorded when the stored value is the same, nor
+    /// while the fact is absent and the composition has no warning, so a Runtime whose composed
+    /// generations never had one records nothing new; one that had some records the fact empty.
+    fn record_catalog_warnings(
+        &self,
+        composition: &StandardPackComposition,
+    ) -> RuntimeHostResult<()> {
+        let warnings = composition
+            .compile_warnings()
+            .iter()
+            .map(StandardPackCompileWarning::to_contract)
+            .collect::<Vec<_>>();
+        let warnings = ConfigCatalogWarnings::of(&warnings);
+        let record = warnings.to_fact_record(0, OriginModule::Policy);
+        let unchanged = match lock(&self.runtime_facts, HostLocation::StandardPackRead)?
+            .get(&RuntimeFactScope::Runtime, CONFIG_CATALOG_WARNINGS_FACT_KEY)
+        {
+            Some(stored) => stored.value == record.value,
+            None => warnings.is_empty(),
+        };
+        if unchanged {
+            return Ok(());
+        }
+        self.record_config_fact(record)
     }
 
     /// ROUT-L RL-1b (model §3.4): the host's procedure manifest is the composition's: one

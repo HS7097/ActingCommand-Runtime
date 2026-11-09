@@ -9,12 +9,13 @@
 // monotonic clock. Every expected state comes from the model rows named at each test.
 
 use super::*;
-use crate::codes::HostCode;
+use crate::codes::{HostCode, HostLocation};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{Code, Outcome};
 use actingcommand_contract::{
-    ConfigParameter, ConfigParameterSource, FactScalar, RuntimeConfigManifest,
-    RuntimeLifecyclePhase, RuntimePayload,
+    CONFIG_CATALOG_WARNINGS_FACT_KEY, CatalogCompileWarning, ConfigCatalogWarnings,
+    ConfigParameter, ConfigParameterSource, FactScalar, RuntimeConfigManifest, RuntimeFactRecord,
+    RuntimeFactScope, RuntimeLifecyclePhase, RuntimePayload,
 };
 use actingcommand_policy::{
     STANDARD_PACKS_CATALOG_ID, StandardPackBinding, StandardPackComposeInput,
@@ -1109,5 +1110,158 @@ fn rl1b_item1_a_stale_pool_reading_never_stops_the_other_games() {
         notes[0].value("pool_id").and_then(Value::as_str),
         Some(POOL_B)
     );
+    bench.close();
+}
+
+// ---------------------------------------------------------------------------------------------
+// #428 CW-1 (register §1.290; coordinator work order rd-1110/brief-cw1.md): the composed
+// catalog's compile warnings are recorded with the activation and held for the overview
+// ---------------------------------------------------------------------------------------------
+
+/// The warning a pool that writes both water lines and declares no valuation compiles with
+/// (SS-2h fix 1, register §1.289).
+const LINES_UNVALUED: &str = "pool_lines_unvalued";
+
+/// [`schedule_a`] whose pool A writes both water lines (constants below its capacity 120) and
+/// declares no valuation, with `pool_lines` in `requires`: it composes, and its compiled catalog
+/// carries `pool_lines_unvalued` at the pool's `stop_line`.
+fn schedule_a_lines_unvalued(rules: &[(&str, &str, u64)]) -> Value {
+    let mut schedule = schedule_a(rules);
+    schedule["requires"] = json!(["pool_lines"]);
+    let pool = schedule["pools"][0].as_object_mut().expect("pool A");
+    pool.shift_remove("valuation");
+    pool.insert("stop_line".to_owned(), json!(100));
+    pool.insert("hard_line".to_owned(), json!(50));
+    schedule
+}
+
+/// The workbench's `standard_pack_registered` records of `game` (those with `schedule_sha256`),
+/// in ledger order.
+fn registrations(bench: &Bench, game: &str) -> Vec<Outcome> {
+    bench
+        .reads_of(HostCode::StandardPackRegistered, Some(game))
+        .into_iter()
+        .filter(|outcome| outcome.value("schedule_sha256").is_some())
+        .collect()
+}
+
+/// The `config.catalog_warnings` fact the host holds now.
+fn catalog_warnings_fact(bench: &Bench) -> Option<RuntimeFactRecord> {
+    bench
+        .host
+        .runtime_fact_snapshot()
+        .expect("the runtime fact snapshot")
+        .records
+        .into_iter()
+        .find(|record| {
+            record.scope == RuntimeFactScope::Runtime
+                && record.key == CONFIG_CATALOG_WARNINGS_FACT_KEY
+        })
+}
+
+/// CW-1 test 1 (fails before: the warning was made and dropped): a composed root whose pool
+/// writes both lines and declares no valuation is composed and activated as before; the
+/// activation's `standard_pack_registered` record of the game carries `compile_warnings` with
+/// `pool_lines_unvalued` at `/pools/0/stop_line` of that game's `schedule.json`, and
+/// `config.catalog_warnings`, which the overview's catalog block reads, holds it with its game and
+/// pointer. The file fixed with a valuation, the next activation records the game with no
+/// warning and the fact empty.
+#[test]
+fn cw1_a_lines_without_a_valuation_are_recorded_with_the_activation_and_held_for_the_overview() {
+    let bench = Bench::new(&[BOUND_A], &[POOL_A], true, None);
+    bench.place(
+        GAME_A,
+        SERVER_A,
+        &[PACKAGE_1],
+        Some(&schedule_a_lines_unvalued(&[(RULE_1, PACKAGE_1, 100)])),
+    );
+    bench.cycle(POLICY_NOW_UNIX_MS, 0);
+    assert_eq!(bench.active().catalog_id(), STANDARD_PACKS_CATALOG_ID);
+    assert_eq!(bench.events(EventType::CatalogActivated).len(), 1);
+    let registered = registrations(&bench, GAME_A);
+    assert_eq!(registered.len(), 1, "{registered:#?}");
+    assert_eq!(
+        registered[0].value("compile_warnings"),
+        Some(&json!([{"warning_code": LINES_UNVALUED, "json_pointer": "/pools/0/stop_line"}])),
+        "{registered:#?}"
+    );
+    let expected = ConfigCatalogWarnings::of(&[CatalogCompileWarning {
+        warning: LINES_UNVALUED.to_owned(),
+        game: Some(GAME_A.to_owned()),
+        pointer: "/pools/0/stop_line".to_owned(),
+    }]);
+    assert_eq!(expected.total(), 1);
+    let fact = catalog_warnings_fact(&bench).expect("config.catalog_warnings is recorded");
+    assert_eq!(
+        fact.value,
+        expected.to_fact_record(0, OriginModule::Policy).value
+    );
+    assert_eq!(
+        ConfigCatalogWarnings::from_fact_record(&fact).expect("the fact reads back"),
+        expected
+    );
+
+    bench.place(
+        GAME_A,
+        SERVER_A,
+        &[PACKAGE_1],
+        Some(&schedule_a(&[(RULE_1, PACKAGE_1, 100)])),
+    );
+    bench.cycle(POLICY_NOW_UNIX_MS, INTERVAL_MS);
+    assert_eq!(bench.events(EventType::CatalogActivated).len(), 2);
+    let registered = registrations(&bench, GAME_A);
+    assert_eq!(registered.len(), 2, "{registered:#?}");
+    assert_eq!(registered[1].value("compile_warnings"), None);
+    let fact = catalog_warnings_fact(&bench).expect("config.catalog_warnings stays recorded");
+    assert!(
+        ConfigCatalogWarnings::from_fact_record(&fact)
+            .expect("the fact reads back")
+            .is_empty(),
+        "{fact:#?}"
+    );
+    bench.close();
+}
+
+/// CW-1 test 2: a composition without compile warnings records as before: each activation's
+/// `standard_pack_registered` record of the game is RL-1b's, member for member, and no
+/// `config.catalog_warnings` fact is recorded, at the first activation, at the next one and at
+/// the first check after a restart.
+#[test]
+fn cw1_b_a_composition_without_warnings_records_as_before() {
+    let bench = Bench::new(&[BOUND_A], &[POOL_A], true, None);
+    let expected = |sha: &Value| {
+        Outcome::new(HostCode::StandardPackRegistered)
+            .operation(HostLocation::StandardPackRegister)
+            .game(GAME_A)
+            .count(1_usize)
+            .schedule_sha256(sha.as_str().expect("schedule_sha256"))
+            .rules(1_usize)
+            .held(0_usize)
+            .unclassified(0_usize)
+    };
+    for (step, priority) in [(0, 100), (1, 99)] {
+        bench.place(
+            GAME_A,
+            SERVER_A,
+            &[PACKAGE_1],
+            Some(&schedule_a(&[(RULE_1, PACKAGE_1, priority)])),
+        );
+        bench.cycle(POLICY_NOW_UNIX_MS, step * INTERVAL_MS);
+        let registered = registrations(&bench, GAME_A);
+        assert_eq!(registered.len(), step as usize + 1, "{registered:#?}");
+        let last = registered.last().expect("a registration");
+        let sha = last.value("schedule_sha256").expect("schedule_sha256");
+        assert_eq!(*last, expected(sha));
+        assert!(catalog_warnings_fact(&bench).is_none());
+    }
+    assert_eq!(bench.events(EventType::CatalogActivated).len(), 2);
+
+    // The restarted host evaluates at the fixture's restart instant, after every record of the
+    // first start (board #71, TCLOCK).
+    let bench = bench.restart(true);
+    bench.cycle(POLICY_RESTART_UNIX_MS, 0);
+    assert_eq!(bench.events(EventType::CatalogActivated).len(), 2);
+    assert_eq!(registrations(&bench, GAME_A).len(), 2);
+    assert!(catalog_warnings_fact(&bench).is_none());
     bench.close();
 }

@@ -618,15 +618,73 @@ fn running_selection<'f>(facts: &'f RuntimeFactSnapshot, member: &str) -> Option
 /// catalog_version, catalog_hash, activated_event_id, approval_id?, approval_disposition?,
 /// previous_catalog_id?, previous_catalog_version?}`, or null while none is active. A record
 /// that does not read back is its refusal (`invalid_fact_snapshot_record`).
+///
+/// #428 CW-1 (register §1.290): when the active composed generation compiled with warnings
+/// (`config.catalog_warnings`), the block also carries [`CATALOG_COMPILE_WARNINGS`]
+/// `{count, codes, items}`: how many warnings, their codes, and each warning's place
+/// `{warning, game?, pointer}` (its code, its game and its JSON pointer in that game's
+/// `schedule.json`), as many as the fact holds. Without warnings the block is as before.
 fn catalog_block(facts: &RuntimeFactSnapshot) -> Result<Value, Outcome> {
     let Some(record) = facts.records.iter().find(|record| {
         record.scope == RuntimeFactScope::Runtime && record.key == CONFIG_CATALOG_FACT_KEY
     }) else {
         return Ok(Value::Null);
     };
-    ConfigCatalog::from_fact_record(record)
+    let mut block = ConfigCatalog::from_fact_record(record)
         .map(|catalog| json!(catalog))
-        .map_err(|error| Outcome::new(error.code()))
+        .map_err(|error| Outcome::new(error.code()))?;
+    if let Some(warnings) = compile_warnings(facts)?
+        && let Value::Object(members) = &mut block
+    {
+        members.insert(CATALOG_COMPILE_WARNINGS.to_owned(), warnings);
+    }
+    Ok(block)
+}
+
+/// #428 CW-1: the member of the `catalog` block that carries the active composed generation's
+/// compile warnings; MCP cuts its `items` before the block ([`catalog_block`]).
+pub const CATALOG_COMPILE_WARNINGS: &str = "compile_warnings";
+
+/// #428 CW-1: `{count, codes, items}` of `config.catalog_warnings`, `None` without the fact or
+/// with no warning in it. A record that does not read back is its refusal
+/// (`invalid_fact_snapshot_record`).
+fn compile_warnings(facts: &RuntimeFactSnapshot) -> Result<Option<Value>, Outcome> {
+    let Some(record) = facts.records.iter().find(|record| {
+        record.scope == RuntimeFactScope::Runtime
+            && record.key == actingcommand_contract::CONFIG_CATALOG_WARNINGS_FACT_KEY
+    }) else {
+        return Ok(None);
+    };
+    let warnings = actingcommand_contract::ConfigCatalogWarnings::from_fact_record(record)
+        .map_err(|error| Outcome::new(error.code()))?;
+    if warnings.is_empty() {
+        return Ok(None);
+    }
+    let mut codes = warnings
+        .counts
+        .iter()
+        .map(|count| count.warning.as_str())
+        .collect::<Vec<_>>();
+    codes.sort_unstable();
+    codes.dedup();
+    let items = warnings
+        .places
+        .iter()
+        .map(|place| {
+            let mut item = Map::new();
+            item.insert("warning".to_owned(), json!(place.warning));
+            if let Some(game) = &place.game {
+                item.insert("game".to_owned(), json!(game));
+            }
+            item.insert("pointer".to_owned(), json!(place.pointer));
+            Value::Object(item)
+        })
+        .collect::<Vec<_>>();
+    Ok(Some(json!({
+        "count": warnings.total(),
+        "codes": codes,
+        "items": items,
+    })))
 }
 
 /// `actingctl watchdog status` of the install root, read locally (command table §4.10): its
@@ -1387,6 +1445,69 @@ mod tests {
             refusal.is(SanitizationCode::InvalidFactSnapshotRecord),
             "{refusal}"
         );
+    }
+
+    // #428 CW-1 (register §1.290; coordinator work order rd-1110/brief-cw1.md): the catalog block
+    // carries the active composed generation's compile warnings as `config.catalog_warnings`
+    // holds them, as the workbench writes it: {count, codes, items}. Without the fact, and with the
+    // fact recorded empty, the block is MCP-9a's, byte for byte.
+    #[test]
+    fn cw1_the_catalog_block_shows_the_compile_warnings_and_is_unchanged_without_them() {
+        use actingcommand_contract::{CatalogCompileWarning, ConfigCatalogWarnings};
+
+        let active = ConfigCatalog {
+            catalog_id: "standard-packs".to_owned(),
+            catalog_version: 7,
+            catalog_hash: format!("sha256:{}", "c".repeat(64)),
+            activated_event_id: "evt_0123456789abcdef0123456789abcdef".to_owned(),
+            approval_id: None,
+            approval_disposition: None,
+            previous_catalog_id: None,
+            previous_catalog_version: None,
+        };
+        let catalog = active.to_fact_record(1, OriginModule::Policy);
+        let place = |game: &str, pointer: &str| CatalogCompileWarning {
+            warning: "pool_lines_unvalued".to_owned(),
+            game: Some(game.to_owned()),
+            pointer: pointer.to_owned(),
+        };
+        let warnings = ConfigCatalogWarnings::of(&[
+            place("neutral-game-b", "/pools/1/stop_line"),
+            place("neutral-game-a", "/pools/0/stop_line"),
+            place("neutral-game-a", "/pools/0/stop_line"),
+        ]);
+        let shown = catalog_block(&facts(vec![
+            catalog.clone(),
+            warnings.to_fact_record(2, OriginModule::Policy),
+        ]))
+        .expect("the catalog block");
+        let mut expected = json!(active);
+        expected["compile_warnings"] = json!({
+            "count": 2,
+            "codes": ["pool_lines_unvalued"],
+            "items": [
+                {"warning": "pool_lines_unvalued", "game": "neutral-game-a", "pointer": "/pools/0/stop_line"},
+                {"warning": "pool_lines_unvalued", "game": "neutral-game-b", "pointer": "/pools/1/stop_line"},
+            ],
+        });
+        assert_eq!(
+            serde_json::to_string(&shown).expect("the block"),
+            serde_json::to_string(&expected).expect("the expected block")
+        );
+
+        let before = serde_json::to_string(&json!(active)).expect("MCP-9a's block");
+        let empty = ConfigCatalogWarnings::of(&[]).to_fact_record(3, OriginModule::Policy);
+        for (case, records) in [
+            ("no fact", vec![catalog.clone()]),
+            ("the fact recorded empty", vec![catalog, empty]),
+        ] {
+            let block = catalog_block(&facts(records)).expect("the catalog block");
+            assert_eq!(
+                serde_json::to_string(&block).expect("the block"),
+                before,
+                "{case}"
+            );
+        }
     }
 
     // §4.10: config_generation names the generation actingd runs (`config.selection`) and the

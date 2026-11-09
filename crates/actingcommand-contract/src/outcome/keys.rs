@@ -751,4 +751,9 @@ outcome_keys! {
     capped_rank: integer,
     pool_line_hold: vocab(pool_line_hold),
     // ---- SS-2h: end ----
+    // ---- #428 CW-1 (a composed catalog's compile warnings, contracts/standard-pack-schedule.md
+    // "The scheduler workbench"): begin ----
+    warning_code: code,
+    compile_warnings: records(warning_code, json_pointer),
+    // ---- #428 CW-1: end ----
 }

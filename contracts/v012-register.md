@@ -8280,6 +8280,64 @@ and ran next) and, with the busy instance held as the cycle starts as the Runtim
 `ss2h_t5` and `ss2h_t9`. Still no configuration key, ledger shape or interface revision; a catalog
 without valuations, lines and `benefit_limited` is unchanged byte for byte.
 
+### 1.290 Slice CW-1 (0.12.47): the composed catalog's compile warnings are recorded and shown (#428; AK v0.12.34 and BA v0.12.37 went live on 11-10 at 01:11 and 01:12 JST with pool lines and no valuation, and their `pool_lines_unvalued` (§1.289 fix 1) was nowhere: not in the ledger, `catalog.activated`, `standard_pack_registered`, `ac_overview` or actingd's log, against Fail Loud; the coordinator's ruling, not Alice's words: record and show them; coordinator work order `rd-1110/brief-cw1.md`)
+
+[standard-pack-schedule.md](standard-pack-schedule.md) ("The scheduler workbench", "Compile
+warnings"), [scheduling/README.md](scheduling/README.md) ("Pool lines"),
+[runtime-config.md](runtime-config.md) ("Facts") and [runtime-interface.md](runtime-interface.md)
+(the `ac_overview` row and its output budget) are the contract. The number is the next free one on
+main `c76ce040`.
+
+**Why.** The compiler returns its warnings with the compiled catalog (`CompiledCatalog::warnings`),
+and only `actinglab scheduling compile` wrote them out. The workbench handed the composition over
+through `compiled()` and read none; `StandardPackComposition::warnings()` holds only the
+composer's own (unclassified packages, priority tiers).
+
+**What.** (1) The composer places each compile warning in its game's `schedule.json` as it places a
+refusal (`Composed::locate`), each place once, in the order game, code, pointer
+(`StandardPackComposition::compile_warnings`, `StandardPackCompileWarning`). (2) **Record:** an
+activation writes, on the `standard_pack_registered` record of each game with warnings, the new
+optional value `compile_warnings` (records of `warning_code`, a code, and `json_pointer`), also
+for a game whose file did not change; a game without warnings is recorded as before, and a game
+whose file did not change and has none still gets no record. Chosen over `catalog.activated`
+because that record's payload (`CatalogTransitionEventData`, its audit `AuditInput`) is a typed
+shape whose members the ledger reader checks, so a member there raises `ledger` (revision 5's
+rule), while an outcome's values are what the reader only spells. (3) **Show:** after each
+composition the active generation holds, the workbench records the program fact
+`config.catalog_warnings` (runtime scope, `config.` re-observed; `ConfigCatalogWarnings`): count
+rows `{warning, game?, count}`, then place rows `{warning, game?, pointer}` within the fact's 256
+rows; only when it changes, never while absent with no warning, and empty once the active
+generation has none. The overview (`actingctl overview`, `ac_overview`, and actinglab's through
+`crates/lab-ops`) reads it from the RuntimeFactSnapshot it already reads and adds
+`compile_warnings {count, codes, items}` to the `catalog` block; MCP cuts the `items` just
+before the block.
+
+**Interfaces.** None raised. `ledger`: a new outcome key in an existing record's values, and a new
+key in the `config.` family of `runtime.fact_recorded` with the existing `RecordList` value; neither
+is a member or a word of a closed vocabulary the reader checks (component-interfaces.md, the
+`ledger` row of revision 5). `runtime-client`: no request or answer shape changes; the fact travels
+in the existing `RuntimeFactSnapshot` answer, and `ConfigCatalog::from_fact_record` ignores members
+it does not read. The `catalog` block of the overview's answer is presentation, as §1.243's rows.
+
+**Unchanged.** A composition without warnings records and answers byte for byte as before: no
+`compile_warnings`, no `config.catalog_warnings`, the `catalog` block as MCP-9a's. Compiling,
+composing, activating and deciding are unchanged.
+
+**Rollback** (to 0.12.46). Records that carry `compile_warnings` stay readable (an outcome's values);
+`config.catalog_warnings` is a fact record of an existing shape, which an earlier build reads as
+any other and does not load at its start (`config.` is re-observed).
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| CW1-1 | `standard_pack_registered`'s optional value `compile_warnings` (records `warning_code`, `json_pointer`); keys `compile_warnings`, `warning_code` | outcome values (no ledger shape) | CW-1 | runtime-host workbench | `since` 0.12.47; at most 64 with `compile_warnings_total` |
+| CW1-2 | the program fact `config.catalog_warnings` | new key of the `config.` family (runtime scope, untagged) | CW-1 | runtime-host workbench | §4 below |
+| CW1-3 | `catalog.compile_warnings {count, codes, items [{warning, game?, pointer}]}` | `actingctl overview` / `ac_overview` answer | CW-1 | lab-ops overview | absent without warnings; MCP cuts `items` before `catalog` |
+
+Tests: `gate_rl1b::cw1_a_lines_without_a_valuation_are_recorded_with_the_activation_and_held_for_the_overview`
+(fails before: the record carried no warning), `gate_rl1b::cw1_b_a_composition_without_warnings_records_as_before`
+and `overview::tests::cw1_the_catalog_block_shows_the_compile_warnings_and_is_unchanged_without_them`.
+No test adapted.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -8347,6 +8405,7 @@ U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `Loa
 | `host.idle_state` (a record list: the instances the idle action closed or is closing, with their action and wake; since 0.12.25 its writer row names the start anchor, not the owner epoch (#405 N-2), and a woken instance stays in it, `woken`, until its startup package has run (#405 O-2); [runtime-fact-store.md](runtime-fact-store.md)) | workbench | yes (added to `tag.workbench_patterns` by #405 IDLE-1P) | #405 IDLE-1P |
 | `host.agent_wake` (a record list: the newest `agent_wake.delivery.history_rows` wakes and their delivery states; [agent-wake.md](agent-wake.md); AGT-1a adds the tag entry, AGT-1b the writer; §1.245 AGT1A-5, §1.246 AGT1B-2) | workbench | yes (added to `tag.workbench_patterns`) | #432 AGT-1b |
 | `config.selection`, `config.catalog` | workbench | no (`config.` is re-observed) | D1b, MCP-9a |
+| `config.catalog_warnings` (count and place rows of the active composed generation's compile warnings; §1.290 CW1-2) | workbench | no (`config.` is re-observed) | #428 CW-1 |
 | `config.parameters.touch` (a section fact of the `config.parameters.<section>` family, five rows; §1.136 T12-4) | workbench | no (`config.` is re-observed) | #406 T12 |
 | `config.parameters.emulator_control` (a section fact of the `config.parameters.<section>` family, one row; §1.158 A50-5) | workbench | no (`config.` is re-observed) | #411 A50 |
 | `config.parameters.execution` (a section fact of the `config.parameters.<section>` family, four rows since STILL-1; §1.177 B1-2, B1-3; §1.249 ST1-1) | workbench | no (`config.` is re-observed) | PERF-B1 |
