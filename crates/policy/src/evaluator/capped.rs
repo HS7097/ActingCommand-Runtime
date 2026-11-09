@@ -137,7 +137,7 @@ pub(super) enum Disposition {
     /// A capped round tries it: it passes with its own `B`, whatever its sign.
     Member {
         benefit: KnownBenefit,
-        slot: CappedSlot,
+        slot: Box<CappedSlot>,
     },
 }
 
@@ -390,7 +390,10 @@ impl Decided {
         match (self.held, self.hold, self.member) {
             (Some(held), _, _) => Disposition::Held(held),
             (None, Some(hold), Some(_)) => Disposition::Held(hold),
-            (None, None, Some((benefit, slot))) => Disposition::Member { benefit, slot },
+            (None, None, Some((benefit, slot))) => Disposition::Member {
+                benefit,
+                slot: Box::new(slot),
+            },
             (None, hold, None) => Disposition::Normal { hold },
         }
     }

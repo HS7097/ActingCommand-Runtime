@@ -672,7 +672,7 @@ pub(super) fn gate(
                     }
                     Disposition::Member { benefit, slot } => {
                         candidate.benefit = Some(benefit);
-                        candidate.capped = Some(slot);
+                        candidate.capped = Some(*slot);
                         if let Some(record) = task_work.record.as_mut() {
                             record.benefit = Some(benefit);
                         }
