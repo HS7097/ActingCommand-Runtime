@@ -9,6 +9,189 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.47
+
+本版是 v0.12.46 之后合并的 4 个 PR：#434 LAB-1b（#1548）、#434 LAB-4（#1549）、#434 LAB-2（#1550）和 #428 CW-1（#1551）。先说部署：接口声明都不变（账本
+仍是 [3, 7]），部署不用带 `--accept-ledger-one-way`，计划里也没有 `ledger_verify` 这一步；v0.12.46 的安装工具装本版照常（见下面的升级）；装上以后能退回
+v0.12.46，不用带标志（本版写的 Lab 录制 v0.12.46 读不了，见下面的退回）。没有新键，默认值文件没改。运行上要知道的是这几处：
+
+- **部署之前：进行中的 Lab 录制先做完**（LAB-2）。本版录制的每个步骤和标记都必带 `initiator`，不带兼容（`crates/lab/src/recording/model.rs` 192、547），
+  所以部署前开始的录制，部署后本版解码不了；反过来本版写的录制 v0.12.46 也解码不了（见下面的退回）。
+- **看门狗：计划任务不变，`actingwatch.exe` 换了，tick 在它自己的进程里跑**（LAB-4，登记 §1.287）。
+  - 计划任务的名字、动作（`<root>\tools\actingwatch.exe`，不带参数）、工作目录、触发器和设置都不变，部署不重新注册（`crates/watchdog/src/task.rs`
+    150–159 的任务 XML 逐字节没变）。新的 `actingwatch.exe` 不再启动 `<root>\runtime\actingctl.exe`，用 `crates/watchdog` 在自己的进程里跑同一个 tick
+    （`apps/actingwatch/src/main.rs` 58–70、134–161、187–221）：判定、`state.json`、`watchdog.log`、`actingd-<ms>.log`、`run.lock`、码、退出码和 WMI 启动都和
+    以前一样。`actingctl watchdog …`（overview 的看门狗块、控制台的看门狗页也是它）走同一个 crate，答法不变。
+  - 不一样的三处：没有子进程了，`watchdog_launcher_spawn_failed` 退役；tick 启动的 actingd 不再继承 `watchdog.log` 的句柄；panic 的消息由 actingwatch
+    自己写进 `watchdog.log`（`thread 'main' panicked at …`）。
+  - 新命令：`<root>\tools\actingwatch.exe status|install|uninstall`，只对它所在的根，答法同 `actingctl watchdog <词> --root <root>`。从控制台起时输出打在
+    那个控制台上，但控制台不等它（它是 GUI 子系统程序）：cmd 里用 `start /wait "" <root>\tools\actingwatch.exe status`，再读 `%ERRORLEVEL%`。
+  - **部署后核三项**（#1549 的 “At deploy”）：
+    1. `tools\actingwatch.exe` 换上了：它的 SHA-256 等于新 Tools zip（`actingcommand-tools-<sha>.zip`）根目录 `BUILD-MANIFEST.json` 的 `files` 里 `path` 为
+       `actingwatch.exe` 那一项的 `sha256`。Release 的 `SHA256SUMS` 只算整个 zip，不能拿来比。哈希不同就是 Tools 没部署上：旧启动器还在经
+       `runtime\actingctl.exe` 跑同一个 tick，下面两项照样会过，所以这一项必须核。
+    2. overview（`ac_overview` / `actingctl overview`）的 `watchdog` 块：`decision` 是 `watchdog_alive`，`last_tick` 每分钟往前走，`attention` 里没有
+       `watchdog_task_missing`、`watchdog_task_mismatch`；`actingctl watchdog status --root <root>` 答的一样。
+    3. `<root>\watchdog\watchdog.log` 没有新的 `ERROR actingwatch:` 或 `ERROR actingctl:` 行；任务计划程序里这个任务的上次运行结果仍是 0。
+- **actinglab：现有调用方拿到的东西不变，多了从 actingctl 来的短命令和 `actinglab serve --stdio`**（LAB-2，登记 §1.287）。
+  - actinglab 原有的命令（全局选项 `--run-root`、`--verbose`、`--via` 和 `--json` 写在哪都行）照旧：给人看的输出、`--json` 信封（`ok`、`data`、`error`）和
+    退出码（0、2 到 6）逐字节不变（总览的裁定）。MCP 的 actinglab 子进程（`--json --via mcp …`）、acmodel 的校验、资源仓的 CI 和脚本、热放置工具包都不用改，
+    它们的命令行由 golden 钉住（`apps/actinglab/tests/consumer_goldens.rs`）；分流在 `apps/actinglab/src/cli_module.rs` 88–132。唯一的例外：`record mark`
+    （MCP `ac_record_mark`）和 `session record step` 的回答带上 `initiator`。
+  - 新的短命令：操作表 `contracts/lab-operations.json` 里 LAB-1、LAB-1b 的核心操作（例如 `facts`、`schedule`、`summary`、`events`、`runs`、`diagnose`、
+    `packs`、`codes`、`pause`、`resume`、`offset`、`emu start|stop|restart|selfcheck`、`shutdown`），以及 `run start`、`run stop`、`reset`、`drill`，用表里的
+    词。实例写在位置参数上（别名、`instance_id` 或 ADB 端口），没有 `--root`、`--state-root`。默认给人看（码和它的值，结果的成员列成小表）；`--json` 打印
+    和 actingctl 同样的一行 `{…结果, "outcome": …}`；退出码 0、1、2，拒绝至少是 1。表里由 actinglab 自己的命令服务的行，短词转给那条命令（如 `watch` 是
+    `lab watch`，`app launch` 是 `session app launch`），答法和那条命令一样。`status` 和 `run show` 在命令行上仍是 actinglab 原来的命令。
+  - 两边都有的词现在由新模块回答（没有调用方在用）：`devices` 列出安装的设备（以前拒绝，退出码 6）；`devices bind|unbind <实例>` 写或去掉实例的绑定；
+    `monitor set|clear <实例>` 把实例的监视策略写给 Runtime；`config`、`config set|clear` 读写的是 **Runtime 的设置**（发 `ConfigureSettings`）。以前
+    `actinglab config set` 写的是 actinglab 自己的用户配置文件，这个功能改名 `user-config` / `user-config set`。`run evidence|start|stop` 也归模块。
+  - `actinglab serve --stdio`：每行读一个 `{op, params}`，每行答一行，就是那个操作的 `--json` 打印的那一行（模块的操作是模块的行，`status`、`run show`
+    也是；actinglab 自己的命令服务的行是它的信封）。`serve` 的 `status` 带看门狗块和下面的 `compile_warnings`。现在还没有调用方。
+  - 发起者：Lab 录制的每个步骤和标记写 `initiator`：默认 `Lab-CLI`；环境变量 `ACTINGCOMMAND_INITIATOR` 可设 `Lab-制包` 或 `Lab-救急`（其他值答
+    `actingctl_usage_invalid`，带 `variable`，什么都不发、不写）；经 MCP（`--via mcp`）添加的记 `Lab-MCP`。
+  - 删掉的命令词：已退役和保留的词（122 个能力条目、退役的 `session` 词、`ledger`、`lab start|lease|preempt|release`、`scheduler`、`operation dry-run`、
+    `resource check-release` 和 `resource` 的两个保留词）现在大多是未知命令（`validation_failed`，退出码 2）；`resource_check_release_retired` 随之退役。
+  - LAB-6 删掉来源门之前，Runtime 只收操作员或代理来源的请求（`drill`、`offset`、`facts publish`、`targets set`、`wake-test`）经 actinglab 发出可能被拒；
+    到 LAB-7 之前，这些照旧用 actingctl。
+- **组装目录的编译警告现在看得见**（CW-1，登记 §1.290）。v0.12.46 的编译器开始带出警告（`pool_lines_unvalued`），但工作台组装、启用目录时读完就丢，
+  账本、overview 和日志里都没有。现在：
+  - 启用一代组装目录时，本来就为改了的 `schedule.json` 写的 `standard_pack_registered` 记录多一个值 `compile_warnings`（每条警告的码和它在那个文件里的
+    JSON 指针，最多 64 条，带总数；`crates/runtime-host/src/host/standard_pack_schedule.rs` 670–697）。文件没改的游戏不补写记录，生产的事件流不变。
+  - 当前一代的全部警告记在程序事实 `config.catalog_warnings` 里：先是计数行 `{warning, game?, count}`，再是位置行 `{warning, game?, pointer}`，最多
+    256 行，超了不悄悄截，末行写 `{counts_omitted, places_omitted}`；只在变了时记（同一文件 751–779），重启后照样有。
+  - overview 的 `catalog` 块（`actingctl overview`、`ac_overview` 和 `serve --stdio` 的 `status`）多一个 `compile_warnings {count, codes, items}`，事实被截时
+    还有 `items_omitted`、`counts_omitted`（`crates/lab-ops/src/overview.rs` 638–656）；MCP 超出输出预算时，在裁整个 `catalog` 块之前先裁 `items`（留 `items_truncated`）。actinglab
+    命令行上的 `status` 照 LAB-2 的裁定不变。
+  - 生产现在会看到：每个写了两条线、没写估值的池一条 `pool_lines_unvalued`，指在它的 `stop_line`（现在三个写了线的规则文件各一个这样的池，应是 3 条）。
+    它不改变任何决定：只有写了估值的池的线参与硬线和封顶次序。没有警告时，记录、事实、overview 和 MCP 都和 v0.12.46 逐字节一样；编译、组装、启用和
+    决定都没变。
+- **LAB-1b 只是内部搬移**：剩下的 23 个核心操作（`run show`、`material`、`targets`、`pause`、`resume`、`config set|clear`、`monitor set|clear`、`offset`、
+  `facts publish`、`emu …`、`app …`、`shutdown`、`wake-test` 等）发请求、整理回答的代码从 actingctl 和 MCP 搬进 `crates/lab-ops`，actingctl 的每条命令和
+  每个 MCP 工具都和以前答的一样；操作表按搬过去的代码订正了几行的 `requests`。
+
+配置：接口修订都不变，按代码和 `contracts/component-interfaces.md` 核过：`actingd-config` 仍是 [5, 27]，`ledger` 仍是 [3, 7]，`runtime-client` 仍是 [3, 6]，
+`package` 仍是 [3, 7]，`install-selection` 仍是 [1, 1]，`install-control` 仍是 [0, 1]，`runtime-outcomes` 仍是 [1, 1]。`contracts/component-interfaces.md`、
+`distribution/windows/component-interfaces.json` 和架构测试 `tools/actinglab-architecture/tests/component_interfaces.rs` 自 v0.12.46 没改。
+
+- LAB-1b 不升接口：没有新请求种类，`crates/runtime-client` 没改，只搬代码、改操作表的文字。
+- LAB-4 不升接口：actingwatch 现在自己读选择和配置、自己发 `Health`，但单一位置根上 `runtime\` 和 `tools\` 一起换，看门狗和它看的 Runtime 来自同一版；
+  A/B 根（R-15c/d）用它之前要先给它加版本范围检查（`contracts/install-cli.md`、`INSTALL.md`）。Tools 的文件清单没变，布局仍是 `platform-tools-v3`
+  （`tools-layout` 3）；计划中的 `tools-layout` 5 跟着 LAB-5、LAB-7 的文件清单走（`component-interfaces.md` 280–282）。
+- LAB-2 不升接口：actinglab 的输出行和录制文件在 `component-interfaces.md` 里没有行，actinglab 发给 Runtime 的请求没变；录制的 `initiator` 是不带兼容的
+  格式变化，影响见上面和下面的退回。#434 的计划行（`runtime-client` 7、`ledger` 8、`actingd-config` 28、`install-cli` 2）仍不生效。
+- CW-1 不升接口：`compile_warnings` 是已有记录的 outcome 值，账本读者只核拼写（`component-interfaces.md` 136 的读者规则），记录形状没变；
+  `config.catalog_warnings` 是 `config.` 族的新键，值是已有的 `RecordList`（`crates/actingcommand-contract/src/runtime_fact.rs` 80–116 只按族校验键），
+  随已有的 `RuntimeFactSnapshot` 传，`runtime-client` 的请求和答复形状都没变；overview 的新成员由客户端从事实拼出来。没有用 `catalog.activated`：它的
+  成员是类型化的，加成员就要升 `ledger`。
+- 配置键：没有新键，也没有去掉的键。`crates/runtime-config`、`apps/actingd`、`actingd.defaults.json` 和 `actingd.config.example.json` 自 v0.12.46 都没改，
+  键表、默认值文件和配置示例都没改，部署计划的默认值对比是空的；`config.subsystems` 没有新行。`config.catalog_warnings` 是程序事实，不是配置键。
+- 结果码：新码 1 个 `lab_operation_completed`（actinglab，success，`ladder_class` none，待定稿，since 0.12.47）。退役 2 个，都是待定稿、error、
+  `ladder_class` none、`retired_in` 0.12.47、没有 `replaced_by`，登记项一并删掉：`watchdog_launcher_spawn_failed`（actingctl；actingwatch 不再起子进程）、
+  `resource_check_release_retired`（actinglab；`resource check-release` 这个词删了）。只改说明的：`actingctl_usage_invalid`（已定稿；加
+  `ACTINGCOMMAND_INITIATOR`）、`lab_operation_check_failed`、`standard_pack_registered`（多一个可选值 `compile_warnings`）。新值键 2 个：`compile_warnings`
+  （records：`warning_code`、`json_pointer`）和 `warning_code`（code）（`crates/actingcommand-contract/src/outcome/keys.rs` 756–757）；结果码目录头的片名多了
+  `watchdog`、`actingwatch`（没有分片文件，不登记码）。没有新位置和新词表。结果码目录从 3896 个码、1741 个位置变成 3897 个、1741 个（退役的码留在目录里）。
+  本版的发布文件有 2 条，就是这两个退役码（退役的条目约束以后的目录）；新码是待定稿，不进发布文件。
+- 账本：不升，没有新记录形状。`compile_warnings` 只在已有记录的 outcome 值里，`config.catalog_warnings` 是已有形状的事实记录。
+- 程序文件：workspace 成员从 36 个变成 38 个（新库 `crates/watchdog`，CI 归 `host-lab` 作业；新程序包 `apps/actingwatch`，CI 归 `apps` 作业）。
+  `actingwatch.exe` 从 actingctl 的包挪到 `apps/actingwatch`，发版构建的 `--bin actingwatch`（`.github/workflows/windows-remote-build.yml` 394）照旧找到它；
+  `windows-remote-build.yml` 和 `release.yml` 自 v0.12.46 没改，Runtime 包和 Tools 包的文件清单都和 v0.12.46 一样。`Cargo.lock` 只多了这两个 workspace 包，
+  没有新的外部依赖。`apps/actingd`、`crates/runtime-config`、`crates/runtime-client`、`crates/ledger`、`crates/ledger-forensics`、`apps/ledger-forensics`、
+  `apps/mcp-entry` 自 v0.12.46 没改；合同 crate 只加了两个值键和事实 `config.catalog_warnings` 的类型。MCP 工具仍是 41 个（只改了 `ac_overview` 的说明）。
+
+升级时要知道的（按安装工具的代码核过；LAB-4 只把 `install\current.json` 的类型和读取原样挪进 `crates/watchdog` 再在 `install` 里引用：`journal.rs`、
+`state.rs` 改了引用，`deploy.rs` 和 `update.rs` 各改一行 import，`plan.rs`、`undo.rs`、`host.rs` 没改，所以下面的行号在 v0.12.46 和本版相同）：
+
+- 不用 `--accept-ledger-one-way`：两边的 `ledger` 都是 [3, 7]，`previous_max_in_next`（7 在 [3, 7] 里）和 `one_way`（7 不大于 7）都过
+  （`apps/actingctl/src/install/plan.rs` 281–294），带上也不改判断；现行和目标的 `ledger` 相同，所以计划里没有 `ledger_verify`（908），apply 不读账本。
+- 其余的边都过：两边的声明逐字相同，安装工具自己的声明 I 编在程序里（`install/host.rs` 24–25），v0.12.46 的 I 和本版的声明一样；`next_max_in_installer`
+  （295–307）、`installer_meets_previous` 和 `installer_meets_next`（308–323）都过；`package` 两边都是 [3, 7]，`bundle_max_in_next` 在单一位置根上只有
+  `pack_declaration_unknown` 警告（325–348）；`installer_knows_keys`（353–369）不受影响，没有新键；`next_check_config`（895–907）：本版的 check-config 和
+  v0.12.46 是同一份代码（`apps/actingd`、`crates/runtime-config`、`crates/vision-ffi` 都没改），收现行配置，写了 DirectML 的也一样。
+- **v0.12.46 的安装工具没有新东西要发或要读**：两个包的文件清单没变，它照常把新的 `tools\actingwatch.exe` 换上去；它持有 `install\writer.lock` 时任务的
+  tick 什么也不做（`apps/actingwatch/src/main.rs` 145–150，和以前的启动器一样）；计划任务不用重新注册。它写的 `install\current.json` 格式没变，新看门狗
+  照旧读（`crates/watchdog` 的 `install_state`，从 actingctl 原样搬来）。从本版的构建目录跑本版的安装工具，结果相同。
+- 部署的自动回退和 `install undo` 这次可以用：接口边都过，回退门的配置一项也过（见下面的退回）。
+
+退回 v0.12.46（按安装工具的代码核过）：
+
+- 安装工具允许退回，不用 `--accept-ledger-one-way`。两边的声明相同：`ledger` [3, 7] 的 `previous_max_in_next` 和 `one_way` 都过（`plan.rs` 281–294），
+  `runtime-client`、`install-control`、`runtime-outcomes`、`package` 和 `actingd-config` 两边都一样，没有失败的边；退回时 `next_check_config` 不算接口边
+  （`plan.rs` 1019–1025）。部署的自动回退（`install/deploy.rs` 715–733，`accept_ledger_one_way: false`）、`rollback plan|apply` 和起过本版 Runtime 以后的
+  `install undo`（`install/undo.rs` 177–189、324–356）走的是同一组边和同一个回退门（`install/update.rs` 378 起）。
+- 回退门其余几项：v0.12.46 自己的读者读部署之后写的账本页（`ledger_readability`，`update.rs` 395–432，只对本版替换掉的那个构建算，就是 v0.12.46）：
+  没有新记录形状；`compile_warnings` 在 outcome 的值里，合同 crate 把值读成自由的映射（`crates/actingcommand-contract/src/outcome.rs` 1573–1577，两版相同）；
+  `config.catalog_warnings` 是 `config.` 族、已有 `RecordList` 形状的事实，v0.12.46 照常读、照普通事实重放（v0.12.46 的 `runtime_fact.rs` 76–112，
+  `crates/scheduler/src/facts.rs` 83–88 两版相同），但不再更新它，它的 overview 也不显示。v0.12.46 在这个根上最近一次打开在它的期限减余量之内
+  （433–484）；现行配置过 v0.12.46 的 check-config（485–498）：两版的配置代码相同。
+- **Lab 录制：v0.12.46 的 actinglab 读不了本版写的录制。** 本版录制的步骤和标记带 `initiator`，v0.12.46 的 `RecordingStep`、`RecordedMark` 拒收未知成员
+  （v0.12.46 的 `crates/lab/src/recording/model.rs` 163–165、489–491，`deny_unknown_fields`）。退回之前，把本版开始的录制做完，否则退回后要重录。
+  安装工具不看录制，不会因此拦退回。
+- **看门狗**：退回时 Tools 换回 v0.12.46 的 `actingwatch.exe`，它是启动器，照旧起 `<root>\runtime\actingctl.exe watchdog run-once --root <root>
+  --from-task`（v0.12.46 的 `apps/actingctl/src/watch_launcher.rs` 122、133–137），由 v0.12.46 的 actingctl 跑 tick。计划任务两版相同（动作都是
+  `<root>\tools\actingwatch.exe`；任务 XML 在 v0.12.46 的 `apps/actingctl/src/watchdog/task.rs` 和本版的 `crates/watchdog/src/task.rs` 都是 150–159，内容
+  一样），不用重新注册；`state.json`（`actingcommand.runtime-watchdog-state.v2`）和 `watchdog.log` 是同样的文件和格式，退回后接着用。v0.12.46 的
+  `actingwatch.exe` 不看参数（v0.12.46 `watch_launcher.rs` 39–41），带 `status` 运行也是跑一次 tick：退回后看状态用 `actingctl watchdog status --root <root>`。
+  `watchdog_launcher_spawn_failed` 在 v0.12.46 里还是现行的码，可能又出现。
+- **规则文件的水位线不挡退回**：生产的规则文件写的 `stop_line`、`hard_line` 和 `requires` 里的 `pool_lines` 要 ≥ 0.12.46，v0.12.46 正是：它认子系统
+  `pool_lines`（v0.12.46 的 `apps/actingd/src/config/manifest.rs` 190–198）、读池的两条线（`crates/policy/src/schema.rs` 1135–1142，两版相同）、按同样的
+  规则查 `requires`（v0.12.46 的 `crates/policy/src/compose.rs` 862–880），有线没估值的池照样编译（警告不拒收，`crates/policy/src/compiler.rs` 418–425，两版
+  相同），所以退回 v0.12.46 不用动规则文件。再往前退到 v0.12.45 不行：它按名字拒收 `pool_lines`（见 v0.12.46 的退回）。
+- 落盘的东西除了录制都不挡：没有新键、新文件、新记录形状。
+- 退回以后：看门狗又经 `runtime\actingctl.exe` 跑 tick；actinglab 没有短命令和 `serve --stdio`，`config set` 又写 actinglab 自己的用户配置；编译警告又只
+  编译不记，overview 没有 `compile_warnings`；actingctl 和 MCP 的命令和本版一样。
+- 客户端和 Runtime 的配对：
+  - v0.12.46 的安装工具装本版：照常，不带标志，见上面的升级。
+  - **actinglab ≤ v0.12.46 和 MCP（actingctl ≤ v0.12.46）连本版的 Runtime**：线上什么都不变。`crates/runtime-client` 没改，合同 crate 只加了两个值键和
+    一个事实类型（编码成已有的 `RecordList`），Runtime 收的请求、发的回执和写的记录形状都和 v0.12.46 一样。旧客户端只是显示上少一点：旧的
+    `actingctl overview`、`ac_overview` 的 catalog 块没有 `compile_warnings`（它由本版的 lab-ops 从事实拼出来，`crates/lab-ops/src/overview.rs` 638–656），
+    事实本身旧的 `actingctl facts`、`ac_facts` 照样列出；它内嵌的码目录没有 `lab_operation_completed`，`actingctl codes`、`ac_outcome_code` 查它答
+    `outcome_code_unknown`（v0.12.46 的 `crates/lab-ops/src/code_lookup.rs` 188–200）。
+  - 旧 MCP 跑本版的 actinglab（MCP 跑的是安装根里的 `<root>\tools\actinglab.exe`，带 `--json --via mcp`，v0.12.46 的 `apps/actingctl/src/mcp/lab.rs` 61、
+    739）：走 actinglab 的旧路，输出和退出码逐字节照旧；只有 `ac_record_mark` 的答复多了 `initiator`（旧 MCP 原样转 `data`，v0.12.46 `lab.rs` 3–4、842），
+    录制里记 `Lab-MCP`。旧 actinglab 读本版写的录制读不了（见上面）。生产根里的 actingctl（含 MCP 服务）、`tools\actinglab.exe`、`tools\actingwatch.exe`
+    和 Runtime 是同一个构建，随部署一起换。
+  - **控制台 UI**（UI 仓 main `0e324e21`，最新发版仍是 UI v0.12.10 `c03d18ea`；自 `e60e3366` 只改了 `model/` 下的 acmodel，控制台没动：`Cargo.toml` 39–44
+    仍把合同、账本、取证、`runtime-client`、配置和内核 crate 钉在 `a322caa4`，即 v0.12.43；`crates/acui-setup/component-interfaces.json` 仍声明
+    `actingd-config` [5, 26]、`ledger` [3, 7]、`runtime-client` [3, 5]、`runtime-outcomes` [1, 1]）：本版的声明和 v0.12.46 逐字相同，线上也没变，所以
+    控制台对本版和对 v0.12.46 一样。CW-1 的审查结论按 UI 的代码核过：控制台不读 overview（UI 仓 `model/` 以外的 Rust 代码里没有 overview 的读取）；它取
+    事实只按指定的键或 `config.parameters.` 前缀（`crates/acui-source/src/workbench.rs` 1284–1285、1453–1456，`crates/acui-source/src/workbench/backends.rs`
+    586–587、685），新事实在快照里能解码（钉住的合同 crate 只按族校验键，值是已有的 `RecordList`）但不显示；outcome 的值由钉住的合同 crate 按自由的
+    映射解码（`a322caa4` 的 `crates/actingcommand-contract/src/outcome.rs` 1573–1577），账本里带 `compile_warnings` 的记录照读；不在它码目录里的码照原样
+    显示（`crates/acui-rows/src/outcome.rs` 152、156–161）。看门狗页跑的是 `actingctl watchdog status --root <root>`（`crates/acui-app/src/workbench/tools.rs`
+    404–415），本版答法不变。配置写了修订 27 的成员（切了 DirectML）时不在它声明的 [5, 26] 里，这在 v0.12.44 就是这样，本版没变。本版没有东西逼控制台
+    换钉。
+
+运行上的变化：
+
+- 部署本身不改变调度的决定；看门狗的 tick 改由 `actingwatch.exe` 自己跑（判定和文件不变），overview 的 catalog 块多了编译警告，actinglab 多了短命令和
+  `serve --stdio`（原有命令的输出不变）；部署前先做完进行中的录制。
+
+本版合并的 PR：
+
+- #1548 LAB-1b（#434，登记 §1.287）：剩下的 23 个核心操作的代码搬进 `crates/lab-ops`（新模块 `apps`、`configure`、`emulators`、`fact_publish`、`frames`、
+  `lab_child`、`material`、`run_show`、`scheduling`、`served`、`shutdown`、`targets`、`wait`、`wake_test`；`process_probe` 和关机等待随 `shutdown` 一起搬），
+  actingctl 和 MCP 调这些函数，答法不变；登记表 `served::SERVED` 写明每个核心行由哪个函数服务；操作表 23 行改归 LAB-1b，按代码订正 `requests`；
+  `ac_config_set`、`ac_targets_set` 的编码失败从 panic 改答已登记的 `actingctl_output_failed`（实际走不到）。新测试 1 个
+  （`lab_ops_core_rows_served_by_lab_ops`），改造 1 个（`gate_mcp13a`：改读 `ac_app` 实际跑的子进程命令行，断言不变）；没有新码、新键。
+- #1549 LAB-4（#434，登记 §1.287）：新库 `crates/watchdog`（actingctl 的看门狗用 `git mv` 搬来，连同 `install\current.json` 的读取）和新程序包
+  `apps/actingwatch`（`actingwatch.exe` 自己跑 tick，加 `status|install|uninstall`）；`actingctl watchdog …` 走同一个 crate；`crates/host-metrics` 加
+  `attach_parent_console`；`watchdog_launcher_spawn_failed` 退役；操作表的 `watchdog install|uninstall` 两行改归 LAB-3；`INSTALL.md`、`install-cli.md`、
+  `runtime-watchdog.md` 跟着改。新测试 1 个（`actingwatch_tick_in_process`），42 个门测试随文件换了路径名（旧名进 `ci/retired-gates.toml`，带
+  `covered_by`），退役 1 个（固定入口跑不了的那条），改造 3 处（启动器的注入改为记 tick、`watchdog_install_registers_the_task_and_uninstall_removes_it`
+  放一个占位的 `tools\actingwatch.exe`、架构守卫多读两个包）。
+- #1550 LAB-2（#434，登记 §1.287；契约 `lab-two-entries.md` §9.3 和未决第 6、7、10 条）：actinglab 的 CLI 模块和 `serve --stdio`；原有命令的输出逐字节
+  不变（修复 1，总览的裁定）；录制带 `initiator`（第 6 条；`record mark` 和 `session record step` 的回答是唯一的例外）；`config get|set` 改名 `user-config`
+  （第 7 条）；`status`、`run show` 在命令行上仍是 actinglab 原来的（第 10 条）；删掉退役和保留的命令词（`ratchet/actinglab_commands.json` 变成 46 个分派臂、
+  102 条命令）；`lab-ops` 不再打印（`cli_line` 返回 `Exit`）；操作表多两行（170 项）。新码 1 个、退役 1 个。新测试 5 个（`gate_434_lab2`）和一个集成测试
+  （`consumer_goldens`：15 个消费方命令行的 golden，照 main 的代码写）；删了 6 个测退役词的测试（都不在门测表里）；改造的有三个能力测试、退役 `session`
+  选择器的测试、`config get|set` 的测试（改测 `user-config`）、两个录制夹具和 `crates/lab` 里七个取录制锁的门测试（`Lab-CLI`）；架构守卫删掉
+  `lab-ops` 的 stderr 放行条目，命令清单跟着改。
+- #1551 CW-1（#428，登记 §1.290）：组装器把每条编译警告定位到所在游戏的 `schedule.json`；启用时写的 `standard_pack_registered` 带 `compile_warnings`；
+  程序事实 `config.catalog_warnings`；overview 的 `catalog.compile_warnings` 和 MCP 的裁剪次序；新值键 2 个。新测试 8 个（`gate_rl1b` 的 `cw1_a` 到
+  `cw1_e`、`gate_mcp8` 的裁剪测试、lab-ops overview 的两个），没有改既有测试。
+
 ## v0.12.46
 
 本版是 v0.12.45 之后合并的 2 个 PR：#428 SS-2f（#1543）和 #428 SS-2h（#1546）。先说部署：接口声明都不变（账本仍是 [3, 7]），部署不用带
