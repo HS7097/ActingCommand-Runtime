@@ -269,6 +269,79 @@ fn gate_mcp5b_ac_overview_cuts_each_row_s_foreground_after_the_monitors_and_befo
     }
 }
 
+// #428 CW-1 (register §1.290; fix 1, coordinator work order rd-1110/brief-cw1-fix1.md item 3):
+// the catalog block's compile warnings lose their `items` first, after the watchdog and just
+// before the block itself; the cut leaves `items_truncated: true` beside the warnings' count and
+// codes, and `truncated` names `/catalog/compile_warnings/items`, then `/catalog` when the block
+// goes too.
+#[test]
+fn cw1_ac_overview_cuts_the_compile_warnings_items_just_before_the_catalog_block() {
+    let mut overview = full_overview();
+    overview["catalog"] = json!({
+        "catalog_id": "standard-packs",
+        "catalog_version": 7,
+        "compile_warnings": {
+            "count": 2,
+            "codes": ["neutral_warning"],
+            "items": [
+                {"warning": "neutral_warning", "game": "neutral.game.a", "pointer": "/pools/0/stop_line"},
+                {"warning": "neutral_warning", "game": "neutral.game.b", "pointer": "/pools/1/stop_line"},
+            ],
+        },
+    });
+    let start = overview.clone();
+    let items = "/catalog/compile_warnings/items";
+    let at = TOP_BLOCKS
+        .iter()
+        .position(|block| *block == "catalog")
+        .expect("catalog is cut");
+    let mut before_items = TOP_BLOCKS[..at]
+        .iter()
+        .map(|block| format!("/{block}"))
+        .collect::<Vec<_>>();
+    before_items.push(items.to_owned());
+
+    // It fits once the items are gone: the block stays, with the count and codes.
+    let mut cut = start.clone();
+    cut_to_fit(&mut cut, |candidate| {
+        candidate["catalog"]["compile_warnings"]
+            .get("items")
+            .is_none()
+    });
+    assert_eq!(cut["truncated"], json!(before_items), "{cut}");
+    let mut kept = start["catalog"].clone();
+    let warnings = kept["compile_warnings"]
+        .as_object_mut()
+        .expect("the compile warnings");
+    warnings.remove("items");
+    warnings.insert("items_truncated".to_owned(), json!(true));
+    assert_eq!(cut["catalog"], kept, "{cut}");
+    assert_eq!(cut.get("catalog_truncated"), None, "{cut}");
+
+    // Cut to nothing: the items go just before the block.
+    cut_to_fit(&mut overview, |_| false);
+    let truncated = overview["truncated"]
+        .as_array()
+        .expect("the list of what was cut");
+    let position = |pointer: &str| {
+        truncated
+            .iter()
+            .position(|entry| entry == pointer)
+            .unwrap_or_else(|| panic!("{pointer} is cut: {truncated:?}"))
+    };
+    assert_eq!(position(items) + 1, position("/catalog"), "{truncated:?}");
+    assert_eq!(
+        json!(truncated[..=at]),
+        json!(before_items),
+        "{truncated:?}"
+    );
+    assert_eq!(
+        (overview.get("catalog"), &overview["catalog_truncated"]),
+        (None, &json!(true)),
+        "{overview}"
+    );
+}
+
 // Workflow #429 R-0b2 (register §1.243): cut to nothing, each row keeps its activity as it was,
 // with no marker, and `truncated` does not name it.
 #[test]

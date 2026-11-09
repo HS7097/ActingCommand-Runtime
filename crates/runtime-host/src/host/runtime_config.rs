@@ -1579,7 +1579,12 @@ impl HostShared {
         result
     }
 
-    fn record_config_fact(&self, mut record: RuntimeFactRecord) -> RuntimeHostResult<()> {
+    /// Records one configuration fact, observed now and strictly after the stored record of its
+    /// key; #428 CW-1: the workbench records `config.catalog_warnings` with it.
+    pub(super) fn record_config_fact(
+        &self,
+        mut record: RuntimeFactRecord,
+    ) -> RuntimeHostResult<()> {
         let now = self.clock.sample()?.unix_ms;
         let previous = lock(&self.runtime_facts, ConfigHostLocation::ReadRuntimeConfig)?
             .get(&record.scope, &record.key)

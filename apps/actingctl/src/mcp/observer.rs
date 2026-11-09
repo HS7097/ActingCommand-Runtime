@@ -31,7 +31,8 @@ use std::time::Duration;
 /// MCP-0 command table §4.9: the top-level blocks ac_overview cuts first, in this order, when its
 /// answer does not fit the output budget. A slice that adds an overview block registers its place
 /// here in the same PR; a block the answer does not hold is passed over. Workflow #432 AGT-1b:
-/// `agent_wake` is not here: it is a few members of the Status read and is never cut.
+/// `agent_wake` is not here: it is a few members of the Status read and is never cut. #428 CW-1:
+/// `catalog.compile_warnings.items` is cut just before `catalog`.
 const CUT_BLOCKS: [&str; 8] = [
     "host",
     "startup",
@@ -180,6 +181,21 @@ pub(super) fn cut_to_fit(result: &mut Value, fits: impl Fn(&Value) -> bool) {
 fn cut_next(result: &mut Value) -> Option<String> {
     let members = result.as_object_mut()?;
     for block in CUT_BLOCKS {
+        // #428 CW-1: the places of the catalog's compile warnings go just before the catalog
+        // block, so their count and codes outlast them.
+        if block == overview::Section::Catalog.name()
+            && let Some(warnings) = members
+                .get_mut(block)
+                .and_then(|catalog| catalog.get_mut(overview::CATALOG_COMPILE_WARNINGS))
+                .and_then(Value::as_object_mut)
+            && warnings.remove("items").is_some()
+        {
+            warnings.insert("items_truncated".to_owned(), json!(true));
+            return Some(format!(
+                "/{block}/{}/items",
+                overview::CATALOG_COMPILE_WARNINGS
+            ));
+        }
         if members.remove(block).is_some() {
             members.insert(format!("{block}_truncated"), json!(true));
             return Some(format!("/{block}"));

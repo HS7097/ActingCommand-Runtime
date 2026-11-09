@@ -2596,6 +2596,18 @@
     "pool_line_hold": {
       "type": "vocab:pool_line_hold",
       "description": "Why a pool's lines hold a judged candidate back this round (SS-2h, contracts/scheduling/README.md \"Pool lines\", \"Capped spending order\")."
+    },
+    "warning_code": {
+      "type": "code",
+      "description": "The code of a warning a record lists, for example a compile warning of a composed catalog (#428 CW-1)."
+    },
+    "compile_warnings": {
+      "type": "records",
+      "fields": {
+        "warning_code": "required",
+        "json_pointer": "required"
+      },
+      "description": "The compile warnings of the composed catalog the scheduler workbench activated that the game's schedule.json gave: each warning's code and its JSON pointer in that file, each place once, in code then pointer order (#428 CW-1, contracts/standard-pack-schedule.md \"The scheduler workbench\")."
     }
   },
   "vocabularies": {
