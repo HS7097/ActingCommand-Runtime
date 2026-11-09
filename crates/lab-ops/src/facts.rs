@@ -20,7 +20,7 @@ use serde_json::{Map, Value, json};
 
 /// What one read answers: the CLI form, the MCP `scope`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Scope {
+pub enum Scope {
     /// `facts --program`: the Runtime's own fact store.
     Program,
     /// `status --config`: only the store's `config.*` records.
@@ -30,13 +30,13 @@ pub(crate) enum Scope {
 }
 
 impl Scope {
-    pub(crate) fn parse(text: &str) -> Option<Self> {
+    pub fn parse(text: &str) -> Option<Self> {
         [Self::Program, Self::Config, Self::Instance]
             .into_iter()
             .find(|scope| scope.as_str() == text)
     }
 
-    pub(crate) const fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Program => "program",
             Self::Config => "config",
@@ -46,7 +46,7 @@ impl Scope {
 }
 
 /// One read, as either side parsed it.
-pub(crate) enum FactsRequest {
+pub enum FactsRequest {
     Program {
         key_prefix: Option<String>,
     },
@@ -70,7 +70,7 @@ impl FactsRequest {
 
 /// Why a read answered nothing.
 #[derive(Debug)]
-pub(crate) enum Failure {
+pub enum Failure {
     /// The selector names no instance of the Runtime's status, or more than one.
     Selector {
         miss: SelectorMiss,
@@ -91,7 +91,7 @@ pub(crate) enum Failure {
 /// the records the read returned, `records_kept` those the answer holds. Workflow #429 R-4
 /// (register §1.239): the config read also answers `config_version`, the settings' version the
 /// Runtime read with its records, when it answers one (the next `expected_version`).
-pub(crate) fn read(client: &RuntimeClient, request: &FactsRequest) -> Result<Value, Failure> {
+pub fn read(client: &RuntimeClient, request: &FactsRequest) -> Result<Value, Failure> {
     let kept =
         |prefix: Option<&str>, key: &str| prefix.is_none_or(|prefix| key.starts_with(prefix));
     // Workflow #429 R-4: the settings' version the config read answers beside its records.

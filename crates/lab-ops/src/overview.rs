@@ -82,6 +82,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const USAGE: &str = "usage: actingctl overview --state-root <path> [--root <install root>] [--instance <alias|instance_id|ADB port>] [--sections <block>[,<block>...]]\nblocks: global_pause, instances, run_window, lab_tool, install, performance, catalog, config_generation, watchdog, fact_refresh, agent_wake (default all); daemon and incomplete are always answered";
@@ -103,7 +104,7 @@ const NOT_RUNNING: &str = "not_running";
 /// are always answered and are not among them; a slice that adds a block adds its name here and
 /// its place in the truncation order of `mcp::observer`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Section {
+pub enum Section {
     GlobalPause,
     Instances,
     RunWindow,
@@ -124,7 +125,7 @@ pub(crate) enum Section {
 }
 
 impl Section {
-    pub(crate) const ALL: [Self; 11] = [
+    pub const ALL: [Self; 11] = [
         Self::GlobalPause,
         Self::Instances,
         Self::RunWindow,
@@ -139,7 +140,7 @@ impl Section {
     ];
 
     /// The block's member name in the answer.
-    pub(crate) const fn name(self) -> &'static str {
+    pub const fn name(self) -> &'static str {
         match self {
             Self::GlobalPause => "global_pause",
             Self::Instances => "instances",
@@ -174,14 +175,14 @@ impl Section {
 
 /// The blocks one overview answers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Sections([bool; 11]);
+pub struct Sections([bool; 11]);
 
 impl Sections {
     /// Every block: `--sections` / `sections` omitted.
-    pub(crate) const ALL: Self = Self([true; 11]);
+    pub const ALL: Self = Self([true; 11]);
 
     /// The blocks `names` names, each once or more; `None` when one of them names no block.
-    pub(crate) fn parse<'a>(names: impl IntoIterator<Item = &'a str>) -> Option<Self> {
+    pub fn parse<'a>(names: impl IntoIterator<Item = &'a str>) -> Option<Self> {
         let mut sections = [false; 11];
         for name in names {
             let section = Section::ALL
@@ -192,36 +193,36 @@ impl Sections {
         Some(Self(sections))
     }
 
-    pub(crate) const fn contains(self, section: Section) -> bool {
+    pub const fn contains(self, section: Section) -> bool {
         self.0[section.index()]
     }
 }
 
 /// One overview, as either side parsed it.
-pub(crate) struct OverviewRequest {
+pub struct OverviewRequest {
     /// Alias, instance_id or ADB port; without it every instance.
-    pub(crate) instance: Option<String>,
-    pub(crate) sections: Sections,
+    pub instance: Option<String>,
+    pub sections: Sections,
 }
 
 /// Where the install lives, as the side found it.
-pub(crate) struct Place<'a> {
+pub struct Place<'a> {
     /// The program root: the selected slot `<root>\<A|B>`, or the install root of a layout
     /// without slots; its `runtime\BUILD-MANIFEST.json` is the build.
-    pub(crate) root: Option<&'a Path>,
+    pub root: Option<&'a Path>,
     /// The install root that holds `tools\actinglab.exe`.
-    pub(crate) install_root: Option<&'a Path>,
-    pub(crate) state_root: Option<&'a Path>,
+    pub install_root: Option<&'a Path>,
+    pub state_root: Option<&'a Path>,
 }
 
 /// One overview: its blocks, and the warnings each side renders as its own.
-pub(crate) struct Overview {
-    pub(crate) result: Map<String, Value>,
-    pub(crate) warnings: Vec<Warning>,
+pub struct Overview {
+    pub result: Map<String, Value>,
+    pub warnings: Vec<Warning>,
 }
 
 /// A part of the overview that could not be read, reported beside it.
-pub(crate) enum Warning {
+pub enum Warning {
     /// `install_build_manifest_unreadable`, or `call_budget_exhausted` naming the instance
     /// (`alias`) whose run was not read.
     Outcome(Outcome),
@@ -230,7 +231,7 @@ pub(crate) enum Warning {
 }
 
 /// Why an overview was refused or failed.
-pub(crate) enum Failure {
+pub enum Failure {
     /// A CLI flag is unknown, repeated, missing its value or malformed: the flag as given.
     Argument {
         argument: String,
@@ -257,7 +258,7 @@ impl Failure {
     /// The failure as an outcome (Workflow #378 A5). A CLI flag failure is
     /// `actingctl_usage_invalid` with `argument` and `argument_problem` (MCP answers
     /// `arguments_invalid` for its argument failures before any read).
-    pub(crate) fn outcome(&self) -> Outcome {
+    pub fn outcome(&self) -> Outcome {
         match self {
             Self::Argument { argument, problem } => {
                 Outcome::new(ActingctlCode::ActingctlUsageInvalid)
@@ -278,7 +279,7 @@ impl Failure {
 /// answer is not an empty system (nor a `catalog`; `config_generation` then has only what the
 /// install root selects). `envelope` writes an outcome inside a block (the watchdog's) as the
 /// side writes one.
-pub(crate) fn read(
+pub fn read(
     client: Result<&RuntimeClient, Value>,
     request: &OverviewRequest,
     place: &Place<'_>,
@@ -631,23 +632,31 @@ fn catalog_block(facts: &RuntimeFactSnapshot) -> Result<Value, Outcome> {
 /// `actingctl watchdog status` of the install root, read locally (command table §4.10): its
 /// `decision`, `attention`, `starts_24h` and `last_tick`; null without an install root.
 fn watchdog_block(place: &Place<'_>, envelope: &dyn Fn(&Outcome) -> Value) -> Value {
-    #[cfg(windows)]
-    {
-        if let Some(root) = place.install_root {
-            return crate::watchdog::overview_block(root, envelope);
-        }
+    match (place.install_root, WATCHDOG_BLOCK.get()) {
+        (Some(root), Some(block)) => block(root, envelope),
+        _ => Value::Null,
     }
-    #[cfg(not(windows))]
-    {
-        let _ = (place, envelope);
-    }
-    Value::Null
+}
+
+/// Workflow #434 LAB-1: the reader of the `watchdog` block, `actingctl watchdog status` of an
+/// install root written with `envelope`. The watchdog stays in actingctl until LAB-4 moves it to
+/// `crates/watchdog`, so actingctl hands its reader over at its start ([`set_watchdog_block`]);
+/// on Windows only, where the watchdog runs, as before.
+pub type WatchdogBlock = fn(&Path, &dyn Fn(&Outcome) -> Value) -> Value;
+
+static WATCHDOG_BLOCK: OnceLock<WatchdogBlock> = OnceLock::new();
+
+/// Hands the `watchdog` block's reader to this process's overview, once, before the first
+/// overview; `false` when one was handed over already (that one stays). Without one the block is
+/// null, as on a platform without the watchdog.
+pub fn set_watchdog_block(block: WatchdogBlock) -> bool {
+    WATCHDOG_BLOCK.set(block).is_ok()
 }
 
 /// Workflow #385 P-m (PERF §4.6): the shadow measurement's status (`PerformanceStatus`), its
 /// rows narrowed to the instance `selected` names (an alias) when given. `perf-status` prints
 /// it and `ac_overview` answers it as its `performance` block.
-pub(crate) fn performance_block(
+pub fn performance_block(
     client: &RuntimeClient,
     selected: Option<&str>,
 ) -> Result<RuntimePerformanceStatus, RuntimeClientError> {
@@ -670,7 +679,7 @@ const PERFORMANCE_DWELLS: [&str; 2] = ["dwell_24h", "dwell_total"];
 /// `dwell_total_ref`, in place of `dwell_24h` and `dwell_total`. Nothing is lost: a view whose
 /// dwell differs from every other has an entry of its own. The rows' identical dwell was written
 /// up to 24 times (host and five instances, two views, two periods).
-pub(crate) fn performance_answer(status: &RuntimePerformanceStatus) -> Value {
+pub fn performance_answer(status: &RuntimePerformanceStatus) -> Value {
     let mut answer = json!(status);
     let mut dwell = Vec::<Value>::new();
     let mut share = |row: &mut Value| {
@@ -713,7 +722,7 @@ pub(crate) fn performance_answer(status: &RuntimePerformanceStatus) -> Value {
 /// Workflow #384 D2-S5 (D2 model §6 S5, §8 T39): what the scheduler's fact refresh waits for
 /// (`FactRefreshStatus`), its rows narrowed to the instance `selected` names (an alias) when
 /// given. `fact-refresh` prints it and `ac_overview` answers it as its `fact_refresh` block.
-pub(crate) fn fact_refresh_block(
+pub fn fact_refresh_block(
     client: &RuntimeClient,
     selected: Option<&str>,
 ) -> Result<RuntimeFactRefreshStatus, RuntimeClientError> {
@@ -827,9 +836,9 @@ fn instance_rows(
 /// The run window of one overview (#411 A42): from 24 h before the read (`since_unix_ms`, the
 /// `run_window` block's start) to the read (`until_unix_ms`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct RunWindow {
-    pub(crate) since_unix_ms: u64,
-    pub(crate) until_unix_ms: u64,
+pub struct RunWindow {
+    pub since_unix_ms: u64,
+    pub until_unix_ms: u64,
 }
 
 /// One instance row's run members. `run` is at most one brief run status: the instance's newest
@@ -845,7 +854,7 @@ pub(crate) struct RunWindow {
 /// until_unix_ms}`, the window's bounds. A read the call budget left no time to start
 /// (`call_budget_exhausted` naming the instance), one the deadline stopped, and one that failed
 /// (its warning) each mark the row `run_incomplete` and the overview incomplete.
-pub(crate) fn run_block(
+pub fn run_block(
     client: &RuntimeClient,
     instance: &RuntimeInstanceStatus,
     window: RunWindow,
@@ -1100,7 +1109,7 @@ fn install_view(place: &Place<'_>, warnings: &mut Vec<Warning>) -> Value {
 /// Reads a whole file of at most `limit` bytes: a failed open or read is `foreign_os_error`
 /// with the `path` and `io_op`; a larger file is `mcp_file_too_large` with `path` and
 /// `limit_bytes`. mcp-serve reads its files with it too (`mcp::runtime`).
-pub(crate) fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>, Outcome> {
+pub fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>, Outcome> {
     let file = fs::File::open(path)
         .map_err(|error| Outcome::from_io_error(&error, IoOp::Open).path(path))?;
     let mut bytes = Vec::new();
@@ -1118,7 +1127,7 @@ pub(crate) fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>, Outcome> 
 /// Runs `overview`; `None` leaves every other command to the CLI, unchanged. One result line on
 /// stdout (Workflow #378 A5): the overview with `runtime_overview_reported`, or `{outcome}` with
 /// the failure (a flag failure's developer line adds the usage) and exit 1.
-pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
+pub fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
     if arguments.first()?.to_str()? != "overview" {
         return None;
     }

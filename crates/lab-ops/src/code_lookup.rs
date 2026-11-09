@@ -26,8 +26,8 @@ use std::process::ExitCode;
 
 const COMMAND: &str = "codes";
 const USAGE: &str = "usage: actingctl codes <code> | actingctl codes [--prefix <text>] [--owner <owner>] [--limit <1-100>] [--cursor <next_cursor>]";
-pub(crate) const DEFAULT_LIMIT: u64 = 20;
-pub(crate) const MAX_LIMIT: u64 = 100;
+pub const DEFAULT_LIMIT: u64 = 20;
+pub const MAX_LIMIT: u64 = 100;
 /// `c1.<last code of the page>.<filters>`.
 const CURSOR_VERSION: &str = "c1";
 /// The hex digits of the filters' SHA-256 a cursor carries.
@@ -36,26 +36,26 @@ const CURSOR_FINGERPRINT_DIGITS: usize = 16;
 const MAX_CODE_BYTES: usize = 64;
 
 /// What one call asks for: one code's entry, or one page of the code list.
-pub(crate) enum Query {
+pub enum Query {
     /// `codes <code>` / `code`: the code as given.
     One(String),
     List(ListQuery),
 }
 
 /// The filters and the page of a code list (R2: each MCP argument is the CLI flag's name).
-pub(crate) struct ListQuery {
+pub struct ListQuery {
     /// Only codes whose name starts with it.
-    pub(crate) prefix: Option<String>,
+    pub prefix: Option<String>,
     /// Only codes of this owner, as the entries' `owner` names it.
-    pub(crate) owner: Option<String>,
-    pub(crate) limit: u64,
+    pub owner: Option<String>,
+    pub limit: u64,
     /// `next_cursor` of the previous page.
-    pub(crate) cursor: Option<String>,
+    pub cursor: Option<String>,
 }
 
 /// Why a lookup was refused, as its outcome.
 #[derive(Debug)]
-pub(crate) enum Refusal {
+pub enum Refusal {
     /// The caller's to change: `outcome_code_unknown`, `cursor_invalid` or a usage error.
     Usage(Outcome),
     /// A build defect: `outcome_catalog_unreadable`, or `actingctl_output_failed` for an answer
@@ -64,7 +64,7 @@ pub(crate) enum Refusal {
 }
 
 impl Refusal {
-    pub(crate) fn outcome(&self) -> &Outcome {
+    pub fn outcome(&self) -> &Outcome {
         match self {
             Self::Usage(outcome) | Self::Defect(outcome) => outcome,
         }
@@ -98,7 +98,7 @@ fn foreign_data_error(error: &serde_json::Error) -> Outcome {
 }
 
 /// The answer of a lookup.
-pub(crate) enum Answer {
+pub enum Answer {
     /// One entry: the catalog entry with its `code`.
     Entry(Value),
     List(Page),
@@ -131,7 +131,7 @@ struct EntryDocument<'c> {
 }
 
 /// One page of the code list, before rendering.
-pub(crate) struct Page {
+pub struct Page {
     rows: Vec<Row>,
     /// The code this page started after (the cursor's), if any.
     from: Option<String>,
@@ -141,13 +141,13 @@ pub(crate) struct Page {
 }
 
 impl Page {
-    pub(crate) fn row_count(&self) -> usize {
+    pub fn row_count(&self) -> usize {
         self.rows.len()
     }
 
     /// `{codes, next_cursor?, truncated?}` with the first `kept` rows. With fewer rows than the
     /// page holds it is `truncated`, and next_cursor continues after the last row kept.
-    pub(crate) fn render(&self, kept: usize) -> Result<Value, Refusal> {
+    pub fn render(&self, kept: usize) -> Result<Value, Refusal> {
         let kept = kept.min(self.rows.len());
         let truncated = kept < self.rows.len();
         let after = match kept.checked_sub(1) {
@@ -178,7 +178,7 @@ impl Page {
 }
 
 /// Reads `query` from the catalog this build embeds.
-pub(crate) fn read_embedded(query: &Query) -> Result<Answer, Refusal> {
+pub fn read_embedded(query: &Query) -> Result<Answer, Refusal> {
     let catalog = actingcommand_contract::outcome::catalog_json()
         .map_err(|error| Refusal::unreadable(Some(error)))?;
     read(catalog, query)
@@ -189,7 +189,7 @@ pub(crate) fn read_embedded(query: &Query) -> Result<Answer, Refusal> {
 /// word a name may hold); a cursor that is malformed or was issued for other filters is
 /// `cursor_invalid`; a catalog without its codes table, or with an entry that is not an object
 /// or lacks a member the answer reads, is `outcome_catalog_unreadable`.
-pub(crate) fn read(catalog: &Value, query: &Query) -> Result<Answer, Refusal> {
+pub fn read(catalog: &Value, query: &Query) -> Result<Answer, Refusal> {
     let codes = catalog
         .get("codes")
         .and_then(Value::as_object)
@@ -313,7 +313,7 @@ fn decode_cursor(cursor: &str, fingerprint: &str) -> Result<Option<String>, Refu
 /// It takes no `--state-root`: it never connects to the Runtime (command table D5). One result
 /// line on stdout (Workflow #378 A5): the entry or the page with `outcome_codes_reported`, or
 /// `{outcome}` with the refusal (a usage refusal's developer line adds the usage) and exit 1.
-pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
+pub fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
     if arguments.first()?.to_str()? != COMMAND {
         return None;
     }

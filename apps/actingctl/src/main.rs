@@ -4,15 +4,45 @@
 
 #![forbid(unsafe_code)]
 
-// Workflow #378 A5: the one result line of every exit.
-mod cli_line;
-// Workflow #389 MCP-14: `codes` (MCP `ac_outcome_code`), entries of the embedded outcome catalog.
-mod code_lookup;
+// Workflow #434 LAB-1 (contracts/lab-two-entries.md §8; register §1.287): actingctl's read and
+// write modules and the helpers they share live in `crates/lab-ops`, unchanged; actingctl calls
+// them from there, so every `crate::<module>` path below still names them. What each module is:
+// - `cli_line` (Workflow #378 A5): the one result line of every exit.
+// - `code_lookup` (Workflow #389 MCP-14): `codes` (MCP `ac_outcome_code`), entries of the
+//   embedded outcome catalog; `codes`: actingctl's outcome codes.
+// - `facts` (Workflow #389 MCP-4): `facts --program | --instance` and `status --config` (MCP
+//   `ac_facts`); `events` (MCP-1).
+// - `instance_selector`, `material_export`, `observe_export` (Workflow #389 MCP-5a): `observe
+//   --export` (MCP `ac_observe`), with the instance selector and the material export writer it
+//   shares with MCP.
+// - `run_list` (Workflow #389 MCP-3): `runs` (MCP `ac_runs`).
+// - `child`, `diagnose` (Workflow #389 MCP-7): `diagnose` (MCP `ac_diagnose`), with the
+//   child-process runner it shares with MCP for `actingd suspended`.
+// - `overview` (Workflow #389 MCP-8): `overview` (MCP `ac_overview`), with the read both share.
+// - `run_evidence` (Workflow #389 MCP-6): `run evidence` (MCP `ac_run_evidence`).
+// - `devices` (Workflow #398 RD-1c): `devices list|bind|unbind` (MCP `ac_devices`,
+//   `ac_device_bind`, `ac_device_unbind`).
+// - `capability_gap` (Workflow #410 item 6): `capability-gap` (MCP `ac_capability_gap`).
+// - `remedy` (Workflow #411 B15 R6): `remedy set|get|lift` (MCP `ac_remedy_set`,
+//   `ac_remedy_get`), an instance's remedy choices.
+// - `evidence_read` (#422 LN-7c C): `evidence confirm-read` (MCP `ac_evidence_confirm_read`).
+// - `schedule` (Workflow #386 SR-6b, MCP-19b): `schedule` (MCP `ac_schedule`); what `overview`
+//   and `diagnose` show of it is read inside `crates/lab-ops`.
+// - `perf_preset` (Workflow #429 R-2): `perf-preset set|get` (MCP `ac_perf_preset`).
+// - `routine_summary` (Workflow #429 R-12): `routine-summary` (MCP `ac_routine_summary`).
+// - `read_bounded`, `InputProblem` and `foreign_data_error`: a subcommand's bounded input file.
+use actingcommand_lab_ops::{
+    InputProblem, capability_gap, child, cli_line, code_lookup, codes, devices, diagnose, events,
+    evidence_read, facts, foreign_data_error, instance_selector, observe_export, overview, packs,
+    perf_preset, read_bounded, remedy, routine_summary, run_evidence, run_list,
+};
+// Read by the MCP server only, and `schedule` only by its tests.
+#[cfg(feature = "mcp")]
+use actingcommand_lab_ops::material_export;
+#[cfg(all(test, feature = "mcp"))]
+use actingcommand_lab_ops::schedule;
+
 // Test-only: Workflow #381 A, the install-transition run budget (test plan A-2 G2a).
-mod codes;
-mod events;
-// Workflow #389 MCP-4: `facts --program | --instance` and `status --config` (MCP `ac_facts`).
-mod facts;
 #[cfg(test)]
 mod gate_381a;
 // Test-only: Workflow #382 A-1 (test plan v2.2 §3.7), the CLI grammar (G10) and
@@ -27,12 +57,7 @@ mod gate_382_a1;
 mod held_runtime;
 #[cfg(feature = "mcp")]
 mod mcp;
-mod packs;
 mod process_probe;
-// Test-only: ROUT-L RL-1c (#411), the standard-pack game root fixtures of `packs::tests`.
-#[cfg(test)]
-#[path = "../../../tests/support/standard_pack_schedule.rs"]
-mod standard_pack_schedule_fixture;
 // Workflow #421 INST-1: `install`, the command-line installer of a single-location root.
 #[cfg(windows)]
 mod install;
@@ -43,63 +68,11 @@ mod shutdown_wait;
 #[cfg(windows)]
 mod watchdog;
 
-// Workflow #389 MCP-5a: `observe --export` (MCP `ac_observe`), with the instance selector and the
-// material export writer it shares with MCP.
-mod instance_selector;
-mod material_export;
-mod observe_export;
-// End of MCP-5a.
-
-// Workflow #389 MCP-3: `runs` (MCP `ac_runs`); it uses MCP-5a's instance selector above.
-mod run_list;
-// End of MCP-3.
-
-// ---- Workflow #389 MCP-7 (begin): `diagnose` (MCP `ac_diagnose`), with the child-process
-// runner it shares with MCP for `actingd suspended`. ----
-mod child;
-mod diagnose;
-// ---- Workflow #389 MCP-7 (end) ----
-
-// ---- Workflow #389 MCP-8 (begin): `overview` (MCP `ac_overview`), with the read both share.
-mod overview;
-// ---- Workflow #389 MCP-8 (end) ----
-
-// ---- Workflow #389 MCP-6 (begin): `run evidence` (MCP `ac_run_evidence`).
-mod run_evidence;
-// ---- Workflow #389 MCP-6 (end) ----
-
 // Workflow #390 DRILL-1: `ladder-drill` (MCP `ac_ladder_drill`), a drill of an instance's ladder.
 mod ladder_drill;
 
-// ---- Workflow #398 RD-1c (begin): `devices list|bind|unbind` (MCP `ac_devices`,
-// `ac_device_bind`, `ac_device_unbind`).
-mod devices;
-// ---- Workflow #398 RD-1c (end) ----
-
-// Workflow #410 item 6: `capability-gap` (MCP `ac_capability_gap`), the local capability-gap log.
-mod capability_gap;
-
-// Workflow #411 B15 R6: `remedy set|get|lift` (MCP `ac_remedy_set`, `ac_remedy_get`), an
-// instance's remedy choices.
-mod remedy;
-
-// #422 LN-7c C: `evidence confirm-read` (MCP `ac_evidence_confirm_read`), the confirmation that an
-// evidence frame or a run was read.
-mod evidence_read;
-
-// Workflow #386 SR-6b, MCP-19b: `schedule` (MCP `ac_schedule`), the latest policy evaluation's
-// explanation, and what `overview` and `diagnose` show of it.
-mod schedule;
-
-// Workflow #429 R-2: `perf-preset set|get` (MCP `ac_perf_preset`), the performance presets.
-mod perf_preset;
-
-// Workflow #429 R-12: `routine-summary` (MCP `ac_routine_summary`), the routine summary's health
-// statistics.
-mod routine_summary;
-
-use actingcommand_contract::codes::{ContractCode, ContractLocation, SharedCode};
-use actingcommand_contract::outcome::{Category, Detail, IoOp, Outcome, RawSource};
+use actingcommand_contract::codes::{ContractLocation, SharedCode};
+use actingcommand_contract::outcome::{Category, Detail, IoOp, Outcome};
 use actingcommand_contract::{
     CaptureSequenceSpec, ConfigSettingChange, ContainedTaskRecoveryBinding, ContainedTaskRequest,
     CorrelationId, EmulatorInstanceAction, EventActor, EventSource, FactObservation, FactRecord,
@@ -107,15 +80,15 @@ use actingcommand_contract::{
     RequestId, RuntimeMonitorPolicy, RuntimeReceipt, RuntimeReceiptState, RuntimeResult,
     SanitizationError, SchedulingPauseScope,
 };
+use actingcommand_lab_ops::codes::{ActingctlCode, ArgumentProblem};
+use actingcommand_lab_ops::instance_selector::SelectorMiss;
 use actingcommand_runtime_client::{RuntimeClient, RuntimeClientConfig, RuntimeClientError};
-use codes::{ActingctlCode, ArgumentProblem};
-use instance_selector::SelectorMiss;
 use serde::Serialize;
 use serde_json::{Map, Value};
 use std::env;
 use std::ffi::OsString;
 use std::fmt;
-use std::io::{self, Read};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -153,6 +126,10 @@ fn main() -> ExitCode {
     actingcommand_runtime_client::set_channel_unsupported_reporter(|outcome| {
         cli_line::developer_line(outcome, None);
     });
+    // Workflow #434 LAB-1: `overview` (and mcp-serve's `ac_overview`) reads the watchdog block
+    // through actingctl's watchdog, which stays here until LAB-4.
+    #[cfg(windows)]
+    overview::set_watchdog_block(watchdog::overview_block);
     let arguments: Vec<OsString> = env::args_os().skip(1).collect();
     // Workflow #432 AGT-T1: `agent-channel` touches only its own files and never needs the Runtime
     // or an installation. It leaves first: a session's hook must not depend on, or pin, a slot.
@@ -1192,20 +1169,6 @@ fn canonical_package(path: PathBuf) -> Result<PathBuf, ActingctlError> {
     }
 }
 
-/// Reads at most `limit` bytes of an input file; a longer file is `TooLarge`.
-fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>, InputProblem> {
-    let mut bytes = Vec::new();
-    std::fs::File::open(path)
-        .map_err(|error| InputProblem::Io(error, IoOp::Open))?
-        .take(limit as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|error| InputProblem::Io(error, IoOp::Read))?;
-    if bytes.len() > limit {
-        return Err(InputProblem::TooLarge(limit));
-    }
-    Ok(bytes)
-}
-
 /// `agent-publish-facts --record-file`: one bounded, valid fact observation.
 fn read_fact_observation(path: &Path) -> Result<FactObservation, ActingctlError> {
     let invalid = |problem: InputProblem| ActingctlError::FactRecord {
@@ -1800,46 +1763,10 @@ impl Command {
 /// Any other flag, a flag given twice and a word that is no flag are refused by name (Fail Loud:
 /// nothing is ignored silently). The offline `codes` leaves before `Invocation::parse` and reads
 /// its flags here (Workflow #389 MCP-14), as `run evidence` does (Workflow #389 MCP-6).
+/// Workflow #434 LAB-1: the flags of the commands whose modules moved to `crates/lab-ops` are
+/// that crate's (`actingcommand_lab_ops::flags_of`), unchanged; every other word asks it.
 fn flags_of(command: &str, action: Option<&str>) -> Option<&'static [&'static str]> {
     let flags: &'static [&'static str] = match command {
-        // Workflow #389 MCP-14: the list flags of `codes`; its code is a positional word.
-        "codes" => &["--prefix", "--owner", "--limit", "--cursor"],
-        // Workflow #389 MCP-1: `events`, one flag per parameter of `ac_events`
-        // (`events::PARAMETERS`); MCP-2 adds `--event-types` and `--fact-key`.
-        "events" => &[
-            "--state-root",
-            "--instance",
-            "--view",
-            "--since-unix-ms",
-            "--until-unix-ms",
-            "--after-sequence",
-            "--through-sequence",
-            "--event-type",
-            "--event-types",
-            "--exclude-event-types",
-            "--fact-key",
-            "--min-severity",
-            "--max-severity",
-            "--origin-module",
-            "--task-id",
-            "--run-id",
-            "--request-id",
-            "--correlation-id",
-            "--detail",
-            "--limit",
-            "--cursor",
-            "--wait-s",
-        ],
-        // Workflow #389 MCP-6: `run evidence`, by request_id or run_id, a page of steps.
-        "run" if action == Some(run_evidence::ACTION) => &[
-            "--state-root",
-            "--request-id",
-            "--run-id",
-            "--from-step",
-            "--limit",
-            // #411 A42: whole steps or step summaries.
-            "--detail",
-        ],
         "agent-publish-facts" => &["--state-root", "--record-file"],
         "agent-apply-resource-targets" => &["--state-root", "--policy-file"],
         "config" | "monitor-status" | "selfcheck" => &["--state-root"],
@@ -1895,38 +1822,7 @@ fn flags_of(command: &str, action: Option<&str>) -> Option<&'static [&'static st
             // Workflow #389 MCP-21.
             "--wait",
         ],
-        // Workflow #398 RD-1c: `devices`; the alias and the handle are positional words.
-        "devices" if matches!(action, Some(devices::LIST | devices::BIND)) => {
-            &["--state-root", "--root"]
-        }
-        "devices" if action == Some(devices::UNBIND) => &["--state-root"],
-        // Workflow #410 item 6: both texts are required; no root is read.
-        capability_gap::COMMAND => &["--capability", "--why"],
-        // Workflow #411 B15 R6: `remedy set` writes one scope's rows, an instance's or a game's
-        // (no `--server`: a server id is not game-qualified); `get` and `lift` take one instance.
-        remedy::COMMAND if action == Some(remedy::SET) => {
-            &["--state-root", "--instance", "--game", "--rows"]
-        }
-        remedy::COMMAND if matches!(action, Some(remedy::GET | remedy::LIFT)) => {
-            &["--state-root", "--instance"]
-        }
-        // #422 LN-7c C: a confirmation names one frame (`--artifact`) or one run (`--run`).
-        evidence_read::COMMAND if action == Some(evidence_read::CONFIRM_READ) => {
-            &["--state-root", "--artifact", "--run"]
-        }
-        // Workflow #429 R-2: `set` names its preset as a word; both read the Runtime's facts.
-        perf_preset::COMMAND if matches!(action, Some(perf_preset::SET | perf_preset::GET)) => {
-            &["--state-root"]
-        }
-        // Workflow #429 R-12: one width flag (no value), the instance and the cursor.
-        routine_summary::COMMAND => &[
-            "--state-root",
-            routine_summary::HOUR,
-            routine_summary::DAY,
-            "--instance",
-            routine_summary::SINCE,
-        ],
-        _ => return None,
+        _ => return actingcommand_lab_ops::flags_of(command, action),
     };
     Some(flags)
 }
@@ -1952,46 +1848,6 @@ fn require_u16(arguments: &[OsString], index: &mut usize) -> Result<u16, Actingc
     require_text(arguments, index)?
         .parse()
         .map_err(|_| ActingctlError::Usage)
-}
-
-/// Why a subcommand's bounded input file (`--record-file`, `--policy-file`) cannot be used.
-#[derive(Debug)]
-enum InputProblem {
-    /// Opening (`IoOp::Open`) or reading (`IoOp::Read`) it failed.
-    Io(io::Error, IoOp),
-    /// It holds no byte.
-    Empty,
-    /// It is larger than its bound, in bytes.
-    TooLarge(usize),
-    /// Its text is not UTF-8.
-    NotUtf8(std::string::FromUtf8Error),
-    /// Its JSON does not decode.
-    Json(serde_json::Error),
-    /// The contract refuses its content.
-    Invalid(SanitizationError),
-}
-
-impl InputProblem {
-    /// `top` with what this problem adds: the I/O or decode failure as its `caused_by` link
-    /// (`foreign_os_error`, `foreign_data_error`), the size, or the contract's refusal code.
-    fn attach(&self, top: Outcome) -> Outcome {
-        match self {
-            Self::Io(error, op) => top.caused_by(Outcome::from_io_error(error, *op)),
-            Self::Empty => top.actual_bytes(0_u64),
-            Self::TooLarge(limit) => top.limit_bytes(*limit),
-            Self::NotUtf8(error) => top.caused_by(foreign_data_error(error)),
-            Self::Json(error) => top.caused_by(foreign_data_error(error)),
-            Self::Invalid(error) => top.caused_by(Outcome::new(error.code())),
-        }
-    }
-}
-
-/// `foreign_data_error` for JSON text a decoder refused: the decoder's message verbatim as
-/// `raw_text` (spec §7).
-fn foreign_data_error(error: &impl fmt::Display) -> Outcome {
-    Outcome::new(ContractCode::ForeignDataError)
-        .raw_source(RawSource::Json)
-        .raw_text(error.to_string())
 }
 
 #[derive(Debug)]

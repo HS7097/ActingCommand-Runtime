@@ -328,10 +328,10 @@ incident = ["#429 R-12"]
 key = "43"
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::cli_line::tests::a_result_line_is_the_result_members_and_one_outcome_envelope",
-    "actingcommand-actingctl::bin:actingctl::cli_line::tests::the_exit_code_follows_the_category_and_a_refusal_is_never_zero",
+    "actingcommand-lab-ops::lib::cli_line::tests::a_result_line_is_the_result_members_and_one_outcome_envelope",
+    "actingcommand-lab-ops::lib::cli_line::tests::the_exit_code_follows_the_category_and_a_refusal_is_never_zero",
     "actingcommand-actingctl::bin:actingctl::tests::every_command_has_its_success_code_and_every_failure_its_code",
-    "actingcommand-actingctl::bin:actingctl::events::tests::each_argument_problem_of_events_is_the_usage_outcome_with_its_argument_values",
+    "actingcommand-lab-ops::lib::events::tests::each_argument_problem_of_events_is_the_usage_outcome_with_its_argument_values",
     "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcpt1::gate_a_tool_error_is_exactly_class_and_outcome_and_tier_not_enabled_names_its_blocker",
     "actingcommand-actingctl::bin:actingctl::mcp::lab::tests::gate_mcpt1::gate_interpret_answers_each_actinglab_exit_by_its_class_with_actinglab_s_code_as_the_cause",
     "actingcommand-actingctl::bin:actingctl::watchdog::decide::tests::every_decision_has_its_code_category_and_exit",
@@ -392,7 +392,7 @@ incident = ["#378 A6a"]
 key = "49"
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::code_lookup::tests::each_refusal_of_a_code_lookup_carries_its_registered_code",
+    "actingcommand-lab-ops::lib::code_lookup::tests::each_refusal_of_a_code_lookup_carries_its_registered_code",
     "actingcommand-actingctl::bin:actingctl::mcp::code_lookup::tests::a_list_over_the_output_budget_is_cut_with_truncated_and_read_on_from_its_cursor",
 ]
 incident = ["#389 MCP-14"]
@@ -486,7 +486,7 @@ incident = ["#389 U-2"]
 key = "51"
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::run_evidence::tests::each_refusal_of_run_evidence_carries_its_registered_code",
+    "actingcommand-lab-ops::lib::run_evidence::tests::each_refusal_of_run_evidence_carries_its_registered_code",
     "actingcommand-actingctl::bin:actingctl::mcp::run_evidence::tests::a_page_over_the_output_budget_is_cut_to_whole_steps_with_truncated_and_next_step",
 ]
 incident = ["#389 MCP-6"]
@@ -542,7 +542,7 @@ incident = ["#390 DRILL-1"]
 key = "58"
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::events::tests::mcp2_event_types_and_fact_key_keep_the_rule_of_the_runtime_query",
+    "actingcommand-lab-ops::lib::events::tests::mcp2_event_types_and_fact_key_keep_the_rule_of_the_runtime_query",
 ]
 incident = ["#389 MCP-2"]
 
@@ -551,7 +551,7 @@ incident = ["#389 MCP-2"]
 key = "59"
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::events::tests::mcp1_follow_up_detail_takes_summary_beside_brief_and_payload",
+    "actingcommand-lab-ops::lib::events::tests::mcp1_follow_up_detail_takes_summary_beside_brief_and_payload",
 ]
 incident = ["#389 MCP-1"]
 
@@ -569,9 +569,9 @@ incident = ["#389 MCP-5b"]
 key = "61"
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::overview::tests::mcp9a_catalog_is_the_active_generation_null_without_one_and_refused_when_unreadable",
-    "actingcommand-actingctl::bin:actingctl::overview::tests::mcp9a_config_generation_names_both_generations_and_warns_only_when_they_differ",
-    "actingcommand-actingctl::bin:actingctl::overview::tests::mcp9a_each_unreadable_binding_of_the_selected_configuration_is_one_warning",
+    "actingcommand-lab-ops::lib::overview::tests::mcp9a_catalog_is_the_active_generation_null_without_one_and_refused_when_unreadable",
+    "actingcommand-lab-ops::lib::overview::tests::mcp9a_config_generation_names_both_generations_and_warns_only_when_they_differ",
+    "actingcommand-lab-ops::lib::overview::tests::mcp9a_each_unreadable_binding_of_the_selected_configuration_is_one_warning",
 ]
 incident = ["#389 MCP-9a"]
 
@@ -580,10 +580,10 @@ incident = ["#389 MCP-9a"]
 key = "62"
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::devices::tests::rd1c_t1_list_answers_each_device_by_handle_and_never_its_serial",
-    "actingcommand-actingctl::bin:actingctl::devices::tests::rd1c_t2_bind_writes_the_serial_for_the_alias_and_answers_without_it",
-    "actingcommand-actingctl::bin:actingctl::devices::tests::rd1c_t3_each_refusal_carries_its_code_and_names_no_serial",
-    "actingcommand-actingctl::bin:actingctl::devices::tests::rd1c_t5_unbind_removes_the_binding_the_runtime_reads_and_keeps_the_others",
+    "actingcommand-lab-ops::lib::devices::tests::rd1c_t1_list_answers_each_device_by_handle_and_never_its_serial",
+    "actingcommand-lab-ops::lib::devices::tests::rd1c_t2_bind_writes_the_serial_for_the_alias_and_answers_without_it",
+    "actingcommand-lab-ops::lib::devices::tests::rd1c_t3_each_refusal_carries_its_code_and_names_no_serial",
+    "actingcommand-lab-ops::lib::devices::tests::rd1c_t5_unbind_removes_the_binding_the_runtime_reads_and_keeps_the_others",
 ]
 incident = ["#398 RD-1c"]
 
@@ -684,8 +684,8 @@ incident = ["#410"]
 key = "67"
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::capability_gap::tests::gaplog_each_record_appends_one_line_with_the_gap_as_given",
-    "actingcommand-actingctl::bin:actingctl::capability_gap::tests::gaplog_a_blank_multiline_or_overlong_text_is_refused",
+    "actingcommand-lab-ops::lib::capability_gap::tests::gaplog_each_record_appends_one_line_with_the_gap_as_given",
+    "actingcommand-lab-ops::lib::capability_gap::tests::gaplog_a_blank_multiline_or_overlong_text_is_refused",
 ]
 incident = ["#410"]
 
@@ -715,7 +715,7 @@ incident = ["#369 W-1", "#382 A-4"]
 key = "69"
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::overview::tests::nine1_each_overview_row_shows_its_emulator_as_last_read_with_the_time",
+    "actingcommand-lab-ops::lib::overview::tests::nine1_each_overview_row_shows_its_emulator_as_last_read_with_the_time",
     "actingcommand-actingctl::bin:actingctl::tests::nine1_status_shows_each_emulator_as_last_read_with_the_time",
     "actingcommand-actingctl::gate::mcp_overview_parity::nine1_status_and_overview_show_unknown_while_the_runtime_holds_no_reading",
 ]
@@ -753,8 +753,8 @@ incident = ["#411 A5"]
 key = "72"
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::overview::tests::a7_the_overview_row_shows_a_failed_capture_self_check_with_its_time",
-    "actingcommand-actingctl::bin:actingctl::overview::tests::a7_a_passing_self_check_after_it_shows_passed",
+    "actingcommand-lab-ops::lib::overview::tests::a7_the_overview_row_shows_a_failed_capture_self_check_with_its_time",
+    "actingcommand-lab-ops::lib::overview::tests::a7_a_passing_self_check_after_it_shows_passed",
     "actingcommand-actingctl::gate::mcp_overview_parity::a7_cli_and_mcp_rows_carry_the_same_backend_selfcheck",
 ]
 incident = ["#411 A7"]
@@ -763,7 +763,7 @@ incident = ["#411 A7"]
 [[gate]]
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::overview::tests::r0b2_an_overview_row_shows_the_status_activity_and_an_idle_row_has_no_member",
+    "actingcommand-lab-ops::lib::overview::tests::r0b2_an_overview_row_shows_the_status_activity_and_an_idle_row_has_no_member",
     "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp8::r0b2_ac_overview_never_cuts_a_row_s_activity",
     "actingcommand-actingctl::gate::mcp_overview_parity::r0b2_cli_and_mcp_rows_carry_the_same_activity_from_one_status_read",
 ]
@@ -847,7 +847,7 @@ incident = ["#386 SR-6b", "MCP-19"]
 key = "81"
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::overview::tests::mcp19b_each_overview_row_shows_its_not_running_row",
+    "actingcommand-lab-ops::lib::overview::tests::mcp19b_each_overview_row_shows_its_not_running_row",
     "actingcommand-actingctl::bin:actingctl::mcp::tests::gate_mcp19b::mcp19b_diagnose_lists_deferred_rows_up_to_the_configured_bound",
 ]
 incident = ["#386 SR-6b", "MCP-19"]
@@ -959,8 +959,8 @@ incident = ["#421 MCP-ENTRY"]
 [[gate]]
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::packs::tests::rl1c_c1_packs_lists_the_composed_procedures_of_a_composer_mode_configuration",
-    "actingcommand-actingctl::bin:actingctl::packs::tests::rl1c_c6_a_catalog_mode_configuration_lists_its_procedure_bindings_as_before",
+    "actingcommand-lab-ops::lib::packs::tests::rl1c_c1_packs_lists_the_composed_procedures_of_a_composer_mode_configuration",
+    "actingcommand-lab-ops::lib::packs::tests::rl1c_c6_a_catalog_mode_configuration_lists_its_procedure_bindings_as_before",
     "actingcommand-actingd::bin:actingcommand-actingd::gate_rl1c::rl1c_c2_suspended_reads_the_composition_in_composer_mode",
     "actingcommand-actingd::bin:actingcommand-actingd::gate_rl1c::rl1c_c3_composer_mode_notes_fact_reader_missing_where_catalog_mode_does",
     "actingcommand-actingd::bin:actingcommand-actingd::gate_rl1c::rl1c_c4_composer_mode_check_config_runs_the_admission_and_remedy_checks",
@@ -974,9 +974,9 @@ coverage = "Y"
 tests = [
     "actingcommand-contract::lib::standard_pack_ui::tests::r11_t1_a_valid_ui_json_reads_back_exactly_as_written",
     "actingcommand-contract::lib::standard_pack_ui::tests::r11_t2_each_ui_json_violation_is_reported_at_its_place",
-    "actingcommand-actingctl::bin:actingctl::packs::tests::r11_t3_without_ui_json_the_rows_are_as_before_with_irreversible_and_task_ids",
-    "actingcommand-actingctl::bin:actingctl::packs::tests::r11_t4_irreversible_is_derived_from_the_package_s_provides",
-    "actingcommand-actingctl::bin:actingctl::packs::tests::r11_t5_task_ids_are_the_composed_tasks_of_each_package",
+    "actingcommand-lab-ops::lib::packs::tests::r11_t3_without_ui_json_the_rows_are_as_before_with_irreversible_and_task_ids",
+    "actingcommand-lab-ops::lib::packs::tests::r11_t4_irreversible_is_derived_from_the_package_s_provides",
+    "actingcommand-lab-ops::lib::packs::tests::r11_t5_task_ids_are_the_composed_tasks_of_each_package",
     "actingcommand-actingctl::gate::mcp_packs::gate_r11_packs_and_ac_packs_answer_the_same_ui_irreversible_and_task_ids",
 ]
 incident = ["#429 R-11"]
@@ -993,7 +993,7 @@ incident = ["#411 RL-1c"]
 [[gate]]
 coverage = "Y"
 tests = [
-    "actingcommand-actingctl::bin:actingctl::child::tests::rl1c_fix1_child_still_running_at_the_deadline_is_ended_in_time",
+    "actingcommand-lab-ops::lib::child::tests::rl1c_fix1_child_still_running_at_the_deadline_is_ended_in_time",
 ]
 incident = ["#411 RL-1c"]
 
@@ -1233,3 +1233,12 @@ tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::config::gate_407_gpu1d::check_config_lists_every_adapter_and_the_one_it_resolves",
 ]
 incident = ["#407 GPU-1 D"]
+
+# Workflow #434 LAB-1 (0.12.x; register §1.287, "Slice LAB-1"; brief rd-1108/arch-013/brief-lab1.md; contracts/lab-two-entries.md §9.2 and §9.3): the operation table file contracts/lab-operations.json, read itself into typed rows, has unique names and MCP tool names, every row's members (params, output, writes, irreversible, runtime, entries, requests, source or new, slice, status), every request kind of RuntimeOperationKind::ALL sent by some operation or once in not_exposed and every kind it names existing, entries ["lab", "ui"] exactly for a core operation whose every request kind is on the UI list (the transitional kind not counted) and a reserved row's opens_with; on a fake single-location root, a program in its runtime folder and one in a kept build install\builds\<commit>\runtime find the root and the configuration's state root with neither given, and a program outside any installed root is refused install_root_unresolved
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-ops::lib::gate_434_lab1::lab_ops_table_complete",
+    "actingcommand-lab-ops::lib::gate_434_lab1::lab_ops_locate_defaults",
+]
+incident = ["#434 LAB-1"]

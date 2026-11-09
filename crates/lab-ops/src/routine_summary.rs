@@ -33,19 +33,19 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-pub(crate) const COMMAND: &str = "routine-summary";
+pub const COMMAND: &str = "routine-summary";
 /// The flag of the hour buckets.
-pub(crate) const HOUR: &str = "--hour";
+pub const HOUR: &str = "--hour";
 /// The flag of the day buckets.
-pub(crate) const DAY: &str = "--day";
+pub const DAY: &str = "--day";
 /// The flag of the cursor, a page's `revision`.
-pub(crate) const SINCE: &str = "--since";
+pub const SINCE: &str = "--since";
 /// The two width flags, as a usage outcome names them when neither is given.
 const WIDTH: &str = "--hour|--day";
 const USAGE: &str = "usage: actingctl routine-summary (--hour | --day) [--instance <alias|instance_id|ADB port>] [--since <revision>] --state-root <path>";
 
 /// Why a routine summary read answered nothing.
-pub(crate) enum Failure {
+pub enum Failure {
     /// The selector names no instance of the Runtime's status, or more than one.
     Selector {
         miss: SelectorMiss,
@@ -57,7 +57,7 @@ pub(crate) enum Failure {
 
 impl Failure {
     /// The failure as one outcome (Workflow #378 A5).
-    pub(crate) fn outcome(&self) -> Outcome {
+    pub fn outcome(&self) -> Outcome {
         match self {
             Self::Selector { miss, selector } => miss.outcome(selector),
             Self::Runtime(error) => error.outcome(),
@@ -68,7 +68,7 @@ impl Failure {
 /// The page `RoutineSummary` answers on `client`: for the one instance `selector` names
 /// (resolved to its alias with one status read), or every instance without it; by
 /// `granularity`; with `since_revision` only the buckets changed after it.
-pub(crate) fn read(
+pub fn read(
     client: &RuntimeClient,
     selector: Option<&str>,
     granularity: RoutineSummaryGranularity,
@@ -105,13 +105,13 @@ struct Parsed {
 }
 
 /// Why the CLI ended without an answer.
-pub(crate) enum Ended {
+pub enum Ended {
     Usage(Outcome),
     Failure(Failure),
 }
 
 /// The `routine-summary` command, when it is the first word.
-pub(crate) fn dispatch(arguments: &[OsString], detail: Detail) -> Option<ExitCode> {
+pub fn dispatch(arguments: &[OsString], detail: Detail) -> Option<ExitCode> {
     if arguments.first()?.to_str()? != COMMAND {
         return None;
     }
@@ -138,7 +138,7 @@ pub(crate) fn dispatch(arguments: &[OsString], detail: Detail) -> Option<ExitCod
 
 /// The members the line prints beside its outcome for `arguments` (`routine-summary` and its
 /// flags): the page's, read on a connection with the CLI's (Cli, Cli) origin; or why it ended.
-pub(crate) fn answer(arguments: &[OsString], detail: Detail) -> Result<Map<String, Value>, Ended> {
+pub fn answer(arguments: &[OsString], detail: Detail) -> Result<Map<String, Value>, Ended> {
     let parsed = parse(arguments).map_err(Ended::Usage)?;
     let config = RuntimeClientConfig::new(
         &parsed.state_root,

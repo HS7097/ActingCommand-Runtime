@@ -41,14 +41,14 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub(crate) const COMMAND: &str = "devices";
-pub(crate) const LIST: &str = "list";
-pub(crate) const BIND: &str = "bind";
-pub(crate) const UNBIND: &str = "unbind";
+pub const COMMAND: &str = "devices";
+pub const LIST: &str = "list";
+pub const BIND: &str = "bind";
+pub const UNBIND: &str = "unbind";
 const USAGE: &str = "usage: actingctl devices list --state-root <dir> [--root <install root>]\n       actingctl devices bind <alias> <handle> --state-root <dir> [--root <install root>]\n       actingctl devices unbind <alias> --state-root <dir>";
 
 /// One run of `adb devices -l`: what it printed, or why it printed nothing.
-pub(crate) enum AdbRun {
+pub enum AdbRun {
     Printed(String),
     /// adb did not start.
     NotStarted(std::io::Error),
@@ -60,7 +60,7 @@ pub(crate) enum AdbRun {
 }
 
 /// Runs `adb devices -l` with the adb at `adb`.
-pub(crate) fn run_adb(adb: &Path) -> AdbRun {
+pub fn run_adb(adb: &Path) -> AdbRun {
     match Command::new(adb).args(["devices", "-l"]).output() {
         Err(error) => AdbRun::NotStarted(error),
         Ok(output) if output.status.success() => {
@@ -225,7 +225,7 @@ fn listing(
 /// `{devices: [{handle?, transport, state, model?, bound_alias?, endpoint?}]}`: every device adb
 /// lists now, in its order, with the alias the private file of `state_root` binds it to. No row
 /// names a serial; a loopback `tcp` row (an emulator) names its `endpoint`.
-pub(crate) fn list(
+pub fn list(
     state_root: &Path,
     root: Option<&Path>,
     run: &dyn Fn(&Path) -> AdbRun,
@@ -264,10 +264,10 @@ pub(crate) fn list(
 }
 
 /// One binding request: the handset's alias and the handle of the device `list` showed.
-pub(crate) struct Bind<'a> {
-    pub(crate) alias: &'a str,
-    pub(crate) handle: &'a str,
-    pub(crate) via: DeviceBoundVia,
+pub struct Bind<'a> {
+    pub alias: &'a str,
+    pub handle: &'a str,
+    pub via: DeviceBoundVia,
 }
 
 /// Binds the device of `handle` to the handset `alias`: `{alias, handle, model?,
@@ -276,7 +276,7 @@ pub(crate) struct Bind<'a> {
 /// list now `device_handle_unknown`; a binding the file's rules refuse (the device already bound
 /// to another alias) `device_bindings_invalid`; a file that cannot be written
 /// `device_bindings_write_failed`.
-pub(crate) fn bind(
+pub fn bind(
     state_root: &Path,
     root: Option<&Path>,
     request: &Bind<'_>,
@@ -322,7 +322,7 @@ pub(crate) fn bind(
 
 /// Removes the binding of `alias`: `{alias, unbound, restart_required}`, both true when the file
 /// had one and false when it had none (nothing is written then).
-pub(crate) fn unbind(state_root: &Path, alias: &str) -> Result<Value, Outcome> {
+pub fn unbind(state_root: &Path, alias: &str) -> Result<Value, Outcome> {
     let bindings = bindings(state_root)?;
     let unbound = bindings.get(alias).is_some();
     if unbound {
@@ -489,7 +489,7 @@ fn parse(arguments: &[OsString]) -> Result<Parsed, Outcome> {
 /// Runs `devices …` when the first argument names it; `None` leaves every other command to the
 /// CLI. One result line (Workflow #378 A5): the answer with `device_list_reported` or
 /// `device_binding_changed`, or `{outcome}` with the refusal and exit 1.
-pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
+pub fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
     if arguments.first()?.to_str()? != COMMAND {
         return None;
     }

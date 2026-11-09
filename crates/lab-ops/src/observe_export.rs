@@ -37,7 +37,7 @@ const READ_BUDGET: Duration = Duration::from_secs(60);
 
 /// Runs `observe` when it carries `--export`; `None` leaves every other command, and `observe`
 /// without `--export`, to `Invocation::parse`, unchanged.
-pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
+pub fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
     if arguments.first()?.to_str()? != "observe"
         || !arguments[1..]
             .iter()
@@ -56,16 +56,16 @@ pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
 }
 
 /// The frame one observation captured, with the event of that observation that carries it.
-pub(crate) struct ObservedFrame<'a> {
-    pub(crate) observation: &'a ReadonlyObservation,
-    pub(crate) event: &'a ProjectedEvent,
+pub struct ObservedFrame<'a> {
+    pub observation: &'a ReadonlyObservation,
+    pub event: &'a ProjectedEvent,
     /// The newest position among the observation's events: a snapshot that holds `event`.
-    pub(crate) snapshot: u64,
+    pub snapshot: u64,
 }
 
 impl<'a> ObservedFrame<'a> {
     /// `None` when none of the observation's events carries the frame its result reports.
-    pub(crate) fn of(flow: &'a RuntimeFlowOutput) -> Option<Self> {
+    pub fn of(flow: &'a RuntimeFlowOutput) -> Option<Self> {
         let Some(RuntimeResult::ReadonlyObservationCompleted { observation }) =
             flow.receipt().result()
         else {
@@ -87,7 +87,7 @@ impl<'a> ObservedFrame<'a> {
         })
     }
 
-    pub(crate) fn position(&self) -> LedgerEventPosition {
+    pub fn position(&self) -> LedgerEventPosition {
         LedgerEventPosition {
             event_id: self.event.event_id,
             sequence: self.event.sequence,
@@ -95,7 +95,7 @@ impl<'a> ObservedFrame<'a> {
     }
 
     /// The answer both sides give: the observation, its frame by material ref, and `export`.
-    pub(crate) fn answer(&self, export: Value) -> Value {
+    pub fn answer(&self, export: Value) -> Value {
         let artifact = self.observation.artifact();
         json!({
             "width": self.observation.width(),

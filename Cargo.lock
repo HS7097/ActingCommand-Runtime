@@ -27,6 +27,7 @@ dependencies = [
  "actingcommand-contract",
  "actingcommand-device",
  "actingcommand-host-metrics",
+ "actingcommand-lab-ops",
  "actingcommand-ledger",
  "actingcommand-pack-containment",
  "actingcommand-policy",
@@ -218,6 +219,21 @@ dependencies = [
  "sha2",
  "tempfile",
  "zip",
+]
+
+[[package]]
+name = "actingcommand-lab-ops"
+version = "0.1.0"
+dependencies = [
+ "actingcommand-contract",
+ "actingcommand-ledger",
+ "actingcommand-policy",
+ "actingcommand-runtime-client",
+ "actingcommand-runtime-config",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]

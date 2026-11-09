@@ -27,8 +27,8 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const USAGE: &str = "usage: actingctl runs --state-root <path> [--instance <alias|instance_id|ADB port>] [--since-unix-ms <ms>] [--until-unix-ms <ms>] [--task-prefix <text>] [--dispatch manual|scheduled] [--state open|succeeded|failed|cancelled|interrupted_unterminated] [--limit <1-100>] [--cursor <next_cursor>]";
-pub(crate) const DEFAULT_LIMIT: u64 = 20;
-pub(crate) const MAX_LIMIT: u64 = 100;
+pub const DEFAULT_LIMIT: u64 = 20;
+pub const MAX_LIMIT: u64 = 100;
 const DAY_MS: u64 = 24 * 60 * 60 * 1000;
 /// The window when no since_unix_ms is given: the last 24 h.
 const DEFAULT_WINDOW_MS: u64 = DAY_MS;
@@ -44,7 +44,7 @@ const CURSOR_FINGERPRINT_DIGITS: usize = 16;
 
 /// `--state` / `state`: `open` is admitted or running.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum StateFilter {
+pub enum StateFilter {
     Open,
     Succeeded,
     Failed,
@@ -53,7 +53,7 @@ pub(crate) enum StateFilter {
 }
 
 impl StateFilter {
-    pub(crate) fn parse(text: &str) -> Option<Self> {
+    pub fn parse(text: &str) -> Option<Self> {
         match text {
             "open" => Some(Self::Open),
             "succeeded" => Some(Self::Succeeded),
@@ -86,7 +86,7 @@ impl StateFilter {
 }
 
 /// `--dispatch` / `dispatch`: `manual` or `scheduled`.
-pub(crate) fn parse_dispatch(text: &str) -> Option<RunDispatch> {
+pub fn parse_dispatch(text: &str) -> Option<RunDispatch> {
     match text {
         "manual" => Some(RunDispatch::Manual),
         "scheduled" => Some(RunDispatch::Scheduled),
@@ -103,19 +103,19 @@ const fn dispatch_name(dispatch: RunDispatch) -> &'static str {
 }
 
 /// The arguments both sides take, typed (R2: each MCP argument is the CLI flag's name).
-pub(crate) struct RunsRequest {
-    pub(crate) instance: Option<String>,
-    pub(crate) since_unix_ms: Option<u64>,
-    pub(crate) until_unix_ms: Option<u64>,
-    pub(crate) task_prefix: Option<String>,
-    pub(crate) dispatch: Option<RunDispatch>,
-    pub(crate) state: Option<StateFilter>,
-    pub(crate) limit: u64,
-    pub(crate) cursor: Option<String>,
+pub struct RunsRequest {
+    pub instance: Option<String>,
+    pub since_unix_ms: Option<u64>,
+    pub until_unix_ms: Option<u64>,
+    pub task_prefix: Option<String>,
+    pub dispatch: Option<RunDispatch>,
+    pub state: Option<StateFilter>,
+    pub limit: u64,
+    pub cursor: Option<String>,
 }
 
 /// Why a run list was refused or failed.
-pub(crate) enum Failure {
+pub enum Failure {
     /// A flag or argument is unknown, repeated, missing its value, malformed, out of its range
     /// (`range`) or at odds with another: the CLI flag as given, or the MCP argument's name.
     Argument {
@@ -149,7 +149,7 @@ impl Failure {
     /// `range_min` and `range_max`; MCP answers `arguments_invalid` with the same values. A
     /// window start too far back is `since_out_of_range` with the oldest start allowed
     /// (`range_min`).
-    pub(crate) fn outcome(&self) -> Outcome {
+    pub fn outcome(&self) -> Outcome {
         match self {
             Self::Argument {
                 argument,
@@ -176,7 +176,7 @@ impl Failure {
 }
 
 /// Now, in Unix milliseconds.
-pub(crate) fn now_unix_ms() -> Result<u64, Failure> {
+pub fn now_unix_ms() -> Result<u64, Failure> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .ok()
@@ -259,7 +259,7 @@ fn fingerprint(
 }
 
 /// One page of a run list, before rendering: its rows with their order sequences.
-pub(crate) struct RunsAnswer {
+pub struct RunsAnswer {
     rows: Vec<(Value, u64)>,
     since_unix_ms: u64,
     until_unix_ms: Option<u64>,
@@ -272,13 +272,13 @@ pub(crate) struct RunsAnswer {
 }
 
 impl RunsAnswer {
-    pub(crate) fn row_count(&self) -> usize {
+    pub fn row_count(&self) -> usize {
         self.rows.len()
     }
 
     /// The result with the first `kept` rows. With fewer rows than the page holds it is
     /// `truncated`, and next_cursor continues after the last row kept.
-    pub(crate) fn render(&self, kept: usize) -> Value {
+    pub fn render(&self, kept: usize) -> Value {
         let kept = kept.min(self.rows.len());
         let truncated = kept < self.rows.len();
         let next = if truncated {
@@ -329,7 +329,7 @@ impl RunsAnswer {
     /// `call_budget_exhausted` when the read budget ended the page before every listed run of
     /// it was read (next_cursor continues after the last one read). Each side renders it as its
     /// warning `{outcome}` (Workflow #378 A5, D3).
-    pub(crate) fn warnings(&self) -> Vec<Outcome> {
+    pub fn warnings(&self) -> Vec<Outcome> {
         if self.incomplete {
             vec![Outcome::new(ActingctlCode::CallBudgetExhausted)]
         } else {
@@ -339,7 +339,7 @@ impl RunsAnswer {
 }
 
 /// One page of the run list `request` asks for, read by `client` before `deadline`.
-pub(crate) fn read(
+pub fn read(
     client: &RuntimeClient,
     request: &RunsRequest,
     now_unix_ms: u64,
@@ -497,7 +497,7 @@ fn row(run: &ListedContainedRun, status: Option<&RuntimeControlPlaneStatus>) -> 
 /// Runs `runs`; `None` leaves every other command to the CLI, unchanged. One result line on
 /// stdout (Workflow #378 A5): the run list with `run_list_reported`, or `{outcome}` with the
 /// failure (an argument failure's developer line adds the usage) and exit 1.
-pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
+pub fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
     if arguments.first()?.to_str()? != "runs" {
         return None;
     }

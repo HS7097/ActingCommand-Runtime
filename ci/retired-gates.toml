@@ -222,3 +222,196 @@ test = "actingcommand-runtime-host::lib::tests::gate_hs3::hs3_display_missing_cl
 ruling = "#402 HS-5b (coordinator's brief-hs-5ab.md, design model-hs5.md §4.3: only a rebinding clears the resolution)"
 reason = "An open that found no display for the package no longer drops the resolved application index; no paired session reports display_missing since HS-5a, and the application stopping or starting keeps the index."
 covered_by = "actingcommand-runtime-host::lib::tests::gate_hs5::hs5_resolution_kept_across_application_stop, in the HS-5b host.toml row; hs3_cache_reused_until_rebind keeps the rebinding rule."
+
+# Workflow #434 LAB-1 (register §1.287, "Slice LAB-1"): actingctl's read and write modules and the
+# helpers they share moved to crates/lab-ops with git mv; each test moved with its module, paths
+# only, so its name changed package and target and the new name takes the old one's place in the
+# same row.
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::cli_line::tests::a_result_line_is_the_result_members_and_one_outcome_envelope"
+ruling = "Workflow #434 LAB-1 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §8)"
+reason = "Moved with its module from apps/actingctl to crates/lab-ops, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-ops::lib::cli_line::tests::a_result_line_is_the_result_members_and_one_outcome_envelope, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::cli_line::tests::the_exit_code_follows_the_category_and_a_refusal_is_never_zero"
+ruling = "Workflow #434 LAB-1 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §8)"
+reason = "Moved with its module from apps/actingctl to crates/lab-ops, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-ops::lib::cli_line::tests::the_exit_code_follows_the_category_and_a_refusal_is_never_zero, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::events::tests::each_argument_problem_of_events_is_the_usage_outcome_with_its_argument_values"
+ruling = "Workflow #434 LAB-1 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §8)"
+reason = "Moved with its module from apps/actingctl to crates/lab-ops, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-ops::lib::events::tests::each_argument_problem_of_events_is_the_usage_outcome_with_its_argument_values, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::code_lookup::tests::each_refusal_of_a_code_lookup_carries_its_registered_code"
+ruling = "Workflow #434 LAB-1 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §8)"
+reason = "Moved with its module from apps/actingctl to crates/lab-ops, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-ops::lib::code_lookup::tests::each_refusal_of_a_code_lookup_carries_its_registered_code, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::run_evidence::tests::each_refusal_of_run_evidence_carries_its_registered_code"
+ruling = "Workflow #434 LAB-1 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §8)"
+reason = "Moved with its module from apps/actingctl to crates/lab-ops, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-ops::lib::run_evidence::tests::each_refusal_of_run_evidence_carries_its_registered_code, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::events::tests::mcp2_event_types_and_fact_key_keep_the_rule_of_the_runtime_query"
+ruling = "Workflow #434 LAB-1 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §8)"
+reason = "Moved with its module from apps/actingctl to crates/lab-ops, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-ops::lib::events::tests::mcp2_event_types_and_fact_key_keep_the_rule_of_the_runtime_query, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::events::tests::mcp1_follow_up_detail_takes_summary_beside_brief_and_payload"
+ruling = "Workflow #434 LAB-1 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §8)"
+reason = "Moved with its module from apps/actingctl to crates/lab-ops, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-ops::lib::events::tests::mcp1_follow_up_detail_takes_summary_beside_brief_and_payload, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::overview::tests::mcp9a_catalog_is_the_active_generation_null_without_one_and_refused_when_unreadable"
+ruling = "Workflow #434 LAB-1 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §8)"
+reason = "Moved with its module from apps/actingctl to crates/lab-ops, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-ops::lib::overview::tests::mcp9a_catalog_is_the_active_generation_null_without_one_and_refused_when_unreadable, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::overview::tests::mcp9a_config_generation_names_both_generations_and_warns_only_when_they_differ"
+ruling = "Workflow #434 LAB-1 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §8)"
+reason = "Moved with its module from apps/actingctl to crates/lab-ops, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-ops::lib::overview::tests::mcp9a_config_generation_names_both_generations_and_warns_only_when_they_differ, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::overview::tests::mcp9a_each_unreadable_binding_of_the_selected_configuration_is_one_warning"
+ruling = "Workflow #434 LAB-1 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §8)"
+reason = "Moved with its module from apps/actingctl to crates/lab-ops, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-ops::lib::overview::tests::mcp9a_each_unreadable_binding_of_the_selected_configuration_is_one_warning, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::devices::tests::rd1c_t1_list_answers_each_device_by_handle_and_never_its_serial"
+ruling = "Workflow #434 LAB-1 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §8)"
+reason = "Moved with its module from apps/actingctl to crates/lab-ops, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-ops::lib::devices::tests::rd1c_t1_list_answers_each_device_by_handle_and_never_its_serial, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::devices::tests::rd1c_t2_bind_writes_the_serial_for_the_alias_and_answers_without_it"
+ruling = "Workflow #434 LAB-1 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §8)"
+reason = "Moved with its module from apps/actingctl to crates/lab-ops, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-ops::lib::devices::tests::rd1c_t2_bind_writes_the_serial_for_the_alias_and_answers_without_it, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::devices::tests::rd1c_t3_each_refusal_carries_its_code_and_names_no_serial"
+ruling = "Workflow #434 LAB-1 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §8)"
+reason = "Moved with its module from apps/actingctl to crates/lab-ops, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-ops::lib::devices::tests::rd1c_t3_each_refusal_carries_its_code_and_names_no_serial, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::devices::tests::rd1c_t5_unbind_removes_the_binding_the_runtime_reads_and_keeps_the_others"
+ruling = "Workflow #434 LAB-1 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §8)"
+reason = "Moved with its module from apps/actingctl to crates/lab-ops, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-ops::lib::devices::tests::rd1c_t5_unbind_removes_the_binding_the_runtime_reads_and_keeps_the_others, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::capability_gap::tests::gaplog_each_record_appends_one_line_with_the_gap_as_given"
+ruling = "Workflow #434 LAB-1 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §8)"
+reason = "Moved with its module from apps/actingctl to crates/lab-ops, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-ops::lib::capability_gap::tests::gaplog_each_record_appends_one_line_with_the_gap_as_given, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::capability_gap::tests::gaplog_a_blank_multiline_or_overlong_text_is_refused"
+ruling = "Workflow #434 LAB-1 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §8)"
+reason = "Moved with its module from apps/actingctl to crates/lab-ops, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-ops::lib::capability_gap::tests::gaplog_a_blank_multiline_or_overlong_text_is_refused, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::overview::tests::nine1_each_overview_row_shows_its_emulator_as_last_read_with_the_time"
+ruling = "Workflow #434 LAB-1 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §8)"
+reason = "Moved with its module from apps/actingctl to crates/lab-ops, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-ops::lib::overview::tests::nine1_each_overview_row_shows_its_emulator_as_last_read_with_the_time, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::overview::tests::a7_the_overview_row_shows_a_failed_capture_self_check_with_its_time"
+ruling = "Workflow #434 LAB-1 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §8)"
+reason = "Moved with its module from apps/actingctl to crates/lab-ops, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-ops::lib::overview::tests::a7_the_overview_row_shows_a_failed_capture_self_check_with_its_time, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::overview::tests::a7_a_passing_self_check_after_it_shows_passed"
+ruling = "Workflow #434 LAB-1 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §8)"
+reason = "Moved with its module from apps/actingctl to crates/lab-ops, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-ops::lib::overview::tests::a7_a_passing_self_check_after_it_shows_passed, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::overview::tests::r0b2_an_overview_row_shows_the_status_activity_and_an_idle_row_has_no_member"
+ruling = "Workflow #434 LAB-1 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §8)"
+reason = "Moved with its module from apps/actingctl to crates/lab-ops, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-ops::lib::overview::tests::r0b2_an_overview_row_shows_the_status_activity_and_an_idle_row_has_no_member, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::overview::tests::mcp19b_each_overview_row_shows_its_not_running_row"
+ruling = "Workflow #434 LAB-1 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §8)"
+reason = "Moved with its module from apps/actingctl to crates/lab-ops, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-ops::lib::overview::tests::mcp19b_each_overview_row_shows_its_not_running_row, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::packs::tests::rl1c_c1_packs_lists_the_composed_procedures_of_a_composer_mode_configuration"
+ruling = "Workflow #434 LAB-1 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §8)"
+reason = "Moved with its module from apps/actingctl to crates/lab-ops, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-ops::lib::packs::tests::rl1c_c1_packs_lists_the_composed_procedures_of_a_composer_mode_configuration, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::packs::tests::rl1c_c6_a_catalog_mode_configuration_lists_its_procedure_bindings_as_before"
+ruling = "Workflow #434 LAB-1 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §8)"
+reason = "Moved with its module from apps/actingctl to crates/lab-ops, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-ops::lib::packs::tests::rl1c_c6_a_catalog_mode_configuration_lists_its_procedure_bindings_as_before, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::packs::tests::r11_t3_without_ui_json_the_rows_are_as_before_with_irreversible_and_task_ids"
+ruling = "Workflow #434 LAB-1 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §8)"
+reason = "Moved with its module from apps/actingctl to crates/lab-ops, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-ops::lib::packs::tests::r11_t3_without_ui_json_the_rows_are_as_before_with_irreversible_and_task_ids, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::packs::tests::r11_t4_irreversible_is_derived_from_the_package_s_provides"
+ruling = "Workflow #434 LAB-1 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §8)"
+reason = "Moved with its module from apps/actingctl to crates/lab-ops, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-ops::lib::packs::tests::r11_t4_irreversible_is_derived_from_the_package_s_provides, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::packs::tests::r11_t5_task_ids_are_the_composed_tasks_of_each_package"
+ruling = "Workflow #434 LAB-1 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §8)"
+reason = "Moved with its module from apps/actingctl to crates/lab-ops, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-ops::lib::packs::tests::r11_t5_task_ids_are_the_composed_tasks_of_each_package, in the same apps.toml row."
+
+[[retired]]
+fragment = "apps"
+test = "actingcommand-actingctl::bin:actingctl::child::tests::rl1c_fix1_child_still_running_at_the_deadline_is_ended_in_time"
+ruling = "Workflow #434 LAB-1 (Alice's approval of the Lab and UI two entries, board #434; contracts/lab-two-entries.md §8)"
+reason = "Moved with its module from apps/actingctl to crates/lab-ops, paths only: the test and what it asserts are unchanged."
+covered_by = "actingcommand-lab-ops::lib::child::tests::rl1c_fix1_child_still_running_at_the_deadline_is_ended_in_time, in the same apps.toml row."

@@ -19,15 +19,13 @@
 #![windows_subsystem = "windows"]
 #![forbid(unsafe_code)]
 
-// The registry, for the launcher's own codes (never a literal spelling).
-#[allow(dead_code)]
-#[path = "codes.rs"]
-mod codes;
 // Test-only: Workflow #382 A-1 (test plan v2.2 §3.7, G13), the launcher's exits.
 #[cfg(test)]
 mod gate_382_a1_launcher;
 
-use codes::ActingctlCode;
+// The registry, for the launcher's own codes (never a literal spelling): actingctl's, in
+// `crates/lab-ops` since Workflow #434 LAB-1.
+use actingcommand_lab_ops::codes::ActingctlCode;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};

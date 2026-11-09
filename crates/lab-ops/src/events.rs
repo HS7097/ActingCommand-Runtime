@@ -40,12 +40,12 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Rows carry their full payloads, where the ledger's diagnostic code lives.
-pub(crate) const PROFILE: ProjectionProfile = ProjectionProfile::Forensic;
+pub const PROFILE: ProjectionProfile = ProjectionProfile::Forensic;
 /// The subcommand; its flags are `flags_of`'s (Workflow #382 A1-FLAG, #389 MCP-2).
-pub(crate) const COMMAND: &str = "events";
+pub const COMMAND: &str = "events";
 /// Every parameter: the MCP argument names, which are the CLI flag names without `--` and with
 /// `_` for `-` (#389 R2). Workflow #389 MCP-2 adds `event_types` and `fact_key` (§4.2).
-pub(crate) const PARAMETERS: [&str; 21] = [
+pub const PARAMETERS: [&str; 21] = [
     "instance",
     "view",
     "since_unix_ms",
@@ -78,22 +78,22 @@ const INTEGER_PARAMETERS: [&str; 6] = [
 ];
 /// Parameters that take a list: an array in MCP, a comma-separated value on the CLI.
 const LIST_PARAMETERS: [&str; 2] = ["event_types", "exclude_event_types"];
-pub(crate) const DEFAULT_LIMIT: u16 = 20;
+pub const DEFAULT_LIMIT: u16 = 20;
 /// The CLI's largest page: the Runtime's page bound (§2.2; MCP stops at 100).
-pub(crate) const CLI_MAX_LIMIT: u16 = MAX_RUNTIME_EVENT_QUERY_EVENTS;
+pub const CLI_MAX_LIMIT: u16 = MAX_RUNTIME_EVENT_QUERY_EVENTS;
 /// The longest wait for rows, CLI and MCP alike.
-pub(crate) const MAX_WAIT_S: u64 = 20;
+pub const MAX_WAIT_S: u64 = 20;
 /// The largest value an unbounded integer parameter (a time, a sequence) takes, here and in the
 /// other commands: an outcome carries an argument's range as i64 values (`range_max`,
 /// Workflow #378 A5), and no time or sequence comes near it.
-pub(crate) const MAX_INTEGER: u64 = i64::MAX.unsigned_abs();
+pub const MAX_INTEGER: u64 = i64::MAX.unsigned_abs();
 /// An empty first page is read again this often while the wait lasts.
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 const CLI_USAGE: &str = "usage: actingctl events --state-root <dir> [--instance <alias|instance_id|ADB port>] [--view events|observation|changes|errors|health|lab] [--since-unix-ms <ms>] [--until-unix-ms <ms>] [--after-sequence <seq> | --cursor <cursor>] [--through-sequence <seq>] [--event-type <type> | --event-types <type,...>] [--exclude-event-types <type,...>] [--fact-key <key>] [--min-severity <severity>] [--max-severity <severity>] [--origin-module <module>] [--task-id <id>] [--run-id <id>] [--request-id <id>] [--correlation-id <id>] [--detail brief|summary|payload] [--limit 1-256] [--wait-s 0-20]\npage on with --after-sequence <last_sequence>: the next_cursor one call prints answers cursor_invalid in any later call";
 
 /// What each row carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Detail {
+pub enum Detail {
     /// The row's identity, links, diagnostic code and material refs.
     Brief,
     /// The brief row and the outcome the record carries (ledger revision 3, #378 A3), when it
@@ -105,17 +105,17 @@ pub(crate) enum Detail {
 
 /// One read of `actingctl events` / `ac_events`, its parameters checked.
 #[derive(Debug)]
-pub(crate) struct Request {
+pub struct Request {
     /// The instance selector, resolved by the caller with at most one Status.
-    pub(crate) instance: Option<String>,
+    pub instance: Option<String>,
     /// Every filter but the instance and `after_sequence`: with the resolved instance, the query
     /// every cursor of this read is bound to.
     filters: EventQuery,
     after_sequence: Option<u64>,
-    pub(crate) detail: Detail,
+    pub detail: Detail,
     limit: u16,
     cursor: Option<String>,
-    pub(crate) wait: Duration,
+    pub wait: Duration,
 }
 
 impl Request {
@@ -132,7 +132,7 @@ impl Request {
 /// the usage code (`argument <field> <problem>`). The code is decided by the frontend:
 /// `actingctl_usage_invalid` on the CLI, `arguments_invalid` in MCP.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ArgumentProblem {
+pub enum ArgumentProblem {
     /// Not a parameter of `actingctl events` / `ac_events`.
     UnknownArgument,
     /// Not a flag of `actingctl events`.
@@ -187,7 +187,7 @@ impl std::fmt::Display for ArgumentProblem {
 
 impl ArgumentProblem {
     /// The problem's token of the vocabulary `argument_problem`.
-    pub(crate) const fn token(self) -> codes::ArgumentProblem {
+    pub const fn token(self) -> codes::ArgumentProblem {
         match self {
             Self::UnknownArgument | Self::UnknownFlag => codes::ArgumentProblem::Unknown,
             Self::NotUtf8 => codes::ArgumentProblem::NotUtf8,
@@ -204,7 +204,7 @@ impl ArgumentProblem {
     }
 
     /// The range an out-of-range value had to be in: `(range_min, range_max)`.
-    pub(crate) const fn range(self) -> Option<(u64, u64)> {
+    pub const fn range(self) -> Option<(u64, u64)> {
         match self {
             Self::OutOfRange { minimum, maximum } => Some((minimum, maximum)),
             _ => None,
@@ -214,7 +214,7 @@ impl ArgumentProblem {
 
 /// Why `actingctl events` / `ac_events` gives no page.
 #[derive(Debug)]
-pub(crate) enum EventsError {
+pub enum EventsError {
     /// An argument or flag is unknown, repeated, of the wrong type or out of its range.
     /// Workflow #411 B27: `value` is the text an event type argument was given that names no
     /// event type (for a list, the element), when it is a word a name may hold.
@@ -265,7 +265,7 @@ impl EventsError {
     /// The failure as an outcome (Workflow #378 A5). An argument or flag is the CLI's
     /// `actingctl_usage_invalid` with `argument`, `argument_problem` and, for a range,
     /// `range_min` and `range_max`; MCP answers `arguments_invalid` with the same values.
-    pub(crate) fn outcome(&self) -> Outcome {
+    pub fn outcome(&self) -> Outcome {
         match self {
             Self::Argument { field, problem, .. } => {
                 let outcome = Outcome::new(ActingctlCode::ActingctlUsageInvalid)
@@ -306,10 +306,7 @@ impl std::fmt::Display for EventsError {
 /// Checks every parameter, MCP arguments or CLI flags turned into the same names and JSON
 /// types; `max_limit` is the frontend's largest page (§2.2). The filters are checked here as
 /// the Runtime checks them, so a query it would refuse never reaches it.
-pub(crate) fn parse(
-    arguments: &Map<String, Value>,
-    max_limit: u16,
-) -> Result<Request, EventsError> {
+pub fn parse(arguments: &Map<String, Value>, max_limit: u16) -> Result<Request, EventsError> {
     if let Some(unknown) = arguments
         .keys()
         .find(|key| !PARAMETERS.contains(&key.as_str()))
@@ -457,13 +454,13 @@ fn typed<T: DeserializeOwned>(
 /// Binds a cursor to the process and the Runtime connection that issued it:
 /// `v1.<session>.<connection>.<snapshot>.<after>.<query fingerprint>`.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct CursorBinding {
-    pub(crate) session: u64,
-    pub(crate) generation: u64,
+pub struct CursorBinding {
+    pub session: u64,
+    pub generation: u64,
 }
 
 impl CursorBinding {
-    pub(crate) fn encode(self, cursor: &RuntimeEventQueryCursor) -> Result<String, EventsError> {
+    pub fn encode(self, cursor: &RuntimeEventQueryCursor) -> Result<String, EventsError> {
         let fingerprint = json!(cursor)
             .get("query_fingerprint")
             .and_then(Value::as_str)
@@ -503,7 +500,7 @@ impl CursorBinding {
 }
 
 /// One page as the Runtime answered it, with the query its cursors are bound to.
-pub(crate) struct Page {
+pub struct Page {
     page: RuntimeEventQueryPage,
     query: EventQuery,
     /// With a wait: how long the answered read started after the first one.
@@ -511,13 +508,13 @@ pub(crate) struct Page {
 }
 
 impl Page {
-    pub(crate) fn events(&self) -> &[ProjectedEvent] {
+    pub fn events(&self) -> &[ProjectedEvent] {
         self.page.events()
     }
 
     /// The cursor that goes on after `after` within this page's snapshot. It is bound to the
     /// query without `after_sequence`, so that it is sent back without it.
-    pub(crate) fn cursor_after(&self, after: u64) -> Result<RuntimeEventQueryCursor, EventsError> {
+    pub fn cursor_after(&self, after: u64) -> Result<RuntimeEventQueryCursor, EventsError> {
         RuntimeEventQueryCursor::new(
             self.page.snapshot_ledger_position(),
             after,
@@ -528,7 +525,7 @@ impl Page {
     }
 
     /// Where the Runtime's next page starts; `None` once the snapshot is read to its end.
-    pub(crate) fn next_cursor(&self) -> Result<Option<RuntimeEventQueryCursor>, EventsError> {
+    pub fn next_cursor(&self) -> Result<Option<RuntimeEventQueryCursor>, EventsError> {
         self.page
             .next_cursor()
             .map(|next| self.cursor_after(next.after_sequence()))
@@ -538,12 +535,7 @@ impl Page {
     /// `{events, next_cursor?, truncated?, snapshot_ledger_position, last_sequence?,
     /// waited_ms?}` with these rows; `last_sequence` is the seq of the last of them, for the
     /// next `after_sequence`.
-    pub(crate) fn result(
-        &self,
-        rows: &[Value],
-        next_cursor: Option<String>,
-        truncated: bool,
-    ) -> Value {
+    pub fn result(&self, rows: &[Value], next_cursor: Option<String>, truncated: bool) -> Value {
         let mut result = Map::new();
         result.insert("events".to_owned(), Value::Array(rows.to_vec()));
         if let Some(cursor) = next_cursor {
@@ -569,7 +561,7 @@ impl Page {
 /// Reads one page of `request` with the resolved instance. A page from `after_sequence` starts
 /// at the next sequence; a cursor resumes where its page ended. With a wait, an empty page is
 /// read again every second until rows arrive, `wait_until` comes or `stop` says so.
-pub(crate) fn read(
+pub fn read(
     client: &RuntimeClient,
     request: &Request,
     instance_id: Option<InstanceId>,
@@ -625,11 +617,7 @@ pub(crate) fn read(
 
 /// A row of `detail`; `envelope` writes an outcome as the frontend writes it (the CLI line's and
 /// the MCP server's outcome detail).
-pub(crate) fn row(
-    event: &ProjectedEvent,
-    detail: Detail,
-    envelope: &dyn Fn(&Outcome) -> Value,
-) -> Value {
+pub fn row(event: &ProjectedEvent, detail: Detail, envelope: &dyn Fn(&Outcome) -> Value) -> Value {
     let mut row = brief_row(event);
     match detail {
         Detail::Brief => {}
@@ -647,7 +635,7 @@ pub(crate) fn row(
 
 /// `{seq, ts, type, severity, instance?, request_id?, run_id?, task_id?, correlation_id?,
 /// code?, materials?}`: the ledger's diagnostic code and the material refs for `ac_material`.
-pub(crate) fn brief_row(event: &ProjectedEvent) -> Value {
+pub fn brief_row(event: &ProjectedEvent) -> Value {
     let mut row = Map::new();
     row.insert("seq".to_owned(), json!(event.sequence));
     row.insert("ts".to_owned(), json!(event.timestamp_unix_ms));
@@ -696,7 +684,7 @@ pub(crate) fn brief_row(event: &ProjectedEvent) -> Value {
 /// `actingctl events …` when the first argument is `events`: one result line on stdout
 /// (Workflow #378 A5), the page with `runtime_events_reported`, or `{outcome}` with the failure
 /// (an argument failure's developer line adds the usage) and exit 1.
-pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
+pub fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
     if arguments.first()?.to_str()? != COMMAND {
         return None;
     }
@@ -819,7 +807,7 @@ fn cli_parameters(arguments: &[OsString]) -> Result<(PathBuf, Map<String, Value>
 
 /// Distinct per process: a cursor this CLI printed answers `cursor_invalid` in any other
 /// (`actingctl diagnose` binds its errors page cursor the same way, Workflow #389 MCP-7).
-pub(crate) fn process_session() -> u64 {
+pub fn process_session() -> u64 {
     let started = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_nanos());

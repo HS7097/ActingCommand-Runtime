@@ -116,16 +116,16 @@ const FAILURE_EVENT_TYPES: [EventType; 3] = [
 ];
 
 /// The parameters both sides take, typed (#389 R2: each MCP argument is the CLI flag's name).
-pub(crate) struct DiagnoseRequest {
+pub struct DiagnoseRequest {
     /// Alias, instance_id or ADB port; without it every instance.
-    pub(crate) instance: Option<String>,
-    pub(crate) task_id: Option<TaskId>,
-    pub(crate) since_unix_ms: Option<u64>,
+    pub instance: Option<String>,
+    pub task_id: Option<TaskId>,
+    pub since_unix_ms: Option<u64>,
 }
 
 impl DiagnoseRequest {
     /// The window's start: since_unix_ms, else 24 h before `now_unix_ms`; at most 7 days back.
-    pub(crate) fn window(&self, now_unix_ms: u64) -> Result<u64, Failure> {
+    pub fn window(&self, now_unix_ms: u64) -> Result<u64, Failure> {
         let oldest_unix_ms = now_unix_ms.saturating_sub(MAX_WINDOW_MS);
         match self.since_unix_ms {
             Some(since) if since < oldest_unix_ms => {
@@ -138,12 +138,12 @@ impl DiagnoseRequest {
 }
 
 /// `task_id` as a Runtime task_id.
-pub(crate) fn parse_task_id(text: &str) -> Option<TaskId> {
+pub fn parse_task_id(text: &str) -> Option<TaskId> {
     serde_json::from_value::<TaskId>(json!(text)).ok()
 }
 
 /// Why a diagnosis was refused or failed.
-pub(crate) enum Failure {
+pub enum Failure {
     /// A CLI flag is unknown, repeated, missing its value or malformed: the flag as given.
     Argument {
         argument: String,
@@ -176,7 +176,7 @@ impl Failure {
     /// `actingctl_usage_invalid` with `argument` and `argument_problem` (MCP answers
     /// `arguments_invalid` for its argument failures before any read); a window start too far
     /// back is `since_out_of_range` with the oldest start allowed (`range_min`).
-    pub(crate) fn outcome(&self) -> Outcome {
+    pub fn outcome(&self) -> Outcome {
         match self {
             Self::Argument { argument, problem } => {
                 Outcome::new(ActingctlCode::ActingctlUsageInvalid)
@@ -198,7 +198,7 @@ impl Failure {
 }
 
 /// Now, in Unix milliseconds.
-pub(crate) fn now_unix_ms() -> Result<u64, Failure> {
+pub fn now_unix_ms() -> Result<u64, Failure> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .ok()
@@ -208,7 +208,7 @@ pub(crate) fn now_unix_ms() -> Result<u64, Failure> {
 
 /// The `actingd suspended` child of one diagnosis, started before the Runtime reads so that it
 /// runs beside them; or, when it cannot start, the outcome that says why.
-pub(crate) struct SuspensionReport(Result<JoinHandle<Result<Captured, ChildFailure>>, Outcome>);
+pub struct SuspensionReport(Result<JoinHandle<Result<Captured, ChildFailure>>, Outcome>);
 
 impl SuspensionReport {
     /// Starts `<program root>\runtime\actingcommand-actingd.exe suspended --config <config>
@@ -218,7 +218,7 @@ impl SuspensionReport {
     /// earlier moment. ROUT-L RL-1c fix 1 (#411 H1): the child reads the ledger until
     /// `--deadline-ms`, [`SUSPENDED_ANSWER_MARGIN`] before `deadline`, and answers with what it
     /// read; a child still running at `deadline` is ended there, never left running.
-    pub(crate) fn start(root: Option<&Path>, deadline: Instant) -> Self {
+    pub fn start(root: Option<&Path>, deadline: Instant) -> Self {
         let (program_root, config, installation) = match suspension_source(root) {
             Ok(source) => source,
             Err(outcome) => return Self(Err(outcome)),
@@ -241,9 +241,10 @@ impl SuspensionReport {
     }
 
     /// #422 QR-2b gate: a report that was not started, as `start` answers when it finds no
-    /// configuration (the gate reads the Runtime's sections, not the child's).
-    #[cfg(test)]
-    pub(crate) fn not_started(outcome: Outcome) -> Self {
+    /// configuration (the gate reads the Runtime's sections, not the child's). Workflow #434 LAB-1:
+    /// the gate stays in actingctl, which turns on `test-hooks` for its tests.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn not_started(outcome: Outcome) -> Self {
         Self(Err(outcome))
     }
 }
@@ -273,12 +274,12 @@ fn suspension_source(
 /// #422 QR-2b: the clock a diagnosis checks its deadline on. A diagnosis reads the system's
 /// monotonic clock (`SystemClock`); a test's clock moves as its fake Runtime serves pages, so
 /// that the deadline passes inside a chosen section without a sleep.
-pub(crate) trait Clock {
+pub trait Clock {
     fn now(&self) -> Instant;
 }
 
 /// The system's monotonic clock.
-pub(crate) struct SystemClock;
+pub struct SystemClock;
 
 impl Clock for SystemClock {
     fn now(&self) -> Instant {
@@ -309,7 +310,7 @@ impl Budget<'_> {
 /// reads did not finish: the call's deadline came first (the warning `call_budget_exhausted`
 /// naming it, `member`), or a read failed (the client's failure as the warning).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Section {
+pub enum Section {
     Runs,
     ErrorsPage,
     RunsGrouped,
@@ -317,7 +318,7 @@ pub(crate) enum Section {
 }
 
 impl Section {
-    pub(crate) const fn name(self) -> &'static str {
+    pub const fn name(self) -> &'static str {
         match self {
             Self::Runs => "runs",
             Self::ErrorsPage => "errors_page",
@@ -398,7 +399,7 @@ impl Unfinished {
 /// errors page (one page), `failures_grouped`, `not_run` (two reads of the Runtime's memory),
 /// then the run listing, read once for both `runs` and `runs_grouped` (`window_runs`). Every
 /// QueryEvents page asks for no run recovery: no part of a diagnosis reads it.
-pub(crate) fn read(
+pub fn read(
     client: &RuntimeClient,
     request: &DiagnoseRequest,
     since_unix_ms: u64,
@@ -1092,80 +1093,80 @@ fn full_payload(event: &ProjectedEvent) -> Option<&EventPayload> {
 }
 
 /// A diagnosis's parts, each list whole; `render` keeps the first `Kept` of each.
-pub(crate) struct Diagnosis {
+pub struct Diagnosis {
     /// `{alias, instance_id}` of the diagnosed instance; null when every instance is.
-    pub(crate) instance: Value,
-    pub(crate) since: u64,
-    pub(crate) incomplete: bool,
+    pub instance: Value,
+    pub since: u64,
+    pub incomplete: bool,
     /// #422 QR-2b: the sections whose reads did not finish, each rendered
     /// `<section>_incomplete: true` beside the diagnosis's `incomplete`.
-    pub(crate) incomplete_sections: Vec<Section>,
-    pub(crate) runs: Vec<Value>,
-    pub(crate) errors: Vec<Value>,
-    pub(crate) error_sequences: Vec<u64>,
-    pub(crate) errors_more: bool,
-    pub(crate) errors_next: Option<RuntimeEventQueryCursor>,
-    pub(crate) snapshot: u64,
-    pub(crate) continuable: bool,
-    pub(crate) repeating: Vec<Value>,
-    pub(crate) suspended: Vec<Value>,
+    pub incomplete_sections: Vec<Section>,
+    pub runs: Vec<Value>,
+    pub errors: Vec<Value>,
+    pub error_sequences: Vec<u64>,
+    pub errors_more: bool,
+    pub errors_next: Option<RuntimeEventQueryCursor>,
+    pub snapshot: u64,
+    pub continuable: bool,
+    pub repeating: Vec<Value>,
+    pub suspended: Vec<Value>,
     /// Workflow #386 SR-3: the report's suspended task packages that defer the instance's pairs
     /// (every one without an instance).
-    pub(crate) packs: Vec<Value>,
+    pub packs: Vec<Value>,
     /// Workflow #411 B15 R7: the report's stopped remedy rounds of the instance (every one
     /// without an instance).
-    pub(crate) remedies: Vec<Value>,
+    pub remedies: Vec<Value>,
     /// Workflow #386 SR-2b-2: the report's owed reruns of the instance (every one without an
     /// instance).
-    pub(crate) reruns: Vec<Value>,
-    pub(crate) lift: Vec<Value>,
-    pub(crate) report_warnings: Vec<Value>,
+    pub reruns: Vec<Value>,
+    pub lift: Vec<Value>,
+    pub report_warnings: Vec<Value>,
     /// The report status's data members: `{status, …}`.
-    pub(crate) report_status: Value,
+    pub report_status: Value,
     /// The outcome of a report that is unavailable or failed (Workflow #378 A5), rendered into
     /// the status as `outcome` in the frontend's detail.
-    pub(crate) report_outcome: Option<Outcome>,
+    pub report_outcome: Option<Outcome>,
     /// At most 10 clock-slot rows (#372 K3), refused and superseded first, then deferred and
     /// expired, then owed (#372 K4).
-    pub(crate) clock_slots: Vec<Value>,
+    pub clock_slots: Vec<Value>,
     /// The clock-slot rows in the window, kept or not.
-    pub(crate) clock_slots_total: usize,
+    pub clock_slots_total: usize,
     /// Workflow #389 MCP-7: the failed and open runs grouped, the most frequent first.
-    pub(crate) runs_grouped: Vec<Value>,
+    pub runs_grouped: Vec<Value>,
     /// Workflow #389 MCP-7: the non-run failures grouped, the most frequent first.
-    pub(crate) failures_grouped: Vec<Value>,
+    pub failures_grouped: Vec<Value>,
     /// Workflow #386 SR-6b, MCP-19b: the deferred rows of the latest policy evaluation, at most
     /// the configured bound per instance, and how many there are; `None` when they could not be
     /// read (`warnings` says why).
-    pub(crate) not_run: Option<NotRun>,
+    pub not_run: Option<NotRun>,
     /// Workflow #386 SR-6b, MCP-19b: the parts that could not be read, reported beside the
     /// diagnosis, which is then incomplete.
-    pub(crate) warnings: Vec<Warning>,
+    pub warnings: Vec<Warning>,
 }
 
 /// How many of each list a rendering keeps.
 #[derive(Clone, Copy)]
-pub(crate) struct Kept {
-    pub(crate) runs: usize,
-    pub(crate) errors: usize,
-    pub(crate) repeating: usize,
-    pub(crate) suspended: usize,
-    pub(crate) packs: usize,
-    pub(crate) remedies: usize,
+pub struct Kept {
+    pub runs: usize,
+    pub errors: usize,
+    pub repeating: usize,
+    pub suspended: usize,
+    pub packs: usize,
+    pub remedies: usize,
     /// Workflow #386 SR-2b-2.
-    pub(crate) reruns: usize,
-    pub(crate) lift: usize,
-    pub(crate) report_warnings: usize,
-    pub(crate) clock_slots: usize,
-    pub(crate) runs_grouped: usize,
-    pub(crate) failures_grouped: usize,
+    pub reruns: usize,
+    pub lift: usize,
+    pub report_warnings: usize,
+    pub clock_slots: usize,
+    pub runs_grouped: usize,
+    pub failures_grouped: usize,
     /// Workflow #386 SR-6b, MCP-19b.
-    pub(crate) not_run: usize,
+    pub not_run: usize,
 }
 
 impl Diagnosis {
     /// Every list whole.
-    pub(crate) fn kept_all(&self) -> Kept {
+    pub fn kept_all(&self) -> Kept {
         Kept {
             runs: self.runs.len(),
             errors: self.errors.len(),
@@ -1189,7 +1190,7 @@ impl Diagnosis {
     /// The result with the first `kept` of each list and `errors_page` as the errors page;
     /// each list cut short is marked `<list>_truncated`. `envelope` renders the report status's
     /// outcome as the frontend writes outcomes (its detail).
-    pub(crate) fn render(
+    pub fn render(
         &self,
         kept: &Kept,
         errors_page: Value,
@@ -1265,7 +1266,7 @@ impl Diagnosis {
     /// The errors page with its first `kept` rows, oldest first. Without a task_id filter its
     /// next_cursor continues it in `events` / `ac_events` with view errors, the same instance
     /// and the same since_unix_ms, on the connection `binding` names.
-    pub(crate) fn errors_page(
+    pub fn errors_page(
         &self,
         query: &EventQuery,
         binding: CursorBinding,
@@ -1423,7 +1424,7 @@ fn of_instance(row: &Value, instance: Option<(&str, &Value)>) -> bool {
 
 /// Workflow #386 SR-3: the report's `packs` rows whose suspension defers a pair of the instance
 /// (its alias is among the row's `instances`), or every row when no instance is diagnosed.
-pub(crate) fn pack_rows(document: &Value, instance: Option<(&str, &Value)>) -> Vec<Value> {
+pub fn pack_rows(document: &Value, instance: Option<(&str, &Value)>) -> Vec<Value> {
     document
         .get("packs")
         .and_then(Value::as_array)
@@ -1447,7 +1448,7 @@ pub(crate) fn pack_rows(document: &Value, instance: Option<(&str, &Value)>) -> V
 /// Workflow #411 B15 R7: the report's `remedies` rows of the instance (its alias or its
 /// instance id is the row's `instance_id`), or every row when no instance is diagnosed. An
 /// unparsed row names no instance and is kept only without one.
-pub(crate) fn remedy_rows(document: &Value, instance: Option<(&str, &Value)>) -> Vec<Value> {
+pub fn remedy_rows(document: &Value, instance: Option<(&str, &Value)>) -> Vec<Value> {
     document
         .get("remedies")
         .and_then(Value::as_array)
@@ -1462,7 +1463,7 @@ pub(crate) fn remedy_rows(document: &Value, instance: Option<(&str, &Value)>) ->
 
 /// Workflow #386 SR-2b-2: the report's `reruns` rows of the instance (its alias or its instance
 /// id is the row's `instance_id`), or every row when no instance is diagnosed.
-pub(crate) fn rerun_rows(document: &Value, instance: Option<(&str, &Value)>) -> Vec<Value> {
+pub fn rerun_rows(document: &Value, instance: Option<(&str, &Value)>) -> Vec<Value> {
     document
         .get("reruns")
         .and_then(Value::as_array)
@@ -1478,7 +1479,7 @@ pub(crate) fn rerun_rows(document: &Value, instance: Option<(&str, &Value)>) -> 
 /// The instance's `clock_slots` rows of the report recorded since `since_unix_ms` (#372 K3):
 /// at most 10, in the order of [`clock_slot_rank`], newest first within each rank; and how many
 /// there are in the window.
-pub(crate) fn clock_slot_rows(
+pub fn clock_slot_rows(
     document: &Value,
     alias: &str,
     instance_id: &Value,
@@ -1705,7 +1706,7 @@ fn stderr_tail(stderr: &[u8]) -> String {
 /// Runs `diagnose`; `None` leaves every other command to the CLI, unchanged. One result line on
 /// stdout (Workflow #378 A5): the diagnosis with `runtime_diagnosis_reported`, or `{outcome}`
 /// with the failure (a flag failure's developer line adds the usage) and exit 1.
-pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
+pub fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
     if arguments.first()?.to_str()? != "diagnose" {
         return None;
     }

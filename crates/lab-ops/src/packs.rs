@@ -54,7 +54,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const COMMAND: &str = "packs";
 const USAGE: &str = "usage: actingctl packs [--root <install root>] [--instance <alias|instance_id|adb port>] [--role procedure|startup|resource_package]";
 /// The configuration of an install root without slots, as mcp-serve finds it.
-pub(crate) const ROOT_CONFIG_FILE: &str = "actingd.config.json";
+pub const ROOT_CONFIG_FILE: &str = "actingd.config.json";
 /// The file of a package that names its `package_id`.
 const CONTROL_FILE: &str = "control.json";
 /// A procedure binding's `procedure_ref` is this prefix and the package id (M-PKG §4.4).
@@ -68,7 +68,7 @@ const MAX_CONTROL_BYTES: u64 = 1024 * 1024;
 /// holds them), so the roles `prerequisite` and `return_home` are gone with their keys.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum Role {
+pub enum Role {
     /// `policy.procedure_manifest[]`: installation level.
     Procedure,
     /// `instances[].startup_package`: per instance.
@@ -77,12 +77,11 @@ pub(crate) enum Role {
     ResourcePackage,
 }
 
-#[cfg_attr(not(feature = "mcp"), allow(dead_code))]
 impl Role {
-    pub(crate) const ALL: [Self; 3] = [Self::Procedure, Self::Startup, Self::ResourcePackage];
+    pub const ALL: [Self; 3] = [Self::Procedure, Self::Startup, Self::ResourcePackage];
 
     /// The role a `--role` flag or `role` argument names.
-    pub(crate) fn parse(text: &str) -> Option<Self> {
+    pub fn parse(text: &str) -> Option<Self> {
         serde_json::from_value(Value::String(text.to_owned())).ok()
     }
 }
@@ -90,14 +89,14 @@ impl Role {
 /// What one call asks for: one instance (alias, instance_id or ADB port, as the configuration
 /// names them) or every one, and one role or every one.
 #[derive(Default)]
-pub(crate) struct Query<'a> {
-    pub(crate) instance: Option<&'a str>,
-    pub(crate) role: Option<Role>,
+pub struct Query<'a> {
+    pub instance: Option<&'a str>,
+    pub role: Option<Role>,
 }
 
 /// The answer of `actingctl packs` and the `result` of `ac_packs`.
 #[derive(Serialize)]
-pub(crate) struct Packs {
+pub struct Packs {
     source: Source,
     instances: Vec<InstanceRow>,
     installation: Vec<InstallationRow>,
@@ -107,16 +106,15 @@ pub(crate) struct Packs {
     standard_packs: Option<StandardPacksRow>,
 }
 
-#[cfg_attr(not(feature = "mcp"), allow(dead_code))]
 impl Packs {
-    pub(crate) const fn source(&self) -> &Source {
+    pub const fn source(&self) -> &Source {
         &self.source
     }
 }
 
 /// Which configuration the answer read: the selected generation.
 #[derive(Serialize)]
-pub(crate) struct Source {
+pub struct Source {
     kind: SourceKind,
     config: String,
 }
@@ -196,19 +194,18 @@ struct InstallationRow {
     display: Option<Value>,
 }
 
-pub(crate) struct Answer {
+pub struct Answer {
     packs: Packs,
     /// Each warning once: `package_binding_unreadable {path, alias?}`.
     warnings: Vec<Outcome>,
 }
 
-#[cfg_attr(not(feature = "mcp"), allow(dead_code))]
 impl Answer {
-    pub(crate) const fn packs(&self) -> &Packs {
+    pub const fn packs(&self) -> &Packs {
         &self.packs
     }
 
-    pub(crate) fn warnings(&self) -> &[Outcome] {
+    pub fn warnings(&self) -> &[Outcome] {
         &self.warnings
     }
 
@@ -216,7 +213,7 @@ impl Answer {
     /// over the output budget: the answer with its warnings, each `{outcome}` as the side's
     /// `warning` renders it, as a top-level member present only when there are some (command
     /// table D3).
-    pub(crate) fn document(
+    pub fn document(
         &self,
         warning: impl Fn(&Outcome) -> Value,
     ) -> Result<Map<String, Value>, serde_json::Error> {
@@ -235,7 +232,7 @@ impl Answer {
 /// configuration's `path`, a selector's `instance_selector`, a flag's `argument`) and the
 /// failure beneath it as its cause.
 #[derive(Debug)]
-pub(crate) struct PacksError(Outcome);
+pub struct PacksError(Outcome);
 
 impl PacksError {
     fn usage(argument: impl AsRef<OsStr>, problem: ArgumentProblem) -> Self {
@@ -247,7 +244,7 @@ impl PacksError {
     }
 
     /// The refusal's outcome.
-    pub(crate) fn outcome(&self) -> Outcome {
+    pub fn outcome(&self) -> Outcome {
         self.0.clone()
     }
 }
@@ -361,7 +358,7 @@ struct ControlProvides {
 /// is an install selection, as actingd does) and lists its package bindings. A configuration
 /// that cannot be read is `config_read_failed`, one that does not decode `config_decode_failed`
 /// (ruling Q6), each with the configuration's `path` and the failure beneath it as its cause.
-pub(crate) fn read(
+pub fn read(
     installation: Option<&InstalledProcess>,
     config: &Path,
     query: &Query<'_>,
@@ -374,7 +371,7 @@ pub(crate) fn read(
 /// read the tables: other readers of the bindings (the overview) do not. ROUT-L RL-1c: only these
 /// two compose a composer-mode configuration's procedures (the installation rows); the overview
 /// reads the instances' bindings only.
-pub(crate) fn read_with_tables(
+pub fn read_with_tables(
     installation: Option<&InstalledProcess>,
     config: &Path,
     query: &Query<'_>,
@@ -1098,7 +1095,7 @@ fn startup_package_id(path: &Path) -> Option<String> {
 /// CLI. It takes no `--state-root`: it never connects to the Runtime (command table D5). One
 /// result line on stdout (Workflow #378 A5): the bindings with `package_bindings_reported`, or
 /// `{outcome}` with the refusal (a flag refusal's developer line adds the usage) and exit 1.
-pub(crate) fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
+pub fn dispatch(arguments: &[OsString]) -> Option<ExitCode> {
     if arguments.first()?.to_str()? != COMMAND {
         return None;
     }
@@ -1199,7 +1196,7 @@ fn run(arguments: &[OsString]) -> Result<Map<String, Value>, PacksError> {
 /// answers the generation selected now, as a fresh `actingctl packs` does (train 4 review
 /// ruling), also when the fixed entry started it with an inherited selection (Workflow #389
 /// MCP-7 scope extension).
-pub(crate) fn selected_config(
+pub fn selected_config(
     root: Option<&Path>,
 ) -> Result<(Option<InstalledProcess>, PathBuf), PacksError> {
     // The install selection of this process cannot be read: the contract's code.
@@ -1253,7 +1250,7 @@ pub(crate) fn selected_config(
 /// process (mcp-serve) reads this instead at every call, as a process started now through the
 /// fixed entry would be handed it. A selection that cannot be read answers the contract's install
 /// code, one the root no longer has `install_selection_unavailable`.
-pub(crate) fn current_selection(root: &Path) -> Result<InstalledProcess, PacksError> {
+pub fn current_selection(root: &Path) -> Result<InstalledProcess, PacksError> {
     InstalledProcess::read_active(root)
         .map_err(|error| PacksError(Outcome::new(error.code())))?
         .ok_or_else(|| PacksError(Outcome::new(SharedCode::InstallSelectionUnavailable)))
@@ -1261,7 +1258,7 @@ pub(crate) fn current_selection(root: &Path) -> Result<InstalledProcess, PacksEr
 
 /// Two levels above the running executable when `<root>\runtime\BUILD-MANIFEST.json` is a
 /// file, as mcp-serve's install detection; `actingctl overview` finds its install the same way.
-pub(crate) fn executable_install_root() -> Option<PathBuf> {
+pub fn executable_install_root() -> Option<PathBuf> {
     let executable = fs::canonicalize(std::env::current_exe().ok()?).ok()?;
     let root = executable.parent()?.parent()?.to_path_buf();
     root.join("runtime")

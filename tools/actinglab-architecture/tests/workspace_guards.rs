@@ -386,6 +386,8 @@ fn c3b_client_device_authority_stays_behind_runtime() {
     let root = workspace_root();
     let mut files = Vec::new();
     collect_rust_files(&root.join("apps/actingctl/src"), &mut files);
+    // Workflow #434 LAB-1: actingctl's read and write modules moved there.
+    collect_rust_files(&root.join("crates/lab-ops/src"), &mut files);
     collect_rust_files(&root.join("crates/runtime-client/src"), &mut files);
     files.push(root.join("apps/actinglab/src/runtime_slice_cli.rs"));
     let forbidden = [
@@ -429,7 +431,12 @@ fn c3b_client_device_authority_stays_behind_runtime() {
     let metadata: serde_json::Value =
         serde_json::from_str(&workspace_metadata()).expect("parse cargo metadata");
     let packages = metadata["packages"].as_array().expect("metadata packages");
-    for package_name in ["actingcommand-runtime-client", "actingcommand-actingctl"] {
+    for package_name in [
+        "actingcommand-runtime-client",
+        "actingcommand-actingctl",
+        // Workflow #434 LAB-1: actingctl's read and write modules moved there.
+        "actingcommand-lab-ops",
+    ] {
         let package = packages
             .iter()
             .find(|package| package["name"] == package_name)
@@ -2636,7 +2643,8 @@ fn rd1b_t10_export_archive_and_diagnostics_never_read_the_private_bindings() {
     const READERS: &[&str] = &[
         "crates/actingcommand-contract/src/device_binding.rs",
         "apps/actingd/src/config/device_binding.rs",
-        "apps/actingctl/src/devices.rs",
+        // Workflow #434 LAB-1: `actingctl devices`, moved with its code.
+        "crates/lab-ops/src/devices.rs",
     ];
     const NEVER_READING: &[&str] = &[
         "crates/runtime-host/src/host/evidence_export.rs",

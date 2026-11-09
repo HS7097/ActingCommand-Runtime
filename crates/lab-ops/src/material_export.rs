@@ -17,16 +17,13 @@ use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The largest material an export writes (`material_too_large` above it).
-pub(crate) const MAX_EXPORT_BYTES: usize = 32 * 1024 * 1024;
+pub const MAX_EXPORT_BYTES: usize = 32 * 1024 * 1024;
 
 static EXPORT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// `<seq>:<event_id>:<artifact_id>`: enough to find the material again in the ledger, and what
 /// `ac_material` takes as `ref`.
-pub(crate) fn material_ref(
-    event: &ProjectedEvent,
-    artifact: &ProjectedArtifactReference,
-) -> String {
+pub fn material_ref(event: &ProjectedEvent, artifact: &ProjectedArtifactReference) -> String {
     format!(
         "{}:{}:{}",
         event.sequence,
@@ -44,7 +41,7 @@ fn text_of(value: Value) -> String {
 
 /// An export that was not written: the file-system step that failed, on which path.
 #[derive(Debug)]
-pub(crate) struct WriteFailure {
+pub struct WriteFailure {
     op: IoOp,
     path: PathBuf,
     /// The partial file left behind when moving it into place failed.
@@ -56,7 +53,7 @@ impl WriteFailure {
     /// `material_export_failed` with the path the step failed on (`path`; for the move into
     /// place, the export's own path, with the partial file left behind as `from_path`), caused by
     /// the OS failure (Workflow #378 A5).
-    pub(crate) fn outcome(&self) -> Outcome {
+    pub fn outcome(&self) -> Outcome {
         let outcome = Outcome::new(ActingctlCode::MaterialExportFailed).path(&self.path);
         let outcome = match &self.partial {
             Some(partial) => outcome.from_path(partial),
@@ -69,7 +66,7 @@ impl WriteFailure {
 /// The export writer: `bytes`, whose `sha256` (`sha256:<hex>`) the caller knows, to
 /// `<directory>\<hex>.<extension>` through a partial file moved into place;
 /// `{path, sha256, size}`.
-pub(crate) fn write(
+pub fn write(
     directory: &Path,
     sha256: &str,
     extension: &str,
