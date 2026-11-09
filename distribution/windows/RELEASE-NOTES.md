@@ -9,6 +9,120 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.45
+
+本版是 v0.12.44 之后合并的 3 个 PR：#434 LAB-0（#1540）、#433 LABDO-1（#1542）和 #434 LAB-1（#1541）。先说部署：接口声明都不变（账本仍是 [3, 7]），
+部署不用带 `--accept-ledger-one-way`，计划里也没有 `ledger_verify` 这一步；v0.12.44 的安装工具装本版照常（见下面的升级）；装上以后能退回 v0.12.44，不用带
+标志（见下面的退回）。没有新键，默认值文件没改。运行上要知道的是这几处：
+
+- **Runtime 已经做了的 Lab 操作，客户端自己的核验没过时，答 `lab_operation_check_failed`（退出码 5），不再是设备错误**（LABDO-1）。
+  - 以前：`actinglab do --capture`（元素、坐标或 `--operation`）收到 Runtime 的回执以后，`runtime-client` 还要按请求、租约和各个动作查事件，再核这次操作的
+    证据；其中任何一步失败，actinglab 都答 `device_error`（退出码 4），MCP `ac_lab_do` 转成 `device` 类，不带 `req_id`，也不带 actinglab 的消息。可这时操作已经
+    在设备上做完了。
+  - 现在：答 `lab_operation_check_failed`，退出码 5（Runtime 和状态类，`apps/actinglab/src/cli_result.rs` 93–100）。details 带回执的 `req_id`、`correlation_id`、
+    `receipt_state`，操作记录报的 `effect`（`performed`、`not_performed` 或 `indeterminate`；回执里没有 Lab 操作记录时为 null）和 `executed`，记录自己的
+    `failure`（没有时为 null），以及客户端自己的 `client_code`、`client_message`（`apps/actinglab/src/lab2_cli/operation.rs` 222–258）。Runtime 拒绝了的、
+    或者根本没回答的请求，照旧是 `device_error`。
+  - **收到这个码，不要把这个操作当成没跑过再发一次。** 重发是一个新请求，没有幂等键，设备上会再做一次。先看 `effect`，再看那台实例的画面，确认页面以后再决定
+    下一步；把 `client_code` 和 `req_id` 报上来，好把那项核验改对。
+  - 本版只改了答法，没改核验本身：让核验不过的原因还在，部署以后带 OCR 的 Lab 操作还可能遇到，只是现在报得出是哪一项（#1542 的诊断认为最可能是
+    `runtime_lab_diagnostic_budget_mismatch`：DirectML 会话载入后的第一次 OCR 多存了一份节点分布报告，记在这次请求名下，客户端数诊断件时对不上；只看代码定不了，
+    要用 `client_code` 坐实）。客户端照旧不往账本写这次失败。
+  - `do --capture --record` 遇到这个码照旧不记那一步；答复写明了效果，人可以照它关掉或接受这一步。
+  - MCP：所有 Lab 工具的错误在已有的码和 details 两条链接后面，再加一条 `foreign_other_error`（`raw_source` process），`raw_text` 是 actinglab 的消息原文
+    （`apps/actingctl/src/mcp/lab.rs` 871–917）。`ac_lab_do` 对这个码答 `runtime` 类的 `lab_tool_failed {exit_code: 5, req_id}`，cause 是
+    `lab_operation_check_failed` 和带 `effect` 的 details。Lab 工具的共用说明（`lab_errors!`）跟着改了一句，MCP 工具仍是 41 个。
+  - 契约 `contracts/lab-two-entries.md` §9.3 写明以后的 LAB-2、LAB-5 也照这样：请求发出去、Runtime 回答了以后的失败，要写明 `req_id` 和效果，绝不算设备错误。
+- **actingctl 的读写模块挪进新的库 `crates/lab-ops`，只是内部搬移；actingctl 的每条命令都和以前答的一样**（LAB-1）。
+  - 用 `git mv` 搬了 16 个模块（`overview`、`events`、`run_list`、`run_evidence`、`diagnose`、`facts`、`schedule`、`perf_preset`、`routine_summary`、`remedy`、
+    `devices`、`packs`、`code_lookup`、`capability_gap`、`evidence_read`、`observe_export`）和它们共用的 5 个辅助模块（`child`、`cli_line`、`codes`、
+    `instance_selector`、`material_export`）；actingctl 从 `actingcommand_lab_ops` 引入同名模块（`apps/actingctl/src/main.rs` 34–43、83–84）。命令的词、输出、
+    码和退出码都没变；搬过去的测试只改了包名前缀，断言一条没动。
+  - overview 的看门狗块：看门狗留在 actingctl 里（到 LAB-4），actingctl 启动时把读取函数交给 lab-ops（`main.rs` 129–132，只在 Windows 上），所以
+    `actingctl overview` 和 MCP `ac_overview` 的看门狗块照旧。
+  - 新加的三样：操作表读取（`table.rs`，把 `contracts/lab-operations.json` 读成带类型的行）、发起者类型（`initiator.rs`，契约 §4.1 的六个词）和默认位置
+    （`locate.rs`，契约 §9.3）。本版还没有程序用它们，只有两个新测试读。
+  - 结果码目录的头：片名 `actingctl` 改指 `crates/lab-ops`（码表随 `codes.rs` 搬了过去），新片名 `actingctl-app` 指 `apps/actingctl`、没有分片文件；
+    LAB-1 没动 `actingctl.json`，码的拼写和所属都没变；合并目录本身不带片名映射，所以嵌进程序的那份不受这处改动影响。`evidence confirm-read` 记的客户端
+    版本照旧是 `0.1.0`（lab-ops 用 actingctl 的版本号）。
+- **LAB-0 只写契约，运行上什么都不变**（LAB-0）：`contracts/lab-two-entries.md`（Lab 和 UI 两个入口的契约）、`contracts/lab-operations.json`（操作表 v1，
+  168 项）、`contracts/component-interfaces.md` 的 “Planned: Workflow #434” 一节（四条计划行，不生效）和登记 §1.287。没有代码、键和结果码。
+
+配置：接口修订都不变，按代码和 `contracts/component-interfaces.md` 核过：`actingd-config` 仍是 [5, 27]，`ledger` 仍是 [3, 7]，`runtime-client` 仍是 [3, 6]，
+`package` 仍是 [3, 7]，`install-selection` 仍是 [1, 1]，`install-control` 仍是 [0, 1]，`runtime-outcomes` 仍是 [1, 1]。`distribution/windows/component-interfaces.json`
+和架构测试 `tools/actinglab-architecture/tests/component_interfaces.rs` 自 v0.12.44 没改。
+
+- #434 的计划行不生效：`component-interfaces.md` 新加的 “Planned: Workflow #434” 一节写了 `runtime-client` 7、`ledger` 8、`actingd-config` 28（LAB-6）和
+  `install-cli` 2（LAB-7），明写 not in force，没有构建声明它们；声明文件没动，本版也不声明 `install-cli`。同一节把 `install-control` 2（#389 U-4）的计划标成
+  被取代。
+- LABDO-1 不升接口：`LabOperationAnswer` 是 `runtime-client` 错误类型里的进程内成员（`crates/runtime-client/src/error.rs` 192，挂在
+  `client/lab_operation.rs` 229–239 的 `map_err` 上），客户端发的请求、回执和握手都没变；`runtime-outcomes` 1 多一个登记的码、MCP 工具错误多一条 cause
+  链接，都是 v1 读者本来就收的追加。LAB-1 不升接口：没有新请求种类，`runtime-client` 和账本都没改。
+- 配置键：没有新键，也没有去掉的键。`crates/runtime-config`、`apps/actingd` 和合同 crate 自 v0.12.44 都没改，键表、默认值文件和配置示例都没改，部署计划的
+  默认值对比是空的。
+- 结果码：新码 1 个 `lab_operation_check_failed`（actinglab 分片，error，`ladder_class` none，待定稿，since 0.12.45；必带 `req_id`、`receipt_state`、
+  `client_code`，三个都是已有的键）；`lab_tool_failed`（actingctl，待定稿）只改了说明。没有新位置、新值键或新词，没有新定稿或退役的条目。结果码目录从
+  3891 个码、1741 个位置变成 3892 个、1741 个；新码是待定稿，不进发布文件，所以本版的发布文件是空的。
+- 账本：不升，没有新记录形状。
+- 程序文件：workspace 成员从 35 个变成 36 个（多了库 `crates/lab-ops`，CI 里归 `host-lab` 作业），Runtime 包和 Tools 包的文件清单都和 v0.12.44 一样
+  （`.github/workflows/windows-remote-build.yml` 自 v0.12.44 没改）；外部依赖没变。`apps/actingd`、`crates/runtime-host`、`crates/ledger`、
+  `crates/ledger-forensics` 和合同 crate 自 v0.12.44 没改；`crates/runtime-client` 只改了错误类型、Lab 操作的 `map_err` 和只在测试里编的辅助函数。
+
+升级时要知道的（按安装工具的代码核过；`apps/actingctl/src/install` 自 v0.12.43 没改，下面的行号在 v0.12.44 和本版相同）：
+
+- 不用 `--accept-ledger-one-way`：两边的 `ledger` 都是 [3, 7]，`previous_max_in_next`（7 在 [3, 7] 里）和 `one_way`（7 不大于 7）都过
+  （`apps/actingctl/src/install/plan.rs` 281–294），带上也不改判断；现行和目标的 `ledger` 相同，所以计划里没有 `ledger_verify`（908），apply 不读账本。
+- 其余的边都过：两边的声明逐字相同，安装工具自己的声明 I 编在程序里（`install/host.rs` 24–25），v0.12.44 的 I 和本版的声明一样；`next_max_in_installer`
+  （295–307）、`installer_meets_previous` 和 `installer_meets_next`（308–323）都过；`package` 两边都是 [3, 7]，`bundle_max_in_next` 在单一位置根上只有
+  `pack_declaration_unknown` 警告（325–348）；`installer_knows_keys`（353–369）不受影响，没有新键；`next_check_config`（895–907）：本版的 check-config 和
+  v0.12.44 是同一份代码（`apps/actingd`、`crates/runtime-config`、`crates/vision-ffi` 都没改），收现行配置，写了 DirectML（修订 27 的成员）的也一样。
+- **v0.12.44 的安装工具没有新东西要发或要读**：它连 Runtime 发的请求和读到的答复形状都没变，它不跑 Lab 操作。从本版的构建目录跑本版的安装工具，结果相同。
+- 部署的自动回退和 `install undo` 这次可以用：接口边都过，回退门的配置一项也过（见下面的退回）。
+
+退回 v0.12.44（按安装工具的代码核过）：
+
+- 安装工具允许退回，不用 `--accept-ledger-one-way`。两边的声明相同：`ledger` [3, 7] 的 `previous_max_in_next` 和 `one_way` 都过（`plan.rs` 281–294），
+  `runtime-client`、`install-control`、`runtime-outcomes`、`package` 和 `actingd-config` 两边都一样，没有失败的边；退回时 `next_check_config` 不算接口边
+  （`plan.rs` 1019–1025）。部署的自动回退（`install/deploy.rs` 715–733，`accept_ledger_one_way: false`）、`rollback plan|apply` 和起过本版 Runtime 以后的
+  `install undo`（`install/undo.rs` 177–189、324–356）走的是同一组边和同一个回退门（`install/update.rs` 378 起）。
+- 回退门其余几项：v0.12.44 自己的读者读部署之后写的账本页（`ledger_readability`，`update.rs` 395–432，只对本版替换掉的那个构建算，就是 v0.12.44）：
+  本版的 Runtime 代码没变，写下的记录形状和 v0.12.44 一样，读得了；v0.12.44 在这个根上最近一次打开在它的期限减余量之内（433–484）；现行配置过 v0.12.44
+  的 check-config（485–498）：两版的配置代码相同，本版收的配置（含 DirectML 的）v0.12.44 都收。
+- 落盘的东西都不挡：没有新键、新文件、新记录形状。
+- 退回以后：Lab 操作在回执之后的核验失败又答 `device_error`（退出码 4），MCP 的 Lab 工具错误又不带 actinglab 的消息；actingctl 的命令和本版一样。
+- 客户端和 Runtime 的配对：
+  - v0.12.44 的安装工具装本版：照常，不带标志，见上面的升级。
+  - **actinglab ≤ v0.12.44 和 MCP（actingctl ≤ v0.12.44）连本版的 Runtime**：线上什么都不变。合同 crate、`crates/runtime-host` 和 `apps/actingd` 自 v0.12.44
+    没改，Runtime 收的请求、发的回执和写的记录都和 v0.12.44 一样；`runtime-client` 的改动只在客户端进程里（错误类型）。旧 actinglab 遇到回执之后的核验失败，
+    照旧答 `device_error`（退出码 4，v0.12.44 的 `apps/actinglab/src/lab2_cli/operation.rs` 103–105、315–317），那是旧客户端自己的答法。
+  - 旧 MCP 跑本版的 actinglab（MCP 跑的是安装根里的 `<root>\tools\actinglab.exe`，本版 `apps/actingctl/src/mcp/lab.rs` 722）：退出码 5 照它原有的规则读成
+    `runtime` 类（v0.12.44 `lab.rs` 861–886），`req_id` 从 details 取（824–830），cause 带 `lab_operation_check_failed` 和含 `effect` 的 details，只是没有消息那条
+    链接。生产根里的 actingctl（含 MCP 服务和看门狗）、`tools\actinglab.exe` 和 Runtime 是同一个构建，随部署一起换。
+  - **控制台 UI**（UI 仓 main `c03d18ea`，UI v0.12.10：`Cargo.toml` 39–44 把合同、账本、取证、`runtime-client`、配置和内核 crate 都钉在 `a322caa4`，即 v0.12.43；
+    `crates/acui-setup/component-interfaces.json` 声明 `actingd-config` [5, 26]、`ledger` [3, 7]、`runtime-client` [3, 5]、`runtime-outcomes` [1, 1]）：本版的
+    声明和 v0.12.44 逐字相同，线上也没变，所以控制台对本版和对 v0.12.44 一样。`ledger` 7 在 [3, 7] 里，`runtime-client` [3, 5] 和 [3, 6] 有交集，
+    `runtime-outcomes` 1 在 [1, 1] 里；配置文件写了修订 27 的成员（切了 DirectML）时不在它声明的 [5, 26] 里，这在 v0.12.44 就是这样，本版没变：控制台把配置
+    当 JSON 读、只查 `vision_provider_manifest`（`crates/acui-installation/src/lib.rs` 74–77），画面刷新走 `observe_readonly`
+    （`crates/acui-source/src/workbench/preview.rs` 586–595），源码里没有 Lab 操作的请求（`run_contained_lab_operation`）。本版没有东西逼控制台换钉；换钉、
+    声明 [5, 27] 仍是为了让它的声明和写了新成员的文件一致。
+
+运行上的变化：
+
+- 部署本身不改变运行；只有 Lab 操作在回执之后的核验失败改答 `lab_operation_check_failed`（退出码 5，带 `req_id` 和效果），MCP 的 Lab 工具错误多带
+  actinglab 的消息。
+
+本版合并的 PR：
+
+- #1540 LAB-0（#434，登记 §1.287）：只改契约的四个文件。`contracts/lab-two-entries.md`（新：一个端口上的 Lab 和 UI 两个入口和握手、UI 白名单和被拒时的答法、
+  六个发起者词、不可逆操作只记发起者、守卫只报告不拦、模块怎么拆）；`contracts/lab-operations.json`（新：操作表 v1，168 项）；`component-interfaces.md` 的
+  四条计划行（不生效）；登记 §1.287。没有代码、测试、键和结果码。
+- #1542 LABDO-1（#433）：`runtime-client` 在回执之后的核验失败上带 `LabOperationAnswer`；actinglab 答 `lab_operation_check_failed`（退出码 5）；MCP 的 Lab 工具
+  带上 actinglab 的消息；契约 §9.3 写下这条规则；新码 1 个；新测试 2 个（`gate_433_labdo1`，actinglab 和 MCP 各一个），改造 1 个（`gate_mcpt1`：原来断言不带
+  消息，现在要求带上原文）。
+- #1541 LAB-1（#434）：新库 `crates/lab-ops`（操作表读取、发起者类型、默认位置）；actingctl 的 16 个读写模块和 5 个辅助模块搬进去，actingctl 的行为不变；操作表
+  按搬过来的代码改了 11 行的 `requests`，23 行加注（代码还在 actingctl 里，以后另一片再搬）；结果码目录头的片名映射；新测试 2 个（`lab_ops_table_complete`、
+  `lab_ops_locate_defaults`），搬过去的 27 个门测试只改包名前缀，旧名登记进 `ci/retired-gates.toml`；两条架构守卫扩到 `crates/lab-ops`；没有新码、新键。
+
 ## v0.12.44
 
 本版是 v0.12.43 之后合并的 7 个 PR：#407 GPU-1 的六片 A（#1532）、D（#1533）、B1（#1534）、B2（#1536）、C（#1535）、E（#1537），和只改 CI 的 FLK-08（#1538）。

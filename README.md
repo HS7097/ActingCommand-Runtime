@@ -148,7 +148,7 @@ There are four workflows in total: three CI workflows and the on-demand `release
 
 ## Workspace members
 
-The workspace declares 35 members, resolver `3`, a workspace-level edition of 2024, all `publish = false`.
+The workspace declares 36 members, resolver `3`, a workspace-level edition of 2024, all `publish = false`.
 
 ### apps (7)
 
@@ -162,7 +162,7 @@ The workspace declares 35 members, resolver `3`, a workspace-level edition of 20
 | apps/mcp-entry | actingcommand-mcp-entry | bin `actingcommand-mcp-entry` | The stable MCP entry every client starts (Tools half): pipes JSON-RPC to the current `actingctl mcp-serve` and switches it, between calls, to the installed build |
 | apps/vision-provider-check | actingcommand-vision-provider-check | bin | Lists vision model folders and their content identities, and reads provider startup facts from a Runtime ledger; loads no model |
 
-### crates (25)
+### crates (26)
 
 | Path | Package | Responsibility |
 | --- | --- | --- |
@@ -174,6 +174,7 @@ The workspace declares 35 members, resolver `3`, a workspace-level edition of 20
 | crates/execution-kernel | actingcommand-execution-kernel | Daemon-owned execution sessions and pure task/probe decision planning |
 | crates/host-metrics | actingcommand-host-metrics | Safe boundary for platform performance counters (windows-sys only under cfg(windows)) |
 | crates/lab | actingcommand-lab | Optional authoring and debugging adapter layer; production still builds and runs without it |
+| crates/lab-ops | actingcommand-lab-ops | The Lab's operation layer (Workflow #434 LAB-1): the operation table `contracts/lab-operations.json` read into typed rows, the initiator words and the default location, and actingctl's read and write modules, which actingctl calls from here unchanged |
 | crates/ledger | actingcommand-ledger | Recoverable single-writer storage for the global runtime event ledger |
 | crates/ledger-forensics | actingcommand-ledger-forensics | Read-only forensics over the GlobalLedger and verified evidence archives |
 | crates/onnx-provider-support | actingcommand-onnx-provider-support | Engine-side ORT lifetime: idempotent init, cancellable watchdog |
@@ -234,7 +235,7 @@ A pack's coordinates are in the resolution it declares (today's standard packs u
 
 **The stable entry (v0.12.18).** On a single-location root every client (Claude Code, Codex, Antigravity, DSH) starts `<root>\mcp-entry\g1\actingcommand-mcp-entry.exe --root <root> --client <name> -- mcp-serve --tier <tiers>` instead of `actingctl mcp-serve`. The entry pipes JSON-RPC to one `<root>\runtime\actingctl.exe` child with the words after `--` unchanged; after an update it switches, between calls and only to a verified complete install (`actingctl mcp-entry plan`), to a new child, replays the client's handshake and sends the change notice (legacy `notifications/tools/list_changed`, or the same notification on a 2026-07-28 `subscriptions/listen` stream). A switch waits while the old child holds job or Lab handles whose results were not read; a request in flight when its child ends gets `mcp_entry_outcome_unknown` (inspect with `ac_get_run` or `ac_overview`) and is never sent again. Moving a client onto the entry needs one client restart; after that an update needs none. Claude Code fetches the new tools by itself; Codex reloads the server, Antigravity uses Refresh in its MCP manager, and DSH reloads its plugin with its tool whitelist unchanged. `actingctl mcp-config --client claude|codex|antigravity|dsh --entry --root <root> --tier <tiers>` prints each client's snippet; `actingctl mcp-entry list --root <root>` shows each entry's status (`<root>\mcp-entry\state\entry-<pid>.json`). Details: [contracts/install-cli.md](contracts/install-cli.md), "The MCP entry".
 
-**Tiers.** `observer` is always on and is the default; `operator` and `author` are enabled with `--tier`. `tools/list` lists only the tools of the enabled tiers, and a tool outside them answers `tier_not_enabled`. The table lists the 41 tools of v0.12.44; the 19 marked † are new in the 0.12 series. `ac_config_set` is an observer tool, but a call that names an instance's `touch_backend` or `capture_backend` switches that device and needs the operator tier (v0.12.39). A tool error is `{class, outcome}`, and `mcp-serve --detail codes|full` sets how much of each outcome it carries.
+**Tiers.** `observer` is always on and is the default; `operator` and `author` are enabled with `--tier`. `tools/list` lists only the tools of the enabled tiers, and a tool outside them answers `tier_not_enabled`. The table lists the 41 tools of v0.12.45; the 19 marked † are new in the 0.12 series. `ac_config_set` is an observer tool, but a call that names an instance's `touch_backend` or `capture_backend` switches that device and needs the operator tier (v0.12.39). A tool error is `{class, outcome}`, and `mcp-serve --detail codes|full` sets how much of each outcome it carries.
 
 | Tier | Tools |
 | --- | --- |
