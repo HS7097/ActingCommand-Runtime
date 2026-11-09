@@ -17,6 +17,9 @@ test-hooks = []
 
 [dependencies]
 actingcommand-contract = { workspace = true }
+# Workflow #434 LAB-1b: `process_probe`, moved with the shutdown wait `shutdown --wait` reads,
+# asks the operating system for a process's creation time (`pid_created_at`).
+actingcommand-host-metrics = { workspace = true }
 # #422 LN-7c Q: `evidence confirm-read` counts the evidence frames a confirmation covers with the
 # frame cleaner's statements, read-only (`evidence_covers`).
 actingcommand-ledger = { workspace = true }

@@ -7901,7 +7901,8 @@ catalog, and no live revision raised.
 |---|---|---|---|---|---|---|
 | LAB-0 | Runtime, contracts only | S | the contract, the table v1, the planned rows, this section | — | none | none |
 | LAB-1 | Runtime | L | `crates/lab-ops`: the operation table read from `lab-operations.json`, the default location (contract §9.3), the initiator type (contract §4); actingctl's read and write modules moved in (`overview`, `events`, `run_list`, `run_evidence`, `diagnose`, `facts`, `schedule`, `perf_preset`, `routine_summary`, `remedy`, `devices`, `packs`, `code_lookup`, `capability_gap`, `evidence_read`, `observe_export`) | LAB-0 | `lab_ops_table_complete` (contract §9.2); `lab_ops_locate_defaults`: on a fake installed root, without a root or a state root given, the layer finds both | none |
-| LAB-2 | Runtime | M | the CLI module: short words, output for people, `--json`; `actinglab serve --stdio`; actinglab's debugging and authoring commands on the table; its retired and reserved command words deleted; the CLI app prints the result and developer lines and `lab-ops` returns them, and the `STDERR_ALLOW_LIST` entry for `crates/lab-ops/src/cli_line.rs` (LAB-1) goes; actinglab registers the overview's watchdog block (`overview::set_watchdog_block`) as actingctl does, unless LAB-4 has merged first (without it the block is null) | LAB-1 | `cli_json_matches_op_output`, `cli_short_words_parse`, `serve_answers_same_as_cli` | none |
+| LAB-1b | Runtime | L | the other 23 core operations moved into `crates/lab-ops` from actingctl's `main.rs` and MCP's tools (`run show`, `material`, `targets`, `targets set`, `frames`, `discover`, `pause`, `resume`, `offset`, `config set`, `config clear`, `monitor set`, `monitor clear`, `facts publish`, `emu start`, `emu stop`, `emu restart`, `emu selfcheck`, `app launch`, `app restart`, `app stop`, `shutdown`, `wake-test`): a function per operation that sends its requests and shapes its answer; the registry `served` naming the function that serves each core row of LAB-1 and LAB-1b (coordinator #434 6733408524) | LAB-1 | `lab_ops_core_rows_served_by_lab_ops`: every core row of the table whose slice is LAB-1 or LAB-1b names a function of `lab-ops` that serves it | none |
+| LAB-2 | Runtime | M | the CLI module: short words, output for people, `--json`; `actinglab serve --stdio`; actinglab's debugging and authoring commands on the table; its retired and reserved command words deleted; the CLI app prints the result and developer lines and `lab-ops` returns them, and the `STDERR_ALLOW_LIST` entry for `crates/lab-ops/src/cli_line.rs` (LAB-1) goes; actinglab registers the overview's watchdog block (`overview::set_watchdog_block`) as actingctl does, unless LAB-4 has merged first (without it the block is null) | LAB-1b | `cli_json_matches_op_output`, `cli_short_words_parse`, `serve_answers_same_as_cli` | none |
 | LAB-3 | Runtime | L | the rescue and installation module; `deploy`, `config replace`, `place`, `alive`; the journal's `initiator`; the confirmation parameters gone and `unlock` without one (contract §5); guards that report and `--ack-guard` gone (contract §6, §7 Q4) | LAB-1 | `rescue_without_actingd`: without `runtime-info.json`, `op status`, `up` and `rollback` go through. `irreversible_journal_initiator`: the journals of `deploy`, `rollback`, `clean` and `config replace` carry the initiator, and a confirmation parameter (`--accept-ledger-one-way`, `--ui-confirmed`, `--ack-guard`) is `actingctl_usage_invalid` (`unknown`), the code renamed with LAB-7. `deploy_steps_in_order`: on fake seams, stage → plan → stop → apply → start → alive → release | none: `actingctl install` keeps the `install-cli` 1 face |
 | LAB-4 | Runtime | M | `crates/watchdog`; `actingwatch.exe` with its own tick, `status`, `install` and `uninstall` | — | the watchdog's existing gate tests move with the code (paths only, each listed); `actingwatch_tick_in_process` | none |
 | LAB-5 | Runtime | M | `actinglab-mcp.exe`: tools generated from the table, no tiers; the MCP entry `g2` | LAB-1, LAB-3 | `mcp_tools_from_op_table`: `tools/list` equals the installed modules' operations, with the CLI's parameters. `mcp_entry_g2_child`: the entry starts actinglab-mcp and passes `--client` down | the MCP entry's `entry_protocol` 2 |
@@ -8030,6 +8031,55 @@ and exits are the moved code's; the table and the location are read by nothing y
 
 **LAB-1 rollback** (to the release before it). Nothing persisted: the crate is code, and no
 document, record or configuration key changes.
+
+#### Slice LAB-1b (0.12.46): the remaining core operations into `crates/lab-ops`
+
+Coordinator work order `rd-1108/arch-013/brief-lab1b.md` (#434 6733408524); on main `60933f38`
+(LAB-1, #1541, and LABDO-1, #1542, merged). The contract is
+[lab-two-entries.md](lab-two-entries.md) §8 and §9.1; the table is
+[lab-operations.json](lab-operations.json). LAB-1b only moves: actingctl and its MCP server
+answer as before (same words, lines, codes, exit codes and MCP answers), calling the moved
+functions. The CLI keeps its parsing and its result line; MCP keeps its arguments, its jobs, its
+provenance (`RecordClientAction` and the identity card), its call budget and its
+`{class, outcome}`; LABDO-1's `lab_operation_check_failed` is untouched.
+
+| # | Shape | Kind | Code slice | First writer | Notes |
+|---|---|---|---|---|---|
+| L1b-1 | modules `run_show` (`run show`), `material` (`material`), `targets` (`targets`, `targets set`), `frames` (`frames`), `emulators` (`discover`, `emu start`, `emu stop`, `emu restart`, `emu selfcheck`), `scheduling` (`pause`, `resume`, `offset`), `configure` (`config set`, `config clear`, `monitor set`, `monitor clear`), `fact_publish` (`facts publish`), `apps` (`app launch`, `app restart`, `app stop`), `shutdown` (`shutdown`), `wake_test` (`wake-test`) and `wait` (the bounded wait of `emu start|stop|restart`, which `task-run` shares) | moved code | LAB-1b | actingctl's `run` and MCP's `ac_get_run`, `ac_material`, `ac_observe`, `ac_resources_list`, `ac_targets_get`, `ac_targets_set`, `ac_pause`, `ac_resume`, `ac_config_set`, `ac_emulator`, `ac_app` | each function takes the connection it sends on and answers the Runtime's result, or the answer shaped from it, unchanged; a failure is the client's error or the module's own failure, which each front end maps to the outcome and class it gave before; defaults and bounds of the requests (`CLI_PAUSE_REASON`, `MCP_PAUSE_REASON`, the drain timeouts, `DEFAULT_MONITOR_INTERVAL_MS`, `DEFAULT_EXPECTED_PAGE`, `DEFAULT_FRAME_COUNT`, `DEFAULT_INTERVAL_MS`, `MAX_TEXT_BYTES`, `DEFAULT_TEXT_BYTES`, `MAX_VALID_DAYS`, `TASK_OFFSET_DETECTOR`) moved with them, their values unchanged |
+| L1b-2 | `shutdown_wait`, `process_probe` | moved code (`git mv`) | LAB-1b | actingctl's `install-transition`, `start`, `restart`, `install` and watchdog | the shutdown wait `shutdown --wait` reads, with the process probe it reads; the wait answers its outcome, and actingctl's new `shutdown_wait` gives it as `ActingctlError::ShutdownWait`, so its callers and the G11 gate read what they read before; `process_probe`'s functions became `pub`; `lab-ops` depends on `actingcommand-host-metrics`, as actingctl does |
+| L1b-3 | `with_cause` (the crate's root), `schedule::explanation`, `observe_export::observe` | moved code | LAB-1b | actingctl, MCP's `ac_schedule` and `ac_observe` | `with_cause` from actingctl's `main.rs` (`install-transition` still reads it); the other two finish what LAB-1 left of its rows `schedule` and `frame` (LAB-1 (g)), so that every LAB-1 row has its server too |
+| L1b-4 | `served::SERVED` (`Served {operation, function}`) and `served::server(operation)` | in-process registry | LAB-1b | — | one entry per core row of LAB-1 and LAB-1b, in the table's order, naming `module::function`; an entry compiles only when its path names a function of the crate; `app launch|restart|stop` name `apps::session_app`, the actinglab command line MCP runs (the request is actinglab's `session app`, LAB-2) |
+| L1b-5 | the table's 23 rows: `slice` `LAB-1b`, the LAB-1 note replaced by what moved (`MCP gains it` kept); `requests` corrected from the moved code (contract §9.1): `material` adds `QueryEvents` (the page that finds the material again), `targets`, `pause`, `resume`, `emu start`, `emu stop`, `emu restart` and `offset` add `Status` (the read that resolves `<inst>`, or names the game), `targets set` adds `ResourceTargetView` and `Status`, `wake-test` adds `RuntimeFactSnapshot` (the wake's row); LAB-1's `schedule` adds `Status`, and `schedule` and `frame` gain a note | contract table | LAB-1b | — | the schema does not change; every row's `entries` still follows its rule; no kind joins or leaves `not_exposed`; MCP's provenance requests are not counted, as LAB-1 counted none |
+
+**Tests.** New: apps row "#434 LAB-1b" (`gate_434_lab1b`, the repository's table file and the
+registry; no clock, no sleep): `lab_ops_core_rows_served_by_lab_ops` (every core row whose slice
+is LAB-1 or LAB-1b has its server, and the registry names each operation once). No test moved and
+no gate name changed, so nothing is retired: actingctl's tests read the same items, through the
+thin forms actingctl keeps (`config_changes`, `wait_expired`, `shutdown_wait`, and `pause_scope`
+imported at its root). Changed: none.
+
+**Interface.** None: `actingd-config` 27, `ledger` 7, `runtime-client` 6, `package` 7,
+`runtime-outcomes` 1. No code, key, location or vocabulary token is added.
+
+**Where LAB-1b differs from its work order's letter.**
+
+- (a) The shutdown wait and the process probe moved too: `shutdown --wait` reads them, and a crate
+  cannot call back into the program that uses it (as LAB-1 (a)). actingctl's rescue callers keep
+  their error type through its new `shutdown_wait`.
+- (b) `schedule` and `frame`, LAB-1 rows, had their remaining read moved (L1b-3), so that the
+  registry names a serving function for every row the named test reads; their `slice` stays
+  LAB-1.
+- (c) `app launch|restart|stop` are served by actinglab's own `session app` (out of this slice,
+  LAB-2): what moved is the operation's actions and the command line MCP's `ac_app` runs
+  actinglab with, which `ac_app` now takes from `lab-ops`.
+- (d) MCP's `ac_config_set` and `ac_targets_set` now shape their answer with the CLI's one copy,
+  which returns an encoder error where MCP's `json!` would have panicked; neither typed result can
+  fail to encode, and MCP answers such an error as `ac_ladder_drill` does (`runtime`,
+  `actingctl_output_failed`).
+
+**What LAB-1b changes live.** Nothing a person or the Runtime sees.
+
+**LAB-1b rollback** (to the release before it). Nothing persisted: code and the table's text.
 
 ### 1.288 Slice SS-2f (0.12.46): the business tier across instances goes to the instance least recently dispatched first (Workflow #428; Alice's answer K2 to question 137 of 2026-11-02 19:4x, recorded on board #428 and in the coordinator's pending list, 「137：K2」, with no reason given; design `rd-1031/design-acm-price-addendum2.1.md` §5.4 and its slice row SS-2f, read on main `eb1e946d`; placed before 116 is lifted by the research channel's `rd-1031/design-c424-redline-1109.md` §4.9, Q13; coordinator work order `rd-1109/brief-ss2f.md`)
 

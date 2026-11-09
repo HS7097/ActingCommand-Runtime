@@ -16,16 +16,12 @@ use super::tools::{
     self, Arguments, McpBlocker, ToolContext, ToolError, ToolOutcome, ToolSuccess,
     invalid_argument, out_of_range,
 };
-use crate::codes::{ActingctlCode, ArgumentProblem, MaterialLimit, MaterialState};
+use crate::codes::{ActingctlCode, ArgumentProblem};
+use crate::material;
 use crate::overview::{self, Failure, OverviewRequest, Place, Sections, Warning};
 use actingcommand_contract::outcome::{CauseRelation, Outcome};
-use actingcommand_contract::{
-    ArtifactId, ArtifactMediaType, EventId, EventQuery, LedgerEventPosition,
-    MAX_RUNTIME_MATERIAL_REPLY_BYTES, ProjectedArtifactReference, ProjectionProfile,
-    RuntimeEventQueryPageRequest, RuntimeInstanceStatus, RuntimeMaterialReadFailure,
-    RuntimeMaterialReadLimit, RuntimeMaterialReadRequest, RuntimeMaterialReadState,
-};
-use actingcommand_runtime_client::{RuntimeMaterialCompleteResult, RuntimeMaterialSelection};
+use actingcommand_contract::{ProjectedArtifactReference, RuntimeInstanceStatus};
+use actingcommand_runtime_client::RuntimeClientError;
 use serde_json::{Map, Value, json};
 use std::env;
 use std::path::PathBuf;
@@ -55,10 +51,8 @@ const CUT_ROW_BLOCKS: [&str; 3] = ["run", "monitor", "foreground"];
 const CUT_LAST: &str = "fact_refresh";
 /// #422 OV-24K: the member of a cut answer listing what was cut, in the order it was cut.
 const TRUNCATED: &str = "truncated";
-const MAX_TEXT_BYTES: u64 = 8192;
-const DEFAULT_TEXT_BYTES: u64 = 4096;
-/// The largest material ac_material exports; ac_observe and `actingctl observe --export` share it.
-const MAX_EXPORT_BYTES: usize = crate::material_export::MAX_EXPORT_BYTES;
+// Workflow #434 LAB-1b: ac_material's text bounds and the largest material it exports are
+// `material`'s (`MAX_TEXT_BYTES`, `DEFAULT_TEXT_BYTES`, `material_export::MAX_EXPORT_BYTES`).
 /// Time kept back from the call budget for writing the exported file.
 const EXPORT_WRITE_RESERVE: Duration = Duration::from_secs(2);
 
@@ -375,35 +369,36 @@ pub(super) fn select_instance<'s>(
         .map_err(|miss| ToolError::outcome("usage", miss.outcome(selector)))
 }
 
-fn text_of(value: Value) -> String {
-    match value {
-        Value::String(text) => text,
-        other => other.to_string(),
-    }
-}
-
 /// One committed material, found again from its ref at the ledger's current snapshot (or, for
-/// ac_observe, the frame its observation just recorded).
-pub(super) struct Material {
-    pub(super) position: LedgerEventPosition,
-    pub(super) artifact: ProjectedArtifactReference,
-    pub(super) snapshot: u64,
-}
+/// ac_observe, the frame its observation just recorded). Workflow #434 LAB-1b: `material`'s.
+pub(super) use crate::material::Material;
 
+/// Workflow #434 LAB-1b: the ref, the reads and the text answer are `material`'s; the call
+/// budget, the cancellation and the export directory stay here.
 pub(super) fn material(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
     let arguments = Arguments::new(arguments, &["ref", "mode", "offset", "max_bytes"])?;
     let reference = arguments.required_string("ref")?;
     let mode = arguments.required_string("mode")?;
-    let (position, artifact_id) = parse_material_ref(reference)?;
+    let (position, artifact_id) =
+        material::parse_ref(reference).map_err(|failure| material_error(context, None, failure))?;
     match mode {
         "text" => {
             let offset = arguments.integer("offset", 0, u64::MAX)?.unwrap_or(0);
             let max_bytes = arguments
-                .integer("max_bytes", 1, MAX_TEXT_BYTES)?
-                .unwrap_or(DEFAULT_TEXT_BYTES);
+                .integer("max_bytes", 1, material::MAX_TEXT_BYTES)?
+                .unwrap_or(material::DEFAULT_TEXT_BYTES);
             let connected = context.runtime.connect()?;
-            let material = resolve_material(context, &connected, position, artifact_id)?;
-            material_text(context, &connected, &material, offset, max_bytes)
+            let found = material::resolve(&connected.client, position, artifact_id)
+                .map_err(|failure| material_error(context, Some(&connected), failure))?;
+            material::read_text(
+                &connected.client,
+                &found,
+                offset,
+                max_bytes,
+                &tools::fits_success,
+            )
+            .map(ToolSuccess::new)
+            .map_err(|failure| material_error(context, Some(&connected), failure))
         }
         "export" => {
             // offset and max_bytes belong to mode text; export writes the whole material.
@@ -413,279 +408,61 @@ pub(super) fn material(context: &ToolContext<'_>, arguments: &Map<String, Value>
                 }
             }
             let connected = context.runtime.connect()?;
-            let material = resolve_material(context, &connected, position, artifact_id)?;
-            material_export(context, &connected, &material)
+            let found = material::resolve(&connected.client, position, artifact_id)
+                .map_err(|failure| material_error(context, Some(&connected), failure))?;
+            material_export(context, &connected, &found)
         }
         _ => Err(invalid_argument("mode", ArgumentProblem::NotRecognised)),
     }
 }
 
-/// `<seq>:<event_id>:<artifact_id>`, a materials[].ref of ac_events; anything else is
-/// `material_ref_invalid`.
-fn parse_material_ref(reference: &str) -> Result<(LedgerEventPosition, ArtifactId), ToolError> {
-    let invalid = || ToolError::usage(ActingctlCode::MaterialRefInvalid);
-    let mut parts = reference.split(':');
-    let (Some(sequence), Some(event_id), Some(artifact_id), None) =
-        (parts.next(), parts.next(), parts.next(), parts.next())
-    else {
-        return Err(invalid());
-    };
-    let sequence = sequence.parse::<u64>().map_err(|_| invalid())?;
-    let event_id = serde_json::from_value::<EventId>(json!(event_id)).map_err(|_| invalid())?;
-    let artifact_id =
-        serde_json::from_value::<ArtifactId>(json!(artifact_id)).map_err(|_| invalid())?;
-    Ok((LedgerEventPosition { event_id, sequence }, artifact_id))
-}
-
-fn resolve_material(
+/// A material failure as a tool error, with the classes ac_material always answered: an
+/// argument's or a ref's failure `usage` (a material that is no text with `mcp_blocker`
+/// `material_mode`), a material the Runtime did not provide `runtime`, a Runtime failure the
+/// client's on the server's connection (with what a whole read reached as its `note` link).
+fn material_error(
     context: &ToolContext<'_>,
-    connected: &Connected,
-    position: LedgerEventPosition,
-    artifact_id: ArtifactId,
-) -> Result<Material, ToolError> {
-    let query = EventQuery {
-        from_sequence: Some(position.sequence),
-        to_sequence: Some(position.sequence),
-        ..EventQuery::default()
+    connected: Option<&Connected>,
+    failure: material::Failure,
+) -> ToolError {
+    let client_failure = |error: &RuntimeClientError| match connected {
+        Some(connected) => context.runtime.failure(connected, error),
+        None => runtime::client_error(error),
     };
-    let request = RuntimeEventQueryPageRequest::new(1, None).map_err(|error| {
-        ToolError::new("runtime", ActingctlCode::MaterialQueryInvalid)
-            .caused_by(Outcome::new(error.code()))
-    })?;
-    let page = connected
-        .client
-        .query_event_page(query, ProjectionProfile::Concise, request)
-        .map_err(|error| context.runtime.failure(connected, &error))?;
-    let artifact = page
-        .events()
-        .first()
-        .filter(|event| event.event_id == position.event_id)
-        .and_then(|event| {
-            event
-                .artifacts
-                .iter()
-                .find(|artifact| artifact.artifact_id == artifact_id)
-        })
-        .cloned()
-        .ok_or_else(|| {
-            // The ledger holds no such event and material at this sequence.
-            ToolError::usage(ActingctlCode::MaterialRefUnknown).with(|outcome| {
-                outcome
-                    .event_id(text_of(json!(position.event_id)))
-                    .artifact_id(text_of(json!(artifact_id)))
-            })
-        })?;
-    Ok(Material {
-        position,
-        artifact,
-        snapshot: page.snapshot_ledger_position(),
-    })
-}
-
-fn material_text(
-    context: &ToolContext<'_>,
-    connected: &Connected,
-    material: &Material,
-    offset: u64,
-    max_bytes: u64,
-) -> ToolOutcome {
-    let artifact = &material.artifact;
-    if !matches!(
-        artifact.media_type,
-        ArtifactMediaType::ApplicationJson | ArtifactMediaType::TextPlain
-    ) {
-        // Read it with mode export; its media type travels as `media_type`.
-        return Err(ToolError::usage(ActingctlCode::MaterialNotText)
-            .with(|outcome| outcome.media_type(text_of(json!(artifact.media_type))))
-            .blocked_by(McpBlocker::MaterialMode));
-    }
-    if offset >= artifact.byte_count {
-        // At or past the end: the offsets this material has.
-        return Err(out_of_range(
-            "offset",
-            0,
-            artifact.byte_count.saturating_sub(1),
-        ));
-    }
-    let length = max_bytes.min(artifact.byte_count - offset);
-    let request = RuntimeMaterialReadRequest {
-        event: material.position,
-        artifact_id: artifact.artifact_id,
-        snapshot_position: material.snapshot,
-        byte_count: artifact.byte_count,
-        sha256: artifact.sha256.clone(),
-        expected_run_id: None,
-        expected_frame_id: None,
-        expected_request_id: None,
-        expected_correlation_id: None,
-        offset,
-        requested_length: u32::try_from(length)
-            .map_err(|_| out_of_range("max_bytes", 1, MAX_TEXT_BYTES))?,
-        max_reply_bytes: MAX_RUNTIME_MATERIAL_REPLY_BYTES,
-    };
-    let read = connected
-        .client
-        .read_material(request)
-        .map_err(|error| context.runtime.failure(connected, &error))?;
-    let bytes = match (read.state, read.chunk) {
-        (RuntimeMaterialReadState::Verified, Some(chunk)) => chunk.bytes,
-        (state, _) => {
-            return Err(material_unavailable(
-                state,
-                read.limit,
-                read.failure.as_ref(),
-            ));
+    match failure {
+        material::Failure::Usage(outcome) => ToolError::outcome("usage", outcome),
+        material::Failure::NotText(outcome) => {
+            ToolError::outcome("usage", outcome).blocked_by(McpBlocker::MaterialMode)
         }
-    };
-    // The bytes at this offset are not UTF-8 text: start at 0 or at a next_offset, or use
-    // mode export.
-    let text = utf8_prefix(&bytes).ok_or_else(|| {
-        ToolError::usage(ActingctlCode::MaterialNotText).with(|outcome| outcome.offset(offset))
-    })?;
-    let mut end = text.len();
-    loop {
-        let returned = &text[..end];
-        let mut result = json!({
-            "text": returned,
-            "offset": offset,
-            "bytes": returned.len(),
-            "total_bytes": artifact.byte_count,
-            "media_type": artifact.media_type,
-        });
-        let next_offset = offset + returned.len() as u64;
-        if next_offset < artifact.byte_count {
-            result["next_offset"] = json!(next_offset);
+        material::Failure::OutOfRange {
+            argument,
+            minimum,
+            maximum,
+        } => out_of_range(argument, minimum, maximum),
+        material::Failure::Unavailable(outcome) => ToolError::outcome("runtime", outcome),
+        material::Failure::Runtime(error) => client_failure(&error),
+        material::Failure::RuntimeNoted { error, reached } => {
+            client_failure(&error).with(|outcome| outcome.link(CauseRelation::Note, reached))
         }
-        if end == 0 || tools::fits_success(&result) {
-            return Ok(ToolSuccess::new(result));
-        }
-        // Escaped text can outgrow the budget; return less, ending on a character boundary.
-        end = floor_char_boundary(text, end - (end / 8).max(1));
     }
 }
 
-/// The longest UTF-8 prefix of a range that may end inside a character.
-fn utf8_prefix(bytes: &[u8]) -> Option<&str> {
-    match std::str::from_utf8(bytes) {
-        Ok(text) => Some(text),
-        Err(error) if error.error_len().is_none() && error.valid_up_to() > 0 => {
-            std::str::from_utf8(&bytes[..error.valid_up_to()]).ok()
-        }
-        Err(_) => None,
-    }
-}
-
-fn floor_char_boundary(text: &str, mut index: usize) -> usize {
-    while index > 0 && !text.is_char_boundary(index) {
-        index -= 1;
-    }
-    index
-}
-
+/// ac_material mode export and ac_observe: the whole material, read within the call budget until
+/// the call is cancelled (`material::read_whole`), written to the export directory. Workflow #434
+/// LAB-1b: the read is `material`'s.
 pub(super) fn material_export(
     context: &ToolContext<'_>,
     connected: &Connected,
     material: &Material,
 ) -> ToolOutcome {
-    let artifact = &material.artifact;
-    if artifact.byte_count > MAX_EXPORT_BYTES as u64 {
-        return Err(
-            ToolError::usage(ActingctlCode::MaterialTooLarge).with(|outcome| {
-                outcome
-                    .actual_bytes(artifact.byte_count)
-                    .limit_bytes(MAX_EXPORT_BYTES)
-            }),
-        );
-    }
-    let selection = RuntimeMaterialSelection {
-        event: material.position,
-        artifact_id: artifact.artifact_id,
-        snapshot_position: material.snapshot,
-        sha256: artifact.sha256.clone(),
-        byte_count: artifact.byte_count,
-        run_id: None,
-        frame_id: None,
-        request_id: None,
-        correlation_id: None,
-    };
     let deadline = context
         .deadline
         .checked_sub(EXPORT_WRITE_RESERVE)
         .unwrap_or(context.deadline);
     let keep_reading = || !context.cancelled.load(Ordering::SeqCst);
-    match connected.client.read_material_complete(
-        selection,
-        MAX_EXPORT_BYTES,
-        deadline,
-        &keep_reading,
-    ) {
-        RuntimeMaterialCompleteResult::Verified { bytes, .. } => write_export(artifact, &bytes),
-        // A client failure during the read keeps the client's outcome on top; what the read
-        // reached is its `note` link `material_unavailable`.
-        RuntimeMaterialCompleteResult::NotProvided {
-            limit,
-            failure,
-            error,
-            ..
-        } => Err(match error {
-            Some(error) => context.runtime.failure(connected, &error).with(|outcome| {
-                outcome.link(
-                    CauseRelation::Note,
-                    unavailable_outcome(
-                        RuntimeMaterialReadState::NotProvided,
-                        Some(limit),
-                        failure.as_ref(),
-                    ),
-                )
-            }),
-            None => material_unavailable(
-                RuntimeMaterialReadState::NotProvided,
-                Some(limit),
-                failure.as_ref(),
-            ),
-        }),
-        RuntimeMaterialCompleteResult::Failed {
-            state,
-            failure,
-            error,
-            ..
-        } => Err(context.runtime.failure(connected, &error).with(|outcome| {
-            outcome.link(
-                CauseRelation::Note,
-                unavailable_outcome(state, None, failure.as_ref()),
-            )
-        })),
-    }
-}
-
-/// The Runtime answered the read without the material: `material_unavailable`, class runtime
-/// (see [`unavailable_outcome`]).
-fn material_unavailable(
-    state: RuntimeMaterialReadState,
-    limit: Option<RuntimeMaterialReadLimit>,
-    failure: Option<&RuntimeMaterialReadFailure>,
-) -> ToolError {
-    ToolError::outcome("runtime", unavailable_outcome(state, limit, failure))
-}
-
-/// `material_unavailable` (Workflow #378 A5): the read's state (`material_state`) and, when
-/// the read stopped short, its limit (`material_limit`), caused by the Runtime's typed failure
-/// code when it gave one (relayed as the Runtime spelled it).
-fn unavailable_outcome(
-    state: RuntimeMaterialReadState,
-    limit: Option<RuntimeMaterialReadLimit>,
-    failure: Option<&RuntimeMaterialReadFailure>,
-) -> Outcome {
-    let outcome =
-        Outcome::new(ActingctlCode::MaterialUnavailable).material_state(MaterialState::of(state));
-    let outcome = match limit {
-        Some(limit) => outcome.material_limit(MaterialLimit::of(limit)),
-        None => outcome,
-    };
-    match failure {
-        Some(failure) => outcome.caused_by(Outcome::relayed(&failure.code)),
-        None => outcome,
-    }
+    let bytes = material::read_whole(&connected.client, material, deadline, &keep_reading)
+        .map_err(|failure| material_error(context, Some(connected), failure))?;
+    write_export(&material.artifact, &bytes)
 }
 
 /// Writes the verified bytes to `%TEMP%\actingcommand-mcp\materials\<sha256>.<ext>`

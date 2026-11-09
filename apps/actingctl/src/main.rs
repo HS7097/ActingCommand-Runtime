@@ -30,17 +30,40 @@
 //   and `diagnose` show of it is read inside `crates/lab-ops`.
 // - `perf_preset` (Workflow #429 R-2): `perf-preset set|get` (MCP `ac_perf_preset`).
 // - `routine_summary` (Workflow #429 R-12): `routine-summary` (MCP `ac_routine_summary`).
-// - `read_bounded`, `InputProblem` and `foreign_data_error`: a subcommand's bounded input file.
+// - `InputProblem`: why a subcommand's bounded input file cannot be used (Workflow #434 LAB-1b:
+//   `read_bounded` and `foreign_data_error`, which actingctl's readers took, are read in the crate
+//   only now).
 use actingcommand_lab_ops::{
     InputProblem, capability_gap, child, cli_line, code_lookup, codes, devices, diagnose, events,
-    evidence_read, facts, foreign_data_error, instance_selector, observe_export, overview, packs,
-    perf_preset, read_bounded, remedy, routine_summary, run_evidence, run_list,
+    evidence_read, facts, instance_selector, observe_export, overview, packs, perf_preset, remedy,
+    routine_summary, run_evidence, run_list,
+};
+// Workflow #434 LAB-1b (register §1.287, LAB-1b row): the other core operations live in
+// `crates/lab-ops` too, a function per operation that sends its requests and shapes its answer;
+// `run` below and the MCP tools call them and answer as before. What each module serves:
+// - `configure`: `config set|clear`, `monitor-set`, `monitor-clear` (MCP `ac_config_set`);
+// - `emulators`: `emulator discover|start|stop|restart`, `selfcheck` (MCP `ac_emulator`), with
+//   `wait`, the bounded wait of a control (and of `task-run`);
+// - `fact_publish`: `agent-publish-facts`; `frames`: `stream`;
+// - `scheduling`: `pause`, `resume`, `task-offset` (MCP `ac_pause`, `ac_resume`);
+// - `shutdown`: `request-shutdown`, with the shutdown wait and `process_probe`, which the
+//   watchdog and `install` read from there too;
+// - `targets`: `agent-apply-resource-targets` (MCP `ac_resources_list`, `ac_targets_get`,
+//   `ac_targets_set`); `wake_test`: `agent-wake-test`;
+// - read by the MCP server only: `run_show` (`ac_get_run`), `material` (`ac_material`) and
+//   `apps` (`ac_app`).
+#[cfg(windows)]
+use actingcommand_lab_ops::process_probe;
+use actingcommand_lab_ops::scheduling::{self, OffsetFailure, pause_scope};
+use actingcommand_lab_ops::wait::{Waited, wait_at_most};
+use actingcommand_lab_ops::{
+    configure, emulators, fact_publish, frames, shutdown, targets, wake_test, with_cause,
 };
 // Read by the MCP server only, and `schedule` only by its tests.
-#[cfg(feature = "mcp")]
-use actingcommand_lab_ops::material_export;
 #[cfg(all(test, feature = "mcp"))]
 use actingcommand_lab_ops::schedule;
+#[cfg(feature = "mcp")]
+use actingcommand_lab_ops::{apps, material, material_export, run_show};
 
 // Test-only: Workflow #381 A, the install-transition run budget (test plan A-2 G2a).
 #[cfg(test)]
@@ -57,13 +80,14 @@ mod gate_382_a1;
 mod held_runtime;
 #[cfg(feature = "mcp")]
 mod mcp;
-mod process_probe;
 // Workflow #421 INST-1: `install`, the command-line installer of a single-location root.
 #[cfg(windows)]
 mod install;
 // Workflow #389 MCP-10: `start` and `restart`.
 #[cfg(windows)]
 mod runtime_start;
+// Workflow #434 LAB-1b: the shutdown wait lives in `crates/lab-ops`; this gives its failure as
+// `ActingctlError::ShutdownWait` to `install-transition`, `start`, `restart` and `install`.
 mod shutdown_wait;
 #[cfg(windows)]
 mod watchdog;
@@ -72,13 +96,17 @@ mod watchdog;
 mod ladder_drill;
 
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
-use actingcommand_contract::outcome::{Category, Detail, IoOp, Outcome};
+// Test-only: the tests below read them; the code that did moved to `crates/lab-ops` (LAB-1b).
+#[cfg(test)]
+use actingcommand_contract::FactObservation;
+#[cfg(test)]
+use actingcommand_contract::outcome::Category;
+use actingcommand_contract::outcome::{Detail, IoOp, Outcome};
 use actingcommand_contract::{
     CaptureSequenceSpec, ConfigSettingChange, ContainedTaskRecoveryBinding, ContainedTaskRequest,
-    CorrelationId, EmulatorInstanceAction, EventActor, EventSource, FactObservation, FactRecord,
-    FactScope, InstallTransitionAction, InstallTransitionPhase, MAX_CONFIG_SETTING_CHANGES,
-    RequestId, RuntimeMonitorPolicy, RuntimeReceipt, RuntimeReceiptState, RuntimeResult,
-    SanitizationError, SchedulingPauseScope,
+    CorrelationId, EmulatorInstanceAction, EventActor, EventSource, InstallTransitionAction,
+    InstallTransitionPhase, RequestId, RuntimeMonitorPolicy, RuntimeReceipt, RuntimeReceiptState,
+    RuntimeResult, SanitizationError,
 };
 use actingcommand_lab_ops::codes::{ActingctlCode, ArgumentProblem};
 use actingcommand_lab_ops::instance_selector::SelectorMiss;
@@ -91,9 +119,7 @@ use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::mpsc::{self, RecvTimeoutError};
-use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 /// The developer text of `actingctl_usage_invalid`.
 const USAGE: &str = "usage: actingctl <observe|reset|status [--config]|config set <key>=<json>...|config clear <key>...|facts (--program|--instance <alias|instance_id|ADB port>) [--key-prefix <prefix>]|request-shutdown|install-transition --action-json <json>|monitor-status|perf-status [--instance <alias|instance_id|ADB port>]|fact-refresh [--instance <alias|instance_id|ADB port>]|schedule [--instance <alias|instance_id|ADB port>]|monitor-set|monitor-clear|emulator <status|start|stop|restart|discover>|stream|task-run|task-offset <task_id> <offset_milli>|pause [--reason <code>] [--drain-timeout-ms <n>]|resume|selfcheck <alias>|ladder-drill --instance <alias|instance_id|ADB port> [--device]|agent-wake-test --to <channel> [--instance <alias>] [--wait-s <seconds>]> --state-root <path> [--instance <id>] [--program] [--wait <seconds>] [--package <locator> [--recovery-package <locator>]]\nusage: actingctl watchdog <status|run-once [--from-task]|install|uninstall> --root <install root>";
@@ -104,11 +130,8 @@ const RESULT_MEMBER: &str = "result";
 /// Upper bound for `--wait <seconds>` (`request-shutdown`, `install-transition`; Workflow #389
 /// MCP-21: `emulator start|stop|restart` and `task-run`).
 const MAX_WAIT_SECONDS: u64 = 3600;
-/// `source_detector` of the priority offsets `task-offset` publishes.
-const TASK_OFFSET_DETECTOR: &str = "actingctl.task-offset";
-/// `pause` defaults (Workflow #191 ps1): the reason code and the instance drain timeout.
-const DEFAULT_PAUSE_REASON: &str = "operator";
-const DEFAULT_PAUSE_DRAIN_TIMEOUT_MS: u64 = 60_000;
+// Workflow #434 LAB-1b: `task-offset`'s `source_detector` and the `pause` defaults are
+// `scheduling`'s (`TASK_OFFSET_DETECTOR`, `CLI_PAUSE_REASON`, `CLI_DRAIN_TIMEOUT_MS`).
 
 fn main() -> ExitCode {
     // Model §6 (M2): actingctl's diagnostic sink. Foreign text cut at its bound and other
@@ -436,15 +459,28 @@ fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError>
         command,
     } = Invocation::parse(arguments)?;
     let success = command.success(wait.is_some());
+    // Workflow #434 LAB-1b: `facts publish` reads the observation (`fact_publish`).
     let observation = match &command {
-        Command::AgentPublishFacts { record_file } => Some(read_fact_observation(record_file)?),
+        Command::AgentPublishFacts { record_file } => Some(
+            fact_publish::read_observation(record_file).map_err(|problem| {
+                ActingctlError::FactRecord {
+                    path: record_file.clone(),
+                    problem,
+                }
+            })?,
+        ),
         _ => None,
     };
     // Workflow #308 RT-S1a: the policy document is read bounded and checked as UTF-8 only;
-    // the Runtime parses and checks its content.
+    // the Runtime parses and checks its content (Workflow #434 LAB-1b: `targets`).
     let resource_targets = match &command {
         Command::AgentApplyResourceTargets { policy_file } => {
-            Some(read_resource_targets(policy_file)?)
+            Some(targets::read_document(policy_file).map_err(|problem| {
+                ActingctlError::ResourceTargetsFile {
+                    path: policy_file.clone(),
+                    problem,
+                }
+            })?)
         }
         _ => None,
     };
@@ -462,11 +498,11 @@ fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError>
     let optional_instance = instance.clone();
     let instance = || instance.as_deref().ok_or(ActingctlError::Usage);
     match command {
+        // Workflow #434 LAB-1b: `facts publish` (`fact_publish`).
         Command::AgentPublishFacts { .. } => {
             let observation = observation.ok_or(ActingctlError::Usage)?;
-            let event_id = client
-                .publish_facts(observation)
-                .map_err(ActingctlError::Runtime)?;
+            let event_id =
+                fact_publish::publish(&client, observation).map_err(ActingctlError::Runtime)?;
             Ok(Done::new(
                 members([member("event_id", &event_id)?]),
                 Outcome::new(success),
@@ -475,104 +511,58 @@ fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError>
         // Workflow #387 D1b: `config set|clear` (MCP `ac_config_set`); a refused change prints
         // the Runtime's receipt beside its outcome and exits non-zero. Workflow #429 R-4: the
         // settings' version after the change beside them, when the Runtime answers one.
-        Command::ConfigureSettings { changes } => match client.configure_settings(changes, None) {
-            Ok(configured) => {
-                let mut line = members([member("settings", &configured.settings)?]);
-                if let Some(version) = configured.config_version {
-                    line.insert("config_version".to_owned(), Value::from(version));
-                }
-                Ok(Done::new(line, Outcome::new(success)))
-            }
+        // Workflow #434 LAB-1b: the change and its answer are `configure`'s.
+        Command::ConfigureSettings { changes } => match configure::configure(&client, changes) {
+            Ok(configured) => Ok(Done::new(
+                configure::configured_answer(&configured).map_err(ActingctlError::Output)?,
+                Outcome::new(success),
+            )),
             Err(error) => refused(error),
         },
         // A refused policy prints the Runtime's receipt beside its outcome and exits non-zero.
+        // Workflow #434 LAB-1b: `targets set` (`targets`).
         Command::AgentApplyResourceTargets { .. } => {
             let document = resource_targets.ok_or(ActingctlError::Usage)?;
-            match client.apply_resource_targets(document, None) {
+            match targets::apply(&client, document) {
                 Ok(applied) => Ok(Done::new(
-                    members([member("applied", &applied)?]),
+                    targets::applied_answer(&applied).map_err(ActingctlError::Output)?,
                     Outcome::new(success),
                 )),
                 Err(error) => refused(error),
             }
         }
         // One manual priority offset (Workflow #308 slice 4a-2) through the ordinary fact
-        // publication, with this CLI's Cli/Cli origin.
+        // publication, with this CLI's Cli/Cli origin. Workflow #434 LAB-1b: `offset`
+        // (`scheduling`).
         Command::TaskOffset {
             task_id,
             offset_milli,
         } => {
-            let status = client.status().map_err(ActingctlError::Runtime)?;
-            let scope = match optional_instance.as_deref() {
-                Some(alias) => {
-                    if !status
-                        .instances()
-                        .iter()
-                        .any(|registered| registered.instance_alias() == alias)
-                    {
-                        return Err(ActingctlError::InstanceUnknown(alias.to_owned()));
-                    }
-                    FactScope::Instance {
-                        instance_id: alias.to_owned(),
-                    }
-                }
-                // A task-level offset applies to every instance of the configured game; the
-                // registered instances must name exactly one.
-                None => {
-                    let games = status
-                        .instances()
-                        .iter()
-                        .map(|registered| registered.game_id())
-                        .collect::<Vec<_>>();
-                    match games.first() {
-                        Some(Some(game_id)) if games.iter().all(|game| *game == Some(*game_id)) => {
-                            FactScope::Game {
-                                game_id: (*game_id).to_owned(),
-                            }
-                        }
-                        _ => return Err(ActingctlError::TaskOffsetScopeAmbiguous),
-                    }
-                }
-            };
-            let observed_at_unix_ms = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .ok()
-                .and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok())
-                .filter(|millis| *millis > 0)
-                .ok_or(ActingctlError::Clock)?;
-            let record = FactRecord::priority_offset(
-                scope,
+            let published = scheduling::offset(
+                &client,
                 &task_id,
                 offset_milli,
-                observed_at_unix_ms,
-                TASK_OFFSET_DETECTOR,
+                optional_instance.as_deref(),
             )
-            .map_err(ActingctlError::PriorityOffsetInvalid)?;
-            let (scope, key) = (record.scope.clone(), record.key.clone());
-            let event_id = client
-                .publish_facts(FactObservation {
-                    records: vec![record],
-                })
-                .map_err(ActingctlError::Runtime)?;
+            .map_err(|failure| match failure {
+                OffsetFailure::Runtime(error) => ActingctlError::Runtime(error),
+                OffsetFailure::InstanceUnknown(alias) => ActingctlError::InstanceUnknown(alias),
+                OffsetFailure::ScopeAmbiguous => ActingctlError::TaskOffsetScopeAmbiguous,
+                OffsetFailure::Invalid(error) => ActingctlError::PriorityOffsetInvalid(error),
+                OffsetFailure::Clock => ActingctlError::Clock,
+            })?;
             Ok(Done::new(
-                members([
-                    member("event_id", &event_id)?,
-                    member("scope", &scope)?,
-                    member("key", &key)?,
-                    member("offset_milli", &offset_milli)?,
-                ]),
+                published.answer().map_err(ActingctlError::Output)?,
                 Outcome::new(success),
             ))
         }
+        // Workflow #434 LAB-1b: `shutdown` (`shutdown`), its wait with it.
         Command::RequestShutdown => {
-            let receipt = client.request_shutdown().map_err(ActingctlError::Runtime)?;
+            let receipt = shutdown::request(&client).map_err(ActingctlError::Runtime)?;
             let mut result = members([member("receipt", &receipt)?]);
             if let Some(wait) = wait {
-                // request_shutdown verified that the accepted receipt names exactly this target.
-                let target = client.runtime_info().shutdown_target();
-                // Close the connection so the waiting CLI leaves nothing for the Runtime to drain.
-                drop(client);
-                let shutdown = shutdown_wait::wait_for_shutdown(&state_root, &target, wait)?;
+                let shutdown = shutdown::wait(client, &state_root, wait)
+                    .map_err(ActingctlError::ShutdownWait)?;
                 result.insert("shutdown".to_owned(), shutdown);
             }
             Ok(Done::new(result, Outcome::new(success)))
@@ -610,9 +600,7 @@ fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError>
             success,
         ),
         Command::Observe => reported(
-            &client
-                .observe_readonly(instance()?)
-                .map_err(ActingctlError::Runtime)?,
+            &observe_export::observe(&client, instance()?).map_err(ActingctlError::Runtime)?,
             success,
         ),
         Command::Status => reported(&client.status().map_err(ActingctlError::Runtime)?, success),
@@ -699,43 +687,32 @@ fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError>
         // Workflow #386 SR-6b, MCP-19b (register §1.144 M19B-1): the latest policy evaluation's
         // explanation with every candidate, the object `ac_schedule` answers; `--instance`
         // (alias, instance_id or ADB port) narrows it to one instance, resolved with one status
-        // read.
-        Command::ScheduleExplanation => {
-            let selected = match optional_instance.as_deref() {
-                Some(selector) => {
-                    let status = client.status().map_err(ActingctlError::Runtime)?;
-                    let alias = instance_selector::select(status.instances(), selector)
-                        .map_err(|miss| match miss {
-                            SelectorMiss::Unknown => {
-                                ActingctlError::InstanceUnknown(selector.to_owned())
-                            }
-                            SelectorMiss::Ambiguous => {
-                                ActingctlError::InstanceAmbiguous(selector.to_owned())
-                            }
-                        })?
-                        .instance_alias()
-                        .to_owned();
-                    Some(alias)
-                }
-                None => None,
-            };
-            reported(
-                &client
-                    .schedule_explanation(selected.as_deref(), true)
-                    .map_err(ActingctlError::Runtime)?,
-                success,
-            )
-        }
+        // read. Workflow #434 LAB-1b: the read is `schedule::explanation`.
+        Command::ScheduleExplanation => reported(
+            &actingcommand_lab_ops::schedule::explanation(&client, optional_instance.as_deref())
+                .map_err(|failure| match failure {
+                    actingcommand_lab_ops::schedule::Failure::Runtime(error) => {
+                        ActingctlError::Runtime(error)
+                    }
+                    actingcommand_lab_ops::schedule::Failure::Selector {
+                        miss: SelectorMiss::Unknown,
+                        selector,
+                    } => ActingctlError::InstanceUnknown(selector),
+                    actingcommand_lab_ops::schedule::Failure::Selector {
+                        miss: SelectorMiss::Ambiguous,
+                        selector,
+                    } => ActingctlError::InstanceAmbiguous(selector),
+                })?,
+            success,
+        ),
+        // Workflow #434 LAB-1b: `monitor set`, `monitor clear` (`configure`).
         Command::MonitorSet { policy } => reported(
-            &client
-                .configure_monitor(instance()?, policy)
+            &configure::set_monitor(&client, instance()?, policy)
                 .map_err(ActingctlError::Runtime)?,
             success,
         ),
         Command::MonitorClear => reported(
-            &client
-                .clear_monitor(instance()?)
-                .map_err(ActingctlError::Runtime)?,
+            &configure::clear_monitor(&client, instance()?).map_err(ActingctlError::Runtime)?,
             success,
         ),
         // Served by the existing status read, filtered to the one alias; no new operation.
@@ -749,29 +726,23 @@ fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError>
                 .ok_or_else(|| ActingctlError::InstanceUnknown(alias.to_owned()))?;
             reported(instance, success)
         }
+        // Workflow #434 LAB-1b: `emu start|stop|restart` (`emulators`).
         Command::EmulatorControl { action } => {
             let alias = instance()?.to_owned();
             let Some(wait) = wait else {
                 return reported(
-                    &client
-                        .control_emulator_instance(&alias, action)
+                    &emulators::control(&client, &alias, action)
                         .map_err(ActingctlError::Runtime)?,
                     success,
                 );
             };
             // Workflow #389 MCP-21: the interaction's correlation names the request before its
             // receipt; the client mints the request id only as it writes it.
-            let interaction = client
-                .begin_interaction()
-                .map_err(ActingctlError::Runtime)?;
-            let correlation_id = interaction.correlation_id();
-            match wait_at_most(wait, move || {
-                interaction.control_emulator_instance(&alias, action)
-            }) {
-                Waited::Done(result) => {
-                    reported(&result.map_err(ActingctlError::Runtime)?, success)
-                }
-                Waited::Expired => Ok(wait_expired(
+            match emulators::control_within(&client, alias, action, wait)
+                .map_err(ActingctlError::Runtime)?
+            {
+                emulators::Bounded::Controlled(result) => reported(&result, success),
+                emulators::Bounded::Expired { correlation_id } => Ok(wait_expired(
                     ContractLocation::ControlEmulatorInstance,
                     wait,
                     None,
@@ -779,56 +750,43 @@ fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError>
                 )),
             }
         }
+        // Workflow #434 LAB-1b: `discover` (`emulators`).
         Command::EmulatorDiscover => {
-            let discovery = client
-                .discover_instances()
-                .map_err(ActingctlError::Runtime)?;
+            let discovery = emulators::discover(&client).map_err(ActingctlError::Runtime)?;
             Ok(Done::new(
                 result_members(&discovery, RESULT_MEMBER)?,
                 Outcome::new(success).count(discovery.instances().len()),
             ))
         }
-        // Workflow #191 ps1: without --instance the pause / resume is global.
+        // Workflow #191 ps1: without --instance the pause / resume is global. Workflow #434
+        // LAB-1b: `pause`, `resume` (`scheduling`).
         Command::Pause {
             pause_reason,
             drain_timeout_ms,
         } => reported(
-            &client
-                .pause_scheduling(
-                    pause_scope(optional_instance),
-                    pause_reason,
-                    drain_timeout_ms,
-                )
-                .map_err(ActingctlError::Runtime)?,
+            &scheduling::pause(
+                &client,
+                pause_scope(optional_instance),
+                pause_reason,
+                drain_timeout_ms,
+            )
+            .map_err(ActingctlError::Runtime)?,
             success,
         ),
         Command::Resume => reported(
-            &client
-                .resume_scheduling(pause_scope(optional_instance))
+            &scheduling::resume(&client, pause_scope(optional_instance))
                 .map_err(ActingctlError::Runtime)?,
             success,
         ),
         // Workflow #317 sc3 (d): manual reconnect and self-check of one physical instance. A
         // check that failed is no success: `instance_self_check_failed`, caused by the check's
-        // failure code (the result is printed beside it).
+        // failure code (the result is printed beside it). Workflow #434 LAB-1b: `emu selfcheck`
+        // (`emulators`).
         Command::SelfCheck { instance_alias } => {
-            let result = client
-                .self_check_instance(&instance_alias)
-                .map_err(ActingctlError::Runtime)?;
-            let outcome = match &result {
-                RuntimeResult::InstanceSelfChecked { selfcheck, .. }
-                    if selfcheck.failure_code.is_some()
-                        || !selfcheck.capture.ok
-                        || !selfcheck.touch.ok =>
-                {
-                    let check_failed = Outcome::new(ActingctlCode::InstanceSelfCheckFailed);
-                    match selfcheck.failure_code.as_deref() {
-                        Some(spelling) => with_cause(check_failed, Outcome::relayed(spelling)),
-                        None => check_failed,
-                    }
-                }
-                _ => Outcome::new(success),
-            };
+            let result =
+                emulators::self_check(&client, &instance_alias).map_err(ActingctlError::Runtime)?;
+            let outcome =
+                emulators::self_check_failure(&result).unwrap_or_else(|| Outcome::new(success));
             Ok(Done::new(result_members(&result, RESULT_MEMBER)?, outcome))
         }
         // Workflow #390 DRILL-1: the drill the Runtime admitted, as `ac_ladder_drill` answers it.
@@ -849,24 +807,24 @@ fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError>
                 )?;
             reported(&drill, success)
         }
-        // Workflow #432 AGT-1b: the queued test, and with `--wait-s` the wake's row.
+        // Workflow #432 AGT-1b: the queued test, and with `--wait-s` the wake's row. Workflow
+        // #434 LAB-1b: `wake-test` (`wake_test`).
         Command::AgentWakeTest { to, wait } => {
-            let queued = client
-                .agent_wake_test(&to, optional_instance.as_deref())
+            let queued = wake_test::queue(&client, &to, optional_instance.as_deref())
                 .map_err(ActingctlError::Runtime)?;
             let mut members = result_members(&queued, RESULT_MEMBER)?;
             if let Some(wait) = wait {
                 members.insert(
                     "row".to_owned(),
-                    agent_wake_row(&client, &queued.wake_id, wait)?,
+                    wake_test::row(&client, &queued.wake_id, wait)
+                        .map_err(ActingctlError::Runtime)?,
                 );
             }
             Ok(Done::new(members, Outcome::new(success)))
         }
+        // Workflow #434 LAB-1b: `frames` (`frames`).
         Command::Stream { spec } => reported(
-            &client
-                .capture_sequence(instance()?, spec)
-                .map_err(ActingctlError::Runtime)?,
+            &frames::capture(&client, instance()?, spec).map_err(ActingctlError::Runtime)?,
             success,
         ),
         Command::TaskRun {
@@ -924,63 +882,6 @@ fn run(arguments: Vec<OsString>, detail: Detail) -> Result<Done, ActingctlError>
 }
 
 /// The line of a typed result whose subcommand succeeded with `success`.
-/// Workflow #432 AGT-1b: the row of the wake `wake_id` in `host.agent_wake`, read until it has left
-/// `prepared` and `sending` or `wait` is over; null while it has no row. A read records nothing.
-fn agent_wake_row(
-    client: &RuntimeClient,
-    wake_id: &str,
-    wait: Duration,
-) -> Result<Value, ActingctlError> {
-    use actingcommand_contract::{FactScalar, FactValue, RuntimeFactScope};
-    let deadline = std::time::Instant::now() + wait;
-    loop {
-        let snapshot = client
-            .runtime_fact_snapshot()
-            .map_err(ActingctlError::Runtime)?;
-        let row = snapshot
-            .records
-            .iter()
-            .find(|record| {
-                record.scope == RuntimeFactScope::Runtime && record.key == "host.agent_wake"
-            })
-            .and_then(|record| {
-                match &record.value {
-                FactValue::RecordList(rows) => rows.iter().find(|row| {
-                    matches!(row.get("wake_id"), Some(FactScalar::String(id)) if id == wake_id)
-                }),
-                _ => None,
-            }
-            });
-        let settled = row.is_some_and(|row| {
-            !matches!(
-                row.get("state"),
-                Some(FactScalar::String(state)) if state == "prepared" || state == "sending"
-            )
-        });
-        if settled || std::time::Instant::now() >= deadline {
-            let Some(row) = row else {
-                return Ok(Value::Null);
-            };
-            let members = row
-                .iter()
-                .map(|(key, value)| {
-                    let value = match value {
-                        FactScalar::Boolean(flag) => Value::from(*flag),
-                        FactScalar::Integer(number) => Value::from(*number),
-                        FactScalar::String(text) => Value::from(text.as_str()),
-                        FactScalar::TimestampMs(ms) | FactScalar::DurationMs(ms) => {
-                            Value::from(*ms)
-                        }
-                    };
-                    (key.clone(), value)
-                })
-                .collect::<Map<String, Value>>();
-            return Ok(Value::Object(members));
-        }
-        std::thread::sleep(Duration::from_millis(200));
-    }
-}
-
 fn reported(result: &impl Serialize, success: ActingctlCode) -> Result<Done, ActingctlError> {
     Ok(Done::new(
         result_members(result, RESULT_MEMBER)?,
@@ -988,65 +889,19 @@ fn reported(result: &impl Serialize, success: ActingctlCode) -> Result<Done, Act
     ))
 }
 
-/// Workflow #389 MCP-21: how a `--wait` ended.
-enum Waited<T> {
-    /// The request ended within the wait, with this.
-    Done(T),
-    /// The wait ended first.
-    Expired,
-}
-
-/// Runs `request` on a thread of its own and waits for it at most `wait` (Workflow #389 MCP-21).
-/// A request that has not ended by then goes on in the Runtime: the Runtime serves it on its
-/// own connection thread whether its client still waits or not, and this process stops waiting.
-/// A request thread that panicked panics here too.
-fn wait_at_most<T: Send + 'static>(
-    wait: Duration,
-    request: impl FnOnce() -> T + Send + 'static,
-) -> Waited<T> {
-    let (sender, receiver) = mpsc::channel();
-    let worker = thread::spawn(move || {
-        // The receiver is gone only when the wait already ended.
-        let _ = sender.send(request());
-    });
-    match receiver.recv_timeout(wait) {
-        Ok(done) => Waited::Done(done),
-        Err(RecvTimeoutError::Timeout) => Waited::Expired,
-        Err(RecvTimeoutError::Disconnected) => match worker.join() {
-            Err(panic) => std::panic::resume_unwind(panic),
-            // A thread that ended sent its result first, which `recv_timeout` takes before it
-            // sees the channel closed.
-            Ok(()) => unreachable!("a request thread ended without its result"),
-        },
-    }
-}
-
 /// Workflow #389 MCP-21 (MCP-0 command table v1.1 §4.22, D11 as verified): the line of a
 /// `--wait` that ended before its request did, `{request_id?, correlation_id?, state:
 /// "in_progress"}` with `command_wait_expired` (`operation`, `request_id` when this command
-/// knows it, `waited_ms`). The request goes on in the Runtime; the line exits 1.
+/// knows it, `waited_ms`). The request goes on in the Runtime; the line exits 1. Workflow #434
+/// LAB-1b: its members and outcome are `actingcommand_lab_ops::wait::expired`'s.
 fn wait_expired(
     operation: ContractLocation,
     wait: Duration,
     request_id: Option<RequestId>,
     correlation_id: Option<CorrelationId>,
 ) -> Done {
-    let mut members = Map::new();
-    let mut outcome = Outcome::new(SharedCode::CommandWaitExpired)
-        .operation(operation)
-        .waited_ms(wait);
-    if let Some(request_id) = request_id {
-        let text = run_evidence::id_text(&request_id);
-        outcome = outcome.request_id(text.as_str());
-        members.insert("request_id".to_owned(), Value::String(text));
-    }
-    if let Some(correlation_id) = correlation_id {
-        members.insert(
-            "correlation_id".to_owned(),
-            Value::String(run_evidence::id_text(&correlation_id)),
-        );
-    }
-    members.insert("state".to_owned(), Value::String("in_progress".to_owned()));
+    let (members, outcome) =
+        actingcommand_lab_ops::wait::expired(operation, wait, request_id, correlation_id);
     Done {
         members,
         outcome,
@@ -1117,16 +972,6 @@ fn result_members(
         .map_err(ActingctlError::Output)
 }
 
-/// `top` caused by `cause`. A fatal cause is the top itself: a fatal link needs a fatal top
-/// (spec §5), and the operation ended in that condition.
-fn with_cause(top: Outcome, cause: Outcome) -> Outcome {
-    if cause.category() == Category::Fatal {
-        cause
-    } else {
-        top.caused_by(cause)
-    }
-}
-
 /// The transition an install-transition action names.
 fn action_transition_id(action: &InstallTransitionAction) -> &str {
     match action {
@@ -1169,77 +1014,15 @@ fn canonical_package(path: PathBuf) -> Result<PathBuf, ActingctlError> {
     }
 }
 
-/// `agent-publish-facts --record-file`: one bounded, valid fact observation.
-fn read_fact_observation(path: &Path) -> Result<FactObservation, ActingctlError> {
-    let invalid = |problem: InputProblem| ActingctlError::FactRecord {
-        path: path.to_path_buf(),
-        problem,
-    };
-    let bytes =
-        read_bounded(path, actingcommand_contract::MAX_FACT_OBSERVATION_BYTES).map_err(invalid)?;
-    let observation: FactObservation =
-        serde_json::from_slice(&bytes).map_err(|error| invalid(InputProblem::Json(error)))?;
-    observation
-        .validate()
-        .map_err(|error| invalid(InputProblem::Invalid(error)))?;
-    Ok(observation)
-}
-
-/// `agent-apply-resource-targets --policy-file`: the document, bounded, not empty, UTF-8.
-fn read_resource_targets(path: &Path) -> Result<String, ActingctlError> {
-    let invalid = |problem: InputProblem| ActingctlError::ResourceTargetsFile {
-        path: path.to_path_buf(),
-        problem,
-    };
-    let bytes = read_bounded(
-        path,
-        actingcommand_contract::MAX_RESOURCE_TARGETS_DOCUMENT_BYTES,
-    )
-    .map_err(invalid)?;
-    if bytes.is_empty() {
-        return Err(invalid(InputProblem::Empty));
-    }
-    String::from_utf8(bytes).map_err(|error| invalid(InputProblem::NotUtf8(error)))
-}
-
 /// Workflow #387 D1b: the changes of `config set <key>=<json>…` and `config clear <key>…`, the
 /// same `ConfigureSettings` changes MCP `ac_config_set` sends: a set carries its value (JSON, not
-/// `null`), a clear none.
+/// `null`), a clear none. Workflow #434 LAB-1b: they are `configure::word_changes`'; anything they
+/// refuse is a usage error.
 fn config_changes(
     action: &str,
     items: &[String],
 ) -> Result<Vec<ConfigSettingChange>, ActingctlError> {
-    if items.is_empty() || items.len() > MAX_CONFIG_SETTING_CHANGES {
-        return Err(ActingctlError::Usage);
-    }
-    items
-        .iter()
-        .map(|item| match action {
-            "set" => {
-                let (key, json) = item.split_once('=').ok_or(ActingctlError::Usage)?;
-                let value = serde_json::from_str::<Value>(json)
-                    .ok()
-                    .filter(|value| !value.is_null())
-                    .ok_or(ActingctlError::Usage)?;
-                Ok(ConfigSettingChange {
-                    key: key.to_owned(),
-                    value: Some(value),
-                })
-            }
-            "clear" => Ok(ConfigSettingChange {
-                key: item.clone(),
-                value: None,
-            }),
-            _ => Err(ActingctlError::Usage),
-        })
-        .collect()
-}
-
-fn pause_scope(instance: Option<String>) -> SchedulingPauseScope {
-    match instance {
-        Some(instance_alias) => SchedulingPauseScope::Instance { instance_alias },
-        None => SchedulingPauseScope::Global,
-    }
+    configure::word_changes(action, items).ok_or(ActingctlError::Usage)
 }
 
 /// Workflow #336 PKG-S4 (option 丙): the task's package, and its recovery package, by their
@@ -1606,38 +1389,31 @@ impl Invocation {
             "perf-status" => Command::PerformanceStatus,
             "fact-refresh" => Command::FactRefreshStatus,
             "schedule" => Command::ScheduleExplanation,
+            // Workflow #434 LAB-1b: the policy and its defaults are `configure`'s.
             "monitor-set" => Command::MonitorSet {
-                policy: RuntimeMonitorPolicy::new(
-                    interval_ms.unwrap_or(30_000),
-                    expected_page.unwrap_or_else(|| "home".to_string()),
-                    recovery_enabled,
-                )
-                .map_err(|_| ActingctlError::Usage)?,
+                policy: configure::monitor_policy(interval_ms, expected_page, recovery_enabled)
+                    .ok_or(ActingctlError::Usage)?,
             },
             "monitor-clear" => Command::MonitorClear,
             "emulator" => match emulator_action {
                 Some("status") => Command::EmulatorStatus,
-                Some("start") => Command::EmulatorControl {
-                    action: EmulatorInstanceAction::Start,
-                },
-                Some("stop") => Command::EmulatorControl {
-                    action: EmulatorInstanceAction::Stop,
-                },
-                Some("restart") => Command::EmulatorControl {
-                    action: EmulatorInstanceAction::Restart,
-                },
                 Some("discover") => Command::EmulatorDiscover,
-                _ => return Err(ActingctlError::Usage),
+                // Workflow #434 LAB-1b: the controls are the words `emulators::action` takes.
+                Some(word) => Command::EmulatorControl {
+                    action: emulators::action(word).ok_or(ActingctlError::Usage)?,
+                },
+                None => return Err(ActingctlError::Usage),
             },
+            // Workflow #434 LAB-1b: the defaults are `scheduling`'s.
             "pause" => Command::Pause {
                 pause_reason: match pause_reason {
                     Some(reason) => reason,
-                    None => {
-                        actingcommand_contract::SchedulingPauseReason::new(DEFAULT_PAUSE_REASON)
-                            .map_err(|_| ActingctlError::Usage)?
-                    }
+                    None => actingcommand_contract::SchedulingPauseReason::new(
+                        scheduling::CLI_PAUSE_REASON,
+                    )
+                    .map_err(|_| ActingctlError::Usage)?,
                 },
-                drain_timeout_ms: drain_timeout_ms.unwrap_or(DEFAULT_PAUSE_DRAIN_TIMEOUT_MS),
+                drain_timeout_ms: drain_timeout_ms.unwrap_or(scheduling::CLI_DRAIN_TIMEOUT_MS),
             },
             "resume" => Command::Resume,
             "selfcheck" => Command::SelfCheck {
@@ -1650,12 +1426,9 @@ impl Invocation {
                 to: to.ok_or(ActingctlError::Usage)?,
                 wait,
             },
+            // Workflow #434 LAB-1b: the capture and its defaults are `frames`'.
             "stream" => Command::Stream {
-                spec: CaptureSequenceSpec::new(
-                    frame_count.unwrap_or(1),
-                    interval_ms.unwrap_or(250),
-                )
-                .map_err(|_| ActingctlError::Usage)?,
+                spec: frames::spec(frame_count, interval_ms).ok_or(ActingctlError::Usage)?,
             },
             "task-run" => Command::TaskRun {
                 package: package.ok_or(ActingctlError::Usage)?,

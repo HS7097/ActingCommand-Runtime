@@ -15,8 +15,8 @@ use crate::codes::{ActingctlCode, ArgumentProblem};
 use crate::diagnose::{self, DiagnoseRequest, Failure};
 use crate::events::{CursorBinding, MAX_INTEGER};
 use crate::overview::Warning;
-use actingcommand_contract::{RequestId, RunId};
-use actingcommand_runtime_client::{ContainedRunState, RunKey, RunStatusMode};
+use crate::run_show;
+use actingcommand_runtime_client::ContainedRunState;
 use serde_json::{Map, Value, json};
 use std::sync::atomic::Ordering;
 use std::thread;
@@ -66,23 +66,21 @@ pub(super) fn get_run(context: &ToolContext<'_>, arguments: &Map<String, Value>)
             json!({"handle": job.handle, "job": job.snapshot()}),
         ));
     }
+    // Workflow #434 LAB-1b: the key, the read and the answer are `run_show`'s; the waiting and
+    // the jobs of this process stay here.
     let key = match (handle, arguments.string("run_id")?) {
-        (Some(handle), None) => RunKey::RequestId(
-            serde_json::from_value::<RequestId>(json!(handle)).map_err(|_| {
-                // A job handle this MCP process does not hold: the process that started it
-                // ended, or it is another one's.
-                if handle.starts_with("correlation_") || handle.starts_with(lab::HANDLE_PREFIX) {
-                    ToolError::usage(ActingctlCode::HandleUnknown)
-                } else {
-                    // Neither a Runtime request_id nor a job handle.
-                    invalid_argument("handle", ArgumentProblem::NotRecognised)
-                }
-            })?,
-        ),
-        (None, Some(run_id)) => RunKey::RunId(
-            serde_json::from_value::<RunId>(json!(run_id))
-                .map_err(|_| invalid_argument("run_id", ArgumentProblem::NotRecognised))?,
-        ),
+        (Some(handle), None) => run_show::by_request_id(handle).ok_or_else(|| {
+            // A job handle this MCP process does not hold: the process that started it
+            // ended, or it is another one's.
+            if handle.starts_with("correlation_") || handle.starts_with(lab::HANDLE_PREFIX) {
+                ToolError::usage(ActingctlCode::HandleUnknown)
+            } else {
+                // Neither a Runtime request_id nor a job handle.
+                invalid_argument("handle", ArgumentProblem::NotRecognised)
+            }
+        })?,
+        (None, Some(run_id)) => run_show::by_run_id(run_id)
+            .ok_or_else(|| invalid_argument("run_id", ArgumentProblem::NotRecognised))?,
         // Exactly one of handle and run_id.
         (Some(_), Some(_)) => {
             return Err(invalid_argument("handle", ArgumentProblem::Conflicting));
@@ -91,14 +89,9 @@ pub(super) fn get_run(context: &ToolContext<'_>, arguments: &Map<String, Value>)
     };
     let connected = context.runtime.connect()?;
     loop {
-        let status = connected
-            .client
-            .contained_run_status(key, RunStatusMode::Full)
+        let status = run_show::read(&connected.client, key)
             .map_err(|error| context.runtime.failure(&connected, &error))?;
-        let may_change = matches!(
-            status.state,
-            ContainedRunState::NotFound | ContainedRunState::Admitted | ContainedRunState::Running
-        );
+        let may_change = run_show::may_change(&status);
         // A submit job of this process that failed before admission leaves no run.
         let job_failed_first = job.as_ref().is_some_and(|job| job.finished())
             && status.state == ContainedRunState::NotFound;
@@ -107,7 +100,7 @@ pub(super) fn get_run(context: &ToolContext<'_>, arguments: &Map<String, Value>)
             || context.cancelled.load(Ordering::SeqCst)
             || Instant::now() + POLL_INTERVAL >= wait_until
         {
-            let mut result = json!(status);
+            let mut result = run_show::answer(&status);
             if let Some(job) = &job {
                 result["job"] = job.snapshot();
             }

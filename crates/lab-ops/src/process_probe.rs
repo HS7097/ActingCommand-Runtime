@@ -2,6 +2,10 @@
 
 //! Process liveness without unsafe code, shared by `request-shutdown --wait` and
 //! `watchdog` (Workflow #374).
+//!
+//! Workflow #434 LAB-1b: moved unchanged from actingctl with the shutdown wait
+//! ([`crate::shutdown_wait`]), which `shutdown --wait` reads it through; actingctl's watchdog and
+//! installer call it from here.
 
 use crate::codes::ActingctlCode;
 use actingcommand_contract::codes::ContractCode;
@@ -15,13 +19,13 @@ use std::process::Command;
 /// `None` when no running process has the pid. Windows reuses pids, so a pid and this time
 /// together name one process. A probe the operating system does not decide is
 /// `process_probe_failed` with the `pid`, caused by the probe's reason.
-pub(crate) fn pid_created_at(pid: u32) -> Result<Option<u64>, Outcome> {
+pub fn pid_created_at(pid: u32) -> Result<Option<u64>, Outcome> {
     created_at_of(pid, actingcommand_host_metrics::probe_process(pid))
 }
 
 /// [`pid_created_at`] from the operating system's answer `probe` about `pid` (fix round 1,
 /// review M1: a test feeds the answer of a refused query).
-pub(crate) fn created_at_of(pid: u32, probe: ProcessProbe) -> Result<Option<u64>, Outcome> {
+pub fn created_at_of(pid: u32, probe: ProcessProbe) -> Result<Option<u64>, Outcome> {
     match probe {
         ProcessProbe::Running { created_at_unix_ms } => Ok(Some(created_at_unix_ms)),
         ProcessProbe::NotRunning => Ok(None),
@@ -42,7 +46,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// A lister that did not run, or that failed, is `process_probe_failed` with the `pid`, caused
 /// by the OS error, or by `foreign_other_error` with the lister's stderr and exit code
 /// (Workflow #378 A5).
-pub(crate) fn pid_alive(pid: u32) -> Result<bool, Outcome> {
+pub fn pid_alive(pid: u32) -> Result<bool, Outcome> {
     let pid_text = pid.to_string();
     #[cfg(windows)]
     let (program, output) = {

@@ -7,7 +7,8 @@
 //! codes and its wake. The Runtime answers it from the policy host's memory and records nothing.
 //!
 //! - `actingctl schedule [--instance <alias|instance_id|ADB port>]` prints the answer verbatim,
-//!   candidates included (`main.rs`), as MCP `ac_schedule` answers it (`mcp::schedule`).
+//!   candidates included (`main.rs`), as MCP `ac_schedule` answers it (`mcp::schedule`); both
+//!   read it with [`explanation`] (Workflow #434 LAB-1b).
 //! - `overview` / `ac_overview` read it without candidates and give each instance row the
 //!   `not_running` row of its entry ([`not_running_by_alias`]).
 //! - `diagnose` / `ac_diagnose` read it with candidates and list the deferred rows (due, or
@@ -16,6 +17,7 @@
 //!   `config.parameters.scheduling` holds ([`not_run`]).
 
 use crate::codes::ActingctlCode;
+use crate::instance_selector::{self, SelectorMiss};
 use crate::overview::Warning;
 use actingcommand_contract::codes::SanitizationCode;
 use actingcommand_contract::outcome::Outcome;
@@ -24,13 +26,51 @@ use actingcommand_contract::{
     ScheduleCandidateState, config_parameter_section, config_parameters_fact_key,
 };
 use actingcommand_policy::PolicyCode;
-use actingcommand_runtime_client::RuntimeClientError;
+use actingcommand_runtime_client::{RuntimeClient, RuntimeClientError};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 
 /// The configuration key that bounds `not_run` per instance (`contracts/runtime-config.md`,
 /// default 10); its row is in the program fact `config.parameters.scheduling`.
 pub const DIAGNOSE_ROWS_KEY: &str = "scheduling.not_run.diagnose_rows";
+
+/// Why [`explanation`] answered nothing.
+pub enum Failure {
+    /// The Runtime refused a read, or did not answer.
+    Runtime(RuntimeClientError),
+    /// No instance, or more than one, of the status read matches the selector.
+    Selector {
+        miss: SelectorMiss,
+        selector: String,
+    },
+}
+
+/// `schedule` (Workflow #434 LAB-1b, from `actingctl schedule` and MCP `ac_schedule`): the latest
+/// policy evaluation's explanation with every candidate, narrowed to the instance `selector`
+/// names (alias, instance_id or ADB port; one status read resolves it), or of every instance
+/// without one.
+pub fn explanation(
+    client: &RuntimeClient,
+    selector: Option<&str>,
+) -> Result<RuntimeScheduleExplanation, Failure> {
+    let alias = match selector {
+        Some(selector) => {
+            let status = client.status().map_err(Failure::Runtime)?;
+            let alias = instance_selector::select(status.instances(), selector)
+                .map_err(|miss| Failure::Selector {
+                    miss,
+                    selector: selector.to_owned(),
+                })?
+                .instance_alias()
+                .to_owned();
+            Some(alias)
+        }
+        None => None,
+    };
+    client
+        .schedule_explanation(alias.as_deref(), true)
+        .map_err(Failure::Runtime)
+}
 
 /// The `not_running` row of each entry of `explanation`, by the entry's instance alias, verbatim:
 /// the member `overview` adds to the instance row of that alias.

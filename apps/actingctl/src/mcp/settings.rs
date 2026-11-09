@@ -11,28 +11,25 @@ use super::runtime::client_error;
 use super::tools::{
     Arguments, ToolContext, ToolError, ToolOutcome, ToolSuccess, invalid_argument, out_of_range,
 };
-use crate::codes::ArgumentProblem;
+use crate::configure::{self, ChangesProblem};
 use actingcommand_contract::{ConfigSettingChange, MAX_CONFIG_SETTING_CHANGES};
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 
 /// `ac_config_set {changes: [{key, value?}]}`: answers `{settings, config_version?}`, each changed
 /// key as it is in effect afterwards and (Workflow #429 R-4) the settings' version after the
-/// change, as `actingctl config set|clear` prints them.
+/// change, as `actingctl config set|clear` prints them. Workflow #434 LAB-1b: the change and its
+/// answer are `configure`'s.
 pub(super) fn config_set(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
     let arguments = Arguments::new(arguments, &["changes"])?;
     let changes = changes(arguments.value("changes"))?;
     let connection = context.runtime.connect_fresh(CLI.0, CLI.1)?;
     let write = record_provenance(connection, "ac_config_set", None, CLI, None)?;
-    let configured = write
-        .client
-        .configure_settings(changes, None)
-        .map_err(|error| client_error(&error))?;
-    let mut result = json!({ "settings": configured.settings });
-    if let (Some(version), Some(members)) = (configured.config_version, result.as_object_mut()) {
-        members.insert("config_version".to_owned(), Value::from(version));
-    }
+    let configured =
+        configure::configure(&write.client, changes).map_err(|error| client_error(&error))?;
     Ok(ToolSuccess {
-        result,
+        result: Value::Object(
+            configure::configured_answer(&configured).map_err(super::packs::encode_failed)?,
+        ),
         warnings: write.warnings,
     })
 }
@@ -58,41 +55,11 @@ pub(super) fn names_backend_key(arguments: &Map<String, Value>) -> bool {
 /// configuration-file value. Anything else is `arguments_invalid` for `changes`: not an array
 /// of objects (`wrong_type`), outside 1 to 64 changes (`out_of_range`), a change with another
 /// member than key and value (`not_recognised`), a change without a non-empty string key
-/// (`required`, or `wrong_type` for a key that is not a string).
+/// (`required`, or `wrong_type` for a key that is not a string). Workflow #434 LAB-1b: the changes
+/// are `configure::json_changes`'.
 pub(super) fn changes(value: Option<&Value>) -> Result<Vec<ConfigSettingChange>, ToolError> {
-    let Some(Value::Array(items)) = value else {
-        return Err(invalid_argument("changes", ArgumentProblem::WrongType));
-    };
-    if items.is_empty() || items.len() > MAX_CONFIG_SETTING_CHANGES {
-        return Err(out_of_range(
-            "changes",
-            1,
-            MAX_CONFIG_SETTING_CHANGES as u64,
-        ));
-    }
-    items
-        .iter()
-        .map(|item| {
-            let Value::Object(change) = item else {
-                return Err(invalid_argument("changes", ArgumentProblem::WrongType));
-            };
-            if change.keys().any(|name| name != "key" && name != "value") {
-                return Err(invalid_argument("changes", ArgumentProblem::NotRecognised));
-            }
-            let key = match change.get("key") {
-                Some(Value::String(key)) if !key.is_empty() => key,
-                Some(Value::String(_)) | None => {
-                    return Err(invalid_argument("changes", ArgumentProblem::Required));
-                }
-                Some(_) => return Err(invalid_argument("changes", ArgumentProblem::WrongType)),
-            };
-            Ok(ConfigSettingChange {
-                key: key.to_owned(),
-                value: change
-                    .get("value")
-                    .filter(|value| !value.is_null())
-                    .cloned(),
-            })
-        })
-        .collect()
+    configure::json_changes(value).map_err(|problem| match problem {
+        ChangesProblem::Argument(problem) => invalid_argument("changes", problem),
+        ChangesProblem::OutOfRange => out_of_range("changes", 1, MAX_CONFIG_SETTING_CHANGES as u64),
+    })
 }

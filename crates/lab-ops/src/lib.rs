@@ -13,6 +13,11 @@
 //!   (same words, output, codes and exit codes) until LAB-7 deletes it. Their texts still say
 //!   `actingctl`, the program that runs them. `codes` stays the registry of the catalog owner
 //!   `actingctl` (`contracts/outcome-codes/actingctl.json`), whose crate this now is.
+//! - Workflow #434 LAB-1b: the other 23 core operations, whose code was in actingctl's `main.rs`
+//!   and in MCP's tools (register §1.287, LAB-1b row): a function per operation that sends its
+//!   requests on a connection it is given and shapes its answer, which actingctl's CLI and MCP
+//!   server call and wrap as before; [`served`] names the function that serves each core
+//!   operation of LAB-1 and LAB-1b.
 
 #![forbid(unsafe_code)]
 
@@ -78,10 +83,38 @@ pub mod initiator;
 pub mod locate;
 pub mod table;
 
+// Workflow #434 LAB-1b: the other core operations (register §1.287, LAB-1b row), by group of the
+// table: runs and materials (`run show`, `material`, `targets`, `targets set`, `frames`),
+// scheduling (`pause`, `resume`, `offset`), configuration and monitors (`config set`, `config
+// clear`, `monitor set`, `monitor clear`), facts (`facts publish`), emulators (`discover`, `emu
+// start|stop|restart|selfcheck`), games (`app launch|restart|stop`) and the rest (`shutdown`,
+// `wake-test`); with the bounded wait of `emu start|stop|restart`, and the shutdown wait and the
+// process probe it reads, moved from actingctl unchanged.
+pub mod apps;
+pub mod configure;
+pub mod emulators;
+pub mod fact_publish;
+pub mod frames;
+pub mod material;
+pub mod process_probe;
+pub mod run_show;
+pub mod scheduling;
+pub mod shutdown;
+pub mod shutdown_wait;
+pub mod targets;
+pub mod wait;
+pub mod wake_test;
+
+// Workflow #434 LAB-1b: the registry of the core operations this crate serves.
+pub mod served;
+
 // Test-only: Workflow #434 LAB-1, the slice's named tests (`lab_ops_table_complete`,
 // `lab_ops_locate_defaults`).
 #[cfg(test)]
 mod gate_434_lab1;
+// Test-only: Workflow #434 LAB-1b, the slice's named test (`lab_ops_core_rows_served_by_lab_ops`).
+#[cfg(test)]
+mod gate_434_lab1b;
 // Test-only: ROUT-L RL-1c (#411), the standard-pack game root fixtures of `packs::tests`.
 #[cfg(test)]
 #[path = "../../../tests/support/standard_pack_schedule.rs"]
@@ -89,7 +122,7 @@ mod standard_pack_schedule_fixture;
 
 use actingcommand_contract::SanitizationError;
 use actingcommand_contract::codes::ContractCode;
-use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
+use actingcommand_contract::outcome::{Category, IoOp, Outcome, RawSource};
 use std::fmt;
 use std::io::{self, Read};
 use std::path::Path;
@@ -229,4 +262,15 @@ pub fn foreign_data_error(error: &impl fmt::Display) -> Outcome {
     Outcome::new(ContractCode::ForeignDataError)
         .raw_source(RawSource::Json)
         .raw_text(error.to_string())
+}
+
+/// `top` caused by `cause`. A fatal cause is the top itself: a fatal link needs a fatal top
+/// (spec §5), and the operation ended in that condition. Workflow #434 LAB-1b: moved from
+/// actingctl's `main.rs`, where `install-transition` reads it too.
+pub fn with_cause(top: Outcome, cause: Outcome) -> Outcome {
+    if cause.category() == Category::Fatal {
+        cause
+    } else {
+        top.caused_by(cause)
+    }
 }

@@ -41,6 +41,7 @@ use super::tools::{
     self, Arguments, McpBlocker, ToolContext, ToolError, ToolOutcome, invalid_argument,
     out_of_range,
 };
+use crate::apps;
 use crate::codes::{ActingctlCode, ArgumentProblem};
 use actingcommand_contract::ClientActionValue;
 use actingcommand_contract::codes::{ContractCode, SharedCode};
@@ -499,12 +500,13 @@ static RECORD_STATUS: LabCommand = LabCommand {
 // §4.14), operator before U-3 and option two after it (FCM:116). ----
 
 /// The actions of actinglab `session app` (`session_management.rs`); `force-stop` is the same
-/// action as `stop`.
-pub(super) const APP_ACTIONS: [&str; 4] = ["launch", "restart", "stop", "force-stop"];
+/// action as `stop`. Workflow #434 LAB-1b: `apps::ACTIONS`.
+pub(super) use crate::apps::ACTIONS as APP_ACTIONS;
 
 /// `session app <action> --instance <alias>`, never with `--record` (no recording step).
+/// Workflow #434 LAB-1b: its words are `apps::SESSION_APP`, its command line `apps::session_app`.
 static APP: LabCommand = LabCommand {
-    words: &["session", "app"],
+    words: &apps::SESSION_APP,
     flags: &[
         flag(
             "action",
@@ -1137,6 +1139,18 @@ fn author(
     tool: &'static str,
 ) -> ToolOutcome {
     let line = command_line(command, arguments)?;
+    author_line(context, arguments, command, tool, line)
+}
+
+/// [`author`] with the command line `line` already built from `arguments` (Workflow #434 LAB-1b:
+/// ac_app's is `apps::session_app`'s).
+fn author_line(
+    context: &ToolContext<'_>,
+    arguments: &Map<String, Value>,
+    command: &'static LabCommand,
+    tool: &'static str,
+    line: Vec<String>,
+) -> ToolOutcome {
     let capture = arguments.get("capture") == Some(&Value::Bool(true));
     let records = command.capture_is_lab_request && capture;
     let instance = arguments
@@ -1369,14 +1383,20 @@ pub(super) fn record_status(
 }
 
 /// ac_app (Workflow #389 MCP-13a): actinglab `session app <action> --instance <alias>`, its data
-/// verbatim. An action that is none of `APP_ACTIONS` is refused before actinglab runs.
+/// verbatim. An action that is none of `APP_ACTIONS` is refused before actinglab runs. Workflow
+/// #434 LAB-1b: the arguments are checked as every Lab tool's are, and the command line actinglab
+/// runs is `apps::session_app`'s.
 pub(super) fn app(context: &ToolContext<'_>, arguments: &Map<String, Value>) -> ToolOutcome {
     let line = command_line(&APP, arguments)?;
-    let action = line.get(APP.words.len()).map(String::as_str);
-    if !action.is_some_and(|action| APP_ACTIONS.contains(&action)) {
+    let action = line.get(APP.words.len()).map_or("", String::as_str);
+    let instance = arguments
+        .get("instance")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let Some(line) = apps::session_app(action, instance) else {
         return Err(invalid_argument("action", ArgumentProblem::NotRecognised));
-    }
-    author(context, arguments, &APP, "ac_app")
+    };
+    author_line(context, arguments, &APP, "ac_app", line)
 }
 
 // ---------------------------------------------------------------- checks
